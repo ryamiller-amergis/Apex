@@ -240,3 +240,18 @@ pdf_blob_container_name = "pdf-artifacts"
 # repo_read_service_memory = "4Gi"
 # repo_read_service_target_port = 8080
 
+# ---------------------------------------------------------------------------
+# AI Platform V2 foundation (additive Central US). Keep false until an
+# explicit apply approval. Does NOT stop or delete V1 East US Service Bus
+# (sbns-apex-ai-*) or shared async storage — those stay live for traffic until
+# V2 is proven in production, then a later runbook stops and deletes them.
+# Contracts: infra/ai-platform-v2-contracts.json
+# ---------------------------------------------------------------------------
+# enable_ai_platform_v2 = false
+# ai_platform_v2_location = "centralus"
+# ai_platform_v2_create_network = true   # or supply ai_platform_v2_infrastructure_subnet_id
+# ai_platform_v2_create_log_analytics_workspace = true  # or supply workspace id
+# ai_platform_v2_log_analytics_workspace_id = null
+# ai_platform_v2_grant_app_service_sender = false
+# ai_platform_v2_internal_load_balancer = false  # public endpoints for first smoke
+

@@ -862,3 +862,162 @@ variable "repo_read_service_target_port" {
   type        = number
   default     = 8080
 }
+
+# ---------------------------------------------------------------------------
+# AI Platform V2 foundation (additive Central US — Task 4)
+# Does not replace V1 East US Service Bus or shared async storage.
+# ---------------------------------------------------------------------------
+
+variable "enable_ai_platform_v2" {
+  description = "Provision the additive Central US AI Platform V2 foundation (SB, artifact storage, ZR CAE, identities). Default false so existing workspaces plan clean. Keep V1 resources running until a later retirement approval."
+  type        = bool
+  default     = false
+}
+
+variable "ai_platform_v2_location" {
+  description = "Azure region for V2 foundation resources. Null uses centralus from ai-platform-v2-contracts.json."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_resource_group_name" {
+  description = "Dedicated resource group for V2. Null derives rg-apex-ai-v2-{environment}."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_servicebus_namespace_name" {
+  description = "V2 Service Bus namespace name. Null derives sbns-apex-ai-v2-{environment}."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.ai_platform_v2_servicebus_namespace_name == null || can(regex("^[a-zA-Z][a-zA-Z0-9-]{4,48}[a-zA-Z0-9]$", var.ai_platform_v2_servicebus_namespace_name))
+    error_message = "ai_platform_v2_servicebus_namespace_name must be 6–50 chars, start with a letter, and contain only letters, numbers, or hyphens."
+  }
+}
+
+variable "ai_platform_v2_container_app_env_name" {
+  description = "V2 Container Apps Environment name. Null derives cae-apex-ai-v2-{environment}."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_storage_account_name" {
+  description = "V2 AI artifact storage account (3–24 lowercase alphanumeric). Null derives stapex{env}aiv2."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.ai_platform_v2_storage_account_name == null || can(regex("^[a-z0-9]{3,24}$", var.ai_platform_v2_storage_account_name))
+    error_message = "ai_platform_v2_storage_account_name must contain 3-24 lowercase letters or numbers."
+  }
+}
+
+variable "ai_platform_v2_storage_replication_type" {
+  description = "Replication for the V2 artifact storage account."
+  type        = string
+  default     = "LRS"
+}
+
+variable "ai_platform_v2_artifact_lifecycle_days" {
+  description = "Days before unmodified V2 artifact blobs/snapshots are deleted. Null uses contracts.json (90)."
+  type        = number
+  default     = null
+}
+
+variable "ai_platform_v2_create_network" {
+  description = "When true with enable_ai_platform_v2, create a Central US VNet with CAE /25, App Service, and private-endpoint subnets."
+  type        = bool
+  default     = false
+}
+
+variable "ai_platform_v2_infrastructure_subnet_id" {
+  description = "Existing subnet ID delegated to Microsoft.App/environments for the ZR CAE. Required when enable_ai_platform_v2 is true and create_network is false."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_vnet_name" {
+  description = "VNet name when create_network is true. Null derives vnet-apex-ai-v2-{environment}."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_vnet_address_space" {
+  description = "Address space for the V2 VNet when create_network is true."
+  type        = list(string)
+  default     = ["10.50.0.0/16"]
+}
+
+variable "ai_platform_v2_cae_subnet_name" {
+  description = "CAE infrastructure subnet name when create_network is true."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_cae_subnet_cidr" {
+  description = "CAE infrastructure subnet CIDR (/25 recommended for zone-redundant environments)."
+  type        = string
+  default     = "10.50.0.0/25"
+}
+
+variable "ai_platform_v2_app_service_subnet_name" {
+  description = "Reserved App Service subnet name when create_network is true."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_app_service_subnet_cidr" {
+  description = "Reserved App Service subnet CIDR when create_network is true."
+  type        = string
+  default     = "10.50.0.128/26"
+}
+
+variable "ai_platform_v2_private_endpoint_subnet_name" {
+  description = "Reserved private-endpoint subnet name when create_network is true (PE phase deferred)."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_private_endpoint_subnet_cidr" {
+  description = "Reserved private-endpoint subnet CIDR when create_network is true."
+  type        = string
+  default     = "10.50.0.192/26"
+}
+
+variable "ai_platform_v2_internal_load_balancer" {
+  description = "When true, CAE uses an internal load balancer (private ingress). First smoke keeps this false for public endpoints."
+  type        = bool
+  default     = false
+}
+
+variable "ai_platform_v2_log_analytics_workspace_id" {
+  description = "Existing Log Analytics workspace ID for the V2 CAE. Prefer reusing law-apex-ai-* when the workspace accepts Container Apps shared keys."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_create_log_analytics_workspace" {
+  description = "Create a dedicated Central US Log Analytics workspace when no workspace ID is supplied."
+  type        = bool
+  default     = false
+}
+
+variable "ai_platform_v2_log_analytics_workspace_name" {
+  description = "Name for a created V2 Log Analytics workspace. Null derives law-apex-ai-v2-{environment}."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_log_analytics_retention_days" {
+  description = "Retention days for a created V2 Log Analytics workspace."
+  type        = number
+  default     = 30
+}
+
+variable "ai_platform_v2_grant_app_service_sender" {
+  description = "Grant the Apex App Service system identity Sender on V2 command queues (additive; does not remove V1 sender roles)."
+  type        = bool
+  default     = false
+}

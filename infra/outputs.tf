@@ -404,3 +404,86 @@ output "github_app_setting_names" {
     token = "GITHUB_TOKEN"
   }
 }
+
+# ---------------------------------------------------------------------------
+# AI Platform V2 (null while enable_ai_platform_v2 is false)
+# ---------------------------------------------------------------------------
+
+output "ai_platform_v2_enabled" {
+  description = "Whether the additive Central US V2 foundation is enabled in this workspace"
+  value       = var.enable_ai_platform_v2
+}
+
+output "ai_platform_v2_resource_group_name" {
+  description = "V2 resource group name"
+  value       = try(azurerm_resource_group.ai_platform_v2[0].name, null)
+}
+
+output "ai_platform_v2_location" {
+  description = "V2 foundation Azure region"
+  value       = var.enable_ai_platform_v2 ? local.ai_platform_v2_location : null
+}
+
+output "ai_platform_v2_servicebus_namespace_name" {
+  description = "V2 Service Bus namespace (Central US). V1 East US namespace remains separate."
+  value       = try(azurerm_servicebus_namespace.ai_platform_v2[0].name, null)
+}
+
+output "ai_platform_v2_servicebus_namespace_fqdn" {
+  description = "V2 Service Bus fully-qualified namespace hostname"
+  value = try(
+    "${azurerm_servicebus_namespace.ai_platform_v2[0].name}.servicebus.windows.net",
+    null
+  )
+}
+
+output "ai_platform_v2_queue_names" {
+  description = "V2 queue names keyed by contract name"
+  value = var.enable_ai_platform_v2 ? {
+    for name, queue in azurerm_servicebus_queue.ai_platform_v2 : name => queue.name
+  } : null
+}
+
+output "ai_platform_v2_storage_account_name" {
+  description = "V2 AI artifact storage account (Central US). V1 shared async stays East US."
+  value       = try(azurerm_storage_account.ai_platform_v2_artifacts[0].name, null)
+}
+
+output "ai_platform_v2_artifact_container_name" {
+  description = "Private Blob container for V2 run artifacts"
+  value       = var.enable_ai_platform_v2 ? local.ai_platform_v2_artifact_container : null
+}
+
+output "ai_platform_v2_container_app_environment_name" {
+  description = "Zone-redundant V2 Container Apps Environment name"
+  value       = try(azapi_resource.ai_platform_v2_cae[0].name, null)
+}
+
+output "ai_platform_v2_container_app_environment_id" {
+  description = "V2 Container Apps Environment resource ID"
+  value       = try(azapi_resource.ai_platform_v2_cae[0].id, null)
+}
+
+output "ai_platform_v2_identity_client_ids" {
+  description = "Client IDs for V2 user-assigned identities keyed by role"
+  value = var.enable_ai_platform_v2 ? {
+    for key, identity in azurerm_user_assigned_identity.ai_platform_v2 : key => identity.client_id
+  } : null
+}
+
+output "ai_platform_v2_identity_principal_ids" {
+  description = "Principal IDs for V2 user-assigned identities keyed by role"
+  value = var.enable_ai_platform_v2 ? {
+    for key, identity in azurerm_user_assigned_identity.ai_platform_v2 : key => identity.principal_id
+  } : null
+}
+
+output "ai_platform_v2_app_setting_names" {
+  description = "Non-secret app setting key contract for future V2 wiring (Task 5+)"
+  value = {
+    servicebus_namespace = "AI_PLATFORM_V2_SERVICEBUS_NAMESPACE"
+    artifact_account     = "AI_PLATFORM_V2_ARTIFACT_ACCOUNT_NAME"
+    artifact_container   = "AI_PLATFORM_V2_ARTIFACT_CONTAINER"
+    cae_name             = "AI_PLATFORM_V2_CONTAINER_APP_ENV_NAME"
+  }
+}

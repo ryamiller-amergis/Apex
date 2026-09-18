@@ -277,12 +277,27 @@ routing, Azure provisioning, or production migration).
 
 ### Task 4: Provision the V2 Azure foundation
 
+**Status:** Complete for this branch (Terraform + tests only; no apply until
+separate approval).
+
+**Locked decisions (2026-09-18):**
+
+- **Service Bus:** new Central US Standard namespace (1A). Existing East US
+  `sbns-apex-ai-*` stays live for V1 traffic.
+- **Artifact storage:** new Central US StorageV2 account with private
+  `ai-run-artifacts` (2A). Existing East US shared async storage stays live.
+- **Cutover:** additive only. Do not stop or delete V1 messaging, storage,
+  CAE/Jobs/interactive/Redis, or App Service AI wiring in Task 4. After V2 is
+  proven in production, a later approved task stops old resources for an
+  observation window, then deletes them under a separate runbook.
+
 **Files:**
 
 - Create: `infra/ai-platform-v2.tf`
 - Create: `infra/ai-platform-v2-networking.tf`
 - Create: `infra/ai-platform-v2-identities.tf`
 - Create: `infra/ai-platform-v2-monitoring.tf`
+- Create: `infra/ai-platform-v2-contracts.json`
 - Modify with separate approval: `infra/variables.tf`
 - Modify with separate approval: `infra/outputs.tf`
 - Modify with separate approval: `infra/terraform.tfvars.example`
@@ -300,21 +315,28 @@ routing, Azure provisioning, or production migration).
   - V2 queue entities
   - Monitoring resources
 
-- [ ] Decide, with explicit cost approval, whether V2 uses a new Central US
+- [x] Decide, with explicit cost approval, whether V2 uses a new Central US
   Standard Service Bus namespace or intentionally retains East US messaging.
-- [ ] Decide, with explicit migration approval, whether V2 AI artifacts use a
+- [x] Decide, with explicit migration approval, whether V2 AI artifacts use a
   new Central US storage account or intentionally retain East US storage.
-- [ ] Create the V2 environment with zone redundancy enabled at creation.
-- [ ] Add Consumption and repo-read workload profiles.
-- [ ] Configure Log Analytics using resource-specific tables.
-- [ ] Add private `ai-run-artifacts` storage with lifecycle rules.
-- [ ] Create document, visual, fast, agentic, checkpoint, and result queues.
-- [ ] Enable duplicate detection on commands and terminal results only.
-- [ ] Keep sessions and checkpoint duplicate detection disabled.
-- [ ] Add entity-scoped managed-identity role assignments.
-- [ ] Keep public endpoints during the first functional smoke.
-- [ ] Add private endpoints later as an independent, reversible phase.
-- [ ] Add Terraform tests for immutable queue and environment properties.
+- [x] Create the V2 environment with zone redundancy enabled at creation.
+- [x] Add Consumption and repo-read workload profiles.
+- [x] Configure Log Analytics using resource-specific tables.
+- [x] Add private `ai-run-artifacts` storage with lifecycle rules.
+- [x] Create document, visual, fast, agentic, checkpoint, and result queues.
+- [x] Enable duplicate detection on commands and terminal results only.
+- [x] Keep sessions and checkpoint duplicate detection disabled.
+- [x] Add entity-scoped managed-identity role assignments.
+- [x] Keep public endpoints during the first functional smoke.
+- [x] Add private endpoints later as an independent, reversible phase.
+- [x] Add Terraform tests for immutable queue and environment properties.
+
+**Verification evidence (2026-09-18, branch `tbi/infra-changes`):**
+
+- Gated by `enable_ai_platform_v2` (default false); V1 resources untouched.
+- `terraform validate` succeeds (CAE via AzAPI for immutable `zoneRedundant`).
+- Contract suite: 8 passed (`aiPlatformV2Infrastructure.test.ts`).
+- No Terraform apply performed.
 
 ---
 

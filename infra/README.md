@@ -758,6 +758,48 @@ shutdown grace period, neither of which a handler can catch.
 
 ---
 
+## AI Platform V2 foundation (additive Central US)
+
+Task 4 adds an **opt-in** V2 control-plane stack beside the existing V1 AI runs
+resources. It is gated by `enable_ai_platform_v2` (default `false`).
+
+### Locked decisions
+
+- New **Central US** Standard Service Bus namespace (`sbns-apex-ai-v2-*`).
+- New **Central US** StorageV2 account with private `ai-run-artifacts`.
+- Existing East US `sbns-apex-ai-*` and shared async storage (**remain in
+  service** for live traffic). Do not stop or delete them in this task.
+- After V2 is proven in production, a later approved runbook stops old
+  resources for an observation window, then deletes them.
+
+### Enable checklist (plan only until apply is approved)
+
+1. Set `enable_ai_platform_v2 = true` in the target workspace tfvars.
+2. Provide networking: `ai_platform_v2_create_network = true` **or**
+   `ai_platform_v2_infrastructure_subnet_id` (delegated `/25` for ZR CAE).
+3. Provide logging: existing `ai_platform_v2_log_analytics_workspace_id` **or**
+   `ai_platform_v2_create_log_analytics_workspace = true`.
+4. Keep `ai_platform_v2_internal_load_balancer = false` for the first public
+   smoke. Private endpoints are a later reversible phase.
+5. Run `terraform plan` and obtain an explicit apply approval. **Do not apply
+   from this README alone.**
+
+Immutable queue and CAE contracts are checked into
+`infra/ai-platform-v2-contracts.json` and asserted by
+`src/server/__tests__/aiPlatformV2Infrastructure.test.ts`.
+
+### Files
+
+| File | Owns |
+|------|------|
+| `ai-platform-v2.tf` | RG, SB, queues, artifact storage/lifecycle, ZR CAE + profiles |
+| `ai-platform-v2-networking.tf` | Optional VNet + CAE/App/PE subnets |
+| `ai-platform-v2-identities.tf` | Five UAMIs + entity-scoped RBAC |
+| `ai-platform-v2-monitoring.tf` | Log Analytics wiring |
+| `ai-platform-v2-contracts.json` | Duplicate-detection matrix and CAE expectations |
+
+---
+
 ## Deployment
 
 After infrastructure is provisioned, deploy the application:
