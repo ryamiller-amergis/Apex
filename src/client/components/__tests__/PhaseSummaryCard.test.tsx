@@ -130,6 +130,36 @@ describe('PhaseSummaryCard', () => {
     expect(textarea).toHaveValue('Owner typed this');
   });
 
+  it('replaces leftover draft content when the interview changes', () => {
+    const { rerender } = render(
+      <PhaseSummaryCard
+        interviewId="interview-1"
+        phase="requirements"
+        currentUserId="requirements-owner"
+        technicalOwnerId="technical-owner"
+        canManage
+      />,
+    );
+
+    const textarea = screen.getByTestId('phase-summary-requirements-content');
+    fireEvent.change(textarea, { target: { value: 'Owner typed this' } });
+
+    summary = { ...summary, content: 'Other interview summary' };
+    rerender(
+      <PhaseSummaryCard
+        interviewId="interview-2"
+        phase="requirements"
+        currentUserId="requirements-owner"
+        technicalOwnerId="technical-owner"
+        canManage
+      />,
+    );
+
+    expect(screen.getByTestId('phase-summary-requirements-content')).toHaveValue(
+      'Other interview summary',
+    );
+  });
+
   it('fills an empty draft when imported summary content arrives', () => {
     summary = { ...summary, content: '' };
     const { rerender } = render(

@@ -61,6 +61,10 @@ export const PhaseSummaryCard: React.FC<PhaseSummaryCardProps> = ({
   const contentField = register('content');
 
   useEffect(() => {
+    reset({ content: summary?.content ?? '' });
+  }, [interviewId, reset]); // eslint-disable-line react-hooks/exhaustive-deps -- rebind only when the interview changes
+
+  useEffect(() => {
     if (!summary) return;
     const local = getValues('content');
     if (local.trim() !== '' && local !== summary.content) return;
