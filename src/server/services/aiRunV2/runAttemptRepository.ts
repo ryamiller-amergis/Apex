@@ -1,0 +1,540 @@
+import { sql } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
+import { db } from '../../db/drizzle';
+import {
+  AI_RUN_V2_SCHEMA_VERSION,
+  isAiRunV2ActiveAttemptStatus,
+  isAiRunV2TerminalAttemptStatus,
+  type AiRunBlobRef,
+  type AiRunV2AttemptStatus,
+  type AiRunV2Checkpoint,
+  type AiRunV2Command,
+  type AiRunV2FailureCategory,
+} from '../../../shared/types/aiRunV2';
+import type { AgentRunLane, AgentRunStatus, AgentRunTerminalReason } from '../../../shared/types/agentRunLifecycle';
+import { createOutboxRepository, type SqlExecutor } from './outboxRepository';
+import { createInboxRepository } from './inboxRepository';
+
+export type CreateQueuedV2RunInput = Readonly<{
+  runId?: string;
+  threadId: string;
+  projectId: string;
+  lane: AgentRunLane;
+  timeoutAt: string;
+  specRef: AiRunBlobRef;
+  ownerInstance?: string | null;
+}>;
+
+export type CreateQueuedV2RunResult =
+  | {
+    status: 'created';
+    runId: string;
+    attemptId: string;
+    attemptNumber: number;
+    dispatchMessageId: string;
+  }
+  | {
+    status: 'active_run_conflict';
+    existingRunId: string;
+    existingTransportVersion: string;
+    existingStatus: string;
+  };
+
+export type DispatchNextAttemptInput = Readonly<{
+  runId: string;
+  dispatchMessageId?: string;
+  specRef: AiRunBlobRef;
+}>;
+
+export type DispatchNextAttemptResult = Readonly<{
+  attemptId: string;
+  attemptNumber: number;
+  dispatchMessageId: string;
+  outboxId: string | null;
+}>;
+
+export type TransitionAttemptInput = Readonly<{
+  attemptId: string;
+  expectedDispatchMessageId: string;
+  to: AiRunV2AttemptStatus;
+  artifactStatus?: string;
+  failureCategory?: AiRunV2FailureCategory;
+  failureDetail?: string;
+  manifestRef?: AiRunBlobRef | null;
+}>;
+
+export type TransitionAttemptResult =
+  | { status: 'ok'; attemptId: string; to: AiRunV2AttemptStatus }
+  | { status: 'fence_mismatch' }
+  | { status: 'not_found' }
+  | { status: 'illegal_transition'; from: AiRunV2AttemptStatus; to: AiRunV2AttemptStatus };
+
+export type AcceptCheckpointResult =
+  | { status: 'accepted'; checkpointSequence: number }
+  | { status: 'duplicate' }
+  | { status: 'stale_sequence'; lastCheckpointSequence: number }
+  | { status: 'fence_mismatch' }
+  | { status: 'not_found' };
+
+type TransactionRunner = <T>(
+  work: (executor: SqlExecutor) => Promise<T>,
+) => Promise<T>;
+
+function resultRows<T>(result: unknown): T[] {
+  if (Array.isArray(result)) return result as T[];
+  return (result as { rows?: T[] } | undefined)?.rows ?? [];
+}
+
+const ALLOWED_ATTEMPT_TRANSITIONS: Record<AiRunV2AttemptStatus, readonly AiRunV2AttemptStatus[]> = {
+  queued: ['dispatched', 'cancelled'],
+  dispatched: ['running', 'cancelled', 'failed'],
+  running: ['checking_worker', 'finalizing', 'completed', 'failed', 'cancelled'],
+  checking_worker: ['running', 'finalizing', 'failed', 'cancelled'],
+  finalizing: ['completed', 'failed', 'cancelled'],
+  completed: [],
+  failed: [],
+  cancelled: [],
+};
+
+const V1_TERMINAL_REASONS = new Set<string>([
+  'worker_lost',
+  'progress_timeout',
+  'queue_ttl',
+  'dispatch_ttl',
+  'forced_cancel',
+]);
+
+function headerStatusForAttempt(status: AiRunV2AttemptStatus): AgentRunStatus {
+  if (isAiRunV2TerminalAttemptStatus(status)) {
+    return status;
+  }
+  if (status === 'queued') return 'queued';
+  if (status === 'dispatched') return 'dispatched';
+  return 'running';
+}
+
+function toV1TerminalReason(
+  failureCategory: AiRunV2FailureCategory | undefined,
+): AgentRunTerminalReason | null {
+  if (!failureCategory) return null;
+  return V1_TERMINAL_REASONS.has(failureCategory)
+    ? failureCategory as AgentRunTerminalReason
+    : null;
+}
+
+const defaultTransactionRunner: TransactionRunner = async (work) => db.transaction(
+  async (tx) => work({ execute: (query) => tx.execute(query) }),
+);
+
+export function createRunAttemptRepository(options?: {
+  runInTransaction?: TransactionRunner;
+}) {
+  const runInTransaction = options?.runInTransaction ?? defaultTransactionRunner;
+
+  return {
+    async createQueuedV2Run(
+      input: CreateQueuedV2RunInput,
+    ): Promise<CreateQueuedV2RunResult> {
+      return runInTransaction(async (executor) => {
+        const activeResult = await executor.execute(sql`
+          SELECT id, status, transport_version
+          FROM agent_runs
+          WHERE thread_id = ${input.threadId}
+            AND status IN ('queued', 'dispatched', 'running')
+          ORDER BY created_at ASC, id ASC
+          LIMIT 1
+          FOR UPDATE
+        `);
+        const active = resultRows<{
+          id: string;
+          status: string;
+          transport_version: string;
+        }>(activeResult)[0];
+        if (active) {
+          return {
+            status: 'active_run_conflict',
+            existingRunId: active.id,
+            existingTransportVersion: active.transport_version,
+            existingStatus: active.status,
+          };
+        }
+
+        const runId = input.runId ?? randomUUID();
+        const attemptId = randomUUID();
+        const dispatchMessageId = randomUUID();
+
+        await executor.execute(sql`
+          INSERT INTO agent_runs (
+            id,
+            thread_id,
+            status,
+            project_id,
+            lane,
+            queued_at,
+            timeout_at,
+            owner_instance,
+            transport_version,
+            cancel_requested,
+            heartbeat_at,
+            started_at,
+            created_at,
+            updated_at
+          ) VALUES (
+            ${runId},
+            ${input.threadId},
+            'queued',
+            ${input.projectId},
+            ${input.lane},
+            now(),
+            ${input.timeoutAt},
+            ${input.ownerInstance ?? null},
+            'servicebus-blob-v2',
+            FALSE,
+            now(),
+            now(),
+            now(),
+            now()
+          )
+        `);
+
+        await executor.execute(sql`
+          INSERT INTO ai_run_attempts (
+            id,
+            run_id,
+            attempt_number,
+            dispatch_message_id,
+            status,
+            artifact_status,
+            spec_ref,
+            created_at,
+            updated_at
+          ) VALUES (
+            ${attemptId},
+            ${runId},
+            1,
+            ${dispatchMessageId},
+            'queued',
+            'pending',
+            ${JSON.stringify(input.specRef)}::jsonb,
+            now(),
+            now()
+          )
+        `);
+
+        return {
+          status: 'created',
+          runId,
+          attemptId,
+          attemptNumber: 1,
+          dispatchMessageId,
+        };
+      });
+    },
+
+    async dispatchNextAttempt(
+      input: DispatchNextAttemptInput,
+    ): Promise<DispatchNextAttemptResult> {
+      return runInTransaction(async (executor) => {
+        const outbox = createOutboxRepository(executor);
+
+        const runResult = await executor.execute(sql`
+          SELECT id, status, transport_version
+          FROM agent_runs
+          WHERE id = ${input.runId}
+          FOR UPDATE
+        `);
+        const run = resultRows<{
+          id: string;
+          status: string;
+          transport_version: string;
+        }>(runResult)[0];
+        if (!run) {
+          throw new Error(`Run not found: ${input.runId}`);
+        }
+        if (run.transport_version !== 'servicebus-blob-v2') {
+          throw new Error(`Run ${input.runId} is not a V2 transport run`);
+        }
+        if (run.status === 'completed') {
+          throw new Error(`Cannot dispatch another attempt for completed run ${input.runId}`);
+        }
+
+        const activeAttempt = await executor.execute(sql`
+          SELECT id, attempt_number, status
+          FROM ai_run_attempts
+          WHERE run_id = ${input.runId}
+            AND status IN ('queued', 'dispatched', 'running', 'checking_worker', 'finalizing')
+          FOR UPDATE
+        `);
+        const active = resultRows<{
+          id: string;
+          attempt_number: number;
+          status: string;
+        }>(activeAttempt)[0];
+
+        const dispatchMessageId = input.dispatchMessageId ?? randomUUID();
+
+        if (active?.status === 'queued' && active.attempt_number === 1) {
+          await executor.execute(sql`
+            UPDATE ai_run_attempts
+            SET
+              status = 'dispatched',
+              dispatch_message_id = ${dispatchMessageId},
+              spec_ref = ${JSON.stringify(input.specRef)}::jsonb,
+              updated_at = now()
+            WHERE id = ${active.id}
+          `);
+          await executor.execute(sql`
+            UPDATE agent_runs
+            SET
+              status = 'dispatched',
+              dispatch_message_id = ${dispatchMessageId},
+              dispatched_at = now(),
+              updated_at = now()
+            WHERE id = ${input.runId}
+          `);
+
+          const command: AiRunV2Command = {
+            schemaVersion: AI_RUN_V2_SCHEMA_VERSION,
+            eventId: randomUUID(),
+            runId: input.runId,
+            attemptId: active.id,
+            attemptNumber: 1,
+            dispatchMessageId,
+            timestamp: new Date().toISOString(),
+            kind: 'dispatch_command',
+            transport: 'servicebus-blob-v2',
+            specRef: input.specRef,
+          };
+          const inserted = await outbox.enqueue([{
+            idempotencyKey: `${active.id}:dispatch`,
+            kind: 'dispatch_command',
+            runId: input.runId,
+            attemptId: active.id,
+            payload: command,
+          }]);
+          return {
+            attemptId: active.id,
+            attemptNumber: 1,
+            dispatchMessageId,
+            outboxId: inserted[0]?.id ?? null,
+          };
+        }
+
+        if (active) {
+          throw new Error(`Run ${input.runId} already has an active attempt`);
+        }
+
+        const nextNumberResult = await executor.execute(sql`
+          SELECT COALESCE(MAX(attempt_number), 0)::int AS max_attempt
+          FROM ai_run_attempts
+          WHERE run_id = ${input.runId}
+        `);
+        const maxAttempt = Number(
+          resultRows<{ max_attempt: number | string }>(nextNumberResult)[0]?.max_attempt ?? 0,
+        );
+        const attemptNumber = maxAttempt + 1;
+        const attemptId = randomUUID();
+
+        await executor.execute(sql`
+          INSERT INTO ai_run_attempts (
+            id,
+            run_id,
+            attempt_number,
+            dispatch_message_id,
+            status,
+            artifact_status,
+            spec_ref,
+            created_at,
+            updated_at
+          ) VALUES (
+            ${attemptId},
+            ${input.runId},
+            ${attemptNumber},
+            ${dispatchMessageId},
+            'dispatched',
+            'pending',
+            ${JSON.stringify(input.specRef)}::jsonb,
+            now(),
+            now()
+          )
+        `);
+
+        await executor.execute(sql`
+          UPDATE agent_runs
+          SET
+            status = 'dispatched',
+            dispatch_message_id = ${dispatchMessageId},
+            dispatched_at = now(),
+            updated_at = now()
+          WHERE id = ${input.runId}
+        `);
+
+        const command: AiRunV2Command = {
+          schemaVersion: AI_RUN_V2_SCHEMA_VERSION,
+          eventId: randomUUID(),
+          runId: input.runId,
+          attemptId,
+          attemptNumber,
+          dispatchMessageId,
+          timestamp: new Date().toISOString(),
+          kind: 'dispatch_command',
+          transport: 'servicebus-blob-v2',
+          specRef: input.specRef,
+        };
+        const inserted = await outbox.enqueue([{
+          idempotencyKey: `${attemptId}:dispatch`,
+          kind: 'dispatch_command',
+          runId: input.runId,
+          attemptId,
+          payload: command,
+        }]);
+
+        return {
+          attemptId,
+          attemptNumber,
+          dispatchMessageId,
+          outboxId: inserted[0]?.id ?? null,
+        };
+      });
+    },
+
+    async transitionAttempt(
+      input: TransitionAttemptInput,
+    ): Promise<TransitionAttemptResult> {
+      return runInTransaction(async (executor) => {
+        const existingResult = await executor.execute(sql`
+          SELECT id, run_id, status, dispatch_message_id
+          FROM ai_run_attempts
+          WHERE id = ${input.attemptId}
+          FOR UPDATE
+        `);
+        const existing = resultRows<{
+          id: string;
+          run_id: string;
+          status: AiRunV2AttemptStatus;
+          dispatch_message_id: string;
+        }>(existingResult)[0];
+        if (!existing) return { status: 'not_found' };
+        if (existing.dispatch_message_id !== input.expectedDispatchMessageId) {
+          return { status: 'fence_mismatch' };
+        }
+        const allowed = ALLOWED_ATTEMPT_TRANSITIONS[existing.status] ?? [];
+        if (!allowed.includes(input.to)) {
+          return {
+            status: 'illegal_transition',
+            from: existing.status,
+            to: input.to,
+          };
+        }
+
+        const headerStatus = headerStatusForAttempt(input.to);
+        const terminalReason = isAiRunV2TerminalAttemptStatus(input.to)
+          ? toV1TerminalReason(input.failureCategory)
+          : null;
+
+        await executor.execute(sql`
+          UPDATE ai_run_attempts
+          SET
+            status = ${input.to},
+            artifact_status = COALESCE(${input.artifactStatus ?? null}, artifact_status),
+            failure_category = ${input.failureCategory ?? null},
+            failure_detail = ${input.failureDetail ?? null},
+            manifest_ref = COALESCE(${input.manifestRef ? JSON.stringify(input.manifestRef) : null}::jsonb, manifest_ref),
+            updated_at = now()
+          WHERE id = ${input.attemptId}
+        `);
+
+        await executor.execute(sql`
+          UPDATE agent_runs
+          SET
+            status = ${headerStatus},
+            terminal_reason = COALESCE(${terminalReason}, terminal_reason),
+            updated_at = now()
+          WHERE id = ${existing.run_id}
+        `);
+
+        return { status: 'ok', attemptId: input.attemptId, to: input.to };
+      });
+    },
+
+    async acceptCheckpoint(
+      checkpoint: AiRunV2Checkpoint,
+    ): Promise<AcceptCheckpointResult> {
+      return runInTransaction(async (executor) => {
+        const inbox = createInboxRepository(executor);
+
+        const attemptResult = await executor.execute(sql`
+          SELECT id, dispatch_message_id, last_checkpoint_sequence, status
+          FROM ai_run_attempts
+          WHERE id = ${checkpoint.attemptId}
+          FOR UPDATE
+        `);
+        const attempt = resultRows<{
+          id: string;
+          dispatch_message_id: string;
+          last_checkpoint_sequence: number;
+          status: AiRunV2AttemptStatus;
+        }>(attemptResult)[0];
+        if (!attempt) return { status: 'not_found' };
+        if (attempt.dispatch_message_id !== checkpoint.dispatchMessageId) {
+          return { status: 'fence_mismatch' };
+        }
+        if (!isAiRunV2ActiveAttemptStatus(attempt.status)) {
+          return {
+            status: 'stale_sequence',
+            lastCheckpointSequence: Number(attempt.last_checkpoint_sequence),
+          };
+        }
+        if (checkpoint.checkpointSequence <= Number(attempt.last_checkpoint_sequence)) {
+          return {
+            status: 'stale_sequence',
+            lastCheckpointSequence: Number(attempt.last_checkpoint_sequence),
+          };
+        }
+
+        const claim = await inbox.claimEvent({
+          eventId: checkpoint.eventId,
+          kind: 'checkpoint',
+          runId: checkpoint.runId,
+          attemptId: checkpoint.attemptId,
+          dispatchMessageId: checkpoint.dispatchMessageId,
+          checkpointSequence: checkpoint.checkpointSequence,
+          payload: checkpoint as unknown as Record<string, unknown>,
+        });
+        if (claim.status !== 'inserted') {
+          return { status: 'duplicate' };
+        }
+
+        await executor.execute(sql`
+          UPDATE ai_run_attempts
+          SET
+            last_checkpoint_sequence = ${checkpoint.checkpointSequence},
+            last_checkpoint_at = now(),
+            status = CASE
+              WHEN status = 'dispatched' THEN 'running'
+              ELSE status
+            END,
+            updated_at = now()
+          WHERE id = ${checkpoint.attemptId}
+        `);
+        await executor.execute(sql`
+          UPDATE agent_runs
+          SET
+            status = 'running',
+            updated_at = now()
+          WHERE id = ${checkpoint.runId}
+            AND status IN ('dispatched', 'running')
+        `);
+        await inbox.markProcessed(checkpoint.eventId);
+        return {
+          status: 'accepted',
+          checkpointSequence: checkpoint.checkpointSequence,
+        };
+      });
+    },
+  };
+}
+
+export type RunAttemptRepository = ReturnType<typeof createRunAttemptRepository>;
+
+export const runAttemptRepository = createRunAttemptRepository();
