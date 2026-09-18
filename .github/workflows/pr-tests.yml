@@ -17,10 +17,46 @@ on:
         options:
           - dev
 
+# A new push (or label change) on the same PR cancels the in-flight run so we
+# do not stack test/deploy jobs behind a Cursor bot that is still pushing.
+concurrency:
+  group: pr-tests-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 env:
   NODE_VERSION: '24.x'
 
 jobs:
+  # Cheap gate: Cursor bots push several commits in a row. Wait for the Cursor
+  # app's own check to complete on this SHA, then start the suite once.
+  debounce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      proceed: ${{ steps.settle.outputs.proceed }}
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    steps:
+      - name: Checkout settle script
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/ci/wait-for-pr-head-settle.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Wait for the Cursor check to complete
+        id: settle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          TRIGGER_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: bash scripts/ci/wait-for-pr-head-settle.sh
+
   # When a PR carries `quick-dev-deploy`, skip the full PR policy suite —
   # Deploy Dev (Quick) owns that path. Removing the label re-arms these checks.
   quick-deploy-bypass:
@@ -35,9 +71,11 @@ jobs:
           echo "Skipping PR Tests & Dev Deploy — Deploy Dev (Quick) handles this PR."
 
   detect-changes:
+    needs: debounce
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      !contains(github.event.pull_request.labels.*.name, 'quick-dev-deploy')
+      needs.debounce.outputs.proceed == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+      !contains(github.event.pull_request.labels.*.name, 'quick-dev-deploy'))
     runs-on: ubuntu-latest
     outputs:
       migrations: ${{ steps.detect.outputs.has_migration_changes }}
