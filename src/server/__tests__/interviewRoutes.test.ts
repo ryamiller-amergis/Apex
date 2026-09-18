@@ -794,6 +794,32 @@ describe('FEAT-002 phase summary lifecycle routes', () => {
     );
   });
 
+  it('imports a delayed Technical artifact before serving its summary', async () => {
+    mockTechnicalPhaseSkillService.syncAvailableTechnicalPhaseSummary
+      .mockResolvedValue(true);
+    mockPhaseLifecycleService.getPhaseSummary.mockResolvedValue({
+      phase: 'technical',
+      status: 'draft',
+      content: 'Imported technical summary',
+      ownerId: 'user-test',
+      approvedAt: null,
+      locked: false,
+      amendable: false,
+    });
+
+    const response = await request(buildApp())
+      .get('/api/interviews/interview-1/phases/technical/summary');
+
+    expect(response.status).toBe(200);
+    expect(
+      mockTechnicalPhaseSkillService.syncAvailableTechnicalPhaseSummary,
+    ).toHaveBeenCalledWith('interview-1');
+    expect(response.body).toMatchObject({
+      phase: 'technical',
+      content: 'Imported technical summary',
+    });
+  });
+
   it('loads the generated Requirements artifact through the retry route', async () => {
     mockRequirementsPhaseSkillService.syncRequirementsPhaseSummary
       .mockResolvedValue(undefined);

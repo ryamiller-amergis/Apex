@@ -1442,6 +1442,7 @@ describe('document assistant MCP wiring', () => {
     [{ assistantType: 'design-doc' as const }, 'design-doc'],
     [{ skillPath: '.cursor/skills/grill-with-docs/SKILL.md' }, 'interview'],
     [{ skillPath: '.cursor/skills/requirements-phase/SKILL.md' }, 'interview'],
+    [{ skillPath: '.cursor/skills/technical-phase/SKILL.md' }, 'interview'],
     [{ skillPath: '.cursor/skills/kick-off/SKILL.md' }, 'interview'],
     [{ skillPath: '.cursor/skills/to-prd/SKILL.md' }, 'prd'],
     [{ skillPath: '.cursor/skills/prd-spec-review/SKILL.md' }, 'prd'],
@@ -2118,6 +2119,16 @@ describe('document assistant MCP wiring', () => {
     expect(
       isInteractiveWorkspaceBoundSkill(
         '.cursor/skills/prd-spec-review/SKILL.md'
+      )
+    ).toBe(true);
+    expect(
+      isInteractiveWorkspaceBoundSkill(
+        '.cursor/skills/requirements-phase/SKILL.md'
+      )
+    ).toBe(true);
+    expect(
+      isInteractiveWorkspaceBoundSkill(
+        '.cursor/skills/technical-phase/SKILL.md'
       )
     ).toBe(true);
     expect(

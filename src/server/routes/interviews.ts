@@ -45,6 +45,7 @@ import {
   getTechnicalPhaseState,
   handoffToTechnicalPhase,
   startTechnicalPhase,
+  syncAvailableTechnicalPhaseSummary,
 } from '../services/technicalPhaseSkillService';
 import {
   addAdrLink,
@@ -312,6 +313,8 @@ router.get('/:id/phases/:phase/summary', requirePermission('interviews:view'), a
     }
     if (phase === 'requirements') {
       await syncAvailableRequirementsPhaseSummary(req.params.id);
+    } else {
+      await syncAvailableTechnicalPhaseSummary(req.params.id);
     }
     const summary = await getPhaseSummary(req.params.id, phase);
     if (!summary) {

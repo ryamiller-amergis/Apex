@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { InterviewChatView } from '../InterviewChatView';
+import { InterviewAgentMessage, InterviewChatView } from '../InterviewChatView';
 import type { Interview, PrdSummary } from '../../../shared/types/interview';
 import type { ChatThreadStatus } from '../../../shared/types/chat';
 
@@ -401,6 +401,73 @@ beforeEach(() => {
   stubGlobalFetch();
 });
 
+describe('persisted interview answers', () => {
+  it('restores selected choices and notes from the persisted user response', () => {
+    render(
+      <InterviewAgentMessage
+        text={'Choose the delivery mode:\n\na. Synchronous REST\nb. Background queue'}
+        onSend={jest.fn()}
+        isRunning={false}
+        alreadyAnswered
+        submittedAnswerText={
+          'Q1: A — Synchronous REST\n  Notes: Match the existing profile service.'
+        }
+      />,
+    );
+
+    expect(screen.getByTestId('interview-choice-a').className)
+      .toContain('choiceOptionSelected');
+    expect(screen.getByText('Match the existing profile service.'))
+      .toBeInTheDocument();
+    expect(screen.getByText('✓ Answers sent')).toBeInTheDocument();
+  });
+
+  it('restores a free-form persisted response', () => {
+    render(
+      <InterviewAgentMessage
+        text={'Choose the delivery mode:\n\na. Synchronous REST\nb. Background queue'}
+        onSend={jest.fn()}
+        isRunning={false}
+        alreadyAnswered
+        submittedAnswerText="Q1: Use the existing GraphQL gateway"
+      />,
+    );
+
+    expect(screen.getByTestId('interview-choice-other').className)
+      .toContain('choiceOptionSelected');
+    expect(screen.getByText('Use the existing GraphQL gateway'))
+      .toBeInTheDocument();
+  });
+
+  it('associates each restored question with its following user message', () => {
+    const persistedMessages = [
+      {
+        id: 'agent-question',
+        role: 'agent' as const,
+        text: 'Choose the delivery mode:\n\na. Synchronous REST\nb. Background queue',
+        ts: '2026-09-18T04:00:00Z',
+      },
+      {
+        id: 'user-answer',
+        role: 'user' as const,
+        text: 'Q1: B — Background queue',
+        ts: '2026-09-18T04:01:00Z',
+      },
+    ];
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      messages: persistedMessages,
+      visibleMessages: persistedMessages,
+    });
+
+    renderExistingInterview();
+
+    expect(screen.getByTestId('interview-choice-b').className)
+      .toContain('choiceOptionSelected');
+    expect(screen.getByText('✓ Answers sent')).toBeInTheDocument();
+  });
+});
+
 describe('PBI-004 Interview grounding status embed', () => {
   it('does not show SHA or re-ground controls on an existing Interview', () => {
     renderExistingInterview();
@@ -675,6 +742,45 @@ describe('FEAT-006 tabbed phase chrome integration', () => {
     expect(screen.getByRole('tabpanel')).toHaveAttribute(
       'id',
       'interview-phase-panel-technical',
+    );
+  });
+
+  it('restores the selected Technical tab from the URL after refresh', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({
+        phaseFlow: 'both_sequential',
+        requirementsPhaseStatus: 'approved',
+        technicalPhaseStatus: 'draft',
+        technicalPhaseChatThreadId: 'technical-thread',
+      }),
+      isLoading: false,
+      isError: false,
+    });
+    mockTechnicalPhaseState = {
+      status: 'in_progress',
+      canStart: false,
+      technicalPhaseChatThreadId: 'technical-thread',
+      seedContext: null,
+    };
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter
+          initialEntries={['/backlog/interview/iv-1?phase=technical']}
+        >
+          <InterviewChatView />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByTestId('interview-phase-tab-technical'))
+      .toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('mock-phase-summary-technical'))
+      .toBeInTheDocument();
+    expect(mockUseAgentChatSession).toHaveBeenCalledWith(
+      'technical-thread',
+      expect.any(Object),
     );
   });
 

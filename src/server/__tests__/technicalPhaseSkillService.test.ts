@@ -40,6 +40,7 @@ import {
   getTechnicalPhaseState,
   handoffToTechnicalPhase,
   startTechnicalPhase,
+  syncAvailableTechnicalPhaseSummary,
   syncTechnicalPhaseArtifacts,
 } from '../services/technicalPhaseSkillService';
 
@@ -275,6 +276,37 @@ describe('technicalPhaseSkillService (FEAT-005 / PBI-008 / TBI-005)', () => {
     );
     expect(fs.existsSync(path.join(outputDir, 'requirements-amendment.md'))).toBe(false);
     expect(fs.existsSync(path.join(outputDir, 'technical-flow.technical-phase-summary.md'))).toBe(false);
+    fs.rmSync(workspaceDir, { recursive: true, force: true });
+  });
+
+  it('imports a delayed Technical summary while serving the read model', async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-technical-phase-'));
+    const outputDir = path.join(workspaceDir, '.ai-pilot', 'output');
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(outputDir, 'technical-flow.technical-phase-summary.md'),
+      'Delayed technical summary',
+    );
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...approvedInterview,
+      technicalPhaseChatThreadId: 'technical-thread',
+      technicalSummary: null,
+    });
+    mockLoadFullThread.mockResolvedValue({
+      id: 'technical-thread',
+      workspaceDir,
+      messages: [],
+    });
+
+    await expect(
+      syncAvailableTechnicalPhaseSummary('interview-1'),
+    ).resolves.toBe(true);
+    expect(mockEditPhaseSummary).toHaveBeenCalledWith(
+      'interview-1',
+      'technical',
+      'technical-owner',
+      'Delayed technical summary',
+    );
     fs.rmSync(workspaceDir, { recursive: true, force: true });
   });
 });

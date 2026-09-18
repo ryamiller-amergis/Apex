@@ -629,6 +629,7 @@ export function resolveGroundingCallerKey(
   if (
     skillPath.includes('grill-with-docs') ||
     skillPath.includes('requirements-phase') ||
+    skillPath.includes('technical-phase') ||
     skillPath.includes('grill-design') ||
     skillPath.includes('kick-off') ||
     skillPath.includes('adr-interview') ||
@@ -3981,6 +3982,8 @@ export function isInteractiveWorkspaceBoundSkill(
     normalized.includes('k6-load-test') ||
     normalized.includes('/ui-lab/') ||
     normalized.includes('design-module-') ||
+    normalized.includes('requirements-phase') ||
+    normalized.includes('technical-phase') ||
     normalized.includes('feature-request-analysis') ||
     normalized.includes('issue-analysis') ||
     normalized.includes('technical-analysis') ||

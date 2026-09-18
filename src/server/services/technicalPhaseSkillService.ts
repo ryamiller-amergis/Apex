@@ -319,3 +319,29 @@ export async function syncTechnicalPhaseArtifacts(
 
   return { amendedRequirements, syncedTechnicalSummary };
 }
+
+/**
+ * Import a Technical summary that became available after the dispatch request
+ * returned. This covers process restarts and delayed artifact writes before the
+ * summary read model is served.
+ */
+export async function syncAvailableTechnicalPhaseSummary(
+  interviewId: string,
+): Promise<boolean> {
+  const row = await db.query.interviews.findFirst({
+    where: eq(interviews.id, interviewId),
+  });
+  if (
+    !row?.technicalOwnerId
+    || !row.technicalPhaseChatThreadId
+    || row.technicalSummary?.trim()
+  ) {
+    return false;
+  }
+
+  const result = await syncTechnicalPhaseArtifacts(
+    row.technicalPhaseChatThreadId,
+    row.technicalOwnerId,
+  );
+  return result.syncedTechnicalSummary;
+}

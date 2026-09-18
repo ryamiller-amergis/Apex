@@ -191,18 +191,58 @@ interface InterviewAgentMessageProps {
   questionOffset?: number;
   interviewLocked?: boolean;
   alreadyAnswered?: boolean;
+  submittedAnswerText?: string;
   fullWidth?: boolean;
 }
 
-export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onSend, isRunning, questionOffset = 0, interviewLocked = false, alreadyAnswered = false, fullWidth = false }) => {
+function restoredQuestionStates(
+  choiceBlocks: ChoiceBlock[],
+  questionOffset: number,
+  submittedAnswerText?: string,
+): Record<string, QuestionState> {
+  const restored: Record<string, QuestionState> = {};
+  for (const [index, block] of choiceBlocks.entries()) {
+    const questionNumber = questionOffset + index + 1;
+    const answerPattern = new RegExp(
+      `(?:^|\\n)Q${questionNumber}:\\s*(?:(?:\\*\\*)?([A-Z])(?:\\*\\*)?\\s*(?:—|-)\\s*)?([^\\n]*)`,
+      'i',
+    );
+    const answer = submittedAnswerText?.match(answerPattern);
+    const selectedLetter = answer?.[1]?.toLowerCase() ?? null;
+    const matchingOption = selectedLetter
+      ? block.options.some((option) => option.letter.toLowerCase() === selectedLetter)
+      : false;
+    const notesPattern = new RegExp(
+      `(?:^|\\n)Q${questionNumber}:[^\\n]*\\n\\s+Notes:\\s*([^\\n]*)`,
+      'i',
+    );
+    const notes = submittedAnswerText?.match(notesPattern)?.[1]?.trim() ?? '';
+
+    restored[block.id] = answer
+      ? matchingOption
+        ? { selected: selectedLetter, freeform: notes }
+        : { selected: 'other', freeform: answer[2].trim() }
+      : { selected: null, freeform: '' };
+  }
+  return restored;
+}
+
+export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({
+  text,
+  onSend,
+  isRunning,
+  questionOffset = 0,
+  interviewLocked = false,
+  alreadyAnswered = false,
+  submittedAnswerText,
+  fullWidth = false,
+}) => {
   const parts = parseAgentMessage(text);
   const choiceBlocks = parts.filter((p): p is ChoiceBlock => p.type === 'choices');
 
-  const [selections, setSelections] = useState<Record<string, QuestionState>>(() => {
-    const init: Record<string, QuestionState> = {};
-    for (const b of choiceBlocks) init[b.id] = { selected: null, freeform: '' };
-    return init;
-  });
+  const [selections, setSelections] = useState<Record<string, QuestionState>>(
+    () => restoredQuestionStates(choiceBlocks, questionOffset, submittedAnswerText),
+  );
   // Initialize from `alreadyAnswered` so a previously-submitted question stays
   // locked after a page reload (the submission state is otherwise only kept in
   // ephemeral component state).
@@ -211,8 +251,19 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
   // Lock the block if the thread later shows it was answered (e.g. when message
   // history loads asynchronously after this component first mounts).
   useEffect(() => {
-    if (alreadyAnswered) setSent(true);
-  }, [alreadyAnswered]);
+    if (!alreadyAnswered && !submittedAnswerText) return;
+    const persistedChoiceBlocks = parseAgentMessage(text).filter(
+      (part): part is ChoiceBlock => part.type === 'choices',
+    );
+    setSelections(
+      restoredQuestionStates(
+        persistedChoiceBlocks,
+        questionOffset,
+        submittedAnswerText,
+      ),
+    );
+    setSent(true);
+  }, [alreadyAnswered, questionOffset, submittedAnswerText, text]);
 
   const allAnswered = choiceBlocks.every((b) => {
     const s = selections[b.id];
@@ -1050,7 +1101,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const [wrapUpDismissed, setWrapUpDismissed] = useState(false);
   const [showSendConfirm, setShowSendConfirm] = useState(false);
   const [activePhaseTab, setActivePhaseTab] =
-    useState<InterviewPhaseTabId>('requirements');
+    useState<InterviewPhaseTabId>(() =>
+      new URLSearchParams(location.search).get('phase') === 'technical'
+        ? 'technical'
+        : 'requirements',
+    );
   const [startedTechnicalState, setStartedTechnicalState] =
     useState<TechnicalPhaseState | null>(null);
   const [isSeedPromptExpanded, setIsSeedPromptExpanded] = useState(false);
@@ -1177,13 +1232,34 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     });
   }, [isAgentProcessing, interview?.id, queryClient]);
 
+  const handlePhaseTabChange = useCallback(
+    (phase: InterviewPhaseTabId) => {
+      setActivePhaseTab(phase);
+      const params = new URLSearchParams(location.search);
+      if (phase === 'technical') {
+        params.set('phase', 'technical');
+      } else {
+        params.delete('phase');
+      }
+      const search = params.toString();
+      navigate(
+        {
+          pathname: location.pathname,
+          search: search ? `?${search}` : '',
+        },
+        { replace: true, state: location.state },
+      );
+    },
+    [location.pathname, location.search, location.state, navigate],
+  );
+
   const handleRequirementsApproved = useCallback(
     (response: ApprovePhaseSummaryResponse) => {
       if (!response.technicalPhase) return;
       setStartedTechnicalState(response.technicalPhase);
-      setActivePhaseTab('technical');
+      handlePhaseTabChange('technical');
     },
-    [],
+    [handlePhaseTabChange],
   );
 
   const resumeGate = useGroundingResumeGate(
@@ -1487,12 +1563,25 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     }
   }
 
-  // An agent message's choice block has already been answered if any user
-  // message follows it in the thread (submitting answers creates a user
-  // message). Used to persist the "Answers sent" lock across reloads.
-  let lastUserMsgIndex = -1;
-  visibleMessages.forEach((m, i) => {
-    if (m.role === 'user') lastUserMsgIndex = i;
+  // Associate each choice block with the user submission that immediately
+  // followed it. Rehydrate the selected options after a refresh instead of
+  // restoring only an unhelpful "Answers sent" label.
+  const submittedAnswersByAgentMessageId = new Map<string, string>();
+  visibleMessages.forEach((message, messageIndex) => {
+    if (
+      message.role !== 'agent'
+      || !parseAgentMessage(message.text).some((part) => part.type === 'choices')
+    ) {
+      return;
+    }
+    for (let index = messageIndex + 1; index < visibleMessages.length; index++) {
+      const candidate = visibleMessages[index];
+      if (candidate.role === 'agent') break;
+      if (candidate.role === 'user') {
+        submittedAnswersByAgentMessageId.set(message.id, candidate.text);
+        break;
+      }
+    }
   });
 
   return (
@@ -1798,7 +1887,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
           phaseFlow={interview.phaseFlow}
           requirementsPhaseStatus={interview.requirementsPhaseStatus}
           activeTab={activePhaseTab}
-          onTabChange={setActivePhaseTab}
+          onTabChange={handlePhaseTabChange}
         />
       )}
 
@@ -1949,7 +2038,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             </div>
           )}
 
-          {visibleMessages.map((msg, msgIndex) => {
+          {visibleMessages.map((msg) => {
             if (msg.role === 'tool') {
               return (
                 <div key={msg.id} className={styles.messageBubbleTool}>→ {msg.text}</div>
@@ -2004,6 +2093,8 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 </div>
               );
             }
+            const submittedAnswerText =
+              submittedAnswersByAgentMessageId.get(msg.id);
             return (
               <InterviewAgentMessage
                 key={msg.id}
@@ -2015,7 +2106,8 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 isRunning={isInteractionBusy}
                 questionOffset={messageQOffsets.get(msg.id) ?? 0}
                 interviewLocked={isChatLocked}
-                alreadyAnswered={msgIndex < lastUserMsgIndex}
+                alreadyAnswered={Boolean(submittedAnswerText)}
+                submittedAnswerText={submittedAnswerText}
               />
             );
           })}
