@@ -216,16 +216,27 @@ increase.
 
 ### Task 3: Add durable run protocol tables and contracts
 
+**Status:** Complete for this branch (persistence contracts only; no live V2
+routing, Azure provisioning, or production migration).
+
 **Files:**
 
 - Modify: `src/server/db/schema.ts`
-- Create: `migrations/<timestamp>_ai-run-v2-control-plane.sql`
+- Create: `migrations/20260917220000_ai-run-v2-control-plane.sql`
+- Create: `migrations/20260917221000_ai-run-v2-active-thread-index.js`
 - Create: `src/shared/types/aiRunV2.ts`
 - Create: `src/server/services/aiRunV2/outboxRepository.ts`
 - Create: `src/server/services/aiRunV2/inboxRepository.ts`
 - Create: `src/server/services/aiRunV2/distributedLeaseRepository.ts`
 - Create: `src/server/services/aiRunV2/runAttemptRepository.ts`
 - Create: `src/server/services/aiRunV2/artifactManifest.ts`
+- Test: `src/server/__tests__/aiRunV2Types.test.ts`
+- Test: `src/server/__tests__/aiRunV2PersistenceContracts.test.ts`
+- Test: `src/server/__tests__/aiRunV2ArtifactManifest.test.ts`
+- Test: `src/server/__tests__/aiRunV2DistributedLeaseRepository.test.ts`
+- Test: `src/server/__tests__/aiRunV2OutboxRepository.test.ts`
+- Test: `src/server/__tests__/aiRunV2InboxRepository.test.ts`
+- Test: `src/server/__tests__/aiRunV2RunAttemptRepository.test.ts`
 - Test: `tests/integration/ai-run-v2-persistence.integration.test.ts`
 
 **Interfaces:**
@@ -238,18 +249,27 @@ increase.
   - `http-files-v1` and `servicebus-blob-v2` transport markers
   - `checking_worker`, `finalizing`, and terminal failure categories
 
-- [ ] Define exact V2 command, checkpoint, result, and manifest schemas.
-- [ ] Add one-active-run-per-thread enforcement.
-- [ ] Add permanent seeded leases for admission, recovery, reaper, and outbox.
-- [ ] Enforce update-only lease acquisition/renewal for application roles.
-- [ ] Keep acquisition and renewal as distinct atomic statements.
-- [ ] Use PostgreSQL time and a non-resetting bigint fencing token.
-- [ ] Add an abort signal for lost long-running leases.
-- [ ] Add idempotent inbox event IDs and monotonic checkpoint sequences.
-- [ ] Add attempt-scoped dispatch fences.
-- [ ] Add artifact status distinct from execution status.
-- [ ] Add integration tests for duplicates, stale fences, lease takeover, and
+- [x] Define exact V2 command, checkpoint, result, and manifest schemas.
+- [x] Add one-active-run-per-thread enforcement.
+- [x] Add permanent seeded leases for admission, recovery, reaper, and outbox.
+- [x] Enforce update-only lease acquisition/renewal for application roles.
+- [x] Keep acquisition and renewal as distinct atomic statements.
+- [x] Use PostgreSQL time and a non-resetting bigint fencing token.
+- [x] Add an abort signal for lost long-running leases.
+- [x] Add idempotent inbox event IDs and monotonic checkpoint sequences.
+- [x] Add attempt-scoped dispatch fences.
+- [x] Add artifact status distinct from execution status.
+- [x] Add integration tests for duplicates, stale fences, lease takeover, and
   split-brain behavior.
+
+**Verification evidence (2026-09-18, branch `tbi/infra-changes`):**
+
+- Unit suites: 30 passed (`aiRunV2*` focused Jest run).
+- Integration: 8 passed against approved `aipilot_e2e` only
+  (`ai-run-v2-persistence.integration.test.ts`).
+- V1 regression: 166 passed (lifecycle / ingest / reaper / publisher).
+- `npm run build:server` and `git diff --check` clean after formatting.
+- Local commits `f066f608`..`cf696cf6` (contracts through integration proof).
 
 ---
 
