@@ -309,6 +309,11 @@ async function requireMessageSendAccess(
   switch (phase.outcome) {
     case 'not_applicable':
       break;
+    case 'phase_closed':
+      res.status(403).json({
+        error: 'This interview phase is closed and no longer accepts messages',
+      });
+      return;
     case 'not_owner':
       res.status(403).json({
         error: 'Only the assigned Requirements owner can send messages in this phase',

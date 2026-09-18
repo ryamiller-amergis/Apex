@@ -147,24 +147,31 @@ export async function canWriteThread(userId: string, threadId: string): Promise<
  * Outcome of the Requirements-phase check for a single message send.
  * `not_applicable` means this thread has no open Requirements phase, so the
  * caller must fall back to the existing thread-write rules.
+ * `phase_closed` means the last configured Requirements phase was approved, so
+ * the caller must reject the send instead of falling back to thread ownership.
  */
 export type RequirementsPhaseMessageWrite =
   | { outcome: 'not_applicable' }
   | { outcome: 'allowed'; thread: ChatThread }
   | { outcome: 'not_owner' }
   | { outcome: 'missing_manage_permission' }
-  | { outcome: 'thread_not_found' };
+  | { outcome: 'thread_not_found' }
+  | { outcome: 'phase_closed' };
 
-export type TechnicalPhaseMessageWrite = RequirementsPhaseMessageWrite;
+export type TechnicalPhaseMessageWrite = Exclude<
+  RequirementsPhaseMessageWrite,
+  { outcome: 'phase_closed' }
+>;
 
 /** A configured Requirements phase that has not been approved yet. */
 function requirementsPhaseIsOpen(row: {
   phaseFlow: string | null;
   requirementsPhaseStatus: string | null;
 }): boolean {
-  if (row.phaseFlow === 'requirements_only') return true;
-  return row.phaseFlow === 'both_sequential'
-    && row.requirementsPhaseStatus !== 'approved';
+  if (row.phaseFlow !== 'requirements_only' && row.phaseFlow !== 'both_sequential') {
+    return false;
+  }
+  return row.requirementsPhaseStatus !== 'approved';
 }
 
 /**
@@ -176,7 +183,8 @@ function requirementsPhaseIsOpen(row: {
  * deliberately ignores thread ownership. It applies to the message-send route
  * only; technical-only flows, legacy interviews without phase fields, and
  * non-interview threads all report `not_applicable` and keep their existing
- * rules.
+ * rules. An approved `requirements_only` phase reports `phase_closed` so the
+ * send route cannot reopen the thread under the original author's ownership.
  */
 export async function resolveRequirementsPhaseMessageWrite(
   userId: string,
@@ -190,7 +198,16 @@ export async function resolveRequirementsPhaseMessageWrite(
       requirementsPhaseStatus: true,
     },
   });
-  if (!interview || !requirementsPhaseIsOpen(interview)) {
+  if (!interview) {
+    return { outcome: 'not_applicable' };
+  }
+  if (
+    interview.phaseFlow === 'requirements_only'
+    && interview.requirementsPhaseStatus === 'approved'
+  ) {
+    return { outcome: 'phase_closed' };
+  }
+  if (!requirementsPhaseIsOpen(interview)) {
     return { outcome: 'not_applicable' };
   }
 

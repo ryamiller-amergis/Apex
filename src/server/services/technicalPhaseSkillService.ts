@@ -52,7 +52,8 @@ async function loadSeedContext(row: InterviewRow): Promise<TechnicalPhaseSeedCon
   const originalThread = await loadFullThread(row.chatThreadId);
   const originalPrompt = originalThread?.messages.find(
     (message) => message.role === 'user' && !message.hidden && message.text.trim(),
-  )?.text.trim();
+  )?.text.trim()
+    || originalThread?.kickoff.transcript?.trim();
   if (!originalPrompt) {
     throw httpError(409, 'The original interview prompt is unavailable.');
   }
