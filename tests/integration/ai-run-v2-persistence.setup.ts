@@ -25,7 +25,7 @@ function resolveTestDatabaseUrl(): string {
   const base = process.env.DATABASE_URL?.trim();
   if (!base) {
     throw new Error(
-      '[ai-run-v2-persistence] TEST_DATABASE_URL or DATABASE_URL must be set',
+      '[ai-run-v2-persistence] TEST_DATABASE_URL or DATABASE_URL must be set'
     );
   }
   return base.replace(/\/([^/?]+)(\?.*)?$/, '/$1_e2e$2');
@@ -40,7 +40,7 @@ function assertApprovedTestDatabase(url: string): void {
   }
   if (!dbName.endsWith(APPROVED_TEST_DB_SUFFIX)) {
     throw new Error(
-      `[ai-run-v2-persistence] Refusing to run: database "${dbName}" is not an approved *_e2e test database`,
+      `[ai-run-v2-persistence] Refusing to run: database "${dbName}" is not an approved *_e2e test database`
     );
   }
 }

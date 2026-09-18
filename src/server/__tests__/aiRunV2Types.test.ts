@@ -112,39 +112,49 @@ describe('AI-run V2 shared types', () => {
   });
 
   it('rejects commands with unknown schema versions, kinds, or missing fences', () => {
-    expect(isAiRunV2Command({
-      ...envelopeBase,
-      schemaVersion: 1,
-      kind: 'dispatch_command',
-      transport: 'servicebus-blob-v2',
-      specRef: blobRef,
-    })).toBe(false);
-    expect(isAiRunV2Command({
-      ...envelopeBase,
-      kind: 'legacy_dispatch',
-      transport: 'servicebus-blob-v2',
-      specRef: blobRef,
-    })).toBe(false);
-    expect(isAiRunV2Command({
-      ...envelopeBase,
-      attemptNumber: 0,
-      kind: 'dispatch_command',
-      transport: 'servicebus-blob-v2',
-      specRef: blobRef,
-    })).toBe(false);
-    expect(isAiRunV2Command({
-      ...envelopeBase,
-      dispatchMessageId: '',
-      kind: 'dispatch_command',
-      transport: 'servicebus-blob-v2',
-      specRef: blobRef,
-    })).toBe(false);
-    expect(isAiRunV2Command({
-      ...envelopeBase,
-      kind: 'dispatch_command',
-      transport: 'servicebus-blob-v2',
-      specRef: { container: 'ai-run-artifacts' },
-    })).toBe(false);
+    expect(
+      isAiRunV2Command({
+        ...envelopeBase,
+        schemaVersion: 1,
+        kind: 'dispatch_command',
+        transport: 'servicebus-blob-v2',
+        specRef: blobRef,
+      })
+    ).toBe(false);
+    expect(
+      isAiRunV2Command({
+        ...envelopeBase,
+        kind: 'legacy_dispatch',
+        transport: 'servicebus-blob-v2',
+        specRef: blobRef,
+      })
+    ).toBe(false);
+    expect(
+      isAiRunV2Command({
+        ...envelopeBase,
+        attemptNumber: 0,
+        kind: 'dispatch_command',
+        transport: 'servicebus-blob-v2',
+        specRef: blobRef,
+      })
+    ).toBe(false);
+    expect(
+      isAiRunV2Command({
+        ...envelopeBase,
+        dispatchMessageId: '',
+        kind: 'dispatch_command',
+        transport: 'servicebus-blob-v2',
+        specRef: blobRef,
+      })
+    ).toBe(false);
+    expect(
+      isAiRunV2Command({
+        ...envelopeBase,
+        kind: 'dispatch_command',
+        transport: 'servicebus-blob-v2',
+        specRef: { container: 'ai-run-artifacts' },
+      })
+    ).toBe(false);
   });
 
   it('accepts started, heartbeat, and progress checkpoints with positive sequences', () => {
@@ -173,26 +183,34 @@ describe('AI-run V2 shared types', () => {
   });
 
   it('rejects checkpoints with stale schema, unknown kinds, or non-positive sequences', () => {
-    expect(isAiRunV2Checkpoint({
-      ...envelopeBase,
-      kind: 'heartbeat',
-      checkpointSequence: 0,
-    })).toBe(false);
-    expect(isAiRunV2Checkpoint({
-      ...envelopeBase,
-      kind: 'heartbeat',
-      checkpointSequence: 1.5,
-    })).toBe(false);
-    expect(isAiRunV2Checkpoint({
-      ...envelopeBase,
-      kind: 'token',
-      checkpointSequence: 1,
-    })).toBe(false);
-    expect(isAiRunV2Checkpoint({
-      ...envelopeBase,
-      kind: 'started',
-      checkpointSequence: 1,
-    })).toBe(false);
+    expect(
+      isAiRunV2Checkpoint({
+        ...envelopeBase,
+        kind: 'heartbeat',
+        checkpointSequence: 0,
+      })
+    ).toBe(false);
+    expect(
+      isAiRunV2Checkpoint({
+        ...envelopeBase,
+        kind: 'heartbeat',
+        checkpointSequence: 1.5,
+      })
+    ).toBe(false);
+    expect(
+      isAiRunV2Checkpoint({
+        ...envelopeBase,
+        kind: 'token',
+        checkpointSequence: 1,
+      })
+    ).toBe(false);
+    expect(
+      isAiRunV2Checkpoint({
+        ...envelopeBase,
+        kind: 'started',
+        checkpointSequence: 1,
+      })
+    ).toBe(false);
   });
 
   it('accepts terminal results with separate execution and artifact outcomes', () => {
@@ -210,19 +228,23 @@ describe('AI-run V2 shared types', () => {
   });
 
   it('rejects terminal results with unknown statuses or failure categories', () => {
-    expect(isAiRunV2Result({
-      ...envelopeBase,
-      kind: 'terminal',
-      status: 'running',
-      artifactStatus: 'pending',
-    })).toBe(false);
-    expect(isAiRunV2Result({
-      ...envelopeBase,
-      kind: 'terminal',
-      status: 'failed',
-      artifactStatus: 'failed',
-      failureCategory: 'not-a-category',
-    })).toBe(false);
+    expect(
+      isAiRunV2Result({
+        ...envelopeBase,
+        kind: 'terminal',
+        status: 'running',
+        artifactStatus: 'pending',
+      })
+    ).toBe(false);
+    expect(
+      isAiRunV2Result({
+        ...envelopeBase,
+        kind: 'terminal',
+        status: 'failed',
+        artifactStatus: 'failed',
+        failureCategory: 'not-a-category',
+      })
+    ).toBe(false);
   });
 
   it('accepts a valid artifact manifest and rejects empty attempt fences', () => {
@@ -246,13 +268,17 @@ describe('AI-run V2 shared types', () => {
       ],
     };
     expect(isAiRunV2ArtifactManifest(manifest)).toBe(true);
-    expect(isAiRunV2ArtifactManifest({
-      ...manifest,
-      attemptNumber: 0,
-    })).toBe(false);
-    expect(isAiRunV2ArtifactManifest({
-      ...manifest,
-      transport: 'http-files-v1',
-    })).toBe(false);
+    expect(
+      isAiRunV2ArtifactManifest({
+        ...manifest,
+        attemptNumber: 0,
+      })
+    ).toBe(false);
+    expect(
+      isAiRunV2ArtifactManifest({
+        ...manifest,
+        transport: 'http-files-v1',
+      })
+    ).toBe(false);
   });
 });

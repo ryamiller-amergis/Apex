@@ -38,42 +38,56 @@ describe('AI-run V2 artifact manifests', () => {
   });
 
   it('rejects absolute, traversal, and duplicate paths', () => {
-    expect(() => validateArtifactManifest({
-      ...validManifest,
-      files: [{ ...validManifest.files[0], path: '/tmp/secret.md' }],
-    })).toThrow(ArtifactManifestValidationError);
-    expect(() => validateArtifactManifest({
-      ...validManifest,
-      files: [{ ...validManifest.files[0], path: '../escape.md' }],
-    })).toThrow(/traversal/);
-    expect(() => validateArtifactManifest({
-      ...validManifest,
-      files: [validManifest.files[0], validManifest.files[0]],
-    })).toThrow(/Duplicate artifact path/);
+    expect(() =>
+      validateArtifactManifest({
+        ...validManifest,
+        files: [{ ...validManifest.files[0], path: '/tmp/secret.md' }],
+      })
+    ).toThrow(ArtifactManifestValidationError);
+    expect(() =>
+      validateArtifactManifest({
+        ...validManifest,
+        files: [{ ...validManifest.files[0], path: '../escape.md' }],
+      })
+    ).toThrow(/traversal/);
+    expect(() =>
+      validateArtifactManifest({
+        ...validManifest,
+        files: [validManifest.files[0], validManifest.files[0]],
+      })
+    ).toThrow(/Duplicate artifact path/);
   });
 
   it('rejects malformed digests, negative sizes, and unsupported transports', () => {
-    expect(() => validateArtifactManifest({
-      ...validManifest,
-      files: [{ ...validManifest.files[0], sha256: 'not-a-digest' }],
-    })).toThrow(/sha256/);
-    expect(() => validateArtifactManifest({
-      ...validManifest,
-      files: [{ ...validManifest.files[0], sizeBytes: -1 }],
-    })).toThrow(ArtifactManifestValidationError);
-    expect(() => validateArtifactManifest({
-      ...validManifest,
-      transport: 'http-files-v1',
-    })).toThrow(ArtifactManifestValidationError);
-    expect(() => validateArtifactManifest({
-      ...validManifest,
-      attemptNumber: 0,
-    })).toThrow(ArtifactManifestValidationError);
+    expect(() =>
+      validateArtifactManifest({
+        ...validManifest,
+        files: [{ ...validManifest.files[0], sha256: 'not-a-digest' }],
+      })
+    ).toThrow(/sha256/);
+    expect(() =>
+      validateArtifactManifest({
+        ...validManifest,
+        files: [{ ...validManifest.files[0], sizeBytes: -1 }],
+      })
+    ).toThrow(ArtifactManifestValidationError);
+    expect(() =>
+      validateArtifactManifest({
+        ...validManifest,
+        transport: 'http-files-v1',
+      })
+    ).toThrow(ArtifactManifestValidationError);
+    expect(() =>
+      validateArtifactManifest({
+        ...validManifest,
+        attemptNumber: 0,
+      })
+    ).toThrow(ArtifactManifestValidationError);
   });
 
   it('builds the canonical manifest object key', () => {
     expect(manifestObjectKey('run-1', 2)).toBe(
-      'runs/run-1/attempts/2/manifest.json',
+      'runs/run-1/attempts/2/manifest.json'
     );
     expect(() => manifestObjectKey('', 1)).toThrow(/runId/);
     expect(() => manifestObjectKey('run-1', 0)).toThrow(/attemptNumber/);

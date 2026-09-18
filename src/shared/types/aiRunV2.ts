@@ -64,7 +64,8 @@ export const AI_RUN_V2_FAILURE_CATEGORIES = [
   'lease_lost',
   'internal_error',
 ] as const;
-export type AiRunV2FailureCategory = (typeof AI_RUN_V2_FAILURE_CATEGORIES)[number];
+export type AiRunV2FailureCategory =
+  (typeof AI_RUN_V2_FAILURE_CATEGORIES)[number];
 
 export const AI_RUN_V2_COMMAND_KINDS = ['dispatch_command'] as const;
 export type AiRunV2CommandKind = (typeof AI_RUN_V2_COMMAND_KINDS)[number];
@@ -85,7 +86,8 @@ export const AI_CONTROL_PLANE_LEASE_KEYS = [
   'reaper',
   'outbox',
 ] as const;
-export type AiControlPlaneLeaseKey = (typeof AI_CONTROL_PLANE_LEASE_KEYS)[number];
+export type AiControlPlaneLeaseKey =
+  (typeof AI_CONTROL_PLANE_LEASE_KEYS)[number];
 
 export type AiRunBlobRef = Readonly<{
   container: string;
@@ -102,44 +104,49 @@ type AiRunV2EnvelopeBase = Readonly<{
   timestamp: string;
 }>;
 
-export type AiRunV2Command = AiRunV2EnvelopeBase & Readonly<{
-  kind: 'dispatch_command';
-  transport: 'servicebus-blob-v2';
-  specRef: AiRunBlobRef;
-}>;
+export type AiRunV2Command = AiRunV2EnvelopeBase &
+  Readonly<{
+    kind: 'dispatch_command';
+    transport: 'servicebus-blob-v2';
+    specRef: AiRunBlobRef;
+  }>;
 
-export type AiRunV2StartedCheckpoint = AiRunV2EnvelopeBase & Readonly<{
-  kind: 'started';
-  checkpointSequence: number;
-  containerAppsExecutionId: string;
-}>;
+export type AiRunV2StartedCheckpoint = AiRunV2EnvelopeBase &
+  Readonly<{
+    kind: 'started';
+    checkpointSequence: number;
+    containerAppsExecutionId: string;
+  }>;
 
-export type AiRunV2HeartbeatCheckpoint = AiRunV2EnvelopeBase & Readonly<{
-  kind: 'heartbeat';
-  checkpointSequence: number;
-}>;
+export type AiRunV2HeartbeatCheckpoint = AiRunV2EnvelopeBase &
+  Readonly<{
+    kind: 'heartbeat';
+    checkpointSequence: number;
+  }>;
 
-export type AiRunV2ProgressCheckpoint = AiRunV2EnvelopeBase & Readonly<{
-  kind: 'progress';
-  checkpointSequence: number;
-  phase: string;
-  status: string;
-  detail?: string;
-}>;
+export type AiRunV2ProgressCheckpoint = AiRunV2EnvelopeBase &
+  Readonly<{
+    kind: 'progress';
+    checkpointSequence: number;
+    phase: string;
+    status: string;
+    detail?: string;
+  }>;
 
 export type AiRunV2Checkpoint =
   | AiRunV2StartedCheckpoint
   | AiRunV2HeartbeatCheckpoint
   | AiRunV2ProgressCheckpoint;
 
-export type AiRunV2TerminalResult = AiRunV2EnvelopeBase & Readonly<{
-  kind: 'terminal';
-  status: AiRunV2TerminalAttemptStatus;
-  artifactStatus: AiRunArtifactStatus;
-  failureCategory?: AiRunV2FailureCategory;
-  detail?: string;
-  manifestRef?: AiRunBlobRef;
-}>;
+export type AiRunV2TerminalResult = AiRunV2EnvelopeBase &
+  Readonly<{
+    kind: 'terminal';
+    status: AiRunV2TerminalAttemptStatus;
+    artifactStatus: AiRunArtifactStatus;
+    failureCategory?: AiRunV2FailureCategory;
+    detail?: string;
+    manifestRef?: AiRunBlobRef;
+  }>;
 
 export type AiRunV2Result = AiRunV2TerminalResult;
 
@@ -165,93 +172,111 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isPositiveInteger(value: unknown): value is number {
-  return typeof value === 'number'
-    && Number.isInteger(value)
-    && value > 0;
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
-  return typeof value === 'number'
-    && Number.isInteger(value)
-    && value >= 0;
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
 }
 
 export function isAiRunTransportVersion(
-  value: unknown,
+  value: unknown
 ): value is AiRunTransportVersion {
-  return typeof value === 'string'
-    && (AI_RUN_TRANSPORT_VERSIONS as readonly string[]).includes(value);
+  return (
+    typeof value === 'string' &&
+    (AI_RUN_TRANSPORT_VERSIONS as readonly string[]).includes(value)
+  );
 }
 
 export function isAiRunV2AttemptStatus(
-  value: unknown,
+  value: unknown
 ): value is AiRunV2AttemptStatus {
-  return typeof value === 'string'
-    && (AI_RUN_V2_ATTEMPT_STATUSES as readonly string[]).includes(value);
+  return (
+    typeof value === 'string' &&
+    (AI_RUN_V2_ATTEMPT_STATUSES as readonly string[]).includes(value)
+  );
 }
 
 export function isAiRunV2ActiveAttemptStatus(
-  value: unknown,
+  value: unknown
 ): value is AiRunV2ActiveAttemptStatus {
-  return typeof value === 'string'
-    && (AI_RUN_V2_ACTIVE_ATTEMPT_STATUSES as readonly string[]).includes(value);
+  return (
+    typeof value === 'string' &&
+    (AI_RUN_V2_ACTIVE_ATTEMPT_STATUSES as readonly string[]).includes(value)
+  );
 }
 
 export function isAiRunV2TerminalAttemptStatus(
-  value: unknown,
+  value: unknown
 ): value is AiRunV2TerminalAttemptStatus {
-  return typeof value === 'string'
-    && (AI_RUN_V2_TERMINAL_ATTEMPT_STATUSES as readonly string[]).includes(value);
+  return (
+    typeof value === 'string' &&
+    (AI_RUN_V2_TERMINAL_ATTEMPT_STATUSES as readonly string[]).includes(value)
+  );
 }
 
 export function isAiRunArtifactStatus(
-  value: unknown,
+  value: unknown
 ): value is AiRunArtifactStatus {
-  return typeof value === 'string'
-    && (AI_RUN_ARTIFACT_STATUSES as readonly string[]).includes(value);
+  return (
+    typeof value === 'string' &&
+    (AI_RUN_ARTIFACT_STATUSES as readonly string[]).includes(value)
+  );
 }
 
 export function isAiRunV2FailureCategory(
-  value: unknown,
+  value: unknown
 ): value is AiRunV2FailureCategory {
-  return typeof value === 'string'
-    && (AI_RUN_V2_FAILURE_CATEGORIES as readonly string[]).includes(value);
+  return (
+    typeof value === 'string' &&
+    (AI_RUN_V2_FAILURE_CATEGORIES as readonly string[]).includes(value)
+  );
 }
 
 export function isAiControlPlaneLeaseKey(
-  value: unknown,
+  value: unknown
 ): value is AiControlPlaneLeaseKey {
-  return typeof value === 'string'
-    && (AI_CONTROL_PLANE_LEASE_KEYS as readonly string[]).includes(value);
+  return (
+    typeof value === 'string' &&
+    (AI_CONTROL_PLANE_LEASE_KEYS as readonly string[]).includes(value)
+  );
 }
 
 export function isAiRunBlobRef(value: unknown): value is AiRunBlobRef {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Record<string, unknown>;
-  return isNonEmptyString(candidate.container) && isNonEmptyString(candidate.key);
+  return (
+    isNonEmptyString(candidate.container) && isNonEmptyString(candidate.key)
+  );
 }
 
 function hasEnvelopeBase(value: unknown): value is AiRunV2EnvelopeBase {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Record<string, unknown>;
-  return candidate.schemaVersion === AI_RUN_V2_SCHEMA_VERSION
-    && isNonEmptyString(candidate.eventId)
-    && isNonEmptyString(candidate.runId)
-    && isNonEmptyString(candidate.attemptId)
-    && isPositiveInteger(candidate.attemptNumber)
-    && isNonEmptyString(candidate.dispatchMessageId)
-    && isNonEmptyString(candidate.timestamp);
+  return (
+    candidate.schemaVersion === AI_RUN_V2_SCHEMA_VERSION &&
+    isNonEmptyString(candidate.eventId) &&
+    isNonEmptyString(candidate.runId) &&
+    isNonEmptyString(candidate.attemptId) &&
+    isPositiveInteger(candidate.attemptNumber) &&
+    isNonEmptyString(candidate.dispatchMessageId) &&
+    isNonEmptyString(candidate.timestamp)
+  );
 }
 
 export function isAiRunV2Command(value: unknown): value is AiRunV2Command {
   if (!hasEnvelopeBase(value)) return false;
   const candidate = value as Record<string, unknown>;
-  return candidate.kind === 'dispatch_command'
-    && candidate.transport === 'servicebus-blob-v2'
-    && isAiRunBlobRef(candidate.specRef);
+  return (
+    candidate.kind === 'dispatch_command' &&
+    candidate.transport === 'servicebus-blob-v2' &&
+    isAiRunBlobRef(candidate.specRef)
+  );
 }
 
-export function isAiRunV2Checkpoint(value: unknown): value is AiRunV2Checkpoint {
+export function isAiRunV2Checkpoint(
+  value: unknown
+): value is AiRunV2Checkpoint {
   if (!hasEnvelopeBase(value)) return false;
   const candidate = value as Record<string, unknown>;
   if (!isPositiveInteger(candidate.checkpointSequence)) return false;
@@ -262,7 +287,9 @@ export function isAiRunV2Checkpoint(value: unknown): value is AiRunV2Checkpoint 
     return true;
   }
   if (candidate.kind === 'progress') {
-    return isNonEmptyString(candidate.phase) && isNonEmptyString(candidate.status);
+    return (
+      isNonEmptyString(candidate.phase) && isNonEmptyString(candidate.status)
+    );
   }
   return false;
 }
@@ -274,28 +301,25 @@ export function isAiRunV2Result(value: unknown): value is AiRunV2Result {
   if (!isAiRunV2TerminalAttemptStatus(candidate.status)) return false;
   if (!isAiRunArtifactStatus(candidate.artifactStatus)) return false;
   if (
-    candidate.failureCategory !== undefined
-    && !isAiRunV2FailureCategory(candidate.failureCategory)
+    candidate.failureCategory !== undefined &&
+    !isAiRunV2FailureCategory(candidate.failureCategory)
   ) {
     return false;
   }
   if (
-    candidate.manifestRef !== undefined
-    && !isAiRunBlobRef(candidate.manifestRef)
+    candidate.manifestRef !== undefined &&
+    !isAiRunBlobRef(candidate.manifestRef)
   ) {
     return false;
   }
-  if (
-    candidate.detail !== undefined
-    && typeof candidate.detail !== 'string'
-  ) {
+  if (candidate.detail !== undefined && typeof candidate.detail !== 'string') {
     return false;
   }
   return true;
 }
 
 export function isAiRunV2ArtifactManifest(
-  value: unknown,
+  value: unknown
 ): value is AiRunV2ArtifactManifest {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Record<string, unknown>;
@@ -309,9 +333,11 @@ export function isAiRunV2ArtifactManifest(
   return candidate.files.every((entry) => {
     if (!entry || typeof entry !== 'object') return false;
     const file = entry as Record<string, unknown>;
-    return isNonEmptyString(file.path)
-      && isNonEmptyString(file.sha256)
-      && isNonNegativeInteger(file.sizeBytes)
-      && isAiRunBlobRef(file.ref);
+    return (
+      isNonEmptyString(file.path) &&
+      isNonEmptyString(file.sha256) &&
+      isNonNegativeInteger(file.sizeBytes) &&
+      isAiRunBlobRef(file.ref)
+    );
   });
 }

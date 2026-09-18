@@ -7,17 +7,23 @@ import {
 } from '../services/aiRunV2/distributedLeaseRepository';
 
 function createMemoryStore(initialToken = 0n): DistributedLeaseStore & {
-  rows: Map<string, {
-    holderId: string | null;
-    fencingToken: bigint;
-    expiresAtMs: number;
-  }>;
+  rows: Map<
+    string,
+    {
+      holderId: string | null;
+      fencingToken: bigint;
+      expiresAtMs: number;
+    }
+  >;
 } {
-  const rows = new Map<string, {
-    holderId: string | null;
-    fencingToken: bigint;
-    expiresAtMs: number;
-  }>();
+  const rows = new Map<
+    string,
+    {
+      holderId: string | null;
+      fencingToken: bigint;
+      expiresAtMs: number;
+    }
+  >();
   for (const key of ['admission', 'recovery', 'reaper', 'outbox'] as const) {
     rows.set(key, {
       holderId: null,
@@ -44,9 +50,9 @@ function createMemoryStore(initialToken = 0n): DistributedLeaseStore & {
       const row = rows.get(leaseKey);
       if (!row) return false;
       if (
-        row.holderId !== holderId
-        || row.fencingToken !== fencingToken
-        || row.expiresAtMs <= Date.now()
+        row.holderId !== holderId ||
+        row.fencingToken !== fencingToken ||
+        row.expiresAtMs <= Date.now()
       ) {
         return false;
       }
@@ -129,27 +135,35 @@ describe('AI-run V2 distributed leases', () => {
       store,
     });
     expect(second?.fencingToken).toBe(3n);
-    await expect(first!.assertOwned()).rejects.toBeInstanceOf(DistributedLeaseLostError);
+    await expect(first!.assertOwned()).rejects.toBeInstanceOf(
+      DistributedLeaseLostError
+    );
     await second?.release();
   });
 
   it('rejects invalid durations and unknown lease keys', async () => {
     const store = createMemoryStore();
-    await expect(tryAcquireLease('reaper', {
-      leaseMs: 0,
-      heartbeatMs: 10,
-      store,
-    })).rejects.toThrow(/leaseMs/);
-    await expect(tryAcquireLease('reaper', {
-      leaseMs: 100,
-      heartbeatMs: 100,
-      store,
-    })).rejects.toThrow(/heartbeatMs must be less than leaseMs/);
-    await expect(tryAcquireLease('watcher' as 'reaper', {
-      leaseMs: 100,
-      heartbeatMs: 10,
-      store,
-    })).rejects.toThrow(/Unknown control-plane lease key/);
+    await expect(
+      tryAcquireLease('reaper', {
+        leaseMs: 0,
+        heartbeatMs: 10,
+        store,
+      })
+    ).rejects.toThrow(/leaseMs/);
+    await expect(
+      tryAcquireLease('reaper', {
+        leaseMs: 100,
+        heartbeatMs: 100,
+        store,
+      })
+    ).rejects.toThrow(/heartbeatMs must be less than leaseMs/);
+    await expect(
+      tryAcquireLease('watcher' as 'reaper', {
+        leaseMs: 100,
+        heartbeatMs: 10,
+        store,
+      })
+    ).rejects.toThrow(/Unknown control-plane lease key/);
   });
 
   it('withDistributedLease releases on success and surfaces unavailability', async () => {
@@ -160,23 +174,29 @@ describe('AI-run V2 distributed leases', () => {
       heartbeatMs: 1_000,
       store,
     });
-    await expect(withDistributedLease('recovery', async () => 'ok', {
-      holderId: 'owner-b',
-      leaseMs: 5_000,
-      heartbeatMs: 1_000,
-      store,
-    })).rejects.toBeInstanceOf(DistributedLeaseUnavailableError);
+    await expect(
+      withDistributedLease('recovery', async () => 'ok', {
+        holderId: 'owner-b',
+        leaseMs: 5_000,
+        heartbeatMs: 1_000,
+        store,
+      })
+    ).rejects.toBeInstanceOf(DistributedLeaseUnavailableError);
 
     await held?.release();
-    const value = await withDistributedLease('recovery', async (lease) => {
-      expect(lease.leaseKey).toBe('recovery');
-      return 'done';
-    }, {
-      holderId: 'owner-b',
-      leaseMs: 5_000,
-      heartbeatMs: 1_000,
-      store,
-    });
+    const value = await withDistributedLease(
+      'recovery',
+      async (lease) => {
+        expect(lease.leaseKey).toBe('recovery');
+        return 'done';
+      },
+      {
+        holderId: 'owner-b',
+        leaseMs: 5_000,
+        heartbeatMs: 1_000,
+        store,
+      }
+    );
     expect(value).toBe('done');
     expect(store.rows.get('recovery')?.holderId).toBeNull();
   });

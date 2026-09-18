@@ -35,20 +35,22 @@ export interface DistributedLeaseStore {
   tryAcquire(
     leaseKey: AiControlPlaneLeaseKey,
     holderId: string,
-    leaseMs: number,
+    leaseMs: number
   ): Promise<bigint | null>;
   renew(
     leaseKey: AiControlPlaneLeaseKey,
     holderId: string,
     fencingToken: bigint,
-    leaseMs: number,
+    leaseMs: number
   ): Promise<boolean>;
   release(
     leaseKey: AiControlPlaneLeaseKey,
     holderId: string,
-    fencingToken: bigint,
+    fencingToken: bigint
   ): Promise<boolean>;
-  getLease(leaseKey: AiControlPlaneLeaseKey): Promise<DistributedLeaseRow | null>;
+  getLease(
+    leaseKey: AiControlPlaneLeaseKey
+  ): Promise<DistributedLeaseRow | null>;
 }
 
 export interface DistributedLeaseOptions {
@@ -95,13 +97,14 @@ function requireLeaseKey(leaseKey: string): AiControlPlaneLeaseKey {
 
 function toBigInt(value: unknown): bigint {
   if (typeof value === 'bigint') return value;
-  if (typeof value === 'number' && Number.isInteger(value)) return BigInt(value);
+  if (typeof value === 'number' && Number.isInteger(value))
+    return BigInt(value);
   if (typeof value === 'string' && /^-?\d+$/.test(value)) return BigInt(value);
   throw new Error(`Unexpected fencing token value: ${String(value)}`);
 }
 
 export function createPostgresDistributedLeaseStore(
-  executor: SqlExecutor = db,
+  executor: SqlExecutor = db
 ): DistributedLeaseStore {
   return {
     async tryAcquire(leaseKey, holderId, leaseMs) {
@@ -186,14 +189,17 @@ const postgresDistributedLeaseStore = createPostgresDistributedLeaseStore();
 
 export async function tryAcquireLease(
   leaseKey: AiControlPlaneLeaseKey,
-  options: DistributedLeaseOptions = {},
+  options: DistributedLeaseOptions = {}
 ): Promise<HeldDistributedLease | null> {
   requireLeaseKey(leaseKey);
   const holderId = options.holderId ?? uuidv4();
-  const leaseMs = requirePositiveMs('leaseMs', options.leaseMs ?? DEFAULT_LEASE_MS);
+  const leaseMs = requirePositiveMs(
+    'leaseMs',
+    options.leaseMs ?? DEFAULT_LEASE_MS
+  );
   const heartbeatMs = requirePositiveMs(
     'heartbeatMs',
-    options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS,
+    options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS
   );
   if (heartbeatMs >= leaseMs) {
     throw new Error('heartbeatMs must be less than leaseMs');
@@ -221,7 +227,12 @@ export async function tryAcquireLease(
     if (released || abortController.signal.aborted) {
       throw new DistributedLeaseLostError();
     }
-    const renewed = await store.renew(leaseKey, holderId, fencingToken, leaseMs);
+    const renewed = await store.renew(
+      leaseKey,
+      holderId,
+      fencingToken,
+      leaseMs
+    );
     if (!renewed) {
       abortController.abort(new DistributedLeaseLostError());
       throw new DistributedLeaseLostError();
@@ -243,8 +254,8 @@ export async function tryAcquireLease(
               error instanceof DistributedLeaseLostError
                 ? error
                 : new DistributedLeaseLostError(
-                  error instanceof Error ? error.message : String(error),
-                ),
+                    error instanceof Error ? error.message : String(error)
+                  )
             );
           }
         } finally {
@@ -278,7 +289,7 @@ export async function tryAcquireLease(
 export async function withDistributedLease<T>(
   leaseKey: AiControlPlaneLeaseKey,
   work: (lease: HeldDistributedLease) => Promise<T>,
-  options: DistributedLeaseOptions = {},
+  options: DistributedLeaseOptions = {}
 ): Promise<T> {
   const lease = await tryAcquireLease(leaseKey, options);
   if (!lease) {
@@ -295,10 +306,13 @@ export async function renewLease(
   leaseKey: AiControlPlaneLeaseKey,
   holderId: string,
   fencingToken: bigint,
-  options: Pick<DistributedLeaseOptions, 'leaseMs' | 'store'> = {},
+  options: Pick<DistributedLeaseOptions, 'leaseMs' | 'store'> = {}
 ): Promise<boolean> {
   const store = options.store ?? postgresDistributedLeaseStore;
-  const leaseMs = requirePositiveMs('leaseMs', options.leaseMs ?? DEFAULT_LEASE_MS);
+  const leaseMs = requirePositiveMs(
+    'leaseMs',
+    options.leaseMs ?? DEFAULT_LEASE_MS
+  );
   return store.renew(leaseKey, holderId, fencingToken, leaseMs);
 }
 
@@ -306,7 +320,7 @@ export async function releaseLease(
   leaseKey: AiControlPlaneLeaseKey,
   holderId: string,
   fencingToken: bigint,
-  options: Pick<DistributedLeaseOptions, 'store'> = {},
+  options: Pick<DistributedLeaseOptions, 'store'> = {}
 ): Promise<boolean> {
   const store = options.store ?? postgresDistributedLeaseStore;
   return store.release(leaseKey, holderId, fencingToken);
@@ -316,7 +330,7 @@ export async function assertLeaseOwned(
   leaseKey: AiControlPlaneLeaseKey,
   holderId: string,
   fencingToken: bigint,
-  options: Pick<DistributedLeaseOptions, 'leaseMs' | 'store'> = {},
+  options: Pick<DistributedLeaseOptions, 'leaseMs' | 'store'> = {}
 ): Promise<void> {
   const renewed = await renewLease(leaseKey, holderId, fencingToken, options);
   if (!renewed) {

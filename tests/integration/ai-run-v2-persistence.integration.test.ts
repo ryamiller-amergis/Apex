@@ -30,19 +30,20 @@ const specRef = {
 async function cleanup(): Promise<void> {
   await pool.query(
     `DELETE FROM ai_run_inbox WHERE run_id LIKE $1 OR attempt_id LIKE $1`,
-    [`${PREFIX}%`],
+    [`${PREFIX}%`]
   );
   await pool.query(
     `DELETE FROM ai_run_outbox WHERE run_id LIKE $1 OR idempotency_key LIKE $1`,
-    [`${PREFIX}%`],
+    [`${PREFIX}%`]
   );
-  await pool.query(`DELETE FROM agent_runs WHERE id LIKE $1 OR thread_id LIKE $1`, [
-    `${PREFIX}%`,
-  ]);
+  await pool.query(
+    `DELETE FROM agent_runs WHERE id LIKE $1 OR thread_id LIKE $1`,
+    [`${PREFIX}%`]
+  );
   await pool.query(
     `UPDATE ai_control_plane_leases
      SET holder_id = NULL, expires_at = 'epoch', updated_at = now()
-     WHERE lease_key IN ('admission', 'recovery', 'reaper', 'outbox')`,
+     WHERE lease_key IN ('admission', 'recovery', 'reaper', 'outbox')`
   );
 }
 
@@ -53,11 +54,11 @@ function timeoutIso(hoursAhead = 1): string {
 describe('AI-run V2 persistence integration', () => {
   beforeAll(async () => {
     const tables = await pool.query<{ exists: boolean }>(
-      `SELECT to_regclass('public.ai_run_attempts') IS NOT NULL AS exists`,
+      `SELECT to_regclass('public.ai_run_attempts') IS NOT NULL AS exists`
     );
     if (!tables.rows[0]?.exists) {
       throw new Error(
-        '[ai-run-v2-persistence] ai_run_attempts missing — migrate the *_e2e database first',
+        '[ai-run-v2-persistence] ai_run_attempts missing — migrate the *_e2e database first'
       );
     }
   });
@@ -79,12 +80,14 @@ describe('AI-run V2 persistence integration', () => {
          $1, $2, 'queued', 'project-1', 'background', now(),
          FALSE, now(), now(), $3, now(), now()
        )`,
-      [runId, `${PREFIX}thread-v1`, timeoutIso()],
+      [runId, `${PREFIX}thread-v1`, timeoutIso()]
     );
-    const result = await pool.query<{ transport_version: string; status: string }>(
-      `SELECT transport_version, status FROM agent_runs WHERE id = $1`,
-      [runId],
-    );
+    const result = await pool.query<{
+      transport_version: string;
+      status: string;
+    }>(`SELECT transport_version, status FROM agent_runs WHERE id = $1`, [
+      runId,
+    ]);
     expect(result.rows[0]).toEqual({
       transport_version: 'http-files-v1',
       status: 'queued',
@@ -120,11 +123,11 @@ describe('AI-run V2 persistence integration', () => {
 
     await pool.query(
       `UPDATE ai_run_attempts SET status = 'failed', updated_at = now() WHERE run_id = $1`,
-      [`${PREFIX}active-1`],
+      [`${PREFIX}active-1`]
     );
     await pool.query(
       `UPDATE agent_runs SET status = 'failed', updated_at = now() WHERE id = $1`,
-      [`${PREFIX}active-1`],
+      [`${PREFIX}active-1`]
     );
 
     const retry = await repo.createQueuedV2Run({
@@ -166,7 +169,7 @@ describe('AI-run V2 persistence integration', () => {
         attemptId: firstDispatch.attemptId,
         expectedDispatchMessageId: `${PREFIX}dispatch-stale`,
         to: 'running',
-      }),
+      })
     ).resolves.toEqual({ status: 'fence_mismatch' });
 
     await expect(
@@ -174,7 +177,7 @@ describe('AI-run V2 persistence integration', () => {
         attemptId: firstDispatch.attemptId,
         expectedDispatchMessageId: `${PREFIX}dispatch-1`,
         to: 'running',
-      }),
+      })
     ).resolves.toEqual({
       status: 'ok',
       attemptId: firstDispatch.attemptId,
@@ -208,12 +211,14 @@ describe('AI-run V2 persistence integration', () => {
          $1, $2, 'queued', 'project-1', 'background', now(),
          FALSE, now(), now(), $3, 'servicebus-blob-v2', now(), now()
        )`,
-      [runId, `${PREFIX}thread-rollback`, timeoutIso()],
+      [runId, `${PREFIX}thread-rollback`, timeoutIso()]
     );
 
     await expect(
       db.transaction(async (tx) => {
-        const executor = { execute: (query: unknown) => tx.execute(query as never) };
+        const executor = {
+          execute: (query: unknown) => tx.execute(query as never),
+        };
         const outbox = createOutboxRepository(executor);
         await tx.execute(sql`
           INSERT INTO ai_run_attempts (
@@ -228,13 +233,15 @@ describe('AI-run V2 persistence integration', () => {
             ${JSON.stringify(specRef)}::jsonb
           )
         `);
-        await outbox.enqueue([{
-          idempotencyKey: `${PREFIX}outbox-rb`,
-          kind: 'dispatch_command',
-          runId,
-          attemptId: `${PREFIX}attempt-rb-1`,
-          payload: { kind: 'dispatch_command' },
-        }]);
+        await outbox.enqueue([
+          {
+            idempotencyKey: `${PREFIX}outbox-rb`,
+            kind: 'dispatch_command',
+            runId,
+            attemptId: `${PREFIX}attempt-rb-1`,
+            payload: { kind: 'dispatch_command' },
+          },
+        ]);
         await tx.execute(sql`
           INSERT INTO ai_run_attempts (
             id, run_id, attempt_number, dispatch_message_id, status, artifact_status, spec_ref
@@ -248,23 +255,25 @@ describe('AI-run V2 persistence integration', () => {
             ${JSON.stringify(specRef)}::jsonb
           )
         `);
-      }),
+      })
     ).rejects.toThrow();
 
     const attempts = await pool.query(
       `SELECT id FROM ai_run_attempts WHERE run_id = $1`,
-      [runId],
+      [runId]
     );
     const outboxRows = await pool.query(
       `SELECT id FROM ai_run_outbox WHERE run_id = $1`,
-      [runId],
+      [runId]
     );
     expect(attempts.rows).toHaveLength(0);
     expect(outboxRows.rows).toHaveLength(0);
   });
 
   it('claims non-overlapping outbox batches and recovers unprocessed inbox duplicates', async () => {
-    const executor = { execute: (query: unknown) => db.execute(query as never) };
+    const executor = {
+      execute: (query: unknown) => db.execute(query as never),
+    };
     const outbox = createOutboxRepository(executor);
     const inbox = createInboxRepository(executor);
 
@@ -277,7 +286,7 @@ describe('AI-run V2 persistence integration', () => {
          $1, $2, 'running', 'project-1', 'background', now(),
          FALSE, now(), now(), $3, 'servicebus-blob-v2', now(), now()
        )`,
-      [`${PREFIX}outbox-run`, `${PREFIX}thread-outbox`, timeoutIso()],
+      [`${PREFIX}outbox-run`, `${PREFIX}thread-outbox`, timeoutIso()]
     );
 
     await outbox.enqueue([
@@ -296,12 +305,14 @@ describe('AI-run V2 persistence integration', () => {
         payload: { n: 2 },
       },
     ]);
-    const again = await outbox.enqueue([{
-      idempotencyKey: `${PREFIX}outbox-a`,
-      kind: 'dispatch_command',
-      runId: `${PREFIX}outbox-run`,
-      payload: { n: 1 },
-    }]);
+    const again = await outbox.enqueue([
+      {
+        idempotencyKey: `${PREFIX}outbox-a`,
+        kind: 'dispatch_command',
+        runId: `${PREFIX}outbox-run`,
+        payload: { n: 1 },
+      },
+    ]);
     expect(again).toHaveLength(0);
 
     const [batchA, batchB] = await Promise.all([
@@ -389,7 +400,10 @@ describe('AI-run V2 persistence integration', () => {
       kind: 'heartbeat',
       checkpointSequence: 1,
     });
-    expect(stale).toEqual({ status: 'stale_sequence', lastCheckpointSequence: 1 });
+    expect(stale).toEqual({
+      status: 'stale_sequence',
+      lastCheckpointSequence: 1,
+    });
 
     const fenceMismatch = await repo.acceptCheckpoint({
       schemaVersion: AI_RUN_V2_SCHEMA_VERSION,
@@ -458,7 +472,7 @@ describe('AI-run V2 persistence integration', () => {
     await pool.query(
       `UPDATE ai_control_plane_leases
        SET expires_at = now() - interval '1 second', updated_at = now()
-       WHERE lease_key = 'reaper'`,
+       WHERE lease_key = 'reaper'`
     );
 
     const second = await tryAcquireLease('reaper', {
@@ -476,7 +490,7 @@ describe('AI-run V2 persistence integration', () => {
       'reaper',
       `${PREFIX}owner-a`,
       firstToken,
-      5_000,
+      5_000
     );
     expect(staleRenew).toBe(false);
 
@@ -498,14 +512,14 @@ describe('AI-run V2 persistence integration', () => {
     const forgedRelease = await store.release(
       'outbox',
       `${PREFIX}split-b`,
-      lease!.fencingToken,
+      lease!.fencingToken
     );
     expect(forgedRelease).toBe(false);
 
     const forgedToken = await store.release(
       'outbox',
       `${PREFIX}split-a`,
-      lease!.fencingToken + 1n,
+      lease!.fencingToken + 1n
     );
     expect(forgedToken).toBe(false);
 

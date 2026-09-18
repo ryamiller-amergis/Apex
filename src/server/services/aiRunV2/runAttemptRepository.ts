@@ -11,7 +11,11 @@ import {
   type AiRunV2Command,
   type AiRunV2FailureCategory,
 } from '../../../shared/types/aiRunV2';
-import type { AgentRunLane, AgentRunStatus, AgentRunTerminalReason } from '../../../shared/types/agentRunLifecycle';
+import type {
+  AgentRunLane,
+  AgentRunStatus,
+  AgentRunTerminalReason,
+} from '../../../shared/types/agentRunLifecycle';
 import { createOutboxRepository, type SqlExecutor } from './outboxRepository';
 import { createInboxRepository } from './inboxRepository';
 
@@ -27,18 +31,18 @@ export type CreateQueuedV2RunInput = Readonly<{
 
 export type CreateQueuedV2RunResult =
   | {
-    status: 'created';
-    runId: string;
-    attemptId: string;
-    attemptNumber: number;
-    dispatchMessageId: string;
-  }
+      status: 'created';
+      runId: string;
+      attemptId: string;
+      attemptNumber: number;
+      dispatchMessageId: string;
+    }
   | {
-    status: 'active_run_conflict';
-    existingRunId: string;
-    existingTransportVersion: string;
-    existingStatus: string;
-  };
+      status: 'active_run_conflict';
+      existingRunId: string;
+      existingTransportVersion: string;
+      existingStatus: string;
+    };
 
 export type DispatchNextAttemptInput = Readonly<{
   runId: string;
@@ -67,7 +71,11 @@ export type TransitionAttemptResult =
   | { status: 'ok'; attemptId: string; to: AiRunV2AttemptStatus }
   | { status: 'fence_mismatch' }
   | { status: 'not_found' }
-  | { status: 'illegal_transition'; from: AiRunV2AttemptStatus; to: AiRunV2AttemptStatus };
+  | {
+      status: 'illegal_transition';
+      from: AiRunV2AttemptStatus;
+      to: AiRunV2AttemptStatus;
+    };
 
 export type AcceptCheckpointResult =
   | { status: 'accepted'; checkpointSequence: number }
@@ -77,7 +85,7 @@ export type AcceptCheckpointResult =
   | { status: 'not_found' };
 
 type TransactionRunner = <T>(
-  work: (executor: SqlExecutor) => Promise<T>,
+  work: (executor: SqlExecutor) => Promise<T>
 ) => Promise<T>;
 
 function resultRows<T>(result: unknown): T[] {
@@ -85,10 +93,19 @@ function resultRows<T>(result: unknown): T[] {
   return (result as { rows?: T[] } | undefined)?.rows ?? [];
 }
 
-const ALLOWED_ATTEMPT_TRANSITIONS: Record<AiRunV2AttemptStatus, readonly AiRunV2AttemptStatus[]> = {
+const ALLOWED_ATTEMPT_TRANSITIONS: Record<
+  AiRunV2AttemptStatus,
+  readonly AiRunV2AttemptStatus[]
+> = {
   queued: ['dispatched', 'cancelled'],
   dispatched: ['running', 'cancelled', 'failed'],
-  running: ['checking_worker', 'finalizing', 'completed', 'failed', 'cancelled'],
+  running: [
+    'checking_worker',
+    'finalizing',
+    'completed',
+    'failed',
+    'cancelled',
+  ],
   checking_worker: ['running', 'finalizing', 'failed', 'cancelled'],
   finalizing: ['completed', 'failed', 'cancelled'],
   completed: [],
@@ -114,26 +131,28 @@ function headerStatusForAttempt(status: AiRunV2AttemptStatus): AgentRunStatus {
 }
 
 function toV1TerminalReason(
-  failureCategory: AiRunV2FailureCategory | undefined,
+  failureCategory: AiRunV2FailureCategory | undefined
 ): AgentRunTerminalReason | null {
   if (!failureCategory) return null;
   return V1_TERMINAL_REASONS.has(failureCategory)
-    ? failureCategory as AgentRunTerminalReason
+    ? (failureCategory as AgentRunTerminalReason)
     : null;
 }
 
-const defaultTransactionRunner: TransactionRunner = async (work) => db.transaction(
-  async (tx) => work({ execute: (query) => tx.execute(query as never) }),
-);
+const defaultTransactionRunner: TransactionRunner = async (work) =>
+  db.transaction(async (tx) =>
+    work({ execute: (query) => tx.execute(query as never) })
+  );
 
 export function createRunAttemptRepository(options?: {
   runInTransaction?: TransactionRunner;
 }) {
-  const runInTransaction = options?.runInTransaction ?? defaultTransactionRunner;
+  const runInTransaction =
+    options?.runInTransaction ?? defaultTransactionRunner;
 
   return {
     async createQueuedV2Run(
-      input: CreateQueuedV2RunInput,
+      input: CreateQueuedV2RunInput
     ): Promise<CreateQueuedV2RunResult> {
       return runInTransaction(async (executor) => {
         const activeResult = await executor.execute(sql`
@@ -232,7 +251,7 @@ export function createRunAttemptRepository(options?: {
     },
 
     async dispatchNextAttempt(
-      input: DispatchNextAttemptInput,
+      input: DispatchNextAttemptInput
     ): Promise<DispatchNextAttemptResult> {
       return runInTransaction(async (executor) => {
         const outbox = createOutboxRepository(executor);
@@ -255,7 +274,9 @@ export function createRunAttemptRepository(options?: {
           throw new Error(`Run ${input.runId} is not a V2 transport run`);
         }
         if (run.status === 'completed') {
-          throw new Error(`Cannot dispatch another attempt for completed run ${input.runId}`);
+          throw new Error(
+            `Cannot dispatch another attempt for completed run ${input.runId}`
+          );
         }
 
         const activeAttempt = await executor.execute(sql`
@@ -305,13 +326,15 @@ export function createRunAttemptRepository(options?: {
             transport: 'servicebus-blob-v2',
             specRef: input.specRef,
           };
-          const inserted = await outbox.enqueue([{
-            idempotencyKey: `${active.id}:dispatch`,
-            kind: 'dispatch_command',
-            runId: input.runId,
-            attemptId: active.id,
-            payload: command,
-          }]);
+          const inserted = await outbox.enqueue([
+            {
+              idempotencyKey: `${active.id}:dispatch`,
+              kind: 'dispatch_command',
+              runId: input.runId,
+              attemptId: active.id,
+              payload: command,
+            },
+          ]);
           return {
             attemptId: active.id,
             attemptNumber: 1,
@@ -330,7 +353,8 @@ export function createRunAttemptRepository(options?: {
           WHERE run_id = ${input.runId}
         `);
         const maxAttempt = Number(
-          resultRows<{ max_attempt: number | string }>(nextNumberResult)[0]?.max_attempt ?? 0,
+          resultRows<{ max_attempt: number | string }>(nextNumberResult)[0]
+            ?.max_attempt ?? 0
         );
         const attemptNumber = maxAttempt + 1;
         const attemptId = randomUUID();
@@ -381,13 +405,15 @@ export function createRunAttemptRepository(options?: {
           transport: 'servicebus-blob-v2',
           specRef: input.specRef,
         };
-        const inserted = await outbox.enqueue([{
-          idempotencyKey: `${attemptId}:dispatch`,
-          kind: 'dispatch_command',
-          runId: input.runId,
-          attemptId,
-          payload: command,
-        }]);
+        const inserted = await outbox.enqueue([
+          {
+            idempotencyKey: `${attemptId}:dispatch`,
+            kind: 'dispatch_command',
+            runId: input.runId,
+            attemptId,
+            payload: command,
+          },
+        ]);
 
         return {
           attemptId,
@@ -399,7 +425,7 @@ export function createRunAttemptRepository(options?: {
     },
 
     async transitionAttempt(
-      input: TransitionAttemptInput,
+      input: TransitionAttemptInput
     ): Promise<TransitionAttemptResult> {
       return runInTransaction(async (executor) => {
         const existingResult = await executor.execute(sql`
@@ -458,7 +484,7 @@ export function createRunAttemptRepository(options?: {
     },
 
     async acceptCheckpoint(
-      checkpoint: AiRunV2Checkpoint,
+      checkpoint: AiRunV2Checkpoint
     ): Promise<AcceptCheckpointResult> {
       return runInTransaction(async (executor) => {
         const inbox = createInboxRepository(executor);
@@ -485,7 +511,10 @@ export function createRunAttemptRepository(options?: {
             lastCheckpointSequence: Number(attempt.last_checkpoint_sequence),
           };
         }
-        if (checkpoint.checkpointSequence <= Number(attempt.last_checkpoint_sequence)) {
+        if (
+          checkpoint.checkpointSequence <=
+          Number(attempt.last_checkpoint_sequence)
+        ) {
           return {
             status: 'stale_sequence',
             lastCheckpointSequence: Number(attempt.last_checkpoint_sequence),
@@ -535,6 +564,8 @@ export function createRunAttemptRepository(options?: {
   };
 }
 
-export type RunAttemptRepository = ReturnType<typeof createRunAttemptRepository>;
+export type RunAttemptRepository = ReturnType<
+  typeof createRunAttemptRepository
+>;
 
 export const runAttemptRepository = createRunAttemptRepository();

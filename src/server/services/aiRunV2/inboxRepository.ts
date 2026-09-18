@@ -51,7 +51,9 @@ function mapInboxRow(row: Record<string, unknown>): InboxRow {
       row.checkpoint_sequence == null ? null : Number(row.checkpoint_sequence),
     payload: (row.payload ?? {}) as Record<string, unknown>,
     receivedAt:
-      receivedAt instanceof Date ? receivedAt.toISOString() : String(receivedAt),
+      receivedAt instanceof Date
+        ? receivedAt.toISOString()
+        : String(receivedAt),
     processedAt:
       processedAt == null
         ? null
@@ -65,10 +67,13 @@ export function createInboxRepository(executor: SqlExecutor) {
   return {
     async claimEvent(input: ClaimInboxEventInput): Promise<InboxClaimResult> {
       if (
-        input.checkpointSequence != null
-        && (!Number.isInteger(input.checkpointSequence) || input.checkpointSequence <= 0)
+        input.checkpointSequence != null &&
+        (!Number.isInteger(input.checkpointSequence) ||
+          input.checkpointSequence <= 0)
       ) {
-        throw new Error('checkpointSequence must be a positive integer when provided');
+        throw new Error(
+          'checkpointSequence must be a positive integer when provided'
+        );
       }
 
       const inserted = await executor.execute(sql`
@@ -102,9 +107,14 @@ export function createInboxRepository(executor: SqlExecutor) {
         WHERE event_id = ${input.eventId}
         FOR UPDATE
       `);
-      const row = resultRows<{ event_id: string; processed_at: string | Date | null }>(existing)[0];
+      const row = resultRows<{
+        event_id: string;
+        processed_at: string | Date | null;
+      }>(existing)[0];
       if (!row) {
-        throw new Error(`Inbox event disappeared after conflict: ${input.eventId}`);
+        throw new Error(
+          `Inbox event disappeared after conflict: ${input.eventId}`
+        );
       }
       if (row.processed_at == null) {
         return { status: 'duplicate_unprocessed', eventId: input.eventId };

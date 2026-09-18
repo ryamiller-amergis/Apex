@@ -5,7 +5,10 @@ export type SqlExecutor = {
   execute(query: unknown): Promise<unknown>;
 };
 
-export type OutboxKind = 'dispatch_command' | 'checkpoint_notify' | 'terminal_result';
+export type OutboxKind =
+  | 'dispatch_command'
+  | 'checkpoint_notify'
+  | 'terminal_result';
 
 export type OutboxRow = Readonly<{
   id: string;
@@ -52,7 +55,9 @@ function mapOutboxRow(row: Record<string, unknown>): OutboxRow {
     attemptId: row.attempt_id == null ? null : String(row.attempt_id),
     payload: (row.payload ?? {}) as Record<string, unknown>,
     availableAt:
-      availableAt instanceof Date ? availableAt.toISOString() : String(availableAt),
+      availableAt instanceof Date
+        ? availableAt.toISOString()
+        : String(availableAt),
     claimedBy: row.claimed_by == null ? null : String(row.claimed_by),
     claimedAt:
       claimedAt == null
@@ -112,7 +117,7 @@ export function createOutboxRepository(executor: SqlExecutor) {
     async claimBatch(
       limit: number,
       holderId: string,
-      claimMs: number,
+      claimMs: number
     ): Promise<OutboxRow[]> {
       if (!Number.isInteger(limit) || limit <= 0) {
         throw new Error('limit must be a positive integer');
@@ -168,7 +173,7 @@ export function createOutboxRepository(executor: SqlExecutor) {
       id: string,
       holderId: string,
       error: string,
-      retryDelayMs = 0,
+      retryDelayMs = 0
     ): Promise<boolean> {
       if (!Number.isInteger(retryDelayMs) || retryDelayMs < 0) {
         throw new Error('retryDelayMs must be a non-negative integer');
