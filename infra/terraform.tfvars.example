@@ -75,6 +75,9 @@ postgresql_backup_retention_days = 7
 # Portal-created servers carry a generated rule name. Rule names are ForceNew,
 # so set this to the existing name rather than letting Terraform recreate it.
 # postgresql_azure_services_firewall_rule_name = "allow-azure-services"
+# Query diagnostics. Both are dynamic — changing them does not restart the server.
+# postgresql_pg_stat_statements_track      = "top"   # none | top | all
+# postgresql_log_min_duration_statement_ms = 5000    # -1 disables
 
 # Shared async Blob platform
 # One private storage account per environment. Add containers for new modules.

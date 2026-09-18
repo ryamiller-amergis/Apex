@@ -301,6 +301,28 @@ variable "postgresql_azure_services_firewall_rule_name" {
   default     = "allow-azure-services"
 }
 
+variable "postgresql_pg_stat_statements_track" {
+  description = "Which statements pg_stat_statements records: none, top, or all. 'top' covers statements issued directly by the app and is what identifies a query holding pool connections."
+  type        = string
+  default     = "top"
+
+  validation {
+    condition     = contains(["none", "top", "all"], var.postgresql_pg_stat_statements_track)
+    error_message = "postgresql_pg_stat_statements_track must be none, top, or all."
+  }
+}
+
+variable "postgresql_log_min_duration_statement_ms" {
+  description = "Log statements slower than this many milliseconds. -1 disables logging; 0 logs everything and will flood the log."
+  type        = number
+  default     = 5000
+
+  validation {
+    condition     = var.postgresql_log_min_duration_statement_ms >= -1
+    error_message = "postgresql_log_min_duration_statement_ms must be -1 (disabled) or a non-negative millisecond threshold."
+  }
+}
+
 variable "postgresql_high_availability_mode" {
   description = "PostgreSQL HA mode: ZoneRedundant or SameZone. Requires General Purpose or Memory Optimized SKU."
   type        = string
