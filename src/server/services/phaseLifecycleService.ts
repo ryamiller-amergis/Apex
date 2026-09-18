@@ -1,4 +1,4 @@
-import { and, eq, ne } from 'drizzle-orm';
+import { and, eq, ne, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { interviews } from '../db/schema';
 import type {
@@ -130,6 +130,7 @@ export async function editPhaseSummary(
   phase: PhaseName,
   userId: string,
   content: string,
+  options?: { onlyIfEmpty?: boolean },
 ): Promise<void> {
   const row = await loadInterview(interviewId);
   configuredFlow(row, phase);
@@ -138,6 +139,14 @@ export async function editPhaseSummary(
   }
   if (phaseStatus(row, phase) !== 'draft') {
     throw httpError(409, 'Approved summaries are frozen and cannot be edited.');
+  }
+
+  const summaryColumn =
+    phase === 'requirements' ? interviews.requirementsSummary : interviews.technicalSummary;
+  const existingSummary =
+    phase === 'requirements' ? row.requirementsSummary : row.technicalSummary;
+  if (options?.onlyIfEmpty && existingSummary?.trim()) {
+    return;
   }
 
   const ownerColumn =
@@ -157,9 +166,13 @@ export async function editPhaseSummary(
       eq(interviews.id, interviewId),
       eq(ownerColumn, userId),
       eq(statusColumn, 'draft'),
+      ...(options?.onlyIfEmpty
+        ? [sql`coalesce(btrim(${summaryColumn}), '') = ''`]
+        : []),
     ))
     .returning({ id: interviews.id });
   if (updated.length === 0) {
+    if (options?.onlyIfEmpty) return;
     throw httpError(409, 'The phase changed before the summary could be saved.');
   }
 }

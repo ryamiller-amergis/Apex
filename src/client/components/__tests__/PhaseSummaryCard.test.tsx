@@ -101,6 +101,85 @@ describe('PhaseSummaryCard', () => {
     });
   });
 
+  it('keeps in-progress draft edits when imported summary content arrives', () => {
+    summary = { ...summary, content: '' };
+    const { rerender } = render(
+      <PhaseSummaryCard
+        interviewId="interview-1"
+        phase="requirements"
+        currentUserId="requirements-owner"
+        technicalOwnerId="technical-owner"
+        canManage
+      />,
+    );
+
+    const textarea = screen.getByTestId('phase-summary-requirements-content');
+    fireEvent.change(textarea, { target: { value: 'Owner typed this' } });
+
+    summary = { ...summary, content: 'Imported from skill file' };
+    rerender(
+      <PhaseSummaryCard
+        interviewId="interview-1"
+        phase="requirements"
+        currentUserId="requirements-owner"
+        technicalOwnerId="technical-owner"
+        canManage
+      />,
+    );
+
+    expect(textarea).toHaveValue('Owner typed this');
+  });
+
+  it('fills an empty draft when imported summary content arrives', () => {
+    summary = { ...summary, content: '' };
+    const { rerender } = render(
+      <PhaseSummaryCard
+        interviewId="interview-1"
+        phase="requirements"
+        currentUserId="requirements-owner"
+        technicalOwnerId="technical-owner"
+        canManage
+      />,
+    );
+
+    summary = { ...summary, content: 'Imported from skill file' };
+    rerender(
+      <PhaseSummaryCard
+        interviewId="interview-1"
+        phase="requirements"
+        currentUserId="requirements-owner"
+        technicalOwnerId="technical-owner"
+        canManage
+      />,
+    );
+
+    expect(screen.getByTestId('phase-summary-requirements-content')).toHaveValue(
+      'Imported from skill file',
+    );
+  });
+
+  it('replaces in-progress draft edits when Generate with AI succeeds', async () => {
+    summary = { ...summary, content: '' };
+    mockGenerate.mockResolvedValue({ ...summary, content: 'Generated requirements' });
+    render(
+      <PhaseSummaryCard
+        interviewId="interview-1"
+        phase="requirements"
+        currentUserId="requirements-owner"
+        technicalOwnerId="technical-owner"
+        canManage
+      />,
+    );
+
+    const textarea = screen.getByTestId('phase-summary-requirements-content');
+    fireEvent.change(textarea, { target: { value: 'Owner typed this' } });
+    fireEvent.click(screen.getByTestId('phase-summary-requirements-generate'));
+
+    await waitFor(() => {
+      expect(textarea).toHaveValue('Generated requirements');
+    });
+  });
+
   it('PBI-003 AC-2/AC-3 renders approved or non-owner summaries read-only', () => {
     summary = {
       ...summary,

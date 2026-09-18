@@ -43,6 +43,7 @@ export const PhaseSummaryCard: React.FC<PhaseSummaryCardProps> = ({
     handleSubmit,
     reset,
     watch,
+    getValues,
     setError,
     formState: { errors },
   } = useForm<SummaryFormValues>({
@@ -60,8 +61,11 @@ export const PhaseSummaryCard: React.FC<PhaseSummaryCardProps> = ({
   const contentField = register('content');
 
   useEffect(() => {
-    if (summary) reset({ content: summary.content });
-  }, [reset, summary]);
+    if (!summary) return;
+    const local = getValues('content');
+    if (local.trim() !== '' && local !== summary.content) return;
+    reset({ content: summary.content });
+  }, [getValues, reset, summary]);
 
   if (summaryQuery.isLoading) {
     return (
@@ -148,7 +152,8 @@ export const PhaseSummaryCard: React.FC<PhaseSummaryCardProps> = ({
   const generate = async (): Promise<void> => {
     setActionError(null);
     try {
-      await generateSummary.mutateAsync({ interviewId });
+      const generated = await generateSummary.mutateAsync({ interviewId });
+      reset({ content: generated.content });
     } catch (error) {
       setActionError(
         error instanceof Error

@@ -57,6 +57,7 @@ describe('requirementsPhaseSkillService', () => {
       'requirements',
       'owner-1',
       '# Generated requirements',
+      { onlyIfEmpty: true },
     );
   });
 
@@ -76,6 +77,7 @@ describe('requirementsPhaseSkillService', () => {
       'requirements',
       'owner-1',
       '# Generated requirements',
+      { onlyIfEmpty: true },
     );
   });
 

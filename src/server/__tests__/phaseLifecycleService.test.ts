@@ -63,6 +63,41 @@ describe('phaseLifecycleService', () => {
     }));
   });
 
+  it('does not overwrite a draft that was saved before an empty-only import', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...baseInterview,
+      requirementsSummary: 'Owner saved this',
+    });
+
+    await editPhaseSummary(
+      'interview-1',
+      'requirements',
+      'requirements-owner',
+      'Generated from file',
+      { onlyIfEmpty: true },
+    );
+
+    expect(updateChain.set).not.toHaveBeenCalled();
+  });
+
+  it('skips an empty-only import when the draft is no longer empty at write time', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...baseInterview,
+      requirementsSummary: null,
+    });
+    updateChain.returning.mockResolvedValue([]);
+
+    await expect(
+      editPhaseSummary(
+        'interview-1',
+        'requirements',
+        'requirements-owner',
+        'Generated from file',
+        { onlyIfEmpty: true },
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it('VT-02 / PBI-003 AC-1 blocks approval of whitespace-only content', async () => {
     mockDb.query.interviews.findFirst.mockResolvedValue({
       ...baseInterview,

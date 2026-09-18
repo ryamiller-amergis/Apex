@@ -24,7 +24,9 @@ async function syncRow(
   const content = readOutputRequirementsPhaseSummary(row.chatThreadId);
   if (!content?.trim()) return false;
 
-  await editPhaseSummary(row.id, 'requirements', actingUserId, content);
+  await editPhaseSummary(row.id, 'requirements', actingUserId, content, {
+    onlyIfEmpty: true,
+  });
   return true;
 }
 
