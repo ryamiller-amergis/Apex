@@ -487,6 +487,12 @@ export function usePhaseSummary(
       apiFetch(`/api/interviews/${interviewId}/phases/${phase}/summary`),
     enabled: !!interviewId,
     staleTime: 30_000,
+    refetchInterval: (query) => {
+      const summary = query.state.data;
+      return summary?.status === 'draft' && !summary.content.trim()
+        ? 2_000
+        : false;
+    },
   });
 }
 
@@ -505,6 +511,23 @@ export function useEditPhaseSummary() {
       }),
     onSuccess: (_data, { interviewId, phase }) => {
       void qc.invalidateQueries({ queryKey: ['phase-summary', interviewId, phase] });
+      void qc.invalidateQueries({ queryKey: ['interview', interviewId] });
+    },
+  });
+}
+
+export function useGenerateRequirementsSummary() {
+  const qc = useQueryClient();
+  return useMutation<PhaseSummary, Error, { interviewId: string }>({
+    mutationFn: ({ interviewId }) =>
+      apiFetch(`/api/interviews/${interviewId}/phases/requirements/generate`, {
+        method: 'POST',
+      }),
+    onSuccess: (summary, { interviewId }) => {
+      qc.setQueryData(
+        ['phase-summary', interviewId, 'requirements'],
+        summary,
+      );
       void qc.invalidateQueries({ queryKey: ['interview', interviewId] });
     },
   });

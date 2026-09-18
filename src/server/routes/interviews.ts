@@ -38,6 +38,10 @@ import {
   getPhaseSummary,
 } from '../services/phaseLifecycleService';
 import {
+  syncAvailableRequirementsPhaseSummary,
+  syncRequirementsPhaseSummary,
+} from '../services/requirementsPhaseSkillService';
+import {
   getTechnicalPhaseState,
   startTechnicalPhase,
 } from '../services/technicalPhaseSkillService';
@@ -305,6 +309,9 @@ router.get('/:id/phases/:phase/summary', requirePermission('interviews:view'), a
       res.status(400).json({ error: 'phase must be "requirements" or "technical"' });
       return;
     }
+    if (phase === 'requirements') {
+      await syncAvailableRequirementsPhaseSummary(req.params.id);
+    }
     const summary = await getPhaseSummary(req.params.id, phase);
     if (!summary) {
       res.status(404).json({ error: 'Phase summary not found' });
@@ -330,6 +337,16 @@ router.put('/:id/phases/:phase/summary', requirePermission('interviews:manage'),
     }
     await editPhaseSummary(req.params.id, phase, getUserId(req), content);
     res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/phases/requirements/generate', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    await syncRequirementsPhaseSummary(req.params.id, getUserId(req));
+    const summary = await getPhaseSummary(req.params.id, 'requirements');
+    res.json(summary);
   } catch (err) {
     next(err);
   }

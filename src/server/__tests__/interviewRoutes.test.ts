@@ -12,6 +12,7 @@ import path from 'node:path';
 import interviewRouter from '../routes/interviews';
 import * as interviewService from '../services/interviewService';
 import * as phaseLifecycleService from '../services/phaseLifecycleService';
+import * as requirementsPhaseSkillService from '../services/requirementsPhaseSkillService';
 import * as technicalPhaseSkillService from '../services/technicalPhaseSkillService';
 import * as prdService from '../services/prdService';
 
@@ -19,6 +20,7 @@ import * as prdService from '../services/prdService';
 
 jest.mock('../services/interviewService');
 jest.mock('../services/phaseLifecycleService');
+jest.mock('../services/requirementsPhaseSkillService');
 jest.mock('../services/technicalPhaseSkillService');
 jest.mock('../services/prdService');
 jest.mock('../services/chatAgentService', () => ({
@@ -165,6 +167,8 @@ jest.mock('../utils/requestUser', () => ({
 const mockInterviewService = interviewService as jest.Mocked<typeof interviewService>;
 const mockPhaseLifecycleService =
   phaseLifecycleService as jest.Mocked<typeof phaseLifecycleService>;
+const mockRequirementsPhaseSkillService =
+  requirementsPhaseSkillService as jest.Mocked<typeof requirementsPhaseSkillService>;
 const mockTechnicalPhaseSkillService =
   technicalPhaseSkillService as jest.Mocked<typeof technicalPhaseSkillService>;
 const mockPrdService = prdService as jest.Mocked<typeof prdService>;
@@ -788,6 +792,29 @@ describe('FEAT-002 phase summary lifecycle routes', () => {
       'user-test',
       'Updated summary',
     );
+  });
+
+  it('loads the generated Requirements artifact through the retry route', async () => {
+    mockRequirementsPhaseSkillService.syncRequirementsPhaseSummary
+      .mockResolvedValue(undefined);
+    mockPhaseLifecycleService.getPhaseSummary.mockResolvedValue({
+      phase: 'requirements',
+      status: 'draft',
+      content: '# Generated requirements',
+      ownerId: 'user-test',
+      approvedAt: null,
+      locked: false,
+      amendable: false,
+    });
+
+    const response = await request(buildApp())
+      .post('/api/interviews/interview-1/phases/requirements/generate');
+
+    expect(response.status).toBe(200);
+    expect(response.body.content).toBe('# Generated requirements');
+    expect(
+      mockRequirementsPhaseSkillService.syncRequirementsPhaseSummary,
+    ).toHaveBeenCalledWith('interview-1', 'user-test');
   });
 
   it('PBI-003 AC-1 / VT-14 returns last-phase approval metadata', async () => {

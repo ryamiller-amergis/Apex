@@ -45,6 +45,7 @@ import type {
   RequirementsPhaseMessageWrite,
   TechnicalPhaseMessageWrite,
 } from '../services/threadAccessService';
+import { syncRequirementsPhaseArtifacts } from '../services/requirementsPhaseSkillService';
 import { syncTechnicalPhaseArtifacts } from '../services/technicalPhaseSkillService';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import { requirePermission } from '../middleware/rbac';
@@ -783,6 +784,14 @@ router.post('/threads/:id/messages', requireMessageSendAccess, async (req: Reque
     turnSkill,
   })
     .then(async () => {
+      try {
+        await syncRequirementsPhaseArtifacts(threadId, getUserId(req));
+      } catch (err: unknown) {
+        console.error(
+          `[chat] Requirements phase artifact sync failed for thread ${threadId}:`,
+          errorMessage(err),
+        );
+      }
       try {
         await syncTechnicalPhaseArtifacts(threadId, getUserId(req));
       } catch (err: unknown) {

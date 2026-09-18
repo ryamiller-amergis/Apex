@@ -124,6 +124,7 @@ const mockCanWriteThread = jest.fn();
 let mockRequirementsPhaseWrite: unknown = { outcome: 'not_applicable' };
 const mockRequirementsPhaseWriteArgs: unknown[][] = [];
 let mockTechnicalPhaseWrite: unknown = { outcome: 'not_applicable' };
+const mockSyncRequirementsPhaseArtifacts = jest.fn().mockResolvedValue(false);
 const mockSyncTechnicalPhaseArtifacts = jest.fn().mockResolvedValue({
   amendedRequirements: false,
   syncedTechnicalSummary: false,
@@ -142,6 +143,11 @@ jest.mock('../services/threadAccessService', () => ({
 jest.mock('../services/technicalPhaseSkillService', () => ({
   syncTechnicalPhaseArtifacts: (...args: unknown[]) =>
     mockSyncTechnicalPhaseArtifacts(...args),
+}));
+
+jest.mock('../services/requirementsPhaseSkillService', () => ({
+  syncRequirementsPhaseArtifacts: (...args: unknown[]) =>
+    mockSyncRequirementsPhaseArtifacts(...args),
 }));
 
 import chatRouter, {
