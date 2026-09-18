@@ -273,6 +273,8 @@ type SkillPathKey =
   | 'standupSkillPath'
   | 'featureRequestSkillPath'
   | 'technicalSkillPath'
+  | 'requirementsPhaseSkillPath'
+  | 'technicalPhaseSkillPath'
   | 'issueSkillPath'
   | 'loadTestGenerationSkillPath'
   | 'designModuleSkillPath'
@@ -291,6 +293,8 @@ type ModelKey =
   | 'standupModel'
   | 'featureRequestModel'
   | 'technicalModel'
+  | 'requirementsPhaseModel'
+  | 'technicalPhaseModel'
   | 'issueModel'
   | 'loadTestGenerationModel'
   | 'designModuleModel'
@@ -308,6 +312,8 @@ type EffortKey =
   | 'standupEffort'
   | 'featureRequestEffort'
   | 'technicalEffort'
+  | 'requirementsPhaseEffort'
+  | 'technicalPhaseEffort'
   | 'issueEffort'
   | 'loadTestGenerationEffort'
   | 'designModuleEffort'
@@ -342,6 +348,26 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     modelKey: 'interviewModel',
     effortKey: 'interviewEffort',
     interviewOptions: true,
+  },
+  {
+    id: 'requirements-phase',
+    label: 'Requirements Phase',
+    desc: 'Elicits requirements in a phased interview, before any technical design',
+    skillKey: 'requirementsPhaseSkillPath',
+    emptyLabel: 'Default (.cursor/skills/requirements-phase/SKILL.md)',
+    modelKey: 'requirementsPhaseModel',
+    effortKey: 'requirementsPhaseEffort',
+    optional: true,
+  },
+  {
+    id: 'technical-phase',
+    label: 'Technical Phase',
+    desc: 'Runs the technical interview phase once Requirements is approved',
+    skillKey: 'technicalPhaseSkillPath',
+    emptyLabel: 'Default (.cursor/skills/technical-phase/SKILL.md)',
+    modelKey: 'technicalPhaseModel',
+    effortKey: 'technicalPhaseEffort',
+    optional: true,
   },
   {
     id: 'prd',
@@ -1176,6 +1202,8 @@ interface EditState {
   standupSkillPath: string;
   featureRequestSkillPath: string;
   technicalSkillPath: string;
+  requirementsPhaseSkillPath: string;
+  technicalPhaseSkillPath: string;
   issueSkillPath: string;
   loadTestGenerationSkillPath: string;
   designModuleSkillPath: string;
@@ -1193,6 +1221,8 @@ interface EditState {
   standupModel: string;
   featureRequestModel: string;
   technicalModel: string;
+  requirementsPhaseModel: string;
+  technicalPhaseModel: string;
   issueModel: string;
   loadTestGenerationModel: string;
   designModuleModel: string;
@@ -1212,6 +1242,8 @@ interface EditState {
   standupEffort: EffortLevel | '';
   featureRequestEffort: EffortLevel | '';
   technicalEffort: EffortLevel | '';
+  requirementsPhaseEffort: EffortLevel | '';
+  technicalPhaseEffort: EffortLevel | '';
   issueEffort: EffortLevel | '';
   calendarAssistantEffort: EffortLevel | '';
   loadTestGenerationEffort: EffortLevel | '';
@@ -1257,20 +1289,23 @@ const emptyEdit = (): EditState => ({
   adrInterviewSkillPath: '', adrFinalizeSkillPath: '', adrAssistantSkillPath: '',
   designDocAssistantSkillPath: '', designPrototypeSkillPath: '', testCaseSkillPath: '', designDocValidationSkillPath: '', prdValidationSkillPath: '',
   developmentSkillPath: '', standupSkillPath: '', featureRequestSkillPath: '',
-  technicalSkillPath: '', issueSkillPath: '', loadTestGenerationSkillPath: '', designModuleSkillPath: '',
+  technicalSkillPath: '', requirementsPhaseSkillPath: '', technicalPhaseSkillPath: '',
+  issueSkillPath: '', loadTestGenerationSkillPath: '', designModuleSkillPath: '',
   designModuleScopingSkillPath: '',
   interviewModel: '', prdModel: '', designDocModel: '',
   adrModel: '',
   designDocAssistantModel: '', designPrototypeModel: '', testCaseModel: '', designDocValidationModel: '', prdValidationModel: '',
   developmentModel: '', standupModel: '', featureRequestModel: '',
-  technicalModel: '', issueModel: '', loadTestGenerationModel: '', designModuleModel: '',
+  technicalModel: '', requirementsPhaseModel: '', technicalPhaseModel: '',
+  issueModel: '', loadTestGenerationModel: '', designModuleModel: '',
   designModuleScopingModel: '',
   defaultModel: '',
   interviewEffort: '', prdEffort: '', adrEffort: '', designDocEffort: '',
   designDocAssistantEffort: '', designPrototypeEffort: '', testCaseEffort: '',
   designDocValidationEffort: '', prdAssistantEffort: '', prdValidationEffort: '',
   developmentEffort: '', standupEffort: '', featureRequestEffort: '',
-  technicalEffort: '', issueEffort: '', calendarAssistantEffort: '',
+  technicalEffort: '', requirementsPhaseEffort: '', technicalPhaseEffort: '',
+  issueEffort: '', calendarAssistantEffort: '',
   loadTestGenerationEffort: '', designModuleEffort: '', designModuleScopingEffort: '',
   defaultEffort: '',
   prdReviewBedrockModelId: '',
@@ -1791,6 +1826,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       standupSkillPath: config.standupSkillPath ?? '',
       featureRequestSkillPath: config.featureRequestSkillPath ?? '',
       technicalSkillPath: config.technicalSkillPath ?? '',
+      requirementsPhaseSkillPath: config.requirementsPhaseSkillPath ?? '',
+      technicalPhaseSkillPath: config.technicalPhaseSkillPath ?? '',
       issueSkillPath: config.issueSkillPath ?? '',
       loadTestGenerationSkillPath: config.loadTestGenerationSkillPath ?? '',
       designModuleSkillPath: config.designModuleSkillPath ?? '',
@@ -1808,6 +1845,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       standupModel: config.standupModel ?? '',
       featureRequestModel: config.featureRequestModel ?? '',
       technicalModel: config.technicalModel ?? '',
+      requirementsPhaseModel: config.requirementsPhaseModel ?? '',
+      technicalPhaseModel: config.technicalPhaseModel ?? '',
       issueModel: config.issueModel ?? '',
       loadTestGenerationModel: config.loadTestGenerationModel ?? '',
       designModuleModel: config.designModuleModel ?? '',
@@ -1827,6 +1866,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       standupEffort: config.standupEffort ?? '',
       featureRequestEffort: config.featureRequestEffort ?? '',
       technicalEffort: config.technicalEffort ?? '',
+      requirementsPhaseEffort: config.requirementsPhaseEffort ?? '',
+      technicalPhaseEffort: config.technicalPhaseEffort ?? '',
       issueEffort: config.issueEffort ?? '',
       calendarAssistantEffort: config.calendarAssistantEffort ?? '',
       loadTestGenerationEffort: config.loadTestGenerationEffort ?? '',
@@ -1916,6 +1957,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         standupSkillPath: edit.standupSkillPath || null,
         featureRequestSkillPath: edit.featureRequestSkillPath || null,
         technicalSkillPath: edit.technicalSkillPath || null,
+        requirementsPhaseSkillPath: edit.requirementsPhaseSkillPath || null,
+        technicalPhaseSkillPath: edit.technicalPhaseSkillPath || null,
         issueSkillPath: edit.issueSkillPath || null,
         loadTestGenerationSkillPath: edit.loadTestGenerationSkillPath || null,
         designModuleSkillPath: edit.designModuleSkillPath || null,
@@ -1933,6 +1976,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         standupModel: edit.standupModel || null,
         featureRequestModel: edit.featureRequestModel || null,
         technicalModel: edit.technicalModel || null,
+        requirementsPhaseModel: edit.requirementsPhaseModel || null,
+        technicalPhaseModel: edit.technicalPhaseModel || null,
         issueModel: edit.issueModel || null,
         loadTestGenerationModel: edit.loadTestGenerationModel || null,
         designModuleModel: edit.designModuleModel || null,
@@ -1952,6 +1997,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         standupEffort: edit.standupEffort || null,
         featureRequestEffort: edit.featureRequestEffort || null,
         technicalEffort: edit.technicalEffort || null,
+        requirementsPhaseEffort: edit.requirementsPhaseEffort || null,
+        technicalPhaseEffort: edit.technicalPhaseEffort || null,
         issueEffort: edit.issueEffort || null,
         calendarAssistantEffort: edit.calendarAssistantEffort || null,
         loadTestGenerationEffort: edit.loadTestGenerationEffort || null,

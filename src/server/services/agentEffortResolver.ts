@@ -18,6 +18,7 @@ const MODULE_EFFORT_KEYS = {
   standup: 'standupEffort',
   featureRequest: 'featureRequestEffort',
   technical: 'technicalEffort',
+  requirementsPhase: 'requirementsPhaseEffort',
   technicalPhase: 'technicalPhaseEffort',
   issue: 'issueEffort',
   calendarAssistant: 'calendarAssistantEffort',
@@ -41,6 +42,7 @@ const SKILL_PATH_MODULES = [
   ['standupSkillPath', 'standup'],
   ['featureRequestSkillPath', 'featureRequest'],
   ['technicalSkillPath', 'technical'],
+  ['requirementsPhaseSkillPath', 'requirementsPhase'],
   ['technicalPhaseSkillPath', 'technicalPhase'],
   ['issueSkillPath', 'issue'],
   ['calendarAssistantSkillPath', 'calendarAssistant'],
@@ -75,7 +77,7 @@ export function deriveAgentModule(
 
   const normalizedSkillPath = kickoff.skillPath?.replace(/\\/g, '/').toLowerCase();
   if (normalizedSkillPath?.includes('/requirements-phase/skill.md')) {
-    return 'interview';
+    return 'requirementsPhase';
   }
   if (normalizedSkillPath?.includes('/technical-phase/skill.md')) {
     return 'technicalPhase';

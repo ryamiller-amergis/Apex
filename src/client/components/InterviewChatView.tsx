@@ -491,16 +491,25 @@ const NewInterviewCompose: React.FC = () => {
     }
     setIsSending(true);
     try {
+      // A Requirements phase runs its own project-configured skill and model;
+      // every other flow keeps the interview skill and the composer's model.
+      const requirementsPhaseSkillPath = resolveRequirementsPhaseSkillPath(
+        selections.phaseFlow,
+        skillConfig?.requirementsPhaseSkillPath,
+      );
+      const resolvedModel = requirementsPhaseSkillPath
+        ? skillConfig?.requirementsPhaseModel ?? model
+        : model;
       const threadResult = await startChat.mutateAsync({
         kickoff: {
           project: selectedProject,
           repo: resolvedRepoName,
           branch: resolvedBranch,
           skillProvider: skillConfig?.skillProvider ?? undefined,
-          skillPath: resolveRequirementsPhaseSkillPath(selections.phaseFlow)
+          skillPath: requirementsPhaseSkillPath
             ?? resolvedSkillPath
             ?? grillSkill?.path,
-          model,
+          model: resolvedModel,
           skillSettingsId: skillConfig?.id ?? undefined,
         },
         skipAutoKickoff: true,
@@ -510,7 +519,7 @@ const NewInterviewCompose: React.FC = () => {
         repo: resolvedRepoName,
         title: trimmedTitle,
         chatThreadId: threadResult.threadId,
-        model,
+        model: resolvedModel,
         skillSettingsId: skillConfig?.id ?? undefined,
         prdOwnerId: selections.prdOwnerId,
         designDocOwnerId: selections.designDocOwnerId,
@@ -576,7 +585,11 @@ const NewInterviewCompose: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ text: text || 'Please use the attached files as context.', attachments, model }),
+        body: JSON.stringify({
+          text: text || 'Please use the attached files as context.',
+          attachments,
+          model: resolvedModel,
+        }),
       });
       clearAttachments();
       if (linkedContextInitialErrorText) {

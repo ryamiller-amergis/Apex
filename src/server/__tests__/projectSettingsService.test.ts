@@ -721,6 +721,9 @@ describe('FEAT-005 S1 technical phase skill config', () => {
         technicalPhaseSkillPath: '.cursor/skills/technical-phase/SKILL.md',
         technicalPhaseModel: 'claude-opus-4-6',
         technicalPhaseEffort: 'high',
+        requirementsPhaseSkillPath: '.cursor/skills/team-requirements/SKILL.md',
+        requirementsPhaseModel: 'composer-2.5',
+        requirementsPhaseEffort: 'medium',
       })
     );
 
@@ -730,6 +733,9 @@ describe('FEAT-005 S1 technical phase skill config', () => {
         technicalPhaseSkillPath: '.cursor/skills/technical-phase/SKILL.md',
         technicalPhaseModel: 'claude-opus-4-6',
         technicalPhaseEffort: 'high',
+        requirementsPhaseSkillPath: '.cursor/skills/team-requirements/SKILL.md',
+        requirementsPhaseModel: 'composer-2.5',
+        requirementsPhaseEffort: 'medium',
       })
     );
   });

@@ -238,6 +238,27 @@ describe('resolveRequirementsPhaseSkillPath', () => {
     expect(resolveRequirementsPhaseSkillPath(null)).toBeNull();
     expect(resolveRequirementsPhaseSkillPath(undefined)).toBeNull();
   });
+
+  it('prefers the project-configured Requirements skill over the bundled default', () => {
+    expect(
+      resolveRequirementsPhaseSkillPath(
+        'both_sequential',
+        '.cursor/skills/team-requirements/SKILL.md',
+      ),
+    ).toBe('.cursor/skills/team-requirements/SKILL.md');
+    expect(
+      resolveRequirementsPhaseSkillPath('technical_only', '.cursor/skills/team-requirements/SKILL.md'),
+    ).toBeNull();
+  });
+
+  it('falls back to the bundled skill when the project configures a blank path', () => {
+    expect(resolveRequirementsPhaseSkillPath('requirements_only', '   ')).toBe(
+      '.cursor/skills/requirements-phase/SKILL.md',
+    );
+    expect(resolveRequirementsPhaseSkillPath('requirements_only', null)).toBe(
+      '.cursor/skills/requirements-phase/SKILL.md',
+    );
+  });
 });
 
 describe('NewInterviewCompose — title required', () => {

@@ -321,6 +321,26 @@ describe('GET /api/skill-config', () => {
     });
   });
 
+  it('returns project-configured Requirements Phase skill settings', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      project: 'MaxView',
+      skillRepo: 'MaxView',
+      skillBranch: 'main',
+      requirementsPhaseSkillPath: '.cursor/skills/team-requirements/SKILL.md',
+      requirementsPhaseModel: 'claude-opus-4-6',
+      requirementsPhaseEffort: 'medium',
+    });
+
+    const res = await request(buildApp()).get('/api/skill-config?project=MaxView');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      requirementsPhaseSkillPath: '.cursor/skills/team-requirements/SKILL.md',
+      requirementsPhaseModel: 'claude-opus-4-6',
+      requirementsPhaseEffort: 'medium',
+    });
+  });
+
   it('FEAT-002 TBI-004 DoD-1 returns every effort field as null when the config has none', async () => {
     mockGetSkillConfig.mockResolvedValue({
       project: 'MaxView',

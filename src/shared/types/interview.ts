@@ -15,11 +15,20 @@ export interface RetryPrdFromPhaseResponse {
 /** Per-interview phase configuration. Null on legacy interviews (DoD-2). */
 export type InterviewPhaseFlow = 'requirements_only' | 'technical_only' | 'both_sequential';
 
+/** Skill the Requirements phase falls back to when a project configures none. */
+export const DEFAULT_REQUIREMENTS_PHASE_SKILL =
+  '.cursor/skills/requirements-phase/SKILL.md';
+
+/**
+ * Skill that runs the Requirements phase, preferring the project's configured
+ * `requirementsPhaseSkillPath` over the bundled default.
+ */
 export function resolveRequirementsPhaseSkillPath(
   phaseFlow: InterviewPhaseFlow | null | undefined,
+  configuredSkillPath?: string | null,
 ): string | null {
   if (phaseFlow === 'requirements_only' || phaseFlow === 'both_sequential') {
-    return '.cursor/skills/requirements-phase/SKILL.md';
+    return configuredSkillPath?.trim() || DEFAULT_REQUIREMENTS_PHASE_SKILL;
   }
   return null;
 }

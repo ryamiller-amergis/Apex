@@ -117,6 +117,19 @@ describe('agentEffortResolver', () => {
         }),
       })
     ).toBe('high');
+    expect(
+      resolveEffort({
+        kickoff: {
+          project: 'Apex',
+          repo: 'org/apex',
+          agentModule: 'requirementsPhase',
+        },
+        skillConfig: config({
+          requirementsPhaseEffort: 'medium',
+          interviewEffort: 'low',
+        }),
+      })
+    ).toBe('medium');
   });
 
   it('DoD-0 / VT-04: derives generic-route identities from server config, not request fields', () => {
@@ -164,7 +177,18 @@ describe('agentEffortResolver', () => {
         },
         skillConfig
       )
-    ).toBe('interview');
+    ).toBe('requirementsPhase');
+    expect(
+      deriveAgentModule(
+        {
+          ...requestKickoff,
+          skillPath: '.cursor/skills/team-requirements/SKILL.md',
+        },
+        config({
+          requirementsPhaseSkillPath: '.cursor/skills/team-requirements/SKILL.md',
+        })
+      )
+    ).toBe('requirementsPhase');
     expect(
       deriveAgentModule(
         {

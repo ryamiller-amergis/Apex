@@ -153,6 +153,7 @@ export interface ProjectEffortSettings {
   standupEffort?: EffortLevel | null;
   featureRequestEffort?: EffortLevel | null;
   technicalEffort?: EffortLevel | null;
+  requirementsPhaseEffort?: EffortLevel | null;
   technicalPhaseEffort?: EffortLevel | null;
   issueEffort?: EffortLevel | null;
   calendarAssistantEffort?: EffortLevel | null;
@@ -215,6 +216,8 @@ export interface ProjectSkillConfig extends ProjectEffortSettings {
   featureRequestModel?: string | null;
   technicalSkillPath?: string | null;
   technicalModel?: string | null;
+  requirementsPhaseSkillPath?: string | null;
+  requirementsPhaseModel?: string | null;
   technicalPhaseSkillPath?: string | null;
   technicalPhaseModel?: string | null;
   issueSkillPath?: string | null;
@@ -334,6 +337,8 @@ export interface UpsertProjectSkillConfigRequest extends ProjectEffortSettings {
   featureRequestModel?: string | null;
   technicalSkillPath?: string | null;
   technicalModel?: string | null;
+  requirementsPhaseSkillPath?: string | null;
+  requirementsPhaseModel?: string | null;
   technicalPhaseSkillPath?: string | null;
   technicalPhaseModel?: string | null;
   issueSkillPath?: string | null;
@@ -440,6 +445,8 @@ export interface ProjectSkillConfigResponse extends ProjectEffortSettings {
   featureRequestModel?: string | null;
   technicalSkillPath?: string | null;
   technicalModel?: string | null;
+  requirementsPhaseSkillPath?: string | null;
+  requirementsPhaseModel?: string | null;
   technicalPhaseSkillPath?: string | null;
   technicalPhaseModel?: string | null;
   issueSkillPath?: string | null;
