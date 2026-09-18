@@ -306,7 +306,67 @@ describe('technicalPhaseSkillService (FEAT-005 / PBI-008 / TBI-005)', () => {
       'technical',
       'technical-owner',
       'Delayed technical summary',
+      { onlyIfEmpty: true },
     );
+    expect(mockAmendRequirementsSummary).not.toHaveBeenCalled();
+    fs.rmSync(workspaceDir, { recursive: true, force: true });
+  });
+
+  it('does not apply a requirements amendment while importing a delayed Technical summary', async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-technical-phase-'));
+    const outputDir = path.join(workspaceDir, '.ai-pilot', 'output');
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.writeFileSync(path.join(outputDir, 'requirements-amendment.md'), 'Amendment');
+    fs.writeFileSync(
+      path.join(outputDir, 'technical-flow.technical-phase-summary.md'),
+      'Delayed technical summary',
+    );
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...approvedInterview,
+      technicalPhaseChatThreadId: 'technical-thread',
+      technicalSummary: null,
+    });
+    mockLoadFullThread.mockResolvedValue({
+      id: 'technical-thread',
+      workspaceDir,
+      messages: [],
+    });
+
+    await expect(
+      syncAvailableTechnicalPhaseSummary('interview-1'),
+    ).resolves.toBe(true);
+    expect(mockAmendRequirementsSummary).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(outputDir, 'requirements-amendment.md'))).toBe(true);
+    fs.rmSync(workspaceDir, { recursive: true, force: true });
+  });
+
+  it('keeps serving the read model when delayed Technical import fails', async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-technical-phase-'));
+    const outputDir = path.join(workspaceDir, '.ai-pilot', 'output');
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(outputDir, 'technical-flow.technical-phase-summary.md'),
+      'Delayed technical summary',
+    );
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...approvedInterview,
+      technicalPhaseChatThreadId: 'technical-thread',
+      technicalSummary: null,
+    });
+    mockLoadFullThread.mockResolvedValue({
+      id: 'technical-thread',
+      workspaceDir,
+      messages: [],
+    });
+    mockEditPhaseSummary.mockRejectedValue(
+      Object.assign(new Error('The phase changed before the summary could be saved.'), {
+        status: 409,
+      }),
+    );
+
+    await expect(
+      syncAvailableTechnicalPhaseSummary('interview-1'),
+    ).resolves.toBe(false);
     fs.rmSync(workspaceDir, { recursive: true, force: true });
   });
 });

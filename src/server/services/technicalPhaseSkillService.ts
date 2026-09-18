@@ -323,7 +323,9 @@ export async function syncTechnicalPhaseArtifacts(
 /**
  * Import a Technical summary that became available after the dispatch request
  * returned. This covers process restarts and delayed artifact writes before the
- * summary read model is served.
+ * summary read model is served. Empty-only so a concurrent owner save is not
+ * overwritten; errors stay in this import so GET can still serve the current
+ * read model.
  */
 export async function syncAvailableTechnicalPhaseSummary(
   interviewId: string,
@@ -331,17 +333,38 @@ export async function syncAvailableTechnicalPhaseSummary(
   const row = await db.query.interviews.findFirst({
     where: eq(interviews.id, interviewId),
   });
-  if (
-    !row?.technicalOwnerId
-    || !row.technicalPhaseChatThreadId
-    || row.technicalSummary?.trim()
-  ) {
+  const ownerId = row?.technicalOwnerId;
+  const threadId = row?.technicalPhaseChatThreadId;
+  if (!row || !ownerId || !threadId || row.technicalSummary?.trim()) {
     return false;
   }
 
-  const result = await syncTechnicalPhaseArtifacts(
-    row.technicalPhaseChatThreadId,
-    row.technicalOwnerId,
-  );
-  return result.syncedTechnicalSummary;
+  try {
+    const thread = await loadFullThread(threadId);
+    if (!thread?.workspaceDir) return false;
+    const outputDir = path.join(thread.workspaceDir, '.ai-pilot', 'output');
+    if (!fs.existsSync(outputDir)) return false;
+
+    const summaryName = fs.readdirSync(outputDir).find(
+      (name) => /\.technical-phase-summary\.md$/i.test(name),
+    );
+    if (!summaryName) return false;
+
+    return await applyClaimedFile(
+      path.join(outputDir, summaryName),
+      (content) => editPhaseSummary(
+        row.id,
+        'technical',
+        ownerId,
+        content,
+        { onlyIfEmpty: true },
+      ),
+    );
+  } catch (error) {
+    console.error(
+      `[technicalPhase] Delayed summary import failed for interview ${interviewId}:`,
+      error instanceof Error ? error.message : error,
+    );
+    return false;
+  }
 }
