@@ -1160,9 +1160,8 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
   const isAgentProcessing = isRunning || isSending || session.isAwaitingAgentResponse;
 
-  // A finished turn is the point at which the phase skill has written its
-  // summary artifact and the server has persisted it. Refresh the summaries on
-  // that event rather than polling the read model for content.
+  // Kick a summary refresh when the client turn goes idle. Persist can still
+  // lag the agent message, so empty drafts keep polling in usePhaseSummary.
   const queryClient = useQueryClient();
   const wasTurnActiveRef = useRef(false);
   useEffect(() => {
