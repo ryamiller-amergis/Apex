@@ -236,9 +236,9 @@ variable "port" {
 }
 
 variable "postgresql_location" {
-  description = "Azure region for the PostgreSQL Flexible Server (may differ from main location if subscription quota requires it)"
+  description = "Azure region for the PostgreSQL Flexible Server (may differ from main location if subscription quota requires it). Keep this equal to app_service_location: a cross-region server adds ~30 ms to every query."
   type        = string
-  default     = "East US 2"
+  default     = "Central US"
 }
 
 variable "postgresql_resource_group_name" {
@@ -250,7 +250,7 @@ variable "postgresql_resource_group_name" {
 variable "postgresql_server_name" {
   description = "Name of the PostgreSQL Flexible Server (must be globally unique)"
   type        = string
-  default     = "psql-apex-eus2"
+  default     = "psql-apex-cus"
 }
 
 variable "postgresql_admin_username" {
@@ -276,6 +276,29 @@ variable "postgresql_sku_name" {
   description = "SKU name for the PostgreSQL Flexible Server"
   type        = string
   default     = "B_Standard_B1ms"
+}
+
+variable "postgresql_storage_mb" {
+  description = "Provisioned storage for the PostgreSQL Flexible Server. Azure can grow this but never shrink it, so lowering the value fails the apply."
+  type        = number
+  default     = 32768
+}
+
+variable "postgresql_backup_retention_days" {
+  description = "Point-in-time restore window (7-35 days). Backups are deleted with the server, so this is the only recovery window once a replaced server is removed."
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = var.postgresql_backup_retention_days >= 7 && var.postgresql_backup_retention_days <= 35
+    error_message = "postgresql_backup_retention_days must be between 7 and 35."
+  }
+}
+
+variable "postgresql_azure_services_firewall_rule_name" {
+  description = "Name of the 0.0.0.0 allow-Azure-services firewall rule. Rule names are ForceNew, so servers created through the portal keep their generated name here."
+  type        = string
+  default     = "allow-azure-services"
 }
 
 variable "postgresql_high_availability_mode" {

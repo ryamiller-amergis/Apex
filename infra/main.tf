@@ -307,8 +307,8 @@ resource "azurerm_postgresql_flexible_server" "main" {
   administrator_login    = var.postgresql_admin_username
   administrator_password = var.postgresql_admin_password
   sku_name               = var.postgresql_sku_name
-  storage_mb             = 32768
-  backup_retention_days  = 7
+  storage_mb             = var.postgresql_storage_mb
+  backup_retention_days  = var.postgresql_backup_retention_days
   zone                   = var.postgresql_availability_zone
   tags                   = merge(var.tags, { Environment = var.environment })
 
@@ -336,7 +336,7 @@ resource "azurerm_postgresql_flexible_server_database" "main" {
 
 # Allow Azure services to connect to the PostgreSQL server
 resource "azurerm_postgresql_flexible_server_firewall_rule" "azure_services" {
-  name             = "allow-azure-services"
+  name             = var.postgresql_azure_services_firewall_rule_name
   server_id        = azurerm_postgresql_flexible_server.main.id
   start_ip_address = "0.0.0.0"
   end_ip_address   = "0.0.0.0"
