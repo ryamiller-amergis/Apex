@@ -338,6 +338,26 @@ separate approval).
 - Contract suite: 8 passed (`aiPlatformV2Infrastructure.test.ts`).
 - No Terraform apply performed.
 
+**Deferred Azure apply (do NOT do during Tasks 5–8 code work):**
+
+Hold until remaining V2 **code** work is done, the branch is pushed, and
+dev/staging app deploys are healthy. Then create cloud resources in a
+separate ops pass:
+
+1. Set `enable_ai_platform_v2 = true` in the approved workspace tfvars.
+2. Set network: `ai_platform_v2_create_network = true` **or**
+   `ai_platform_v2_infrastructure_subnet_id` (ZR CAE needs a `/25` subnet).
+3. Set logging: existing `ai_platform_v2_log_analytics_workspace_id` **or**
+   `ai_platform_v2_create_log_analytics_workspace = true`.
+4. Keep `ai_platform_v2_internal_load_balancer = false` for first public smoke.
+5. Review `terraform plan` (expect creates only for V2; **zero** destroys of
+   V1 East US SB / shared storage / existing CAE).
+6. Obtain **separate explicit apply approval**, then apply to staging first.
+7. Smoke V2 resources; only later promote apply to production under the same
+   additive rules.
+8. V1 stop/delete remains Task 8 + soak + a further deletion approval — not
+   part of the first V2 apply.
+
 ---
 
 
@@ -590,6 +610,20 @@ Every child plan follows:
 
 No workstream combines an irreversible resource deletion with a new runtime
 cutover.
+
+## Deferred program ops (end of code track)
+
+Parked until Tasks 5–8 (and related app wiring) are coded, reviewed, pushed,
+and running on **dev/staging**:
+
+- [ ] **Azure apply — AI Platform V2 foundation** (Task 4 Terraform only
+  created resources behind `enable_ai_platform_v2`). Follow the deferred
+  checklist under Task 4 above. Staging apply first; production apply only
+  with a second approval. Do not stop or delete V1 in this pass.
+- [ ] **Task 2 rollout gates** (still open): staging/prod heartbeat swap
+  verification; 25-document V1 regression before any capacity increase.
+- [ ] **V1 retirement** (Task 8): only after V2 is proven in production —
+  stop old resources → observation window → delete under a separate runbook.
 
 ## Cost gates
 
