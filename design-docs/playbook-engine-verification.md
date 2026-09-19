@@ -3,7 +3,7 @@
 > **Work item:** FEAT-001 — Mastra Verification Spike & Fallback Decision
 > **Branch:** `labs/mastra-poc`
 > **Engine under verification:** Mastra — `@mastra/core@1.67.0`, `@mastra/pg@1.25.0` (exact pins, installed 2026-09-18)
-> **Status:** harness ready — no engine findings recorded yet
+> **Status:** complete — all six questions answered; see the Verdict Summary at the end
 
 This file is the written record for the six verification questions in FEAT-001. It is read
 directly by `tests/integration/playbook-engine-conformance.integration.test.ts`, which asserts
@@ -247,10 +247,17 @@ verification. In `@mastra/core@1.67.0` the carve-out is every directory named `e
 Production use requires a written agreement with Kepler; modification for internal development and
 testing is permitted. Rights terminate automatically on non-compliance, curable within 30 days.
 
-⚠ **The EE licence is marked "Effective August 24, 2026."** If the ADR was written before that date,
-its entitlement statements describe an earlier licence revision and the dependency owner should
-re-read the current terms before the pin moves. The ADR's own risk register anticipated exactly this
-("Open-core licensing can change in future releases despite current configuration checks").
+**The EE licence is marked "Effective August 24, 2026."** Resolved 2026-09-19: the repo owner
+confirmed the ADR was written well after that date, so its entitlement statements describe the
+licence revision recorded above rather than an earlier one. The ADR's own risk register still
+applies to future revisions ("Open-core licensing can change in future releases despite current
+configuration checks"), so this entitlement diff has to be re-run whenever the pin moves.
+
+That re-run is enforced rather than remembered: `src/server/__tests__/playbookEnginePins.test.ts`
+compares the versions named in this file's header against the versions pinned in `package.json` and
+fails when they diverge. The conformance suite re-measures DDL behaviour, pool size, telemetry and
+the contract tests against the live engine, but it cannot re-derive the licensed-key list above —
+that still takes a person reading the new release's LICENSE.md and `ee/` directories.
 
 **Source URL:** `node_modules/@mastra/core/LICENSE.md` at the pinned version, which cites
 `https://github.com/mastra-ai/mastra/blob/main/ee/LICENSE` — fetched and read in full.
