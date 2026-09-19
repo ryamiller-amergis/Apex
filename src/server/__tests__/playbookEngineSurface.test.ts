@@ -60,10 +60,10 @@ describe('TBI-010 — the flag gates at a single top-level entry point', () => {
 
     for (const [name, call] of everyOperation()) {
       await expect(call()).rejects.toThrow(/Playbooks are not enabled for project "Apex"/);
-      expect(mockIsFeatureEnabled).toHaveBeenCalledWith('playbooks-spike', {
-        userId: 'user-oid-1',
-        project: 'Apex',
-      });
+      expect(mockIsFeatureEnabled).toHaveBeenCalledWith(
+        'playbooks-spike',
+        expect.objectContaining({ userId: 'user-oid-1', project: 'Apex' })
+      );
       expect(name).toBeTruthy();
     }
     expect(mockIsFeatureEnabled).toHaveBeenCalledTimes(4);
@@ -99,9 +99,32 @@ describe('TBI-010 — the flag gates at a single top-level entry point', () => {
       playbookEngine.resume({ ...context, runId: 'run-1', stepId: 'step-1', resolvedByUserId: 'approver-oid' })
     ).rejects.toThrow();
 
-    expect(mockIsFeatureEnabled).toHaveBeenCalledWith('playbooks-spike', {
-      userId: 'user-oid-1',
-      project: 'Apex',
-    });
+    expect(mockIsFeatureEnabled).toHaveBeenCalledWith(
+      'playbooks-spike',
+      expect.objectContaining({ userId: 'user-oid-1', project: 'Apex' })
+    );
+  });
+
+  /*
+   * Rule categories are ANDed when a flag is evaluated, so an environment rule compared against an
+   * absent environment matches nothing and the flag is disabled everywhere. Phase 0 targets local
+   * and dev by environment, which makes this the difference between a working demo and one that is
+   * silently dark with the flag showing as on in Platform Admin.
+   */
+  it('passes the environment so environment targeting can match', async () => {
+    mockIsFeatureEnabled.mockResolvedValue(false);
+    const originalAppEnv = process.env.APP_ENV;
+    process.env.APP_ENV = 'dev';
+
+    try {
+      await expect(playbookEngine.start({ ...context, definitionVersionId: 'ver-1' })).rejects.toThrow();
+      expect(mockIsFeatureEnabled).toHaveBeenCalledWith(
+        'playbooks-spike',
+        expect.objectContaining({ environment: 'dev' })
+      );
+    } finally {
+      if (originalAppEnv === undefined) delete process.env.APP_ENV;
+      else process.env.APP_ENV = originalAppEnv;
+    }
   });
 });

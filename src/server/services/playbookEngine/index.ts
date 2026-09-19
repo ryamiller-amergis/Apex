@@ -12,6 +12,7 @@
  * merged ahead of the engine gets a clear error, not a silent no-op.
  */
 import { isFeatureEnabled } from '../featureFlagService';
+import { getAppEnvironment } from '../../utils/superAdmin';
 import type {
   PlaybookCancelInput,
   PlaybookOperationContext,
@@ -35,9 +36,16 @@ async function withPlaybooksEnabled<T>(
   operation: string,
   run: () => Promise<T>
 ): Promise<T> {
+  /*
+   * The environment is passed deliberately. Rule categories are ANDed during evaluation, so an
+   * environment rule that finds no environment on the context matches nothing and the flag resolves
+   * disabled everywhere. Phase 0 is targeted at local and dev precisely that way, which would leave
+   * the feature silently dark if this were omitted.
+   */
   const enabled = await isFeatureEnabled(PLAYBOOKS_SPIKE_FLAG, {
     userId: context.initiatorUserId,
     project: context.projectName,
+    environment: getAppEnvironment(),
   });
 
   // @feature-flag:playbooks-spike start winner=enabled
