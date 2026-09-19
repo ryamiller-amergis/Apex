@@ -130,6 +130,25 @@ export async function createScratchDatabase(label = 'verify'): Promise<ScratchDa
   };
 }
 
+/**
+ * Rolls back the most recent `count` migrations.
+ *
+ * Reversibility is a stated non-functional requirement on the playbook schema, and the only honest
+ * way to check it is to actually run the down path and see what is left behind. Scoped to a scratch
+ * database for the obvious reason.
+ */
+export async function migrateDown(connectionString: string, count: number): Promise<void> {
+  await execFileAsync(
+    process.execPath,
+    [MIGRATE_CLI, 'down', String(count), '--no-check-order', '--migrations-dir', MIGRATIONS_DIR],
+    {
+      cwd: REPO_ROOT,
+      env: { ...process.env, DATABASE_URL: connectionString },
+      maxBuffer: 32 * 1024 * 1024,
+    }
+  );
+}
+
 const SCRATCH_NAME = /^apex_scratch_[a-z0-9]+_\d+_\d+$/;
 
 async function dropDatabase(base: URL, databaseName: string): Promise<void> {

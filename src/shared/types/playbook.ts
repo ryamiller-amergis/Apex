@@ -1,24 +1,207 @@
 /**
- * Apex-vocabulary contracts for the playbook engine wrapper.
+ * Apex-vocabulary contracts for playbook orchestration.
  *
  * Everything the rest of Apex sends to, or receives from, the engine is described here. No type in
  * this file may be derived from an engine package: the wrapper exists so that swapping the engine
  * is a change inside `src/server/services/playbookEngine/` and nowhere else, and that only holds
  * while its signatures speak Apex's own language.
+ *
+ * The row shapes below mirror the four Apex-owned tables. They are the whole of what Apex needs to
+ * answer "what happened, and what happens next" — the engine's own store is a disposable execution
+ * cache, so nothing here may depend on it being present.
  */
+import type { ArtifactRef } from './loadTest';
 
-/** Terminal and non-terminal states a run can be observed in. */
-export type PlaybookRunStatus =
-  | 'running'
-  | 'suspended'
-  | 'succeeded'
-  | 'failed'
-  | 'failed_retryable'
-  | 'cancelled'
-  | 'expired';
+// ── Status vocabularies ───────────────────────────────────────────────────────
+
+/**
+ * Lifecycle of a definition version. Only this column may move after publication; the graph itself
+ * is frozen, which is what lets a run pin a version and trust it for days.
+ */
+export const PLAYBOOK_VERSION_STATUSES = ['draft', 'published', 'deprecated', 'archived'] as const;
+export type PlaybookVersionStatus = (typeof PLAYBOOK_VERSION_STATUSES)[number];
+
+/**
+ * States a run can be observed in.
+ *
+ * `expired` is a peer of the other terminals rather than a flag on `failed` because the whole point
+ * is distinguishing "nobody came" from "something broke" — an approval gate that timed out is not a
+ * malfunction, and a status view that conflates them tells an operator the wrong story.
+ */
+export const PLAYBOOK_RUN_STATUSES = [
+  'running',
+  'suspended',
+  'completed',
+  'cancelled',
+  'failed',
+  'expired',
+] as const;
+export type PlaybookRunStatus = (typeof PLAYBOOK_RUN_STATUSES)[number];
+
+/**
+ * States an individual step can be observed in.
+ *
+ * `failed_retryable` exists only here, not on the run: it is what a live agent step becomes when the
+ * process dies mid-turn, and the ADR's exit criterion asks for manual retry of that step rather than
+ * failure of the whole run. Cursor work cannot resume mid-turn, so the step is parked for a person
+ * instead of being retried automatically.
+ */
+export const PLAYBOOK_STEP_RUN_STATUSES = [
+  'pending',
+  'running',
+  'suspended',
+  'completed',
+  'failed',
+  'failed_retryable',
+  'cancelled',
+  'expired',
+] as const;
+export type PlaybookStepRunStatus = (typeof PLAYBOOK_STEP_RUN_STATUSES)[number];
+
+/**
+ * Step states that are still waiting on something. The `expires_at` index is partial over exactly
+ * this set, so the reconciliation sweep scans open suspensions rather than all run history.
+ */
+export const PLAYBOOK_STEP_RUN_OPEN_STATUSES = ['pending', 'running', 'suspended'] as const;
 
 /** Why a run is parked. Both kinds resume through the same path, per BR-008. */
 export type PlaybookSuspendReason = 'approval_gate' | 'agent_run';
+
+// ── Definition graph ──────────────────────────────────────────────────────────
+
+/**
+ * A node's step type is a plain string here on purpose. The registry that decides which step types
+ * exist, and what each one requires, is FEAT-004's contract — naming the three Phase 0 types in this
+ * union would put the vocabulary in two places and make adding a fourth a shared-types change.
+ */
+export interface PlaybookGraphNode {
+  id: string;
+  stepType: string;
+  config?: Record<string, unknown>;
+}
+
+export interface PlaybookGraphEdge {
+  from: string;
+  to: string;
+  /** Branch conditions arrive in Phase 1, evaluated against a named prior step's output schema. */
+  condition?: string;
+}
+
+/** The frozen content of a published version. Stored as `jsonb` on the version row. */
+export interface PlaybookGraph {
+  nodes: PlaybookGraphNode[];
+  edges: PlaybookGraphEdge[];
+}
+
+// ── Row shapes (mirror the four Apex-owned tables) ────────────────────────────
+
+/** A definition has identity that outlives any single version, which is why it is its own row. */
+export interface PlaybookDefinition {
+  id: string;
+  project: string;
+  name: string;
+  description: string | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlaybookDefinitionVersion {
+  id: string;
+  definitionId: string;
+  versionNumber: number;
+  graph: PlaybookGraph;
+  status: PlaybookVersionStatus;
+  publishedBy: string | null;
+  publishedAt: string | null;
+  createdAt: string;
+}
+
+export interface PlaybookRun {
+  id: string;
+  project: string;
+  /** A run never follows a version it did not start on. */
+  definitionVersionId: string;
+  /** The authorization identity for the whole run, per BR-003. */
+  initiatorUserId: string;
+  status: PlaybookRunStatus;
+  /**
+   * Incremented by the runtime as steps execute, never computed on read. The structural guards in
+   * FEAT-005 are synchronous, and making a synchronous guard depend on an aggregate scan is how
+   * admission checks become slow enough to skip.
+   */
+  stepCount: number;
+  agentStepCount: number;
+  startedAt: string;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlaybookStepRun {
+  id: string;
+  runId: string;
+  /** The node id within the pinned version's graph. */
+  stepId: string;
+  stepType: string;
+  status: PlaybookStepRunStatus;
+  /** Null for `approval-gate` and `notify` steps, which correlate to no agent run. */
+  agentRunId: string | null;
+  resumeToken: string | null;
+  /** Phase 0 writes only this. */
+  outputInline: Record<string, unknown> | null;
+  /** Shaped now so the Phase 1 threshold decision costs no migration. */
+  outputBlobRef: ArtifactRef | null;
+  /** Every suspension has one; reconciliation ends the run as expired once it passes. */
+  expiresAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ── Reconstruction projection ─────────────────────────────────────────────────
+
+export interface PlaybookRunSummary {
+  runId: string;
+  project: string;
+  definitionName: string;
+  definitionVersionId: string;
+  versionNumber: number;
+  status: PlaybookRunStatus;
+  initiatorUserId: string;
+  startedAt: string;
+  completedAt: string | null;
+}
+
+/**
+ * Carries an accurate total alongside a capped page, because a status view that says "20 runs" when
+ * there are 300 is worse than one that shows 20 and says so.
+ */
+export interface PlaybookRunListResult {
+  runs: PlaybookRunSummary[];
+  total: number;
+}
+
+/** What a suspended run is waiting on, and until when. Absent unless a step is actually parked. */
+export interface PlaybookSuspensionDetail {
+  stepId: string;
+  reason: PlaybookSuspendReason;
+  deadline: string | null;
+}
+
+/**
+ * The answer to "what happened, and what happens next" — assembled from Apex tables alone. Exit
+ * criterion E4 drops every engine table and asserts this is still correct.
+ */
+export interface PlaybookRunDetail extends PlaybookRunSummary {
+  steps: PlaybookStepRun[];
+  /** The step the run is currently on: the parked one, or the first that has not finished. */
+  currentStepId: string | null;
+  suspension: PlaybookSuspensionDetail | null;
+}
+
+// ── Engine wrapper operations ─────────────────────────────────────────────────
 
 /**
  * What the caller holds after any operation. Apex owns run truth, so this carries Apex's run id —
