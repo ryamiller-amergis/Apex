@@ -13,6 +13,7 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { playbookDefinitionVersions } from '../db/schema';
+import { assertGraphWithinGuards } from './playbookGuardService';
 import type { PlaybookGraph, PlaybookVersionStatus } from '../../shared/types/playbook';
 
 /**
@@ -91,9 +92,22 @@ export async function updateVersionGraph(versionId: string, graph: PlaybookGraph
     .where(eq(playbookDefinitionVersions.id, versionId));
 }
 
-/** Freezes a draft. After this the graph is fixed and only the lifecycle status can move. */
+/**
+ * Freezes a draft. After this the graph is fixed and only the lifecycle status can move.
+ *
+ * TBI-023's four graph guards run here and nowhere else. Publication is the last moment the shape
+ * can be rejected — afterwards immutability means a bad graph can only be deprecated, never fixed,
+ * and every run started from it has already been admitted.
+ */
 export async function publishVersion(versionId: string, publishedByUserId: string): Promise<void> {
-  assertLifecycleTransition(await loadStatus(versionId), 'published');
+  const version = await db.query.playbookDefinitionVersions.findFirst({
+    where: eq(playbookDefinitionVersions.id, versionId),
+    columns: { status: true, graph: true },
+  });
+  if (!version) throw new PlaybookVersionNotFoundError(versionId);
+
+  assertLifecycleTransition(version.status, 'published');
+  assertGraphWithinGuards(version.graph as PlaybookGraph);
 
   await db
     .update(playbookDefinitionVersions)

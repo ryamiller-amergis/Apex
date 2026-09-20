@@ -30,11 +30,22 @@ jest.mock('../db/drizzle', () => ({
 const beginStepRun = jest.fn();
 const executeStep = jest.fn();
 const failStepRun = jest.fn().mockResolvedValue(undefined);
+const assertActiveRunCapacity = jest.fn().mockResolvedValue(undefined);
 jest.mock('../services/playbookSteps', () => ({
   ...jest.requireActual('../services/playbookSteps'),
   beginStepRun: (...a: unknown[]) => beginStepRun(...a),
   executeStep: (...a: unknown[]) => executeStep(...a),
   failStepRun: (...a: unknown[]) => failStepRun(...a),
+}));
+
+/*
+ * The admission guard counts rows, which this suite's hand-rolled `db` double does not model. Its
+ * own behaviour is covered by playbookGuards.test.ts and the integration suite; what matters here
+ * is only that `startRun` calls it, asserted below.
+ */
+jest.mock('../services/playbookGuardService', () => ({
+  ...jest.requireActual('../services/playbookGuardService'),
+  assertActiveRunCapacity: (...a: unknown[]) => assertActiveRunCapacity(...a),
 }));
 
 import {
@@ -64,6 +75,27 @@ beforeEach(() => {
   insertValues.mockResolvedValue([{ id: 'run-1' }]);
   beginStepRun.mockResolvedValue({ id: 'step-run-1' });
   executeStep.mockResolvedValue({ kind: 'suspended', expiresAt: '2026-09-20T00:00:00.000Z' });
+  assertActiveRunCapacity.mockResolvedValue(undefined);
+});
+
+describe('VT-16 — the active-run cap is enforced at admission', () => {
+  it('checks capacity for the run’s project before writing anything', async () => {
+    await startRun({ project: PROJECT, definitionId: 'def-1', initiatorUserId: INITIATOR });
+
+    expect(assertActiveRunCapacity).toHaveBeenCalledWith(PROJECT);
+  });
+
+  it('writes no run row when the cap refuses', async () => {
+    assertActiveRunCapacity.mockRejectedValue(new Error('at its cap of 5'));
+
+    await expect(
+      startRun({ project: PROJECT, definitionId: 'def-1', initiatorUserId: INITIATOR })
+    ).rejects.toThrow(/cap of 5/);
+
+    // Same reasoning as VT-07: a run that was refused admission should leave nothing to explain.
+    expect(insertValues).not.toHaveBeenCalled();
+    expect(beginStepRun).not.toHaveBeenCalled();
+  });
 });
 
 describe('VT-07 — a definition with no published version', () => {

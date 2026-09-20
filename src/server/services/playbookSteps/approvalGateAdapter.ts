@@ -50,6 +50,39 @@ export class ApprovalNotPermittedError extends Error {
   }
 }
 
+/**
+ * The gate is parked but carries no deadline, which BR-005 says cannot happen.
+ *
+ * Refusing rather than approving anyway is PBI-004's third criterion, and the reasoning is that a
+ * suspension with no deadline is invisible to the sweep — nothing will ever end it. Resuming it
+ * quietly would clear the symptom and leave the write path that produced it intact.
+ */
+export class ApprovalMissingDeadlineError extends Error {
+  constructor(stepRunId: string) {
+    super(
+      `Approval gate ${stepRunId} is suspended with no deadline recorded, which should not be ` +
+        'possible. Refusing to resume a suspension the reconciliation sweep cannot see.'
+    );
+    this.name = 'ApprovalMissingDeadlineError';
+  }
+}
+
+/**
+ * The step is not parked awaiting a decision, and never was decided either.
+ *
+ * Distinct from a duplicate approval, which is a no-op. The difference is whether the gate was
+ * ever suspended: a decided gate has been, and the caller is simply late; a `running` or `pending`
+ * step has not, and approving it would be approving something that has not asked yet.
+ */
+export class ApprovalNotAwaitingError extends Error {
+  constructor(stepRunId: string, status: string) {
+    super(
+      `Playbook step ${stepRunId} is ${status} and is not awaiting approval.`
+    );
+    this.name = 'ApprovalNotAwaitingError';
+  }
+}
+
 export function parseApprovalGateConfig(
   config: Record<string, unknown>
 ): ApprovalGateStepConfig {
@@ -94,12 +127,16 @@ export async function submitApprovalDecision(input: {
   stepRunId: string;
   deciderUserId: string;
   decision: ApprovalDecision;
+  /** When given, the step must belong to this run. The route passes the id from its path. */
+  runId?: string;
 }): Promise<ApprovalSubmissionResult> {
   const [row] = await db
     .select({
       stepRunId: playbookStepRuns.id,
+      runId: playbookStepRuns.runId,
       stepType: playbookStepRuns.stepType,
       status: playbookStepRuns.status,
+      expiresAt: playbookStepRuns.expiresAt,
       initiatorUserId: playbookRuns.initiatorUserId,
     })
     .from(playbookStepRuns)
@@ -109,6 +146,14 @@ export async function submitApprovalDecision(input: {
 
   if (!row) {
     throw new ApprovalNotPermittedError(`No approval gate with step run id ${input.stepRunId}.`);
+  }
+
+  if (input.runId && row.runId !== input.runId) {
+    // Refused as not-found rather than mismatched: confirming a step exists under another run is
+    // more than the caller has established a right to know.
+    throw new ApprovalNotPermittedError(
+      `No approval gate with step run id ${input.stepRunId} on run ${input.runId}.`
+    );
   }
 
   if (row.stepType !== STEP_TYPE) {
@@ -121,6 +166,23 @@ export async function submitApprovalDecision(input: {
     throw new ApprovalNotPermittedError(
       'Only the person who started this run may decide its approval gates.'
     );
+  }
+
+  /*
+   * Ordered so the two non-suspended cases are told apart, which PBI-004 needs and the status
+   * alone does not give: a decided gate and a gate that never parked both read as "not
+   * suspended". A gate that reached `completed` or `expired` was suspended once, so a decision
+   * arriving now is simply late — a no-op. A `pending` or `running` step never asked for one.
+   */
+  if (row.status !== 'suspended') {
+    if (row.status === 'completed' || row.status === 'expired') {
+      return { outcome: 'already-decided' };
+    }
+    throw new ApprovalNotAwaitingError(input.stepRunId, row.status);
+  }
+
+  if (!row.expiresAt) {
+    throw new ApprovalMissingDeadlineError(input.stepRunId);
   }
 
   /*

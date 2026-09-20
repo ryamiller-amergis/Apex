@@ -66,7 +66,12 @@ describe('VT-01 — a suspendable step type must declare a deadline', () => {
 
   it('accepts a non-suspending type with no deadline', () => {
     expect(() =>
-      validateStepTypeDescriptor({ stepType: 'fire-and-forget', canSuspend: false })
+      validateStepTypeDescriptor({
+        stepType: 'fire-and-forget',
+        canSuspend: false,
+        isAgentStep: false,
+        sideEffect: 'none',
+      })
     ).not.toThrow();
   });
 
@@ -82,8 +87,8 @@ describe('VT-01 — a suspendable step type must declare a deadline', () => {
 
   it('refuses two descriptors for one step type', () => {
     const twice = [
-      { stepType: 'notify', canSuspend: false },
-      { stepType: 'notify', canSuspend: false },
+      { stepType: 'notify', canSuspend: false, isAgentStep: false, sideEffect: 'none' },
+      { stepType: 'notify', canSuspend: false, isAgentStep: false, sideEffect: 'none' },
     ] as const;
 
     expect(() => createStepTypeRegistry(twice)).toThrow(/declared twice/);

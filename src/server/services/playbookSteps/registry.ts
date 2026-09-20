@@ -6,9 +6,11 @@
  * registration: a closed set validated up front, in the spirit of `CONFIGURABLE_MENU_ITEMS` in
  * `src/shared/types/menuSettings.ts`.
  *
- * Phase 0 deliberately omits Zod input/output schemas, `sideEffect` classification and
- * `requiredPermissions`. Those are FEAT-008's contract, and designing them now would mean fixing
- * the shape of a contract before three adapters have shown what it needs to carry.
+ * Phase 0 deliberately omits Zod input/output schemas and `requiredPermissions`. Those are
+ * FEAT-008's contract, and designing them now would mean fixing the shape of a contract before
+ * three adapters have shown what it needs to carry. `sideEffect` was originally deferred with
+ * them and is here because TBI-024 needs it: a permission re-check that cannot tell a read-only
+ * step from a side-effecting one either re-checks everything or nothing.
  *
  * The one rule enforced here is BR-005: a step type that can suspend must declare a deadline. A
  * suspension with no deadline is a run that waits forever, and no reconciliation sweep can ever end
@@ -18,6 +20,7 @@ import type {
   ApprovalGateStepConfig,
   CursorAgentStepConfig,
   NotifyStepConfig,
+  PlaybookStepSideEffect,
   PlaybookStepTypeDescriptor,
   PlaybookSuspendReason,
 } from '../../../shared/types/playbook';
@@ -69,6 +72,9 @@ export const PHASE_0_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
     deadlineOverridable: false,
     suspendReason: 'agent_run',
     allowedSkillPaths: PHASE_0_ALLOWED_AGENT_SKILLS,
+    isAgentStep: true,
+    // Hands work to Cursor, which Apex does not own and cannot roll back.
+    sideEffect: 'leaves-apex',
   },
   {
     stepType: 'approval-gate',
@@ -76,12 +82,17 @@ export const PHASE_0_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
     defaultDeadlineMs: APPROVAL_GATE_DEADLINE_MS,
     deadlineOverridable: true,
     suspendReason: 'approval_gate',
+    isAgentStep: false,
+    // Waiting changes nothing; the decision it records lives on its own step-run row.
+    sideEffect: 'none',
   },
   {
     stepType: 'notify',
     // Completes as soon as the notification row is written, so there is nothing to wait for and
     // therefore nothing to expire.
     canSuspend: false,
+    isAgentStep: false,
+    sideEffect: 'writes-apex',
   },
 ];
 
@@ -227,6 +238,33 @@ export function resolveDeadlineMs(stepType: string, overrideMs?: number): number
 export function suspendReasonForStepType(stepType: string): PlaybookSuspendReason {
   const descriptor = stepTypeRegistry.get(stepType);
   return descriptor?.canSuspend ? descriptor.suspendReason : 'agent_run';
+}
+
+/**
+ * Whether this type counts against the agent-step cap.
+ *
+ * Tolerant of an unknown type for the same reason `suspendReasonForStepType` is: the guard runs
+ * over stored definition graphs, and one naming a type that no longer exists should be refused by
+ * the step-type check rather than crash the counter on its way there.
+ */
+export function isAgentStepType(stepType: string): boolean {
+  return stepTypeRegistry.get(stepType)?.isAgentStep ?? false;
+}
+
+/** What executing a step of this type does outside its own row. */
+export function sideEffectOfStepType(stepType: string): PlaybookStepSideEffect {
+  return stepTypeRegistry.get(stepType)?.sideEffect ?? 'none';
+}
+
+/**
+ * Whether TBI-024's execution-time permission re-check applies to this step type.
+ *
+ * A read-only step is left alone, which is DoD-2 of that item. Note the default for an unknown
+ * type is `none`, so an unrecognised type is *not* re-checked — that is safe here only because
+ * `executeStep` refuses an unregistered type before this is ever consulted.
+ */
+export function requiresInitiatorPermissionRecheck(stepType: string): boolean {
+  return sideEffectOfStepType(stepType) !== 'none';
 }
 
 /**

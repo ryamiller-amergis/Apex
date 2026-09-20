@@ -15,7 +15,8 @@
  */
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../../db/drizzle';
-import { playbookStepRuns } from '../../db/schema';
+import { playbookRuns, playbookStepRuns } from '../../db/schema';
+import { assertSuspendedRunCapacity } from '../playbookGuardService';
 import type { PlaybookStepRun, PlaybookStepRunStatus } from '../../../shared/types/playbook';
 
 /** What an adapter reports back after executing. */
@@ -84,6 +85,31 @@ export async function suspendStepRun(input: {
   agentRunId?: string;
   resumeToken?: string;
 }): Promise<void> {
+  /*
+   * The run is loaded first because two things here need it: TBI-023's suspended-run ceiling is
+   * per project, and the run's own status has to follow the step's. A parked step whose run still
+   * reads `running` would make both concurrency counters lie — every suspension would count
+   * against the active cap and none against the ceiling, which is exactly the collision the two
+   * separate counters exist to avoid.
+   */
+  const [context] = await db
+    .select({
+      runId: playbookStepRuns.runId,
+      project: playbookRuns.project,
+      stepStatus: playbookStepRuns.status,
+    })
+    .from(playbookStepRuns)
+    .innerJoin(playbookRuns, eq(playbookStepRuns.runId, playbookRuns.id))
+    .where(eq(playbookStepRuns.id, input.stepRunId))
+    .limit(1);
+
+  if (!context) {
+    throw new PlaybookStepRunNotFoundError(input.stepRunId);
+  }
+
+  // Admission, before any write: a refused suspension must leave the step exactly as it was.
+  await assertSuspendedRunCapacity(context.project, context.runId);
+
   const updated = await db
     .update(playbookStepRuns)
     .set({
@@ -106,6 +132,11 @@ export async function suspendStepRun(input: {
   if (updated.length === 0) {
     throw new PlaybookStepRunNotFoundError(input.stepRunId);
   }
+
+  await db
+    .update(playbookRuns)
+    .set({ status: 'suspended', updatedAt: nowIso() })
+    .where(and(eq(playbookRuns.id, context.runId), eq(playbookRuns.status, 'running')));
 }
 
 /**
@@ -131,9 +162,21 @@ export async function resumeStepRun(input: {
     .where(
       and(eq(playbookStepRuns.id, input.stepRunId), eq(playbookStepRuns.status, 'suspended'))
     )
-    .returning({ id: playbookStepRuns.id });
+    .returning({ id: playbookStepRuns.id, runId: playbookStepRuns.runId });
 
-  return moved.length > 0;
+  if (moved.length === 0) return false;
+
+  /*
+   * Only the caller that actually moved the step puts the run back to running, which is what keeps
+   * a redelivered event from reviving a run that has since been cancelled or expired: the second
+   * delivery returns above without reaching this.
+   */
+  await db
+    .update(playbookRuns)
+    .set({ status: 'running', updatedAt: nowIso() })
+    .where(and(eq(playbookRuns.id, moved[0].runId), eq(playbookRuns.status, 'suspended')));
+
+  return true;
 }
 
 /** Marks a step finished. Used by non-suspending steps, which complete in the same tick they start. */

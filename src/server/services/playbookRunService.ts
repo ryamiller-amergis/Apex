@@ -19,6 +19,7 @@ import {
   playbookDefinitionVersions,
   playbookRuns,
 } from '../db/schema';
+import { assertActiveRunCapacity } from './playbookGuardService';
 import { beginStepRun, executeStep, failStepRun } from './playbookSteps';
 import type { PlaybookGraph, PlaybookGraphNode } from '../../shared/types/playbook';
 
@@ -109,10 +110,11 @@ export async function startRun(input: {
   }
 
   /*
-   * TBI-023's structural guards belong here — between the version check and the insert, so a run
-   * refused by the active-run cap also writes no row. They are FEAT-005's work; this comment marks
-   * the position rather than leaving the ordering to be rediscovered.
+   * Between the version check and the insert, so a run refused by the cap writes no row — the same
+   * reasoning as the no-published-version case above. The graph guards are not repeated here:
+   * publication already ran them, and the version is immutable, so the answer cannot have changed.
    */
+  await assertActiveRunCapacity(input.project);
 
   const [run] = await db
     .insert(playbookRuns)

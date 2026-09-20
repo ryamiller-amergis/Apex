@@ -40,9 +40,15 @@ const GRAPH: PlaybookGraph = {
   edges: [],
 };
 
-/** The status the service will read for the version under test. */
-function versionIs(status: PlaybookVersionStatus | null): void {
-  mockFindFirst.mockResolvedValue(status === null ? undefined : { status });
+/**
+ * The status and graph the service will read for the version under test.
+ *
+ * The graph is included because publication now runs TBI-023's structural guards over it, and a
+ * guard is left unmocked here on purpose: this suite asserts what `publishVersion` does, and since
+ * FEAT-005 refusing a malformed graph is part of that.
+ */
+function versionIs(status: PlaybookVersionStatus | null, graph: PlaybookGraph = GRAPH): void {
+  mockFindFirst.mockResolvedValue(status === null ? undefined : { status, graph });
 }
 
 beforeEach(() => {
@@ -141,6 +147,27 @@ describe('VT-04 — lifecycle status is the one thing that still moves', () => {
     await expect(publishVersion(VERSION_ID, 'user-oid-1')).rejects.toThrow(
       PlaybookVersionTransitionError
     );
+  });
+
+  /*
+   * VT-14 at the seam that enforces it. playbookGuards.test.ts proves the cycle detector finds a
+   * loop; this proves publication is wired to ask it, which is the part a refactor can quietly
+   * drop while every guard test stays green.
+   */
+  it('refuses to publish a graph containing a loop, and writes nothing', async () => {
+    versionIs('draft', {
+      nodes: [
+        { id: 'a', stepType: 'notify' },
+        { id: 'b', stepType: 'notify' },
+      ],
+      edges: [
+        { from: 'a', to: 'b' },
+        { from: 'b', to: 'a' },
+      ],
+    });
+
+    await expect(publishVersion(VERSION_ID, 'user-oid-1')).rejects.toThrow(/loop/i);
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 });
 

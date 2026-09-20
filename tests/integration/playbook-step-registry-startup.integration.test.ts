@@ -77,7 +77,9 @@ describe('VT-03 — startup validation', () => {
     const { status, output } = runScript(`
       import { createStepTypeRegistry } from ${REGISTRY_IMPORT};
 
-      const partial = createStepTypeRegistry([{ stepType: 'notify', canSuspend: false }]);
+      const partial = createStepTypeRegistry([
+        { stepType: 'notify', canSuspend: false, isAgentStep: false, sideEffect: 'writes-apex' },
+      ]);
       if (partial.has('cursor-agent')) throw new Error('unexpected');
       console.log('PARTIAL REGISTRY BUILT');
     `);

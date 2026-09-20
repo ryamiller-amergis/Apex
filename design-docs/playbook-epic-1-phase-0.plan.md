@@ -322,7 +322,18 @@ Four cases to cover: the happy path; a full admission lane, where the run is sti
 
 ## FEAT-005 — Durable Suspend/Resume & Structural Guards
 
+**Status: complete, 2026-09-19.** All 25 verification targets covered; 140 unit and 108 integration
+tests green across the Playbook suites.
+
 Seven items. This feature is where the durability claim is actually made good. The latency path and the correctness path are both required — the sweep is not a nicety.
+
+One thing found while building it is worth carrying forward. `suspendStepRun` parked the step but
+never moved the run, so `playbook_runs.status` stayed `running` for the whole time a run was parked.
+FEAT-004 shipped that way because nothing read the column. Both of TBI-023's concurrency counters read
+it, so every suspended run would have counted against the active-run cap and none against the
+suspended ceiling — collapsing the two counters that exist precisely to be separate. Suspend and
+resume now move the run alongside the step, and two FEAT-004 integration assertions were corrected to
+match. The general form: a column nothing reads is not verified, whatever the tests say.
 
 ### TBI-020 — Resume on terminal agent-run event
 

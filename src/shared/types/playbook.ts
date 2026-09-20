@@ -232,7 +232,35 @@ interface PlaybookStepTypeDescriptorBase {
    * a per-type config union for a single case is a layer nobody reads.
    */
   allowedSkillPaths?: readonly string[];
+
+  /**
+   * Whether this type counts against the per-definition agent-step cap.
+   *
+   * Explicit rather than derived from `allowedSkillPaths`, which happens to identify the same
+   * single type today. A future type could run a Skill without being an agent turn, or be one
+   * without naming a Skill, and a guard that silently stopped counting would be discovered by an
+   * unexpected bill rather than by a test.
+   */
+  isAgentStep: boolean;
+
+  /**
+   * What executing this step does outside its own row, in the PRD's vocabulary.
+   *
+   * TBI-024 re-checks the initiator's permissions before any `writes-apex` or `leaves-apex` step,
+   * so Phase 0 needs the classification even though `requiredPermissions` and the Zod input/output
+   * schemas remain FEAT-008's contract. What is missing until then is *which* permission a step
+   * needs — so Phase 0 re-checks project access plus `playbooks:run` for every side-effecting
+   * step, and this field decides only whether the check runs at all.
+   */
+  sideEffect: PlaybookStepSideEffect;
 }
+
+/**
+ * `none` is a step whose only trace is its own step-run row — a gate waiting on a person writes a
+ * decision and nothing else. `writes-apex` changes Apex state a user can see. `leaves-apex` reaches
+ * a system Apex does not own, which cannot be rolled back by anything here.
+ */
+export type PlaybookStepSideEffect = 'none' | 'writes-apex' | 'leaves-apex';
 
 export type PlaybookStepTypeDescriptor =
   | (PlaybookStepTypeDescriptorBase & {
@@ -281,6 +309,100 @@ export interface NotifyStepConfig {
   link?: string;
   /** Defaults to the run initiator, who is the only identity Phase 0 can resolve (BR-003). */
   recipientUserId?: string;
+}
+
+// ── Structural guards ─────────────────────────────────────────────────────────
+
+/**
+ * The six caps, split by when they can be known.
+ *
+ * Graph shape is fixed at publication, so checking it per run would re-derive an answer that cannot
+ * have changed. Concurrency depends on what is happening right now, so it can only be checked at
+ * admission. Every value lives here rather than in the service because the refusal messages name
+ * the cap, and a client that formats one should not be quoting a different number from the server
+ * that enforces it.
+ *
+ * None of these are read from cost data, per BR-007. That is asserted by VT-18 rather than left to
+ * the reader, because a guard that quietly grew a network call is the failure this rule exists to
+ * prevent.
+ */
+export const PLAYBOOK_GUARD_LIMITS = {
+  /** Publish-time. */
+  maxStepsPerRun: 20,
+  /** Publish-time. Agent steps cost far more than the others, so they get a tighter ceiling. */
+  maxAgentStepsPerRun: 10,
+  /** Publish-time. One means no fan-out at all in Phase 0 — a linear graph. */
+  maxFanOutWidth: 1,
+  /** Admission-time, per project. */
+  maxActiveRunsPerProject: 5,
+  /**
+   * Admission-time, per project, and deliberately a separate counter from the active-run cap.
+   *
+   * Counting suspensions against concurrency would let a handful of abandoned runs lock a project
+   * out of starting anything; not counting them at all would let a graph that suspends escape the
+   * only bound there is. Two counters is the only arrangement that avoids both.
+   */
+  maxSuspendedRunsPerProject: 20,
+} as const;
+
+export type PlaybookGuardLimits = typeof PLAYBOOK_GUARD_LIMITS;
+
+/** Which guard refused, so a caller can react to the kind rather than parsing the message. */
+export type PlaybookGuardViolationKind =
+  | 'max-steps'
+  | 'max-agent-steps'
+  | 'max-fan-out'
+  | 'loop'
+  | 'active-run-cap'
+  | 'suspended-run-ceiling';
+
+export interface PlaybookGuardViolation {
+  kind: PlaybookGuardViolationKind;
+  /** Names the cap and the observed value. Surfaced to the caller verbatim. */
+  message: string;
+}
+
+// ── Gate decisions ────────────────────────────────────────────────────────────
+
+export type PlaybookGateDecision = 'approve' | 'reject';
+
+export interface PlaybookGateDecisionRequest {
+  decision: PlaybookGateDecision;
+  comment?: string;
+}
+
+export interface PlaybookGateDecisionResponse {
+  runId: string;
+  status: PlaybookRunStatus;
+  /** Absent when the decision was a duplicate and moved nothing. */
+  resumedStepId?: string;
+  /**
+   * True when this call is what advanced the run. A duplicate returns `false` with a 200 rather
+   * than an error: the caller asked for a decided gate and the gate is decided.
+   */
+  advanced: boolean;
+}
+
+// ── Reconciliation sweep ──────────────────────────────────────────────────────
+
+/**
+ * What one sweep pass did.
+ *
+ * TBI-021's definition of done requires the last-run outcome to be observable, and the reason is
+ * worth stating: a sweep that silently stopped running looks exactly like a sweep with nothing to
+ * do. Both report zero. Only the timestamp distinguishes them.
+ */
+export interface PlaybookSweepOutcome {
+  startedAt: string;
+  durationMs: number;
+  /** Steps whose agent run had finished but whose terminal event never arrived. */
+  resumed: number;
+  /** Steps past `expires_at`, moved to `expired`. */
+  expired: number;
+  /** Steps with no path forward — suspended with neither a deadline nor a correlated agent run. */
+  orphaned: number;
+  /** Present when the pass threw. The scheduler keeps ticking; one bad pass is not fatal. */
+  error?: string;
 }
 
 // ── Engine wrapper operations ─────────────────────────────────────────────────

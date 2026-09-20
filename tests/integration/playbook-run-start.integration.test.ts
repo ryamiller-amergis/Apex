@@ -106,7 +106,44 @@ beforeAll(async () => {
      ON CONFLICT (oid) DO NOTHING`,
     [INITIATOR]
   );
+
+  await grantPlaybooksRun(INITIATOR);
 }, MIGRATE_TIMEOUT);
+
+/**
+ * Gives the initiator the project role that carries `playbooks:run`.
+ *
+ * Needed because these tests call `startRun` directly rather than through the route, so
+ * `requirePermission` never runs — but TBI-024 re-checks the initiator's access again at execution
+ * time, and an initiator with no role at all is refused there. Seeding a real role rather than
+ * stubbing the check keeps the re-check honest: if the permission key or its wiring changes, this
+ * fixture breaks, which is the point.
+ */
+async function grantPlaybooksRun(userOid: string): Promise<void> {
+  const [role] = await query<{ id: string }>(
+    `INSERT INTO app_roles (name, description) VALUES ('playbook-runner', 'Integration fixture')
+     ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description
+     RETURNING id`
+  );
+
+  const [permission] = await query<{ id: string }>(
+    `INSERT INTO app_permissions (key, description) VALUES ('playbooks:run', 'Start Playbook runs')
+     ON CONFLICT (key) DO UPDATE SET description = EXCLUDED.description
+     RETURNING id`
+  );
+
+  await query(
+    `INSERT INTO app_role_permissions (role_id, permission_id) VALUES ($1, $2)
+     ON CONFLICT DO NOTHING`,
+    [role.id, permission.id]
+  );
+
+  await query(
+    `INSERT INTO app_user_project_roles (user_id, project, role_id) VALUES ($1, $2, $3)
+     ON CONFLICT DO NOTHING`,
+    [userOid, PROJECT, role.id]
+  );
+}
 
 afterAll(async () => {
   if (client) await client.end();
@@ -140,7 +177,13 @@ describe('VT-05 — a published Playbook starts and enqueues in one request', ()
       'SELECT status, initiator_user_id FROM playbook_runs WHERE id = $1',
       [result.runId]
     );
-    expect(run.status).toBe('running');
+    /*
+     * `suspended`, not `running`: the first step is a `cursor-agent` step, which parks waiting on
+     * its agent run, and FEAT-005 made the run follow its step there. Before that it stayed
+     * `running` while parked, which nothing read and so nothing caught — until the concurrency
+     * guards, which count runs by exactly this column.
+     */
+    expect(run.status).toBe('suspended');
     expect(run.initiator_user_id).toBe(INITIATOR);
   });
 
@@ -233,8 +276,9 @@ describe('VT-06 — the background lane at its in-flight cap', () => {
     );
 
     // A full lane is a capacity condition, not an error. The Playbook behaves exactly as it does
-    // with an empty lane; only the agent run's own status differs.
-    expect(run.status).toBe('running');
+    // with an empty lane; only the agent run's own status differs — `queued` rather than
+    // `dispatched`. The run and its step park either way.
+    expect(run.status).toBe('suspended');
     expect(step.status).toBe('suspended');
     expect(agentRun.status).toBe('queued');
   });

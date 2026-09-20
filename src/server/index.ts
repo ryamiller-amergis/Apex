@@ -60,6 +60,10 @@ import {
   startAdmissionGovernorScheduler,
   stopAdmissionGovernorScheduler,
 } from './services/admissionGovernorScheduler';
+import {
+  startPlaybookReconciliation,
+  stopPlaybookReconciliation,
+} from './services/playbookReconciliationScheduler';
 import { initPgNotify, shutdownPgNotify } from './services/pgNotifyService';
 import {
   initInteractiveLiveBus,
@@ -456,6 +460,9 @@ const server = app.listen(PORT, () => {
   startReaper();
   startAdmissionGovernorScheduler();
   server.once('close', stopAdmissionGovernorScheduler);
+  // Gates itself on playbooks-spike; with the flag off neither the sweep nor the listener starts.
+  void startPlaybookReconciliation();
+  server.once('close', stopPlaybookReconciliation);
   startLoadTestRunReaper();
   initPgNotify().catch((err) => console.error('[startup] initPgNotify failed:', err.message));
 
