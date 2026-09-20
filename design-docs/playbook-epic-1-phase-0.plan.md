@@ -512,6 +512,76 @@ Worth checking early, because each one can quietly turn the rehearsal into an in
 
 ---
 
+## Gaps Epic 1 records but does not close
+
+Found while building, deliberately carried forward. Each is written here rather than only in the
+design-spec folder because that folder is not in version control, and a gap nobody can find later is
+the same as one nobody wrote down.
+
+**Agent steps cannot be restricted to read-only Skills, and Epic 2's FEAT-008 has to fix it.**
+
+The PRD restricts `cursor-agent` steps to Skills whose MCP configuration is read-only, and FEAT-004's
+tech spec asks the adapter to validate that before enqueueing. There is nothing to validate against.
+`ExecutionSnapshot.skillPath` is a bare path; SKILL.md frontmatter is parsed but `src/` reads none of
+its extra keys; the Agent Skills `allowed-tools` field is known only to `foundation-skills`
+validation, never to Apex's execution path.
+
+What looks like read-only today is a property of the lane, not the Skill. The background worker and
+interactive actor pass `mcpServers: {}` and hand the agent `createNativeReadTools` — but both still
+set `local.cwd` to a writable scratch directory, so the SDK's own write tools keep working. Empty MCP
+is not a sandbox. Ask Apex, the one service that advertises itself as read-only, gets there with
+prompt text and a minimal MCP map, which is the honour system.
+
+Phase 0 therefore enforces *which* Skills may run rather than *what* they can do: the `cursor-agent`
+descriptor carries an explicit allow-list and the adapter refuses anything not named. That is
+defensible for synthetic local demos and indefensible the moment a Playbook runs a Skill someone else
+wrote. Real enforcement needs a declared capability on the skill manifest, propagation into
+`ExecutionSnapshot`, and a central check in `buildMcpServers` and the worker's SDK options — which is
+the same contract FEAT-008 builds for `sideEffect` and `requiredPermissions`. It should be built
+there, once, rather than approximated twice.
+
+---
+
+## Deferred items and where they stand
+
+Reviewed 2026-09-19, after FEAT-004. Recorded here rather than only in the design-spec folder for the
+same reason as the gap above: that folder is not in version control.
+
+**Closed**
+
+- **What "failed-retryable" means as a stored value** (was blocking TBI-024's failure path and exit
+  criterion E2). Answered by construction rather than by decision — FEAT-003 shipped it as a distinct
+  step-status value while building the schema. It is in the `playbook_step_runs` CHECK constraint, the
+  Drizzle table and `PlaybookStepRunStatus`; `failStepRun({ retryable: true })` writes it; and an
+  integration test asserts the database accepts it. It sits on the step vocabulary and deliberately not
+  on the run vocabulary, because a retryable step does not make the whole run retryable. **FEAT-005
+  needs no migration for this**, contrary to what its tech spec previously implied.
+- **Which permissions a Phase 0 step re-checks on resume.** The initiator's project access plus
+  `playbooks:run`, confirmed as the intended stand-in rather than a no-op. Both checks are real —
+  a contributor removed from the project, or one whose `playbooks:run` was revoked, is caught between
+  suspension and resume. Epic 2's TBI-036 replaces it with per-step `requiredPermissions`.
+- **Which Skill the demo `cursor-agent` steps run.** `.cursor/skills/app-knowledge/SKILL.md`, already
+  the sole entry in the `cursor-agent` descriptor's allow-list. Subject to the read-only gap above:
+  the allow-list constrains which Skills may be named, not what they can do.
+- **`playbooks-spike` targeting.** Enabled and scoped to `environment = local`, verified through the
+  real service and not by reading rows — `evaluateFlags` requires at least one rule, so a rule-less
+  flag resolves to false however enabled it looks.
+
+**Still open**
+
+- **No worker drains the background lane locally.** `ai-runs-background` is deliberately off: it does
+  not gate the Playbook adapter, which calls `enqueue` directly, and turning it on with no worker
+  would leave local PRD and design-doc generation queued forever. Blocks the live demo and the
+  observable queue-behind-the-cap case; blocks neither the implementation nor its tests.
+- **The Blob container for step outputs is unnamed.** Nothing in Phase 0 writes a blob, so naming it
+  now would fix a decision with no evidence behind it. Blocks the first large-payload step in Phase 1.
+- **Playbook threads resolve to a null usage-entity anchor.** `resolveUsageEntityFromThread` matches
+  interviews, PRDs, ADRs and design docs; a Playbook-owned thread matches none. Accepted — cost data
+  is advisory and off the execution path per BR-007.
+- **Exit criterion E5 has no named owner and deputy.** A staffing decision, not code.
+
+---
+
 ## Files that need your explicit permission
 
 Per `.cursor/rules/scope-discipline.mdc`, these are not to be edited as a side effect of the work:

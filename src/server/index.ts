@@ -55,6 +55,7 @@ import { getFeatureAutoCompleteService } from './services/featureAutoComplete';
 import { getUatAutoReleaseService } from './services/uatAutoReleaseService';
 import { startRecoveryLoop, registerGracefulShutdown } from './services/startupRecovery';
 import { startReaper, stopReaper } from './services/agentRunReaperService';
+import { validateStepTypeRegistry } from './services/playbookSteps/registry';
 import {
   startAdmissionGovernorScheduler,
   stopAdmissionGovernorScheduler,
@@ -360,6 +361,15 @@ async function bootstrapAdmin(): Promise<void> {
     console.error('[bootstrap] Bootstrap failed:', err);
   }
 }
+
+/*
+ * Playbook step types are a closed set, checked before the port opens rather than when a run first
+ * reaches a step (TBI-016). Deliberately before `listen` and deliberately not behind the
+ * `playbooks-spike` flag: a suspendable step type with no deadline is a coding error, not a runtime
+ * condition, and the first symptom of one reaching production would be a run that waits forever
+ * with nothing able to end it. Failing the boot is the cheap version of finding that out.
+ */
+validateStepTypeRegistry();
 
 const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

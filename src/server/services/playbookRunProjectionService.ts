@@ -16,26 +16,17 @@
 import { and, count, desc, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { playbookRuns } from '../db/schema';
+import { suspendReasonForStepType } from './playbookSteps/registry';
 import type {
   PlaybookRunDetail,
   PlaybookRunListResult,
   PlaybookRunSummary,
   PlaybookStepRun,
-  PlaybookSuspendReason,
   PlaybookSuspensionDetail,
 } from '../../shared/types/playbook';
 
 /** Step states that mean the step has not finished. */
 const OPEN_STEP_STATUSES = new Set(['pending', 'running', 'suspended']);
-
-/**
- * Both kinds of suspension resume through the same path (BR-008), but an operator still needs to
- * know which one they are looking at: a gate is waiting on a person, an agent step on a machine.
- * The step type is what distinguishes them.
- */
-function suspendReasonFor(stepType: string): PlaybookSuspendReason {
-  return stepType === 'approval-gate' ? 'approval_gate' : 'agent_run';
-}
 
 /** Shape of the nested rows the relational query returns. */
 type RunRow = typeof playbookRuns.$inferSelect & {
@@ -85,7 +76,9 @@ function suspensionOf(steps: PlaybookStepRun[]): PlaybookSuspensionDetail | null
   if (!parked) return null;
   return {
     stepId: parked.stepId,
-    reason: suspendReasonFor(parked.stepType),
+    // Asked of the registry rather than decided here: whether a wait ends with a person or a
+    // machine is a property the step type declares, and duplicating it would let the two drift.
+    reason: suspendReasonForStepType(parked.stepType),
     deadline: parked.expiresAt,
   };
 }

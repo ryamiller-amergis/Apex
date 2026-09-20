@@ -201,6 +201,88 @@ export interface PlaybookRunDetail extends PlaybookRunSummary {
   suspension: PlaybookSuspensionDetail | null;
 }
 
+// ── Step types ────────────────────────────────────────────────────────────────
+
+/**
+ * What a step type declares about itself.
+ *
+ * This file carries the *shape*; the registry in `src/server/services/playbookSteps/` carries the
+ * three values. That split is deliberate — TBI-016 requires the registry to be the only place a
+ * step type is declared, so naming `cursor-agent` here would create a second declaration site and
+ * make adding a fourth type a shared-types change.
+ *
+ * The union below encodes BR-005 in the type system: a descriptor that can suspend cannot be
+ * written without a deadline, because a suspension with no deadline is a run that waits forever and
+ * no sweep can ever end. The registry checks the same rule at runtime anyway — the type only
+ * protects descriptors written as literals, and a descriptor assembled dynamically or widened
+ * through a cast would slip past it.
+ */
+interface PlaybookStepTypeDescriptorBase {
+  stepType: string;
+  /**
+   * Skill paths this step type may run. Empty or absent means the step type runs no Skill.
+   *
+   * Phase 0's enforcement of the PRD's read-only-Skill rule, and narrower than that rule sounds:
+   * it constrains *which* Skills may be named, not what they are able to do. Apex has no read-only
+   * capability model — `ExecutionSnapshot.skillPath` is a bare path and nothing reads SKILL.md
+   * frontmatter — so a real check is not available to build against. Recorded as a gap for
+   * FEAT-008 in `design-docs/playbook-epic-1-phase-0.plan.md`.
+   *
+   * Optional rather than modelled per step type because exactly one Phase 0 type runs a Skill, and
+   * a per-type config union for a single case is a layer nobody reads.
+   */
+  allowedSkillPaths?: readonly string[];
+}
+
+export type PlaybookStepTypeDescriptor =
+  | (PlaybookStepTypeDescriptorBase & {
+      canSuspend: true;
+      /** Required. How long the step waits before the sweep ends the run as expired. */
+      defaultDeadlineMs: number;
+      /** Whether a definition may shorten or extend the default for a particular step. */
+      deadlineOverridable: boolean;
+      /**
+       * What ends the wait — a person or a machine. Both resume through the same primitive
+       * (BR-008), so this is not a branch in the execution path; it is what the status view reads
+       * to tell an operator whether to go find someone or go look at a queue.
+       */
+      suspendReason: PlaybookSuspendReason;
+    })
+  | (PlaybookStepTypeDescriptorBase & {
+      canSuspend: false;
+      defaultDeadlineMs?: never;
+      deadlineOverridable?: never;
+      suspendReason?: never;
+    });
+
+// ── Per-step-type configuration ───────────────────────────────────────────────
+//
+// What a graph node's `config` carries for each Phase 0 step type. Validated by the owning adapter
+// at execution time rather than by a schema here: Zod input/output schemas are FEAT-008's contract,
+// and Phase 0 is explicitly out of scope for them.
+
+export interface CursorAgentStepConfig {
+  /** Checked against the descriptor's `allowedSkillPaths` before anything is enqueued. */
+  skillPath: string;
+  prompt: string;
+  model?: string;
+}
+
+export interface ApprovalGateStepConfig {
+  /** Overrides the descriptor's 48-hour default for this step only. */
+  deadlineMs?: number;
+  /** Shown to whoever is deciding. */
+  subject?: string;
+}
+
+export interface NotifyStepConfig {
+  title: string;
+  body?: string;
+  link?: string;
+  /** Defaults to the run initiator, who is the only identity Phase 0 can resolve (BR-003). */
+  recipientUserId?: string;
+}
+
 // ── Engine wrapper operations ─────────────────────────────────────────────────
 
 /**

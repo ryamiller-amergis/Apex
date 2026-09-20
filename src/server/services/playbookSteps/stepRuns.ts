@@ -1,0 +1,206 @@
+/**
+ * The suspend/resume primitive, and the only place a step run's status is written.
+ *
+ * BR-008 says a human approval gate and an agent-step completion share one primitive. The interview
+ * called that the strongest single reason the engine earns its place, so it is worth being literal
+ * about: `approval-gate` and `cursor-agent` call the same `suspendStepRun` and the same
+ * `resumeStepRun` here, and differ only in what causes the resume. Two parallel suspension
+ * mechanisms would mean the reconciliation sweep in FEAT-005 has to cover both, and it will only
+ * ever be written against one.
+ *
+ * Every state move is a conditional update guarded on the status the caller expects to find. That
+ * is what makes resume idempotent: a duplicate approval, or a terminal agent-run event delivered
+ * twice, affects zero rows and is reported as "already moved" rather than advancing the run a
+ * second time. At-least-once delivery is the normal case, not the exceptional one.
+ */
+import { and, eq, inArray } from 'drizzle-orm';
+import { db } from '../../db/drizzle';
+import { playbookStepRuns } from '../../db/schema';
+import type { PlaybookStepRun, PlaybookStepRunStatus } from '../../../shared/types/playbook';
+
+/** What an adapter reports back after executing. */
+export type PlaybookStepOutcome =
+  | { kind: 'completed'; output?: Record<string, unknown> }
+  | { kind: 'suspended'; expiresAt: string; agentRunId?: string };
+
+/** Everything an adapter is given. Adapters read this and touch no global state. */
+export interface PlaybookStepExecutionContext {
+  runId: string;
+  stepRunId: string;
+  stepId: string;
+  stepType: string;
+  project: string;
+  /** Every step executes as the run's initiator, never a service principal (BR-003). */
+  initiatorUserId: string;
+  config: Record<string, unknown>;
+}
+
+export type PlaybookStepAdapter = (
+  context: PlaybookStepExecutionContext
+) => Promise<PlaybookStepOutcome>;
+
+export class PlaybookStepRunNotFoundError extends Error {
+  constructor(stepRunId: string) {
+    super(`No playbook step run with id ${stepRunId}.`);
+    this.name = 'PlaybookStepRunNotFoundError';
+  }
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+/** Creates the row for a step about to execute, and marks it running in the same insert. */
+export async function beginStepRun(input: {
+  runId: string;
+  stepId: string;
+  stepType: string;
+}): Promise<PlaybookStepRun> {
+  const [row] = await db
+    .insert(playbookStepRuns)
+    .values({
+      runId: input.runId,
+      stepId: input.stepId,
+      stepType: input.stepType,
+      status: 'running',
+      startedAt: nowIso(),
+    })
+    .returning();
+
+  return row as unknown as PlaybookStepRun;
+}
+
+/**
+ * Parks a step.
+ *
+ * `expiresAt` is required rather than optional, which is BR-005 expressed in a signature: a
+ * suspension with no deadline is a run that waits forever, and the reconciliation sweep finds
+ * nothing to end because its index is over `expires_at`. Making the caller pass one means the rule
+ * cannot be forgotten at the one call site that matters.
+ */
+export async function suspendStepRun(input: {
+  stepRunId: string;
+  expiresAt: string;
+  agentRunId?: string;
+  resumeToken?: string;
+}): Promise<void> {
+  const updated = await db
+    .update(playbookStepRuns)
+    .set({
+      status: 'suspended',
+      expiresAt: input.expiresAt,
+      ...(input.agentRunId ? { agentRunId: input.agentRunId } : {}),
+      ...(input.resumeToken ? { resumeToken: input.resumeToken } : {}),
+      updatedAt: nowIso(),
+    })
+    .where(
+      and(
+        eq(playbookStepRuns.id, input.stepRunId),
+        // Only a step that is actually executing may be parked. Suspending an already-suspended
+        // step would silently extend its deadline, which is how a gate outlives the thing it gates.
+        eq(playbookStepRuns.status, 'running')
+      )
+    )
+    .returning({ id: playbookStepRuns.id });
+
+  if (updated.length === 0) {
+    throw new PlaybookStepRunNotFoundError(input.stepRunId);
+  }
+}
+
+/**
+ * Advances a suspended step. Returns false when it had already moved.
+ *
+ * The false return is the whole idempotence story, and it is deliberately not an error: a duplicate
+ * approval submission and a redelivered terminal agent-run event are both ordinary, and TBI-018's
+ * definition of done asks for a no-op rather than something that "corrupts state". The caller
+ * decides whether to care; nothing here treats it as a problem.
+ */
+export async function resumeStepRun(input: {
+  stepRunId: string;
+  output?: Record<string, unknown>;
+}): Promise<boolean> {
+  const moved = await db
+    .update(playbookStepRuns)
+    .set({
+      status: 'completed',
+      ...(input.output ? { outputInline: input.output } : {}),
+      completedAt: nowIso(),
+      updatedAt: nowIso(),
+    })
+    .where(
+      and(eq(playbookStepRuns.id, input.stepRunId), eq(playbookStepRuns.status, 'suspended'))
+    )
+    .returning({ id: playbookStepRuns.id });
+
+  return moved.length > 0;
+}
+
+/** Marks a step finished. Used by non-suspending steps, which complete in the same tick they start. */
+export async function completeStepRun(input: {
+  stepRunId: string;
+  output?: Record<string, unknown>;
+}): Promise<void> {
+  const updated = await db
+    .update(playbookStepRuns)
+    .set({
+      status: 'completed',
+      ...(input.output ? { outputInline: input.output } : {}),
+      completedAt: nowIso(),
+      updatedAt: nowIso(),
+    })
+    .where(
+      and(
+        eq(playbookStepRuns.id, input.stepRunId),
+        inArray(playbookStepRuns.status, ['pending', 'running'])
+      )
+    )
+    .returning({ id: playbookStepRuns.id });
+
+  if (updated.length === 0) {
+    throw new PlaybookStepRunNotFoundError(input.stepRunId);
+  }
+}
+
+/**
+ * Marks a step failed.
+ *
+ * `retryable` writes `failed_retryable`, which exists on steps but not on runs. It is what a live
+ * agent step becomes when the process dies mid-turn: Cursor work cannot resume mid-turn, so the
+ * step is parked for a person to retry rather than failing the whole run or being retried
+ * automatically, which is what the ADR's exit criterion asks for.
+ */
+export async function failStepRun(input: {
+  stepRunId: string;
+  retryable?: boolean;
+  reason?: string;
+}): Promise<void> {
+  const status: PlaybookStepRunStatus = input.retryable ? 'failed_retryable' : 'failed';
+
+  await db
+    .update(playbookStepRuns)
+    .set({
+      status,
+      ...(input.reason ? { outputInline: { error: input.reason } } : {}),
+      completedAt: nowIso(),
+      updatedAt: nowIso(),
+    })
+    .where(
+      and(
+        eq(playbookStepRuns.id, input.stepRunId),
+        inArray(playbookStepRuns.status, ['pending', 'running', 'suspended'])
+      )
+    );
+}
+
+export async function getStepRun(stepRunId: string): Promise<PlaybookStepRun | null> {
+  const row = await db.query.playbookStepRuns.findFirst({
+    where: eq(playbookStepRuns.id, stepRunId),
+  });
+  return (row as unknown as PlaybookStepRun) ?? null;
+}
+
+/** Turns a deadline in milliseconds into the absolute instant the sweep will compare against. */
+export function deadlineFromNow(deadlineMs: number): string {
+  return new Date(Date.now() + deadlineMs).toISOString();
+}
