@@ -2,7 +2,10 @@ import {
   AI_RUN_V2_VISUAL_SPEC_VERSION,
   type AiRunV2VisualSpecification,
 } from '../../../shared/types/aiRunV2VisualSpec';
-import { buildPrototypeContextSection } from '../../services/aiRunsV2Worker/prototypePromptBuilder';
+import {
+  buildPrototypeContextSection,
+  buildPrototypePrompt,
+} from '../../services/aiRunsV2Worker/prototypePromptBuilder';
 
 const spec: AiRunV2VisualSpecification = {
   specVersion: AI_RUN_V2_VISUAL_SPEC_VERSION,
@@ -71,6 +74,58 @@ describe('prototypePromptBuilder', () => {
     const section = buildPrototypeContextSection(spec);
 
     expect(section).toContain('/src/components/Huge.tsx');
+  });
+
+  it('frames the feature and carries the sections resolved upstream', () => {
+    const prompt = buildPrototypePrompt({
+      ...spec,
+      promptInputs: {
+        ...spec.promptInputs,
+        featureName: 'Standup summary',
+        featureDescription: 'Summarize the ceremony',
+        planSection: '## Design plan\n\nUse a table.\n\n',
+        pbiSection: '- PBI-1: show the summary',
+        scopingSection: '### Scope\n\nOne panel only.\n',
+      },
+    });
+
+    expect(prompt).toContain(
+      'You are a senior UI/UX designer generating a high-fidelity HTML prototype for a MaxView application feature.',
+    );
+    expect(prompt).toContain('**Feature:** Standup summary');
+    expect(prompt).toContain('**Description:** Summarize the ceremony');
+    expect(prompt).toContain('## Design plan');
+    expect(prompt).toContain('- PBI-1: show the summary');
+    expect(prompt).toContain('One panel only.');
+  });
+
+  it('keeps the output rules that make the result parseable', () => {
+    const prompt = buildPrototypePrompt(spec);
+
+    expect(prompt).toContain('<!-- STATE:default:START -->');
+    expect(prompt).toContain('<!-- STATE:error:START -->');
+    expect(prompt).toContain('<!-- NEW_FEATURE:START -->');
+    expect(prompt).toContain(
+      'Return ONLY the complete HTML document. No markdown fences, no explanation — just the raw HTML starting with <!DOCTYPE html>.',
+    );
+  });
+
+  it('keeps the strict colour and icon rules that stop invented values', () => {
+    const prompt = buildPrototypePrompt(spec);
+
+    expect(prompt).toContain(
+      '**NEVER invent, approximate, or sample** any hex/rgba value that is not listed in those tokens.',
+    );
+    expect(prompt).toContain('### Icons and images rule — NO emojis, NO external images');
+  });
+
+  it('omits the description line when the feature has none', () => {
+    const prompt = buildPrototypePrompt({
+      ...spec,
+      promptInputs: { ...spec.promptInputs, featureName: 'Standup summary' },
+    });
+
+    expect(prompt).not.toContain('**Description:**');
   });
 
   it('falls back to the specification navigation when the catalog has no routes', () => {
