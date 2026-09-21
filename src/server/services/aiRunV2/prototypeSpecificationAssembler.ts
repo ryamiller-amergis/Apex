@@ -1,0 +1,74 @@
+/**
+ * Composes everything a prototype run needs into one immutable specification.
+ *
+ * This is the boundary where App Service stops and the worker begins: the
+ * repository read, the context budget, and the design-system lookups all
+ * happen here, because a worker has no checkout, no repository credentials,
+ * and no database.
+ */
+import type { RepoReader } from '../../../shared/types/repoReader';
+import type {
+  AiRunV2VisualSpecification,
+  VisualModelSettings,
+  VisualNavItem,
+  VisualUsageAttribution,
+} from '../../../shared/types/aiRunV2VisualSpec';
+import {
+  applyDesignContextBudget,
+  DEFAULT_DESIGN_CONTEXT_BUDGET_BYTES,
+} from '../designContext/designContextBudget';
+import { createRepoDesignContextReader } from '../designContext/repoDesignContextReader';
+import { buildPrototypeVisualSpecification } from './visualSpecificationBuilder';
+
+export type PrototypeDesignContext = Readonly<{
+  catalog: unknown;
+  screenInventory: unknown;
+  colorTokens: unknown;
+  navItems: ReadonlyArray<VisualNavItem>;
+}>;
+
+export type AssemblePrototypeSpecificationInput = Readonly<{
+  prototypeId: string;
+  promptInputs: Record<string, unknown>;
+  sourcePaths: ReadonlyArray<string>;
+  model: VisualModelSettings;
+  usage: VisualUsageAttribution;
+}>;
+
+export type PrototypeSpecificationAssembler = {
+  assemble(
+    input: AssemblePrototypeSpecificationInput,
+  ): Promise<AiRunV2VisualSpecification>;
+};
+
+export function createPrototypeSpecificationAssembler(deps: {
+  reader: RepoReader;
+  loadDesignContext: () => Promise<PrototypeDesignContext>;
+  budgetBytes?: number;
+}): PrototypeSpecificationAssembler {
+  const source = createRepoDesignContextReader({ reader: deps.reader });
+  const budgetBytes = deps.budgetBytes ?? DEFAULT_DESIGN_CONTEXT_BUDGET_BYTES;
+
+  return {
+    async assemble(input) {
+      const [context, read] = await Promise.all([
+        deps.loadDesignContext(),
+        source.readComponents([...input.sourcePaths]),
+      ]);
+      const budgeted = applyDesignContextBudget(read, budgetBytes);
+
+      return buildPrototypeVisualSpecification({
+        prototypeId: input.prototypeId,
+        promptInputs: input.promptInputs,
+        sourceFiles: budgeted.included,
+        omittedSourcePaths: budgeted.omitted,
+        catalog: context.catalog,
+        screenInventory: context.screenInventory,
+        colorTokens: context.colorTokens,
+        navItems: context.navItems,
+        model: input.model,
+        usage: input.usage,
+      });
+    },
+  };
+}
