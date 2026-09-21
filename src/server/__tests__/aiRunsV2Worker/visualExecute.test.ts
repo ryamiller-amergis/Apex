@@ -83,6 +83,35 @@ describe('visual execute', () => {
     expect(invokeModel).not.toHaveBeenCalled();
   });
 
+  it('carries usage back as an artifact because a worker cannot write it', async () => {
+    const execute = createVisualExecute({
+      invokeModel: async () => ({
+        html: '<html>ok</html>',
+        usage: { inputTokens: 120, outputTokens: 3400 },
+        durationMs: 9000,
+      }),
+    });
+
+    const outcome = await execute({
+      specification: spec as never,
+      command: {} as never,
+      checkpoints: checkpoints().port as never,
+      signal: new AbortController().signal,
+    });
+
+    expect(outcome.files.map((f) => f.path)).toEqual([
+      'prototype.html',
+      'usage.json',
+    ]);
+    const usage = JSON.parse(outcome.files[1].content as string);
+    expect(usage).toMatchObject({
+      modelId: 'anthropic.claude',
+      feature: 'design-prototype',
+      inputTokens: 120,
+      outputTokens: 3400,
+    });
+  });
+
   it('refuses empty model output rather than uploading a blank prototype', async () => {
     const execute = createVisualExecute({ invokeModel: async () => '   ' });
 

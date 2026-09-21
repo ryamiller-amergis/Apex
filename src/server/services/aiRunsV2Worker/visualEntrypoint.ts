@@ -10,15 +10,21 @@ import { createWorkerServiceBusClient } from './serviceBusClient';
 import { resolveWorkerEnvironment } from './entrypointSupport';
 import { buildPrototypePrompt } from './prototypePromptBuilder';
 import {
+  createBedrockVisualClient,
+  type VisualModelResult,
+} from './bedrockVisualClient';
+import {
   createVisualConcurrencyController,
   isBedrockThrottle,
 } from './visualConcurrency';
 import { createV2Worker, type ExecuteWorkload } from './worker';
 
+export const USAGE_FILE_NAME = 'usage.json';
+
 export type InvokeVisualModel = (
   prompt: string,
   model: VisualModelSettings,
-) => Promise<string>;
+) => Promise<string | VisualModelResult>;
 
 /**
  * Turns a visual specification into one HTML artifact.
@@ -35,36 +41,53 @@ export function createVisualExecute(deps: {
     }
     await checkpoints.publishProgress('execution', 'running');
 
-    const html = await deps.invokeModel(
+    const result = await deps.invokeModel(
       buildPrototypePrompt(specification),
       specification.model,
     );
+    const html = typeof result === 'string' ? result : result.html;
     if (!html.trim()) {
       // An empty upload would finalize the run as a completed blank prototype.
       throw new Error('Visual model returned no HTML');
     }
 
-    return {
-      files: [
-        {
-          path: specification.outputPath,
-          content: html,
-          contentType: 'text/html',
-        },
-      ],
-    };
+    const files = [
+      {
+        path: specification.outputPath,
+        content: html,
+        contentType: 'text/html',
+      },
+    ];
+
+    // A worker cannot write a usage row, so the cost rides along as an
+    // artifact and the owning service records it when it applies the output.
+    if (typeof result !== 'string') {
+      files.push({
+        path: USAGE_FILE_NAME,
+        content: JSON.stringify(
+          {
+            modelId: specification.model.modelId,
+            feature: specification.usage.feature,
+            project: specification.usage.project,
+            userId: specification.usage.userId,
+            inputTokens: result.usage.inputTokens,
+            outputTokens: result.usage.outputTokens,
+            durationMs: result.durationMs,
+          },
+          null,
+          2,
+        ),
+        contentType: 'application/json',
+      });
+    }
+
+    return { files };
   };
 }
 
-/**
- * Bedrock is not bound in this image yet: `bedrockService` still reaches a
- * database through `recordAiUsage`, so binding it here would break worker
- * isolation. Task 7 supplies a database-free client.
- */
 const executeVisualWorkload: ExecuteWorkload = createVisualExecute({
-  invokeModel: async () => {
-    throw new Error('Visual model client is not bound yet');
-  },
+  invokeModel: (prompt, model) =>
+    createBedrockVisualClient().invokeModel(prompt, model),
 });
 
 export async function startVisualWorker(): Promise<void> {
