@@ -459,6 +459,9 @@ in the running App Service imports):**
 
 ### Task 6: Build document and visual workers
 
+**Status:** Worker side complete on this branch. The four live V1 files are
+not yet modified — see "Remaining for Task 6" below.
+
 **Files:**
 
 - Create: `src/server/services/aiRunsV2Worker/serviceBusClient.ts`
@@ -483,19 +486,40 @@ in the running App Service imports):**
 - Consumes: immutable Blob execution specifications and fenced commands
 - Produces: checkpoints, immutable artifacts, terminal results
 
-- [ ] Receive commands with peek-lock.
-- [ ] Publish a started checkpoint containing the Container Apps execution ID.
-- [ ] Complete the command only after the fenced attempt is durably started.
-- [ ] Publish checkpoints every 30 seconds.
+- [x] Receive commands with peek-lock.
+- [x] Publish a started checkpoint containing the Container Apps execution ID.
+- [x] Complete the command only after the fenced attempt is durably started.
+- [x] Publish checkpoints every 30 seconds.
 - [ ] Use ephemeral local workspace and repo-read.
-- [ ] Enforce normal and large phase deadlines.
-- [ ] Upload files under attempt-scoped immutable Blob paths.
-- [ ] Write the manifest last.
-- [ ] Publish terminal result before process exit.
+- [x] Enforce normal and large phase deadlines.
+- [x] Upload files under attempt-scoped immutable Blob paths.
+- [x] Write the manifest last.
+- [x] Publish terminal result before process exit.
 - [ ] Use a new attempt and dispatch ID after confirmed post-claim loss.
-- [ ] Keep all PostgreSQL packages and connections out of worker entrypoints.
-- [ ] Start visual concurrency at two and implement automatic rollback from
+- [x] Keep all PostgreSQL packages and connections out of worker entrypoints.
+- [x] Start visual concurrency at two and implement automatic rollback from
   three/four on Bedrock throttling.
+
+**Verification evidence (2026-09-21, branch `tbi/infra-changes`):**
+
+- Worker suites: 24 passed, including a guard that fails if any module under
+  `aiRunsV2Worker/` imports a database module.
+- `npm run build:server` clean.
+- Neither entrypoint is started from App Service `index.ts`.
+
+**Remaining for Task 6:**
+
+- [ ] Write the execution specification to Blob and dispatch a V2 attempt from
+  the admission path. Neither lane's `execute` is wired to a provider yet;
+  both publish a progress checkpoint and then refuse rather than invent
+  output.
+- [ ] Modify `backgroundWorkflowRouter.ts`, `designPrototypeService.ts`,
+  `uiLabService.ts`, and `routes/uiLab.ts` behind a new feature flag
+  (default off) so the V2 path is selectable without disturbing V1. The
+  router already carries the `ai-runs-background` flag split; the V2 choice
+  belongs inside its enabled branch.
+- [ ] Ephemeral workspace and repo-read wiring, and the fresh attempt/dispatch
+  id after a confirmed post-claim loss.
 
 ---
 
