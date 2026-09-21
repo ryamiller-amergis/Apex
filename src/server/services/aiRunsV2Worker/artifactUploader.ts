@@ -13,7 +13,7 @@ import {
   type AiRunV2ArtifactManifest,
   type AiRunV2ArtifactManifestEntry,
 } from '../../../shared/types/aiRunV2';
-import { resolveArtifactContainerClient } from './specificationClient';
+import { resolveArtifactContainerClient } from '../aiRunV2/artifactContainer';
 
 export const MANIFEST_FILE_NAME = 'manifest.json';
 

@@ -502,17 +502,20 @@ not yet modified — see "Remaining for Task 6" below.
 
 **Verification evidence (2026-09-21, branch `tbi/infra-changes`):**
 
-- Worker suites: 24 passed, including a guard that fails if any module under
-  `aiRunsV2Worker/` imports a database module.
+- V2 suites: 81 passed, including a guard that walks the worker import graph
+  and fails if any module in it imports a database module.
 - `npm run build:server` clean.
 - Neither entrypoint is started from App Service `index.ts`.
 
 **Remaining for Task 6:**
 
-- [ ] Write the execution specification to Blob and dispatch a V2 attempt from
-  the admission path. Neither lane's `execute` is wired to a provider yet;
-  both publish a progress checkpoint and then refuse rather than invent
-  output.
+- [x] Write the execution specification to Blob and dispatch a V2 attempt from
+  the admission path (`specificationWriter.ts`, `v2AdmissionService.ts`). The
+  specification is written under an if-none-match condition before the
+  command references it, so a re-dispatched attempt reuses it rather than
+  rewriting it.
+- [ ] Wire each lane's `execute` to a provider. Both lanes currently publish a
+  progress checkpoint and then refuse rather than invent output.
 - [ ] Modify `backgroundWorkflowRouter.ts`, `designPrototypeService.ts`,
   `uiLabService.ts`, and `routes/uiLab.ts` behind a new feature flag
   (default off) so the V2 path is selectable without disturbing V1. The

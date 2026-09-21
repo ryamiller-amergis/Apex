@@ -1,24 +1,54 @@
-import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 
 /**
  * A worker image must not open a PostgreSQL connection — that is the point of
- * the V2 split. Guard the whole module directory, not just the entrypoints,
- * because any import in the graph would pull the pool in.
+ * the V2 split. Walk the whole relative-import graph rather than one folder,
+ * because a single shared helper is enough to pull the pool in.
  */
-const WORKER_DIR = join(__dirname, '../../services/aiRunsV2Worker');
+const WORKER_DIR = resolve(__dirname, '../../services/aiRunsV2Worker');
 
 const FORBIDDEN = [/from '.*\/db\/drizzle'/, /from '.*\/db'/, /from 'pg'/];
 
-describe('V2 worker isolation', () => {
-  const files = readdirSync(WORKER_DIR).filter((name) => name.endsWith('.ts'));
+function relativeImports(source: string): string[] {
+  const found: string[] = [];
+  const pattern = /from '(\.[^']+)'/g;
+  let match = pattern.exec(source);
+  while (match) {
+    found.push(match[1]);
+    match = pattern.exec(source);
+  }
+  return found;
+}
 
-  it('has worker modules to check', () => {
-    expect(files.length).toBeGreaterThan(0);
+function collectGraph(): string[] {
+  const queue = readdirSync(WORKER_DIR)
+    .filter((name) => name.endsWith('.ts'))
+    .map((name) => join(WORKER_DIR, name));
+  const seen = new Set<string>();
+
+  while (queue.length > 0) {
+    const file = queue.pop() as string;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    for (const specifier of relativeImports(readFileSync(file, 'utf8'))) {
+      const candidate = resolve(dirname(file), `${specifier}.ts`);
+      if (existsSync(candidate)) queue.push(candidate);
+    }
+  }
+  return [...seen].sort();
+}
+
+describe('V2 worker isolation', () => {
+  const graph = collectGraph();
+
+  it('reaches the worker modules and their shared helpers', () => {
+    expect(graph.length).toBeGreaterThan(5);
+    expect(graph.some((file) => file.includes('artifactContainer'))).toBe(true);
   });
 
-  it.each(files)('%s imports no database module', (file) => {
-    const source = readFileSync(join(WORKER_DIR, file), 'utf8');
+  it.each(graph)('%s imports no database module', (file) => {
+    const source = readFileSync(file, 'utf8');
     for (const pattern of FORBIDDEN) {
       expect(source).not.toMatch(pattern);
     }

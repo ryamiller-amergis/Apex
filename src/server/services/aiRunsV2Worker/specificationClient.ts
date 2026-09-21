@@ -4,12 +4,9 @@
  * The command carries only a blob reference, so runtime data never travels on
  * the queue and a redelivered command always reads the same specification.
  */
-import { BlobServiceClient, type ContainerClient } from '@azure/storage-blob';
-import {
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-} from '@azure/identity';
+import { type ContainerClient } from '@azure/storage-blob';
 import type { AiRunBlobRef } from '../../../shared/types/aiRunV2';
+import { resolveArtifactContainerClient } from '../aiRunV2/artifactContainer';
 
 export type ExecutionSpecification = Readonly<{
   runId: string;
@@ -25,26 +22,6 @@ export type ExecutionSpecification = Readonly<{
 export type SpecificationClient = {
   read(ref: AiRunBlobRef): Promise<ExecutionSpecification>;
 };
-
-export function resolveArtifactContainerClient(
-  containerName: string,
-): ContainerClient {
-  const account = process.env.AI_PLATFORM_V2_BLOB_ACCOUNT_NAME?.trim();
-  if (!account) {
-    throw new Error(
-      'AI_PLATFORM_V2_BLOB_ACCOUNT_NAME is required for V2 artifact storage',
-    );
-  }
-  const clientId = process.env.AI_PLATFORM_V2_IDENTITY_CLIENT_ID?.trim();
-  const credential = clientId
-    ? new ManagedIdentityCredential({ clientId })
-    : new DefaultAzureCredential();
-  const service = new BlobServiceClient(
-    `https://${account}.blob.core.windows.net`,
-    credential,
-  );
-  return service.getContainerClient(containerName);
-}
 
 export function createSpecificationClient(options?: {
   getContainerClient?: (containerName: string) => ContainerClient;
