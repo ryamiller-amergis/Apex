@@ -769,6 +769,59 @@ not yet modified — see "Remaining for Task 6" below.
     than fixed, because a transport move is the wrong place to change what the
     model is asked. `uiLabBedrockService.buildCatalogSection` is also dead —
     it builds an empty literal and nothing calls it.
+
+  **A differential test for the whole class (2026-09-21).** Every defect above
+  is the same species — an input channel the in-process path supplies that the
+  V2 path drops — and each was found by hand, weeks apart. Unit tests missed
+  all of them because they assert what the V2 code does, not whether it
+  matches the path it replaced.
+  `src/server/__tests__/designPrototypeBedrockRequestParity.test.ts` asserts
+  the match instead: one PRD fixture drives `generatePrototypesForPrd` twice —
+  once with `ai-runs-v2-transport` off, once on — and both Bedrock requests
+  are captured and compared.
+
+  - **Comparison point: the whole `InvokeModelCommand` payload** — model id,
+    headers, every payload key, and every content block including images and
+    their ordering. It is the last place the two paths converge before the
+    network, so a dropped channel has nowhere left to hide. The composed
+    prompt alone would have caught the wrong-prompt defects but not the
+    missing image and not the token ceiling below.
+  - **Seam: the AWS SDK client class, and nothing else.** `bedrockService`
+    holds its client at module scope and `bedrockVisualClient` builds one when
+    none is injected, so replacing the class observes both paths without
+    either knowing it is under test and without touching `bedrockService`.
+  - **Named allowances**, applied to both sides so an unexpected difference
+    still fails: a bare-string `content` is canonicalised to a one-block text
+    array, and the worker-only repository-source section is removed before the
+    prompts are compared.
+  - Both differential cases are **red on purpose** — one on the project
+    design system above, one on the token ceiling below. The comparison names
+    each divergence in a sentence, including the prompt line where two
+    prompts first differ.
+
+  **Found by that test, still open:**
+
+  - **The prototype output-token ceiling is halved on V2.**
+    `admitPendingPrototypesToV2` sets `model.maxTokens` only when a project
+    configures `designPrototypeBedrockMaxTokens`, so with no override the
+    worker falls back to `DEFAULT_VISUAL_MAX_TOKENS` (16k) while the
+    in-process path uses `UI_MOCK_MAX_TOKENS` (32k). Prototype HTML is what
+    drove that ceiling from 4k to 32k in the first place, so V2 truncates
+    where the in-process path completes — and because `stop_reason` is
+    ignored (above), the truncated document is uploaded and finalized as a
+    completed prototype. Not a shared-constant retune: UI Lab's in-process
+    default really is 16k, so the ceiling is per-lane and App Service has to
+    resolve it and always put it on the specification.
+  - The comment on `bedrockVisualClient.buildContent` — "With no image the
+    message stays a plain string, which is what a reference-less in-process
+    call sends" — is wrong. `bedrockService.invokeModel` always builds a block
+    array, even with no images. The two encodings mean the same thing to the
+    Bedrock Anthropic API, so this is a comment to correct rather than a
+    defect, and the test carries it as a named allowance.
+  - The payload is not the whole call. The per-attempt timeout (12 minutes in
+    process, 10 on the worker) and `bedrockService`'s throttle retry, which
+    `bedrockVisualClient` has no equivalent of, sit outside this comparison
+    and need their own check.
 - [ ] Ephemeral workspace and repo-read wiring for the worker processes.
 
 ---
