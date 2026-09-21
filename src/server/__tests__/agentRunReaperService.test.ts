@@ -1064,6 +1064,86 @@ describe('reapOrphanedRuns', () => {
     expect(notifyRunEvent).not.toHaveBeenCalled();
   });
 
+  it('leaves a running V2 row to the orchestrator while still reaping its V1 twin', async () => {
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-v2-running',
+        threadId: 'thread-v2',
+        status: 'running',
+        lane: 'background',
+        transportVersion: 'servicebus-blob-v2',
+        dispatchMessageId: 'dispatch-v2',
+        createdAt: timestamp(20 * 60_000),
+        startedAt: timestamp(20 * 60_000),
+        heartbeatAt: timestamp(20 * 60_000),
+        progressAt: timestamp(20 * 60_000),
+        updatedAt: timestamp(20 * 60_000),
+        cancelRequested: false,
+      },
+      {
+        id: 'run-v1-running',
+        threadId: 'thread-v1',
+        status: 'running',
+        lane: 'background',
+        transportVersion: 'http-files-v1',
+        dispatchMessageId: 'dispatch-v1',
+        createdAt: timestamp(20 * 60_000),
+        startedAt: timestamp(20 * 60_000),
+        heartbeatAt: timestamp(20 * 60_000),
+        progressAt: timestamp(20 * 60_000),
+        updatedAt: timestamp(20 * 60_000),
+        cancelRequested: false,
+      },
+    ]);
+
+    await reapOrphanedRuns({ now: () => now, config });
+
+    expect(mockMarkTerminal).toHaveBeenCalledTimes(1);
+    expect(mockMarkTerminal).toHaveBeenCalledWith(
+      'run-v1-running',
+      expect.objectContaining({ terminalReason: 'worker_lost' }),
+    );
+  });
+
+  it('leaves a queued V2 row past the V1 queue TTL to the orchestrator', async () => {
+    mockFindMany.mockResolvedValue([{
+      id: 'run-v2-queued',
+      threadId: 'thread-v2',
+      status: 'queued',
+      lane: 'background',
+      transportVersion: 'servicebus-blob-v2',
+      queuedAt: timestamp(31 * 60_000),
+      createdAt: timestamp(31 * 60_000),
+      progressPhase: null,
+      lastError: null,
+    }]);
+
+    await reapOrphanedRuns({ now: () => now, config });
+
+    expect(finalizeReconciledAgentRun).not.toHaveBeenCalled();
+    expect(mockUpdateSet).not.toHaveBeenCalled();
+  });
+
+  it('never republishes or terminalizes a dispatched V2 row on the V1 dispatch clocks', async () => {
+    mockFindMany.mockResolvedValue([{
+      id: 'run-v2-dispatched',
+      threadId: 'thread-v2',
+      status: 'dispatched',
+      lane: 'background',
+      transportVersion: 'servicebus-blob-v2',
+      dispatchMessageId: 'dispatch-v2',
+      dispatchedAt: timestamp(30 * 60_000 + 1),
+      updatedAt: timestamp(30 * 60_000 + 1),
+      progressPhase: null,
+      cancelRequested: false,
+    }]);
+
+    await reapOrphanedRuns({ now: () => now, config });
+
+    expect(mockMarkTerminal).not.toHaveBeenCalled();
+    expect(mockRecoverStaleDispatchedRuns).not.toHaveBeenCalled();
+  });
+
   it('AC-3/VT-04/queue_ttl defaults to 30 minutes and accepts only positive env overrides', () => {
     const previous = process.env.AI_RUNS_BACKGROUND_QUEUE_TTL_MS;
     try {

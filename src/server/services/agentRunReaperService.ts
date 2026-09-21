@@ -793,6 +793,13 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
 
     for (const row of rows) {
       throwIfAborted(signal);
+      // A V2 run's real lifecycle is its `ai_run_attempts` row, swept by the
+      // orchestrator's reconciler. Terminating the header from here would leave
+      // that attempt active with nothing to finalize it.
+      if (row.transportVersion === 'servicebus-blob-v2') {
+        continue;
+      }
+
       // Interactive dispatch is acknowledged before the Dapr actor invocation
       // finishes. A process crash can therefore bypass the host's rejection
       // handler and leave the fenced row dispatched forever. Unlike background

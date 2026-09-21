@@ -8,13 +8,23 @@ jest.mock('../services/pgNotifyService', () => ({
   nextRunEventSequence: jest.fn().mockReturnValue(1),
   notifyRunEvent: jest.fn().mockResolvedValue(undefined),
 }));
+jest.mock('../db/drizzle', () => ({
+  db: {
+    execute: jest.fn(),
+    transaction: jest.fn(),
+  },
+}));
 
+import { db } from '../db/drizzle';
+import { setServiceBusPublisher } from '../services/serviceBusPublisher';
 import {
   createAdmissionGovernorService,
   createStaleDispatchRecoveryService,
+  recoverStaleDispatchedRuns,
   resolveBackgroundDispatchTtlMs,
   resolveBackgroundInFlightLimit,
   resolveBackgroundPublishGraceMs,
+  runAdmissionCycle,
   type AdmissionStore,
   type AdmissionTransaction,
   type AdmissionQueueSnapshot,
@@ -849,5 +859,85 @@ describe('stale dispatch republish recovery (TBI-002 DoD-4/VT-07)', () => {
     expect(resolveBackgroundPublishGraceMs('0')).toBe(60_000);
     expect(resolveBackgroundPublishGraceMs('not-a-duration')).toBe(60_000);
     expect(resolveBackgroundPublishGraceMs('60000')).toBe(60_000);
+  });
+});
+
+/**
+ * Renders a Drizzle `sql` template, inlining bound parameters so the emitted
+ * predicate can be asserted as text.
+ */
+function sqlText(node: unknown): string {
+  if (node == null) return '';
+  if (typeof node === 'string') return node;
+  const chunks = (node as { queryChunks?: unknown[] }).queryChunks;
+  if (Array.isArray(chunks)) return chunks.map(sqlText).join('');
+  if (typeof node === 'object' && 'value' in (node as object)) {
+    return sqlText((node as { value: unknown }).value);
+  }
+  if (Array.isArray(node)) return node.map(sqlText).join('');
+  return String(node);
+}
+
+/** Collapse whitespace so multi-line SQL can be matched with simple patterns. */
+function flatSql(node: unknown): string {
+  return sqlText(node).replace(/\s+/g, ' ').trim();
+}
+
+describe('transport partitioning: V1 governs only http-files-v1 runs', () => {
+  const execute = jest.fn();
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    execute.mockResolvedValue([]);
+    jest.mocked(db.execute).mockResolvedValue([] as never);
+    jest.mocked(db.transaction).mockImplementation(
+      (async (work: (tx: unknown) => Promise<unknown>) =>
+        work({ execute })) as never,
+    );
+    setServiceBusPublisher({ publish: jest.fn().mockResolvedValue(undefined) });
+  });
+
+  afterEach(() => {
+    setServiceBusPublisher(null);
+  });
+
+  test('the queue snapshot excludes V2 runs from in-flight, queue depth, and oldest-queued age', async () => {
+    execute.mockResolvedValue([
+      { in_flight: 0, queued_depth: 0, oldest_queued_at: null },
+    ]);
+
+    await runAdmissionCycle('sweep');
+
+    const snapshot = flatSql(execute.mock.calls[1][0]);
+    const filters = snapshot.match(/COUNT\(\*\) FILTER \([^)]*\)|MIN\(queued_at\) FILTER \([^)]*\)/g) ?? [];
+    expect(filters).toHaveLength(3);
+    for (const filter of filters) {
+      expect(filter).toContain("transport_version <> 'servicebus-blob-v2'");
+    }
+  });
+
+  test('candidate selection and fairness counting both skip V2 runs', async () => {
+    execute
+      .mockResolvedValueOnce([]) // advisory lock
+      .mockResolvedValueOnce([{ in_flight: 0, queued_depth: 1, oldest_queued_at: null }])
+      .mockResolvedValue([]); // admitNext finds nothing, then the final snapshot
+
+    await runAdmissionCycle('sweep');
+
+    const admitNext = flatSql(execute.mock.calls[2][0]);
+    expect(admitNext).toContain('project_in_flight AS');
+    expect(admitNext).toContain('candidate AS');
+    // Once inside the fairness CTE, once inside candidate selection.
+    expect(
+      admitNext.match(/transport_version <> 'servicebus-blob-v2'/g),
+    ).toHaveLength(2);
+  });
+
+  test('stale dispatch republish never re-enqueues a V2 run onto the V1 queue', async () => {
+    await recoverStaleDispatchedRuns();
+
+    expect(flatSql(jest.mocked(db.execute).mock.calls[0][0])).toContain(
+      "transport_version <> 'servicebus-blob-v2'",
+    );
   });
 });
