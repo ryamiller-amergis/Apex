@@ -110,6 +110,45 @@ describe('AI-run V2 run attempt repository', () => {
     ).resolves.toEqual({ status: 'fence_mismatch' });
   });
 
+  it('stores the started execution id where the reconciler probes for it', async () => {
+    const execute = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          id: 'attempt-1',
+          dispatch_message_id: 'dispatch-1',
+          last_checkpoint_sequence: 0,
+          status: 'dispatched',
+        },
+      ])
+      .mockResolvedValueOnce([{ event_id: 'evt-1' }]) // inbox claim
+      .mockResolvedValue([]);
+    const repo = createRunAttemptRepository({
+      runInTransaction: async (work) => work({ execute }),
+    });
+
+    await expect(
+      repo.acceptCheckpoint({
+        schemaVersion: AI_RUN_V2_SCHEMA_VERSION,
+        eventId: 'evt-1',
+        runId: 'run-1',
+        attemptId: 'attempt-1',
+        attemptNumber: 1,
+        dispatchMessageId: 'dispatch-1',
+        timestamp: '2026-09-18T12:00:00.000Z',
+        kind: 'started',
+        checkpointSequence: 1,
+        containerAppsExecutionId: 'exec-42',
+      })
+    ).resolves.toEqual({ status: 'accepted', checkpointSequence: 1 });
+
+    const attemptUpdate = JSON.stringify(
+      execute.mock.calls.map(([query]) => query)
+    );
+    expect(attemptUpdate).toContain('containerAppsExecutionId');
+    expect(attemptUpdate).toContain('exec-42');
+  });
+
   it('rejects non-monotonic checkpoint sequences', async () => {
     const execute = jest.fn().mockResolvedValueOnce([
       {

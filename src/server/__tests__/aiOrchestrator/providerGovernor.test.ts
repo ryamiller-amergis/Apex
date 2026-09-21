@@ -1,7 +1,6 @@
 import {
   evaluateDispatchCapacity,
   emptyUtilization,
-  laneForQueueName,
   providerForLane,
 } from '../../services/aiOrchestrator/providerGovernor';
 import { planAdmissionBatch } from '../../services/aiOrchestrator/admissionController';
@@ -9,8 +8,7 @@ import type { OutboxRow } from '../../services/aiRunV2/outboxRepository';
 import { DEFAULT_PROVIDER_CAPACITY } from '../../services/aiOrchestrator/types';
 
 describe('providerGovernor', () => {
-  it('maps lanes and providers', () => {
-    expect(laneForQueueName('ai-runs-v2-visual')).toBe('visual');
+  it('maps lanes to providers', () => {
     expect(providerForLane('visual')).toBe('bedrock');
     expect(providerForLane('document')).toBe('cursor');
   });
@@ -84,7 +82,7 @@ describe('admissionController', () => {
     kind: 'dispatch_command',
     runId: 'run-1',
     attemptId: 'attempt-1',
-    payload: { queueName: 'ai-runs-v2-document', dispatchMessageId: id },
+    payload: { workloadLane: 'document', dispatchMessageId: id },
     availableAt: '2026-09-18T12:00:00.000Z',
     claimedBy: 'drainer',
     claimedAt: '2026-09-18T12:00:00.000Z',
@@ -100,7 +98,7 @@ describe('admissionController', () => {
     const rows = [
       baseRow('a'),
       baseRow('b', {
-        payload: { queueName: 'ai-runs-v2-visual', dispatchMessageId: 'b' },
+        payload: { workloadLane: 'visual', dispatchMessageId: 'b' },
       }),
     ];
     const planned = planAdmissionBatch({

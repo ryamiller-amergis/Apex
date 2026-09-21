@@ -105,10 +105,31 @@ describe('AI-run V2 shared types', () => {
       ...envelopeBase,
       kind: 'dispatch_command',
       transport: 'servicebus-blob-v2',
+      workloadLane: 'document',
       specRef: blobRef,
     };
     expect(isAiRunV2Command(command)).toBe(true);
     expect(isAiRunBlobRef(command.specRef)).toBe(true);
+  });
+
+  it('rejects a dispatch command without a recognizable workload lane', () => {
+    expect(
+      isAiRunV2Command({
+        ...envelopeBase,
+        kind: 'dispatch_command',
+        transport: 'servicebus-blob-v2',
+        specRef: blobRef,
+      })
+    ).toBe(false);
+    expect(
+      isAiRunV2Command({
+        ...envelopeBase,
+        kind: 'dispatch_command',
+        transport: 'servicebus-blob-v2',
+        workloadLane: 'batch',
+        specRef: blobRef,
+      })
+    ).toBe(false);
   });
 
   it('rejects commands with unknown schema versions, kinds, or missing fences', () => {

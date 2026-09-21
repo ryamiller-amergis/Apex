@@ -2,6 +2,7 @@
  * Outbox drain loop: NOTIFY wake + 30s leased safety sweep.
  */
 import { randomUUID } from 'node:crypto';
+import { AI_RUN_V2_LANE_QUEUES } from '../../../shared/types/aiRunV2';
 import {
   withDistributedLease,
   type HeldDistributedLease,
@@ -125,13 +126,12 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
           });
           continue;
         }
+        const lane = item.decision.lane;
         try {
-          await publishRow(item.outbox, item.queueName);
+          await publishRow(item.outbox, AI_RUN_V2_LANE_QUEUES[lane]);
           await outbox.markPublished([item.outbox.id], holderId);
           published += 1;
-          metrics.increment('orchestrator.outbox.published', {
-            lane: item.lane,
-          });
+          metrics.increment('orchestrator.outbox.published', { lane });
         } catch (err) {
           const detail = err instanceof Error ? err.message : String(err);
           await outbox.markFailed(item.outbox.id, holderId, detail, 10_000);

@@ -3,17 +3,17 @@
  * Live App Service traffic stays on V1; this process is separate.
  */
 
+import {
+  AI_RUN_V2_WORKLOAD_LANES,
+  type AiRunV2WorkloadLane,
+} from '../../../shared/types/aiRunV2';
+
 export const AI_ORCHESTRATOR_PROVIDERS = ['cursor', 'bedrock'] as const;
 export type AiOrchestratorProvider =
   (typeof AI_ORCHESTRATOR_PROVIDERS)[number];
 
-export const AI_ORCHESTRATOR_LANES = [
-  'document',
-  'visual',
-  'fast',
-  'agentic',
-] as const;
-export type AiOrchestratorLane = (typeof AI_ORCHESTRATOR_LANES)[number];
+/** Lanes are a wire contract shared with the workers, not orchestrator-local. */
+export type AiOrchestratorLane = AiRunV2WorkloadLane;
 
 export type ProviderCapacityConfig = Readonly<{
   cursorCap: number;
@@ -41,43 +41,20 @@ export type ProviderUtilization = Readonly<{
 
 export type DispatchDecision =
   | { status: 'allow'; provider: AiOrchestratorProvider; lane: AiOrchestratorLane }
-  | { status: 'deny'; reason: 'provider_cap' | 'lane_cap' | 'uncertain_workers_paused' };
+  | {
+      status: 'deny';
+      reason:
+        | 'provider_cap'
+        | 'lane_cap'
+        | 'uncertain_workers_paused'
+        | 'unknown_lane';
+    };
 
 export type PeekLockedMessage = Readonly<{
   lockToken: string;
   messageId: string;
   body: Record<string, unknown>;
   deliveryCount: number;
-}>;
-
-export type CheckpointMessageBody = Readonly<{
-  schemaVersion: number;
-  eventId: string;
-  runId: string;
-  attemptId: string;
-  attemptNumber: number;
-  dispatchMessageId: string;
-  timestamp: string;
-  kind: 'started' | 'heartbeat' | 'progress';
-  checkpointSequence: number;
-  progressPercent?: number;
-  containerAppExecutionId?: string;
-}>;
-
-export type TerminalResultMessageBody = Readonly<{
-  schemaVersion: number;
-  eventId: string;
-  runId: string;
-  attemptId: string;
-  attemptNumber: number;
-  dispatchMessageId: string;
-  timestamp: string;
-  kind: 'terminal';
-  executionStatus: 'completed' | 'failed' | 'cancelled';
-  failureCategory?: string;
-  failureDetail?: string;
-  artifactStatus?: string;
-  manifestRef?: { container: string; key: string };
 }>;
 
 export type CommandPublishRequest = Readonly<{

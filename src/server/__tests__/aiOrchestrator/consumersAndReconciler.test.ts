@@ -137,7 +137,7 @@ describe('reconciler', () => {
           dispatchMessageId: 'd1',
           status: 'running',
           lastCheckpointAt: null,
-          containerAppExecutionId: 'exec-1',
+          containerAppsExecutionId: 'exec-1',
         },
       ],
       listCheckingWorkers: async () => [],
@@ -187,7 +187,7 @@ describe('reconciler', () => {
           dispatchMessageId: 'd1',
           status: 'checking_worker',
           lastCheckpointAt: '2026-09-18T12:00:00.000Z',
-          containerAppExecutionId: 'exec-missing',
+          containerAppsExecutionId: 'exec-missing',
         },
       ],
       acquireRecoveryLease: async (work) =>

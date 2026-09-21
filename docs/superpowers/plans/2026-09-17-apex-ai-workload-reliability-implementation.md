@@ -415,21 +415,30 @@ App Service wiring, no deploy.yml, no Azure apply).
 - Entrypoint is **not** started from App Service `index.ts`.
 - deploy.yml and Azure apply remain deferred.
 
-**Open follow-ups before any staging run (recorded 2026-09-21):**
+**Follow-ups closed 2026-09-21 (all inside the V2-only folders, which nothing
+in the running App Service imports):**
 
-The committed process builds and passes tests, but three placeholders in
-`src/server/services/aiOrchestrator/entrypoint.ts` make it unsafe to run
-against real queues until closed:
+- [x] Dispatch commands now carry `workloadLane`, so each lane reaches its own
+  command queue and its own capacity floor. Previously the lane never reached
+  the outbox payload and every V2 dispatch would have landed on the document
+  queue. A command with no recognizable lane is denied as `unknown_lane`
+  rather than published to a guessed queue.
+- [x] `acceptCheckpoint` folds the started checkpoint's execution id into
+  `spec_ref`, which is the only place the reconciler can read it. The
+  orchestrator also had the field misspelled `containerAppExecutionId`
+  against the contract's `containerAppsExecutionId`, so the probe could never
+  have found an id even once workers published one.
+- [x] Live per-provider and per-lane counters replace the empty utilization
+  placeholder, so the Cursor 20 / Bedrock 2 caps bind at runtime. Counts join
+  attempts back to the originating outbox row; no schema change was needed.
 
-- [ ] `loadUtilization()` returns `emptyUtilization()`, so the Cursor 20 /
-  Bedrock 2 caps never bind at runtime. Wire live per-provider counters from
-  `ai_run_attempts`.
-- [ ] The execution probe always answers `unknown`, and the reconciler leaves
-  `unknown` attempts alone. Nothing can reach `worker_lost`, so two stuck
-  attempts pause background dispatch permanently. Implement the Container
-  Apps execution probe against the ARM API using the orchestrator identity.
-- [ ] The command publisher hardcodes queue `ai-runs-v2-document`. Route per
-  lane once the visual queue exists (Task 6).
+**Still open before any staging run:**
+
+- [ ] The execution probe answers `unknown` for everything, and the
+  reconciler leaves `unknown` attempts alone, so nothing reaches
+  `worker_lost` and two stuck attempts pause background dispatch. Blocked on
+  Task 6 (workers must publish the execution id) and on Terraform defining
+  the job to probe.
 
 **Hosting and environment (not yet provisioned):**
 
@@ -667,8 +676,8 @@ and running on **dev/staging**:
 - [ ] **Orchestrator hosting and CI wiring** (Task 5 shipped the process and
   its Dockerfile/publish script only). Needs a Container App resource, a
   registry repository, `deploy.yml` wiring, the environment variables listed
-  under Task 5, and the three entrypoint placeholders closed before the
-  process consumes real queues.
+  under Task 5, and the execution probe closed before the process consumes
+  real queues.
 - [ ] **Task 2 rollout gates** (still open): staging/prod heartbeat swap
   verification; 25-document V1 regression before any capacity increase.
 - [ ] **V1 retirement** (Task 8): only after V2 is proven in production —

@@ -1,12 +1,12 @@
 /**
  * Leased V2 admission decisions for outbox command rows.
  */
-import type { OutboxRow } from '../aiRunV2/outboxRepository';
 import {
-  evaluateDispatchCapacity,
-  laneForQueueName,
-  providerForLane,
-} from './providerGovernor';
+  AI_RUN_V2_LANE_QUEUES,
+  isAiRunV2WorkloadLane,
+} from '../../../shared/types/aiRunV2';
+import type { OutboxRow } from '../aiRunV2/outboxRepository';
+import { evaluateDispatchCapacity, providerForLane } from './providerGovernor';
 import type {
   AiOrchestratorLane,
   DispatchDecision,
@@ -20,26 +20,17 @@ import {
 
 export type AdmissionCandidate = Readonly<{
   outbox: OutboxRow;
-  queueName: string;
-  lane: AiOrchestratorLane;
+  /** Null when the row carries no recognizable workload lane. */
+  queueName: string | null;
+  lane: AiOrchestratorLane | null;
   decision: DispatchDecision;
 }>;
 
-export function resolveQueueNameFromOutbox(row: OutboxRow): string {
+export function resolveLaneFromOutbox(row: OutboxRow): AiOrchestratorLane | null {
   const payload = row.payload as Record<string, unknown>;
-  if (typeof payload.queueName === 'string' && payload.queueName.trim()) {
-    return payload.queueName;
-  }
-  const laneHint =
-    typeof payload.lane === 'string'
-      ? payload.lane
-      : typeof payload.kind === 'string'
-        ? payload.kind
-        : 'document';
-  if (laneHint.includes('visual')) return 'ai-runs-v2-visual';
-  if (laneHint.includes('fast')) return 'ai-runs-v2-fast';
-  if (laneHint.includes('agentic')) return 'ai-runs-v2-agentic';
-  return 'ai-runs-v2-document';
+  return isAiRunV2WorkloadLane(payload.workloadLane)
+    ? payload.workloadLane
+    : null;
 }
 
 export function planAdmissionBatch(input: {
@@ -66,9 +57,17 @@ export function planAdmissionBatch(input: {
 
   for (const row of input.rows) {
     if (row.kind !== 'dispatch_command') continue;
-    const queueName = resolveQueueNameFromOutbox(row);
-    const lane = laneForQueueName(queueName);
-    if (!lane) continue;
+    const lane = resolveLaneFromOutbox(row);
+    if (!lane) {
+      planned.push({
+        outbox: row,
+        queueName: null,
+        lane: null,
+        decision: { status: 'deny', reason: 'unknown_lane' },
+      });
+      continue;
+    }
+    const queueName = AI_RUN_V2_LANE_QUEUES[lane];
 
     const decision = evaluateDispatchCapacity({
       lane,

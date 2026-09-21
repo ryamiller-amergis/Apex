@@ -10,6 +10,7 @@ import {
   type AiRunV2Checkpoint,
   type AiRunV2Command,
   type AiRunV2FailureCategory,
+  type AiRunV2WorkloadLane,
 } from '../../../shared/types/aiRunV2';
 import type {
   AgentRunLane,
@@ -47,6 +48,7 @@ export type CreateQueuedV2RunResult =
 export type DispatchNextAttemptInput = Readonly<{
   runId: string;
   dispatchMessageId?: string;
+  workloadLane: AiRunV2WorkloadLane;
   specRef: AiRunBlobRef;
 }>;
 
@@ -324,6 +326,7 @@ export function createRunAttemptRepository(options?: {
             timestamp: new Date().toISOString(),
             kind: 'dispatch_command',
             transport: 'servicebus-blob-v2',
+            workloadLane: input.workloadLane,
             specRef: input.specRef,
           };
           const inserted = await outbox.enqueue([
@@ -403,6 +406,7 @@ export function createRunAttemptRepository(options?: {
           timestamp: new Date().toISOString(),
           kind: 'dispatch_command',
           transport: 'servicebus-blob-v2',
+          workloadLane: input.workloadLane,
           specRef: input.specRef,
         };
         const inserted = await outbox.enqueue([
@@ -534,11 +538,20 @@ export function createRunAttemptRepository(options?: {
           return { status: 'duplicate' };
         }
 
+        // The started checkpoint carries the only execution id the reconciler
+        // can probe, so fold it into spec_ref rather than leaving it in inbox.
+        const executionIdPatch =
+          checkpoint.kind === 'started'
+            ? sql`spec_ref = COALESCE(spec_ref, '{}'::jsonb) || ${JSON.stringify(
+                { containerAppsExecutionId: checkpoint.containerAppsExecutionId },
+              )}::jsonb,`
+            : sql``;
         await executor.execute(sql`
           UPDATE ai_run_attempts
           SET
             last_checkpoint_sequence = ${checkpoint.checkpointSequence},
             last_checkpoint_at = now(),
+            ${executionIdPatch}
             status = CASE
               WHEN status = 'dispatched' THEN 'running'
               ELSE status

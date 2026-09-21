@@ -4,7 +4,7 @@
  */
 import { db } from '../../db/drizzle';
 import { runAttemptRepository } from '../aiRunV2/runAttemptRepository';
-import { emptyUtilization } from './providerGovernor';
+import { createUtilizationReader } from './utilizationReader';
 import { createOutboxDrainer } from './outboxDrainer';
 import { createCheckpointConsumer } from './checkpointConsumer';
 import { createResultConsumer } from './resultConsumer';
@@ -16,7 +16,6 @@ import {
   createServiceBusRestQueueConsumer,
 } from './serviceBusRestClient';
 import type { ExecutionProbe } from './ports';
-import type { ProviderUtilization } from './types';
 
 const executor = { execute: (query: unknown) => db.execute(query as never) };
 
@@ -28,17 +27,17 @@ function resolveNamespace(): string {
   );
 }
 
+/**
+ * Placeholder until Task 6 workers publish a Container Apps execution id and
+ * Terraform defines the job to probe. `unknown` keeps attempts in
+ * checking_worker instead of failing a possibly healthy worker.
+ */
 function createNoopExecutionProbe(): ExecutionProbe {
   return {
     async probe() {
       return { status: 'unknown', detail: 'execution probe not configured' };
     },
   };
-}
-
-async function loadUtilization(): Promise<ProviderUtilization> {
-  // Placeholder until Task 5 wires live provider counters from attempt rows.
-  return emptyUtilization();
 }
 
 async function main(): Promise<void> {
@@ -99,10 +98,12 @@ async function main(): Promise<void> {
     metrics,
   });
 
+  const utilization = createUtilizationReader({ executor });
+
   const outboxDrainer = createOutboxDrainer({
     executor,
     publisher,
-    getUtilization: loadUtilization,
+    getUtilization: () => utilization.read(),
     getUncertainWorkerCount: () => reconciler.countUncertainWorkers(),
     metrics,
     enableNotify: process.env.NODE_ENV !== 'test',

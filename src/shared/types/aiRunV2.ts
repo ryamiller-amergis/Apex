@@ -13,6 +13,27 @@ export const AI_RUN_TRANSPORT_VERSIONS = [
 ] as const;
 export type AiRunTransportVersion = (typeof AI_RUN_TRANSPORT_VERSIONS)[number];
 
+/**
+ * V2 workload lanes. Distinct from `AgentRunLane` (background vs interactive):
+ * these select the command queue, the provider, and the capacity floor.
+ */
+export const AI_RUN_V2_WORKLOAD_LANES = [
+  'document',
+  'visual',
+  'fast',
+  'agentic',
+] as const;
+export type AiRunV2WorkloadLane = (typeof AI_RUN_V2_WORKLOAD_LANES)[number];
+
+export const AI_RUN_V2_LANE_QUEUES: Readonly<
+  Record<AiRunV2WorkloadLane, string>
+> = {
+  document: 'ai-runs-v2-document',
+  visual: 'ai-runs-v2-visual',
+  fast: 'ai-runs-v2-fast',
+  agentic: 'ai-runs-v2-agentic',
+};
+
 /** Attempt-local execution statuses. Header `agent_runs.status` stays V1 until Task 5. */
 export const AI_RUN_V2_ATTEMPT_STATUSES = [
   'queued',
@@ -108,6 +129,7 @@ export type AiRunV2Command = AiRunV2EnvelopeBase &
   Readonly<{
     kind: 'dispatch_command';
     transport: 'servicebus-blob-v2';
+    workloadLane: AiRunV2WorkloadLane;
     specRef: AiRunBlobRef;
   }>;
 
@@ -242,6 +264,15 @@ export function isAiControlPlaneLeaseKey(
   );
 }
 
+export function isAiRunV2WorkloadLane(
+  value: unknown
+): value is AiRunV2WorkloadLane {
+  return (
+    typeof value === 'string' &&
+    (AI_RUN_V2_WORKLOAD_LANES as readonly string[]).includes(value)
+  );
+}
+
 export function isAiRunBlobRef(value: unknown): value is AiRunBlobRef {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Record<string, unknown>;
@@ -270,6 +301,7 @@ export function isAiRunV2Command(value: unknown): value is AiRunV2Command {
   return (
     candidate.kind === 'dispatch_command' &&
     candidate.transport === 'servicebus-blob-v2' &&
+    isAiRunV2WorkloadLane(candidate.workloadLane) &&
     isAiRunBlobRef(candidate.specRef)
   );
 }

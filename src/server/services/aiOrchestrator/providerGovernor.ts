@@ -11,14 +11,6 @@ import type {
 } from './types';
 import { DEFAULT_PROVIDER_CAPACITY } from './types';
 
-export function laneForQueueName(queueName: string): AiOrchestratorLane | null {
-  if (queueName.includes('document')) return 'document';
-  if (queueName.includes('visual')) return 'visual';
-  if (queueName.includes('fast')) return 'fast';
-  if (queueName.includes('agentic')) return 'agentic';
-  return null;
-}
-
 export function providerForLane(lane: AiOrchestratorLane): AiOrchestratorProvider {
   return lane === 'visual' ? 'bedrock' : 'cursor';
 }

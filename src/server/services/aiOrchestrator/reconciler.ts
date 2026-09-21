@@ -20,7 +20,7 @@ export type StaleAttemptRow = Readonly<{
   dispatchMessageId: string;
   status: string;
   lastCheckpointAt: string | null;
-  containerAppExecutionId: string | null;
+  containerAppsExecutionId: string | null;
 }>;
 
 export type ReconcilerDeps = Readonly<{
@@ -87,7 +87,7 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
         a.dispatch_message_id,
         a.status,
         a.last_checkpoint_at,
-        a.spec_ref->>'containerAppExecutionId' AS container_app_execution_id
+        a.spec_ref->>'containerAppsExecutionId' AS container_apps_execution_id
       FROM ai_run_attempts a
       JOIN agent_runs r ON r.id = a.run_id
       WHERE r.transport_version = 'servicebus-blob-v2'
@@ -110,10 +110,10 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
           : row.last_checkpoint_at instanceof Date
             ? row.last_checkpoint_at.toISOString()
             : String(row.last_checkpoint_at),
-      containerAppExecutionId:
-        row.container_app_execution_id == null
+      containerAppsExecutionId:
+        row.container_apps_execution_id == null
           ? null
-          : String(row.container_app_execution_id),
+          : String(row.container_apps_execution_id),
     }));
   }
 
@@ -125,7 +125,7 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
         a.dispatch_message_id,
         a.status,
         a.last_checkpoint_at,
-        a.spec_ref->>'containerAppExecutionId' AS container_app_execution_id
+        a.spec_ref->>'containerAppsExecutionId' AS container_apps_execution_id
       FROM ai_run_attempts a
       JOIN agent_runs r ON r.id = a.run_id
       WHERE r.transport_version = 'servicebus-blob-v2'
@@ -144,10 +144,10 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
           : row.last_checkpoint_at instanceof Date
             ? row.last_checkpoint_at.toISOString()
             : String(row.last_checkpoint_at),
-      containerAppExecutionId:
-        row.container_app_execution_id == null
+      containerAppsExecutionId:
+        row.container_apps_execution_id == null
           ? null
-          : String(row.container_app_execution_id),
+          : String(row.container_apps_execution_id),
     }));
   }
 
@@ -184,12 +184,12 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
       const checking = await listChecking();
       let failed = 0;
       for (const row of checking) {
-        if (!row.containerAppExecutionId) {
+        if (!row.containerAppsExecutionId) {
           // Without an execution id we cannot confirm loss — leave in checking_worker.
           metrics.increment('orchestrator.reconciler.missing_execution_id');
           continue;
         }
-        const probe = await deps.executionProbe.probe(row.containerAppExecutionId);
+        const probe = await deps.executionProbe.probe(row.containerAppsExecutionId);
         if (probe.status === 'running' || probe.status === 'succeeded') {
           // Worker healthy or finished — return to running so checkpoints can resume.
           await deps.attempts.transitionAttempt({
