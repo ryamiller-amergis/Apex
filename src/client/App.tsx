@@ -87,6 +87,7 @@ const StandupSummaryView = lazy(() => import('./components/StandupSummaryView'))
 const FeatureRequestsView = lazy(() => import('./components/FeatureRequestsView'));
 const ApexWorkBoardView = lazy(() => import('./components/ApexWorkBoardView').then(m => ({ default: m.ApexWorkBoardView })));
 const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ default: m.UiLabView })));
+const QaLabView = lazy(() => import('./components/QaLabView').then(m => ({ default: m.QaLabView })));
 const ApryseWebViewerPoc = lazy(() => import('./components/ApryseWebViewerPoc').then(m => ({ default: m.ApryseWebViewerPoc })));
 const NutrientWebSdkPoc = lazy(() => import('./components/NutrientWebSdkPoc').then(m => ({ default: m.NutrientWebSdkPoc })));
 const DesignModuleView = lazy(() => import('./components/DesignModuleView'));
@@ -164,7 +165,7 @@ function App() {
   }, []);
   const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'qa-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -200,6 +201,8 @@ function App() {
                     ? 'feature-requests'
                     : location.pathname.startsWith('/ui-lab')
                     ? 'ui-lab'
+                    : location.pathname === '/qa-lab'
+                    ? 'qa-lab'
                     : location.pathname.startsWith('/pdf-tools')
                     ? 'pdf-tools'
                     : location.pathname === '/ai-cost'
@@ -234,7 +237,7 @@ function App() {
     favicon.href = IS_BETA_RELEASE ? '/favicon-beta.svg' : '/favicon.svg';
   }, []);
 
-  const needsWorkItems = currentView === 'calendar' || currentView === 'planning';
+  const needsWorkItems = currentView === 'calendar' || currentView === 'planning' || currentView === 'qa-lab';
 
   const {
     isAuthenticated,
@@ -488,6 +491,7 @@ function App() {
       });
       if (access === 'deny') navigate(fallback);
     }
+    if (currentView === 'qa-lab'        && !isSuperAdmin && (!effectiveEnabledViews.includes('qa-lab')    || !can('planning:qa')))       navigate(fallback);
     if (currentView === 'pdf-tools'     && !isSuperAdmin && (!effectiveEnabledViews.includes('pdf-tools') || !can('pdf-assembly:use'))) navigate(fallback);
     if (currentView === 'design-module' && !isSuperAdmin && (!effectiveEnabledViews.includes('design-module') || !can('design-module:view'))) navigate(fallback);
     if (currentView === 'load-tests'    && !isSuperAdmin && (!effectiveEnabledViews.includes('load-tests')    || !can('load-test:view')))    navigate(fallback);
@@ -794,6 +798,7 @@ function App() {
             onNavigateMyWork={() => navigate('/my-work')}
             onNavigateStandup={() => navigate('/standup')}
             onNavigateUiLab={() => navigate('/ui-lab')}
+            onNavigateQaLab={() => navigate('/qa-lab')}
             onNavigateFeatureRequests={() => navigate('/feature-requests')}
             onNavigatePdfTools={() => navigate('/pdf-tools/nutrient-poc')}
             onNavigateAiCost={() => navigate('/ai-cost')}
@@ -849,6 +854,7 @@ function App() {
             onNavigateStandup={() => navigate('/standup')}
             onNavigateFeatureRequests={() => navigate('/feature-requests')}
             onNavigateUiLab={() => navigate('/ui-lab')}
+            onNavigateQaLab={() => navigate('/qa-lab')}
             onNavigateAdmin={() => navigate('/admin/roles')}
             onNavigateAiCost={() => navigate('/ai-cost')}
             onNavigateDesignModule={() => navigate('/design-module')}
@@ -1236,6 +1242,16 @@ function App() {
                     hasWorkspaceAccess={uiLabWorkspaceAccess}
                   />
                 </div>
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'qa-lab' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <QaLabView
+                  workItems={workItems}
+                  project={selectedProject}
+                  areaPath={selectedAreaPath}
+                />
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'pdf-tools' ? (
