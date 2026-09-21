@@ -574,7 +574,7 @@ async function admitPendingPrototypesToV2(params: {
         });
 
         const admitted = await params.admitV2Run({
-          threadId: visualRunThreadId(prototypeId),
+          threadId: visualRunThreadId('design-prototype', prototypeId),
           projectId: params.project,
           workloadLane: VISUAL_WORKLOAD_LANE,
           timeoutAt,

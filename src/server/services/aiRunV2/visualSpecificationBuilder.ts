@@ -8,6 +8,7 @@
 import {
   AI_RUN_V2_VISUAL_SPEC_VERSION,
   type AiRunV2VisualSpecification,
+  type UiLabDesignSystemName,
   type VisualModelSettings,
   type VisualNavItem,
   type VisualUsageAttribution,
@@ -51,5 +52,62 @@ export function buildPrototypeVisualSpecification(
     model: input.model,
     usage: input.usage,
     outputPath: PROTOTYPE_OUTPUT_PATH,
+  };
+}
+
+export const UI_LAB_OUTPUT_PATH = 'design.html';
+
+export type BuildUiLabSpecificationInput = Readonly<{
+  designId: string;
+  /** The brief the author typed, verbatim. */
+  userPrompt: string;
+  /** The page being extended, or null for a standalone screen. */
+  targetRoute: string | null;
+  designSystemName: UiLabDesignSystemName;
+  /** Resolved UI Lab SKILL.md, local or remote — a worker cannot fetch it. */
+  skillMarkdown: string;
+  /** APEX only; the MaxView branch uses the design-system catalog instead. */
+  componentIndex: string;
+  /** EXTEND mode page source, read through `fetchExistingPageContext`. */
+  existingPageContext: string;
+  colorTokens: unknown;
+  catalog?: unknown;
+  screenInventory?: unknown;
+  navItems: ReadonlyArray<VisualNavItem>;
+  model: VisualModelSettings;
+  usage: VisualUsageAttribution;
+}>;
+
+/**
+ * The UI Lab half of the visual contract.
+ *
+ * Every `promptInputs` key here is read by `uiLabPromptBuilder` on the
+ * worker. Nothing else reads them, so the two move together or a section
+ * disappears from the prompt without a word.
+ */
+export function buildUiLabVisualSpecification(
+  input: BuildUiLabSpecificationInput,
+): AiRunV2VisualSpecification {
+  return {
+    specVersion: AI_RUN_V2_VISUAL_SPEC_VERSION,
+    subjectId: input.designId,
+    subjectKind: 'ui-lab-screen',
+    promptInputs: {
+      userPrompt: input.userPrompt,
+      targetRoute: input.targetRoute,
+      designSystemName: input.designSystemName,
+      skillMarkdown: input.skillMarkdown,
+      componentIndex: input.componentIndex,
+      existingPageContext: input.existingPageContext,
+    },
+    designSystem: {
+      catalog: input.catalog,
+      screenInventory: input.screenInventory,
+      colorTokens: input.colorTokens,
+    },
+    designReference: { navItems: input.navItems },
+    model: input.model,
+    usage: input.usage,
+    outputPath: UI_LAB_OUTPUT_PATH,
   };
 }

@@ -11,10 +11,10 @@
  * lane admits initial generation only, the same boundary the prototype lane
  * draws.
  */
-import type { AiRunV2VisualSpecification } from '../../../shared/types/aiRunV2VisualSpec';
-
-/** The two design systems UI Lab generates against, chosen by project. */
-export type UiLabDesignSystemName = 'APEX' | 'MaxView';
+import type {
+  AiRunV2VisualSpecification,
+  UiLabDesignSystemName,
+} from '../../../shared/types/aiRunV2VisualSpec';
 
 type SpecCatalog = Readonly<{
   /**

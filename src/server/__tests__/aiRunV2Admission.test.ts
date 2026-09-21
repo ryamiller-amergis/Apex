@@ -208,9 +208,22 @@ describe('V2 admission', () => {
   it('gives each visual subject a distinct run identity', () => {
     // One active V2 run is allowed per thread, and a PRD generates many
     // prototypes at once, so they cannot share a thread id.
-    expect(visualRunThreadId('prototype-1')).toBe('prototype:prototype-1');
-    expect(visualRunThreadId('prototype-1')).not.toBe(
-      visualRunThreadId('prototype-2'),
+    expect(visualRunThreadId('design-prototype', 'prototype-1')).toBe(
+      'prototype:prototype-1',
+    );
+    expect(visualRunThreadId('design-prototype', 'prototype-1')).not.toBe(
+      visualRunThreadId('design-prototype', 'prototype-2'),
+    );
+  });
+
+  it('keeps the two visual subject kinds in separate thread namespaces', () => {
+    // The harvest reads its own threads back by id. Sharing a prefix would
+    // let one owner's sweep see a run it knows nothing about.
+    expect(visualRunThreadId('ui-lab-screen', 'subject-1')).toBe(
+      'ui-lab:subject-1',
+    );
+    expect(visualRunThreadId('ui-lab-screen', 'subject-1')).not.toBe(
+      visualRunThreadId('design-prototype', 'subject-1'),
     );
   });
 

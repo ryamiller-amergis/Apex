@@ -8,6 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentRunLane } from '../../../shared/types/agentRunLifecycle';
 import type { AiRunV2WorkloadLane } from '../../../shared/types/aiRunV2';
+import type { VisualSubjectKind } from '../../../shared/types/aiRunV2VisualSpec';
 import {
   runAttemptRepository,
   type RunAttemptRepository,
@@ -47,9 +48,25 @@ export type AdmitV2RunResult =
  * Visual subjects have no chat thread, and `uq_agent_runs_v2_active_thread`
  * allows one active V2 run per thread. A PRD generates many prototypes at
  * once, so each needs its own run identity or the second is refused.
+ *
+ * The kind picks the namespace because each owner sweeps for its own threads
+ * by id; a shared prefix would offer one owner a finished run belonging to
+ * another, whose artifact it cannot read.
  */
-export function visualRunThreadId(subjectId: string): string {
-  return `prototype:${subjectId}`;
+export function visualRunThreadId(
+  subjectKind: VisualSubjectKind,
+  subjectId: string,
+): string {
+  switch (subjectKind) {
+    case 'design-prototype':
+      return `prototype:${subjectId}`;
+    case 'ui-lab-screen':
+      return `ui-lab:${subjectId}`;
+    default: {
+      const unhandled: never = subjectKind;
+      throw new Error(`Unsupported visual subjectKind: ${String(unhandled)}`);
+    }
+  }
 }
 
 /** Document and visual work runs on the background lane; chat lanes do not. */

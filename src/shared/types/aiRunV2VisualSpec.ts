@@ -35,6 +35,21 @@ export type VisualDesignReference = Readonly<{
   screenshotHeight?: number;
 }>;
 
+/**
+ * The kinds of subject the visual lane carries. Every place that dispatches
+ * on one switches exhaustively, so adding a kind here fails the compile until
+ * its prompt, its thread namespace, and its harvest exist.
+ */
+export type VisualSubjectKind = 'design-prototype' | 'ui-lab-screen';
+
+/**
+ * The design system a UI Lab screen is generated against, chosen from the
+ * project on the App Service side. It selects the palette, the component
+ * reference, and the font rule, so it travels with the specification rather
+ * than being re-derived by a worker that cannot see project settings.
+ */
+export type UiLabDesignSystemName = 'APEX' | 'MaxView';
+
 export type VisualModelSettings = Readonly<{
   modelId: string;
   maxTokens?: number;
@@ -55,7 +70,7 @@ export type AiRunV2VisualSpecification = Readonly<{
   specVersion: typeof AI_RUN_V2_VISUAL_SPEC_VERSION;
   /** The domain row this run produces output for, e.g. a prototype id. */
   subjectId: string;
-  subjectKind: 'design-prototype' | 'ui-lab-screen';
+  subjectKind: VisualSubjectKind;
   /** Resolved prompt inputs. Opaque to the transport, meaningful to the lane. */
   promptInputs: Record<string, unknown>;
   /** Resolved design-system context, already read from the database. */

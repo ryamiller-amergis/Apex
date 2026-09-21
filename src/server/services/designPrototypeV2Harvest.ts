@@ -278,13 +278,13 @@ export async function harvestFinishedV2Prototypes(
   if (waiting.length === 0) return 0;
 
   const byThread = await finishedAttempts.listFinishedByThread(
-    waiting.map((prototype) => visualRunThreadId(prototype.id)),
+    waiting.map((prototype) => visualRunThreadId('design-prototype', prototype.id)),
   );
   if (byThread.size === 0) return 0;
 
   let harvested = 0;
   for (const prototype of waiting) {
-    const attempt = byThread.get(visualRunThreadId(prototype.id));
+    const attempt = byThread.get(visualRunThreadId('design-prototype', prototype.id));
     if (!attempt) continue;
 
     try {

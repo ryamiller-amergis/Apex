@@ -1,5 +1,12 @@
 import { isAiRunV2VisualSpecification } from '../../shared/types/aiRunV2VisualSpec';
-import { buildPrototypeVisualSpecification } from '../services/aiRunV2/visualSpecificationBuilder';
+import {
+  buildPrototypeVisualSpecification,
+  buildUiLabVisualSpecification,
+} from '../services/aiRunV2/visualSpecificationBuilder';
+import {
+  buildUiLabContextSection,
+  buildUiLabPrompt,
+} from '../services/aiRunsV2Worker/uiLabPromptBuilder';
 
 const base = {
   prototypeId: 'prototype-1',
@@ -36,5 +43,70 @@ describe('visualSpecificationBuilder', () => {
     expect(spec.promptInputs.omittedSourcePaths).toEqual([
       '/src/components/Huge.tsx',
     ]);
+  });
+});
+
+const uiLab = {
+  designId: 'design-1',
+  userPrompt: 'A timecard approval queue',
+  targetRoute: '/timecards',
+  designSystemName: 'MaxView' as const,
+  skillMarkdown: '# UI Lab\n\nUse 8px spacing.',
+  componentIndex: '',
+  existingPageContext: 'export const Timecards = () => null;',
+  catalog: { uiKnowledgeBase: 'Screens are described here.' },
+  screenInventory: [{ route: '/timecards', purpose: 'Approve timecards' }],
+  colorTokens: 'primary.main: #123456',
+  navItems: [{ label: 'Home', route: '/' }],
+  model: { modelId: 'anthropic.claude' },
+  usage: { feature: 'ui-lab', project: 'Apex' },
+};
+
+describe('buildUiLabVisualSpecification', () => {
+  it('produces a specification that validates and names its own subject kind', () => {
+    const spec = buildUiLabVisualSpecification(uiLab);
+
+    expect(isAiRunV2VisualSpecification(spec)).toBe(true);
+    expect(spec.subjectKind).toBe('ui-lab-screen');
+    expect(spec.subjectId).toBe('design-1');
+  });
+
+  it('writes to its own artifact path so a prototype harvest cannot claim it', () => {
+    expect(buildUiLabVisualSpecification(uiLab).outputPath).toBe('design.html');
+    expect(buildPrototypeVisualSpecification(base).outputPath).toBe('prototype.html');
+  });
+
+  /**
+   * The builder and the worker's prompt builder agree on key names or the
+   * prompt silently loses a section. Assert against the built prompt rather
+   * than the key names so a rename on either side fails here.
+   */
+  it('fills every input the worker prompt reads', () => {
+    const spec = buildUiLabVisualSpecification(uiLab);
+    const section = buildUiLabContextSection(spec);
+
+    expect(section).toContain('Use 8px spacing.');
+    expect(section).toContain('primary.main: #123456');
+    expect(section).toContain('Screens are described here.');
+    expect(section).toContain('- **/timecards** — Approve timecards');
+    expect(section).toContain('export const Timecards = () => null;');
+    expect(buildUiLabPrompt(spec)).toContain('A timecard approval queue');
+  });
+
+  it('carries the APEX component index only when APEX is the design system', () => {
+    const spec = buildUiLabVisualSpecification({
+      ...uiLab,
+      designSystemName: 'APEX',
+      componentIndex: '- AppHeader',
+    });
+
+    expect(buildUiLabContextSection(spec)).toContain('## APEX Component Index');
+  });
+
+  it('accepts a design with no target route', () => {
+    const spec = buildUiLabVisualSpecification({ ...uiLab, targetRoute: null });
+
+    expect(isAiRunV2VisualSpecification(spec)).toBe(true);
+    expect(buildUiLabPrompt(spec)).toContain('This is a standalone new UI');
   });
 });
