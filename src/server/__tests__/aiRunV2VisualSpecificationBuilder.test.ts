@@ -34,6 +34,30 @@ describe('visualSpecificationBuilder', () => {
     expect(spec.promptInputs.featureTitle).toBe('Standup summary');
   });
 
+  it('carries the reference screenshot so the worker gets the same vision input', () => {
+    const spec = buildPrototypeVisualSpecification({
+      ...base,
+      screenshotBase64: 'QUJD',
+      screenshotMediaType: 'image/png',
+      screenshotWidth: 1024,
+      screenshotHeight: 810,
+    });
+
+    expect(spec.designReference).toEqual({
+      navItems: base.navItems,
+      screenshotBase64: 'QUJD',
+      screenshotMediaType: 'image/png',
+      screenshotWidth: 1024,
+      screenshotHeight: 810,
+    });
+  });
+
+  it('leaves the screenshot fields off when there is no reference', () => {
+    expect(buildPrototypeVisualSpecification(base).designReference).toEqual({
+      navItems: base.navItems,
+    });
+  });
+
   it('records what the budget left out so the gap is visible downstream', () => {
     const spec = buildPrototypeVisualSpecification({
       ...base,
@@ -101,6 +125,25 @@ describe('buildUiLabVisualSpecification', () => {
     });
 
     expect(buildUiLabContextSection(spec)).toContain('## APEX Component Index');
+  });
+
+  /**
+   * `uiLabBedrockService` attaches the same Figma screenshot in process, so
+   * the UI Lab half of the contract has to carry it for the same reason the
+   * prototype half does.
+   */
+  it('carries the reference screenshot UI Lab attaches in process', () => {
+    const spec = buildUiLabVisualSpecification({
+      ...uiLab,
+      screenshotBase64: 'QUJD',
+      screenshotMediaType: 'image/png',
+    });
+
+    expect(spec.designReference).toEqual({
+      navItems: uiLab.navItems,
+      screenshotBase64: 'QUJD',
+      screenshotMediaType: 'image/png',
+    });
   });
 
   it('accepts a design with no target route', () => {

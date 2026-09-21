@@ -9,6 +9,7 @@ import {
   AI_RUN_V2_VISUAL_SPEC_VERSION,
   type AiRunV2VisualSpecification,
   type UiLabDesignSystemName,
+  type VisualDesignReference,
   type VisualModelSettings,
   type VisualNavItem,
   type VisualUsageAttribution,
@@ -16,6 +17,44 @@ import {
 import type { DesignSourceFile } from '../designContext/repoDesignContextReader';
 
 export const PROTOTYPE_OUTPUT_PATH = 'prototype.html';
+
+/**
+ * The Figma screenshot both in-process visual paths attach as a vision input.
+ * Optional because `getFigmaReference` returns none when the asset is
+ * missing, and both paths then send text only.
+ */
+export type VisualReferenceScreenshot = Readonly<{
+  screenshotBase64?: string;
+  screenshotMediaType?: string;
+  screenshotWidth?: number;
+  screenshotHeight?: number;
+}>;
+
+/**
+ * Kept off the object entirely when there is no screenshot, so a
+ * reference-less specification is byte-identical to the one built before
+ * images travelled.
+ */
+function buildDesignReference(
+  navItems: ReadonlyArray<VisualNavItem>,
+  screenshot: VisualReferenceScreenshot,
+): VisualDesignReference {
+  if (!screenshot.screenshotBase64) return { navItems };
+
+  return {
+    navItems,
+    screenshotBase64: screenshot.screenshotBase64,
+    ...(screenshot.screenshotMediaType != null
+      ? { screenshotMediaType: screenshot.screenshotMediaType }
+      : {}),
+    ...(screenshot.screenshotWidth != null
+      ? { screenshotWidth: screenshot.screenshotWidth }
+      : {}),
+    ...(screenshot.screenshotHeight != null
+      ? { screenshotHeight: screenshot.screenshotHeight }
+      : {}),
+  };
+}
 
 export type BuildPrototypeSpecificationInput = Readonly<{
   prototypeId: string;
@@ -29,7 +68,8 @@ export type BuildPrototypeSpecificationInput = Readonly<{
   usage: VisualUsageAttribution;
   screenInventory?: unknown;
   catalog?: unknown;
-}>;
+}> &
+  VisualReferenceScreenshot;
 
 export function buildPrototypeVisualSpecification(
   input: BuildPrototypeSpecificationInput,
@@ -48,7 +88,7 @@ export function buildPrototypeVisualSpecification(
       screenInventory: input.screenInventory,
       colorTokens: input.colorTokens,
     },
-    designReference: { navItems: input.navItems },
+    designReference: buildDesignReference(input.navItems, input),
     model: input.model,
     usage: input.usage,
     outputPath: PROTOTYPE_OUTPUT_PATH,
@@ -76,7 +116,8 @@ export type BuildUiLabSpecificationInput = Readonly<{
   navItems: ReadonlyArray<VisualNavItem>;
   model: VisualModelSettings;
   usage: VisualUsageAttribution;
-}>;
+}> &
+  VisualReferenceScreenshot;
 
 /**
  * The UI Lab half of the visual contract.
@@ -105,7 +146,7 @@ export function buildUiLabVisualSpecification(
       screenInventory: input.screenInventory,
       colorTokens: input.colorTokens,
     },
-    designReference: { navItems: input.navItems },
+    designReference: buildDesignReference(input.navItems, input),
     model: input.model,
     usage: input.usage,
     outputPath: UI_LAB_OUTPUT_PATH,

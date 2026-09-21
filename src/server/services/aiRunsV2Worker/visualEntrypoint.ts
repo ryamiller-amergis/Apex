@@ -15,6 +15,7 @@ import { buildUiLabPrompt } from './uiLabPromptBuilder';
 import {
   createBedrockVisualClient,
   type VisualModelResult,
+  type VisualReferenceImage,
 } from './bedrockVisualClient';
 import {
   createVisualConcurrencyController,
@@ -27,7 +28,29 @@ export const USAGE_FILE_NAME = VISUAL_USAGE_FILE_NAME;
 export type InvokeVisualModel = (
   prompt: string,
   model: VisualModelSettings,
+  image?: VisualReferenceImage,
 ) => Promise<string | VisualModelResult>;
+
+/**
+ * The reference screenshot both in-process visual paths attach as a vision
+ * input, resolved on App Service and carried here. Optional throughout:
+ * `getFigmaReference` returns no screenshot when the asset is missing, and
+ * both in-process callers send text only in that case.
+ *
+ * The media type defaults to png because that is what `bedrockService` and
+ * `uiLabBedrockService` hardcode for the Figma reference.
+ */
+function visualReferenceImage(
+  specification: AiRunV2VisualSpecification,
+): VisualReferenceImage | undefined {
+  const { screenshotBase64, screenshotMediaType } = specification.designReference;
+  if (!screenshotBase64) return undefined;
+
+  return {
+    base64: screenshotBase64,
+    mediaType: screenshotMediaType ?? 'image/png',
+  };
+}
 
 /**
  * The lane carries more than one kind of subject and each needs its own
@@ -67,6 +90,7 @@ export function createVisualExecute(deps: {
     const result = await deps.invokeModel(
       buildVisualPrompt(specification),
       specification.model,
+      visualReferenceImage(specification),
     );
     const html = typeof result === 'string' ? result : result.html;
     if (!html.trim()) {
@@ -109,8 +133,8 @@ export function createVisualExecute(deps: {
 }
 
 const executeVisualWorkload: ExecuteWorkload = createVisualExecute({
-  invokeModel: (prompt, model) =>
-    createBedrockVisualClient().invokeModel(prompt, model),
+  invokeModel: (prompt, model, image) =>
+    createBedrockVisualClient().invokeModel(prompt, model, image),
 });
 
 export async function startVisualWorker(): Promise<void> {

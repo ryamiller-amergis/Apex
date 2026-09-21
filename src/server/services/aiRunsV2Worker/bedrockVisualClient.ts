@@ -26,14 +26,50 @@ export type VisualModelResult = Readonly<{
   durationMs: number;
 }>;
 
+/**
+ * The design reference the model looks at, already fetched into the
+ * specification. A worker cannot call Figma, so if it is not here the model
+ * generates blind against a prompt that tells it to match a screenshot.
+ */
+export type VisualReferenceImage = Readonly<{
+  base64: string;
+  mediaType: string;
+}>;
+
 export type BedrockVisualClient = {
   invokeModel(
     prompt: string,
     model: VisualModelSettings,
+    image?: VisualReferenceImage,
   ): Promise<VisualModelResult>;
 };
 
 type SendableClient = Pick<BedrockRuntimeClient, 'send'>;
+
+/**
+ * Mirrors `bedrockService.invokeModel`: the image block comes first and the
+ * text second. That ordering is part of what produces today's output, so it
+ * is kept rather than chosen. With no image the message stays a plain string,
+ * which is what a reference-less in-process call sends.
+ */
+function buildContent(
+  prompt: string,
+  image?: VisualReferenceImage,
+): string | unknown[] {
+  if (!image?.base64) return prompt;
+
+  return [
+    {
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: image.mediaType,
+        data: image.base64,
+      },
+    },
+    { type: 'text', text: prompt },
+  ];
+}
 
 export function createBedrockVisualClient(options?: {
   client?: SendableClient;
@@ -48,7 +84,7 @@ export function createBedrockVisualClient(options?: {
   const now = options?.now ?? Date.now;
 
   return {
-    async invokeModel(prompt, model) {
+    async invokeModel(prompt, model, image) {
       const command = new InvokeModelCommand({
         modelId: model.modelId,
         contentType: 'application/json',
@@ -56,7 +92,7 @@ export function createBedrockVisualClient(options?: {
         body: JSON.stringify({
           anthropic_version: 'bedrock-2023-05-31',
           max_tokens: model.maxTokens ?? DEFAULT_VISUAL_MAX_TOKENS,
-          messages: [{ role: 'user', content: prompt }],
+          messages: [{ role: 'user', content: buildContent(prompt, image) }],
         }),
       });
 

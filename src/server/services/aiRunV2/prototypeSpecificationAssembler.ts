@@ -18,14 +18,23 @@ import {
   DEFAULT_DESIGN_CONTEXT_BUDGET_BYTES,
 } from '../designContext/designContextBudget';
 import { createRepoDesignContextReader } from '../designContext/repoDesignContextReader';
-import { buildPrototypeVisualSpecification } from './visualSpecificationBuilder';
+import {
+  buildPrototypeVisualSpecification,
+  type VisualReferenceScreenshot,
+} from './visualSpecificationBuilder';
 
+/**
+ * The screenshot rides alongside the source rather than through it: the byte
+ * budget decides how much repository source fits, and an image counted
+ * against it would push real source out of the prompt.
+ */
 export type PrototypeDesignContext = Readonly<{
   catalog: unknown;
   screenInventory: unknown;
   colorTokens: unknown;
   navItems: ReadonlyArray<VisualNavItem>;
-}>;
+}> &
+  VisualReferenceScreenshot;
 
 export type AssemblePrototypeSpecificationInput = Readonly<{
   prototypeId: string;
@@ -73,6 +82,10 @@ export function createPrototypeSpecificationAssembler(deps: {
         screenInventory: context.screenInventory,
         colorTokens: context.colorTokens,
         navItems: context.navItems,
+        screenshotBase64: context.screenshotBase64,
+        screenshotMediaType: context.screenshotMediaType,
+        screenshotWidth: context.screenshotWidth,
+        screenshotHeight: context.screenshotHeight,
         model: input.model,
         usage: input.usage,
       });

@@ -68,6 +68,96 @@ describe('visual execute', () => {
     expect(model).toEqual({ modelId: 'anthropic.claude', maxTokens: 8000 });
   });
 
+  /**
+   * The in-process prototype path attaches the Figma screenshot as a vision
+   * input, and the prompt tells the model the screenshot is there. Without
+   * this the V2 output diverges from the in-process output for the same
+   * feature, with nothing to flag it.
+   */
+  it('hands the specification screenshot to the model', async () => {
+    const invokeModel = jest.fn().mockResolvedValue('<html/>');
+    const execute = createVisualExecute({ invokeModel });
+
+    await execute({
+      specification: {
+        ...spec,
+        designReference: {
+          navItems: [],
+          screenshotBase64: 'QUJD',
+          screenshotMediaType: 'image/png',
+          screenshotWidth: 1024,
+          screenshotHeight: 810,
+        },
+      } as never,
+      command: {} as never,
+      checkpoints: checkpoints().port as never,
+      signal: new AbortController().signal,
+    });
+
+    expect(invokeModel.mock.calls[0][2]).toEqual({
+      base64: 'QUJD',
+      mediaType: 'image/png',
+    });
+  });
+
+  it('defaults the media type to png, matching the in-process Figma reference', async () => {
+    const invokeModel = jest.fn().mockResolvedValue('<html/>');
+    const execute = createVisualExecute({ invokeModel });
+
+    await execute({
+      specification: {
+        ...spec,
+        designReference: { navItems: [], screenshotBase64: 'QUJD' },
+      } as never,
+      command: {} as never,
+      checkpoints: checkpoints().port as never,
+      signal: new AbortController().signal,
+    });
+
+    expect(invokeModel.mock.calls[0][2]).toEqual({
+      base64: 'QUJD',
+      mediaType: 'image/png',
+    });
+  });
+
+  it('passes no image when the specification carries no screenshot', async () => {
+    const invokeModel = jest.fn().mockResolvedValue('<html/>');
+    const execute = createVisualExecute({ invokeModel });
+
+    await execute({
+      specification: spec as never,
+      command: {} as never,
+      checkpoints: checkpoints().port as never,
+      signal: new AbortController().signal,
+    });
+
+    expect(invokeModel.mock.calls[0][2]).toBeUndefined();
+  });
+
+  /** UI Lab attaches the same Figma reference in process, so it travels too. */
+  it('hands the screenshot to a ui-lab-screen subject as well', async () => {
+    const invokeModel = jest.fn().mockResolvedValue('<html/>');
+    const execute = createVisualExecute({ invokeModel });
+
+    await execute({
+      specification: {
+        ...spec,
+        subjectKind: 'ui-lab-screen',
+        outputPath: 'design.html',
+        promptInputs: { userPrompt: 'A timecard approval queue' },
+        designReference: { navItems: [], screenshotBase64: 'QUJD' },
+      } as never,
+      command: {} as never,
+      checkpoints: checkpoints().port as never,
+      signal: new AbortController().signal,
+    });
+
+    expect(invokeModel.mock.calls[0][2]).toEqual({
+      base64: 'QUJD',
+      mediaType: 'image/png',
+    });
+  });
+
   it('refuses a specification that does not validate', async () => {
     const invokeModel = jest.fn();
     const execute = createVisualExecute({ invokeModel });

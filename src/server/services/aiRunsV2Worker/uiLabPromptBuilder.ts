@@ -196,8 +196,8 @@ export function buildUiLabContextSection(
  *
  * The in-process builder also takes the Figma screenshot, but never reads it —
  * the image rides on the Bedrock message, not in the prompt text. It is left
- * out here for the same reason, and because `bedrockVisualClient` sends a text
- * message with no image block at all.
+ * out here for the same reason: it travels on `designReference` and
+ * `visualEntrypoint` attaches it to the call.
  */
 export function buildUiLabPrompt(spec: AiRunV2VisualSpecification): string {
   const userPrompt = asText(spec.promptInputs.userPrompt);

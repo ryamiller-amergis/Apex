@@ -410,17 +410,32 @@ function resolvePrototypeTargetRoute(
  * Design context a worker cannot read for itself: the catalog and screen
  * inventory come from Azure DevOps, the palette and navigation from bundled
  * assets. Resolved here and frozen into the specification.
+ *
+ * The reference screenshot travels the same way. `bedrockService` attaches it
+ * to the in-process call as a vision input and the prompt tells the model to
+ * read it, so a specification without it asks the model to match a screenshot
+ * it cannot see. The asset can be absent, in which case the fields stay unset
+ * and the worker sends text only, exactly as the in-process path does.
  */
 async function loadPrototypeDesignContext() {
   const [catalog, screenInventory] = await Promise.all([
     getDesignSystemCatalog(),
     getScreenInventory(),
   ]);
+  const figma = getFigmaReference();
   return {
     catalog,
     screenInventory,
     colorTokens: getMaxviewColorTokens(),
-    navItems: getFigmaReference().navItems,
+    navItems: figma.navItems,
+    ...(figma.tablePageBase64
+      ? {
+          screenshotBase64: figma.tablePageBase64,
+          screenshotMediaType: 'image/png',
+          screenshotWidth: figma.tablePageWidth,
+          screenshotHeight: figma.tablePageHeight,
+        }
+      : {}),
   };
 }
 
