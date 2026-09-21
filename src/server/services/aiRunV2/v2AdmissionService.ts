@@ -43,6 +43,15 @@ export type AdmitV2RunResult =
       existingStatus: string;
     };
 
+/**
+ * Visual subjects have no chat thread, and `uq_agent_runs_v2_active_thread`
+ * allows one active V2 run per thread. A PRD generates many prototypes at
+ * once, so each needs its own run identity or the second is refused.
+ */
+export function visualRunThreadId(subjectId: string): string {
+  return `prototype:${subjectId}`;
+}
+
 /** Document and visual work runs on the background lane; chat lanes do not. */
 export function agentRunLaneFor(lane: AiRunV2WorkloadLane): AgentRunLane {
   return lane === 'fast' || lane === 'agentic'

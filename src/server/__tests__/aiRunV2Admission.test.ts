@@ -6,6 +6,7 @@ import {
 import {
   agentRunLaneFor,
   createV2AdmissionService,
+  visualRunThreadId,
 } from '../services/aiRunV2/v2AdmissionService';
 import type { RunAttemptRepository } from '../services/aiRunV2/runAttemptRepository';
 
@@ -202,6 +203,15 @@ describe('V2 admission', () => {
 
     expect(result.status).toBe('active_run_conflict');
     expect(dispatchNextAttempt).not.toHaveBeenCalled();
+  });
+
+  it('gives each visual subject a distinct run identity', () => {
+    // One active V2 run is allowed per thread, and a PRD generates many
+    // prototypes at once, so they cannot share a thread id.
+    expect(visualRunThreadId('prototype-1')).toBe('prototype:prototype-1');
+    expect(visualRunThreadId('prototype-1')).not.toBe(
+      visualRunThreadId('prototype-2'),
+    );
   });
 
   it('maps workload lanes onto the right agent run lane', () => {
