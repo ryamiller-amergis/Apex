@@ -112,23 +112,28 @@ describe('visual execute', () => {
     });
   });
 
-  it('refuses a ui-lab-screen subject rather than sending it prototype instructions', async () => {
+  it('builds UI Lab instructions for a ui-lab-screen subject, not prototype ones', async () => {
     const invokeModel = jest.fn().mockResolvedValue('<html/>');
     const execute = createVisualExecute({ invokeModel });
 
-    await expect(
-      execute({
-        specification: {
-          ...spec,
-          subjectKind: 'ui-lab-screen',
-          outputPath: 'design.html',
-        } as never,
-        command: {} as never,
-        checkpoints: checkpoints().port as never,
-        signal: new AbortController().signal,
-      }),
-    ).rejects.toThrow('ui-lab-screen');
-    expect(invokeModel).not.toHaveBeenCalled();
+    const outcome = await execute({
+      specification: {
+        ...spec,
+        subjectKind: 'ui-lab-screen',
+        outputPath: 'design.html',
+        promptInputs: { userPrompt: 'A timecard approval queue' },
+      } as never,
+      command: {} as never,
+      checkpoints: checkpoints().port as never,
+      signal: new AbortController().signal,
+    });
+
+    const [prompt] = invokeModel.mock.calls[0];
+    expect(prompt).toContain('expert UI/UX designer and front-end engineer');
+    expect(prompt).toContain('A timecard approval queue');
+    expect(prompt).toContain('<!-- STATE:LOADING:START -->');
+    expect(prompt).not.toContain('NEW_FEATURE');
+    expect(outcome.files[0].path).toBe('design.html');
   });
 
   it('refuses empty model output rather than uploading a blank prototype', async () => {

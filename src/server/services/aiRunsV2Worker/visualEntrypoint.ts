@@ -11,6 +11,7 @@ import {
 import { createWorkerServiceBusClient } from './serviceBusClient';
 import { resolveWorkerEnvironment } from './entrypointSupport';
 import { buildPrototypePrompt } from './prototypePromptBuilder';
+import { buildUiLabPrompt } from './uiLabPromptBuilder';
 import {
   createBedrockVisualClient,
   type VisualModelResult,
@@ -30,20 +31,17 @@ export type InvokeVisualModel = (
 
 /**
  * The lane carries more than one kind of subject and each needs its own
- * prompt, so the kind has to decide the builder. Falling through to the
- * prototype builder would answer a UI Lab specification with prototype
- * instructions — output that looks finished and is wrong, with nothing to
- * flag it. The `never` check keeps a third kind from compiling until it is
- * handled here too.
+ * prompt, so the kind has to decide the builder. Falling through to one of
+ * them would answer the other with the wrong instructions — output that looks
+ * finished and is wrong, with nothing to flag it. The `never` check keeps a
+ * third kind from compiling until it is handled here too.
  */
 function buildVisualPrompt(specification: AiRunV2VisualSpecification): string {
   switch (specification.subjectKind) {
     case 'design-prototype':
       return buildPrototypePrompt(specification);
     case 'ui-lab-screen':
-      throw new Error(
-        'The visual worker has no prompt for subjectKind ui-lab-screen yet',
-      );
+      return buildUiLabPrompt(specification);
     default: {
       const unhandled: never = specification.subjectKind;
       throw new Error(`Unsupported visual subjectKind: ${String(unhandled)}`);
