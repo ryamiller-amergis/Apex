@@ -106,13 +106,21 @@ const TOKEN_PATHS = [
 ];
 
 /** Folders searched (in order) to locate a component by name. Includes the ClientApp root when set. */
-function componentIndexPaths(target?: DesignSystemAdoTarget): string[] {
+export function componentIndexPaths(target?: DesignSystemAdoTarget): string[] {
   const root = isMaxViewTarget(target) ? clientAppRoot() : '';
   return [
     ...(root ? [`${root}/components`] : []),
     '/src/client/components',
     '/src/components',
   ];
+}
+
+/**
+ * A component source file worth reading for design context. Tests and CSS
+ * modules sit alongside components in the same folders and describe nothing.
+ */
+export function isComponentSourcePath(path: string): boolean {
+  return path.endsWith('.tsx') && !path.includes('__tests__') && !path.includes('.module.');
 }
 
 /* ── Types ────────────────────────────────────────────────── */
@@ -416,7 +424,7 @@ async function fetchComponentDetails(
 
   // Filter to component .tsx files only and cap at 20
   const targets = componentPaths
-    .filter(p => p.endsWith('.tsx') && !p.includes('__tests__') && !p.includes('.module.'))
+    .filter(isComponentSourcePath)
     .slice(0, 20);
 
   const results = await Promise.allSettled(
@@ -515,9 +523,7 @@ export async function getDesignSystemCatalog(): Promise<DesignSystemCatalog> {
       if (componentNames.length > 0) {
         // Fetch source for component details (non-fatal)
         try {
-          const componentFilePaths = paths.filter(
-            p => p.endsWith('.tsx') && !p.includes('__tests__') && !p.includes('.module.')
-          );
+          const componentFilePaths = paths.filter(isComponentSourcePath);
           const details = await fetchComponentDetails(orgUrl, pat, componentFilePaths);
           componentDescriptions = details.descriptions;
           componentLayoutHints = details.layoutHints;
