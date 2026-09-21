@@ -8,6 +8,35 @@
 
 **Tech Stack:** TypeScript, Express, Drizzle, Azure Service Bus (REST peek-lock), Azure Blob Storage, AWS Bedrock, Jest.
 
+## Progress (2026-09-21)
+
+Tasks 1–6 are complete and committed; only Task 7 remains.
+
+| Task | State | Commit |
+|---|---|---|
+| 1 Repo design context reader | Done | `0d8de514` |
+| 2 Context byte budget | Done | `a2f4a45c` |
+| 3 Visual specification builder | Done | `b7bfc6b0` |
+| 4 Prompt from the specification | Done | `1d1f9113`, `522b0945` |
+| 5 Per-subject run identity | Done | `b8454a92` |
+| 6 Worker execute + Bedrock client | Done | `73b94393`, `9463f196` |
+| — Specification assembler | Done | `c1b049e8` |
+| 7 Flag split in designPrototypeService | **Not started** | — |
+
+Two things the original plan did not anticipate, both since resolved:
+
+- `ExecutionSpecification` had to become a union so a lane-specific
+  specification is a legal blob body (`e5195a47`).
+- The worker needed its own Bedrock client. `bedrockService` writes usage
+  rows through `recordAiUsage`, so binding it would break worker isolation.
+  The visual client returns the tokens Bedrock reports and the worker writes
+  them as a `usage.json` artifact for the owning service to record.
+
+Still unresolved and required before a prototype run can complete end to end:
+the V1/V2 completion convergence, recorded as an open question in
+`2026-09-17-apex-ai-workload-reliability-implementation.md`. Task 7 admits the
+run; something must notice it finished and apply the artifact.
+
 ## Global Constraints
 
 - No worker module may import a database module. `src/server/__tests__/aiRunsV2Worker/noDatabaseImports.test.ts` walks the import graph and fails the build otherwise.
