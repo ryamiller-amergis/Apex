@@ -20,8 +20,8 @@ import {
   playbookRuns,
 } from '../db/schema';
 import { assertActiveRunCapacity } from './playbookGuardService';
-import { beginStepRun, executeStep, failStepRun } from './playbookSteps';
-import type { PlaybookGraph, PlaybookGraphNode } from '../../shared/types/playbook';
+import { entryNode, runStepChain } from './playbookAdvanceService';
+import type { PlaybookGraph } from '../../shared/types/playbook';
 
 export class PlaybookDefinitionNotFoundError extends Error {
   constructor(project: string, definitionId: string) {
@@ -50,22 +50,6 @@ export class PlaybookEmptyGraphError extends Error {
 export interface StartRunResult {
   runId: string;
   status: 'running';
-}
-
-/**
- * The node a run begins at: the one nothing points to.
- *
- * Falls back to the first declared node when every node has an inbound edge, which means the graph
- * is cyclic. That is not this function's problem to report — TBI-023 refuses cycles at publish
- * time, so a cycle reaching here is a definition that was published before that guard existed. The
- * fallback makes such a run start somewhere sensible instead of failing with a confusing error
- * about an empty graph.
- */
-function entryNode(graph: PlaybookGraph): PlaybookGraphNode | undefined {
-  if (graph.nodes.length === 0) return undefined;
-
-  const hasInbound = new Set(graph.edges.map((edge) => edge.to));
-  return graph.nodes.find((node) => !hasInbound.has(node.id)) ?? graph.nodes[0];
 }
 
 export async function startRun(input: {
@@ -128,37 +112,27 @@ export async function startRun(input: {
     })
     .returning();
 
-  const stepRun = await beginStepRun({
+  /*
+   * The same chain runner a resumed run uses, so starting and resuming cannot drift. It runs
+   * forward until a step parks or the graph ends, which is what lets a definition whose steps all
+   * complete in-tick finish without anything nudging it.
+   */
+  const chain = await runStepChain({
     runId: run.id,
-    stepId: first.id,
-    stepType: first.stepType,
+    project: input.project,
+    initiatorUserId: input.initiatorUserId,
+    graph,
+    from: first,
   });
 
-  try {
-    await executeStep({
-      runId: run.id,
-      stepRunId: stepRun.id,
-      stepId: first.id,
-      stepType: first.stepType,
-      project: input.project,
-      initiatorUserId: input.initiatorUserId,
-      config: first.config ?? {},
-    });
-  } catch (error) {
-    /*
-     * The run row stays. Unlike the no-published-version case, this run really did start — it has a
-     * pinned version and a step that failed, and the status view should be able to show why.
-     */
-    await failStepRun({
-      stepRunId: stepRun.id,
-      reason: error instanceof Error ? error.message : 'The first step failed',
-    });
-    await db
-      .update(playbookRuns)
-      .set({ status: 'failed', completedAt: new Date().toISOString() })
-      .where(eq(playbookRuns.id, run.id));
-
-    throw error;
+  /*
+   * The run row stays on failure. Unlike the no-published-version case, this run really did start —
+   * it has a pinned version and a step that failed, and the status view should be able to show why.
+   * The chain has already marked both the step and the run failed; rethrowing is what turns a
+   * first-step failure into a response the caller can act on rather than a 201 for a dead run.
+   */
+  if (chain.endedAs === 'failed') {
+    throw chain.error;
   }
 
   return { runId: run.id, status: 'running' };

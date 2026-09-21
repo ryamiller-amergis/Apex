@@ -22,6 +22,7 @@ import {
   startRun,
 } from '../services/playbookRunService';
 import { PlaybookGuardViolationError } from '../services/playbookGuardService';
+import { advanceRun } from '../services/playbookAdvanceService';
 import {
   ApprovalMissingDeadlineError,
   ApprovalNotAwaitingError,
@@ -227,6 +228,23 @@ router.post(
         deciderUserId,
         decision,
       });
+
+      /*
+       * PBI-004 asks for the next step to be under way before the response returns, so this is
+       * awaited rather than left to the sweep — a person who approves a gate and immediately
+       * refreshes should see the run moving, not still sitting where they left it.
+       *
+       * Only on `recorded`. An `already-decided` outcome moved nothing, so whatever did move the
+       * step has already advanced the run.
+       *
+       * `advanceRun` does not throw, which is what makes awaiting it safe here: the decision is
+       * already durably recorded, and failing this response would tell the caller their approval
+       * did not happen when it did.
+       */
+      if (result.outcome === 'recorded') {
+        await advanceRun(runId);
+      }
+
       res.status(200).json(result);
     } catch (error) {
       if (error instanceof ApprovalNotPermittedError) {

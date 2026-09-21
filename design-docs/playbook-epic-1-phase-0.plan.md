@@ -322,10 +322,44 @@ Four cases to cover: the happy path; a full admission lane, where the run is sti
 
 ## FEAT-005 — Durable Suspend/Resume & Structural Guards
 
-**Status: complete, 2026-09-19.** All 25 verification targets covered; 140 unit and 108 integration
-tests green across the Playbook suites.
+**Status: complete, 2026-09-19. Reopened and closed again 2026-09-20 — see the gap below.**
 
 Seven items. This feature is where the durability claim is actually made good. The latency path and the correctness path are both required — the sweep is not a nicety.
+
+> **PBI-004 was only half built, and the tests could not see it.** Found 2026-09-20, after FEAT-006
+> was called complete. PBI-004 reads *"the run picks up at its next step"* and specifies the next
+> step enqueued inside a second. What shipped moved the gate to `completed` and the run back to
+> `running`, and stopped there. Nothing read the pinned graph's edges to work out what came next:
+> `graph.edges` was read in exactly two places, both publish-time guards, and `beginStepRun` was
+> called from exactly one, for the entry node. **No Playbook could reach its final step.**
+>
+> It survived two features of testing because every test needing a multi-step run inserted the step
+> rows itself, which is precisely the fixture shape that cannot notice missing orchestration. The
+> E3 exit-criterion test was the worst of them: it provisioned all three of definition B's steps and
+> completed each in turn, so it passed while no traversal existed at all — and E3 is the criterion
+> asserting B *runs end to end*. It has been rewritten to publish B and then touch nothing, so every
+> step row is the system's own work.
+>
+> **What closed it.** `playbookAdvanceService.ts` owns runtime traversal, on one rule: a run only
+> moves forward from a settled position, meaning every step so far is `completed`. Anything else —
+> a step pending, running or suspended; a step failed or expired — is a no-op. That single condition
+> is checked in the service rather than by its callers, which matters because there are three of
+> them (the approval route, the terminal-event listener, the sweep) and the usual way this shape
+> breaks is a fourth caller forgetting a precondition. Getting it wrong is a no-op, not a
+> double-executed step.
+>
+> `startRun` now shares the same chain runner, so starting a run and resuming one execute steps
+> through identical code. They had drifted: `startRun` never completed its first step, and worked
+> only because the one non-suspending adapter wrote its own completion row.
+>
+> The sweep gained a fourth pass, `advanceStalledRuns`, and it is not redundant. A process dying
+> between a step completing and the next one starting leaves a run with nothing waiting to nudge it,
+> because the event that would have advanced it has already been consumed. The sweep is the
+> guarantee here for the same reason it is for resumption.
+>
+> One existing assertion changed as a result: the reconciliation sweep's recovery test expected a
+> recovered run to read `running`. It now reads `completed`, because resuming the last step is only
+> half of what that pass owes the run.
 
 One thing found while building it is worth carrying forward. `suspendStepRun` parked the step but
 never moved the run, so `playbook_runs.status` stayed `running` for the whole time a run was parked.
@@ -416,6 +450,32 @@ Four cases: the sweep expires an overdue suspension; the sweep leaves a not-yet-
 ## FEAT-006 — Phase 0 Status View, Demo Playbooks & Exit Criteria
 
 Seven items. This is the demo itself plus the evidence that it meant something.
+
+> **Status: implemented 2026-09-20, with exit criterion E5 open.** Six of the seven items are done
+> and tested: 188 unit tests and 129 integration tests pass across the Playbook suites. TBI-029 (E5)
+> stays open and blocking — see below.
+>
+> **What shipped.** Two `GET` endpoints on `src/server/routes/playbooks.ts` as pass-throughs over
+> `playbookRunProjectionService`; `usePlaybookRuns.ts` polling while any step is non-terminal;
+> `PlaybookStatusView` and its three children carrying all twelve design-spec `data-testid` values;
+> a flag-gated `/playbooks` route with **no** `MenuItemKey`; `scripts/seed-playbook-demos.ts`
+> publishing A and B through the real publish path; the four exit criteria as re-runnable tests; and
+> `design-docs/playbook-demo-runbook.md`.
+>
+> **One decision worth recording.** The `playbooks-spike` gate is mounted at the router level rather
+> than per handler, so it covers the run-start and gate-decision endpoints from FEAT-004 as well as
+> the new reads. With the flag off, every Playbook endpoint is 404 — including an unscoped request
+> naming no project, which previously got 403. A 403 confirms the route exists to exactly the caller
+> the flag is meant to hide it from.
+>
+> **A documentation error corrected.** The design-spec assumptions claimed the interview record
+> showed two names already attached to the five governance duties in the ADR, making E5 a
+> copy-forward. The record says the opposite in its own header — owner and deputy were never named,
+> and the transcript records the agreement as `Owner: [NAME]. Deputy: [NAME].` E5 is a real staffing
+> decision. It is now recorded as open in `design-docs/playbook-engine-verification.md` with the
+> five duties listed, and one name will not close it: the deputy covers absence where the conformance
+> suite covers replacement, so a single name leaves the bus-factor problem the arrangement exists to
+> solve.
 
 ### TBI-025 — Wire the status view to the Apex-owned projection exclusively
 
@@ -589,7 +649,14 @@ same reason as the gap above: that folder is not in version control.
 - **Playbook threads resolve to a null usage-entity anchor.** `resolveUsageEntityFromThread` matches
   interviews, PRDs, ADRs and design docs; a Playbook-owned thread matches none. Accepted — cost data
   is advisory and off the execution path per BR-007.
-- **Exit criterion E5 has no named owner and deputy.** A staffing decision, not code.
+- **Exit criterion E5 has an owner but no deputy.** Reese recorded as dependency owner 2026-09-20.
+  Offered for both slots; recorded for one, because the deputy exists to cover *absence* where the
+  conformance suite covers *replacement*, and one person in both slots leaves exactly the gap the
+  arrangement was written to close. A second name closes E5. A staffing decision, not code.
+- **The dev database is five migrations behind.** `playbook_definitions` and friends do not exist in
+  the local `aipilot` database, and neither do `playbooks:view` and `playbooks:run` — the integration
+  suites never caught it because each builds a fresh scratch database. `npm run migrate:up` before
+  any demo.
 
 ---
 

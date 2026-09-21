@@ -46,11 +46,20 @@ async function seedRun(status = 'suspended', project = PROJECT): Promise<string>
      VALUES ($1, $2, $3) RETURNING id`,
     [project, `sweep-def-${definitionCounter}`, USER_OID]
   );
+  /*
+   * A one-node graph matching the step `addStep` inserts, rather than an empty one. The sweep now
+   * advances runs as well as resuming steps, so a graph that disagrees with the step rows would
+   * make these tests assert against a state no real run can be in.
+   */
   const [version] = await query<{ id: string }>(
     `INSERT INTO playbook_definition_versions
        (definition_id, version_number, graph, status, published_by, published_at)
      VALUES ($1, 1, $2, 'published', $3, now()) RETURNING id`,
-    [definition.id, JSON.stringify({ nodes: [], edges: [] }), USER_OID]
+    [
+      definition.id,
+      JSON.stringify({ nodes: [{ id: 'gate', stepType: 'approval-gate', config: {} }], edges: [] }),
+      USER_OID,
+    ]
   );
   const [run] = await query<{ id: string }>(
     `INSERT INTO playbook_runs (project, definition_version_id, initiator_user_id, status)
@@ -199,7 +208,16 @@ describe('VT-04 — a missed terminal agent-run event is recovered', () => {
     const outcome = await sweep.runReconciliationPass({ clock });
 
     expect(outcome.resumed).toBe(1);
-    expect(await statusOf(runId, stepRunId)).toEqual(['running', 'completed']);
+
+    /*
+     * The run reads `completed`, not `running`. Resuming the step is only half of what the pass
+     * owes this run: `gate` is the graph's only node, so once it completes there is nothing left
+     * to start and the run is finished. Leaving it at `running` — which is what happened before
+     * the sweep advanced runs as well as resuming steps — meant a run recovered by the sweep could
+     * never reach a terminal state, and nothing downstream would look at it again.
+     */
+    expect(await statusOf(runId, stepRunId)).toEqual(['completed', 'completed']);
+    expect(outcome.advanced).toBe(1);
   });
 
   it('fails the step, retryably, when the agent run ended badly', async () => {

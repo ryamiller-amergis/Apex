@@ -206,6 +206,41 @@ export async function completeStepRun(input: {
 }
 
 /**
+ * Completes a step only if it is still open. Returns false when it had already moved.
+ *
+ * The same shape as `resumeStepRun`'s conditional update, and for a related reason. Adapters own
+ * their own status writes — `notify` completes its row, `approval-gate` and `cursor-agent` suspend
+ * theirs — so by the time the orchestrator sees a `completed` outcome the row usually already says
+ * so. Calling `completeStepRun` there would throw on the ordinary path.
+ *
+ * It exists rather than the orchestrator simply trusting the adapter because an adapter that
+ * reports `completed` without writing a row leaves the step stuck at `running`, and a step stuck at
+ * `running` stalls the run at the next advance with nothing to show why.
+ */
+export async function completeStepRunIfOpen(input: {
+  stepRunId: string;
+  output?: Record<string, unknown>;
+}): Promise<boolean> {
+  const updated = await db
+    .update(playbookStepRuns)
+    .set({
+      status: 'completed',
+      ...(input.output ? { outputInline: input.output } : {}),
+      completedAt: nowIso(),
+      updatedAt: nowIso(),
+    })
+    .where(
+      and(
+        eq(playbookStepRuns.id, input.stepRunId),
+        inArray(playbookStepRuns.status, ['pending', 'running'])
+      )
+    )
+    .returning({ id: playbookStepRuns.id });
+
+  return updated.length > 0;
+}
+
+/**
  * Marks a step failed.
  *
  * `retryable` writes `failed_retryable`, which exists on steps but not on runs. It is what a live

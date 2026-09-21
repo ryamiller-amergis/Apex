@@ -13,6 +13,8 @@
  *   2. suspended steps past their deadline — the nobody-came case
  *   3. suspended steps with neither a deadline nor an agent run — orphans, which should not exist
  *      and are recorded rather than silently left
+ *   4. runs settled but unfinished — every step completed, no next step started, and nothing left
+ *      waiting to nudge them, because whatever would have has already fired
  *
  * The clock is injected. A sweep that reads `Date.now()` internally can only be tested by waiting,
  * and the boundary cases PBI-005 asks about — one millisecond either side of a deadline, and the
@@ -21,6 +23,7 @@
 import { and, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { agentRuns, playbookRuns, playbookStepRuns } from '../db/schema';
+import { advanceStalledRuns } from './playbookAdvanceService';
 import { failStepRun, resumeStepRun } from './playbookSteps/stepRuns';
 import type { PlaybookSweepOutcome } from '../../shared/types/playbook';
 
@@ -180,6 +183,11 @@ export async function runReconciliationPass(
     const resumed = await resumeMissedTerminalEvents();
     const expired = await expireOverdueSuspensions(clock());
     const orphaned = await countOrphans();
+    /*
+     * Last, and after `resumeMissedTerminalEvents` rather than before it, so a step this pass has
+     * just resumed gets its successor started in the same pass instead of waiting another minute.
+     */
+    const advanced = await advanceStalledRuns();
 
     lastOutcome = {
       startedAt,
@@ -187,6 +195,7 @@ export async function runReconciliationPass(
       resumed,
       expired,
       orphaned,
+      advanced,
     };
   } catch (error) {
     /*
@@ -200,6 +209,7 @@ export async function runReconciliationPass(
       resumed: 0,
       expired: 0,
       orphaned: 0,
+      advanced: 0,
       error: error instanceof Error ? error.message : String(error),
     };
   }

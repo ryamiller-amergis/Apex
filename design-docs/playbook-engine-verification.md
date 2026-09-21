@@ -413,3 +413,46 @@ licence revision of 2026-08-24 (see TBI-004). And DoD-2 still has no pin-move pu
 **Recommendation:** `proceed with Mastra`
 **Decided by:** `verification spike on labs/mastra-poc — pending dependency-owner sign-off`
 **Date:** `2026-09-18`
+
+---
+
+## Exit criterion E5 — dependency owner and deputy
+
+**Status: PARTLY RECORDED, still blocking. The owner is named; the deputy is not.**
+
+This is the place TBI-029 requires the names to live: the same document the re-runnable conformance
+results are attached to when a pin-move pull request is raised, which is DoD-2's actual requirement.
+
+| Role | Name | Recorded |
+|------|------|----------|
+| Dependency owner | Reese | 2026-09-20 |
+| Deputy | *(unnamed)* | — |
+
+Reese was offered for both roles on 2026-09-20 and is recorded as owner only. One person holding
+both slots is the arrangement this criterion was written to refuse — see the reasoning at the foot
+of this section. Naming a second person closes E5.
+
+Each name carries all five duties, and they are listed here so that recording a name is not mistaken
+for recording the job:
+
+1. **Deciding the pin** — holding or moving the Mastra version, per BR-004.
+2. **Reviewing the wrapper surface** — that nothing outside the wrapper reads an engine-owned table.
+3. **Watching the entitlement list** — the `ee/` carve-out recorded under TBI-004, which a quiet
+   licence revision can change without any code moving.
+4. **Running the recurring conformance review** — re-running the suite and recording a hold-or-move
+   verdict even when the version has not moved.
+5. **Escalating a fallback-trigger finding** — the owner may hold or move the pin but may **not**
+   decide the fallback alone; abandoning Mastra is an ADR supersession.
+
+**Why this was open at all.** Checked 2026-09-20. The interview record states plainly that *"Owner and
+deputy were never named. Any name appearing in a generated artifact for those roles was inferred, not
+supplied"*, and the transcript shows the agreement recorded as `Owner: [NAME]. Deputy: [NAME].` —
+placeholders that were never filled. Earlier design-spec artifacts described this as a copy-forward
+from the ADR; that was an inference, and it was wrong.
+
+**Why one name does not close it.** A deputy is required rather than optional. The interview's
+reasoning was that the conformance suite covers *replacement* while the deputy covers *absence* — the
+suite tells you whether a new version still behaves, and no suite tells you anything on the week the
+owner is on leave and a licence revision lands. So recording Reese twice would satisfy the table and
+leave the bus-factor problem the arrangement exists to solve, which is the one outcome worth
+refusing. The deputy must be someone other than the owner.

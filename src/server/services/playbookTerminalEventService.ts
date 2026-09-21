@@ -19,6 +19,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { playbookStepRuns } from '../db/schema';
 import { subscribeAllRunEvents } from './pgNotifyService';
+import { advanceRun } from './playbookAdvanceService';
 import { failStepRun, resumeStepRun } from './playbookSteps/stepRuns';
 import type { AgentRunEventEnvelope, AgentRunEventStatus } from '../../shared/types/chat';
 
@@ -57,7 +58,11 @@ export async function handleTerminalAgentRunEvent(
   if (!isTerminalRunEvent(event)) return { handled: 'not-correlated' };
 
   const [step] = await db
-    .select({ id: playbookStepRuns.id, status: playbookStepRuns.status })
+    .select({
+      id: playbookStepRuns.id,
+      runId: playbookStepRuns.runId,
+      status: playbookStepRuns.status,
+    })
     .from(playbookStepRuns)
     .where(eq(playbookStepRuns.agentRunId, event.runId))
     .limit(1);
@@ -71,9 +76,17 @@ export async function handleTerminalAgentRunEvent(
       output: { agentRunId: event.runId, completedAt: event.timestamp },
     });
 
-    return moved
-      ? { handled: 'resumed', stepRunId: step.id }
-      : { handled: 'already-moved', stepRunId: step.id };
+    if (!moved) return { handled: 'already-moved', stepRunId: step.id };
+
+    /*
+     * Resuming the step is only half of it: without this the run sits at `running` with nothing
+     * left to wake it, because the event that would have advanced it has just been consumed. Only
+     * the delivery that actually moved the step advances, so a redelivery cannot start the next
+     * step twice — though `advanceRun` would refuse that anyway.
+     */
+    await advanceRun(step.runId);
+
+    return { handled: 'resumed', stepRunId: step.id };
   }
 
   /*

@@ -401,6 +401,13 @@ export interface PlaybookSweepOutcome {
   expired: number;
   /** Steps with no path forward — suspended with neither a deadline nor a correlated agent run. */
   orphaned: number;
+  /**
+   * Runs that were settled but unfinished — every step completed, none started for the next one.
+   * A steady non-zero count here means advances are being missed on the latency path rather than
+   * merely arriving late, since anything the route or the event listener handles never reaches
+   * this pass.
+   */
+  advanced: number;
   /** Present when the pass threw. The scheduler keeps ticking; one bad pass is not fatal. */
   error?: string;
 }

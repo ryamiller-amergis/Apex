@@ -15,6 +15,7 @@ import path from 'path';
 const selectWhere = jest.fn();
 const resumeStepRun = jest.fn();
 const failStepRun = jest.fn();
+const advanceRun = jest.fn();
 
 jest.mock('../db', () => ({ __esModule: true, default: { end: jest.fn(), on: jest.fn() } }));
 
@@ -29,6 +30,16 @@ jest.mock('../services/playbookSteps/stepRuns', () => ({
   failStepRun: (...a: unknown[]) => failStepRun(...a),
 }));
 
+/*
+ * Stubbed rather than exercised. Resuming the step and starting the next one are two decisions,
+ * and this file is about the first: which events resume, which fail, and which do nothing.
+ * `playbook-run-advance.integration.test.ts` covers what advancing actually does, against a real
+ * database. What is worth asserting here is only that the handler asks — see VT-01.
+ */
+jest.mock('../services/playbookAdvanceService', () => ({
+  advanceRun: (...a: unknown[]) => advanceRun(...a),
+}));
+
 import type { AgentRunEventEnvelope, AgentRunEventStatus } from '../../shared/types/chat';
 import {
   handleTerminalAgentRunEvent,
@@ -37,6 +48,7 @@ import {
 
 const AGENT_RUN_ID = 'agent-run-42';
 const STEP_RUN_ID = 'step-run-7';
+const RUN_ID = 'run-3';
 
 function event(status: AgentRunEventStatus): AgentRunEventEnvelope {
   return {
@@ -55,7 +67,9 @@ function event(status: AgentRunEventStatus): AgentRunEventEnvelope {
 
 /** The step the event correlates to, in the state the handler will find it. */
 function stepIs(status: string | null): void {
-  selectWhere.mockResolvedValue(status === null ? [] : [{ id: STEP_RUN_ID, status }]);
+  selectWhere.mockResolvedValue(
+    status === null ? [] : [{ id: STEP_RUN_ID, runId: RUN_ID, status }]
+  );
 }
 
 beforeEach(() => {
@@ -63,6 +77,7 @@ beforeEach(() => {
   stepIs('suspended');
   resumeStepRun.mockResolvedValue(true);
   failStepRun.mockResolvedValue(undefined);
+  advanceRun.mockResolvedValue({ advanced: true, stepsStarted: 1 });
 });
 
 describe('which events count as terminal', () => {
@@ -94,6 +109,17 @@ describe('VT-01 — a terminal success event resumes the correlated step', () =>
       stepRunId: STEP_RUN_ID,
       output: { agentRunId: AGENT_RUN_ID, completedAt: '2026-09-19T12:00:00.000Z' },
     });
+  });
+
+  /*
+   * Resuming the step without this leaves the run at `running` with nothing left to wake it: the
+   * event that would have advanced it is the one being handled. The run would sit there until the
+   * sweep noticed, which is a minute of a demo spent watching a finished step.
+   */
+  it('advances the run it belongs to, so the next step actually starts', async () => {
+    await handleTerminalAgentRunEvent(event('completed'));
+
+    expect(advanceRun).toHaveBeenCalledWith(RUN_ID);
   });
 
   it('does nothing when no Playbook step is waiting on that agent run', async () => {
@@ -130,6 +156,12 @@ describe('VT-03 — a redelivered terminal event moves nothing', () => {
     const result = await handleTerminalAgentRunEvent(event('completed'));
 
     expect(result).toEqual({ handled: 'already-moved', stepRunId: STEP_RUN_ID });
+
+    /*
+     * Only the delivery that moved the step advances. `advanceRun` would refuse a second start on
+     * its own, but relying on that would make correctness here depend on a guard in another file.
+     */
+    expect(advanceRun).not.toHaveBeenCalled();
   });
 
   it('does not re-fail a step that already moved', async () => {
