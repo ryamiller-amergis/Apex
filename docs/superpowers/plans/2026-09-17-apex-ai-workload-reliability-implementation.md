@@ -524,6 +524,11 @@ not yet modified — see "Remaining for Task 6" below.
   and `routes/uiLab.ts` never call `routeBackgroundWorkflow` — visual
   generation runs in-process today, so moving it onto the queue is new
   routing rather than a flag split on an existing one.
+
+  **Decision (2026-09-21):** the owning service applies its own artifacts. The
+  orchestrator finalizes the attempt and knows nothing about prototypes; each
+  service reads the manifest from Blob when it sees its run finish.
+  `artifactReader.ts` provides the shared, checksum-verifying read.
 - [ ] Ephemeral workspace and repo-read wiring for the worker processes.
 
 ---
