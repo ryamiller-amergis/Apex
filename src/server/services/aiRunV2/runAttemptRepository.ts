@@ -17,6 +17,7 @@ import type {
   AgentRunStatus,
   AgentRunTerminalReason,
 } from '../../../shared/types/agentRunLifecycle';
+import type { TerminalRunSubject } from '../agentRunTerminalEffects';
 import { createOutboxRepository, type SqlExecutor } from './outboxRepository';
 import { createInboxRepository } from './inboxRepository';
 
@@ -70,7 +71,17 @@ export type TransitionAttemptInput = Readonly<{
 }>;
 
 export type TransitionAttemptResult =
-  | { status: 'ok'; attemptId: string; to: AiRunV2AttemptStatus }
+  | {
+      status: 'ok';
+      attemptId: string;
+      to: AiRunV2AttemptStatus;
+      /**
+       * The run header this transaction wrote, present only when the attempt
+       * reached a terminal status. The caller needs it to apply the shared
+       * post-terminal effects without re-reading the row it just wrote.
+       */
+      run: TerminalRunSubject | null;
+    }
   | { status: 'fence_mismatch' }
   | { status: 'not_found' }
   | {
@@ -474,16 +485,46 @@ export function createRunAttemptRepository(options?: {
           WHERE id = ${input.attemptId}
         `);
 
-        await executor.execute(sql`
+        const headerResult = await executor.execute(sql`
           UPDATE agent_runs
           SET
             status = ${headerStatus},
             terminal_reason = COALESCE(${terminalReason}, terminal_reason),
             updated_at = now()
           WHERE id = ${existing.run_id}
+          RETURNING
+            id,
+            thread_id,
+            project_id,
+            lane,
+            terminal_reason,
+            dispatch_message_id
         `);
+        const header = resultRows<{
+          id: string;
+          thread_id: string;
+          project_id: string | null;
+          lane: string | null;
+          terminal_reason: string | null;
+          dispatch_message_id: string | null;
+        }>(headerResult)[0];
 
-        return { status: 'ok', attemptId: input.attemptId, to: input.to };
+        let run: TerminalRunSubject | null = null;
+        if (isAiRunV2TerminalAttemptStatus(input.to) && header) {
+          run = {
+            runId: header.id,
+            threadId: header.thread_id,
+            projectId: header.project_id ?? null,
+            lane: (header.lane as AgentRunLane | null) ?? null,
+            status: input.to,
+            fromStatus: headerStatusForAttempt(existing.status),
+            terminalReason:
+              (header.terminal_reason as AgentRunTerminalReason | null) ?? null,
+            dispatchMessageId: header.dispatch_message_id ?? null,
+          };
+        }
+
+        return { status: 'ok', attemptId: input.attemptId, to: input.to, run };
       });
     },
 

@@ -8,6 +8,7 @@ import {
   type AiRunV2FailureCategory,
   type AiRunV2Result,
 } from '../../../shared/types/aiRunV2';
+import { applyTerminalRunEffects as defaultTerminalEffects } from '../agentRunTerminalEffects';
 import type { RunAttemptRepository } from '../aiRunV2/runAttemptRepository';
 import type { Clock, OrchestratorMetrics, QueueConsumer } from './ports';
 import { noopMetrics, systemClock } from './ports';
@@ -19,6 +20,7 @@ export type ResultConsumerDeps = Readonly<{
   metrics?: OrchestratorMetrics;
   signal?: AbortSignal;
   maxDeliveryCount?: number;
+  applyTerminalRunEffects?: typeof defaultTerminalEffects;
 }>;
 
 export type ResultConsumer = {
@@ -36,6 +38,8 @@ export function createResultConsumer(deps: ResultConsumerDeps): ResultConsumer {
   const metrics = deps.metrics ?? noopMetrics;
   const clock = deps.clock ?? systemClock;
   const maxDelivery = deps.maxDeliveryCount ?? 5;
+  const applyTerminalEffects =
+    deps.applyTerminalRunEffects ?? defaultTerminalEffects;
 
   async function processOnce(): Promise<'processed' | 'idle' | 'poison'> {
     const message = await deps.consumer.receive({ timeoutSeconds: 5 });
@@ -93,6 +97,18 @@ export function createResultConsumer(deps: ResultConsumerDeps): ResultConsumer {
         await deps.consumer.complete(message.lockToken);
         metrics.increment('orchestrator.result.idempotent');
         return 'processed';
+      }
+
+      // The attempt transaction wrote the run header but nothing else a V1
+      // terminal does. Run the shared effects on the header it returned, then
+      // acknowledge — a redelivery would be refused as an illegal transition
+      // and never reach this point again.
+      if (transition.run) {
+        await applyTerminalEffects({
+          run: transition.run,
+          detail: result.detail,
+          terminalEventsPersisted: false,
+        });
       }
 
       await deps.consumer.complete(message.lockToken);

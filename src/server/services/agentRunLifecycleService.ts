@@ -31,6 +31,12 @@ import {
   runAdmissionCycle,
   type AdmissionReason,
 } from './admissionGovernorService';
+import {
+  applyTerminalRunEffects,
+  bestEffortDeactivateGrounding,
+  deactivateTerminalGrounding,
+  type TerminalGroundingDeactivator,
+} from './agentRunTerminalEffects';
 import { workerTierTelemetry } from './workerTierTelemetry';
 
 const QUEUED_PROGRESS_LABEL = 'Queued — waiting for available worker';
@@ -49,10 +55,7 @@ export type TerminalCompletionHandler = (input: {
   terminalReason?: AgentRunTerminalReason;
 }) => Promise<boolean>;
 
-export type TerminalGroundingDeactivator = (
-  threadId: string,
-  projectId: string,
-) => Promise<void>;
+export type { TerminalGroundingDeactivator };
 
 export class AgentRunLifecycleConflictError extends Error {
   readonly code = 'AGENT_RUN_LIFECYCLE_CONFLICT';
@@ -266,35 +269,6 @@ async function loadRun(runId: string): Promise<AgentRunLifecycleRow | null> {
     where: eq(agentRuns.id, runId),
   });
   return row ? mapRow(row) : null;
-}
-
-async function deactivateTerminalGrounding(
-  threadId: string,
-  projectId: string,
-): Promise<void> {
-  const { runGroundingService } = await import('./runGroundingService');
-  await runGroundingService.persistThenMarkTerminalInactive(
-    { runType: 'chat', runId: threadId, project: projectId },
-    async () => undefined,
-  );
-}
-
-async function bestEffortDeactivateGrounding(
-  run: AgentRunLifecycleRow,
-  deactivate: TerminalGroundingDeactivator,
-): Promise<void> {
-  if (run.lane !== 'background' || !run.projectId) return;
-  try {
-    await deactivate(run.threadId, run.projectId);
-  } catch {
-    console.error('[agent-run-lifecycle]', JSON.stringify({
-      runId: run.id,
-      projectId: run.projectId,
-      lane: run.lane,
-      status: run.status,
-      reason: 'grounding_deactivation_failed',
-    }));
-  }
 }
 
 /**
@@ -700,30 +674,24 @@ export async function markTerminal(
     };
   }
 
-  await bestEffortDeactivateGrounding(
-    latest,
-    input.deactivateGrounding ?? deactivateTerminalGrounding,
-  );
-
-  logTransition({
-    runId,
-    projectId: latest.projectId,
-    lane: latest.lane,
-    fromStatus,
-    toStatus: input.status,
-    dispatchMessageId: latest.dispatchMessageId,
-    terminalReason: latest.terminalReason,
+  // The completion handler persisted the terminal events and idled the thread
+  // inside the transaction that wrote the terminal row, so the shared effects
+  // path must not publish a second copy.
+  await applyTerminalRunEffects({
+    run: {
+      runId,
+      threadId: latest.threadId,
+      projectId: latest.projectId,
+      lane: latest.lane,
+      status: input.status,
+      fromStatus,
+      terminalReason: latest.terminalReason ?? input.terminalReason ?? null,
+      dispatchMessageId: latest.dispatchMessageId,
+    },
+    detail: input.detail,
+    terminalEventsPersisted: true,
+    deactivateGrounding: input.deactivateGrounding ?? deactivateTerminalGrounding,
   });
-  if (latest.lane === 'background') {
-    const terminalReason =
-      latest.terminalReason ?? input.terminalReason ?? input.status;
-    emitWorkerTelemetry(() => {
-      workerTierTelemetry.terminalReason(
-        workerTelemetryContext(latest),
-        terminalReason,
-      );
-    });
-  }
 
   if (
     latest.lane === 'background'
