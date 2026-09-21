@@ -6,6 +6,12 @@
 import { sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import {
+  isAiRunBlobRef,
+  isAiRunV2WorkloadLane,
+  type AiRunBlobRef,
+  type AiRunV2WorkloadLane,
+} from '../../../shared/types/aiRunV2';
+import {
   withDistributedLease,
   type HeldDistributedLease,
 } from '../aiRunV2/distributedLeaseRepository';
@@ -23,10 +29,23 @@ export type StaleAttemptRow = Readonly<{
   containerAppsExecutionId: string | null;
 }>;
 
+/**
+ * What a replacement attempt needs. The lane and specification reference live
+ * on the original dispatch command, not on the attempt row.
+ */
+export type RetryContext = Readonly<{
+  workloadLane: AiRunV2WorkloadLane;
+  specRef: AiRunBlobRef;
+  attemptCount: number;
+}>;
+
 export type ReconcilerDeps = Readonly<{
   executor: SqlExecutor;
   attempts: RunAttemptRepository;
   executionProbe: ExecutionProbe;
+  /** Attempts per run before a confirmed loss stops being retried. */
+  maxAttempts?: number;
+  loadRetryContext?: (row: StaleAttemptRow) => Promise<RetryContext | null>;
   clock?: Clock;
   metrics?: OrchestratorMetrics;
   /** Stale if no checkpoint newer than this many ms (default 90s). */
@@ -151,8 +170,73 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
     }));
   }
 
+  async function defaultLoadRetryContext(
+    row: StaleAttemptRow,
+  ): Promise<RetryContext | null> {
+    const result = await deps.executor.execute(sql`
+      SELECT
+        o.payload->>'workloadLane' AS workload_lane,
+        o.payload->'specRef' AS spec_ref,
+        (
+          SELECT COUNT(*)::int
+          FROM ai_run_attempts
+          WHERE run_id = ${row.runId}
+        ) AS attempt_count
+      FROM ai_run_outbox o
+      WHERE o.attempt_id = ${row.attemptId}
+        AND o.kind = 'dispatch_command'
+      LIMIT 1
+    `);
+    const found = resultRows<Record<string, unknown>>(result)[0];
+    if (!found) return null;
+    const specRef =
+      typeof found.spec_ref === 'string'
+        ? (JSON.parse(found.spec_ref) as unknown)
+        : found.spec_ref;
+    if (
+      !isAiRunV2WorkloadLane(found.workload_lane) ||
+      !isAiRunBlobRef(specRef)
+    ) {
+      return null;
+    }
+    return {
+      workloadLane: found.workload_lane,
+      specRef,
+      attemptCount: Number(found.attempt_count ?? 0),
+    };
+  }
+
   const listStale = deps.listStaleRunning ?? defaultListStaleRunning;
   const listChecking = deps.listCheckingWorkers ?? defaultListCheckingWorkers;
+  const loadRetryContext = deps.loadRetryContext ?? defaultLoadRetryContext;
+  const maxAttempts = deps.maxAttempts ?? 3;
+
+  /**
+   * A confirmed loss leaves the run with no live attempt, so replace it with a
+   * fresh attempt and dispatch id rather than reusing the fence the dead
+   * worker still holds.
+   */
+  async function retryAfterConfirmedLoss(row: StaleAttemptRow): Promise<void> {
+    const context = await loadRetryContext(row);
+    if (!context) {
+      metrics.increment('orchestrator.reconciler.retry_context_missing');
+      return;
+    }
+    if (context.attemptCount >= maxAttempts) {
+      metrics.increment('orchestrator.reconciler.retry_exhausted');
+      return;
+    }
+    try {
+      await deps.attempts.dispatchNextAttempt({
+        runId: row.runId,
+        workloadLane: context.workloadLane,
+        specRef: context.specRef,
+      });
+      metrics.increment('orchestrator.reconciler.retry_dispatched');
+    } catch {
+      metrics.increment('orchestrator.reconciler.retry_failed');
+    }
+  }
 
   async function countUncertainWorkers(): Promise<number> {
     const rows = await listChecking();
@@ -215,6 +299,7 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
         if (transition.status === 'ok') {
           failed += 1;
           metrics.increment('orchestrator.reconciler.worker_lost');
+          await retryAfterConfirmedLoss(row);
         }
       }
       metrics.gauge('orchestrator.reconciler.checking_batch', checking.length);

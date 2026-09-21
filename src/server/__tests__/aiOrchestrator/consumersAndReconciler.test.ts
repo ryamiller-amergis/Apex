@@ -213,4 +213,111 @@ describe('reconciler', () => {
     await expect(reconciler.sweepCheckingWorkers()).resolves.toBe(1);
     expect(transitions).toEqual(['failed:worker_lost']);
   });
+
+  describe('retry after a confirmed loss', () => {
+    const lostRow = {
+      attemptId: 'a1',
+      runId: 'r1',
+      dispatchMessageId: 'd1',
+      status: 'checking_worker',
+      lastCheckpointAt: '2026-09-18T12:00:00.000Z',
+      containerAppsExecutionId: 'exec-gone',
+    };
+
+    const lease = async <T>(work: (held: never) => Promise<T>): Promise<T> =>
+      work({
+        leaseKey: 'reaper',
+        holderId: 'h',
+        fencingToken: 1n,
+        signal: new AbortController().signal,
+        assertOwned: async () => undefined,
+        release: async () => undefined,
+      } as never);
+
+    function makeReconciler(
+      dispatchNextAttempt: jest.Mock,
+      retryContext: unknown,
+      maxAttempts?: number,
+    ) {
+      return createReconciler({
+        executor: { execute: async () => [] },
+        attempts: {
+          transitionAttempt: async () => ({
+            status: 'ok',
+            attemptId: 'a1',
+            to: 'failed',
+          }),
+          dispatchNextAttempt,
+        } as never,
+        executionProbe: { probe: async () => ({ status: 'not_found' }) },
+        listStaleRunning: async () => [],
+        listCheckingWorkers: async () => [lostRow],
+        loadRetryContext: async () => retryContext as never,
+        ...(maxAttempts === undefined ? {} : { maxAttempts }),
+        acquireRecoveryLease: lease,
+        acquireReaperLease: lease,
+      });
+    }
+
+    it('dispatches a replacement attempt with a fresh dispatch id', async () => {
+      const dispatchNextAttempt = jest.fn().mockResolvedValue({
+        attemptId: 'a2',
+        attemptNumber: 2,
+        dispatchMessageId: 'd2',
+        outboxId: 'o2',
+      });
+      const reconciler = makeReconciler(dispatchNextAttempt, {
+        workloadLane: 'document',
+        specRef: { container: 'ai-run-artifacts', key: 'spec.json' },
+        attemptCount: 1,
+      });
+
+      await reconciler.sweepCheckingWorkers();
+
+      expect(dispatchNextAttempt).toHaveBeenCalledWith({
+        runId: 'r1',
+        workloadLane: 'document',
+        specRef: { container: 'ai-run-artifacts', key: 'spec.json' },
+      });
+    });
+
+    it('stops retrying once the run has used its attempts', async () => {
+      const dispatchNextAttempt = jest.fn();
+      const reconciler = makeReconciler(
+        dispatchNextAttempt,
+        {
+          workloadLane: 'document',
+          specRef: { container: 'ai-run-artifacts', key: 'spec.json' },
+          attemptCount: 3,
+        },
+        3,
+      );
+
+      await reconciler.sweepCheckingWorkers();
+
+      expect(dispatchNextAttempt).not.toHaveBeenCalled();
+    });
+
+    it('leaves the run failed when the original command cannot be read', async () => {
+      const dispatchNextAttempt = jest.fn();
+      const reconciler = makeReconciler(dispatchNextAttempt, null);
+
+      await expect(reconciler.sweepCheckingWorkers()).resolves.toBe(1);
+      expect(dispatchNextAttempt).not.toHaveBeenCalled();
+    });
+
+    it('still reports the loss when the replacement dispatch fails', async () => {
+      const dispatchNextAttempt = jest
+        .fn()
+        .mockRejectedValue(new Error('outbox unavailable'));
+      const reconciler = makeReconciler(dispatchNextAttempt, {
+        workloadLane: 'visual',
+        specRef: { container: 'ai-run-artifacts', key: 'spec.json' },
+        attemptCount: 1,
+      });
+
+      await expect(reconciler.sweepCheckingWorkers()).resolves.toBe(1);
+      expect(dispatchNextAttempt).toHaveBeenCalled();
+    });
+  });
 });

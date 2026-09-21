@@ -495,7 +495,7 @@ not yet modified — see "Remaining for Task 6" below.
 - [x] Upload files under attempt-scoped immutable Blob paths.
 - [x] Write the manifest last.
 - [x] Publish terminal result before process exit.
-- [ ] Use a new attempt and dispatch ID after confirmed post-claim loss.
+- [x] Use a new attempt and dispatch ID after confirmed post-claim loss.
 - [x] Keep all PostgreSQL packages and connections out of worker entrypoints.
 - [x] Start visual concurrency at two and implement automatic rollback from
   three/four on Bedrock throttling.
@@ -524,8 +524,7 @@ not yet modified — see "Remaining for Task 6" below.
   and `routes/uiLab.ts` never call `routeBackgroundWorkflow` — visual
   generation runs in-process today, so moving it onto the queue is new
   routing rather than a flag split on an existing one.
-- [ ] Ephemeral workspace and repo-read wiring, and the fresh attempt/dispatch
-  id after a confirmed post-claim loss.
+- [ ] Ephemeral workspace and repo-read wiring for the worker processes.
 
 ---
 
