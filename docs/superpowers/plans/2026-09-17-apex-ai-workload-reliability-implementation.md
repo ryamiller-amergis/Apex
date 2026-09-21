@@ -596,9 +596,9 @@ not yet modified — see "Remaining for Task 6" below.
 
   **Still open after the harvest:**
 
-  - Only the visual lane is harvested. Document runs routed through
+  - Only prototypes are harvested. Document runs routed through
     `backgroundWorkflowRouter` onto V2 have no equivalent consumer, and
-    `uiLabService` is not on V2 at all.
+    `uiLabService` still admits nothing — see the UI Lab note below.
   - `failStalePrototypes` uses a 25-minute threshold measured from
     `design_prototypes.updatedAt`, but a V2 run's own deadline is
     `resolveAgentRunHardLimitMs()` (2 hours by default). A visual run that
@@ -634,6 +634,98 @@ not yet modified — see "Remaining for Task 6" below.
      own run identity (for example `prototype:{prototypeId}`) or the second
      admission is refused as a conflict.
   3. Completion convergence — see the note under Task 8 below.
+
+  **UI Lab onto the visual lane (2026-09-21) — half built, and the reason it
+  stops there.**
+
+  Built:
+
+  - `visualEntrypoint.buildVisualPrompt` dispatches on `subjectKind` with a
+    `never` check. It did not before: `createVisualExecute` called
+    `buildPrototypePrompt` unconditionally while
+    `aiRunV2VisualSpec.ts` had declared `'design-prototype' | 'ui-lab-screen'`
+    since it was written. A UI Lab specification would have been answered with
+    prototype instructions — four state sections, the purple NEW annotation,
+    the MaxView shell — and the result uploaded as a finished artifact with
+    nothing raised anywhere. Closed before anything else.
+  - `aiRunsV2Worker/uiLabPromptBuilder.ts` ports `buildContextSection` and
+    `buildGenerationPrompt` out of `uiLabBedrockService`, prose copied rather
+    than rewritten. No database import; the guard suite still passes.
+  - `buildUiLabVisualSpecification` fills exactly the `promptInputs` keys the
+    worker reads, asserted through the built prompt so a rename on either side
+    fails a test instead of dropping a prompt section in silence. Output path
+    is `design.html`.
+  - `visualRunThreadId` now takes the subject kind and switches exhaustively.
+    It hardcoded `prototype:`, so a UI Lab run admitted through it would have
+    landed in the prototype namespace — harmless only because the prototype
+    harvest keys off `design_prototypes` rows, and a trap for whoever wires
+    admission next.
+
+  **Not built: admission, the App Service context loader, and the harvest.**
+  UI Lab is not prototype work with a different prompt. Every generation is
+  driven by `GET /api/ui-lab/:id/stream`, which holds an SSE connection open
+  and forwards Bedrock tokens to `useUiLabStream`, which renders the partial
+  HTML into the canvas as it arrives. `runGeneration` has no other caller.
+  V2 cannot carry that: the worker uploads a finished artifact to Blob, the
+  orchestrator finalizes the attempt, and the owning service applies it from
+  the 60-second recovery sweep. There is no token channel back to a waiting
+  browser, and up to 60 seconds of dead air after the model has already
+  finished. Wiring admission without settling this would trade a live stream
+  for a blank screen and call it a transport change.
+
+  Three decisions belong to whoever picks this up, none of them mine to make
+  quietly:
+
+  1. **Does UI Lab give up live streaming?** If yes, `useUiLabStream` and the
+     two SSE routes come out and the existing `refetchInterval` polling in
+     `useUiLabDesigns` carries the result — a client change, and a visible
+     downgrade for the author watching. If no, the visual lane needs a
+     progress channel (the checkpoint queue already carries progress;
+     nothing forwards it to a browser).
+  2. **Harvest cadence.** 60 seconds is invisible for a batch of prototypes
+     nobody is watching. It is not acceptable for a user at a screen. Either
+     UI Lab gets an event-driven apply or the sweep interval changes for
+     everything.
+  3. **`ai-runs-v2-transport` is one flag**, already shared by the document
+     lane and the visual lane. Adding UI Lab to it means enabling V2 for
+     PRDs also degrades UI Lab's UX in the same switch. UI Lab needs its own
+     flag or the existing one needs per-lane scoping.
+
+  **Regeneration stays in process** either way, matching the prototype
+  boundary: the V2 visual lane admits initial generation only, and the CAS in
+  the harvest is restricted to the initial-generation status for the same
+  reason.
+
+  **Queue topology — recommendation: keep one `ai-runs-v2-visual` queue.**
+  Not changed here; the queues live in `infra/ai-platform-v2-contracts.json`
+  and the Terraform is not applied. Two separate queues would not buy
+  isolation, because the contended resource is not the queue — it is the two
+  Bedrock slots (`bedrockCap: 2`, `visual` lane floor 2 in
+  `aiOrchestrator/types.ts`). A second queue drains into the same cap, so a
+  batch of prototypes still starves an interactive UI Lab request; it would
+  only add a queue, an identity, and a second consumer to operate. The real
+  fix is priority *within* the lane: let UI Lab preempt or reserve one of the
+  two slots, so a 20-prototype PRD cannot make an author wait behind it. Split
+  the queue only if the lanes stop sharing a worker image or get separate
+  provider caps — at which point they are no longer one lane.
+
+  **Two things found that the visual lane already gets wrong for prototypes:**
+
+  - `bedrockVisualClient` sends `messages: [{ role: 'user', content: prompt }]`
+    — a plain string, no image block. Both in-process paths attach the Figma
+    screenshot as a vision input (`bedrockService` for prototypes,
+    `uiLabBedrockService` for UI Lab). `VisualDesignReference` declares
+    `screenshotBase64`, `screenshotMediaType`, `screenshotWidth` and
+    `screenshotHeight` for exactly this, and nothing populates or reads them.
+    Prototypes on V2 are already generating without the visual reference the
+    in-process path supplies, which is a silent output change, not a transport
+    change.
+  - `uiLabBedrockService.buildContextSection` joins `PageRoute` objects
+    straight into the prompt, so "### Application routes" has always read
+    `[object Object]`. Carried across verbatim and pinned with a test rather
+    than fixed, because a transport move is the wrong place to change what the
+    model is asked. `uiLabBedrockService.buildCatalogSection` is also dead —
+    it builds an empty literal and nothing calls it.
 - [ ] Ephemeral workspace and repo-read wiring for the worker processes.
 
 ---
