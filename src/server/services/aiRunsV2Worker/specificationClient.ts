@@ -6,9 +6,15 @@
  */
 import { type ContainerClient } from '@azure/storage-blob';
 import type { AiRunBlobRef } from '../../../shared/types/aiRunV2';
+import type { AiRunV2VisualSpecification } from '../../../shared/types/aiRunV2VisualSpec';
 import { resolveArtifactContainerClient } from '../aiRunV2/artifactContainer';
 
-export type ExecutionSpecification = Readonly<{
+/**
+ * The document lane repeats the run identity in its specification. Newer
+ * lane-specific specifications do not: the command envelope already carries
+ * it, so duplicating it invites the two copies to disagree.
+ */
+export type LegacyExecutionSpecification = Readonly<{
   runId: string;
   attemptId: string;
   attemptNumber: number;
@@ -18,6 +24,10 @@ export type ExecutionSpecification = Readonly<{
   repository?: Record<string, unknown>;
   [key: string]: unknown;
 }>;
+
+export type ExecutionSpecification =
+  | LegacyExecutionSpecification
+  | AiRunV2VisualSpecification;
 
 export type SpecificationClient = {
   read(ref: AiRunBlobRef): Promise<ExecutionSpecification>;
