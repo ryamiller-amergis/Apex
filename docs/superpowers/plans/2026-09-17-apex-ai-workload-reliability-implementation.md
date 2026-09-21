@@ -634,18 +634,63 @@ Two deliberate exclusions, both documented in the module:
 
 - Admission slot release stays in `markTerminal`. It publishes V1 dispatch
   messages, and V2 capacity is governed by the orchestrator's own utilization
-  reader. The periodic admission sweep still reclaims the slot a finished V2
-  background run was holding.
+  reader. V2 runs no longer occupy a V1 slot at all, so a finished one leaves
+  nothing for the periodic sweep to reclaim.
 - The reconciler's `failed` / `worker_lost` transition is not wired to the
   shared path, because it may be followed immediately by a replacement attempt
   that puts the run back to `dispatched`. Applying terminal effects there needs
   a check that no retry follows.
 
-Still open, found while resolving this: `admissionGovernorService` and
-`agentRunReaperService` both select on `lane = 'background'` with no
-`transport_version` filter, so the V1 governor can claim a queued V2 run and
-overwrite its dispatch fence, and the V1 reaper can terminalize a V2 run
-without finalizing its attempt row.
+**Resolved — V1 schedulers no longer govern V2 runs (raised 2026-09-21,
+settled 2026-09-21):**
+
+`admissionGovernorService` and `agentRunReaperService` both selected on
+`lane = 'background'` with no `transport_version` filter, so V1's schedulers
+operated on V2 runs. Every selection in both services is now restricted to the
+V1 transport:
+
+- `readQueueSnapshot` excludes V2 from in-flight, queue depth, and
+  oldest-queued age, so V2 work is no longer charged to both V1's cap and the
+  orchestrator's utilization reader.
+- `admitNext` excludes V2 from the fairness CTE and from candidate selection,
+  so the governor can no longer claim a V2 run during the window where it is
+  still `queued` and overwrite the fence its `ai_run_attempts` row holds.
+- `findStaleDispatches` excludes V2, so the republish sweep cannot re-enqueue
+  a V2 run onto the V1 queue.
+- `reapOrphanedRuns` skips V2 rows before any clock is evaluated. The V1 queue
+  TTL, dispatch TTL, cold-start republish, worker-heartbeat and
+  worker-progress clocks all previously fired on V2 rows; the heartbeat clock
+  fired unconditionally on any V2 run older than ten minutes, because a V2
+  worker writes `last_checkpoint_at`, never `heartbeat_at`.
+
+Liveness reads (`isThreadRunAlive`, `getThreadRunStateSnapshot`) are
+deliberately unchanged: a V2 run in flight genuinely is alive, and waiters
+must keep waiting for it.
+
+**Open — a V2 attempt can be stranded in `queued` with no owner:**
+
+`createQueuedV2Run` writes the run header and its first `ai_run_attempts` row
+in one transaction, so a header without an attempt row cannot occur. The
+reachable gap is narrower and one step later: `dispatchNextAttempt` runs in a
+second transaction, and both callers of `v2AdmissionService.admit`
+(`backgroundWorkflowRouter`, `designPrototypeService`) catch its failure and
+fall back to in-process generation without removing the committed header. A
+crash between the two transactions leaves the same state.
+
+Nothing reclaims that state. The reconciler sweeps
+`status IN ('dispatched', 'running')` and `status = 'checking_worker'`; a
+`queued` attempt matches neither. Until the fix above, V1's queue TTL reaped
+the header after thirty minutes — incorrectly, since it orphaned the attempt,
+but it did release `uq_agent_runs_v2_active_thread`. That partial-index lock
+now blocks every future V2 run on the affected thread permanently.
+
+A fix was not attempted here because none of the options is small:
+`queued -> checking_worker` is an illegal attempt transition, a new sweep
+needs its own age budget measured from `created_at` rather than
+`last_checkpoint_at` (a queued attempt has never checkpointed), and the
+structurally correct fix — folding `dispatchNextAttempt` into
+`createQueuedV2Run`'s transaction — changes the admission contract and the
+reconciler's retry path, which reuses `dispatchNextAttempt` on its own.
 
 - [ ] Record `transport_version` on every run.
 - [ ] Keep old HTTP callbacks and Azure Files for v1 runs.
