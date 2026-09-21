@@ -711,15 +711,58 @@ not yet modified — see "Remaining for Task 6" below.
 
   **Two things found that the visual lane already gets wrong for prototypes:**
 
-  - `bedrockVisualClient` sends `messages: [{ role: 'user', content: prompt }]`
-    — a plain string, no image block. Both in-process paths attach the Figma
-    screenshot as a vision input (`bedrockService` for prototypes,
-    `uiLabBedrockService` for UI Lab). `VisualDesignReference` declares
-    `screenshotBase64`, `screenshotMediaType`, `screenshotWidth` and
-    `screenshotHeight` for exactly this, and nothing populates or reads them.
-    Prototypes on V2 are already generating without the visual reference the
-    in-process path supplies, which is a silent output change, not a transport
-    change.
+  - ~~`bedrockVisualClient` sends `messages: [{ role: 'user', content: prompt }]`
+    — a plain string, no image block.~~ **Fixed 2026-09-21.** Both in-process
+    paths attach the Figma screenshot as a vision input (`bedrockService` for
+    prototypes, `uiLabBedrockService` for UI Lab), and the prompt tells the
+    model to match it — the ported colour rule says the reference screenshot
+    is for layout only. A V2 prototype was being asked to match a screenshot
+    it could not see, which is a silent output change hiding inside a
+    transport change. The `screenshotBase64`, `screenshotMediaType`,
+    `screenshotWidth` and `screenshotHeight` fields `VisualDesignReference`
+    already declared are now produced and consumed end to end:
+
+    - `designPrototypeService.loadPrototypeDesignContext` reads them off
+      `getFigmaReference()`, where the App Service can reach it.
+    - `visualSpecificationBuilder` carries them on `designReference` for both
+      the prototype and UI Lab builders, so UI Lab inherits the fix when it
+      is wired up. The fields are left off entirely when there is no
+      screenshot, so a reference-less specification is unchanged.
+    - `visualEntrypoint` resolves the image off the specification — never
+      fetching it, which would break worker isolation — and
+      `bedrockVisualClient` emits an Anthropic image block ahead of the text
+      block, mirroring `bedrockService.invokeModel` including the ordering.
+      With no image the message stays a plain string, as before.
+
+    The image deliberately does not travel through
+    `applyDesignContextBudget`: that budget sizes how much repository source
+    fits, and counting a ~94 KB base64 screenshot against its 400 KB would
+    push real source out of the prompt. Nothing caps the specification — the
+    writer uploads it to Blob whole and the queue carries only a blob ref —
+    so the added size is workable.
+
+  - **Still open: the project-specific prototype prompt never reaches the
+    worker.** In process, `generateDesignPrototypeHtml` branches to
+    `buildProjectPrototypePrompt` when `prototypeContext` is set, dropping
+    the MaxView catalog, palette, Figma reference and sidebar entirely, and
+    can add `webReferences`. `buildPrototypePromptInputs` carries neither,
+    and `admitPendingPrototypesToV2` excludes only EXTEND-mode features — so
+    a project with its own design-system skill is admitted to V2 and answered
+    with the MaxView prompt. Same class of defect as the image, wider blast
+    radius.
+  - **Still open: `stop_reason` is not read.** `bedrockService` throws
+    `BedrockModelTruncatedError` on `stop_reason: 'max_tokens'`;
+    `bedrockVisualClient` ignores it and returns the partial text, which the
+    worker uploads and finalizes as a completed prototype.
+  - **Still open: `VisualModelSettings` has no `temperature`.** UI Lab reads
+    `uiLabBedrockTemperature` from project settings and sets it on the
+    payload; the visual contract cannot express it, so a UI Lab screen on V2
+    would silently run at the model default.
+  - **Still open: one image, but EXTEND mode sends two.** The in-process
+    prototype path can attach both the Figma reference and a per-route page
+    screenshot from `pageScreenshotService`. `VisualDesignReference` holds one
+    screenshot. Not live today — EXTEND falls back in process — but it
+    becomes a gap the moment EXTEND is admitted.
   - `uiLabBedrockService.buildContextSection` joins `PageRoute` objects
     straight into the prompt, so "### Application routes" has always read
     `[object Object]`. Carried across verbatim and pinned with a test rather
