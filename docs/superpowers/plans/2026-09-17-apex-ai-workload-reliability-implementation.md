@@ -529,6 +529,25 @@ not yet modified — see "Remaining for Task 6" below.
   orchestrator finalizes the attempt and knows nothing about prototypes; each
   service reads the manifest from Blob when it sees its run finish.
   `artifactReader.ts` provides the shared, checksum-verifying read.
+
+  **Three blockers found (2026-09-21), in the order they must be cleared:**
+
+  1. Visual generation is entangled with the database. `bedrockService.ts`
+     reads `getFigmaReference`, `getMaxviewColorTokens`,
+     `getDesignSystemCatalog`, `getScreenInventory`, and
+     `resolvePrototypeExtendMode` inline, at roughly ten call sites deep
+     inside its prompt builders, and writes usage with `recordAiUsage`. A
+     worker importing it pulls PostgreSQL in and the isolation guard fails.
+     `src/shared/types/aiRunV2VisualSpec.ts` defines the shape those reads
+     collapse into: context resolved on the App Service side, usage
+     attribution travelling back with the terminal result. The refactor of
+     `bedrockService` to build prompts from that specification alone is the
+     bulk of the remaining work.
+  2. Runs are keyed by thread and a unique index allows one active V2 run per
+     thread, but a PRD generates many prototypes concurrently. Each needs its
+     own run identity (for example `prototype:{prototypeId}`) or the second
+     admission is refused as a conflict.
+  3. Completion convergence — see the note under Task 8 below.
 - [ ] Ephemeral workspace and repo-read wiring for the worker processes.
 
 ---
@@ -594,6 +613,18 @@ not yet modified — see "Remaining for Task 6" below.
 
 - Consumes: working v1 and proven V2 paths
 - Produces: V2 production traffic with v1 rollback retained
+
+**Open question — V1/V2 completion convergence (raised 2026-09-21):**
+
+V2's `transitionAttempt` writes `agent_runs.status` and `terminal_reason`
+directly inside its own transaction, while V1 reaches terminal through
+`agentRunLifecycleService.markTerminal`. `markTerminal` returns an idempotent
+no-op when the run is already terminal, so calling it after a V2 finalize
+skips the completion handler, the run events it publishes, and the grounding
+deactivation. Converging the two means deciding who owns the header
+transition: extract the post-terminal effects into a function both call, or
+make `markTerminal` the single owner and let the reconciler repair the window
+where an attempt is terminal but its run is not.
 
 - [ ] Record `transport_version` on every run.
 - [ ] Keep old HTTP callbacks and Azure Files for v1 runs.
