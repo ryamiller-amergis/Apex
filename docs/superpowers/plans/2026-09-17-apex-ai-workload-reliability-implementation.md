@@ -415,6 +415,35 @@ App Service wiring, no deploy.yml, no Azure apply).
 - Entrypoint is **not** started from App Service `index.ts`.
 - deploy.yml and Azure apply remain deferred.
 
+**Open follow-ups before any staging run (recorded 2026-09-21):**
+
+The committed process builds and passes tests, but three placeholders in
+`src/server/services/aiOrchestrator/entrypoint.ts` make it unsafe to run
+against real queues until closed:
+
+- [ ] `loadUtilization()` returns `emptyUtilization()`, so the Cursor 20 /
+  Bedrock 2 caps never bind at runtime. Wire live per-provider counters from
+  `ai_run_attempts`.
+- [ ] The execution probe always answers `unknown`, and the reconciler leaves
+  `unknown` attempts alone. Nothing can reach `worker_lost`, so two stuck
+  attempts pause background dispatch permanently. Implement the Container
+  Apps execution probe against the ARM API using the orchestrator identity.
+- [ ] The command publisher hardcodes queue `ai-runs-v2-document`. Route per
+  lane once the visual queue exists (Task 6).
+
+**Hosting and environment (not yet provisioned):**
+
+- [ ] No compute resource exists for the orchestrator.
+  `ai-platform-v2-identities.tf` grants it queue and blob roles, but no
+  Container App is defined; the cost gates assume two warm replicas.
+- [ ] `scripts/ci/publish-ai-orchestrator.sh` is never called — `deploy.yml`
+  has no orchestrator references and no registry repository name is chosen.
+- [ ] Environment contract is undocumented (`.env.example` is protected):
+  `AI_PLATFORM_V2_SERVICEBUS_NAMESPACE` (falls back to
+  `AI_RUNS_SERVICEBUS_NAMESPACE`), `AI_PLATFORM_V2_CHECKPOINT_QUEUE`,
+  `AI_PLATFORM_V2_RESULT_QUEUE`, `AI_ORCHESTRATOR_ENABLED`,
+  `AI_ORCHESTRATOR_SB_MODE`, `DATABASE_URL`.
+
 ---
 
 
@@ -635,6 +664,11 @@ and running on **dev/staging**:
   created resources behind `enable_ai_platform_v2`). Follow the deferred
   checklist under Task 4 above. Staging apply first; production apply only
   with a second approval. Do not stop or delete V1 in this pass.
+- [ ] **Orchestrator hosting and CI wiring** (Task 5 shipped the process and
+  its Dockerfile/publish script only). Needs a Container App resource, a
+  registry repository, `deploy.yml` wiring, the environment variables listed
+  under Task 5, and the three entrypoint placeholders closed before the
+  process consumes real queues.
 - [ ] **Task 2 rollout gates** (still open): staging/prod heartbeat swap
   verification; 25-document V1 regression before any capacity increase.
 - [ ] **V1 retirement** (Task 8): only after V2 is proven in production —
