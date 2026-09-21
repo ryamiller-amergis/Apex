@@ -19,6 +19,7 @@ This directory contains Terraform configuration for provisioning Azure resources
 - **Managed-identity access**: The cross-cutting Apex App Service identity is scoped to the shared Storage Account. PDF assembly stays in the Apex application; job delivery uses the Postgres queue (Service Bus deferred).
 - **Load Test infrastructure** (FEAT-002): Dedicated Service Bus namespace, Container Apps Job, and managed identities — see [Load Test module](#load-test-module-feat-002) below.
 - **AI Runs background worker** (FEAT-003): Shared AI-runs Service Bus namespace (`sbns-apex-ai-*`), `ai-runs-background` queue, KEDA Container Apps Job, runner MI, Azure Files workspace mount — see [AI Runs worker module](#ai-runs-background-worker-module-feat-003) below.
+- **Cursor Team Pool workers** (dev only): Always-on controller Container App plus one manual worker Job template in `cae-apex-ai-dev` for My Work cloud development sessions — see [Cursor Team Pool workers](#cursor-team-pool-workers-dev-only).
 - **Repo read service** (optional): Container App serving git reads from ephemeral disk; gated by `enable_repo_read_service` — see [Repo read service](#repo-read-service) below.
 
 ## Shared async platform conventions
@@ -593,6 +594,74 @@ terraform output ai_runs_runner_identity_client_id
 
 Infrastructure is safe to apply while `ai-runs-background` is disabled; the Job
 scales from zero until the governor publishes admitted work.
+
+---
+
+## Cursor Team Pool workers (dev only)
+
+`cursor-cloud-workers.tf` provisions the Azure execution tier for Cursor
+self-hosted Team Pool sessions started from My Work. Set
+`enable_cursor_pool_workers = true` in the **dev** tfvars file. The resources are
+suppressed for every environment whose `environment` value is not `dev`.
+
+The stack reuses `cae-apex-ai-dev`, the existing ACR, Application Insights, and
+the `cursor-api-key` secret in the AI-runs Key Vault. It does not mount the
+shared Azure Files workspace: each agent gets an isolated ephemeral checkout.
+
+| Resource | Default dev name | Purpose |
+|----------|------------------|---------|
+| Controller Container App | `ca-apex-cursor-controller-dev` | Maintains Cursor's pending-request stream and claims work |
+| Worker Container Apps Job | `caj-apex-cursor-worker-dev` | Manual Job template; one execution per claimed request |
+| Controller identity | `mi-apex-cursor-controller-dev` | Pull image, read Cursor key, start/inspect only the worker Job |
+| Worker identity | `mi-apex-cursor-worker-dev` | Pull image and read Cursor key |
+| Cursor pool | `apex-my-work` | Routing name supplied by the My Work Cloud Agents API request |
+
+### Image contract
+
+Terraform provisions compute and identity but does not build the two images:
+
+- `cursor_pool_controller_image` must contain the Cursor `agent` CLI, Azure CLI,
+  and executable `/opt/cursor/spawn-aca-job.sh`.
+- The spawn hook receives Cursor's `CURSOR_AGENT_WORKER_ID`, `CURSOR_POOL`, and
+  request metadata. It starts `CURSOR_WORKER_JOB_RESOURCE_ID` through Azure ARM,
+  overriding the Job execution with the claim-specific worker ID and pool.
+- `cursor_pool_worker_image` must contain the Cursor `agent` CLI, `git`, and the
+  Apex build/test toolchain.
+- The Key Vault `cursor-api-key` must be a Cursor **service-account** key; user
+  and personal keys cannot authenticate Team Pool workers.
+
+With `cursor_pool_clone_git_repos = true`, workers start with
+`--clone-git-repos`. Enable GitHub token minting for Team Pool workers in the
+Cursor admin dashboard before using this mode.
+
+### RBAC and networking
+
+The controller gets a custom role assigned only on the worker Job with
+`jobs/read`, `jobs/start/action`, and `jobs/executions/read`. Neither identity
+receives access to the AI-runs Service Bus queue or the shared workspace.
+
+Workers require outbound HTTPS to `api2.cursor.sh`, `api2direct.cursor.sh`,
+`downloads.cursor.com`, and the Cursor artifact host, plus the source-control
+and package-registry hosts used by the repository. No inbound worker port or
+public IP is required.
+
+### Dev activation and smoke check
+
+```hcl
+enable_cursor_pool_workers   = true
+cursor_pool_controller_image = "<acr>.azurecr.io/apex-cursor-controller:<tag>"
+cursor_pool_worker_image     = "<acr>.azurecr.io/apex-cursor-worker:<tag>"
+```
+
+```bash
+terraform output cursor_pool_name
+terraform output cursor_pool_controller_app_name
+terraform output cursor_pool_worker_job_name
+```
+
+After apply, confirm the controller has one ready replica, the `apex-my-work`
+pool appears in the Cursor dashboard, and one pool request creates exactly one
+worker Job execution.
 
 ---
 

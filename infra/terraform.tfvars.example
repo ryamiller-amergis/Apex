@@ -161,6 +161,28 @@ pdf_blob_container_name = "pdf-artifacts"
 # ai_runs_apex_callback_base_url    = "https://app-scrum-dev.azurewebsites.net"
 
 # ---------------------------------------------------------------------------
+# Cursor self-hosted Team Pool — My Work cloud development (dev only)
+# Reuses cae-apex-ai-dev, the load-test ACR, and kv-apex-ai-dev. Production is
+# inert even if this switch is copied into a production tfvars file.
+#
+# The Key Vault cursor-api-key value must be a Cursor service-account key with
+# Self-Hosted Team Pools enabled. The controller image must contain `agent`,
+# Azure CLI, and /opt/cursor/spawn-aca-job.sh; the worker image must contain
+# `agent`, git, and the toolchain needed to build/test Apex.
+# ---------------------------------------------------------------------------
+# enable_cursor_pool_workers = true
+# cursor_pool_name = "apex-my-work"
+# cursor_pool_controller_image = "<acr>.azurecr.io/apex-cursor-controller:<tag>"
+# cursor_pool_worker_image     = "<acr>.azurecr.io/apex-cursor-worker:<tag>"
+# cursor_pool_controller_cpu    = 0.5
+# cursor_pool_controller_memory = "1Gi"
+# cursor_pool_worker_cpu         = 2.0
+# cursor_pool_worker_memory      = "4Gi"
+# cursor_pool_worker_timeout_seconds      = 21600
+# cursor_pool_worker_idle_release_seconds = 600
+# cursor_pool_clone_git_repos = true
+
+# ---------------------------------------------------------------------------
 # AI Runs interactive lane — FEAT-007 (WebSocket gateway + Dapr virtual actors)
 # Additive/inert while disabled. Reuses the FEAT-003 ai-runs Container Apps
 # Environment, runner managed identity, Azure Files workspace, LT ACR, and the
