@@ -22,7 +22,8 @@ describe('AI-run V2 outbox repository', () => {
           created_at: '2026-09-18T12:00:00.000Z',
         },
       ])
-      .mockResolvedValueOnce([]);
+      .mockResolvedValueOnce([{ pg_notify: '' }]) // transactional wake
+      .mockResolvedValueOnce([]); // duplicate idempotency key
 
     const repo = createOutboxRepository({ execute });
     const first = await repo.enqueue([
@@ -47,7 +48,7 @@ describe('AI-run V2 outbox repository', () => {
     expect(first).toHaveLength(1);
     expect(first[0].id).toBe('outbox-1');
     expect(second).toHaveLength(0);
-    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenCalledTimes(3);
   });
 
   it('claims due rows for one holder and marks published only for that holder', async () => {

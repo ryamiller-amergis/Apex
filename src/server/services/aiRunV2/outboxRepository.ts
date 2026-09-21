@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import type { AiRunV2Command } from '../../../shared/types/aiRunV2';
+import { AI_RUN_OUTBOX_CHANNEL, buildOutboxNotifyPayload } from '../aiOrchestrator/outboxNotify';
 
 export type SqlExecutor = {
   execute(query: unknown): Promise<unknown>;
@@ -109,7 +110,19 @@ export function createOutboxRepository(executor: SqlExecutor) {
           RETURNING *
         `);
         const row = resultRows<Record<string, unknown>>(result)[0];
-        if (row) inserted.push(mapOutboxRow(row));
+        if (row) {
+          const mapped = mapOutboxRow(row);
+          inserted.push(mapped);
+          await executor.execute(sql`
+            SELECT pg_notify(
+              ${AI_RUN_OUTBOX_CHANNEL},
+              ${buildOutboxNotifyPayload({
+                outboxId: mapped.id,
+                runId: mapped.runId,
+              })}
+            )
+          `);
+        }
       }
       return inserted;
     },

@@ -364,6 +364,9 @@ separate ops pass:
 
 ### Task 5: Build the orchestrator
 
+**Status:** Complete for this branch (separate process + unit tests only; no
+App Service wiring, no deploy.yml, no Azure apply).
+
 **Files:**
 
 - Create: `src/server/services/aiOrchestrator/orchestrator.ts`
@@ -374,9 +377,14 @@ separate ops pass:
 - Create: `src/server/services/aiOrchestrator/reconciler.ts`
 - Create: `src/server/services/aiOrchestrator/providerGovernor.ts`
 - Create: `src/server/services/aiOrchestrator/entrypoint.ts`
+- Create: `src/server/services/aiOrchestrator/outboxNotify.ts`
+- Create: `src/server/services/aiOrchestrator/serviceBusRestClient.ts`
+- Create: `src/server/services/aiOrchestrator/metrics.ts`
+- Create: `src/server/services/aiOrchestrator/ports.ts`
+- Create: `src/server/services/aiOrchestrator/types.ts`
 - Create: `runners/ai-orchestrator/Dockerfile`
 - Create: `scripts/ci/publish-ai-orchestrator.sh`
-- Modify with separate approval: `.github/workflows/deploy.yml`
+- Deferred (separate approval): `.github/workflows/deploy.yml`
 - Test: `src/server/__tests__/aiOrchestrator/*.test.ts`
 
 **Interfaces:**
@@ -384,21 +392,28 @@ separate ops pass:
 - Consumes: outbox, V2 queues, Blob manifests, provider/lane capacities
 - Produces: dispatches, checkpoints, finalized runs/documents, alerts
 
-- [ ] Wake the outbox drainer with PostgreSQL NOTIFY.
-- [ ] Add a 30-second leased safety sweep.
-- [ ] Claim bounded outbox batches with `SKIP LOCKED`.
-- [ ] Enforce provider and lane floors with borrowable shared capacity.
-- [ ] Start Cursor provider cap at 20 and Bedrock at 2.
-- [ ] Batch checkpoint persistence.
-- [ ] Keep checkpoint and terminal consumer pools separate.
-- [ ] Move stale runs to `checking_worker` after missed checkpoints.
-- [ ] Require positive Container Apps execution confirmation for
+- [x] Wake the outbox drainer with PostgreSQL NOTIFY.
+- [x] Add a 30-second leased safety sweep.
+- [x] Claim bounded outbox batches with `SKIP LOCKED`.
+- [x] Enforce provider and lane floors with borrowable shared capacity.
+- [x] Start Cursor provider cap at 20 and Bedrock at 2.
+- [x] Batch checkpoint persistence.
+- [x] Keep checkpoint and terminal consumer pools separate.
+- [x] Move stale runs to `checking_worker` after missed checkpoints.
+- [x] Require positive Container Apps execution confirmation for
   `worker_lost`.
-- [ ] Pause background dispatch at two uncertain workers.
-- [ ] Finalize terminal results transactionally and idempotently.
-- [ ] Dead-letter poison messages and terminalize the user-visible run.
-- [ ] Emit control-plane QPS, queue age, lease, provider, and finalization
+- [x] Pause background dispatch at two uncertain workers.
+- [x] Finalize terminal results transactionally and idempotently.
+- [x] Dead-letter poison messages and terminalize the user-visible run.
+- [x] Emit control-plane QPS, queue age, lease, provider, and finalization
   metrics.
+
+**Verification evidence (2026-09-21, branch `tbi/infra-changes`):**
+
+- Orchestrator unit suites + outbox notify regression: 16 passed.
+- `npm run build:server` clean.
+- Entrypoint is **not** started from App Service `index.ts`.
+- deploy.yml and Azure apply remain deferred.
 
 ---
 
