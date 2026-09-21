@@ -530,6 +530,92 @@ not yet modified — see "Remaining for Task 6" below.
   service reads the manifest from Blob when it sees its run finish.
   `artifactReader.ts` provides the shared, checksum-verifying read.
 
+  **Harvest built 2026-09-21 — the visual loop now closes.** A finished V2
+  visual run reaches its `design_prototypes` row through the recovery sweep:
+
+  - `aiRunV2/finishedAttemptReader.ts` answers "which of these threads have a
+    finished V2 run?" and owns the harvest claim. It takes thread ids and
+    returns manifest references, so it learns nothing about prototypes. An
+    attempt is offered only when the run header **and** the attempt are both
+    terminal — the reconciler's retry path fails an attempt and immediately
+    dispatches a replacement, which returns the header to `dispatched`, and
+    consuming the loser would apply a superseded run's output.
+  - `designPrototypeV2Harvest.ts` reads `prototype.html` through
+    `artifactReader`, sanitizes it, and writes the same row
+    `generateSinglePrototype` writes on success (`mockHtml`, `mockVersion: 1`,
+    a single version-1 history entry, `pending_review`, `generationError: null`),
+    then records the cost from `usage.json` and fires the completion
+    notification.
+  - `startupRecovery.recoverInFlightWork` drives it, immediately **before**
+    `failStalePrototypes`. That ordering matters: a run that finishes just past
+    the 25-minute staleness threshold would otherwise be failed in the same
+    cycle that could have applied it.
+
+  **Why the recovery sweep and not a new consumer.** It already runs every 60
+  seconds behind a single-owner lease (`startup-recovery:sweep`), already calls
+  into `designPrototypeService` for exactly this class of problem, and is
+  already started from the protected `index.ts`. A live `subscribeRunEvents`
+  subscription loses the event whenever the finishing instance is not the
+  admitting one; a durable replay over `agent_run_events` would need a new
+  per-consumer cursor and would still have to read `ai_run_attempts.manifest_ref`
+  afterwards. The attempt table is the durable record, so the sweep queries it
+  directly.
+
+  **Exactly-once — two independent guards, both existing patterns:**
+
+  1. A durable claim per attempt in `ai_run_inbox`, keyed
+     `artifact-harvest:{attemptId}` under the new `artifact_harvest` kind. The
+     table already models idempotent consumption, including the
+     claimed-but-never-processed case, which is retried rather than abandoned.
+     The claim is what stops a superseded attempt being re-applied later:
+     `retryPrototype` puts a row back to `generating` and regenerates
+     **in process**, leaving the old terminal V2 attempt as the newest one on
+     `prototype:{id}`.
+  2. A compare-and-set on the prototype row (`WHERE status = 'generating'`), so
+     the apply and "has this already been applied?" are one statement. Only the
+     writer that wins it records usage, so cost cannot be charged twice, and the
+     history entry is a replacement rather than an append. The CAS is restricted
+     to `generating` deliberately: a version-1 replacement would discard a
+     regeneration's history, and the V2 lane admits initial generation only.
+
+  Correctness does not depend on the claim alone — a lost claim still cannot
+  double-write, because the CAS refuses the second apply.
+
+  **Failure handling.** A `failed` or `cancelled` attempt never reaches the
+  artifact read; the prototype is marked `generation_failed` with the attempt's
+  own failure detail. `ArtifactVerificationError` is terminal for the apply:
+  the bytes will never match on a later read, so the prototype is failed with
+  the verification message rather than left in `generating`, and the claim is
+  closed. Any other read error (a transient Blob fault) leaves the claim open
+  and the next sweep retries.
+
+  `VISUAL_USAGE_FILE_NAME` moved to `src/shared/types/aiRunV2VisualSpec.ts` so
+  the worker and the harvest name one file; `visualEntrypoint.USAGE_FILE_NAME`
+  re-exports it. Nothing under `aiRunsV2Worker/` gained a database import — the
+  guard suite still passes.
+
+  **Still open after the harvest:**
+
+  - Only the visual lane is harvested. Document runs routed through
+    `backgroundWorkflowRouter` onto V2 have no equivalent consumer, and
+    `uiLabService` is not on V2 at all.
+  - `failStalePrototypes` uses a 25-minute threshold measured from
+    `design_prototypes.updatedAt`, but a V2 run's own deadline is
+    `resolveAgentRunHardLimitMs()` (2 hours by default). A visual run that
+    legitimately outlives 25 minutes has its prototype failed while the run is
+    still going; the harvest then finds a completed attempt whose prototype is
+    `generation_failed` and the CAS correctly refuses to overwrite the
+    user-visible failure. The transport and the staleness sweep need one shared
+    deadline.
+  - A run that finishes while its prototype is **not** in `generating` (the user
+    reset it first) is never claimed. A later retry that puts the row back to
+    `generating` can then have the older artifact applied to it, racing the
+    in-process retry. Neither outcome corrupts the row — both write a single
+    version-1 history entry, and each run records only its own real cost — but
+    the winner is whichever finishes last.
+  - Nothing reclaims the Blob artifacts of a harvested attempt; lifecycle rules
+    on the container are the only cleanup.
+
   **Three blockers found (2026-09-21), in the order they must be cleared:**
 
   1. Visual generation is entangled with the database. `bedrockService.ts`
