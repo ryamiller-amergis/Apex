@@ -5,6 +5,7 @@
 import {
   isAiRunV2VisualSpecification,
   VISUAL_USAGE_FILE_NAME,
+  type AiRunV2VisualSpecification,
   type VisualModelSettings,
 } from '../../../shared/types/aiRunV2VisualSpec';
 import { createWorkerServiceBusClient } from './serviceBusClient';
@@ -28,6 +29,29 @@ export type InvokeVisualModel = (
 ) => Promise<string | VisualModelResult>;
 
 /**
+ * The lane carries more than one kind of subject and each needs its own
+ * prompt, so the kind has to decide the builder. Falling through to the
+ * prototype builder would answer a UI Lab specification with prototype
+ * instructions — output that looks finished and is wrong, with nothing to
+ * flag it. The `never` check keeps a third kind from compiling until it is
+ * handled here too.
+ */
+function buildVisualPrompt(specification: AiRunV2VisualSpecification): string {
+  switch (specification.subjectKind) {
+    case 'design-prototype':
+      return buildPrototypePrompt(specification);
+    case 'ui-lab-screen':
+      throw new Error(
+        'The visual worker has no prompt for subjectKind ui-lab-screen yet',
+      );
+    default: {
+      const unhandled: never = specification.subjectKind;
+      throw new Error(`Unsupported visual subjectKind: ${String(unhandled)}`);
+    }
+  }
+}
+
+/**
  * Turns a visual specification into one HTML artifact.
  *
  * The model client is injected: a worker image binds the real Bedrock call,
@@ -43,7 +67,7 @@ export function createVisualExecute(deps: {
     await checkpoints.publishProgress('execution', 'running');
 
     const result = await deps.invokeModel(
-      buildPrototypePrompt(specification),
+      buildVisualPrompt(specification),
       specification.model,
     );
     const html = typeof result === 'string' ? result : result.html;

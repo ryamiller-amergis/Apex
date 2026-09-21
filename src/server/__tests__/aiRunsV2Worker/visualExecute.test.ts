@@ -112,6 +112,25 @@ describe('visual execute', () => {
     });
   });
 
+  it('refuses a ui-lab-screen subject rather than sending it prototype instructions', async () => {
+    const invokeModel = jest.fn().mockResolvedValue('<html/>');
+    const execute = createVisualExecute({ invokeModel });
+
+    await expect(
+      execute({
+        specification: {
+          ...spec,
+          subjectKind: 'ui-lab-screen',
+          outputPath: 'design.html',
+        } as never,
+        command: {} as never,
+        checkpoints: checkpoints().port as never,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow('ui-lab-screen');
+    expect(invokeModel).not.toHaveBeenCalled();
+  });
+
   it('refuses empty model output rather than uploading a blank prototype', async () => {
     const execute = createVisualExecute({ invokeModel: async () => '   ' });
 
