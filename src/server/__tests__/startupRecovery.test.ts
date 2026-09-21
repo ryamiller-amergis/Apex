@@ -82,6 +82,9 @@ jest.mock('../services/documentValidationService', () => ({
 jest.mock('../services/designPrototypeService', () => ({
   failStalePrototypes: jest.fn(),
 }));
+jest.mock('../services/designPrototypeV2Harvest', () => ({
+  harvestFinishedV2Prototypes: jest.fn().mockResolvedValue(0),
+}));
 jest.mock('../services/chatThreadRepository', () => ({
   findRunningInterviewThreads: jest.fn(),
   clearStaleRun: jest.fn(),
@@ -1062,5 +1065,63 @@ describe('recoverStuckInterviewThreads', () => {
     expect(mockedHydrate).toHaveBeenCalledWith('t1');
     expect(mockedReevaluateGrounding).toHaveBeenCalledWith('t1');
     expect(mockedClearStale).toHaveBeenCalledWith('t1');
+  });
+});
+
+describe('finished durable prototype runs', () => {
+  const harvest = () =>
+    jest.requireMock('../services/designPrototypeV2Harvest')
+      .harvestFinishedV2Prototypes as jest.Mock;
+  const failStale = () =>
+    jest.requireMock('../services/designPrototypeService')
+      .failStalePrototypes as jest.Mock;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockFindMany.mockResolvedValue([]);
+    mockPrdsFindMany.mockResolvedValue([]);
+    mockDesignDocsFindMany.mockResolvedValue([]);
+    mockTestCasesFindMany.mockResolvedValue([]);
+    mockedFindRunning.mockResolvedValue([]);
+    harvest().mockResolvedValue(0);
+    failStale().mockResolvedValue(0);
+    jest.requireMock('../services/pdfAssemblyService')
+      .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
+    jest.requireMock('../services/featureRequestAnalysisService')
+      .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
+  });
+
+  it('applies finished runs before the staleness reset can fail them', async () => {
+    const order: string[] = [];
+    harvest().mockImplementation(async () => {
+      order.push('harvest');
+      return 1;
+    });
+    failStale().mockImplementation(async () => {
+      order.push('failStale');
+      return 0;
+    });
+
+    await recoverInFlightWork();
+
+    expect(order).toEqual(['harvest', 'failStale']);
+  });
+
+  it('still resets stale prototypes when the harvest fails', async () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const harvestError = new Error('blob unavailable');
+    harvest().mockRejectedValue(harvestError);
+
+    try {
+      await expect(recoverInFlightWork()).resolves.toBeUndefined();
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '[recovery] Failed to apply finished prototype runs:',
+        harvestError,
+      );
+      expect(failStale()).toHaveBeenCalled();
+    } finally {
+      consoleSpy.mockRestore();
+    }
   });
 });

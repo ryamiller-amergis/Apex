@@ -4,7 +4,16 @@ export type SqlExecutor = {
   execute(query: unknown): Promise<unknown>;
 };
 
-export type InboxKind = 'checkpoint' | 'terminal_result' | 'command_ack';
+/**
+ * `artifact_harvest` is claimed by the App Service rather than by a queue
+ * consumer: it records that an owning service has already read a finished
+ * attempt's artifact and applied it to its own row.
+ */
+export type InboxKind =
+  | 'checkpoint'
+  | 'terminal_result'
+  | 'command_ack'
+  | 'artifact_harvest';
 
 export type InboxClaimResult =
   | { status: 'inserted'; eventId: string }

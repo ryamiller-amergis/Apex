@@ -4,6 +4,7 @@
  */
 import {
   isAiRunV2VisualSpecification,
+  VISUAL_USAGE_FILE_NAME,
   type VisualModelSettings,
 } from '../../../shared/types/aiRunV2VisualSpec';
 import { createWorkerServiceBusClient } from './serviceBusClient';
@@ -19,7 +20,7 @@ import {
 } from './visualConcurrency';
 import { createV2Worker, type ExecuteWorkload } from './worker';
 
-export const USAGE_FILE_NAME = 'usage.json';
+export const USAGE_FILE_NAME = VISUAL_USAGE_FILE_NAME;
 
 export type InvokeVisualModel = (
   prompt: string,

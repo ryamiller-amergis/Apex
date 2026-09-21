@@ -27,6 +27,7 @@ import {
 import { startTestCaseWatcher, isTestCaseWatcherActive, routeTestCaseGenerationKickoff } from './testCaseService';
 import { routeDocumentValidationKickoff } from './documentValidationService';
 import { failStalePrototypes } from './designPrototypeService';
+import { harvestFinishedV2Prototypes } from './designPrototypeV2Harvest';
 import {
   findRunningInterviewThreads,
   clearStaleRun,
@@ -721,6 +722,25 @@ export async function recoverInFlightWork(
   } catch (err) {
     if (signal?.aborted || err instanceof RepoCacheLeaseLostError) throw err;
     console.error('[recovery] Failed to recover stuck interview threads:', err);
+  }
+
+  // ── Prototypes whose V2 run has finished ──────────────────────────────────
+  // A visual run finishes on a worker and is finalized by the orchestrator;
+  // neither writes the prototype row. This reads the finished attempt's
+  // manifest and applies it. It must run before the staleness reset below, or
+  // a run that finished just past the threshold is failed before it is read.
+  try {
+    throwIfAborted(signal);
+    const harvested = await harvestFinishedV2Prototypes();
+    if (harvested > 0) {
+      recovered += harvested;
+      console.log(
+        `[recovery] Applied ${harvested} finished durable prototype run(s)`,
+      );
+    }
+  } catch (err) {
+    if (signal?.aborted || err instanceof RepoCacheLeaseLostError) throw err;
+    console.error('[recovery] Failed to apply finished prototype runs:', err);
   }
 
   // ── Design prototypes stuck in generating/regenerating ────────────────────

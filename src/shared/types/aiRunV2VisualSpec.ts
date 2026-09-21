@@ -14,6 +14,12 @@
 
 export const AI_RUN_V2_VISUAL_SPEC_VERSION = 1 as const;
 
+/**
+ * Artifact the worker writes its token counts to, read by the owning service
+ * when it applies the output. Shared so both ends name the same file.
+ */
+export const VISUAL_USAGE_FILE_NAME = 'usage.json';
+
 export type VisualNavItem = Readonly<{
   label: string;
   route: string;
