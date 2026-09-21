@@ -614,17 +614,38 @@ not yet modified — see "Remaining for Task 6" below.
 - Consumes: working v1 and proven V2 paths
 - Produces: V2 production traffic with v1 rollback retained
 
-**Open question — V1/V2 completion convergence (raised 2026-09-21):**
+**Resolved — V1/V2 completion convergence (raised 2026-09-21, settled
+2026-09-21):**
 
-V2's `transitionAttempt` writes `agent_runs.status` and `terminal_reason`
-directly inside its own transaction, while V1 reaches terminal through
-`agentRunLifecycleService.markTerminal`. `markTerminal` returns an idempotent
-no-op when the run is already terminal, so calling it after a V2 finalize
-skips the completion handler, the run events it publishes, and the grounding
-deactivation. Converging the two means deciding who owns the header
-transition: extract the post-terminal effects into a function both call, or
-make `markTerminal` the single owner and let the reconciler repair the window
-where an attempt is terminal but its run is not.
+Each transport keeps the terminal write it already had, and both now call
+`agentRunTerminalEffects.applyTerminalRunEffects` once that write is durable.
+`markTerminal` was not made the single owner: V2 finalizes the attempt row and
+its run header in one transaction, and splitting them would let a crash leave
+a finalized attempt on a still-running run.
+
+The shared path publishes a durable `done` / `completion` run event,
+deactivates grounding, logs the transition, and reports the terminal reason.
+V1 passes `terminalEventsPersisted: true` because its completion handler
+already persisted the events and idled the thread inside the terminal
+transaction; the V2 result consumer passes `false` and the shared path
+publishes the run's only terminal event.
+
+Two deliberate exclusions, both documented in the module:
+
+- Admission slot release stays in `markTerminal`. It publishes V1 dispatch
+  messages, and V2 capacity is governed by the orchestrator's own utilization
+  reader. The periodic admission sweep still reclaims the slot a finished V2
+  background run was holding.
+- The reconciler's `failed` / `worker_lost` transition is not wired to the
+  shared path, because it may be followed immediately by a replacement attempt
+  that puts the run back to `dispatched`. Applying terminal effects there needs
+  a check that no retry follows.
+
+Still open, found while resolving this: `admissionGovernorService` and
+`agentRunReaperService` both select on `lane = 'background'` with no
+`transport_version` filter, so the V1 governor can claim a queued V2 run and
+overwrite its dispatch fence, and the V1 reaper can terminalize a V2 run
+without finalizing its attempt row.
 
 - [ ] Record `transport_version` on every run.
 - [ ] Keep old HTTP callbacks and Azure Files for v1 runs.

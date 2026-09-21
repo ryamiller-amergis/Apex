@@ -32,10 +32,15 @@ Two things the original plan did not anticipate, both since resolved:
   The visual client returns the tokens Bedrock reports and the worker writes
   them as a `usage.json` artifact for the owning service to record.
 
-Still unresolved and required before a prototype run can complete end to end:
-the V1/V2 completion convergence, recorded as an open question in
-`2026-09-17-apex-ai-workload-reliability-implementation.md`. Task 7 admits the
-run; something must notice it finished and apply the artifact.
+The V1/V2 completion convergence this plan was blocked on is resolved in
+`2026-09-17-apex-ai-workload-reliability-implementation.md`. A finished V2 run
+now publishes the same durable `done` / `completion` run event a V1 run does,
+against the run's `thread_id` — `prototype:{subjectId}` for the visual lane.
+That event is what an owning service observes to know a run finished. It does
+not carry the manifest: the artifact manifest reference is on
+`ai_run_attempts.manifest_ref`, written by the same transaction that
+terminalized the attempt, and `usage.json` is one of the files that manifest
+lists.
 
 ## Global Constraints
 
