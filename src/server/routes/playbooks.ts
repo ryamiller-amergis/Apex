@@ -1,5 +1,5 @@
 /**
- * The two Phase 0 endpoints: start a run, and decide a gate it is parked on.
+ * The Phase 0 endpoints: start a run, decide a gate it is parked on, and read run status.
  *
  * Deliberately thin and deliberately unlovely. PBI-001 rules out any richer UI, and records
  * accessibility as not applicable, precisely because this is a developer-facing endpoint that the
@@ -10,8 +10,11 @@
  * project the caller names rather than to the platform.
  */
 import express, { Request, Response } from 'express';
-import { requirePermission } from '../middleware/rbac';
+import { requirePermission, resolveRequestProject } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
+import { getAppEnvironment } from '../utils/superAdmin';
+import { isFeatureEnabled } from '../services/featureFlagService';
+import { getRun, listRuns } from '../services/playbookRunProjectionService';
 import {
   PlaybookDefinitionNotFoundError,
   PlaybookEmptyGraphError,
@@ -27,6 +30,109 @@ import {
 } from '../services/playbookSteps/approvalGateAdapter';
 
 const router = express.Router();
+
+const PLAYBOOKS_SPIKE_FLAG = 'playbooks-spike';
+
+/** The display cap. A larger `limit` is clamped rather than refused; `total` reports the truth. */
+const MAX_RUN_PAGE = 50;
+
+/**
+ * Router-level flag gate. With `playbooks-spike` off, no Playbook endpoint exists.
+ *
+ * 404 rather than 403 is the point: a 403 confirms the surface is there and merely withheld, and
+ * the epic's success metric is that no Playbook surface appears anywhere outside local and
+ * development. Mounted once here rather than repeated per handler because the feature-flags skill
+ * asks for a single obvious entry point, and because a handler added later would otherwise be
+ * ungated by default — the wrong way round for a flag whose whole job is keeping this dark.
+ *
+ * It covers the run-start and gate-decision endpoints too, which is deliberate: being able to start
+ * a run you cannot see would be a strange thing for the off state to allow.
+ */
+const requirePlaybooksEnabled: express.RequestHandler = async (req, res, next) => {
+  try {
+    // Same resolution the permission guard uses, so the flag and the guard can never disagree
+    // about which project a request is for.
+    const project = resolveRequestProject(req);
+    if (!project) {
+      // A project-scoped surface addressed without a project names nothing: there is no project to
+      // evaluate the flag against and none to check a permission in. 404 for the same reason as
+      // below — a 400 here would confirm the route exists to a caller the flag is meant to hide it
+      // from.
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+
+    const enabled = await isFeatureEnabled(PLAYBOOKS_SPIKE_FLAG, {
+      userId: getUserId(req),
+      project,
+      environment: getAppEnvironment(),
+    });
+
+    // @feature-flag:playbooks-spike start winner=enabled
+    if (!enabled) {
+      // @feature-flag:playbooks-spike disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbooks-spike disabled-end
+    }
+    // @feature-flag:playbooks-spike enabled-start
+    next();
+    // @feature-flag:playbooks-spike enabled-end
+    // @feature-flag:playbooks-spike end
+  } catch (error) {
+    next(error);
+  }
+};
+
+router.use(requirePlaybooksEnabled);
+
+/**
+ * `GET /api/playbooks/runs?project=&limit=` — runs in a project, most recent first.
+ *
+ * A pass-through, and deliberately dull. TBI-025 (a) requires every field on screen to trace to the
+ * projection, and the way that rule breaks is not a decision to break it — it is one convenience
+ * added to a route, then another. So this resolves the project, clamps the limit, calls the
+ * projection and returns what it got. There is no error path that reads an engine table, because
+ * there is no error path that reads anything.
+ */
+router.get(
+  '/runs',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    // Non-null because `requirePlaybooksEnabled` refuses a request that names no project, and it
+    // runs in front of every route on this router.
+    const project = resolveRequestProject(req)!;
+
+    const requested = Number.parseInt(String(req.query.limit ?? ''), 10);
+    const limit =
+      Number.isFinite(requested) && requested > 0 ? Math.min(requested, MAX_RUN_PAGE) : MAX_RUN_PAGE;
+
+    res.json(await listRuns(project, limit));
+  }
+);
+
+/**
+ * `GET /api/playbooks/runs/:runId?project=` — one run, its ordered steps and what it waits on.
+ *
+ * The projection scopes by project in its own query, so a run belonging to another project is
+ * indistinguishable from one that does not exist. That is the intended answer rather than a lossy
+ * one: telling a caller a run exists but is not theirs is more than the guard established.
+ */
+router.get(
+  '/runs/:runId',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+
+    const run = await getRun(project, req.params.runId);
+    if (!run) {
+      res.status(404).json({ error: 'No such Playbook run in this project.' });
+      return;
+    }
+
+    res.json(run);
+  }
+);
 
 router.post(
   '/runs',

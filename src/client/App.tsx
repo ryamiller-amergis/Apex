@@ -90,6 +90,7 @@ const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ defau
 const ApryseWebViewerPoc = lazy(() => import('./components/ApryseWebViewerPoc').then(m => ({ default: m.ApryseWebViewerPoc })));
 const NutrientWebSdkPoc = lazy(() => import('./components/NutrientWebSdkPoc').then(m => ({ default: m.NutrientWebSdkPoc })));
 const DesignModuleView = lazy(() => import('./components/DesignModuleView'));
+const PlaybookStatusView = lazy(() => import('./components/PlaybookStatusView'));
 const LoadTestsListPage = lazy(() => import('./components/LoadTestsListPage').then(m => ({ default: m.LoadTestsListPage })));
 const LoadTestDefinitionBuilderView = lazy(() =>
   import('./components/LoadTestDefinitionBuilderView').then((m) => ({ default: m.LoadTestDefinitionBuilderView })),
@@ -165,7 +166,7 @@ function App() {
   }, []);
   const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -207,6 +208,8 @@ function App() {
                     ? 'ai-cost'
                     : location.pathname === '/design-module'
                     ? 'design-module'
+                    : location.pathname === '/playbooks'
+                    ? 'playbooks'
                     : location.pathname.startsWith('/work-board')
                     ? 'work-board'
                     : location.pathname.startsWith('/load-tests')
@@ -309,6 +312,8 @@ function App() {
   }, [location.pathname, location.search, selectedProject, availableProjects, changeProject]);
 
   const showBetaAnnouncement = useFeatureFlag('beta-to-prod-announcement', selectedProject);
+  // Direct URL only — no `MenuItemKey`, so no nav entry can appear in a project by mistake.
+  const playbooksEnabled = useFeatureFlag('playbooks-spike', selectedProject);
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
   const interactiveWsEnabled = homeFlags['ai-runs-interactive'] === true;
@@ -756,7 +761,19 @@ function App() {
     );
   }
 
-  if (currentView === 'not-found') {
+  // @feature-flag:playbooks-spike start winner=enabled
+  // With the flag off, `/playbooks` is not merely empty — it is indistinguishable from a URL that
+  // was never built, which is what "the route is not registered" means from the outside. Handled
+  // here rather than inside the view so the gate sits at the routing level, above the component.
+  // @feature-flag:playbooks-spike disabled-start
+  const playbooksRouteHidden = currentView === 'playbooks' && !playbooksEnabled;
+  // @feature-flag:playbooks-spike disabled-end
+  // @feature-flag:playbooks-spike enabled-start
+  // (enabled: `playbooksRouteHidden` is false and the view renders below)
+  // @feature-flag:playbooks-spike enabled-end
+  // @feature-flag:playbooks-spike end
+
+  if (currentView === 'not-found' || playbooksRouteHidden) {
     return (
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <div role="status" aria-live="polite" {...{ 'data-testid': 'route-not-found' }}>
@@ -1244,6 +1261,13 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 <DesignModuleView selectedProject={selectedProject} />
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'playbooks' ? (
+            // Only reachable when the flag is on; the off case returned the not-found surface above.
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <PlaybookStatusView selectedProject={selectedProject} />
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'load-tests' ? (

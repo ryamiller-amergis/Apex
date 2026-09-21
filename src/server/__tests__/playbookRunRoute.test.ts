@@ -23,7 +23,21 @@ jest.mock('../services/rbacService', () => ({
 
 // The real middleware waves super admins through before consulting permissions at all, which would
 // make every denial test pass for the wrong reason.
-jest.mock('../utils/superAdmin', () => ({ isSuperAdminRequest: () => false }));
+jest.mock('../utils/superAdmin', () => ({
+  isSuperAdminRequest: () => false,
+  // Read by the router's flag gate. Named here because the mock replaces the whole module.
+  getAppEnvironment: () => 'local',
+}));
+
+/*
+ * FEAT-006 put a `playbooks-spike` gate in front of every endpoint on this router, so a test that
+ * says nothing about the flag is a test about a surface that does not exist. On, because these
+ * tests are about what the endpoint does when it is reachable; the off case is VT-05's, in
+ * `playbookStatusRoutes.test.ts`.
+ */
+jest.mock('../services/featureFlagService', () => ({
+  isFeatureEnabled: jest.fn().mockResolvedValue(true),
+}));
 
 const startRun = jest.fn();
 jest.mock('../services/playbookRunService', () => ({
@@ -151,9 +165,13 @@ describe('starting a run through the endpoint', () => {
       .post('/api/playbooks/runs')
       .send({ project: 'Apex' });
 
-    // A request with no project cannot be permission-checked against one, so the guard refuses it
-    // before the handler's own validation is reached.
-    expect(noProject.status).toBe(403);
+    /*
+     * A request naming no project cannot be permission-checked against one — and since FEAT-006 it
+     * cannot be flag-evaluated against one either, so the flag gate refuses it first with 404.
+     * That is a deliberate change from the 403 this asserted before: answering 403 to an unscoped
+     * request confirms the route exists, to exactly the caller the flag is meant to hide it from.
+     */
+    expect(noProject.status).toBe(404);
     expect(noDefinition.status).toBe(400);
     expect(startRun).not.toHaveBeenCalled();
   });
