@@ -153,6 +153,7 @@ function toRunSummary(
   },
   prUrl: string | null,
   prStatus: HostAgnosticPrStatus,
+  expectsPullRequest = true,
 ): CloudAgentRunSummary {
   const status = run.status as AgentRunStatus;
   return {
@@ -160,7 +161,7 @@ function toRunSummary(
     status,
     prUrl,
     prStatus,
-    finishedWithoutPr: status === 'completed' && !prUrl,
+    finishedWithoutPr: expectsPullRequest && status === 'completed' && !prUrl,
     terminalReason: run.terminalReason,
     checkResults: run.checkResults,
     failingChecks: deriveFailingChecks(run.checkResults),
@@ -322,6 +323,7 @@ export interface StartCloudAgentRunInput {
   userId: string;
   project: string;
   workItemId: number;
+  workItemTitle?: string;
   isSuperAdmin: boolean;
   item: Pick<AssignedWorkItem, 'workItemType' | 'state' | 'tags'>;
 }
@@ -509,6 +511,8 @@ async function dispatchLaunch(
       skillProvider: (skillConfig.skillProvider ?? 'ado') as SkillProvider,
       skillRepo: skillConfig.skillRepo,
       skillBranch: skillConfig.skillBranch,
+      workItemId: input.workItemId,
+      workItemTitle: input.workItemTitle ?? `Work item ${input.workItemId}`,
     });
   } catch (err) {
     const detail = err instanceof Error ? err.message : 'Cloud Agent launch failed';
@@ -541,6 +545,15 @@ async function dispatchLaunch(
     cursorRunId: launched.cursorRunId,
     timeoutAt,
   });
+  if (launched.branchName) {
+    await db
+      .update(devSessions)
+      .set({
+        branchName: launched.branchName,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(devSessions.id, started.sessionId));
+  }
 }
 
 function emitTerminal(
@@ -648,6 +661,7 @@ export async function applyCloudAgentCompletion(input: {
    */
   checkResults?: RunCheckResult[];
   incompleteAcceptanceCriteria?: string[];
+  analysisOnly?: boolean;
 }, deps: CloudAgentServiceDeps = defaultDeps): Promise<void> {
   const terminal = await markTerminal(input.runId, {
     status: input.status,
@@ -706,6 +720,16 @@ export async function applyCloudAgentCompletion(input: {
       updatedAt: nowIso,
     })
     .where(eq(devSessions.id, sessionId));
+
+  if (input.analysisOnly) {
+    emitTerminal(
+      { sessionId, runId: input.runId },
+      input.project,
+      input.status,
+      input.terminalReason ?? null,
+    );
+    return;
+  }
 
   const summary = computeLeftoverWorkSummary({
     checkResults: terminal.run.checkResults ?? input.checkResults,
@@ -805,6 +829,7 @@ export async function getCloudAgentRunStatus(
           status: mapped,
           prUrl: observed.prUrl,
           dispatchMessageId: run.dispatchMessageId,
+          detail: mapped === 'failed' ? (observed.resultText ?? undefined) : undefined,
         }, deps);
         return toRunSummary(
           {
@@ -812,10 +837,11 @@ export async function getCloudAgentRunStatus(
             status: mapped,
             terminalReason: run.terminalReason as AgentRunTerminalReason | null,
             checkResults: run.checkResults ?? null,
-            lastError: run.lastError,
+            lastError: mapped === 'failed' ? observed.resultText : run.lastError,
           },
           observed.prUrl,
           cachedPullRequestStatus(observed.prUrl, null),
+          true,
         );
       }
     } catch (err) {
@@ -870,6 +896,7 @@ export async function getCloudAgentRunStatus(
     },
     prUrl,
     prStatus,
+    true,
   );
 }
 

@@ -3,7 +3,7 @@
  */
 import request from 'supertest';
 import express from 'express';
-import devWorkbenchRouter from '../routes/devWorkbench';
+import devWorkbenchRouter, { BOARD_SESSION_STATUSES } from '../routes/devWorkbench';
 import { AzureDevOpsService } from '../services/azureDevOps';
 import type { CloudAgentRunSummary } from '../../shared/types/devWorkbench';
 
@@ -323,6 +323,7 @@ describe('POST /api/dev-workbench/cloud-agent/start', () => {
         items: [{
           id: 42,
           fields: {
+            'System.Title': 'Implement login',
             'System.State': 'Committed',
             'System.WorkItemType': 'Feature',
             'System.Tags': 'apex',
@@ -407,6 +408,7 @@ describe('POST /api/dev-workbench/cloud-agent/start', () => {
     expect(mockStartCloudAgentRun).toHaveBeenCalledWith(expect.objectContaining({
       userId: expect.any(String),
       project: 'MaxView',
+      workItemTitle: 'Implement login',
     }));
     expect(mockStartCloudAgentRun).toHaveBeenCalledTimes(1);
   });
@@ -811,6 +813,47 @@ describe('GET /api/dev-workbench/sessions', () => {
     // The status rides on the existing projection — no sibling session field and
     // no second endpoint for the row to call.
     expect(res.body[0].prStatus).toBeUndefined();
+  });
+
+  it('lists failed sessions so a failed run keeps its card instead of resetting', () => {
+    // A dropped 'failed' session leaves the row with no activeSession, so it
+    // falls back to "Start cloud agent" and loses the branch and the error.
+    expect(BOARD_SESSION_STATUSES).toContain('failed');
+  });
+
+  it('carries a failed session through with its cloud run attached', async () => {
+    mockSelectWhere.mockResolvedValueOnce([
+      {
+        id: 'session-failed',
+        workItemId: 55033,
+        chatThreadId: null,
+        branchName: 'feature/apex-55033',
+        status: 'failed',
+        createdAt: '2026-06-01T00:00:00Z',
+        leftoverWork: null,
+      },
+    ]);
+    mockGetCloudAgentRunStatus.mockResolvedValueOnce({
+      runId: 'run-failed',
+      status: 'failed',
+      prUrl: null,
+      prStatus: 'none',
+      finishedWithoutPr: false,
+      terminalReason: 'queue_ttl',
+      checkResults: null,
+      failingChecks: [],
+      lastError: 'Cloud Agent start exceeded the pre-identity queue TTL',
+    });
+
+    const res = await request(buildApp()).get('/api/dev-workbench/sessions?project=MaxView');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({
+      id: 'session-failed',
+      status: 'failed',
+      branchName: 'feature/apex-55033',
+      cloudAgentRun: { status: 'failed', terminalReason: 'queue_ttl' },
+    });
   });
 
   it('returns 500 when the query fails', async () => {

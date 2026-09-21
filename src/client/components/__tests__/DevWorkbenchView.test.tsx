@@ -464,8 +464,9 @@ describe('DevWorkbenchView', () => {
 
     renderView();
 
-    expect(screen.getByRole('button', { name: 'Resume Session' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Close Session' })).toBeInTheDocument();
+    expect(screen.getByTestId('my-work-clear-progress-42')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resume Session' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Close Session' })).not.toBeInTheDocument();
     expect(screen.getByTestId('my-work-cancel-cloud-run-42')).toBeInTheDocument();
   });
 
@@ -825,7 +826,7 @@ describe('DevWorkbenchView', () => {
     expect(screen.queryByRole('button', { name: /^Start cloud agent$/i })).not.toBeInTheDocument();
   });
 
-  it('shows resume and close actions for work items with an active session', () => {
+  it('shows Clear Progress and no legacy session actions for work items with an active session', () => {
     (useActiveSessions as jest.Mock).mockReturnValue({
       data: [
         {
@@ -841,14 +842,13 @@ describe('DevWorkbenchView', () => {
 
     renderView();
 
-    expect(screen.getByText('Active Session')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /resume session/i })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /resume session/i }));
-    expect(mockNavigate).toHaveBeenCalledWith('/my-work/session/session-1');
+    expect(screen.getByText('In Progress')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /clear progress/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /resume session/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /close session/i })).not.toBeInTheDocument();
   });
 
-  it('closes an active session when Close Session is clicked', async () => {
+  it('closes an active session when Clear Progress is clicked', async () => {
     (useActiveSessions as jest.Mock).mockReturnValue({
       data: [
         {
@@ -864,7 +864,7 @@ describe('DevWorkbenchView', () => {
     mockCloseMutateAsync.mockResolvedValue({ ok: true });
 
     renderView();
-    fireEvent.click(screen.getByRole('button', { name: /close session/i }));
+    fireEvent.click(screen.getByRole('button', { name: /clear progress/i }));
 
     await waitFor(() => {
       expect(mockCloseMutateAsync).toHaveBeenCalledWith('session-1');

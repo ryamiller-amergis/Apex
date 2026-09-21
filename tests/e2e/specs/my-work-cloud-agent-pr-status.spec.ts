@@ -80,7 +80,7 @@ const RUN_PR_MERGED: CloudAgentRunSummary = { ...RUN_PR_OPEN, prStatus: 'merged'
 /**
  * Active session carrying the run. `chatThreadId` and `branchName` stay null so
  * the row resolves this session as the Cloud Agent session only, keeping the
- * legacy Resume Session / Close Session controls out of the assertions.
+ * legacy Clear Progress control out of the assertions.
  */
 function activeSession(run: CloudAgentRunSummary): ActiveDevSession {
   return {

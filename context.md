@@ -137,7 +137,7 @@ Platform admins can create and manage feature flags for targeted rollout.
 A developer-focused view for managing personal work items and development sessions (visible to users in the Developer group).
 
 - **Apex and Amego PRD features** appear as PRD → Epic → Feature rows from approved in-app PRDs. Each feature offers **View Context** (read-only PRD, backlog, design doc, tech spec, assumptions, and sandboxed prototype), **Start Local Development**, **Mark Complete**, and **Clear Progress** when in progress. Their requirements remain in Apex and are not loaded from Azure DevOps.
-- **Other projects** continue to list ADO assigned work items with Start Development / Resume Session / local development actions unchanged.
+- **Other projects** continue to list ADO assigned work items with **Start Local Development**, the Cloud Agent run controls (start, cancel, resume run), and **Clear Progress** when a session is in progress.
 
 ### 13. What's New / Changelog
 

@@ -825,8 +825,8 @@ router.post('/cloud-agent/start', async (req: Request, res: Response) => {
 
     const stateService = new AzureDevOpsService(project);
     const wiResult = await stateService.queryWorkItemsByWiql({
-      wiql: `SELECT [System.Id],[System.State],[System.WorkItemType],[System.Tags],[System.AssignedTo] FROM WorkItems WHERE [System.Id] = ${workItemId}`,
-      fields: ['System.Id', 'System.State', 'System.WorkItemType', 'System.Tags', 'System.AssignedTo'],
+      wiql: `SELECT [System.Id],[System.Title],[System.State],[System.WorkItemType],[System.Tags],[System.AssignedTo] FROM WorkItems WHERE [System.Id] = ${workItemId}`,
+      fields: ['System.Id', 'System.Title', 'System.State', 'System.WorkItemType', 'System.Tags', 'System.AssignedTo'],
     });
     const fields = wiResult.items[0]?.fields;
     if (!fields) {
@@ -846,6 +846,7 @@ router.post('/cloud-agent/start', async (req: Request, res: Response) => {
       userId,
       project,
       workItemId,
+      workItemTitle: (fields['System.Title'] ?? `Work item ${workItemId}`) as string,
       isSuperAdmin: isSuperAdminRequest(req),
       item: {
         state: (fields['System.State'] ?? '') as string,
@@ -966,7 +967,21 @@ router.post('/sessions/:id/cloud-agent/cancel', async (req: Request, res: Respon
   }
 });
 
-// GET /sessions — active sessions for the current user
+/**
+ * Statuses the My Work board lists. 'failed' is included because the row reads
+ * its cloud run off this payload — omitting it resets the card to "Start cloud
+ * agent" and hides the branch, the error, and the run history.
+ */
+export const BOARD_SESSION_STATUSES = [
+  'setting_up',
+  'in_progress',
+  'conflict',
+  'closed',
+  'completed',
+  'failed',
+] as const;
+
+// GET /sessions — sessions the board can render for the current user
 router.get('/sessions', async (req: Request, res: Response) => {
   try {
     const userId = getUserId(req);
@@ -974,7 +989,7 @@ router.get('/sessions', async (req: Request, res: Response) => {
 
     const conditions = [
       eq(devSessions.authorId, userId),
-      inArray(devSessions.status, ['setting_up', 'in_progress', 'conflict', 'closed', 'completed']),
+      inArray(devSessions.status, [...BOARD_SESSION_STATUSES]),
     ];
     if (project) conditions.push(eq(devSessions.project, project));
 

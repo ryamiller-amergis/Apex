@@ -132,12 +132,24 @@ function prStatusText(run: CloudAgentRunSummary): string | null {
   }
 }
 
+const DEFAULT_RUN_DRAWER_WIDTH = 440;
+const MIN_RUN_DRAWER_WIDTH = 360;
+const MAX_RUN_DRAWER_WIDTH = 1100;
+const RUN_DRAWER_WIDTH_KEY = 'my-work.cloud-run-drawer-width';
+
+function readStoredRunDrawerWidth(): number {
+  const stored = Number(window.localStorage.getItem(RUN_DRAWER_WIDTH_KEY));
+  if (!Number.isFinite(stored) || stored <= 0) return DEFAULT_RUN_DRAWER_WIDTH;
+  return Math.min(MAX_RUN_DRAWER_WIDTH, Math.max(MIN_RUN_DRAWER_WIDTH, stored));
+}
+
 interface CloudRunDrawerProps {
   item: AssignedWorkItem;
   run: CloudAgentRunSummary;
   sessionId: string | null;
   isLive: boolean;
   onClose: () => void;
+  'data-testid'?: string;
 }
 
 /** Copies text without relying on clipboard permission being granted. */
@@ -245,13 +257,37 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
   sessionId,
   isLive,
   onClose,
+  'data-testid': testId,
 }) => {
+  const [drawerWidth, setDrawerWidth] = useState(readStoredRunDrawerWidth);
+  const [isResizing, setIsResizing] = useState(false);
+  const activityRef = useRef<HTMLDivElement | null>(null);
+  const dragStartXRef = useRef(0);
+  const dragStartWidthRef = useRef(DEFAULT_RUN_DRAWER_WIDTH);
+  const resizeJustEndedRef = useRef(false);
+
   const activity = useCloudAgentActivityStream(
     sessionId,
     run.runId,
     run.status !== 'queued',
   );
-  const activityRef = useRef<HTMLDivElement | null>(null);
+
+  const handleResizeMouseDown = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dragStartXRef.current = event.clientX;
+    dragStartWidthRef.current = drawerWidth;
+    setIsResizing(true);
+  };
+
+  const handleBackdropClick = () => {
+    // A drag released over the backdrop synthesizes a click here; ignore that one.
+    if (resizeJustEndedRef.current) {
+      resizeJustEndedRef.current = false;
+      return;
+    }
+    onClose();
+  };
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -260,6 +296,38 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
+
+  useEffect(() => {
+    if (!isResizing) return;
+    const onMouseMove = (event: MouseEvent) => {
+      const delta = dragStartXRef.current - event.clientX;
+      setDrawerWidth(
+        Math.min(
+          MAX_RUN_DRAWER_WIDTH,
+          Math.max(MIN_RUN_DRAWER_WIDTH, dragStartWidthRef.current + delta),
+        ),
+      );
+    };
+    const onMouseUp = () => {
+      resizeJustEndedRef.current = true;
+      setIsResizing(false);
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    return () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizing]);
+
+  useEffect(() => {
+    if (isResizing) return;
+    window.localStorage.setItem(RUN_DRAWER_WIDTH_KEY, String(drawerWidth));
+  }, [drawerWidth, isResizing]);
 
   useEffect(() => {
     const element = activityRef.current;
@@ -272,15 +340,27 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
         type="button"
         className={styles['run-drawer-backdrop']}
         aria-label="Close cloud run details"
-        onClick={onClose}
+        onClick={handleBackdropClick}
+        {...{ 'data-testid': `my-work-cloud-run-drawer-backdrop-${item.id}` }}
       />
       <aside
-        className={styles['run-drawer']}
+        className={`${styles['run-drawer']}${isResizing ? ` ${styles['run-drawer-resizing']}` : ''}`}
+        style={{ width: drawerWidth }}
         role="dialog"
         aria-modal="true"
         aria-labelledby={`cloud-run-drawer-title-${item.id}`}
-        {...{ 'data-testid': `my-work-cloud-run-drawer-${item.id}` }}
+        {...{ 'data-testid': testId ?? `my-work-cloud-run-drawer-${item.id}` }}
       >
+        <div
+          className={styles['run-drawer-resize-handle']}
+          onMouseDown={handleResizeMouseDown}
+          onDoubleClick={() => setDrawerWidth(DEFAULT_RUN_DRAWER_WIDTH)}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize cloud run details panel"
+          title="Drag to resize · double-click to reset"
+          {...{ 'data-testid': `my-work-cloud-run-drawer-resize-${item.id}` }}
+        />
         <header className={styles['run-drawer-header']}>
           <div>
             <span className={styles['run-drawer-eyebrow']}>Cloud agent run</span>
@@ -292,6 +372,7 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
             className={styles['run-drawer-close']}
             aria-label="Close cloud run details"
             onClick={onClose}
+            {...{ 'data-testid': `my-work-cloud-run-drawer-close-${item.id}` }}
           >
             ×
           </button>
@@ -309,7 +390,7 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
                 <p
                   className={styles['run-failure-detail']}
                   role="alert"
-                  data-testid={`my-work-cloud-run-error-${item.id}`}
+                  {...{ 'data-testid': `my-work-cloud-run-error-${item.id}` }}
                 >
                   {run.lastError}
                 </p>
@@ -345,7 +426,7 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
               ref={activityRef}
               className={styles['run-activity-stream']}
               aria-live="polite"
-              data-testid={`my-work-cloud-run-activity-${item.id}`}
+              {...{ 'data-testid': `my-work-cloud-run-activity-${item.id}` }}
             >
               {activity.events.length > 0 ? activity.events.map((event) => (
                 <div
@@ -389,6 +470,7 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
               href={run.prUrl}
               target="_blank"
               rel="noreferrer"
+              {...{ 'data-testid': `my-work-cloud-run-drawer-pr-${item.id}` }}
             >
               Open pull request <span aria-hidden="true">↗</span>
             </a>
@@ -566,6 +648,7 @@ const CloudAgentEnabledRowAction: React.FC<{
             className={styles['cloud-run-summary']}
             onClick={() => setDrawerOpen(true)}
             aria-label={`View cloud agent run details: ${cloudRunStatusText(currentRun)}`}
+            {...{ 'data-testid': `my-work-cloud-run-summary-${item.id}` }}
           >
             <span className={styles['cloud-status-dot']} aria-hidden="true" />
             <span className={styles['cloud-run-copy']} aria-live="polite">
@@ -607,7 +690,7 @@ const CloudAgentEnabledRowAction: React.FC<{
                 className={styles['cloud-run-failure-detail']}
                 role="alert"
                 title={currentRun.lastError}
-                data-testid={`my-work-cloud-run-error-${item.id}`}
+                {...{ 'data-testid': `my-work-cloud-run-error-${item.id}` }}
               >
                 {currentRun.lastError}
               </span>
@@ -649,6 +732,7 @@ const CloudAgentEnabledRowAction: React.FC<{
           sessionId={sessionId}
           isLive={isLive}
           onClose={() => setDrawerOpen(false)}
+          {...{ 'data-testid': `my-work-cloud-run-drawer-${item.id}` }}
         />
       ) : null}
     </>
@@ -1177,7 +1261,6 @@ const ApexBacklogView: React.FC<{
 };
 
 export const DevWorkbenchView: React.FC = () => {
-  const navigate = useNavigate();
   const { selectedProject, usesBoardWorkItems } = useAppShell();
   const usesAppNativeRequirements = isAppNativeRequirementsProject(selectedProject);
   const showBoardAssigned = usesBoardWorkItems;
@@ -1225,11 +1308,7 @@ export const DevWorkbenchView: React.FC = () => {
     });
   }, [workItems, legacySessionByWorkItem, cloudSessionByWorkItem]);
 
-  const handleResume = (sessionId: string) => {
-    navigate(`/my-work/session/${sessionId}`);
-  };
-
-  const handleClose = async (sessionId: string) => {
+  const handleClearProgress = async (sessionId: string) => {
     setClosingId(sessionId);
     try {
       await closeSession.mutateAsync(sessionId);
@@ -1307,30 +1386,21 @@ export const DevWorkbenchView: React.FC = () => {
                     <span className={styles['item-id']}>#{item.id}</span>
                     <span className={styles.badge}>{item.workItemType}</span>
                     <span className={styles.badge}>{item.state}</span>
-                    {active && <span className={styles['active-badge']}>Active Session</span>}
+                    {active && <span className={styles['active-badge']}>In Progress</span>}
                   </div>
                 </div>
                 <div className={styles['item-actions']}>
                   {active ? (
-                    <>
-                      <button
-                        className={styles['resume-btn']}
-                        onClick={() => handleResume(active.id)}
-                        type="button"
-                        {...{ 'data-testid': 'my-work-resume-session-btn' }}
-                      >
-                        Resume Session
-                      </button>
-                      <button
-                        className={styles['close-btn']}
-                        onClick={() => handleClose(active.id)}
-                        disabled={closingId === active.id}
-                        type="button"
-                        {...{ 'data-testid': `my-work-close-session-${item.id}` }}
-                      >
-                        {closingId === active.id ? 'Closing...' : 'Close Session'}
-                      </button>
-                    </>
+                    <button
+                      className={styles['close-btn']}
+                      onClick={() => handleClearProgress(active.id)}
+                      disabled={closingId === active.id}
+                      type="button"
+                      title="Clear in-progress status for this work item"
+                      {...{ 'data-testid': `my-work-clear-progress-${item.id}` }}
+                    >
+                      {closingId === active.id ? 'Closing...' : 'Clear Progress'}
+                    </button>
                   ) : null}
                   <button
                     className={styles['local-dev-btn']}

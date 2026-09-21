@@ -9,6 +9,13 @@ import { Agent } from '@cursor/sdk';
 import type { SkillProvider } from '../../shared/types/projectSettings';
 import type { CloudAgentActivityEvent } from '../../shared/types/devWorkbench';
 import { resolveGitRemote } from './repoCacheService';
+import {
+  cancelCursorCliAgentRun,
+  getCursorCliAgentRun,
+  isCursorCliAgentId,
+  launchCursorCliAgent,
+  streamCursorCliAgentRun,
+} from './cursorCliAgentClient';
 
 export interface LaunchCloudAgentInput {
   project: string;
@@ -17,17 +24,25 @@ export interface LaunchCloudAgentInput {
   skillProvider: SkillProvider;
   skillRepo: string;
   skillBranch: string;
+  workItemId?: number;
+  workItemTitle?: string;
 }
 
 export interface LaunchCloudAgentResult {
   cloudAgentId: string;
   cursorRunId: string;
+  branchName?: string;
 }
 
 export interface CloudAgentRunObservation {
   status: string;
   prUrl: string | null;
   resultText: string | null;
+}
+
+/** Runs the Cursor CLI against a local checkout instead of the Cloud Agents API. */
+function useCursorCliAgent(): boolean {
+  return process.env.CLOUD_AGENT_EXECUTOR?.trim().toLowerCase() === 'cli';
 }
 
 function activityStatus(value: unknown): CloudAgentActivityEvent['status'] | undefined {
@@ -250,17 +265,38 @@ function logDryRunPayload(payload: unknown): void {
   console.log(json);
 }
 
+/**
+ * `machine` targets a personal My Machines worker, `pool` a self-hosted pool.
+ * Both execute on hardware we do not own, so they stay opt-in via env.
+ */
+export type CloudAgentEnvironment =
+  | { type: 'cloud'; name: string }
+  | { type: 'pool'; name: string }
+  | { type: 'machine'; name: string };
+
+function resolveCloudEnvironmentType(): CloudAgentEnvironment['type'] {
+  const configured = process.env.CLOUD_AGENT_CURSOR_ENV_TYPE?.trim().toLowerCase();
+  return configured === 'machine' || configured === 'pool' ? configured : 'cloud';
+}
+
 function resolveCloudEnvironment(
   _project: string,
   skillProvider: SkillProvider,
-): { type: 'cloud'; name: string } | undefined {
+): CloudAgentEnvironment | undefined {
   const fromEnv = process.env.CLOUD_AGENT_CURSOR_ENV_NAME?.trim();
   if (!fromEnv) return undefined;
   // Named envs carry repo/branch config; skip them for ADO unless explicitly enabled.
   if (skillProvider === 'ado' && process.env.CLOUD_AGENT_ADO_USE_NAMED_ENV !== 'true') {
     return undefined;
   }
-  return { type: 'cloud', name: fromEnv };
+  switch (resolveCloudEnvironmentType()) {
+    case 'machine':
+      return { type: 'machine', name: fromEnv };
+    case 'pool':
+      return { type: 'pool', name: fromEnv };
+    default:
+      return { type: 'cloud', name: fromEnv };
+  }
 }
 
 function buildCloudCreateOptions(input: {
@@ -269,17 +305,20 @@ function buildCloudCreateOptions(input: {
   skillRepo: string;
   skillBranch: string;
 }): {
-  env?: { type: 'cloud'; name: string };
+  env?: CloudAgentEnvironment;
   repos?: Array<{ url: string; startingRef: string }>;
   autoCreatePR: boolean;
 } {
   const cloudEnv = resolveCloudEnvironment(input.project, input.skillProvider);
-  if (cloudEnv) {
+  if (cloudEnv?.type === 'cloud') {
     // Cursor rejects env.name + repos together — named env carries repo/branch config.
     return { env: cloudEnv, autoCreatePR: true };
   }
+  // Private workers still need an anchor repo: repo-less dispatch requires a
+  // workspace binding the public API does not expose.
   const repoUrl = buildCloudRepoUrl(input.skillProvider, input.project, input.skillRepo);
   return {
+    ...(cloudEnv ? { env: cloudEnv } : {}),
     repos: [{ url: repoUrl, startingRef: input.skillBranch }],
     autoCreatePR: true,
   };
@@ -288,6 +327,24 @@ function buildCloudCreateOptions(input: {
 export async function launchCloudAgent(
   input: LaunchCloudAgentInput,
 ): Promise<LaunchCloudAgentResult> {
+  if (useCursorCliAgent()) {
+    if (!input.workItemId || !input.workItemTitle?.trim()) {
+      throw new Error('Local CLI Agent launch requires workItemId and workItemTitle');
+    }
+    // Local CLI runs clone the project's configured repo directly, so the
+    // GitHub test override (a cloud-clone concern) never applies here.
+    return launchCursorCliAgent({
+      project: input.project,
+      prompt: input.prompt,
+      model: input.model,
+      skillProvider: input.skillProvider,
+      skillRepo: input.skillRepo,
+      skillBranch: input.skillBranch,
+      workItemId: input.workItemId,
+      workItemTitle: input.workItemTitle,
+    });
+  }
+
   const target = resolveCloudAgentLaunchTarget(input);
   const effectiveInput: LaunchCloudAgentInput = { ...input, ...target };
   if (target.testOverride) {
@@ -336,6 +393,10 @@ export async function getCloudAgentRun(input: {
   cloudAgentId: string;
   cursorRunId: string;
 }): Promise<CloudAgentRunObservation> {
+  if (isCursorCliAgentId(input.cloudAgentId)) {
+    return getCursorCliAgentRun(input.cursorRunId);
+  }
+
   const apiKey = await resolveCursorApiKey(input.project);
   const run = await Agent.getRun(input.cursorRunId, {
     runtime: 'cloud',
@@ -354,6 +415,11 @@ export async function* streamCloudAgentRun(input: {
   cloudAgentId: string;
   cursorRunId: string;
 }): AsyncGenerator<CloudAgentActivityEvent> {
+  if (isCursorCliAgentId(input.cloudAgentId)) {
+    yield* streamCursorCliAgentRun(input.cursorRunId);
+    return;
+  }
+
   const apiKey = await resolveCursorApiKey(input.project);
   const run = await Agent.getRun(input.cursorRunId, {
     runtime: 'cloud',
@@ -377,6 +443,11 @@ export async function cancelCursorCloudAgentRun(input: {
   cloudAgentId: string;
   cursorRunId: string;
 }): Promise<void> {
+  if (isCursorCliAgentId(input.cloudAgentId)) {
+    cancelCursorCliAgentRun(input.cursorRunId);
+    return;
+  }
+
   const apiKey = await resolveCursorApiKey(input.project);
   await Agent.cancelRun(input.cursorRunId, {
     runtime: 'cloud',

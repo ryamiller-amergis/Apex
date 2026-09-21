@@ -64,6 +64,10 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* A crowded action cluster (session buttons + cloud run control) wraps onto
+     its own line instead of crushing the title and badges. */
+  flex-wrap: wrap;
+  row-gap: 12px;
   padding: 16px 20px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
@@ -80,7 +84,9 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  flex: 1;
+  /* The basis is what forces the actions to wrap rather than squeeze the
+     title down to a few characters. */
+  flex: 1 1 280px;
   min-width: 0;
 }
 
@@ -95,19 +101,26 @@
 
 .item-meta {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 12px;
+  row-gap: 6px;
   font-size: 0.8125rem;
   color: var(--text-secondary);
 }
 
 .item-id {
+  flex: 0 0 auto;
   color: var(--text-muted);
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .badge {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
+  white-space: nowrap;
   padding: 2px 8px;
   border-radius: 4px;
   font-size: 0.75rem;
@@ -120,6 +133,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  row-gap: 8px;
   align-items: center;
   flex-shrink: 0;
   justify-content: flex-end;
@@ -128,6 +142,8 @@
 .active-badge {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
+  white-space: nowrap;
   padding: 2px 8px;
   border-radius: 4px;
   font-size: 0.75rem;
@@ -137,7 +153,6 @@
 }
 
 .start-btn,
-.resume-btn,
 .close-btn {
   padding: 8px 16px;
   border: none;
@@ -156,15 +171,6 @@
 
 .start-btn:hover:not(:disabled) {
   background: var(--accent-hover);
-}
-
-.resume-btn {
-  background: var(--success-color);
-  color: var(--on-success);
-}
-
-.resume-btn:hover {
-  filter: brightness(1.1);
 }
 
 .close-btn {
@@ -865,6 +871,27 @@
   background: var(--bg-primary);
   box-shadow: var(--shadow-md);
   animation: drawerSlideIn 0.3s ease;
+}
+
+.run-drawer-resizing {
+  animation: none;
+  transition: none;
+}
+
+.run-drawer-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 4;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.run-drawer-resize-handle:hover,
+.run-drawer-resize-handle:active {
+  background: color-mix(in srgb, var(--accent-color) 35%, transparent);
 }
 
 @keyframes drawerFadeIn {
