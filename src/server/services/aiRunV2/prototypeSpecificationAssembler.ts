@@ -42,18 +42,25 @@ export type PrototypeSpecificationAssembler = {
 };
 
 export function createPrototypeSpecificationAssembler(deps: {
-  reader: RepoReader;
+  /**
+   * Omitted when no grounded mirror is reachable on this instance. The
+   * specification is still complete — the catalog, palette, and navigation
+   * come from the database and bundled assets — it just carries no source.
+   */
+  reader?: RepoReader;
   loadDesignContext: () => Promise<PrototypeDesignContext>;
   budgetBytes?: number;
 }): PrototypeSpecificationAssembler {
-  const source = createRepoDesignContextReader({ reader: deps.reader });
+  const source = deps.reader
+    ? createRepoDesignContextReader({ reader: deps.reader })
+    : null;
   const budgetBytes = deps.budgetBytes ?? DEFAULT_DESIGN_CONTEXT_BUDGET_BYTES;
 
   return {
     async assemble(input) {
       const [context, read] = await Promise.all([
         deps.loadDesignContext(),
-        source.readComponents([...input.sourcePaths]),
+        source ? source.readComponents([...input.sourcePaths]) : [],
       ]);
       const budgeted = applyDesignContextBudget(read, budgetBytes);
 

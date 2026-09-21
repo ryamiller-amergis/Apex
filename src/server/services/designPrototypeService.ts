@@ -8,8 +8,39 @@ import { isAdminUser } from '../utils/rbacHelpers';
 import { isAssignedApprover } from './documentApprovalService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { prototypeUsageCtx } from './artifactUsageContext';
+import { resolveAgentRunHardLimitMs } from './agentRunReaperService';
+import { createPrototypeSpecificationAssembler } from './aiRunV2/prototypeSpecificationAssembler';
+import {
+  createV2AdmissionService,
+  visualRunThreadId,
+  type V2AdmissionService,
+} from './aiRunV2/v2AdmissionService';
+import {
+  buildPrototypePbiSection,
+  buildPrototypePlanSection,
+  buildPrototypeScopingSection,
+} from './designContext/prototypePromptSections';
+import {
+  componentIndexPaths,
+  getDesignSystemCatalog,
+  getScreenInventory,
+  isComponentSourcePath,
+} from './designSystemService';
+import { getMaxviewColorTokens } from './designTokensService';
+import { isFeatureEnabled } from './featureFlagService';
+import { getFigmaReference } from './figmaReferenceService';
+import { getRepoCacheDir } from './repoCacheService';
+import { BareRepoReader } from './repoRead/bareRepoReader';
+import { cacheOptionsFromGrounding, isUsableBareMirror } from './repoRead/mirrorStore';
+import { resolveRunGroundingSurface, runGroundingService } from './runGroundingService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
 import { resolveUserStoryIWant } from '../../shared/utils/userStory';
+import type { RepoReader } from '../../shared/types/repoReader';
+import type {
+  AiRunV2VisualSpecification,
+  VisualModelSettings,
+  VisualUsageAttribution,
+} from '../../shared/types/aiRunV2VisualSpec';
 import type {
   DesignPrototypeSummary,
   DesignPrototype,
@@ -337,7 +368,241 @@ function buildSkippedPrototypeHtml(
 </html>`;
 }
 
-export async function generatePrototypesForPrd(prdId: string): Promise<string[]> {
+const V2_TRANSPORT_FLAG = 'ai-runs-v2-transport';
+
+/** A prototype is visual work: one model call producing one HTML artifact. */
+const VISUAL_WORKLOAD_LANE = 'visual' as const;
+
+type PendingPrototype = {
+  prototypeId: string;
+  feature: BacklogFeature;
+  planFeature?: DesignPlanFeature;
+};
+
+type GenerateInProcess = typeof generateSinglePrototype;
+
+type FeatureFlagEvaluator = (
+  key: string,
+  context: { userId: string; project: string; caller?: string },
+) => Promise<boolean>;
+
+export interface GeneratePrototypesDependencies {
+  isFeatureEnabled?: FeatureFlagEvaluator;
+  admitV2Run?: V2AdmissionService['admit'];
+  generateInProcess?: GenerateInProcess;
+}
+
+/**
+ * The route this feature extends, if any. The reviewed plan is authoritative:
+ * prefer its route decision over the raw backlog route.
+ */
+function resolvePrototypeTargetRoute(
+  feature: BacklogFeature,
+  planFeature?: DesignPlanFeature,
+): string | undefined {
+  const planRoute = planFeature?.decision === 'update-page'
+    ? planFeature.targetRoute?.trim()
+    : undefined;
+  return planRoute || feature.route?.trim() || undefined;
+}
+
+/**
+ * Design context a worker cannot read for itself: the catalog and screen
+ * inventory come from Azure DevOps, the palette and navigation from bundled
+ * assets. Resolved here and frozen into the specification.
+ */
+async function loadPrototypeDesignContext() {
+  const [catalog, screenInventory] = await Promise.all([
+    getDesignSystemCatalog(),
+    getScreenInventory(),
+  ]);
+  return {
+    catalog,
+    screenInventory,
+    colorTokens: getMaxviewColorTokens(),
+    navItems: getFigmaReference().navItems,
+  };
+}
+
+/** The component files the design-system catalog already walks, uncapped. */
+async function resolveComponentSourcePaths(reader: RepoReader): Promise<string[]> {
+  for (const folder of componentIndexPaths()) {
+    try {
+      const paths = (await reader.listDir(folder))
+        .filter(entry => !entry.isFolder)
+        .map(entry => entry.path)
+        .filter(isComponentSourcePath);
+      if (paths.length > 0) return paths;
+    } catch {
+      // Component folder layouts differ per repo; try the next candidate.
+    }
+  }
+  return [];
+}
+
+/**
+ * Repository source for the specification, read from the same bare mirror a
+ * background worker would use. Best effort: with no active target grounding,
+ * or no mirror fetched on this instance, there is nothing to read. The
+ * specification is still complete — a new-page prompt has never carried
+ * component source — so this degrades context rather than blocking the run.
+ */
+async function resolvePrototypeRepoSource(
+  prdId: string,
+): Promise<{ reader: RepoReader; sourcePaths: string[] } | null> {
+  try {
+    const surface = await resolveRunGroundingSurface('prd', prdId);
+    if (!surface) return null;
+
+    const grounding = (await runGroundingService.getGroundings(surface.run))
+      .find(row => row.repoRole === 'target' && row.isActive);
+    if (!grounding?.groundedSha) return null;
+
+    const cacheOptions = cacheOptionsFromGrounding(grounding);
+    const mirrorPath = getRepoCacheDir(cacheOptions);
+    if (!isUsableBareMirror(mirrorPath)) return null;
+
+    const reader = new BareRepoReader({
+      identity: {
+        provider: cacheOptions.provider,
+        project: grounding.project,
+        repo: grounding.repository,
+        sha: grounding.groundedSha,
+      },
+      mirrorPath,
+    });
+    return { reader, sourcePaths: await resolveComponentSourcePaths(reader) };
+  } catch (err) {
+    console.warn(`[designPrototypeService] Repository source unavailable for PRD ${prdId}:`, err);
+    return null;
+  }
+}
+
+function buildPrototypePromptInputs(
+  feature: BacklogFeature,
+  planFeature?: DesignPlanFeature,
+): Record<string, unknown> {
+  return {
+    featureName: feature.title,
+    featureDescription: feature.description ?? '',
+    // EXTEND features never reach here — they stay on the in-process path.
+    planSection: buildPrototypePlanSection({
+      plan: planFeatureToInput(planFeature),
+      extendMode: false,
+    }),
+    pbiSection: buildPrototypePbiSection(extractPbiRequirements(feature)),
+    scopingSection: buildPrototypeScopingSection({ extendMode: false }),
+  };
+}
+
+/**
+ * Admit each pending prototype onto the V2 visual lane, falling back to the
+ * in-process path per prototype so one refused admission cannot leave a row
+ * stuck in `generating`.
+ */
+async function admitPendingPrototypesToV2(params: {
+  prdId: string;
+  project: string;
+  userId: string;
+  skillSettingsId: string | null;
+  modelId: string;
+  maxTokens?: number;
+  timeoutMs?: number;
+  pending: PendingPrototype[];
+  admitV2Run: V2AdmissionService['admit'];
+  generateInProcess: GenerateInProcess;
+}): Promise<void> {
+  const source = await resolvePrototypeRepoSource(params.prdId);
+  const assembler = createPrototypeSpecificationAssembler({
+    reader: source?.reader,
+    loadDesignContext: loadPrototypeDesignContext,
+  });
+  const timeoutAt = new Date(Date.now() + resolveAgentRunHardLimitMs()).toISOString();
+
+  const model: VisualModelSettings = {
+    modelId: params.modelId,
+    ...(params.maxTokens != null ? { maxTokens: params.maxTokens } : {}),
+    ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),
+  };
+
+  await runWithConcurrency(
+    params.pending,
+    PROTOTYPE_GENERATION_CONCURRENCY,
+    async ({ prototypeId, feature, planFeature }) => {
+      const fallBackInProcess = (reason: string): void => {
+        console.warn(
+          `[designPrototypeService] Prototype ${prototypeId} stays in process — ${reason}`,
+        );
+        void params.generateInProcess(
+          prototypeId,
+          feature,
+          params.modelId,
+          params.maxTokens,
+          planFeature,
+          params.timeoutMs,
+          params.project,
+          params.skillSettingsId,
+        ).catch(err => {
+          console.error(
+            `[designPrototypeService] Background generation failed for ${prototypeId}:`,
+            err,
+          );
+        });
+      };
+
+      // EXTEND mode needs the existing page's source, which only the
+      // in-process path fetches; the specification has no EXTEND scoping
+      // section to carry yet.
+      if (resolvePrototypeTargetRoute(feature, planFeature)) {
+        fallBackInProcess('it extends an existing page');
+        return;
+      }
+
+      const usage: VisualUsageAttribution = {
+        feature: 'design-prototype',
+        project: params.project,
+        userId: params.userId,
+      };
+
+      try {
+        const specification: AiRunV2VisualSpecification = await assembler.assemble({
+          prototypeId,
+          promptInputs: buildPrototypePromptInputs(feature, planFeature),
+          sourcePaths: source?.sourcePaths ?? [],
+          model,
+          usage,
+        });
+
+        const admitted = await params.admitV2Run({
+          threadId: visualRunThreadId(prototypeId),
+          projectId: params.project,
+          workloadLane: VISUAL_WORKLOAD_LANE,
+          timeoutAt,
+          specification: specification as unknown as Record<string, unknown>,
+        });
+        if (admitted.status !== 'dispatched') {
+          fallBackInProcess(`admission returned ${admitted.status}`);
+        }
+      } catch (err) {
+        console.error(
+          `[designPrototypeService] V2 admission failed for ${prototypeId}:`,
+          err,
+        );
+        fallBackInProcess('V2 admission failed');
+      }
+    },
+  );
+}
+
+export async function generatePrototypesForPrd(
+  prdId: string,
+  dependencies: GeneratePrototypesDependencies = {},
+): Promise<string[]> {
+  const evaluateFlag = dependencies.isFeatureEnabled ?? isFeatureEnabled;
+  const admitV2Run =
+    dependencies.admitV2Run ?? ((input) => createV2AdmissionService().admit(input));
+  const generateInProcess = dependencies.generateInProcess ?? generateSinglePrototype;
+
   const prd = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
   if (!prd) throw new Error(`PRD ${prdId} not found`);
 
@@ -367,7 +632,7 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
   const existingIndices = new Set(existingRows.map(r => r.featureIndex));
 
   const ids: string[] = [];
-  const pending: Array<{ prototypeId: string; feature: BacklogFeature; planFeature?: DesignPlanFeature }> = [];
+  const pending: PendingPrototype[] = [];
 
   for (let i = 0; i < features.length; i++) {
     if (existingIndices.has(i)) continue;
@@ -422,17 +687,53 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
     pending.push({ prototypeId: row.id, feature, planFeature });
   }
 
-  // Generate with bounded concurrency so we don't fire every feature at Bedrock
-  // at once (which throttles large models and causes timeouts). Runs in the
-  // background — the route returns immediately and the UI polls per-prototype.
   if (pending.length > 0) {
-    runWithConcurrency(pending, PROTOTYPE_GENERATION_CONCURRENCY, async ({ prototypeId, feature, planFeature }) =>
-      generateSinglePrototype(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature, prototypeTimeoutMs, prd.project, prd.skillSettingsId ?? null).catch(err => {
-        console.error(`[designPrototypeService] Background generation failed for ${prototypeId}:`, err);
-      }),
-    ).catch(err => {
-      console.error(`[designPrototypeService] Prototype generation batch failed for PRD ${prdId}:`, err);
-    });
+    let useV2Transport = false;
+    try {
+      useV2Transport = await evaluateFlag(V2_TRANSPORT_FLAG, {
+        userId: prd.authorId,
+        project: prd.project,
+        caller: 'design-prototype',
+      });
+    } catch {
+      // An unreadable flag keeps the proven in-process path.
+      useV2Transport = false;
+    }
+
+    // Retain enabled once the visual lane carries production prototype traffic.
+    // @feature-flag:ai-runs-v2-transport start winner=enabled
+    if (useV2Transport) {
+      // @feature-flag:ai-runs-v2-transport enabled-start
+      // Admission is a blob write and two row writes, so it is awaited; the
+      // model call itself happens on the worker.
+      await admitPendingPrototypesToV2({
+        prdId,
+        project: prd.project,
+        userId: prd.authorId,
+        skillSettingsId: prd.skillSettingsId ?? null,
+        modelId: prototypeModel,
+        maxTokens: prototypeMaxTokens,
+        timeoutMs: prototypeTimeoutMs,
+        pending,
+        admitV2Run,
+        generateInProcess,
+      });
+      // @feature-flag:ai-runs-v2-transport enabled-end
+    } else {
+      // @feature-flag:ai-runs-v2-transport disabled-start
+      // Generate with bounded concurrency so we don't fire every feature at Bedrock
+      // at once (which throttles large models and causes timeouts). Runs in the
+      // background — the route returns immediately and the UI polls per-prototype.
+      runWithConcurrency(pending, PROTOTYPE_GENERATION_CONCURRENCY, async ({ prototypeId, feature, planFeature }) =>
+        generateInProcess(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature, prototypeTimeoutMs, prd.project, prd.skillSettingsId ?? null).catch(err => {
+          console.error(`[designPrototypeService] Background generation failed for ${prototypeId}:`, err);
+        }),
+      ).catch(err => {
+        console.error(`[designPrototypeService] Prototype generation batch failed for PRD ${prdId}:`, err);
+      });
+      // @feature-flag:ai-runs-v2-transport disabled-end
+    }
+    // @feature-flag:ai-runs-v2-transport end
   }
 
   // Stamp all newly created prototype IDs into the backlog JSON features
@@ -497,9 +798,7 @@ async function generateSinglePrototype(
     const { generateDesignPrototypeHtml } = await import('./bedrockService');
 
     const pbis = extractPbiRequirements(feature);
-    // The reviewed plan is authoritative: prefer its route decision over the raw backlog route.
-    const planRoute = planFeature?.decision === 'update-page' ? planFeature.targetRoute?.trim() : undefined;
-    const targetRoute = planRoute || feature.route?.trim() || undefined;
+    const targetRoute = resolvePrototypeTargetRoute(feature, planFeature);
     const extendMode = Boolean(targetRoute);
 
     let pageScreenshot: { base64: string; mediaType: string } | undefined;
