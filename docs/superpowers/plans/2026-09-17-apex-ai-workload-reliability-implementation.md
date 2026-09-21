@@ -516,11 +516,14 @@ not yet modified — see "Remaining for Task 6" below.
   rewriting it.
 - [ ] Wire each lane's `execute` to a provider. Both lanes currently publish a
   progress checkpoint and then refuse rather than invent output.
-- [ ] Modify `backgroundWorkflowRouter.ts`, `designPrototypeService.ts`,
-  `uiLabService.ts`, and `routes/uiLab.ts` behind a new feature flag
-  (default off) so the V2 path is selectable without disturbing V1. The
-  router already carries the `ai-runs-background` flag split; the V2 choice
-  belongs inside its enabled branch.
+- [x] `backgroundWorkflowRouter.ts` chooses V2 behind `ai-runs-v2-transport`
+  (default off) inside the existing `ai-runs-background` enabled branch. An
+  unreadable V2 flag, a refused admission, or a thrown admission all keep the
+  proven path: the first two stay on V1, the last two recover in-process.
+- [ ] Route the visual lane. `designPrototypeService.ts`, `uiLabService.ts`,
+  and `routes/uiLab.ts` never call `routeBackgroundWorkflow` — visual
+  generation runs in-process today, so moving it onto the queue is new
+  routing rather than a flag split on an existing one.
 - [ ] Ephemeral workspace and repo-read wiring, and the fresh attempt/dispatch
   id after a confirmed post-claim loss.
 

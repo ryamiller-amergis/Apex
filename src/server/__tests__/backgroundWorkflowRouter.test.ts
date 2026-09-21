@@ -84,7 +84,11 @@ function makeDependencies(
   overrides: Partial<BackgroundWorkflowRouterDependencies> = {},
 ): BackgroundWorkflowRouterDependencies {
   return {
-    isFeatureEnabled: jest.fn().mockResolvedValue(true),
+    // Worker routing on, V2 transport off — the shipped default.
+    isFeatureEnabled: jest
+      .fn()
+      .mockImplementation(async (key: string) => key === 'ai-runs-background'),
+    admitV2Run: jest.fn(),
     materializeRunGroundingWithPath: jest.fn().mockResolvedValue({
       state: 'materialized',
       workspacePath: 'C:\\grounding-workspaces\\opaque',
@@ -342,7 +346,9 @@ describe('background workflow routing', () => {
     const clearGenerationOutput = jest.fn().mockResolvedValue(undefined);
     const enqueue = jest.fn().mockResolvedValue({ runId: 'run-1' });
     const dependencies = makeDependencies({
-      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      isFeatureEnabled: jest
+        .fn()
+        .mockImplementation(async (key: string) => key === 'ai-runs-background'),
       sharedReadCheckout: { getReady, retain: jest.fn() },
       clearGenerationOutput,
       enqueue,
@@ -413,7 +419,8 @@ describe('background workflow routing', () => {
     const evaluations: Array<{ project: string; caller?: string }> = [];
     const dependencies = makeDependencies({
       isFeatureEnabled: jest.fn().mockImplementation(
-        async (_key: string, context: { project: string; caller?: string }) => {
+        async (key: string, context: { project: string; caller?: string }) => {
+          if (key !== 'ai-runs-background') return false;
           evaluations.push(context);
           return context.caller !== 'validation';
         },
@@ -463,6 +470,95 @@ describe('background workflow routing', () => {
     ]);
   });
 
+  it('keeps the V1 transport while the V2 flag is off', async () => {
+    const dependencies = makeDependencies();
+
+    await createBackgroundWorkflowRouter(dependencies).route(makeInput());
+
+    expect(dependencies.enqueue).toHaveBeenCalledTimes(1);
+    expect(dependencies.admitV2Run).not.toHaveBeenCalled();
+    expect(dependencies.isFeatureEnabled).toHaveBeenCalledWith(
+      'ai-runs-v2-transport',
+      { userId: 'user-1', project: 'Apex', caller: 'prd' },
+    );
+  });
+
+  it('admits onto the V2 transport instead of V1 when the flag is on', async () => {
+    const admitV2Run = jest.fn().mockResolvedValue({
+      status: 'dispatched',
+      runId: 'run-1',
+      attemptId: 'attempt-1',
+      attemptNumber: 1,
+      dispatchMessageId: 'dispatch-1',
+      outboxId: 'outbox-1',
+    });
+    const dependencies = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      admitV2Run,
+    });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(
+      makeInput(),
+    );
+
+    expect(decision).toEqual<WorkflowRouteDecision>({
+      route: 'worker',
+      workspacePath: 'C:\\grounding-workspaces\\opaque',
+      runId: 'run-1',
+    });
+    expect(dependencies.enqueue).not.toHaveBeenCalled();
+    expect(admitV2Run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: 'run-1',
+        threadId: 'thread-1',
+        projectId: 'project-1',
+        workloadLane: 'document',
+        specification: expect.objectContaining({ workflowClass: 'prd' }),
+      }),
+    );
+  });
+
+  it('recovers in-process when V2 admission refuses or throws', async () => {
+    const conflict = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      admitV2Run: jest.fn().mockResolvedValue({
+        status: 'active_run_conflict',
+        existingRunId: 'run-0',
+        existingTransportVersion: 'http-files-v1',
+        existingStatus: 'running',
+      }),
+    });
+    const conflictInput = makeInput();
+
+    await createBackgroundWorkflowRouter(conflict).route(conflictInput);
+    expect(conflictInput.runInProcess).toHaveBeenCalledTimes(1);
+
+    const thrown = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      admitV2Run: jest.fn().mockRejectedValue(new Error('blob unavailable')),
+    });
+    const thrownInput = makeInput();
+
+    await createBackgroundWorkflowRouter(thrown).route(thrownInput);
+    expect(thrownInput.runInProcess).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the V1 transport when the V2 flag cannot be read', async () => {
+    const dependencies = makeDependencies({
+      isFeatureEnabled: jest
+        .fn()
+        .mockImplementation(async (key: string) => {
+          if (key === 'ai-runs-background') return true;
+          throw new Error('flag store unavailable');
+        }),
+    });
+
+    await createBackgroundWorkflowRouter(dependencies).route(makeInput());
+
+    expect(dependencies.enqueue).toHaveBeenCalledTimes(1);
+    expect(dependencies.admitV2Run).not.toHaveBeenCalled();
+  });
+
   it('TBI-007 DoD-2 / DoD-4 / PBI-006 AC-1 / VT-04: Given the flag is disabled, runs only the unchanged in-process callback', async () => {
     const dependencies = makeDependencies({
       isFeatureEnabled: jest.fn().mockResolvedValue(false),
@@ -503,7 +599,11 @@ describe('background workflow routing', () => {
   it('TBI-007 DoD-2 / DoD-4 / PBI-006 AC-2 / BR-011 / VT-05: disable affects only a new route while an already-dispatched run drains independently', async () => {
     let enabled = true;
     const dependencies = makeDependencies({
-      isFeatureEnabled: jest.fn().mockImplementation(async () => enabled),
+      isFeatureEnabled: jest
+        .fn()
+        .mockImplementation(async (key: string) =>
+          key === 'ai-runs-background' ? enabled : false,
+        ),
     });
     const router = createBackgroundWorkflowRouter(dependencies);
     const activeInput = makeInput();

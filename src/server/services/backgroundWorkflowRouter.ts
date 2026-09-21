@@ -10,6 +10,10 @@ import type { EffortLevel } from '../../shared/types/effort';
 import type { RunGrounding, RunRef } from '../../shared/types/runGrounding';
 import { resolveAgentRunHardLimitMs } from './agentRunReaperService';
 import { enqueue } from './agentRunLifecycleService';
+import {
+  createV2AdmissionService,
+  type V2AdmissionService,
+} from './aiRunV2/v2AdmissionService';
 import { isFeatureEnabled } from './featureFlagService';
 import { getRepoCacheDir, type RepoCacheOptions } from './repoCacheService';
 import {
@@ -35,6 +39,10 @@ import {
 } from './repositoryPreparationService';
 
 const BACKGROUND_WORKFLOW_FLAG = 'ai-runs-background';
+const V2_TRANSPORT_FLAG = 'ai-runs-v2-transport';
+
+/** Every class this router handles is document work; visual has its own path. */
+const V2_WORKLOAD_LANE = 'document' as const;
 
 /** Generation workflows that reuse the interview's shared SHA checkout (no full clone). */
 const SHARED_READ_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new Set([
@@ -102,6 +110,7 @@ type EnqueueRun = typeof enqueue;
 
 export interface BackgroundWorkflowRouterDependencies {
   isFeatureEnabled?: FeatureFlagEvaluator;
+  admitV2Run?: V2AdmissionService['admit'];
   materializeRunGroundingWithPath?: MaterializeGrounding;
   prepareWorkspace?: typeof prepareBackgroundWorkflowWorkspace;
   enqueue?: EnqueueRun;
@@ -228,6 +237,8 @@ export function createBackgroundWorkflowRouter(
   const clearGenerationOutput =
     dependencies.clearGenerationOutput ?? clearBackgroundGenerationOutput;
   const enqueueRun = dependencies.enqueue ?? enqueue;
+  const admitV2Run =
+    dependencies.admitV2Run ?? ((input) => createV2AdmissionService().admit(input));
   const hardLimitMs = dependencies.resolveHardLimitMs ?? resolveAgentRunHardLimitMs;
   const emitEvent = dependencies.trackEvent ?? trackEvent;
   const now = dependencies.now ?? Date.now;
@@ -332,6 +343,7 @@ export function createBackgroundWorkflowRouter(
 
   const routeWorker = async (
     input: BackgroundWorkflowRouteInput,
+    useV2Transport: boolean,
   ): Promise<WorkflowRouteDecision> => {
     const preparationStartedAt = now();
     let prepared: PreparedBackgroundWorkflowWorker;
@@ -551,27 +563,63 @@ export function createBackgroundWorkflowRouter(
       threadId: input.threadId,
     };
     const timeoutAt = new Date(now() + hardLimitMs()).toISOString();
-    let enqueued: Awaited<ReturnType<EnqueueRun>>;
-    try {
-      enqueued = await enqueueRun({
-        threadId: input.threadId,
-        projectId: prepared.projectId,
-        snapshot,
-        timeoutAt,
-        runId: input.destinationRun.runId,
-      });
-    } catch {
-      return recoverPreparation(
-        input,
-        'worker-enqueue-failed',
-        preparationStartedAt,
-      );
+    let dispatchedRunId: string;
+    // Retain enabled once V2 carries production document traffic.
+    // @feature-flag:ai-runs-v2-transport start winner=enabled
+    if (useV2Transport) {
+      // @feature-flag:ai-runs-v2-transport enabled-start
+      try {
+        const admitted = await admitV2Run({
+          runId: input.destinationRun.runId,
+          threadId: input.threadId,
+          projectId: prepared.projectId,
+          workloadLane: V2_WORKLOAD_LANE,
+          timeoutAt,
+          specification: snapshot as unknown as Record<string, unknown>,
+        });
+        if (admitted.status !== 'dispatched') {
+          return recoverPreparation(
+            input,
+            'worker-enqueue-failed',
+            preparationStartedAt,
+          );
+        }
+        dispatchedRunId = admitted.runId;
+      } catch {
+        return recoverPreparation(
+          input,
+          'worker-enqueue-failed',
+          preparationStartedAt,
+        );
+      }
+      // @feature-flag:ai-runs-v2-transport enabled-end
+    } else {
+      // @feature-flag:ai-runs-v2-transport disabled-start
+      let enqueued: Awaited<ReturnType<EnqueueRun>>;
+      try {
+        enqueued = await enqueueRun({
+          threadId: input.threadId,
+          projectId: prepared.projectId,
+          snapshot,
+          timeoutAt,
+          runId: input.destinationRun.runId,
+        });
+      } catch {
+        return recoverPreparation(
+          input,
+          'worker-enqueue-failed',
+          preparationStartedAt,
+        );
+      }
+      dispatchedRunId = enqueued.runId;
+      // @feature-flag:ai-runs-v2-transport disabled-end
     }
+    // @feature-flag:ai-runs-v2-transport end
     routeDecision(input, 'worker', materializationReason);
     return {
       route: 'worker',
       workspacePath: workspaceRef,
-      runId: enqueued.runId,
+      runId: dispatchedRunId,
     };
   };
 
@@ -619,7 +667,18 @@ export function createBackgroundWorkflowRouter(
       }
 
       // @feature-flag:ai-runs-background enabled-start
-      const decision = await routeWorker(input);
+      let useV2Transport = false;
+      try {
+        useV2Transport = await evaluateFlag(V2_TRANSPORT_FLAG, {
+          userId: input.userId,
+          project: input.destinationRun.project,
+          caller: input.workflowClass,
+        });
+      } catch {
+        // An unreadable V2 flag keeps the proven V1 transport.
+        useV2Transport = false;
+      }
+      const decision = await routeWorker(input, useV2Transport);
       // @feature-flag:ai-runs-background enabled-end
       // @feature-flag:ai-runs-background end
       return decision;
