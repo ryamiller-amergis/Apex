@@ -29,6 +29,14 @@ export type StaleAttemptRow = Readonly<{
   containerAppsExecutionId: string | null;
 }>;
 
+export type QueuedAttemptRow = Readonly<{
+  attemptId: string;
+  runId: string;
+  dispatchMessageId: string;
+  status: 'queued';
+  createdAt: string;
+}>;
+
 /**
  * What a replacement attempt needs. The lane and specification reference live
  * on the original dispatch command, not on the attempt row.
@@ -50,7 +58,10 @@ export type ReconcilerDeps = Readonly<{
   metrics?: OrchestratorMetrics;
   /** Stale if no checkpoint newer than this many ms (default 90s). */
   checkpointStaleMs?: number;
+  /** Initial dispatch must commit within this many ms (default 90s). */
+  initialDispatchStaleMs?: number;
   holderId?: string;
+  listStaleQueued?: () => Promise<QueuedAttemptRow[]>;
   listStaleRunning?: () => Promise<StaleAttemptRow[]>;
   listCheckingWorkers?: () => Promise<StaleAttemptRow[]>;
   acquireRecoveryLease?: <T>(
@@ -63,6 +74,7 @@ export type ReconcilerDeps = Readonly<{
 
 export type Reconciler = {
   countUncertainWorkers(): Promise<number>;
+  sweepQueuedInitialAttempts(): Promise<number>;
   sweepStaleCheckpoints(): Promise<number>;
   sweepCheckingWorkers(): Promise<number>;
   runOnce(): Promise<void>;
@@ -77,6 +89,7 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
   const metrics = deps.metrics ?? noopMetrics;
   const clock = deps.clock ?? systemClock;
   const staleMs = deps.checkpointStaleMs ?? 90_000;
+  const initialDispatchStaleMs = deps.initialDispatchStaleMs ?? 90_000;
   const holderId = deps.holderId ?? `reconciler-${randomUUID()}`;
 
   const acquireRecovery =
@@ -96,6 +109,39 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
         leaseMs: 55_000,
         heartbeatMs: 15_000,
       }));
+
+  async function defaultListStaleQueued(): Promise<QueuedAttemptRow[]> {
+    const cutoff = new Date(
+      clock.now().getTime() - initialDispatchStaleMs,
+    ).toISOString();
+    const result = await deps.executor.execute(sql`
+      SELECT
+        a.id AS attempt_id,
+        a.run_id,
+        a.dispatch_message_id,
+        a.status,
+        a.created_at
+      FROM ai_run_attempts a
+      JOIN agent_runs r ON r.id = a.run_id
+      WHERE r.transport_version = 'servicebus-blob-v2'
+        AND r.status = 'queued'
+        AND a.status = 'queued'
+        AND a.attempt_number = 1
+        AND a.created_at < ${cutoff}::timestamptz
+      ORDER BY a.created_at ASC
+      LIMIT 50
+    `);
+    return resultRows<Record<string, unknown>>(result).map((row) => ({
+      attemptId: String(row.attempt_id),
+      runId: String(row.run_id),
+      dispatchMessageId: String(row.dispatch_message_id),
+      status: 'queued',
+      createdAt:
+        row.created_at instanceof Date
+          ? row.created_at.toISOString()
+          : String(row.created_at),
+    }));
+  }
 
   async function defaultListStaleRunning(): Promise<StaleAttemptRow[]> {
     const cutoff = new Date(clock.now().getTime() - staleMs).toISOString();
@@ -206,6 +252,7 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
     };
   }
 
+  const listStaleQueued = deps.listStaleQueued ?? defaultListStaleQueued;
   const listStale = deps.listStaleRunning ?? defaultListStaleRunning;
   const listChecking = deps.listCheckingWorkers ?? defaultListCheckingWorkers;
   const loadRetryContext = deps.loadRetryContext ?? defaultLoadRetryContext;
@@ -241,6 +288,34 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
   async function countUncertainWorkers(): Promise<number> {
     const rows = await listChecking();
     return rows.length;
+  }
+
+  async function sweepQueuedInitialAttempts(): Promise<number> {
+    return acquireRecovery(async (lease) => {
+      const queued = await listStaleQueued();
+      let cancelled = 0;
+      for (const row of queued) {
+        await lease.assertOwned();
+        const transition = await deps.attempts.transitionAttempt({
+          attemptId: row.attemptId,
+          expectedDispatchMessageId: row.dispatchMessageId,
+          to: 'cancelled',
+          failureDetail:
+            'Initial dispatch did not complete before the recovery deadline.',
+        });
+        if (transition.status === 'ok') {
+          cancelled += 1;
+          metrics.increment(
+            'orchestrator.reconciler.initial_dispatch_cancelled',
+          );
+        }
+      }
+      metrics.gauge(
+        'orchestrator.reconciler.queued_initial_batch',
+        queued.length,
+      );
+      return cancelled;
+    });
   }
 
   async function sweepStaleCheckpoints(): Promise<number> {
@@ -309,9 +384,11 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
 
   return {
     countUncertainWorkers,
+    sweepQueuedInitialAttempts,
     sweepStaleCheckpoints,
     sweepCheckingWorkers,
     async runOnce(): Promise<void> {
+      await sweepQueuedInitialAttempts();
       await sweepStaleCheckpoints();
       await sweepCheckingWorkers();
       const uncertain = await countUncertainWorkers();

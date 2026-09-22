@@ -1,6 +1,25 @@
-import { eq, and, asc, count, desc, inArray, lt, type SQL } from 'drizzle-orm';
+import {
+  eq,
+  and,
+  asc,
+  count,
+  desc,
+  inArray,
+  lt,
+  notExists,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { designPrototypes, designPrototypeComments, designPlans, designDocs, prds, documentApproverAssignments } from '../db/schema';
+import {
+  agentRuns,
+  designPrototypes,
+  designPrototypeComments,
+  designPlans,
+  designDocs,
+  prds,
+  documentApproverAssignments,
+} from '../db/schema';
 import type { DesignPlanFeature } from '../../shared/types/designPlan';
 import { resolvePrototypeVisualModel, type DesignPrototypeInput } from './bedrockService';
 import { sanitizeMockHtml } from '../utils/htmlSanitizer';
@@ -1312,7 +1331,16 @@ export async function retryPrototype(prototypeId: string): Promise<void> {
  * generation is never reset out from under itself. Returns the number reset.
  */
 export async function failStalePrototypes(thresholdMs: number): Promise<number> {
-  const cutoff = new Date(Date.now() - thresholdMs).toISOString();
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - thresholdMs).toISOString();
+  const activeV2RunBeforeDeadline = sql`
+    SELECT 1
+    FROM ${agentRuns}
+    WHERE ${agentRuns.transportVersion} = ${'servicebus-blob-v2'}
+      AND ${agentRuns.threadId} = ${'prototype:'} || ${designPrototypes.id}::text
+      AND ${agentRuns.status} IN ('queued', 'dispatched', 'running')
+      AND ${agentRuns.timeoutAt} > ${now.toISOString()}::timestamptz
+  `;
   const reset = await db
     .update(designPrototypes)
     .set({
@@ -1325,6 +1353,9 @@ export async function failStalePrototypes(thresholdMs: number): Promise<number> 
       and(
         inArray(designPrototypes.status, ['generating', 'regenerating']),
         lt(designPrototypes.updatedAt, cutoff),
+        // V2 owns this row until its persisted admission deadline. Terminal
+        // runs do not match, so the harvest above or this fallback settles it.
+        notExists(activeV2RunBeforeDeadline),
       ),
     )
     .returning({ id: designPrototypes.id, featureName: designPrototypes.featureName });

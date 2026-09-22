@@ -91,26 +91,18 @@ describe('V2 admission', () => {
     specifications.write.mockClear();
   });
 
-  it('writes the specification before the command can reference it', async () => {
+  it('writes the specification before atomically creating the dispatched run', async () => {
     const order: string[] = [];
     specifications.write.mockImplementation(async () => {
       order.push('spec');
       return { container: 'ai-run-artifacts', key: 'runs/run-1/attempts/1/spec.json' };
     });
     const attempts = {
-      createQueuedV2Run: jest.fn(async () => {
-        order.push('create');
+      createDispatchedV2Run: jest.fn(async () => {
+        order.push('create-and-dispatch');
         return {
-          status: 'created' as const,
+          status: 'dispatched' as const,
           runId: 'run-1',
-          attemptId: 'attempt-1',
-          attemptNumber: 1,
-          dispatchMessageId: 'dispatch-1',
-        };
-      }),
-      dispatchNextAttempt: jest.fn(async () => {
-        order.push('dispatch');
-        return {
           attemptId: 'attempt-1',
           attemptNumber: 1,
           dispatchMessageId: 'dispatch-1',
@@ -141,25 +133,20 @@ describe('V2 admission', () => {
       dispatchMessageId: 'dispatch-1',
       outboxId: 'outbox-1',
     });
-    expect(order).toEqual(['spec', 'create', 'dispatch']);
+    expect(order).toEqual(['spec', 'create-and-dispatch']);
   });
 
-  it('passes the workload lane to dispatch so the command reaches its queue', async () => {
-    const dispatchNextAttempt = jest.fn(async () => ({
+  it('passes the workload lane into the atomic dispatch transaction', async () => {
+    const createDispatchedV2Run = jest.fn(async () => ({
+      status: 'dispatched' as const,
+      runId: 'run-1',
       attemptId: 'attempt-1',
       attemptNumber: 1,
       dispatchMessageId: 'dispatch-1',
       outboxId: 'outbox-1',
     }));
     const attempts = {
-      createQueuedV2Run: jest.fn(async () => ({
-        status: 'created' as const,
-        runId: 'run-1',
-        attemptId: 'attempt-1',
-        attemptNumber: 1,
-        dispatchMessageId: 'dispatch-1',
-      })),
-      dispatchNextAttempt,
+      createDispatchedV2Run,
     } as unknown as RunAttemptRepository;
 
     const service = createV2AdmissionService({
@@ -175,21 +162,20 @@ describe('V2 admission', () => {
       specification: {},
     });
 
-    expect(dispatchNextAttempt).toHaveBeenCalledWith(
+    expect(createDispatchedV2Run).toHaveBeenCalledWith(
       expect.objectContaining({ workloadLane: 'visual' }),
     );
   });
 
-  it('does not dispatch when the thread already has an active run', async () => {
-    const dispatchNextAttempt = jest.fn();
+  it('returns the atomic create conflict without a second dispatch step', async () => {
+    const createDispatchedV2Run = jest.fn(async () => ({
+      status: 'active_run_conflict' as const,
+      existingRunId: 'run-0',
+      existingTransportVersion: 'http-files-v1',
+      existingStatus: 'running',
+    }));
     const attempts = {
-      createQueuedV2Run: jest.fn(async () => ({
-        status: 'active_run_conflict' as const,
-        existingRunId: 'run-0',
-        existingTransportVersion: 'http-files-v1',
-        existingStatus: 'running',
-      })),
-      dispatchNextAttempt,
+      createDispatchedV2Run,
     } as unknown as RunAttemptRepository;
 
     const service = createV2AdmissionService({ attempts, specifications });
@@ -202,7 +188,7 @@ describe('V2 admission', () => {
     });
 
     expect(result.status).toBe('active_run_conflict');
-    expect(dispatchNextAttempt).not.toHaveBeenCalled();
+    expect(createDispatchedV2Run).toHaveBeenCalledTimes(1);
   });
 
   it('gives each visual subject a distinct run identity', () => {

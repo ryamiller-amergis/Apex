@@ -594,19 +594,20 @@ not yet modified — see "Remaining for Task 6" below.
   re-exports it. Nothing under `aiRunsV2Worker/` gained a database import — the
   guard suite still passes.
 
-  **Still open after the harvest:**
+  **Harvest follow-up state:**
 
   - Only prototypes are harvested. Document runs routed through
     `backgroundWorkflowRouter` onto V2 have no equivalent consumer, and
     `uiLabService` still admits nothing — see the UI Lab note below.
-  - `failStalePrototypes` uses a 25-minute threshold measured from
-    `design_prototypes.updatedAt`, but a V2 run's own deadline is
-    `resolveAgentRunHardLimitMs()` (2 hours by default). A visual run that
-    legitimately outlives 25 minutes has its prototype failed while the run is
-    still going; the harvest then finds a completed attempt whose prototype is
-    `generation_failed` and the CAS correctly refuses to overwrite the
-    user-visible failure. The transport and the staleness sweep need one shared
-    deadline.
+  - **Closed 2026-09-22 — prototype recovery now honors the V2 deadline.**
+    `failStalePrototypes` keeps the existing 25-minute cutoff, but its update
+    excludes a prototype while the matching `servicebus-blob-v2` run is active
+    and that run's persisted `timeout_at` is still in the future. Admission
+    already derives `timeout_at` from `resolveAgentRunHardLimitMs()`, so the
+    sweep does not copy the two-hour default. V1/in-process prototypes and
+    terminal V2 runs still take the 25-minute path; the finished-run harvest
+    remains immediately before the sweep so a terminal attempt is applied or
+    failed before the fallback reset.
   - A run that finishes while its prototype is **not** in `generating` (the user
     reset it first) is never claimed. A later retry that puts the row back to
     `generating` can then have the older artifact applied to it, racing the
@@ -1112,30 +1113,27 @@ Liveness reads (`isThreadRunAlive`, `getThreadRunStateSnapshot`) are
 deliberately unchanged: a V2 run in flight genuinely is alive, and waiters
 must keep waiting for it.
 
-**Open — a V2 attempt can be stranded in `queued` with no owner:**
+**Closed 2026-09-22 — initial V2 dispatch is atomic and old queued rows are
+recovered:**
 
-`createQueuedV2Run` writes the run header and its first `ai_run_attempts` row
-in one transaction, so a header without an attempt row cannot occur. The
-reachable gap is narrower and one step later: `dispatchNextAttempt` runs in a
-second transaction, and both callers of `v2AdmissionService.admit`
-(`backgroundWorkflowRouter`, `designPrototypeService`) catch its failure and
-fall back to in-process generation without removing the committed header. A
-crash between the two transactions leaves the same state.
-
-Nothing reclaims that state. The reconciler sweeps
-`status IN ('dispatched', 'running')` and `status = 'checking_worker'`; a
-`queued` attempt matches neither. Until the fix above, V1's queue TTL reaped
-the header after thirty minutes — incorrectly, since it orphaned the attempt,
-but it did release `uq_agent_runs_v2_active_thread`. That partial-index lock
-now blocks every future V2 run on the affected thread permanently.
-
-A fix was not attempted here because none of the options is small:
-`queued -> checking_worker` is an illegal attempt transition, a new sweep
-needs its own age budget measured from `created_at` rather than
-`last_checkpoint_at` (a queued attempt has never checkpointed), and the
-structurally correct fix — folding `dispatchNextAttempt` into
-`createQueuedV2Run`'s transaction — changes the admission contract and the
-reconciler's retry path, which reuses `dispatchNextAttempt` on its own.
+- `createDispatchedV2Run` binds `createQueuedV2Run` and
+  `dispatchNextAttempt` to one transaction executor. The run header, first
+  attempt, final dispatch fence, and outbox command now commit together; an
+  outbox failure rolls the queued rows back, so admission can fall back or
+  retry without leaving an active-thread lock.
+- `v2AdmissionService.admit` uses that atomic operation. Successful admission
+  still returns the same dispatched result. The public `dispatchNextAttempt`
+  stays independently transactional for the reconciler's replacement-attempt
+  path, which still creates a new attempt and a fresh dispatch fence.
+- The V2 reconciler also drains rows stranded by older code. Every recovery
+  pass selects first attempts that have remained `queued` for 90 seconds,
+  measured from `ai_run_attempts.created_at`, then transitions them to
+  `cancelled` under the recovery lease and their stored dispatch fence.
+  Repeated passes are idempotent: only the first legal fenced transition
+  counts, and the terminal header releases `uq_agent_runs_v2_active_thread`.
+  A delayed initial dispatcher cannot revive that cancelled run.
+- V1 admission and reaping remain excluded from `servicebus-blob-v2` rows.
+  No schema change is required.
 
 - [ ] Record `transport_version` on every run.
 - [ ] Keep old HTTP callbacks and Azure Files for v1 runs.

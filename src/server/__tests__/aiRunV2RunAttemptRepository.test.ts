@@ -1,5 +1,9 @@
 import { AI_RUN_V2_SCHEMA_VERSION } from '../../shared/types/aiRunV2';
-import { createRunAttemptRepository } from '../services/aiRunV2/runAttemptRepository';
+import {
+  createRunAttemptRepository,
+  type CreateDispatchedV2RunInput,
+  type CreateDispatchedV2RunResult,
+} from '../services/aiRunV2/runAttemptRepository';
 
 const specRef = {
   container: 'ai-run-artifacts',
@@ -62,6 +66,168 @@ describe('AI-run V2 run attempt repository', () => {
       expect(created.dispatchMessageId).toBeTruthy();
     }
     expect(execute).toHaveBeenCalledTimes(3);
+  });
+
+  it('creates the initial run, dispatch fence, and outbox command in one transaction', async () => {
+    let transactionCount = 0;
+    const execute = jest
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 'run-1',
+          status: 'queued',
+          transport_version: 'servicebus-blob-v2',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'attempt-1',
+          attempt_number: 1,
+          status: 'queued',
+        },
+      ])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 'outbox-1',
+          idempotency_key: 'attempt-1:dispatch',
+          kind: 'dispatch_command',
+          run_id: 'run-1',
+          attempt_id: 'attempt-1',
+          payload: {},
+          available_at: new Date('2026-09-18T12:00:00.000Z'),
+          publish_attempts: 0,
+          created_at: new Date('2026-09-18T12:00:00.000Z'),
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const repo = createRunAttemptRepository({
+      runInTransaction: async (work) => {
+        transactionCount += 1;
+        return work({ execute });
+      },
+    });
+    const createDispatchedV2Run = Reflect.get(
+      repo,
+      'createDispatchedV2Run',
+    ) as
+      | ((
+          input: CreateDispatchedV2RunInput,
+        ) => Promise<CreateDispatchedV2RunResult>)
+      | undefined;
+
+    expect(createDispatchedV2Run).toEqual(expect.any(Function));
+    if (!createDispatchedV2Run) return;
+
+    await expect(
+      createDispatchedV2Run({
+        runId: 'run-1',
+        threadId: 'thread-1',
+        projectId: 'project-1',
+        lane: 'background',
+        workloadLane: 'visual',
+        timeoutAt: '2026-09-18T13:00:00.000Z',
+        specRef,
+      }),
+    ).resolves.toMatchObject({
+      status: 'dispatched',
+      runId: 'run-1',
+      attemptId: 'attempt-1',
+      attemptNumber: 1,
+      outboxId: 'outbox-1',
+    });
+    expect(transactionCount).toBe(1);
+  });
+
+  it('rolls back the queued row when the initial outbox write fails', async () => {
+    const committedStatements: unknown[] = [];
+    let transactionCount = 0;
+    const repo = createRunAttemptRepository({
+      runInTransaction: async (work) => {
+        transactionCount += 1;
+        const pendingStatements: unknown[] = [];
+        let statement = 0;
+        const execute = jest.fn(async (query: unknown) => {
+          pendingStatements.push(query);
+          statement += 1;
+          if (statement === 1) return [];
+          if (statement === 4) {
+            return [
+              {
+                id: 'run-1',
+                status: 'queued',
+                transport_version: 'servicebus-blob-v2',
+              },
+            ];
+          }
+          if (statement === 5) {
+            return [
+              {
+                id: 'attempt-1',
+                attempt_number: 1,
+                status: 'queued',
+              },
+            ];
+          }
+          if (statement === 8) throw new Error('outbox unavailable');
+          return [];
+        });
+        const result = await work({ execute });
+        committedStatements.push(...pendingStatements);
+        return result;
+      },
+    });
+    const createDispatchedV2Run = Reflect.get(
+      repo,
+      'createDispatchedV2Run',
+    ) as
+      | ((
+          input: CreateDispatchedV2RunInput,
+        ) => Promise<CreateDispatchedV2RunResult>)
+      | undefined;
+
+    expect(createDispatchedV2Run).toEqual(expect.any(Function));
+    if (!createDispatchedV2Run) return;
+
+    await expect(
+      createDispatchedV2Run({
+        runId: 'run-1',
+        threadId: 'thread-1',
+        projectId: 'project-1',
+        lane: 'background',
+        workloadLane: 'document',
+        timeoutAt: '2026-09-18T13:00:00.000Z',
+        specRef,
+      }),
+    ).rejects.toThrow('outbox unavailable');
+    expect(transactionCount).toBe(1);
+    expect(committedStatements).toEqual([]);
+  });
+
+  it('does not let a delayed initial dispatcher revive a recovered run', async () => {
+    const execute = jest.fn().mockResolvedValueOnce([
+      {
+        id: 'run-1',
+        status: 'cancelled',
+        transport_version: 'servicebus-blob-v2',
+      },
+    ]);
+    const repo = createRunAttemptRepository({
+      runInTransaction: async (work) => work({ execute }),
+    });
+
+    await expect(
+      repo.dispatchNextAttempt({
+        runId: 'run-1',
+        workloadLane: 'document',
+        specRef,
+      }),
+    ).rejects.toThrow('cancelled run');
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it('rejects stale dispatch fences on transition and checkpoint accept', async () => {

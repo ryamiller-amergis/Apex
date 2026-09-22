@@ -46,6 +46,22 @@ export type CreateQueuedV2RunResult =
       existingStatus: string;
     };
 
+export type CreateDispatchedV2RunInput = CreateQueuedV2RunInput &
+  Readonly<{
+    workloadLane: AiRunV2WorkloadLane;
+  }>;
+
+export type CreateDispatchedV2RunResult =
+  | {
+      status: 'dispatched';
+      runId: string;
+      attemptId: string;
+      attemptNumber: number;
+      dispatchMessageId: string;
+      outboxId: string | null;
+    }
+  | Extract<CreateQueuedV2RunResult, { status: 'active_run_conflict' }>;
+
 export type DispatchNextAttemptInput = Readonly<{
   runId: string;
   dispatchMessageId?: string;
@@ -96,6 +112,24 @@ export type AcceptCheckpointResult =
   | { status: 'stale_sequence'; lastCheckpointSequence: number }
   | { status: 'fence_mismatch' }
   | { status: 'not_found' };
+
+export type RunAttemptRepository = {
+  createQueuedV2Run(
+    input: CreateQueuedV2RunInput,
+  ): Promise<CreateQueuedV2RunResult>;
+  createDispatchedV2Run(
+    input: CreateDispatchedV2RunInput,
+  ): Promise<CreateDispatchedV2RunResult>;
+  dispatchNextAttempt(
+    input: DispatchNextAttemptInput,
+  ): Promise<DispatchNextAttemptResult>;
+  transitionAttempt(
+    input: TransitionAttemptInput,
+  ): Promise<TransitionAttemptResult>;
+  acceptCheckpoint(
+    checkpoint: AiRunV2Checkpoint,
+  ): Promise<AcceptCheckpointResult>;
+};
 
 type TransactionRunner = <T>(
   work: (executor: SqlExecutor) => Promise<T>
@@ -159,7 +193,7 @@ const defaultTransactionRunner: TransactionRunner = async (work) =>
 
 export function createRunAttemptRepository(options?: {
   runInTransaction?: TransactionRunner;
-}) {
+}): RunAttemptRepository {
   const runInTransaction =
     options?.runInTransaction ?? defaultTransactionRunner;
 
@@ -263,6 +297,38 @@ export function createRunAttemptRepository(options?: {
       });
     },
 
+    async createDispatchedV2Run(
+      input: CreateDispatchedV2RunInput,
+    ): Promise<CreateDispatchedV2RunResult> {
+      return runInTransaction(async (executor) => {
+        // Bind both existing operations to this executor so the run header,
+        // first attempt, dispatch fence, and outbox command commit together.
+        // The public dispatch method remains independently transactional for
+        // reconciler-created replacement attempts.
+        const transactionBoundRepository = createRunAttemptRepository({
+          runInTransaction: async (work) => work(executor),
+        });
+        const created =
+          await transactionBoundRepository.createQueuedV2Run(input);
+        if (created.status === 'active_run_conflict') return created;
+
+        const dispatched =
+          await transactionBoundRepository.dispatchNextAttempt({
+            runId: created.runId,
+            workloadLane: input.workloadLane,
+            specRef: input.specRef,
+          });
+        return {
+          status: 'dispatched',
+          runId: created.runId,
+          attemptId: dispatched.attemptId,
+          attemptNumber: dispatched.attemptNumber,
+          dispatchMessageId: dispatched.dispatchMessageId,
+          outboxId: dispatched.outboxId,
+        };
+      });
+    },
+
     async dispatchNextAttempt(
       input: DispatchNextAttemptInput
     ): Promise<DispatchNextAttemptResult> {
@@ -286,9 +352,9 @@ export function createRunAttemptRepository(options?: {
         if (run.transport_version !== 'servicebus-blob-v2') {
           throw new Error(`Run ${input.runId} is not a V2 transport run`);
         }
-        if (run.status === 'completed') {
+        if (run.status === 'completed' || run.status === 'cancelled') {
           throw new Error(
-            `Cannot dispatch another attempt for completed run ${input.runId}`
+            `Cannot dispatch another attempt for ${run.status} run ${input.runId}`
           );
         }
 
@@ -617,9 +683,5 @@ export function createRunAttemptRepository(options?: {
     },
   };
 }
-
-export type RunAttemptRepository = ReturnType<
-  typeof createRunAttemptRepository
->;
 
 export const runAttemptRepository = createRunAttemptRepository();

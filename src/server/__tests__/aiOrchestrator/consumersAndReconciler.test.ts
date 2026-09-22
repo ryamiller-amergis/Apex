@@ -119,6 +119,115 @@ describe('resultConsumer', () => {
 });
 
 describe('reconciler', () => {
+  describe('stranded initial dispatch recovery', () => {
+    const queuedRow = {
+      attemptId: 'attempt-queued',
+      runId: 'run-queued',
+      dispatchMessageId: 'dispatch-never-published',
+      status: 'queued',
+      createdAt: '2026-09-18T11:58:00.000Z',
+    };
+    const lease = async <T>(work: (held: never) => Promise<T>): Promise<T> =>
+      work({
+        leaseKey: 'recovery',
+        holderId: 'h',
+        fencingToken: 1n,
+        signal: new AbortController().signal,
+        assertOwned: async () => undefined,
+        release: async () => undefined,
+      } as never);
+
+    function sweepQueuedInitialAttempts(
+      reconciler: ReturnType<typeof createReconciler>,
+    ): () => Promise<number> {
+      const sweep = Reflect.get(reconciler, 'sweepQueuedInitialAttempts') as
+        | (() => Promise<number>)
+        | undefined;
+      expect(sweep).toEqual(expect.any(Function));
+      return sweep ?? (async () => 0);
+    }
+
+    it('terminalizes a stale queued attempt with the fence it was created with', async () => {
+      const transitionAttempt = jest.fn().mockResolvedValue({
+        status: 'ok',
+        attemptId: queuedRow.attemptId,
+        to: 'cancelled',
+      });
+      const reconciler = createReconciler({
+        executor: { execute: async () => [] },
+        attempts: { transitionAttempt } as never,
+        executionProbe: { probe: async () => ({ status: 'unknown' }) },
+        listStaleRunning: async () => [],
+        listCheckingWorkers: async () => [],
+        listStaleQueued: async () => [queuedRow],
+        acquireRecoveryLease: lease,
+        acquireReaperLease: lease,
+      } as never);
+
+      await expect(sweepQueuedInitialAttempts(reconciler)()).resolves.toBe(1);
+      expect(transitionAttempt).toHaveBeenCalledWith({
+        attemptId: queuedRow.attemptId,
+        expectedDispatchMessageId: queuedRow.dispatchMessageId,
+        to: 'cancelled',
+        failureDetail: expect.stringMatching(/initial dispatch/i),
+      });
+    });
+
+    it('is idempotent when the same queued recovery candidate is seen again', async () => {
+      const transitionAttempt = jest
+        .fn()
+        .mockResolvedValueOnce({
+          status: 'ok',
+          attemptId: queuedRow.attemptId,
+          to: 'cancelled',
+        })
+        .mockResolvedValueOnce({
+          status: 'illegal_transition',
+          from: 'cancelled',
+          to: 'cancelled',
+        });
+      const reconciler = createReconciler({
+        executor: { execute: async () => [] },
+        attempts: { transitionAttempt } as never,
+        executionProbe: { probe: async () => ({ status: 'unknown' }) },
+        listStaleRunning: async () => [],
+        listCheckingWorkers: async () => [],
+        listStaleQueued: async () => [queuedRow],
+        acquireRecoveryLease: lease,
+        acquireReaperLease: lease,
+      } as never);
+      const sweep = sweepQueuedInitialAttempts(reconciler);
+
+      await expect(sweep()).resolves.toBe(1);
+      await expect(sweep()).resolves.toBe(0);
+    });
+
+    it('uses the queued creation time to enforce a bounded recovery delay', async () => {
+      const execute = jest.fn().mockResolvedValue([]);
+      const reconciler = createReconciler({
+        executor: { execute },
+        attempts: { transitionAttempt: jest.fn() } as never,
+        executionProbe: { probe: async () => ({ status: 'unknown' }) },
+        clock: {
+          now: () => new Date('2026-09-18T12:00:00.000Z'),
+          sleep: async () => undefined,
+        },
+        initialDispatchStaleMs: 60_000,
+        listStaleRunning: async () => [],
+        listCheckingWorkers: async () => [],
+        acquireRecoveryLease: lease,
+        acquireReaperLease: lease,
+      } as never);
+
+      await sweepQueuedInitialAttempts(reconciler)();
+
+      const query = JSON.stringify(execute.mock.calls[0]?.[0]);
+      expect(query).toContain('servicebus-blob-v2');
+      expect(query).toContain('created_at');
+      expect(query).toContain('2026-09-18T11:59:00.000Z');
+    });
+  });
+
   it('moves stale running attempts to checking_worker without worker_lost', async () => {
     const transitions: string[] = [];
     const reconciler = createReconciler({

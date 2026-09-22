@@ -95,30 +95,25 @@ export function createV2AdmissionService(deps?: {
         specification: input.specification,
       });
 
-      const created = await attempts.createQueuedV2Run({
+      const created = await attempts.createDispatchedV2Run({
         runId,
         threadId: input.threadId,
         projectId: input.projectId,
         lane: agentRunLaneFor(input.workloadLane),
+        workloadLane: input.workloadLane,
         timeoutAt: input.timeoutAt,
         specRef,
         ownerInstance: input.ownerInstance ?? null,
       });
       if (created.status === 'active_run_conflict') return created;
 
-      const dispatched = await attempts.dispatchNextAttempt({
-        runId,
-        workloadLane: input.workloadLane,
-        specRef,
-      });
-
       return {
         status: 'dispatched',
         runId,
-        attemptId: dispatched.attemptId,
-        attemptNumber: dispatched.attemptNumber,
-        dispatchMessageId: dispatched.dispatchMessageId,
-        outboxId: dispatched.outboxId,
+        attemptId: created.attemptId,
+        attemptNumber: created.attemptNumber,
+        dispatchMessageId: created.dispatchMessageId,
+        outboxId: created.outboxId,
       };
     },
   };

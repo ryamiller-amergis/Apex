@@ -7,10 +7,22 @@
  * readers are mocked because they reach Azure DevOps and the filesystem.
  */
 
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
+
+const mockPrototypeUpdateWhere = jest.fn();
+const mockPrototypeUpdateReturning = jest.fn().mockResolvedValue([]);
+
 jest.mock('../db/drizzle', () => {
   const makeUpdateChain = () => ({
     set: jest.fn().mockReturnThis(),
-    where: jest.fn().mockResolvedValue(undefined),
+    where: jest.fn((...args: unknown[]) => {
+      mockPrototypeUpdateWhere(...args);
+      return {
+        returning: (...returningArgs: unknown[]) =>
+          mockPrototypeUpdateReturning(...returningArgs),
+      };
+    }),
   });
 
   const makeSelectChain = () => ({
@@ -71,7 +83,10 @@ jest.mock('../services/webDesignReferenceService', () => ({
 
 import type { AdmitV2RunResult } from '../services/aiRunV2/v2AdmissionService';
 import type { PrototypeContext } from '../services/prototypeContextService';
-import { generatePrototypesForPrd } from '../services/designPrototypeService';
+import {
+  failStalePrototypes,
+  generatePrototypesForPrd,
+} from '../services/designPrototypeService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
 
@@ -510,5 +525,41 @@ describe('generatePrototypesForPrd V2 transport routing', () => {
 
     expect(admitV2Run).not.toHaveBeenCalled();
     expect(generateInProcess).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('failStalePrototypes V2 deadline safety', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('protects only active V2 runs until their stored deadline', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-09-22T12:00:00.000Z'));
+    mockPrototypeUpdateReturning.mockResolvedValueOnce([]);
+
+    await expect(failStalePrototypes(25 * 60_000)).resolves.toBe(0);
+
+    const predicate = mockPrototypeUpdateWhere.mock.calls[0]?.[0];
+    expect(predicate).toBeDefined();
+    if (!predicate) return;
+    const compiled = new PgDialect().sqlToQuery(predicate as SQL);
+    const sqlText = compiled.sql.toLowerCase();
+    expect(sqlText).toContain('not exists');
+    expect(compiled.sql).toContain('"agent_runs"."timeout_at"');
+    expect(compiled.params).toEqual(
+      expect.arrayContaining([
+        '2026-09-22T11:35:00.000Z',
+        '2026-09-22T12:00:00.000Z',
+        'servicebus-blob-v2',
+        'prototype:',
+      ]),
+    );
+    expect(sqlText).toContain("'queued'");
+    expect(sqlText).toContain("'dispatched'");
+    expect(sqlText).toContain("'running'");
+    expect(sqlText).not.toContain("'completed'");
+    expect(sqlText).not.toContain("'failed'");
+    expect(sqlText).not.toContain("'cancelled'");
   });
 });
