@@ -47,6 +47,9 @@ const DEFAULT_UI_LAB_TIMEOUT_MS = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 10 * 60_000;
 })();
 
+const UI_LAB_RETRY_MAX_ATTEMPTS = 3;
+const UI_LAB_RETRY_INITIAL_BACKOFF_MS = 2_000;
+
 /**
  * UI Lab's model settings: the project's values where it set them, this
  * lane's own defaults where it did not.
@@ -69,6 +72,12 @@ export function resolveUiLabVisualModel(input: {
     modelId: input.modelId ?? DEFAULT_UI_LAB_MODEL,
     maxTokens: input.maxTokens ?? DEFAULT_UI_LAB_MAX_TOKENS,
     timeoutMs: input.timeoutMs ?? DEFAULT_UI_LAB_TIMEOUT_MS,
+    retry: {
+      maxAttempts: UI_LAB_RETRY_MAX_ATTEMPTS,
+      initialBackoffMs: UI_LAB_RETRY_INITIAL_BACKOFF_MS,
+      backoffMultiplier: 2,
+      jitter: true,
+    },
     ...(input.temperature != null ? { temperature: input.temperature } : {}),
   };
 }
@@ -503,8 +512,8 @@ async function invokeStreaming(
     const response = await retryWithBackoff(
       () => client.send(command, { abortSignal: controller.signal }),
       {
-        maxRetries: 3,
-        initialDelay: 2000,
+        maxRetries: UI_LAB_RETRY_MAX_ATTEMPTS,
+        initialDelay: UI_LAB_RETRY_INITIAL_BACKOFF_MS,
         jitter: true,
         shouldRetry: isThrottleError,
       },

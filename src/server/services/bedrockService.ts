@@ -10,7 +10,10 @@ import type { DesignPlanFeature } from '../../shared/types/designPlan';
 import { DESIGN_PROTOTYPE_STATE_NAMES, type DesignPrototypeStateName } from '../../shared/types/designPrototype';
 import { recordAiUsage, computeCost } from './aiUsageService';
 import type { AiFeature } from '../../shared/types/aiCostAnalytics';
-import type { VisualModelSettings } from '../../shared/types/aiRunV2VisualSpec';
+import type {
+  VisualModelSettings,
+  VisualRetrySettings,
+} from '../../shared/types/aiRunV2VisualSpec';
 import { resolvePrototypeExtendMode } from './prototypeContextService';
 import {
   buildComponentDetailCoverageSection,
@@ -58,6 +61,20 @@ const MODEL_INVOKE_MAX_ATTEMPTS = (() => {
   const parsed = raw ? Number(raw) : Number.NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 5;
 })();
+
+const MODEL_INVOKE_INITIAL_BACKOFF_MS = 2_000;
+const MODEL_INVOKE_BACKOFF_MULTIPLIER = 2;
+
+function resolvePrototypeRetrySettings(): VisualRetrySettings {
+  return {
+    // `retryWithBackoff` loops while an integer counter is below the configured
+    // number, so a fractional value already means its ceiling in process.
+    maxAttempts: Math.ceil(MODEL_INVOKE_MAX_ATTEMPTS),
+    initialBackoffMs: MODEL_INVOKE_INITIAL_BACKOFF_MS,
+    backoffMultiplier: MODEL_INVOKE_BACKOFF_MULTIPLIER,
+    jitter: true,
+  };
+}
 
 /**
  * Retry only on throttling/rate-limit and transient 5xx — NOT on the abort
@@ -166,6 +183,7 @@ export function resolvePrototypeVisualModel(input: {
     modelId: input.modelId,
     maxTokens: resolvePrototypeMaxTokens(input.maxTokens),
     timeoutMs: resolveInvokeTimeoutMs(input.timeoutMs),
+    retry: resolvePrototypeRetrySettings(),
   };
 }
 
@@ -2134,7 +2152,7 @@ async function invokeModel(
     },
     {
       maxRetries: MODEL_INVOKE_MAX_ATTEMPTS,
-      initialDelay: 2000,
+      initialDelay: MODEL_INVOKE_INITIAL_BACKOFF_MS,
       jitter: true,
       shouldRetry: isBedrockThrottleError,
     },

@@ -17,6 +17,12 @@ const MODEL = {
   modelId: 'anthropic.claude',
   maxTokens: 8_000,
   timeoutMs: 600_000,
+  retry: {
+    maxAttempts: 5,
+    initialBackoffMs: 2_000,
+    backoffMultiplier: 2,
+    jitter: true,
+  },
 };
 
 describe('bedrockVisualClient', () => {
@@ -209,6 +215,164 @@ describe('bedrockVisualClient', () => {
     expect(Object.keys(payload)).not.toContain('temperature');
   });
 
+  it('retries throttles with the resolved attempt count and exponential backoff', async () => {
+    const throttle = Object.assign(new Error('slow down'), {
+      name: 'ThrottlingException',
+    });
+    const send = jest
+      .fn()
+      .mockRejectedValueOnce(throttle)
+      .mockRejectedValueOnce(throttle)
+      .mockResolvedValue(
+        response({ content: [{ type: 'text', text: '<html>done</html>' }] }),
+      );
+    const sleep = jest.fn().mockResolvedValue(undefined);
+    const client = createBedrockVisualClient({
+      client: { send } as never,
+      sleep,
+    } as never);
+
+    await expect(
+      client.invokeModel('a prompt', {
+        ...MODEL,
+        retry: { ...MODEL.retry, maxAttempts: 3, jitter: false },
+      }),
+    ).resolves.toMatchObject({ html: '<html>done</html>' });
+
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([2_000, 4_000]);
+  });
+
+  it.each([
+    { statusCode: 429 },
+    { statusCode: 503 },
+    { $metadata: { httpStatusCode: 500 } },
+  ])('retries transient Bedrock failure %#', async (fields) => {
+    const send = jest
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error('transient'), fields))
+      .mockResolvedValue(
+        response({ content: [{ type: 'text', text: '<html>done</html>' }] }),
+      );
+    const sleep = jest.fn().mockResolvedValue(undefined);
+    const client = createBedrockVisualClient({
+      client: { send } as never,
+      sleep,
+    } as never);
+
+    await client.invokeModel('a prompt', {
+      ...MODEL,
+      retry: { ...MODEL.retry, maxAttempts: 2, jitter: false },
+    });
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a non-transient model failure', async () => {
+    const send = jest.fn().mockRejectedValue(new Error('bad request'));
+    const sleep = jest.fn().mockResolvedValue(undefined);
+    const client = createBedrockVisualClient({
+      client: { send } as never,
+      sleep,
+    } as never);
+
+    await expect(client.invokeModel('a prompt', MODEL)).rejects.toThrow(
+      'bad request',
+    );
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('stops at maxAttempts without sleeping after the final failure', async () => {
+    const throttle = Object.assign(new Error('still throttled'), {
+      name: 'TooManyRequestsException',
+    });
+    const send = jest.fn().mockRejectedValue(throttle);
+    const sleep = jest.fn().mockResolvedValue(undefined);
+    const client = createBedrockVisualClient({
+      client: { send } as never,
+      sleep,
+    } as never);
+
+    await expect(
+      client.invokeModel('a prompt', {
+        ...MODEL,
+        retry: { ...MODEL.retry, maxAttempts: 3, jitter: false },
+      }),
+    ).rejects.toThrow('still throttled');
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledTimes(2);
+  });
+
+  it('aborts during backoff without starting another model call', async () => {
+    const throttle = Object.assign(new Error('slow down'), {
+      name: 'ThrottlingException',
+    });
+    const send = jest.fn().mockRejectedValue(throttle);
+    const controller = new AbortController();
+    const deadline = new Error('Execution deadline elapsed');
+    deadline.name = 'AbortError';
+    const sleep = jest.fn(async (_delay: number, signal?: AbortSignal) => {
+      controller.abort(deadline);
+      if (signal?.aborted) throw signal.reason;
+    });
+    const client = createBedrockVisualClient({
+      client: { send } as never,
+      sleep,
+    } as never);
+
+    await expect(
+      (client.invokeModel as unknown as (
+        prompt: string,
+        model: typeof MODEL,
+        images: [],
+        signal: AbortSignal,
+      ) => Promise<unknown>)('a prompt', MODEL, [], controller.signal),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry an attempt that reached its per-call timeout', async () => {
+    jest.useFakeTimers();
+    try {
+      const send = jest.fn(
+        async (
+          _command: unknown,
+          options?: { abortSignal?: AbortSignal },
+        ): Promise<never> =>
+          new Promise<never>((_resolve, reject) => {
+            options?.abortSignal?.addEventListener(
+              'abort',
+              () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+              { once: true },
+            );
+          }),
+      );
+      const sleep = jest.fn().mockResolvedValue(undefined);
+      const client = createBedrockVisualClient({
+        client: { send } as never,
+        sleep,
+      });
+      const result = client.invokeModel('a prompt', {
+        ...MODEL,
+        timeoutMs: 10,
+        retry: { ...MODEL.retry, maxAttempts: 3, jitter: false },
+      });
+      const refusal = expect(result).rejects.toThrow(
+        'Bedrock request timed out after 0s',
+      );
+
+      await jest.advanceTimersByTimeAsync(10);
+
+      await refusal;
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   /**
    * `stop_reason: 'max_tokens'` means the model was still writing when it ran
    * out of room, so the text is a fragment. `bedrockService.invokeModel`
@@ -228,6 +392,7 @@ describe('bedrockVisualClient', () => {
     await expect(client.invokeModel('a prompt', MODEL)).rejects.toBeInstanceOf(
       VisualModelTruncatedError,
     );
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   /**

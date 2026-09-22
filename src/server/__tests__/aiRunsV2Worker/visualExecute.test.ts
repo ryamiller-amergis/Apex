@@ -23,7 +23,17 @@ const spec = {
   },
   designSystem: {},
   designReference: { navItems: [], images: [] },
-  model: { modelId: 'anthropic.claude', maxTokens: 8000, timeoutMs: 600_000 },
+  model: {
+    modelId: 'anthropic.claude',
+    maxTokens: 8000,
+    timeoutMs: 600_000,
+    retry: {
+      maxAttempts: 5,
+      initialBackoffMs: 2_000,
+      backoffMultiplier: 2,
+      jitter: true,
+    },
+  },
   usage: { feature: 'design-prototype' },
   outputPath: 'prototype.html',
 };
@@ -84,7 +94,28 @@ describe('visual execute', () => {
       modelId: 'anthropic.claude',
       maxTokens: 8000,
       timeoutMs: 600_000,
+      retry: {
+        maxAttempts: 5,
+        initialBackoffMs: 2_000,
+        backoffMultiplier: 2,
+        jitter: true,
+      },
     });
+  });
+
+  it('passes the attempt deadline signal into the model client', async () => {
+    const invokeModel = jest.fn().mockResolvedValue('<html/>');
+    const execute = createVisualExecute({ invokeModel });
+    const controller = new AbortController();
+
+    await execute({
+      specification: spec as never,
+      command: {} as never,
+      checkpoints: checkpoints().port as never,
+      signal: controller.signal,
+    });
+
+    expect(invokeModel.mock.calls[0][3]).toBe(controller.signal);
   });
 
   /**

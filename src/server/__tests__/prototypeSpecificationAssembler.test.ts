@@ -41,6 +41,18 @@ const promptInputs = {
   pageScreenshotHint: '',
 };
 
+const MODEL = {
+  modelId: 'anthropic.claude',
+  maxTokens: 32_000,
+  timeoutMs: 720_000,
+  retry: {
+    maxAttempts: 5,
+    initialBackoffMs: 2_000,
+    backoffMultiplier: 2,
+    jitter: true,
+  },
+};
+
 describe('prototypeSpecificationAssembler', () => {
   it('reads the requested source and produces a valid specification', async () => {
     const assembler = createPrototypeSpecificationAssembler({
@@ -55,7 +67,7 @@ describe('prototypeSpecificationAssembler', () => {
       sourcePaths: ['/src/components/Board.tsx'],
       sourceRelevanceText: 'standup board',
       images: [],
-      model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
+      model: MODEL,
       usage: { feature: 'design-prototype', project: 'Apex' },
     });
 
@@ -80,7 +92,7 @@ describe('prototypeSpecificationAssembler', () => {
       sourcePaths: ['/a.tsx', '/b.tsx'],
       sourceRelevanceText: '',
       images: [],
-      model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
+      model: MODEL,
       usage: { feature: 'design-prototype' },
     });
 
@@ -107,7 +119,7 @@ describe('prototypeSpecificationAssembler', () => {
       ],
       sourceRelevanceText: 'Add an approval action',
       images: [],
-      model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
+      model: MODEL,
       usage: { feature: 'design-prototype' },
     } as never);
 
@@ -146,7 +158,7 @@ describe('prototypeSpecificationAssembler', () => {
       sourcePaths: [],
       sourceRelevanceText: '',
       images: [],
-      model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
+      model: MODEL,
       usage: { feature: 'design-prototype' },
     });
 
@@ -192,7 +204,7 @@ describe('prototypeSpecificationAssembler', () => {
       sourcePaths: ['/a.tsx', '/b.tsx'],
       sourceRelevanceText: '',
       images: [],
-      model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
+      model: MODEL,
       usage: { feature: 'design-prototype' },
     });
 
@@ -216,7 +228,7 @@ describe('prototypeSpecificationAssembler', () => {
       sourcePaths: [],
       sourceRelevanceText: '',
       images: [],
-      model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
+      model: MODEL,
       usage: { feature: 'design-prototype' },
     });
 
@@ -239,7 +251,7 @@ describe('prototypeSpecificationAssembler', () => {
       sourcePaths: [],
       sourceRelevanceText: '',
       images: [],
-      model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
+      model: MODEL,
       usage: { feature: 'design-prototype' },
     });
 

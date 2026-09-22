@@ -28,7 +28,17 @@ const spec: DesignPrototypeVisualSpecification = {
     navItems: [{ label: 'Home', route: '/' }],
     images: [],
   },
-  model: { modelId: 'anthropic.claude', maxTokens: 8000, timeoutMs: 600_000 },
+  model: {
+    modelId: 'anthropic.claude',
+    maxTokens: 8000,
+    timeoutMs: 600_000,
+    retry: {
+      maxAttempts: 5,
+      initialBackoffMs: 2_000,
+      backoffMultiplier: 2,
+      jitter: true,
+    },
+  },
   usage: { feature: 'design-prototype', project: 'Apex' },
   outputPath: 'prototype.html',
 };
@@ -106,6 +116,29 @@ describe('visual execution specification', () => {
       ).toBe(false);
       expect(
         isAiRunV2VisualSpecification({ ...spec, model: { ...spec.model, timeoutMs: value } }),
+      ).toBe(false);
+    }
+  });
+
+  it('requires the complete retry policy and refuses invalid bounds', () => {
+    const withoutRetry = { ...spec.model } as Record<string, unknown>;
+    delete withoutRetry.retry;
+    expect(
+      isAiRunV2VisualSpecification({ ...spec, model: withoutRetry }),
+    ).toBe(false);
+
+    for (const retry of [
+      { ...spec.model.retry, maxAttempts: 0 },
+      { ...spec.model.retry, maxAttempts: 1.5 },
+      { ...spec.model.retry, initialBackoffMs: -1 },
+      { ...spec.model.retry, backoffMultiplier: 0 },
+      { ...spec.model.retry, jitter: 'true' },
+    ]) {
+      expect(
+        isAiRunV2VisualSpecification({
+          ...spec,
+          model: { ...spec.model, retry },
+        }),
       ).toBe(false);
     }
   });

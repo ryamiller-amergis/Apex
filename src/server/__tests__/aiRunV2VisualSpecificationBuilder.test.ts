@@ -27,7 +27,17 @@ const base = {
   colorTokens: { primary: '#000' },
   navItems: [{ label: 'Home', route: '/' }],
   images: [],
-  model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
+  model: {
+    modelId: 'anthropic.claude',
+    maxTokens: 32_000,
+    timeoutMs: 720_000,
+    retry: {
+      maxAttempts: 5,
+      initialBackoffMs: 2_000,
+      backoffMultiplier: 2,
+      jitter: true,
+    },
+  },
   usage: { feature: 'design-prototype', project: 'Apex' },
 };
 
@@ -126,7 +136,17 @@ const uiLab = {
   colorTokens: 'primary.main: #123456',
   navItems: [{ label: 'Home', route: '/' }],
   images: [],
-  model: { modelId: 'anthropic.claude', maxTokens: 16_000, timeoutMs: 600_000 },
+  model: {
+    modelId: 'anthropic.claude',
+    maxTokens: 16_000,
+    timeoutMs: 600_000,
+    retry: {
+      maxAttempts: 3,
+      initialBackoffMs: 2_000,
+      backoffMultiplier: 2,
+      jitter: true,
+    },
+  },
   usage: { feature: 'ui-lab', project: 'Apex' },
 };
 

@@ -108,11 +108,20 @@ export type PrototypePromptSelection =
  * environment variable, and a worker can read neither, so a default of its
  * own would quietly disagree with the in-process path instead of matching it.
  */
+export type VisualRetrySettings = Readonly<{
+  /** Total calls, including the first one. */
+  maxAttempts: number;
+  initialBackoffMs: number;
+  backoffMultiplier: number;
+  jitter: boolean;
+}>;
+
 export type VisualModelSettings = Readonly<{
   modelId: string;
   /** Project override where set, otherwise the lane's own app default. */
   maxTokens: number;
   timeoutMs: number;
+  retry: VisualRetrySettings;
   /** Only where the project set one; the prototype lane sends none. */
   temperature?: number;
 }>;
@@ -185,6 +194,21 @@ function isResolvedModel(value: unknown): boolean {
   if (!isNonEmptyString(value.modelId)) return false;
   if (!isPositiveNumber(value.maxTokens)) return false;
   if (!isPositiveNumber(value.timeoutMs)) return false;
+  if (!isRecord(value.retry)) return false;
+  if (
+    !Number.isSafeInteger(value.retry.maxAttempts)
+    || (value.retry.maxAttempts as number) <= 0
+  ) {
+    return false;
+  }
+  if (
+    !Number.isSafeInteger(value.retry.initialBackoffMs)
+    || (value.retry.initialBackoffMs as number) < 0
+  ) {
+    return false;
+  }
+  if (!isPositiveNumber(value.retry.backoffMultiplier)) return false;
+  if (typeof value.retry.jitter !== 'boolean') return false;
   return (
     value.temperature === undefined ||
     (typeof value.temperature === 'number' && Number.isFinite(value.temperature))

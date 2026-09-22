@@ -17,10 +17,22 @@ import { resolveUiLabVisualModel } from '../services/uiLabBedrockService';
 /** What `UI_MOCK_MAX_TOKENS` and `MODEL_INVOKE_TIMEOUT_MS` come to unset. */
 const PROTOTYPE_DEFAULT_MAX_TOKENS = 32_000;
 const PROTOTYPE_DEFAULT_TIMEOUT_MS = 12 * 60_000;
+const PROTOTYPE_RETRY = {
+  maxAttempts: 5,
+  initialBackoffMs: 2_000,
+  backoffMultiplier: 2,
+  jitter: true,
+};
 
 /** What `DEFAULT_UI_LAB_MAX_TOKENS` and `DEFAULT_UI_LAB_TIMEOUT_MS` come to. */
 const UI_LAB_DEFAULT_MAX_TOKENS = 16_000;
 const UI_LAB_DEFAULT_TIMEOUT_MS = 10 * 60_000;
+const UI_LAB_RETRY = {
+  maxAttempts: 3,
+  initialBackoffMs: 2_000,
+  backoffMultiplier: 2,
+  jitter: true,
+};
 
 /**
  * Both app defaults are read from the environment once, at module load, so
@@ -53,6 +65,7 @@ describe('prototype lane model settings', () => {
       modelId: 'anthropic.claude',
       maxTokens: PROTOTYPE_DEFAULT_MAX_TOKENS,
       timeoutMs: PROTOTYPE_DEFAULT_TIMEOUT_MS,
+      retry: PROTOTYPE_RETRY,
     });
   });
 
@@ -63,7 +76,12 @@ describe('prototype lane model settings', () => {
         maxTokens: 9_000,
         timeoutMs: 90_000,
       }),
-    ).toEqual({ modelId: 'anthropic.claude', maxTokens: 9_000, timeoutMs: 90_000 });
+    ).toEqual({
+      modelId: 'anthropic.claude',
+      maxTokens: 9_000,
+      timeoutMs: 90_000,
+      retry: PROTOTYPE_RETRY,
+    });
   });
 
   /**
@@ -91,6 +109,7 @@ describe('prototype lane model settings', () => {
       modelId: 'anthropic.claude',
       maxTokens: PROTOTYPE_DEFAULT_MAX_TOKENS,
       timeoutMs: PROTOTYPE_DEFAULT_TIMEOUT_MS,
+      retry: PROTOTYPE_RETRY,
     });
   });
 
@@ -110,6 +129,22 @@ describe('prototype lane model settings', () => {
       modelId: 'anthropic.claude',
       maxTokens: 48_000,
       timeoutMs: 300_000,
+      retry: PROTOTYPE_RETRY,
+    });
+  });
+
+  it('carries the configured retry attempt count from App Service', () => {
+    const resolved = underEnvironment(
+      { BEDROCK_INVOKE_MAX_ATTEMPTS: '7' },
+      () =>
+        (
+          require('../services/bedrockService') as typeof import('../services/bedrockService')
+        ).resolvePrototypeVisualModel({ modelId: 'anthropic.claude' }),
+    );
+
+    expect(resolved.retry).toEqual({
+      ...PROTOTYPE_RETRY,
+      maxAttempts: 7,
     });
   });
 
@@ -127,6 +162,7 @@ describe('UI Lab lane model settings', () => {
       modelId: 'anthropic.claude',
       maxTokens: UI_LAB_DEFAULT_MAX_TOKENS,
       timeoutMs: UI_LAB_DEFAULT_TIMEOUT_MS,
+      retry: UI_LAB_RETRY,
     });
   });
 
@@ -150,7 +186,12 @@ describe('UI Lab lane model settings', () => {
         maxTokens: 24_000,
         timeoutMs: 120_000,
       }),
-    ).toEqual({ modelId: 'anthropic.claude', maxTokens: 24_000, timeoutMs: 120_000 });
+    ).toEqual({
+      modelId: 'anthropic.claude',
+      maxTokens: 24_000,
+      timeoutMs: 120_000,
+      retry: UI_LAB_RETRY,
+    });
   });
 
   it('carries the environment-tuned UI Lab default', () => {
@@ -169,6 +210,7 @@ describe('UI Lab lane model settings', () => {
       modelId: 'anthropic.claude',
       maxTokens: 20_000,
       timeoutMs: 420_000,
+      retry: UI_LAB_RETRY,
     });
   });
 

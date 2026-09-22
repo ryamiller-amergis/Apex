@@ -38,6 +38,7 @@ export type BedrockVisualClient = {
     prompt: string,
     model: VisualModelSettings,
     images?: ReadonlyArray<VisualReferenceImage>,
+    signal?: AbortSignal,
   ): Promise<VisualModelResult>;
 };
 
@@ -66,6 +67,58 @@ export class VisualModelTruncatedError extends Error {
 }
 
 type SendableClient = Pick<BedrockRuntimeClient, 'send'>;
+
+type RetrySleep = (ms: number, signal?: AbortSignal) => Promise<void>;
+
+function abortError(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  const error = new Error('Visual model execution was aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
+function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError(signal));
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout>;
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      reject(abortError(signal!));
+    };
+    timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function isBedrockRetryable(error: unknown): boolean {
+  const candidate = error as {
+    name?: string;
+    statusCode?: number;
+    $metadata?: { httpStatusCode?: number };
+  } | undefined;
+  if (!candidate) return false;
+  if (
+    candidate.name === 'ThrottlingException'
+    || candidate.name === 'TooManyRequestsException'
+  ) {
+    return true;
+  }
+  const status =
+    candidate.statusCode
+    ?? candidate.$metadata?.httpStatusCode;
+  return status === 429 || (
+    typeof status === 'number'
+    && status >= 500
+    && status < 600
+  );
+}
 
 /**
  * Mirrors `bedrockService.invokeModel`: the image block comes first and the
@@ -97,6 +150,8 @@ export function createBedrockVisualClient(options?: {
   client?: SendableClient;
   region?: string;
   now?: () => number;
+  sleep?: RetrySleep;
+  random?: () => number;
 }): BedrockVisualClient {
   const client =
     options?.client ??
@@ -104,9 +159,11 @@ export function createBedrockVisualClient(options?: {
       region: options?.region ?? process.env.AWS_REGION ?? 'us-east-1',
     });
   const now = options?.now ?? Date.now;
+  const sleep = options?.sleep ?? sleepWithAbort;
+  const random = options?.random ?? Math.random;
 
   return {
-    async invokeModel(prompt, model, images) {
+    async invokeModel(prompt, model, images, signal) {
       const command = new InvokeModelCommand({
         modelId: model.modelId,
         contentType: 'application/json',
@@ -125,26 +182,60 @@ export function createBedrockVisualClient(options?: {
       });
 
       const startedAt = now();
-      const controller = new AbortController();
-      const { timeoutMs } = model;
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      let response;
-      try {
-        response = await (client as BedrockRuntimeClient).send(command, {
-          abortSignal: controller.signal,
-        });
-      } catch (error) {
-        if (controller.signal.aborted) {
-          throw new Error(
-            `Bedrock request timed out after ${Math.round(
-              timeoutMs / 1000,
-            )}s (model=${model.modelId})`,
-          );
+      const sendAttempt = async () => {
+        if (signal?.aborted) throw abortError(signal);
+        const controller = new AbortController();
+        const abortForAttempt = (): void =>
+          controller.abort(signal?.reason);
+        signal?.addEventListener('abort', abortForAttempt, { once: true });
+        const timer = setTimeout(() => controller.abort(), model.timeoutMs);
+        try {
+          return await (client as BedrockRuntimeClient).send(command, {
+            abortSignal: controller.signal,
+          });
+        } catch (error) {
+          if (signal?.aborted) throw abortError(signal);
+          if (controller.signal.aborted) {
+            throw new Error(
+              `Bedrock request timed out after ${Math.round(
+                model.timeoutMs / 1000,
+              )}s (model=${model.modelId})`,
+            );
+          }
+          throw error;
+        } finally {
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', abortForAttempt);
         }
-        throw error;
-      } finally {
-        clearTimeout(timer);
+      };
+
+      let response;
+      for (
+        let attempt = 1;
+        attempt <= model.retry.maxAttempts;
+        attempt += 1
+      ) {
+        try {
+          response = await sendAttempt();
+          break;
+        } catch (error) {
+          if (signal?.aborted) throw abortError(signal);
+          if (
+            !isBedrockRetryable(error)
+            || attempt === model.retry.maxAttempts
+          ) {
+            throw error;
+          }
+          let delay =
+            model.retry.initialBackoffMs
+            * Math.pow(model.retry.backoffMultiplier, attempt - 1);
+          if (model.retry.jitter) {
+            delay *= 0.5 + random();
+          }
+          await sleep(delay, signal);
+        }
       }
+      if (!response) throw new Error('Bedrock returned no response');
 
       const decoded = JSON.parse(
         new TextDecoder().decode(response.body as Uint8Array),

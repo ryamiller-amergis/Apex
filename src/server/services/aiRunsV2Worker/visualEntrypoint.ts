@@ -33,6 +33,7 @@ export type InvokeVisualModel = (
   prompt: string,
   model: VisualModelSettings,
   images: ReadonlyArray<VisualReferenceImage>,
+  signal: AbortSignal,
 ) => Promise<string | VisualModelResult>;
 
 /**
@@ -115,7 +116,7 @@ function buildVisualPrompt(specification: AiRunV2VisualSpecification): string {
 export function createVisualExecute(deps: {
   invokeModel: InvokeVisualModel;
 }): ExecuteWorkload {
-  return async ({ specification, checkpoints }) => {
+  return async ({ specification, checkpoints, signal }) => {
     if (!isAiRunV2VisualSpecification(specification)) {
       throw new Error('Command referenced an invalid visual specification');
     }
@@ -125,6 +126,7 @@ export function createVisualExecute(deps: {
       buildVisualPrompt(specification),
       specification.model,
       visualReferenceImages(specification),
+      signal,
     );
     const html = typeof result === 'string' ? result : result.html;
     if (!html.trim()) {
@@ -167,8 +169,8 @@ export function createVisualExecute(deps: {
 }
 
 const executeVisualWorkload: ExecuteWorkload = createVisualExecute({
-  invokeModel: (prompt, model, images) =>
-    createBedrockVisualClient().invokeModel(prompt, model, images),
+  invokeModel: (prompt, model, images, signal) =>
+    createBedrockVisualClient().invokeModel(prompt, model, images, signal),
 });
 
 export async function startVisualWorker(): Promise<void> {

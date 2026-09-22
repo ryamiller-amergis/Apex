@@ -242,6 +242,12 @@ describe('generatePrototypesForPrd V2 transport routing', () => {
       modelId: expect.any(String),
       maxTokens: 32_000,
       timeoutMs: 12 * 60_000,
+      retry: {
+        maxAttempts: 5,
+        initialBackoffMs: 2_000,
+        backoffMultiplier: 2,
+        jitter: true,
+      },
     });
   });
 
