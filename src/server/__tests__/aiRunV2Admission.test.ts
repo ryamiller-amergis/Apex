@@ -6,6 +6,7 @@ import {
 import {
   agentRunLaneFor,
   createV2AdmissionService,
+  visualGenerationRunId,
   visualRunThreadId,
   visualRunThreadPrefix,
 } from '../services/aiRunV2/v2AdmissionService';
@@ -213,6 +214,28 @@ describe('V2 admission', () => {
     expect(visualRunThreadId('ui-lab-screen', 'subject-1')).not.toBe(
       visualRunThreadId('design-prototype', 'subject-1'),
     );
+  });
+
+  it('gives one visual generation a deterministic run id', () => {
+    const first = visualGenerationRunId(
+      'design-prototype',
+      'prototype-1',
+      '2026-09-22T12:00:00.000Z',
+    );
+    const replay = visualGenerationRunId(
+      'design-prototype',
+      'prototype-1',
+      '2026-09-22T12:00:00.000Z',
+    );
+    const retry = visualGenerationRunId(
+      'design-prototype',
+      'prototype-1',
+      '2026-09-22T12:05:00.000Z',
+    );
+
+    expect(replay).toBe(first);
+    expect(retry).not.toBe(first);
+    expect(first).toMatch(/^visual-[a-f0-9]{32}$/);
   });
 
   it('maps workload lanes onto the right agent run lane', () => {

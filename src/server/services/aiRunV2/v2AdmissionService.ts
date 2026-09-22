@@ -5,7 +5,7 @@
  * Nothing calls Service Bus here. The outbox row is the handoff, and the
  * orchestrator publishes it once capacity allows.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { AgentRunLane } from '../../../shared/types/agentRunLifecycle';
 import type { AiRunV2WorkloadLane } from '../../../shared/types/aiRunV2';
 import type { VisualSubjectKind } from '../../../shared/types/aiRunV2VisualSpec';
@@ -75,6 +75,22 @@ export function visualRunThreadPrefix(
       throw new Error(`Unsupported visual subjectKind: ${String(unhandled)}`);
     }
   }
+}
+
+export function visualGenerationRunId(
+  subjectKind: VisualSubjectKind,
+  subjectId: string,
+  generationStartedAt: string,
+): string {
+  const generationKey = [
+    subjectKind,
+    subjectId,
+    generationStartedAt,
+  ].join('\n');
+  return `visual-${createHash('sha256')
+    .update(generationKey)
+    .digest('hex')
+    .slice(0, 32)}`;
 }
 
 /** Document and visual work runs on the background lane; chat lanes do not. */

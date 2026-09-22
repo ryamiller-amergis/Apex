@@ -35,6 +35,7 @@ import {
 } from './aiRunV2/prototypeSpecificationAssembler';
 import {
   createV2AdmissionService,
+  visualGenerationRunId,
   visualRunThreadId,
   visualRunThreadPrefix,
   type V2AdmissionService,
@@ -426,10 +427,51 @@ type FeatureFlagEvaluator = (
   context: { userId: string; project: string; caller?: string },
 ) => Promise<boolean>;
 
+export type PrototypeV2AdmissionState =
+  | 'intended'
+  | 'absent'
+  | 'conflicting';
+
+export type ReconcilePrototypeV2Admission = (input: Readonly<{
+  runId: string;
+  threadId: string;
+  subjectId: string;
+  generationStartedAt: string;
+}>) => Promise<PrototypeV2AdmissionState>;
+
 export interface GeneratePrototypesDependencies {
   isFeatureEnabled?: FeatureFlagEvaluator;
   admitV2Run?: V2AdmissionService['admit'];
+  reconcileV2Admission?: ReconcilePrototypeV2Admission;
   generateInProcess?: GenerateInProcess;
+}
+
+async function reconcilePrototypeV2Admission(
+  input: Parameters<ReconcilePrototypeV2Admission>[0],
+): Promise<PrototypeV2AdmissionState> {
+  const rows = await db
+    .select({
+      id: agentRuns.id,
+      threadId: agentRuns.threadId,
+      transportVersion: agentRuns.transportVersion,
+      executionSnapshot: agentRuns.executionSnapshot,
+    })
+    .from(agentRuns)
+    .where(eq(agentRuns.id, input.runId));
+  const run = rows[0];
+  if (!run) return 'absent';
+
+  const snapshot = run.executionSnapshot as Record<string, unknown> | null;
+  return (
+    run.threadId === input.threadId
+    && run.transportVersion === 'servicebus-blob-v2'
+    && snapshot?.workflowClass === 'design-prototype'
+    && snapshot.subjectKind === 'design-prototype'
+    && snapshot.subjectId === input.subjectId
+    && snapshot.generationStartedAt === input.generationStartedAt
+  )
+    ? 'intended'
+    : 'conflicting';
 }
 
 /**
@@ -885,6 +927,7 @@ async function admitPendingPrototypesToV2(params: {
   skillRepoConfigured: boolean;
   webReferencesEnabled: boolean;
   admitV2Run: V2AdmissionService['admit'];
+  reconcileV2Admission: ReconcilePrototypeV2Admission;
   generateInProcess: GenerateInProcess;
 }): Promise<void> {
   const branch = await resolvePrototypeBranch({
@@ -957,6 +1000,22 @@ async function admitPendingPrototypesToV2(params: {
         project: params.project,
         userId: params.userId,
       };
+      const threadId = visualRunThreadId(
+        'design-prototype',
+        prototypeId,
+      );
+      const runId = visualGenerationRunId(
+        'design-prototype',
+        prototypeId,
+        generationStartedAt,
+      );
+      const admissionIdentity = {
+        runId,
+        threadId,
+        subjectId: prototypeId,
+        generationStartedAt,
+      };
+      let admissionAttempted = false;
 
       try {
         const extend = await resolvePrototypeExtendInputs({
@@ -986,8 +1045,10 @@ async function admitPendingPrototypesToV2(params: {
           usage,
         });
 
+        admissionAttempted = true;
         const admitted = await params.admitV2Run({
-          threadId: visualRunThreadId('design-prototype', prototypeId),
+          runId,
+          threadId,
           projectId: params.project,
           workloadLane: VISUAL_WORKLOAD_LANE,
           timeoutAt,
@@ -999,15 +1060,56 @@ async function admitPendingPrototypesToV2(params: {
             generationStartedAt,
           },
         });
-        if (admitted.status !== 'dispatched') {
-          fallBackInProcess(`admission returned ${admitted.status}`);
+        if (!admitted) {
+          throw new Error('V2 admission returned no result');
+        }
+        switch (admitted.status) {
+          case 'dispatched':
+            return;
+          case 'active_run_conflict':
+            if (
+              admitted.existingRunId === runId
+              && admitted.existingTransportVersion === 'servicebus-blob-v2'
+            ) {
+              return;
+            }
+            fallBackInProcess(
+              `admission conflicted with unrelated run ${admitted.existingRunId}`,
+            );
+            return;
+          default: {
+            const unhandled: never = admitted;
+            throw new Error(
+              `Unsupported V2 admission result: ${String(unhandled)}`,
+            );
+          }
         }
       } catch (err) {
         console.error(
           `[designPrototypeService] V2 admission failed for ${prototypeId}:`,
           err,
         );
-        fallBackInProcess('V2 admission failed');
+        if (!admissionAttempted) {
+          fallBackInProcess('V2 preparation failed before admission');
+          return;
+        }
+        try {
+          const state = await params.reconcileV2Admission(admissionIdentity);
+          if (state === 'absent') {
+            fallBackInProcess('V2 admission rollback was confirmed');
+          } else {
+            console.warn(
+              `[designPrototypeService] Prototype ${prototypeId} will not start in process `
+                + `because V2 reconciliation returned ${state}`,
+            );
+          }
+        } catch (reconcileError) {
+          console.error(
+            `[designPrototypeService] Could not reconcile V2 admission for ${prototypeId}; `
+              + 'leaving it on the durable path to avoid duplicate generation:',
+            reconcileError,
+          );
+        }
       }
     },
   );
@@ -1020,6 +1122,8 @@ export async function generatePrototypesForPrd(
   const evaluateFlag = dependencies.isFeatureEnabled ?? isFeatureEnabled;
   const admitV2Run =
     dependencies.admitV2Run ?? ((input) => createV2AdmissionService().admit(input));
+  const reconcileV2Admission =
+    dependencies.reconcileV2Admission ?? reconcilePrototypeV2Admission;
   const generateInProcess = dependencies.generateInProcess ?? generateSinglePrototype;
 
   const prd = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
@@ -1144,6 +1248,7 @@ export async function generatePrototypesForPrd(
         skillRepoConfigured: Boolean(skillConfig?.skillRepo?.trim()),
         webReferencesEnabled: Boolean(skillConfig?.prototypeWebReferencesEnabled),
         admitV2Run,
+        reconcileV2Admission,
         generateInProcess,
       });
       // @feature-flag:ai-runs-v2-transport enabled-end

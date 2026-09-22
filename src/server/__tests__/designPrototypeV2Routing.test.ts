@@ -12,6 +12,7 @@ import { PgDialect } from 'drizzle-orm/pg-core';
 
 const mockPrototypeUpdateWhere = jest.fn();
 const mockPrototypeUpdateReturning = jest.fn().mockResolvedValue([]);
+const mockSelectWhere = jest.fn().mockResolvedValue([]);
 
 jest.mock('../db/drizzle', () => {
   const makeUpdateChain = () => ({
@@ -27,7 +28,7 @@ jest.mock('../db/drizzle', () => {
 
   const makeSelectChain = () => ({
     from: jest.fn().mockReturnThis(),
-    where: jest.fn().mockResolvedValue([]),
+    where: (...args: unknown[]) => mockSelectWhere(...args),
   });
 
   return {
@@ -164,6 +165,7 @@ function twoUiFeatures(): unknown[] {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockSelectWhere.mockResolvedValue([]);
   mockResolveSkillConfig.mockResolvedValue(null);
   mockResolvePrototypeContext.mockResolvedValue(null);
   mockGetDesignReferences.mockResolvedValue('');
@@ -299,9 +301,63 @@ describe('generatePrototypesForPrd V2 transport routing', () => {
     expect(generateInProcess).toHaveBeenCalledTimes(2);
   });
 
-  it('falls back to in-process generation when admission throws', async () => {
+  it('falls back after an admission throw only when reconciliation proves rollback', async () => {
     arrangePrd();
     const admitV2Run = jest.fn().mockRejectedValue(new Error('blob unavailable'));
+    const reconcileV2Admission = jest.fn().mockResolvedValue('absent');
+    const generateInProcess = jest.fn().mockResolvedValue(undefined);
+
+    await generatePrototypesForPrd('prd-1', {
+      isFeatureEnabled: async () => true,
+      admitV2Run,
+      reconcileV2Admission,
+      generateInProcess,
+    });
+
+    expect(reconcileV2Admission).toHaveBeenCalledTimes(2);
+    expect(generateInProcess).toHaveBeenCalledTimes(2);
+    expect(generateInProcess.mock.calls[0][0]).toBe('prototype-1');
+  });
+
+  it.each([
+    new Error('response lost after commit'),
+    Object.assign(new Error('admission timed out'), { code: 'ETIMEDOUT' }),
+  ])('does not start V1 when reconciliation finds the committed V2 run', async (error) => {
+    arrangePrd([twoUiFeatures()[0]]);
+    const admitV2Run = jest.fn().mockRejectedValue(error);
+    const reconcileV2Admission = jest.fn().mockResolvedValue('intended');
+    const generateInProcess = jest.fn().mockResolvedValue(undefined);
+
+    await generatePrototypesForPrd('prd-1', {
+      isFeatureEnabled: async () => true,
+      admitV2Run,
+      reconcileV2Admission,
+      generateInProcess,
+    });
+
+    expect(reconcileV2Admission).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: admitV2Run.mock.calls[0][0].runId,
+        threadId: 'prototype:prototype-1',
+        subjectId: 'prototype-1',
+      }),
+    );
+    expect(generateInProcess).not.toHaveBeenCalled();
+  });
+
+  it('recognizes a committed intended run through the default database reconciliation', async () => {
+    arrangePrd([twoUiFeatures()[0]]);
+    let attempted: Record<string, any> | undefined;
+    const admitV2Run = jest.fn(async (input) => {
+      attempted = input;
+      throw new Error('connection closed after commit');
+    });
+    mockSelectWhere.mockImplementation(async () => [{
+      id: attempted?.runId,
+      threadId: attempted?.threadId,
+      transportVersion: 'servicebus-blob-v2',
+      executionSnapshot: attempted?.executionSnapshot,
+    }]);
     const generateInProcess = jest.fn().mockResolvedValue(undefined);
 
     await generatePrototypesForPrd('prd-1', {
@@ -310,8 +366,45 @@ describe('generatePrototypesForPrd V2 transport routing', () => {
       generateInProcess,
     });
 
-    expect(generateInProcess).toHaveBeenCalledTimes(2);
-    expect(generateInProcess.mock.calls[0][0]).toBe('prototype-1');
+    expect(mockSelectWhere).toHaveBeenCalled();
+    expect(generateInProcess).not.toHaveBeenCalled();
+  });
+
+  it('does not start V1 for an ambiguous response when the V2 run exists', async () => {
+    arrangePrd([twoUiFeatures()[0]]);
+    const admitV2Run = jest.fn().mockResolvedValue(undefined);
+    const reconcileV2Admission = jest.fn().mockResolvedValue('intended');
+    const generateInProcess = jest.fn().mockResolvedValue(undefined);
+
+    await generatePrototypesForPrd('prd-1', {
+      isFeatureEnabled: async () => true,
+      admitV2Run,
+      reconcileV2Admission,
+      generateInProcess,
+    });
+
+    expect(reconcileV2Admission).toHaveBeenCalledTimes(1);
+    expect(generateInProcess).not.toHaveBeenCalled();
+  });
+
+  it('treats a conflict with the intended deterministic run as admitted', async () => {
+    arrangePrd([twoUiFeatures()[0]]);
+    const admitV2Run = jest.fn(async (input) => ({
+      status: 'active_run_conflict' as const,
+      existingRunId: input.runId,
+      existingTransportVersion: 'servicebus-blob-v2',
+      existingStatus: 'dispatched',
+    }));
+    const generateInProcess = jest.fn().mockResolvedValue(undefined);
+
+    await generatePrototypesForPrd('prd-1', {
+      isFeatureEnabled: async () => true,
+      admitV2Run,
+      reconcileV2Admission: jest.fn(),
+      generateInProcess,
+    });
+
+    expect(generateInProcess).not.toHaveBeenCalled();
   });
 
   it('falls back to in-process generation when the thread already has an active run', async () => {
