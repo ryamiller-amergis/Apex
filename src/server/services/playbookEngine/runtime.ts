@@ -18,7 +18,12 @@ import {
   completeStepRunIfOpen,
   executeStep,
   failStepRun,
+  failStepRunForHuman,
 } from '../playbookSteps';
+import {
+  assertStepGateSatisfied,
+  PlaybookGuardViolationError,
+} from '../playbookGuardService';
 import type { PlaybookGraph, PlaybookGraphNode } from '../../../shared/types/playbook';
 
 /**
@@ -184,7 +189,11 @@ export interface EngineRunContext {
  * against the step registry at publish time; re-describing them in zod here would put the same
  * contract in two places and make adding a step type a change to both.
  */
-function translate(graph: PlaybookGraph, context: EngineRunContext, modules: EngineModules) {
+export function translate(
+  graph: PlaybookGraph,
+  context: EngineRunContext,
+  modules: EngineModules
+) {
   const { createWorkflow, createStep } = modules;
 
   const steps = orderedNodes(graph).map((node) =>
@@ -207,6 +216,30 @@ function translate(graph: PlaybookGraph, context: EngineRunContext, modules: Eng
           stepId: node.id,
           stepType: node.stepType,
         });
+
+        try {
+          // Resolve through the current registry at the last boundary before adapter dispatch.
+          // A pinned version may predate a step type's reclassification to `leaves-apex`.
+          assertStepGateSatisfied(graph, node.id);
+        } catch (error) {
+          if (
+            error instanceof PlaybookGuardViolationError &&
+            error.violation.kind === 'ungated-leaves-apex'
+          ) {
+            await failStepRunForHuman({
+              stepRunId: stepRun.id,
+              reason: error.message,
+            });
+            return suspend({ stepId: node.id });
+          }
+
+          await failStepRun({
+            stepRunId: stepRun.id,
+            reason: error instanceof Error ? error.message : `Step ${node.id} failed`,
+          });
+          throw error;
+        }
+
         let outcome;
         try {
           outcome = await executeStep({
@@ -344,6 +377,49 @@ export async function resumeRunOnEngine(
 
   try {
     return endFrom(await run.resume({ step: stepId, resumeData: { stepId } }));
+  } catch (error) {
+    return { endedAs: 'failed', error };
+  }
+}
+
+/**
+ * Re-executes one existing retryable Apex step row, then resumes traversal from that node.
+ *
+ * This narrow operation exists because Mastra's public restart operation restarts a workflow, not
+ * one Apex-owned failed row. The same runtime gate and adapter dispatch used by normal traversal
+ * run again here; no engine type escapes this wrapper.
+ */
+export async function retryStepRunOnEngine(
+  graph: PlaybookGraph,
+  context: EngineRunContext,
+  stepRunId: string,
+  stepId: string
+): Promise<EngineOutcome> {
+  const node = graph.nodes.find((candidate) => candidate.id === stepId);
+  if (!node) {
+    return { endedAs: 'failed', error: new Error(`No graph node "${stepId}" to retry.`) };
+  }
+
+  try {
+    // BR-013: this is deliberately re-evaluated on every attempt.
+    assertStepGateSatisfied(graph, node.id);
+
+    const outcome = await executeStep({
+      runId: context.runId,
+      stepRunId,
+      stepId: node.id,
+      stepType: node.stepType,
+      project: context.project,
+      initiatorUserId: context.initiatorUserId,
+      config: node.config ?? {},
+    });
+
+    if (outcome.kind === 'suspended') {
+      return { endedAs: 'suspended', suspendedStepId: node.id };
+    }
+
+    await completeStepRunIfOpen({ stepRunId, output: outcome.output });
+    return resumeRunOnEngine(graph, context, node.id);
   } catch (error) {
     return { endedAs: 'failed', error };
   }

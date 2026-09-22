@@ -16,6 +16,7 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../../db/drizzle';
 import { playbookRuns, playbookStepRuns } from '../../db/schema';
+import { parseStepInput, parseStepOutput } from './descriptorValidation';
 import { resolveDeadlineMs } from './registry';
 import {
   deadlineFromNow,
@@ -39,13 +40,6 @@ export type ApprovalSubmissionResult =
   | { outcome: 'recorded'; decision: ApprovalDecision; stepId: string }
   /** The gate had already been decided, or had expired. Not an error — see the file comment. */
   | { outcome: 'already-decided' };
-
-export class ApprovalGateConfigError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ApprovalGateConfigError';
-  }
-}
 
 export class ApprovalNotPermittedError extends Error {
   constructor(message: string) {
@@ -87,27 +81,10 @@ export class ApprovalNotAwaitingError extends Error {
   }
 }
 
-export function parseApprovalGateConfig(
-  config: Record<string, unknown>
-): ApprovalGateStepConfig {
-  const { deadlineMs, subject } = config;
-
-  if (deadlineMs !== undefined && (typeof deadlineMs !== 'number' || !Number.isFinite(deadlineMs))) {
-    throw new ApprovalGateConfigError(
-      "An approval gate's deadlineMs must be a finite number of milliseconds when set."
-    );
-  }
-  if (subject !== undefined && typeof subject !== 'string') {
-    throw new ApprovalGateConfigError("An approval gate's subject must be a string when set.");
-  }
-
-  return { deadlineMs: deadlineMs as number | undefined, subject: subject as string | undefined };
-}
-
 export async function executeApprovalGateStep(
   context: PlaybookStepExecutionContext
 ): Promise<PlaybookStepOutcome> {
-  const config = parseApprovalGateConfig(context.config);
+  const config = parseStepInput<ApprovalGateStepConfig>('approval-gate', context.config);
 
   // The registry owns both the 48-hour default and whether a definition may override it, so an
   // out-of-range or disallowed override is refused there rather than quietly clamped here.
@@ -195,9 +172,13 @@ export async function submitApprovalDecision(input: {
    * the two, the gate may have been decided or swept. `resumeStepRun` only moves a row still marked
    * suspended, so the second of two concurrent submissions moves nothing and is told so.
    */
+  const output = parseStepOutput(STEP_TYPE, {
+    decision: input.decision,
+    decidedBy: input.deciderUserId,
+  });
   const moved = await resumeStepRun({
     stepRunId: input.stepRunId,
-    output: { decision: input.decision, decidedBy: input.deciderUserId },
+    output,
   });
 
   return moved

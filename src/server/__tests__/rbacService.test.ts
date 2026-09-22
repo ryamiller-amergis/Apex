@@ -25,6 +25,7 @@ jest.mock('../db/drizzle', () => {
 
   const makeSelectChain = () => ({
     from: jest.fn().mockReturnThis(),
+    where: jest.fn().mockResolvedValue([]),
     orderBy: jest.fn().mockResolvedValue([]),
   });
 
@@ -342,7 +343,18 @@ describe('updateRolePermissions', () => {
     });
 
     mockDb.transaction.mockImplementation(async (fn: any) => {
-      return fn({ delete: txDeleteMock, insert: txInsertMock });
+      return fn({
+        delete: txDeleteMock,
+        insert: txInsertMock,
+        select: jest.fn().mockReturnValue({
+          from: jest.fn().mockReturnValue({
+            where: jest.fn().mockResolvedValue([
+              { id: 'perm-a', key: 'chat:create' },
+              { id: 'perm-b', key: 'cost:view' },
+            ]),
+          }),
+        }),
+      });
     });
 
     await updateRolePermissions('role-1', ['perm-a', 'perm-b']);
@@ -357,13 +369,66 @@ describe('updateRolePermissions', () => {
     const txInsertMock = jest.fn();
 
     mockDb.transaction.mockImplementation(async (fn: any) => {
-      return fn({ delete: txDeleteMock, insert: txInsertMock });
+      return fn({ delete: txDeleteMock, insert: txInsertMock, select: jest.fn() });
     });
 
     await updateRolePermissions('role-1', []);
 
     expect(txDeleteMock).toHaveBeenCalledTimes(1);
     expect(txInsertMock).not.toHaveBeenCalled();
+  });
+
+  it('PBI-008 AC-0 / TBI-037 DoD-0 / VT-06 saves author-only exactly and returns a warning', async () => {
+    const savedValues: unknown[] = [];
+    mockDb.transaction.mockImplementation(async (fn: any) => fn({
+      delete: jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) }),
+      insert: jest.fn().mockReturnValue({
+        values: jest.fn().mockImplementation((values: unknown) => {
+          savedValues.push(values);
+          return Promise.resolve(undefined);
+        }),
+      }),
+      select: jest.fn().mockReturnValue({
+        from: jest.fn().mockReturnValue({
+          where: jest.fn().mockResolvedValue([
+            { id: 'perm-author', key: 'playbooks:author' },
+          ]),
+        }),
+      }),
+    }));
+
+    const result = await updateRolePermissions('role-author', ['perm-author']);
+
+    expect(savedValues).toEqual([[
+      { roleId: 'role-author', permissionId: 'perm-author' },
+    ]]);
+    expect(result).toEqual({
+      ok: true,
+      warnings: [{
+        code: 'PLAYBOOK_AUTHOR_WITHOUT_RUN',
+        message: expect.any(String),
+        permissionKeys: ['playbooks:author', 'playbooks:run'],
+      }],
+    });
+  });
+
+  it('PBI-008 AC-0 / TBI-037 DoD-0 / VT-07 returns no warning with author and run', async () => {
+    mockDb.transaction.mockImplementation(async (fn: any) => fn({
+      delete: jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) }),
+      insert: jest.fn().mockReturnValue({ values: jest.fn().mockResolvedValue(undefined) }),
+      select: jest.fn().mockReturnValue({
+        from: jest.fn().mockReturnValue({
+          where: jest.fn().mockResolvedValue([
+            { id: 'perm-author', key: 'playbooks:author' },
+            { id: 'perm-run', key: 'playbooks:run' },
+          ]),
+        }),
+      }),
+    }));
+
+    await expect(
+      updateRolePermissions('role-author', ['perm-author', 'perm-run']),
+    ).resolves.toEqual({ ok: true, warnings: [] });
   });
 });
 
@@ -601,6 +666,18 @@ describe('assignProjectRole', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('inserts a project-role record and ignores conflicts', async () => {
+    mockDb.select.mockReturnValue({
+      from: jest.fn().mockReturnValue({
+        where: jest.fn().mockResolvedValue([{ userId: 'user-1' }]),
+      }),
+    });
+    mockDb.query.appUserProjectRoles.findMany.mockResolvedValue([
+      {
+        role: {
+          rolePermissions: [{ permission: { key: 'playbooks:view' } }],
+        },
+      },
+    ]);
     const onConflictMock = jest.fn().mockResolvedValue(undefined);
     const valuesMock = jest.fn().mockReturnValue({ onConflictDoNothing: onConflictMock });
     mockDb.insert.mockReturnValue({ values: valuesMock });
@@ -617,6 +694,59 @@ describe('assignProjectRole', () => {
       }),
     );
     expect(onConflictMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('PBI-008 AC-1 / TBI-037 DoD-0 / VT-08 rejects an out-of-project target before writing', async () => {
+    mockDb.select.mockReturnValue({
+      from: jest.fn().mockReturnValue({
+        where: jest.fn().mockResolvedValue([]),
+      }),
+    });
+
+    await expect(
+      assignProjectRole('outside-user', 'ProjectX', 'role-author', 'admin-user'),
+    ).rejects.toMatchObject({
+      name: 'ProjectRoleScopeError',
+      project: 'ProjectX',
+      userId: 'outside-user',
+    });
+    expect(mockDb.insert).not.toHaveBeenCalled();
+  });
+
+  it('PBI-008 AC-0 / TBI-037 DoD-0 / VT-09 warns from resulting effective project permissions', async () => {
+    mockDb.select.mockReturnValue({
+      from: jest.fn().mockReturnValue({
+        where: jest.fn().mockResolvedValue([{ userId: 'user-1' }]),
+      }),
+    });
+    mockDb.insert.mockReturnValue({
+      values: jest.fn().mockReturnValue({
+        onConflictDoNothing: jest.fn().mockResolvedValue(undefined),
+      }),
+    });
+    mockDb.query.appUserProjectRoles.findMany.mockResolvedValue([
+      {
+        role: {
+          rolePermissions: [{ permission: { key: 'playbooks:author' } }],
+        },
+      },
+      {
+        role: {
+          rolePermissions: [{ permission: { key: 'playbooks:view' } }],
+        },
+      },
+    ]);
+
+    await expect(
+      assignProjectRole('user-1', 'ProjectX', 'role-author', 'admin-user'),
+    ).resolves.toEqual({
+      ok: true,
+      warnings: [{
+        code: 'PLAYBOOK_AUTHOR_WITHOUT_RUN',
+        message: expect.any(String),
+        permissionKeys: ['playbooks:author', 'playbooks:run'],
+      }],
+    });
   });
 });
 

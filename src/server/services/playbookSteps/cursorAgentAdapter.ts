@@ -19,6 +19,7 @@
 import { createThread } from '../chatAgentService';
 import { enqueue } from '../agentRunLifecycleService';
 import { getSkillConfig } from '../projectSettingsService';
+import { parseStepInput } from './descriptorValidation';
 import { assertSkillAllowed, resolveDeadlineMs } from './registry';
 import {
   deadlineFromNow,
@@ -43,33 +44,10 @@ const TERMINAL_EVENT_GRACE_MS = 5 * 60 * 1000;
 
 const STEP_TYPE = 'cursor-agent';
 
-export class CursorAgentStepConfigError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'CursorAgentStepConfigError';
-  }
-}
-
-export function parseCursorAgentConfig(config: Record<string, unknown>): CursorAgentStepConfig {
-  const { skillPath, prompt, model } = config;
-
-  if (typeof skillPath !== 'string' || !skillPath.trim()) {
-    throw new CursorAgentStepConfigError('A cursor-agent step needs a skillPath.');
-  }
-  if (typeof prompt !== 'string' || !prompt.trim()) {
-    throw new CursorAgentStepConfigError('A cursor-agent step needs a non-empty prompt.');
-  }
-  if (model !== undefined && typeof model !== 'string') {
-    throw new CursorAgentStepConfigError("A cursor-agent step's model must be a string when set.");
-  }
-
-  return { skillPath, prompt, model };
-}
-
 export async function executeCursorAgentStep(
   context: PlaybookStepExecutionContext
 ): Promise<PlaybookStepOutcome> {
-  const config = parseCursorAgentConfig(context.config);
+  const config = parseStepInput<CursorAgentStepConfig>(STEP_TYPE, context.config);
 
   /*
    * Before anything exists to clean up. Validating after the thread and agent run were created

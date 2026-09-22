@@ -11,6 +11,7 @@
 const insertValues = jest.fn();
 const findFirstDefinition = jest.fn();
 const findFirstVersion = jest.fn();
+const updateTable = jest.fn();
 
 // The real playbookSteps barrel is required below for the dispatch-table check, which reaches the
 // cursor-agent adapter and through it chatAgentService. Stubbed so that pulls in no pool.
@@ -23,7 +24,10 @@ jest.mock('../db/drizzle', () => ({
       playbookDefinitionVersions: { findFirst: (...a: unknown[]) => findFirstVersion(...a) },
     },
     insert: () => ({ values: (v: unknown) => ({ returning: () => insertValues(v) }) }),
-    update: () => ({ set: () => ({ where: jest.fn().mockResolvedValue(undefined) }) }),
+    update: (table: unknown) => {
+      updateTable(table);
+      return { set: () => ({ where: jest.fn().mockResolvedValue(undefined) }) };
+    },
   },
 }));
 
@@ -54,6 +58,10 @@ import {
   PlaybookDefinitionNotFoundError,
   PlaybookEmptyGraphError,
   PlaybookNoPublishedVersionError,
+  PlaybookVersionPinNotFoundError,
+  PlaybookVersionPinNotPublishedError,
+  PlaybookVersionPinReasonRequiredError,
+  resolveRunnableVersion,
   startRun,
 } from '../services/playbookRunService';
 import { adapterStepTypes, listStepTypeDescriptors } from '../services/playbookSteps';
@@ -70,10 +78,47 @@ const GRAPH = {
   edges: [{ from: 'draft', to: 'approve' }],
 };
 
+/** An older published version a caller may pin deliberately, per TBI-031 (c). */
+const PINNED_VERSION = {
+  id: 'version-3',
+  definitionId: 'def-1',
+  versionNumber: 3,
+  status: 'published',
+  graph: GRAPH,
+};
+
+/*
+ * Flattens a Drizzle condition into the column names and bound values it mentions, which is how
+ * the version-selection tests below assert *what was asked of the database* rather than only what
+ * the double was told to answer. Without this, a resolver that ignored `status` entirely would
+ * still pass, because the mock hands back whatever it was given.
+ */
+const sqlTerms = (node: unknown): string[] => {
+  if (node === null || node === undefined) return [];
+  if (Array.isArray(node)) return node.flatMap(sqlTerms);
+  if (typeof node !== 'object') return [String(node)];
+  const record = node as Record<string, unknown>;
+  if (Array.isArray(record.queryChunks)) return sqlTerms(record.queryChunks);
+  if (typeof record.name === 'string') return [record.name];
+  if ('value' in record) return sqlTerms(record.value);
+  return [];
+};
+
+const versionQueryTerms = (): string[] => {
+  const [args] = findFirstVersion.mock.calls[0] as [{ where?: unknown; orderBy?: unknown }];
+  return [...sqlTerms(args.where), ...sqlTerms(args.orderBy)];
+};
+
 beforeEach(() => {
   jest.clearAllMocks();
   findFirstDefinition.mockResolvedValue(DEFINITION);
-  findFirstVersion.mockResolvedValue({ id: 'version-7', versionNumber: 7, graph: GRAPH });
+  findFirstVersion.mockResolvedValue({
+    id: 'version-7',
+    definitionId: 'def-1',
+    versionNumber: 7,
+    status: 'published',
+    graph: GRAPH,
+  });
   insertValues.mockResolvedValue([{ id: 'run-1' }]);
   beginRun.mockResolvedValue({ advanced: true, endedAs: 'suspended' });
   assertActiveRunCapacity.mockResolvedValue(undefined);
@@ -140,7 +185,12 @@ describe('starting a run', () => {
       initiatorUserId: INITIATOR,
     });
 
-    expect(result).toEqual({ runId: 'run-1', status: 'running' });
+    // TBI-031: the resolved version is part of the answer, so the caller knows what it started.
+    expect(result).toEqual({
+      runId: 'run-1',
+      status: 'running',
+      definitionVersionId: 'version-7',
+    });
     expect(insertValues).toHaveBeenCalledWith(
       expect.objectContaining({
         project: PROJECT,
@@ -208,6 +258,214 @@ describe('starting a run', () => {
      * the step and run rows are already marked failed by the time this is reached.
      */
     expect(insertValues).toHaveBeenCalledTimes(1);
+  });
+});
+
+/*
+ * TBI-031 — which version a new run gets, and what a caller must say to override it.
+ *
+ * The refusals are the load-bearing half. Every one of them has to happen before the capacity
+ * check and the run insert, for the same reason VT-07 does: a run row that exists only to record
+ * its own rejection counts against the project's active-run cap and has to be explained to whoever
+ * reads the status view.
+ */
+describe('VT-12 — an unpinned start resolves the current published version', () => {
+  it('asks for the highest-numbered published version of this definition (TBI-031 DoD-2)', async () => {
+    await startRun({ project: PROJECT, definitionId: 'def-1', initiatorUserId: INITIATOR });
+
+    const terms = versionQueryTerms();
+    // Deprecated, archived and draft rows are excluded by the status term, not by luck of ordering.
+    expect(terms).toEqual(expect.arrayContaining(['definition_id', 'def-1', 'status', 'published']));
+    expect(terms).toEqual(expect.arrayContaining(['version_number']));
+    expect(terms.join(' ')).toMatch(/desc/i);
+  });
+
+  it('stores no pin reason (TBI-031 DoD-2)', async () => {
+    await startRun({ project: PROJECT, definitionId: 'def-1', initiatorUserId: INITIATOR });
+
+    expect(insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({ definitionVersionId: 'version-7', versionPinReason: null })
+    );
+  });
+
+  it('stores no pin reason when a reason arrives without a version (TBI-031 DoD-2)', async () => {
+    await startRun({
+      project: PROJECT,
+      definitionId: 'def-1',
+      initiatorUserId: INITIATOR,
+      versionPinReason: 'stated, but nothing was pinned',
+    });
+
+    // A reason with no version pinned nothing, so there is nothing to document.
+    expect(insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({ versionPinReason: null })
+    );
+  });
+
+  it('resolves through the definition, returning both (TBI-031 (a))', async () => {
+    const resolution = await resolveRunnableVersion({ project: PROJECT, definitionId: 'def-1' });
+
+    expect(resolution.definition).toEqual(expect.objectContaining({ id: 'def-1', name: 'Draft and approve' }));
+    expect(resolution.version).toEqual(expect.objectContaining({ id: 'version-7' }));
+    expect(resolution.versionPinReason).toBeNull();
+  });
+});
+
+describe('VT-13 — resolution never crosses a project boundary (TBI-031 DoD-1/3)', () => {
+  it('refuses a pinned start against another project’s definition before reading any version', async () => {
+    findFirstDefinition.mockResolvedValue(undefined);
+
+    await expect(
+      startRun({
+        project: 'SomeOtherProject',
+        definitionId: 'def-1',
+        initiatorUserId: INITIATOR,
+        definitionVersionId: 'version-3',
+        versionPinReason: 'trigger subscription',
+      })
+    ).rejects.toThrow(PlaybookDefinitionNotFoundError);
+
+    expect(findFirstVersion).not.toHaveBeenCalled();
+    expect(assertActiveRunCapacity).not.toHaveBeenCalled();
+    expect(insertValues).not.toHaveBeenCalled();
+  });
+
+  it('looks a pinned version up through the project-scoped definition, not by id alone', async () => {
+    findFirstVersion.mockResolvedValue(PINNED_VERSION);
+
+    await startRun({
+      project: PROJECT,
+      definitionId: 'def-1',
+      initiatorUserId: INITIATOR,
+      definitionVersionId: 'version-3',
+      versionPinReason: 'trigger subscription',
+    });
+
+    const terms = versionQueryTerms();
+    expect(terms).toEqual(expect.arrayContaining(['id', 'version-3', 'definition_id', 'def-1']));
+    /*
+     * Deliberately not filtered to published: a deprecated pin has to come back so the caller is
+     * told the version is deprecated rather than told it does not exist.
+     */
+    expect(terms).not.toContain('published');
+  });
+});
+
+describe('VT-14 — an explicit pin with a documented reason (TBI-031 (c))', () => {
+  beforeEach(() => {
+    findFirstVersion.mockResolvedValue(PINNED_VERSION);
+  });
+
+  const pinnedStart = () =>
+    startRun({
+      project: PROJECT,
+      definitionId: 'def-1',
+      initiatorUserId: INITIATOR,
+      definitionVersionId: 'version-3',
+      versionPinReason: '  Trigger subscription still targets v3  ',
+    });
+
+  it('pins that exact version and returns it', async () => {
+    await expect(pinnedStart()).resolves.toEqual({
+      runId: 'run-1',
+      status: 'running',
+      definitionVersionId: 'version-3',
+    });
+  });
+
+  it('stores the reason trimmed', async () => {
+    await pinnedStart();
+
+    expect(insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        definitionVersionId: 'version-3',
+        versionPinReason: 'Trigger subscription still targets v3',
+      })
+    );
+  });
+
+  it('hands the engine the pinned version’s graph', async () => {
+    await pinnedStart();
+
+    expect(beginRun).toHaveBeenCalledWith(
+      expect.objectContaining({ definitionVersionId: 'version-3', graph: GRAPH })
+    );
+  });
+});
+
+describe('VT-15 — a pin that cannot be honoured is refused before the run exists (TBI-031 (d))', () => {
+  const pinnedStart = (overrides: { definitionVersionId?: string; versionPinReason?: string }) =>
+    startRun({
+      project: PROJECT,
+      definitionId: 'def-1',
+      initiatorUserId: INITIATOR,
+      definitionVersionId: 'version-3',
+      ...overrides,
+    });
+
+  const wroteNothing = () => {
+    expect(assertActiveRunCapacity).not.toHaveBeenCalled();
+    expect(insertValues).not.toHaveBeenCalled();
+    expect(beginRun).not.toHaveBeenCalled();
+  };
+
+  it.each([
+    ['omitted', undefined],
+    ['blank', '   '],
+  ])('refuses a pin whose reason is %s', async (_label, versionPinReason) => {
+    findFirstVersion.mockResolvedValue(PINNED_VERSION);
+
+    await expect(pinnedStart({ versionPinReason })).rejects.toThrow(
+      PlaybookVersionPinReasonRequiredError
+    );
+    wroteNothing();
+  });
+
+  it('says what to supply when the reason is missing', async () => {
+    await expect(pinnedStart({ versionPinReason: undefined })).rejects.toThrow(
+      /versionPinReason/
+    );
+  });
+
+  it.each(['deprecated', 'archived', 'draft'])(
+    'refuses a pin to a %s version, naming its status',
+    async (status) => {
+      findFirstVersion.mockResolvedValue({ ...PINNED_VERSION, status });
+
+      const attempt = pinnedStart({ versionPinReason: 'trigger subscription' });
+      await expect(attempt).rejects.toThrow(PlaybookVersionPinNotPublishedError);
+      await expect(attempt).rejects.toThrow(new RegExp(status));
+      wroteNothing();
+    }
+  );
+
+  it('refuses a pin to a version of another definition or project', async () => {
+    // The project-scoped, definition-scoped lookup simply does not find it.
+    findFirstVersion.mockResolvedValue(undefined);
+
+    const attempt = pinnedStart({ versionPinReason: 'trigger subscription' });
+    await expect(attempt).rejects.toThrow(PlaybookVersionPinNotFoundError);
+    await expect(attempt).rejects.toThrow(/Draft and approve/);
+    wroteNothing();
+  });
+
+  it('refuses a pin to a version with an empty graph', async () => {
+    findFirstVersion.mockResolvedValue({ ...PINNED_VERSION, graph: { nodes: [], edges: [] } });
+
+    await expect(pinnedStart({ versionPinReason: 'trigger subscription' })).rejects.toThrow(
+      PlaybookEmptyGraphError
+    );
+    expect(insertValues).not.toHaveBeenCalled();
+  });
+});
+
+describe('VT-16 — starting a run leaves existing runs and their pins alone (BR-006)', () => {
+  it('writes one new run row and updates nothing', async () => {
+    await startRun({ project: PROJECT, definitionId: 'def-1', initiatorUserId: INITIATOR });
+
+    expect(insertValues).toHaveBeenCalledTimes(1);
+    // Resolution reads versions; it never rewrites a version another run is already pinned to.
+    expect(updateTable).not.toHaveBeenCalled();
   });
 });
 

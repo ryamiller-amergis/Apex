@@ -64,9 +64,11 @@ function toStepRun(row: Record<string, unknown>): PlaybookStepRun {
  * step at all, which is a real answer rather than a missing one.
  */
 function currentStep(steps: PlaybookStepRun[]): PlaybookStepRun | null {
+  const latest = steps[steps.length - 1];
   return (
     steps.find((s) => s.status === 'suspended') ??
     steps.find((s) => OPEN_STEP_STATUSES.has(s.status)) ??
+    (latest?.status === 'failed_retryable' ? latest : null) ??
     null
   );
 }

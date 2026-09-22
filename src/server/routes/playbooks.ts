@@ -12,16 +12,37 @@
 import express, { Request, Response } from 'express';
 import { requirePermission, resolveRequestProject } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
-import { getAppEnvironment } from '../utils/superAdmin';
-import { isFeatureEnabled } from '../services/featureFlagService';
+import { isSuperAdminRequest } from '../utils/superAdmin';
 import { getRun, listRuns } from '../services/playbookRunProjectionService';
 import {
   PlaybookDefinitionNotFoundError,
   PlaybookEmptyGraphError,
   PlaybookNoPublishedVersionError,
+  PlaybookVersionPinNotFoundError,
+  PlaybookVersionPinNotPublishedError,
+  PlaybookVersionPinReasonRequiredError,
   startRun,
 } from '../services/playbookRunService';
 import { PlaybookGuardViolationError } from '../services/playbookGuardService';
+import {
+  PlaybookDefinitionNotFoundError as PlaybookLifecycleDefinitionNotFoundError,
+  PlaybookDraftConflictError,
+  PlaybookDraftNotFoundError,
+  PlaybookVersionImmutableError,
+  PlaybookVersionNotFoundError,
+  PlaybookVersionTransitionError,
+  createDefinition,
+  deprecateVersion,
+  getDefinitionDetail,
+  listDefinitions,
+  publishDraft,
+  updateDraft,
+} from '../services/playbookDefinitionService';
+import { PlaybookStepSchemaError } from '../services/playbookSteps/descriptorValidation';
+import {
+  PlaybookStepTypeError,
+  UnknownPlaybookStepTypeError,
+} from '../services/playbookSteps/registry';
 import { advanceRun } from '../services/playbookAdvanceService';
 import {
   ApprovalMissingDeadlineError,
@@ -29,63 +50,288 @@ import {
   ApprovalNotPermittedError,
   submitApprovalDecision,
 } from '../services/playbookSteps/approvalGateAdapter';
+import {
+  PlaybookRunActionConflictError,
+  PlaybookRunActionForbiddenError,
+  PlaybookRunActionNotFoundError,
+  cancelPlaybookRun,
+  retryPlaybookStep,
+} from '../services/playbookRunActionService';
 
 const router = express.Router();
-
-const PLAYBOOKS_SPIKE_FLAG = 'playbooks-spike';
 
 /** The display cap. A larger `limit` is clamped rather than refused; `total` reports the truth. */
 const MAX_RUN_PAGE = 50;
 
-/**
- * Router-level flag gate. With `playbooks-spike` off, no Playbook endpoint exists.
- *
- * 404 rather than 403 is the point: a 403 confirms the surface is there and merely withheld, and
- * the epic's success metric is that no Playbook surface appears anywhere outside local and
- * development. Mounted once here rather than repeated per handler because the feature-flags skill
- * asks for a single obvious entry point, and because a handler added later would otherwise be
- * ungated by default — the wrong way round for a flag whose whole job is keeping this dark.
- *
- * It covers the run-start and gate-decision endpoints too, which is deliberate: being able to start
- * a run you cannot see would be a strange thing for the off state to allow.
- */
-const requirePlaybooksEnabled: express.RequestHandler = async (req, res, next) => {
+type RequestBody = Record<string, unknown>;
+
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isPlaybookGraph(value: unknown): value is {
+  nodes: Array<{ id: string; stepType: string; config?: Record<string, unknown> }>;
+  edges: Array<{ from: string; to: string; condition?: string }>;
+} {
+  if (!value || typeof value !== 'object') return false;
+  const graph = value as Record<string, unknown>;
+  if (!Array.isArray(graph.nodes) || !Array.isArray(graph.edges)) return false;
+
+  const nodesAreValid = graph.nodes.every((node) => {
+    if (!node || typeof node !== 'object') return false;
+    const candidate = node as Record<string, unknown>;
+    if (!isNonBlankString(candidate.id) || !isNonBlankString(candidate.stepType)) return false;
+    return (
+      candidate.config === undefined ||
+      (candidate.config !== null &&
+        typeof candidate.config === 'object' &&
+        !Array.isArray(candidate.config))
+    );
+  });
+  const edgesAreValid = graph.edges.every((edge) => {
+    if (!edge || typeof edge !== 'object') return false;
+    const candidate = edge as Record<string, unknown>;
+    return (
+      isNonBlankString(candidate.from) &&
+      isNonBlankString(candidate.to) &&
+      (candidate.condition === undefined || typeof candidate.condition === 'string')
+    );
+  });
+
+  return nodesAreValid && edgesAreValid;
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === '23505'
+  );
+}
+
+function sendDefinitionError(error: unknown, res: Response): boolean {
+  if (error instanceof PlaybookGuardViolationError) {
+    res.status(400).json({ error: error.message, violation: error.violation });
+    return true;
+  }
+
+  if (
+    error instanceof UnknownPlaybookStepTypeError ||
+    error instanceof PlaybookStepSchemaError ||
+    error instanceof PlaybookStepTypeError
+  ) {
+    res.status(400).json({ error: error.message });
+    return true;
+  }
+
+  if (
+    error instanceof PlaybookLifecycleDefinitionNotFoundError ||
+    error instanceof PlaybookDraftNotFoundError ||
+    error instanceof PlaybookVersionNotFoundError
+  ) {
+    res.status(404).json({ error: error.message });
+    return true;
+  }
+
+  if (
+    error instanceof PlaybookDraftConflictError ||
+    error instanceof PlaybookVersionImmutableError ||
+    error instanceof PlaybookVersionTransitionError ||
+    isUniqueViolation(error)
+  ) {
+    res.status(409).json({
+      error: error instanceof Error ? error.message : 'A conflicting Playbook definition exists.',
+    });
+    return true;
+  }
+
+  return false;
+}
+
+/** Reject project-scoped requests that do not name a project. */
+const requirePlaybooksProject: express.RequestHandler = async (req, res, next) => {
   try {
-    // Same resolution the permission guard uses, so the flag and the guard can never disagree
-    // about which project a request is for.
     const project = resolveRequestProject(req);
     if (!project) {
-      // A project-scoped surface addressed without a project names nothing: there is no project to
-      // evaluate the flag against and none to check a permission in. 404 for the same reason as
-      // below — a 400 here would confirm the route exists to a caller the flag is meant to hide it
-      // from.
       res.status(404).json({ error: 'Not found' });
       return;
     }
 
-    const enabled = await isFeatureEnabled(PLAYBOOKS_SPIKE_FLAG, {
-      userId: getUserId(req),
-      project,
-      environment: getAppEnvironment(),
-    });
-
-    // @feature-flag:playbooks-spike start winner=enabled
-    if (!enabled) {
-      // @feature-flag:playbooks-spike disabled-start
-      res.status(404).json({ error: 'Not found' });
-      return;
-      // @feature-flag:playbooks-spike disabled-end
-    }
-    // @feature-flag:playbooks-spike enabled-start
     next();
-    // @feature-flag:playbooks-spike enabled-end
-    // @feature-flag:playbooks-spike end
   } catch (error) {
     next(error);
   }
 };
 
-router.use(requirePlaybooksEnabled);
+router.use(requirePlaybooksProject);
+
+router.get(
+  '/definitions',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    res.json(await listDefinitions(project));
+  }
+);
+
+router.post(
+  '/definitions',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const { project, name, description, graph } = (req.body ?? {}) as RequestBody;
+    if (!isNonBlankString(project)) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    if (!isNonBlankString(name)) {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    if (description !== undefined && typeof description !== 'string') {
+      res.status(400).json({ error: 'description must be a string' });
+      return;
+    }
+    if (!isPlaybookGraph(graph)) {
+      res.status(400).json({ error: 'graph must contain valid nodes and edges arrays' });
+      return;
+    }
+
+    const createdByUserId = getUserId(req);
+    if (!createdByUserId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    try {
+      const result = await createDefinition({
+        project,
+        name,
+        description,
+        graph,
+        createdByUserId,
+      });
+      res.status(201).json(result);
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+  }
+);
+
+router.get(
+  '/definitions/:definitionId',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    try {
+      res.json(await getDefinitionDetail(project, req.params.definitionId));
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+  }
+);
+
+router.put(
+  '/definitions/:definitionId/draft',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const { project, name, description, graph, expectedDraftUpdatedAt } = (req.body ??
+      {}) as RequestBody;
+    if (!isNonBlankString(project)) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    if (!isNonBlankString(name)) {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    if (description !== undefined && typeof description !== 'string') {
+      res.status(400).json({ error: 'description must be a string' });
+      return;
+    }
+    if (!isPlaybookGraph(graph)) {
+      res.status(400).json({ error: 'graph must contain valid nodes and edges arrays' });
+      return;
+    }
+    if (!isNonBlankString(expectedDraftUpdatedAt)) {
+      res.status(400).json({ error: 'expectedDraftUpdatedAt is required' });
+      return;
+    }
+
+    try {
+      res.json(
+        await updateDraft({
+          project,
+          definitionId: req.params.definitionId,
+          name,
+          description,
+          graph,
+          expectedDraftUpdatedAt,
+        })
+      );
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+  }
+);
+
+router.post(
+  '/definitions/:definitionId/publish',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const { project, expectedDraftUpdatedAt } = (req.body ?? {}) as RequestBody;
+    if (!isNonBlankString(project)) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    if (!isNonBlankString(expectedDraftUpdatedAt)) {
+      res.status(400).json({ error: 'expectedDraftUpdatedAt is required' });
+      return;
+    }
+
+    const publishedByUserId = getUserId(req);
+    if (!publishedByUserId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    try {
+      const result = await publishDraft({
+        project,
+        definitionId: req.params.definitionId,
+        publishedByUserId,
+        expectedDraftUpdatedAt,
+      });
+      res.status(201).json(result);
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+  }
+);
+
+router.post(
+  '/definitions/:definitionId/versions/:versionId/deprecate',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const { project } = (req.body ?? {}) as RequestBody;
+    if (!isNonBlankString(project)) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+
+    try {
+      res.json(
+        await deprecateVersion({
+          project,
+          definitionId: req.params.definitionId,
+          versionId: req.params.versionId,
+        })
+      );
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+  }
+);
 
 /**
  * `GET /api/playbooks/runs?project=&limit=` — runs in a project, most recent first.
@@ -100,7 +346,7 @@ router.get(
   '/runs',
   requirePermission('playbooks:view'),
   async (req: Request, res: Response): Promise<void> => {
-    // Non-null because `requirePlaybooksEnabled` refuses a request that names no project, and it
+    // Non-null because `requirePlaybooksProject` refuses a request that names no project, and it
     // runs in front of every route on this router.
     const project = resolveRequestProject(req)!;
 
@@ -139,7 +385,8 @@ router.post(
   '/runs',
   requirePermission('playbooks:run'),
   async (req: Request, res: Response): Promise<void> => {
-    const { project, definitionId } = (req.body ?? {}) as Record<string, unknown>;
+    const { project, definitionId, definitionVersionId, versionPinReason } = (req.body ??
+      {}) as RequestBody;
 
     if (typeof project !== 'string' || !project.trim()) {
       res.status(400).json({ error: 'project is required' });
@@ -147,6 +394,22 @@ router.post(
     }
     if (typeof definitionId !== 'string' || !definitionId.trim()) {
       res.status(400).json({ error: 'definitionId is required' });
+      return;
+    }
+    const hasVersionId = definitionVersionId !== undefined;
+    const hasPinReason = versionPinReason !== undefined;
+    if (hasVersionId !== hasPinReason) {
+      res.status(400).json({
+        error: 'definitionVersionId and versionPinReason must be provided together',
+      });
+      return;
+    }
+    if (hasVersionId && !isNonBlankString(definitionVersionId)) {
+      res.status(400).json({ error: 'definitionVersionId must be a non-blank string' });
+      return;
+    }
+    if (hasPinReason && !isNonBlankString(versionPinReason)) {
+      res.status(400).json({ error: 'versionPinReason must be a non-blank string' });
       return;
     }
 
@@ -157,7 +420,14 @@ router.post(
     }
 
     try {
-      const result = await startRun({ project, definitionId, initiatorUserId });
+      const result = await startRun({
+        project,
+        definitionId,
+        ...(definitionVersionId !== undefined
+          ? { definitionVersionId, versionPinReason: versionPinReason as string }
+          : {}),
+        initiatorUserId,
+      });
       res.status(201).json(result);
     } catch (error) {
       /*
@@ -167,16 +437,25 @@ router.post(
        */
       if (
         error instanceof PlaybookNoPublishedVersionError ||
-        error instanceof PlaybookEmptyGraphError
+        error instanceof PlaybookEmptyGraphError ||
+        error instanceof PlaybookVersionPinReasonRequiredError
       ) {
         res.status(400).json({ error: error.message });
         return;
       }
 
-      if (error instanceof PlaybookDefinitionNotFoundError) {
+      if (
+        error instanceof PlaybookDefinitionNotFoundError ||
+        error instanceof PlaybookVersionPinNotFoundError
+      ) {
         // 404 rather than 403: the permission check already passed for this project, so the caller
         // is allowed to know that no such definition exists in it.
         res.status(404).json({ error: error.message });
+        return;
+      }
+
+      if (error instanceof PlaybookVersionPinNotPublishedError) {
+        res.status(409).json({ error: error.message });
         return;
       }
 
@@ -188,6 +467,84 @@ router.post(
       }
 
       throw error;
+    }
+  }
+);
+
+function sendRunActionError(error: unknown, res: Response): boolean {
+  if (error instanceof PlaybookRunActionForbiddenError) {
+    res.status(403).json({ error: error.message });
+    return true;
+  }
+  if (error instanceof PlaybookRunActionNotFoundError) {
+    res.status(404).json({ error: error.message });
+    return true;
+  }
+  if (error instanceof PlaybookRunActionConflictError) {
+    res.status(409).json({ error: error.message });
+    return true;
+  }
+  return false;
+}
+
+router.post(
+  '/runs/:runId/cancel',
+  async (req: Request, res: Response): Promise<void> => {
+    const { project, reason } = (req.body ?? {}) as RequestBody;
+    if (!req.user || !getUserId(req)) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    if (!isNonBlankString(project)) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    if (reason !== undefined && typeof reason !== 'string') {
+      res.status(400).json({ error: 'reason must be a string' });
+      return;
+    }
+
+    try {
+      res.json(
+        await cancelPlaybookRun({
+          runId: req.params.runId,
+          project,
+          actorUserId: getUserId(req)!,
+          isSuperAdmin: isSuperAdminRequest(req),
+          ...(reason?.trim() ? { reason: reason.trim() } : {}),
+        })
+      );
+    } catch (error) {
+      if (!sendRunActionError(error, res)) throw error;
+    }
+  }
+);
+
+router.post(
+  '/runs/:runId/steps/:stepRunId/retry',
+  async (req: Request, res: Response): Promise<void> => {
+    const { project } = (req.body ?? {}) as RequestBody;
+    if (!req.user || !getUserId(req)) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    if (!isNonBlankString(project)) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+
+    try {
+      res.json(
+        await retryPlaybookStep({
+          runId: req.params.runId,
+          stepRunId: req.params.stepRunId,
+          project,
+          actorUserId: getUserId(req)!,
+          isSuperAdmin: isSuperAdminRequest(req),
+        })
+      );
+    } catch (error) {
+      if (!sendRunActionError(error, res)) throw error;
     }
   }
 );

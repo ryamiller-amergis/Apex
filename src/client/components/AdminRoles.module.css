@@ -419,10 +419,10 @@
 
 .warning {
   padding: 10px 12px;
-  background: color-mix(in srgb, #f59e0b 8%, transparent);
-  border: 1px solid color-mix(in srgb, #f59e0b 30%, transparent);
+  background: color-mix(in srgb, var(--warning-color) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning-color) 30%, transparent);
   border-radius: 6px;
-  color: #f59e0b;
+  color: var(--warning-text);
   font-size: 13px;
 }
 

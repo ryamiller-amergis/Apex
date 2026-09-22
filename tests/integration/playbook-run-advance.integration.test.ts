@@ -21,7 +21,7 @@ jest.mock('../../src/server/services/chatAgentService', () => ({
 }));
 
 import pg from 'pg';
-import { createScratchDatabase, enablePlaybooks, ScratchDatabase } from './support/scratch-db';
+import { createScratchDatabase, ScratchDatabase } from './support/scratch-db';
 
 type RunServiceModule = typeof import('../../src/server/services/playbookRunService');
 type AdvanceModule = typeof import('../../src/server/services/playbookAdvanceService');
@@ -105,21 +105,31 @@ async function stepRunIdFor(runId: string, stepId: string): Promise<string> {
   return row.id;
 }
 
-/** Gives the initiator a project role carrying `playbooks:run`, which TBI-024 re-checks per step. */
-async function grantPlaybooksRun(userOid: string): Promise<void> {
+/** Gives the initiator exactly the permissions required by the step types this suite executes. */
+async function grantStepPermissions(userOid: string, stepTypes: string[]): Promise<void> {
   const [role] = await query<{ id: string }>(
     `INSERT INTO app_roles (name, description) VALUES ('playbook-advance-runner', 'Fixture')
      ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description RETURNING id`
   );
-  const [permission] = await query<{ id: string }>(
-    `INSERT INTO app_permissions (key, description) VALUES ('playbooks:run', 'Start Playbook runs')
-     ON CONFLICT (key) DO UPDATE SET description = EXCLUDED.description RETURNING id`
+  const requiredPermissions = [
+    ...new Set(
+      stepTypes.flatMap((stepType) => registry.getStepTypeDescriptor(stepType).requiredPermissions)
+    ),
+  ];
+  const permissions = await query<{ id: string }>(
+    `SELECT id FROM app_permissions WHERE key = ANY($1::text[])`,
+    [requiredPermissions]
   );
-  await query(
-    `INSERT INTO app_role_permissions (role_id, permission_id) VALUES ($1, $2)
-     ON CONFLICT DO NOTHING`,
-    [role.id, permission.id]
-  );
+  if (permissions.length !== requiredPermissions.length) {
+    throw new Error(`Missing seeded Playbook permissions: ${requiredPermissions.join(', ')}`);
+  }
+  for (const permission of permissions) {
+    await query(
+      `INSERT INTO app_role_permissions (role_id, permission_id) VALUES ($1, $2)
+       ON CONFLICT DO NOTHING`,
+      [role.id, permission.id]
+    );
+  }
   await query(
     `INSERT INTO app_user_project_roles (user_id, project, role_id) VALUES ($1, $2, $3)
      ON CONFLICT DO NOTHING`,
@@ -130,7 +140,6 @@ async function grantPlaybooksRun(userOid: string): Promise<void> {
 beforeAll(async () => {
   scratch = await createScratchDatabase('playbookadvance');
   // Traversal runs through the engine boundary, which refuses every operation while the flag is off.
-  await enablePlaybooks(scratch.connectionString);
 
   process.env.DATABASE_URL = scratch.connectionString;
   /* eslint-disable @typescript-eslint/no-require-imports --
@@ -153,7 +162,7 @@ beforeAll(async () => {
      ON CONFLICT (oid) DO NOTHING`,
     [INITIATOR]
   );
-  await grantPlaybooksRun(INITIATOR);
+  await grantStepPermissions(INITIATOR, ['approval-gate', 'cursor-agent', 'notify']);
 }, MIGRATE_TIMEOUT);
 
 afterAll(async () => {
@@ -344,6 +353,7 @@ describe('advancing is a no-op unless the run is genuinely waiting for its next 
 describe('an agent step completing advances the run, through the real terminal-event path', () => {
   it('runs the step after the agent step when its terminal event arrives', async () => {
     const definitionId = await publishDefinition('advance-after-agent', [
+      { id: 'approve', stepType: 'approval-gate', config: { subject: 'Run agent?' } },
       {
         id: 'ask',
         stepType: 'cursor-agent',
@@ -360,6 +370,13 @@ describe('an agent step completing advances the run, through the real terminal-e
       definitionId,
       initiatorUserId: INITIATOR,
     });
+    await approvals.submitApprovalDecision({
+      stepRunId: await stepRunIdFor(runId, 'approve'),
+      deciderUserId: INITIATOR,
+      decision: 'approved',
+      runId,
+    });
+    await advance.advanceRun(runId, 'approve');
 
     const [agentStep] = await query<{ agent_run_id: string | null }>(
       "SELECT agent_run_id FROM playbook_step_runs WHERE run_id = $1 AND step_id = 'ask'",
@@ -376,6 +393,7 @@ describe('an agent step completing advances the run, through the real terminal-e
     } as Parameters<TerminalEventModule['handleTerminalAgentRunEvent']>[0]);
 
     expect(await stepsOf(runId)).toEqual([
+      { step_id: 'approve', status: 'completed' },
       { step_id: 'ask', status: 'completed' },
       { step_id: 'announce', status: 'completed' },
     ]);

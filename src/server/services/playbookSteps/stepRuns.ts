@@ -271,6 +271,59 @@ export async function failStepRun(input: {
     );
 }
 
+/**
+ * Parks a step for a person and suspends its run, in one transaction. Returns false when there was
+ * no open step to park.
+ *
+ * TBI-035's refusal has two halves and neither is useful alone. A step at `failed_retryable` whose
+ * run still reads `running` is a run the engine keeps advancing, straight past the step the refusal
+ * exists to stop; a run at `suspended` with no parked step is a run nobody can explain. Both moves
+ * are conditional for the same reason every other move in this file is — a step that has already
+ * gone terminal is left as it is, and a run that has already completed, been cancelled or expired
+ * is not brought back to life.
+ *
+ * Nothing here retries. `failed_retryable` names what a person may do next, not something this
+ * code will do on their behalf.
+ */
+export async function failStepRunForHuman(input: {
+  stepRunId: string;
+  reason: string;
+}): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const parked = await tx
+      .update(playbookStepRuns)
+      .set({
+        status: 'failed_retryable',
+        outputInline: { error: input.reason },
+        completedAt: nowIso(),
+        updatedAt: nowIso(),
+      })
+      .where(
+        and(
+          eq(playbookStepRuns.id, input.stepRunId),
+          inArray(playbookStepRuns.status, ['pending', 'running', 'suspended'])
+        )
+      )
+      .returning({ id: playbookStepRuns.id, runId: playbookStepRuns.runId });
+
+    // Absent or already terminal: the run is not the caller's to move on the strength of a step
+    // this call did not park.
+    if (parked.length === 0) return false;
+
+    await tx
+      .update(playbookRuns)
+      .set({ status: 'suspended', updatedAt: nowIso() })
+      .where(
+        and(
+          eq(playbookRuns.id, parked[0].runId),
+          inArray(playbookRuns.status, ['running', 'suspended'])
+        )
+      );
+
+    return true;
+  });
+}
+
 export async function getStepRun(stepRunId: string): Promise<PlaybookStepRun | null> {
   const row = await db.query.playbookStepRuns.findFirst({
     where: eq(playbookStepRuns.id, stepRunId),

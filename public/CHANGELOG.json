@@ -1,5 +1,28 @@
 [
   {
+    "version": "1.38.0",
+    "date": "2026-09-22",
+    "title": "Playbook Definition and Governance",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Playbook authors can create project-scoped drafts, publish immutable numbered versions, deprecate versions, and inspect version history"
+      },
+      {
+        "type": "feature",
+        "description": "Playbook publishing and execution now validate step schemas, required permissions, and approval gates before actions can leave Apex"
+      },
+      {
+        "type": "feature",
+        "description": "Project Admins can grant Playbook author and administrator access with warnings when an author cannot run what they create"
+      },
+      {
+        "type": "feature",
+        "description": "Run initiators and Playbook administrators can cancel eligible runs or retry the current retryable step from the run view"
+      }
+    ]
+  },
+  {
     "version": "1.37.0",
     "date": "2026-08-13",
     "title": "Canonical Agent Skills Roots",

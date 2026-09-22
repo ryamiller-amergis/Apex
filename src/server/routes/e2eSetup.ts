@@ -13,12 +13,18 @@ import { and, eq, inArray, like, ne, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import {
   adrs,
+  appPermissions,
+  appRolePermissions,
+  appRoles,
+  appUserProjectRoles,
   chatThreads,
   designDocs,
   designPrototypes,
   documentApproverAssignments,
   interviews,
   notifications,
+  playbookDefinitions,
+  playbookDefinitionVersions,
   prds,
   projectApprovalModes,
   projectApprovers,
@@ -33,6 +39,7 @@ import type { ValidationScorecard } from '../../shared/types/interview';
 const router = express.Router();
 
 const E2E_PREFIX = '[E2E]';
+const E2E_ASSIGNED_BY = 'e2e-setup';
 
 /** Modules that inherit the legacy `approvalMode` payload; `adr` is always seeded as `any_one`. */
 const LEGACY_APPROVAL_MODE_MODULES = ['prd', 'design_doc', 'design_prototype', 'test_case'] as const;
@@ -81,6 +88,9 @@ function defaultScorecard(score: number, threshold = 90): ValidationScorecard {
 // DELETE all records created by E2E tests (idempotent, safe to call repeatedly).
 router.post('/reset', async (_req, res) => {
   try {
+    await db.delete(playbookDefinitions).where(like(playbookDefinitions.name, `${E2E_PREFIX}%`));
+    await db.delete(appRoles).where(like(appRoles.name, `${E2E_PREFIX}%`));
+
     await db.delete(reviewComments).where(like(reviewComments.body, `${E2E_PREFIX}%`));
     await db.delete(notifications).where(like(notifications.title, `${E2E_PREFIX}%`));
 
@@ -148,6 +158,117 @@ router.post('/reset', async (_req, res) => {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: `E2E reset failed: ${message}` });
+  }
+});
+
+// Seed project-scoped lifecycle RBAC and a definition for the Playbook browser smoke.
+router.post('/seed/playbook-lifecycle', async (req, res) => {
+  try {
+    const {
+      project,
+      authorId,
+      viewerId,
+      name,
+      published = false,
+    } = req.body as {
+      project: string;
+      authorId: string;
+      viewerId: string;
+      name: string;
+      published?: boolean;
+    };
+
+    const result = await db.transaction(async (tx) => {
+      const permissions = await tx
+        .select({ id: appPermissions.id, key: appPermissions.key })
+        .from(appPermissions)
+        .where(inArray(appPermissions.key, ['playbooks:view', 'playbooks:author']));
+      const permissionByKey = new Map(permissions.map((permission) => [permission.key, permission.id]));
+      const viewPermissionId = permissionByKey.get('playbooks:view');
+      const authorPermissionId = permissionByKey.get('playbooks:author');
+      if (!viewPermissionId || !authorPermissionId) {
+        throw new Error('playbooks:view and playbooks:author permissions must exist');
+      }
+
+      const roleSpecs = [
+        {
+          name: `${E2E_PREFIX} Playbook Author`,
+          userId: authorId,
+          permissionIds: [viewPermissionId, authorPermissionId],
+        },
+        {
+          name: `${E2E_PREFIX} Playbook Viewer`,
+          userId: viewerId,
+          permissionIds: [viewPermissionId],
+        },
+      ];
+
+      for (const roleSpec of roleSpecs) {
+        const [role] = await tx
+          .insert(appRoles)
+          .values({ name: roleSpec.name, description: 'Playbook lifecycle E2E role' })
+          .onConflictDoUpdate({
+            target: appRoles.name,
+            set: { description: 'Playbook lifecycle E2E role' },
+          })
+          .returning();
+
+        await tx
+          .insert(appRolePermissions)
+          .values(roleSpec.permissionIds.map((permissionId) => ({ roleId: role.id, permissionId })))
+          .onConflictDoNothing();
+        await tx
+          .insert(appUserProjectRoles)
+          .values({
+            userId: roleSpec.userId,
+            project,
+            roleId: role.id,
+            assignedBy: E2E_ASSIGNED_BY,
+          })
+          .onConflictDoNothing();
+      }
+
+      const [definition] = await tx
+        .insert(playbookDefinitions)
+        .values({
+          project,
+          name: e2eTitle(name),
+          description: 'Playbook lifecycle browser smoke',
+          createdBy: authorId,
+        })
+        .returning();
+
+      const graph = {
+        nodes: [{ id: 'seeded', stepType: 'notify', config: { title: 'Seeded lifecycle' } }],
+        edges: [],
+      };
+      if (published) {
+        await tx.insert(playbookDefinitionVersions).values({
+          definitionId: definition.id,
+          versionNumber: 1,
+          graph,
+          status: 'published',
+          publishedBy: authorId,
+          publishedAt: new Date().toISOString(),
+        });
+      }
+      const [draft] = await tx
+        .insert(playbookDefinitionVersions)
+        .values({
+          definitionId: definition.id,
+          versionNumber: published ? 2 : 1,
+          graph,
+          status: 'draft',
+        })
+        .returning();
+
+      return { definition, draft };
+    });
+
+    res.json(result);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: `E2E seed/playbook-lifecycle failed: ${message}` });
   }
 });
 

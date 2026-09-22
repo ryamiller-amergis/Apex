@@ -107,6 +107,7 @@ describe('VT-01 — migrations create the documented shape', () => {
       'published_at',
       'published_by',
       'status',
+      'updated_at',
       'version_number',
     ]);
     expect(byName.graph.data_type).toBe('jsonb');
@@ -114,11 +115,13 @@ describe('VT-01 — migrations create the documented shape', () => {
     // Publication metadata is absent on a draft, so it has to be nullable.
     expect(byName.published_by.is_nullable).toBe('YES');
     expect(byName.published_at.is_nullable).toBe('YES');
+    // Draft optimistic concurrency (FEAT-007); every version row carries a revision time.
+    expect(byName.updated_at.is_nullable).toBe('NO');
   });
 
   it('gives playbook_runs its documented columns, including the step-budget counters', async () => {
-    const columns = await query<{ column_name: string; column_default: string | null }>(
-      `SELECT column_name, column_default FROM information_schema.columns
+    const columns = await query<{ column_name: string; column_default: string | null; is_nullable: string }>(
+      `SELECT column_name, column_default, is_nullable FROM information_schema.columns
        WHERE table_name = 'playbook_runs' ORDER BY column_name`
     );
     const names = columns.map((c) => c.column_name);
@@ -135,6 +138,7 @@ describe('VT-01 — migrations create the documented shape', () => {
       'status',
       'step_count',
       'updated_at',
+      'version_pin_reason',
     ]);
 
     // Counters start at zero and are incremented by the runtime; a null default would make the
@@ -142,6 +146,8 @@ describe('VT-01 — migrations create the documented shape', () => {
     for (const counter of ['step_count', 'agent_step_count']) {
       expect(columns.find((c) => c.column_name === counter)?.column_default).toBe('0');
     }
+    // Explicit pins store a reason; current-version resolution leaves this null (TBI-031).
+    expect(columns.find((c) => c.column_name === 'version_pin_reason')?.is_nullable).toBe('YES');
   });
 
   it('gives playbook_step_runs its documented columns, both output shapes included', async () => {
@@ -188,6 +194,7 @@ describe('VT-01 — migrations create the documented shape', () => {
       'uq_playbook_definitions_project_name',
       'idx_playbook_definition_versions_definition',
       'idx_playbook_definition_versions_status',
+      'uq_playbook_definition_versions_one_draft',
       'idx_playbook_runs_project_started',
       'idx_playbook_runs_project_status',
       'idx_playbook_runs_definition_version',
@@ -475,35 +482,50 @@ describe('VT-10 — the reconciliation sweep uses the expires_at partial index',
 });
 
 describe('VT-18 — the playbooks permission seed', () => {
-  it('seeds both keys under the playbooks category', async () => {
+  it('seeds all four keys under the playbooks category with the run-authority wording', async () => {
     const rows = await query<{ key: string; category: string; description: string }>(
       `SELECT key, category, description FROM app_permissions
-       WHERE key IN ('playbooks:view', 'playbooks:run') ORDER BY key`
+       WHERE key LIKE 'playbooks:%' ORDER BY key`
     );
 
-    expect(rows.map((r) => r.key)).toEqual(['playbooks:run', 'playbooks:view']);
+    expect(rows.map((r) => r.key)).toEqual([
+      'playbooks:admin',
+      'playbooks:author',
+      'playbooks:run',
+      'playbooks:view',
+    ]);
     for (const row of rows) expect(row.category).toBe('playbooks');
+    expect(rows.find((row) => row.key === 'playbooks:run')?.description).toMatch(
+      /does not authorize the run's step effects/,
+    );
   });
 
-  it('grants both keys to admin and to no other role', async () => {
+  it('grants the four keys to exactly their documented default roles', async () => {
     const rows = await query<{ name: string; key: string }>(
       `SELECT r.name, p.key
        FROM app_role_permissions rp
        JOIN app_roles r ON r.id = rp.role_id
        JOIN app_permissions p ON p.id = rp.permission_id
-       WHERE p.key IN ('playbooks:view', 'playbooks:run')
+       WHERE p.key LIKE 'playbooks:%'
        ORDER BY r.name, p.key`
     );
 
     expect(rows).toEqual([
+      { name: 'admin', key: 'playbooks:admin' },
       { name: 'admin', key: 'playbooks:run' },
       { name: 'admin', key: 'playbooks:view' },
+      { name: 'member', key: 'playbooks:run' },
+      { name: 'member', key: 'playbooks:view' },
+      { name: 'viewer', key: 'playbooks:view' },
     ]);
   });
 
-  it('leaves the Epic 2 keys alone', async () => {
+  it('leaves playbooks:author without any default role grant', async () => {
     const rows = await query(
-      `SELECT key FROM app_permissions WHERE key IN ('playbooks:author', 'playbooks:admin')`
+      `SELECT rp.role_id
+       FROM app_role_permissions rp
+       JOIN app_permissions p ON p.id = rp.permission_id
+       WHERE p.key = 'playbooks:author'`
     );
     expect(rows).toEqual([]);
   });
@@ -643,9 +665,10 @@ describe('VT-02 — the playbook migrations roll back cleanly', () => {
     if (rollbackScratch) await rollbackScratch.drop();
   });
 
-  it('reverses all five migrations, leaving no table, index or permission behind', async () => {
-    // The five this Feature adds: definitions+versions, runs, step runs, permissions, engine schema.
-    await migrateDown(rollbackScratch.connectionString, 5);
+  it('reverses all nine Playbook migrations, leaving no table, index or permission behind', async () => {
+    // Ten files must be reversed: the nine Playbook migrations plus the changelog migration
+    // ordered between lifecycle and archive. Stopping at nine leaves the first schema migration.
+    await migrateDown(rollbackScratch.connectionString, 10);
 
     const { rows: tables } = await rollbackClient.query(
       `SELECT table_name FROM information_schema.tables
@@ -660,7 +683,7 @@ describe('VT-02 — the playbook migrations roll back cleanly', () => {
     expect(indexes).toEqual([]);
 
     const { rows: permissions } = await rollbackClient.query(
-      `SELECT key FROM app_permissions WHERE key IN ('playbooks:view', 'playbooks:run')`
+      `SELECT key FROM app_permissions WHERE key LIKE 'playbooks:%'`
     );
     expect(permissions).toEqual([]);
 

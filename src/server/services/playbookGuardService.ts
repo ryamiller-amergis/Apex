@@ -5,20 +5,34 @@
  * a step suspends. Splitting them across those callers would guarantee the two drift — the usual
  * way being that a new caller of one forgets the other exists.
  *
+ * Publication also asks the step-type registry what each node is: whether the type exists, whether
+ * its config is one the type would accept, and — TBI-034 — whether anything that reaches outside
+ * Apex has an approval gate on every edge into it. The registry is a map built at module load, so
+ * reading it costs nothing and changes none of what follows.
+ *
  * Every check here is synchronous, deterministic and network-free, which BR-007 requires and
  * VT-18 asserts by stubbing the network to throw and running the guards through it. No guard reads
  * cost data. Cost in this system is advisory, arrives late and is allowed to undercount; a run
  * refused on a number with those properties would be refused unreproducibly.
  */
 import { and, count, eq, inArray, ne } from 'drizzle-orm';
+import type { ZodError } from 'zod';
 import { db } from '../db/drizzle';
 import { playbookRuns, playbookStepRuns } from '../db/schema';
-import { isAgentStepType } from './playbookSteps/registry';
+import { PlaybookStepSchemaError } from './playbookSteps/descriptorValidation';
+import {
+  PlaybookStepTypeError,
+  getStepTypeDescriptor,
+  isAgentStepType,
+  isRegisteredStepType,
+} from './playbookSteps/registry';
 import {
   PLAYBOOK_GUARD_LIMITS,
   type PlaybookGraph,
+  type PlaybookGraphNode,
   type PlaybookGuardViolation,
   type PlaybookGuardViolationKind,
+  type PlaybookStepTypeDescriptor,
 } from '../../shared/types/playbook';
 
 /**
@@ -101,7 +115,180 @@ export function findCycle(graph: PlaybookGraph): string[] | undefined {
 }
 
 /**
- * The four publish-time guards, in the order an author most likely tripped.
+ * How a graph node's step type is resolved to the contract it declares.
+ *
+ * Injectable so the rule can be run against descriptors the registry has never heard of — the
+ * conformance test registers a fourth `leaves-apex` type and expects the same refusal — and so the
+ * runtime can later pass whichever registry is in force at execution time rather than the one a
+ * version was published under.
+ */
+export type PlaybookStepDescriptorLookup = (
+  stepType: string
+) => PlaybookStepTypeDescriptor | undefined;
+
+/** Undefined, not a throw, for a type nobody registered: the caller decides what that means. */
+const registryLookup: PlaybookStepDescriptorLookup = (stepType) =>
+  isRegisteredStepType(stepType) ? getStepTypeDescriptor(stepType) : undefined;
+
+/** A graph node naming a step type the registry cannot resolve. */
+export class PlaybookGraphStepTypeError extends PlaybookStepTypeError {
+  constructor(nodeId: string, stepType: string) {
+    super(
+      `Playbook step "${nodeId}" names the step type "${stepType}", which no registered step ` +
+        'type matches. A step nothing can execute must not reach a published version.'
+    );
+    this.name = 'PlaybookGraphStepTypeError';
+  }
+}
+
+/**
+ * A graph node whose `config` its own step type would reject.
+ *
+ * Named for the node rather than only the type, because a graph may hold several steps of one type
+ * and "notify is missing a title" does not say which one.
+ */
+export class PlaybookGraphNodeConfigError extends PlaybookStepSchemaError {
+  readonly nodeId: string;
+
+  constructor(nodeId: string, stepType: string, error: ZodError) {
+    super(stepType, 'input', error);
+    this.name = 'PlaybookGraphNodeConfigError';
+    this.nodeId = nodeId;
+    this.message = `Playbook step "${nodeId}": ${this.message}`;
+  }
+}
+
+/**
+ * Whether this step type is a human approval checkpoint.
+ *
+ * Asked of the descriptor rather than matched against the name `approval-gate`, because the
+ * registry is the only place a step type is declared and a rule that branches on a type's name
+ * would be a second declaration of the same vocabulary. What makes a gate a gate is that it parks
+ * the run until a person decides, which is exactly what these two fields say.
+ */
+function isApprovalGate(descriptor: PlaybookStepTypeDescriptor | undefined): boolean {
+  return descriptor?.canSuspend === true && descriptor.suspendReason === 'approval_gate';
+}
+
+function inboundEdges(graph: PlaybookGraph): Map<string, string[]> {
+  const inbound = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    const existing = inbound.get(edge.to);
+    if (existing) existing.push(edge.from);
+    else inbound.set(edge.to, [edge.from]);
+  }
+  return inbound;
+}
+
+/**
+ * Whether this node reaches outside Apex with something other than a gate in front of it.
+ *
+ * Edges, not array order. A graph whose nodes read gate-then-agent but whose edge skips the gate is
+ * precisely the arrangement an order-based check waves through, and the step it lets run is the one
+ * kind Apex cannot undo. An empty inbound set counts as ungated for the same reason: nothing can
+ * precede a first step, so a first step can never be the one that leaves.
+ */
+function isUngatedLeavesApexNode(
+  node: PlaybookGraphNode,
+  inbound: Map<string, string[]>,
+  stepTypeById: Map<string, string>,
+  lookup: PlaybookStepDescriptorLookup
+): boolean {
+  if (lookup(node.stepType)?.sideEffect !== 'leaves-apex') return false;
+
+  const predecessors = inbound.get(node.id) ?? [];
+  if (predecessors.length === 0) return true;
+
+  // Every path in, not merely one of them. A predecessor naming an unresolvable type is not a gate.
+  return predecessors.some(
+    (predecessorId) => !isApprovalGate(lookup(stepTypeById.get(predecessorId) ?? ''))
+  );
+}
+
+/**
+ * Every `leaves-apex` node in this graph that is not gated on all of its inbound edges, per TBI-034.
+ *
+ * Pure, synchronous and network-free: it reads the graph it is handed and the descriptors the
+ * lookup returns, and nothing else. It neither rewrites the graph nor inserts the missing gate —
+ * where a checkpoint belongs is the author's decision, and a validator that quietly supplied one
+ * would be approving the thing it exists to refuse.
+ */
+export function findUngatedLeavesApexSteps(
+  graph: PlaybookGraph,
+  lookup: PlaybookStepDescriptorLookup = registryLookup
+): string[] {
+  const inbound = inboundEdges(graph);
+  const stepTypeById = new Map(graph.nodes.map((node) => [node.id, node.stepType]));
+
+  return graph.nodes
+    .filter((node) => isUngatedLeavesApexNode(node, inbound, stepTypeById, lookup))
+    .map((node) => node.id);
+}
+
+function ungatedViolation(nodeIds: string[]): PlaybookGuardViolationError {
+  const named = nodeIds.map((nodeId) => `"${nodeId}"`).join(', ');
+  return new PlaybookGuardViolationError(
+    'ungated-leaves-apex',
+    `${nodeIds.length === 1 ? 'Step' : 'Steps'} ${named} act outside Apex, so every step that can ` +
+      'reach them must be an approval gate. Add a gate immediately before each one; a step that ' +
+      'leaves Apex cannot be the first step, because nothing precedes it.'
+  );
+}
+
+/**
+ * The same rule asked about one node, for a caller holding a graph and the step it is about to run.
+ *
+ * The runtime needs this because a published graph's classifications are the ones that were in
+ * force when it was published, and a step type reclassified to `leaves-apex` since then would
+ * otherwise execute ungated. Whole-graph and per-node share `isUngatedLeavesApexNode` so the two
+ * answers cannot drift.
+ */
+export function assertStepGateSatisfied(
+  graph: PlaybookGraph,
+  stepId: string,
+  lookup: PlaybookStepDescriptorLookup = registryLookup
+): void {
+  const node = graph.nodes.find((candidate) => candidate.id === stepId);
+  if (!node) {
+    throw new Error(
+      `Playbook step "${stepId}" is not a node in this graph, so no gate rule applies to it.`
+    );
+  }
+
+  const stepTypeById = new Map(graph.nodes.map((candidate) => [candidate.id, candidate.stepType]));
+  if (isUngatedLeavesApexNode(node, inboundEdges(graph), stepTypeById, lookup)) {
+    throw ungatedViolation([node.id]);
+  }
+}
+
+/**
+ * Every node names a registered step type and carries a config that type accepts.
+ *
+ * Run before the gate rule because the gate rule reads classifications: a node whose type the
+ * registry cannot resolve has no classification, and treating that silence as "harmless" is how an
+ * unrecognised step gets published. Config is parsed here rather than at execution because
+ * publication is the last moment a graph can be corrected — after it, immutability means a step
+ * with a config nothing can execute can only be deprecated.
+ */
+export function assertGraphStepsResolvable(
+  graph: PlaybookGraph,
+  lookup: PlaybookStepDescriptorLookup = registryLookup
+): void {
+  for (const node of graph.nodes) {
+    const descriptor = lookup(node.stepType);
+    if (!descriptor) throw new PlaybookGraphStepTypeError(node.id, node.stepType);
+
+    // `safeParse` rather than `parse`, and the result discarded: the graph is the author's and is
+    // stored as written, so nothing here may hand back a coerced copy of it.
+    const parsed = descriptor.inputSchema.safeParse(node.config ?? {});
+    if (!parsed.success) {
+      throw new PlaybookGraphNodeConfigError(node.id, node.stepType, parsed.error);
+    }
+  }
+}
+
+/**
+ * The publish-time guards, in the order an author most likely tripped.
  *
  * Checked at publish rather than per run because a published version's graph cannot change —
  * BR-006 makes it immutable — so re-deriving the same answer on every start would be waste that
@@ -142,6 +329,11 @@ export function assertGraphWithinGuards(graph: PlaybookGraph): void {
         'Loops are not permitted; a Playbook must reach an end.'
     );
   }
+
+  assertGraphStepsResolvable(graph);
+
+  const ungated = findUngatedLeavesApexSteps(graph);
+  if (ungated.length > 0) throw ungatedViolation(ungated);
 }
 
 /**

@@ -19,10 +19,12 @@ jest.mock('../../src/server/services/chatAgentService', () => ({
 }));
 
 import pg from 'pg';
-import { createScratchDatabase, enablePlaybooks, ScratchDatabase } from './support/scratch-db';
+import { createScratchDatabase, ScratchDatabase } from './support/scratch-db';
 
 type RunServiceModule = typeof import('../../src/server/services/playbookRunService');
 type RegistryModule = typeof import('../../src/server/services/playbookSteps/registry');
+type ApprovalModule = typeof import('../../src/server/services/playbookSteps/approvalGateAdapter');
+type AdvanceModule = typeof import('../../src/server/services/playbookAdvanceService');
 
 const MIGRATE_TIMEOUT = 600_000;
 const INITIATOR = 'feat004-start-initiator';
@@ -32,6 +34,8 @@ let scratch: ScratchDatabase;
 let client: pg.Client;
 let runService: RunServiceModule;
 let registry: RegistryModule;
+let approvals: ApprovalModule;
+let advance: AdvanceModule;
 let pool: { end: () => Promise<void> };
 
 async function query<T extends pg.QueryResultRow = pg.QueryResultRow>(
@@ -42,7 +46,7 @@ async function query<T extends pg.QueryResultRow = pg.QueryResultRow>(
   return rows;
 }
 
-/** Publishes a definition whose first step is an allow-listed `cursor-agent` step. */
+/** Publishes a definition that gates an allow-listed `cursor-agent` step. */
 async function seedPublishedDefinition(name: string): Promise<string> {
   const [definition] = await query<{ id: string }>(
     `INSERT INTO playbook_definitions (project, name, created_by)
@@ -52,6 +56,7 @@ async function seedPublishedDefinition(name: string): Promise<string> {
 
   const graph = {
     nodes: [
+      { id: 'approve-draft', stepType: 'approval-gate', config: { subject: 'Draft?' } },
       {
         id: 'draft',
         stepType: 'cursor-agent',
@@ -62,7 +67,10 @@ async function seedPublishedDefinition(name: string): Promise<string> {
       },
       { id: 'tell-someone', stepType: 'notify', config: { title: 'Draft ready' } },
     ],
-    edges: [{ from: 'draft', to: 'tell-someone' }],
+    edges: [
+      { from: 'approve-draft', to: 'draft' },
+      { from: 'draft', to: 'tell-someone' },
+    ],
   };
 
   await query(
@@ -86,10 +94,23 @@ async function occupyLane(count: number): Promise<void> {
   }
 }
 
+async function approveDraftGate(runId: string): Promise<void> {
+  const [gate] = await query<{ id: string }>(
+    `SELECT id FROM playbook_step_runs WHERE run_id = $1 AND step_id = 'approve-draft'`,
+    [runId]
+  );
+  await approvals.submitApprovalDecision({
+    stepRunId: gate.id,
+    deciderUserId: INITIATOR,
+    decision: 'approved',
+    runId,
+  });
+  await advance.advanceRun(runId, 'approve-draft');
+}
+
 beforeAll(async () => {
   scratch = await createScratchDatabase('playbookstart');
   // Traversal runs through the engine boundary, which refuses every operation while the flag is off.
-  await enablePlaybooks(scratch.connectionString);
 
   process.env.DATABASE_URL = scratch.connectionString;
   /* eslint-disable @typescript-eslint/no-require-imports --
@@ -97,6 +118,8 @@ beforeAll(async () => {
      database. A static import is hoisted and would bind to whatever URL was set at file load. */
   runService = require('../../src/server/services/playbookRunService');
   registry = require('../../src/server/services/playbookSteps/registry');
+  approvals = require('../../src/server/services/playbookSteps/approvalGateAdapter');
+  advance = require('../../src/server/services/playbookAdvanceService');
   pool = require('../../src/server/db').default;
   /* eslint-enable @typescript-eslint/no-require-imports */
 
@@ -109,36 +132,36 @@ beforeAll(async () => {
     [INITIATOR]
   );
 
-  await grantPlaybooksRun(INITIATOR);
+  await grantStepPermissions(INITIATOR, ['approval-gate', 'cursor-agent', 'notify']);
 }, MIGRATE_TIMEOUT);
 
-/**
- * Gives the initiator the project role that carries `playbooks:run`.
- *
- * Needed because these tests call `startRun` directly rather than through the route, so
- * `requirePermission` never runs — but TBI-024 re-checks the initiator's access again at execution
- * time, and an initiator with no role at all is refused there. Seeding a real role rather than
- * stubbing the check keeps the re-check honest: if the permission key or its wiring changes, this
- * fixture breaks, which is the point.
- */
-async function grantPlaybooksRun(userOid: string): Promise<void> {
+/** Gives the initiator exactly the permissions required by this definition's descriptors. */
+async function grantStepPermissions(userOid: string, stepTypes: string[]): Promise<void> {
   const [role] = await query<{ id: string }>(
     `INSERT INTO app_roles (name, description) VALUES ('playbook-runner', 'Integration fixture')
      ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description
      RETURNING id`
   );
 
-  const [permission] = await query<{ id: string }>(
-    `INSERT INTO app_permissions (key, description) VALUES ('playbooks:run', 'Start Playbook runs')
-     ON CONFLICT (key) DO UPDATE SET description = EXCLUDED.description
-     RETURNING id`
+  const requiredPermissions = [
+    ...new Set(
+      stepTypes.flatMap((stepType) => registry.getStepTypeDescriptor(stepType).requiredPermissions)
+    ),
+  ];
+  const permissions = await query<{ id: string }>(
+    `SELECT id FROM app_permissions WHERE key = ANY($1::text[])`,
+    [requiredPermissions]
   );
-
-  await query(
-    `INSERT INTO app_role_permissions (role_id, permission_id) VALUES ($1, $2)
-     ON CONFLICT DO NOTHING`,
-    [role.id, permission.id]
-  );
+  if (permissions.length !== requiredPermissions.length) {
+    throw new Error(`Missing seeded Playbook permissions: ${requiredPermissions.join(', ')}`);
+  }
+  for (const permission of permissions) {
+    await query(
+      `INSERT INTO app_role_permissions (role_id, permission_id) VALUES ($1, $2)
+       ON CONFLICT DO NOTHING`,
+      [role.id, permission.id]
+    );
+  }
 
   await query(
     `INSERT INTO app_user_project_roles (user_id, project, role_id) VALUES ($1, $2, $3)
@@ -199,6 +222,7 @@ describe('VT-05 — a published Playbook starts and enqueues in one request', ()
       definitionId,
       initiatorUserId: INITIATOR,
     });
+    await approveDraftGate(runId);
 
     const [step] = await query<{
       step_id: string;
@@ -206,7 +230,8 @@ describe('VT-05 — a published Playbook starts and enqueues in one request', ()
       agent_run_id: string | null;
       expires_at: Date | null;
     }>(
-      'SELECT step_id, status, agent_run_id, expires_at FROM playbook_step_runs WHERE run_id = $1',
+      `SELECT step_id, status, agent_run_id, expires_at
+       FROM playbook_step_runs WHERE run_id = $1 AND step_id = 'draft'`,
       [runId]
     );
 
@@ -245,7 +270,7 @@ describe('VT-05 — a published Playbook starts and enqueues in one request', ()
     });
 
     const steps = await query('SELECT step_id FROM playbook_step_runs WHERE run_id = $1', [runId]);
-    // Advancing to `tell-someone` is the engine's job once the agent step resumes, not startRun's.
+    // The required approval gate is the only step startRun may execute.
     expect(steps).toHaveLength(1);
   });
 });
@@ -263,6 +288,7 @@ describe('VT-06 — the background lane at its in-flight cap', () => {
       definitionId,
       initiatorUserId: INITIATOR,
     });
+    await approveDraftGate(runId);
 
     expect(status).toBe('running');
 
@@ -271,7 +297,8 @@ describe('VT-06 — the background lane at its in-flight cap', () => {
       [runId]
     );
     const [step] = await query<{ status: string; agent_run_id: string }>(
-      'SELECT status, agent_run_id FROM playbook_step_runs WHERE run_id = $1',
+      `SELECT status, agent_run_id
+       FROM playbook_step_runs WHERE run_id = $1 AND step_id = 'draft'`,
       [runId]
     );
     const [agentRun] = await query<{ status: string }>(
@@ -302,9 +329,11 @@ describe('VT-06 — the background lane at its in-flight cap', () => {
       definitionId,
       initiatorUserId: INITIATOR,
     });
+    await approveDraftGate(runId);
 
     const [step] = await query<{ agent_run_id: string }>(
-      'SELECT agent_run_id FROM playbook_step_runs WHERE run_id = $1',
+      `SELECT agent_run_id FROM playbook_step_runs
+       WHERE run_id = $1 AND step_id = 'draft'`,
       [runId]
     );
     const [agentRun] = await query<{ status: string }>(

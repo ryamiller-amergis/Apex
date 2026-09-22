@@ -1,8 +1,8 @@
 /**
  * TBI-025 — the two read endpoints.
  *
- * Covers VT-04 (a caller without `playbooks:view` gets 403 and no run data), VT-05 (with the flag
- * off the path is 404, not 403) and VT-10 (the response equals the projection's output, unreshaped).
+ * Covers VT-04 (a caller without `playbooks:view` gets 403 and no run data) and VT-10 (the response
+ * equals the projection's output, unreshaped).
  *
  * As in `playbookRunRoute.test.ts`, `requirePermission` is **not** mocked. The property VT-04
  * asserts is project-scoped denial, which happens inside the real middleware; a mocked guard
@@ -27,11 +27,6 @@ jest.mock('../services/rbacService', () => ({
 jest.mock('../utils/superAdmin', () => ({
   isSuperAdminRequest: () => false,
   getAppEnvironment: () => 'local',
-}));
-
-const isFeatureEnabled = jest.fn();
-jest.mock('../services/featureFlagService', () => ({
-  isFeatureEnabled: (...a: unknown[]) => isFeatureEnabled(...a),
 }));
 
 const listRuns = jest.fn();
@@ -86,52 +81,9 @@ const PROJECTION_RESULT = {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  isFeatureEnabled.mockResolvedValue(true);
   grantIn(PROJECT, 'playbooks:view');
   listRuns.mockResolvedValue(PROJECTION_RESULT);
   getRun.mockResolvedValue({ ...PROJECTION_RESULT.runs[0], steps: [], currentStepId: null, suspension: null });
-});
-
-describe('VT-05 — with playbooks-spike off, the endpoints do not exist', () => {
-  it('returns 404 rather than 403 for the run list', async () => {
-    isFeatureEnabled.mockResolvedValue(false);
-
-    const res = await request(buildApp()).get('/api/playbooks/runs').query({ project: PROJECT });
-
-    // 403 would confirm the surface exists and is merely withheld. 404 says there is nothing here.
-    expect(res.status).toBe(404);
-    expect(listRuns).not.toHaveBeenCalled();
-  });
-
-  it('returns 404 for a single run', async () => {
-    isFeatureEnabled.mockResolvedValue(false);
-
-    const res = await request(buildApp())
-      .get('/api/playbooks/runs/run-1')
-      .query({ project: PROJECT });
-
-    expect(res.status).toBe(404);
-    expect(getRun).not.toHaveBeenCalled();
-  });
-
-  it('gates the write endpoints too, so no run can be started while the surface is dark', async () => {
-    isFeatureEnabled.mockResolvedValue(false);
-
-    const res = await request(buildApp())
-      .post('/api/playbooks/runs')
-      .send({ project: PROJECT, definitionId: 'def-1' });
-
-    expect(res.status).toBe(404);
-  });
-
-  it('evaluates the flag against the project the request names', async () => {
-    await request(buildApp()).get('/api/playbooks/runs').query({ project: 'SomeOtherProject' });
-
-    expect(isFeatureEnabled).toHaveBeenCalledWith(
-      'playbooks-spike',
-      expect.objectContaining({ project: 'SomeOtherProject', userId: USER_OID })
-    );
-  });
 });
 
 describe('VT-04 — a caller without playbooks:view is refused, and gets no run data', () => {
@@ -165,9 +117,7 @@ describe('VT-04 — a caller without playbooks:view is refused, and gets no run 
   it('refuses a request that names no project at all', async () => {
     const res = await request(buildApp()).get('/api/playbooks/runs');
 
-    // 404 rather than 400: a request naming no project cannot be permission-checked against one
-    // *or* flag-evaluated, and answering 400 would confirm the route exists to exactly the caller
-    // the flag is meant to hide it from.
+    // A request naming no project cannot be permission-checked against one.
     expect(res.status).toBe(404);
     expect(listRuns).not.toHaveBeenCalled();
   });

@@ -2731,12 +2731,18 @@ export const playbookDefinitionVersions = pgTable('playbook_definition_versions'
   publishedBy: text('published_by').references(() => appUsers.oid, { onDelete: 'set null' }),
   publishedAt: timestamp('published_at', { withTimezone: true, mode: 'string' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  // Optimistic draft concurrency and auditable working-copy revision (FEAT-007).
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   definitionVersionUq: unique('uq_playbook_definition_versions_number')
     .on(t.definitionId, t.versionNumber),
   definitionIdx: index('idx_playbook_definition_versions_definition')
     .on(t.definitionId, t.versionNumber),
   statusIdx: index('idx_playbook_definition_versions_status').on(t.definitionId, t.status),
+  // Database enforcement of exactly one retained draft per definition (FEAT-007 user decision).
+  oneDraftUq: uniqueIndex('uq_playbook_definition_versions_one_draft')
+    .on(t.definitionId)
+    .where(sql`${t.status} = 'draft'`),
   statusCheck: check(
     'playbook_definition_versions_status_check',
     sql`${t.status} IN ('draft', 'published', 'deprecated', 'archived')`,
@@ -2757,6 +2763,8 @@ export const playbookRuns = pgTable('playbook_runs', {
   initiatorUserId: text('initiator_user_id').notNull()
     .references(() => appUsers.oid, { onDelete: 'restrict' }),
   status: text('status').$type<PlaybookRunStatus>().notNull().default('running'),
+  // Null for current-version resolution; required and trimmed for explicit older pins (TBI-031).
+  versionPinReason: text('version_pin_reason'),
   // Incremented by the runtime, never computed on read — the structural guards that read them are
   // synchronous, and an aggregate scan in an admission check is how guards get disabled.
   stepCount: integer('step_count').notNull().default(0),

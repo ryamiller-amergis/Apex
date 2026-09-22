@@ -149,3 +149,14 @@ describe('VT-25 — a suspension with no deadline is refused, not resumed', () =
     await expect(decide()).rejects.toThrow(/no deadline/i);
   });
 });
+
+describe('TBI-032 VT-24 — approval output validation', () => {
+  it('rejects malformed decision output before durable resume and names the field', async () => {
+    gateIs({ initiatorUserId: 42 });
+
+    await expect(decide({ deciderUserId: 42 })).rejects.toThrow(
+      /approval-gate.*output.*decidedBy/i
+    );
+    expect(resumeStepRun).not.toHaveBeenCalled();
+  });
+});

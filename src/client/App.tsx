@@ -312,8 +312,6 @@ function App() {
   }, [location.pathname, location.search, selectedProject, availableProjects, changeProject]);
 
   const showBetaAnnouncement = useFeatureFlag('beta-to-prod-announcement', selectedProject);
-  // Direct URL only — no `MenuItemKey`, so no nav entry can appear in a project by mistake.
-  const playbooksEnabled = useFeatureFlag('playbooks-spike', selectedProject);
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
   const interactiveWsEnabled = homeFlags['ai-runs-interactive'] === true;
@@ -761,19 +759,7 @@ function App() {
     );
   }
 
-  // @feature-flag:playbooks-spike start winner=enabled
-  // With the flag off, `/playbooks` is not merely empty — it is indistinguishable from a URL that
-  // was never built, which is what "the route is not registered" means from the outside. Handled
-  // here rather than inside the view so the gate sits at the routing level, above the component.
-  // @feature-flag:playbooks-spike disabled-start
-  const playbooksRouteHidden = currentView === 'playbooks' && !playbooksEnabled;
-  // @feature-flag:playbooks-spike disabled-end
-  // @feature-flag:playbooks-spike enabled-start
-  // (enabled: `playbooksRouteHidden` is false and the view renders below)
-  // @feature-flag:playbooks-spike enabled-end
-  // @feature-flag:playbooks-spike end
-
-  if (currentView === 'not-found' || playbooksRouteHidden) {
+  if (currentView === 'not-found') {
     return (
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <div role="status" aria-live="polite" {...{ 'data-testid': 'route-not-found' }}>

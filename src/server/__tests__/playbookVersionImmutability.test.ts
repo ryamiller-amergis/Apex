@@ -35,8 +35,10 @@ const mockFindFirst = db.query.playbookDefinitionVersions.findFirst as jest.Mock
 const mockUpdate = db.update as jest.Mock;
 
 const VERSION_ID = 'ver-1';
+// The config is not decoration: since FEAT-008 publication parses every node through its step
+// type's input schema, so a fixture graph has to be one the registry would actually accept.
 const GRAPH: PlaybookGraph = {
-  nodes: [{ id: 'step-1', stepType: 'notify' }],
+  nodes: [{ id: 'step-1', stepType: 'notify', config: { title: 'Done' } }],
   edges: [],
 };
 

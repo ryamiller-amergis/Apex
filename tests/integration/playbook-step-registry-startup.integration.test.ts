@@ -43,6 +43,7 @@ function runScript(source: string): { status: number | null; output: string } {
 const REGISTRY_IMPORT = `'${path
   .join(REPO_ROOT, 'src/server/services/playbookSteps/registry')
   .replace(/\\/g, '/')}'`;
+const ZOD_IMPORT = `'${path.join(REPO_ROOT, 'node_modules/zod').replace(/\\/g, '/')}'`;
 
 describe('VT-03 — startup validation', () => {
   it('boots cleanly with the real Phase 0 descriptors', () => {
@@ -59,10 +60,19 @@ describe('VT-03 — startup validation', () => {
   it('refuses to reach the listen call when a suspendable type declares no deadline', () => {
     const { status, output } = runScript(`
       import { createStepTypeRegistry } from ${REGISTRY_IMPORT};
+      import { z } from ${ZOD_IMPORT};
 
       // Built the way the module builds its own: at load, before anything listens.
       createStepTypeRegistry([
-        { stepType: 'broken', canSuspend: true } as never,
+        {
+          stepType: 'broken',
+          canSuspend: true,
+          isAgentStep: false,
+          sideEffect: 'read',
+          requiredPermissions: ['playbooks:view'],
+          inputSchema: z.object({}),
+          outputSchema: z.object({}),
+        } as never,
       ]);
 
       console.log('REACHED LISTEN');
@@ -76,9 +86,18 @@ describe('VT-03 — startup validation', () => {
   it('refuses to boot when a Phase 0 step type is missing entirely', () => {
     const { status, output } = runScript(`
       import { createStepTypeRegistry } from ${REGISTRY_IMPORT};
+      import { z } from ${ZOD_IMPORT};
 
       const partial = createStepTypeRegistry([
-        { stepType: 'notify', canSuspend: false, isAgentStep: false, sideEffect: 'writes-apex' },
+        {
+          stepType: 'notify',
+          canSuspend: false,
+          isAgentStep: false,
+          sideEffect: 'writes-apex',
+          requiredPermissions: ['playbooks:run'],
+          inputSchema: z.object({ title: z.string() }),
+          outputSchema: z.object({ notificationId: z.string() }),
+        },
       ]);
       if (partial.has('cursor-agent')) throw new Error('unexpected');
       console.log('PARTIAL REGISTRY BUILT');

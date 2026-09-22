@@ -16,58 +16,21 @@
  * moment at which outside code both knows a step should park and is in a position to park it.
  * Keeping it would have meant exporting a function nothing could call correctly.
  */
-import { isFeatureEnabled } from '../featureFlagService';
-import { getAppEnvironment } from '../../utils/superAdmin';
-import { cancelRunOnEngine, resumeRunOnEngine, startRunOnEngine } from './runtime';
+import {
+  cancelRunOnEngine,
+  resumeRunOnEngine,
+  retryStepRunOnEngine,
+  startRunOnEngine,
+} from './runtime';
 import type { EngineOutcome } from './runtime';
 import type {
   PlaybookCancelInput,
-  PlaybookOperationContext,
   PlaybookResumeInput,
+  PlaybookRetryInput,
   PlaybookStartInput,
 } from '../../../shared/types/playbook';
 
-const PLAYBOOKS_SPIKE_FLAG = 'playbooks-spike';
-
 export type { EngineOutcome } from './runtime';
-
-/**
- * The single gate every operation passes through.
- *
- * One split rather than three keeps the cleanup mechanical, and means the engine cannot be reached
- * by adding an operation and forgetting the check. `isFeatureEnabled` resolves an absent flag as
- * disabled, so code merging before the seed migration lands cannot enable anything.
- */
-async function withPlaybooksEnabled<T>(
-  context: PlaybookOperationContext,
-  operation: string,
-  run: () => Promise<T>
-): Promise<T> {
-  /*
-   * The environment is passed deliberately. Rule categories are ANDed during evaluation, so an
-   * environment rule that finds no environment on the context matches nothing and the flag resolves
-   * disabled everywhere. Phase 0 is targeted at local and dev precisely that way, which would leave
-   * the feature silently dark if this were omitted.
-   */
-  const enabled = await isFeatureEnabled(PLAYBOOKS_SPIKE_FLAG, {
-    userId: context.initiatorUserId,
-    project: context.projectName,
-    environment: getAppEnvironment(),
-  });
-
-  // @feature-flag:playbooks-spike start winner=enabled
-  if (!enabled) {
-    // @feature-flag:playbooks-spike disabled-start
-    throw new Error(
-      `Playbooks are not enabled for project "${context.projectName}" — refusing to ${operation}.`
-    );
-    // @feature-flag:playbooks-spike disabled-end
-  }
-  // @feature-flag:playbooks-spike enabled-start
-  return run();
-  // @feature-flag:playbooks-spike enabled-end
-  // @feature-flag:playbooks-spike end
-}
 
 /**
  * Drives a run from its entry step until one parks, one fails, or the graph runs out.
@@ -77,13 +40,11 @@ async function withPlaybooksEnabled<T>(
  * reach an engine.
  */
 export async function start(input: PlaybookStartInput): Promise<EngineOutcome> {
-  return withPlaybooksEnabled(input, 'start a run', () =>
-    startRunOnEngine(input.graph, {
-      runId: input.runId,
-      project: input.projectName,
-      initiatorUserId: input.initiatorUserId,
-    })
-  );
+  return startRunOnEngine(input.graph, {
+    runId: input.runId,
+    project: input.projectName,
+    initiatorUserId: input.initiatorUserId,
+  });
 }
 
 /**
@@ -93,26 +54,36 @@ export async function start(input: PlaybookStartInput): Promise<EngineOutcome> {
  * event arrive by different routes and mean the same thing to the engine.
  */
 export async function resume(input: PlaybookResumeInput): Promise<EngineOutcome> {
-  return withPlaybooksEnabled(input, 'resume a step', () =>
-    resumeRunOnEngine(
-      input.graph,
-      {
-        runId: input.runId,
-        project: input.projectName,
-        initiatorUserId: input.initiatorUserId,
-      },
-      input.stepId
-    )
+  return resumeRunOnEngine(
+    input.graph,
+    {
+      runId: input.runId,
+      project: input.projectName,
+      initiatorUserId: input.initiatorUserId,
+    },
+    input.stepId
   );
 }
 
 /** Terminates a run inside the engine. The Apex run row is the caller's to update. */
 export async function cancel(input: PlaybookCancelInput): Promise<void> {
-  return withPlaybooksEnabled(input, 'cancel a run', () =>
-    cancelRunOnEngine(input.graph, {
+  return cancelRunOnEngine(input.graph, {
+    runId: input.runId,
+    project: input.projectName,
+    initiatorUserId: input.initiatorUserId,
+  });
+}
+
+/** Retries one Apex-owned failed row, re-running runtime guards before adapter dispatch. */
+export async function retry(input: PlaybookRetryInput): Promise<EngineOutcome> {
+  return retryStepRunOnEngine(
+    input.graph,
+    {
       runId: input.runId,
       project: input.projectName,
       initiatorUserId: input.initiatorUserId,
-    })
+    },
+    input.stepRunId,
+    input.stepId
   );
 }

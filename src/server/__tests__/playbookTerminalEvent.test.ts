@@ -70,7 +70,17 @@ function event(status: AgentRunEventStatus): AgentRunEventEnvelope {
 /** The step the event correlates to, in the state the handler will find it. */
 function stepIs(status: string | null): void {
   selectWhere.mockResolvedValue(
-    status === null ? [] : [{ id: STEP_RUN_ID, runId: RUN_ID, stepId: STEP_ID, status }]
+    status === null
+      ? []
+      : [
+          {
+            id: STEP_RUN_ID,
+            runId: RUN_ID,
+            stepId: STEP_ID,
+            stepType: 'cursor-agent',
+            status,
+          },
+        ]
   );
 }
 
@@ -190,5 +200,18 @@ describe('VT-03 — a redelivered terminal event moves nothing', () => {
      */
     expect(source).toContain('resumeStepRun');
     expect(source).not.toMatch(/if\s*\(\s*step\.status\s*===\s*'suspended'\s*\)\s*\{[\s\S]{0,200}resumeStepRun/);
+  });
+});
+
+describe('TBI-032 VT-24 — cursor-agent terminal output validation', () => {
+  it('rejects malformed output before durable resume and names the field', async () => {
+    const invalid = event('completed');
+    invalid.timestamp = 'not-a-time';
+
+    await expect(handleTerminalAgentRunEvent(invalid)).rejects.toThrow(
+      /cursor-agent.*output.*completedAt/i
+    );
+    expect(resumeStepRun).not.toHaveBeenCalled();
+    expect(advanceRun).not.toHaveBeenCalled();
   });
 });

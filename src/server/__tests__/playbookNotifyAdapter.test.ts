@@ -30,11 +30,7 @@ jest.mock('../db/drizzle', () => ({
   },
 }));
 
-import {
-  executeNotifyStep,
-  NotifyStepConfigError,
-  parseNotifyConfig,
-} from '../services/playbookSteps/notifyAdapter';
+import { executeNotifyStep } from '../services/playbookSteps/notifyAdapter';
 import type { PlaybookStepExecutionContext } from '../services/playbookSteps/stepRuns';
 
 const INITIATOR = 'initiator-oid';
@@ -134,24 +130,13 @@ describe('VT-18 — delivery failure is not step failure', () => {
   });
 });
 
-describe('config validation', () => {
-  it('requires a non-empty title', () => {
-    for (const config of [{}, { title: '' }, { title: '   ' }, { title: 7 }]) {
-      expect(() => parseNotifyConfig(config)).toThrow(NotifyStepConfigError);
-    }
-  });
+describe('TBI-032 VT-24 — descriptor output validation', () => {
+  it('rejects malformed output before durable completion and names the field', async () => {
+    insertReturning.mockResolvedValue([{ ...NOTIFICATION_ROW, id: 42 }]);
 
-  it('rejects non-string optional fields rather than coercing them', () => {
-    expect(() => parseNotifyConfig({ title: 'ok', body: 42 })).toThrow(/body must be a string/);
-    expect(() => parseNotifyConfig({ title: 'ok', link: {} })).toThrow(/link must be a string/);
-  });
-
-  it('accepts a title alone', () => {
-    expect(parseNotifyConfig({ title: 'ok' })).toEqual({
-      title: 'ok',
-      body: undefined,
-      link: undefined,
-      recipientUserId: undefined,
-    });
+    await expect(executeNotifyStep(contextWith({ title: 'Draft ready' }))).rejects.toThrow(
+      /notify.*output.*notificationId/i
+    );
+    expect(completeStepRun).not.toHaveBeenCalled();
   });
 });

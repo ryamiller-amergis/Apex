@@ -5,9 +5,9 @@
  * A migration would seed these into every environment it ran against, and a demo fixture belongs
  * only where the demo happens. More importantly, exit criterion E3 — "definition B runs with zero
  * lines of code changed" — is worth nothing unless B was published exactly the way A was. So this
- * goes through `publishVersion`, which runs TBI-023's structural guards, rather than inserting a
- * row with `status = 'published'` already set. A direct insert would skip the validation A passed
- * and leave E3 proving something weaker than it appears to.
+ * goes through FEAT-007's retained-draft lifecycle, which runs the structural guards, rather than
+ * inserting a row with `status = 'published'` already set. A direct insert would skip the
+ * validation A passed and leave E3 proving something weaker than it appears to.
  *
  * Idempotent, because TBI-027's non-functional requirement is that the rehearsal repeats without
  * hand-run SQL between attempts — a demo that needs a DELETE before the second take is a demo that
@@ -19,11 +19,16 @@
  *   npx ts-node --project tsconfig.server.json scripts/seed-playbook-demos.ts [--project Apex]
  */
 import 'dotenv/config';
-import { and, eq } from 'drizzle-orm';
+import { isDeepStrictEqual } from 'util';
+import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../src/server/db/drizzle';
 import pool from '../src/server/db';
 import { playbookDefinitionVersions, playbookDefinitions } from '../src/server/db/schema';
-import { publishVersion } from '../src/server/services/playbookDefinitionService';
+import {
+  createDefinition,
+  publishDraft,
+  updateDraft,
+} from '../src/server/services/playbookDefinitionService';
 import type { PlaybookGraph } from '../src/shared/types/playbook';
 
 /**
@@ -43,11 +48,11 @@ export interface DemoDefinition {
 }
 
 /**
- * Definition A — the composition TBI-026 (a) names: `cursor-agent` → `approval-gate` → `notify`.
+ * Definition A — the FEAT-008-safe composition: `approval-gate` → `cursor-agent` → `notify`.
  *
  * This is the one the live demo drives, and its shape is chosen for what it lets an audience see:
- * an agent step that takes real time, a gate that visibly parks with an approver and a deadline,
- * and a notification that proves the run resumed and finished.
+ * a gate that visibly parks with an approver and a deadline before anything leaves Apex, an agent
+ * step that takes real time, and a notification that proves the run resumed and finished.
  */
 export const DEFINITION_A: DemoDefinition = {
   name: 'Demo A — Ask, Approve, Notify',
@@ -56,6 +61,11 @@ export const DEFINITION_A: DemoDefinition = {
     'answer, then notifies the initiator. The definition the Phase 0 live demo drives.',
   graph: {
     nodes: [
+      {
+        id: 'approve',
+        stepType: 'approval-gate',
+        config: { subject: 'Approve the run before the agent sends work outside Apex' },
+      },
       {
         id: 'ask',
         stepType: 'cursor-agent',
@@ -67,11 +77,6 @@ export const DEFINITION_A: DemoDefinition = {
         },
       },
       {
-        id: 'approve',
-        stepType: 'approval-gate',
-        config: { subject: 'Approve the summary before it is sent' },
-      },
-      {
         id: 'announce',
         stepType: 'notify',
         config: {
@@ -81,25 +86,24 @@ export const DEFINITION_A: DemoDefinition = {
       },
     ],
     edges: [
-      { from: 'ask', to: 'approve' },
-      { from: 'approve', to: 'announce' },
+      { from: 'approve', to: 'ask' },
+      { from: 'ask', to: 'announce' },
     ],
   },
 };
 
 /**
- * Definition B — the same three step types, composed differently.
+ * Definition B — the same safe three-step order with different configuration.
  *
- * TBI-026 (b) asks for a different order and configuration, and the difference is deliberate rather
- * than cosmetic: B leads with the gate, so the very first thing it does is park. That makes E3 a
- * sharper test than a reordering that still happens to start with an agent step — if any part of
- * the runtime had been written around "runs begin by enqueueing an agent run", B finds it.
+ * B already led with a gate, so FEAT-008 does not need to version it forward. Its distinct ids,
+ * prompt, approval subject, and notification still prove that execution comes from stored graph
+ * configuration rather than a code path for Demo A.
  */
 export const DEFINITION_B: DemoDefinition = {
   name: 'Demo B — Approve, Ask, Notify',
   description:
     'Gates first, then asks the app-knowledge Skill a different question, then notifies. Same ' +
-    'three step types as A in a different composition — the definition exit criterion E3 runs.',
+    'safe step order as A with different stored configuration — the definition exit criterion E3 runs.',
   graph: {
     nodes: [
       {
@@ -138,17 +142,23 @@ export interface SeedOutcome {
   definitionId: string;
   versionId: string;
   versionNumber: number;
-  /** False when a published version of this definition already existed. */
+  /** False when the current published version already had the requested graph. */
   created: boolean;
+}
+
+function graphsMatch(left: unknown, right: unknown): boolean {
+  // PostgreSQL jsonb does not preserve object-key order, so string comparison would publish an
+  // identical graph again after every database round trip.
+  return isDeepStrictEqual(left, right);
 }
 
 /**
  * Seeds one definition and returns what it found or made.
  *
- * The published-version check is what makes a second run a no-op rather than a second version. It
- * deliberately looks for a *published* version rather than any version: a draft left behind by an
- * interrupted run should be completed, not skipped, or the script would be idempotent in the sense
- * that it reliably does nothing.
+ * New definitions use FEAT-007's create/update/publish lifecycle, so v1 is immutable history and v2
+ * remains the retained draft. Existing Demo A installations may have the old ungated v1. That row
+ * is never edited: the retained draft is corrected and copied to a new immutable version. Comparing
+ * the current published graph before publishing makes the correction idempotent.
  */
 export async function seedDefinition(
   definition: DemoDefinition,
@@ -157,55 +167,95 @@ export async function seedDefinition(
 ): Promise<SeedOutcome> {
   const existing = await db.query.playbookDefinitions.findFirst({
     where: and(eq(playbookDefinitions.project, project), eq(playbookDefinitions.name, definition.name)),
-    columns: { id: true },
+    columns: { id: true, name: true, description: true },
   });
 
-  const definitionId =
-    existing?.id ??
-    (
-      await db
-        .insert(playbookDefinitions)
-        .values({
-          project,
-          name: definition.name,
-          description: definition.description,
-          createdBy: seededByUserId,
-        })
-        .returning({ id: playbookDefinitions.id })
-    )[0].id;
-
-  const published = await db.query.playbookDefinitionVersions.findFirst({
-    where: and(
-      eq(playbookDefinitionVersions.definitionId, definitionId),
-      eq(playbookDefinitionVersions.status, 'published')
-    ),
-    columns: { id: true, versionNumber: true },
-  });
-
-  if (published) {
+  if (!existing) {
+    const created = await createDefinition({
+      project,
+      name: definition.name,
+      description: definition.description,
+      graph: definition.graph,
+      createdByUserId: seededByUserId,
+    });
+    const published = await publishDraft({
+      project,
+      definitionId: created.definition.id,
+      publishedByUserId: seededByUserId,
+      expectedDraftUpdatedAt: created.draft.updatedAt,
+    });
     return {
       name: definition.name,
-      definitionId,
-      versionId: published.id,
-      versionNumber: published.versionNumber,
+      definitionId: created.definition.id,
+      versionId: published.publishedVersion.id,
+      versionNumber: published.publishedVersion.versionNumber,
+      created: true,
+    };
+  }
+
+  const currentPublished = await db.query.playbookDefinitionVersions.findFirst({
+    where: and(
+      eq(playbookDefinitionVersions.definitionId, existing.id),
+      eq(playbookDefinitionVersions.status, 'published')
+    ),
+    columns: { id: true, versionNumber: true, graph: true },
+    orderBy: [desc(playbookDefinitionVersions.versionNumber)],
+  });
+
+  const draft = await db.query.playbookDefinitionVersions.findFirst({
+    where: and(
+      eq(playbookDefinitionVersions.definitionId, existing.id),
+      eq(playbookDefinitionVersions.status, 'draft')
+    ),
+    columns: { graph: true, updatedAt: true },
+  });
+  if (!draft) {
+    throw new Error(
+      `Demo definition "${definition.name}" has no retained draft. ` +
+        'Apply the FEAT-007 lifecycle migration before seeding.'
+    );
+  }
+
+  let draftUpdatedAt = draft.updatedAt;
+  if (
+    !graphsMatch(draft.graph, definition.graph) ||
+    existing.name !== definition.name ||
+    existing.description !== definition.description
+  ) {
+    const updated = await updateDraft({
+      project,
+      definitionId: existing.id,
+      name: definition.name,
+      description: definition.description,
+      graph: definition.graph,
+      expectedDraftUpdatedAt: draft.updatedAt,
+    });
+    draftUpdatedAt = updated.draft.updatedAt;
+  }
+
+  if (currentPublished && graphsMatch(currentPublished.graph, definition.graph)) {
+    return {
+      name: definition.name,
+      definitionId: existing.id,
+      versionId: currentPublished.id,
+      versionNumber: currentPublished.versionNumber,
       created: false,
     };
   }
 
-  const [draft] = await db
-    .insert(playbookDefinitionVersions)
-    .values({ definitionId, versionNumber: 1, graph: definition.graph, status: 'draft' })
-    .returning({ id: playbookDefinitionVersions.id, versionNumber: playbookDefinitionVersions.versionNumber });
-
-  // The whole point of the script. Publishing through the service runs the structural guards, so a
-  // demo definition that violates one fails here rather than halfway through the demo.
-  await publishVersion(draft.id, seededByUserId);
+  // Publishing copies the corrected draft. Existing published rows remain immutable.
+  const published = await publishDraft({
+    project,
+    definitionId: existing.id,
+    publishedByUserId: seededByUserId,
+    expectedDraftUpdatedAt: draftUpdatedAt,
+  });
 
   return {
     name: definition.name,
-    definitionId,
-    versionId: draft.id,
-    versionNumber: draft.versionNumber,
+    definitionId: existing.id,
+    versionId: published.publishedVersion.id,
+    versionNumber: published.publishedVersion.versionNumber,
     created: true,
   };
 }
@@ -253,8 +303,8 @@ async function main(): Promise<void> {
     console.log(`    definitionId ${outcome.definitionId}`);
   }
   console.log(
-    '\nBoth went through the real publish path, so the structural guards ran against them.' +
-      '\nRe-running this script is safe and will not create a second copy.'
+    '\nBoth went through the retained-draft publish path, so the structural guards ran against them.' +
+      '\nRe-running is safe: a matching current version is reused, while legacy Demo A v1 remains immutable.'
   );
 }
 

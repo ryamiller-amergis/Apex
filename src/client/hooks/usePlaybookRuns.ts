@@ -9,13 +9,15 @@
  * Polling stops once every step is terminal. A view left open on a finished run should not keep
  * asking, and "is anything still moving" is a question the data already answers.
  */
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { PLAYBOOK_STEP_RUN_OPEN_STATUSES } from '../../shared/types/playbook';
 import type {
   PlaybookRunDetail,
   PlaybookRunListResult,
   PlaybookRunStatus,
   PlaybookStepRunStatus,
+  CancelPlaybookRunResponse,
+  RetryPlaybookStepResponse,
 } from '../../shared/types/playbook';
 
 /** How often a live run is re-read. Frequent enough to watch, slow enough not to be a load test. */
@@ -39,11 +41,24 @@ const OPEN_STEP_STATUSES: ReadonlySet<PlaybookStepRunStatus> = new Set(
   PLAYBOOK_STEP_RUN_OPEN_STATUSES
 );
 
-async function apiFetch<T>(url: string): Promise<T> {
-  const response = await fetch(url, { credentials: 'include' });
+export class PlaybookRunApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number
+  ) {
+    super(message);
+    this.name = 'PlaybookRunApiError';
+  }
+}
+
+async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, { credentials: 'include', ...init });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error((body as { error?: string }).error ?? `Request failed: ${response.status}`);
+    throw new PlaybookRunApiError(
+      (body as { error?: string }).error ?? `Request failed: ${response.status}`,
+      response.status
+    );
   }
   return response.json() as Promise<T>;
 }
@@ -85,5 +100,59 @@ export function usePlaybookRun(project: string | undefined, runId: string | null
     enabled: !!project && !!runId,
     staleTime: 0,
     refetchInterval: (result) => (hasLiveStep(result.state.data) ? POLL_INTERVAL_MS : false),
+  });
+}
+
+async function invalidateRunQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+  project: string,
+  runId: string
+): Promise<void> {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['playbook-runs', project] }),
+    queryClient.invalidateQueries({ queryKey: ['playbook-run', project, runId] }),
+  ]);
+}
+
+export function useCancelPlaybookRun(project: string, runId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<
+    CancelPlaybookRunResponse,
+    PlaybookRunApiError,
+    { reason?: string }
+  >({
+    mutationFn: ({ reason }) =>
+      apiFetch(`/api/playbooks/runs/${encodeURIComponent(runId)}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project, ...(reason ? { reason } : {}) }),
+      }),
+    onSuccess: () => invalidateRunQueries(queryClient, project, runId),
+    onError: (error) => {
+      if (error.status === 403) void invalidateRunQueries(queryClient, project, runId);
+    },
+  });
+}
+
+export function useRetryPlaybookStep(project: string, runId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<
+    RetryPlaybookStepResponse,
+    PlaybookRunApiError,
+    { stepRunId: string }
+  >({
+    mutationFn: ({ stepRunId }) =>
+      apiFetch(
+        `/api/playbooks/runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepRunId)}/retry`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project }),
+        }
+      ),
+    onSuccess: () => invalidateRunQueries(queryClient, project, runId),
+    onError: (error) => {
+      if (error.status === 403) void invalidateRunQueries(queryClient, project, runId);
+    },
   });
 }

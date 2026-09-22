@@ -60,8 +60,7 @@ export const PlaybookRunStepList: React.FC<PlaybookRunStepListProps> = ({ run, i
                 */}
               <span
                 className={styles.stepStatus}
-                data-status={step.status}
-                {...{ 'data-testid': 'playbook-step-status' }}
+                {...{ 'data-status': step.status, 'data-testid': 'playbook-step-status' }}
               >
                 {stepStatusLabel(step.status)}
               </span>

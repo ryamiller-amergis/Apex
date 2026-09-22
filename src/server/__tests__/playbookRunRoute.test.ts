@@ -25,18 +25,7 @@ jest.mock('../services/rbacService', () => ({
 // make every denial test pass for the wrong reason.
 jest.mock('../utils/superAdmin', () => ({
   isSuperAdminRequest: () => false,
-  // Read by the router's flag gate. Named here because the mock replaces the whole module.
   getAppEnvironment: () => 'local',
-}));
-
-/*
- * FEAT-006 put a `playbooks-spike` gate in front of every endpoint on this router, so a test that
- * says nothing about the flag is a test about a surface that does not exist. On, because these
- * tests are about what the endpoint does when it is reachable; the off case is VT-05's, in
- * `playbookStatusRoutes.test.ts`.
- */
-jest.mock('../services/featureFlagService', () => ({
-  isFeatureEnabled: jest.fn().mockResolvedValue(true),
 }));
 
 const startRun = jest.fn();
@@ -51,6 +40,9 @@ import playbooksRouter from '../routes/playbooks';
 import {
   PlaybookDefinitionNotFoundError,
   PlaybookNoPublishedVersionError,
+  PlaybookVersionPinNotFoundError,
+  PlaybookVersionPinNotPublishedError,
+  PlaybookVersionPinReasonRequiredError,
 } from '../services/playbookRunService';
 
 const USER_OID = 'caller-oid';
@@ -129,6 +121,82 @@ describe('starting a run through the endpoint', () => {
       definitionId: 'def-1',
       initiatorUserId: USER_OID,
     });
+  });
+
+  it('TBI-031 AC-3 / VT-14 forwards an explicit version pin and its reason', async () => {
+    const res = await request(buildApp()).post('/api/playbooks/runs').send({
+      project: 'Apex',
+      definitionId: 'def-1',
+      definitionVersionId: 'version-1',
+      versionPinReason: ' Trigger subscription compatibility ',
+    });
+
+    expect(res.status).toBe(201);
+    expect(startRun).toHaveBeenCalledWith({
+      project: 'Apex',
+      definitionId: 'def-1',
+      definitionVersionId: 'version-1',
+      versionPinReason: ' Trigger subscription compatibility ',
+      initiatorUserId: USER_OID,
+    });
+  });
+
+  it.each([
+    [{ definitionVersionId: 'version-1' }, 'versionPinReason'],
+    [{ versionPinReason: 'because' }, 'definitionVersionId'],
+    [{ definitionVersionId: '', versionPinReason: 'because' }, 'definitionVersionId'],
+    [{ definitionVersionId: 'version-1', versionPinReason: '   ' }, 'versionPinReason'],
+  ])('TBI-031 AC-4 / VT-15 rejects malformed pin pairing %#', async (pin, field) => {
+    const res = await request(buildApp())
+      .post('/api/playbooks/runs')
+      .send({ project: 'Apex', definitionId: 'def-1', ...pin });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(new RegExp(field, 'i'));
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
+  it('maps a service-level missing pin reason to 400', async () => {
+    startRun.mockRejectedValue(new PlaybookVersionPinReasonRequiredError('version-1'));
+
+    const res = await request(buildApp()).post('/api/playbooks/runs').send({
+      project: 'Apex',
+      definitionId: 'def-1',
+      definitionVersionId: 'version-1',
+      versionPinReason: 'reason',
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('TBI-031 AC-2 / VT-13 maps a cross-project pin to 404', async () => {
+    startRun.mockRejectedValue(
+      new PlaybookVersionPinNotFoundError('Apex', 'Definition', 'version-other-project')
+    );
+
+    const res = await request(buildApp()).post('/api/playbooks/runs').send({
+      project: 'Apex',
+      definitionId: 'def-1',
+      definitionVersionId: 'version-other-project',
+      versionPinReason: 'reason',
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  it('TBI-031 AC-4 / VT-15 maps a non-published pin to 409', async () => {
+    startRun.mockRejectedValue(
+      new PlaybookVersionPinNotPublishedError('Definition', 1, 'deprecated')
+    );
+
+    const res = await request(buildApp()).post('/api/playbooks/runs').send({
+      project: 'Apex',
+      definitionId: 'def-1',
+      definitionVersionId: 'version-1',
+      versionPinReason: 'reason',
+    });
+
+    expect(res.status).toBe(409);
   });
 
   it('reports a missing published version as 400, naming the reason', async () => {

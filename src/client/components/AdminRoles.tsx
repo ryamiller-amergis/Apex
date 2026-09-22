@@ -15,7 +15,11 @@ import {
   useAssignProjectRole,
   useRemoveProjectRole,
 } from '../hooks/useRbac';
-import type { AppPermission, RoleWithPermissions } from '../../shared/types/rbac';
+import type {
+  AppPermission,
+  RbacConfigurationWarning,
+  RoleWithPermissions,
+} from '../../shared/types/rbac';
 import styles from './AdminRoles.module.css';
 
 // ── Schemas ───────────────────────────────────────────────────────────────
@@ -33,6 +37,7 @@ type RoleFormValues = z.infer<typeof roleSchema>;
 interface CreateEditRoleModalProps {
   role?: RoleWithPermissions;
   onClose: () => void;
+  'data-testid'?: string;
 }
 
 const CreateEditRoleModal: React.FC<CreateEditRoleModalProps> = ({ role, onClose }) => {
@@ -70,18 +75,18 @@ const CreateEditRoleModal: React.FC<CreateEditRoleModalProps> = ({ role, onClose
   const mutationError = createRole.error ?? updateRole.error;
 
   return (
-    <div className={styles.overlay} role="dialog" aria-modal="true" aria-labelledby="role-modal-title">
+    <div className={styles.overlay} role="dialog" aria-modal="true" aria-labelledby="role-modal-title" {...{ 'data-testid': 'role-create-edit-dialog' }}>
       <div className={styles.modal}>
         <div className={styles.modalHeader}>
           <h2 className={styles.modalTitle} id="role-modal-title">
             {isEdit ? 'Edit Role' : 'Create Role'}
           </h2>
-          <button className={styles.closeBtn} onClick={onClose} aria-label="Close">
+          <button className={styles.closeBtn} onClick={onClose} aria-label="Close" {...{ 'data-testid': 'role-create-edit-close-btn' }}>
             ✕
           </button>
         </div>
 
-        <form onSubmit={handleSubmit(onSubmit)}>
+        <form onSubmit={handleSubmit(onSubmit)} {...{ 'data-testid': 'role-create-edit-form' }}>
           <div className={styles.modalBody}>
             <div className={styles.field}>
               <label className={styles.label} htmlFor="role-name">
@@ -92,7 +97,7 @@ const CreateEditRoleModal: React.FC<CreateEditRoleModalProps> = ({ role, onClose
                 className={styles.input}
                 {...register('name')}
                 placeholder="e.g. developer, viewer"
-                autoFocus
+                {...{ 'data-testid': 'role-name-input' }}
               />
               {errors.name && <span className={styles.fieldError}>{errors.name.message}</span>}
             </div>
@@ -107,6 +112,7 @@ const CreateEditRoleModal: React.FC<CreateEditRoleModalProps> = ({ role, onClose
                 {...register('description')}
                 placeholder="Describe what this role can do…"
                 rows={3}
+                {...{ 'data-testid': 'role-description-textarea' }}
               />
               {errors.description && (
                 <span className={styles.fieldError}>{errors.description.message}</span>
@@ -120,6 +126,7 @@ const CreateEditRoleModal: React.FC<CreateEditRoleModalProps> = ({ role, onClose
                   id="role-default"
                   className={styles.checkbox}
                   {...register('isDefault')}
+                  {...{ 'data-testid': 'role-default-checkbox' }}
                 />
                 <label htmlFor="role-default" className={styles.checkLabel}>
                   Set as default role for new users
@@ -131,10 +138,10 @@ const CreateEditRoleModal: React.FC<CreateEditRoleModalProps> = ({ role, onClose
           </div>
 
           <div className={styles.modalFooter}>
-            <button type="button" className={styles.btnCancel} onClick={onClose}>
+            <button type="button" className={styles.btnCancel} onClick={onClose} {...{ 'data-testid': 'role-create-edit-cancel-btn' }}>
               Cancel
             </button>
-            <button type="submit" className={styles.btnPrimary} disabled={isPending}>
+            <button type="submit" className={styles.btnPrimary} disabled={isPending} {...{ 'data-testid': 'role-create-edit-submit-btn' }}>
               {isPending
                 ? isEdit
                   ? 'Saving…'
@@ -155,6 +162,7 @@ const CreateEditRoleModal: React.FC<CreateEditRoleModalProps> = ({ role, onClose
 interface DeleteConfirmModalProps {
   role: RoleWithPermissions;
   onClose: () => void;
+  'data-testid'?: string;
 }
 
 const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({ role, onClose }) => {
@@ -170,13 +178,13 @@ const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({ role, onClose }
   };
 
   return (
-    <div className={styles.overlay} role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
+    <div className={styles.overlay} role="dialog" aria-modal="true" aria-labelledby="delete-modal-title" {...{ 'data-testid': 'role-delete-dialog' }}>
       <div className={`${styles.modal} ${styles.confirmModal}`}>
         <div className={styles.modalHeader}>
           <h2 className={styles.modalTitle} id="delete-modal-title">
             Delete Role
           </h2>
-          <button className={styles.closeBtn} onClick={onClose} aria-label="Close">
+          <button className={styles.closeBtn} onClick={onClose} aria-label="Close" {...{ 'data-testid': 'role-delete-close-btn' }}>
             ✕
           </button>
         </div>
@@ -198,13 +206,14 @@ const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({ role, onClose }
         </div>
 
         <div className={styles.modalFooter}>
-          <button className={styles.btnCancel} onClick={onClose}>
+          <button className={styles.btnCancel} onClick={onClose} {...{ 'data-testid': 'role-delete-cancel-btn' }}>
             Cancel
           </button>
           <button
             className={styles.btnDanger}
             onClick={handleDelete}
             disabled={deleteRole.isPending || role.isDefault}
+            {...{ 'data-testid': 'role-delete-confirm-btn' }}
           >
             {deleteRole.isPending ? 'Deleting…' : 'Delete Role'}
           </button>
@@ -220,10 +229,12 @@ interface PermissionsModalProps {
   role: RoleWithPermissions;
   allPermissions: AppPermission[];
   onClose: () => void;
+  'data-testid'?: string;
 }
 
 const PermissionsModal: React.FC<PermissionsModalProps> = ({ role, allPermissions, onClose }) => {
   const updatePerms = useUpdateRolePermissions();
+  const [savedWarning, setSavedWarning] = useState<RbacConfigurationWarning | null>(null);
 
   const [selected, setSelected] = useState<Set<string>>(() => {
     const rolePermKeys = new Set(role.permissions);
@@ -251,15 +262,32 @@ const PermissionsModal: React.FC<PermissionsModalProps> = ({ role, allPermission
 
   const handleSave = async () => {
     try {
-      await updatePerms.mutateAsync({ id: role.id, permissionIds: Array.from(selected) });
-      onClose();
+      const result = await updatePerms.mutateAsync({
+        id: role.id,
+        permissionIds: Array.from(selected),
+      });
+      const warning = result.warnings.find(
+        (item) => item.code === 'PLAYBOOK_AUTHOR_WITHOUT_RUN',
+      ) ?? null;
+      if (warning) {
+        setSavedWarning(warning);
+      } else {
+        onClose();
+      }
     } catch {
       // error displayed via updatePerms.error below
     }
   };
 
+  const selectedKeys = useMemo(
+    () => new Set(allPermissions.filter((permission) => selected.has(permission.id)).map((permission) => permission.key)),
+    [allPermissions, selected],
+  );
+  const hasAuthorWithoutRun = selectedKeys.has('playbooks:author')
+    && !selectedKeys.has('playbooks:run');
+
   return (
-    <div className={styles.overlay} role="dialog" aria-modal="true" aria-labelledby="perms-modal-title">
+    <div className={styles.overlay} role="dialog" aria-modal="true" aria-labelledby="perms-modal-title" {...{ 'data-testid': 'role-permissions-dialog' }}>
       <div className={`${styles.modal} ${styles.permsModal}`}>
         <div className={styles.modalHeader}>
           <div>
@@ -270,7 +298,7 @@ const PermissionsModal: React.FC<PermissionsModalProps> = ({ role, allPermission
               {selected.size} of {allPermissions.length} selected
             </p>
           </div>
-          <button className={styles.closeBtn} onClick={onClose} aria-label="Close">
+          <button className={styles.closeBtn} onClick={onClose} aria-label="Close" {...{ 'data-testid': 'role-permissions-close-btn' }}>
             ✕
           </button>
         </div>
@@ -290,23 +318,62 @@ const PermissionsModal: React.FC<PermissionsModalProps> = ({ role, allPermission
                     className={styles.checkbox}
                     checked={selected.has(p.id)}
                     onChange={() => toggle(p.id)}
+                    disabled={updatePerms.isPending}
+                    {...{
+                      'data-testid': p.key.startsWith('playbooks:')
+                        ? `playbook-permission-${p.key.replace(':', '-')}`
+                        : `role-permission-${p.key.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-checkbox`,
+                    }}
                   />
                   <span className={styles.permKey}>{p.key}</span>
-                  {p.description && <span className={styles.permDesc}>{p.description}</span>}
+                  <span className={styles.permDesc}>
+                    {p.key === 'playbooks:view' && 'View — '}
+                    {p.key === 'playbooks:run' && 'Start — '}
+                    {p.key === 'playbooks:author' && 'Author — '}
+                    {p.key === 'playbooks:admin' && 'Admin — '}
+                    {p.description ?? 'No purpose provided.'}
+                  </span>
                 </label>
               ))}
             </div>
           ))}
 
+          {(savedWarning || hasAuthorWithoutRun) && (
+            <div
+              className={styles.warning}
+              id="playbook-author-without-run-warning"
+              role={savedWarning ? 'alert' : 'status'}
+              aria-live={savedWarning ? 'assertive' : 'polite'}
+              {...{ 'data-testid': 'playbook-author-without-run-warning' }}
+            >
+              {savedWarning?.message
+                ?? 'Playbook author permission is present without run permission; the member can author but cannot run what they author.'}
+            </div>
+          )}
+
           {updatePerms.error && <div className={styles.error}>{updatePerms.error.message}</div>}
         </div>
 
         <div className={styles.modalFooter}>
-          <button className={styles.btnCancel} onClick={onClose}>
+          <button className={styles.btnCancel} onClick={onClose} {...{ 'data-testid': 'role-permissions-cancel-btn' }}>
             Cancel
           </button>
-          <button className={styles.btnPrimary} onClick={handleSave} disabled={updatePerms.isPending}>
-            {updatePerms.isPending ? 'Saving…' : 'Save Permissions'}
+          <button
+            className={styles.btnPrimary}
+            onClick={savedWarning ? onClose : handleSave}
+            disabled={updatePerms.isPending}
+            aria-describedby={hasAuthorWithoutRun ? 'playbook-author-without-run-warning' : undefined}
+            {...{
+              'data-testid': savedWarning
+                ? 'role-permissions-warning-acknowledge'
+                : 'role-permissions-save',
+            }}
+          >
+            {savedWarning
+              ? 'Acknowledge and Close'
+              : updatePerms.isPending
+                ? 'Saving…'
+                : 'Save Permissions'}
           </button>
         </div>
       </div>
@@ -325,6 +392,7 @@ interface RoleMembersModalProps {
   role: RoleWithPermissions;
   project?: string;
   onClose: () => void;
+  'data-testid'?: string;
 }
 
 const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, project, onClose }) => {
@@ -336,6 +404,7 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, project, onCl
 
   const [selectedOid, setSelectedOid] = useState('');
   const [memberSearch, setMemberSearch] = useState('');
+  const [assignmentWarning, setAssignmentWarning] = useState<RbacConfigurationWarning | null>(null);
 
   const members = useMemo(
     () => users.filter((u) =>
@@ -363,16 +432,29 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, project, onCl
 
   const handleAdd = () => {
     if (!selectedOid) return;
-    const onSuccess = () => setSelectedOid('');
     if (project) {
       assignProjectRole.mutate(
         { oid: selectedOid, project, roleId: role.id },
-        { onSuccess },
+        {
+          onSuccess: (result) => {
+            setSelectedOid('');
+            setAssignmentWarning(
+              result.warnings.find(
+                (warning) => warning.code === 'PLAYBOOK_AUTHOR_WITHOUT_RUN',
+              ) ?? null,
+            );
+          },
+        },
       );
     } else {
       assignRole.mutate(
         { oid: selectedOid, roleId: role.id },
-        { onSuccess },
+        {
+          onSuccess: () => {
+            setSelectedOid('');
+            setAssignmentWarning(null);
+          },
+        },
       );
     }
   };
@@ -391,7 +473,7 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, project, onCl
   const removeError = project ? removeProjectRole.error : removeRole.error;
 
   return (
-    <div className={styles.overlay} role="dialog" aria-modal="true" aria-labelledby="members-modal-title">
+    <div className={styles.overlay} role="dialog" aria-modal="true" aria-labelledby="members-modal-title" {...{ 'data-testid': 'role-members-dialog' }}>
       <div className={`${styles.modal} ${styles.membersModal}`}>
         <div className={styles.modalHeader}>
           <div>
@@ -402,7 +484,7 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, project, onCl
               {members.length} member{members.length !== 1 ? 's' : ''}
             </p>
           </div>
-          <button className={styles.closeBtn} onClick={onClose} aria-label="Close">
+          <button className={styles.closeBtn} onClick={onClose} aria-label="Close" {...{ 'data-testid': 'role-members-close-btn' }}>
             ✕
           </button>
         </div>
@@ -416,6 +498,7 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, project, onCl
               onChange={(e) => setSelectedOid(e.target.value)}
               disabled={isLoading || isAssigning || nonMembers.length === 0}
               aria-label="Select user to add"
+              {...{ 'data-testid': 'project-role-member-select' }}
             >
               <option value="">
                 {isLoading
@@ -435,6 +518,8 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, project, onCl
               onClick={handleAdd}
               disabled={!selectedOid || isLoading || isAssigning}
               aria-label="Add selected user to role"
+              aria-describedby={assignmentWarning ? 'project-role-assignment-warning' : undefined}
+              {...{ 'data-testid': 'project-role-assign' }}
             >
               {isAssigning ? 'Adding…' : 'Add'}
             </button>
@@ -442,6 +527,16 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, project, onCl
 
           {assignError && <div className={styles.error}>{assignError.message}</div>}
           {removeError && <div className={styles.error}>{removeError.message}</div>}
+          {assignmentWarning && (
+            <div
+              id="project-role-assignment-warning"
+              className={styles.warning}
+              role="alert"
+              {...{ 'data-testid': 'playbook-author-without-run-warning' }}
+            >
+              {assignmentWarning.message}
+            </div>
+          )}
 
           {/* Member search */}
           {members.length > 5 && (
@@ -452,6 +547,7 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, project, onCl
               value={memberSearch}
               onChange={(e) => setMemberSearch(e.target.value)}
               aria-label="Filter members"
+              {...{ 'data-testid': 'project-role-members-filter-input' }}
             />
           )}
 
@@ -459,7 +555,10 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, project, onCl
           {isLoading ? (
             <p className={styles.emptyMembers}>Loading users…</p>
           ) : filteredMembers.length === 0 ? (
-            <p className={styles.emptyMembers}>
+            <p
+              className={styles.emptyMembers}
+              {...(!memberSearch ? { 'data-testid': 'project-role-members-empty' } : {})}
+            >
               {memberSearch ? `No members match "${memberSearch}"` : 'No members assigned yet.'}
             </p>
           ) : (
@@ -481,6 +580,7 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, project, onCl
                     disabled={isRemoving}
                     title={`Remove ${u.displayName ?? u.email} from role`}
                     aria-label={`Remove ${u.displayName ?? u.email} from ${role.name}`}
+                    {...{ 'data-testid': `project-role-remove-${u.oid}-btn` }}
                   >
                     Remove
                   </button>
@@ -491,7 +591,7 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, project, onCl
         </div>
 
         <div className={styles.modalFooter}>
-          <button className={styles.btnCancel} onClick={onClose}>
+          <button className={styles.btnCancel} onClick={onClose} {...{ 'data-testid': 'role-members-footer-close-btn' }}>
             Close
           </button>
         </div>
@@ -524,7 +624,7 @@ export const AdminRoles: React.FC<AdminRolesProps> = ({ selectedProject }) => {
             <h1 className={styles.pageTitle}>Roles</h1>
             <p className={styles.pageSubtitle}>Manage roles and their assigned permissions.</p>
           </div>
-          <button className={styles.btnPrimary} onClick={() => setShowCreate(true)}>
+          <button className={styles.btnPrimary} onClick={() => setShowCreate(true)} {...{ 'data-testid': 'role-create-btn' }}>
             + Create Role
           </button>
         </div>
@@ -568,6 +668,7 @@ export const AdminRoles: React.FC<AdminRolesProps> = ({ selectedProject }) => {
                           className={styles.btnAction}
                           onClick={() => setManagingPermsRole(role)}
                           title="Manage permissions"
+                          {...{ 'data-testid': `role-${role.id}-permissions-btn` }}
                         >
                           Permissions
                         </button>
@@ -575,6 +676,7 @@ export const AdminRoles: React.FC<AdminRolesProps> = ({ selectedProject }) => {
                           className={styles.btnAction}
                           onClick={() => setManagingMembersRole(role)}
                           title="Manage members"
+                          {...{ 'data-testid': `role-${role.id}-members-btn` }}
                         >
                           Members
                         </button>
@@ -582,6 +684,7 @@ export const AdminRoles: React.FC<AdminRolesProps> = ({ selectedProject }) => {
                           className={styles.btnAction}
                           onClick={() => setEditingRole(role)}
                           title="Edit role"
+                          {...{ 'data-testid': `role-${role.id}-edit-btn` }}
                         >
                           Edit
                         </button>
@@ -590,6 +693,7 @@ export const AdminRoles: React.FC<AdminRolesProps> = ({ selectedProject }) => {
                           onClick={() => setDeletingRole(role)}
                           title="Delete role"
                           disabled={role.isDefault}
+                          {...{ 'data-testid': `role-${role.id}-delete-btn` }}
                         >
                           Delete
                         </button>
@@ -603,18 +707,32 @@ export const AdminRoles: React.FC<AdminRolesProps> = ({ selectedProject }) => {
         )}
       </div>
 
-      {showCreate && <CreateEditRoleModal onClose={() => setShowCreate(false)} />}
+      {showCreate && (
+        <CreateEditRoleModal
+          onClose={() => setShowCreate(false)}
+          {...{ 'data-testid': 'role-create-modal' }}
+        />
+      )}
       {editingRole && (
-        <CreateEditRoleModal role={editingRole} onClose={() => setEditingRole(null)} />
+        <CreateEditRoleModal
+          role={editingRole}
+          onClose={() => setEditingRole(null)}
+          {...{ 'data-testid': 'role-edit-modal' }}
+        />
       )}
       {deletingRole && (
-        <DeleteConfirmModal role={deletingRole} onClose={() => setDeletingRole(null)} />
+        <DeleteConfirmModal
+          role={deletingRole}
+          onClose={() => setDeletingRole(null)}
+          {...{ 'data-testid': 'role-delete-modal' }}
+        />
       )}
       {managingPermsRole && (
         <PermissionsModal
           role={managingPermsRole}
           allPermissions={allPermissions}
           onClose={() => setManagingPermsRole(null)}
+          {...{ 'data-testid': 'role-permissions-modal' }}
         />
       )}
       {managingMembersRole && (
@@ -622,6 +740,7 @@ export const AdminRoles: React.FC<AdminRolesProps> = ({ selectedProject }) => {
           role={managingMembersRole}
           project={selectedProject}
           onClose={() => setManagingMembersRole(null)}
+          {...{ 'data-testid': 'role-members-modal' }}
         />
       )}
 

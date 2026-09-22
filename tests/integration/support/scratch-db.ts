@@ -183,50 +183,6 @@ async function dropDatabase(base: URL, databaseName: string): Promise<void> {
   });
 }
 
-/**
- * Turns the `playbooks-spike` flag on in a scratch database.
- *
- * Needed by any suite that actually runs a Playbook. Traversal goes through the engine boundary,
- * and every operation there passes the flag gate, so a run in a database carrying the seed's
- * default-off state is refused before it starts.
- *
- * Setting `enabled` is necessary but not sufficient. `evaluateFlags` requires at least one rule —
- * it ends in `knownRuleCount > 0 && ...`, so a flag switched on with no audience at all resolves
- * false for everybody. An `everyone` rule is the widest one available and the right shape here: a
- * project or environment rule would be ANDed against a test process that has no `APP_ENV`, which is
- * the narrower setup that silently does nothing.
- *
- * Safe because every caller owns its own disposable database — the suite asserting the seed ships
- * default-off builds its own, so nothing here can contaminate it.
- */
-export async function enablePlaybooks(connectionString: string): Promise<void> {
-  const client = new pg.Client({ connectionString });
-  await client.connect();
-  try {
-    const { rows } = await client.query<{ id: string }>(
-      `UPDATE feature_flags SET enabled = true WHERE key = 'playbooks-spike' RETURNING id`
-    );
-    if (rows.length === 0) {
-      throw new Error(
-        'Cannot enable playbooks-spike: the flag row is missing from this database. ' +
-          'The seed migration (20260918120000) should have created it — this scratch database is ' +
-          'not fully migrated, and every Playbook run in it would be refused for the wrong reason.'
-      );
-    }
-
-    await client.query(
-      `INSERT INTO feature_flag_rules (flag_id, type, value)
-       SELECT $1, 'everyone', NULL
-       WHERE NOT EXISTS (
-         SELECT 1 FROM feature_flag_rules WHERE flag_id = $1 AND type = 'everyone'
-       )`,
-      [rows[0].id]
-    );
-  } finally {
-    await client.end();
-  }
-}
-
 /** Table names present in the given schema — the before/after snapshot TBI-001 needs. */
 export async function listTables(connectionString: string, schema = 'public'): Promise<string[]> {
   const client = new pg.Client({ connectionString });

@@ -5,7 +5,9 @@
  * definition with no published version produces **no run row at all** — not a row marked failed —
  * so the version check has to precede the insert. A run row that exists only to record its own
  * rejection would show up in the status view, count against the per-project active-run cap FEAT-005
- * adds, and have to be explained to whoever reads it.
+ * adds, and have to be explained to whoever reads it. TBI-031's refused pins — deprecated,
+ * archived, draft, another definition's version, or no stated reason — sit in the same position,
+ * ahead of both the capacity check and the insert, for the same reason.
  *
  * The request returns as soon as the first step is enqueued, following the posture of
  * `backgroundWorkflowRouter.routeBackgroundWorkflow`: the caller gets a handle, the work proceeds
@@ -21,7 +23,7 @@ import {
 } from '../db/schema';
 import { assertActiveRunCapacity } from './playbookGuardService';
 import { beginRun } from './playbookAdvanceService';
-import type { PlaybookGraph } from '../../shared/types/playbook';
+import type { PlaybookGraph, StartRunRequest } from '../../shared/types/playbook';
 
 export class PlaybookDefinitionNotFoundError extends Error {
   constructor(project: string, definitionId: string) {
@@ -47,16 +49,59 @@ export class PlaybookEmptyGraphError extends Error {
   }
 }
 
-export interface StartRunResult {
-  runId: string;
-  status: 'running';
+export class PlaybookVersionPinReasonRequiredError extends Error {
+  constructor(versionId: string) {
+    super(
+      `Pinning version ${versionId} requires a documented reason. ` +
+        'Send a non-blank versionPinReason, or omit definitionVersionId to run the current ' +
+        'published version.'
+    );
+    this.name = 'PlaybookVersionPinReasonRequiredError';
+  }
 }
 
-export async function startRun(input: {
+export class PlaybookVersionPinNotFoundError extends Error {
+  constructor(project: string, definitionName: string, versionId: string) {
+    super(
+      `Version ${versionId} is not a version of Playbook "${definitionName}" in project ` +
+        `${project}. Pin a version of this Playbook, or omit definitionVersionId to run the ` +
+        'current published version.'
+    );
+    this.name = 'PlaybookVersionPinNotFoundError';
+  }
+}
+
+export class PlaybookVersionPinNotPublishedError extends Error {
+  constructor(definitionName: string, versionNumber: number, status: string) {
+    super(
+      `Version ${versionNumber} of Playbook "${definitionName}" is ${status}, not published. ` +
+        'Pin a published version, or omit definitionVersionId to run the current published version.'
+    );
+    this.name = 'PlaybookVersionPinNotPublishedError';
+  }
+}
+
+export interface RunnableVersionResolution {
+  definition: typeof playbookDefinitions.$inferSelect;
+  version: typeof playbookDefinitionVersions.$inferSelect;
+  /** The trimmed reason for an explicit pin; null when the current published version was taken. */
+  versionPinReason: string | null;
+}
+
+/**
+ * TBI-031 — which version a new run gets.
+ *
+ * Both paths start from the same project-scoped definition lookup, so neither can cross a project
+ * boundary: an explicit pin is matched within the definition that lookup returned rather than by
+ * version id alone. The pinned lookup deliberately does not filter on status, because a caller who
+ * pins a deprecated version should be told it is deprecated rather than told it does not exist.
+ */
+export async function resolveRunnableVersion(input: {
   project: string;
   definitionId: string;
-  initiatorUserId: string;
-}): Promise<StartRunResult> {
+  explicitVersionId?: string;
+  pinReason?: string;
+}): Promise<RunnableVersionResolution> {
   /*
    * Scoped by project as well as id. The route's `requirePermission('playbooks:run')` already
    * resolved the caller's permissions against the project in the body, so resolving the definition
@@ -74,18 +119,77 @@ export async function startRun(input: {
     throw new PlaybookDefinitionNotFoundError(input.project, input.definitionId);
   }
 
-  const version = await db.query.playbookDefinitionVersions.findFirst({
+  if (!input.explicitVersionId) {
+    const current = await db.query.playbookDefinitionVersions.findFirst({
+      where: and(
+        eq(playbookDefinitionVersions.definitionId, definition.id),
+        eq(playbookDefinitionVersions.status, 'published')
+      ),
+      orderBy: [desc(playbookDefinitionVersions.versionNumber)],
+    });
+
+    // Before the insert, deliberately. See the file comment.
+    if (!current) {
+      throw new PlaybookNoPublishedVersionError(definition.name);
+    }
+
+    return { definition, version: current, versionPinReason: null };
+  }
+
+  /*
+   * The reason is what makes an old version's use auditable later, so a pin without one is refused
+   * before the version is even read. There is nothing to look up on behalf of a request that
+   * cannot be recorded.
+   */
+  const pinReason = input.pinReason?.trim();
+  if (!pinReason) {
+    throw new PlaybookVersionPinReasonRequiredError(input.explicitVersionId);
+  }
+
+  const pinned = await db.query.playbookDefinitionVersions.findFirst({
     where: and(
-      eq(playbookDefinitionVersions.definitionId, definition.id),
-      eq(playbookDefinitionVersions.status, 'published')
+      eq(playbookDefinitionVersions.id, input.explicitVersionId),
+      eq(playbookDefinitionVersions.definitionId, definition.id)
     ),
-    orderBy: [desc(playbookDefinitionVersions.versionNumber)],
   });
 
-  // Before the insert, deliberately. See the file comment.
-  if (!version) {
-    throw new PlaybookNoPublishedVersionError(definition.name);
+  if (!pinned) {
+    throw new PlaybookVersionPinNotFoundError(
+      input.project,
+      definition.name,
+      input.explicitVersionId
+    );
   }
+
+  if (pinned.status !== 'published') {
+    throw new PlaybookVersionPinNotPublishedError(
+      definition.name,
+      pinned.versionNumber,
+      pinned.status
+    );
+  }
+
+  return { definition, version: pinned, versionPinReason: pinReason };
+}
+
+/** Narrows the shared `StartRunResult`: a run this call created has only just started. */
+export interface StartRunResult {
+  runId: string;
+  status: 'running';
+  definitionVersionId: string;
+}
+
+export interface StartRunInput extends StartRunRequest {
+  initiatorUserId: string;
+}
+
+export async function startRun(input: StartRunInput): Promise<StartRunResult> {
+  const { definition, version, versionPinReason } = await resolveRunnableVersion({
+    project: input.project,
+    definitionId: input.definitionId,
+    explicitVersionId: input.definitionVersionId,
+    pinReason: input.versionPinReason,
+  });
 
   const graph = version.graph as PlaybookGraph;
   if (graph.nodes.length === 0) {
@@ -106,6 +210,7 @@ export async function startRun(input: {
       definitionVersionId: version.id,
       // BR-006: the run pins the version it started under, so editing the Playbook afterwards
       // cannot change what this run does.
+      versionPinReason,
       initiatorUserId: input.initiatorUserId,
       status: 'running',
     })
@@ -133,5 +238,5 @@ export async function startRun(input: {
     throw chain.error;
   }
 
-  return { runId: run.id, status: 'running' };
+  return { runId: run.id, status: 'running', definitionVersionId: version.id };
 }

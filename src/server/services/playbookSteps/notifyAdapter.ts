@@ -16,40 +16,16 @@
  * Non-suspending, so it completes in the same tick it starts and declares no deadline.
  */
 import { createNotification } from '../notificationService';
+import { parseStepInput, parseStepOutput } from './descriptorValidation';
 import { completeStepRun, PlaybookStepExecutionContext, PlaybookStepOutcome } from './stepRuns';
 import type { NotifyStepConfig } from '../../../shared/types/playbook';
 
-export class NotifyStepConfigError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'NotifyStepConfigError';
-  }
-}
-
-export function parseNotifyConfig(config: Record<string, unknown>): NotifyStepConfig {
-  const title = config.title;
-  if (typeof title !== 'string' || !title.trim()) {
-    throw new NotifyStepConfigError('A notify step needs a non-empty title.');
-  }
-
-  for (const key of ['body', 'link', 'recipientUserId'] as const) {
-    if (config[key] !== undefined && typeof config[key] !== 'string') {
-      throw new NotifyStepConfigError(`A notify step's ${key} must be a string when present.`);
-    }
-  }
-
-  return {
-    title,
-    body: config.body as string | undefined,
-    link: config.link as string | undefined,
-    recipientUserId: config.recipientUserId as string | undefined,
-  };
-}
+const STEP_TYPE = 'notify';
 
 export async function executeNotifyStep(
   context: PlaybookStepExecutionContext
 ): Promise<PlaybookStepOutcome> {
-  const config = parseNotifyConfig(context.config);
+  const config = parseStepInput<NotifyStepConfig>(STEP_TYPE, context.config);
 
   /*
    * Defaults to the initiator because they are the only identity Phase 0 can resolve (BR-003).
@@ -67,7 +43,10 @@ export async function executeNotifyStep(
     link: config.link,
   });
 
-  const output = { notificationId: notification.id, recipientUserId };
+  const output = parseStepOutput(STEP_TYPE, {
+    notificationId: notification.id,
+    recipientUserId,
+  });
   await completeStepRun({ stepRunId: context.stepRunId, output });
 
   return { kind: 'completed', output };

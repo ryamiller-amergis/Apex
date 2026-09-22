@@ -19,7 +19,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import pg from 'pg';
-import { createScratchDatabase, enablePlaybooks, ScratchDatabase } from './support/scratch-db';
+import { createScratchDatabase, ScratchDatabase } from './support/scratch-db';
 
 type ReconciliationModule = typeof import('../../src/server/services/playbookReconciliationService');
 type ReaperModule = typeof import('../../src/server/services/agentRunReaperService');
@@ -156,7 +156,6 @@ function executeAgentStepThenKill(stepRunId: string, runId: string): Promise<str
 beforeAll(async () => {
   scratch = await createScratchDatabase('playbooke2');
   // Traversal runs through the engine boundary, which refuses every operation while the flag is off.
-  await enablePlaybooks(scratch.connectionString);
 
   process.env.DATABASE_URL = scratch.connectionString;
   /* eslint-disable @typescript-eslint/no-require-imports --

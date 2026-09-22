@@ -10,6 +10,7 @@
  * answer "what happened, and what happens next" — the engine's own store is a disposable execution
  * cache, so nothing here may depend on it being present.
  */
+import type { ZodType } from 'zod';
 import type { ArtifactRef } from './loadTest';
 
 // ── Status vocabularies ───────────────────────────────────────────────────────
@@ -115,6 +116,8 @@ export interface PlaybookDefinitionVersion {
   publishedBy: string | null;
   publishedAt: string | null;
   createdAt: string;
+  /** Draft revision time; refreshed on draft save and when publish advances the retained draft. */
+  updatedAt: string;
 }
 
 export interface PlaybookRun {
@@ -125,6 +128,11 @@ export interface PlaybookRun {
   /** The authorization identity for the whole run, per BR-003. */
   initiatorUserId: string;
   status: PlaybookRunStatus;
+  /**
+   * Documented reason when the caller explicitly pinned an older published version. Null when the
+   * run resolved to the project's current published version.
+   */
+  versionPinReason: string | null;
   /**
    * Incremented by the runtime as steps execute, never computed on read. The structural guards in
    * FEAT-005 are synchronous, and making a synchronous guard depend on an aggregate scan is how
@@ -207,9 +215,9 @@ export interface PlaybookRunDetail extends PlaybookRunSummary {
  * What a step type declares about itself.
  *
  * This file carries the *shape*; the registry in `src/server/services/playbookSteps/` carries the
- * three values. That split is deliberate — TBI-016 requires the registry to be the only place a
- * step type is declared, so naming `cursor-agent` here would create a second declaration site and
- * make adding a fourth type a shared-types change.
+ * values. That split is deliberate — TBI-016 requires the registry to be the only place a step type
+ * is declared, so naming `cursor-agent` here would create a second declaration site and make adding
+ * a fourth type a shared-types change.
  *
  * The union below encodes BR-005 in the type system: a descriptor that can suspend cannot be
  * written without a deadline, because a suspension with no deadline is a run that waits forever and
@@ -246,21 +254,47 @@ interface PlaybookStepTypeDescriptorBase {
   /**
    * What executing this step does outside its own row, in the PRD's vocabulary.
    *
-   * TBI-024 re-checks the initiator's permissions before any `writes-apex` or `leaves-apex` step,
-   * so Phase 0 needs the classification even though `requiredPermissions` and the Zod input/output
-   * schemas remain FEAT-008's contract. What is missing until then is *which* permission a step
-   * needs — so Phase 0 re-checks project access plus `playbooks:run` for every side-effecting
-   * step, and this field decides only whether the check runs at all.
+   * Read by two rules. TBI-024 re-checks the initiator's permissions before any step that is not
+   * `read`, and TBI-034 refuses to publish a graph where a `leaves-apex` node is reached from
+   * anything but an `approval-gate`. Both read the classification in force now rather than the one
+   * a version was published under, which is why it lives on the descriptor and not in the graph.
    */
   sideEffect: PlaybookStepSideEffect;
+
+  /**
+   * What the run initiator must hold for a step of this type to execute, per TBI-033.
+   *
+   * Non-empty by construction: a step type that names no permission would execute on whatever
+   * authority admitted the run, which is how `playbooks:run` quietly becomes an umbrella for
+   * effects nobody granted it for. A later step type declares its own domain permissions here
+   * rather than inheriting these by convention. The registry re-checks emptiness at runtime too,
+   * because a tuple is only non-empty while nobody has cast their way past it.
+   */
+  requiredPermissions: readonly [string, ...string[]];
+
+  /**
+   * What a graph node's `config` must contain for this step type, and what the step yields.
+   *
+   * Typed as Zod rather than as a TypeScript interface because both are read at runtime by things
+   * that hold no compile-time type for the step: a node's stored `config`, an adapter's result on
+   * its way to being recorded as complete, and — later — a gate rendering the input to an approver
+   * and a branch condition evaluated against the output.
+   *
+   * Retrievable by step-type key from the registry, so inspecting what a step type takes and
+   * returns never involves instantiating an adapter or starting anything.
+   */
+  inputSchema: ZodType<Record<string, unknown>>;
+  outputSchema: ZodType<Record<string, unknown>>;
 }
 
 /**
- * `none` is a step whose only trace is its own step-run row — a gate waiting on a person writes a
+ * `read` is a step whose only trace is its own step-run row — a gate waiting on a person records a
  * decision and nothing else. `writes-apex` changes Apex state a user can see. `leaves-apex` reaches
- * a system Apex does not own, which cannot be rolled back by anything here.
+ * a system Apex does not own, which cannot be rolled back by anything here and is therefore the
+ * only classification that mandates an approval gate in front of it.
  */
-export type PlaybookStepSideEffect = 'none' | 'writes-apex' | 'leaves-apex';
+export const PLAYBOOK_STEP_SIDE_EFFECTS = ['read', 'writes-apex', 'leaves-apex'] as const;
+export type PlaybookStepSideEffect = (typeof PLAYBOOK_STEP_SIDE_EFFECTS)[number];
 
 export type PlaybookStepTypeDescriptor =
   | (PlaybookStepTypeDescriptorBase & {
@@ -285,9 +319,9 @@ export type PlaybookStepTypeDescriptor =
 
 // ── Per-step-type configuration ───────────────────────────────────────────────
 //
-// What a graph node's `config` carries for each Phase 0 step type. Validated by the owning adapter
-// at execution time rather than by a schema here: Zod input/output schemas are FEAT-008's contract,
-// and Phase 0 is explicitly out of scope for them.
+// What a graph node's `config` carries for each production step type, for callers that hold the
+// config at compile time. The authority is the descriptor's `inputSchema` in the registry, which is
+// what actually validates a stored node config; these interfaces mirror it and nothing more.
 
 export interface CursorAgentStepConfig {
   /** Checked against the descriptor's `allowedSkillPaths` before anything is enqueued. */
@@ -347,14 +381,22 @@ export const PLAYBOOK_GUARD_LIMITS = {
 
 export type PlaybookGuardLimits = typeof PLAYBOOK_GUARD_LIMITS;
 
-/** Which guard refused, so a caller can react to the kind rather than parsing the message. */
+/**
+ * Which guard refused, so a caller can react to the kind rather than parsing the message.
+ *
+ * `ungated-leaves-apex` is not a cap like the others — nothing about it is a number. It is here
+ * because it refuses a graph at the same moment and through the same path as the caps do, and a
+ * caller that already branches on this vocabulary should not need a second one to learn that
+ * publication was refused.
+ */
 export type PlaybookGuardViolationKind =
   | 'max-steps'
   | 'max-agent-steps'
   | 'max-fan-out'
   | 'loop'
   | 'active-run-cap'
-  | 'suspended-run-ceiling';
+  | 'suspended-run-ceiling'
+  | 'ungated-leaves-apex';
 
 export interface PlaybookGuardViolation {
   kind: PlaybookGuardViolationKind;
@@ -462,4 +504,116 @@ export interface PlaybookResumeInput extends PlaybookEngineInput {
 export interface PlaybookCancelInput extends PlaybookEngineInput {
   cancelledByUserId: string;
   reason?: string;
+}
+
+/** Re-executes one retryable row without changing run identity or its pinned version. */
+export interface PlaybookRetryInput extends PlaybookEngineInput {
+  definitionVersionId: string;
+  stepRunId: string;
+  stepId: string;
+  retriedByUserId: string;
+}
+
+export interface CancelPlaybookRunRequest {
+  project: string;
+  reason?: string;
+}
+
+export interface CancelPlaybookRunResponse {
+  runId: string;
+  status: 'cancelled';
+  outcome: 'cancelled' | 'already-cancelled';
+}
+
+export interface RetryPlaybookStepRequest {
+  project: string;
+}
+
+export interface RetryPlaybookStepResponse {
+  runId: string;
+  stepRunId: string;
+  status: 'running';
+  outcome: 'retried';
+}
+
+// ── Definition lifecycle API contracts (FEAT-007) ─────────────────────────────
+//
+// Thin Apex-vocabulary DTOs for draft/publish/deprecate and run-version pin resolution. No engine
+// types appear here: the service layer speaks these shapes on both sides of the HTTP boundary.
+
+/** Definition list row without graph payloads. */
+export interface PlaybookDefinitionSummary {
+  id: string;
+  project: string;
+  name: string;
+  description: string | null;
+  draftUpdatedAt: string;
+  currentPublishedVersionNumber: number | null;
+}
+
+/** The sole mutable working copy for a definition. */
+export interface PlaybookDefinitionDraft {
+  id: string;
+  definitionId: string;
+  /** Candidate number the next successful publish will freeze. */
+  nextVersionNumber: number;
+  graph: PlaybookGraph;
+  updatedAt: string;
+}
+
+/** Immutable history row for lifecycle actions and the version list. */
+export interface PlaybookPublishedVersionSummary {
+  id: string;
+  definitionId: string;
+  versionNumber: number;
+  status: PlaybookVersionStatus;
+  publishedBy: string | null;
+  publishedAt: string | null;
+}
+
+export interface PlaybookDefinitionListResult {
+  definitions: PlaybookDefinitionSummary[];
+}
+
+/** Definition editor read model: identity, retained draft, and numbered history. */
+export interface PlaybookDefinitionDetail {
+  definition: PlaybookDefinition;
+  draft: PlaybookDefinitionDraft;
+  versions: PlaybookPublishedVersionSummary[];
+  currentPublishedVersionId: string | null;
+}
+
+export interface PlaybookDefinitionDraftResponse {
+  definition: PlaybookDefinition;
+  draft: PlaybookDefinitionDraft;
+}
+
+/** Confirms both the frozen published copy and the retained working draft. */
+export interface PlaybookPublishResponse {
+  publishedVersion: PlaybookPublishedVersionSummary;
+  draft: PlaybookDefinitionDraft;
+  currentPublishedVersionId: string;
+}
+
+export interface PlaybookDeprecateVersionResponse {
+  version: PlaybookPublishedVersionSummary;
+  currentPublishedVersionId: string | null;
+}
+
+/**
+ * Start a run against a project-scoped definition. An explicit pin requires both
+ * `definitionVersionId` and a non-blank `versionPinReason`.
+ */
+export interface StartRunRequest {
+  project: string;
+  definitionId: string;
+  definitionVersionId?: string;
+  versionPinReason?: string;
+}
+
+/** Makes the resolved version pin visible to the caller. */
+export interface StartRunResult {
+  runId: string;
+  status: PlaybookRunStatus;
+  definitionVersionId: string;
 }

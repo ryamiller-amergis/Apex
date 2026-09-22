@@ -6,10 +6,11 @@
  * engine table dropped, nothing outside the wrapper needed the engine's store. Exit criterion E4
  * drops them and asks again.
  *
- * Read-only on purpose. Approving a gate from here is Phase 1's; PBI-003 records it as out of
- * scope, and a view that can act on a run is no longer evidence about what a run *is*.
+ * The expanded detail adds only Phase 1's cancel/retry controls. The status projection remains the
+ * source of truth; action mutations invalidate and re-read it rather than editing cached rows.
  */
 import React from 'react';
+import { PlaybookDefinitionPanel } from './PlaybookDefinitionPanel';
 import { PlaybookRunList } from './PlaybookRunList';
 import { usePlaybookRuns } from '../hooks/usePlaybookRuns';
 import styles from './PlaybookStatusView.module.css';
@@ -29,6 +30,11 @@ export const PlaybookStatusView: React.FC<PlaybookStatusViewProps> = ({ selected
           Live step status for {selectedProject}, read from Apex&apos;s own tables.
         </p>
       </header>
+
+      <PlaybookDefinitionPanel
+        project={selectedProject}
+        {...{ 'data-testid': 'playbook-definitions-panel' }}
+      />
 
       {isPending ? (
         <p className={styles.loading} {...{ 'data-testid': 'playbook-runs-loading' }}>

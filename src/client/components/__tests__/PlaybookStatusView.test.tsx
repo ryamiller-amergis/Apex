@@ -21,6 +21,10 @@ import type {
   PlaybookStepRunStatus,
 } from '../../../shared/types/playbook';
 
+jest.mock('../../hooks/useAppShell', () => ({
+  useAppShell: () => ({ can: () => false }),
+}));
+
 const PROJECT = 'Apex';
 
 function step(overrides: Partial<PlaybookStepRun> & { stepId: string }): PlaybookStepRun {
@@ -62,7 +66,11 @@ const SUMMARY = {
  */
 function stubFetch(list: PlaybookRunListResult, detail?: PlaybookRunDetail): jest.Mock {
   const mock = jest.fn(async (url: string) => {
-    const body = url.includes('/runs/') ? detail : list;
+    const body = url.includes('/definitions')
+      ? { definitions: [] }
+      : url.includes('/runs/')
+        ? detail
+        : list;
     return {
       ok: true,
       status: 200,

@@ -14,7 +14,6 @@
  * but they would all queue on that lock at the same moment, every minute, forever.
  */
 import { getAppEnvironment } from '../utils/superAdmin';
-import { isFeatureOperational } from './featureFlagService';
 import {
   runReconciliationPassLocked,
   type Clock,
@@ -23,8 +22,6 @@ import {
   startPlaybookTerminalEventListener,
   stopPlaybookTerminalEventListener,
 } from './playbookTerminalEventService';
-
-const PLAYBOOKS_SPIKE_FLAG = 'playbooks-spike';
 
 const MAX_SWEEP_DELAY_MS = 60_000;
 const DOWNWARD_JITTER_MS = 12_000;
@@ -111,45 +108,12 @@ export function createPlaybookReconciliationScheduler(
 
 const defaultScheduler = createPlaybookReconciliationScheduler();
 
-/**
- * Starts the sweep and the terminal-event listener, if Playbooks are switched on at all.
- *
- * `isFeatureOperational` rather than `isFeatureEnabled` because startup has no user and no project
- * to evaluate targeting rules against — the question here is only whether the flag is on anywhere.
- * With it off, neither the timer nor the subscription is created: no run can exist to sweep, so a
- * sweep would be a query returning nothing, once a minute, forever.
- */
+/** Starts the sweep and the terminal-event listener. */
 export async function startPlaybookReconciliation(): Promise<void> {
-  let operational = false;
-  try {
-    operational = await isFeatureOperational(PLAYBOOKS_SPIKE_FLAG);
-  } catch (error) {
-    // An unreadable flag at boot is not a reason to fail boot. Playbooks stay dark; the sweep has
-    // nothing to reconcile if no run can be started either.
-    logStartupProblem(error);
-    return;
-  }
-
-  // @feature-flag:playbooks-spike start winner=enabled
-  if (!operational) {
-    // @feature-flag:playbooks-spike disabled-start
-    return;
-    // @feature-flag:playbooks-spike disabled-end
-  }
-  // @feature-flag:playbooks-spike enabled-start
   startPlaybookTerminalEventListener();
   defaultScheduler.start();
   console.log(
     `[playbook-reconciliation] sweep started (${getAppEnvironment()}); terminal-event listener registered`
-  );
-  // @feature-flag:playbooks-spike enabled-end
-  // @feature-flag:playbooks-spike end
-}
-
-function logStartupProblem(error: unknown): void {
-  console.error(
-    '[playbook-reconciliation] could not read the playbooks-spike flag; sweep not started:',
-    error instanceof Error ? error.message : String(error)
   );
 }
 

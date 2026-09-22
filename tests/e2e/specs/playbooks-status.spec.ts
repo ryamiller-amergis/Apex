@@ -11,9 +11,7 @@
  * lives in `tests/integration/playbook-exit-criteria.integration.test.ts`. These are the two paths
  * a person actually clicks during the demo, which is what a smoke spec is for.
  *
- * Requires `playbooks-spike` enabled for the test project and `scripts/seed-playbook-demos.ts`
- * having run. Both are asserted rather than assumed — a spec that silently passes because the
- * surface was absent is worse than one that fails.
+ * Requires `scripts/seed-playbook-demos.ts` to have run for the test project.
  */
 import { test, expect, SeedApi, E2E_PROJECT } from '../support/fixtures';
 import { stubAdoProjects } from '../support/api-stubs';
@@ -29,8 +27,8 @@ test.describe('Playbook status view @smoke', () => {
   }) => {
     // DEFERRED: Playwright env unavailable — no browser binaries and no seeded Playbook run in
     // this environment. Authored against the design-spec test ids so it runs unchanged once the
-    // seed script and the flag are in place for the E2E project.
-    test.skip(true, 'Requires seeded Playbook runs and playbooks-spike enabled for the E2E project');
+    // seed script is in place for the E2E project.
+    test.skip(true, 'Requires seeded Playbook runs for the E2E project');
 
     await stubAdoProjects(page);
     await loginAsPersona('developer');
@@ -66,7 +64,7 @@ test.describe('Playbook status view @smoke', () => {
     loginAsPersona,
   }) => {
     // DEFERRED: Playwright env unavailable — see above.
-    test.skip(true, 'Requires playbooks-spike enabled for the E2E project');
+    test.skip(true, 'Requires a seeded empty Playbook project');
 
     await stubAdoProjects(page);
     await loginAsPersona('developer');

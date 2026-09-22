@@ -2,8 +2,8 @@
  * TBI-010 — the `playbooks-spike` flag seed, verified against a real migrated database.
  *
  * The scratch harness from the FEAT-001 verification spike builds a disposable database and applies
- * every migration to it, so this asserts the flag as an operator would find it after a deploy
- * rather than as the SQL file reads.
+ * every migration to it. The original seed is checked inside a rolled-back transaction, while the
+ * migrated database verifies the accepted Phase 1 archive state.
  */
 import fs from 'fs';
 import path from 'path';
@@ -56,19 +56,45 @@ describe('TBI-010 — playbooks-spike flag seed', () => {
     if (scratch) await scratch.drop();
   });
 
-  // DoD-0, VT-10
-  it('creates the flag default-off with a kebab-case key', async () => {
-    const rows = await query<FlagRow>(
+  // DoD-0, VT-10 — verify the seed itself, isolated from the later retirement migration.
+  it('originally seeds the flag active, default-off, and not cleanup-ready', async () => {
+    const client = new pg.Client({ connectionString: scratch.connectionString });
+    await client.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `DELETE FROM feature_flag_rules
+         WHERE flag_id = (SELECT id FROM feature_flags WHERE key = $1)`,
+        [FLAG_KEY]
+      );
+      await client.query('DELETE FROM feature_flags WHERE key = $1', [FLAG_KEY]);
+      await client.query(upMigrationSql());
+      const { rows } = await client.query<FlagRow>(
+        'SELECT key, description, enabled, lifecycle, cleanup_ready FROM feature_flags WHERE key = $1',
+        [FLAG_KEY]
+      );
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].key).toMatch(/^[a-z][a-z0-9]*(-[a-z0-9]+)*$/);
+      expect(rows[0].enabled).toBe(false);
+      expect(rows[0].lifecycle).toBe('active');
+      expect(rows[0].cleanup_ready).toBe(false);
+    } finally {
+      await client.query('ROLLBACK');
+      await client.end();
+    }
+  });
+
+  it('archives the flag and marks it cleanup-ready after Phase 1 acceptance', async () => {
+    const [flag] = await query<FlagRow>(
       scratch.connectionString,
       'SELECT key, description, enabled, lifecycle, cleanup_ready FROM feature_flags WHERE key = $1',
       [FLAG_KEY]
     );
 
-    expect(rows).toHaveLength(1);
-    expect(rows[0].key).toMatch(/^[a-z][a-z0-9]*(-[a-z0-9]+)*$/);
-    expect(rows[0].enabled).toBe(false);
-    expect(rows[0].lifecycle).toBe('active');
-    expect(rows[0].cleanup_ready).toBe(false);
+    expect(flag.enabled).toBe(false);
+    expect(flag.lifecycle).toBe('archived');
+    expect(flag.cleanup_ready).toBe(true);
   });
 
   // DoD-1, VT-10 — recorded at creation, not left to be decided later

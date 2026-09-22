@@ -1,5 +1,5 @@
 /**
- * TBI-024 — the execution-time permission re-check.
+ * FEAT-008 Wave 2 Bundle A — TBI-033 execution-time permission enforcement.
  *
  * Covers VT-19 (a revoked initiator cannot execute a side-effecting step), VT-20 (a still-permitted
  * one can) and VT-21 (the re-check happens before the adapter, not inside it).
@@ -40,6 +40,14 @@ const PROJECT = 'Apex';
 const INITIATOR = 'user-who-started-it';
 
 function context(stepType: string): PlaybookStepExecutionContext {
+  const configs: Record<string, Record<string, unknown>> = {
+    notify: { title: 'Ready' },
+    'approval-gate': {},
+    'cursor-agent': {
+      skillPath: '.cursor/skills/app-knowledge/SKILL.md',
+      prompt: 'Summarise the docs',
+    },
+  };
   return {
     runId: 'run-1',
     stepRunId: 'step-run-1',
@@ -47,7 +55,7 @@ function context(stepType: string): PlaybookStepExecutionContext {
     stepType,
     project: PROJECT,
     initiatorUserId: INITIATOR,
-    config: {},
+    config: configs[stepType] ?? {},
   };
 }
 
@@ -112,7 +120,7 @@ describe('VT-20 — a still-permitted initiator executes normally', () => {
   });
 });
 
-describe('VT-21 — the re-check runs before the adapter, and only where it is owed', () => {
+describe('TBI-033 VT-24 — descriptor permissions run immediately before every adapter', () => {
   it('checks permissions before invoking the adapter', async () => {
     const order: string[] = [];
     getUserPermissions.mockImplementation(async () => {
@@ -130,33 +138,50 @@ describe('VT-21 — the re-check runs before the adapter, and only where it is o
     expect(order).toEqual(['permission-check', 'adapter']);
   });
 
-  it('skips the re-check for an approval gate, which has no side effect outside Apex', async () => {
+  it('enforces the approval-gate read permission too', async () => {
+    initiatorHas('playbooks:run');
+
+    await expect(executeStep(context('approval-gate'))).rejects.toThrow(/playbooks:view/);
+
+    expect(getUserPermissions).toHaveBeenCalledTimes(1);
+    expect(executeApprovalGate).not.toHaveBeenCalled();
+  });
+
+  it('allows an approval gate when its descriptor permission is present', async () => {
+    initiatorHas('playbooks:view');
+
     await executeStep(context('approval-gate'));
 
-    expect(getUserPermissions).not.toHaveBeenCalled();
+    expect(getUserPermissions).toHaveBeenCalledTimes(1);
     expect(executeApprovalGate).toHaveBeenCalledTimes(1);
   });
 
-  it('re-checks every step type the registry classifies as side-effecting', async () => {
+  it('enforces the exact current descriptor matrix once for every step type', async () => {
     /* eslint-disable @typescript-eslint/no-require-imports -- reading the registry at runtime */
-    const { requiresInitiatorPermissionRecheck, listStepTypeDescriptors } =
+    const { listStepTypeDescriptors } =
       require('../services/playbookSteps/registry') as typeof import('../services/playbookSteps/registry');
     /* eslint-enable @typescript-eslint/no-require-imports */
 
     /*
-     * Derived from the registry rather than hardcoded. A step type added later with a side effect
-     * is then covered by this test on the day it is added, which is the only moment anyone would
-     * think to check.
+     * Derived from the registry rather than hardcoded. Every descriptor is enforced, including
+     * `read`, and only its declared permissions admit dispatch.
      */
     for (const descriptor of listStepTypeDescriptors()) {
       jest.clearAllMocks();
-      initiatorHas('playbooks:run');
+      initiatorHas(...descriptor.requiredPermissions);
 
       await executeStep(context(descriptor.stepType));
 
-      expect(getUserPermissions.mock.calls.length).toBe(
-        requiresInitiatorPermissionRecheck(descriptor.stepType) ? 1 : 0
-      );
+      expect(getUserPermissions).toHaveBeenCalledTimes(1);
     }
+  });
+
+  it('names the step and every missing descriptor permission', async () => {
+    initiatorHas();
+
+    await expect(executeStep(context('approval-gate'))).rejects.toThrow(
+      /notify-the-team.*playbooks:view/i
+    );
+    expect(executeApprovalGate).not.toHaveBeenCalled();
   });
 });

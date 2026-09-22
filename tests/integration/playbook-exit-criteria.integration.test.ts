@@ -32,7 +32,6 @@ jest.mock('../../src/server/services/chatAgentService', () => ({
 import pg from 'pg';
 import {
   createScratchDatabase,
-  enablePlaybooks,
   listTables,
   ScratchDatabase,
 } from './support/scratch-db';
@@ -140,27 +139,33 @@ async function provisionRun(
 }
 
 /**
- * Gives a user the project role carrying `playbooks:run`.
+ * Gives a user the project role carrying every permission Demo B's descriptors require.
  *
  * E3 calls `startRun` directly rather than through the route, so `requirePermission` never runs —
  * but TBI-024 re-checks the initiator's access again before each side-effecting step, and an
  * initiator with no role at all is refused there. Seeding a real role rather than stubbing keeps
  * that re-check honest.
  */
-async function grantPlaybooksRun(userOid: string): Promise<void> {
+async function grantPlaybookExecutionPermissions(userOid: string): Promise<void> {
   const [role] = await query<{ id: string }>(
     `INSERT INTO app_roles (name, description) VALUES ('exit-criteria-runner', 'Fixture')
      ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description RETURNING id`
   );
-  const [permission] = await query<{ id: string }>(
-    `INSERT INTO app_permissions (key, description) VALUES ('playbooks:run', 'Start Playbook runs')
-     ON CONFLICT (key) DO UPDATE SET description = EXCLUDED.description RETURNING id`
+  const permissions = await query<{ id: string }>(
+    `INSERT INTO app_permissions (key, description)
+     VALUES
+       ('playbooks:view', 'View Playbook definitions and runs'),
+       ('playbooks:run', 'Start Playbook runs')
+     ON CONFLICT (key) DO UPDATE SET description = EXCLUDED.description
+     RETURNING id`
   );
-  await query(
-    `INSERT INTO app_role_permissions (role_id, permission_id) VALUES ($1, $2)
+  for (const permission of permissions) {
+    await query(
+      `INSERT INTO app_role_permissions (role_id, permission_id) VALUES ($1, $2)
      ON CONFLICT DO NOTHING`,
-    [role.id, permission.id]
-  );
+      [role.id, permission.id]
+    );
+  }
   await query(
     `INSERT INTO app_user_project_roles (user_id, project, role_id) VALUES ($1, $2, $3)
      ON CONFLICT DO NOTHING`,
@@ -171,7 +176,6 @@ async function grantPlaybooksRun(userOid: string): Promise<void> {
 beforeAll(async () => {
   scratch = await createScratchDatabase('playbookexit');
   // Traversal runs through the engine boundary, which refuses every operation while the flag is off.
-  await enablePlaybooks(scratch.connectionString);
 
   process.env.DATABASE_URL = scratch.connectionString;
   /* eslint-disable @typescript-eslint/no-require-imports --
@@ -294,6 +298,7 @@ describe('VT-19 — E3: definition B runs end to end with zero lines of code cha
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) {
+          if (entry.name === '__tests__') continue;
           walk(full);
           continue;
         }
@@ -335,7 +340,7 @@ describe('VT-19 — E3: definition B runs end to end with zero lines of code cha
        ON CONFLICT (oid) DO NOTHING`,
       [initiator]
     );
-    await grantPlaybooksRun(initiator);
+    await grantPlaybookExecutionPermissions(initiator);
 
     // B's actual graph, not a hand-written copy — a change to B is a change to this test.
     const [definition] = await query<{ id: string }>(

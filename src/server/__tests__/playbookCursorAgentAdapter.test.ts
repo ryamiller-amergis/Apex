@@ -34,11 +34,7 @@ jest.mock('../services/playbookSteps/stepRuns', () => ({
 
 import fs from 'fs';
 import path from 'path';
-import {
-  CursorAgentStepConfigError,
-  executeCursorAgentStep,
-  parseCursorAgentConfig,
-} from '../services/playbookSteps/cursorAgentAdapter';
+import { executeCursorAgentStep } from '../services/playbookSteps/cursorAgentAdapter';
 import { PHASE_0_ALLOWED_AGENT_SKILLS } from '../services/playbookSteps/registry';
 import type { PlaybookStepExecutionContext } from '../services/playbookSteps/stepRuns';
 
@@ -126,7 +122,6 @@ describe('VT-09 — enqueue, correlate, suspend', () => {
     expect(enqueue).not.toHaveBeenCalled();
   });
 });
-
 describe('VT-10 — a rejected enqueue leaves nothing dangling', () => {
   it('writes no correlation row and fails the step', async () => {
     enqueue.mockRejectedValue(new Error('admission refused'));
@@ -139,7 +134,6 @@ describe('VT-10 — a rejected enqueue leaves nothing dangling', () => {
     );
   });
 });
-
 describe('VT-12 — it does not wait for the agent', () => {
   it('returns without the agent run ever settling', async () => {
     let agentFinished = false;
@@ -182,25 +176,5 @@ describe('VT-12 — it does not wait for the agent', () => {
     ]) {
       expect(code).not.toContain(forbidden);
     }
-  });
-});
-
-describe('config validation', () => {
-  it('requires a skillPath and a prompt', () => {
-    for (const config of [
-      {},
-      { skillPath: ALLOWED_SKILL },
-      { prompt: 'do the thing' },
-      { skillPath: '', prompt: 'x' },
-      { skillPath: ALLOWED_SKILL, prompt: '   ' },
-    ]) {
-      expect(() => parseCursorAgentConfig(config)).toThrow(CursorAgentStepConfigError);
-    }
-  });
-
-  it('accepts an optional model override', () => {
-    expect(
-      parseCursorAgentConfig({ skillPath: ALLOWED_SKILL, prompt: 'go', model: 'gpt-5' })
-    ).toEqual({ skillPath: ALLOWED_SKILL, prompt: 'go', model: 'gpt-5' });
   });
 });

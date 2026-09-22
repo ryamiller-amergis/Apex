@@ -20,6 +20,7 @@ import { db } from '../db/drizzle';
 import { playbookStepRuns } from '../db/schema';
 import { subscribeAllRunEvents } from './pgNotifyService';
 import { advanceRun } from './playbookAdvanceService';
+import { parseStepOutput } from './playbookSteps/descriptorValidation';
 import { failStepRun, resumeStepRun } from './playbookSteps/stepRuns';
 import type { AgentRunEventEnvelope, AgentRunEventStatus } from '../../shared/types/chat';
 
@@ -63,6 +64,7 @@ export async function handleTerminalAgentRunEvent(
       runId: playbookStepRuns.runId,
       // The graph node, not the row: it is what the engine is parked at and how it is told to go on.
       stepId: playbookStepRuns.stepId,
+      stepType: playbookStepRuns.stepType,
       status: playbookStepRuns.status,
     })
     .from(playbookStepRuns)
@@ -72,10 +74,14 @@ export async function handleTerminalAgentRunEvent(
   if (!step) return { handled: 'not-correlated' };
 
   if (event.status === 'completed') {
+    const output = parseStepOutput(step.stepType, {
+      agentRunId: event.runId,
+      completedAt: event.timestamp,
+    });
     const moved = await resumeStepRun({
       stepRunId: step.id,
       // DoD-2: the next step must be able to read what this one produced.
-      output: { agentRunId: event.runId, completedAt: event.timestamp },
+      output,
     });
 
     if (!moved) return { handled: 'already-moved', stepRunId: step.id };

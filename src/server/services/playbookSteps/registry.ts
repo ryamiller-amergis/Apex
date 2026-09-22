@@ -6,16 +6,20 @@
  * registration: a closed set validated up front, in the spirit of `CONFIGURABLE_MENU_ITEMS` in
  * `src/shared/types/menuSettings.ts`.
  *
- * Phase 0 deliberately omits Zod input/output schemas and `requiredPermissions`. Those are
- * FEAT-008's contract, and designing them now would mean fixing the shape of a contract before
- * three adapters have shown what it needs to carry. `sideEffect` was originally deferred with
- * them and is here because TBI-024 needs it: a permission re-check that cannot tell a read-only
- * step from a side-effecting one either re-checks everything or nothing.
+ * A descriptor is the whole of what the rest of Apex may know about a step type without running
+ * one: what it takes and returns (Zod, per TBI-032), what executing it does outside its own row and
+ * what the initiator must hold to do that (TBI-033), whether it suspends and for how long.
+ * Everything that reasons about steps — the publish-time gate rule, the execution-time permission
+ * re-check, the agent-step cap — reads this rather than branching on a step type's name.
  *
- * The one rule enforced here is BR-005: a step type that can suspend must declare a deadline. A
- * suspension with no deadline is a run that waits forever, and no reconciliation sweep can ever end
- * it — so the registry refuses to exist rather than letting one be registered.
+ * Four rules are enforced at registration: BR-005's deadline (a suspension with no deadline is a
+ * run that waits forever, and no reconciliation sweep can ever end it), both schemas being real Zod
+ * schemas, a non-empty permission list, and a classification from the current vocabulary. The
+ * registry refuses to exist rather than letting any of those through, so the failure is a boot
+ * failure and not a run that dies on its third step.
  */
+import { z } from 'zod';
+import { PLAYBOOK_STEP_SIDE_EFFECTS } from '../../../shared/types/playbook';
 import type {
   ApprovalGateStepConfig,
   CursorAgentStepConfig,
@@ -61,8 +65,65 @@ export const PHASE_0_ALLOWED_AGENT_SKILLS: readonly string[] = [
 export const CURSOR_AGENT_DEADLINE_MS = 60 * MINUTE_MS;
 export const APPROVAL_GATE_DEADLINE_MS = 48 * HOUR_MS;
 
-/** The three step types Phase 0 ships. Adding a fourth is a change to this array and nowhere else. */
-export const PHASE_0_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
+/**
+ * A completion time somebody can read as a time.
+ *
+ * Deliberately looser than a strict RFC 3339 check. What this is protecting against is a step
+ * recording a completion time that is not a time at all — a run id, an empty string, a placeholder
+ * — because the status view and the reconciliation sweep both treat this value as a moment. A
+ * timestamp that parses but uses an unusual shape is not the failure worth refusing output over.
+ */
+const READABLE_TIMESTAMP = z
+  .string()
+  .refine((value) => !Number.isNaN(Date.parse(value)), 'must be a timestamp that reads as a time');
+
+/**
+ * What each step type takes and returns, per TBI-032.
+ *
+ * Input schemas are the authority for a graph node's `config`; the matching interfaces in
+ * `src/shared/types/playbook.ts` mirror them for callers holding a config at compile time. Output
+ * schemas are parsed at the durable completion boundary, so a step cannot be recorded as complete
+ * carrying something the next step's condition could not be evaluated against.
+ */
+const CURSOR_AGENT_INPUT_SCHEMA = z.object({
+  skillPath: z.string().min(1),
+  prompt: z.string().min(1),
+  model: z.string().optional(),
+});
+
+const CURSOR_AGENT_OUTPUT_SCHEMA = z.object({
+  agentRunId: z.string(),
+  completedAt: READABLE_TIMESTAMP,
+});
+
+const APPROVAL_GATE_INPUT_SCHEMA = z.object({
+  // `positive()` also excludes NaN and Infinity, which is the whole requirement: a deadline that
+  // never arrives is the thing BR-005 exists to prevent.
+  deadlineMs: z.number().positive().optional(),
+  subject: z.string().optional(),
+});
+
+const APPROVAL_GATE_OUTPUT_SCHEMA = z.object({
+  decision: z.enum(['approved', 'rejected']),
+  decidedBy: z.string(),
+});
+
+const NOTIFY_INPUT_SCHEMA = z.object({
+  title: z.string().min(1),
+  body: z.string().optional(),
+  link: z.string().optional(),
+  recipientUserId: z.string().optional(),
+});
+
+const NOTIFY_OUTPUT_SCHEMA = z.object({
+  notificationId: z.string(),
+  // Required on the way out even though the config may omit it: by the time the step completes the
+  // run initiator has been resolved, and "who was told" is the only thing this output is for.
+  recipientUserId: z.string(),
+});
+
+/** The step types Apex ships. Adding a fourth is a change to this array and nowhere else. */
+export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
   {
     stepType: 'cursor-agent',
     canSuspend: true,
@@ -75,6 +136,9 @@ export const PHASE_0_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
     isAgentStep: true,
     // Hands work to Cursor, which Apex does not own and cannot roll back.
     sideEffect: 'leaves-apex',
+    requiredPermissions: ['playbooks:run'],
+    inputSchema: CURSOR_AGENT_INPUT_SCHEMA,
+    outputSchema: CURSOR_AGENT_OUTPUT_SCHEMA,
   },
   {
     stepType: 'approval-gate',
@@ -84,7 +148,11 @@ export const PHASE_0_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
     suspendReason: 'approval_gate',
     isAgentStep: false,
     // Waiting changes nothing; the decision it records lives on its own step-run row.
-    sideEffect: 'none',
+    sideEffect: 'read',
+    // Reading the run is all a gate does before someone decides, so viewing is all it needs.
+    requiredPermissions: ['playbooks:view'],
+    inputSchema: APPROVAL_GATE_INPUT_SCHEMA,
+    outputSchema: APPROVAL_GATE_OUTPUT_SCHEMA,
   },
   {
     stepType: 'notify',
@@ -93,6 +161,9 @@ export const PHASE_0_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
     canSuspend: false,
     isAgentStep: false,
     sideEffect: 'writes-apex',
+    requiredPermissions: ['playbooks:run'],
+    inputSchema: NOTIFY_INPUT_SCHEMA,
+    outputSchema: NOTIFY_OUTPUT_SCHEMA,
   },
 ];
 
@@ -111,17 +182,61 @@ export class UnknownPlaybookStepTypeError extends PlaybookStepTypeError {
 }
 
 /**
- * The rule the registry exists to enforce, stated once.
+ * Whether a declared schema is a Zod schema, rather than something shaped like one.
  *
- * The descriptor type already makes a suspendable-without-deadline literal fail to compile. This is
- * the runtime half, and it is not redundant: a descriptor assembled from configuration, widened
- * through a cast, or arriving from a test helper never meets the compiler's version of the rule.
+ * `instanceof` and not a check for a `parse` method: an object with the right method names is
+ * exactly what a hand-rolled stand-in looks like, and one that validates nothing would let every
+ * later parse call succeed on anything. Nothing is parsed here — a schema of entirely optional
+ * fields is perfectly valid, and inventing sample data to try it against would be testing the
+ * sample rather than the declaration.
+ */
+function assertZodSchema(stepType: string, field: string, schema: unknown): void {
+  if (!(schema instanceof z.ZodType)) {
+    throw new PlaybookStepTypeError(
+      `Step type "${stepType}" declares no usable Zod ${field}. ` +
+        'Every step type states what it takes and what it returns, and an object that merely ' +
+        'looks like a schema validates nothing.'
+    );
+  }
+}
+
+/**
+ * The rules the registry exists to enforce, stated once.
+ *
+ * The descriptor type already makes most of these fail to compile — a suspendable type with no
+ * deadline, an empty permission tuple, a classification that no longer exists. This is the runtime
+ * half, and it is not redundant: a descriptor assembled from configuration, widened through a cast,
+ * or arriving from a test helper never meets the compiler's version of the rule.
  */
 export function validateStepTypeDescriptor(descriptor: PlaybookStepTypeDescriptor): void {
   const { stepType } = descriptor;
 
   if (!stepType || !stepType.trim()) {
     throw new PlaybookStepTypeError('A Playbook step type descriptor must declare a stepType.');
+  }
+
+  assertZodSchema(stepType, 'inputSchema', descriptor.inputSchema);
+  assertZodSchema(stepType, 'outputSchema', descriptor.outputSchema);
+
+  if (!PLAYBOOK_STEP_SIDE_EFFECTS.includes(descriptor.sideEffect)) {
+    throw new PlaybookStepTypeError(
+      `Step type "${stepType}" declares the sideEffect "${descriptor.sideEffect}", which is not ` +
+        `one of: ${PLAYBOOK_STEP_SIDE_EFFECTS.join(', ')}.`
+    );
+  }
+
+  const permissions = descriptor.requiredPermissions;
+  const declaresPermission =
+    Array.isArray(permissions) &&
+    permissions.length > 0 &&
+    permissions.every((permission) => typeof permission === 'string' && permission.trim() !== '');
+
+  if (!declaresPermission) {
+    throw new PlaybookStepTypeError(
+      `Step type "${stepType}" declares no usable requiredPermissions. ` +
+        'A step type that names no permission executes on whatever authority admitted the run, ' +
+        'which is not the same thing as being permitted.'
+    );
   }
 
   if (descriptor.canSuspend) {
@@ -174,7 +289,7 @@ export function createStepTypeRegistry(
  * during boot — so the process dies before it serves a request rather than when a run first reaches
  * a step.
  */
-const stepTypeRegistry = createStepTypeRegistry(PHASE_0_STEP_TYPES);
+const stepTypeRegistry = createStepTypeRegistry(PRODUCTION_STEP_TYPES);
 
 export function listStepTypeDescriptors(): readonly PlaybookStepTypeDescriptor[] {
   return [...stepTypeRegistry.values()];
@@ -251,20 +366,27 @@ export function isAgentStepType(stepType: string): boolean {
   return stepTypeRegistry.get(stepType)?.isAgentStep ?? false;
 }
 
-/** What executing a step of this type does outside its own row. */
-export function sideEffectOfStepType(stepType: string): PlaybookStepSideEffect {
-  return stepTypeRegistry.get(stepType)?.sideEffect ?? 'none';
+/**
+ * What executing a step of this type does outside its own row.
+ *
+ * Undefined for a type nobody recognises, rather than any of the three classifications. A type the
+ * registry cannot name has not been shown to be harmless, and a caller that wants to treat it as
+ * such should have to say so.
+ */
+export function sideEffectOfStepType(stepType: string): PlaybookStepSideEffect | undefined {
+  return stepTypeRegistry.get(stepType)?.sideEffect;
 }
 
 /**
- * Whether TBI-024's execution-time permission re-check applies to this step type.
+ * Whether the execution-time permission re-check applies to this step type.
  *
- * A read-only step is left alone, which is DoD-2 of that item. Note the default for an unknown
- * type is `none`, so an unrecognised type is *not* re-checked — that is safe here only because
- * `executeStep` refuses an unregistered type before this is ever consulted.
+ * A `read` step is left alone: re-checking it would cost a query per step to re-derive an answer
+ * nothing acts on. Anything else is re-checked, and so is an unknown type — an unrecognised step
+ * type is the one case where skipping the check cannot be justified, even though `executeStep`
+ * refuses an unregistered type before this is ever consulted.
  */
 export function requiresInitiatorPermissionRecheck(stepType: string): boolean {
-  return sideEffectOfStepType(stepType) !== 'none';
+  return sideEffectOfStepType(stepType) !== 'read';
 }
 
 /**
@@ -288,8 +410,11 @@ export function assertSkillAllowed(stepType: string, skillPath: string): void {
  * The module-level build above already rejects a malformed descriptor, but it does so as an import
  * error, which surfaces as whichever module happened to pull this one in first. This gives the
  * failure a name and a place, and additionally asserts the things a per-descriptor check cannot
- * see: that all three Phase 0 types are present, and that a type permitted to run Skills actually
- * names some. An empty allow-list would be a step type that can never execute.
+ * see: that the three types the product actually ships are present, and that a type permitted to
+ * run Skills actually names some. An empty allow-list would be a step type that can never execute.
+ *
+ * The named three are a boot assertion, not a constraint on the registry — `createStepTypeRegistry`
+ * stays generic so a fourth type can be registered by a caller without editing anything here.
  */
 export function validateStepTypeRegistry(): void {
   const expected = ['cursor-agent', 'approval-gate', 'notify'];
@@ -298,7 +423,7 @@ export function validateStepTypeRegistry(): void {
   if (missing.length > 0) {
     throw new PlaybookStepTypeError(
       `Playbook step type registry is missing: ${missing.join(', ')}. ` +
-        'Phase 0 requires all three.'
+        'Apex ships all three.'
     );
   }
 

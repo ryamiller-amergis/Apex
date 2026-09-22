@@ -12,6 +12,7 @@
  */
 import React, { useState } from 'react';
 import { PlaybookRunStepList } from './PlaybookRunStepList';
+import { PlaybookRunActions } from './PlaybookRunActions';
 import { usePlaybookRun } from '../hooks/usePlaybookRuns';
 import { absoluteTime, runStatusLabel } from './playbookStatusFormat';
 import type { PlaybookRunSummary } from '../../shared/types/playbook';
@@ -60,8 +61,7 @@ const PlaybookRunRow: React.FC<PlaybookRunRowProps> = ({ run, project }) => {
 
         <span
           className={styles.runStatus}
-          data-status={run.status}
-          {...{ 'data-testid': 'playbook-run-status' }}
+          {...{ 'data-status': run.status, 'data-testid': 'playbook-run-status' }}
         >
           {runStatusLabel(run.status)}
         </span>
@@ -82,7 +82,10 @@ const PlaybookRunRow: React.FC<PlaybookRunRowProps> = ({ run, project }) => {
               Could not load this run&apos;s steps. {detail.error?.message}
             </p>
           ) : detail.data ? (
-            <PlaybookRunStepList run={detail.data} id={stepListId} />
+            <>
+              <PlaybookRunStepList run={detail.data} id={stepListId} />
+              <PlaybookRunActions run={detail.data} />
+            </>
           ) : null}
         </div>
       ) : null}

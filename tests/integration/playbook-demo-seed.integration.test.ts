@@ -2,8 +2,9 @@
  * TBI-026 — the two demo definitions.
  *
  * Covers VT-13 (A and B publish with the composition the criterion names), VT-14 (a second run
- * makes two definitions, not four), VT-15 (both go through the real publish path, guards included)
- * and VT-16 (neither writes a pipeline artifact).
+ * makes two definitions, not four), VT-15 (both go through the real publish path, guards included),
+ * VT-16 (neither writes a pipeline artifact), and FEAT-008 VT-22/23 (legacy Demo A is corrected
+ * through the retained-draft lifecycle exactly once without changing its published v1).
  *
  * Against a real database because every property here is about what the publish path does, and the
  * publish path is where the structural guards live. A mocked `db` would assert that the script
@@ -23,6 +24,7 @@ type GuardModule = typeof import('../../src/server/services/playbookGuardService
 const MIGRATE_TIMEOUT = 600_000;
 const USER_OID = 'demo-seed-user';
 const PROJECT = 'Apex';
+const LEGACY_PROJECT = 'Apex Legacy Demo Upgrade';
 
 let scratch: ScratchDatabase;
 let client: pg.Client;
@@ -63,6 +65,7 @@ beforeAll(async () => {
 afterAll(async () => {
   if (client) await client.end();
   // The engine holds its own pool; an open session blocks the scratch database from being dropped.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   await require('../../src/server/services/playbookEngine/runtime').closeEngineStore();
   if (pool) await pool.end();
   if (scratch) await scratch.drop();
@@ -99,29 +102,27 @@ function orderedStepTypes(graph: {
   return order;
 }
 
-describe('VT-13 — A and B publish with the compositions the criterion names', () => {
+describe('VT-13 — A and B publish with gate-first external work', () => {
   beforeAll(async () => {
     await seed.seedDemoPlaybooks(PROJECT, USER_OID);
   });
 
-  it('publishes definition A as cursor-agent, then approval-gate, then notify', async () => {
+  it('publishes definition A as approval-gate, then cursor-agent, then notify', async () => {
     const graph = await publishedGraph(seed.DEFINITION_A.name);
 
-    expect(orderedStepTypes(graph)).toEqual(['cursor-agent', 'approval-gate', 'notify']);
+    expect(orderedStepTypes(graph)).toEqual(['approval-gate', 'cursor-agent', 'notify']);
   });
 
-  it('publishes definition B with the same three step types in a different composition', async () => {
+  it('keeps definition B valid with its distinct stored configuration', async () => {
     const a = orderedStepTypes(await publishedGraph(seed.DEFINITION_A.name));
-    const b = orderedStepTypes(await publishedGraph(seed.DEFINITION_B.name));
+    const bGraph = await publishedGraph(seed.DEFINITION_B.name);
+    const b = orderedStepTypes(bGraph);
 
-    // Same three types...
-    expect([...b].sort()).toEqual([...a].sort());
-    // ...in a different order. Both halves matter: the same order would not be a different
-    // composition, and a different set of types would not be the same three.
-    expect(b).not.toEqual(a);
+    expect(b).toEqual(a);
+    expect(seed.DEFINITION_B.graph).not.toEqual(seed.DEFINITION_A.graph);
   });
 
-  it('marks both versions published, not draft', async () => {
+  it('keeps one retained draft beside each immutable published v1', async () => {
     const rows = await query<{ name: string; status: string }>(
       `SELECT d.name, v.status FROM playbook_definition_versions v
          JOIN playbook_definitions d ON d.id = v.definition_id
@@ -129,15 +130,16 @@ describe('VT-13 — A and B publish with the compositions the criterion names', 
       [PROJECT]
     );
 
-    expect(rows).toHaveLength(2);
-    expect(rows.every((r) => r.status === 'published')).toBe(true);
+    expect(rows).toHaveLength(4);
+    expect(rows.filter((r) => r.status === 'published')).toHaveLength(2);
+    expect(rows.filter((r) => r.status === 'draft')).toHaveLength(2);
   });
 
   it('attributes both to the seeding user, satisfying the created_by foreign key', async () => {
     const rows = await query<{ created_by: string; published_by: string }>(
       `SELECT d.created_by, v.published_by FROM playbook_definition_versions v
          JOIN playbook_definitions d ON d.id = v.definition_id
-        WHERE d.project = $1`,
+        WHERE d.project = $1 AND v.status = 'published'`,
       [PROJECT]
     );
 
@@ -164,7 +166,7 @@ describe('VT-14 — running the script twice leaves two definitions, not four', 
     expect(counts.definitions).toBe(2);
     // The one that would actually break the demo: a second version would change which one a new
     // run pins, mid-rehearsal.
-    expect(counts.versions).toBe(2);
+    expect(counts.versions).toBe(4);
   });
 
   it('returns the same version ids on the second run', async () => {
@@ -172,13 +174,103 @@ describe('VT-14 — running the script twice leaves two definitions, not four', 
     const versionIds = await query<{ id: string }>(
       `SELECT v.id FROM playbook_definition_versions v
          JOIN playbook_definitions d ON d.id = v.definition_id
-        WHERE d.project = $1 ORDER BY d.name`,
+        WHERE d.project = $1 AND v.status = 'published' ORDER BY d.name`,
       [PROJECT]
     );
 
     expect([...again].sort((x, y) => x.name.localeCompare(y.name)).map((o) => o.versionId)).toEqual(
       versionIds.map((r) => r.id)
     );
+  });
+});
+
+describe('FEAT-008 VT-22/23 — upgrade legacy Demo A without rewriting history', () => {
+  const legacyGraph = {
+    nodes: [
+      {
+        id: 'ask',
+        stepType: 'cursor-agent',
+        config: {
+          skillPath: '.cursor/skills/app-knowledge/SKILL.md',
+          prompt: 'Legacy ungated prompt',
+        },
+      },
+      {
+        id: 'approve',
+        stepType: 'approval-gate',
+        config: { subject: 'Legacy approval after agent work' },
+      },
+      {
+        id: 'announce',
+        stepType: 'notify',
+        config: { title: 'Legacy done', body: 'Legacy body' },
+      },
+    ],
+    edges: [
+      { from: 'ask', to: 'approve' },
+      { from: 'approve', to: 'announce' },
+    ],
+  };
+
+  beforeAll(async () => {
+    const [definition] = await query<{ id: string }>(
+      `INSERT INTO playbook_definitions (project, name, description, created_by)
+       VALUES ($1, $2, 'Legacy Demo A', $3) RETURNING id`,
+      [LEGACY_PROJECT, seed.DEFINITION_A.name, USER_OID]
+    );
+    await query(
+      `INSERT INTO playbook_definition_versions
+         (definition_id, version_number, graph, status, published_by, published_at)
+       VALUES
+         ($1, 1, $2, 'published', $3, now()),
+         ($1, 2, $2, 'draft', NULL, NULL)`,
+      [definition.id, legacyGraph, USER_OID]
+    );
+  });
+
+  it('VT-22 retains ungated published v1 and publishes corrected Demo A as immutable v2', async () => {
+    await seed.seedDefinition(seed.DEFINITION_A, LEGACY_PROJECT, USER_OID);
+
+    const versions = await query<{
+      version_number: number;
+      status: string;
+      graph: typeof legacyGraph;
+    }>(
+      `SELECT v.version_number, v.status, v.graph
+         FROM playbook_definition_versions v
+         JOIN playbook_definitions d ON d.id = v.definition_id
+        WHERE d.project = $1 AND d.name = $2
+        ORDER BY v.version_number`,
+      [LEGACY_PROJECT, seed.DEFINITION_A.name]
+    );
+
+    expect(versions.map(({ version_number, status }) => [version_number, status])).toEqual([
+      [1, 'published'],
+      [2, 'published'],
+      [3, 'draft'],
+    ]);
+    expect(versions[0].graph).toEqual(legacyGraph);
+    expect(orderedStepTypes(versions[1].graph)).toEqual([
+      'approval-gate',
+      'cursor-agent',
+      'notify',
+    ]);
+    expect(versions[2].graph).toEqual(seed.DEFINITION_A.graph);
+  });
+
+  it('VT-23 reruns without creating another identical current version', async () => {
+    const outcome = await seed.seedDefinition(seed.DEFINITION_A, LEGACY_PROJECT, USER_OID);
+    const [count] = await query<{ n: number }>(
+      `SELECT count(*)::int AS n
+         FROM playbook_definition_versions v
+         JOIN playbook_definitions d ON d.id = v.definition_id
+        WHERE d.project = $1 AND d.name = $2`,
+      [LEGACY_PROJECT, seed.DEFINITION_A.name]
+    );
+
+    expect(outcome.created).toBe(false);
+    expect(outcome.versionNumber).toBe(2);
+    expect(count.n).toBe(3);
   });
 });
 
