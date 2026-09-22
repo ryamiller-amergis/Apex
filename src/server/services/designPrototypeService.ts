@@ -2,7 +2,7 @@ import { eq, and, asc, count, desc, inArray, lt, type SQL } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { designPrototypes, designPrototypeComments, designPlans, designDocs, prds, documentApproverAssignments } from '../db/schema';
 import type { DesignPlanFeature } from '../../shared/types/designPlan';
-import type { DesignPrototypeInput } from './bedrockService';
+import { resolvePrototypeVisualModel, type DesignPrototypeInput } from './bedrockService';
 import { sanitizeMockHtml } from '../utils/htmlSanitizer';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { isAssignedApprover } from './documentApprovalService';
@@ -38,7 +38,6 @@ import { resolveUserStoryIWant } from '../../shared/utils/userStory';
 import type { RepoReader } from '../../shared/types/repoReader';
 import type {
   AiRunV2VisualSpecification,
-  VisualModelSettings,
   VisualUsageAttribution,
 } from '../../shared/types/aiRunV2VisualSpec';
 import type {
@@ -534,11 +533,14 @@ async function admitPendingPrototypesToV2(params: {
   });
   const timeoutAt = new Date(Date.now() + resolveAgentRunHardLimitMs()).toISOString();
 
-  const model: VisualModelSettings = {
+  // A worker holds no policy: it can read neither the project override nor
+  // the environment the app default is tuned by, so the effective values are
+  // resolved here and every specification carries a concrete number.
+  const model = resolvePrototypeVisualModel({
     modelId: params.modelId,
-    ...(params.maxTokens != null ? { maxTokens: params.maxTokens } : {}),
-    ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),
-  };
+    maxTokens: params.maxTokens,
+    timeoutMs: params.timeoutMs,
+  });
 
   await runWithConcurrency(
     params.pending,

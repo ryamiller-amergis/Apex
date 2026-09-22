@@ -63,6 +63,10 @@ import { generatePrototypesForPrd } from '../services/designPrototypeService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
 
+const { resolveSkillConfig: mockResolveSkillConfig } = jest.requireMock(
+  '../services/projectSettingsService',
+) as { resolveSkillConfig: jest.Mock };
+
 const DISPATCHED: AdmitV2RunResult = {
   status: 'dispatched',
   runId: 'run-1',
@@ -103,6 +107,7 @@ function twoUiFeatures(): unknown[] {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockResolveSkillConfig.mockResolvedValue(null);
 });
 
 describe('generatePrototypesForPrd V2 transport routing', () => {
@@ -155,6 +160,49 @@ describe('generatePrototypesForPrd V2 transport routing', () => {
     expect(specification.promptInputs.pbiSection).toContain('### PBI 1: Show the summary');
     expect(specification.promptInputs.scopingSection).toContain('NEVER invent content');
     expect(typeof specification.promptInputs.planSection).toBe('string');
+  });
+
+  /**
+   * A worker has no database and no App Service environment, so a
+   * specification that arrives without a ceiling has nothing to fall back on
+   * that could agree with the in-process path. The resolution belongs here,
+   * at the boundary, and the specification always carries a concrete number.
+   */
+  it('carries the resolved ceiling and timeout when the project overrides neither', async () => {
+    arrangePrd();
+    const admitV2Run = jest.fn().mockResolvedValue(DISPATCHED);
+
+    await generatePrototypesForPrd('prd-1', {
+      isFeatureEnabled: async () => true,
+      admitV2Run,
+      generateInProcess: jest.fn(),
+    });
+
+    expect(admitV2Run.mock.calls[0][0].specification.model).toEqual({
+      modelId: expect.any(String),
+      maxTokens: 32_000,
+      timeoutMs: 12 * 60_000,
+    });
+  });
+
+  it('carries the project override instead when there is one', async () => {
+    arrangePrd();
+    mockResolveSkillConfig.mockResolvedValue({
+      designPrototypeBedrockMaxTokens: 9_000,
+      designPrototypeBedrockTimeoutMs: 90_000,
+    });
+    const admitV2Run = jest.fn().mockResolvedValue(DISPATCHED);
+
+    await generatePrototypesForPrd('prd-1', {
+      isFeatureEnabled: async () => true,
+      admitV2Run,
+      generateInProcess: jest.fn(),
+    });
+
+    expect(admitV2Run.mock.calls[0][0].specification.model).toMatchObject({
+      maxTokens: 9_000,
+      timeoutMs: 90_000,
+    });
   });
 
   it('keeps in-process generation when the flag is off', async () => {

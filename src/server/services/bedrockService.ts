@@ -10,6 +10,7 @@ import type { DesignPlanFeature } from '../../shared/types/designPlan';
 import { DESIGN_PROTOTYPE_STATE_NAMES, type DesignPrototypeStateName } from '../../shared/types/designPrototype';
 import { recordAiUsage, computeCost } from './aiUsageService';
 import type { AiFeature } from '../../shared/types/aiCostAnalytics';
+import type { VisualModelSettings } from '../../shared/types/aiRunV2VisualSpec';
 import { resolvePrototypeExtendMode } from './prototypeContextService';
 import {
   buildPrototypePbiSection,
@@ -39,7 +40,7 @@ const controlPlaneClient = new BedrockClient({
  * generations are large (high max_tokens); a stalled connection would otherwise
  * hang indefinitely and leave the generation row stuck. On timeout we abort the
  * request so callers fail fast and transition to a retryable error state.
- * Override via BEDROCK_INVOKE_TIMEOUT_MS (default 8 minutes).
+ * Override via BEDROCK_INVOKE_TIMEOUT_MS (default 12 minutes).
  */
 const MODEL_INVOKE_TIMEOUT_MS = (() => {
   const raw = process.env.BEDROCK_INVOKE_TIMEOUT_MS;
@@ -132,6 +133,37 @@ const UI_MOCK_MAX_TOKENS = (() => {
   const parsed = raw ? Number(raw) : NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 32000;
 })();
+
+/** The prototype ceiling: a positive project override, else the app default. */
+function resolvePrototypeMaxTokens(override?: number | null): number {
+  return override != null && override > 0 ? override : UI_MOCK_MAX_TOKENS;
+}
+
+/** The wall-clock cap one invocation runs under, resolved the same way. */
+function resolveInvokeTimeoutMs(override?: number | null): number {
+  return override ?? MODEL_INVOKE_TIMEOUT_MS;
+}
+
+/**
+ * The prototype lane's model settings for a V2 execution specification.
+ *
+ * A worker holds no policy. It has neither the database the project override
+ * lives in nor the environment that tunes the app default, so both values are
+ * resolved here — by the same two functions the in-process call uses, which
+ * is what keeps the two transports on one number — and travel with the run.
+ * No temperature: the in-process prototype payload has no such key.
+ */
+export function resolvePrototypeVisualModel(input: {
+  modelId: string;
+  maxTokens?: number | null;
+  timeoutMs?: number | null;
+}): VisualModelSettings {
+  return {
+    modelId: input.modelId,
+    maxTokens: resolvePrototypeMaxTokens(input.maxTokens),
+    timeoutMs: resolveInvokeTimeoutMs(input.timeoutMs),
+  };
+}
 
 /** Default max-tokens used by PRD Apex Review when no project-level override is set. */
 export const PRD_REVIEW_DEFAULT_MAX_TOKENS = 16000;
@@ -2077,7 +2109,7 @@ async function invokeModel(
   // hard); the abort-timeout and truncation are NOT retried (see predicate).
   const response = await retryWithBackoff(
     async () => {
-      const effectiveTimeout = timeoutMs ?? MODEL_INVOKE_TIMEOUT_MS;
+      const effectiveTimeout = resolveInvokeTimeoutMs(timeoutMs);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), effectiveTimeout);
       try {
@@ -3719,7 +3751,7 @@ export async function generateDesignPrototypeHtml(
       pageScreenshotHint,
     );
     const effectiveModelPS = modelId ?? UI_MOCK_MODEL_ID;
-    const effectiveMaxTokensPS = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
+    const effectiveMaxTokensPS = resolvePrototypeMaxTokens(maxTokens);
     const projectImages: ImageInput[] = [];
     if (attachScreenshot && input.pageScreenshot) {
       projectImages.push({
@@ -3855,7 +3887,7 @@ Return ONLY the complete HTML document. No markdown fences, no explanation — j
     : undefined;
 
   const effectiveModel = modelId ?? UI_MOCK_MODEL_ID;
-  const effectiveMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
+  const effectiveMaxTokens = resolvePrototypeMaxTokens(maxTokens);
 
   const images: ImageInput[] = [];
   if (image) images.push(image);

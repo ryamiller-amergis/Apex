@@ -534,15 +534,14 @@ describe('prototype Bedrock request parity between the in-process path and the V
   });
 
   /**
-   * Fails today on a fourth channel of the same species: App Service leaves
-   * `model.maxTokens` unset whenever a project configures no override, so the
-   * worker falls back to `DEFAULT_VISUAL_MAX_TOKENS` (16k) while the
-   * in-process path uses `UI_MOCK_MAX_TOKENS` (32k). Prototype HTML is what
-   * drove that ceiling to 32k in the first place, so V2 truncates where the
-   * in-process path completes. Left red: the ceiling is per-lane — UI Lab's
-   * in-process default really is 16k — so the fix is to resolve it on App
-   * Service and always put it on the specification, not to retune a shared
-   * worker constant.
+   * This was red on a fourth channel of the same species: App Service left
+   * `model.maxTokens` unset whenever a project configured no override, and
+   * the worker answered with a 16k constant of its own while the in-process
+   * path used `UI_MOCK_MAX_TOKENS` (32k) — so V2 truncated prototypes the
+   * in-process path finished. Prototype HTML is what drove that ceiling to
+   * 32k in the first place. The ceiling is now resolved on App Service and
+   * carried on every specification; the worker holds no default to fall back
+   * to, which is what closes the gap for good rather than for this number.
    */
   it('sends the same request for a project on the bundled MaxView design system', async () => {
     const inProcess = await captureInProcessRequest();

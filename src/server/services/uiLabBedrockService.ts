@@ -8,6 +8,7 @@ import { getDesignSystemCatalog, getScreenInventory } from './designSystemServic
 import { getMaxviewColorTokens, getApexColorTokens } from './designTokensService';
 import { getFigmaReference } from './figmaReferenceService';
 import { recordAiUsage, computeCost } from './aiUsageService';
+import type { VisualModelSettings } from '../../shared/types/aiRunV2VisualSpec';
 
 /**
  * Cross-region inference profiles (us.anthropic.* model IDs) must be invoked
@@ -45,6 +46,32 @@ const DEFAULT_UI_LAB_TIMEOUT_MS = (() => {
   const parsed = raw ? Number(raw) : NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 10 * 60_000;
 })();
+
+/**
+ * UI Lab's model settings: the project's values where it set them, this
+ * lane's own defaults where it did not.
+ *
+ * Used by the streaming call below and by whatever admits a UI Lab run to the
+ * V2 lane, so both land on one set of numbers. A worker holds no policy — it
+ * has neither the project settings row nor the environment these defaults are
+ * tuned by — and this lane's policy is not the prototype lane's: UI Lab runs
+ * on a smaller ceiling, a shorter timeout, and a temperature the project can
+ * set. Temperature stays off the object when the project set none, because
+ * the payload omits the key in that case.
+ */
+export function resolveUiLabVisualModel(input: {
+  modelId?: string | null;
+  maxTokens?: number | null;
+  timeoutMs?: number | null;
+  temperature?: number | null;
+}): VisualModelSettings {
+  return {
+    modelId: input.modelId ?? DEFAULT_UI_LAB_MODEL,
+    maxTokens: input.maxTokens ?? DEFAULT_UI_LAB_MAX_TOKENS,
+    timeoutMs: input.timeoutMs ?? DEFAULT_UI_LAB_TIMEOUT_MS,
+    ...(input.temperature != null ? { temperature: input.temperature } : {}),
+  };
+}
 
 const APEX_COMPONENT_INDEX_PATH = path.join(
   __dirname, '..', 'assets', 'apex-component-index.md',
@@ -566,9 +593,7 @@ async function invokeStreaming(
 }
 
 export async function generateUiLabDesign(opts: UiLabGenerateOptions): Promise<string> {
-  const modelId = opts.modelId ?? DEFAULT_UI_LAB_MODEL;
-  const maxTokens = opts.maxTokens ?? DEFAULT_UI_LAB_MAX_TOKENS;
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_UI_LAB_TIMEOUT_MS;
+  const { modelId, maxTokens, timeoutMs } = resolveUiLabVisualModel(opts);
 
   let figmaBase64: string | undefined;
   try {
@@ -597,9 +622,7 @@ export async function generateUiLabDesign(opts: UiLabGenerateOptions): Promise<s
 }
 
 export async function editUiLabDesign(opts: UiLabEditOptions): Promise<string> {
-  const modelId = opts.modelId ?? DEFAULT_UI_LAB_MODEL;
-  const maxTokens = opts.maxTokens ?? DEFAULT_UI_LAB_MAX_TOKENS;
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_UI_LAB_TIMEOUT_MS;
+  const { modelId, maxTokens, timeoutMs } = resolveUiLabVisualModel(opts);
 
   const forApex = isApexProject(opts.project);
   const dsName  = forApex ? 'APEX' : 'MaxView';
