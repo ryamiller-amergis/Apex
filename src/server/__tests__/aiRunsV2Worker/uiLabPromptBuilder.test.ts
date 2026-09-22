@@ -156,14 +156,12 @@ describe('uiLabPromptBuilder', () => {
     );
   });
 
-  /**
-   * `uiLabBedrockService` joins `PageRoute` objects straight into the prompt,
-   * so this section has always read `[object Object]`. Carried across rather
-   * than fixed, because a transport move must not change what the model sees.
-   */
-  it('carries the route list exactly as the in-process prompt emits it', () => {
+  it('renders application route objects instead of object coercion text', () => {
     const section = buildUiLabContextSection(spec);
 
-    expect(section).toContain('### Application routes\n\n[object Object]');
+    expect(section).toContain(
+      '### Application routes\n\n- **/timecards** — Timecards',
+    );
+    expect(section).not.toContain('[object Object]');
   });
 });

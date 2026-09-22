@@ -4,11 +4,20 @@ import fs from 'fs';
 const { existsSync, readFileSync } = fs;
 import { BedrockRuntimeClient, InvokeModelWithResponseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
 import { retryWithBackoff } from '../utils/retry';
-import { getDesignSystemCatalog, getScreenInventory } from './designSystemService';
+import {
+  fetchExistingPageContext,
+  getDesignSystemCatalog,
+  getScreenInventory,
+} from './designSystemService';
 import { getMaxviewColorTokens, getApexColorTokens } from './designTokensService';
 import { getFigmaReference } from './figmaReferenceService';
 import { recordAiUsage, computeCost } from './aiUsageService';
 import type { VisualModelSettings } from '../../shared/types/aiRunV2VisualSpec';
+import {
+  buildResolvedUiLabContextSection,
+  buildResolvedUiLabPrompt,
+  type ResolvedUiLabPromptInput,
+} from './aiRunsV2Worker/uiLabPromptBuilder';
 
 /**
  * Cross-region inference profiles (us.anthropic.* model IDs) must be invoked
@@ -151,226 +160,75 @@ async function loadUiLabSkillContent(
   return bundle.content;
 }
 
-function buildCatalogSection(): string {
-  const catalog = (() => {
-    try {
-      return { routes: [] as string[], componentNames: [] as string[], uiKnowledgeBase: '', tokensCss: '', componentDescriptions: {} as Record<string, string> };
-    } catch {
-      return { routes: [], componentNames: [], uiKnowledgeBase: '', tokensCss: '', componentDescriptions: {} };
-    }
-  })();
-
-  return catalog.uiKnowledgeBase ?? '';
-}
-
-async function buildContextSection(
-  targetRoute?: string | null,
-  featureText?: string,
-  project?: string,
-  uiLabSkillPath?: string | null,
-  skillRepo?: string | null,
-  skillBranch?: string | null,
-  skillProvider?: 'ado' | 'github' | null,
-): Promise<string> {
-  const parts: string[] = [];
-  const forApex = isApexProject(project);
-
-  const skillMarkdown = await loadUiLabSkillContent(uiLabSkillPath, skillRepo, skillBranch, skillProvider, project);
-  if (skillMarkdown.trim()) {
-    parts.push(`## UI Lab Design System Standards\n\n${skillMarkdown.trim()}`);
-  }
+export async function resolveUiLabPromptInput(input: {
+  userPrompt: string;
+  targetRoute?: string | null;
+  project?: string;
+  uiLabSkillPath?: string | null;
+  skillRepo?: string | null;
+  skillBranch?: string | null;
+  skillProvider?: 'ado' | 'github' | null;
+}): Promise<ResolvedUiLabPromptInput> {
+  const forApex = isApexProject(input.project);
+  const skillMarkdown = await loadUiLabSkillContent(
+    input.uiLabSkillPath,
+    input.skillRepo,
+    input.skillBranch,
+    input.skillProvider,
+    input.project,
+  );
+  let colorTokens = '';
+  let componentIndex = '';
+  let catalog: unknown;
 
   if (forApex) {
-    // ── APEX project: use APEX design tokens + component index ──────────────
     try {
-      const colorTokens = getApexColorTokens();
-      if (colorTokens.trim()) {
-        parts.push(`## APEX Color Tokens\n\n${colorTokens.trim()}`);
-      }
+      colorTokens = getApexColorTokens();
     } catch { /* non-fatal */ }
-
-    const componentIndex = loadApexComponentIndex();
-    if (componentIndex.trim()) {
-      parts.push(`## APEX Component Index\n\n${componentIndex.trim()}`);
-    }
+    componentIndex = loadApexComponentIndex();
   } else {
-    // ── Default (MaxView and unconfigured): existing behavior unchanged ──────
     try {
-      const colorTokens = getMaxviewColorTokens();
-      if (colorTokens.trim()) {
-        parts.push(`## MaxView Color Tokens\n\n${colorTokens.trim()}`);
-      }
+      colorTokens = getMaxviewColorTokens();
     } catch {
-      // non-fatal — colors unavailable
+      // non-fatal
     }
-
     try {
-      const catalog = await getDesignSystemCatalog();
-      const ctxParts: string[] = [];
-
-      if (catalog.uiKnowledgeBase?.trim()) {
-        ctxParts.push(`### Existing screens — detailed descriptions\n\n${catalog.uiKnowledgeBase.trim()}`);
-      }
-
-      if (catalog.routes?.length) {
-        ctxParts.push(`### Application routes\n\n${catalog.routes.join('\n')}`);
-      }
-
-      if (catalog.tokensCss?.trim()) {
-        ctxParts.push(`### CSS custom properties (design tokens)\n\n\`\`\`css\n${catalog.tokensCss.trim()}\n\`\`\``);
-      }
-
-      const compNames = (catalog.componentNames ?? []).slice(0, 50);
-      if (compNames.length) {
-        const compLines = compNames.map((name) => {
-          const desc = catalog.componentDescriptions?.[name];
-          return desc ? `- **${name}**: ${desc}` : `- ${name}`;
-        });
-        ctxParts.push(`### Available MaxView components\n\n${compLines.join('\n')}`);
-      }
-
-      if (ctxParts.length) {
-        parts.push(`## MaxView Design System Catalog\n\n${ctxParts.join('\n\n')}`);
-      }
+      catalog = await getDesignSystemCatalog();
     } catch {
-      // non-fatal — catalog unavailable
+      // non-fatal
     }
   }
 
+  let screenInventory: unknown;
   try {
-    const inventory = await getScreenInventory();
-    if (inventory.length) {
-      // Keep the target route's row from being truncated by the 30-row cap by
-      // ordering any rows matching the target route first.
-      const normTarget = targetRoute
-        ? targetRoute.trim().toLowerCase().replace(/^\//, '').split(/[?#]/)[0]
-        : '';
-      const isTarget = (r: { route: string }) =>
-        normTarget.length > 0 &&
-        r.route
-          .split(',')
-          .some((seg) => seg.trim().toLowerCase().replace(/^\//, '').split(/[?#]/)[0].includes(normTarget));
-      const ordered = normTarget
-        ? [...inventory.filter(isTarget), ...inventory.filter((r) => !isTarget(r))]
-        : inventory;
-      const rows = ordered
-        .slice(0, 30)
-        .map((r) => `- **${r.route}** — ${r.purpose ?? ''}${r.userTypes?.length ? ` (${r.userTypes.join(', ')})` : ''}`)
-        .join('\n');
-      parts.push(`## Screen Inventory (existing pages)\n\n${rows}`);
-    }
+    screenInventory = await getScreenInventory();
   } catch {
     // non-fatal
   }
 
-  // EXTEND mode: when a target route is set, pull the ACTUAL existing page source
-  // (page component + relevant child components, keyword-guided) so the generated
-  // design faithfully extends the real page rather than approximating from a
-  // screenshot. Non-fatal — falls back to the catalog-only context on any failure.
-  if (targetRoute?.trim()) {
+  let existingPageContext = '';
+  if (input.targetRoute?.trim()) {
     try {
-      const { fetchExistingPageContext } = await import('./designSystemService');
-      const pageContext = await fetchExistingPageContext(targetRoute, featureText);
-      if (pageContext.trim()) {
-        parts.push(
-          `## Existing page source — extend this (ground truth)\n\n` +
-            `The following is the real source of the page at \`${targetRoute}\` and its ` +
-            `relevant child components. Reproduce its actual layout, columns, controls, and ` +
-            `data shape, and add the requested new behavior INTO this structure — do not ` +
-            `invent a different layout or let the brief override the existing structure.\n\n` +
-            pageContext.trim(),
-        );
-      }
+      existingPageContext = await fetchExistingPageContext(
+        input.targetRoute,
+        input.userPrompt,
+      );
     } catch {
-      // non-fatal — existing-page source unavailable
+      // non-fatal
     }
   }
 
-  return parts.join('\n\n---\n\n');
-}
-
-function buildGenerationPrompt(
-  userPrompt: string,
-  contextSection: string,
-  targetRoute?: string | null,
-  figmaBase64?: string,
-  designSystemName?: string,
-): string {
-  const dsName = designSystemName ?? 'MaxView';
-  const routeClause = targetRoute
-    ? `The UI should be designed for the route: \`${targetRoute}\`. Study the existing page context from the design system catalog and match the surrounding layout/navigation shell.`
-    : 'This is a standalone new UI — design an appropriate layout and navigation shell.';
-
-  const fontInstruction = dsName === 'APEX'
-    ? '- Use the system font stack defined by the APEX design system (no external font import required).'
-    : '- Use Roboto font: add `<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">` in <head>.';
-
-  return `You are an expert UI/UX designer and front-end engineer specializing in the ${dsName} design system. Generate a complete, self-contained, interactive HTML prototype that exactly follows the ${dsName} design system tokens, spacing, typography, and component usage rules defined below.
-
-${contextSection}
-
----
-
-## Your task
-
-${userPrompt}
-
-${routeClause}
-
----
-
-## Critical output requirements
-
-### 1. Design system fidelity
-- Use ONLY color values from the ${dsName} Color Tokens above — no invented hex values.
-- Use ONLY the spacing scale (multiples of 4px, base 8px grid).
-${fontInstruction}
-- Follow the component usage rules exactly (button variants, form patterns, elevation).
-
-### 2. Four required UI states
-Include all four states with these exact HTML comment markers:
-
-\`\`\`
-<!-- STATE:DEFAULT:START -->
-  ... fully populated/interactive default state ...
-<!-- STATE:DEFAULT:END -->
-
-<!-- STATE:EMPTY:START -->
-  ... empty/zero-data state with helpful message and CTA ...
-<!-- STATE:EMPTY:END -->
-
-<!-- STATE:ERROR:START -->
-  ... error/failure state with message and retry action ...
-<!-- STATE:ERROR:END -->
-
-<!-- STATE:LOADING:START -->
-  ... skeleton/spinner loading state ...
-<!-- STATE:LOADING:END -->
-\`\`\`
-
-Only DEFAULT is visible on load. Include a small state-switcher control (top-right, subtle) to toggle between states for review.
-
-### 3. Self-contained HTML
-- One complete <html> document.
-- All CSS inline in <style> tags — no external CSS imports except Google Fonts.
-- All JS inline in <script> tags — no external JS (no React, no framework).
-- No calls to external APIs, no fetch(), no XMLHttpRequest.
-- Fully functional interactive prototype: clicks, hovers, form interactions work.
-- Responsive: mobile-first, works at 375px and 1440px width.
-
-### 4. Realistic content
-- Use realistic, plausible placeholder content (not "Lorem ipsum").
-- Use realistic user names, dates, data values appropriate to the described feature.
-
-### 5. Accessibility baseline
-- All images have non-empty alt attributes.
-- All icon-only buttons have aria-label.
-- Form inputs have associated labels.
-- Focus ring visible on all interactive elements.
-
----
-
-Output ONLY the complete HTML — no markdown fences, no explanation, no preamble. Start with \`<!DOCTYPE html>\` and end with \`</html>\`.`;
+  return {
+    userPrompt: input.userPrompt,
+    targetRoute: input.targetRoute ?? null,
+    designSystemName: forApex ? 'APEX' : 'MaxView',
+    skillMarkdown,
+    componentIndex,
+    existingPageContext,
+    catalog,
+    screenInventory,
+    colorTokens,
+  };
 }
 
 function buildEditPrompt(
@@ -612,10 +470,16 @@ export async function generateUiLabDesign(opts: UiLabGenerateOptions): Promise<s
     // non-fatal
   }
 
-  const forApex = isApexProject(opts.project);
-  const dsName  = forApex ? 'APEX' : 'MaxView';
-  const contextSection = await buildContextSection(opts.targetRoute, opts.prompt, opts.project, opts.uiLabSkillPath, opts.skillRepo, opts.skillBranch, opts.skillProvider);
-  const prompt = buildGenerationPrompt(opts.prompt, contextSection, opts.targetRoute, figmaBase64, dsName);
+  const promptInput = await resolveUiLabPromptInput({
+    userPrompt: opts.prompt,
+    targetRoute: opts.targetRoute,
+    project: opts.project,
+    uiLabSkillPath: opts.uiLabSkillPath,
+    skillRepo: opts.skillRepo,
+    skillBranch: opts.skillBranch,
+    skillProvider: opts.skillProvider,
+  });
+  const prompt = buildResolvedUiLabPrompt(promptInput);
 
   return invokeStreaming(
     prompt,
@@ -633,24 +497,23 @@ export async function generateUiLabDesign(opts: UiLabGenerateOptions): Promise<s
 export async function editUiLabDesign(opts: UiLabEditOptions): Promise<string> {
   const { modelId, maxTokens, timeoutMs } = resolveUiLabVisualModel(opts);
 
-  const forApex = isApexProject(opts.project);
-  const dsName  = forApex ? 'APEX' : 'MaxView';
-  const contextSection = await buildContextSection(
-    opts.targetRoute,
-    opts.featureText ?? undefined,
-    opts.project,
-    opts.uiLabSkillPath,
-    opts.skillRepo,
-    opts.skillBranch,
-    opts.skillProvider,
-  );
+  const promptInput = await resolveUiLabPromptInput({
+    userPrompt: opts.featureText ?? opts.instruction,
+    targetRoute: opts.targetRoute,
+    project: opts.project,
+    uiLabSkillPath: opts.uiLabSkillPath,
+    skillRepo: opts.skillRepo,
+    skillBranch: opts.skillBranch,
+    skillProvider: opts.skillProvider,
+  });
+  const contextSection = buildResolvedUiLabContextSection(promptInput);
   const prompt = buildEditPrompt(
     opts.instruction,
     opts.currentHtml,
     opts.selectedSelector,
     opts.selectedHtml,
     contextSection,
-    dsName,
+    promptInput.designSystemName,
   );
 
   return invokeStreaming(prompt, modelId, maxTokens, timeoutMs, opts.temperature, opts.onToken, undefined, opts.project, opts.userId);

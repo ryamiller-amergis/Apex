@@ -34,6 +34,18 @@ type SpecScreen = Readonly<{
   userTypes?: ReadonlyArray<string>;
 }>;
 
+export type ResolvedUiLabPromptInput = Readonly<{
+  userPrompt: string;
+  targetRoute: string | null;
+  designSystemName: UiLabDesignSystemName;
+  skillMarkdown: string;
+  componentIndex: string;
+  existingPageContext: string;
+  catalog?: unknown;
+  screenInventory?: unknown;
+  colorTokens?: unknown;
+}>;
+
 const SCREEN_INVENTORY_ROW_CAP = 30;
 const COMPONENT_NAME_CAP = 50;
 
@@ -43,6 +55,22 @@ function asText(value: unknown): string {
 
 function asCatalog(value: unknown): SpecCatalog {
   return (value ?? {}) as SpecCatalog;
+}
+
+function formatApplicationRoute(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return String(value);
+  }
+  const route = value as Record<string, unknown>;
+  if (typeof route.path !== 'string' || !route.path.trim()) {
+    return String(value);
+  }
+  const title =
+    typeof route.title === 'string' && route.title.trim()
+      ? ` — ${route.title.trim()}`
+      : '';
+  return `- **${route.path.trim()}**${title}`;
 }
 
 function asScreens(value: unknown): ReadonlyArray<SpecScreen> {
@@ -66,10 +94,11 @@ function buildMaxviewCatalogSection(catalog: SpecCatalog): string {
   }
 
   if (catalog.routes?.length) {
-    // Joining route objects renders `[object Object]`, which is what the
-    // in-process prompt has always sent. Kept as-is so the transport move
-    // does not change the model's input; fixing it is a separate change.
-    ctxParts.push(`### Application routes\n\n${catalog.routes.join('\n')}`);
+    ctxParts.push(
+      `### Application routes\n\n${catalog.routes
+        .map(formatApplicationRoute)
+        .join('\n')}`,
+    );
   }
 
   if (catalog.tokensCss?.trim()) {
@@ -97,10 +126,10 @@ function normalizeRoute(route: string): string {
 }
 
 function buildScreenInventorySection(
-  spec: AiRunV2VisualSpecification,
+  inventoryValue: unknown,
   targetRoute: string,
 ): string {
-  const inventory = asScreens(spec.designSystem.screenInventory);
+  const inventory = asScreens(inventoryValue);
   if (inventory.length === 0) return '';
 
   // Keep the target route's row from being truncated by the 30-row cap by
@@ -131,11 +160,11 @@ function buildScreenInventorySection(
  * no repository credentials.
  */
 function buildExistingPageSection(
-  spec: AiRunV2VisualSpecification,
+  pageContextValue: unknown,
   targetRoute: string,
 ): string {
   if (!targetRoute.trim()) return '';
-  const pageContext = asText(spec.promptInputs.existingPageContext);
+  const pageContext = asText(pageContextValue);
   if (!pageContext.trim()) return '';
 
   return (
@@ -148,25 +177,41 @@ function buildExistingPageSection(
   );
 }
 
-export function buildUiLabContextSection(
+function resolvedPromptInput(
   spec: AiRunV2VisualSpecification,
+): ResolvedUiLabPromptInput {
+  return {
+    userPrompt: asText(spec.promptInputs.userPrompt),
+    targetRoute: asText(spec.promptInputs.targetRoute) || null,
+    designSystemName: uiLabDesignSystemName(spec),
+    skillMarkdown: asText(spec.promptInputs.skillMarkdown),
+    componentIndex: asText(spec.promptInputs.componentIndex),
+    existingPageContext: asText(spec.promptInputs.existingPageContext),
+    catalog: spec.designSystem.catalog,
+    screenInventory: spec.designSystem.screenInventory,
+    colorTokens: spec.designSystem.colorTokens,
+  };
+}
+
+export function buildResolvedUiLabContextSection(
+  input: ResolvedUiLabPromptInput,
 ): string {
   const parts: string[] = [];
-  const forApex = uiLabDesignSystemName(spec) === 'APEX';
-  const targetRoute = asText(spec.promptInputs.targetRoute);
+  const forApex = input.designSystemName === 'APEX';
+  const targetRoute = input.targetRoute ?? '';
 
-  const skillMarkdown = asText(spec.promptInputs.skillMarkdown);
+  const skillMarkdown = input.skillMarkdown;
   if (skillMarkdown.trim()) {
     parts.push(`## UI Lab Design System Standards\n\n${skillMarkdown.trim()}`);
   }
 
-  const colorTokens = asText(spec.designSystem.colorTokens);
+  const colorTokens = asText(input.colorTokens);
   if (forApex) {
     // ── APEX project: APEX design tokens + component index ──────────────────
     if (colorTokens.trim()) {
       parts.push(`## APEX Color Tokens\n\n${colorTokens.trim()}`);
     }
-    const componentIndex = asText(spec.promptInputs.componentIndex);
+    const componentIndex = input.componentIndex;
     if (componentIndex.trim()) {
       parts.push(`## APEX Component Index\n\n${componentIndex.trim()}`);
     }
@@ -176,18 +221,30 @@ export function buildUiLabContextSection(
       parts.push(`## MaxView Color Tokens\n\n${colorTokens.trim()}`);
     }
     const catalogSection = buildMaxviewCatalogSection(
-      asCatalog(spec.designSystem.catalog),
+      asCatalog(input.catalog),
     );
     if (catalogSection) parts.push(catalogSection);
   }
 
-  const inventorySection = buildScreenInventorySection(spec, targetRoute);
+  const inventorySection = buildScreenInventorySection(
+    input.screenInventory,
+    targetRoute,
+  );
   if (inventorySection) parts.push(inventorySection);
 
-  const existingPageSection = buildExistingPageSection(spec, targetRoute);
+  const existingPageSection = buildExistingPageSection(
+    input.existingPageContext,
+    targetRoute,
+  );
   if (existingPageSection) parts.push(existingPageSection);
 
   return parts.join('\n\n---\n\n');
+}
+
+export function buildUiLabContextSection(
+  spec: AiRunV2VisualSpecification,
+): string {
+  return buildResolvedUiLabContextSection(resolvedPromptInput(spec));
 }
 
 /**
@@ -199,11 +256,13 @@ export function buildUiLabContextSection(
  * out here for the same reason: it travels on `designReference` and
  * `visualEntrypoint` attaches it to the call.
  */
-export function buildUiLabPrompt(spec: AiRunV2VisualSpecification): string {
-  const userPrompt = asText(spec.promptInputs.userPrompt);
-  const targetRoute = asText(spec.promptInputs.targetRoute);
-  const dsName = uiLabDesignSystemName(spec);
-  const contextSection = buildUiLabContextSection(spec);
+export function buildResolvedUiLabPrompt(
+  input: ResolvedUiLabPromptInput,
+): string {
+  const userPrompt = input.userPrompt;
+  const targetRoute = input.targetRoute ?? '';
+  const dsName = input.designSystemName;
+  const contextSection = buildResolvedUiLabContextSection(input);
 
   const routeClause = targetRoute
     ? `The UI should be designed for the route: \`${targetRoute}\`. Study the existing page context from the design system catalog and match the surrounding layout/navigation shell.`
@@ -279,4 +338,8 @@ Only DEFAULT is visible on load. Include a small state-switcher control (top-rig
 ---
 
 Output ONLY the complete HTML — no markdown fences, no explanation, no preamble. Start with \`<!DOCTYPE html>\` and end with \`</html>\`.`;
+}
+
+export function buildUiLabPrompt(spec: AiRunV2VisualSpecification): string {
+  return buildResolvedUiLabPrompt(resolvedPromptInput(spec));
 }
