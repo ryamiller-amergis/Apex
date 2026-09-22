@@ -28,6 +28,7 @@ export type CreateQueuedV2RunInput = Readonly<{
   lane: AgentRunLane;
   timeoutAt: string;
   specRef: AiRunBlobRef;
+  executionSnapshot?: Record<string, unknown>;
   ownerInstance?: string | null;
 }>;
 
@@ -238,6 +239,7 @@ export function createRunAttemptRepository(options?: {
             lane,
             queued_at,
             timeout_at,
+            execution_snapshot,
             owner_instance,
             transport_version,
             cancel_requested,
@@ -253,6 +255,9 @@ export function createRunAttemptRepository(options?: {
             ${input.lane},
             now(),
             ${input.timeoutAt},
+            ${input.executionSnapshot
+              ? JSON.stringify(input.executionSnapshot)
+              : null}::jsonb,
             ${input.ownerInstance ?? null},
             'servicebus-blob-v2',
             FALSE,

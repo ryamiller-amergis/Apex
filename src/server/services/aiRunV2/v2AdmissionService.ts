@@ -25,6 +25,8 @@ export type AdmitV2RunInput = Readonly<{
   workloadLane: AiRunV2WorkloadLane;
   timeoutAt: string;
   specification: Record<string, unknown>;
+  /** Optional copy persisted on the run header for generic completion/usage. */
+  executionSnapshot?: Record<string, unknown>;
   ownerInstance?: string | null;
 }>;
 
@@ -103,6 +105,7 @@ export function createV2AdmissionService(deps?: {
         workloadLane: input.workloadLane,
         timeoutAt: input.timeoutAt,
         specRef,
+        executionSnapshot: input.executionSnapshot,
         ownerInstance: input.ownerInstance ?? null,
       });
       if (created.status === 'active_run_conflict') return created;

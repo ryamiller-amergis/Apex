@@ -29,6 +29,7 @@ jest.mock('../services/telemetry', () => ({
 import {
   createBackgroundWorkflowRouter,
   prepareBackgroundWorkflowWorkspace,
+  readDocumentScratchInputs,
   workerCanReadWithoutWorkingTree,
   type BackgroundWorkflowRouteInput,
   type BackgroundWorkflowRouterDependencies,
@@ -104,8 +105,14 @@ function makeDependencies(
     now: jest.fn().mockReturnValue(1_000),
     trackEvent: jest.fn(),
     isUsableBareMirror: jest.fn().mockReturnValue(false),
+    readDocumentScratchInputs: jest.fn().mockResolvedValue([
+      {
+        path: '.ai-pilot/kickoff-transcript.md',
+        content: '# Interview transcript',
+      },
+    ]),
     ...overrides,
-  };
+  } as BackgroundWorkflowRouterDependencies;
 }
 
 describe('workerCanReadWithoutWorkingTree', () => {
@@ -518,6 +525,61 @@ describe('background workflow routing', () => {
     );
   });
 
+  it('freezes every worker input into the V2 document specification', async () => {
+    const admitV2Run = jest.fn().mockResolvedValue({
+      status: 'dispatched',
+      runId: 'run-1',
+      attemptId: 'attempt-1',
+      attemptNumber: 1,
+      dispatchMessageId: 'dispatch-1',
+      outboxId: 'outbox-1',
+    });
+    const readDocumentScratchInputs = jest.fn().mockResolvedValue([
+      {
+        path: '.ai-pilot/kickoff-transcript.md',
+        content: '# Interview transcript',
+      },
+    ]);
+    const dependencies = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      admitV2Run,
+      readDocumentScratchInputs,
+    } as Partial<BackgroundWorkflowRouterDependencies>);
+
+    await createBackgroundWorkflowRouter(dependencies).route(makeInput());
+
+    expect(readDocumentScratchInputs).toHaveBeenCalledWith(
+      'C:\\threads\\thread-1',
+      'prd',
+    );
+    const admission = admitV2Run.mock.calls[0][0] as {
+      specification: Record<string, unknown>;
+      executionSnapshot?: Record<string, unknown>;
+      timeoutAt: string;
+    };
+    expect(admission.timeoutAt).toBe('1970-01-01T00:01:01.000Z');
+    expect(admission.specification).toMatchObject({
+      prompt: 'confidential generation prompt',
+      model: 'claude-4',
+      effort: null,
+      skillPath: '.cursor/skills/to-prd/SKILL.md',
+      workflowClass: 'prd',
+      projectId: 'project-1',
+      threadId: 'thread-1',
+      deadlineMs: 60_000,
+      groundedSha: 'abc123',
+      repository: 'apex/ai-pilot',
+      provider: 'github',
+      scratchInputs: [
+        {
+          path: '.ai-pilot/kickoff-transcript.md',
+          content: '# Interview transcript',
+        },
+      ],
+    });
+    expect(admission.executionSnapshot).toEqual(admission.specification);
+  });
+
   it('recovers in-process when V2 admission refuses or throws', async () => {
     const conflict = makeDependencies({
       isFeatureEnabled: jest.fn().mockResolvedValue(true),
@@ -810,6 +872,110 @@ describe('background workspace preparation', () => {
 
   afterEach(async () => {
     await fs.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  it('copies only the allowlisted PRD scratch inputs into a V2 specification', async () => {
+    const aiPilot = path.join(tempRoot, '.ai-pilot');
+    await fs.mkdir(path.join(aiPilot, 'output'), { recursive: true });
+    await fs.writeFile(
+      path.join(aiPilot, 'kickoff-transcript.md'),
+      '# Transcript',
+      'utf8',
+    );
+    await fs.writeFile(
+      path.join(aiPilot, 'kickoff-context.md'),
+      '# Context',
+      'utf8',
+    );
+    await fs.writeFile(
+      path.join(aiPilot, 'session.json'),
+      '{"threadId":"thread-1"}',
+      'utf8',
+    );
+    await fs.writeFile(path.join(aiPilot, 'secret.env'), 'TOKEN=secret', 'utf8');
+    await fs.writeFile(
+      path.join(aiPilot, 'output', 'leftover.prd.md'),
+      '# Stale output',
+      'utf8',
+    );
+
+    await expect(readDocumentScratchInputs(tempRoot, 'prd')).resolves.toEqual([
+      {
+        path: '.ai-pilot/kickoff-context.md',
+        content: '# Context',
+      },
+      {
+        path: '.ai-pilot/kickoff-transcript.md',
+        content: '# Transcript',
+      },
+      {
+        path: '.ai-pilot/session.json',
+        content: '{"threadId":"thread-1"}',
+      },
+    ]);
+  });
+
+  it('carries the PRD and backlog scratch files needed by test-case generation', async () => {
+    const aiPilot = path.join(tempRoot, '.ai-pilot');
+    const output = path.join(aiPilot, 'output');
+    await fs.mkdir(output, { recursive: true });
+    await fs.writeFile(
+      path.join(aiPilot, 'kickoff-context.md'),
+      '# Test context',
+      'utf8',
+    );
+    await fs.writeFile(path.join(output, 'feature.prd.md'), '# PRD', 'utf8');
+    await fs.writeFile(
+      path.join(output, 'feature.backlog.json'),
+      '{"epics":[]}',
+      'utf8',
+    );
+    await fs.writeFile(
+      path.join(output, 'stale.test-cases.json'),
+      '{"suites":[]}',
+      'utf8',
+    );
+
+    await expect(
+      readDocumentScratchInputs(tempRoot, 'test-cases'),
+    ).resolves.toEqual([
+      {
+        path: '.ai-pilot/kickoff-context.md',
+        content: '# Test context',
+      },
+      {
+        path: '.ai-pilot/output/feature.backlog.json',
+        content: '{"epics":[]}',
+      },
+      {
+        path: '.ai-pilot/output/feature.prd.md',
+        content: '# PRD',
+      },
+    ]);
+  });
+
+  it('does not copy a transcript into scratch-only validation work', async () => {
+    const aiPilot = path.join(tempRoot, '.ai-pilot');
+    await fs.mkdir(aiPilot, { recursive: true });
+    await fs.writeFile(
+      path.join(aiPilot, 'kickoff-context.md'),
+      '# Validation context',
+      'utf8',
+    );
+    await fs.writeFile(
+      path.join(aiPilot, 'kickoff-transcript.md'),
+      '# Unused transcript',
+      'utf8',
+    );
+
+    await expect(
+      readDocumentScratchInputs(tempRoot, 'validation'),
+    ).resolves.toEqual([
+      {
+        path: '.ai-pilot/kickoff-context.md',
+        content: '# Validation context',
+      },
+    ]);
   });
 
   it('BR-007 / VT-01: merges .ai-pilot inputs/outputs and drops destination-only leftovers', async () => {
