@@ -754,10 +754,10 @@ not yet modified — see "Remaining for Task 6" below.
     `BedrockModelTruncatedError` on `stop_reason: 'max_tokens'`;
     `bedrockVisualClient` ignores it and returns the partial text, which the
     worker uploads and finalizes as a completed prototype.
-  - **Still open: `VisualModelSettings` has no `temperature`.** UI Lab reads
-    `uiLabBedrockTemperature` from project settings and sets it on the
-    payload; the visual contract cannot express it, so a UI Lab screen on V2
-    would silently run at the model default.
+  - ~~**Still open: `VisualModelSettings` has no `temperature`.**~~ Closed
+    2026-09-22 — the contract carries an optional `temperature`,
+    `resolveUiLabVisualModel` populates it from `uiLabBedrockTemperature`, and
+    `bedrockVisualClient` adds the key to the payload only where it is set.
   - **Still open: one image, but EXTEND mode sends two.** The in-process
     prototype path can attach both the Figma reference and a per-route page
     screenshot from `pageScreenshotService`. `VisualDesignReference` holds one
@@ -794,34 +794,65 @@ not yet modified — see "Remaining for Task 6" below.
     still fails: a bare-string `content` is canonicalised to a one-block text
     array, and the worker-only repository-source section is removed before the
     prompts are compared.
-  - Both differential cases are **red on purpose** — one on the project
-    design system above, one on the token ceiling below. The comparison names
-    each divergence in a sentence, including the prompt line where two
-    prompts first differ.
+  - Both differential cases were **red on purpose** — one on the project
+    design system above, one on the token ceiling below. The ceiling case went
+    green on 2026-09-22; the project design system case is still red. The
+    comparison names each divergence in a sentence, including the prompt line
+    where two prompts first differ.
 
   **Found by that test, still open:**
 
-  - **The prototype output-token ceiling is halved on V2.**
-    `admitPendingPrototypesToV2` sets `model.maxTokens` only when a project
-    configures `designPrototypeBedrockMaxTokens`, so with no override the
-    worker falls back to `DEFAULT_VISUAL_MAX_TOKENS` (16k) while the
-    in-process path uses `UI_MOCK_MAX_TOKENS` (32k). Prototype HTML is what
-    drove that ceiling from 4k to 32k in the first place, so V2 truncates
-    where the in-process path completes — and because `stop_reason` is
-    ignored (above), the truncated document is uploaded and finalized as a
-    completed prototype. Not a shared-constant retune: UI Lab's in-process
-    default really is 16k, so the ceiling is per-lane and App Service has to
-    resolve it and always put it on the specification.
+  - ~~**The prototype output-token ceiling is halved on V2.**~~ Closed
+    2026-09-22, see "A worker holds no policy" below.
   - The comment on `bedrockVisualClient.buildContent` — "With no image the
     message stays a plain string, which is what a reference-less in-process
     call sends" — is wrong. `bedrockService.invokeModel` always builds a block
     array, even with no images. The two encodings mean the same thing to the
     Bedrock Anthropic API, so this is a comment to correct rather than a
     defect, and the test carries it as a named allowance.
-  - The payload is not the whole call. The per-attempt timeout (12 minutes in
-    process, 10 on the worker) and `bedrockService`'s throttle retry, which
-    `bedrockVisualClient` has no equivalent of, sit outside this comparison
-    and need their own check.
+  - The payload is not the whole call. `bedrockService`'s throttle retry, which
+    `bedrockVisualClient` has no equivalent of, sits outside this comparison
+    and needs its own check. The per-attempt timeout was part of this gap and
+    is now resolved on App Service like the ceiling; what remains is that the
+    in-process timeout bounds each of up to five attempts while the worker
+    gets one.
+
+  **A worker holds no policy (2026-09-22).** The ceiling defect was not a
+  wrong number, it was a worker deciding a number at all. Model settings have
+  three layers — the project override in `project_skill_settings`, the app
+  default in the owning service, and the environment variable that tunes it —
+  and a worker can read none of them. `model.maxTokens ?? DEFAULT` then reads
+  a missing field as configuration and answers with something plausible.
+
+  - **Resolved on App Service, always on the specification.**
+    `resolvePrototypeVisualModel` (in `bedrockService`) and
+    `resolveUiLabVisualModel` (in `uiLabBedrockService`) each live beside the
+    defaults their own in-process call applies, and each returns a complete
+    `VisualModelSettings`. The prototype resolver calls the same two functions
+    `generateDesignPrototypeHtml` and `invokeModel` call, so the two
+    transports cannot land on different numbers without the shared function
+    changing.
+  - **Per lane, because the lanes differ.** Prototype: 32,000 tokens
+    (`BEDROCK_UI_MOCK_MAX_TOKENS`) and a 12-minute timeout
+    (`BEDROCK_INVOKE_TIMEOUT_MS`). UI Lab: 16,000 tokens
+    (`BEDROCK_UI_LAB_MAX_TOKENS`) and a 10-minute timeout
+    (`BEDROCK_UI_LAB_TIMEOUT_MS`). Collapsing them to one number truncates
+    one lane or overspends on the other, which is why the 16k worker constant
+    looked defensible.
+  - **Override semantics are mirrored, not tidied.** The prototype path takes
+    an override only when it is above zero; UI Lab takes any non-null value.
+    Both are copied as they are, because matching the in-process request
+    matters more than consistency between two lanes.
+  - **`maxTokens` and `timeoutMs` are required on `VisualModelSettings`** and
+    checked by `isAiRunV2VisualSpecification`, which the worker already runs
+    before the model call. A specification that lost either is refused, and
+    `DEFAULT_VISUAL_MAX_TOKENS` / `DEFAULT_VISUAL_TIMEOUT_MS` are deleted, so
+    there is nothing left to fall back to.
+  - **Known divergence, deliberate.** A project that sets
+    `ui_lab_bedrock_max_tokens` to 0 would have the in-process path send
+    `max_tokens: 0` and be rejected by Bedrock; on V2 the specification is
+    refused at validation instead. Both fail; only the message differs.
+
 - [ ] Ephemeral workspace and repo-read wiring for the worker processes.
 
 ---

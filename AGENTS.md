@@ -121,6 +121,7 @@ src/
 | How does ADO integration work? | `src/server/services/azureDevOps.ts` |
 | How should Blob / async workers be designed? | `.cursor/skills/azure-async-infra/SKILL.md`, `infra/shared-async.tf`, `.cursor/rules/azure-async-infra.mdc` |
 | How should Apex Terraform be written? | `.cursor/skills/terraform-infra/SKILL.md`, `.cursor/rules/terraform-infra.mdc`, `infra/README.md` |
+| Where do a V2 worker's settings come from? | `.cursor/rules/v2-worker-no-policy.mdc` — App Service resolves every value and the execution specification carries it; a worker holds no default |
 | What are the project settings? | `src/server/services/projectSettingsService.ts`, `src/client/components/AdminProjectSettings.tsx` |
 | How do I start a feature interview? | `.cursor/skills/grill-with-docs/SKILL.md` (feature building) or `.cursor/skills/grill-design/SKILL.md` (technical design) |
 | How do I generate a PRD from an interview? | `.cursor/skills/to-prd/SKILL.md` — reads `.ai-pilot/kickoff-transcript.md` |

@@ -1,0 +1,25 @@
+---
+description: A V2 worker holds no policy — every value it uses arrives on the execution specification or the run is refused
+globs: src/server/services/aiRunsV2Worker/**/*.ts,src/server/services/aiRunV2/**/*.ts,src/shared/types/aiRunV2*.ts
+alwaysApply: false
+---
+
+# A worker holds no policy
+
+A V2 worker runs in its own container. It has no database connection — `src/server/__tests__/aiRunsV2Worker/noDatabaseImports.test.ts` enforces that across the whole import graph — and none of App Service's environment. So it cannot read a project setting, and it cannot read the environment variable that tunes an app default.
+
+Every value a worker uses is therefore resolved on the App Service side and carried on the execution specification. A worker that supplies its own value is not being defensive; it is inventing a policy that nothing can reconcile with the in-process path it replaced.
+
+## Rules
+
+1. **Resolve on App Service, carry on the specification.** Project setting first, then the app default including its environment override. The specification always carries a concrete value.
+2. **Resolve beside the in-process default, not near the worker.** `resolvePrototypeVisualModel` lives in `bedrockService` and `resolveUiLabVisualModel` in `uiLabBedrockService`, each calling the same code its own in-process path calls. Two copies of one default drift; one function cannot.
+3. **Resolve per lane.** The prototype lane's ceiling (32k) is not UI Lab's (16k), and their timeouts differ too. One shared number truncates one lane or overspends on the other.
+4. **Mirror the in-process semantics exactly, including the awkward parts.** The prototype path takes an override only when it is above zero; UI Lab takes any non-null value. Copy what the path does. Matching the request that ships beats consistency between lanes.
+5. **Required on the contract, checked before the model call.** A value the worker must have is a required field on the specification type and is validated in the specification's type guard, so a missing one refuses the run instead of reaching a model.
+6. **No `??` fallback in a worker.** `spec.model.maxTokens ?? 16_000` reads a missing field as configuration and answers with something plausible. That is how the V2 prototype ceiling sat at half the in-process one in production, and why nothing reported it.
+7. **Prove it against the path being replaced.** A unit test on the worker asserts what the worker does. `src/server/__tests__/designPrototypeBedrockRequestParity.test.ts` drives one fixture through both transports and compares the Bedrock requests; add the channel there when a new one is carried.
+
+## Applies to more than model settings
+
+Token ceilings and timeouts are where this was found. It holds for anything resolved from the database or the environment: model ids, prompts and skill markdown, design-system context, feature-flag decisions, and reference imagery. If a worker needs it, App Service resolves it and the specification carries it.
