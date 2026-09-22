@@ -22,6 +22,7 @@ import {
   buildPrototypePbiSection,
   buildPrototypePlanSection,
   buildPrototypeScopingSection,
+  buildPrototypeSourceSection,
   buildPrototypeTargetScreenHint,
 } from './designContext/prototypePromptSections';
 import { normalizeGeneratedPrototypeHtml } from '../utils/htmlSanitizer';
@@ -3532,6 +3533,14 @@ export interface DesignPrototypeInput {
   existingPageContext?: string;
   /** Reviewer-uploaded screenshot of the existing page. Sent as vision input in EXTEND mode. */
   pageScreenshot?: { base64: string; mediaType: string };
+  /** Relevance-ranked repository source shared by V1 and V2. */
+  sourceFiles?: ReadonlyArray<Readonly<{ path: string; content: string }>>;
+  /** Every unreadable or byte-budget-omitted candidate, in ranked order. */
+  omittedSourcePaths?: ReadonlyArray<string>;
+  /** Resolved once on App Service so both transports receive one catalog. */
+  designSystemCatalog?: DesignSystemCatalog;
+  /** Resolved once on App Service so both transports receive one inventory. */
+  screenInventory?: ReadonlyArray<ScreenInventoryRoute>;
   /**
    * Authoritative design-plan decisions for this feature (from the reviewed/edited design plan).
    * When present, these override the model's own inference for layout/components/states.
@@ -3690,9 +3699,11 @@ export async function generateDesignPrototypeHtml(
 
   let catalogSection = '';
   if (!projectCtx) {
-    const catalog = await designSystemService.getDesignSystemCatalog({
-      relevanceText: prototypeRelevanceText,
-    });
+    const catalog =
+      input.designSystemCatalog
+      ?? await designSystemService.getDesignSystemCatalog({
+        relevanceText: prototypeRelevanceText,
+      });
     catalogSection = buildCatalogSection(catalog);
   }
 
@@ -3701,7 +3712,9 @@ export async function generateDesignPrototypeHtml(
     if (adoTarget?.inventoryPath) {
       screenInventory = await designSystemService.getScreenInventory(adoTarget);
     } else if (!projectCtx) {
-      screenInventory = await designSystemService.getScreenInventory();
+      screenInventory = input.screenInventory
+        ? [...input.screenInventory]
+        : await designSystemService.getScreenInventory();
     }
   } catch (err) {
     console.warn('[bedrockService] getScreenInventory failed for design prototype:', err);
@@ -3710,6 +3723,12 @@ export async function generateDesignPrototypeHtml(
     screenInventory,
     projectCtx?.appName ?? 'MaxView',
   );
+  const sourceContextSection = projectCtx
+    ? ''
+    : buildPrototypeSourceSection(
+        input.sourceFiles ?? [],
+        input.omittedSourcePaths ?? [],
+      );
 
   const pbiSection = buildPrototypePbiSection(input.pbis);
 
@@ -3795,7 +3814,7 @@ export async function generateDesignPrototypeHtml(
 
   const prompt = `You are a senior UI/UX designer generating a high-fidelity HTML prototype for a MaxView application feature.
 
-${catalogSection}${screensContextSection}
+${catalogSection}${screensContextSection}${sourceContextSection}
 ## Feature to Design
 
 **Feature:** ${input.featureName}

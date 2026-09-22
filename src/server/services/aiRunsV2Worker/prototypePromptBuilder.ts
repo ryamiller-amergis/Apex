@@ -16,7 +16,10 @@ import type {
   DesignPrototypeVisualSpecification,
   ProjectPrototypePrompt,
 } from '../../../shared/types/aiRunV2VisualSpec';
-import { buildComponentDetailCoverageSection } from '../designContext/prototypePromptSections';
+import {
+  buildComponentDetailCoverageSection,
+  buildPrototypeSourceSection,
+} from '../designContext/prototypePromptSections';
 
 type CatalogRoute = Readonly<{ path: string; title: string }>;
 
@@ -144,32 +147,16 @@ function buildScreensContextSection(
  * no checkout and no repository credentials, so if it is not here the model
  * cannot see it.
  */
-function buildSourceSection(spec: AiRunV2VisualSpecification): string {
-  const files = asSourceFiles(spec.promptInputs.sourceFiles);
-  if (files.length === 0) return '';
-
-  const blocks = files
-    .map((file) => `#### ${file.path}\n\n\`\`\`tsx\n${file.content}\n\`\`\``)
-    .join('\n\n');
-
-  const omitted = asPaths(spec.promptInputs.omittedSourcePaths);
-  const omittedNote =
-    omitted.length > 0
-      ? `\n\nThese files were omitted to stay within the context budget, so do not assume anything about them:\n\n${omitted
-          .map((path) => `- \`${path}\``)
-          .join('\n')}`
-      : '';
-
-  return `### Repository source for the affected surface\n\n${blocks}${omittedNote}\n\n---\n\n`;
-}
-
 export function buildPrototypeContextSection(
   spec: AiRunV2VisualSpecification,
 ): string {
   return [
     buildCatalogSection(spec),
     buildScreensContextSection(spec),
-    buildSourceSection(spec),
+    buildPrototypeSourceSection(
+      asSourceFiles(spec.promptInputs.sourceFiles),
+      asPaths(spec.promptInputs.omittedSourcePaths),
+    ),
   ].join('');
 }
 

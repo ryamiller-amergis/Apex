@@ -61,6 +61,40 @@ export type PrototypeSpecificationAssembler = {
   ): Promise<DesignPrototypeVisualSpecification>;
 };
 
+export type PrototypeSourceContext = Readonly<{
+  sourceFiles: ReadonlyArray<{ path: string; content: string }>;
+  omittedSourcePaths: ReadonlyArray<string>;
+}>;
+
+export async function resolvePrototypeSourceContext(input: {
+  reader?: RepoReader;
+  sourcePaths: ReadonlyArray<string>;
+  sourceRelevanceText: string;
+  budgetBytes?: number;
+}): Promise<PrototypeSourceContext> {
+  const rankedPaths = rankSourcePaths(
+    input.sourcePaths,
+    input.sourceRelevanceText,
+  );
+  const read = input.reader
+    ? await createRepoDesignContextReader({
+        reader: input.reader,
+      }).readComponents(rankedPaths)
+    : [];
+  const budgeted = applyDesignContextBudget(
+    read,
+    input.budgetBytes ?? DEFAULT_DESIGN_CONTEXT_BUDGET_BYTES,
+  );
+  const included = new Set(
+    budgeted.included.map((file) => file.path.replace(/\\/g, '/')),
+  );
+  return {
+    sourceFiles: budgeted.included,
+    // Includes both unreadable candidates and readable files over budget.
+    omittedSourcePaths: rankedPaths.filter((path) => !included.has(path)),
+  };
+}
+
 export function createPrototypeSpecificationAssembler(deps: {
   /**
    * Omitted when no grounded mirror is reachable on this instance. The
@@ -73,29 +107,26 @@ export function createPrototypeSpecificationAssembler(deps: {
   ) => Promise<PrototypeDesignContext>;
   budgetBytes?: number;
 }): PrototypeSpecificationAssembler {
-  const source = deps.reader
-    ? createRepoDesignContextReader({ reader: deps.reader })
-    : null;
   const budgetBytes = deps.budgetBytes ?? DEFAULT_DESIGN_CONTEXT_BUDGET_BYTES;
 
   return {
     async assemble(input) {
-      const rankedPaths = rankSourcePaths(
-        input.sourcePaths,
-        input.sourceRelevanceText,
-      );
-      const [context, read] = await Promise.all([
+      const [context, source] = await Promise.all([
         deps.loadDesignContext(input),
-        source ? source.readComponents(rankedPaths) : [],
+        resolvePrototypeSourceContext({
+          reader: deps.reader,
+          sourcePaths: input.sourcePaths,
+          sourceRelevanceText: input.sourceRelevanceText,
+          budgetBytes,
+        }),
       ]);
-      const budgeted = applyDesignContextBudget(read, budgetBytes);
 
       return buildPrototypeVisualSpecification({
         prototypeId: input.prototypeId,
         prototypePrompt: input.prototypePrompt,
         promptInputs: input.promptInputs,
-        sourceFiles: budgeted.included,
-        omittedSourcePaths: budgeted.omitted,
+        sourceFiles: source.sourceFiles,
+        omittedSourcePaths: source.omittedSourcePaths,
         catalog: context.catalog,
         screenInventory: context.screenInventory,
         colorTokens: context.colorTokens,

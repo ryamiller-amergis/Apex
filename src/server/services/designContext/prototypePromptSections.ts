@@ -85,6 +85,29 @@ export function buildComponentDetailCoverageSection(catalog: {
   );
 }
 
+export function buildPrototypeSourceSection(
+  files: ReadonlyArray<Readonly<{ path: string; content: string }>>,
+  omitted: ReadonlyArray<string>,
+): string {
+  if (files.length === 0 && omitted.length === 0) return '';
+
+  const blocks = files
+    .map((file) => `#### ${file.path}\n\n\`\`\`tsx\n${file.content}\n\`\`\``)
+    .join('\n\n');
+  const omittedNote =
+    omitted.length > 0
+      ? `${blocks ? '\n\n' : ''}These files could not be read or included within the context budget, so do not assume anything about them:\n\n${omitted
+          .map((path) => `- \`${path}\``)
+          .join('\n')}`
+      : '';
+  const emptyNote =
+    files.length === 0
+      ? 'No repository source files were included.\n\n'
+      : '';
+
+  return `### Repository source for the affected surface\n\n${emptyNote}${blocks}${omittedNote}\n\n---\n\n`;
+}
+
 export function buildPrototypePbiSection(
   pbis: ReadonlyArray<PbiRequirement>,
 ): string {

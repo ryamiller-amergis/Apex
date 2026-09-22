@@ -99,6 +99,36 @@ describe('prototypeSpecificationAssembler', () => {
     expect(spec.promptInputs.omittedSourcePaths).toEqual(['/b.tsx']);
   });
 
+  it('reports unreadable and budget-omitted paths in deterministic order', async () => {
+    const assembler = createPrototypeSpecificationAssembler({
+      reader: reader({
+        '/src/components/ApprovalPanel.tsx': 'x'.repeat(80),
+      }),
+      loadDesignContext: async () => designContext,
+      budgetBytes: 1,
+    });
+
+    const spec = await assembler.assemble({
+      prototypeId: 'prototype-1',
+      prototypePrompt: { branch: 'maxview' },
+      promptInputs,
+      sourcePaths: [
+        '/src/components/ApprovalPanel.tsx',
+        '/src/components/ApprovalMissing.tsx',
+      ],
+      sourceRelevanceText: 'approval',
+      images: [],
+      model: MODEL,
+      usage: { feature: 'design-prototype', project: 'Apex' },
+    });
+
+    expect(spec.promptInputs.sourceFiles).toEqual([]);
+    expect(spec.promptInputs.omittedSourcePaths).toEqual([
+      '/src/components/ApprovalMissing.tsx',
+      '/src/components/ApprovalPanel.tsx',
+    ]);
+  });
+
   it('spends the byte budget on relevant source rather than the first path', async () => {
     const assembler = createPrototypeSpecificationAssembler({
       reader: reader({

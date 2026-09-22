@@ -30,6 +30,7 @@ import { prototypeUsageCtx } from './artifactUsageContext';
 import { resolveAgentRunHardLimitMs } from './agentRunReaperService';
 import {
   createPrototypeSpecificationAssembler,
+  resolvePrototypeSourceContext,
   type PrototypeDesignContext,
 } from './aiRunV2/prototypeSpecificationAssembler';
 import {
@@ -52,6 +53,7 @@ import {
   getDesignSystemCatalog,
   getScreenInventory,
   isComponentSourcePath,
+  type DesignSystemCatalog,
   type DesignSystemAdoTarget,
 } from './designSystemService';
 import { getMaxviewColorTokens } from './designTokensService';
@@ -936,6 +938,7 @@ async function admitPendingPrototypesToV2(params: {
           params.timeoutMs,
           params.project,
           params.skillSettingsId,
+          params.prdId,
         ).catch(err => {
           console.error(
             `[designPrototypeService] Background generation failed for ${prototypeId}:`,
@@ -1150,7 +1153,7 @@ export async function generatePrototypesForPrd(
       // at once (which throttles large models and causes timeouts). Runs in the
       // background — the route returns immediately and the UI polls per-prototype.
       runWithConcurrency(pending, PROTOTYPE_GENERATION_CONCURRENCY, async ({ prototypeId, feature, planFeature }) =>
-        generateInProcess(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature, prototypeTimeoutMs, prd.project, prd.skillSettingsId ?? null).catch(err => {
+        generateInProcess(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature, prototypeTimeoutMs, prd.project, prd.skillSettingsId ?? null, prdId).catch(err => {
           console.error(`[designPrototypeService] Background generation failed for ${prototypeId}:`, err);
         }),
       ).catch(err => {
@@ -1218,6 +1221,7 @@ async function generateSinglePrototype(
   timeoutMs?: number,
   project?: string,
   skillSettingsId?: string | null,
+  prdId?: string,
 ): Promise<void> {
   try {
     const { generateDesignPrototypeHtml } = await import('./bedrockService');
@@ -1282,6 +1286,25 @@ async function generateSinglePrototype(
       }
     }
 
+    let sourceContext:
+      | Awaited<ReturnType<typeof resolvePrototypeSourceContext>>
+      | undefined;
+    let maxViewDesignContext: PrototypeDesignContext | undefined;
+    if (!prototypeContext && prdId) {
+      const source = await resolvePrototypeRepoSource(prdId);
+      [sourceContext, maxViewDesignContext] = await Promise.all([
+        resolvePrototypeSourceContext({
+          reader: source?.reader,
+          sourcePaths: source?.sourcePaths ?? [],
+          sourceRelevanceText: prototypeFeatureText(feature),
+        }),
+        loadPrototypeDesignContext(
+          source?.reader,
+          prototypeFeatureText(feature),
+        ),
+      ]);
+    }
+
     const rawHtml = await generateDesignPrototypeHtml({
       featureName: feature.title,
       featureDescription: feature.description,
@@ -1291,6 +1314,14 @@ async function generateSinglePrototype(
       plan: planFeatureToInput(planFeature),
       prototypeContext,
       webReferences,
+      sourceFiles: sourceContext?.sourceFiles,
+      omittedSourcePaths: sourceContext?.omittedSourcePaths,
+      designSystemCatalog: maxViewDesignContext?.catalog as
+        | DesignSystemCatalog
+        | undefined,
+      screenInventory: maxViewDesignContext?.screenInventory as
+        | ScreenInventoryRoute[]
+        | undefined,
     }, modelId, maxTokens, timeoutMs, prototypeUsageCtx(project, prototypeId));
 
     const html = sanitizeMockHtml(rawHtml);
@@ -1538,7 +1569,7 @@ export async function retryPrototype(prototypeId: string): Promise<void> {
     })
     .where(eq(designPrototypes.id, prototypeId));
 
-  generateSinglePrototype(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature, prototypeTimeoutMs, prd.project, prd.skillSettingsId ?? null).catch(err => {
+  generateSinglePrototype(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature, prototypeTimeoutMs, prd.project, prd.skillSettingsId ?? null, proto.prdId).catch(err => {
     console.error(`[designPrototypeService] Retry generation failed for ${prototypeId}:`, err);
   });
 }

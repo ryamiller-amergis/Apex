@@ -103,6 +103,25 @@ describe('prototypePromptBuilder', () => {
     expect(section).toContain('/src/components/Huge.tsx');
   });
 
+  it('renders the omission report when zero source files were included', () => {
+    const section = buildPrototypeContextSection({
+      ...spec,
+      promptInputs: {
+        ...spec.promptInputs,
+        sourceFiles: [],
+        omittedSourcePaths: [
+          '/src/components/ApprovalMissing.tsx',
+          '/src/components/ApprovalPanel.tsx',
+        ],
+      },
+    });
+
+    expect(section).toContain('Repository source for the affected surface');
+    expect(section).toContain('No repository source files were included');
+    expect(section).toContain('/src/components/ApprovalMissing.tsx');
+    expect(section).toContain('/src/components/ApprovalPanel.tsx');
+  });
+
   it('frames the feature and carries the sections resolved upstream', () => {
     const prompt = buildPrototypePrompt({
       ...spec,

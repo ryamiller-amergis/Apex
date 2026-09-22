@@ -28,6 +28,7 @@ import { rankSourcePaths } from './designContext/sourceRelevance';
 const DS_REPO    = process.env.MAXVIEW_DS_REPO    ?? 'MaxView';
 const DS_PROJECT = process.env.MAXVIEW_DS_PROJECT ?? 'MaxView';
 const CATALOG_TTL_MS = 10 * 60 * 1000; // 10 minutes
+export const DESIGN_SYSTEM_CATALOG_CACHE_MAX_ENTRIES = 64;
 
 /** Optional override so inventory/page fetch uses a project's own ADO repo instead of MaxView. */
 export interface DesignSystemAdoTarget {
@@ -174,9 +175,28 @@ export interface DesignSystemCatalogOptions {
   componentDetailBudgetBytes?: number;
 }
 
-const ADO_COMPONENT_DETAIL_FILE_LIMIT = 20;
+const ADO_COMPONENT_DETAIL_CONCURRENCY = 4;
 
 const catalogCache = new Map<string, DesignSystemCatalog>();
+
+function pruneCatalogCache(now: number): void {
+  for (const [key, catalog] of catalogCache) {
+    if (now - catalog.fetchedAt >= CATALOG_TTL_MS) {
+      catalogCache.delete(key);
+    }
+  }
+}
+
+function cacheCatalog(key: string, catalog: DesignSystemCatalog): void {
+  // Refreshing a key moves it to the newest position in insertion order.
+  catalogCache.delete(key);
+  catalogCache.set(key, catalog);
+  while (catalogCache.size > DESIGN_SYSTEM_CATALOG_CACHE_MAX_ENTRIES) {
+    const oldest = catalogCache.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    catalogCache.delete(oldest);
+  }
+}
 
 function catalogCacheKey(options: DesignSystemCatalogOptions): string {
   const reader = options.componentReader;
@@ -523,13 +543,45 @@ function extractComponentDetails(
   return { descriptions, layoutHints };
 }
 
+async function fetchAdoComponentSources(
+  orgUrl: string,
+  pat: string,
+  paths: ReadonlyArray<string>,
+): Promise<DesignSourceFile[]> {
+  const results: Array<DesignSourceFile | null> = Array(paths.length).fill(null);
+  let nextIndex = 0;
+
+  const worker = async (): Promise<void> => {
+    while (nextIndex < paths.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const path = paths[index];
+      try {
+        results[index] = {
+          path,
+          content: await fetchAdoFile(orgUrl, pat, path),
+        };
+      } catch {
+        // The coverage result names unreadable candidates as omitted.
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(ADO_COMPONENT_DETAIL_CONCURRENCY, paths.length) },
+      () => worker(),
+    ),
+  );
+  return results.flatMap((file) => (file ? [file] : []));
+}
+
 /**
  * Read component source in relevance order and apply an explicit byte budget.
  *
- * A pinned reader has no per-file API quota, so every candidate can compete
- * for the budget. The live ADO fallback keeps the existing twenty-request
- * bound, but picks the twenty most relevant paths and reports every path it
- * could not include.
+ * Every ranked candidate competes for the byte budget. Repository and live
+ * ADO reads both preserve that order; ADO bounds concurrent calls rather than
+ * silently dropping everything after an arbitrary file count.
  */
 async function fetchComponentDetails(
   orgUrl: string,
@@ -554,16 +606,7 @@ async function fetchComponentDetails(
     }).readComponents(ranked);
   } else {
     source = 'ado-api';
-    const requested = ranked.slice(0, ADO_COMPONENT_DETAIL_FILE_LIMIT);
-    const results = await Promise.allSettled(
-      requested.map(async (path) => ({
-        path,
-        content: await fetchAdoFile(orgUrl, pat, path),
-      })),
-    );
-    read = results.flatMap((result) =>
-      result.status === 'fulfilled' ? [result.value] : [],
-    );
+    read = await fetchAdoComponentSources(orgUrl, pat, ranked);
   }
 
   const budgeted = applyDesignContextBudget(read, budgetBytes);
@@ -613,6 +656,7 @@ export async function getDesignSystemCatalog(
 ): Promise<DesignSystemCatalog> {
   const now = Date.now();
   const cacheKey = catalogCacheKey(options);
+  pruneCatalogCache(now);
   const cached = catalogCache.get(cacheKey);
   if (cached && now - cached.fetchedAt < CATALOG_TTL_MS) {
     return cached;
@@ -726,7 +770,7 @@ export async function getDesignSystemCatalog(
     componentDetailCoverage,
     fetchedAt: now,
   };
-  catalogCache.set(cacheKey, catalog);
+  cacheCatalog(cacheKey, catalog);
 
   console.log(
     `[designSystemService] Catalog loaded — ${routes.length} routes, ${componentNames.length} components, ` +

@@ -14,6 +14,7 @@ jest.mock('https');
 
 import {
   clearDesignSystemCache,
+  DESIGN_SYSTEM_CATALOG_CACHE_MAX_ENTRIES,
   fetchExistingPageContext,
   getDesignSystemCatalog,
   getScreenInventory,
@@ -56,7 +57,11 @@ function timecardsFiles(pageSrc?: string): Record<string, string> {
 }
 
 /** Install an in-memory ADO responder for the mocked https.request. */
-function setupAdo(files: Record<string, string>, trees: Record<string, string[]> = {}): void {
+function setupAdo(
+  files: Record<string, string>,
+  trees: Record<string, string[]> = {},
+  componentRequests?: { active: number; maxActive: number },
+): void {
   (https.request as jest.Mock).mockImplementation((options: any, cb: (res: any) => void) => {
     const url = new URL(`https://ado.local${options.path}`);
     const p = decodeURIComponent(
@@ -65,6 +70,17 @@ function setupAdo(files: Record<string, string>, trees: Record<string, string[]>
       ?? '',
     );
     const isTree = url.searchParams.has('recursionLevel');
+    const tracksComponent =
+      !isTree
+      && p.includes('/components/')
+      && /\.(?:ts|tsx|js|jsx)$/.test(p);
+    if (tracksComponent && componentRequests) {
+      componentRequests.active += 1;
+      componentRequests.maxActive = Math.max(
+        componentRequests.maxActive,
+        componentRequests.active,
+      );
+    }
 
     const res: any = new EventEmitter();
     let body = '';
@@ -87,6 +103,9 @@ function setupAdo(files: Record<string, string>, trees: Record<string, string[]>
       cb(res);
       setImmediate(() => {
         if (body) res.emit('data', Buffer.from(body));
+        if (tracksComponent && componentRequests) {
+          componentRequests.active -= 1;
+        }
         res.emit('end');
       });
     });
@@ -318,13 +337,14 @@ describe('getDesignSystemCatalog — component source coverage', () => {
     });
   });
 
-  it('uses the bounded API fallback for the most relevant files and reports every omission', async () => {
+  it('reads every ranked ADO candidate with bounded concurrency', async () => {
     const files = {
       ...componentFixture('Unrelated', 21),
       ...componentFixture('Approval', 4),
     };
     const paths = Object.keys(files);
-    setupAdo(files, { '/src/client/components': paths });
+    const requests = { active: 0, maxActive: 0 };
+    setupAdo(files, { '/src/client/components': paths }, requests);
 
     const catalog = await (
       getDesignSystemCatalog as unknown as (options: {
@@ -342,14 +362,113 @@ describe('getDesignSystemCatalog — component source coverage', () => {
       );
     }
     expect(catalog.componentDetailCoverage.source).toBe('ado-api');
-    expect(catalog.componentDetailCoverage.includedPaths).toHaveLength(20);
-    expect(catalog.componentDetailCoverage.omittedPaths).toHaveLength(5);
+    expect(catalog.componentDetailCoverage.includedPaths).toHaveLength(25);
+    expect(catalog.componentDetailCoverage.omittedPaths).toEqual([]);
+    expect(requests.maxActive).toBeGreaterThan(1);
+    expect(requests.maxActive).toBeLessThanOrEqual(4);
     expect(
       (https.request as jest.Mock).mock.calls.filter(([options]) => {
         const url = new URL(`https://ado.local${options.path}`);
         const path = decodeURIComponent(url.searchParams.get('path') ?? '');
         return path.includes('/components/') && path.endsWith('.tsx');
       }),
-    ).toHaveLength(20);
+    ).toHaveLength(25);
+  });
+
+  it('reports every unreadable ADO component path as omitted', async () => {
+    const files = componentFixture('Approval', 2);
+    const missing = '/src/client/components/ApprovalMissing.tsx';
+    const paths = [...Object.keys(files), missing];
+    setupAdo(files, { '/src/client/components': paths });
+
+    const catalog = await getDesignSystemCatalog({
+      relevanceText: 'approval action',
+      componentDetailBudgetBytes: 1_000_000,
+    });
+
+    expect(catalog.componentDetailCoverage.includedPaths).toEqual(
+      Object.keys(files).sort((left, right) => left.localeCompare(right)),
+    );
+    expect(catalog.componentDetailCoverage.omittedPaths).toEqual([missing]);
+  });
+
+  it('reports every candidate when the byte budget includes none', async () => {
+    const files = componentFixture('Approval', 3);
+    const paths = Object.keys(files);
+    setupAdo(files, { '/src/client/components': paths });
+
+    const catalog = await getDesignSystemCatalog({
+      relevanceText: 'approval action',
+      componentDetailBudgetBytes: 1,
+    });
+
+    expect(catalog.componentDetailCoverage.includedPaths).toEqual([]);
+    expect(catalog.componentDetailCoverage.omittedPaths).toEqual(
+      paths.sort((left, right) => left.localeCompare(right)),
+    );
+  });
+});
+
+describe('getDesignSystemCatalog — relevance cache bounds', () => {
+  beforeEach(() => {
+    clearDesignSystemCache();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('evicts the oldest feature-text entry when the cache reaches its bound', async () => {
+    const files = componentFixture('Approval', 1);
+    const reader = pinnedReader(files);
+
+    for (
+      let index = 0;
+      index <= DESIGN_SYSTEM_CATALOG_CACHE_MAX_ENTRIES;
+      index += 1
+    ) {
+      await getDesignSystemCatalog({
+        componentReader: reader,
+        relevanceText: `feature-${index}`,
+      });
+    }
+
+    reader.readFile.mockClear();
+    await getDesignSystemCatalog({
+      componentReader: reader,
+      relevanceText: 'feature-0',
+    });
+    expect(reader.readFile).toHaveBeenCalled();
+
+    reader.readFile.mockClear();
+    await getDesignSystemCatalog({
+      componentReader: reader,
+      relevanceText: `feature-${DESIGN_SYSTEM_CATALOG_CACHE_MAX_ENTRIES}`,
+    });
+    expect(reader.readFile).not.toHaveBeenCalled();
+  });
+
+  it('evicts expired entries before serving a new relevance key', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-09-22T12:00:00.000Z'));
+    const files = componentFixture('Approval', 1);
+    const reader = pinnedReader(files);
+
+    await getDesignSystemCatalog({
+      componentReader: reader,
+      relevanceText: 'first feature',
+    });
+    jest.setSystemTime(new Date('2026-09-22T12:11:00.000Z'));
+    await getDesignSystemCatalog({
+      componentReader: reader,
+      relevanceText: 'second feature',
+    });
+
+    reader.readFile.mockClear();
+    await getDesignSystemCatalog({
+      componentReader: reader,
+      relevanceText: 'first feature',
+    });
+    expect(reader.readFile).toHaveBeenCalled();
   });
 });

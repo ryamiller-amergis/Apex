@@ -22,6 +22,14 @@
  */
 
 const mockBedrockRequests: Array<{ input: Record<string, unknown> }> = [];
+const mockSourceFiles: Record<string, string> = {
+  '/src/client/components/StandupSummary.tsx':
+    'export const StandupSummary = () => <section>Summary</section>;',
+};
+const mockSourcePaths = [
+  ...Object.keys(mockSourceFiles),
+  '/src/client/components/StandupSummaryMissing.tsx',
+];
 
 /**
  * Both paths build a real `InvokeModelCommand` and hand it to a
@@ -69,11 +77,56 @@ jest.mock('../db/drizzle', () => ({
   },
 }));
 
-// No active target grounding, so no bare mirror and no repository source.
-// Both paths then send the same context; see REPOSITORY_SOURCE_SECTION.
 jest.mock('../services/runGroundingService', () => ({
-  resolveRunGroundingSurface: jest.fn().mockResolvedValue(null),
-  runGroundingService: { getGroundings: jest.fn().mockResolvedValue([]) },
+  resolveRunGroundingSurface: jest.fn().mockResolvedValue({
+    run: { id: 'run-grounding-1' },
+  }),
+  runGroundingService: {
+    getGroundings: jest.fn().mockResolvedValue([
+      {
+        repoRole: 'target',
+        isActive: true,
+        groundedSha: 'a'.repeat(40),
+        project: 'Apex',
+        repository: 'AI-Pilot',
+        provider: 'ado',
+      },
+    ]),
+  },
+}));
+
+jest.mock('../services/repoCacheService', () => ({
+  getRepoCacheDir: jest.fn(() => '/tmp/apex-parity.git'),
+}));
+
+jest.mock('../services/repoRead/mirrorStore', () => ({
+  cacheOptionsFromGrounding: jest.fn(() => ({
+    provider: 'ado',
+    project: 'Apex',
+    repo: 'AI-Pilot',
+  })),
+  isUsableBareMirror: jest.fn(() => true),
+}));
+
+jest.mock('../services/repoRead/bareRepoReader', () => ({
+  BareRepoReader: class {
+    readonly identity = {
+      provider: 'ado',
+      project: 'Apex',
+      repo: 'AI-Pilot',
+      sha: 'a'.repeat(40),
+    };
+
+    async listDir(): Promise<Array<{ path: string; isFolder: boolean }>> {
+      return mockSourcePaths.map((path) => ({ path, isFolder: false }));
+    }
+
+    async readFile(path: string): Promise<string> {
+      const content = mockSourceFiles[path];
+      if (content === undefined) throw new Error(`missing ${path}`);
+      return content;
+    }
+  },
 }));
 
 jest.mock('../services/designSystemService', () => ({
@@ -266,38 +319,14 @@ const ALLOWANCES = {
    * that actually differs when a channel is dropped, fully compared.
    */
   TEXT_ONLY_CONTENT_ENCODING: 'text-only content encoding',
-
-  /**
-   * The worker adds a repository-source section the in-process path has never
-   * carried: App Service reads component source on the worker's behalf,
-   * because a worker has no checkout. It is an intentional V2 enrichment, so
-   * it is removed before the prompts are compared and everything around it
-   * still has to match.
-   */
-  REPOSITORY_SOURCE_SECTION: 'worker-only repository source section',
 } as const;
 
 const REPOSITORY_SOURCE_HEADING = '### Repository source for the affected surface';
-const SECTION_TERMINATOR = '\n\n---\n\n';
-
-function stripRepositorySourceSection(text: string): string {
-  const start = text.indexOf(REPOSITORY_SOURCE_HEADING);
-  if (start === -1) return text;
-
-  const end = text.indexOf(SECTION_TERMINATOR, start);
-  if (end === -1) return text;
-  return text.slice(0, start) + text.slice(end + SECTION_TERMINATOR.length);
-}
 
 function canonicalContent(content: unknown): ContentBlock[] {
   if (typeof content === 'string') return [{ type: 'text', text: content }];
   if (!Array.isArray(content)) return [{ type: 'unrecognised', value: content }];
   return content as ContentBlock[];
-}
-
-function canonicalBlock(block: ContentBlock): ContentBlock {
-  if (block.type !== 'text' || typeof block.text !== 'string') return block;
-  return { ...block, text: stripRepositorySourceSection(block.text) };
 }
 
 /* ── Comparison ──────────────────────────────────────────────────────────── */
@@ -439,8 +468,8 @@ export function compareBedrockRequests(
     compareContent(
       differences,
       `messages[${i}]`,
-      canonicalContent(expectedMessages[i].content).map(canonicalBlock),
-      canonicalContent(actualMessages[i].content).map(canonicalBlock),
+      canonicalContent(expectedMessages[i].content),
+      canonicalContent(actualMessages[i].content),
     );
   }
 
@@ -576,6 +605,12 @@ describe('prototype Bedrock request parity between the in-process path and the V
       expect(String(text?.text ?? '')).toContain('**Feature:** Standup summary digest');
       expect(String(text?.text ?? '')).toContain(
         '/src/client/components/UnloadedApprovalPanel.tsx',
+      );
+      expect(String(text?.text ?? '')).toContain(
+        mockSourceFiles['/src/client/components/StandupSummary.tsx'],
+      );
+      expect(String(text?.text ?? '')).toContain(
+        '/src/client/components/StandupSummaryMissing.tsx',
       );
       expect(typeof captured.payload.max_tokens).toBe('number');
     }
@@ -771,7 +806,7 @@ describe('the named allowances', () => {
     expect(differences).toEqual([]);
   });
 
-  it(`${ALLOWANCES.REPOSITORY_SOURCE_SECTION}: the worker may add repository source the in-process path never carried`, () => {
+  it('rejects repository source that appears on only one transport', () => {
     const differences = compareBedrockRequests(
       request({ content: '## Context\n\n---\n\n## Feature to Design' }),
       request({
@@ -782,17 +817,25 @@ describe('the named allowances', () => {
       }),
     );
 
-    expect(differences).toEqual([]);
+    expect(differences).toHaveLength(1);
+    expect(differences[0]).toContain(REPOSITORY_SOURCE_HEADING);
   });
 
-  it('still compares everything around a repository source section rather than masking the prompt', () => {
+  it('compares everything around a repository source section', () => {
+    const sourceSection =
+      `${REPOSITORY_SOURCE_HEADING}\n\nexport const App = 1;\n\n---\n\n`;
     const differences = compareBedrockRequests(
-      request({ content: '## Context\n\n---\n\n## Feature to Design\n\n**Feature:** Digest' }),
       request({
         content:
-          '## Context\n\n---\n\n' +
-          `${REPOSITORY_SOURCE_HEADING}\n\nexport const App = 1;\n\n---\n\n` +
-          '## Feature to Design\n\n**Feature:** Something else',
+          '## Context\n\n---\n\n'
+          + sourceSection
+          + '## Feature to Design\n\n**Feature:** Digest',
+      }),
+      request({
+        content:
+          '## Context\n\n---\n\n'
+          + sourceSection
+          + '## Feature to Design\n\n**Feature:** Something else',
       }),
     );
 
