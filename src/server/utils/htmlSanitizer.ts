@@ -7,6 +7,23 @@
  * network calls, external resources, and navigation vectors.
  */
 
+/**
+ * Normalize the model's document wrapper before either transport persists it.
+ *
+ * Bedrock is instructed to return raw HTML but may still wrap the document in
+ * one Markdown fence. Empty completions remain empty to preserve the existing
+ * in-process behavior.
+ */
+export function normalizeGeneratedPrototypeHtml(raw: string): string {
+  let html = raw.trim();
+  if (html.startsWith('```')) {
+    html = html
+      .replace(/^```(?:html)?\s*\n?/, '')
+      .replace(/\n?```\s*$/, '');
+  }
+  return html.trim();
+}
+
 export function sanitizeMockHtml(raw: string): string {
   let html = raw;
 

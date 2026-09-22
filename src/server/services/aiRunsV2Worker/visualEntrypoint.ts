@@ -26,6 +26,7 @@ import {
   isBedrockThrottle,
 } from './visualConcurrency';
 import { createV2Worker, type ExecuteWorkload } from './worker';
+import { normalizeGeneratedPrototypeHtml } from '../../utils/htmlSanitizer';
 
 export const USAGE_FILE_NAME = VISUAL_USAGE_FILE_NAME;
 
@@ -128,11 +129,9 @@ export function createVisualExecute(deps: {
       visualReferenceImages(specification),
       signal,
     );
-    const html = typeof result === 'string' ? result : result.html;
-    if (!html.trim()) {
-      // An empty upload would finalize the run as a completed blank prototype.
-      throw new Error('Visual model returned no HTML');
-    }
+    const html = normalizeGeneratedPrototypeHtml(
+      typeof result === 'string' ? result : result.html,
+    );
 
     const files = [
       {

@@ -24,6 +24,7 @@ import {
   buildPrototypeScopingSection,
   buildPrototypeTargetScreenHint,
 } from './designContext/prototypePromptSections';
+import { normalizeGeneratedPrototypeHtml } from '../utils/htmlSanitizer';
 
 /** Attribution context passed down from callers to the invokeModel wrapper. */
 export interface BedrockUsageContext {
@@ -3789,11 +3790,7 @@ export async function generateDesignPrototypeHtml(
       timeoutMs,
       usageCtx ?? { feature: 'design-prototype', project: 'unknown' },
     );
-    let psHtml = psText.trim();
-    if (psHtml.startsWith('```')) {
-      psHtml = psHtml.replace(/^```(?:html)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-    }
-    return psHtml;
+    return normalizeGeneratedPrototypeHtml(psText);
   }
 
   const prompt = `You are a senior UI/UX designer generating a high-fidelity HTML prototype for a MaxView application feature.
@@ -3922,12 +3919,7 @@ Return ONLY the complete HTML document. No markdown fences, no explanation — j
 
   const text = await invokeModel(prompt, images.length > 0 ? images : undefined, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' });
 
-  let html = text.trim();
-  if (html.startsWith('```')) {
-    html = html.replace(/^```(?:html)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-  }
-
-  return html;
+  return normalizeGeneratedPrototypeHtml(text);
 }
 
 // ── Per-state regeneration helpers ──────────────────────────────────────────
@@ -3964,14 +3956,6 @@ function spliceStateSection(html: string, state: DesignPrototypeStateName, newIn
  */
 function resolveAutoStates(_feedback: string, _comments: string[]): DesignPrototypeStateName[] {
   return ['default', 'error'];
-}
-
-function stripHtmlFences(raw: string): string {
-  let out = raw.trim();
-  if (out.startsWith('```')) {
-    out = out.replace(/^```(?:html)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-  }
-  return out.trim();
 }
 
 export async function regenerateDesignPrototypeHtml(
@@ -4056,7 +4040,7 @@ Return ONLY the complete revised HTML document. No markdown fences — just the 
 
     if (!scoped) {
       const text = await invokeModel(projectRegenPrompt, regenImages.length > 0 ? regenImages : undefined, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' });
-      return stripHtmlFences(text);
+      return normalizeGeneratedPrototypeHtml(text);
     }
 
     // Scoped path: regenerate only the requested sections
@@ -4091,7 +4075,7 @@ ${currentSections}
 
 Return ONLY the revised sections, each in its STATE markers. No markdown fences, no document shell.`;
 
-    const scopedText = stripHtmlFences(await invokeModel(projectScopedPrompt, regenImages.length > 0 ? regenImages : undefined, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' }));
+    const scopedText = normalizeGeneratedPrototypeHtml(await invokeModel(projectScopedPrompt, regenImages.length > 0 ? regenImages : undefined, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' }));
 
     if (/<!DOCTYPE html|<html[\s>]/i.test(scopedText)) return scopedText;
 
@@ -4102,7 +4086,7 @@ Return ONLY the revised sections, each in its STATE markers. No markdown fences,
       if (inner != null) { merged = spliceStateSection(merged, s, inner); appliedCount++; }
       else console.warn(`[bedrockService] project regen: state "${s}" missing from model output — keeping prior`);
     }
-    if (appliedCount === 0) return stripHtmlFences(await invokeModel(projectRegenPrompt, regenImages.length > 0 ? regenImages : undefined, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' }));
+    if (appliedCount === 0) return normalizeGeneratedPrototypeHtml(await invokeModel(projectRegenPrompt, regenImages.length > 0 ? regenImages : undefined, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' }));
     return merged;
   }
 
@@ -4251,7 +4235,7 @@ Return ONLY the complete revised HTML document. No markdown fences, no explanati
 
   if (!scoped) {
     const text = await invokeModel(prompt, regenImageArg, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' });
-    return stripHtmlFences(text);
+    return normalizeGeneratedPrototypeHtml(text);
   }
 
   // ── Scoped path: regenerate only the requested sections, splice the rest ──
@@ -4294,7 +4278,7 @@ ${scopingSection}
 
 Return ONLY the revised section(s), each wrapped in its STATE markers. No markdown fences, no explanation, no document shell.`;
 
-  const text = stripHtmlFences(await invokeModel(scopedPrompt, regenImageArg, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' }));
+  const text = normalizeGeneratedPrototypeHtml(await invokeModel(scopedPrompt, regenImageArg, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' }));
 
   // Graceful fallback: if the model ignored the contract and returned a full
   // document, just use it directly.

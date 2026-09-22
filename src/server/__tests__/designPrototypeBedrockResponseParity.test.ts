@@ -18,6 +18,7 @@
  */
 
 let mockStopReason: string | undefined;
+let mockModelHtml: string;
 
 jest.mock('@aws-sdk/client-bedrock-runtime', () => {
   const actual = jest.requireActual('@aws-sdk/client-bedrock-runtime');
@@ -28,7 +29,7 @@ jest.mock('@aws-sdk/client-bedrock-runtime', () => {
         return {
           body: new TextEncoder().encode(
             JSON.stringify({
-              content: [{ type: 'text', text: MODEL_HTML }],
+              content: [{ type: 'text', text: mockModelHtml }],
               usage: { input_tokens: 10, output_tokens: 20 },
               ...(mockStopReason === undefined ? {} : { stop_reason: mockStopReason }),
             }),
@@ -107,6 +108,7 @@ import type { AiRunV2VisualSpecification } from '../../shared/types/aiRunV2Visua
 import { generatePrototypesForPrd } from '../services/designPrototypeService';
 import { createVisualExecute } from '../services/aiRunsV2Worker/visualEntrypoint';
 import { createBedrockVisualClient } from '../services/aiRunsV2Worker/bedrockVisualClient';
+import { sanitizeMockHtml } from '../utils/htmlSanitizer';
 
 const MODEL_HTML =
   '<html><!-- NEW_FEATURE:START -->#a46bff NEW:<!-- NEW_FEATURE:END --></html>';
@@ -162,7 +164,11 @@ const DISPATCHED: AdmitV2RunResult = {
  * worker's detail onto the prototype row, where `generateSinglePrototype`
  * writes the in-process message.
  */
-type Verdict = Readonly<{ verdict: 'accepted' | 'refused'; message?: string }>;
+type Verdict = Readonly<{
+  verdict: 'accepted' | 'refused';
+  message?: string;
+  storedHtml?: string;
+}>;
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as {
   db: {
@@ -217,7 +223,7 @@ async function inProcessVerdict(): Promise<Verdict> {
   if (written.status === 'generation_failed') {
     return { verdict: 'refused', message: String(written.generationError) };
   }
-  return { verdict: 'accepted' };
+  return { verdict: 'accepted', storedHtml: String(written.mockHtml ?? '') };
 }
 
 /**
@@ -250,7 +256,7 @@ async function v2Verdict(): Promise<Verdict> {
   });
 
   try {
-    await execute({
+    const outcome = await execute({
       specification: admitted as never,
       command: {} as never,
       checkpoints: {
@@ -261,7 +267,15 @@ async function v2Verdict(): Promise<Verdict> {
       } as never,
       signal: new AbortController().signal,
     });
-    return { verdict: 'accepted' };
+    const generated = outcome.files.find(
+      (file) => file.path === admitted?.outputPath,
+    );
+    return {
+      verdict: 'accepted',
+      // `designPrototypeV2Harvest` runs this same sanitizer immediately
+      // before its compare-and-set writes `mockHtml`.
+      storedHtml: sanitizeMockHtml(String(generated?.content ?? '')),
+    };
   } catch (error) {
     return {
       verdict: 'refused',
@@ -273,6 +287,7 @@ async function v2Verdict(): Promise<Verdict> {
 beforeEach(() => {
   mockRowWrites.length = 0;
   mockStopReason = undefined;
+  mockModelHtml = MODEL_HTML;
 });
 
 describe('prototype Bedrock response parity between the in-process path and the V2 lane', () => {
@@ -295,7 +310,7 @@ describe('prototype Bedrock response parity between the in-process path and the 
     mockRowWrites.length = 0;
     const v2 = await v2Verdict();
 
-    expect(inProcess).toEqual({ verdict: 'accepted' });
+    expect(inProcess).toEqual({ verdict: 'accepted', storedHtml: MODEL_HTML });
     expect(v2).toEqual(inProcess);
   });
 
@@ -304,7 +319,29 @@ describe('prototype Bedrock response parity between the in-process path and the 
     mockRowWrites.length = 0;
     const v2 = await v2Verdict();
 
-    expect(inProcess).toEqual({ verdict: 'accepted' });
+    expect(inProcess).toEqual({ verdict: 'accepted', storedHtml: MODEL_HTML });
+    expect(v2).toEqual(inProcess);
+  });
+
+  it('stores fenced HTML byte-for-byte identically after normalization', async () => {
+    mockModelHtml = `\`\`\`html\n${MODEL_HTML}\n\`\`\``;
+
+    const inProcess = await inProcessVerdict();
+    mockRowWrites.length = 0;
+    const v2 = await v2Verdict();
+
+    expect(inProcess).toEqual({ verdict: 'accepted', storedHtml: MODEL_HTML });
+    expect(v2).toEqual(inProcess);
+  });
+
+  it('preserves the V1 empty-completion verdict and stored bytes on V2', async () => {
+    mockModelHtml = ' \n ';
+
+    const inProcess = await inProcessVerdict();
+    mockRowWrites.length = 0;
+    const v2 = await v2Verdict();
+
+    expect(inProcess).toEqual({ verdict: 'accepted', storedHtml: '' });
     expect(v2).toEqual(inProcess);
   });
 });

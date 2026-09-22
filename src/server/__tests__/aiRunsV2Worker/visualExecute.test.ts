@@ -370,7 +370,7 @@ describe('visual execute', () => {
     expect(invokeModel).not.toHaveBeenCalled();
   });
 
-  it('refuses empty model output rather than uploading a blank prototype', async () => {
+  it('preserves the in-process empty completion behavior', async () => {
     const execute = createVisualExecute({ invokeModel: async () => '   ' });
 
     await expect(
@@ -380,7 +380,15 @@ describe('visual execute', () => {
         checkpoints: checkpoints().port as never,
         signal: new AbortController().signal,
       }),
-    ).rejects.toThrow('returned no HTML');
+    ).resolves.toMatchObject({
+      files: [
+        {
+          path: 'prototype.html',
+          content: '',
+          contentType: 'text/html',
+        },
+      ],
+    });
   });
 
   /**
