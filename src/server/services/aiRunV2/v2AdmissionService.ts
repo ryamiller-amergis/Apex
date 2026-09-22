@@ -59,11 +59,17 @@ export function visualRunThreadId(
   subjectKind: VisualSubjectKind,
   subjectId: string,
 ): string {
+  return `${visualRunThreadPrefix(subjectKind)}${subjectId}`;
+}
+
+export function visualRunThreadPrefix(
+  subjectKind: VisualSubjectKind,
+): string {
   switch (subjectKind) {
     case 'design-prototype':
-      return `prototype:${subjectId}`;
+      return 'prototype:';
     case 'ui-lab-screen':
-      return `ui-lab:${subjectId}`;
+      return 'ui-lab:';
     default: {
       const unhandled: never = subjectKind;
       throw new Error(`Unsupported visual subjectKind: ${String(unhandled)}`);

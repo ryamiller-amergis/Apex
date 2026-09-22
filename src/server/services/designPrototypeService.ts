@@ -35,6 +35,7 @@ import {
 import {
   createV2AdmissionService,
   visualRunThreadId,
+  visualRunThreadPrefix,
   type V2AdmissionService,
 } from './aiRunV2/v2AdmissionService';
 import {
@@ -413,6 +414,7 @@ type PendingPrototype = {
   prototypeId: string;
   feature: BacklogFeature;
   planFeature?: DesignPlanFeature;
+  generationStartedAt: string;
 };
 
 type GenerateInProcess = typeof generateSinglePrototype;
@@ -920,7 +922,7 @@ async function admitPendingPrototypesToV2(params: {
   await runWithConcurrency(
     params.pending,
     PROTOTYPE_GENERATION_CONCURRENCY,
-    async ({ prototypeId, feature, planFeature }) => {
+    async ({ prototypeId, feature, planFeature, generationStartedAt }) => {
       const fallBackInProcess = (reason: string): void => {
         console.warn(
           `[designPrototypeService] Prototype ${prototypeId} stays in process — ${reason}`,
@@ -987,6 +989,12 @@ async function admitPendingPrototypesToV2(params: {
           workloadLane: VISUAL_WORKLOAD_LANE,
           timeoutAt,
           specification: specification as unknown as Record<string, unknown>,
+          executionSnapshot: {
+            workflowClass: 'design-prototype',
+            subjectKind: 'design-prototype',
+            subjectId: prototypeId,
+            generationStartedAt,
+          },
         });
         if (admitted.status !== 'dispatched') {
           fallBackInProcess(`admission returned ${admitted.status}`);
@@ -1080,6 +1088,7 @@ export async function generatePrototypesForPrd(
       continue;
     }
 
+    const generationStartedAt = new Date().toISOString();
     const [row] = await db
       .insert(designPrototypes)
       .values({
@@ -1089,10 +1098,16 @@ export async function generatePrototypesForPrd(
         authorId: prd.authorId,
         model: prototypeModel,
         status: 'generating',
+        updatedAt: generationStartedAt,
       })
       .returning({ id: designPrototypes.id });
     ids.push(row.id);
-    pending.push({ prototypeId: row.id, feature, planFeature });
+    pending.push({
+      prototypeId: row.id,
+      feature,
+      planFeature,
+      generationStartedAt,
+    });
   }
 
   if (pending.length > 0) {
@@ -1547,7 +1562,8 @@ export async function failStalePrototypes(thresholdMs: number): Promise<number> 
     SELECT 1
     FROM ${agentRuns}
     WHERE ${agentRuns.transportVersion} = ${'servicebus-blob-v2'}
-      AND ${agentRuns.threadId} = ${'prototype:'} || ${designPrototypes.id}::text
+      AND ${agentRuns.threadId} =
+        ${visualRunThreadPrefix('design-prototype')} || ${designPrototypes.id}::text
       AND ${agentRuns.status} IN ('queued', 'dispatched', 'running')
       AND ${agentRuns.timeoutAt} > ${now.toISOString()}::timestamptz
   `;

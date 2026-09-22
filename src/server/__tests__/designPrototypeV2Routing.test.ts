@@ -185,6 +185,19 @@ describe('generatePrototypesForPrd V2 transport routing', () => {
     expect(admitV2Run).toHaveBeenCalledTimes(2);
     expect(admitV2Run.mock.calls[0][0].workloadLane).toBe('visual');
     expect(admitV2Run.mock.calls[0][0].projectId).toBe('Apex');
+    expect(admitV2Run.mock.calls[0][0].executionSnapshot).toMatchObject({
+      workflowClass: 'design-prototype',
+      subjectKind: 'design-prototype',
+      subjectId: 'prototype-1',
+      generationStartedAt: expect.any(String),
+    });
+    expect(
+      Number.isFinite(
+        Date.parse(
+          admitV2Run.mock.calls[0][0].executionSnapshot.generationStartedAt,
+        ),
+      ),
+    ).toBe(true);
     expect(generateInProcess).not.toHaveBeenCalled();
   });
 

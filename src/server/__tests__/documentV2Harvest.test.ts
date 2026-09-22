@@ -26,6 +26,7 @@ function attempt(
     status: 'completed',
     manifestRef: MANIFEST_REF,
     failureDetail: null,
+    generationOwner: null,
     workflowClass: 'prd',
     ...overrides,
   };

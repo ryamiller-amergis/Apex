@@ -7,6 +7,7 @@ import {
   agentRunLaneFor,
   createV2AdmissionService,
   visualRunThreadId,
+  visualRunThreadPrefix,
 } from '../services/aiRunV2/v2AdmissionService';
 import type { RunAttemptRepository } from '../services/aiRunV2/runAttemptRepository';
 
@@ -200,6 +201,7 @@ describe('V2 admission', () => {
     expect(visualRunThreadId('design-prototype', 'prototype-1')).not.toBe(
       visualRunThreadId('design-prototype', 'prototype-2'),
     );
+    expect(visualRunThreadPrefix('design-prototype')).toBe('prototype:');
   });
 
   it('keeps the two visual subject kinds in separate thread namespaces', () => {

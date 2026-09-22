@@ -36,6 +36,12 @@ describe('finished V2 attempt reader', () => {
         status: 'completed',
         manifest_ref: { container: 'ai-run-artifacts', key: 'runs/run-1/attempts/2/manifest.json' },
         failure_detail: null,
+        execution_snapshot: {
+          workflowClass: 'design-prototype',
+          subjectKind: 'design-prototype',
+          subjectId: 'proto-1',
+          generationStartedAt: '2026-09-22T12:00:00.000Z',
+        },
       },
     ]);
     const reader = createFinishedAttemptReader({ executor: { execute }, inbox: inbox() });
@@ -53,6 +59,10 @@ describe('finished V2 attempt reader', () => {
       status: 'completed',
       manifestRef: { container: 'ai-run-artifacts', key: 'runs/run-1/attempts/2/manifest.json' },
       failureDetail: null,
+      generationOwner: {
+        subjectId: 'proto-1',
+        generationStartedAt: '2026-09-22T12:00:00.000Z',
+      },
     });
     expect(found.has('prototype:proto-2')).toBe(false);
   });
@@ -144,6 +154,7 @@ describe('finished V2 attempt reader', () => {
           key: 'runs/run-prd/attempts/3/manifest.json',
         },
         failureDetail: null,
+        generationOwner: null,
         workflowClass: 'prd',
       },
     ]);
@@ -201,6 +212,7 @@ describe('finished V2 attempt reader', () => {
     status: 'completed' as const,
     manifestRef: null,
     failureDetail: null,
+    generationOwner: null,
   };
 
   it('claims an attempt the first time and refuses it once processed', async () => {

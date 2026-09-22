@@ -53,7 +53,11 @@ export type PrototypeHarvestDependencies = Readonly<{
   batchSize?: number;
 }>;
 
-type TransientPrototype = Readonly<{ id: string; featureName: string }>;
+type TransientPrototype = Readonly<{
+  id: string;
+  featureName: string;
+  generationStartedAt: string;
+}>;
 
 /** What the visual worker wrote to `usage.json` when the model reported it. */
 type ReportedUsage = Readonly<{
@@ -114,6 +118,7 @@ async function readReportedUsage(
  */
 async function applyPrototypeHtml(
   prototypeId: string,
+  generationStartedAt: string,
   html: string,
 ): Promise<boolean> {
   const now = new Date().toISOString();
@@ -132,14 +137,19 @@ async function applyPrototypeHtml(
       and(
         eq(designPrototypes.id, prototypeId),
         eq(designPrototypes.status, 'generating'),
+        eq(designPrototypes.updatedAt, generationStartedAt),
       ),
     )
     .returning({ id: designPrototypes.id });
   return applied.length === 1;
 }
 
-async function failPrototype(prototypeId: string, reason: string): Promise<void> {
-  await db
+async function failPrototype(
+  prototypeId: string,
+  generationStartedAt: string,
+  reason: string,
+): Promise<boolean> {
+  const failed = await db
     .update(designPrototypes)
     .set({
       status: 'generation_failed',
@@ -150,8 +160,11 @@ async function failPrototype(prototypeId: string, reason: string): Promise<void>
       and(
         eq(designPrototypes.id, prototypeId),
         eq(designPrototypes.status, 'generating'),
+        eq(designPrototypes.updatedAt, generationStartedAt),
       ),
-    );
+    )
+    .returning({ id: designPrototypes.id });
+  return failed.length === 1;
 }
 
 function recordReportedUsage(
@@ -204,15 +217,18 @@ async function harvestOne(
   artifacts: ArtifactReader,
 ): Promise<boolean> {
   if (attempt.status !== 'completed') {
-    await failPrototype(prototype.id, failureReason(attempt));
-    return true;
+    return failPrototype(
+      prototype.id,
+      prototype.generationStartedAt,
+      failureReason(attempt),
+    );
   }
   if (!attempt.manifestRef) {
-    await failPrototype(
+    return failPrototype(
       prototype.id,
+      prototype.generationStartedAt,
       'The generation run finished without producing a prototype. Click Retry to run it again.',
     );
-    return true;
   }
 
   let html: string;
@@ -225,16 +241,22 @@ async function harvestOne(
     if (err instanceof ArtifactVerificationError) {
       // The bytes will never match on a later read, so surface it instead of
       // leaving the prototype in `generating` until the staleness sweep.
-      await failPrototype(
+      return failPrototype(
         prototype.id,
+        prototype.generationStartedAt,
         `The generated prototype could not be verified (${err.message}). Click Retry to run it again.`,
       );
-      return true;
     }
     throw err;
   }
 
-  if (!(await applyPrototypeHtml(prototype.id, html))) {
+  if (
+    !(await applyPrototypeHtml(
+      prototype.id,
+      prototype.generationStartedAt,
+      html,
+    ))
+  ) {
     // Another writer moved the row first — its output stands, and recording
     // usage here would charge a prototype this attempt did not produce.
     return false;
@@ -250,6 +272,21 @@ async function harvestOne(
     );
   });
   return true;
+}
+
+function attemptOwnsGeneration(
+  prototype: TransientPrototype,
+  attempt: FinishedV2Attempt,
+): boolean {
+  const prototypeStartedAt = Date.parse(prototype.generationStartedAt);
+  const attemptStartedAt = Date.parse(
+    attempt.generationOwner?.generationStartedAt ?? '',
+  );
+  return (
+    attempt.generationOwner?.subjectId === prototype.id
+    && Number.isFinite(prototypeStartedAt)
+    && prototypeStartedAt === attemptStartedAt
+  );
 }
 
 /**
@@ -270,6 +307,7 @@ export async function harvestFinishedV2Prototypes(
     .select({
       id: designPrototypes.id,
       featureName: designPrototypes.featureName,
+      generationStartedAt: designPrototypes.updatedAt,
     })
     .from(designPrototypes)
     .where(eq(designPrototypes.status, 'generating'))
@@ -289,6 +327,13 @@ export async function harvestFinishedV2Prototypes(
 
     try {
       if ((await finishedAttempts.claimHarvest(attempt)) === 'already_harvested') {
+        continue;
+      }
+      if (!attemptOwnsGeneration(prototype, attempt)) {
+        // A reset/retry moved the row to a new generation. Closing this
+        // attempt's durable claim makes the old artifact permanently
+        // superseded; it never reaches Blob reads, HTML writes, or usage.
+        await finishedAttempts.completeHarvest(attempt.attemptId);
         continue;
       }
       if (await harvestOne(prototype, attempt, artifacts)) harvested += 1;

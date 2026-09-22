@@ -35,6 +35,8 @@ jest.mock('../services/aiUsageService', () => ({
 }));
 
 import { createHash } from 'node:crypto';
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import type { AiRunBlobRef } from '../../shared/types/aiRunV2';
 import { VISUAL_USAGE_FILE_NAME } from '../../shared/types/aiRunV2VisualSpec';
 import { ArtifactVerificationError } from '../services/aiRunV2/artifactReader';
@@ -50,6 +52,7 @@ const MANIFEST_REF: AiRunBlobRef = {
 };
 
 const PROTOTYPE_HTML = '<!DOCTYPE html><html><body><h1>Standup summary</h1></body></html>';
+const GENERATION_STARTED_AT = '2026-09-22T12:00:00.000Z';
 
 function entry(path: string, body: string) {
   return {
@@ -95,6 +98,10 @@ function completedAttempt(overrides: Partial<FinishedV2Attempt> = {}): FinishedV
     status: 'completed',
     manifestRef: MANIFEST_REF,
     failureDetail: null,
+    generationOwner: {
+      subjectId: 'prototype-1',
+      generationStartedAt: GENERATION_STARTED_AT,
+    },
     ...overrides,
   };
 }
@@ -119,7 +126,11 @@ function arrangeArtifacts(files: string[] = ['prototype.html', VISUAL_USAGE_FILE
 /** One prototype sitting in `generating`, with one finished attempt behind it. */
 function arrangeSweep(attempt: FinishedV2Attempt | null) {
   mockSelectLimit.mockResolvedValue([
-    { id: 'prototype-1', featureName: 'Standup summary' },
+    {
+      id: 'prototype-1',
+      featureName: 'Standup summary',
+      generationStartedAt: GENERATION_STARTED_AT,
+    },
   ]);
   const finishedAttempts = {
     listFinishedByThread: jest.fn().mockResolvedValue(
@@ -304,6 +315,65 @@ describe('harvestFinishedV2Prototypes', () => {
     expect(notifyAiCompletion).not.toHaveBeenCalled();
   });
 
+  it('permanently supersedes an artifact owned by an older generation', async () => {
+    const finishedAttempts = arrangeSweep(
+      completedAttempt({
+        generationOwner: {
+          subjectId: 'prototype-1',
+          generationStartedAt: '2026-09-22T11:00:00.000Z',
+        },
+      }),
+    );
+    const artifacts = arrangeArtifacts();
+
+    await expect(
+      harvestFinishedV2Prototypes({ finishedAttempts, artifacts }),
+    ).resolves.toBe(0);
+
+    expect(artifacts.readManifest).not.toHaveBeenCalled();
+    expect(mockUpdateSet).not.toHaveBeenCalled();
+    expect(recordAiUsage).not.toHaveBeenCalled();
+    expect(notifyAiCompletion).not.toHaveBeenCalled();
+    expect(finishedAttempts.completeHarvest).toHaveBeenCalledWith('attempt-1');
+  });
+
+  it('matches equivalent timestamp renderings for the current generation', async () => {
+    const finishedAttempts = arrangeSweep(completedAttempt());
+    mockSelectLimit.mockResolvedValue([
+      {
+        id: 'prototype-1',
+        featureName: 'Standup summary',
+        generationStartedAt: '2026-09-22 12:00:00+00',
+      },
+    ]);
+
+    await expect(
+      harvestFinishedV2Prototypes({
+        finishedAttempts,
+        artifacts: arrangeArtifacts(),
+      }),
+    ).resolves.toBe(1);
+
+    expect(mockUpdateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending_review' }),
+    );
+  });
+
+  it('keeps the generation owner in the final apply compare-and-set', async () => {
+    const finishedAttempts = arrangeSweep(completedAttempt());
+
+    await harvestFinishedV2Prototypes({
+      finishedAttempts,
+      artifacts: arrangeArtifacts(),
+    });
+
+    const predicate = mockUpdateWhere.mock.calls[0]?.[0];
+    expect(predicate).toBeDefined();
+    if (!predicate) return;
+    const compiled = new PgDialect().sqlToQuery(predicate as SQL);
+    expect(compiled.params).toContain(GENERATION_STARTED_AT);
+  });
+
   it('fails a run that completed without an artifact manifest', async () => {
     const finishedAttempts = arrangeSweep(completedAttempt({ manifestRef: null }));
     const artifacts = arrangeArtifacts();
@@ -337,8 +407,16 @@ describe('harvestFinishedV2Prototypes', () => {
 
   it('keeps harvesting the batch after one prototype throws', async () => {
     mockSelectLimit.mockResolvedValue([
-      { id: 'prototype-1', featureName: 'Standup summary' },
-      { id: 'prototype-2', featureName: 'Standup history' },
+      {
+        id: 'prototype-1',
+        featureName: 'Standup summary',
+        generationStartedAt: GENERATION_STARTED_AT,
+      },
+      {
+        id: 'prototype-2',
+        featureName: 'Standup history',
+        generationStartedAt: GENERATION_STARTED_AT,
+      },
     ]);
     const finishedAttempts = {
       listFinishedByThread: jest.fn().mockResolvedValue(
@@ -350,6 +428,10 @@ describe('harvestFinishedV2Prototypes', () => {
               attemptId: 'attempt-2',
               runId: 'run-2',
               threadId: 'prototype:prototype-2',
+              generationOwner: {
+                subjectId: 'prototype-2',
+                generationStartedAt: GENERATION_STARTED_AT,
+              },
             }),
           ],
         ]),

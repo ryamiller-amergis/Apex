@@ -26,6 +26,11 @@ import type { SqlExecutor } from './outboxRepository';
 
 export type FinishedV2AttemptStatus = 'completed' | 'failed' | 'cancelled';
 
+export type PrototypeGenerationOwner = Readonly<{
+  subjectId: string;
+  generationStartedAt: string;
+}>;
+
 export type FinishedV2Attempt = Readonly<{
   attemptId: string;
   runId: string;
@@ -35,6 +40,7 @@ export type FinishedV2Attempt = Readonly<{
   /** Present only when the worker uploaded artifacts. */
   manifestRef: AiRunBlobRef | null;
   failureDetail: string | null;
+  generationOwner: PrototypeGenerationOwner | null;
 }>;
 
 export type FinishedV2DocumentAttempt = FinishedV2Attempt &
@@ -88,6 +94,28 @@ function safeParseJson(value: string): unknown {
   }
 }
 
+function parseGenerationOwner(value: unknown): PrototypeGenerationOwner | null {
+  const parsed = typeof value === 'string' ? safeParseJson(value) : value;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return null;
+  }
+  const snapshot = parsed as Record<string, unknown>;
+  if (
+    snapshot.workflowClass !== 'design-prototype'
+    || snapshot.subjectKind !== 'design-prototype'
+    || typeof snapshot.subjectId !== 'string'
+    || !snapshot.subjectId.trim()
+    || typeof snapshot.generationStartedAt !== 'string'
+    || !Number.isFinite(Date.parse(snapshot.generationStartedAt))
+  ) {
+    return null;
+  }
+  return {
+    subjectId: snapshot.subjectId,
+    generationStartedAt: snapshot.generationStartedAt,
+  };
+}
+
 export function createFinishedAttemptReader(deps?: {
   executor?: SqlExecutor;
   inbox?: InboxRepository;
@@ -114,7 +142,8 @@ export function createFinishedAttemptReader(deps?: {
           a.dispatch_message_id,
           a.status,
           a.manifest_ref,
-          a.failure_detail
+          a.failure_detail,
+          r.execution_snapshot
         FROM ai_run_attempts a
         JOIN agent_runs r ON r.id = a.run_id
         WHERE r.transport_version = 'servicebus-blob-v2'
@@ -135,6 +164,7 @@ export function createFinishedAttemptReader(deps?: {
           manifestRef: parseManifestRef(row.manifest_ref),
           failureDetail:
             row.failure_detail == null ? null : String(row.failure_detail),
+          generationOwner: parseGenerationOwner(row.execution_snapshot),
         });
       }
       return finished;
@@ -209,6 +239,7 @@ export function createFinishedAttemptReader(deps?: {
           manifestRef: parseManifestRef(row.manifest_ref),
           failureDetail:
             row.failure_detail == null ? null : String(row.failure_detail),
+          generationOwner: null,
           workflowClass: row.workflow_class,
         });
       }
@@ -285,6 +316,7 @@ export function createFinishedAttemptReader(deps?: {
           threadId: attempt.threadId,
           status: attempt.status,
           manifestRef: attempt.manifestRef,
+          generationOwner: attempt.generationOwner,
         },
       });
       // An unprocessed duplicate is a claim whose holder died before applying
