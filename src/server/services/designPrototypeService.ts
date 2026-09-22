@@ -9,13 +9,17 @@ import { isAssignedApprover } from './documentApprovalService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { prototypeUsageCtx } from './artifactUsageContext';
 import { resolveAgentRunHardLimitMs } from './agentRunReaperService';
-import { createPrototypeSpecificationAssembler } from './aiRunV2/prototypeSpecificationAssembler';
+import {
+  createPrototypeSpecificationAssembler,
+  type PrototypeDesignContext,
+} from './aiRunV2/prototypeSpecificationAssembler';
 import {
   createV2AdmissionService,
   visualRunThreadId,
   type V2AdmissionService,
 } from './aiRunV2/v2AdmissionService';
 import {
+  buildProjectPrototypeScopingSection,
   buildPrototypePbiSection,
   buildPrototypePlanSection,
   buildPrototypeScopingSection,
@@ -29,15 +33,21 @@ import {
 import { getMaxviewColorTokens } from './designTokensService';
 import { isFeatureEnabled } from './featureFlagService';
 import { getFigmaReference } from './figmaReferenceService';
+import {
+  resolvePrototypeContext,
+  type PrototypeContext,
+} from './prototypeContextService';
 import { getRepoCacheDir } from './repoCacheService';
 import { BareRepoReader } from './repoRead/bareRepoReader';
 import { cacheOptionsFromGrounding, isUsableBareMirror } from './repoRead/mirrorStore';
 import { resolveRunGroundingSurface, runGroundingService } from './runGroundingService';
+import { getDesignReferences } from './webDesignReferenceService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
 import { resolveUserStoryIWant } from '../../shared/utils/userStory';
 import type { RepoReader } from '../../shared/types/repoReader';
 import type {
   AiRunV2VisualSpecification,
+  PrototypePromptSelection,
   VisualUsageAttribution,
 } from '../../shared/types/aiRunV2VisualSpec';
 import type {
@@ -416,7 +426,7 @@ function resolvePrototypeTargetRoute(
  * it cannot see. The asset can be absent, in which case the fields stay unset
  * and the worker sends text only, exactly as the in-process path does.
  */
-async function loadPrototypeDesignContext() {
+async function loadPrototypeDesignContext(): Promise<PrototypeDesignContext> {
   const [catalog, screenInventory] = await Promise.all([
     getDesignSystemCatalog(),
     getScreenInventory(),
@@ -435,6 +445,24 @@ async function loadPrototypeDesignContext() {
           screenshotHeight: figma.tablePageHeight,
         }
       : {}),
+  };
+}
+
+/**
+ * None of it, for a project that has its own design system.
+ *
+ * `generateDesignPrototypeHtml` skips the catalog, the inventory, the
+ * palette, and the Figma reference outright on that branch, and its prompt
+ * mentions none of them. The screenshot is the one that matters: carrying it
+ * anyway would put a vision input in front of the model that the in-process
+ * call never sends.
+ */
+async function loadProjectPrototypeDesignContext(): Promise<PrototypeDesignContext> {
+  return {
+    catalog: undefined,
+    screenInventory: undefined,
+    colorTokens: undefined,
+    navItems: [],
   };
 }
 
@@ -494,7 +522,8 @@ async function resolvePrototypeRepoSource(
 
 function buildPrototypePromptInputs(
   feature: BacklogFeature,
-  planFeature?: DesignPlanFeature,
+  planFeature: DesignPlanFeature | undefined,
+  projectContext: PrototypeContext | null,
 ): Record<string, unknown> {
   return {
     featureName: feature.title,
@@ -505,7 +534,111 @@ function buildPrototypePromptInputs(
       extendMode: false,
     }),
     pbiSection: buildPrototypePbiSection(extractPbiRequirements(feature)),
-    scopingSection: buildPrototypeScopingSection({ extendMode: false }),
+    // The two prompts scope the model differently: one names the MaxView
+    // sidebar, the other the design system the project ships.
+    scopingSection: projectContext
+      ? buildProjectPrototypeScopingSection({
+          extendMode: false,
+          featureName: feature.title,
+        })
+      : buildPrototypeScopingSection({ extendMode: false }),
+  };
+}
+
+/**
+ * The design system this project prototypes against, or null for the bundled
+ * MaxView one. A worker cannot answer this: the skill lives in the project's
+ * own repository behind credentials App Service holds.
+ */
+type PrototypeBranchResolution =
+  | Readonly<{ status: 'resolved'; projectContext: PrototypeContext | null }>
+  | Readonly<{ status: 'unresolved'; reason: string }>;
+
+async function resolvePrototypeBranch(params: {
+  project: string;
+  skillSettingsId: string | null;
+  skillRepoConfigured: boolean;
+}): Promise<PrototypeBranchResolution> {
+  try {
+    const projectContext = await resolvePrototypeContext(
+      params.project,
+      params.skillSettingsId,
+    );
+    if (projectContext) return { status: 'resolved', projectContext };
+
+    // A project that configured a skill repo and cannot be read is a
+    // configuration error the in-process path reports onto the prototype
+    // row. There is no design system to freeze into a specification, so let
+    // the path that can write that error take the run.
+    if (params.skillRepoConfigured) {
+      return { status: 'unresolved', reason: 'its design-system skill could not be read' };
+    }
+    return { status: 'resolved', projectContext: null };
+  } catch (err) {
+    return {
+      status: 'unresolved',
+      reason: `resolving its design system failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    };
+  }
+}
+
+/**
+ * Live web design references, which only the project branch carries and only
+ * where the project turned them on. The search needs an API key, so it is
+ * run here and the result travels on the specification. A failed search
+ * leaves the section out, exactly as it does in process.
+ */
+async function resolvePrototypeWebReferences(params: {
+  enabled: boolean;
+  feature: BacklogFeature;
+  appName: string;
+}): Promise<string | undefined> {
+  if (!params.enabled) return undefined;
+
+  try {
+    const references = await getDesignReferences({
+      featureName: params.feature.title,
+      featureDescription: params.feature.description,
+      designSystemName: params.appName,
+    });
+    return references || undefined;
+  } catch (err) {
+    console.warn(
+      `[designPrototypeService] Web design references failed for "${params.feature.title}":`,
+      err,
+    );
+    return undefined;
+  }
+}
+
+/**
+ * Which of the two prototype prompts this run is for, with everything that
+ * prompt reads. The MaxView branch needs nothing beyond its name; the
+ * project branch carries its design system and, per feature, its references.
+ */
+async function resolvePrototypePromptSelection(params: {
+  projectContext: PrototypeContext | null;
+  feature: BacklogFeature;
+  webReferencesEnabled: boolean;
+}): Promise<PrototypePromptSelection> {
+  const { projectContext } = params;
+  if (!projectContext) return { branch: 'maxview' };
+
+  const webReferences = await resolvePrototypeWebReferences({
+    enabled: params.webReferencesEnabled,
+    feature: params.feature,
+    appName: projectContext.appName,
+  });
+
+  return {
+    branch: 'project-design-system',
+    appName: projectContext.appName,
+    designSystemMarkdown: projectContext.designSystemMarkdown,
+    // EXTEND features returned above, so every admitted run is a new page.
+    extendMode: false,
+    ...(webReferences !== undefined ? { webReferences } : {}),
   };
 }
 
@@ -523,13 +656,29 @@ async function admitPendingPrototypesToV2(params: {
   maxTokens?: number;
   timeoutMs?: number;
   pending: PendingPrototype[];
+  skillRepoConfigured: boolean;
+  webReferencesEnabled: boolean;
   admitV2Run: V2AdmissionService['admit'];
   generateInProcess: GenerateInProcess;
 }): Promise<void> {
-  const source = await resolvePrototypeRepoSource(params.prdId);
+  const branch = await resolvePrototypeBranch({
+    project: params.project,
+    skillSettingsId: params.skillSettingsId,
+    skillRepoConfigured: params.skillRepoConfigured,
+  });
+  const projectContext = branch.status === 'resolved' ? branch.projectContext : null;
+
+  // The project prompt has no repository-source section to put a component
+  // read into, so the mirror is only worth reading for the MaxView branch.
+  const source =
+    branch.status === 'resolved' && !projectContext
+      ? await resolvePrototypeRepoSource(params.prdId)
+      : null;
   const assembler = createPrototypeSpecificationAssembler({
     reader: source?.reader,
-    loadDesignContext: loadPrototypeDesignContext,
+    loadDesignContext: projectContext
+      ? loadProjectPrototypeDesignContext
+      : loadPrototypeDesignContext,
   });
   const timeoutAt = new Date(Date.now() + resolveAgentRunHardLimitMs()).toISOString();
 
@@ -567,6 +716,11 @@ async function admitPendingPrototypesToV2(params: {
         });
       };
 
+      if (branch.status === 'unresolved') {
+        fallBackInProcess(branch.reason);
+        return;
+      }
+
       // EXTEND mode needs the existing page's source, which only the
       // in-process path fetches; the specification has no EXTEND scoping
       // section to carry yet.
@@ -582,10 +736,15 @@ async function admitPendingPrototypesToV2(params: {
       };
 
       try {
+        const prototypePrompt = await resolvePrototypePromptSelection({
+          projectContext,
+          feature,
+          webReferencesEnabled: params.webReferencesEnabled,
+        });
         const specification: AiRunV2VisualSpecification = await assembler.assemble({
           prototypeId,
-          prototypePrompt: { branch: 'maxview' },
-          promptInputs: buildPrototypePromptInputs(feature, planFeature),
+          prototypePrompt,
+          promptInputs: buildPrototypePromptInputs(feature, planFeature, projectContext),
           sourcePaths: source?.sourcePaths ?? [],
           model,
           usage,
@@ -733,6 +892,8 @@ export async function generatePrototypesForPrd(
         maxTokens: prototypeMaxTokens,
         timeoutMs: prototypeTimeoutMs,
         pending,
+        skillRepoConfigured: Boolean(skillConfig?.skillRepo?.trim()),
+        webReferencesEnabled: Boolean(skillConfig?.prototypeWebReferencesEnabled),
         admitV2Run,
         generateInProcess,
       });

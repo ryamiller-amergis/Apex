@@ -58,7 +58,19 @@ jest.mock('../services/projectSettingsService', () => ({
   resolveSkillConfig: jest.fn().mockResolvedValue(null),
 }));
 
+// `resolvePrototypeExtendMode` is pure and the dispatch depends on it, so
+// only the project lookup — which reads Azure DevOps — is replaced.
+jest.mock('../services/prototypeContextService', () => ({
+  ...jest.requireActual('../services/prototypeContextService'),
+  resolvePrototypeContext: jest.fn().mockResolvedValue(null),
+}));
+
+jest.mock('../services/webDesignReferenceService', () => ({
+  getDesignReferences: jest.fn().mockResolvedValue(''),
+}));
+
 import type { AdmitV2RunResult } from '../services/aiRunV2/v2AdmissionService';
+import type { PrototypeContext } from '../services/prototypeContextService';
 import { generatePrototypesForPrd } from '../services/designPrototypeService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
@@ -66,6 +78,24 @@ const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
 const { resolveSkillConfig: mockResolveSkillConfig } = jest.requireMock(
   '../services/projectSettingsService',
 ) as { resolveSkillConfig: jest.Mock };
+
+const { resolvePrototypeContext: mockResolvePrototypeContext } = jest.requireMock(
+  '../services/prototypeContextService',
+) as { resolvePrototypeContext: jest.Mock };
+
+const { getDesignReferences: mockGetDesignReferences } = jest.requireMock(
+  '../services/webDesignReferenceService',
+) as { getDesignReferences: jest.Mock };
+
+const { getFigmaReference: mockGetFigmaReference } = jest.requireMock(
+  '../services/figmaReferenceService',
+) as { getFigmaReference: jest.Mock };
+
+const PROJECT_DESIGN_SYSTEM: PrototypeContext = {
+  appName: 'Apex',
+  designSystemMarkdown: '## Apex tokens',
+  isProjectSpecific: true,
+};
 
 const DISPATCHED: AdmitV2RunResult = {
   status: 'dispatched',
@@ -108,6 +138,9 @@ function twoUiFeatures(): unknown[] {
 beforeEach(() => {
   jest.clearAllMocks();
   mockResolveSkillConfig.mockResolvedValue(null);
+  mockResolvePrototypeContext.mockResolvedValue(null);
+  mockGetDesignReferences.mockResolvedValue('');
+  mockGetFigmaReference.mockReturnValue({ navItems: [{ label: 'Home', route: '/' }] });
 });
 
 describe('generatePrototypesForPrd V2 transport routing', () => {
@@ -294,6 +327,172 @@ describe('generatePrototypesForPrd V2 transport routing', () => {
 
     expect(admitV2Run).not.toHaveBeenCalled();
     expect(generateInProcess).toHaveBeenCalledTimes(1);
+  });
+
+  it('names the MaxView branch when the project resolves no design system', async () => {
+    arrangePrd();
+    const admitV2Run = jest.fn().mockResolvedValue(DISPATCHED);
+
+    await generatePrototypesForPrd('prd-1', {
+      isFeatureEnabled: async () => true,
+      admitV2Run,
+      generateInProcess: jest.fn(),
+    });
+
+    expect(admitV2Run.mock.calls[0][0].specification.prototypePrompt).toEqual({
+      branch: 'maxview',
+    });
+  });
+
+  /**
+   * `generateDesignPrototypeHtml` takes its project branch whenever
+   * `resolvePrototypeContext` returns anything, so admission has to resolve
+   * the same thing here — a worker cannot read the project's repository.
+   */
+  it('carries the design system a project resolved instead of the MaxView prompt', async () => {
+    arrangePrd();
+    mockResolvePrototypeContext.mockResolvedValue(PROJECT_DESIGN_SYSTEM);
+    const admitV2Run = jest.fn().mockResolvedValue(DISPATCHED);
+
+    await generatePrototypesForPrd('prd-1', {
+      isFeatureEnabled: async () => true,
+      admitV2Run,
+      generateInProcess: jest.fn(),
+    });
+
+    const { specification } = admitV2Run.mock.calls[0][0];
+    expect(specification.prototypePrompt).toEqual({
+      branch: 'project-design-system',
+      appName: 'Apex',
+      designSystemMarkdown: '## Apex tokens',
+      extendMode: false,
+    });
+    expect(specification.promptInputs.scopingSection).toContain(
+      'described in the Design System section below',
+    );
+  });
+
+  /**
+   * The project branch attaches no vision input in process. Carrying the
+   * Figma screenshot anyway would put an image in front of the model that
+   * the path being replaced never sends.
+   */
+  it('sends no reference screenshot for a project that has its own design system', async () => {
+    arrangePrd();
+    mockResolvePrototypeContext.mockResolvedValue(PROJECT_DESIGN_SYSTEM);
+    mockGetFigmaReference.mockReturnValue({
+      navItems: [{ label: 'Home', route: '/' }],
+      tablePageBase64: 'QUJD',
+      tablePageWidth: 1024,
+      tablePageHeight: 810,
+    });
+    const admitV2Run = jest.fn().mockResolvedValue(DISPATCHED);
+
+    await generatePrototypesForPrd('prd-1', {
+      isFeatureEnabled: async () => true,
+      admitV2Run,
+      generateInProcess: jest.fn(),
+    });
+
+    expect(admitV2Run.mock.calls[0][0].specification.designReference).toEqual({
+      navItems: [],
+    });
+  });
+
+  it('leaves the MaxView catalog and palette off a project specification', async () => {
+    arrangePrd();
+    mockResolvePrototypeContext.mockResolvedValue(PROJECT_DESIGN_SYSTEM);
+    const admitV2Run = jest.fn().mockResolvedValue(DISPATCHED);
+
+    await generatePrototypesForPrd('prd-1', {
+      isFeatureEnabled: async () => true,
+      admitV2Run,
+      generateInProcess: jest.fn(),
+    });
+
+    expect(admitV2Run.mock.calls[0][0].specification.designSystem).toEqual({
+      catalog: undefined,
+      screenInventory: undefined,
+      colorTokens: undefined,
+    });
+  });
+
+  /** The search needs a key a worker has no way to hold. */
+  it('searches web references on this side when the project turned them on', async () => {
+    arrangePrd();
+    mockResolvePrototypeContext.mockResolvedValue(PROJECT_DESIGN_SYSTEM);
+    mockResolveSkillConfig.mockResolvedValue({ prototypeWebReferencesEnabled: true });
+    mockGetDesignReferences.mockResolvedValue('- Linear uses a two-pane inbox.');
+    const admitV2Run = jest.fn().mockResolvedValue(DISPATCHED);
+
+    await generatePrototypesForPrd('prd-1', {
+      isFeatureEnabled: async () => true,
+      admitV2Run,
+      generateInProcess: jest.fn(),
+    });
+
+    expect(mockGetDesignReferences).toHaveBeenCalledWith(
+      expect.objectContaining({ featureName: 'Standup summary', designSystemName: 'Apex' }),
+    );
+    expect(admitV2Run.mock.calls[0][0].specification.prototypePrompt).toMatchObject({
+      webReferences: '- Linear uses a two-pane inbox.',
+    });
+  });
+
+  it('carries no web references when the project left them off', async () => {
+    arrangePrd();
+    mockResolvePrototypeContext.mockResolvedValue(PROJECT_DESIGN_SYSTEM);
+    const admitV2Run = jest.fn().mockResolvedValue(DISPATCHED);
+
+    await generatePrototypesForPrd('prd-1', {
+      isFeatureEnabled: async () => true,
+      admitV2Run,
+      generateInProcess: jest.fn(),
+    });
+
+    expect(mockGetDesignReferences).not.toHaveBeenCalled();
+    expect(
+      admitV2Run.mock.calls[0][0].specification.prototypePrompt,
+    ).not.toHaveProperty('webReferences');
+  });
+
+  /**
+   * The in-process path fails a prototype outright when a configured
+   * design-system skill will not load, with a message the reviewer can act
+   * on. There is no design system to freeze into a specification, so the
+   * run goes back to the path that can write that error onto the row.
+   */
+  it('keeps generation in process when a configured design system will not load', async () => {
+    arrangePrd();
+    mockResolveSkillConfig.mockResolvedValue({ skillRepo: 'Apex/AI-Pilot' });
+    mockResolvePrototypeContext.mockResolvedValue(null);
+    const admitV2Run = jest.fn().mockResolvedValue(DISPATCHED);
+    const generateInProcess = jest.fn().mockResolvedValue(undefined);
+
+    await generatePrototypesForPrd('prd-1', {
+      isFeatureEnabled: async () => true,
+      admitV2Run,
+      generateInProcess,
+    });
+
+    expect(admitV2Run).not.toHaveBeenCalled();
+    expect(generateInProcess).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps generation in process when resolving the design system throws', async () => {
+    arrangePrd();
+    mockResolvePrototypeContext.mockRejectedValue(new Error('ADO unreachable'));
+    const admitV2Run = jest.fn().mockResolvedValue(DISPATCHED);
+    const generateInProcess = jest.fn().mockResolvedValue(undefined);
+
+    await generatePrototypesForPrd('prd-1', {
+      isFeatureEnabled: async () => true,
+      admitV2Run,
+      generateInProcess,
+    });
+
+    expect(admitV2Run).not.toHaveBeenCalled();
+    expect(generateInProcess).toHaveBeenCalledTimes(2);
   });
 
   it('treats an unreadable flag as off', async () => {
