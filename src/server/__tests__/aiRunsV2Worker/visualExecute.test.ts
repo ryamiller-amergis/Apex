@@ -1,4 +1,5 @@
 import { AI_RUN_V2_VISUAL_SPEC_VERSION } from '../../../shared/types/aiRunV2VisualSpec';
+import { VisualModelTruncatedError } from '../../services/aiRunsV2Worker/bedrockVisualClient';
 import { createVisualExecute } from '../../services/aiRunsV2Worker/visualEntrypoint';
 
 const spec = {
@@ -290,5 +291,29 @@ describe('visual execute', () => {
         signal: new AbortController().signal,
       }),
     ).rejects.toThrow('returned no HTML');
+  });
+
+  /**
+   * A truncated document is well-formed enough to upload and reads as a
+   * finished prototype once it is on the row. The client refuses it, and
+   * nothing here may turn that refusal back into an artifact.
+   */
+  it('produces no artifact when the model call was cut off at the ceiling', async () => {
+    const execute = createVisualExecute({
+      invokeModel: async () => {
+        throw new VisualModelTruncatedError('<html><body><table', 8_000);
+      },
+    });
+
+    const outcome = execute({
+      specification: spec as never,
+      command: {} as never,
+      checkpoints: checkpoints().port as never,
+      signal: new AbortController().signal,
+    });
+
+    // No `ExecutionOutcome` means no files, and the worker uploads nothing.
+    await expect(outcome).rejects.toBeInstanceOf(VisualModelTruncatedError);
+    await expect(outcome).rejects.toThrow('truncated at 8000 output tokens');
   });
 });

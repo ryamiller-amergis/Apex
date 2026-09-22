@@ -1,4 +1,5 @@
 import { AI_RUN_V2_SCHEMA_VERSION } from '../../../shared/types/aiRunV2';
+import { VisualModelTruncatedError } from '../../services/aiRunsV2Worker/bedrockVisualClient';
 import { createV2Worker } from '../../services/aiRunsV2Worker/worker';
 import type { WorkerServiceBusClient } from '../../services/aiRunsV2Worker/serviceBusClient';
 
@@ -159,6 +160,80 @@ describe('V2 worker run loop', () => {
       failureCategory: 'internal_error',
       detail: 'generation exploded',
     });
+  });
+
+  /**
+   * `AiRunV2FailureCategory` is a database check constraint and every value in
+   * it names a transport or lifecycle event. A model that ran out of output
+   * room is none of them, so it is an `internal_error` whose detail carries
+   * the actionable sentence — the harvest copies that detail onto the
+   * prototype row verbatim.
+   */
+  it('reports a truncated model response as internal_error with the message a human can act on', async () => {
+    const { bus, calls } = fakeBus(command({ workloadLane: 'visual' }));
+    const worker = createV2Worker({
+      bus,
+      execute: async () => {
+        throw new VisualModelTruncatedError('<html><body><table', 32_000);
+      },
+      artifactContainer: 'ai-run-artifacts',
+      containerAppsExecutionId: 'exec-7',
+      specifications: {
+        read: async () => ({
+          runId: 'run-1',
+          attemptId: 'attempt-1',
+          attemptNumber: 1,
+          workloadLane: 'visual',
+        }),
+      },
+    });
+
+    await expect(worker.processOnce()).resolves.toBe('failed');
+    expect(calls.results).toEqual([
+      expect.objectContaining({
+        kind: 'terminal',
+        status: 'failed',
+        artifactStatus: 'failed',
+        failureCategory: 'internal_error',
+        detail:
+          'Model response was truncated at 32000 output tokens. '
+          + 'Increase BEDROCK_UI_MOCK_MAX_TOKENS or use a more concise prompt.',
+      }),
+    ]);
+  });
+
+  /**
+   * Re-running the same specification against the same ceiling truncates
+   * again, so a truncated attempt must settle rather than come back. The
+   * command is already completed, and one terminal result closes the attempt;
+   * only the reconciler's confirmed-worker-loss path dispatches a replacement,
+   * and that needs a missing worker, not a finished one.
+   */
+  it('settles a truncated attempt instead of leaving it to be redelivered', async () => {
+    const { bus, calls } = fakeBus(command({ workloadLane: 'visual' }));
+    const worker = createV2Worker({
+      bus,
+      execute: async () => {
+        throw new VisualModelTruncatedError('<html><body><table', 32_000);
+      },
+      artifactContainer: 'ai-run-artifacts',
+      containerAppsExecutionId: 'exec-7',
+      specifications: {
+        read: async () => ({
+          runId: 'run-1',
+          attemptId: 'attempt-1',
+          attemptNumber: 1,
+          workloadLane: 'visual',
+        }),
+      },
+    });
+
+    await worker.processOnce();
+
+    expect(calls.completed).toEqual(['lock-1']);
+    expect(calls.abandoned).toEqual([]);
+    expect(calls.deadLettered).toEqual([]);
+    expect(calls.results).toHaveLength(1);
   });
 
   it('dead-letters a malformed command once deliveries are exhausted', async () => {

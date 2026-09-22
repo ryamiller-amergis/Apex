@@ -41,6 +41,30 @@ export type BedrockVisualClient = {
   ): Promise<VisualModelResult>;
 };
 
+/**
+ * Thrown when Bedrock stops on `stop_reason: 'max_tokens'` — the model was
+ * producing valid output and ran out of room, so the text is a fragment.
+ *
+ * The message is `bedrockService.BedrockModelTruncatedError`'s word for word,
+ * because it ends up on the `design_prototypes` row either way: in process
+ * `generateSinglePrototype` writes `err.message`, and on V2 it travels as the
+ * terminal detail for `designPrototypeV2Harvest` to write. That class is not
+ * imported because `bedrockService` records usage and would pull PostgreSQL
+ * into the worker image.
+ */
+export class VisualModelTruncatedError extends Error {
+  constructor(
+    public readonly modelText: string,
+    public readonly maxTokens: number,
+  ) {
+    super(
+      `Model response was truncated at ${maxTokens} output tokens. `
+        + `Increase BEDROCK_UI_MOCK_MAX_TOKENS or use a more concise prompt.`,
+    );
+    this.name = 'VisualModelTruncatedError';
+  }
+}
+
 type SendableClient = Pick<BedrockRuntimeClient, 'send'>;
 
 /**
@@ -125,11 +149,26 @@ export function createBedrockVisualClient(options?: {
         new TextDecoder().decode(response.body as Uint8Array),
       ) as {
         content?: Array<{ type: string; text?: string }>;
+        stop_reason?: string;
         usage?: { input_tokens?: number; output_tokens?: number };
       };
 
+      const html = decoded.content?.[0]?.text ?? '';
+
+      // Truncation is reported here and nowhere else — the fragment is
+      // well-formed enough to upload and reads as a finished prototype once
+      // it is on the row. `bedrockService.invokeModel` throws at the same
+      // point for the same reason.
+      if (decoded.stop_reason === 'max_tokens') {
+        console.warn(
+          `[aiRunsV2Worker/visual] Response truncated at max_tokens=${model.maxTokens} `
+            + `(model=${model.modelId}). Output length: ${html.length} chars.`,
+        );
+        throw new VisualModelTruncatedError(html, model.maxTokens);
+      }
+
       return {
-        html: decoded.content?.[0]?.text ?? '',
+        html,
         usage: {
           inputTokens: decoded.usage?.input_tokens ?? 0,
           outputTokens: decoded.usage?.output_tokens ?? 0,

@@ -221,6 +221,34 @@ describe('harvestFinishedV2Prototypes', () => {
     expect(written.generationError).toContain('Bedrock throttled');
   });
 
+  /**
+   * The row must read the same whichever transport ran the prototype:
+   * `generateSinglePrototype` catches `BedrockModelTruncatedError` and writes
+   * `err.message`, so the harvest has to put the worker's detail through
+   * unchanged rather than summarising it as a transport failure.
+   */
+  it('writes the in-process truncation message when the model was cut off', async () => {
+    const truncated =
+      'Model response was truncated at 32000 output tokens. '
+      + 'Increase BEDROCK_UI_MOCK_MAX_TOKENS or use a more concise prompt.';
+    const finishedAttempts = arrangeSweep(
+      completedAttempt({
+        status: 'failed',
+        manifestRef: null,
+        failureDetail: truncated,
+      }),
+    );
+    const artifacts = arrangeArtifacts();
+
+    await harvestFinishedV2Prototypes({ finishedAttempts, artifacts });
+
+    const written = mockUpdateSet.mock.calls[0][0] as Record<string, unknown>;
+    expect(written.status).toBe('generation_failed');
+    expect(written.generationError).toBe(truncated);
+    expect(written.mockHtml).toBeUndefined();
+    expect(finishedAttempts.completeHarvest).toHaveBeenCalledWith('attempt-1');
+  });
+
   it('fails the prototype visibly when the artifact does not match its manifest', async () => {
     const finishedAttempts = arrangeSweep(completedAttempt());
     const artifacts = arrangeArtifacts();
