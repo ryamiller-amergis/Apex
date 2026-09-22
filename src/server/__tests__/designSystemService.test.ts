@@ -8,10 +8,16 @@
 
 import { EventEmitter } from 'events';
 import https from 'https';
+import type { RepoReader } from '../../shared/types/repoReader';
 
 jest.mock('https');
 
-import { fetchExistingPageContext, getScreenInventory, clearDesignSystemCache } from '../services/designSystemService';
+import {
+  clearDesignSystemCache,
+  fetchExistingPageContext,
+  getDesignSystemCatalog,
+  getScreenInventory,
+} from '../services/designSystemService';
 
 const INVENTORY_PATH = '/.cursor/skills/figma-ui-knowledge-base/clientapp-screens.md';
 
@@ -53,7 +59,11 @@ function timecardsFiles(pageSrc?: string): Record<string, string> {
 function setupAdo(files: Record<string, string>, trees: Record<string, string[]> = {}): void {
   (https.request as jest.Mock).mockImplementation((options: any, cb: (res: any) => void) => {
     const url = new URL(`https://ado.local${options.path}`);
-    const p = decodeURIComponent(url.searchParams.get('path') ?? '');
+    const p = decodeURIComponent(
+      url.searchParams.get('path')
+      ?? url.searchParams.get('scopePath')
+      ?? '',
+    );
     const isTree = url.searchParams.has('recursionLevel');
 
     const res: any = new EventEmitter();
@@ -83,6 +93,46 @@ function setupAdo(files: Record<string, string>, trees: Record<string, string[]>
 
     return { on: jest.fn(), setTimeout: jest.fn(), end: jest.fn(), destroy: jest.fn() };
   });
+}
+
+function componentFixture(prefix: string, count: number): Record<string, string> {
+  return Object.fromEntries(
+    Array.from({ length: count }, (_, index) => {
+      const name = `${prefix}${String(index).padStart(2, '0')}`;
+      return [
+        `/src/client/components/${name}.tsx`,
+        `/** ${name} component details. */\nexport function ${name}() { return <table />; }`,
+      ];
+    }),
+  );
+}
+
+function pinnedReader(files: Record<string, string>): RepoReader & {
+  readFile: jest.Mock;
+} {
+  const paths = Object.keys(files).sort((left, right) => left.localeCompare(right));
+  return {
+    identity: {
+      provider: 'ado',
+      project: 'MaxView',
+      repo: 'MaxView',
+      sha: 'a'.repeat(40),
+    },
+    readFile: jest.fn(async (path: string) => {
+      const content = files[path];
+      if (content === undefined) throw new Error(`missing ${path}`);
+      return content;
+    }),
+    listDir: jest.fn(async (path: string) =>
+      path === '/src/client/components'
+        ? paths.map((filePath) => ({
+            path: filePath,
+            name: filePath.split('/').pop()!,
+            isFolder: false,
+          }))
+        : []),
+    searchCode: jest.fn(async () => []),
+  };
 }
 
 describe('fetchExistingPageContext — deep traversal + keyword prioritization', () => {
@@ -224,5 +274,82 @@ describe('getScreenInventory — per-project source', () => {
 
     expect(rows.map((r) => r.route)).toEqual(['/home']);
     expect(rows[0].file).toContain('AgentHome.tsx');
+  });
+});
+
+describe('getDesignSystemCatalog — component source coverage', () => {
+  beforeEach(() => {
+    clearDesignSystemCache();
+    (https.request as jest.Mock).mockReset();
+    process.env.ADO_ORG = 'https://dev.azure.com/myorg';
+    process.env.ADO_PAT = 'test-pat';
+  });
+
+  it('reads more than twenty relevant component files through a pinned repository reader', async () => {
+    const files = componentFixture('Approval', 25);
+    const paths = Object.keys(files);
+    setupAdo(files, { '/src/client/components': paths });
+    const reader = pinnedReader(files);
+
+    const catalog = await (
+      getDesignSystemCatalog as unknown as (options: {
+        componentReader: RepoReader;
+        relevanceText: string;
+        componentDetailBudgetBytes: number;
+      }) => Promise<ReturnType<typeof getDesignSystemCatalog> extends Promise<infer T> ? T : never>
+    )({
+      componentReader: reader,
+      relevanceText: 'approval workflow',
+      componentDetailBudgetBytes: 1_000_000,
+    });
+
+    expect(Object.keys(catalog.componentDescriptions)).toHaveLength(25);
+    expect(
+      reader.readFile.mock.calls.filter(
+        ([path]) =>
+          String(path).includes('/components/')
+          && String(path).endsWith('.tsx'),
+      ),
+    ).toHaveLength(25);
+    expect(catalog.componentDetailCoverage).toMatchObject({
+      source: 'repo-reader',
+      includedPaths: paths.sort((left, right) => left.localeCompare(right)),
+      omittedPaths: [],
+    });
+  });
+
+  it('uses the bounded API fallback for the most relevant files and reports every omission', async () => {
+    const files = {
+      ...componentFixture('Unrelated', 21),
+      ...componentFixture('Approval', 4),
+    };
+    const paths = Object.keys(files);
+    setupAdo(files, { '/src/client/components': paths });
+
+    const catalog = await (
+      getDesignSystemCatalog as unknown as (options: {
+        relevanceText: string;
+        componentDetailBudgetBytes: number;
+      }) => Promise<ReturnType<typeof getDesignSystemCatalog> extends Promise<infer T> ? T : never>
+    )({
+      relevanceText: 'approval action',
+      componentDetailBudgetBytes: 1_000_000,
+    });
+
+    for (let index = 0; index < 4; index++) {
+      expect(catalog.componentDescriptions[`Approval0${index}`]).toContain(
+        'component details',
+      );
+    }
+    expect(catalog.componentDetailCoverage.source).toBe('ado-api');
+    expect(catalog.componentDetailCoverage.includedPaths).toHaveLength(20);
+    expect(catalog.componentDetailCoverage.omittedPaths).toHaveLength(5);
+    expect(
+      (https.request as jest.Mock).mock.calls.filter(([options]) => {
+        const url = new URL(`https://ado.local${options.path}`);
+        const path = decodeURIComponent(url.searchParams.get('path') ?? '');
+        return path.includes('/components/') && path.endsWith('.tsx');
+      }),
+    ).toHaveLength(20);
   });
 });

@@ -16,6 +16,7 @@ import type {
   DesignPrototypeVisualSpecification,
   ProjectPrototypePrompt,
 } from '../../../shared/types/aiRunV2VisualSpec';
+import { buildComponentDetailCoverageSection } from '../designContext/prototypePromptSections';
 
 type CatalogRoute = Readonly<{ path: string; title: string }>;
 
@@ -25,6 +26,9 @@ type SpecCatalog = Readonly<{
   componentDescriptions?: Record<string, string>;
   routeLayoutHints?: Record<string, string>;
   uiKnowledgeBase?: string;
+  componentDetailCoverage?: {
+    omittedPaths?: ReadonlyArray<string>;
+  };
 }>;
 
 type SpecScreen = Readonly<{
@@ -94,6 +98,9 @@ function buildCatalogSection(spec: AiRunV2VisualSpecification): string {
       '### Existing components in the codebase\n\n' + componentLines.join('\n'),
     );
   }
+
+  const componentCoverage = buildComponentDetailCoverageSection(catalog);
+  if (componentCoverage) parts.push(componentCoverage);
 
   const colorTokens = spec.designSystem.colorTokens;
   if (typeof colorTokens === 'string' && colorTokens.trim()) {

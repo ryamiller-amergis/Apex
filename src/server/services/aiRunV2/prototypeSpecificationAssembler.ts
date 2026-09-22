@@ -20,6 +20,7 @@ import {
   DEFAULT_DESIGN_CONTEXT_BUDGET_BYTES,
 } from '../designContext/designContextBudget';
 import { createRepoDesignContextReader } from '../designContext/repoDesignContextReader';
+import { rankSourcePaths } from '../designContext/sourceRelevance';
 import {
   buildPrototypeVisualSpecification,
 } from './visualSpecificationBuilder';
@@ -47,6 +48,7 @@ export type AssemblePrototypeSpecificationInput = Readonly<{
   prototypePrompt: PrototypePromptSelection;
   promptInputs: Record<string, unknown>;
   sourcePaths: ReadonlyArray<string>;
+  sourceRelevanceText: string;
   /** Per-feature blocks appended after the shared design reference. */
   images: ReadonlyArray<VisualImageBlock>;
   model: VisualModelSettings;
@@ -66,7 +68,9 @@ export function createPrototypeSpecificationAssembler(deps: {
    * come from the database and bundled assets — it just carries no source.
    */
   reader?: RepoReader;
-  loadDesignContext: () => Promise<PrototypeDesignContext>;
+  loadDesignContext: (
+    input: AssemblePrototypeSpecificationInput,
+  ) => Promise<PrototypeDesignContext>;
   budgetBytes?: number;
 }): PrototypeSpecificationAssembler {
   const source = deps.reader
@@ -76,9 +80,13 @@ export function createPrototypeSpecificationAssembler(deps: {
 
   return {
     async assemble(input) {
+      const rankedPaths = rankSourcePaths(
+        input.sourcePaths,
+        input.sourceRelevanceText,
+      );
       const [context, read] = await Promise.all([
-        deps.loadDesignContext(),
-        source ? source.readComponents([...input.sourcePaths]) : [],
+        deps.loadDesignContext(input),
+        source ? source.readComponents(rankedPaths) : [],
       ]);
       const budgeted = applyDesignContextBudget(read, budgetBytes);
 

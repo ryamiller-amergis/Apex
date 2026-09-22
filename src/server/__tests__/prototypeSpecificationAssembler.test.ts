@@ -53,6 +53,7 @@ describe('prototypeSpecificationAssembler', () => {
       prototypePrompt: { branch: 'maxview' },
       promptInputs,
       sourcePaths: ['/src/components/Board.tsx'],
+      sourceRelevanceText: 'standup board',
       images: [],
       model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
       usage: { feature: 'design-prototype', project: 'Apex' },
@@ -77,12 +78,48 @@ describe('prototypeSpecificationAssembler', () => {
       prototypePrompt: { branch: 'maxview' },
       promptInputs,
       sourcePaths: ['/a.tsx', '/b.tsx'],
+      sourceRelevanceText: '',
       images: [],
       model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
       usage: { feature: 'design-prototype' },
     });
 
     expect(spec.promptInputs.omittedSourcePaths).toEqual(['/b.tsx']);
+  });
+
+  it('spends the byte budget on relevant source rather than the first path', async () => {
+    const assembler = createPrototypeSpecificationAssembler({
+      reader: reader({
+        '/src/components/AUnrelated.tsx': 'u'.repeat(80),
+        '/src/components/ZApprovalPanel.tsx': 'a'.repeat(80),
+      }),
+      loadDesignContext: async () => designContext,
+      budgetBytes: 100,
+    });
+
+    const spec = await assembler.assemble({
+      prototypeId: 'prototype-1',
+      prototypePrompt: { branch: 'maxview' },
+      promptInputs,
+      sourcePaths: [
+        '/src/components/AUnrelated.tsx',
+        '/src/components/ZApprovalPanel.tsx',
+      ],
+      sourceRelevanceText: 'Add an approval action',
+      images: [],
+      model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
+      usage: { feature: 'design-prototype' },
+    } as never);
+
+    expect(spec.promptInputs.sourceFiles).toEqual([
+      {
+        path: '/src/components/ZApprovalPanel.tsx',
+        content: 'a'.repeat(80),
+      },
+    ]);
+    expect(spec.promptInputs.omittedSourcePaths).toEqual([
+      '/src/components/AUnrelated.tsx',
+    ]);
   });
 
   it('carries the Figma reference screenshot the worker cannot fetch', async () => {
@@ -107,6 +144,7 @@ describe('prototypeSpecificationAssembler', () => {
       prototypePrompt: { branch: 'maxview' },
       promptInputs,
       sourcePaths: [],
+      sourceRelevanceText: '',
       images: [],
       model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
       usage: { feature: 'design-prototype' },
@@ -152,6 +190,7 @@ describe('prototypeSpecificationAssembler', () => {
       prototypePrompt: { branch: 'maxview' },
       promptInputs,
       sourcePaths: ['/a.tsx', '/b.tsx'],
+      sourceRelevanceText: '',
       images: [],
       model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
       usage: { feature: 'design-prototype' },
@@ -175,6 +214,7 @@ describe('prototypeSpecificationAssembler', () => {
       prototypePrompt: { branch: 'maxview' },
       promptInputs,
       sourcePaths: [],
+      sourceRelevanceText: '',
       images: [],
       model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
       usage: { feature: 'design-prototype' },
@@ -197,6 +237,7 @@ describe('prototypeSpecificationAssembler', () => {
       prototypePrompt: { branch: 'maxview' },
       promptInputs,
       sourcePaths: [],
+      sourceRelevanceText: '',
       images: [],
       model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
       usage: { feature: 'design-prototype' },

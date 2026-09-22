@@ -70,6 +70,21 @@ export function buildPrototypePageScreenshotHint(input: {
     : '';
 }
 
+export function buildComponentDetailCoverageSection(catalog: {
+  componentDetailCoverage?: {
+    omittedPaths?: ReadonlyArray<string>;
+  };
+}): string {
+  const omitted = catalog.componentDetailCoverage?.omittedPaths ?? [];
+  if (omitted.length === 0) return '';
+  return (
+    '### Component source coverage is partial\n\n'
+    + 'The following component paths were not read within the repository/API budget. '
+    + 'Do not assume their implementation details:\n\n'
+    + omitted.map((path) => `- \`${path}\``).join('\n')
+  );
+}
+
 export function buildPrototypePbiSection(
   pbis: ReadonlyArray<PbiRequirement>,
 ): string {

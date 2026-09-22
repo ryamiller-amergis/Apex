@@ -13,6 +13,7 @@ import type { AiFeature } from '../../shared/types/aiCostAnalytics';
 import type { VisualModelSettings } from '../../shared/types/aiRunV2VisualSpec';
 import { resolvePrototypeExtendMode } from './prototypeContextService';
 import {
+  buildComponentDetailCoverageSection,
   buildProjectPrototypeScopingSection,
   buildPrototypePageScreenshotHint,
   buildPrototypePbiSection,
@@ -1651,6 +1652,9 @@ function buildCatalogSection(catalog: DesignSystemCatalog): string {
     });
     parts.push('### Existing components in the codebase\n\n' + componentLines.join('\n'));
   }
+
+  const componentCoverage = buildComponentDetailCoverageSection(catalog);
+  if (componentCoverage) parts.push(componentCoverage);
 
   // Canonical MaxView color palette — the AI must use these exact values rather
   // than inventing hex/rgba colors. Bundled as a local asset (designTokensService).
@@ -3655,10 +3659,21 @@ export async function generateDesignPrototypeHtml(
         inventoryPath: projectCtx.extend.screenInventoryPath ?? undefined,
       }
     : undefined;
+  const prototypeRelevanceText = [
+    input.featureName,
+    input.featureDescription,
+    ...input.pbis.flatMap((pbi) => [
+      pbi.title,
+      pbi.description,
+      pbi.acceptanceCriteria,
+    ]),
+  ].filter(Boolean).join(' ');
 
   let catalogSection = '';
   if (!projectCtx) {
-    const catalog = await designSystemService.getDesignSystemCatalog();
+    const catalog = await designSystemService.getDesignSystemCatalog({
+      relevanceText: prototypeRelevanceText,
+    });
     catalogSection = buildCatalogSection(catalog);
   }
 
@@ -3684,14 +3699,9 @@ export async function generateDesignPrototypeHtml(
   let existingPageContext = input.existingPageContext;
   if (input.targetRoute && !existingPageContext) {
     try {
-      const featureText = [
-        input.featureName,
-        input.featureDescription,
-        ...input.pbis.flatMap(p => [p.title, p.description, p.acceptanceCriteria]),
-      ].filter(Boolean).join(' ');
       existingPageContext = await designSystemService.fetchExistingPageContext(
         input.targetRoute,
-        featureText,
+        prototypeRelevanceText,
         adoTarget,
       );
     } catch (err) {

@@ -27,6 +27,13 @@ const spec: DesignPrototypeVisualSpecification = {
       componentDescriptions: { Board: 'Sprint board' },
       routeLayoutHints: { '/standups': 'table' },
       uiKnowledgeBase: 'Screens are described here.',
+      componentDetailCoverage: {
+        source: 'ado-api',
+        includedPaths: ['/src/components/Board.tsx'],
+        omittedPaths: ['/src/components/Huge.tsx'],
+        usedBytes: 100,
+        budgetBytes: 400_000,
+      },
     },
     screenInventory: [
       { route: '/standups', purpose: 'Run the ceremony', userTypes: ['Scrum master'], states: 'empty, loaded' },
@@ -56,6 +63,13 @@ describe('prototypePromptBuilder', () => {
     expect(section).toContain('### MaxView Design Tokens — colors (REQUIRED)');
     expect(section).toContain('NEVER invent hex or rgba values not listed here.');
     expect(section).toContain('primary.main: #123456');
+  });
+
+  it('says which catalog component sources were omitted', () => {
+    const section = buildPrototypeContextSection(spec);
+
+    expect(section).toContain('Component source coverage is partial');
+    expect(section).toContain('/src/components/Huge.tsx');
   });
 
   it('renders the screen inventory with its personas and states', () => {

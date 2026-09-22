@@ -453,9 +453,15 @@ function resolvePrototypeTargetRoute(
  * it cannot see. The asset can be absent, in which case the fields stay unset
  * and the worker sends text only, exactly as the in-process path does.
  */
-async function loadPrototypeDesignContext(): Promise<PrototypeDesignContext> {
+async function loadPrototypeDesignContext(
+  componentReader?: RepoReader,
+  relevanceText = '',
+): Promise<PrototypeDesignContext> {
   const [catalog, screenInventory] = await Promise.all([
-    getDesignSystemCatalog(),
+    getDesignSystemCatalog({
+      ...(componentReader ? { componentReader } : {}),
+      relevanceText,
+    }),
     getScreenInventory(),
   ]);
   const figma = getFigmaReference();
@@ -894,7 +900,11 @@ async function admitPendingPrototypesToV2(params: {
     reader: source?.reader,
     loadDesignContext: projectContext
       ? loadProjectPrototypeDesignContext
-      : loadPrototypeDesignContext,
+      : (input) =>
+          loadPrototypeDesignContext(
+            source?.reader,
+            input.sourceRelevanceText,
+          ),
   });
   const timeoutAt = new Date(Date.now() + resolveAgentRunHardLimitMs()).toISOString();
 
@@ -965,6 +975,7 @@ async function admitPendingPrototypesToV2(params: {
             extend,
           ),
           sourcePaths: source?.sourcePaths ?? [],
+          sourceRelevanceText: prototypeFeatureText(feature),
           images: extend.images,
           model,
           usage,

@@ -136,6 +136,13 @@ const CATALOG = {
   componentDescriptions: { DataGrid: 'Sortable table with column controls' },
   routeLayoutHints: { '/timecards': 'table page' },
   uiKnowledgeBase: 'Timecards lists one week of entries per worker.',
+  componentDetailCoverage: {
+    source: 'ado-api',
+    includedPaths: ['/src/client/components/DataGrid.tsx'],
+    omittedPaths: ['/src/client/components/UnloadedApprovalPanel.tsx'],
+    usedBytes: 100,
+    budgetBytes: 400_000,
+  },
 };
 
 const SCREEN_INVENTORY = [
@@ -567,6 +574,9 @@ describe('prototype Bedrock request parity between the in-process path and the V
         'You are a senior UI/UX designer',
       );
       expect(String(text?.text ?? '')).toContain('**Feature:** Standup summary digest');
+      expect(String(text?.text ?? '')).toContain(
+        '/src/client/components/UnloadedApprovalPanel.tsx',
+      );
       expect(typeof captured.payload.max_tokens).toBe('number');
     }
   });
