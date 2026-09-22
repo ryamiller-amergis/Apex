@@ -741,15 +741,16 @@ not yet modified — see "Remaining for Task 6" below.
     writer uploads it to Blob whole and the queue carries only a blob ref —
     so the added size is workable.
 
-  - **Still open: the project-specific prototype prompt never reaches the
-    worker.** In process, `generateDesignPrototypeHtml` branches to
+  - ~~**Still open: the project-specific prototype prompt never reaches the
+    worker.**~~ Closed 2026-09-22, see "The lane has two prototype prompts"
+    below. In process, `generateDesignPrototypeHtml` branches to
     `buildProjectPrototypePrompt` when `prototypeContext` is set, dropping
     the MaxView catalog, palette, Figma reference and sidebar entirely, and
-    can add `webReferences`. `buildPrototypePromptInputs` carries neither,
-    and `admitPendingPrototypesToV2` excludes only EXTEND-mode features — so
-    a project with its own design-system skill is admitted to V2 and answered
-    with the MaxView prompt. Same class of defect as the image, wider blast
-    radius.
+    can add `webReferences`. `buildPrototypePromptInputs` carried neither,
+    and `admitPendingPrototypesToV2` excluded only EXTEND-mode features — so
+    a project with its own design-system skill was admitted to V2 and
+    answered with the MaxView prompt. Same class of defect as the image,
+    wider blast radius.
   - **Still open: `stop_reason` is not read.** `bedrockService` throws
     `BedrockModelTruncatedError` on `stop_reason: 'max_tokens'`;
     `bedrockVisualClient` ignores it and returns the partial text, which the
@@ -795,10 +796,10 @@ not yet modified — see "Remaining for Task 6" below.
     array, and the worker-only repository-source section is removed before the
     prompts are compared.
   - Both differential cases were **red on purpose** — one on the project
-    design system above, one on the token ceiling below. The ceiling case went
-    green on 2026-09-22; the project design system case is still red. The
-    comparison names each divergence in a sentence, including the prompt line
-    where two prompts first differ.
+    design system above, one on the token ceiling below. Both went green on
+    2026-09-22, with no allowance added and nothing changed about what the
+    test compares. The comparison names each divergence in a sentence,
+    including the prompt line where two prompts first differ.
 
   **Found by that test, still open:**
 
@@ -852,6 +853,57 @@ not yet modified — see "Remaining for Task 6" below.
     `ui_lab_bedrock_max_tokens` to 0 would have the in-process path send
     `max_tokens: 0` and be rejected by Bedrock; on V2 the specification is
     refused at validation instead. Both fail; only the message differs.
+
+  **The lane has two prototype prompts (2026-09-22).** `bedrockService` picks
+  between them on whether `resolvePrototypeContext` returned anything, and the
+  two share almost no text. The specification had no way to say which, so the
+  worker built the only one it knew and a project was answered against a
+  design system it had never chosen — finished-looking output, no error.
+
+  - **The branch travels on the specification.**
+    `AiRunV2VisualSpecification` is now split by subject kind: a
+    `design-prototype` carries `prototypePrompt`, and `ui-lab-screen` — which
+    has one prompt — is not asked for one. The project arm carries `appName`,
+    `designSystemMarkdown`, `extendMode`, and optional `webReferences`, and
+    `isAiRunV2VisualSpecification` refuses any of them missing. Same reason as
+    the token ceiling: a worker that filled the gap in would be choosing a
+    prompt, and choosing MaxView is the defect.
+  - **The prose was moved, not rewritten.** The scoping rule went to
+    `prototypePromptSections.buildProjectPrototypeScopingSection` beside its
+    MaxView twin, so `bedrockService` and admission read one copy; the rest
+    was sliced out of `buildProjectPrototypePrompt` into
+    `prototypePromptBuilder.buildProjectPrototypePrompt` with only its
+    identifiers rebound. `visualEntrypoint` switches on the branch inside its
+    `design-prototype` case with a `never` check, the same way it dispatches
+    `subjectKind`.
+  - **The project branch sends no image, and that is the point.** It attaches
+    no Figma reference in process, so a project specification carries no
+    screenshot — and no catalog, inventory, or palette either, since its
+    prompt reads none of them. The bare-mirror read is skipped too: the
+    project prompt has no repository-source section to put component source
+    into, and adding one would change what the model is asked.
+  - **Web references are searched on App Service.** Tavily needs a key, so
+    `getDesignReferences` runs at admission and the result rides on the
+    branch. Absent when the project left them off, which is the default.
+  - **A configured design system that will not load stays in process**, where
+    the existing code writes the configuration error onto the prototype row.
+    That is a resolution failure, not an exclusion — a project that resolves
+    its design system is admitted and answered with its own prompt.
+
+  **Wider than it looked.** `resolvePrototypeContext` falls back to a bundled
+  MaxView context whenever a project has no `skillRepo` configured, and
+  `src/server/assets/maxview-colors.md` ships in the image, so that fallback
+  almost always succeeds. `generateDesignPrototypeHtml` branches on the
+  context being present, not on `isProjectSpecific` — so in process nearly
+  every prototype already took the project prompt, and V2 was answering all
+  of them with the MaxView one. The MaxView branch is reached only when
+  `resolvePrototypeContext` returns nothing at all.
+
+  **Still open after this:** EXTEND mode keeps both branches in process, so
+  the EXTEND arm of the project scoping rule is carried but never exercised
+  by a V2 run; and the project branch is admitted with no repository source,
+  matching the in-process prompt rather than the MaxView branch's V2
+  enrichment.
 
 - [ ] Ephemeral workspace and repo-read wiring for the worker processes.
 
