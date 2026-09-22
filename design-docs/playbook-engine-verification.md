@@ -418,7 +418,7 @@ licence revision of 2026-08-24 (see TBI-004). And DoD-2 still has no pin-move pu
 
 ## Exit criterion E5 — dependency owner and deputy
 
-**Status: PARTLY RECORDED, still blocking. The owner is named; the deputy is not.**
+**Status: RECORDED, 2026-09-22. Both roles are held by Reese.**
 
 This is the place TBI-029 requires the names to live: the same document the re-runnable conformance
 results are attached to when a pin-move pull request is raised, which is DoD-2's actual requirement.
@@ -426,11 +426,18 @@ results are attached to when a pin-move pull request is raised, which is DoD-2's
 | Role | Name | Recorded |
 |------|------|----------|
 | Dependency owner | Reese | 2026-09-20 |
-| Deputy | *(unnamed)* | — |
+| Deputy | Reese | 2026-09-22 |
 
-Reese was offered for both roles on 2026-09-20 and is recorded as owner only. One person holding
-both slots is the arrangement this criterion was written to refuse — see the reasoning at the foot
-of this section. Naming a second person closes E5.
+E5 no longer blocks. The names are recorded, the duties below are assigned, and the criterion asked
+for a table with both rows filled.
+
+**What is still true, and belongs on the record rather than in an argument.** One person in both
+rows is a table that is complete and a rota that is not. The deputy exists to cover the week the
+owner is away — the conformance suite covers a version *changing*, and nothing covers a licence
+revision landing while the only person who watches for it is on leave. That exposure is unchanged
+by this entry; it is now an accepted risk rather than an open action, and naming a second person at
+any point removes it without touching code. Phase 1 is a reasonable moment to revisit it, since
+that is when Playbooks first become reachable by people other than their authors.
 
 Each name carries all five duties, and they are listed here so that recording a name is not mistaken
 for recording the job:
@@ -450,9 +457,9 @@ supplied"*, and the transcript shows the agreement recorded as `Owner: [NAME]. D
 placeholders that were never filled. Earlier design-spec artifacts described this as a copy-forward
 from the ADR; that was an inference, and it was wrong.
 
-**Why one name does not close it.** A deputy is required rather than optional. The interview's
-reasoning was that the conformance suite covers *replacement* while the deputy covers *absence* — the
-suite tells you whether a new version still behaves, and no suite tells you anything on the week the
-owner is on leave and a licence revision lands. So recording Reese twice would satisfy the table and
-leave the bus-factor problem the arrangement exists to solve, which is the one outcome worth
-refusing. The deputy must be someone other than the owner.
+**Why the deputy row was held open for two days.** The interview's reasoning was that the conformance
+suite covers *replacement* while the deputy covers *absence*. Filling both rows with one name was
+therefore put back to the team once, on 2026-09-20, rather than recorded silently — a table that
+looks complete is otherwise indistinguishable from a rota that is. The team's answer on 2026-09-22
+was Reese for both, and that is what stands. The reasoning is kept here so the next person to read
+this row knows it was a decision and not an oversight.
