@@ -459,8 +459,9 @@ in the running App Service imports):**
 
 ### Task 6: Build document and visual workers
 
-**Status:** Worker side complete on this branch. The four live V1 files are
-not yet modified — see "Remaining for Task 6" below.
+**Status:** The document lane and initial design-prototype visual slice are
+implemented on this branch. This does not declare Task 6 complete; UI Lab is
+tracked separately pending the streaming/cadence/flag product decisions below.
 
 **Files:**
 
@@ -490,7 +491,7 @@ not yet modified — see "Remaining for Task 6" below.
 - [x] Publish a started checkpoint containing the Container Apps execution ID.
 - [x] Complete the command only after the fenced attempt is durably started.
 - [x] Publish checkpoints every 30 seconds.
-- [ ] Use ephemeral local workspace and repo-read.
+- [x] Use ephemeral local workspace and repo-read.
 - [x] Enforce normal and large phase deadlines.
 - [x] Upload files under attempt-scoped immutable Blob paths.
 - [x] Write the manifest last.
@@ -507,23 +508,24 @@ not yet modified — see "Remaining for Task 6" below.
 - `npm run build:server` clean.
 - Neither entrypoint is started from App Service `index.ts`.
 
-**Remaining for Task 6:**
+**Task 6 prototype-slice progress:**
 
 - [x] Write the execution specification to Blob and dispatch a V2 attempt from
   the admission path (`specificationWriter.ts`, `v2AdmissionService.ts`). The
   specification is written under an if-none-match condition before the
   command references it, so a re-dispatched attempt reuses it rather than
   rewriting it.
-- [ ] Wire each lane's `execute` to a provider. Both lanes currently publish a
-  progress checkpoint and then refuse rather than invent output.
+- [x] Wire each lane's `execute` to its provider. Document runs execute frozen
+  Cursor workflows; visual runs execute Bedrock from the immutable visual
+  specification.
 - [x] `backgroundWorkflowRouter.ts` chooses V2 behind `ai-runs-v2-transport`
   (default off) inside the existing `ai-runs-background` enabled branch. An
   unreadable V2 flag, a refused admission, or a thrown admission all keep the
   proven path: the first two stay on V1, the last two recover in-process.
-- [ ] Route the visual lane. `designPrototypeService.ts`, `uiLabService.ts`,
-  and `routes/uiLab.ts` never call `routeBackgroundWorkflow` — visual
-  generation runs in-process today, so moving it onto the queue is new
-  routing rather than a flag split on an existing one.
+- [x] Route initial design-prototype generation to the visual lane behind
+  `ai-runs-v2-transport`, with per-prototype fallback to the unchanged
+  in-process path. UI Lab remains deferred for the explicit UX decisions
+  below.
 
   **Decision (2026-09-21):** the owning service applies its own artifacts. The
   orchestrator finalizes the attempt and knows nothing about prototypes; each
@@ -596,9 +598,9 @@ not yet modified — see "Remaining for Task 6" below.
 
   **Harvest follow-up state:**
 
-  - Only prototypes are harvested. Document runs routed through
-    `backgroundWorkflowRouter` onto V2 have no equivalent consumer, and
-    `uiLabService` still admits nothing — see the UI Lab note below.
+  - Document workflows and design prototypes now have durable artifact
+    harvesters. `uiLabService` still admits nothing — see the UI Lab note
+    below.
   - **Closed 2026-09-22 — prototype recovery now honors the V2 deadline.**
     `failStalePrototypes` keeps the existing 25-minute cutoff, but its update
     excludes a prototype while the matching `servicebus-blob-v2` run is active
@@ -608,12 +610,12 @@ not yet modified — see "Remaining for Task 6" below.
     terminal V2 runs still take the 25-minute path; the finished-run harvest
     remains immediately before the sweep so a terminal attempt is applied or
     failed before the fallback reset.
-  - A run that finishes while its prototype is **not** in `generating` (the user
-    reset it first) is never claimed. A later retry that puts the row back to
-    `generating` can then have the older artifact applied to it, racing the
-    in-process retry. Neither outcome corrupts the row — both write a single
-    version-1 history entry, and each run records only its own real cost — but
-    the winner is whichever finishes last.
+  - **Closed 2026-09-22 — artifacts are owned by the admitted generation.**
+    Admission freezes the prototype generation timestamp into the durable run
+    snapshot. Harvest requires that owner before reading Blob and repeats it
+    in the final row compare-and-set. A reset/retry permanently completes the
+    old attempt's harvest claim without applying HTML, recording usage, or
+    racing the new in-process generation.
   - Nothing reclaims the Blob artifacts of a harvested attempt; lifecycle rules
     on the container are the only cleanup.
 
@@ -761,11 +763,13 @@ not yet modified — see "Remaining for Task 6" below.
     2026-09-22 — the contract carries an optional `temperature`,
     `resolveUiLabVisualModel` populates it from `uiLabBedrockTemperature`, and
     `bedrockVisualClient` adds the key to the payload only where it is set.
-  - **Still open: one image, but EXTEND mode sends two.** The in-process
-    prototype path can attach both the Figma reference and a per-route page
-    screenshot from `pageScreenshotService`. `VisualDesignReference` holds one
-    screenshot. Not live today — EXTEND falls back in process — but it
-    becomes a gap the moment EXTEND is admitted.
+  - ~~**Still open: one image, but EXTEND mode sends two.**~~ Closed
+    2026-09-22. The immutable contract carries an ordered image list. App
+    Service resolves existing-page source, inventory hints, and the per-route
+    screenshot; the worker sends MaxView's Figma reference followed by the
+    page screenshot, or only the page screenshot for a project design system.
+    Differential fixtures prove the full Bedrock payload matches both
+    in-process EXTEND branches.
   - `uiLabBedrockService.buildContextSection` joins `PageRoute` objects
     straight into the prompt, so "### Application routes" has always read
     `[object Object]`. Carried across verbatim and pinned with a test rather
@@ -813,12 +817,12 @@ not yet modified — see "Remaining for Task 6" below.
     array, even with no images. The two encodings mean the same thing to the
     Bedrock Anthropic API, so this is a comment to correct rather than a
     defect, and the test carries it as a named allowance.
-  - The payload is not the whole call. `bedrockService`'s throttle retry, which
-    `bedrockVisualClient` has no equivalent of, sits outside this comparison
-    and needs its own check. The per-attempt timeout was part of this gap and
-    is now resolved on App Service like the ceiling; what remains is that the
-    in-process timeout bounds each of up to five attempts while the worker
-    gets one.
+  - ~~The payload is not the whole call: the worker gets one attempt.~~ Closed
+    2026-09-22. App Service resolves attempts, initial backoff, multiplier, and
+    jitter onto the specification. The DB-free client retries the same
+    throttle/429/5xx classes, honors the attempt deadline during calls and
+    backoff, and does not retry timeout, abort, truncation, or non-transient
+    errors.
   - ~~It compares requests, so nothing it does can see a reply one path reads
     and the other ignores.~~ Answered 2026-09-22 by a companion test, see
     below.
@@ -922,11 +926,11 @@ not yet modified — see "Remaining for Task 6" below.
   of them with the MaxView one. The MaxView branch is reached only when
   `resolvePrototypeContext` returns nothing at all.
 
-  **Still open after this:** EXTEND mode keeps both branches in process, so
-  the EXTEND arm of the project scoping rule is carried but never exercised
-  by a V2 run; and the project branch is admitted with no repository source,
-  matching the in-process prompt rather than the MaxView branch's V2
-  enrichment.
+  **Closed 2026-09-22 — EXTEND reaches both prototype prompts.** Existing-page
+  source/context and ordered image blocks are resolved before admission, so
+  both MaxView and project-design-system EXTEND requests now run on V2 with
+  full request parity. The project branch still carries no generic component
+  source because its in-process prompt carries none.
 
   **A truncated document is not a prototype (2026-09-22).** Bedrock reports a
   response it cut off at the output ceiling as `stop_reason: 'max_tokens'`,
@@ -994,7 +998,28 @@ not yet modified — see "Remaining for Task 6" below.
     Matching the in-process prototype sentence exactly is worth more today
     than a message that is right for a lane V2 does not yet carry.
 
-- [ ] Ephemeral workspace and repo-read wiring for the worker processes.
+- [x] Ephemeral workspace and repo-read wiring for the worker processes.
+
+  **Final prototype code-slice closure (2026-09-22):**
+
+  - Component detail reads no longer silently stop at the first twenty paths.
+    A pinned `RepoReader` reads every candidate and applies a relevance-ordered
+    byte budget; the live ADO fallback keeps its twenty-request quota, ranks
+    relevant paths first, and reports every omitted path in the catalog and
+    prompt.
+  - The visual specification validates all resolved prototype inputs, ordered
+    image blocks, model ceilings/timeouts, and retry policy before the worker
+    calls Bedrock. The worker holds no database/network policy.
+  - Prototype run thread prefixes are centralized in the visual run identity
+    contract and reused by stale-generation protection.
+  - No migration was required; durable ownership uses the existing
+    `agent_runs.execution_snapshot` plus the prototype row's generation
+    timestamp.
+  - Focused EXTEND/request-response parity and source-budget verification:
+    8 suites / 118 tests passed.
+  - Final requested regression matrix: 35 suites / 446 tests passed. Server
+    type-check and `git diff --check` passed; the worker database-import guard
+    remained green.
 
 ---
 
