@@ -168,6 +168,11 @@ export type AiRunV2TerminalResult = AiRunV2EnvelopeBase &
     failureCategory?: AiRunV2FailureCategory;
     detail?: string;
     manifestRef?: AiRunBlobRef;
+    durationMs?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
   }>;
 
 export type AiRunV2Result = AiRunV2TerminalResult;
@@ -199,6 +204,10 @@ function isPositiveInteger(value: unknown): value is number {
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+function isNonNegativeNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
 export function isAiRunTransportVersion(
@@ -346,6 +355,20 @@ export function isAiRunV2Result(value: unknown): value is AiRunV2Result {
   }
   if (candidate.detail !== undefined && typeof candidate.detail !== 'string') {
     return false;
+  }
+  for (const field of [
+    'durationMs',
+    'inputTokens',
+    'outputTokens',
+    'cacheReadTokens',
+    'cacheWriteTokens',
+  ] as const) {
+    if (
+      candidate[field] !== undefined
+      && !isNonNegativeNumber(candidate[field])
+    ) {
+      return false;
+    }
   }
   return true;
 }

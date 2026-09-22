@@ -17,15 +17,15 @@ export type WorkerCursorExecution = {
 
 /**
  * Construct the real local Cursor agent from only frozen bootstrap values.
- * `checkout` is intentionally required: callers cannot create execution until
- * a RepoReader has successfully opened the pinned snapshot.
+ * Repository-grounded callers pass `checkout` only after opening the pinned
+ * snapshot. Scratch-only document workflows omit it and receive no repo tools.
  *
  * cwd is the thin writable scratch (`workspaceRef`); repo reads go through
  * native tools backed by a bare mirror, HTTP, or a working-tree checkout.
  */
 export async function createLocalCursorExecution(
   snapshot: Readonly<ExecutionSnapshot>,
-  checkout: RepoReader,
+  checkout?: RepoReader,
 ): Promise<WorkerCursorExecution> {
   const apiKey = process.env.CURSOR_API_KEY?.trim();
   if (!apiKey) throw new Error('CURSOR_API_KEY is required');
@@ -33,7 +33,7 @@ export async function createLocalCursorExecution(
   const local = {
     cwd: snapshot.workspaceRef,
     settingSources: ['project'],
-    customTools: createNativeReadTools(checkout),
+    ...(checkout ? { customTools: createNativeReadTools(checkout) } : {}),
   } satisfies LocalAgentOptions;
 
   const agent = await Agent.create({

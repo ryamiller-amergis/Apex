@@ -1,5 +1,6 @@
 import { AI_RUN_V2_SCHEMA_VERSION } from '../../../shared/types/aiRunV2';
 import { VisualModelTruncatedError } from '../../services/aiRunsV2Worker/bedrockVisualClient';
+import { CursorExecutionWaitError } from '../../services/cursorExecutionCore';
 import { createV2Worker } from '../../services/aiRunsV2Worker/worker';
 import type { WorkerServiceBusClient } from '../../services/aiRunsV2Worker/serviceBusClient';
 
@@ -160,6 +161,132 @@ describe('V2 worker run loop', () => {
       failureCategory: 'internal_error',
       detail: 'generation exploded',
     });
+  });
+
+  it('uses the immutable specification deadline for the active attempt', async () => {
+    const { bus, calls } = fakeBus(command());
+    const resolveDeadlineMs = jest.fn(
+      (specification: Record<string, unknown>) =>
+        Number(specification.deadlineMs),
+    );
+    const worker = createV2Worker({
+      bus,
+      execute: async ({ signal }) =>
+        new Promise((_, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => {
+              const error = new Error('document deadline elapsed');
+              error.name = 'AbortError';
+              reject(error);
+            },
+            { once: true },
+          );
+        }),
+      artifactContainer: 'ai-run-artifacts',
+      containerAppsExecutionId: 'exec-7',
+      deadlineMs: 50,
+      resolveDeadlineMs,
+      specifications: {
+        read: async () => ({
+          runId: 'run-1',
+          attemptId: 'attempt-1',
+          attemptNumber: 1,
+          workloadLane: 'document',
+          deadlineMs: 5,
+        }),
+      },
+    } as Parameters<typeof createV2Worker>[0] & {
+      resolveDeadlineMs: typeof resolveDeadlineMs;
+    });
+
+    await expect(worker.processOnce()).resolves.toBe('failed');
+    expect(resolveDeadlineMs).toHaveBeenCalledWith(
+      expect.objectContaining({ deadlineMs: 5 }),
+    );
+    expect(calls.results).toEqual([
+      expect.objectContaining({
+        status: 'failed',
+        failureCategory: 'progress_timeout',
+        detail: 'document deadline elapsed',
+      }),
+    ]);
+  });
+
+  it('publishes document token usage once on the terminal result', async () => {
+    const { bus, calls } = fakeBus(command());
+    const worker = createV2Worker({
+      bus,
+      execute: async () => ({
+        files: [],
+        durationMs: 2_500,
+        usage: {
+          inputTokens: 100,
+          outputTokens: 200,
+          cacheReadTokens: 30,
+          cacheWriteTokens: 4,
+        },
+      }),
+      artifactContainer: 'ai-run-artifacts',
+      containerAppsExecutionId: 'exec-7',
+      specifications: {
+        read: async () => ({
+          runId: 'run-1',
+          attemptId: 'attempt-1',
+          attemptNumber: 1,
+          workloadLane: 'document',
+        }),
+      },
+    });
+
+    await expect(worker.processOnce()).resolves.toBe('completed');
+    expect(calls.results).toEqual([
+      expect.objectContaining({
+        status: 'completed',
+        durationMs: 2_500,
+        inputTokens: 100,
+        outputTokens: 200,
+        cacheReadTokens: 30,
+        cacheWriteTokens: 4,
+      }),
+    ]);
+  });
+
+  it('preserves usage when Cursor fails after consuming tokens', async () => {
+    const { bus, calls } = fakeBus(command());
+    const worker = createV2Worker({
+      bus,
+      execute: async () => {
+        throw new CursorExecutionWaitError(new Error('provider failed'), {
+          inputTokens: 80,
+          outputTokens: 20,
+          cacheReadTokens: 5,
+          cacheWriteTokens: 1,
+        });
+      },
+      artifactContainer: 'ai-run-artifacts',
+      containerAppsExecutionId: 'exec-7',
+      specifications: {
+        read: async () => ({
+          runId: 'run-1',
+          attemptId: 'attempt-1',
+          attemptNumber: 1,
+          workloadLane: 'document',
+        }),
+      },
+    });
+
+    await expect(worker.processOnce()).resolves.toBe('failed');
+    expect(calls.results).toEqual([
+      expect.objectContaining({
+        status: 'failed',
+        detail: 'provider failed',
+        inputTokens: 80,
+        outputTokens: 20,
+        cacheReadTokens: 5,
+        cacheWriteTokens: 1,
+      }),
+    ]);
   });
 
   /**

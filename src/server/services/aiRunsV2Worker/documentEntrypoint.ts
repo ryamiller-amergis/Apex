@@ -4,22 +4,11 @@
  */
 import { createWorkerServiceBusClient } from './serviceBusClient';
 import { resolveWorkerEnvironment } from './entrypointSupport';
-import {
-  createV2Worker,
-  LARGE_PHASE_DEADLINE_MS,
-  NORMAL_PHASE_DEADLINE_MS,
-  type ExecuteWorkload,
-} from './worker';
+import { isAiRunV2DocumentSpecification } from '../../../shared/types/aiRunV2DocumentSpec';
+import { createDocumentExecute } from './documentExecution';
+import { createV2Worker } from './worker';
 
-/**
- * Document generation is not wired to a provider yet; Task 8 routes real work
- * here. Until then the worker proves the protocol and refuses to invent
- * output.
- */
-const executeDocumentWorkload: ExecuteWorkload = async ({ checkpoints }) => {
-  await checkpoints.publishProgress('execution', 'pending');
-  throw new Error('Document lane execution is not wired yet');
-};
+export const executeDocumentWorkload = createDocumentExecute();
 
 export async function startDocumentWorker(): Promise<void> {
   const env = resolveWorkerEnvironment('document');
@@ -36,10 +25,12 @@ export async function startDocumentWorker(): Promise<void> {
     execute: executeDocumentWorkload,
     artifactContainer: env.artifactContainer,
     containerAppsExecutionId: env.containerAppsExecutionId,
-    deadlineMs:
-      process.env.AI_RUNS_V2_LARGE_PHASE === 'true'
-        ? LARGE_PHASE_DEADLINE_MS
-        : NORMAL_PHASE_DEADLINE_MS,
+    resolveDeadlineMs: (specification) => {
+      if (!isAiRunV2DocumentSpecification(specification)) {
+        throw new Error('Command referenced an invalid document specification');
+      }
+      return specification.deadlineMs;
+    },
     signal: abort.signal,
   });
 

@@ -30,6 +30,11 @@ export type PublishTerminalInput = Readonly<{
   failureCategory?: AiRunV2FailureCategory;
   detail?: string;
   manifestRef?: AiRunBlobRef;
+  durationMs?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
 }>;
 
 export type ResultPublisher = {
@@ -70,6 +75,21 @@ export function createResultPublisher(deps: {
         ...(input.manifestRef === undefined
           ? {}
           : { manifestRef: input.manifestRef }),
+        ...(input.durationMs === undefined
+          ? {}
+          : { durationMs: input.durationMs }),
+        ...(input.inputTokens === undefined
+          ? {}
+          : { inputTokens: input.inputTokens }),
+        ...(input.outputTokens === undefined
+          ? {}
+          : { outputTokens: input.outputTokens }),
+        ...(input.cacheReadTokens === undefined
+          ? {}
+          : { cacheReadTokens: input.cacheReadTokens }),
+        ...(input.cacheWriteTokens === undefined
+          ? {}
+          : { cacheWriteTokens: input.cacheWriteTokens }),
       };
       await deps.send(result.eventId, result);
       published = true;

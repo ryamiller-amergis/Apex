@@ -33,6 +33,10 @@ import {
   type SpecificationClient,
 } from './specificationClient';
 import type { WorkerServiceBusClient } from './serviceBusClient';
+import {
+  CursorExecutionWaitError,
+  type CursorTokenUsage,
+} from '../cursorExecutionCore';
 
 /** Normal phase budget, and the longer budget for large workloads. */
 export const NORMAL_PHASE_DEADLINE_MS = 15 * 60_000;
@@ -41,6 +45,8 @@ export const LARGE_PHASE_DEADLINE_MS = 45 * 60_000;
 export type ExecutionOutcome = Readonly<{
   files: ReadonlyArray<ArtifactFile>;
   detail?: string;
+  durationMs?: number;
+  usage?: CursorTokenUsage;
 }>;
 
 export type ExecuteWorkload = (input: {
@@ -58,6 +64,7 @@ export type WorkerDeps = Readonly<{
   specifications?: SpecificationClient;
   checkpointIntervalMs?: number;
   deadlineMs?: number;
+  resolveDeadlineMs?: (specification: ExecutionSpecification) => number;
   maxDeliveryCount?: number;
   sleep?: (ms: number) => Promise<void>;
   signal?: AbortSignal;
@@ -132,7 +139,15 @@ export function createV2Worker(deps: WorkerDeps): V2Worker {
     await deps.bus.completeCommand(message.lockToken);
 
     const deadline = new AbortController();
-    const deadlineTimer = setTimeout(() => deadline.abort(), deadlineMs);
+    let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+    const abortForShutdown = (): void => {
+      deadline.abort(deps.signal?.reason);
+    };
+    if (deps.signal?.aborted) {
+      abortForShutdown();
+    } else {
+      deps.signal?.addEventListener('abort', abortForShutdown, { once: true });
+    }
     let heartbeatTimer: ReturnType<typeof setInterval> | null = setInterval(
       () => {
         void checkpoints.publishHeartbeat().catch(() => undefined);
@@ -148,6 +163,18 @@ export function createV2Worker(deps: WorkerDeps): V2Worker {
 
     try {
       const specification = await specifications.read(command.specRef);
+      const resolvedDeadlineMs =
+        deps.resolveDeadlineMs?.(specification) ?? deadlineMs;
+      if (
+        !Number.isSafeInteger(resolvedDeadlineMs)
+        || resolvedDeadlineMs <= 0
+      ) {
+        throw new Error('Execution specification has an invalid deadline');
+      }
+      deadlineTimer = setTimeout(
+        () => deadline.abort(),
+        resolvedDeadlineMs,
+      );
       const outcome = await deps.execute({
         specification,
         command,
@@ -169,19 +196,27 @@ export function createV2Worker(deps: WorkerDeps): V2Worker {
         artifactStatus: manifestRef ? 'manifest_written' : 'pending',
         ...(outcome.detail === undefined ? {} : { detail: outcome.detail }),
         ...(manifestRef === undefined ? {} : { manifestRef }),
+        ...(outcome.durationMs === undefined
+          ? {}
+          : { durationMs: outcome.durationMs }),
+        ...(outcome.usage === undefined ? {} : outcome.usage),
       });
       return 'completed';
     } catch (error) {
+      const usage =
+        error instanceof CursorExecutionWaitError ? error.usage : undefined;
       await results.publishTerminal({
         status: 'failed',
         artifactStatus: 'failed',
         failureCategory: failureCategoryFor(error),
         detail: error instanceof Error ? error.message : String(error),
+        ...(usage ?? {}),
       });
       return 'failed';
     } finally {
       stopHeartbeat();
-      clearTimeout(deadlineTimer);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      deps.signal?.removeEventListener('abort', abortForShutdown);
     }
   }
 

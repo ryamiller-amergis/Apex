@@ -48,6 +48,7 @@ export async function openLocalCheckout(
  */
 export async function openGroundedReader(
   snapshot: Readonly<ExecutionSnapshot>,
+  options: { allowLocalCheckout?: boolean } = {},
 ): Promise<RepoReader> {
   const sha = snapshot.groundedSha?.trim();
   const identity = identityFromSnapshot(snapshot);
@@ -79,6 +80,11 @@ export async function openGroundedReader(
     }
   }
 
+  if (options.allowLocalCheckout === false) {
+    throw new Error(
+      'The isolated worker has no worker-visible repository reader for the pinned SHA',
+    );
+  }
   return openLocalCheckout(snapshot);
 }
 

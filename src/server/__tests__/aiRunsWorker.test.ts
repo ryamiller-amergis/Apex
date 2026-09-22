@@ -418,6 +418,37 @@ describe('aiRunsWorker local checkout and heartbeat contracts', () => {
     }
   });
 
+  it('does not fall back to an App Service checkout for an isolated V2 worker', async () => {
+    const previous = process.env.REPO_READ_SERVICE_URL;
+    delete process.env.REPO_READ_SERVICE_URL;
+    const checkout = path.join(
+      process.cwd(),
+      `.v2-host-only-checkout-${Date.now()}`,
+    );
+    await fs.promises.mkdir(checkout, { recursive: true });
+    await fs.promises.writeFile(path.join(checkout, 'README.md'), 'host only');
+
+    try {
+      await expect(
+        openGroundedReader(
+          {
+            ...snapshot,
+            workspaceRef: checkout,
+            mirrorRef: path.join(checkout, 'missing.git'),
+            groundedSha: 'abc123',
+            repository: 'apex/ai-pilot',
+          },
+          { allowLocalCheckout: false },
+        ),
+      ).rejects.toThrow('worker-visible repository reader');
+    } finally {
+      await fs.promises.rm(checkout, { recursive: true, force: true });
+      if (previous !== undefined) {
+        process.env.REPO_READ_SERVICE_URL = previous;
+      }
+    }
+  });
+
   it('TBI-004 performance NFR: defaults heartbeat interval to 15 seconds', () => {
     const previous = process.env.AI_RUNS_HEARTBEAT_INTERVAL_MS;
     delete process.env.AI_RUNS_HEARTBEAT_INTERVAL_MS;

@@ -6,6 +6,7 @@
  */
 import { type ContainerClient } from '@azure/storage-blob';
 import type { AiRunBlobRef } from '../../../shared/types/aiRunV2';
+import type { AiRunV2DocumentSpecification } from '../../../shared/types/aiRunV2DocumentSpec';
 import type { AiRunV2VisualSpecification } from '../../../shared/types/aiRunV2VisualSpec';
 import { resolveArtifactContainerClient } from '../aiRunV2/artifactContainer';
 
@@ -27,6 +28,7 @@ export type LegacyExecutionSpecification = Readonly<{
 
 export type ExecutionSpecification =
   | LegacyExecutionSpecification
+  | AiRunV2DocumentSpecification
   | AiRunV2VisualSpecification;
 
 export type SpecificationClient = {
