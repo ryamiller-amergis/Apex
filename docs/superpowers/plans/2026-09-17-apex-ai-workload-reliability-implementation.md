@@ -797,10 +797,10 @@ tracked separately pending the streaming/cadence/flag product decisions below.
     holds its client at module scope and `bedrockVisualClient` builds one when
     none is injected, so replacing the class observes both paths without
     either knowing it is under test and without touching `bedrockService`.
-  - **Named allowances**, applied to both sides so an unexpected difference
-    still fails: a bare-string `content` is canonicalised to a one-block text
-    array, and the worker-only repository-source section is removed before the
-    prompts are compared.
+  - **The only named allowance** canonicalises bare-string `content` to a
+    one-block text array. Repository source is not excluded: both transports
+    receive the same relevance-ranked, byte-budgeted source and omission
+    context, and parity compares that context with the rest of the prompt.
   - Both differential cases were **red on purpose** — one on the project
     design system above, one on the token ceiling below. Both went green on
     2026-09-22, with no allowance added and nothing changed about what the
@@ -1003,10 +1003,13 @@ tracked separately pending the streaming/cadence/flag product decisions below.
   **Final prototype code-slice closure (2026-09-22):**
 
   - Component detail reads no longer silently stop at the first twenty paths.
-    A pinned `RepoReader` reads every candidate and applies a relevance-ordered
-    byte budget; the live ADO fallback keeps its twenty-request quota, ranks
-    relevant paths first, and reports every omitted path in the catalog and
-    prompt.
+    Pinned and live ADO readers process every candidate in deterministic
+    relevance order and apply the same explicit byte budget. Live ADO bounds
+    concurrency to four requests instead of capping total reads. Both
+    transports receive and compare the same source/omission context; unreadable
+    and budget-omitted paths remain visible even when zero files fit. Expired
+    catalog entries are evicted and the feature-text cache retains at most 64
+    entries.
   - The visual specification validates all resolved prototype inputs, ordered
     image blocks, model ceilings/timeouts, and retry policy before the worker
     calls Bedrock. The worker holds no database/network policy.
@@ -1017,7 +1020,7 @@ tracked separately pending the streaming/cadence/flag product decisions below.
     timestamp.
   - Focused EXTEND/request-response parity and source-budget verification:
     8 suites / 118 tests passed.
-  - Final requested regression matrix: 35 suites / 446 tests passed. Server
+  - Final requested regression matrix: 37 suites / 471 tests passed. Server
     type-check and `git diff --check` passed; the worker database-import guard
     remained green.
 
