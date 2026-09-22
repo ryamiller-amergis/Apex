@@ -19,11 +19,13 @@ import {
   executeStep,
   failStepRun,
   failStepRunForHuman,
+  PlaybookRunTerminatedError,
 } from '../playbookSteps';
 import {
   assertStepGateSatisfied,
   PlaybookGuardViolationError,
 } from '../playbookGuardService';
+import { isBranchStepType } from '../playbookSteps/registry';
 import type { PlaybookGraph, PlaybookGraphNode } from '../../../shared/types/playbook';
 
 /**
@@ -196,7 +198,8 @@ export function translate(
 ) {
   const { createWorkflow, createStep } = modules;
 
-  const steps = orderedNodes(graph).map((node) =>
+  const stepById = new Map(graph.nodes.map((node) => [
+    node.id,
     createStep({
       id: node.id,
       inputSchema: z.any(),
@@ -215,6 +218,7 @@ export function translate(
           runId: context.runId,
           stepId: node.id,
           stepType: node.stepType,
+          inputInline: node.config ?? {},
         });
 
         try {
@@ -250,8 +254,10 @@ export function translate(
             project: context.project,
             initiatorUserId: context.initiatorUserId,
             config: node.config ?? {},
+            graph,
           });
         } catch (error) {
+          if (error instanceof PlaybookRunTerminatedError) throw error;
           await failStepRun({
             stepRunId: stepRun.id,
             reason: error instanceof Error ? error.message : `Step ${node.id} failed`,
@@ -272,17 +278,32 @@ export function translate(
         // Conditional because adapters own their status writes; this is the backstop for one that
         // reports completion without having recorded it.
         await completeStepRunIfOpen({ stepRunId: stepRun.id, output: outcome.output });
-        return { stepId: node.id };
+        if (outcome.output?.outcome === 'stale') {
+          throw new PlaybookRunTerminatedError();
+        }
+        return { stepId: node.id, ...(outcome.output ?? {}) };
       },
-    })
-  );
+    }),
+  ]));
 
   let workflow = createWorkflow({
     id: `apex-playbook-${context.runId}`,
     inputSchema: z.any(),
     outputSchema: z.any(),
   });
-  for (const step of steps) workflow = workflow.then(step);
+  const ordered = orderedNodes(graph);
+  for (const node of ordered) {
+    workflow = workflow.then(stepById.get(node.id));
+    const outbound = graph.edges.filter((edge) => edge.from === node.id);
+    if (isBranchStepType(node.stepType) && outbound.length > 0) {
+      workflow = workflow.branch(outbound.map((edge) => [
+        async ({ inputData }: { inputData: Record<string, unknown> }) =>
+          inputData.continuation === edge.condition,
+        stepById.get(edge.to),
+      ]));
+      break;
+    }
+  }
   return workflow.commit();
 }
 
@@ -355,6 +376,9 @@ export async function startRunOnEngine(
   try {
     return endFrom(await run.start({ inputData: {} }));
   } catch (error) {
+    if (error instanceof Error && error.name === 'PlaybookRunTerminatedError') {
+      return { endedAs: 'completed' };
+    }
     return { endedAs: 'failed', error };
   }
 }
@@ -378,6 +402,9 @@ export async function resumeRunOnEngine(
   try {
     return endFrom(await run.resume({ step: stepId, resumeData: { stepId } }));
   } catch (error) {
+    if (error instanceof Error && error.name === 'PlaybookRunTerminatedError') {
+      return { endedAs: 'completed' };
+    }
     return { endedAs: 'failed', error };
   }
 }
@@ -412,6 +439,7 @@ export async function retryStepRunOnEngine(
       project: context.project,
       initiatorUserId: context.initiatorUserId,
       config: node.config ?? {},
+      graph,
     });
 
     if (outcome.kind === 'suspended') {
@@ -419,8 +447,14 @@ export async function retryStepRunOnEngine(
     }
 
     await completeStepRunIfOpen({ stepRunId, output: outcome.output });
+    if (outcome.output?.outcome === 'stale') {
+      throw new PlaybookRunTerminatedError();
+    }
     return resumeRunOnEngine(graph, context, node.id);
   } catch (error) {
+    if (error instanceof Error && error.name === 'PlaybookRunTerminatedError') {
+      return { endedAs: 'completed' };
+    }
     return { endedAs: 'failed', error };
   }
 }

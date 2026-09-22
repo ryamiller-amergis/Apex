@@ -16,9 +16,13 @@
  * Thread-per-step rather than thread-per-run: `chat_threads.active_run_id` holds one run, so two
  * concurrent agent steps in one Playbook sharing a thread would collide.
  */
-import { createThread } from '../chatAgentService';
+import { createThread, getThread } from '../chatAgentService';
 import { enqueue } from '../agentRunLifecycleService';
 import { getSkillConfig } from '../projectSettingsService';
+import {
+  PlaybookMcpCapabilityError,
+  resolvePlaybookMcpCapability,
+} from '../playbookMcpCapabilityService';
 import { parseStepInput } from './descriptorValidation';
 import { assertSkillAllowed, resolveDeadlineMs } from './registry';
 import {
@@ -40,9 +44,8 @@ import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle'
  * step a few minutes more means the terminal event always has room to land first, and the sweep
  * only ever fires when nothing arrived at all.
  */
-const TERMINAL_EVENT_GRACE_MS = 5 * 60 * 1000;
-
 const STEP_TYPE = 'cursor-agent';
+const TERMINAL_EVENT_GRACE_MS = 5 * 60 * 1000;
 
 export async function executeCursorAgentStep(
   context: PlaybookStepExecutionContext
@@ -55,14 +58,27 @@ export async function executeCursorAgentStep(
    * first. See the registry for what this does and does not guarantee.
    */
   assertSkillAllowed(STEP_TYPE, config.skillPath);
+  const mcpCapability = resolvePlaybookMcpCapability(config.mcpProfile);
+  // Undefined is tolerated only for immutable versions published before FEAT-014. New publication
+  // requires a profile; any explicitly named non-read profile is also refused again at execution.
+  if (config.mcpProfile !== undefined && mcpCapability.mode !== 'read') {
+    throw new PlaybookMcpCapabilityError(context.stepId, config.mcpProfile, mcpCapability.mode);
+  }
 
-  const deadlineMs = resolveDeadlineMs(STEP_TYPE);
-  const agentTimeoutAt = deadlineFromNow(deadlineMs);
-  const stepExpiresAt = deadlineFromNow(deadlineMs + TERMINAL_EVENT_GRACE_MS);
+  const deadlineMs = resolveDeadlineMs(STEP_TYPE, config.deadlineMs);
+  const agentTimeoutAt = deadlineFromNow(
+    Math.max(1, deadlineMs - Math.min(TERMINAL_EVENT_GRACE_MS, deadlineMs / 2))
+  );
+  const stepExpiresAt = deadlineFromNow(deadlineMs);
 
   const skillConfig = await getSkillConfig(context.project);
 
-  const thread = await createThread(
+  const existingThread = config.threadId ? await getThread(config.threadId) : null;
+  if (config.threadId && !existingThread) {
+    throw new Error(`Validation thread "${config.threadId}" was not found.`);
+  }
+
+  const thread = existingThread ?? await createThread(
     // Every step executes as the run's initiator, never a service principal and never the approver
     // of some earlier gate (BR-003).
     context.initiatorUserId,
@@ -74,6 +90,7 @@ export async function executeCursorAgentStep(
       skillPath: config.skillPath,
       freeformContext: config.prompt,
       model: config.model ?? skillConfig?.defaultModel ?? undefined,
+      playbookMcpProfile: config.mcpProfile,
     },
     // The adapter owns the enqueue, so the thread must not start a turn of its own.
     { skipAutoKickoff: true }

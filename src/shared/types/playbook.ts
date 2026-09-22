@@ -12,6 +12,61 @@
  */
 import type { ZodType } from 'zod';
 import type { ArtifactRef } from './loadTest';
+import type { ApprovalMode, ReviewerDocumentType } from './approvals';
+
+// ── Per-project spend admission ──────────────────────────────────────────────
+
+export interface PlaybookSpendPolicy {
+  project: string;
+  enabled: boolean;
+  baselineCostUsd: string;
+  capUsd: string;
+  warningActive: boolean;
+  warningGeneration: number;
+  warningCrossedAt: string | null;
+  warningRecipientUserIds: string[];
+  overrideByUserId: string | null;
+  overrideToUsd: string | null;
+  overrideAt: string | null;
+  overrideReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlaybookSpendPolicyView extends PlaybookSpendPolicy {
+  currentSpendUsd: string;
+  warningThresholdUsd: string;
+  startsBlocked: boolean;
+}
+
+export interface UpdatePlaybookSpendPolicyRequest {
+  project: string;
+  enabled?: boolean;
+  capUsd?: string;
+  reason: string;
+}
+
+export interface PlaybookSpendCapExceededResponse {
+  error: string;
+  code: 'PLAYBOOK_SPEND_CAP_EXCEEDED';
+  currentSpendUsd: string;
+  capUsd: string;
+  requiredPermission: 'playbooks:admin';
+}
+
+export interface AiCostUndercountReport {
+  environment: string;
+  periodFrom: string;
+  periodTo: string;
+  totalUsageEvents: number;
+  estimatedZeroCostEvents: number;
+  estimatedZeroCostShare: number;
+  unknownProjectEvents: number;
+  unknownProjectCostUsd: number;
+  cursorTeamApiKeyPresent: boolean;
+  defaultNoHistoryCapUsd: string | null;
+  generatedAt: string;
+}
 
 // ── Status vocabularies ───────────────────────────────────────────────────────
 
@@ -156,6 +211,10 @@ export interface PlaybookStepRun {
   /** Null for `approval-gate` and `notify` steps, which correlate to no agent run. */
   agentRunId: string | null;
   resumeToken: string | null;
+  /** Fully resolved input used by execution and later gate review. */
+  inputInline?: Record<string, unknown> | null;
+  gatePoolKey?: ReviewerDocumentType | null;
+  gateApprovalMode?: ApprovalMode | null;
   /** Phase 0 writes only this. */
   outputInline: Record<string, unknown> | null;
   /** Shaped now so the Phase 1 threshold decision costs no migration. */
@@ -328,6 +387,12 @@ export interface CursorAgentStepConfig {
   skillPath: string;
   prompt: string;
   model?: string;
+  /** Server-owned capability profile; only profiles resolved as read-only may be published. */
+  mcpProfile?: string;
+  /** A definition may shorten the derived 60-minute ceiling for this step. */
+  deadlineMs?: number;
+  /** Existing validation thread to enqueue onto instead of creating one. */
+  threadId?: string;
 }
 
 export interface ApprovalGateStepConfig {
@@ -335,6 +400,10 @@ export interface ApprovalGateStepConfig {
   deadlineMs?: number;
   /** Shown to whoever is deciding. */
   subject?: string;
+  /** Existing reviewer-pool identity resolved against current membership at suspension. */
+  approverPool?: ReviewerDocumentType;
+  /** Graph step whose resolved input snapshot the approver reviews. */
+  gatedStepId?: string;
 }
 
 export interface NotifyStepConfig {
@@ -344,6 +413,55 @@ export interface NotifyStepConfig {
   /** Defaults to the run initiator, who is the only identity Phase 0 can resolve (BR-003). */
   recipientUserId?: string;
 }
+
+export interface IngestArtifactStepConfig {
+  documentType: 'design_doc' | 'prd';
+  documentId: string;
+  validationThreadId: string;
+  scorecard?: Record<string, unknown> | string;
+  reportMd?: string;
+}
+
+export type PlaybookBranchOperator = 'eq' | 'neq' | 'in' | 'gt' | 'gte' | 'lt' | 'lte';
+
+export interface PlaybookBranchCondition {
+  sourceStepId: string;
+  field: string;
+  operator: PlaybookBranchOperator;
+  value: unknown;
+}
+
+export interface BranchStepConfig {
+  condition: PlaybookBranchCondition;
+  /** Named edge condition selected when the expression matches. */
+  whenTrue: string;
+  /** Named edge condition selected when the expression does not match. */
+  whenFalse: string;
+}
+
+export interface PlaybookSchemaDisplayField {
+  path: string;
+  label: string;
+  value: string;
+}
+
+export interface PlaybookGateDetail {
+  runId: string;
+  stepRunId: string;
+  subject: string;
+  deadline: string;
+  approvalMode: ApprovalMode;
+  eligibleApproverCount: number;
+  currentUserDecision: 'approved' | 'rejected' | null;
+  fields: PlaybookSchemaDisplayField[];
+  hasInputFields: boolean;
+  canDecide: boolean;
+}
+
+export type PlaybookRunFilter = 'assigned-to-me';
+
+export const playbookAssignedToMeHref = (runId?: string): string =>
+  `/playbooks?filter=assigned-to-me${runId ? `&run=${encodeURIComponent(runId)}` : ''}`;
 
 // ── Structural guards ─────────────────────────────────────────────────────────
 
@@ -393,6 +511,7 @@ export type PlaybookGuardViolationKind =
   | 'max-steps'
   | 'max-agent-steps'
   | 'max-fan-out'
+  | 'join'
   | 'loop'
   | 'active-run-cap'
   | 'suspended-run-ceiling'
@@ -609,6 +728,14 @@ export interface StartRunRequest {
   definitionId: string;
   definitionVersionId?: string;
   versionPinReason?: string;
+  runInput?: Record<string, unknown>;
+}
+
+export interface DesignDocValidationRunInput {
+  documentType: 'design_doc';
+  documentId: string;
+  validationThreadId: string;
+  ownerUserId: string;
 }
 
 /** Makes the resolved version pin visible to the caller. */

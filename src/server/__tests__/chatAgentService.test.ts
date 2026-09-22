@@ -2128,6 +2128,27 @@ describe('document assistant MCP wiring', () => {
     expect(servers['ado-skills']).toBeUndefined();
   });
 
+  it('gives Playbook read-only profiles no write-capable MCP surface', () => {
+    const githubServers = buildMcpServers(
+      baseKickoff({ playbookMcpProfile: 'repository-read-only' }),
+      'http://localhost:3001/mcp/ado-skills',
+    );
+    const adoServers = buildMcpServers(
+      baseKickoff({
+        skillProvider: 'ado',
+        repo: 'Apex',
+        playbookMcpProfile: 'repository-read-only',
+      }),
+      'http://localhost:3001/mcp/ado-skills',
+    );
+
+    expect(githubServers).toEqual({
+      'github-repo': { url: 'http://localhost:3001/mcp/github-repo' },
+    });
+    expect(adoServers).toEqual({});
+    expect(githubServers['ado-skills']).toBeUndefined();
+  });
+
   it('mounts ADO operations only when a skill declares that capability', () => {
     const servers = buildMcpServers(
       baseKickoff(),

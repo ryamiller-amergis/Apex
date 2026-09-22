@@ -14,6 +14,7 @@ import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { playbookDefinitions, playbookDefinitionVersions } from '../db/schema';
 import { assertGraphWithinGuards } from './playbookGuardService';
+import { assertCursorAgentsUseReadOnlyMcp } from './playbookMcpCapabilityService';
 import type {
   PlaybookDefinition,
   PlaybookDefinitionDetail,
@@ -160,6 +161,7 @@ export async function publishVersion(
 
   assertLifecycleTransition(version.status, 'published');
   assertGraphWithinGuards(version.graph as PlaybookGraph);
+  assertCursorAgentsUseReadOnlyMcp(version.graph as PlaybookGraph);
 
   await db
     .update(playbookDefinitionVersions)
@@ -433,6 +435,7 @@ export async function publishDraft(
       input.expectedDraftUpdatedAt
     );
     assertGraphWithinGuards(draft.graph);
+    assertCursorAgentsUseReadOnlyMcp(draft.graph);
 
     const publishedAt = new Date().toISOString();
     const [advancedDraft] = await tx

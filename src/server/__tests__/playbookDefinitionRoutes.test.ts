@@ -18,6 +18,13 @@ jest.mock('../utils/superAdmin', () => ({
   getAppEnvironment: () => 'local',
 }));
 
+// The publish route consults playbooks-production-adapters before forwarding. The real evaluator
+// queries group membership, which the stubbed `db` above cannot answer.
+const isFeatureEnabled = jest.fn();
+jest.mock('../services/featureFlagService', () => ({
+  isFeatureEnabled: (...args: unknown[]) => isFeatureEnabled(...args),
+}));
+
 const listDefinitions = jest.fn();
 const createDefinition = jest.fn();
 const getDefinitionDetail = jest.fn();
@@ -82,6 +89,7 @@ function grantIn(project: string, ...permissions: string[]): void {
 beforeEach(() => {
   jest.clearAllMocks();
   grantIn(PROJECT, 'playbooks:view', 'playbooks:author');
+  isFeatureEnabled.mockResolvedValue(true);
   listDefinitions.mockResolvedValue({ definitions: [SERVICE_RESULT.definition] });
   createDefinition.mockResolvedValue(SERVICE_RESULT);
   getDefinitionDetail.mockResolvedValue(SERVICE_RESULT);

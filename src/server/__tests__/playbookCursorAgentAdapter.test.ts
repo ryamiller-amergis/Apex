@@ -90,6 +90,14 @@ describe('VT-09 — enqueue, correlate, suspend', () => {
     expect(createThread.mock.calls[0][2]).toEqual({ skipAutoKickoff: true });
   });
 
+  it('passes the server-verified MCP profile into the isolated thread', async () => {
+    await executeCursorAgentStep(context({ mcpProfile: 'repository-read-only' }));
+
+    expect(createThread.mock.calls[0][1]).toEqual(expect.objectContaining({
+      playbookMcpProfile: 'repository-read-only',
+    }));
+  });
+
   it('writes the correlation from the id enqueue returned, and suspends', async () => {
     const outcome = await executeCursorAgentStep(context());
 

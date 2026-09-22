@@ -24,8 +24,10 @@ import {
   suspendStepRun,
   PlaybookStepExecutionContext,
   PlaybookStepOutcome,
+  prepareStepRun,
 } from './stepRuns';
 import type { ApprovalGateStepConfig } from '../../../shared/types/playbook';
+import { snapshotGateAtSuspend } from '../playbookGateService';
 
 const STEP_TYPE = 'approval-gate';
 
@@ -89,6 +91,27 @@ export async function executeApprovalGateStep(
   // The registry owns both the 48-hour default and whether a definition may override it, so an
   // out-of-range or disallowed override is refused there rather than quietly clamped here.
   const expiresAt = deadlineFromNow(resolveDeadlineMs(STEP_TYPE, config.deadlineMs));
+
+  if (config.approverPool || config.gatedStepId) {
+    if (!config.approverPool || !config.gatedStepId) {
+      throw new Error('Production approval gates require both approverPool and gatedStepId.');
+    }
+    const gatedNode = context.graph?.nodes.find((node) => node.id === config.gatedStepId);
+    if (!gatedNode) {
+      throw new Error(`Approval gate references missing gated step "${config.gatedStepId}".`);
+    }
+    await prepareStepRun({
+      runId: context.runId,
+      stepId: gatedNode.id,
+      stepType: gatedNode.stepType,
+      inputInline: gatedNode.config ?? {},
+    });
+    await snapshotGateAtSuspend({
+      project: context.project,
+      stepRunId: context.stepRunId,
+      config,
+    });
+  }
 
   await suspendStepRun({ stepRunId: context.stepRunId, expiresAt });
 

@@ -14,9 +14,19 @@
 import { executeApprovalGateStep } from './approvalGateAdapter';
 import { executeCursorAgentStep } from './cursorAgentAdapter';
 import { executeNotifyStep } from './notifyAdapter';
+import { executeIngestArtifactStep } from './ingestArtifactAdapter';
+import { executeBranchStep } from './branchAdapter';
+import { and, eq } from 'drizzle-orm';
+import { db } from '../../db/drizzle';
+import { playbookRuns, playbookStepRuns } from '../../db/schema';
 import { getUserPermissions } from '../rbacService';
 import { parseStepInput } from './descriptorValidation';
-import { getStepTypeDescriptor } from './registry';
+import { getStepTypeDescriptor, requiredPermissionsForStep } from './registry';
+import { isFeatureEnabled } from '../featureFlagService';
+import {
+  configHasBindings,
+  resolvePlaybookBindings,
+} from '../playbookBindingResolver';
 import type {
   PlaybookStepAdapter,
   PlaybookStepExecutionContext,
@@ -27,6 +37,8 @@ const ADAPTERS: Readonly<Record<string, PlaybookStepAdapter>> = {
   'cursor-agent': executeCursorAgentStep,
   'approval-gate': executeApprovalGateStep,
   notify: executeNotifyStep,
+  'ingest-artifact': executeIngestArtifactStep,
+  branch: executeBranchStep,
 };
 
 /** The step types that can actually be executed. Compared against the registry by a test. */
@@ -48,6 +60,52 @@ export class PlaybookPermissionRevokedError extends Error {
     );
     this.name = 'PlaybookPermissionRevokedError';
   }
+}
+
+export class PlaybookProductionAdapterDisabledError extends Error {
+  constructor(stepType: string) {
+    super(`Step type "${stepType}" is unavailable while playbooks-production-adapters is disabled.`);
+    this.name = 'PlaybookProductionAdapterDisabledError';
+  }
+}
+
+export class PlaybookRunTerminatedError extends Error {
+  constructor() {
+    super('Playbook run ended because a stale ingestion produced no further work.');
+    this.name = 'PlaybookRunTerminatedError';
+  }
+}
+
+async function resolveStepConfig(
+  context: PlaybookStepExecutionContext,
+): Promise<Record<string, unknown>> {
+  if (!configHasBindings(context.config)) return context.config;
+
+  const [run] = await db
+    .select({ runInput: playbookRuns.runInput })
+    .from(playbookRuns)
+    .where(eq(playbookRuns.id, context.runId))
+    .limit(1);
+  const prior = await db
+    .select({
+      stepId: playbookStepRuns.stepId,
+      output: playbookStepRuns.outputInline,
+    })
+    .from(playbookStepRuns)
+    .where(and(
+      eq(playbookStepRuns.runId, context.runId),
+      eq(playbookStepRuns.status, 'completed'),
+    ));
+
+  const steps: Record<string, Record<string, unknown>> = {};
+  for (const row of prior) {
+    steps[row.stepId] = (row.output ?? {}) as Record<string, unknown>;
+  }
+
+  return resolvePlaybookBindings(context.config, {
+    input: (run?.runInput ?? {}) as Record<string, unknown>,
+    steps,
+  });
 }
 
 /**
@@ -86,7 +144,7 @@ async function assertInitiatorStillPermitted(
 export async function executeStep(
   context: PlaybookStepExecutionContext
 ): Promise<PlaybookStepOutcome> {
-  const descriptor = getStepTypeDescriptor(context.stepType);
+  getStepTypeDescriptor(context.stepType);
 
   const adapter = ADAPTERS[context.stepType];
   if (!adapter) {
@@ -97,13 +155,41 @@ export async function executeStep(
   }
 
   // Invalid stored config must cost nothing, including no permission query.
-  const parsedConfig = parseStepInput(context.stepType, context.config);
+  const boundConfig = await resolveStepConfig(context);
+  const parsedConfig = parseStepInput(context.stepType, boundConfig);
+
+  // @feature-flag:playbooks-production-adapters start winner=enabled
+  const isPhase2Step = context.stepType === 'ingest-artifact'
+    || context.stepType === 'branch'
+    || (context.stepType === 'approval-gate' && Boolean(parsedConfig.approverPool));
+  const phase2Enabled = !isPhase2Step || await isFeatureEnabled('playbooks-production-adapters', {
+      userId: context.initiatorUserId,
+      project: context.project,
+    });
+  if (isPhase2Step && !phase2Enabled) {
+    // @feature-flag:playbooks-production-adapters disabled-start
+    if (context.stepType === 'ingest-artifact' || context.stepType === 'branch') {
+      throw new PlaybookProductionAdapterDisabledError(context.stepType);
+    }
+    if (context.stepType === 'approval-gate') {
+      delete parsedConfig.approverPool;
+      delete parsedConfig.gatedStepId;
+    }
+    // @feature-flag:playbooks-production-adapters disabled-end
+  }
+  // @feature-flag:playbooks-production-adapters enabled-start
 
   // Every descriptor is enforced, including `read`. Fetch once at the last boundary before
   // dispatch so a permission revoked while the run was parked cannot reach an adapter.
-  await assertInitiatorStillPermitted(context, descriptor.requiredPermissions);
+  await assertInitiatorStillPermitted(
+    context,
+    requiredPermissionsForStep(context.stepType, parsedConfig),
+  );
 
-  return adapter({ ...context, config: parsedConfig });
+  const result = await adapter({ ...context, config: parsedConfig });
+  // @feature-flag:playbooks-production-adapters enabled-end
+  // @feature-flag:playbooks-production-adapters end
+  return result;
 }
 
 export * from './registry';

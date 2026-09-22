@@ -42,6 +42,7 @@ import { PlaybookStepSchemaError } from '../services/playbookSteps/descriptorVal
 import {
   PlaybookStepTypeError,
   UnknownPlaybookStepTypeError,
+  isProductionAdapterStep,
 } from '../services/playbookSteps/registry';
 import { advanceRun } from '../services/playbookAdvanceService';
 import {
@@ -51,17 +52,35 @@ import {
   submitApprovalDecision,
 } from '../services/playbookSteps/approvalGateAdapter';
 import {
+  PlaybookSpendCapExceededError,
+  PlaybookSpendConfigurationError,
+  PlaybookSpendPolicyValidationError,
+  playbookSpendPolicyService,
+} from '../services/playbookSpendPolicyService';
+import {
   PlaybookRunActionConflictError,
   PlaybookRunActionForbiddenError,
   PlaybookRunActionNotFoundError,
   cancelPlaybookRun,
   retryPlaybookStep,
 } from '../services/playbookRunActionService';
+import { isFeatureEnabled } from '../services/featureFlagService';
+import {
+  PlaybookGateEmptyPoolError,
+  PlaybookGateForbiddenError,
+  PlaybookGateInputRenderError,
+  PlaybookGateNotFoundError,
+  decideGate,
+  getGateDetail,
+  isProductionGateStepRun,
+} from '../services/playbookGateService';
+import { getUserPermissions } from '../services/rbacService';
 
 const router = express.Router();
 
 /** The display cap. A larger `limit` is clamped rather than refused; `total` reports the truth. */
 const MAX_RUN_PAGE = 50;
+const PRODUCTION_ADAPTERS_FLAG = 'playbooks-production-adapters';
 
 type RequestBody = Record<string, unknown>;
 
@@ -165,6 +184,90 @@ const requirePlaybooksProject: express.RequestHandler = async (req, res, next) =
 };
 
 router.use(requirePlaybooksProject);
+
+async function productionAdaptersFlagEnabled(req: Request, project: string): Promise<boolean> {
+  return isFeatureEnabled(PRODUCTION_ADAPTERS_FLAG, {
+    userId: getUserId(req),
+    project,
+  });
+}
+
+router.get(
+  '/spend-policy',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const enabled = await productionAdaptersFlagEnabled(req, project);
+
+    // @feature-flag:playbooks-production-adapters start winner=enabled
+    if (!enabled) {
+      // @feature-flag:playbooks-production-adapters disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbooks-production-adapters disabled-end
+    }
+    // @feature-flag:playbooks-production-adapters enabled-start
+    res.json(await playbookSpendPolicyService.getPolicy(project));
+    // @feature-flag:playbooks-production-adapters enabled-end
+    // @feature-flag:playbooks-production-adapters end
+  },
+);
+
+router.patch(
+  '/spend-policy',
+  requirePermission('playbooks:admin'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const enabled = await productionAdaptersFlagEnabled(req, project);
+
+    // @feature-flag:playbooks-production-adapters start winner=enabled
+    if (!enabled) {
+      // @feature-flag:playbooks-production-adapters disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbooks-production-adapters disabled-end
+    }
+    // @feature-flag:playbooks-production-adapters enabled-start
+    const { reason, capUsd, enabled: policyEnabled } = (req.body ?? {}) as RequestBody;
+    if (!isNonBlankString(reason)) {
+      res.status(400).json({ error: 'reason is required' });
+      return;
+    }
+    if (capUsd !== undefined && typeof capUsd !== 'string') {
+      res.status(400).json({ error: 'capUsd must be a decimal string' });
+      return;
+    }
+    if (policyEnabled !== undefined && typeof policyEnabled !== 'boolean') {
+      res.status(400).json({ error: 'enabled must be a boolean' });
+      return;
+    }
+    const actorUserId = getUserId(req);
+    if (!actorUserId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    try {
+      res.json(await playbookSpendPolicyService.updatePolicy({
+        project,
+        actorUserId,
+        reason,
+        ...(capUsd !== undefined ? { capUsd } : {}),
+        ...(policyEnabled !== undefined ? { enabled: policyEnabled } : {}),
+      }));
+    } catch (error) {
+      if (
+        error instanceof PlaybookSpendPolicyValidationError ||
+        error instanceof PlaybookSpendConfigurationError
+      ) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
+      throw error;
+    }
+    // @feature-flag:playbooks-production-adapters enabled-end
+    // @feature-flag:playbooks-production-adapters end
+  },
+);
 
 router.get(
   '/definitions',
@@ -296,6 +399,20 @@ router.post(
     }
 
     try {
+      const productionAdaptersEnabled = await productionAdaptersFlagEnabled(req, project);
+      if (!productionAdaptersEnabled) {
+        const detail = await getDefinitionDetail(project, req.params.definitionId);
+        const usesProductionAdapters = detail.draft.graph.nodes.some(
+          (node) => isProductionAdapterStep(node.stepType, node.config),
+        );
+        if (usesProductionAdapters) {
+          res.status(409).json({
+            error: 'Production Playbook adapters are disabled.',
+            code: 'PLAYBOOK_PRODUCTION_ADAPTERS_DISABLED',
+          });
+          return;
+        }
+      }
       const result = await publishDraft({
         project,
         definitionId: req.params.definitionId,
@@ -354,6 +471,24 @@ router.get(
     const limit =
       Number.isFinite(requested) && requested > 0 ? Math.min(requested, MAX_RUN_PAGE) : MAX_RUN_PAGE;
 
+    const filter = req.query.filter;
+    if (filter !== undefined && filter !== 'assigned-to-me') {
+      res.status(400).json({ error: 'Unknown Playbook run filter.' });
+      return;
+    }
+    if (filter === 'assigned-to-me') {
+      if (!(await productionAdaptersFlagEnabled(req, project))) {
+        res.status(404).json({ error: 'Not found' });
+        return;
+      }
+      const userId = getUserId(req);
+      if (!userId) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      res.json(await listRuns(project, limit, userId));
+      return;
+    }
     res.json(await listRuns(project, limit));
   }
 );
@@ -379,6 +514,48 @@ router.get(
 
     res.json(run);
   }
+);
+
+router.get(
+  '/runs/:runId/steps/:stepRunId/gate',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    if (!(await productionAdaptersFlagEnabled(req, project))) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    const userId = getUserId(req);
+    if (!userId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    try {
+      res.json(await getGateDetail({
+        project,
+        runId: req.params.runId,
+        stepRunId: req.params.stepRunId,
+        userId,
+      }));
+    } catch (error) {
+      if (error instanceof PlaybookGateForbiddenError) {
+        res.status(403).json({ error: error.message });
+        return;
+      }
+      if (error instanceof PlaybookGateNotFoundError) {
+        res.status(404).json({ error: error.message });
+        return;
+      }
+      if (
+        error instanceof PlaybookGateInputRenderError
+        || error instanceof PlaybookGateEmptyPoolError
+      ) {
+        res.status(409).json({ error: error.message, code: error.name });
+        return;
+      }
+      throw error;
+    }
+  },
 );
 
 router.post(
@@ -420,6 +597,7 @@ router.post(
     }
 
     try {
+      const spendAdmissionEnabled = await productionAdaptersFlagEnabled(req, project);
       const result = await startRun({
         project,
         definitionId,
@@ -427,6 +605,7 @@ router.post(
           ? { definitionVersionId, versionPinReason: versionPinReason as string }
           : {}),
         initiatorUserId,
+        ...(spendAdmissionEnabled ? { spendAdmissionEnabled: true } : {}),
       });
       res.status(201).json(result);
     } catch (error) {
@@ -456,6 +635,17 @@ router.post(
 
       if (error instanceof PlaybookVersionPinNotPublishedError) {
         res.status(409).json({ error: error.message });
+        return;
+      }
+
+      if (error instanceof PlaybookSpendCapExceededError) {
+        res.status(409).json({
+          error: error.message,
+          code: error.code,
+          currentSpendUsd: error.currentSpendUsd,
+          capUsd: error.capUsd,
+          requiredPermission: error.requiredPermission,
+        });
         return;
       }
 
@@ -562,10 +752,9 @@ router.post(
  */
 router.post(
   '/runs/:runId/steps/:stepRunId/decision',
-  requirePermission('playbooks:run'),
   async (req: Request, res: Response): Promise<void> => {
     const { runId, stepRunId } = req.params;
-    const { decision } = (req.body ?? {}) as Record<string, unknown>;
+    const { decision, comment } = (req.body ?? {}) as Record<string, unknown>;
 
     if (decision !== 'approved' && decision !== 'rejected') {
       res.status(400).json({ error: "decision must be 'approved' or 'rejected'" });
@@ -579,12 +768,32 @@ router.post(
     }
 
     try {
-      const result = await submitApprovalDecision({
-        stepRunId,
-        runId,
-        deciderUserId,
-        decision,
-      });
+      const project = resolveRequestProject(req)!;
+      const productionAdaptersEnabled = await productionAdaptersFlagEnabled(req, project);
+      const useProductionGate = productionAdaptersEnabled
+        && await isProductionGateStepRun(stepRunId);
+      if (!useProductionGate) {
+        const permissions = await getUserPermissions(deciderUserId, project);
+        if (!permissions.has('playbooks:run')) {
+          res.status(403).json({ error: 'Missing required permission: playbooks:run' });
+          return;
+        }
+      }
+      const result = useProductionGate
+        ? await decideGate({
+            project,
+            stepRunId,
+            runId,
+            userId: deciderUserId,
+            decision,
+            ...(typeof comment === 'string' ? { comment } : {}),
+          })
+        : await submitApprovalDecision({
+            stepRunId,
+            runId,
+            deciderUserId,
+            decision,
+          });
 
       /*
        * PBI-004 asks for the next step to be under way before the response returns, so this is
@@ -598,7 +807,7 @@ router.post(
        * already durably recorded, and failing this response would tell the caller their approval
        * did not happen when it did.
        */
-      if (result.outcome === 'recorded') {
+      if (result.outcome === 'recorded' && 'stepId' in result && result.stepId) {
         await advanceRun(runId, result.stepId);
       }
 
@@ -606,6 +815,18 @@ router.post(
     } catch (error) {
       if (error instanceof ApprovalNotPermittedError) {
         res.status(403).json({ error: error.message });
+        return;
+      }
+      if (error instanceof PlaybookGateForbiddenError) {
+        res.status(403).json({ error: error.message });
+        return;
+      }
+      if (error instanceof PlaybookGateNotFoundError) {
+        res.status(404).json({ error: error.message });
+        return;
+      }
+      if (error instanceof PlaybookGateEmptyPoolError) {
+        res.status(409).json({ error: error.message, code: error.name });
         return;
       }
 

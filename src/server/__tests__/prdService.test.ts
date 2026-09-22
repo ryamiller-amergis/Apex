@@ -143,6 +143,29 @@ jest.mock('../services/documentValidationService', () => ({
   autoStartDocumentValidation: jest.fn().mockResolvedValue(undefined),
   cancelDocumentValidation: jest.fn().mockResolvedValue(undefined),
   generateFallbackReport: jest.fn().mockReturnValue('# Fallback validation report'),
+  ingestValidationScorecard: jest.fn().mockImplementation(
+    async (
+      adapter: {
+        isCurrentValidationThread(threadId: string): Promise<boolean>;
+        updateDbForValidationResult(
+          scorecard: Record<string, unknown>,
+          reportMd: string,
+        ): Promise<void>;
+      },
+      threadId: string,
+      outcome: { kind: string; scorecardRaw?: string; reportMd?: string },
+    ) => {
+      if (!(await adapter.isCurrentValidationThread(threadId))) {
+        return { disposition: 'discarded_stale' };
+      }
+      const scorecard = JSON.parse(outcome.scorecardRaw ?? '{}');
+      await adapter.updateDbForValidationResult(
+        scorecard,
+        outcome.reportMd ?? '# Fallback validation report',
+      );
+      return { disposition: 'applied', scorecard };
+    },
+  ),
   isDocumentValidationWatcherActive: jest.fn().mockReturnValue(false),
   startDocumentValidationWatcher: jest.fn(),
   stopDocumentValidationWatcher: jest.fn(),
@@ -1995,6 +2018,13 @@ describe('PRD validation lifecycle', () => {
 
   it('syncs a validation scorecard and moves ready PRDs to pending review', async () => {
     mockPrdSelectForGetPrd({ status: 'validating', validationThreadId: 'validation-thread-1' });
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      validationThreadId: 'validation-thread-1',
+      fixBaseline: null,
+      status: 'validating',
+      content: '# PRD',
+      backlogJson: {},
+    });
     const scorecard = {
       slug: 'feature-prd',
       generated_at: '2026-01-01T00:00:00Z',
@@ -2007,8 +2037,10 @@ describe('PRD validation lifecycle', () => {
     };
     mockReadOutputValidationScorecard.mockReturnValue(JSON.stringify(scorecard));
     mockReadOutputValidationScorecardMd.mockReturnValue('# Validation Report');
-    const whereMock = jest.fn().mockResolvedValue(undefined);
-    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'prd-1' }]);
+    const setMock = jest.fn().mockReturnValue({
+      where: jest.fn().mockReturnValue({ returning: returningMock }),
+    });
     mockDb.update.mockReturnValue({ set: setMock });
 
     const result = await syncPrdValidationResult('prd-1');

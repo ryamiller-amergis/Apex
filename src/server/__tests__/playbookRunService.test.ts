@@ -32,6 +32,7 @@ jest.mock('../db/drizzle', () => ({
 }));
 
 const assertActiveRunCapacity = jest.fn().mockResolvedValue(undefined);
+const assertSpendAdmission = jest.fn().mockResolvedValue(undefined);
 
 /*
  * The engine is stubbed. Which node runs first, what a step body does, and what happens when one
@@ -52,6 +53,11 @@ jest.mock('../services/playbookAdvanceService', () => ({
 jest.mock('../services/playbookGuardService', () => ({
   ...jest.requireActual('../services/playbookGuardService'),
   assertActiveRunCapacity: (...a: unknown[]) => assertActiveRunCapacity(...a),
+}));
+jest.mock('../services/playbookSpendPolicyService', () => ({
+  playbookSpendPolicyService: {
+    assertAdmission: (...a: unknown[]) => assertSpendAdmission(...a),
+  },
 }));
 
 import {
@@ -466,6 +472,28 @@ describe('VT-16 — starting a run leaves existing runs and their pins alone (BR
     expect(insertValues).toHaveBeenCalledTimes(1);
     // Resolution reads versions; it never rewrites a version another run is already pinned to.
     expect(updateTable).not.toHaveBeenCalled();
+  });
+});
+
+describe('FEAT-015 — spend admission precedes every run write', () => {
+  it('rejects before capacity, run insert, or engine dispatch', async () => {
+    assertSpendAdmission.mockRejectedValueOnce(new Error('cap exceeded'));
+
+    await expect(startRun({
+      project: PROJECT,
+      definitionId: 'def-1',
+      initiatorUserId: INITIATOR,
+      spendAdmissionEnabled: true,
+    })).rejects.toThrow('cap exceeded');
+
+    expect(assertActiveRunCapacity).not.toHaveBeenCalled();
+    expect(insertValues).not.toHaveBeenCalled();
+    expect(beginRun).not.toHaveBeenCalled();
+  });
+
+  it('does not evaluate policy while the flag is disabled', async () => {
+    await startRun({ project: PROJECT, definitionId: 'def-1', initiatorUserId: INITIATOR });
+    expect(assertSpendAdmission).not.toHaveBeenCalled();
   });
 });
 

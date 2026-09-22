@@ -11,7 +11,7 @@ import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, Des
 import type { PipelinePinPolicy, RunRef } from '../../shared/types/runGrounding';
 import { stampGroundingProvenance } from '../../shared/utils/groundingProvenance';
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
-import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, createThread as createChatThread, sendMessage, cancelRun, prepareBackgroundWorkflowTurn, hydrateThread } from './chatAgentService';
+import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readAllOutputDesignDocFeatures, isThreadIdle, createThread as createChatThread, sendMessage, cancelRun, prepareBackgroundWorkflowTurn, hydrateThread } from './chatAgentService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
 import { isThreadRunAlive, canThisInstanceFailGeneration } from './agentRunReaperService';
 import { isAdminUser } from '../utils/rbacHelpers';
@@ -22,13 +22,20 @@ import { resolveSkillConfig, getSkillSettingsName } from './projectSettingsServi
 import { getDefaultModel } from './appSettingsService';
 import { getPrd } from './prdService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
-import { collectValidationGaps, parseAgentValidationScorecard, buildUnusableValidationScorecard, NO_SCORECARD_REASON, VALIDATION_TIMEOUT_REASON } from '../../shared/utils/validationReport';
+import { collectValidationGaps } from '../../shared/utils/validationReport';
 import {
   propagatePipelineGrounding,
   readActiveTargetProvenance,
   resolveRunGroundingSurface,
   runGroundingService,
 } from './runGroundingService';
+import {
+  ingestValidationScorecard,
+  isDocumentValidationWatcherActive,
+  startDocumentValidationWatcher,
+  stopDocumentValidationWatcher,
+  type DocumentValidationAdapter,
+} from './documentValidationService';
 
 const VALID_STATUSES: DesignDocStatus[] = ['generating', 'generation_failed', 'validating', 'draft', 'pending_review', 'reviewer_approved', 'approved', 'revision_requested'];
 
@@ -632,7 +639,6 @@ const WATCHER_INTERVAL_MS = 5_000;
 const WATCHER_MAX_ATTEMPTS = 360;
 
 const activeDocWatchers = new Map<string, ReturnType<typeof setInterval>>();
-const activeValidationWatchers = new Map<string, ReturnType<typeof setInterval>>();
 
 function stopDocWatcher(designDocId: string): void {
   const handle = activeDocWatchers.get(designDocId);
@@ -644,17 +650,12 @@ function stopDocWatcher(designDocId: string): void {
 }
 
 function stopValidationWatcher(designDocId: string): void {
-  const handle = activeValidationWatchers.get(designDocId);
-  if (handle !== undefined) {
-    clearInterval(handle);
-    activeValidationWatchers.delete(designDocId);
-    console.log(`[validationWatcher] Cancelled — designDocId=${designDocId}`);
-  }
+  stopDocumentValidationWatcher(designDocId);
 }
 
 /** Returns true when a validation watcher is already running for this doc. */
 export function isValidationWatcherActive(designDocId: string): boolean {
-  return activeValidationWatchers.has(designDocId);
+  return isDocumentValidationWatcherActive(designDocId);
 }
 
 function humanizeSlug(slug: string): string {
@@ -1371,6 +1372,59 @@ function rowToSummary(
   };
 }
 
+export function createDesignDocValidationAdapter(
+  designDocId: string,
+  document?: DesignDoc,
+): DocumentValidationAdapter {
+  return {
+    getDocumentId: () => designDocId,
+    getProject: () => document?.project ?? '',
+    getSkillSettingsId: () => document?.skillSettingsId ?? null,
+    getAuthorId: () => document?.authorId ?? '',
+    getSourceThreadId: () => document?.chatThreadId ?? null,
+    getValidationThreadId: () => document?.validationThreadId ?? null,
+    getStatus: () => document?.status ?? 'validating',
+    getSkillPath: (skillConfig) => skillConfig.designDocValidationSkillPath,
+    getModel: (skillConfig, globalModel) => skillConfig.designDocValidationModel ?? globalModel,
+    buildValidationContext: () => '',
+    updateDbForValidationStart: async (threadId: string) => {
+      const statusAllowsValidation: DesignDocStatus[] = [
+        'generating',
+        'pending_review',
+        'draft',
+        'revision_requested',
+        'validating',
+      ];
+      const newStatus = document && statusAllowsValidation.includes(document.status as DesignDocStatus)
+        ? 'validating'
+        : undefined;
+      await db.update(designDocs)
+        .set({
+          validationThreadId: threadId,
+          validationScore: null,
+          validationScorecard: null,
+          validationReportMd: null,
+          validationPhase: null,
+          fixBaseline: null,
+          ...(newStatus ? { status: newStatus } : {}),
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(designDocs.id, designDocId));
+    },
+    updateDbForValidationResult: (scorecard, reportMd) =>
+      applyDesignDocValidationResult(designDocId, scorecard, reportMd),
+    updateDbForValidationTimeout: async () => undefined,
+    updateDbForValidationError: async () => undefined,
+    isCurrentValidationThread: async (threadId: string) => {
+      const current = await db.query.designDocs.findFirst({
+        where: eq(designDocs.id, designDocId),
+        columns: { validationThreadId: true },
+      });
+      return current?.validationThreadId === threadId;
+    },
+  };
+}
+
 export async function autoStartValidation(designDocId: string): Promise<void> {
   const doc = await getDesignDoc(designDocId);
   if (!doc) {
@@ -1455,10 +1509,10 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
     await runGroundingService.persistThenMarkTerminalInactive(
       destinationRun,
       async () => {
-        await persistUnusableDesignDocValidation(
-          designDocId,
-          'Validation could not start. Re-run validation.',
+        await ingestValidationScorecard(
+          createDesignDocValidationAdapter(designDocId, doc),
           thread.id,
+          { kind: 'unusable', reason: 'Validation could not start. Re-run validation.' },
         );
       },
     );
@@ -1519,106 +1573,11 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
   }
 }
 
-const VALIDATION_WATCHER_INTERVAL_MS = 5_000;
-const VALIDATION_WATCHER_MAX_ATTEMPTS = 720;
-
-async function persistUnusableDesignDocValidation(
-  designDocId: string,
-  reason: string,
-  validationThreadId?: string | null,
-): Promise<void> {
-  const scorecard = buildUnusableValidationScorecard(reason);
-  const reportMd = generateFallbackReport(scorecard);
-  const conditions = [
-    eq(designDocs.id, designDocId),
-    eq(designDocs.status, 'validating'),
-  ];
-  if (validationThreadId) {
-    conditions.push(eq(designDocs.validationThreadId, validationThreadId));
-  }
-  await db
-    .update(designDocs)
-    .set({
-      validationScore: Math.round(scorecard.overall_score),
-      validationScorecard: scorecard,
-      validationPhase: scorecard.review_phase,
-      validationReportMd: reportMd,
-      status: 'pending_review',
-      updatedAt: new Date().toISOString(),
-    })
-    .where(and(...conditions));
-}
-
 export function startValidationWatcher(designDocId: string, validationThreadId: string): void {
-  stopValidationWatcher(designDocId);
-  let attempts = 0;
-
-  console.log(`[validationWatcher] Started — designDocId=${designDocId} threadId=${validationThreadId}`);
-  void hydrateThread(validationThreadId).catch((err) => {
-    console.warn(
-      `[validationWatcher] hydrate failed (threadId=${validationThreadId}):`,
-      (err as Error).message,
-    );
-  });
-
-  const finish = (): void => {
-    clearInterval(interval);
-    activeValidationWatchers.delete(designDocId);
-  };
-
-  const interval = setInterval(async () => {
-    attempts += 1;
-
-    if (attempts > VALIDATION_WATCHER_MAX_ATTEMPTS) {
-      finish();
-      console.warn(`[validationWatcher] Timed out (designDocId=${designDocId})`);
-      await persistUnusableDesignDocValidation(designDocId, VALIDATION_TIMEOUT_REASON, validationThreadId);
-      return;
-    }
-
-    if (await isThreadRunAlive(validationThreadId)) {
-      return;
-    }
-
-    const scorecardRaw = readOutputValidationScorecard(validationThreadId);
-
-    if (!scorecardRaw) {
-      if (
-        isThreadIdle(validationThreadId)
-        && (await canThisInstanceFailGeneration(validationThreadId))
-      ) {
-        finish();
-        console.warn(`[validationWatcher] Agent completed/errored without scorecard (designDocId=${designDocId} threadId=${validationThreadId})`);
-        await persistUnusableDesignDocValidation(designDocId, NO_SCORECARD_REASON, validationThreadId);
-      }
-      return;
-    }
-
-    finish();
-
-    try {
-      const currentDoc = await db.query.designDocs.findFirst({
-        where: eq(designDocs.id, designDocId),
-        columns: { validationThreadId: true },
-      });
-      if (currentDoc?.validationThreadId !== validationThreadId) {
-        console.log(`[validationWatcher] Discarded stale result — thread ${validationThreadId} no longer active (designDocId=${designDocId})`);
-        cleanupWorkspace(validationThreadId);
-        return;
-      }
-
-      const scorecard = parseAgentValidationScorecard(scorecardRaw);
-      const reportMd = readOutputValidationScorecardMd(validationThreadId) ?? undefined;
-      await syncValidationResult(designDocId, scorecard, reportMd);
-      console.log(`[validationWatcher] Scorecard synced — score=${scorecard.overall_score} is_ready=${scorecard.is_ready} (designDocId=${designDocId})`);
-      cleanupWorkspace(validationThreadId);
-    } catch (err) {
-      console.error(`[validationWatcher] Failed to parse/sync scorecard (designDocId=${designDocId})`, err);
-      await persistUnusableDesignDocValidation(designDocId, NO_SCORECARD_REASON, validationThreadId);
-    }
-  }, VALIDATION_WATCHER_INTERVAL_MS);
-
-  activeValidationWatchers.set(designDocId, interval);
+  startDocumentValidationWatcher(
+    createDesignDocValidationAdapter(designDocId),
+    validationThreadId,
+  );
 }
 
 export function generateFallbackReport(scorecard: ValidationScorecard): string {
@@ -1677,7 +1636,7 @@ export function generateFallbackReport(scorecard: ValidationScorecard): string {
   return lines.join('\n');
 }
 
-export async function syncValidationResult(
+async function applyDesignDocValidationResult(
   designDocId: string,
   scorecard: ValidationScorecard,
   reportMd?: string,
@@ -1708,6 +1667,18 @@ export async function syncValidationResult(
       console.error(`[syncValidationResult] Failed to notify approvers (docId=${designDocId})`, err),
     );
   }
+}
+
+/**
+ * Document-specific persistence retained for existing internal callers.
+ * Outcome-producing paths must call ingestValidationScorecard instead.
+ */
+export async function syncValidationResult(
+  designDocId: string,
+  scorecard: ValidationScorecard,
+  reportMd?: string,
+): Promise<void> {
+  await applyDesignDocValidationResult(designDocId, scorecard, reportMd);
 }
 
 export async function cancelValidation(id: string, requestingUserId: string): Promise<void> {

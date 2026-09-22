@@ -122,11 +122,11 @@ describe('FEAT-008 S7 — runtime reclassification guard', () => {
       suspended: 'external',
     });
 
-    expect(beginStepRun).toHaveBeenCalledWith({
+    expect(beginStepRun).toHaveBeenCalledWith(expect.objectContaining({
       runId: 'run-1',
       stepId: 'external',
       stepType: 'cursor-agent',
-    });
+    }));
     expect(executeStep).not.toHaveBeenCalled();
     expect(failStepRunForHuman).toHaveBeenCalledWith({
       stepRunId: 'step-run-external',
@@ -175,9 +175,9 @@ describe('FEAT-008 S7 — runtime reclassification guard', () => {
   it('VT-20 — executes a currently leaves-apex step when the pinned graph gates it', async () => {
     const suspend = jest.fn();
 
-    await expect(externalStep(gatedGraph).execute({ suspend })).resolves.toEqual({
-      stepId: 'external',
-    });
+    await expect(externalStep(gatedGraph).execute({ suspend })).resolves.toEqual(
+      expect.objectContaining({ stepId: 'external' }),
+    );
 
     expect(executeStep).toHaveBeenCalledTimes(1);
     expect(failStepRunForHuman).not.toHaveBeenCalled();

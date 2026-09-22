@@ -40,6 +40,11 @@ jest.mock('../services/playbookAdvanceService', () => ({
   advanceRun: (...a: unknown[]) => advanceRun(...a),
 }));
 
+jest.mock('../services/chatAgentService', () => ({
+  readOutputValidationScorecard: jest.fn().mockReturnValue(null),
+  readOutputValidationScorecardMd: jest.fn().mockReturnValue(null),
+}));
+
 import type { AgentRunEventEnvelope, AgentRunEventStatus } from '../../shared/types/chat';
 import {
   handleTerminalAgentRunEvent,
@@ -119,7 +124,7 @@ describe('VT-01 — a terminal success event resumes the correlated step', () =>
     expect(failStepRun).not.toHaveBeenCalled();
     expect(resumeStepRun).toHaveBeenCalledWith({
       stepRunId: STEP_RUN_ID,
-      output: { agentRunId: AGENT_RUN_ID, completedAt: '2026-09-19T12:00:00.000Z' },
+      output: { agentRunId: AGENT_RUN_ID, completedAt: '2026-09-19T12:00:00.000Z', threadId: 'thread-1' },
     });
   });
 

@@ -20,15 +20,27 @@ interface PlaybookStatusViewProps {
 }
 
 export const PlaybookStatusView: React.FC<PlaybookStatusViewProps> = ({ selectedProject }) => {
-  const { data, isPending, isError, error, refetch } = usePlaybookRuns(selectedProject);
+  const assignedFilter = typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('filter') === 'assigned-to-me'
+    ? 'assigned-to-me' as const
+    : undefined;
+  const { data, isPending, isError, error, refetch } = usePlaybookRuns(
+    selectedProject,
+    assignedFilter,
+  );
 
   return (
     <div className={styles.view} {...{ 'data-testid': 'playbook-status-view' }}>
       <header className={styles.header}>
         <h1 className={styles.title}>Playbook runs</h1>
         <p className={styles.hint}>
-          Live step status for {selectedProject}, read from Apex&apos;s own tables.
+          {assignedFilter
+            ? `Pending Playbook gates assigned to you in ${selectedProject}.`
+            : `Live step status for ${selectedProject}, read from Apex's own tables.`}
         </p>
+        {assignedFilter ? (
+          <a href="/playbooks" data-testid="playbook-clear-assigned-filter">Show all runs</a>
+        ) : null}
       </header>
 
       <PlaybookDefinitionPanel

@@ -18,6 +18,8 @@ import type {
   PlaybookStepRunStatus,
   CancelPlaybookRunResponse,
   RetryPlaybookStepResponse,
+  PlaybookGateDetail,
+  PlaybookRunFilter,
 } from '../../shared/types/playbook';
 
 /** How often a live run is re-read. Frequent enough to watch, slow enough not to be a load test. */
@@ -75,17 +77,60 @@ export function hasLiveStep(run: PlaybookRunDetail | undefined): boolean {
 }
 
 /** Runs in a project, most recent first. Polls while any of them is still going. */
-export function usePlaybookRuns(project: string | undefined) {
+export function usePlaybookRuns(
+  project: string | undefined,
+  filter?: PlaybookRunFilter,
+) {
   return useQuery<PlaybookRunListResult>({
-    queryKey: ['playbook-runs', project],
+    queryKey: ['playbook-runs', project, filter],
     queryFn: () =>
       apiFetch<PlaybookRunListResult>(
-        `/api/playbooks/runs?project=${encodeURIComponent(project!)}`
+        `/api/playbooks/runs?project=${encodeURIComponent(project!)}${filter ? `&filter=${filter}` : ''}`
       ),
     enabled: !!project,
     staleTime: 0,
     refetchInterval: (result) =>
       result.state.data?.runs.some((run) => isRunLive(run.status)) ? POLL_INTERVAL_MS : false,
+  });
+}
+
+export function usePlaybookGate(
+  project: string | undefined,
+  runId: string | null,
+  stepRunId: string | null,
+) {
+  return useQuery<PlaybookGateDetail>({
+    queryKey: ['playbook-gate', project, runId, stepRunId],
+    queryFn: () => apiFetch(
+      `/api/playbooks/runs/${encodeURIComponent(runId!)}/steps/${encodeURIComponent(stepRunId!)}`
+        + `/gate?project=${encodeURIComponent(project!)}`,
+    ),
+    enabled: Boolean(project && runId && stepRunId),
+    retry: false,
+  });
+}
+
+export function usePlaybookGateDecision(project: string, runId: string, stepRunId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<unknown, PlaybookRunApiError, {
+    decision: 'approved' | 'rejected';
+    comment?: string;
+  }>({
+    mutationFn: (decision) => apiFetch(
+      `/api/playbooks/runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepRunId)}/decision`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project, ...decision }),
+      },
+    ),
+    onSuccess: async () => {
+      await Promise.all([
+        invalidateRunQueries(queryClient, project, runId),
+        queryClient.invalidateQueries({ queryKey: ['playbook-gate', project, runId, stepRunId] }),
+        queryClient.invalidateQueries({ queryKey: ['home-dashboard', project] }),
+      ]);
+    },
   });
 }
 

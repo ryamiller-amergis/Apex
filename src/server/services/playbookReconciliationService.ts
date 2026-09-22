@@ -26,6 +26,10 @@ import { agentRuns, playbookRuns, playbookStepRuns } from '../db/schema';
 import { advanceStalledRuns } from './playbookAdvanceService';
 import { failStepRun, resumeStepRun } from './playbookSteps/stepRuns';
 import type { PlaybookSweepOutcome } from '../../shared/types/playbook';
+import { failGatesWithEmptyCurrentPools } from './playbookGateService';
+import { createDesignDocValidationAdapter, getDesignDoc } from './designDocService';
+import { ingestValidationScorecard } from './documentValidationService';
+import { VALIDATION_TIMEOUT_REASON } from '../../shared/utils/validationReport';
 
 /** Agent-run statuses that mean the turn is over, one way or another. */
 const TERMINAL_AGENT_RUN_STATUSES = ['completed', 'failed', 'cancelled'] as const;
@@ -124,9 +128,16 @@ async function expireOverdueSuspensions(now: Date): Promise<number> {
         lte(playbookStepRuns.expiresAt, now.toISOString())
       )
     )
-    .returning({ id: playbookStepRuns.id, runId: playbookStepRuns.runId });
+    .returning({
+      id: playbookStepRuns.id,
+      runId: playbookStepRuns.runId,
+      stepType: playbookStepRuns.stepType,
+    });
 
   for (const step of expiredSteps) {
+    if (step.stepType === 'cursor-agent') {
+      await applyExpiredValidationTimeout(step.runId);
+    }
     await db
       .update(playbookRuns)
       .set({ status: 'expired', completedAt: now.toISOString(), updatedAt: now.toISOString() })
@@ -140,6 +151,25 @@ async function expireOverdueSuspensions(now: Date): Promise<number> {
   }
 
   return expiredSteps.length;
+}
+
+async function applyExpiredValidationTimeout(runId: string): Promise<void> {
+  const [run] = await db
+    .select({ runInput: playbookRuns.runInput })
+    .from(playbookRuns)
+    .where(eq(playbookRuns.id, runId))
+    .limit(1);
+  const input = (run?.runInput ?? {}) as Record<string, unknown>;
+  if (input.documentType !== 'design_doc' || typeof input.documentId !== 'string') return;
+  if (typeof input.validationThreadId !== 'string') return;
+
+  const document = await getDesignDoc(input.documentId);
+  if (!document) return;
+  await ingestValidationScorecard(
+    createDesignDocValidationAdapter(input.documentId, document),
+    input.validationThreadId,
+    { kind: 'timeout', reason: VALIDATION_TIMEOUT_REASON },
+  );
 }
 
 /**
@@ -181,6 +211,7 @@ export async function runReconciliationPass(
 
   try {
     const resumed = await resumeMissedTerminalEvents();
+    await failGatesWithEmptyCurrentPools();
     const expired = await expireOverdueSuspensions(clock());
     const orphaned = await countOrphans();
     /*

@@ -537,8 +537,10 @@ describe('FEAT-008 VT-15/VT-16 (TBI-034 / PBI-007) — publishing through the de
   });
 
   it('VT-16 (PBI-007 AC-1): publishes the same draft once a gate is put in front', async () => {
+    const agent = node('agent', 'cursor-agent');
+    agent.config = { ...agent.config, mcpProfile: 'repository-read-only' };
     draftIs({
-      nodes: [node('gate', 'approval-gate'), node('agent', 'cursor-agent')],
+      nodes: [node('gate', 'approval-gate'), agent],
       edges: [{ from: 'gate', to: 'agent' }],
     });
 

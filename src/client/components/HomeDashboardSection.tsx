@@ -9,6 +9,7 @@ import { DevToProductionTile } from './DevToProductionTile';
 import { IncompletePipelineTile } from './IncompletePipelineTile';
 import { MyWorkTile } from './MyWorkTile';
 import { OpenBugsOnPbisTile } from './OpenBugsOnPbisTile';
+import { AssignedToMeTile } from './AssignedToMeTile';
 import styles from './HomeDashboardSection.module.css';
 
 const SKELETON_CARDS = [
@@ -18,6 +19,7 @@ const SKELETON_CARDS = [
   { testId: 'home-dashboard-bugs-card', label: 'Open Bugs on PBIs loading' },
   { testId: 'home-dashboard-bug-ratio-card', label: 'Bug Ratio to PBI loading' },
   { testId: 'home-dashboard-devprod-card', label: 'Dev to Production loading' },
+  { testId: 'home-dashboard-assigned-to-me-card', label: 'Assigned to me loading' },
 ] as const;
 
 interface HomeDashboardSectionProps {
@@ -127,6 +129,7 @@ export const HomeDashboardSection: React.FC<HomeDashboardSectionProps> = ({
           scope={scope}
         />
         <DevToProductionTile result={payload.devToProduction} onRetry={onRetry} />
+        <AssignedToMeTile result={payload.assignedToMe ?? null} onRetry={onRetry} />
       </div>
     </section>
   );

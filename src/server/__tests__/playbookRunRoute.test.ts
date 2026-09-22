@@ -17,8 +17,22 @@ jest.mock('../db/drizzle', () => ({ db: {} }));
 jest.mock('../db', () => ({ __esModule: true, default: { end: jest.fn(), on: jest.fn() } }));
 
 const getUserPermissions = jest.fn();
+const isFeatureEnabled = jest.fn().mockResolvedValue(false);
+const getSpendPolicy = jest.fn();
+const updateSpendPolicy = jest.fn();
 jest.mock('../services/rbacService', () => ({
   getUserPermissions: (...a: unknown[]) => getUserPermissions(...a),
+}));
+jest.mock('../services/featureFlagService', () => ({
+  isFeatureEnabled: (...a: unknown[]) => isFeatureEnabled(...a),
+}));
+jest.mock('../services/playbookSpendPolicyService', () => ({
+  ...jest.requireActual('../services/playbookSpendPolicyService'),
+  playbookSpendPolicyService: {
+    assertAdmission: jest.fn(),
+    getPolicy: (...a: unknown[]) => getSpendPolicy(...a),
+    updatePolicy: (...a: unknown[]) => updateSpendPolicy(...a),
+  },
 }));
 
 // The real middleware waves super admins through before consulting permissions at all, which would
@@ -44,6 +58,7 @@ import {
   PlaybookVersionPinNotPublishedError,
   PlaybookVersionPinReasonRequiredError,
 } from '../services/playbookRunService';
+import { PlaybookSpendCapExceededError } from '../services/playbookSpendPolicyService';
 
 const USER_OID = 'caller-oid';
 
@@ -67,7 +82,72 @@ function grantIn(project: string, ...permissions: string[]) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  isFeatureEnabled.mockResolvedValue(false);
   startRun.mockResolvedValue({ runId: 'run-1', status: 'running' });
+});
+
+describe('FEAT-015 spend admission routes', () => {
+  it('preserves start behavior while the production-adapters flag is off', async () => {
+    grantIn('Apex', 'playbooks:run');
+
+    const res = await request(buildApp())
+      .post('/api/playbooks/runs')
+      .send({ project: 'Apex', definitionId: 'def-1' });
+
+    expect(res.status).toBe(201);
+    expect(startRun).toHaveBeenCalledWith(expect.not.objectContaining({
+      spendAdmissionEnabled: expect.anything(),
+    }));
+  });
+
+  it('maps an at-cap rejection to the typed 409 response', async () => {
+    grantIn('Apex', 'playbooks:run');
+    isFeatureEnabled.mockResolvedValue(true);
+    startRun.mockRejectedValue(new PlaybookSpendCapExceededError('30.000000', '30.000000'));
+
+    const res = await request(buildApp())
+      .post('/api/playbooks/runs')
+      .send({ project: 'Apex', definitionId: 'def-1' });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual(expect.objectContaining({
+      code: 'PLAYBOOK_SPEND_CAP_EXCEEDED',
+      currentSpendUsd: '30.000000',
+      capUsd: '30.000000',
+      requiredPermission: 'playbooks:admin',
+    }));
+    expect(startRun).toHaveBeenCalledWith(expect.objectContaining({ spendAdmissionEnabled: true }));
+  });
+
+  it('requires playbooks:admin before applying a project policy patch', async () => {
+    grantIn('Apex', 'playbooks:view');
+    isFeatureEnabled.mockResolvedValue(true);
+
+    const res = await request(buildApp())
+      .patch('/api/playbooks/spend-policy')
+      .send({ project: 'Apex', capUsd: '50', reason: 'Reviewed release spike' });
+
+    expect(res.status).toBe(403);
+    expect(updateSpendPolicy).not.toHaveBeenCalled();
+  });
+
+  it('applies an authorized override to the request project and actor', async () => {
+    grantIn('Apex', 'playbooks:admin');
+    isFeatureEnabled.mockResolvedValue(true);
+    updateSpendPolicy.mockResolvedValue({ project: 'Apex', capUsd: '50.000000' });
+
+    const res = await request(buildApp())
+      .patch('/api/playbooks/spend-policy')
+      .send({ project: 'Apex', capUsd: '50', reason: 'Reviewed release spike' });
+
+    expect(res.status).toBe(200);
+    expect(updateSpendPolicy).toHaveBeenCalledWith({
+      project: 'Apex',
+      actorUserId: USER_OID,
+      capUsd: '50',
+      reason: 'Reviewed release spike',
+    });
+  });
 });
 
 describe('VT-08 — a caller without playbooks:run', () => {

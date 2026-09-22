@@ -24,8 +24,14 @@ import {
   PlaybookStepTypeError,
   getStepTypeDescriptor,
   isAgentStepType,
+  isApprovalGateStepType,
+  isBranchStepType,
   isRegisteredStepType,
 } from './playbookSteps/registry';
+import { validateBranchCondition } from './playbookSteps/branchConditionEvaluator';
+import {
+  isReadOnlyCursorAgentNode,
+} from './playbookMcpCapabilityService';
 import {
   PLAYBOOK_GUARD_LIMITS,
   type PlaybookGraph,
@@ -180,6 +186,19 @@ function inboundEdges(graph: PlaybookGraph): Map<string, string[]> {
   return inbound;
 }
 
+function canReach(graph: PlaybookGraph, from: string, to: string): boolean {
+  const pending = [from];
+  const seen = new Set<string>();
+  while (pending.length > 0) {
+    const current = pending.shift()!;
+    if (current === to) return true;
+    if (seen.has(current)) continue;
+    seen.add(current);
+    pending.push(...graph.edges.filter((edge) => edge.from === current).map((edge) => edge.to));
+  }
+  return false;
+}
+
 /**
  * Whether this node reaches outside Apex with something other than a gate in front of it.
  *
@@ -194,6 +213,9 @@ function isUngatedLeavesApexNode(
   stepTypeById: Map<string, string>,
   lookup: PlaybookStepDescriptorLookup
 ): boolean {
+  // A server-verified read-only cursor profile does not leave Apex, despite the conservative
+  // descriptor classification used for legacy/unknown agent configurations.
+  if (isReadOnlyCursorAgentNode(node)) return false;
   if (lookup(node.stepType)?.sideEffect !== 'leaves-apex') return false;
 
   const predecessors = inbound.get(node.id) ?? [];
@@ -284,6 +306,26 @@ export function assertGraphStepsResolvable(
     if (!parsed.success) {
       throw new PlaybookGraphNodeConfigError(node.id, node.stepType, parsed.error);
     }
+    if (isBranchStepType(node.stepType)) validateBranchCondition(graph, node);
+    if (isApprovalGateStepType(node.stepType)) {
+      const approverPool = node.config?.approverPool;
+      const gatedStepId = node.config?.gatedStepId;
+      if ((approverPool || gatedStepId) && !(approverPool && gatedStepId)) {
+        throw new PlaybookStepTypeError(
+          `Approval gate "${node.id}" must name both approverPool and gatedStepId.`,
+        );
+      }
+      const reviewsPriorStep = typeof gatedStepId === 'string'
+        && canReach(graph, gatedStepId, node.id);
+      const gatesNextStep = typeof gatedStepId === 'string'
+        && graph.edges.some((edge) => edge.from === node.id && edge.to === gatedStepId);
+      if (gatedStepId && !reviewsPriorStep && !gatesNextStep) {
+        throw new PlaybookStepTypeError(
+          `Approval gate "${node.id}" must review a prior step or directly precede its gated ` +
+            `step "${gatedStepId}".`,
+        );
+      }
+    }
   }
 }
 
@@ -312,12 +354,29 @@ export function assertGraphWithinGuards(graph: PlaybookGraph): void {
     );
   }
 
-  const fanOut = maxFanOut(graph);
-  if (fanOut > maxFanOutWidth) {
+  const invalidFanOut = graph.nodes.find((node) => {
+    const outbound = graph.edges.filter((edge) => edge.from === node.id);
+    return outbound.length > (isBranchStepType(node.stepType) ? 2 : maxFanOutWidth);
+  });
+  if (invalidFanOut) {
+    const fanOut = graph.edges.filter((edge) => edge.from === invalidFanOut.id).length;
     throw new PlaybookGuardViolationError(
       'max-fan-out',
-      `A step in this Playbook branches to ${fanOut} next steps, above the permitted fan-out ` +
-        `width of ${maxFanOutWidth}. Phase 0 runs linear Playbooks only.`
+      `Step "${invalidFanOut.id}" branches to ${fanOut} next steps. Only a branch step may fan ` +
+        `out; other steps have a limit of ${maxFanOutWidth}. A branch must select exactly one ` +
+        'of at most two named continuations.'
+    );
+  }
+
+  const inboundCounts = new Map<string, number>();
+  for (const edge of graph.edges) {
+    inboundCounts.set(edge.to, (inboundCounts.get(edge.to) ?? 0) + 1);
+  }
+  const join = [...inboundCounts.entries()].find(([, count]) => count > 1);
+  if (join) {
+    throw new PlaybookGuardViolationError(
+      'join',
+      `Step "${join[0]}" has ${join[1]} inbound paths. Branch fan-out is supported, but joins are not.`
     );
   }
 

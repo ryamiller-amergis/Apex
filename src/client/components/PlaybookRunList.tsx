@@ -13,6 +13,7 @@
 import React, { useState } from 'react';
 import { PlaybookRunStepList } from './PlaybookRunStepList';
 import { PlaybookRunActions } from './PlaybookRunActions';
+import { PlaybookGateReviewPanel } from './PlaybookGateReviewPanel';
 import { usePlaybookRun } from '../hooks/usePlaybookRuns';
 import { absoluteTime, runStatusLabel } from './playbookStatusFormat';
 import type { PlaybookRunSummary } from '../../shared/types/playbook';
@@ -29,7 +30,10 @@ interface PlaybookRunRowProps {
 }
 
 const PlaybookRunRow: React.FC<PlaybookRunRowProps> = ({ run, project }) => {
-  const [expanded, setExpanded] = useState(false);
+  const selectedRunId = typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.search).get('run')
+    : null;
+  const [expanded, setExpanded] = useState(selectedRunId === run.runId);
 
   // Only fetched once opened; `usePlaybookRun` is disabled while `runId` is null.
   const detail = usePlaybookRun(project, expanded ? run.runId : null);
@@ -84,6 +88,11 @@ const PlaybookRunRow: React.FC<PlaybookRunRowProps> = ({ run, project }) => {
           ) : detail.data ? (
             <>
               <PlaybookRunStepList run={detail.data} id={stepListId} />
+              <PlaybookGateReviewPanel
+                project={project}
+                run={detail.data}
+                data-testid="playbook-gate-review-panel"
+              />
               <PlaybookRunActions run={detail.data} />
             </>
           ) : null}

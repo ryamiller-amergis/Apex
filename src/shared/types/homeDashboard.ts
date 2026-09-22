@@ -109,6 +109,22 @@ export interface BugToPbiRatioData {
   windowDays: 90;
 }
 
+export interface PendingWorkItem {
+  id: string;
+  source: string;
+  title: string;
+  deadline: string;
+  href: string;
+  urgencyText: string;
+}
+
+export interface AssignedToMeData {
+  items: PendingWorkItem[];
+  total: number;
+  soonestDeadline: string | null;
+  viewAllHref: string;
+}
+
 export interface HomeDashboardPayload {
   incompletePipeline: TileResult<IncompletePipelineData> | null;
   artifactCycleTime: TileResult<ArtifactCycleTimeData> | null;
@@ -116,4 +132,5 @@ export interface HomeDashboardPayload {
   openBugsOnPbis: TileResult<OpenBugsOnPbisData> | null;
   bugToPbiRatio: TileResult<BugToPbiRatioData> | null;
   devToProduction: TileResult<DevToProductionData> | null;
+  assignedToMe?: TileResult<AssignedToMeData> | null;
 }

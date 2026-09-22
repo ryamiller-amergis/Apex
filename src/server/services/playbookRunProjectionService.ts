@@ -13,10 +13,11 @@
  * in TBI-025 and E4's own test in TBI-028 — and a helper next to one of them gets copied for the
  * other, after which the two drift.
  */
-import { and, count, desc, eq } from 'drizzle-orm';
+import { and, count, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { playbookRuns } from '../db/schema';
 import { suspendReasonForStepType } from './playbookSteps/registry';
+import { listPendingGateRows } from './playbookGateService';
 import type {
   PlaybookRunDetail,
   PlaybookRunListResult,
@@ -92,9 +93,21 @@ function suspensionOf(steps: PlaybookStepRun[]): PlaybookSuspensionDetail | null
  * runs and reports twenty, when there are three hundred, is worse than one that shows twenty and
  * says so.
  */
-export async function listRuns(project: string, limit: number): Promise<PlaybookRunListResult> {
+export async function listRuns(
+  project: string,
+  limit: number,
+  assignedToUserId?: string,
+): Promise<PlaybookRunListResult> {
+  const assigned = assignedToUserId
+    ? await listPendingGateRows({ project, userId: assignedToUserId, limit: 10_000 })
+    : null;
+  if (assigned && assigned.total === 0) return { runs: [], total: 0 };
+  const runIds = assigned ? [...new Set(assigned.rows.map((row) => row.runId))] : [];
+  const where = assigned
+    ? and(eq(playbookRuns.project, project), inArray(playbookRuns.id, runIds))
+    : eq(playbookRuns.project, project);
   const rows = await db.query.playbookRuns.findMany({
-    where: eq(playbookRuns.project, project),
+    where,
     orderBy: [desc(playbookRuns.startedAt)],
     limit,
     with: {
@@ -108,7 +121,7 @@ export async function listRuns(project: string, limit: number): Promise<Playbook
   const [totals] = await db
     .select({ total: count() })
     .from(playbookRuns)
-    .where(eq(playbookRuns.project, project));
+    .where(where);
 
   return {
     runs: (rows as unknown as RunRow[]).map(toSummary),

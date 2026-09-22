@@ -13,6 +13,9 @@ const getUserPermissions = jest.fn();
 const executeNotify = jest.fn();
 const executeApprovalGate = jest.fn();
 const executeCursorAgent = jest.fn();
+const executeIngestArtifact = jest.fn();
+const executeBranch = jest.fn();
+const isFeatureEnabled = jest.fn();
 
 jest.mock('../services/rbacService', () => ({
   getUserPermissions: (...args: unknown[]) => getUserPermissions(...args),
@@ -28,6 +31,18 @@ jest.mock('../services/playbookSteps/approvalGateAdapter', () => ({
 
 jest.mock('../services/playbookSteps/cursorAgentAdapter', () => ({
   executeCursorAgentStep: (...args: unknown[]) => executeCursorAgent(...args),
+}));
+
+jest.mock('../services/playbookSteps/ingestArtifactAdapter', () => ({
+  executeIngestArtifactStep: (...args: unknown[]) => executeIngestArtifact(...args),
+}));
+
+jest.mock('../services/playbookSteps/branchAdapter', () => ({
+  executeBranchStep: (...args: unknown[]) => executeBranch(...args),
+}));
+
+jest.mock('../services/featureFlagService', () => ({
+  isFeatureEnabled: (...args: unknown[]) => isFeatureEnabled(...args),
 }));
 
 import {
@@ -46,6 +61,17 @@ function context(stepType: string): PlaybookStepExecutionContext {
     'cursor-agent': {
       skillPath: '.cursor/skills/app-knowledge/SKILL.md',
       prompt: 'Summarise the docs',
+    },
+    'ingest-artifact': {
+      documentType: 'design_doc',
+      documentId: 'doc-1',
+      validationThreadId: 'thread-1',
+      scorecard: { verdict: 'ready' },
+    },
+    branch: {
+      condition: { sourceStepId: 'scorecard', field: 'isReady', operator: 'eq', value: true },
+      whenTrue: 'publish',
+      whenFalse: 'notify-the-team',
     },
   };
   return {
@@ -70,6 +96,9 @@ beforeEach(() => {
   executeNotify.mockResolvedValue({ kind: 'completed', output: {} });
   executeApprovalGate.mockResolvedValue({ kind: 'suspended' });
   executeCursorAgent.mockResolvedValue({ kind: 'suspended' });
+  executeIngestArtifact.mockResolvedValue({ kind: 'completed', output: {} });
+  executeBranch.mockResolvedValue({ kind: 'completed', output: {} });
+  isFeatureEnabled.mockResolvedValue(true);
 });
 
 describe('VT-19 — a revoked initiator cannot execute a side-effecting step', () => {

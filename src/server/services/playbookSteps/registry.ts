@@ -22,7 +22,9 @@ import { z } from 'zod';
 import { PLAYBOOK_STEP_SIDE_EFFECTS } from '../../../shared/types/playbook';
 import type {
   ApprovalGateStepConfig,
+  BranchStepConfig,
   CursorAgentStepConfig,
+  IngestArtifactStepConfig,
   NotifyStepConfig,
   PlaybookStepSideEffect,
   PlaybookStepTypeDescriptor,
@@ -49,6 +51,7 @@ const HOUR_MS = 60 * MINUTE_MS;
  */
 export const PHASE_0_ALLOWED_AGENT_SKILLS: readonly string[] = [
   '.cursor/skills/app-knowledge/SKILL.md',
+  '.cursor/skills/design-doc-validation/SKILL.md',
 ];
 
 /**
@@ -89,11 +92,18 @@ const CURSOR_AGENT_INPUT_SCHEMA = z.object({
   skillPath: z.string().min(1),
   prompt: z.string().min(1),
   model: z.string().optional(),
+  // Optional for immutable Phase 0 history; every newly published graph is checked separately.
+  mcpProfile: z.string().min(1).optional(),
+  deadlineMs: z.number().positive().max(CURSOR_AGENT_DEADLINE_MS).optional(),
+  threadId: z.string().min(1).optional(),
 });
 
 const CURSOR_AGENT_OUTPUT_SCHEMA = z.object({
   agentRunId: z.string(),
   completedAt: READABLE_TIMESTAMP,
+  threadId: z.string().optional(),
+  scorecard: z.unknown().optional(),
+  reportMd: z.string().optional(),
 });
 
 const APPROVAL_GATE_INPUT_SCHEMA = z.object({
@@ -101,6 +111,9 @@ const APPROVAL_GATE_INPUT_SCHEMA = z.object({
   // never arrives is the thing BR-005 exists to prevent.
   deadlineMs: z.number().positive().optional(),
   subject: z.string().optional(),
+  // Optional only for Phase 1 rows. Production gates provide both values together.
+  approverPool: z.enum(['prd', 'design_doc', 'design_prototype', 'test_case', 'adr']).optional(),
+  gatedStepId: z.string().min(1).optional(),
 });
 
 const APPROVAL_GATE_OUTPUT_SCHEMA = z.object({
@@ -122,15 +135,47 @@ const NOTIFY_OUTPUT_SCHEMA = z.object({
   recipientUserId: z.string(),
 });
 
+const INGEST_ARTIFACT_INPUT_SCHEMA = z.object({
+  documentType: z.enum(['design_doc', 'prd']),
+  documentId: z.string().min(1),
+  validationThreadId: z.string().min(1),
+  scorecard: z.union([z.string().min(1), z.record(z.string(), z.unknown())]).optional(),
+  reportMd: z.string().optional(),
+});
+
+const INGEST_ARTIFACT_OUTPUT_SCHEMA = z.object({
+  outcome: z.enum(['applied', 'stale']),
+  status: z.string().optional(),
+  verdict: z.string().optional(),
+  isReady: z.boolean().optional(),
+});
+
+const BRANCH_CONDITION_SCHEMA = z.object({
+  sourceStepId: z.string().min(1),
+  field: z.string().min(1),
+  operator: z.enum(['eq', 'neq', 'in', 'gt', 'gte', 'lt', 'lte']),
+  value: z.unknown(),
+});
+
+const BRANCH_INPUT_SCHEMA = z.object({
+  condition: BRANCH_CONDITION_SCHEMA,
+  whenTrue: z.string().min(1),
+  whenFalse: z.string().min(1),
+});
+
+const BRANCH_OUTPUT_SCHEMA = z.object({
+  matched: z.boolean(),
+  continuation: z.string().min(1),
+});
+
 /** The step types Apex ships. Adding a fourth is a change to this array and nowhere else. */
 export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
   {
     stepType: 'cursor-agent',
     canSuspend: true,
     defaultDeadlineMs: CURSOR_AGENT_DEADLINE_MS,
-    // Not overridable: the 60 minutes is derived from what the platform actually tolerates, so a
-    // definition choosing its own number would be overriding an observation with a preference.
-    deadlineOverridable: false,
+    // A definition may shorten the observed ceiling, but never extend it.
+    deadlineOverridable: true,
     suspendReason: 'agent_run',
     allowedSkillPaths: PHASE_0_ALLOWED_AGENT_SKILLS,
     isAgentStep: true,
@@ -139,6 +184,24 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
     requiredPermissions: ['playbooks:run'],
     inputSchema: CURSOR_AGENT_INPUT_SCHEMA,
     outputSchema: CURSOR_AGENT_OUTPUT_SCHEMA,
+  },
+  {
+    stepType: 'ingest-artifact',
+    canSuspend: false,
+    isAgentStep: false,
+    sideEffect: 'writes-apex',
+    requiredPermissions: ['design-docs:review', 'prds:review'],
+    inputSchema: INGEST_ARTIFACT_INPUT_SCHEMA,
+    outputSchema: INGEST_ARTIFACT_OUTPUT_SCHEMA,
+  },
+  {
+    stepType: 'branch',
+    canSuspend: false,
+    isAgentStep: false,
+    sideEffect: 'read',
+    requiredPermissions: ['playbooks:view'],
+    inputSchema: BRANCH_INPUT_SCHEMA,
+    outputSchema: BRANCH_OUTPUT_SCHEMA,
   },
   {
     stepType: 'approval-gate',
@@ -299,6 +362,33 @@ export function isRegisteredStepType(stepType: string): boolean {
   return stepTypeRegistry.has(stepType);
 }
 
+/** Phase 2 types, including the production form of the existing approval gate. */
+export function isProductionAdapterStep(
+  stepType: string,
+  config: Record<string, unknown> = {},
+): boolean {
+  return stepType === 'ingest-artifact'
+    || stepType === 'branch'
+    || (stepType === 'approval-gate' && Boolean(config.approverPool));
+}
+
+export const isApprovalGateStepType = (stepType: string): boolean =>
+  stepType === 'approval-gate';
+
+export const isBranchStepType = (stepType: string): boolean =>
+  stepType === 'branch';
+
+export function requiredPermissionsForStep(
+  stepType: string,
+  config: Record<string, unknown>,
+): readonly string[] {
+  const declared = getStepTypeDescriptor(stepType).requiredPermissions;
+  if (stepType !== 'ingest-artifact') return declared;
+  return config.documentType === 'design_doc'
+    ? ['design-docs:review']
+    : ['prds:review'];
+}
+
 /** Looks up a descriptor, refusing rather than returning undefined for an unknown type. */
 export function getStepTypeDescriptor(stepType: string): PlaybookStepTypeDescriptor {
   const descriptor = stepTypeRegistry.get(stepType);
@@ -336,6 +426,12 @@ export function resolveDeadlineMs(stepType: string, overrideMs?: number): number
   if (!Number.isFinite(overrideMs) || overrideMs <= 0) {
     throw new PlaybookStepTypeError(
       `Deadline override for step type "${stepType}" must be a positive number of milliseconds.`
+    );
+  }
+
+  if (stepType === 'cursor-agent' && overrideMs > descriptor.defaultDeadlineMs) {
+    throw new PlaybookStepTypeError(
+      `Deadline override for step type "${stepType}" may shorten the derived default but not exceed it.`
     );
   }
 
@@ -417,7 +513,7 @@ export function assertSkillAllowed(stepType: string, skillPath: string): void {
  * stays generic so a fourth type can be registered by a caller without editing anything here.
  */
 export function validateStepTypeRegistry(): void {
-  const expected = ['cursor-agent', 'approval-gate', 'notify'];
+  const expected = ['cursor-agent', 'approval-gate', 'notify', 'ingest-artifact', 'branch'];
   const missing = expected.filter((stepType) => !stepTypeRegistry.has(stepType));
 
   if (missing.length > 0) {
@@ -440,7 +536,9 @@ export function validateStepTypeRegistry(): void {
 /** Config shapes, re-exported so adapters import their contract from the registry they register with. */
 export type {
   ApprovalGateStepConfig,
+  BranchStepConfig,
   CursorAgentStepConfig,
+  IngestArtifactStepConfig,
   NotifyStepConfig,
   PlaybookStepTypeDescriptor,
 };

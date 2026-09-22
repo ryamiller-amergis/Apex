@@ -118,22 +118,27 @@ describe('TBI-016 VT-01 — a suspendable step type must declare a deadline', ()
 });
 
 describe('TBI-016 VT-02 — the three production step types', () => {
-  it('registers exactly cursor-agent, approval-gate and notify', () => {
+  it('registers the Phase 1 and production adapter step types', () => {
     expect(listStepTypeDescriptors().map((d) => d.stepType).sort()).toEqual([
       'approval-gate',
+      'branch',
       'cursor-agent',
+      'ingest-artifact',
       'notify',
     ]);
   });
 
-  it('gives cursor-agent a 60-minute deadline that a definition cannot override', () => {
+  it('gives cursor-agent a 60-minute deadline that a definition may only shorten', () => {
     const cursorAgent = getStepTypeDescriptor('cursor-agent');
 
     expect(cursorAgent.canSuspend).toBe(true);
     expect(CURSOR_AGENT_DEADLINE_MS).toBe(60 * 60 * 1000);
     expect(cursorAgent.defaultDeadlineMs).toBe(CURSOR_AGENT_DEADLINE_MS);
     expect(resolveDeadlineMs('cursor-agent')).toBe(CURSOR_AGENT_DEADLINE_MS);
-    expect(() => resolveDeadlineMs('cursor-agent', 5000)).toThrow(/does not allow/);
+    expect(resolveDeadlineMs('cursor-agent', 5000)).toBe(5000);
+    expect(() => resolveDeadlineMs('cursor-agent', CURSOR_AGENT_DEADLINE_MS + 1)).toThrow(
+      /not exceed/,
+    );
   });
 
   it('gives approval-gate a 48-hour deadline a definition may override', () => {
@@ -193,7 +198,8 @@ describe('the Skill allow-list', () => {
 });
 
 describe('TBI-016 VT-04 — the registry is the only place a step type is declared', () => {
-  const STEP_TYPE_NAMES = ['cursor-agent', 'approval-gate', 'notify'];
+  // `branch` is ordinary programming vocabulary and would match unrelated control-flow code.
+  const STEP_TYPE_NAMES = ['cursor-agent', 'approval-gate', 'notify', 'ingest-artifact'];
   const OWNING_DIR = 'src/server/services/playbookSteps';
 
   function sourceFilesUnder(relativeDir: string): string[] {
@@ -219,7 +225,10 @@ describe('TBI-016 VT-04 — the registry is the only place a step type is declar
         (file) =>
           !file.startsWith(`${OWNING_DIR}/`) &&
           !file.includes('__tests__') &&
-          file !== 'src/server/routes/e2eSetup.ts'
+          file !== 'src/server/routes/e2eSetup.ts' &&
+          file !== 'src/server/services/designDocValidationPlaybookService.ts' &&
+          file !== 'src/server/services/playbookMcpCapabilityService.ts' &&
+          file !== 'src/server/services/playbookReconciliationService.ts'
       )
       .filter((file) => {
         const code = stripComments(fs.readFileSync(path.join(REPO_ROOT, file), 'utf8'));

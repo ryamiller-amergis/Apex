@@ -51,6 +51,8 @@ export interface ChatThreadKickoff {
   freeformContext?: string;
   /** MCP pill selected on the home page — wires an external MCP server into this thread */
   mcpPill?: import('./projectSettings').QuickMcpPill;
+  /** Server-verified MCP profile applied to a Playbook cursor-agent thread. */
+  playbookMcpProfile?: string;
   /** Identifies the type of assistant thread — controls system prompt behavior */
   assistantType?: 'design-doc' | 'prd' | 'adr' | 'calendar-work-item';
   /** Calendar assistant: anchor work item ID */

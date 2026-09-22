@@ -17,7 +17,11 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../../db/drizzle';
 import { playbookRuns, playbookStepRuns } from '../../db/schema';
 import { assertSuspendedRunCapacity } from '../playbookGuardService';
-import type { PlaybookStepRun, PlaybookStepRunStatus } from '../../../shared/types/playbook';
+import type {
+  PlaybookGraph,
+  PlaybookStepRun,
+  PlaybookStepRunStatus,
+} from '../../../shared/types/playbook';
 
 /** What an adapter reports back after executing. */
 export type PlaybookStepOutcome =
@@ -34,6 +38,7 @@ export interface PlaybookStepExecutionContext {
   /** Every step executes as the run's initiator, never a service principal (BR-003). */
   initiatorUserId: string;
   config: Record<string, unknown>;
+  graph?: PlaybookGraph;
 }
 
 export type PlaybookStepAdapter = (
@@ -56,6 +61,7 @@ export async function beginStepRun(input: {
   runId: string;
   stepId: string;
   stepType: string;
+  inputInline?: Record<string, unknown>;
 }): Promise<PlaybookStepRun> {
   const [row] = await db
     .insert(playbookStepRuns)
@@ -64,11 +70,38 @@ export async function beginStepRun(input: {
       stepId: input.stepId,
       stepType: input.stepType,
       status: 'running',
+      inputInline: input.inputInline,
       startedAt: nowIso(),
+    })
+    .onConflictDoUpdate({
+      target: [playbookStepRuns.runId, playbookStepRuns.stepId],
+      set: {
+        status: 'running',
+        inputInline: input.inputInline,
+        startedAt: nowIso(),
+        updatedAt: nowIso(),
+      },
+      setWhere: eq(playbookStepRuns.status, 'pending'),
     })
     .returning();
 
   return row as unknown as PlaybookStepRun;
+}
+
+/** Persists a future step's resolved inputs so a preceding gate can render them. */
+export async function prepareStepRun(input: {
+  runId: string;
+  stepId: string;
+  stepType: string;
+  inputInline: Record<string, unknown>;
+}): Promise<void> {
+  await db.insert(playbookStepRuns).values({
+    runId: input.runId,
+    stepId: input.stepId,
+    stepType: input.stepType,
+    status: 'pending',
+    inputInline: input.inputInline,
+  }).onConflictDoNothing();
 }
 
 /**
