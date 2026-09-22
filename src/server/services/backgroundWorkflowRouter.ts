@@ -81,6 +81,8 @@ export interface PreparedBackgroundWorkflowWorker {
   model: string;
   effort?: EffortLevel;
   skillPath: string;
+  skillContent?: string;
+  skillSha256?: string;
   projectId: string;
 }
 
@@ -473,9 +475,16 @@ export function createBackgroundWorkflowRouter(
       if (useV2Transport) {
         // @feature-flag:ai-runs-v2-transport enabled-start
         const specificationCandidate: Record<string, unknown> = {
-          ...snapshot,
           workloadLane: V2_WORKLOAD_LANE,
+          prompt: snapshot.prompt,
+          model: snapshot.model,
           effort: snapshot.effort ?? null,
+          skillPath: prepared.skillPath,
+          skillContent: prepared.skillContent,
+          skillSha256: prepared.skillSha256,
+          workflowClass: input.workflowClass,
+          projectId: prepared.projectId,
+          threadId: input.threadId,
           deadlineMs,
           scratchInputs: documentScratchInputs,
           ...(targetGrounding

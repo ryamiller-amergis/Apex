@@ -8,6 +8,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash } from 'node:crypto';
 import { v4 as uuidv4 } from 'uuid';
 import type {
   ChatAttachment,
@@ -1978,6 +1979,7 @@ async function buildNewAgentTurnPrompt(
     skipProviderCatalogFetch?: boolean;
     repoReader?: RepoReader;
     groundingProvenance?: GroundingProvenance;
+    onResolvedSkill?: (skill: { path: string; content: string }) => void;
   }
 ): Promise<string> {
   let initialPrompt = buildInitialPrompt(kickoff, {
@@ -1989,6 +1991,8 @@ async function buildNewAgentTurnPrompt(
   const provider = kickoff.skillProvider ?? 'ado';
   const resolvedBranch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
   let skillContent: string | null = null;
+  let resolvedSkillPath =
+    kickoff.skillPath?.replace(/^\//, '') ?? null;
   let skillSource: 'ado' | 'github' | 'local' | null = null;
   let contextContent: string | null = null;
   let agentsContent: string | null = null;
@@ -2044,6 +2048,7 @@ async function buildNewAgentTurnPrompt(
         }
         if (request.key === 'skill') {
           skillContent = result.value;
+          resolvedSkillPath = request.path.replace(/^\//, '');
           skillSource = options?.repoReader ? 'local' : provider;
         } else if (request.key === 'context') {
           contextContent = result.value;
@@ -2082,6 +2087,7 @@ async function buildNewAgentTurnPrompt(
               );
           if (content) {
             skillContent = content;
+            resolvedSkillPath = candidate;
             skillSource = options?.repoReader ? 'local' : provider;
             break;
           }
@@ -2100,6 +2106,7 @@ async function buildNewAgentTurnPrompt(
         if (!fs.existsSync(localPath)) continue;
         try {
           skillContent = fs.readFileSync(localPath, 'utf8');
+          resolvedSkillPath = candidate;
           skillSource = 'local';
           console.log('[chat] Using local skill fallback:', candidate);
           break;
@@ -2113,6 +2120,10 @@ async function buildNewAgentTurnPrompt(
     }
 
     if (skillContent) {
+      options?.onResolvedSkill?.({
+        path: resolvedSkillPath ?? skillPathNorm,
+        content: skillContent,
+      });
       initialPrompt +=
         `\n\n# Pre-loaded skill content (${skillPathNorm}; source: ${skillSource})` +
         `\n\n${skillContent}`;
@@ -2164,6 +2175,8 @@ export interface PreparedBackgroundWorkflowTurn {
   model: string;
   effort?: import('../../shared/types/effort').EffortLevel;
   skillPath: string;
+  skillContent?: string;
+  skillSha256?: string;
   projectId: string;
   threadWorkspacePath: string;
   repository: RepositoryPreparationTarget;
@@ -2176,6 +2189,7 @@ export function buildBackgroundWorkflowPrompt(
     repoReader?: RepoReader;
     skipProviderCatalogFetch?: boolean;
     groundingProvenance?: GroundingProvenance;
+    onResolvedSkill?: (skill: { path: string; content: string }) => void;
   }
 ): Promise<string> {
   return buildNewAgentTurnPrompt(kickoff, promptText, false, undefined, {
@@ -2184,6 +2198,7 @@ export function buildBackgroundWorkflowPrompt(
     repoReader: options?.repoReader,
     skipProviderCatalogFetch: options?.skipProviderCatalogFetch,
     groundingProvenance: options?.groundingProvenance,
+    onResolvedSkill: options?.onResolvedSkill,
   });
 }
 
@@ -2226,15 +2241,31 @@ export async function prepareBackgroundWorkflowTurn(
     groundingProvenance = groundingProvenanceFor(grounding, kickoff);
   }
 
-  return {
-    prompt: await buildBackgroundWorkflowPrompt(kickoff, promptText, {
+  let resolvedSkill: { path: string; content: string } | null = null;
+  const prompt = await buildBackgroundWorkflowPrompt(kickoff, promptText, {
       repoReader,
       skipProviderCatalogFetch,
       groundingProvenance,
-    }),
+      onResolvedSkill: (skill) => {
+        resolvedSkill = skill;
+      },
+    });
+  const frozenSkill = resolvedSkill as
+    | { path: string; content: string }
+    | null;
+  return {
+    prompt,
     model: resolveModelId(kickoff.model),
     effort: kickoff.effort,
-    skillPath: kickoff.skillPath ?? '',
+    skillPath: frozenSkill?.path ?? kickoff.skillPath ?? '',
+    ...(frozenSkill
+      ? {
+          skillContent: frozenSkill.content,
+          skillSha256: createHash('sha256')
+            .update(frozenSkill.content)
+            .digest('hex'),
+        }
+      : {}),
     projectId: kickoff.project,
     threadWorkspacePath: state.thread.workspaceDir,
     repository: {

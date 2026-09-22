@@ -30,14 +30,13 @@ export type AiRunV2DocumentSpecification = Readonly<{
   model: string;
   effort: EffortLevel | null;
   skillPath: string;
+  skillContent: string;
+  skillSha256: string;
   workflowClass: BackgroundWorkflowClass;
   projectId: string;
   threadId: string;
   deadlineMs: number;
   scratchInputs: ReadonlyArray<AiRunV2DocumentScratchInput>;
-  workspaceRef?: string;
-  checkoutRef?: string;
-  mirrorRef?: string;
   groundedSha?: string;
   repository?: string;
   provider?: SkillProvider;
@@ -153,6 +152,13 @@ export function isAiRunV2DocumentSpecification(
   if (!Object.prototype.hasOwnProperty.call(candidate, 'effort')) return false;
   if (candidate.effort !== null && !isEffortLevel(candidate.effort)) return false;
   if (!isNonEmptyString(candidate.skillPath)) return false;
+  if (!isNonEmptyString(candidate.skillContent)) return false;
+  if (
+    typeof candidate.skillSha256 !== 'string'
+    || !/^[a-f0-9]{64}$/i.test(candidate.skillSha256)
+  ) {
+    return false;
+  }
   if (!isDocumentWorkflowClass(candidate.workflowClass)) return false;
   if (!isNonEmptyString(candidate.projectId)) return false;
   if (!isNonEmptyString(candidate.threadId)) return false;
@@ -186,13 +192,14 @@ export function isAiRunV2DocumentSpecification(
     return false;
   }
 
-  for (const field of [
+  for (const hostPathField of [
     'workspaceRef',
     'checkoutRef',
     'mirrorRef',
-    'groundedSha',
-    'repository',
   ] as const) {
+    if (candidate[hostPathField] !== undefined) return false;
+  }
+  for (const field of ['groundedSha', 'repository'] as const) {
     if (candidate[field] !== undefined && !isNonEmptyString(candidate[field])) {
       return false;
     }

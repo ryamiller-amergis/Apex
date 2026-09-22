@@ -23,6 +23,7 @@ export interface RepoServiceReaderOptions {
   telemetry?: typeof trackEvent;
   fetchImpl?: typeof fetch;
   now?: () => number;
+  signal?: AbortSignal;
 }
 
 const LOCAL_UNAVAILABLE_MESSAGE = 'Repository content is unavailable';
@@ -52,6 +53,7 @@ export class RepoServiceReader implements RepoReader {
   private readonly telemetry: ReturnType<typeof createGroundingTelemetry>;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
+  private readonly signal?: AbortSignal;
 
   constructor(options: RepoServiceReaderOptions) {
     const baseUrl = options.baseUrl ?? resolveRepoReadServiceUrl();
@@ -69,6 +71,7 @@ export class RepoServiceReader implements RepoReader {
     this.telemetry = createGroundingTelemetry(options.telemetry ?? trackEvent);
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.now = options.now ?? Date.now;
+    this.signal = options.signal;
   }
 
   async readFile(filePath: string): Promise<string> {
@@ -111,6 +114,7 @@ export class RepoServiceReader implements RepoReader {
       response = await this.fetchImpl(`${this.baseUrl}/v1/${operation}`, {
         method: 'POST',
         headers,
+        signal: this.signal,
         body: JSON.stringify({
           provider: this.identity.provider,
           project: this.identity.project,

@@ -62,6 +62,7 @@ function arrange(
     listFinishedByThread: jest.fn(),
     listFinishedDocuments: jest.fn().mockResolvedValue([currentAttempt]),
     isDocumentHarvestPending: jest.fn().mockResolvedValue(false),
+    recordHarvestFailure: jest.fn().mockResolvedValue(1),
     claimHarvest: jest.fn().mockResolvedValue('claimed'),
     completeHarvest: jest.fn().mockResolvedValue(undefined),
   };
@@ -121,6 +122,40 @@ describe('V2 document artifact harvest', () => {
     await expect(fs.stat(harvestedWorkspace)).rejects.toMatchObject({
       code: 'ENOENT',
     });
+  });
+
+  it('materializes documented nested design-spec artifacts', async () => {
+    const currentAttempt = attempt({ workflowClass: 'design-doc' });
+    const files = {
+      'output/billing-design-spec/invoice-design.md': 'design',
+      'output/billing-design-spec/invoice-tech-spec.md': 'tech',
+      'output/billing-design-spec/invoice-assumptions.md': 'assumptions',
+    };
+    const { finishedAttempts, artifacts } = arrange(currentAttempt, files);
+    const applyWorkspace = jest.fn(async ({ workspacePath }) => {
+      await expect(
+        fs.readFile(
+          path.join(
+            workspacePath,
+            '.ai-pilot',
+            'output',
+            'billing-design-spec',
+            'invoice-design.md',
+          ),
+          'utf8',
+        ),
+      ).resolves.toBe('design');
+    });
+
+    await expect(
+      harvestFinishedV2Documents({
+        finishedAttempts,
+        artifacts,
+        applyWorkspace,
+        applySmartTagging: jest.fn(),
+      }),
+    ).resolves.toBe(1);
+    expect(finishedAttempts.completeHarvest).toHaveBeenCalledWith('attempt-1');
   });
 
   it.each([
@@ -184,6 +219,35 @@ describe('V2 document artifact harvest', () => {
     expect(finishedAttempts.completeHarvest).toHaveBeenCalledWith('attempt-1');
   });
 
+  it('does not mark smart-tagging harvested when no domain rows were applied', async () => {
+    const currentAttempt = attempt({
+      workflowClass: 'walkthrough-smart-tagging',
+    });
+    const output = JSON.stringify({
+      suggestions: [{ testId: 'anchor-1' }],
+    });
+    const { finishedAttempts, artifacts } = arrange(currentAttempt, {
+      'output/walkthrough-anchor-smart-tagging.json': output,
+    });
+    const failWorkflow = jest.fn().mockResolvedValue(undefined);
+
+    await harvestFinishedV2Documents({
+      finishedAttempts,
+      artifacts,
+      applyWorkspace: jest.fn(),
+      applySmartTagging: jest.fn().mockResolvedValue(false),
+      failWorkflow,
+    } as Parameters<typeof harvestFinishedV2Documents>[0] & {
+      failWorkflow: typeof failWorkflow;
+    });
+
+    expect(failWorkflow).toHaveBeenCalledWith(
+      currentAttempt,
+      expect.stringMatching(/smart-tagging/i),
+    );
+    expect(finishedAttempts.completeHarvest).toHaveBeenCalledWith('attempt-1');
+  });
+
   it('does not apply an attempt whose durable claim is already complete', async () => {
     const currentAttempt = attempt();
     const { finishedAttempts, artifacts } = arrange(currentAttempt);
@@ -240,6 +304,57 @@ describe('V2 document artifact harvest', () => {
     expect(finishedAttempts.completeHarvest).not.toHaveBeenCalled();
   });
 
+  it('dead-letters an unclassified apply error after three durable failures', async () => {
+    const currentAttempt = attempt();
+    const { finishedAttempts, artifacts } = arrange(currentAttempt);
+    finishedAttempts.recordHarvestFailure
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(3);
+    const applyWorkspace = jest
+      .fn()
+      .mockRejectedValue(new Error('unexpected domain write failure'));
+    const failWorkflow = jest.fn().mockResolvedValue(undefined);
+    const consoleSpy = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+
+    try {
+      await expect(
+        harvestFinishedV2Documents({
+          finishedAttempts,
+          artifacts,
+          applyWorkspace,
+          applySmartTagging: jest.fn(),
+          failWorkflow,
+        } as Parameters<typeof harvestFinishedV2Documents>[0] & {
+          failWorkflow: typeof failWorkflow;
+        }),
+      ).resolves.toBe(0);
+      expect(finishedAttempts.completeHarvest).not.toHaveBeenCalled();
+
+      await expect(
+        harvestFinishedV2Documents({
+          finishedAttempts,
+          artifacts,
+          applyWorkspace,
+          applySmartTagging: jest.fn(),
+          failWorkflow,
+        } as Parameters<typeof harvestFinishedV2Documents>[0] & {
+          failWorkflow: typeof failWorkflow;
+        }),
+      ).resolves.toBe(1);
+      expect(failWorkflow).toHaveBeenCalledWith(
+        currentAttempt,
+        expect.stringContaining('unexpected domain write failure'),
+      );
+      expect(finishedAttempts.completeHarvest).toHaveBeenCalledWith(
+        'attempt-1',
+      );
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
   it('settles invalid smart-tagging output instead of retrying it forever', async () => {
     const currentAttempt = attempt({
       workflowClass: 'walkthrough-smart-tagging',
@@ -253,14 +368,19 @@ describe('V2 document artifact harvest', () => {
         'INVALID_OUTPUT',
       ),
     );
+    const failWorkflow = jest.fn().mockResolvedValue(undefined);
 
     await harvestFinishedV2Documents({
       finishedAttempts,
       artifacts,
       applyWorkspace: jest.fn(),
       applySmartTagging,
+      failWorkflow,
+    } as Parameters<typeof harvestFinishedV2Documents>[0] & {
+      failWorkflow: typeof failWorkflow;
     });
 
+    expect(failWorkflow).toHaveBeenCalled();
     expect(finishedAttempts.completeHarvest).toHaveBeenCalledWith('attempt-1');
   });
 });

@@ -844,12 +844,14 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
   });
 
   it('AC-0 / DoD-4: freezes skill content for local-only worker reads with broad search disabled', async () => {
+    const onResolvedSkill = jest.fn();
     const prompt = await buildBackgroundWorkflowPrompt(
       baseKickoff({
         skillPath: '.cursor/skills/to-prd/SKILL.md',
         skillProvider: 'github',
       }),
-      'Begin.'
+      'Begin.',
+      { onResolvedSkill },
     );
 
     expect(prompt).toContain('local checkout-backed read-only tools');
@@ -865,6 +867,10 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
       'Write required output files with the built-in Write / create_file tool'
     );
     expect(prompt).not.toContain('document-staging/write-back MCP tools');
+    expect(onResolvedSkill).toHaveBeenCalledWith({
+      path: '.cursor/skills/to-prd/SKILL.md',
+      content: '# Frozen skill content',
+    });
   });
 
   it('does not HTTP-fetch the provider skill catalog when local grounding has no checkout reader', async () => {
@@ -918,13 +924,15 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
     mockGetSkillFile.mockClear();
 
     try {
-      const prepared = await prepareBackgroundWorkflowTurn(thread.id, 'Generate.');
-
+      const prepared = await prepareBackgroundWorkflowTurn(
+        thread.id,
+        'Generate.',
+      );
       expect(mockGetSkillFile).not.toHaveBeenCalled();
       expect(prepared.prompt).toContain(
-        'Load it with `get_skill_file` from the pinned checkout'
+        'Load it with `get_skill_file` from the pinned checkout',
       );
-      expect(prepared.prompt).not.toContain('# Frozen skill content');
+      expect(prepared.skillContent).toBeUndefined();
     } finally {
       await closeThread(thread.id);
     }

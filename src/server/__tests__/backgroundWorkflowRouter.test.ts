@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -62,6 +63,7 @@ const targetGrounding: RunGrounding = {
 function makeInput(
   overrides: Partial<BackgroundWorkflowRouteInput> = {},
 ): BackgroundWorkflowRouteInput {
+  const skillContent = '# Frozen to-prd skill';
   return {
     userId: 'user-1',
     workflowClass: 'prd',
@@ -73,6 +75,8 @@ function makeInput(
       prompt: 'confidential generation prompt',
       model: 'claude-4',
       skillPath: '.cursor/skills/to-prd/SKILL.md',
+      skillContent,
+      skillSha256: createHash('sha256').update(skillContent).digest('hex'),
       projectId: 'project-1',
     }),
     runInProcess: jest.fn().mockResolvedValue(undefined),
@@ -563,6 +567,10 @@ describe('background workflow routing', () => {
       model: 'claude-4',
       effort: null,
       skillPath: '.cursor/skills/to-prd/SKILL.md',
+      skillContent: '# Frozen to-prd skill',
+      skillSha256: createHash('sha256')
+        .update('# Frozen to-prd skill')
+        .digest('hex'),
       workflowClass: 'prd',
       projectId: 'project-1',
       threadId: 'thread-1',
@@ -578,6 +586,9 @@ describe('background workflow routing', () => {
       ],
     });
     expect(admission.executionSnapshot).toEqual(admission.specification);
+    expect(admission.specification).not.toHaveProperty('workspaceRef');
+    expect(admission.specification).not.toHaveProperty('checkoutRef');
+    expect(admission.specification).not.toHaveProperty('mirrorRef');
   });
 
   it('recovers in-process when V2 admission refuses or throws', async () => {

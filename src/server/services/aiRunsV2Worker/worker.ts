@@ -64,6 +64,7 @@ export type WorkerDeps = Readonly<{
   specifications?: SpecificationClient;
   checkpointIntervalMs?: number;
   deadlineMs?: number;
+  resolveCommandDeadlineMs?: (command: AiRunV2Command) => number;
   resolveDeadlineMs?: (specification: ExecutionSpecification) => number;
   maxDeliveryCount?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -91,6 +92,31 @@ function failureCategoryFor(error: unknown): AiRunV2FailureCategory {
     return 'progress_timeout';
   }
   return 'internal_error';
+}
+
+function executionAbortError(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  const error = new Error('Execution deadline elapsed');
+  error.name = 'AbortError';
+  return error;
+}
+
+async function raceWithAbort<T>(
+  operation: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  if (signal.aborted) throw executionAbortError(signal);
+  let rejectAbort!: (error: Error) => void;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const onAbort = (): void => rejectAbort(executionAbortError(signal));
+  signal.addEventListener('abort', onAbort, { once: true });
+  try {
+    return await Promise.race([operation, aborted]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
 }
 
 export function createV2Worker(deps: WorkerDeps): V2Worker {
@@ -140,6 +166,33 @@ export function createV2Worker(deps: WorkerDeps): V2Worker {
 
     const deadline = new AbortController();
     let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+    const phaseStartedAt = Date.now();
+    let activeDeadlineMs = deadlineMs;
+    let deadlineSetupError: unknown;
+    try {
+      activeDeadlineMs =
+        deps.resolveCommandDeadlineMs?.(command) ?? deadlineMs;
+      if (
+        !Number.isSafeInteger(activeDeadlineMs)
+        || activeDeadlineMs <= 0
+      ) {
+        throw new Error('Dispatch command has an invalid deadline');
+      }
+    } catch (error) {
+      deadlineSetupError = error;
+      activeDeadlineMs = 1;
+    }
+    const scheduleDeadline = (remainingMs: number): void => {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      deadlineTimer = setTimeout(
+        () => {
+          const error = new Error('Execution deadline elapsed');
+          error.name = 'AbortError';
+          deadline.abort(error);
+        },
+        Math.max(1, remainingMs),
+      );
+    };
     const abortForShutdown = (): void => {
       deadline.abort(deps.signal?.reason);
     };
@@ -148,6 +201,7 @@ export function createV2Worker(deps: WorkerDeps): V2Worker {
     } else {
       deps.signal?.addEventListener('abort', abortForShutdown, { once: true });
     }
+    scheduleDeadline(activeDeadlineMs);
     let heartbeatTimer: ReturnType<typeof setInterval> | null = setInterval(
       () => {
         void checkpoints.publishHeartbeat().catch(() => undefined);
@@ -162,19 +216,29 @@ export function createV2Worker(deps: WorkerDeps): V2Worker {
     };
 
     try {
-      const specification = await specifications.read(command.specRef);
-      const resolvedDeadlineMs =
-        deps.resolveDeadlineMs?.(specification) ?? deadlineMs;
-      if (
-        !Number.isSafeInteger(resolvedDeadlineMs)
-        || resolvedDeadlineMs <= 0
-      ) {
-        throw new Error('Execution specification has an invalid deadline');
-      }
-      deadlineTimer = setTimeout(
-        () => deadline.abort(),
-        resolvedDeadlineMs,
+      if (deadlineSetupError) throw deadlineSetupError;
+      const specification = await raceWithAbort(
+        specifications.read(command.specRef, deadline.signal),
+        deadline.signal,
       );
+      if (deps.resolveDeadlineMs) {
+        const specificationDeadlineMs = deps.resolveDeadlineMs(specification);
+        if (
+          !Number.isSafeInteger(specificationDeadlineMs)
+          || specificationDeadlineMs <= 0
+        ) {
+          throw new Error('Execution specification has an invalid deadline');
+        }
+        const elapsedMs = Math.max(0, Date.now() - phaseStartedAt);
+        const specificationRemainingMs = specificationDeadlineMs - elapsedMs;
+        const commandRemainingMs = activeDeadlineMs - elapsedMs;
+        const remainingMs = Math.min(
+          commandRemainingMs,
+          specificationRemainingMs,
+        );
+        activeDeadlineMs = elapsedMs + remainingMs;
+        scheduleDeadline(remainingMs);
+      }
       const outcome = await deps.execute({
         specification,
         command,
@@ -188,9 +252,15 @@ export function createV2Worker(deps: WorkerDeps): V2Worker {
         const uploader = createArtifactUploader({
           target: { ...target, container: deps.artifactContainer },
         });
-        manifestRef = await uploader.uploadAll(outcome.files);
+        manifestRef = await raceWithAbort(
+          uploader.uploadAll(outcome.files, deadline.signal),
+          deadline.signal,
+        );
       }
 
+      if (deadline.signal.aborted) {
+        throw executionAbortError(deadline.signal);
+      }
       await results.publishTerminal({
         status: 'completed',
         artifactStatus: manifestRef ? 'manifest_written' : 'pending',

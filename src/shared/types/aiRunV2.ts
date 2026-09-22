@@ -131,6 +131,8 @@ export type AiRunV2Command = AiRunV2EnvelopeBase &
     transport: 'servicebus-blob-v2';
     workloadLane: AiRunV2WorkloadLane;
     specRef: AiRunBlobRef;
+    /** Absolute attempt deadline, resolved before dispatch by App Service. */
+    deadlineAt?: string;
   }>;
 
 export type AiRunV2StartedCheckpoint = AiRunV2EnvelopeBase &
@@ -311,7 +313,14 @@ export function isAiRunV2Command(value: unknown): value is AiRunV2Command {
     candidate.kind === 'dispatch_command' &&
     candidate.transport === 'servicebus-blob-v2' &&
     isAiRunV2WorkloadLane(candidate.workloadLane) &&
-    isAiRunBlobRef(candidate.specRef)
+    isAiRunBlobRef(candidate.specRef) &&
+    (
+      candidate.deadlineAt === undefined
+      || (
+        isNonEmptyString(candidate.deadlineAt)
+        && Number.isFinite(Date.parse(candidate.deadlineAt))
+      )
+    )
   );
 }
 

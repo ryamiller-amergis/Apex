@@ -56,6 +56,39 @@ describe('artifactUploader', () => {
       buildAttemptPrefix('run-1', 2),
     );
   });
+
+  it('passes the attempt AbortSignal to every Blob upload', async () => {
+    const seenSignals: Array<AbortSignal | undefined> = [];
+    const controller = new AbortController();
+    const uploader = createArtifactUploader({
+      target: {
+        runId: 'run-1',
+        attemptId: 'attempt-1',
+        attemptNumber: 1,
+        container: 'ai-run-artifacts',
+      },
+      getContainerClient: () =>
+        ({
+          getBlockBlobClient: () => ({
+            uploadData: async (
+              _body: unknown,
+              options?: { abortSignal?: AbortSignal },
+            ) => {
+              seenSignals.push(options?.abortSignal);
+            },
+          }),
+        }) as unknown as ContainerClient,
+    });
+
+    await uploader.uploadAll(
+      [{ path: 'output/design.md', content: '# design' }],
+      controller.signal,
+    );
+
+    expect(seenSignals).toHaveLength(2);
+    expect(seenSignals[0]).toBe(controller.signal);
+    expect(seenSignals[1]).toBe(controller.signal);
+  });
 });
 
 describe('resultPublisher', () => {

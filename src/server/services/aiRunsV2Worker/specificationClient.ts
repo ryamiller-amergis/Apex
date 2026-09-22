@@ -32,7 +32,10 @@ export type ExecutionSpecification =
   | AiRunV2VisualSpecification;
 
 export type SpecificationClient = {
-  read(ref: AiRunBlobRef): Promise<ExecutionSpecification>;
+  read(
+    ref: AiRunBlobRef,
+    signal?: AbortSignal,
+  ): Promise<ExecutionSpecification>;
 };
 
 export function createSpecificationClient(options?: {
@@ -42,11 +45,15 @@ export function createSpecificationClient(options?: {
     options?.getContainerClient ?? resolveArtifactContainerClient;
 
   return {
-    async read(ref) {
+    async read(ref, signal) {
       const blob = getContainerClient(ref.container).getBlockBlobClient(
         ref.key,
       );
-      const downloaded = await blob.downloadToBuffer();
+      const downloaded = await blob.downloadToBuffer(
+        0,
+        undefined,
+        signal ? { abortSignal: signal } : undefined,
+      );
       const parsed = JSON.parse(downloaded.toString('utf8')) as unknown;
       if (!parsed || typeof parsed !== 'object') {
         throw new Error(`Execution specification ${ref.key} is not an object`);

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,7 +19,6 @@ import {
   createLocalCursorExecution,
   type WorkerCursorExecution,
 } from '../aiRunsWorker/cursorExecution';
-import { BareRepoReader } from '../repoRead/bareRepoReader';
 import {
   RepoServiceReader,
   resolveRepoReadServiceUrl,
@@ -32,22 +32,28 @@ const ARTIFACT_OUTPUT_PREFIX = 'output/';
 type CreateExecution = (
   snapshot: Readonly<ExecutionSnapshot>,
   checkout?: RepoReader,
+  signal?: AbortSignal,
 ) => Promise<WorkerCursorExecution>;
 
 export type DocumentExecutionDependencies = Readonly<{
   openRepository?: (
     specification: AiRunV2DocumentSpecification,
+    signal?: AbortSignal,
   ) => Promise<RepoReader>;
   createExecution?: CreateExecution;
   tempRoot?: string;
   now?: () => number;
 }>;
 
-function isExpectedOutputName(
+function isExpectedOutputPath(
   workflowClass: BackgroundWorkflowClass,
-  name: string,
+  relativePath: string,
 ): boolean {
-  if (name.includes('/') || name.includes('\\')) return false;
+  if (relativePath.includes('\\') || relativePath.split('/').includes('..')) {
+    return false;
+  }
+  const segments = relativePath.split('/');
+  const name = segments[segments.length - 1] ?? '';
   switch (workflowClass) {
     case 'prd':
       return (
@@ -56,23 +62,35 @@ function isExpectedOutputName(
         || /\.backlog\.json$/i.test(name)
       );
     case 'design-doc':
+      if (
+        segments.length > 2
+        || (
+          segments.length === 2
+          && !/^[^/]+-design-spec$/i.test(segments[0])
+        )
+      ) {
+        return false;
+      }
       return (
         /[-.]design\.md$/i.test(name)
         || /[-.]tech-spec\.md$/i.test(name)
         || /[-.]assumptions\.md$/i.test(name)
       );
     case 'validation':
+      if (segments.length !== 1) return false;
       return (
         name === 'review-scorecard.json'
         || name === 'review-scorecard.md'
       );
     case 'test-cases':
+      if (segments.length !== 1) return false;
       return (
         /\.test-cases\.json$/i.test(name)
         || /\.test-cases\.md$/i.test(name)
         || /\.backlog\.json$/i.test(name)
       );
     case 'walkthrough-smart-tagging':
+      if (segments.length !== 1) return false;
       return name === 'walkthrough-anchor-smart-tagging.json';
     default: {
       const unhandled: never = workflowClass;
@@ -171,10 +189,51 @@ function assertExpectedOutputSet(
   }
 }
 
-function contentType(name: string): string {
-  if (/\.json$/i.test(name)) return 'application/json';
-  if (/\.md$/i.test(name)) return 'text/markdown; charset=utf-8';
+function contentType(relativePath: string): string {
+  if (/\.json$/i.test(relativePath)) return 'application/json';
+  if (/\.md$/i.test(relativePath)) return 'text/markdown; charset=utf-8';
   return 'application/octet-stream';
+}
+
+async function listDocumentOutputPaths(
+  outputDirectory: string,
+  workflowClass: BackgroundWorkflowClass,
+): Promise<string[]> {
+  const found: string[] = [];
+
+  async function visit(directory: string, relativeDirectory = ''): Promise<void> {
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const relativePath = [relativeDirectory, entry.name]
+        .filter(Boolean)
+        .join('/');
+      const target = path.join(directory, entry.name);
+      const metadata = await fs.lstat(target);
+      if (metadata.isSymbolicLink()) {
+        throw new Error(`Refusing symbolic-link document output: ${relativePath}`);
+      }
+      if (metadata.isDirectory()) {
+        if (
+          workflowClass !== 'design-doc'
+          || relativeDirectory
+          || !/^[^/]+-design-spec$/i.test(entry.name)
+        ) {
+          throw new Error(`Refusing unexpected document output directory: ${relativePath}`);
+        }
+        await visit(target, relativePath);
+        continue;
+      }
+      if (
+        metadata.isFile()
+        && isExpectedOutputPath(workflowClass, relativePath)
+      ) {
+        found.push(relativePath);
+      }
+    }
+  }
+
+  await visit(outputDirectory);
+  return found.sort();
 }
 
 /**
@@ -186,26 +245,27 @@ export async function collectDocumentArtifacts(
   workflowClass: BackgroundWorkflowClass,
 ): Promise<ArtifactFile[]> {
   const outputDirectory = path.join(workspacePath, ...OUTPUT_DIRECTORY_PARTS);
-  const names = (await fs.readdir(outputDirectory))
-    .filter((name) => isExpectedOutputName(workflowClass, name))
-    .sort();
-  assertExpectedOutputSet(workflowClass, names);
+  const outputPaths = await listDocumentOutputPaths(
+    outputDirectory,
+    workflowClass,
+  );
+  assertExpectedOutputSet(workflowClass, outputPaths);
 
   const artifacts: ArtifactFile[] = [];
-  for (const name of names) {
-    const target = path.join(outputDirectory, name);
+  for (const relativePath of outputPaths) {
+    const target = path.join(outputDirectory, ...relativePath.split('/'));
     const metadata = await fs.lstat(target);
     if (
       metadata.isSymbolicLink()
       || !metadata.isFile()
       || metadata.nlink > 1
     ) {
-      throw new Error(`Refusing non-regular document output: ${name}`);
+      throw new Error(`Refusing non-regular document output: ${relativePath}`);
     }
     artifacts.push({
-      path: `${ARTIFACT_OUTPUT_PREFIX}${name}`,
+      path: `${ARTIFACT_OUTPUT_PREFIX}${relativePath}`,
       content: await fs.readFile(target),
-      contentType: contentType(name),
+      contentType: contentType(relativePath),
     });
   }
   return artifacts;
@@ -214,7 +274,9 @@ export async function collectDocumentArtifacts(
 async function prepareDocumentWorkspace(
   specification: AiRunV2DocumentSpecification,
   tempRoot: string,
+  signal: AbortSignal,
 ): Promise<string> {
+  if (signal.aborted) throw abortError();
   const workspacePath = await fs.mkdtemp(
     path.join(tempRoot, 'apex-document-attempt-'),
   );
@@ -223,7 +285,22 @@ async function prepareDocumentWorkspace(
       path.join(workspacePath, ...OUTPUT_DIRECTORY_PARTS),
       { recursive: true },
     );
+    if (signal.aborted) throw abortError();
+    const frozenSkillPath = path.join(
+      workspacePath,
+      '.cursor',
+      'frozen-skill',
+      'SKILL.md',
+    );
+    await fs.mkdir(path.dirname(frozenSkillPath), { recursive: true });
+    await fs.writeFile(frozenSkillPath, specification.skillContent, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    });
+    if (signal.aborted) throw abortError();
     for (const input of specification.scratchInputs) {
+      if (signal.aborted) throw abortError();
       const target = path.resolve(workspacePath, ...input.path.split('/'));
       const relative = path.relative(workspacePath, target);
       if (
@@ -240,6 +317,7 @@ async function prepareDocumentWorkspace(
         mode: 0o600,
       });
     }
+    if (signal.aborted) throw abortError();
     return workspacePath;
   } catch (error) {
     await fs.rm(workspacePath, { recursive: true, force: true });
@@ -249,6 +327,7 @@ async function prepareDocumentWorkspace(
 
 async function openDocumentRepository(
   specification: AiRunV2DocumentSpecification,
+  signal?: AbortSignal,
 ): Promise<RepoReader> {
   const identity = {
     provider: specification.provider as 'ado' | 'github',
@@ -257,26 +336,14 @@ async function openDocumentRepository(
     sha: specification.groundedSha as string,
   };
 
-  if (specification.mirrorRef) {
-    try {
-      const reader = new BareRepoReader({
-        identity,
-        mirrorPath: specification.mirrorRef,
-      });
-      await reader.listDir('');
-      return reader;
-    } catch {
-      // App Service cache paths are not assumed to exist in the worker.
-    }
-  }
-
   const serviceUrl = resolveRepoReadServiceUrl();
   if (serviceUrl) {
     const reader = new RepoServiceReader({
       identity,
       baseUrl: serviceUrl,
+      signal,
     });
-    await reader.listDir('');
+    await raceOperation(reader.listDir(''), signal);
     return reader;
   }
 
@@ -289,19 +356,24 @@ function executionSnapshot(
   specification: AiRunV2DocumentSpecification,
   workspacePath: string,
 ): ExecutionSnapshot {
+  const prompt = [
+    specification.prompt,
+    '',
+    '# Frozen execution skill',
+    `Source path: ${specification.skillPath}`,
+    `SHA-256: ${specification.skillSha256}`,
+    '',
+    specification.skillContent,
+    '',
+    'The skill above is the immutable version selected for this run. Follow it exactly and do not load another version.',
+  ].join('\n');
   return {
-    prompt: specification.prompt,
+    prompt,
     model: specification.model,
     ...(specification.effort === null
       ? {}
       : { effort: specification.effort }),
     workspaceRef: workspacePath,
-    ...(specification.checkoutRef
-      ? { checkoutRef: specification.checkoutRef }
-      : {}),
-    ...(specification.mirrorRef
-      ? { mirrorRef: specification.mirrorRef }
-      : {}),
     ...(specification.groundedSha
       ? { groundedSha: specification.groundedSha }
       : {}),
@@ -328,6 +400,25 @@ function abortError(): Error {
   const error = new Error('Document execution aborted');
   error.name = 'AbortError';
   return error;
+}
+
+async function raceOperation<T>(
+  operation: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return operation;
+  if (signal.aborted) throw abortError();
+  let rejectAbort!: (error: Error) => void;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const onAbort = (): void => rejectAbort(abortError());
+  signal.addEventListener('abort', onAbort, { once: true });
+  try {
+    return await Promise.race([operation, aborted]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
 }
 
 async function executeWithAbort(
@@ -372,6 +463,12 @@ export function createDocumentExecute(
     if (!isAiRunV2DocumentSpecification(unknownSpecification)) {
       throw new Error('Command referenced an invalid document specification');
     }
+    const actualSkillSha = createHash('sha256')
+      .update(unknownSpecification.skillContent)
+      .digest('hex');
+    if (actualSkillSha !== unknownSpecification.skillSha256.toLowerCase()) {
+      throw new Error('Command referenced document skill content with a mismatched hash');
+    }
     if (command.workloadLane !== 'document') {
       throw new Error('Document worker received a non-document command');
     }
@@ -379,10 +476,14 @@ export function createDocumentExecute(
 
     const specification = unknownSpecification;
     const startedAt = now();
-    await checkpoints.publishProgress('workspace', 'preparing');
+    await raceOperation(
+      checkpoints.publishProgress('workspace', 'preparing'),
+      signal,
+    );
     const workspacePath = await prepareDocumentWorkspace(
       specification,
       tempRoot,
+      signal,
     );
     let execution: WorkerCursorExecution | undefined;
     try {
@@ -390,13 +491,22 @@ export function createDocumentExecute(
       const repository = documentWorkflowRequiresRepository(
         specification.workflowClass,
       )
-        ? await openRepository(specification)
+        ? await raceOperation(openRepository(specification, signal), signal)
         : undefined;
       if (signal.aborted) throw abortError();
 
-      await checkpoints.publishProgress('workspace', 'ready');
-      execution = await createExecution(snapshot, repository);
-      await checkpoints.publishProgress('execution', 'running');
+      await raceOperation(
+        checkpoints.publishProgress('workspace', 'ready'),
+        signal,
+      );
+      execution = await raceOperation(
+        createExecution(snapshot, repository, signal),
+        signal,
+      );
+      await raceOperation(
+        checkpoints.publishProgress('execution', 'running'),
+        signal,
+      );
 
       let sequence = 0;
       const result = await executeWithAbort(
@@ -439,10 +549,16 @@ export function createDocumentExecute(
         throw new Error('Cursor document execution did not finish successfully');
       }
 
-      await checkpoints.publishProgress('artifacts', 'collecting');
-      const files = await collectDocumentArtifacts(
-        workspacePath,
-        specification.workflowClass,
+      await raceOperation(
+        checkpoints.publishProgress('artifacts', 'collecting'),
+        signal,
+      );
+      const files = await raceOperation(
+        collectDocumentArtifacts(
+          workspacePath,
+          specification.workflowClass,
+        ),
+        signal,
       );
       return {
         files,

@@ -213,6 +213,62 @@ describe('V2 worker run loop', () => {
     ]);
   });
 
+  it('starts the command deadline before specification download', async () => {
+    const { bus, calls } = fakeBus(
+      command({
+        deadlineAt: new Date(Date.now() + 10).toISOString(),
+      }),
+    );
+    const execute = jest.fn();
+    const read = jest.fn(
+      async (
+        _ref: unknown,
+        signal?: AbortSignal,
+      ): Promise<never> => {
+        if (!signal) throw new Error('specification download has no abort signal');
+        return new Promise<never>((_resolve, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => {
+              const error = new Error('specification deadline elapsed');
+              error.name = 'AbortError';
+              reject(error);
+            },
+            { once: true },
+          );
+        });
+      },
+    );
+    const worker = createV2Worker({
+      bus,
+      execute,
+      artifactContainer: 'ai-run-artifacts',
+      containerAppsExecutionId: 'exec-7',
+      deadlineMs: 5_000,
+      resolveCommandDeadlineMs: (receivedCommand) => {
+        const deadlineAt = Date.parse(
+          String((receivedCommand as { deadlineAt?: unknown }).deadlineAt),
+        );
+        return Math.max(1, deadlineAt - Date.now());
+      },
+      specifications: { read },
+    } as Parameters<typeof createV2Worker>[0] & {
+      resolveCommandDeadlineMs: (
+        receivedCommand: Record<string, unknown>,
+      ) => number;
+    });
+
+    await expect(worker.processOnce()).resolves.toBe('failed');
+    expect(execute).not.toHaveBeenCalled();
+    expect(calls.results).toEqual([
+      expect.objectContaining({
+        status: 'failed',
+        failureCategory: 'progress_timeout',
+        detail: 'Execution deadline elapsed',
+      }),
+    ]);
+  });
+
   it('publishes document token usage once on the terminal result', async () => {
     const { bus, calls } = fakeBus(command());
     const worker = createV2Worker({

@@ -15,6 +15,41 @@ export type WorkerCursorExecution = {
   dispose(): Promise<void>;
 };
 
+function cursorStartupAbortError(): Error {
+  const error = new Error('Cursor execution startup aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
+async function raceCursorStartup<T>(
+  operation: Promise<T>,
+  signal: AbortSignal | undefined,
+  onAbort: () => Promise<void>,
+  onLateValue?: (value: T) => Promise<void>,
+): Promise<T> {
+  if (!signal) return operation;
+  if (signal.aborted) throw cursorStartupAbortError();
+  let aborted = false;
+  let rejectAbort!: (error: Error) => void;
+  const abort = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const handleAbort = (): void => {
+    aborted = true;
+    void onAbort().catch(() => undefined);
+    rejectAbort(cursorStartupAbortError());
+  };
+  signal.addEventListener('abort', handleAbort, { once: true });
+  void operation.then((value) => {
+    if (aborted) void onLateValue?.(value).catch(() => undefined);
+  }).catch(() => undefined);
+  try {
+    return await Promise.race([operation, abort]);
+  } finally {
+    signal.removeEventListener('abort', handleAbort);
+  }
+}
+
 /**
  * Construct the real local Cursor agent from only frozen bootstrap values.
  * Repository-grounded callers pass `checkout` only after opening the pinned
@@ -26,6 +61,7 @@ export type WorkerCursorExecution = {
 export async function createLocalCursorExecution(
   snapshot: Readonly<ExecutionSnapshot>,
   checkout?: RepoReader,
+  signal?: AbortSignal,
 ): Promise<WorkerCursorExecution> {
   const apiKey = process.env.CURSOR_API_KEY?.trim();
   if (!apiKey) throw new Error('CURSOR_API_KEY is required');
@@ -36,16 +72,26 @@ export async function createLocalCursorExecution(
     ...(checkout ? { customTools: createNativeReadTools(checkout) } : {}),
   } satisfies LocalAgentOptions;
 
-  const agent = await Agent.create({
-    apiKey,
-    model: buildCursorModelSelection(snapshot.model, snapshot.effort),
-    local,
-    // The worker never resolves live repository MCP servers.
-    mcpServers: {},
-  });
+  const createAgent = Agent.create({
+      apiKey,
+      model: buildCursorModelSelection(snapshot.model, snapshot.effort),
+      local,
+      // The worker never resolves live repository MCP servers.
+      mcpServers: {},
+    });
+  const agent = await raceCursorStartup(
+    createAgent,
+    signal,
+    async () => undefined,
+    (lateAgent) => lateAgent[Symbol.asyncDispose](),
+  );
 
   try {
-    const run = await agent.send(snapshot.prompt);
+    const run = await raceCursorStartup(
+      agent.send(snapshot.prompt),
+      signal,
+      () => agent[Symbol.asyncDispose](),
+    );
     return {
       run: run as unknown as WorkerCursorExecutionRun,
       dispose: () => agent[Symbol.asyncDispose](),

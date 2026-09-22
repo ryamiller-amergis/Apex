@@ -504,6 +504,35 @@ describe('walkthroughAnchorSmartTaggingService', () => {
       expect(mockIsDocumentHarvestPending).toHaveBeenCalledWith('run-v2');
     });
 
+    it('surfaces the stored V2 application failure after harvest settles', async () => {
+      await startAndClearInFlight();
+      mockedDb.query.chatThreads.findFirst.mockResolvedValue({
+        userId: USER_ID,
+        workspaceDir: '/tmp/ws',
+        status: 'idle',
+        lastError: 'Smart-tagging output matched no pending rows.',
+      });
+      mockFs.existsSync.mockReturnValue(false);
+      mockedIsThreadIdle.mockReturnValue(true);
+      mockedIsThreadLoaded.mockReturnValue(true);
+      mockedGetLatestThreadRun.mockResolvedValue({
+        id: 'run-v2',
+        status: 'completed',
+        ownerInstance: null,
+        updatedAt: '2026-09-22T12:00:00.000Z',
+        timeoutAt: null,
+        transportVersion: 'servicebus-blob-v2',
+      });
+      mockIsDocumentHarvestPending.mockResolvedValueOnce(false);
+
+      await expect(
+        getSmartTaggingResult(THREAD_ID, USER_ID),
+      ).resolves.toMatchObject({
+        status: 'failed',
+        error: 'Smart-tagging output matched no pending rows.',
+      });
+    });
+
     it('names routing as the cause when neither the worker nor the fallback started the batch', async () => {
       const mockedRoute = routeBackgroundWorkflow as jest.MockedFunction<
         typeof routeBackgroundWorkflow
@@ -644,6 +673,10 @@ describe('walkthroughAnchorSmartTaggingService', () => {
           } as unknown as WalkthroughAnchorRegistryRecord,
         ])
         .mockResolvedValueOnce([]);
+      mockedRegistry.getAnchorByTestId.mockResolvedValue({
+        testId: 'new-candidate',
+        aiProvenance: { runId: 'run-v2' },
+      } as unknown as WalkthroughAnchorRegistryRecord);
 
       await expect(
         applyV2SmartTaggingResult({
@@ -658,7 +691,7 @@ describe('walkthroughAnchorSmartTaggingService', () => {
           runId: 'run-v2',
           rawJson: VALID_SMART_TAG_OUTPUT,
         }),
-      ).resolves.toBe(false);
+      ).resolves.toBe(true);
 
       expect(
         mockedRegistry.applySmartTagSuggestionsToPending,
@@ -678,6 +711,31 @@ describe('walkthroughAnchorSmartTaggingService', () => {
         }),
       );
       expect(createNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns false when no pending or already-applied rows match', async () => {
+      mockedDb.query.chatThreads.findFirst.mockResolvedValue({
+        userId: USER_ID,
+        kickoff: {
+          model: 'claude-sonnet-4',
+          skillPath:
+            '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+        },
+      });
+      mockedRegistry.applySmartTagSuggestionsToPending.mockResolvedValue([]);
+      mockedRegistry.getAnchorByTestId.mockResolvedValue({
+        testId: 'new-candidate',
+        aiProvenance: { runId: 'some-other-run' },
+      } as unknown as WalkthroughAnchorRegistryRecord);
+
+      await expect(
+        applyV2SmartTaggingResult({
+          threadId: THREAD_ID,
+          runId: 'run-v2',
+          rawJson: VALID_SMART_TAG_OUTPUT,
+        }),
+      ).resolves.toBe(false);
+      expect(createNotification).not.toHaveBeenCalled();
     });
   });
 

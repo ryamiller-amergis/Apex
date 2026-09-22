@@ -25,6 +25,16 @@ export async function startDocumentWorker(): Promise<void> {
     execute: executeDocumentWorkload,
     artifactContainer: env.artifactContainer,
     containerAppsExecutionId: env.containerAppsExecutionId,
+    resolveCommandDeadlineMs: (command) => {
+      if (!command.deadlineAt) {
+        throw new Error('Document command has no absolute deadline');
+      }
+      const deadlineAt = Date.parse(command.deadlineAt);
+      if (!Number.isFinite(deadlineAt)) {
+        throw new Error('Document command has an invalid absolute deadline');
+      }
+      return Math.max(1, deadlineAt - Date.now());
+    },
     resolveDeadlineMs: (specification) => {
       if (!isAiRunV2DocumentSpecification(specification)) {
         throw new Error('Command referenced an invalid document specification');

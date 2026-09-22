@@ -22,8 +22,14 @@ import {
   type FinishedAttemptReader,
   type FinishedV2DocumentAttempt,
 } from './aiRunV2/finishedAttemptReader';
+import { syncOutputToDb } from './chatAgentService';
+import {
+  applyV2SmartTaggingResult,
+  markV2SmartTaggingFailure,
+} from './walkthroughAnchorSmartTaggingService';
 
 const HARVEST_BATCH_SIZE = 100;
+const MAX_HARVEST_FAILURES = 3;
 
 export type DocumentWorkspaceApplyInput = Readonly<{
   attempt: FinishedV2DocumentAttempt;
@@ -40,6 +46,10 @@ export type DocumentV2HarvestDependencies = Readonly<{
     runId: string;
     rawJson: string;
   }) => Promise<boolean>;
+  failWorkflow?: (
+    attempt: FinishedV2DocumentAttempt,
+    reason: string,
+  ) => Promise<void>;
   batchSize?: number;
   tempRoot?: string;
 }>;
@@ -48,39 +58,53 @@ function isExpectedArtifactPath(
   workflowClass: BackgroundWorkflowClass,
   artifactPath: string,
 ): boolean {
-  if (
-    !artifactPath.startsWith('output/')
-    || artifactPath.slice('output/'.length).includes('/')
-    || artifactPath.includes('\\')
-  ) {
+  if (!artifactPath.startsWith('output/') || artifactPath.includes('\\')) {
     return false;
   }
-  const name = artifactPath.slice('output/'.length);
+  const relativePath = artifactPath.slice('output/'.length);
+  const segments = relativePath.split('/');
+  if (segments.includes('..') || segments.some((segment) => !segment)) {
+    return false;
+  }
+  const name = segments[segments.length - 1] ?? '';
   switch (workflowClass) {
     case 'prd':
+      if (segments.length !== 1) return false;
       return (
         name === 'PRD.md'
         || /\.prd\.md$/i.test(name)
         || /\.backlog\.json$/i.test(name)
       );
     case 'design-doc':
+      if (
+        segments.length > 2
+        || (
+          segments.length === 2
+          && !/^[^/]+-design-spec$/i.test(segments[0])
+        )
+      ) {
+        return false;
+      }
       return (
         /[-.]design\.md$/i.test(name)
         || /[-.]tech-spec\.md$/i.test(name)
         || /[-.]assumptions\.md$/i.test(name)
       );
     case 'validation':
+      if (segments.length !== 1) return false;
       return (
         name === 'review-scorecard.json'
         || name === 'review-scorecard.md'
       );
     case 'test-cases':
+      if (segments.length !== 1) return false;
       return (
         /\.test-cases\.json$/i.test(name)
         || /\.test-cases\.md$/i.test(name)
         || /\.backlog\.json$/i.test(name)
       );
     case 'walkthrough-smart-tagging':
+      if (segments.length !== 1) return false;
       return name === 'walkthrough-anchor-smart-tagging.json';
     default: {
       const unhandled: never = workflowClass;
@@ -92,7 +116,6 @@ function isExpectedArtifactPath(
 async function defaultApplyWorkspace(
   input: DocumentWorkspaceApplyInput,
 ): Promise<void> {
-  const { syncOutputToDb } = await import('./chatAgentService');
   await syncOutputToDb(
     input.attempt.threadId,
     input.workspacePath,
@@ -105,10 +128,14 @@ async function defaultApplySmartTagging(input: {
   runId: string;
   rawJson: string;
 }): Promise<boolean> {
-  const { applyV2SmartTaggingResult } = await import(
-    './walkthroughAnchorSmartTaggingService'
-  );
   return applyV2SmartTaggingResult(input);
+}
+
+class PermanentHarvestApplicationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PermanentHarvestApplicationError';
+  }
 }
 
 async function createHarvestWorkspace(tempRoot: string): Promise<string> {
@@ -170,12 +197,6 @@ async function materializeManifest(
   }
 }
 
-async function clearHarvestOutput(workspacePath: string): Promise<void> {
-  const output = path.join(workspacePath, '.ai-pilot', 'output');
-  await fs.rm(output, { recursive: true, force: true });
-  await fs.mkdir(output, { recursive: true });
-}
-
 async function applyAttempt(
   attempt: FinishedV2DocumentAttempt,
   workspacePath: string,
@@ -183,7 +204,6 @@ async function applyAttempt(
   applySmartTagging: NonNullable<
     DocumentV2HarvestDependencies['applySmartTagging']
   >,
-  failureDetail?: string,
 ): Promise<void> {
   switch (attempt.workflowClass) {
     case 'prd':
@@ -193,12 +213,10 @@ async function applyAttempt(
       await applyWorkspace({
         attempt,
         workspacePath,
-        ...(failureDetail ? { failureDetail } : {}),
       });
       return;
     case 'walkthrough-smart-tagging':
-      if (failureDetail) return;
-      await applySmartTagging({
+      if (!(await applySmartTagging({
         threadId: attempt.threadId,
         runId: attempt.runId,
         rawJson: await fs.readFile(
@@ -210,13 +228,29 @@ async function applyAttempt(
           ),
           'utf8',
         ),
-      });
+      }))) {
+        throw new PermanentHarvestApplicationError(
+          'Smart-tagging output matched no pending or already-applied rows',
+        );
+      }
       return;
     default: {
       const unhandled: never = attempt.workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
     }
   }
+}
+
+function isPermanentHarvestFailure(error: unknown): boolean {
+  return (
+    error instanceof ArtifactVerificationError
+    || error instanceof WalkthroughAnchorSmartTaggingError
+    || error instanceof PermanentHarvestApplicationError
+  );
+}
+
+function harvestErrorDetail(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function terminalFailureDetail(attempt: FinishedV2DocumentAttempt): string {
@@ -244,6 +278,27 @@ export async function harvestFinishedV2Documents(
   const applySmartTagging =
     dependencies.applySmartTagging ?? defaultApplySmartTagging;
   const tempRoot = dependencies.tempRoot ?? os.tmpdir();
+  const failWorkflow =
+    dependencies.failWorkflow
+    ?? (async (attempt, reason) => {
+      if (attempt.workflowClass === 'walkthrough-smart-tagging') {
+        await markV2SmartTaggingFailure({
+          threadId: attempt.threadId,
+          reason,
+        });
+        return;
+      }
+      const failureWorkspace = await createHarvestWorkspace(tempRoot);
+      try {
+        await applyWorkspace({
+          attempt,
+          workspacePath: failureWorkspace,
+          failureDetail: reason,
+        });
+      } finally {
+        await fs.rm(failureWorkspace, { recursive: true, force: true });
+      }
+    });
   const attempts = await finishedAttempts.listFinishedDocuments(
     dependencies.batchSize ?? HARVEST_BATCH_SIZE,
   );
@@ -260,63 +315,59 @@ export async function harvestFinishedV2Documents(
     const workspacePath = await createHarvestWorkspace(tempRoot);
     try {
       if (attempt.status !== 'completed') {
-        await applyAttempt(
-          attempt,
-          workspacePath,
-          applyWorkspace,
-          applySmartTagging,
-          terminalFailureDetail(attempt),
-        );
+        await failWorkflow(attempt, terminalFailureDetail(attempt));
       } else if (!attempt.manifestRef) {
-        await applyAttempt(
+        await failWorkflow(
           attempt,
-          workspacePath,
-          applyWorkspace,
-          applySmartTagging,
           'Document generation finished without an artifact manifest.',
         );
       } else {
-        try {
-          const manifest = await artifacts.readManifest(attempt.manifestRef);
-          await materializeManifest(
-            attempt,
-            manifest,
-            artifacts,
-            workspacePath,
-          );
-          await applyAttempt(
-            attempt,
-            workspacePath,
-            applyWorkspace,
-            applySmartTagging,
-          );
-        } catch (error) {
-          if (
-            !(error instanceof ArtifactVerificationError)
-            && !(error instanceof WalkthroughAnchorSmartTaggingError)
-          ) {
-            throw error;
-          }
-          await clearHarvestOutput(workspacePath);
-          await applyAttempt(
-            attempt,
-            workspacePath,
-            applyWorkspace,
-            applySmartTagging,
-            `Generated document artifacts could not be verified: ${error.message}`,
-          );
-        }
+        const manifest = await artifacts.readManifest(attempt.manifestRef);
+        await materializeManifest(
+          attempt,
+          manifest,
+          artifacts,
+          workspacePath,
+        );
+        await applyAttempt(
+          attempt,
+          workspacePath,
+          applyWorkspace,
+          applySmartTagging,
+        );
       }
 
       await finishedAttempts.completeHarvest(attempt.attemptId);
       harvested += 1;
     } catch (error) {
-      // The durable claim remains unprocessed; a later sweep retries it.
-      console.error(
-        `[documentV2Harvest] Could not apply run ${attempt.runId} `
-          + `to ${attempt.workflowClass} thread ${attempt.threadId}:`,
-        error,
-      );
+      const detail = harvestErrorDetail(error);
+      const failureCount = isPermanentHarvestFailure(error)
+        ? MAX_HARVEST_FAILURES
+        : await finishedAttempts.recordHarvestFailure(
+            attempt.attemptId,
+            detail,
+          );
+      if (failureCount >= MAX_HARVEST_FAILURES) {
+        try {
+          await failWorkflow(
+            attempt,
+            `Document artifact application failed after ${failureCount} attempts: ${detail}`,
+          );
+          await finishedAttempts.completeHarvest(attempt.attemptId);
+          harvested += 1;
+        } catch (failureError) {
+          console.error(
+            `[documentV2Harvest] Could not record terminal apply failure for run ${attempt.runId}:`,
+            failureError,
+          );
+        }
+      } else {
+        console.error(
+          `[documentV2Harvest] Apply attempt ${failureCount}/${MAX_HARVEST_FAILURES} `
+            + `failed for run ${attempt.runId}:`,
+          error,
+        );
+      }
     } finally {
       await fs.rm(workspacePath, { recursive: true, force: true });
     }

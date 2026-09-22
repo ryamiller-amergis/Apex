@@ -624,10 +624,20 @@ function readOutput(workspaceDir: string): string | null {
 async function loadThreadForUser(
   threadId: string,
   userId: string
-): Promise<{ userId: string; workspaceDir: string | null; status: string }> {
+): Promise<{
+  userId: string;
+  workspaceDir: string | null;
+  status: string;
+  lastError: string | null;
+}> {
   const row = await db.query.chatThreads.findFirst({
     where: eq(chatThreads.id, threadId),
-    columns: { userId: true, workspaceDir: true, status: true },
+    columns: {
+      userId: true,
+      workspaceDir: true,
+      status: true,
+      lastError: true,
+    },
   });
   if (!row || row.userId !== userId) {
     throw new WalkthroughAnchorSmartTaggingOrchestrationError(
@@ -690,7 +700,18 @@ export async function applyV2SmartTaggingResult(input: {
       provenanceBase,
       actor: { id: thread.userId },
     });
-  if (updated.length === 0) return false;
+  if (updated.length === 0) {
+    const existing = await Promise.all(
+      testIds.map((testId) =>
+        walkthroughAnchorRegistryService.getAnchorByTestId(testId)),
+    );
+    return (
+      existing.length > 0
+      && existing.every(
+        (row) => row?.aiProvenance?.runId === input.runId,
+      )
+    );
+  }
 
   await createNotification(thread.userId, {
     type: 'ai',
@@ -704,6 +725,20 @@ export async function applyV2SmartTaggingResult(input: {
     );
   });
   return true;
+}
+
+export async function markV2SmartTaggingFailure(input: {
+  threadId: string;
+  reason: string;
+}): Promise<void> {
+  await db
+    .update(chatThreads)
+    .set({
+      status: 'idle',
+      lastError: input.reason,
+      lastActivityAt: new Date().toISOString(),
+    })
+    .where(eq(chatThreads.id, input.threadId));
 }
 
 function chunkCandidates(
@@ -933,7 +968,8 @@ export async function getSmartTaggingResult(
       taggingInFlight.delete(threadId);
       return failedResponse(
         provenance,
-        'Agent completed without generating smart-tagging output.'
+        row.lastError
+        || 'Agent completed without generating smart-tagging output.'
       );
     }
     // After a server restart the in-memory agent is gone but DB may still say

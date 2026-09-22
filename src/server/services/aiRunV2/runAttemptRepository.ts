@@ -68,6 +68,7 @@ export type DispatchNextAttemptInput = Readonly<{
   dispatchMessageId?: string;
   workloadLane: AiRunV2WorkloadLane;
   specRef: AiRunBlobRef;
+  deadlineAt?: string;
 }>;
 
 export type DispatchNextAttemptResult = Readonly<{
@@ -322,6 +323,7 @@ export function createRunAttemptRepository(options?: {
             runId: created.runId,
             workloadLane: input.workloadLane,
             specRef: input.specRef,
+            deadlineAt: input.timeoutAt,
           });
         return {
           status: 'dispatched',
@@ -341,7 +343,7 @@ export function createRunAttemptRepository(options?: {
         const outbox = createOutboxRepository(executor);
 
         const runResult = await executor.execute(sql`
-          SELECT id, status, transport_version
+          SELECT id, status, transport_version, timeout_at
           FROM agent_runs
           WHERE id = ${input.runId}
           FOR UPDATE
@@ -350,6 +352,7 @@ export function createRunAttemptRepository(options?: {
           id: string;
           status: string;
           transport_version: string;
+          timeout_at?: string | Date | null;
         }>(runResult)[0];
         if (!run) {
           throw new Error(`Run not found: ${input.runId}`);
@@ -377,6 +380,18 @@ export function createRunAttemptRepository(options?: {
         }>(activeAttempt)[0];
 
         const dispatchMessageId = input.dispatchMessageId ?? randomUUID();
+        const deadlineAt =
+          input.deadlineAt
+          ?? (
+            run.timeout_at instanceof Date
+              ? run.timeout_at.toISOString()
+              : run.timeout_at == null
+                ? ''
+                : String(run.timeout_at)
+          );
+        if (!Number.isFinite(Date.parse(deadlineAt))) {
+          throw new Error(`Run ${input.runId} has no valid dispatch deadline`);
+        }
 
         if (active?.status === 'queued' && active.attempt_number === 1) {
           await executor.execute(sql`
@@ -410,6 +425,7 @@ export function createRunAttemptRepository(options?: {
             transport: 'servicebus-blob-v2',
             workloadLane: input.workloadLane,
             specRef: input.specRef,
+            deadlineAt,
           };
           const inserted = await outbox.enqueue([
             {
@@ -490,6 +506,7 @@ export function createRunAttemptRepository(options?: {
           transport: 'servicebus-blob-v2',
           workloadLane: input.workloadLane,
           specRef: input.specRef,
+          deadlineAt,
         };
         const inserted = await outbox.enqueue([
           {

@@ -33,7 +33,10 @@ export type UploadTarget = Readonly<{
 
 export type ArtifactUploader = {
   attemptPrefix(): string;
-  uploadAll(files: ReadonlyArray<ArtifactFile>): Promise<AiRunBlobRef>;
+  uploadAll(
+    files: ReadonlyArray<ArtifactFile>,
+    signal?: AbortSignal,
+  ): Promise<AiRunBlobRef>;
 };
 
 export function buildAttemptPrefix(
@@ -58,7 +61,7 @@ export function createArtifactUploader(deps: {
       return prefix;
     },
 
-    async uploadAll(files) {
+    async uploadAll(files, signal) {
       const container = getContainerClient(deps.target.container);
       const entries: AiRunV2ArtifactManifestEntry[] = [];
 
@@ -69,6 +72,7 @@ export function createArtifactUploader(deps: {
             : file.content;
         const key = `${prefix}/${file.path}`;
         await container.getBlockBlobClient(key).uploadData(body, {
+          abortSignal: signal,
           blobHTTPHeaders: {
             blobContentType: file.contentType ?? 'application/octet-stream',
           },
@@ -94,6 +98,7 @@ export function createArtifactUploader(deps: {
       await container
         .getBlockBlobClient(manifestKey)
         .uploadData(Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'), {
+          abortSignal: signal,
           blobHTTPHeaders: { blobContentType: 'application/json' },
         });
 

@@ -1062,18 +1062,31 @@ export async function syncTestCaseOutput(
     updatedAt: readyAt,
   };
 
-  const applied = await db
-    .update(testCases)
-    .set(updates)
-    .where(
-      and(
-        eq(testCases.id, testCaseId),
-        eq(testCases.chatThreadId, chatThreadId),
-        eq(testCases.status, 'generating'),
-      ),
-    )
-    .returning({ id: testCases.id });
-  if (applied.length === 0) return false;
+  const applied = await db.transaction(async (tx) => {
+    const updatedRows = await tx
+      .update(testCases)
+      .set(updates)
+      .where(
+        and(
+          eq(testCases.id, testCaseId),
+          eq(testCases.chatThreadId, chatThreadId),
+          eq(testCases.status, 'generating'),
+        ),
+      )
+      .returning({ id: testCases.id });
+    if (updatedRows.length === 0) return false;
+    if (backlogWithTestCaseCounts !== null) {
+      await tx
+        .update(prds)
+        .set({
+          backlogJson: backlogWithTestCaseCounts as any,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(prds.id, prdId));
+    }
+    return true;
+  });
+  if (!applied) return false;
 
   // Frozen cycle-time end instant — insert-once, so a regeneration keeps the
   // first suite-ready timestamp (FEAT-001 / TBI-002).
@@ -1082,16 +1095,6 @@ export async function syncTestCaseOutput(
   } catch (err) {
     console.error(`[testCase] Failed to record done event (testCaseId=${testCaseId})`, err);
   }
-  if (backlogWithTestCaseCounts !== null) {
-    await db
-      .update(prds)
-      .set({
-        backlogJson: backlogWithTestCaseCounts as any,
-        updatedAt: new Date().toISOString(),
-      })
-      .where(eq(prds.id, prdId));
-  }
-
   await cleanupWorkspace(chatThreadId);
   await cleanupWorkspace(prdRow?.chatThreadId);
   console.log(

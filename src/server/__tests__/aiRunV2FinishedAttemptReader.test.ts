@@ -174,6 +174,25 @@ describe('finished V2 attempt reader', () => {
     expect(text).toContain('processed_at');
   });
 
+  it('durably increments harvest failure attempts in the inbox payload', async () => {
+    const execute = jest.fn().mockResolvedValue([
+      { failure_count: 2 },
+    ]);
+    const reader = createFinishedAttemptReader({
+      executor: { execute },
+      inbox: inbox(),
+    });
+
+    await expect(
+      reader.recordHarvestFailure('attempt-1', 'database unavailable'),
+    ).resolves.toBe(2);
+
+    const text = sqlText(execute.mock.calls[0][0]);
+    expect(text).toContain('harvestFailureCount');
+    expect(text).toContain('harvestLastError');
+    expect(text).toContain('processed_at IS NULL');
+  });
+
   const attempt = {
     attemptId: 'attempt-1',
     runId: 'run-1',

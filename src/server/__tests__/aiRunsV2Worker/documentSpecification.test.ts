@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   isAiRunV2DocumentSpecification,
   type AiRunV2DocumentSpecification,
@@ -6,12 +7,15 @@ import {
 function specification(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
+  const skillContent = '# Frozen to-prd skill';
   return {
     workloadLane: 'document',
     prompt: 'Generate the PRD',
     model: 'claude-4',
     effort: null,
     skillPath: '.cursor/skills/to-prd/SKILL.md',
+    skillContent,
+    skillSha256: createHash('sha256').update(skillContent).digest('hex'),
     workflowClass: 'prd',
     projectId: 'Apex',
     threadId: 'thread-1',
@@ -46,6 +50,9 @@ describe('V2 document execution specification', () => {
     ['model', undefined],
     ['effort', undefined],
     ['skillPath', undefined],
+    ['skillContent', undefined],
+    ['skillSha256', undefined],
+    ['skillSha256', 'not-a-sha'],
     ['deadlineMs', undefined],
     ['deadlineMs', 0],
     ['groundedSha', undefined],
@@ -105,4 +112,15 @@ describe('V2 document execution specification', () => {
       ),
     ).toBe(false);
   });
+
+  it.each(['workspaceRef', 'checkoutRef', 'mirrorRef'])(
+    'rejects App Service path field %s',
+    (field) => {
+      expect(
+        isAiRunV2DocumentSpecification(
+          specification({ [field]: 'C:\\host-only\\path' }),
+        ),
+      ).toBe(false);
+    },
+  );
 });

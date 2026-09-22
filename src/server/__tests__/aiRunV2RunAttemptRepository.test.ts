@@ -10,6 +10,14 @@ const specRef = {
   key: 'runs/run-1/attempts/1/spec.json',
 };
 
+function boundStrings(value: unknown, seen = new Set<unknown>()): string[] {
+  if (typeof value === 'string') return [value];
+  if (!value || typeof value !== 'object' || seen.has(value)) return [];
+  seen.add(value);
+  return Object.values(value as Record<string, unknown>)
+    .flatMap((entry) => boundStrings(entry, seen));
+}
+
 describe('AI-run V2 run attempt repository', () => {
   it('returns an active-run conflict instead of creating a duplicate', async () => {
     const execute = jest.fn().mockResolvedValueOnce([
@@ -141,6 +149,12 @@ describe('AI-run V2 run attempt repository', () => {
       outboxId: 'outbox-1',
     });
     expect(transactionCount).toBe(1);
+    expect(
+      execute.mock.calls
+        .flatMap(([query]) => boundStrings(query))
+        .some((value) =>
+          value.includes('"deadlineAt":"2026-09-18T13:00:00.000Z"')),
+    ).toBe(true);
   });
 
   it('rolls back the queued row when the initial outbox write fails', async () => {

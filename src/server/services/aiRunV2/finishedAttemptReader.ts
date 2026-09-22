@@ -53,6 +53,10 @@ export type FinishedAttemptReader = {
     limit: number,
   ): Promise<FinishedV2DocumentAttempt[]>;
   isDocumentHarvestPending(runId: string): Promise<boolean>;
+  recordHarvestFailure(
+    attemptId: string,
+    detail: string,
+  ): Promise<number>;
   claimHarvest(attempt: FinishedV2Attempt): Promise<HarvestClaim>;
   completeHarvest(attemptId: string): Promise<void>;
 };
@@ -243,6 +247,31 @@ export function createFinishedAttemptReader(deps?: {
         LIMIT 1
       `);
       return resultRows(result).length > 0;
+    },
+
+    async recordHarvestFailure(attemptId, detail) {
+      const result = await executor.execute(sql`
+        UPDATE ai_run_inbox
+        SET payload =
+          jsonb_set(
+            jsonb_set(
+              COALESCE(payload, '{}'::jsonb),
+              '{harvestFailureCount}',
+              to_jsonb(
+                COALESCE((payload->>'harvestFailureCount')::int, 0) + 1
+              )
+            ),
+            '{harvestLastError}',
+            to_jsonb(${detail}::text)
+          )
+        WHERE event_id = ${harvestEventId(attemptId)}
+          AND processed_at IS NULL
+        RETURNING (payload->>'harvestFailureCount')::int AS failure_count
+      `);
+      return Number(
+        resultRows<{ failure_count: number | string }>(result)[0]
+          ?.failure_count ?? 0,
+      );
     },
 
     async claimHarvest(attempt) {
