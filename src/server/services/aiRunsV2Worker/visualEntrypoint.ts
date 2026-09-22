@@ -66,8 +66,14 @@ function buildVisualPrompt(specification: AiRunV2VisualSpecification): string {
     case 'ui-lab-screen':
       return buildUiLabPrompt(specification);
     default: {
-      const unhandled: never = specification.subjectKind;
-      throw new Error(`Unsupported visual subjectKind: ${String(unhandled)}`);
+      // The specification itself is `never` here, so a third subject kind
+      // stops compiling until it has a case of its own.
+      const unhandled: never = specification;
+      throw new Error(
+        `Unsupported visual subjectKind: ${String(
+          (unhandled as { subjectKind?: unknown }).subjectKind,
+        )}`,
+      );
     }
   }
 }

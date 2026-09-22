@@ -8,7 +8,8 @@
  */
 import type { RepoReader } from '../../../shared/types/repoReader';
 import type {
-  AiRunV2VisualSpecification,
+  DesignPrototypeVisualSpecification,
+  PrototypePromptSelection,
   VisualModelSettings,
   VisualNavItem,
   VisualUsageAttribution,
@@ -38,6 +39,11 @@ export type PrototypeDesignContext = Readonly<{
 
 export type AssemblePrototypeSpecificationInput = Readonly<{
   prototypeId: string;
+  /**
+   * Which prompt the worker builds. Resolved per prototype because the
+   * project branch carries web references searched for this feature alone.
+   */
+  prototypePrompt: PrototypePromptSelection;
   promptInputs: Record<string, unknown>;
   sourcePaths: ReadonlyArray<string>;
   model: VisualModelSettings;
@@ -47,7 +53,7 @@ export type AssemblePrototypeSpecificationInput = Readonly<{
 export type PrototypeSpecificationAssembler = {
   assemble(
     input: AssemblePrototypeSpecificationInput,
-  ): Promise<AiRunV2VisualSpecification>;
+  ): Promise<DesignPrototypeVisualSpecification>;
 };
 
 export function createPrototypeSpecificationAssembler(deps: {
@@ -75,6 +81,7 @@ export function createPrototypeSpecificationAssembler(deps: {
 
       return buildPrototypeVisualSpecification({
         prototypeId: input.prototypeId,
+        prototypePrompt: input.prototypePrompt,
         promptInputs: input.promptInputs,
         sourceFiles: budgeted.included,
         omittedSourcePaths: budgeted.omitted,

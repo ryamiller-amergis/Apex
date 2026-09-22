@@ -11,6 +11,7 @@ const spec: AiRunV2VisualSpecification = {
   specVersion: AI_RUN_V2_VISUAL_SPEC_VERSION,
   subjectId: 'prototype-1',
   subjectKind: 'design-prototype',
+  prototypePrompt: { branch: 'maxview' },
   promptInputs: {
     sourceFiles: [
       { path: '/src/components/Board.tsx', content: 'export const Board = 1;' },

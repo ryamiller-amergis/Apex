@@ -44,6 +44,7 @@ describe('prototypeSpecificationAssembler', () => {
 
     const spec = await assembler.assemble({
       prototypeId: 'prototype-1',
+      prototypePrompt: { branch: 'maxview' },
       promptInputs,
       sourcePaths: ['/src/components/Board.tsx'],
       model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
@@ -66,6 +67,7 @@ describe('prototypeSpecificationAssembler', () => {
 
     const spec = await assembler.assemble({
       prototypeId: 'prototype-1',
+      prototypePrompt: { branch: 'maxview' },
       promptInputs,
       sourcePaths: ['/a.tsx', '/b.tsx'],
       model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
@@ -89,6 +91,7 @@ describe('prototypeSpecificationAssembler', () => {
 
     const spec = await assembler.assemble({
       prototypeId: 'prototype-1',
+      prototypePrompt: { branch: 'maxview' },
       promptInputs,
       sourcePaths: [],
       model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
@@ -121,6 +124,7 @@ describe('prototypeSpecificationAssembler', () => {
 
     const spec = await assembler.assemble({
       prototypeId: 'prototype-1',
+      prototypePrompt: { branch: 'maxview' },
       promptInputs,
       sourcePaths: ['/a.tsx', '/b.tsx'],
       model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
@@ -142,6 +146,7 @@ describe('prototypeSpecificationAssembler', () => {
 
     const spec = await assembler.assemble({
       prototypeId: 'prototype-1',
+      prototypePrompt: { branch: 'maxview' },
       promptInputs,
       sourcePaths: [],
       model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
@@ -159,6 +164,7 @@ describe('prototypeSpecificationAssembler', () => {
 
     const spec = await assembler.assemble({
       prototypeId: 'prototype-1',
+      prototypePrompt: { branch: 'maxview' },
       promptInputs,
       sourcePaths: [],
       model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },

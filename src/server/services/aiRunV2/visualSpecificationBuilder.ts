@@ -7,8 +7,10 @@
  */
 import {
   AI_RUN_V2_VISUAL_SPEC_VERSION,
-  type AiRunV2VisualSpecification,
+  type DesignPrototypeVisualSpecification,
+  type PrototypePromptSelection,
   type UiLabDesignSystemName,
+  type UiLabVisualSpecification,
   type VisualDesignReference,
   type VisualModelSettings,
   type VisualNavItem,
@@ -58,6 +60,8 @@ function buildDesignReference(
 
 export type BuildPrototypeSpecificationInput = Readonly<{
   prototypeId: string;
+  /** Which of the two prototype prompts the worker must build. */
+  prototypePrompt: PrototypePromptSelection;
   promptInputs: Record<string, unknown>;
   sourceFiles: ReadonlyArray<DesignSourceFile>;
   /** Paths the byte budget dropped, kept so the gap stays visible. */
@@ -73,11 +77,12 @@ export type BuildPrototypeSpecificationInput = Readonly<{
 
 export function buildPrototypeVisualSpecification(
   input: BuildPrototypeSpecificationInput,
-): AiRunV2VisualSpecification {
+): DesignPrototypeVisualSpecification {
   return {
     specVersion: AI_RUN_V2_VISUAL_SPEC_VERSION,
     subjectId: input.prototypeId,
     subjectKind: 'design-prototype',
+    prototypePrompt: input.prototypePrompt,
     promptInputs: {
       ...input.promptInputs,
       sourceFiles: input.sourceFiles,
@@ -128,7 +133,7 @@ export type BuildUiLabSpecificationInput = Readonly<{
  */
 export function buildUiLabVisualSpecification(
   input: BuildUiLabSpecificationInput,
-): AiRunV2VisualSpecification {
+): UiLabVisualSpecification {
   return {
     specVersion: AI_RUN_V2_VISUAL_SPEC_VERSION,
     subjectId: input.designId,

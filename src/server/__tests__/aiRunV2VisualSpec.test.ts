@@ -1,13 +1,14 @@
 import {
   AI_RUN_V2_VISUAL_SPEC_VERSION,
   isAiRunV2VisualSpecification,
-  type AiRunV2VisualSpecification,
+  type DesignPrototypeVisualSpecification,
 } from '../../shared/types/aiRunV2VisualSpec';
 
-const spec: AiRunV2VisualSpecification = {
+const spec: DesignPrototypeVisualSpecification = {
   specVersion: AI_RUN_V2_VISUAL_SPEC_VERSION,
   subjectId: 'prototype-1',
   subjectKind: 'design-prototype',
+  prototypePrompt: { branch: 'maxview' },
   promptInputs: { featureTitle: 'Standup summary' },
   designSystem: { catalog: { routes: [] }, colorTokens: {} },
   designReference: { navItems: [{ label: 'Home', route: '/' }] },
@@ -15,6 +16,23 @@ const spec: AiRunV2VisualSpecification = {
   usage: { feature: 'design-prototype', project: 'Apex' },
   outputPath: 'prototype.html',
 };
+
+const projectSpec: DesignPrototypeVisualSpecification = {
+  ...spec,
+  prototypePrompt: {
+    branch: 'project-design-system',
+    appName: 'Apex',
+    designSystemMarkdown: '## Apex tokens',
+    extendMode: false,
+  },
+};
+
+/** Drops one field from the project branch, which the typed shape forbids. */
+function projectPromptWithout(field: string): Record<string, unknown> {
+  const prompt: Record<string, unknown> = { ...projectSpec.prototypePrompt };
+  delete prompt[field];
+  return prompt;
+}
 
 /** Drops one model field, which the typed shape no longer lets a caller do. */
 function modelWithout(field: 'maxTokens' | 'timeoutMs'): Record<string, unknown> {
@@ -96,5 +114,81 @@ describe('visual execution specification', () => {
     expect(isAiRunV2VisualSpecification({ ...spec, outputPath: '' })).toBe(
       false,
     );
+  });
+});
+
+/**
+ * The prototype lane has two prompts and they share almost no text. Choosing
+ * between them needs the project's own design-system skill, which lives in
+ * the project's repository — so App Service chooses and the specification
+ * carries the answer. A worker that guessed would answer a project that has
+ * its own design system with the MaxView prompt: finished-looking output
+ * against the wrong design system, with nothing to flag it.
+ */
+describe('the prototype prompt branch', () => {
+  it('accepts either branch when it is fully resolved', () => {
+    expect(isAiRunV2VisualSpecification(spec)).toBe(true);
+    expect(isAiRunV2VisualSpecification(projectSpec)).toBe(true);
+  });
+
+  it('refuses a prototype run that does not say which prompt to build', () => {
+    const { prototypePrompt, ...withoutBranch } = spec;
+    expect(prototypePrompt).toBeDefined();
+    expect(isAiRunV2VisualSpecification(withoutBranch)).toBe(false);
+  });
+
+  it('refuses a branch name the worker has no prompt for', () => {
+    expect(
+      isAiRunV2VisualSpecification({ ...spec, prototypePrompt: { branch: 'figma' } }),
+    ).toBe(false);
+  });
+
+  it('refuses a project branch missing the design system it is named for', () => {
+    for (const field of ['appName', 'designSystemMarkdown', 'extendMode']) {
+      expect(
+        isAiRunV2VisualSpecification({
+          ...spec,
+          prototypePrompt: projectPromptWithout(field),
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it('refuses an empty design system rather than prompting against nothing', () => {
+    expect(
+      isAiRunV2VisualSpecification({
+        ...spec,
+        prototypePrompt: { ...projectSpec.prototypePrompt, designSystemMarkdown: '   ' },
+      }),
+    ).toBe(false);
+  });
+
+  /** Absent whenever the project left web references off, which is the default. */
+  it('accepts optional web references and refuses a non-string', () => {
+    expect(
+      isAiRunV2VisualSpecification({
+        ...spec,
+        prototypePrompt: { ...projectSpec.prototypePrompt, webReferences: '## Linear' },
+      }),
+    ).toBe(true);
+    expect(
+      isAiRunV2VisualSpecification({
+        ...spec,
+        prototypePrompt: { ...projectSpec.prototypePrompt, webReferences: 12 },
+      }),
+    ).toBe(false);
+  });
+
+  /** UI Lab has one prompt, so it carries no branch and must not need one. */
+  it('does not ask a ui-lab-screen run for a prototype branch', () => {
+    const { prototypePrompt, ...base } = spec;
+    expect(prototypePrompt).toBeDefined();
+    expect(
+      isAiRunV2VisualSpecification({
+        ...base,
+        subjectKind: 'ui-lab-screen',
+        outputPath: 'design.html',
+      }),
+    ).toBe(true);
   });
 });

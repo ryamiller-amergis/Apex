@@ -5,6 +5,7 @@ const spec = {
   specVersion: AI_RUN_V2_VISUAL_SPEC_VERSION,
   subjectId: 'prototype-1',
   subjectKind: 'design-prototype' as const,
+  prototypePrompt: { branch: 'maxview' as const },
   promptInputs: { featureName: 'Standup summary' },
   designSystem: {},
   designReference: { navItems: [] },

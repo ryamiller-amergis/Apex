@@ -584,6 +584,7 @@ async function admitPendingPrototypesToV2(params: {
       try {
         const specification: AiRunV2VisualSpecification = await assembler.assemble({
           prototypeId,
+          prototypePrompt: { branch: 'maxview' },
           promptInputs: buildPrototypePromptInputs(feature, planFeature),
           sourcePaths: source?.sourcePaths ?? [],
           model,

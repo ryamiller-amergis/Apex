@@ -51,6 +51,43 @@ export type VisualSubjectKind = 'design-prototype' | 'ui-lab-screen';
 export type UiLabDesignSystemName = 'APEX' | 'MaxView';
 
 /**
+ * The prototype lane has two prompts, not one, and they share almost no text.
+ *
+ * `bedrockService` picks between them on whether `resolvePrototypeContext`
+ * returned anything: a project that ships its own design-system skill is
+ * prompted entirely from that skill, and every other project gets the
+ * bundled MaxView prompt with its catalog, palette, sidebar, and Figma
+ * reference. Neither choice is a worker's to make — the design system lives
+ * in the project's own repository and the web references need a search key —
+ * so App Service resolves the branch and it travels with the specification.
+ */
+export type MaxViewPrototypePrompt = Readonly<{ branch: 'maxview' }>;
+
+export type ProjectPrototypePrompt = Readonly<{
+  branch: 'project-design-system';
+  /** Application name the prompt names throughout, from `PrototypeContext`. */
+  appName: string;
+  /** The project's design-system skill, already read from its repository. */
+  designSystemMarkdown: string;
+  /**
+   * EXTEND an existing page rather than render a new one. The project prompt
+   * drops its annotation block in EXTEND mode, so the worker has to be told
+   * which of the two it is building.
+   */
+  extendMode: boolean;
+  /**
+   * Live web design references, searched on App Service. Absent unless the
+   * project turned them on, and the section is then left out entirely — the
+   * same thing the in-process path does.
+   */
+  webReferences?: string;
+}>;
+
+export type PrototypePromptSelection =
+  | MaxViewPrototypePrompt
+  | ProjectPrototypePrompt;
+
+/**
  * Every value the model call needs, resolved before the run leaves App
  * Service. None of them is optional with a fallback on the worker: the
  * project override lives in the database and the app default is tuned by an
@@ -76,11 +113,10 @@ export type VisualUsageAttribution = Readonly<{
   userId?: string;
 }>;
 
-export type AiRunV2VisualSpecification = Readonly<{
+type VisualSpecificationBase = Readonly<{
   specVersion: typeof AI_RUN_V2_VISUAL_SPEC_VERSION;
   /** The domain row this run produces output for, e.g. a prototype id. */
   subjectId: string;
-  subjectKind: VisualSubjectKind;
   /** Resolved prompt inputs. Opaque to the transport, meaningful to the lane. */
   promptInputs: Record<string, unknown>;
   /** Resolved design-system context, already read from the database. */
@@ -95,6 +131,23 @@ export type AiRunV2VisualSpecification = Readonly<{
   /** Name the artifact must be written under, so the owner can find it. */
   outputPath: string;
 }>;
+
+export type DesignPrototypeVisualSpecification = VisualSpecificationBase &
+  Readonly<{
+    subjectKind: 'design-prototype';
+    prototypePrompt: PrototypePromptSelection;
+  }>;
+
+export type UiLabVisualSpecification = VisualSpecificationBase &
+  Readonly<{ subjectKind: 'ui-lab-screen' }>;
+
+/**
+ * Split by subject kind so a prototype run cannot be built without naming its
+ * prompt branch, while UI Lab — which has one prompt — is not asked for one.
+ */
+export type AiRunV2VisualSpecification =
+  | DesignPrototypeVisualSpecification
+  | UiLabVisualSpecification;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -124,6 +177,29 @@ function isResolvedModel(value: unknown): boolean {
   );
 }
 
+/**
+ * Refuses a prototype run whose branch is missing or incomplete, for the same
+ * reason the model settings are refused: a worker that filled the gap in
+ * would pick a prompt, and picking the MaxView prompt for a project that has
+ * its own design system is the exact defect this field exists to stop.
+ */
+function isPrototypePromptSelection(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  switch (value.branch) {
+    case 'maxview':
+      return true;
+    case 'project-design-system':
+      return (
+        isNonEmptyString(value.appName) &&
+        isNonEmptyString(value.designSystemMarkdown) &&
+        typeof value.extendMode === 'boolean' &&
+        (value.webReferences === undefined || typeof value.webReferences === 'string')
+      );
+    default:
+      return false;
+  }
+}
+
 export function isAiRunV2VisualSpecification(
   value: unknown,
 ): value is AiRunV2VisualSpecification {
@@ -131,6 +207,12 @@ export function isAiRunV2VisualSpecification(
   if (value.specVersion !== AI_RUN_V2_VISUAL_SPEC_VERSION) return false;
   if (!isNonEmptyString(value.subjectId)) return false;
   if (value.subjectKind !== 'design-prototype' && value.subjectKind !== 'ui-lab-screen') {
+    return false;
+  }
+  if (
+    value.subjectKind === 'design-prototype' &&
+    !isPrototypePromptSelection(value.prototypePrompt)
+  ) {
     return false;
   }
   if (!isNonEmptyString(value.outputPath)) return false;

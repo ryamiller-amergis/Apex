@@ -10,6 +10,7 @@ import {
 
 const base = {
   prototypeId: 'prototype-1',
+  prototypePrompt: { branch: 'maxview' } as const,
   promptInputs: { featureTitle: 'Standup summary' },
   sourceFiles: [{ path: '/src/components/A.tsx', content: 'a' }],
   colorTokens: { primary: '#000' },
