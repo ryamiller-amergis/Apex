@@ -751,10 +751,11 @@ not yet modified — see "Remaining for Task 6" below.
     a project with its own design-system skill was admitted to V2 and
     answered with the MaxView prompt. Same class of defect as the image,
     wider blast radius.
-  - **Still open: `stop_reason` is not read.** `bedrockService` throws
+  - ~~**Still open: `stop_reason` is not read.**~~ Closed 2026-09-22, see
+    "A truncated document is not a prototype" below. `bedrockService` throws
     `BedrockModelTruncatedError` on `stop_reason: 'max_tokens'`;
-    `bedrockVisualClient` ignores it and returns the partial text, which the
-    worker uploads and finalizes as a completed prototype.
+    `bedrockVisualClient` ignored it and returned the partial text, which the
+    worker uploaded and finalized as a completed prototype.
   - ~~**Still open: `VisualModelSettings` has no `temperature`.**~~ Closed
     2026-09-22 — the contract carries an optional `temperature`,
     `resolveUiLabVisualModel` populates it from `uiLabBedrockTemperature`, and
@@ -817,6 +818,27 @@ not yet modified — see "Remaining for Task 6" below.
     is now resolved on App Service like the ceiling; what remains is that the
     in-process timeout bounds each of up to five attempts while the worker
     gets one.
+  - ~~It compares requests, so nothing it does can see a reply one path reads
+    and the other ignores.~~ Answered 2026-09-22 by a companion test, see
+    below.
+
+  **The other half of the call (2026-09-22).**
+  `src/server/__tests__/designPrototypeBedrockResponseParity.test.ts` is the
+  request test's mirror: same PRD fixture, same flag-off/flag-on pair, same
+  AWS SDK client seam — except the fake client also chooses the reply, so one
+  response body reaches both transports and the **verdicts** are compared.
+  A verdict is `accepted` (the transport treated the reply as a finished
+  prototype) or `refused` with the sentence it refused in, read off the
+  `design_prototypes` row in process and off the thrown error on V2. The
+  cases are `stop_reason: 'max_tokens'`, `end_turn`, and absent. A request
+  differential cannot see any of this, and truncation is the second channel
+  of this species found in the response direction after the empty completion.
+
+  It is worth its own file rather than more cases in the request test: the
+  fixtures overlap but the seam does not. The request test needs the reply to
+  stay constant so the request is the only variable, and this one needs the
+  reply to vary. Folding them together would mean one of the two stops being
+  a controlled comparison.
 
   **A worker holds no policy (2026-09-22).** The ceiling defect was not a
   wrong number, it was a worker deciding a number at all. Model settings have
@@ -904,6 +926,72 @@ not yet modified — see "Remaining for Task 6" below.
   by a V2 run; and the project branch is admitted with no repository source,
   matching the in-process prompt rather than the MaxView branch's V2
   enrichment.
+
+  **A truncated document is not a prototype (2026-09-22).** Bedrock reports a
+  response it cut off at the output ceiling as `stop_reason: 'max_tokens'`,
+  and the text that comes with it is a fragment — valid-looking HTML that
+  stops mid-element. `bedrockVisualClient` read `content` and `usage` and
+  never looked at `stop_reason`, so the fragment was returned, uploaded as
+  `prototype.html`, and finalized as a **completed** prototype. Nothing
+  downstream could tell: a fragment renders, and the row showed
+  `pending_review` like any other.
+
+  - **The refusal goes in the client, at the parse.** That is where
+    `bedrockService.invokeModel` decides, and putting it anywhere else would
+    mean `VisualModelResult` carrying a stop reason — a new channel, next to
+    the partial HTML it is supposed to stop. `createVisualExecute` already
+    takes a plain `string` from injected fakes and has nowhere to hang one.
+    In the client, the fragment never becomes a `VisualModelResult` at all,
+    and the UI Lab lane inherits the check when it is wired up.
+  - **`VisualModelTruncatedError` is worker-local, and its message is
+    `BedrockModelTruncatedError`'s word for word.** `bedrockService` cannot be
+    imported — it records usage and pulls PostgreSQL into the worker image,
+    which `noDatabaseImports` enforces — so the class is duplicated and the
+    sentence is not. The sentence is what a person reads off the prototype
+    row, and the row must read the same whichever transport ran it.
+  - **Category: `internal_error`, and no new category.** Every value in
+    `AI_RUN_V2_FAILURE_CATEGORIES` names a transport or lifecycle event —
+    `worker_lost`, `progress_timeout`, `queue_ttl`, `dispatch_ttl`,
+    `forced_cancel`, `poison_message`, `artifact_verification_failed`,
+    `lease_lost`. A model that ran out of room is none of them;
+    `artifact_verification_failed` is the closest and it is about bytes not
+    matching a manifest, which happens after an upload truncation never
+    reaches. The set is a check constraint in
+    `20260917220000_ai-run-v2-control-plane.sql`, so widening it is a
+    migration against a control-plane table — and nothing would read the new
+    value. `resultConsumer` records the category and branches only on the
+    transition result; the reconciler retries only `worker_lost`. The detail
+    is the part anyone reads. `failureCategoryFor` is unchanged, since
+    `internal_error` is already its answer; a test pins it so the answer is
+    stated rather than inherited.
+  - **A truncated run is not retried, and nothing had to change for that.**
+    A terminal `failed` result ends the attempt; only the reconciler's
+    confirmed-worker-loss path calls `dispatchNextAttempt`, and that needs an
+    attempt stuck in `checking_worker` with a negative execution probe. A
+    truncated run publishes a clean terminal result and never goes near it.
+    That is also the right answer: the specification is immutable and carries
+    `model.maxTokens`, so a replacement attempt reads the same blob, builds
+    the same prompt, and calls the same model against the same ceiling. It
+    would truncate again at full output-token cost and land on the same row
+    with the same message. In process it is not retried either —
+    `invokeModel`'s `shouldRetry` is `isBedrockThrottleError`, which excludes
+    truncation on purpose. The fix is a person raising the ceiling or
+    shortening the prompt, which is what the message asks for, and then the
+    existing Retry button, which re-reads the skill config.
+  - **On the row it is a visible failure.** `harvestOne` fails any attempt
+    that is not `completed` before it reads a manifest, and `failureReason`
+    passes the worker's detail through untouched — so the row lands on
+    `generation_failed` with exactly the string `generateSinglePrototype`
+    writes in process. It does not sit in `generating` waiting for
+    `failStalePrototypes`, and it is not applied as HTML.
+  - **Known divergence, deliberate.** `uiLabBedrockService` streams and reads
+    no stop reason, so a truncated UI Lab screen currently succeeds in
+    process and would now fail on V2. The V2 direction is the correct one and
+    UI Lab has no admission yet (see above), so this is noted rather than
+    reconciled. The message also names `BEDROCK_UI_MOCK_MAX_TOKENS`, which is
+    the prototype lane's variable; UI Lab's is `BEDROCK_UI_LAB_MAX_TOKENS`.
+    Matching the in-process prototype sentence exactly is worth more today
+    than a message that is right for a lane V2 does not yet carry.
 
 - [ ] Ephemeral workspace and repo-read wiring for the worker processes.
 
