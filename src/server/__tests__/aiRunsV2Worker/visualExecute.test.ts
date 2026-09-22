@@ -8,7 +8,7 @@ const spec = {
   promptInputs: { featureName: 'Standup summary' },
   designSystem: {},
   designReference: { navItems: [] },
-  model: { modelId: 'anthropic.claude', maxTokens: 8000 },
+  model: { modelId: 'anthropic.claude', maxTokens: 8000, timeoutMs: 600_000 },
   usage: { feature: 'design-prototype' },
   outputPath: 'prototype.html',
 };
@@ -65,7 +65,11 @@ describe('visual execute', () => {
 
     const [prompt, model] = invokeModel.mock.calls[0];
     expect(prompt).toContain('**Feature:** Standup summary');
-    expect(model).toEqual({ modelId: 'anthropic.claude', maxTokens: 8000 });
+    expect(model).toEqual({
+      modelId: 'anthropic.claude',
+      maxTokens: 8000,
+      timeoutMs: 600_000,
+    });
   });
 
   /**

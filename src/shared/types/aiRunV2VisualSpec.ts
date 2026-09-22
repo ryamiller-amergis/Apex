@@ -50,10 +50,20 @@ export type VisualSubjectKind = 'design-prototype' | 'ui-lab-screen';
  */
 export type UiLabDesignSystemName = 'APEX' | 'MaxView';
 
+/**
+ * Every value the model call needs, resolved before the run leaves App
+ * Service. None of them is optional with a fallback on the worker: the
+ * project override lives in the database and the app default is tuned by an
+ * environment variable, and a worker can read neither, so a default of its
+ * own would quietly disagree with the in-process path instead of matching it.
+ */
 export type VisualModelSettings = Readonly<{
   modelId: string;
-  maxTokens?: number;
-  timeoutMs?: number;
+  /** Project override where set, otherwise the lane's own app default. */
+  maxTokens: number;
+  timeoutMs: number;
+  /** Only where the project set one; the prototype lane sends none. */
+  temperature?: number;
 }>;
 
 /**
@@ -94,6 +104,26 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function isPositiveNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+/**
+ * The worker runs this before the model call, so a specification that lost a
+ * resolved value on the way is refused rather than answered with an invented
+ * one. `??` would have treated the same gap as valid configuration.
+ */
+function isResolvedModel(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (!isNonEmptyString(value.modelId)) return false;
+  if (!isPositiveNumber(value.maxTokens)) return false;
+  if (!isPositiveNumber(value.timeoutMs)) return false;
+  return (
+    value.temperature === undefined ||
+    (typeof value.temperature === 'number' && Number.isFinite(value.temperature))
+  );
+}
+
 export function isAiRunV2VisualSpecification(
   value: unknown,
 ): value is AiRunV2VisualSpecification {
@@ -110,9 +140,7 @@ export function isAiRunV2VisualSpecification(
   if (!Array.isArray((value.designReference as { navItems?: unknown }).navItems)) {
     return false;
   }
-  if (!isRecord(value.model) || !isNonEmptyString(value.model.modelId)) {
-    return false;
-  }
+  if (!isResolvedModel(value.model)) return false;
   if (!isRecord(value.usage) || !isNonEmptyString(value.usage.feature)) {
     return false;
   }

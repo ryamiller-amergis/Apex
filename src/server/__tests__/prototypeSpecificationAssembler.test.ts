@@ -46,7 +46,7 @@ describe('prototypeSpecificationAssembler', () => {
       prototypeId: 'prototype-1',
       promptInputs,
       sourcePaths: ['/src/components/Board.tsx'],
-      model: { modelId: 'anthropic.claude' },
+      model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
       usage: { feature: 'design-prototype', project: 'Apex' },
     });
 
@@ -68,7 +68,7 @@ describe('prototypeSpecificationAssembler', () => {
       prototypeId: 'prototype-1',
       promptInputs,
       sourcePaths: ['/a.tsx', '/b.tsx'],
-      model: { modelId: 'anthropic.claude' },
+      model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
       usage: { feature: 'design-prototype' },
     });
 
@@ -91,7 +91,7 @@ describe('prototypeSpecificationAssembler', () => {
       prototypeId: 'prototype-1',
       promptInputs,
       sourcePaths: [],
-      model: { modelId: 'anthropic.claude' },
+      model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
       usage: { feature: 'design-prototype' },
     });
 
@@ -123,7 +123,7 @@ describe('prototypeSpecificationAssembler', () => {
       prototypeId: 'prototype-1',
       promptInputs,
       sourcePaths: ['/a.tsx', '/b.tsx'],
-      model: { modelId: 'anthropic.claude' },
+      model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
       usage: { feature: 'design-prototype' },
     });
 
@@ -144,7 +144,7 @@ describe('prototypeSpecificationAssembler', () => {
       prototypeId: 'prototype-1',
       promptInputs,
       sourcePaths: [],
-      model: { modelId: 'anthropic.claude' },
+      model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
       usage: { feature: 'design-prototype' },
     });
 
@@ -161,7 +161,7 @@ describe('prototypeSpecificationAssembler', () => {
       prototypeId: 'prototype-1',
       promptInputs,
       sourcePaths: [],
-      model: { modelId: 'anthropic.claude' },
+      model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
       usage: { feature: 'design-prototype' },
     });
 

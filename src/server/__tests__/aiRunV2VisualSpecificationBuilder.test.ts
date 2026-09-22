@@ -14,7 +14,7 @@ const base = {
   sourceFiles: [{ path: '/src/components/A.tsx', content: 'a' }],
   colorTokens: { primary: '#000' },
   navItems: [{ label: 'Home', route: '/' }],
-  model: { modelId: 'anthropic.claude' },
+  model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
   usage: { feature: 'design-prototype', project: 'Apex' },
 };
 
@@ -82,7 +82,7 @@ const uiLab = {
   screenInventory: [{ route: '/timecards', purpose: 'Approve timecards' }],
   colorTokens: 'primary.main: #123456',
   navItems: [{ label: 'Home', route: '/' }],
-  model: { modelId: 'anthropic.claude' },
+  model: { modelId: 'anthropic.claude', maxTokens: 16_000, timeoutMs: 600_000 },
   usage: { feature: 'ui-lab', project: 'Apex' },
 };
 
@@ -144,6 +144,28 @@ describe('buildUiLabVisualSpecification', () => {
       screenshotBase64: 'QUJD',
       screenshotMediaType: 'image/png',
     });
+  });
+
+  /**
+   * UI Lab reads `ui_lab_bedrock_temperature` from project settings and sets
+   * it in process, so the contract has to be able to express it — otherwise a
+   * project that tuned its temperature gets the model default on the V2 lane
+   * and nothing says so.
+   */
+  it('carries the temperature a project set', () => {
+    const spec = buildUiLabVisualSpecification({
+      ...uiLab,
+      model: { ...uiLab.model, temperature: 0.2 },
+    });
+
+    expect(spec.model.temperature).toBe(0.2);
+    expect(isAiRunV2VisualSpecification(spec)).toBe(true);
+  });
+
+  it('leaves temperature off when the project set none', () => {
+    expect(Object.keys(buildUiLabVisualSpecification(uiLab).model)).not.toContain(
+      'temperature',
+    );
   });
 
   it('accepts a design with no target route', () => {

@@ -12,9 +12,6 @@ import {
 } from '@aws-sdk/client-bedrock-runtime';
 import type { VisualModelSettings } from '../../../shared/types/aiRunV2VisualSpec';
 
-export const DEFAULT_VISUAL_MAX_TOKENS = 16_000;
-export const DEFAULT_VISUAL_TIMEOUT_MS = 10 * 60_000;
-
 export type VisualModelUsage = Readonly<{
   inputTokens: number;
   outputTokens: number;
@@ -91,14 +88,20 @@ export function createBedrockVisualClient(options?: {
         accept: 'application/json',
         body: JSON.stringify({
           anthropic_version: 'bedrock-2023-05-31',
-          max_tokens: model.maxTokens ?? DEFAULT_VISUAL_MAX_TOKENS,
+          max_tokens: model.maxTokens,
           messages: [{ role: 'user', content: buildContent(prompt, image) }],
+          // Only where the specification carries one: UI Lab's in-process
+          // payload omits the key when the project set no temperature, and
+          // the model's own default is not the worker's to choose.
+          ...(model.temperature !== undefined
+            ? { temperature: model.temperature }
+            : {}),
         }),
       });
 
       const startedAt = now();
       const controller = new AbortController();
-      const timeoutMs = model.timeoutMs ?? DEFAULT_VISUAL_TIMEOUT_MS;
+      const { timeoutMs } = model;
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       let response;
       try {

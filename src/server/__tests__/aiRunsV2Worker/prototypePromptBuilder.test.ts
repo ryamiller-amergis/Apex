@@ -31,7 +31,7 @@ const spec: AiRunV2VisualSpecification = {
     colorTokens: 'primary.main: #123456',
   },
   designReference: { navItems: [{ label: 'Home', route: '/' }] },
-  model: { modelId: 'anthropic.claude' },
+  model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
   usage: { feature: 'design-prototype' },
   outputPath: 'prototype.html',
 };
