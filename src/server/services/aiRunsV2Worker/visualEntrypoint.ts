@@ -6,11 +6,15 @@ import {
   isAiRunV2VisualSpecification,
   VISUAL_USAGE_FILE_NAME,
   type AiRunV2VisualSpecification,
+  type DesignPrototypeVisualSpecification,
   type VisualModelSettings,
 } from '../../../shared/types/aiRunV2VisualSpec';
 import { createWorkerServiceBusClient } from './serviceBusClient';
 import { resolveWorkerEnvironment } from './entrypointSupport';
-import { buildPrototypePrompt } from './prototypePromptBuilder';
+import {
+  buildProjectPrototypePrompt,
+  buildPrototypePrompt,
+} from './prototypePromptBuilder';
 import { buildUiLabPrompt } from './uiLabPromptBuilder';
 import {
   createBedrockVisualClient,
@@ -53,6 +57,33 @@ function visualReferenceImage(
 }
 
 /**
+ * A prototype run has two prompts to choose between and the subject kind
+ * cannot separate them, so the specification names the branch and this
+ * switch obeys it. Answering a project that ships its own design system with
+ * the MaxView prompt is the same failure one level down: a finished-looking
+ * prototype built against the wrong design system.
+ */
+function buildDesignPrototypePrompt(
+  specification: DesignPrototypeVisualSpecification,
+): string {
+  const { prototypePrompt } = specification;
+  switch (prototypePrompt.branch) {
+    case 'maxview':
+      return buildPrototypePrompt(specification);
+    case 'project-design-system':
+      return buildProjectPrototypePrompt(specification, prototypePrompt);
+    default: {
+      const unhandled: never = prototypePrompt;
+      throw new Error(
+        `Unsupported prototype prompt branch: ${String(
+          (unhandled as { branch?: unknown }).branch,
+        )}`,
+      );
+    }
+  }
+}
+
+/**
  * The lane carries more than one kind of subject and each needs its own
  * prompt, so the kind has to decide the builder. Falling through to one of
  * them would answer the other with the wrong instructions — output that looks
@@ -62,7 +93,7 @@ function visualReferenceImage(
 function buildVisualPrompt(specification: AiRunV2VisualSpecification): string {
   switch (specification.subjectKind) {
     case 'design-prototype':
-      return buildPrototypePrompt(specification);
+      return buildDesignPrototypePrompt(specification);
     case 'ui-lab-screen':
       return buildUiLabPrompt(specification);
     default: {

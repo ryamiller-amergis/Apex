@@ -122,3 +122,44 @@ export function buildPrototypePlanSection(input: {
 
   return parts.join('\n');
 }
+
+/**
+ * The project branch's scoping rule, which is a different text from the
+ * MaxView one above: it names the design system the project ships rather
+ * than the MaxView sidebar, and its EXTEND arm reads the page source and
+ * screenshot the in-process path fetched.
+ *
+ * Moved here from `bedrockService.buildProjectPrototypePrompt` for the same
+ * reason the MaxView sections moved: the V2 lane resolves it on App Service
+ * and freezes it into the specification, so both callers need one copy.
+ */
+export function buildProjectPrototypeScopingSection(input: {
+  extendMode: boolean;
+  featureName: string;
+  targetRoute?: string;
+  pageScreenshot?: { base64: string; mediaType: string };
+  existingPageContext?: string;
+  targetScreenHint?: string;
+  pageScreenshotHint?: string;
+}): string {
+  const targetScreenHint = input.targetScreenHint ?? '';
+  const pageScreenshotHint = input.pageScreenshotHint ?? '';
+  const existingPageContext = input.existingPageContext;
+
+  return input.extendMode
+    ? `### CRITICAL SCOPING RULE — EXTEND an existing page; the EXISTING layout is FIXED ground truth
+${targetScreenHint}${pageScreenshotHint}
+The existing page is defined by the AUTHORITATIVE source(s) below${existingPageContext?.trim() ? `: the **ACTUAL source code** at \`${input.targetRoute}\`` : ''}${input.pageScreenshot ? `${existingPageContext?.trim() ? ' and' : ':'} the **page screenshot (vision input)**` : ''}. Reproduce the existing page faithfully and add the new feature as a clearly annotated delta.
+1. **Reproduce the existing page faithfully.** Keep the real structure: regions, panels, tab bars, and the real entry mechanism.
+2. **The feature description, PBIs, and design brief describe ONLY the DELTA.** Use them solely to decide what to add or modify.
+3. **Add the new feature** in the correct location. Wrap ONLY the new/changed element(s) in a 2px dashed annotation border using the project's primary color with 8px padding, and a small "NEW: ${input.featureName}" label at the top-left. Also wrap in \`<!-- NEW_FEATURE:START -->\` … \`<!-- NEW_FEATURE:END -->\` markers.
+4. **DO NOT invent, fabricate, or hallucinate** UI elements not in the existing page or described in the PBIs.
+5. **The four state sections apply ONLY to the NEW feature** — the reproduced existing page remains identical across all sections.
+${existingPageContext?.trim() ? `\n## Existing Page Code (route: ${input.targetRoute})\n\n${existingPageContext}` : '\nUse the screenshot as the ground truth for the existing page layout when source code is not available.'}`
+    : `### CRITICAL SCOPING RULE — ONLY render what is described; NEVER invent content
+
+1. **DO NOT invent, fabricate, or hallucinate any UI elements** that are not explicitly described in the PBI Requirements or the feature description.
+2. **The page shell** should match the app's design (described in the Design System section below). Render only what the feature requires plus the minimal app chrome described in the design system skill.
+3. **The content area must contain ONLY the new feature component** described in the PBI Requirements.
+4. **States apply ONLY to the new feature component** — the app chrome remains unchanged across all four sections.`;
+}

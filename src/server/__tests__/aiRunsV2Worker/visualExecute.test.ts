@@ -231,6 +231,54 @@ describe('visual execute', () => {
     expect(outcome.files[0].path).toBe('design.html');
   });
 
+  /**
+   * Both prototype prompts answer the same subject kind, so the kind alone
+   * cannot pick between them. Answering a project that has its own design
+   * system with the MaxView prompt produces output that looks finished and
+   * is built against the wrong design system.
+   */
+  it('builds the project prompt for a project that resolved its own design system', async () => {
+    const invokeModel = jest.fn().mockResolvedValue('<html/>');
+    const execute = createVisualExecute({ invokeModel });
+
+    await execute({
+      specification: {
+        ...spec,
+        prototypePrompt: {
+          branch: 'project-design-system',
+          appName: 'Apex',
+          designSystemMarkdown: '## Apex tokens',
+          extendMode: false,
+        },
+      } as never,
+      command: {} as never,
+      checkpoints: checkpoints().port as never,
+      signal: new AbortController().signal,
+    });
+
+    const [prompt] = invokeModel.mock.calls[0];
+    expect(prompt).toContain('You are a world-class product designer');
+    expect(prompt).toContain('## Apex Design System (AUTHORITATIVE');
+    expect(prompt).not.toContain('MaxView');
+  });
+
+  it('refuses a prototype run that never said which prompt to build', async () => {
+    const invokeModel = jest.fn();
+    const execute = createVisualExecute({ invokeModel });
+    const { prototypePrompt, ...withoutBranch } = spec;
+    expect(prototypePrompt).toBeDefined();
+
+    await expect(
+      execute({
+        specification: withoutBranch as never,
+        command: {} as never,
+        checkpoints: checkpoints().port as never,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow('visual specification');
+    expect(invokeModel).not.toHaveBeenCalled();
+  });
+
   it('refuses empty model output rather than uploading a blank prototype', async () => {
     const execute = createVisualExecute({ invokeModel: async () => '   ' });
 

@@ -11,7 +11,11 @@
  * visual reference, output rules) still live in `bedrockService` and move here
  * in the same way.
  */
-import type { AiRunV2VisualSpecification } from '../../../shared/types/aiRunV2VisualSpec';
+import type {
+  AiRunV2VisualSpecification,
+  DesignPrototypeVisualSpecification,
+  ProjectPrototypePrompt,
+} from '../../../shared/types/aiRunV2VisualSpec';
 
 type CatalogRoute = Readonly<{ path: string; title: string }>;
 
@@ -282,6 +286,101 @@ Wrap EACH of the two state sections with HTML comment delimiters EXACTLY as show
 - \`<!-- STATE:error:START -->\` … the entire Error State section … \`<!-- STATE:error:END -->\`
 
 The START marker must be the first thing inside each state block and the END marker the last. Use the exact lowercase keys above. These markers must never be omitted or renamed.
+
+Return ONLY the complete HTML document. No markdown fences, no explanation — just the raw HTML starting with <!DOCTYPE html>.`;
+}
+
+/**
+ * The prototype prompt for a project that ships its own design system,
+ * ported from `bedrockService.buildProjectPrototypePrompt`.
+ *
+ * It shares almost nothing with the MaxView prompt above — no catalog, no
+ * palette, no sidebar, no Figma reference — and it can carry live web
+ * references, which the MaxView branch never has. `appName`,
+ * `designSystemMarkdown`, and the references are all resolved on App
+ * Service: the design system lives in the project's own repository and the
+ * search needs a key, so neither is a worker's to fetch.
+ */
+export function buildProjectPrototypePrompt(
+  spec: DesignPrototypeVisualSpecification,
+  branch: ProjectPrototypePrompt,
+): string {
+  const featureName = asText(spec.promptInputs.featureName);
+  const featureDescription = asText(spec.promptInputs.featureDescription);
+  const planSection = asText(spec.promptInputs.planSection);
+  const pbiSection = asText(spec.promptInputs.pbiSection);
+  const scopingSection = asText(spec.promptInputs.scopingSection);
+  const { appName, designSystemMarkdown, extendMode } = branch;
+
+  const webSection = branch.webReferences?.trim()
+    ? `\n## Modern Design References (live web — inspiration only)\n\nThe following patterns were found via web research. Use them as **inspiration only** — they are **subordinate to the Design System** above. Apply the project's own tokens/components; do NOT copy off-brand colors, fonts, or layout structures from these references.\n\n${branch.webReferences}\n`
+    : '';
+
+  return `You are a world-class product designer generating a **market-quality, production-ready** HTML prototype for a feature of the **${appName}** application. This prototype should look like something a Series A SaaS startup would actually ship — not a wireframe, not a developer mockup. Reference companies like Linear, Loom, Vercel, Retool, or Rippling for the quality bar.
+
+## ${appName} Design System (AUTHORITATIVE — sole design and color source)
+
+${designSystemMarkdown}
+
+## Feature to Design
+
+**Feature:** ${featureName}
+${featureDescription ? `**Description:** ${featureDescription}` : ''}
+
+${planSection}## PBI Requirements
+
+${pbiSection}
+${webSection}
+## Instructions
+
+Generate a single, self-contained HTML document with inline CSS and inline JavaScript (no external dependencies). The document must show **four state sections** stacked vertically, each clearly separated.
+
+### Design token usage — STRICT (the ${appName} Design System above is the ONLY color and style source)
+
+- Use ONLY the colors and tokens defined in the Design System section above, referencing them by their CSS variable names or semantic roles.
+- **NEVER invent, approximate, or sample** any hex/rgba value not listed in the Design System.
+- When a :root block is provided, define those variables in your document's :root and reference them throughout.
+- All fonts, spacing, radius, and shadows must follow the Design System values.
+
+${scopingSection}
+
+${extendMode ? '' : `### Visual annotation of the new feature — PRECISE SCOPING
+
+Apply a **2px dashed annotation border** using the project's primary color with 8px padding around ONLY the new element(s). Add a small floating label at the top-left corner reading "NEW: ${featureName}". Wrap ALL new feature HTML content in:
+\`<!-- NEW_FEATURE:START -->\` immediately before the first new element and \`<!-- NEW_FEATURE:END -->\` immediately after the last.
+
+`}### State sections — FOUR REQUIRED, STACKED VERTICALLY
+
+Stack all four state sections from top to bottom in the HTML. Do NOT hide any section — the reviewer scrolls through all four. Each section must have a sticky section header with a colored dot indicator and a subtle background tint so sections are visually distinct.
+
+Wrap each section in these exact comment markers:
+
+\`<!-- STATE:DEFAULT:START -->\` … default / populated state … \`<!-- STATE:DEFAULT:END -->\`
+\`<!-- STATE:EMPTY:START -->\` … empty / zero-data state … \`<!-- STATE:EMPTY:END -->\`
+\`<!-- STATE:ERROR:START -->\` … error / failure state … \`<!-- STATE:ERROR:END -->\`
+\`<!-- STATE:LOADING:START -->\` … skeleton / spinner state … \`<!-- STATE:LOADING:END -->\`
+
+Section header style for each:
+- **DEFAULT** — label "Default State", green dot (#16a34a)
+- **EMPTY** — label "Empty State", gray dot (#64748b)
+- **ERROR** — label "Error State", red dot (#dc2626)
+- **LOADING** — label "Loading State", blue dot (#3b82f6)
+
+Do NOT use JavaScript to hide/show states. All four sections are always visible and the reviewer scrolls between them.
+
+### Self-contained HTML rules — STRICTLY ENFORCED
+
+- **ALL CSS** in a single \`<style>\` block in \`<head>\`. **ALL JS** in a single \`<script>\` at end of \`<body>\`.
+- **NO** \`<link>\`, \`<base>\`, \`<meta http-equiv>\` tags.
+- **NO** external \`src\`/\`href\` (http/https), \`url(https://…)\`, web fonts, CDN, or external images.
+- **NO** network calls: \`fetch\`, \`XMLHttpRequest\`, \`window.open\`, \`window.location\` are banned.
+- \`<a href>\` must be \`href="#"\` with \`event.preventDefault()\`.
+- For icons, use inline SVGs (Material Icons style, 24×24 viewBox, \`fill="currentColor"\`). No emoji.
+- For images/avatars, use colored circles with initials. No external image sources.
+
+### Interactivity — lightweight inline JavaScript
+
+Add inline JavaScript for: dropdowns, tabs, accordions, modals/dialogs, checkboxes/toggles, date pickers (simple month grid), hover effects (CSS :hover).
 
 Return ONLY the complete HTML document. No markdown fences, no explanation — just the raw HTML starting with <!DOCTYPE html>.`;
 }
