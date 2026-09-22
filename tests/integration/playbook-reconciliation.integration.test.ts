@@ -12,9 +12,11 @@
  */
 import pg from 'pg';
 import { PLAYBOOK_GUARD_LIMITS } from '../../src/shared/types/playbook';
-import { createScratchDatabase, ScratchDatabase } from './support/scratch-db';
+import { createScratchDatabase, enablePlaybooks, ScratchDatabase } from './support/scratch-db';
 
 type ReconciliationModule = typeof import('../../src/server/services/playbookReconciliationService');
+type RunServiceModule = typeof import('../../src/server/services/playbookRunService');
+type RegistryModule = typeof import('../../src/server/services/playbookSteps/registry');
 
 const MIGRATE_TIMEOUT = 600_000;
 const USER_OID = 'feat005-sweep-user';
@@ -27,6 +29,8 @@ const clock = () => NOW;
 let scratch: ScratchDatabase;
 let client: pg.Client;
 let sweep: ReconciliationModule;
+let runService: RunServiceModule;
+let registry: RegistryModule;
 let pool: { end: () => Promise<void> };
 
 async function query<T extends pg.QueryResultRow = pg.QueryResultRow>(
@@ -117,12 +121,16 @@ function deadline(offsetMs: number): string {
 
 beforeAll(async () => {
   scratch = await createScratchDatabase('playbooksweep');
+  // Traversal runs through the engine boundary, which refuses every operation while the flag is off.
+  await enablePlaybooks(scratch.connectionString);
 
   process.env.DATABASE_URL = scratch.connectionString;
   /* eslint-disable @typescript-eslint/no-require-imports --
      Required rather than imported so the pool is built after DATABASE_URL points at the scratch
      database. A static import is hoisted and would bind to whatever URL was set at file load. */
   sweep = require('../../src/server/services/playbookReconciliationService');
+  runService = require('../../src/server/services/playbookRunService');
+  registry = require('../../src/server/services/playbookSteps/registry');
   pool = require('../../src/server/db').default;
   /* eslint-enable @typescript-eslint/no-require-imports */
 
@@ -134,10 +142,100 @@ beforeAll(async () => {
      ON CONFLICT (oid) DO NOTHING`,
     [USER_OID]
   );
+  await grantPlaybooksRun(USER_OID);
 }, MIGRATE_TIMEOUT);
+
+/**
+ * Gives the initiator the project role carrying `playbooks:run`.
+ *
+ * Needed by the one test that starts a run for real: TBI-024 re-checks the initiator's access
+ * immediately before a side-effecting step, and an initiator with no role at all is refused there.
+ */
+async function grantPlaybooksRun(userOid: string): Promise<void> {
+  const [role] = await query<{ id: string }>(
+    `INSERT INTO app_roles (name, description) VALUES ('playbook-runner', 'Integration fixture')
+     ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description
+     RETURNING id`
+  );
+  const [permission] = await query<{ id: string }>(
+    `INSERT INTO app_permissions (key, description) VALUES ('playbooks:run', 'Start Playbook runs')
+     ON CONFLICT (key) DO UPDATE SET description = EXCLUDED.description
+     RETURNING id`
+  );
+  await query(
+    `INSERT INTO app_role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+    [role.id, permission.id]
+  );
+  await query(
+    `INSERT INTO app_user_project_roles (user_id, project, role_id) VALUES ($1, $2, $3)
+     ON CONFLICT DO NOTHING`,
+    [userOid, PROJECT, role.id]
+  );
+}
+
+/**
+ * Starts a real run that parks on an agent step, and returns it with its agent run marked
+ * completed — a terminal event that was never delivered.
+ *
+ * Built through `startRun` rather than by inserting rows, because the engine must have a snapshot
+ * of this run for the sweep to be able to carry it on. Hand-written rows produce a run that Apex
+ * believes in and the engine has never heard of, which is not a state the system can reach: a run
+ * row is only ever created by `startRun`, which puts it on the engine in the same call.
+ */
+async function startRunMissingItsTerminalEvent(): Promise<{
+  runId: string;
+  stepRunId: string;
+}> {
+  definitionCounter += 1;
+  const [definition] = await query<{ id: string }>(
+    `INSERT INTO playbook_definitions (project, name, created_by)
+     VALUES ($1, $2, $3) RETURNING id`,
+    [PROJECT, `sweep-agent-def-${definitionCounter}`, USER_OID]
+  );
+  await query(
+    `INSERT INTO playbook_definition_versions
+       (definition_id, version_number, graph, status, published_by, published_at)
+     VALUES ($1, 1, $2, 'published', $3, now())`,
+    [
+      definition.id,
+      JSON.stringify({
+        nodes: [
+          {
+            id: 'work',
+            stepType: 'cursor-agent',
+            config: {
+              skillPath: registry.PHASE_0_ALLOWED_AGENT_SKILLS[0],
+              prompt: 'Do the thing',
+            },
+          },
+        ],
+        edges: [],
+      }),
+      USER_OID,
+    ]
+  );
+
+  const { runId } = await runService.startRun({
+    project: PROJECT,
+    definitionId: definition.id,
+    initiatorUserId: USER_OID,
+  });
+
+  const [step] = await query<{ id: string; agent_run_id: string }>(
+    'SELECT id, agent_run_id FROM playbook_step_runs WHERE run_id = $1',
+    [runId]
+  );
+
+  // The agent finished; the event announcing it never arrived. That is what the sweep is for.
+  await query(`UPDATE agent_runs SET status = 'completed' WHERE id = $1`, [step.agent_run_id]);
+
+  return { runId, stepRunId: step.id };
+}
 
 afterAll(async () => {
   if (client) await client.end();
+  // The engine holds its own pool; an open session blocks the scratch database from being dropped.
+  await require('../../src/server/services/playbookEngine/runtime').closeEngineStore();
   if (pool) await pool.end();
   if (scratch) await scratch.drop();
 });
@@ -196,14 +294,7 @@ describe('VT-11 — a run that already finished is never overwritten', () => {
 
 describe('VT-04 — a missed terminal agent-run event is recovered', () => {
   it('resumes a suspended step whose agent run had already completed', async () => {
-    const runId = await seedRun();
-    const agentRunId = await addAgentRun('completed');
-    const stepRunId = await addStep(runId, {
-      status: 'suspended',
-      // Far future, so this is recovered by the terminal-run query and not by the deadline one.
-      expiresAt: deadline(60 * 60 * 1000),
-      agentRunId,
-    });
+    const { runId, stepRunId } = await startRunMissingItsTerminalEvent();
 
     const outcome = await sweep.runReconciliationPass({ clock });
 
@@ -211,7 +302,7 @@ describe('VT-04 — a missed terminal agent-run event is recovered', () => {
 
     /*
      * The run reads `completed`, not `running`. Resuming the step is only half of what the pass
-     * owes this run: `gate` is the graph's only node, so once it completes there is nothing left
+     * owes this run: `work` is the graph's only node, so once it completes there is nothing left
      * to start and the run is finished. Leaving it at `running` — which is what happened before
      * the sweep advanced runs as well as resuming steps — meant a run recovered by the sweep could
      * never reach a terminal state, and nothing downstream would look at it again.

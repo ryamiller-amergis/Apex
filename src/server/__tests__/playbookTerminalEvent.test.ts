@@ -49,6 +49,8 @@ import {
 const AGENT_RUN_ID = 'agent-run-42';
 const STEP_RUN_ID = 'step-run-7';
 const RUN_ID = 'run-3';
+/** The graph node, as distinct from the step-run row — it is what the engine is parked at. */
+const STEP_ID = 'do-the-work';
 
 function event(status: AgentRunEventStatus): AgentRunEventEnvelope {
   return {
@@ -68,7 +70,7 @@ function event(status: AgentRunEventStatus): AgentRunEventEnvelope {
 /** The step the event correlates to, in the state the handler will find it. */
 function stepIs(status: string | null): void {
   selectWhere.mockResolvedValue(
-    status === null ? [] : [{ id: STEP_RUN_ID, runId: RUN_ID, status }]
+    status === null ? [] : [{ id: STEP_RUN_ID, runId: RUN_ID, stepId: STEP_ID, status }]
   );
 }
 
@@ -119,7 +121,9 @@ describe('VT-01 — a terminal success event resumes the correlated step', () =>
   it('advances the run it belongs to, so the next step actually starts', async () => {
     await handleTerminalAgentRunEvent(event('completed'));
 
-    expect(advanceRun).toHaveBeenCalledWith(RUN_ID);
+    // The step id goes with it: the engine is parked at that node and is told to carry on from it,
+    // rather than having the position inferred from the rows as the sweep has to.
+    expect(advanceRun).toHaveBeenCalledWith(RUN_ID, STEP_ID);
   });
 
   it('does nothing when no Playbook step is waiting on that agent run', async () => {

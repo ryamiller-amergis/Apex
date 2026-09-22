@@ -242,7 +242,7 @@ router.post(
        * did not happen when it did.
        */
       if (result.outcome === 'recorded') {
-        await advanceRun(runId);
+        await advanceRun(runId, result.stepId);
       }
 
       res.status(200).json(result);

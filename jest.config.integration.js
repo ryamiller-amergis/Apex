@@ -29,4 +29,17 @@ module.exports = {
   testTimeout: 30_000,
   // Each test file gets its own database schema to avoid cross-test contamination.
   maxWorkers: 1,
+  /*
+   * Recycles the worker once it grows past this, and — the reason it is here — forces the suites
+   * into a worker process at all. Jest runs in band when `maxWorkers` is 1, meaning every file
+   * shares the main process, and specifying a memory limit is what turns that off (see
+   * `shouldRunInBand`). One worker keeps the files sequential, so nothing contends for the
+   * database; recycling it gives the Playbook engine a fresh module context partway through.
+   *
+   * The engine is loaded through a real dynamic `import()`, and Mastra's ESM graph accumulates
+   * state across files in a way that eventually wedges a run with no error and no failing
+   * assertion. A worker that restarts never reaches that point. Roughly 800MB was where the full
+   * Playbook run stopped making progress, so the limit sits comfortably below it.
+   */
+  workerIdleMemoryLimit: '512MB',
 };

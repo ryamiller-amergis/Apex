@@ -1,41 +1,32 @@
 /**
- * Graph traversal at run time — the thing that makes a Playbook more than its first step.
+ * Run-level bookkeeping around the engine.
  *
- * Until this existed, `startRun` executed the entry node and stopped. Approving a gate moved that
- * gate to `completed` and put the run back to `running`, and nothing ever looked at the pinned
- * graph again, so no run could reach its final step. The edges were read in exactly two places,
- * both of them publish-time guards.
+ * Traversal used to live here. It does not any more: deciding which step runs next, and carrying a
+ * parked run forward, are Mastra's job now, behind `playbookEngine/`. What stays is everything the
+ * PRD makes Apex's — when a run may move at all, and the rows that record that it did.
  *
- * The rule this file follows is that **a run only ever moves forward from a settled position**. A
- * step that is pending, running or suspended means the run is mid-flight and advancing would run
- * the step a gate exists to gate; a step that failed or expired means the run is over, or is parked
- * for a person. So `advanceRun` moves only when every step so far is `completed`, and that single
- * condition is what makes it safe to call from anywhere, as often as anyone likes.
+ * The rule is unchanged and is the reason this file still exists: **a run only ever moves forward
+ * from a settled position**, meaning every step so far is `completed`. A step that is pending,
+ * running or suspended means the run is mid-flight and advancing would run the step a gate exists
+ * to gate; a step that failed or expired means the run is over, or is parked for a person.
  *
- * That matters because it is called from three unrelated places — the approval route, the terminal
- * agent-run event listener, and the reconciliation sweep — and the usual way a design like this
- * breaks is a fourth caller appearing that forgets one of the preconditions. Here there is one
- * precondition, it is checked here rather than by the callers, and getting it wrong is a no-op
- * rather than a double-executed step.
+ * That matters because `advanceRun` is called from three unrelated places — the approval route, the
+ * terminal agent-run event listener, and the reconciliation sweep — and the usual way a design like
+ * this breaks is a fourth caller appearing that forgets a precondition. There is one precondition,
+ * it is checked here rather than by the callers, and getting it wrong is a no-op rather than a
+ * double-executed step.
  *
- * The sweep is still the guarantee, exactly as it is for resumption. The event listener is a
- * NOTIFY and may be missed; a process may die between a step completing and the next one starting.
- * `advanceStalledRuns` in the reconciliation pass picks up anything left settled-but-unfinished,
- * which is why no caller here needs a retry of its own.
+ * The sweep is still the guarantee. The event listener is a NOTIFY and may be missed; a process may
+ * die between a step being resolved and the engine being told. `advanceStalledRuns` picks up
+ * anything left settled-but-unfinished, which is why no caller here needs a retry of its own.
  */
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { playbookDefinitionVersions, playbookRuns, playbookStepRuns } from '../db/schema';
-import {
-  beginStepRun,
-  completeStepRunIfOpen,
-  executeStep,
-  failStepRun,
-} from './playbookSteps';
+import * as playbookEngine from './playbookEngine';
 import {
   PLAYBOOK_STEP_RUN_OPEN_STATUSES,
   type PlaybookGraph,
-  type PlaybookGraphNode,
 } from '../../shared/types/playbook';
 
 /** Run states from which nothing further can be started. */
@@ -56,81 +47,17 @@ export type PlaybookAdvanceSkipReason =
   /** A step is pending, running or suspended — the run is mid-flight. */
   | 'step-open'
   /** A step failed or expired. The run is over, or parked for a person to retry. */
-  | 'step-not-completed';
+  | 'step-not-completed'
+  /** The run is settled but has no resolved step to carry on from. Nothing to tell the engine. */
+  | 'no-resume-point';
 
 export interface PlaybookAdvanceOutcome {
-  /** True when the run moved: steps were started, or it was marked completed. */
+  /** True when the run moved: the engine carried it on, or it was marked completed. */
   advanced: boolean;
   /** Set only when `advanced` is false. */
   reason?: PlaybookAdvanceSkipReason;
-  stepsStarted: number;
-  /** Where the chain stopped, when one ran. */
-  endedAs?: PlaybookChainEnd;
-}
-
-export type PlaybookChainEnd =
-  /** A step parked. The resume path will advance the run when it wakes. */
-  | 'suspended'
-  /** The graph ran out of nodes and the run is marked completed. */
-  | 'completed'
-  /** A step threw. The step and the run are both marked failed. */
-  | 'failed';
-
-export interface PlaybookChainOutcome {
-  stepsStarted: number;
-  endedAs: PlaybookChainEnd;
-  /** Present when `endedAs` is `failed`, so `startRun` can rethrow what actually went wrong. */
-  error?: unknown;
-}
-
-/**
- * The node a run begins at: the one nothing points to.
- *
- * Falls back to the first declared node when every node has an inbound edge, which means the graph
- * is cyclic. That is not this function's problem to report — the publish-time guards refuse cycles,
- * so a cycle reaching here is a definition published before that guard existed. The fallback makes
- * such a run start somewhere sensible instead of failing with a confusing error about an empty
- * graph.
- */
-export function entryNode(graph: PlaybookGraph): PlaybookGraphNode | undefined {
-  if (graph.nodes.length === 0) return undefined;
-
-  const hasInbound = new Set(graph.edges.map((edge) => edge.to));
-  return graph.nodes.find((node) => !hasInbound.has(node.id)) ?? graph.nodes[0];
-}
-
-/**
- * The single node after this one.
- *
- * Singular because the publish-time fan-out guard caps outbound edges at one, so "the next step"
- * is unambiguous for every graph that can be published. A version published before that guard
- * existed could have more, and this takes the first edge as declared rather than picking among
- * them — deterministic, and it keeps a legacy graph running in a defined order instead of
- * pretending the branch can be executed. Real fan-out needs parallel step runs and a join, which
- * is Phase 1's work and not something to fake here.
- */
-function successorNode(graph: PlaybookGraph, fromStepId: string): PlaybookGraphNode | undefined {
-  const edge = graph.edges.find((e) => e.from === fromStepId);
-  if (!edge) return undefined;
-  return graph.nodes.find((node) => node.id === edge.to);
-}
-
-/**
- * The first node in the chain that has no step run yet.
- *
- * Walks from the entry rather than from the most recently completed step, because "most recent" is
- * a timestamp comparison and two steps completing in the same millisecond would make it a guess.
- * The graph is the authority on order; the step rows only say how far along it the run has got.
- */
-function firstUnrunNode(
-  graph: PlaybookGraph,
-  alreadyRun: ReadonlySet<string>
-): PlaybookGraphNode | undefined {
-  let node = entryNode(graph);
-  while (node && alreadyRun.has(node.id)) {
-    node = successorNode(graph, node.id);
-  }
-  return node;
+  /** Where the engine stopped, when it was asked. */
+  endedAs?: 'suspended' | 'completed' | 'failed';
 }
 
 /**
@@ -155,83 +82,35 @@ async function markRunFailed(runId: string): Promise<void> {
 }
 
 /**
- * Runs steps from `from` onwards until one parks, one fails, or the graph runs out.
+ * Records the run-level consequence of whatever the engine just did.
  *
- * The loop rather than one-step-at-a-time is deliberate: a `notify` step completes in the tick it
- * starts, so a definition ending in two notifications would otherwise need two external nudges to
- * finish, and the second would never come — nothing is waiting on a step that is already done.
- *
- * Shared with `startRun` so that starting a run and resuming one execute steps through identical
- * code. When they were separate, `startRun` happened to work only because the one non-suspending
- * adapter wrote its own completion row.
+ * Kept in one place because `start` and `resume` end the same three ways, and two copies of this
+ * mapping would drift the moment a fourth outcome appears.
  */
-export async function runStepChain(input: {
-  runId: string;
+async function applyEngineOutcome(
+  runId: string,
+  outcome: playbookEngine.EngineOutcome
+): Promise<PlaybookAdvanceOutcome> {
+  if (outcome.endedAs === 'failed') {
+    await markRunFailed(runId);
+    return { advanced: true, endedAs: 'failed' };
+  }
+  if (outcome.endedAs === 'completed') {
+    await markRunCompleted(runId);
+    return { advanced: true, endedAs: 'completed' };
+  }
+  // Parked. Whatever wakes it — an approval, a terminal event, the sweep — advances from there.
+  return { advanced: true, endedAs: 'suspended' };
+}
+
+interface RunRow {
+  status: string;
   project: string;
   initiatorUserId: string;
   graph: PlaybookGraph;
-  from: PlaybookGraphNode;
-}): Promise<PlaybookChainOutcome> {
-  let node: PlaybookGraphNode | undefined = input.from;
-  let stepsStarted = 0;
-
-  while (node) {
-    const stepRun = await beginStepRun({
-      runId: input.runId,
-      stepId: node.id,
-      stepType: node.stepType,
-    });
-    stepsStarted += 1;
-
-    let outcome;
-    try {
-      outcome = await executeStep({
-        runId: input.runId,
-        stepRunId: stepRun.id,
-        stepId: node.id,
-        stepType: node.stepType,
-        project: input.project,
-        initiatorUserId: input.initiatorUserId,
-        config: node.config ?? {},
-      });
-    } catch (error) {
-      await failStepRun({
-        stepRunId: stepRun.id,
-        reason: error instanceof Error ? error.message : `Step ${node.id} failed`,
-      });
-      await markRunFailed(input.runId);
-      return { stepsStarted, endedAs: 'failed', error };
-    }
-
-    // Parked. Whatever wakes it — an approval, a terminal event, the sweep — advances from there.
-    if (outcome.kind === 'suspended') {
-      return { stepsStarted, endedAs: 'suspended' };
-    }
-
-    /*
-     * Conditional because the adapters own their own status writes: `notify` completes its row
-     * inside the adapter, the same way `approval-gate` and `cursor-agent` suspend theirs. This is
-     * the backstop for an adapter that reports `completed` without having written one, which would
-     * otherwise leave a row stuck at `running` and stall the run at the next advance.
-     */
-    await completeStepRunIfOpen({ stepRunId: stepRun.id, output: outcome.output });
-
-    node = successorNode(input.graph, node.id);
-  }
-
-  await markRunCompleted(input.runId);
-  return { stepsStarted, endedAs: 'completed' };
 }
 
-/**
- * Starts whatever comes next for a run, if anything should.
- *
- * Never throws. Every caller is on a best-effort path — a route that has already recorded a
- * decision the caller was told succeeded, an event listener whose exceptions would break delivery
- * for every other subscriber, and a sweep that must survive one bad run to reach the next. A
- * failure here leaves the run failed in the database, which is where anyone looking will look.
- */
-export async function advanceRun(runId: string): Promise<PlaybookAdvanceOutcome> {
+async function loadRun(runId: string): Promise<RunRow | undefined> {
   const [row] = await db
     .select({
       status: playbookRuns.status,
@@ -247,10 +126,71 @@ export async function advanceRun(runId: string): Promise<PlaybookAdvanceOutcome>
     .where(eq(playbookRuns.id, runId))
     .limit(1);
 
-  if (!row) return { advanced: false, reason: 'run-not-found', stepsStarted: 0 };
+  return row ? { ...row, graph: row.graph as PlaybookGraph } : undefined;
+}
+
+/**
+ * Starts a run on the engine and records where it got to.
+ *
+ * Separate from `advanceRun` because a brand-new run has no settled position to check — it has no
+ * steps at all, and the guard that protects every other entry point would refuse it.
+ */
+export async function beginRun(input: {
+  runId: string;
+  project: string;
+  initiatorUserId: string;
+  definitionVersionId: string;
+  graph: PlaybookGraph;
+}): Promise<PlaybookAdvanceOutcome & { error?: unknown }> {
+  const outcome = await playbookEngine.start({
+    runId: input.runId,
+    graph: input.graph,
+    projectName: input.project,
+    initiatorUserId: input.initiatorUserId,
+    definitionVersionId: input.definitionVersionId,
+  });
+
+  const applied = await applyEngineOutcome(input.runId, outcome);
+  return { ...applied, error: outcome.error };
+}
+
+/**
+ * The step the engine is parked at.
+ *
+ * The most recently created step row, because the chain is linear and each row is written as its
+ * step begins — so the newest one is where the engine stopped. This is only ever asked of a run
+ * that has already been found settled, which is what makes "newest" unambiguous: nothing is still
+ * open, so nothing can be created after it while the question is being answered.
+ */
+async function resumePoint(runId: string): Promise<string | undefined> {
+  const [row] = await db
+    .select({ stepId: playbookStepRuns.stepId })
+    .from(playbookStepRuns)
+    .where(eq(playbookStepRuns.runId, runId))
+    .orderBy(desc(playbookStepRuns.createdAt))
+    .limit(1);
+
+  return row?.stepId;
+}
+
+/**
+ * Tells the engine to carry a run on, if it should.
+ *
+ * Never throws. Every caller is on a best-effort path — a route that has already recorded a
+ * decision the caller was told succeeded, an event listener whose exceptions would break delivery
+ * for every other subscriber, and a sweep that must survive one bad run to reach the next. A
+ * failure here leaves the run failed in the database, which is where anyone looking will look.
+ *
+ * `stepId` is supplied by the callers that know it, which is both of the fast ones: an approval
+ * knows the gate it resolved and a terminal event knows the step it woke. The sweep does not, and
+ * works it out from the rows.
+ */
+export async function advanceRun(runId: string, stepId?: string): Promise<PlaybookAdvanceOutcome> {
+  const row = await loadRun(runId);
+  if (!row) return { advanced: false, reason: 'run-not-found' };
 
   if ((TERMINAL_RUN_STATUSES as readonly string[]).includes(row.status)) {
-    return { advanced: false, reason: 'run-terminal', stepsStarted: 0 };
+    return { advanced: false, reason: 'run-terminal' };
   }
 
   const steps = await db
@@ -268,36 +208,34 @@ export async function advanceRun(runId: string): Promise<PlaybookAdvanceOutcome>
     return {
       advanced: false,
       reason: OPEN_STEP_STATUSES.has(blocking.status) ? 'step-open' : 'step-not-completed',
-      stepsStarted: 0,
     };
   }
 
-  const graph = row.graph as PlaybookGraph;
-  const next = firstUnrunNode(graph, new Set(steps.map((step) => step.stepId)));
+  const from = stepId ?? (await resumePoint(runId));
+  if (!from) return { advanced: false, reason: 'no-resume-point' };
 
-  if (!next) {
-    // Every node has run and all of them completed. The run is finished; say so.
-    return { advanced: await markRunCompleted(runId), stepsStarted: 0, endedAs: 'completed' };
-  }
-
-  const chain = await runStepChain({
+  const outcome = await playbookEngine.resume({
     runId,
-    project: row.project,
+    graph: row.graph,
+    projectName: row.project,
     initiatorUserId: row.initiatorUserId,
-    graph,
-    from: next,
+    stepId: from,
   });
 
-  return { advanced: true, stepsStarted: chain.stepsStarted, endedAs: chain.endedAs };
+  return applyEngineOutcome(runId, outcome);
 }
 
 /**
  * Runs left settled but unfinished — the backstop for a missed advance.
  *
- * A process dying between a step completing and the next one starting leaves a run that is
+ * A process dying between a step being resolved and the engine being told leaves a run that is
  * `running`, has every step `completed`, and has nobody waiting to nudge it: the event that would
  * have advanced it has already been consumed. Nothing else in the system would ever look at it
  * again. This is the pass that does.
+ *
+ * Deliberately Apex's own sweep rather than the engine's `restartAllActiveWorkflowRuns()`. A
+ * blanket restart re-drives side effects, and a `cursor-agent` step re-driven blindly enqueues a
+ * second agent run. This only ever resumes from a settled position, so the worst case is a no-op.
  *
  * Scoped to `running` because a `suspended` run is legitimately waiting and is the resume path's
  * business, not this one's.

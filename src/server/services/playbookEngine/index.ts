@@ -1,35 +1,42 @@
 /**
  * The only place Apex may ever import a playbook orchestration engine.
  *
- * Everything outside this directory calls the four operations below and sees Apex types only. That
- * is what makes the engine replaceable: if a fallback trigger fires, VoltAgent replaces Mastra
- * inside this directory and nothing else in the codebase changes. A `no-restricted-imports` rule
- * fails the build on any engine import from outside, and a snapshot test guards this file's export
- * list, because lint sees imports crossing in while only a snapshot sees the surface growing out.
+ * Everything outside this directory calls the operations below and sees Apex types only. That is
+ * what makes the engine replaceable: swapping Mastra for something else is a change inside this
+ * directory and nowhere else. A `no-restricted-imports` rule fails the build on any engine import
+ * from outside, and a snapshot test guards this file's export list, because lint sees imports
+ * crossing in while only a snapshot sees the surface growing out.
  *
- * Phase 0 defines the surface without an engine behind it — there are no step types to orchestrate
- * yet. The operations therefore refuse rather than pretend, and the refusal is deliberate: a caller
- * merged ahead of the engine gets a clear error, not a silent no-op.
+ * Mastra owns traversal — which step runs next, and the mechanics of parking and waking a run.
+ * Apex owns everything else, including every row that records what happened.
+ *
+ * **`suspend` is gone from this surface.** Phase 0 declared four operations before anything ran.
+ * With the engine actually wired, suspension turns out not to be an operation a caller can invoke:
+ * a step parks from *inside* its own body, when its adapter reports it is waiting, and there is no
+ * moment at which outside code both knows a step should park and is in a position to park it.
+ * Keeping it would have meant exporting a function nothing could call correctly.
  */
 import { isFeatureEnabled } from '../featureFlagService';
 import { getAppEnvironment } from '../../utils/superAdmin';
+import { cancelRunOnEngine, resumeRunOnEngine, startRunOnEngine } from './runtime';
+import type { EngineOutcome } from './runtime';
 import type {
   PlaybookCancelInput,
   PlaybookOperationContext,
   PlaybookResumeInput,
-  PlaybookRunHandle,
   PlaybookStartInput,
-  PlaybookSuspendInput,
 } from '../../../shared/types/playbook';
 
 const PLAYBOOKS_SPIKE_FLAG = 'playbooks-spike';
 
+export type { EngineOutcome } from './runtime';
+
 /**
  * The single gate every operation passes through.
  *
- * One split rather than four keeps the Phase 1 cleanup mechanical, and means the engine cannot be
- * reached by adding an operation and forgetting the check. `isFeatureEnabled` resolves an absent
- * flag as disabled, so code merging before the seed migration lands cannot enable anything.
+ * One split rather than three keeps the cleanup mechanical, and means the engine cannot be reached
+ * by adding an operation and forgetting the check. `isFeatureEnabled` resolves an absent flag as
+ * disabled, so code merging before the seed migration lands cannot enable anything.
  */
 async function withPlaybooksEnabled<T>(
   context: PlaybookOperationContext,
@@ -62,31 +69,50 @@ async function withPlaybooksEnabled<T>(
   // @feature-flag:playbooks-spike end
 }
 
-/** Phase 0 has no step types, so every enabled path lands here rather than half-starting a run. */
-function notYetOrchestrating(operation: string): Promise<never> {
-  return Promise.reject(
-    new Error(
-      `Playbook ${operation} has no engine behind it yet — step types arrive with the step registry.`
+/**
+ * Drives a run from its entry step until one parks, one fails, or the graph runs out.
+ *
+ * The run row already exists — Apex admits the run, checks capacity and pins the version before the
+ * engine is involved at all, because those are Apex's rules and a run that fails them should never
+ * reach an engine.
+ */
+export async function start(input: PlaybookStartInput): Promise<EngineOutcome> {
+  return withPlaybooksEnabled(input, 'start a run', () =>
+    startRunOnEngine(input.graph, {
+      runId: input.runId,
+      project: input.projectName,
+      initiatorUserId: input.initiatorUserId,
+    })
+  );
+}
+
+/**
+ * Continues a run whose parked step has been resolved.
+ *
+ * Shared by both suspendable step kinds, per BR-008: an approval decision and a terminal agent-run
+ * event arrive by different routes and mean the same thing to the engine.
+ */
+export async function resume(input: PlaybookResumeInput): Promise<EngineOutcome> {
+  return withPlaybooksEnabled(input, 'resume a step', () =>
+    resumeRunOnEngine(
+      input.graph,
+      {
+        runId: input.runId,
+        project: input.projectName,
+        initiatorUserId: input.initiatorUserId,
+      },
+      input.stepId
     )
   );
 }
 
-/** Begins a run against a pinned definition version. */
-export async function start(input: PlaybookStartInput): Promise<PlaybookRunHandle> {
-  return withPlaybooksEnabled(input, 'start a run', () => notYetOrchestrating('start'));
-}
-
-/** Parks a step with its deadline. Every suspension has one. */
-export async function suspend(input: PlaybookSuspendInput): Promise<PlaybookRunHandle> {
-  return withPlaybooksEnabled(input, 'suspend a step', () => notYetOrchestrating('suspend'));
-}
-
-/** Advances a suspended step. Shared by both suspendable step kinds, per BR-008. */
-export async function resume(input: PlaybookResumeInput): Promise<PlaybookRunHandle> {
-  return withPlaybooksEnabled(input, 'resume a step', () => notYetOrchestrating('resume'));
-}
-
-/** Terminates a run. */
-export async function cancel(input: PlaybookCancelInput): Promise<PlaybookRunHandle> {
-  return withPlaybooksEnabled(input, 'cancel a run', () => notYetOrchestrating('cancel'));
+/** Terminates a run inside the engine. The Apex run row is the caller's to update. */
+export async function cancel(input: PlaybookCancelInput): Promise<void> {
+  return withPlaybooksEnabled(input, 'cancel a run', () =>
+    cancelRunOnEngine(input.graph, {
+      runId: input.runId,
+      project: input.projectName,
+      initiatorUserId: input.initiatorUserId,
+    })
+  );
 }

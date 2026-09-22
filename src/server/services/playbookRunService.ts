@@ -20,7 +20,7 @@ import {
   playbookRuns,
 } from '../db/schema';
 import { assertActiveRunCapacity } from './playbookGuardService';
-import { entryNode, runStepChain } from './playbookAdvanceService';
+import { beginRun } from './playbookAdvanceService';
 import type { PlaybookGraph } from '../../shared/types/playbook';
 
 export class PlaybookDefinitionNotFoundError extends Error {
@@ -88,8 +88,7 @@ export async function startRun(input: {
   }
 
   const graph = version.graph as PlaybookGraph;
-  const first = entryNode(graph);
-  if (!first) {
+  if (graph.nodes.length === 0) {
     throw new PlaybookEmptyGraphError(definition.name);
   }
 
@@ -113,16 +112,15 @@ export async function startRun(input: {
     .returning();
 
   /*
-   * The same chain runner a resumed run uses, so starting and resuming cannot drift. It runs
-   * forward until a step parks or the graph ends, which is what lets a definition whose steps all
-   * complete in-tick finish without anything nudging it.
+   * The engine takes over here. It drives forward until a step parks or the graph ends, which is
+   * what lets a definition whose steps all complete in-tick finish without anything nudging it.
    */
-  const chain = await runStepChain({
+  const chain = await beginRun({
     runId: run.id,
     project: input.project,
     initiatorUserId: input.initiatorUserId,
+    definitionVersionId: version.id,
     graph,
-    from: first,
   });
 
   /*

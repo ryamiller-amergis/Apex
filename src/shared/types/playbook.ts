@@ -415,21 +415,6 @@ export interface PlaybookSweepOutcome {
 // ── Engine wrapper operations ─────────────────────────────────────────────────
 
 /**
- * What the caller holds after any operation. Apex owns run truth, so this carries Apex's run id —
- * the engine's own position is an implementation detail of the wrapper.
- */
-export interface PlaybookRunHandle {
-  runId: string;
-  status: PlaybookRunStatus;
-  /** The immutable published version the run is pinned to for its whole life. */
-  definitionVersionId: string;
-  /** Present only while `status` is `suspended`. */
-  suspendedStepId?: string;
-  /** When a suspended step stops waiting and the run expires. */
-  deadline?: string;
-}
-
-/**
  * Carried by every operation. The initiator is the authorization identity for the whole run
  * (BR-003), so it is the identity each operation is evaluated against — not whoever happens to be
  * driving this particular call.
@@ -439,33 +424,42 @@ export interface PlaybookOperationContext {
   initiatorUserId: string;
 }
 
-export interface PlaybookStartInput extends PlaybookOperationContext {
-  /** The immutable published version to run. A run never follows a version it did not start on. */
+/**
+ * Every engine operation carries the run id and the pinned graph.
+ *
+ * The graph is passed rather than looked up because Apex has already read it — a run is admitted,
+ * capacity-checked and pinned to a version before an engine is involved, and re-reading the version
+ * row inside the engine would be a second query for an answer the caller is holding. It also keeps
+ * the engine free of Apex's schema, which is what lets it be replaced without a migration.
+ */
+export interface PlaybookEngineInput extends PlaybookOperationContext {
+  runId: string;
+  /** The frozen graph of the version this run is pinned to, for its whole life. */
+  graph: PlaybookGraph;
+}
+
+export interface PlaybookStartInput extends PlaybookEngineInput {
+  /** The immutable published version being run. A run never follows a version it did not start on. */
   definitionVersionId: string;
   input?: Record<string, unknown>;
 }
 
-export interface PlaybookSuspendInput extends PlaybookOperationContext {
-  runId: string;
-  stepId: string;
-  reason: PlaybookSuspendReason;
-  /** Every suspension has one. Reconciliation ends the run as expired once it passes. */
-  deadline: string;
-}
-
-export interface PlaybookResumeInput extends PlaybookOperationContext {
-  runId: string;
+export interface PlaybookResumeInput extends PlaybookEngineInput {
+  /** The graph node whose step has been resolved. */
   stepId: string;
   /**
-   * The approver permits continuation but does not lend authority — the run keeps the initiator's
-   * identity, so this records who decided, not who the run acts as.
+   * Who resolved the step, when a person did. The approver permits continuation but does not lend
+   * authority — the run keeps the initiator's identity, so this records who decided, not who the
+   * run acts as.
+   *
+   * Absent when nobody decided anything: a terminal agent-run event and the reconciliation sweep
+   * both resume runs with no person behind the call, and naming one would be a fiction.
    */
-  resolvedByUserId: string;
+  resolvedByUserId?: string;
   output?: Record<string, unknown>;
 }
 
-export interface PlaybookCancelInput extends PlaybookOperationContext {
-  runId: string;
+export interface PlaybookCancelInput extends PlaybookEngineInput {
   cancelledByUserId: string;
   reason?: string;
 }

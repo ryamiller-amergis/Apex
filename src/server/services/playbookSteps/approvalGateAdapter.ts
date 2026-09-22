@@ -32,7 +32,11 @@ export type ApprovalDecision = 'approved' | 'rejected';
 
 /** Why a decision was refused, when it was. */
 export type ApprovalSubmissionResult =
-  | { outcome: 'recorded'; decision: ApprovalDecision }
+  /**
+   * `stepId` is the graph node, not the row. It is what the engine is parked at, so returning it
+   * lets the route say which step to carry on from instead of having it worked out from timestamps.
+   */
+  | { outcome: 'recorded'; decision: ApprovalDecision; stepId: string }
   /** The gate had already been decided, or had expired. Not an error — see the file comment. */
   | { outcome: 'already-decided' };
 
@@ -134,6 +138,7 @@ export async function submitApprovalDecision(input: {
     .select({
       stepRunId: playbookStepRuns.id,
       runId: playbookStepRuns.runId,
+      stepId: playbookStepRuns.stepId,
       stepType: playbookStepRuns.stepType,
       status: playbookStepRuns.status,
       expiresAt: playbookStepRuns.expiresAt,
@@ -195,5 +200,7 @@ export async function submitApprovalDecision(input: {
     output: { decision: input.decision, decidedBy: input.deciderUserId },
   });
 
-  return moved ? { outcome: 'recorded', decision: input.decision } : { outcome: 'already-decided' };
+  return moved
+    ? { outcome: 'recorded', decision: input.decision, stepId: row.stepId }
+    : { outcome: 'already-decided' };
 }

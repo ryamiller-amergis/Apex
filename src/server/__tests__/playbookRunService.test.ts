@@ -27,15 +27,17 @@ jest.mock('../db/drizzle', () => ({
   },
 }));
 
-const beginStepRun = jest.fn();
-const executeStep = jest.fn();
-const failStepRun = jest.fn().mockResolvedValue(undefined);
 const assertActiveRunCapacity = jest.fn().mockResolvedValue(undefined);
-jest.mock('../services/playbookSteps', () => ({
-  ...jest.requireActual('../services/playbookSteps'),
-  beginStepRun: (...a: unknown[]) => beginStepRun(...a),
-  executeStep: (...a: unknown[]) => executeStep(...a),
-  failStepRun: (...a: unknown[]) => failStepRun(...a),
+
+/*
+ * The engine is stubbed. Which node runs first, what a step body does, and what happens when one
+ * throws are all the engine's behaviour now, proven against a live store in
+ * `playbook-run-start.integration.test.ts`. This file is about `startRun`'s own rules — finding the
+ * definition, pinning the version, admission, and what is written before the engine is involved.
+ */
+const beginRun = jest.fn();
+jest.mock('../services/playbookAdvanceService', () => ({
+  beginRun: (...a: unknown[]) => beginRun(...a),
 }));
 
 /*
@@ -73,8 +75,7 @@ beforeEach(() => {
   findFirstDefinition.mockResolvedValue(DEFINITION);
   findFirstVersion.mockResolvedValue({ id: 'version-7', versionNumber: 7, graph: GRAPH });
   insertValues.mockResolvedValue([{ id: 'run-1' }]);
-  beginStepRun.mockResolvedValue({ id: 'step-run-1' });
-  executeStep.mockResolvedValue({ kind: 'suspended', expiresAt: '2026-09-20T00:00:00.000Z' });
+  beginRun.mockResolvedValue({ advanced: true, endedAs: 'suspended' });
   assertActiveRunCapacity.mockResolvedValue(undefined);
 });
 
@@ -94,7 +95,7 @@ describe('VT-16 — the active-run cap is enforced at admission', () => {
 
     // Same reasoning as VT-07: a run that was refused admission should leave nothing to explain.
     expect(insertValues).not.toHaveBeenCalled();
-    expect(beginStepRun).not.toHaveBeenCalled();
+    expect(beginRun).not.toHaveBeenCalled();
   });
 });
 
@@ -119,7 +120,7 @@ describe('VT-07 — a definition with no published version', () => {
     // Not "inserted then marked failed". A row that exists only to record its own rejection would
     // appear in the status view and count against the active-run cap FEAT-005 adds.
     expect(insertValues).not.toHaveBeenCalled();
-    expect(beginStepRun).not.toHaveBeenCalled();
+    expect(beginRun).not.toHaveBeenCalled();
   });
 
   it('names the Playbook, so the message says what to publish', async () => {
@@ -151,23 +152,24 @@ describe('starting a run', () => {
     );
   });
 
-  it('executes the node nothing points to, not merely the first declared', async () => {
-    findFirstVersion.mockResolvedValue({
-      id: 'version-7',
-      graph: {
-        nodes: [
-          { id: 'second', stepType: 'notify' },
-          { id: 'first', stepType: 'cursor-agent' },
-        ],
-        edges: [{ from: 'first', to: 'second' }],
-      },
-    });
-
+  /*
+   * Which node runs first is the engine's decision now, so this asserts the handover instead: the
+   * engine is given the pinned graph, the run's own id, and the initiator it must act as.
+   *
+   * The graph is passed rather than the version id deliberately. `startRun` has already read the
+   * version row, and handing the engine an id to look up again would put Apex's schema inside the
+   * one directory that exists to be free of it.
+   */
+  it('hands the engine the pinned graph, the run id and the initiator', async () => {
     await startRun({ project: PROJECT, definitionId: 'def-1', initiatorUserId: INITIATOR });
 
-    expect(beginStepRun).toHaveBeenCalledWith(
-      expect.objectContaining({ stepId: 'first', stepType: 'cursor-agent' })
-    );
+    expect(beginRun).toHaveBeenCalledWith({
+      runId: 'run-1',
+      project: PROJECT,
+      initiatorUserId: INITIATOR,
+      definitionVersionId: 'version-7',
+      graph: GRAPH,
+    });
   });
 
   it('refuses a definition from another project', async () => {
@@ -188,19 +190,24 @@ describe('starting a run', () => {
     expect(insertValues).not.toHaveBeenCalled();
   });
 
-  it('keeps the run row when the first step fails, and marks the step failed', async () => {
-    executeStep.mockRejectedValue(new Error('admission refused'));
+  it('keeps the run row when the first step fails, and surfaces why', async () => {
+    beginRun.mockResolvedValue({
+      advanced: true,
+      endedAs: 'failed',
+      error: new Error('admission refused'),
+    });
 
     await expect(
       startRun({ project: PROJECT, definitionId: 'def-1', initiatorUserId: INITIATOR })
     ).rejects.toThrow('admission refused');
 
-    // Unlike the no-version case, this run really did start: it has a pinned version and a step
-    // that failed, and the status view should be able to show why.
+    /*
+     * Unlike the no-version case, this run really did start: it has a pinned version and a step
+     * that failed, and the status view should be able to show why. Rethrowing is what turns a
+     * first-step failure into a response the caller can act on rather than a 201 for a dead run —
+     * the step and run rows are already marked failed by the time this is reached.
+     */
     expect(insertValues).toHaveBeenCalledTimes(1);
-    expect(failStepRun).toHaveBeenCalledWith(
-      expect.objectContaining({ stepRunId: 'step-run-1', reason: 'admission refused' })
-    );
   });
 });
 

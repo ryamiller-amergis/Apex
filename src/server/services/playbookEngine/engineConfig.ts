@@ -24,7 +24,7 @@ export const ENGINE_POOL_MAX = 5;
 export interface PlaybookEngineConfig {
   /** Postgres schema the engine store is confined to. */
   schemaName: string;
-  /** Table creation is a migration's job, so the engine must not do it at startup. */
+  /** Whether the engine is forbidden from creating its own tables at startup. */
   disableInit: boolean;
   pool: { max: number };
   telemetry: { enabled: boolean };
@@ -38,10 +38,25 @@ export interface PlaybookEngineConfig {
  * the workflow path, which means neither half has been exercised in anger — so both are set rather
  * than picking whichever seems likelier to be the one that matters.
  */
+/*
+ * `disableInit: false` corrects a Phase 0 assumption that only became testable once the engine ran.
+ *
+ * Phase 0 recorded the pattern as "migration-created schema plus `disableInit: true`", but the
+ * migration creates the *schema* and the role — not the engine's 43 tables — and it grants
+ * `USAGE, CREATE ON SCHEMA playbook_engine` to the engine role, which would be pointless if the
+ * engine were never to create anything. Suppression with no tables behind it is simply a store that
+ * cannot read or write.
+ *
+ * What the migration buys is confinement, not the absence of DDL. The ADR's phase-0 condition is
+ * that no table lands in `public` under any configuration, and that still holds: the store is bound
+ * to `schemaName` and the conformance suite asserts it (INV-01). Writing the table shapes into a
+ * migration instead would couple an Apex migration to Mastra's internal schema and break on the
+ * next version bump — the coupling the verification record warns against.
+ */
 export function buildEngineConfig(): PlaybookEngineConfig {
   return {
     schemaName: ENGINE_SCHEMA,
-    disableInit: true,
+    disableInit: false,
     pool: { max: ENGINE_POOL_MAX },
     telemetry: { enabled: false },
   };

@@ -30,7 +30,12 @@ jest.mock('../../src/server/services/chatAgentService', () => ({
 }));
 
 import pg from 'pg';
-import { createScratchDatabase, listTables, ScratchDatabase } from './support/scratch-db';
+import {
+  createScratchDatabase,
+  enablePlaybooks,
+  listTables,
+  ScratchDatabase,
+} from './support/scratch-db';
 
 type ProjectionModule = typeof import('../../src/server/services/playbookRunProjectionService');
 type ApprovalModule = typeof import('../../src/server/services/playbookSteps/approvalGateAdapter');
@@ -165,6 +170,8 @@ async function grantPlaybooksRun(userOid: string): Promise<void> {
 
 beforeAll(async () => {
   scratch = await createScratchDatabase('playbookexit');
+  // Traversal runs through the engine boundary, which refuses every operation while the flag is off.
+  await enablePlaybooks(scratch.connectionString);
 
   process.env.DATABASE_URL = scratch.connectionString;
   /* eslint-disable @typescript-eslint/no-require-imports --
@@ -184,6 +191,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (client) await client.end();
+  // The engine holds its own pool; an open session blocks the scratch database from being dropped.
+  await require('../../src/server/services/playbookEngine/runtime').closeEngineStore();
   if (pool) await pool.end();
   if (scratch) await scratch.drop();
 });

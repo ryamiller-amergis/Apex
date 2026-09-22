@@ -61,6 +61,8 @@ export async function handleTerminalAgentRunEvent(
     .select({
       id: playbookStepRuns.id,
       runId: playbookStepRuns.runId,
+      // The graph node, not the row: it is what the engine is parked at and how it is told to go on.
+      stepId: playbookStepRuns.stepId,
       status: playbookStepRuns.status,
     })
     .from(playbookStepRuns)
@@ -84,7 +86,7 @@ export async function handleTerminalAgentRunEvent(
      * the delivery that actually moved the step advances, so a redelivery cannot start the next
      * step twice — though `advanceRun` would refuse that anyway.
      */
-    await advanceRun(step.runId);
+    await advanceRun(step.runId, step.stepId);
 
     return { handled: 'resumed', stepRunId: step.id };
   }

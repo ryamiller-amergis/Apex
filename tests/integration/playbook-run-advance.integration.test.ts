@@ -1,4 +1,4 @@
-﻿/**
+/**
  * PBI-004 — a run picks up at its next step, and reaches its own end.
  *
  * This is the half of PBI-004 that FEAT-005 left unbuilt. `resumeStepRun` moved a parked step to
@@ -21,7 +21,7 @@ jest.mock('../../src/server/services/chatAgentService', () => ({
 }));
 
 import pg from 'pg';
-import { createScratchDatabase, ScratchDatabase } from './support/scratch-db';
+import { createScratchDatabase, enablePlaybooks, ScratchDatabase } from './support/scratch-db';
 
 type RunServiceModule = typeof import('../../src/server/services/playbookRunService');
 type AdvanceModule = typeof import('../../src/server/services/playbookAdvanceService');
@@ -129,6 +129,8 @@ async function grantPlaybooksRun(userOid: string): Promise<void> {
 
 beforeAll(async () => {
   scratch = await createScratchDatabase('playbookadvance');
+  // Traversal runs through the engine boundary, which refuses every operation while the flag is off.
+  await enablePlaybooks(scratch.connectionString);
 
   process.env.DATABASE_URL = scratch.connectionString;
   /* eslint-disable @typescript-eslint/no-require-imports --
@@ -156,6 +158,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (client) await client.end();
+  // The engine holds its own pool; an open session blocks the scratch database from being dropped.
+  await require('../../src/server/services/playbookEngine/runtime').closeEngineStore();
   if (pool) await pool.end();
   if (scratch) await scratch.drop();
 });

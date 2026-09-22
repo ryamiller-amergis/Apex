@@ -184,13 +184,307 @@ async function probeTelemetry(connectionString: string, schemaName: string) {
   };
 }
 
+/**
+ * TBI-040 part one: start a run, let it suspend, and report its id. The process then exits.
+ *
+ * Nothing is returned but the id on purpose. Whatever `cold-resume` manages to do afterwards it
+ * must do from storage, because the `Run` object that suspended this one dies with this process.
+ */
+async function probeColdSuspend(connectionString: string, schemaName: string) {
+  const { Mastra } = require('@mastra/core');
+  const store = await makeStore(connectionString, schemaName);
+  await store.init();
+
+  const mastra = new Mastra({ storage: store, workflows: { probe: buildWorkflow() }, logger: false });
+  const workflow = mastra.getWorkflow('probe');
+  const run = await workflow.createRun();
+  const started = await run.start({ inputData: { subject: 'cold' } });
+
+  if (store.close) await store.close();
+  return { runId: run.runId, startStatus: started.status };
+}
+
+/**
+ * TBI-040 part two: resume that run from a process that never saw it start.
+ *
+ * This is the demo's step 4 asked of the engine rather than of Apex. Our own traversal passes it
+ * trivially because a suspended run is only ever rows; the question here is whether Mastra
+ * rehydrates from `PostgresStore` or needs the original in-memory `Run`.
+ */
+async function probeColdResume(connectionString: string, schemaName: string, runId: string) {
+  const { Mastra } = require('@mastra/core');
+  const store = await makeStore(connectionString, schemaName);
+  await store.init();
+
+  const mastra = new Mastra({ storage: store, workflows: { probe: buildWorkflow() }, logger: false });
+  const workflow = mastra.getWorkflow('probe');
+
+  // Read before touching it: proves the snapshot survived the first process, separately from
+  // whether resume works. If this is null the run did not persist and resume was never the issue.
+  const snapshotBefore = await workflow.getWorkflowRunById(runId);
+
+  let resumeStatus: string | null = null;
+  let resumeResult: unknown = null;
+  let resumeError: string | null = null;
+  try {
+    const run = await workflow.createRun({ runId });
+    const resumed = await run.resume({ step: 'gate', resumeData: { decision: 'approved' } });
+    resumeStatus = resumed.status;
+    resumeResult = resumed.result ?? null;
+  } catch (error) {
+    resumeError = error instanceof Error ? error.message : String(error);
+  }
+
+  const snapshotAfter = await workflow.getWorkflowRunById(runId);
+  if (store.close) await store.close();
+
+  return {
+    runId,
+    foundInStorage: snapshotBefore !== null && snapshotBefore !== undefined,
+    statusBefore: snapshotBefore?.snapshot?.status ?? snapshotBefore?.status ?? null,
+    resumeStatus,
+    resumeResult,
+    resumeError,
+    statusAfter: snapshotAfter?.snapshot?.status ?? snapshotAfter?.status ?? null,
+  };
+}
+
+/**
+ * TBI-041: two engine instances, one store, resume delivered to the one that did not start it.
+ *
+ * Two `Mastra` containers rather than two processes because the thing under test is the container's
+ * own state, not the operating system's. Each gets its own store handle and its own in-memory event
+ * bus, which is exactly the shape three App Service instances have — and the reason the question is
+ * worth asking separately from `cold-resume`.
+ */
+async function probeCrossInstance(connectionString: string, schemaName: string) {
+  const { Mastra } = require('@mastra/core');
+
+  const storeA = await makeStore(connectionString, schemaName, { id: 'instance-a' });
+  await storeA.init();
+  // B shares the schema and inits nothing: a second App Service instance finds its tables already
+  // there, and a store that only works when it created the tables itself would be a finding.
+  const storeB = await makeStore(connectionString, schemaName, { id: 'instance-b', disableInit: true });
+
+  const a = new Mastra({ storage: storeA, workflows: { probe: buildWorkflow() }, logger: false });
+  const b = new Mastra({ storage: storeB, workflows: { probe: buildWorkflow() }, logger: false });
+
+  const runA = await a.getWorkflow('probe').createRun();
+  const started = await runA.start({ inputData: { subject: 'cross-instance' } });
+
+  const workflowB = b.getWorkflow('probe');
+  const seenByB = await workflowB.getWorkflowRunById(runA.runId);
+
+  let resumeStatus: string | null = null;
+  let resumeResult: unknown = null;
+  let resumeError: string | null = null;
+  try {
+    const runB = await workflowB.createRun({ runId: runA.runId });
+    const resumed = await runB.resume({ step: 'gate', resumeData: { decision: 'approved' } });
+    resumeStatus = resumed.status;
+    resumeResult = resumed.result ?? null;
+  } catch (error) {
+    resumeError = error instanceof Error ? error.message : String(error);
+  }
+
+  // Asked of A, because the instance that started the run is the one whose view going stale would
+  // be the subtle failure: B finishing the run while A still believes it is suspended.
+  const seenByAAfter = await a.getWorkflow('probe').getWorkflowRunById(runA.runId);
+
+  for (const s of [storeA, storeB]) if (s.close) await s.close();
+
+  return {
+    runId: runA.runId,
+    startStatus: started.status,
+    visibleToOtherInstance: seenByB !== null && seenByB !== undefined,
+    resumeStatus,
+    resumeResult,
+    resumeError,
+    statusSeenByStarterAfter: seenByAAfter?.snapshot?.status ?? seenByAAfter?.status ?? null,
+  };
+}
+
+/**
+ * The shape of a real published graph: definition B, gate → agent → notify.
+ *
+ * Two suspending steps in a row is the point. The existing `buildWorkflow` has one step, so
+ * TBI-040 proved a resume that *ends* a run; nothing has yet proved a resume that continues one,
+ * and "the next step starts" is the entire job being handed to Mastra.
+ */
+const DEMO_GRAPH = {
+  nodes: [
+    { id: 'approve', stepType: 'approval-gate', config: { subject: 'Ship it?' } },
+    { id: 'agent', stepType: 'cursor-agent', config: { skillPath: '.cursor/skills/app-knowledge/SKILL.md' } },
+    { id: 'announce', stepType: 'notify', config: { title: 'Shipped' } },
+  ],
+  edges: [
+    { from: 'approve', to: 'agent' },
+    { from: 'agent', to: 'announce' },
+  ],
+};
+
+/** Mirrors `canSuspend` in the Phase 0 step registry. */
+const SUSPENDING_STEP_TYPES = new Set(['approval-gate', 'cursor-agent']);
+
+const LOG_TABLE = 'apex_step_log';
+
+/**
+ * Stands in for `playbook_step_runs`: a durable, ordered record of what each step body did.
+ *
+ * It has to be in the database rather than in memory because the run crosses three processes, and
+ * the question it answers — did any step body run twice — is only answerable from outside them.
+ */
+async function logStep(
+  connectionString: string,
+  schemaName: string,
+  runId: string,
+  stepId: string,
+  phase: string
+) {
+  await query(
+    connectionString,
+    `INSERT INTO ${schemaName}.${LOG_TABLE} (run_id, step_id, phase) VALUES ($1, $2, $3)`,
+    [runId, stepId, phase]
+  );
+}
+
+async function readLog(
+  connectionString: string,
+  schemaName: string
+): Promise<{ step_id: string; phase: string }[]> {
+  return query(connectionString, `SELECT step_id, phase FROM ${schemaName}.${LOG_TABLE} ORDER BY seq`);
+}
+
+/**
+ * Builds a Mastra workflow from a stored graph at run time.
+ *
+ * This is the translation TBI-047 has to build for real, written here at its smallest to find out
+ * whether it is possible before any traversal is deleted. Mastra's workflows are authored as code
+ * and ours are rows, so the whole integration rests on this being expressible.
+ *
+ * Each step body does what an Apex step body would: record that it began, run its adapter, then
+ * either park or record completion. The adapters themselves are not called — the question here is
+ * whether Mastra will *drive* bodies of this shape, not whether our adapters work, which 30 passing
+ * tests already answer.
+ */
+function buildWorkflowFromGraph(graph: typeof DEMO_GRAPH, connectionString: string, schemaName: string) {
+  const { createWorkflow, createStep } = require('@mastra/core/workflows');
+
+  // Same ordering rule as playbookAdvanceService: start where nothing points, follow the edges.
+  const hasInbound = new Set(graph.edges.map((e) => e.to));
+  let cursor = graph.nodes.find((n) => !hasInbound.has(n.id)) ?? graph.nodes[0];
+  const ordered: typeof graph.nodes = [];
+  const seen = new Set<string>();
+  while (cursor && !seen.has(cursor.id)) {
+    ordered.push(cursor);
+    seen.add(cursor.id);
+    const edge = graph.edges.find((e) => e.from === cursor!.id);
+    cursor = edge ? graph.nodes.find((n) => n.id === edge.to) : undefined;
+  }
+
+  const steps = ordered.map((node) =>
+    createStep({
+      id: node.id,
+      inputSchema: z.any(),
+      resumeSchema: z.any(),
+      suspendSchema: z.any(),
+      outputSchema: z.any(),
+      execute: async ({ resumeData, suspend, runId }: any) => {
+        const suspends = SUSPENDING_STEP_TYPES.has(node.stepType);
+
+        if (suspends && !resumeData) {
+          await logStep(connectionString, schemaName, runId ?? 'unknown', node.id, 'begin');
+          return await suspend({ reason: node.stepType });
+        }
+        if (!suspends) {
+          await logStep(connectionString, schemaName, runId ?? 'unknown', node.id, 'begin');
+        }
+
+        await logStep(connectionString, schemaName, runId ?? 'unknown', node.id, 'complete');
+        return { stepId: node.id };
+      },
+    })
+  );
+
+  let workflow = createWorkflow({ id: 'apex-graph-wf', inputSchema: z.any(), outputSchema: z.any() });
+  for (const step of steps) workflow = workflow.then(step);
+  return workflow.commit();
+}
+
+async function graphEngine(connectionString: string, schemaName: string) {
+  const { Mastra } = require('@mastra/core');
+  const store = await makeStore(connectionString, schemaName);
+  await store.init();
+  const mastra = new Mastra({
+    storage: store,
+    workflows: { probe: buildWorkflowFromGraph(DEMO_GRAPH, connectionString, schemaName) },
+    logger: false,
+  });
+  return { store, workflow: mastra.getWorkflow('probe') };
+}
+
+/** Spike part one: build the workflow from the graph and start it. */
+async function probeGraphStart(connectionString: string, schemaName: string) {
+  await query(connectionString, `CREATE SCHEMA IF NOT EXISTS ${schemaName}`);
+  await query(
+    connectionString,
+    `CREATE TABLE IF NOT EXISTS ${schemaName}.${LOG_TABLE} (
+       seq serial PRIMARY KEY, run_id text, step_id text, phase text, at timestamptz DEFAULT now())`
+  );
+
+  const { store, workflow } = await graphEngine(connectionString, schemaName);
+  const run = await workflow.createRun();
+  const started = await run.start({ inputData: { subject: 'spike' } });
+  const log = await readLog(connectionString, schemaName);
+  if (store.close) await store.close();
+
+  return {
+    runId: run.runId,
+    status: started.status,
+    suspendedAt: started.suspended ?? null,
+    log: log.map((l) => `${l.step_id}:${l.phase}`),
+  };
+}
+
+/** Spike part two: resume one suspended step from a cold process and see whether the chain moves on. */
+async function probeGraphResume(
+  connectionString: string,
+  schemaName: string,
+  runId: string,
+  stepId: string
+) {
+  const { store, workflow } = await graphEngine(connectionString, schemaName);
+
+  let status: string | null = null;
+  let suspendedAt: unknown = null;
+  let error: string | null = null;
+  try {
+    const run = await workflow.createRun({ runId });
+    const resumed = await run.resume({ step: stepId, resumeData: { decision: 'approved' } });
+    status = resumed.status;
+    suspendedAt = resumed.suspended ?? null;
+  } catch (e) {
+    error = e instanceof Error ? e.message : String(e);
+  }
+
+  const log = await readLog(connectionString, schemaName);
+  if (store.close) await store.close();
+
+  return { runId, resumedStep: stepId, status, suspendedAt, error, log: log.map((l) => `${l.step_id}:${l.phase}`) };
+}
+
 async function main() {
-  const [mode, connectionString, schema = 'playbook_engine'] = process.argv.slice(2);
+  const [mode, connectionString, schema = 'playbook_engine', extra, extra2] = process.argv.slice(2);
   const modes: Record<string, () => Promise<unknown>> = {
     'store-ddl': () => probeStoreDdl(connectionString, schema),
     'in-process': () => probeInProcess(connectionString, schema),
     pool: () => probePool(connectionString, schema),
     telemetry: () => probeTelemetry(connectionString, schema),
+    'cold-suspend': () => probeColdSuspend(connectionString, schema),
+    'cold-resume': () => probeColdResume(connectionString, schema, extra),
+    'cross-instance': () => probeCrossInstance(connectionString, schema),
+    'graph-start': () => probeGraphStart(connectionString, schema),
+    'graph-resume': () => probeGraphResume(connectionString, schema, extra, extra2),
   };
   const run = modes[mode];
   if (!run) throw new Error(`unknown probe mode "${mode}" — expected one of ${Object.keys(modes).join(', ')}`);

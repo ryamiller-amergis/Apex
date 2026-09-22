@@ -89,6 +89,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (client) await client.end();
+  // The engine holds its own pool; an open session blocks the scratch database from being dropped.
+  await require('../../src/server/services/playbookEngine/runtime').closeEngineStore();
   if (pool) await pool.end();
   if (scratch) await scratch.drop();
 });

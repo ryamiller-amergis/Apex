@@ -109,6 +109,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (client) await client.end();
+  // The engine holds its own pool; an open session blocks the scratch database from being dropped.
+  await require('../../src/server/services/playbookEngine/runtime').closeEngineStore();
   if (pool) await pool.end();
   if (scratch) await scratch.drop();
 });
@@ -169,7 +171,8 @@ describe('VT-15 — the initiator\u2019s decision resumes the step', () => {
       decision: 'approved',
     });
 
-    expect(result).toEqual({ outcome: 'recorded', decision: 'approved' });
+    // stepId rides along so the caller knows which node to carry the run on from.
+    expect(result).toEqual({ outcome: 'recorded', decision: 'approved', stepId: 'approve' });
     expect(await statusOf(stepRunId)).toBe('completed');
 
     const [row] = await query<{ output_inline: { decision: string; decidedBy: string } }>(
@@ -190,7 +193,7 @@ describe('VT-15 — the initiator\u2019s decision resumes the step', () => {
 
     // A rejection still *completes* the step. What the run does next is the graph's business, not
     // the gate's — a rejected gate is a decision that arrived, not a step that failed.
-    expect(result).toEqual({ outcome: 'recorded', decision: 'rejected' });
+    expect(result).toEqual({ outcome: 'recorded', decision: 'rejected', stepId: 'approve' });
     expect(await statusOf(stepRunId)).toBe('completed');
   });
 
@@ -219,7 +222,7 @@ describe('VT-16 — a duplicate decision changes nothing', () => {
       decision: 'rejected',
     });
 
-    expect(first).toEqual({ outcome: 'recorded', decision: 'approved' });
+    expect(first).toEqual({ outcome: 'recorded', decision: 'approved', stepId: 'approve' });
     expect(second).toEqual({ outcome: 'already-decided' });
   });
 

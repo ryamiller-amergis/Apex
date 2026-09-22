@@ -92,12 +92,20 @@ describe('TBI-009 — the engine telemetry kill switch is engaged', () => {
     expect(buildEngineConfig().telemetry.enabled).toBe(false);
   });
 
-  // The FEAT-001 findings this configuration is built from
-  it('confines the engine to its own schema and leaves table creation to a migration', () => {
+  /*
+   * The FEAT-001 findings this configuration is built from.
+   *
+   * Confinement is the guarantee, not the absence of DDL. The migration creates the schema and the
+   * role and grants `CREATE` inside it; the engine's own 43 tables are the engine's to make, and a
+   * store suppressed with no tables behind it is one that cannot read or write. What must stay true
+   * is that nothing lands outside the engine's schema, which the conformance suite asserts against
+   * a live database (INV-01).
+   */
+  it('confines the engine to its own schema and lets it create its tables only there', () => {
     const config = buildEngineConfig();
     expect(config.schemaName).toBe(ENGINE_SCHEMA);
     expect(config.schemaName).not.toBe('public');
-    expect(config.disableInit).toBe(true);
+    expect(config.disableInit).toBe(false);
   });
 
   // TBI-003's connection budget: the engine's default of 20 is not what Apex activates
