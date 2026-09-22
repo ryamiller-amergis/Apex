@@ -56,6 +56,9 @@ jest.mock('../services/designSystemService', () => ({
   getScreenInventory: jest.fn().mockResolvedValue([]),
   componentIndexPaths: jest.fn().mockReturnValue(['/src/client/components']),
   isComponentSourcePath: jest.fn().mockReturnValue(true),
+  fetchExistingPageContext: jest
+    .fn()
+    .mockResolvedValue('export const Timecards = () => <TimecardGrid />;'),
 }));
 
 jest.mock('../services/designTokensService', () => ({
@@ -64,6 +67,15 @@ jest.mock('../services/designTokensService', () => ({
 
 jest.mock('../services/figmaReferenceService', () => ({
   getFigmaReference: jest.fn().mockReturnValue({ navItems: [{ label: 'Home', route: '/' }] }),
+}));
+
+jest.mock('../services/pageScreenshotService', () => ({
+  getScreenshotByRoute: jest.fn().mockResolvedValue({
+    imageBase64: 'REVG',
+    mediaType: 'image/jpeg',
+    width: 1280,
+    height: 720,
+  }),
 }));
 
 jest.mock('../services/projectSettingsService', () => ({
@@ -321,9 +333,7 @@ describe('generatePrototypesForPrd V2 transport routing', () => {
     expect(generateInProcess.mock.calls[0][0]).toBe('prototype-1');
   });
 
-  it('keeps features that extend an existing page in process', async () => {
-    // The specification has no EXTEND scoping section yet: building one needs
-    // the existing page source, which only the in-process path fetches.
+  it('admits an EXTEND feature with its resolved source and page image', async () => {
     arrangePrd([
       {
         title: 'Approval column',
@@ -340,8 +350,26 @@ describe('generatePrototypesForPrd V2 transport routing', () => {
       generateInProcess,
     });
 
-    expect(admitV2Run).not.toHaveBeenCalled();
-    expect(generateInProcess).toHaveBeenCalledTimes(1);
+    expect(admitV2Run).toHaveBeenCalledTimes(1);
+    expect(generateInProcess).not.toHaveBeenCalled();
+    const { specification } = admitV2Run.mock.calls[0][0];
+    expect(specification.promptInputs).toMatchObject({
+      extendMode: true,
+      targetRoute: '/timecards',
+      existingPageContext: 'export const Timecards = () => <TimecardGrid />;',
+    });
+    expect(specification.promptInputs.scopingSection).toContain(
+      'EXTEND an existing page',
+    );
+    expect(specification.designReference.images).toEqual([
+      {
+        kind: 'existing-page',
+        base64: 'REVG',
+        mediaType: 'image/jpeg',
+        width: 1280,
+        height: 720,
+      },
+    ]);
   });
 
   it('names the MaxView branch when the project resolves no design system', async () => {
@@ -411,6 +439,7 @@ describe('generatePrototypesForPrd V2 transport routing', () => {
 
     expect(admitV2Run.mock.calls[0][0].specification.designReference).toEqual({
       navItems: [],
+      images: [],
     });
   });
 

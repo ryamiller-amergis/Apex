@@ -26,13 +26,27 @@ export type VisualNavItem = Readonly<{
   icon?: string;
 }>;
 
-/** Design reference imagery, already fetched so the worker never calls Figma. */
+export type VisualImageKind = 'design-reference' | 'existing-page';
+
+/**
+ * One vision block in the exact order App Service resolved it.
+ *
+ * `kind` documents why the bytes are present and lets validation reject a
+ * project prompt that accidentally receives MaxView's Figma image. The
+ * worker preserves this array order when it builds the Bedrock content list.
+ */
+export type VisualImageBlock = Readonly<{
+  kind: VisualImageKind;
+  base64: string;
+  mediaType: 'image/png' | 'image/jpeg';
+  width?: number;
+  height?: number;
+}>;
+
+/** Design references and page imagery, already fetched so the worker never does. */
 export type VisualDesignReference = Readonly<{
   navItems: ReadonlyArray<VisualNavItem>;
-  screenshotBase64?: string;
-  screenshotMediaType?: string;
-  screenshotWidth?: number;
-  screenshotHeight?: number;
+  images: ReadonlyArray<VisualImageBlock>;
 }>;
 
 /**
@@ -177,13 +191,141 @@ function isResolvedModel(value: unknown): boolean {
   );
 }
 
+function isString(value: unknown): value is string {
+  return typeof value === 'string';
+}
+
+function isOptionalPositiveNumber(value: unknown): boolean {
+  return value === undefined || isPositiveNumber(value);
+}
+
+function isVisualImageBlock(value: unknown): value is VisualImageBlock {
+  if (!isRecord(value)) return false;
+  if (value.kind !== 'design-reference' && value.kind !== 'existing-page') {
+    return false;
+  }
+  if (!isNonEmptyString(value.base64)) return false;
+  if (value.mediaType !== 'image/png' && value.mediaType !== 'image/jpeg') {
+    return false;
+  }
+  return (
+    isOptionalPositiveNumber(value.width)
+    && isOptionalPositiveNumber(value.height)
+  );
+}
+
+function isVisualDesignReference(value: unknown): value is VisualDesignReference {
+  if (!isRecord(value)) return false;
+  if (!Array.isArray(value.navItems) || !Array.isArray(value.images)) return false;
+  if (
+    !value.navItems.every(
+      (item) =>
+        isRecord(item)
+        && isNonEmptyString(item.label)
+        && isNonEmptyString(item.route)
+        && (item.icon === undefined || typeof item.icon === 'string'),
+    )
+  ) {
+    return false;
+  }
+  if (!value.images.every(isVisualImageBlock)) return false;
+
+  const rank: Record<VisualImageKind, number> = {
+    'design-reference': 0,
+    'existing-page': 1,
+  };
+  let previousRank = -1;
+  for (const image of value.images) {
+    const nextRank = rank[image.kind];
+    if (nextRank <= previousRank) return false;
+    previousRank = nextRank;
+  }
+  return true;
+}
+
+function isSourceFile(value: unknown): boolean {
+  return (
+    isRecord(value)
+    && isNonEmptyString(value.path)
+    && typeof value.content === 'string'
+  );
+}
+
+function isPrototypePromptInputs(
+  value: unknown,
+  reference: VisualDesignReference,
+  prompt: PrototypePromptSelection,
+): boolean {
+  if (!isRecord(value)) return false;
+  if (!isNonEmptyString(value.featureName)) return false;
+  if (!isString(value.featureDescription)) return false;
+  if (!isString(value.planSection)) return false;
+  if (!isString(value.pbiSection)) return false;
+  if (!isString(value.scopingSection)) return false;
+  if (!isString(value.existingPageContext)) return false;
+  if (!isString(value.targetScreenHint)) return false;
+  if (!isString(value.pageScreenshotHint)) return false;
+  if (typeof value.extendMode !== 'boolean') return false;
+  if (
+    value.targetRoute !== null
+    && !isNonEmptyString(value.targetRoute)
+  ) {
+    return false;
+  }
+  if (!Array.isArray(value.sourceFiles) || !value.sourceFiles.every(isSourceFile)) {
+    return false;
+  }
+  if (
+    !Array.isArray(value.omittedSourcePaths)
+    || !value.omittedSourcePaths.every(isNonEmptyString)
+  ) {
+    return false;
+  }
+
+  const existingPageImage = reference.images.some(
+    (image) => image.kind === 'existing-page',
+  );
+  if (value.extendMode) {
+    if (!isNonEmptyString(value.targetRoute)) return false;
+    if (!value.existingPageContext.trim() && !existingPageImage) return false;
+  } else if (existingPageImage) {
+    return false;
+  }
+
+  if (prompt.branch === 'project-design-system') {
+    if (prompt.extendMode !== value.extendMode) return false;
+    if (reference.images.some((image) => image.kind === 'design-reference')) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isUiLabPromptInputs(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (!isNonEmptyString(value.userPrompt)) return false;
+  if (value.targetRoute !== null && !isNonEmptyString(value.targetRoute)) {
+    return false;
+  }
+  if (value.designSystemName !== 'APEX' && value.designSystemName !== 'MaxView') {
+    return false;
+  }
+  return (
+    isString(value.skillMarkdown)
+    && isString(value.componentIndex)
+    && isString(value.existingPageContext)
+  );
+}
+
 /**
  * Refuses a prototype run whose branch is missing or incomplete, for the same
  * reason the model settings are refused: a worker that filled the gap in
  * would pick a prompt, and picking the MaxView prompt for a project that has
  * its own design system is the exact defect this field exists to stop.
  */
-function isPrototypePromptSelection(value: unknown): boolean {
+function isPrototypePromptSelection(
+  value: unknown,
+): value is PrototypePromptSelection {
   if (!isRecord(value)) return false;
   switch (value.branch) {
     case 'maxview':
@@ -209,19 +351,32 @@ export function isAiRunV2VisualSpecification(
   if (value.subjectKind !== 'design-prototype' && value.subjectKind !== 'ui-lab-screen') {
     return false;
   }
-  if (
-    value.subjectKind === 'design-prototype' &&
-    !isPrototypePromptSelection(value.prototypePrompt)
-  ) {
-    return false;
+  if (!isVisualDesignReference(value.designReference)) return false;
+  if (value.subjectKind === 'design-prototype') {
+    const prototypePrompt = value.prototypePrompt;
+    if (!isPrototypePromptSelection(prototypePrompt)) return false;
+    if (
+      !isPrototypePromptInputs(
+        value.promptInputs,
+        value.designReference,
+        prototypePrompt,
+      )
+    ) {
+      return false;
+    }
+    if (value.outputPath !== 'prototype.html') return false;
+  } else {
+    if (!isUiLabPromptInputs(value.promptInputs)) return false;
+    if (value.outputPath !== 'design.html') return false;
+    if (
+      value.designReference.images.some(
+        (image) => image.kind !== 'design-reference',
+      )
+    ) {
+      return false;
+    }
   }
-  if (!isNonEmptyString(value.outputPath)) return false;
-  if (!isRecord(value.promptInputs)) return false;
   if (!isRecord(value.designSystem)) return false;
-  if (!isRecord(value.designReference)) return false;
-  if (!Array.isArray((value.designReference as { navItems?: unknown }).navItems)) {
-    return false;
-  }
   if (!isResolvedModel(value.model)) return false;
   if (!isRecord(value.usage) || !isNonEmptyString(value.usage.feature)) {
     return false;

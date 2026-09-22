@@ -11,10 +11,22 @@ import {
 const base = {
   prototypeId: 'prototype-1',
   prototypePrompt: { branch: 'maxview' } as const,
-  promptInputs: { featureTitle: 'Standup summary' },
+  promptInputs: {
+    featureName: 'Standup summary',
+    featureDescription: '',
+    planSection: '',
+    pbiSection: '### PBI 1: Show the summary',
+    scopingSection: 'Only render the described feature.',
+    extendMode: false,
+    targetRoute: null,
+    existingPageContext: '',
+    targetScreenHint: '',
+    pageScreenshotHint: '',
+  },
   sourceFiles: [{ path: '/src/components/A.tsx', content: 'a' }],
   colorTokens: { primary: '#000' },
   navItems: [{ label: 'Home', route: '/' }],
+  images: [],
   model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
   usage: { feature: 'design-prototype', project: 'Apex' },
 };
@@ -32,31 +44,61 @@ describe('visualSpecificationBuilder', () => {
     const spec = buildPrototypeVisualSpecification(base);
 
     expect(spec.promptInputs.sourceFiles).toEqual(base.sourceFiles);
-    expect(spec.promptInputs.featureTitle).toBe('Standup summary');
+    expect(spec.promptInputs.featureName).toBe('Standup summary');
   });
 
   it('carries the reference screenshot so the worker gets the same vision input', () => {
     const spec = buildPrototypeVisualSpecification({
       ...base,
-      screenshotBase64: 'QUJD',
-      screenshotMediaType: 'image/png',
-      screenshotWidth: 1024,
-      screenshotHeight: 810,
+      images: [
+        {
+          kind: 'design-reference',
+          base64: 'QUJD',
+          mediaType: 'image/png',
+          width: 1024,
+          height: 810,
+        },
+      ],
     });
 
     expect(spec.designReference).toEqual({
       navItems: base.navItems,
-      screenshotBase64: 'QUJD',
-      screenshotMediaType: 'image/png',
-      screenshotWidth: 1024,
-      screenshotHeight: 810,
+      images: [
+        {
+          kind: 'design-reference',
+          base64: 'QUJD',
+          mediaType: 'image/png',
+          width: 1024,
+          height: 810,
+        },
+      ],
     });
   });
 
   it('leaves the screenshot fields off when there is no reference', () => {
     expect(buildPrototypeVisualSpecification(base).designReference).toEqual({
       navItems: base.navItems,
+      images: [],
     });
+  });
+
+  it('carries both EXTEND images in the order App Service resolved them', () => {
+    const images = [
+      {
+        kind: 'design-reference' as const,
+        base64: 'QUJD',
+        mediaType: 'image/png' as const,
+      },
+      {
+        kind: 'existing-page' as const,
+        base64: 'REVG',
+        mediaType: 'image/jpeg' as const,
+      },
+    ];
+
+    expect(
+      buildPrototypeVisualSpecification({ ...base, images }).designReference.images,
+    ).toEqual(images);
   });
 
   it('records what the budget left out so the gap is visible downstream', () => {
@@ -83,6 +125,7 @@ const uiLab = {
   screenInventory: [{ route: '/timecards', purpose: 'Approve timecards' }],
   colorTokens: 'primary.main: #123456',
   navItems: [{ label: 'Home', route: '/' }],
+  images: [],
   model: { modelId: 'anthropic.claude', maxTokens: 16_000, timeoutMs: 600_000 },
   usage: { feature: 'ui-lab', project: 'Apex' },
 };
@@ -136,14 +179,24 @@ describe('buildUiLabVisualSpecification', () => {
   it('carries the reference screenshot UI Lab attaches in process', () => {
     const spec = buildUiLabVisualSpecification({
       ...uiLab,
-      screenshotBase64: 'QUJD',
-      screenshotMediaType: 'image/png',
+      images: [
+        {
+          kind: 'design-reference',
+          base64: 'QUJD',
+          mediaType: 'image/png',
+        },
+      ],
     });
 
     expect(spec.designReference).toEqual({
       navItems: uiLab.navItems,
-      screenshotBase64: 'QUJD',
-      screenshotMediaType: 'image/png',
+      images: [
+        {
+          kind: 'design-reference',
+          base64: 'QUJD',
+          mediaType: 'image/png',
+        },
+      ],
     });
   });
 

@@ -12,6 +12,7 @@ import {
   type UiLabDesignSystemName,
   type UiLabVisualSpecification,
   type VisualDesignReference,
+  type VisualImageBlock,
   type VisualModelSettings,
   type VisualNavItem,
   type VisualUsageAttribution,
@@ -20,42 +21,11 @@ import type { DesignSourceFile } from '../designContext/repoDesignContextReader'
 
 export const PROTOTYPE_OUTPUT_PATH = 'prototype.html';
 
-/**
- * The Figma screenshot both in-process visual paths attach as a vision input.
- * Optional because `getFigmaReference` returns none when the asset is
- * missing, and both paths then send text only.
- */
-export type VisualReferenceScreenshot = Readonly<{
-  screenshotBase64?: string;
-  screenshotMediaType?: string;
-  screenshotWidth?: number;
-  screenshotHeight?: number;
-}>;
-
-/**
- * Kept off the object entirely when there is no screenshot, so a
- * reference-less specification is byte-identical to the one built before
- * images travelled.
- */
 function buildDesignReference(
   navItems: ReadonlyArray<VisualNavItem>,
-  screenshot: VisualReferenceScreenshot,
+  images: ReadonlyArray<VisualImageBlock>,
 ): VisualDesignReference {
-  if (!screenshot.screenshotBase64) return { navItems };
-
-  return {
-    navItems,
-    screenshotBase64: screenshot.screenshotBase64,
-    ...(screenshot.screenshotMediaType != null
-      ? { screenshotMediaType: screenshot.screenshotMediaType }
-      : {}),
-    ...(screenshot.screenshotWidth != null
-      ? { screenshotWidth: screenshot.screenshotWidth }
-      : {}),
-    ...(screenshot.screenshotHeight != null
-      ? { screenshotHeight: screenshot.screenshotHeight }
-      : {}),
-  };
+  return { navItems, images };
 }
 
 export type BuildPrototypeSpecificationInput = Readonly<{
@@ -68,12 +38,13 @@ export type BuildPrototypeSpecificationInput = Readonly<{
   omittedSourcePaths?: ReadonlyArray<string>;
   colorTokens: unknown;
   navItems: ReadonlyArray<VisualNavItem>;
+  /** Exact Bedrock image order: Figma reference, then EXTEND page screenshot. */
+  images: ReadonlyArray<VisualImageBlock>;
   model: VisualModelSettings;
   usage: VisualUsageAttribution;
   screenInventory?: unknown;
   catalog?: unknown;
-}> &
-  VisualReferenceScreenshot;
+}>;
 
 export function buildPrototypeVisualSpecification(
   input: BuildPrototypeSpecificationInput,
@@ -93,7 +64,7 @@ export function buildPrototypeVisualSpecification(
       screenInventory: input.screenInventory,
       colorTokens: input.colorTokens,
     },
-    designReference: buildDesignReference(input.navItems, input),
+    designReference: buildDesignReference(input.navItems, input.images),
     model: input.model,
     usage: input.usage,
     outputPath: PROTOTYPE_OUTPUT_PATH,
@@ -119,10 +90,10 @@ export type BuildUiLabSpecificationInput = Readonly<{
   catalog?: unknown;
   screenInventory?: unknown;
   navItems: ReadonlyArray<VisualNavItem>;
+  images: ReadonlyArray<VisualImageBlock>;
   model: VisualModelSettings;
   usage: VisualUsageAttribution;
-}> &
-  VisualReferenceScreenshot;
+}>;
 
 /**
  * The UI Lab half of the visual contract.
@@ -151,7 +122,7 @@ export function buildUiLabVisualSpecification(
       screenInventory: input.screenInventory,
       colorTokens: input.colorTokens,
     },
-    designReference: buildDesignReference(input.navItems, input),
+    designReference: buildDesignReference(input.navItems, input.images),
     model: input.model,
     usage: input.usage,
     outputPath: UI_LAB_OUTPUT_PATH,

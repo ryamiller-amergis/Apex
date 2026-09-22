@@ -39,20 +39,26 @@ import {
 } from './aiRunV2/v2AdmissionService';
 import {
   buildProjectPrototypeScopingSection,
+  buildPrototypePageScreenshotHint,
   buildPrototypePbiSection,
   buildPrototypePlanSection,
   buildPrototypeScopingSection,
+  buildPrototypeTargetScreenHint,
 } from './designContext/prototypePromptSections';
 import {
   componentIndexPaths,
+  fetchExistingPageContext,
   getDesignSystemCatalog,
   getScreenInventory,
   isComponentSourcePath,
+  type DesignSystemAdoTarget,
 } from './designSystemService';
 import { getMaxviewColorTokens } from './designTokensService';
 import { isFeatureEnabled } from './featureFlagService';
 import { getFigmaReference } from './figmaReferenceService';
+import { getScreenshotByRoute } from './pageScreenshotService';
 import {
+  resolvePrototypeExtendMode,
   resolvePrototypeContext,
   type PrototypeContext,
 } from './prototypeContextService';
@@ -64,9 +70,11 @@ import { getDesignReferences } from './webDesignReferenceService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
 import { resolveUserStoryIWant } from '../../shared/utils/userStory';
 import type { RepoReader } from '../../shared/types/repoReader';
+import type { ScreenInventoryRoute } from '../../shared/types/designSystem';
 import type {
   AiRunV2VisualSpecification,
   PrototypePromptSelection,
+  VisualImageBlock,
   VisualUsageAttribution,
 } from '../../shared/types/aiRunV2VisualSpec';
 import type {
@@ -456,14 +464,17 @@ async function loadPrototypeDesignContext(): Promise<PrototypeDesignContext> {
     screenInventory,
     colorTokens: getMaxviewColorTokens(),
     navItems: figma.navItems,
-    ...(figma.tablePageBase64
-      ? {
-          screenshotBase64: figma.tablePageBase64,
-          screenshotMediaType: 'image/png',
-          screenshotWidth: figma.tablePageWidth,
-          screenshotHeight: figma.tablePageHeight,
-        }
-      : {}),
+    images: figma.tablePageBase64
+      ? [
+          {
+            kind: 'design-reference',
+            base64: figma.tablePageBase64,
+            mediaType: 'image/png',
+            ...(figma.tablePageWidth > 0 ? { width: figma.tablePageWidth } : {}),
+            ...(figma.tablePageHeight > 0 ? { height: figma.tablePageHeight } : {}),
+          },
+        ]
+      : [],
   };
 }
 
@@ -482,6 +493,7 @@ async function loadProjectPrototypeDesignContext(): Promise<PrototypeDesignConte
     screenInventory: undefined,
     colorTokens: undefined,
     navItems: [],
+    images: [],
   };
 }
 
@@ -539,28 +551,213 @@ async function resolvePrototypeRepoSource(
   }
 }
 
+type ResolvedPrototypeExtendInputs = Readonly<{
+  targetRoute: string | undefined;
+  existingPageContext: string;
+  extendMode: boolean;
+  targetScreenHint: string;
+  pageScreenshotHint: string;
+  pageScreenshot?: { base64: string; mediaType: string };
+  images: ReadonlyArray<VisualImageBlock>;
+}>;
+
+function prototypeFeatureText(feature: BacklogFeature): string {
+  return [
+    feature.title,
+    feature.description,
+    ...extractPbiRequirements(feature).flatMap((pbi) => [
+      pbi.title,
+      pbi.description,
+      pbi.acceptanceCriteria,
+    ]),
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(' ');
+}
+
+function prototypeAdoTarget(
+  projectContext: PrototypeContext | null,
+): DesignSystemAdoTarget | undefined {
+  const extend = projectContext?.extend;
+  return extend
+    ? {
+        provider: extend.provider,
+        adoProject: extend.adoProject,
+        repo: extend.repo,
+        branch: extend.branch,
+        inventoryPath: extend.screenInventoryPath ?? undefined,
+      }
+    : undefined;
+}
+
+/**
+ * Resolve every route-specific EXTEND input before admission. A visual worker
+ * has neither database access for screenshots nor repository credentials for
+ * page source, so an immutable specification must carry the finished context.
+ */
+async function resolvePrototypeExtendInputs(params: {
+  feature: BacklogFeature;
+  planFeature?: DesignPlanFeature;
+  projectContext: PrototypeContext | null;
+}): Promise<ResolvedPrototypeExtendInputs> {
+  const targetRoute = resolvePrototypeTargetRoute(
+    params.feature,
+    params.planFeature,
+  );
+  if (!targetRoute) {
+    return {
+      targetRoute: undefined,
+      existingPageContext: '',
+      extendMode: false,
+      targetScreenHint: '',
+      pageScreenshotHint: '',
+      images: [],
+    };
+  }
+
+  let pageScreenshot:
+    | { base64: string; mediaType: string; width?: number; height?: number }
+    | undefined;
+  try {
+    const screenshot = await getScreenshotByRoute(targetRoute);
+    if (screenshot) {
+      pageScreenshot = {
+        base64: screenshot.imageBase64,
+        mediaType: screenshot.mediaType,
+        ...(screenshot.width != null && screenshot.width > 0
+          ? { width: screenshot.width }
+          : {}),
+        ...(screenshot.height != null && screenshot.height > 0
+          ? { height: screenshot.height }
+          : {}),
+      };
+    }
+  } catch (error) {
+    console.warn(
+      `[designPrototypeService] Page screenshot lookup failed for ${targetRoute}:`,
+      error,
+    );
+  }
+
+  const target = prototypeAdoTarget(params.projectContext);
+  let existingPageContext = '';
+  try {
+    existingPageContext = await fetchExistingPageContext(
+      targetRoute,
+      prototypeFeatureText(params.feature),
+      target,
+    );
+  } catch (error) {
+    console.warn(
+      `[designPrototypeService] Existing page context lookup failed for ${targetRoute}:`,
+      error,
+    );
+  }
+
+  let screenInventory: ScreenInventoryRoute[] = [];
+  try {
+    if (target?.inventoryPath) {
+      screenInventory = await getScreenInventory(target);
+    } else if (!params.projectContext) {
+      screenInventory = await getScreenInventory();
+    }
+  } catch (error) {
+    console.warn(
+      `[designPrototypeService] Screen inventory lookup failed for ${targetRoute}:`,
+      error,
+    );
+  }
+
+  const { extendMode, attachScreenshot } = resolvePrototypeExtendMode({
+    targetRoute,
+    existingPageContext,
+    pageScreenshot,
+  });
+  const targetScreenHint = buildPrototypeTargetScreenHint({
+    extendMode,
+    targetRoute,
+    screenInventory,
+  });
+  const pageScreenshotHint = buildPrototypePageScreenshotHint({
+    extendMode,
+    hasPageScreenshot: Boolean(pageScreenshot),
+  });
+  const images: VisualImageBlock[] =
+    attachScreenshot && pageScreenshot
+      ? [
+          {
+            kind: 'existing-page',
+            base64: pageScreenshot.base64,
+            mediaType:
+              pageScreenshot.mediaType === 'image/jpeg'
+                ? 'image/jpeg'
+                : 'image/png',
+            ...(pageScreenshot.width !== undefined
+              ? { width: pageScreenshot.width }
+              : {}),
+            ...(pageScreenshot.height !== undefined
+              ? { height: pageScreenshot.height }
+              : {}),
+          },
+        ]
+      : [];
+
+  return {
+    targetRoute,
+    existingPageContext,
+    extendMode,
+    targetScreenHint,
+    pageScreenshotHint,
+    ...(pageScreenshot
+      ? {
+          pageScreenshot: {
+            base64: pageScreenshot.base64,
+            mediaType: pageScreenshot.mediaType,
+          },
+        }
+      : {}),
+    images,
+  };
+}
+
 function buildPrototypePromptInputs(
   feature: BacklogFeature,
   planFeature: DesignPlanFeature | undefined,
   projectContext: PrototypeContext | null,
+  extend: ResolvedPrototypeExtendInputs,
 ): Record<string, unknown> {
   return {
     featureName: feature.title,
     featureDescription: feature.description ?? '',
-    // EXTEND features never reach here — they stay on the in-process path.
     planSection: buildPrototypePlanSection({
       plan: planFeatureToInput(planFeature),
-      extendMode: false,
+      extendMode: extend.extendMode,
+      targetRoute: extend.targetRoute,
     }),
     pbiSection: buildPrototypePbiSection(extractPbiRequirements(feature)),
-    // The two prompts scope the model differently: one names the MaxView
-    // sidebar, the other the design system the project ships.
     scopingSection: projectContext
       ? buildProjectPrototypeScopingSection({
-          extendMode: false,
+          extendMode: extend.extendMode,
           featureName: feature.title,
+          targetRoute: extend.targetRoute,
+          pageScreenshot: extend.pageScreenshot,
+          existingPageContext: extend.existingPageContext,
+          targetScreenHint: extend.targetScreenHint,
+          pageScreenshotHint: extend.pageScreenshotHint,
         })
-      : buildPrototypeScopingSection({ extendMode: false }),
+      : buildPrototypeScopingSection({
+          extendMode: extend.extendMode,
+          targetRoute: extend.targetRoute,
+          pageScreenshot: extend.pageScreenshot,
+          existingPageContext: extend.existingPageContext,
+          targetScreenHint: extend.targetScreenHint,
+          pageScreenshotHint: extend.pageScreenshotHint,
+        }),
+    extendMode: extend.extendMode,
+    targetRoute: extend.targetRoute ?? null,
+    existingPageContext: extend.existingPageContext,
+    targetScreenHint: extend.targetScreenHint,
+    pageScreenshotHint: extend.pageScreenshotHint,
   };
 }
 
@@ -641,12 +838,13 @@ async function resolvePrototypePromptSelection(params: {
   projectContext: PrototypeContext | null;
   feature: BacklogFeature;
   webReferencesEnabled: boolean;
+  extendMode: boolean;
 }): Promise<PrototypePromptSelection> {
   const { projectContext } = params;
   if (!projectContext) return { branch: 'maxview' };
 
   const webReferences = await resolvePrototypeWebReferences({
-    enabled: params.webReferencesEnabled,
+    enabled: params.webReferencesEnabled && !params.extendMode,
     feature: params.feature,
     appName: projectContext.appName,
   });
@@ -655,8 +853,7 @@ async function resolvePrototypePromptSelection(params: {
     branch: 'project-design-system',
     appName: projectContext.appName,
     designSystemMarkdown: projectContext.designSystemMarkdown,
-    // EXTEND features returned above, so every admitted run is a new page.
-    extendMode: false,
+    extendMode: params.extendMode,
     ...(webReferences !== undefined ? { webReferences } : {}),
   };
 }
@@ -740,14 +937,6 @@ async function admitPendingPrototypesToV2(params: {
         return;
       }
 
-      // EXTEND mode needs the existing page's source, which only the
-      // in-process path fetches; the specification has no EXTEND scoping
-      // section to carry yet.
-      if (resolvePrototypeTargetRoute(feature, planFeature)) {
-        fallBackInProcess('it extends an existing page');
-        return;
-      }
-
       const usage: VisualUsageAttribution = {
         feature: 'design-prototype',
         project: params.project,
@@ -755,16 +944,28 @@ async function admitPendingPrototypesToV2(params: {
       };
 
       try {
+        const extend = await resolvePrototypeExtendInputs({
+          feature,
+          planFeature,
+          projectContext,
+        });
         const prototypePrompt = await resolvePrototypePromptSelection({
           projectContext,
           feature,
           webReferencesEnabled: params.webReferencesEnabled,
+          extendMode: extend.extendMode,
         });
         const specification: AiRunV2VisualSpecification = await assembler.assemble({
           prototypeId,
           prototypePrompt,
-          promptInputs: buildPrototypePromptInputs(feature, planFeature, projectContext),
+          promptInputs: buildPrototypePromptInputs(
+            feature,
+            planFeature,
+            projectContext,
+            extend,
+          ),
           sourcePaths: source?.sourcePaths ?? [],
+          images: extend.images,
           model,
           usage,
         });
@@ -1002,7 +1203,6 @@ async function generateSinglePrototype(
     let pageScreenshot: { base64: string; mediaType: string } | undefined;
     if (targetRoute) {
       try {
-        const { getScreenshotByRoute } = await import('./pageScreenshotService');
         const ss = await getScreenshotByRoute(targetRoute);
         if (ss) pageScreenshot = { base64: ss.imageBase64, mediaType: ss.mediaType };
       } catch (err) {
@@ -1204,7 +1404,6 @@ export async function regeneratePrototype(
     let regenScreenshot: { base64: string; mediaType: string } | undefined;
     if (targetRoute) {
       try {
-        const { getScreenshotByRoute } = await import('./pageScreenshotService');
         const ss = await getScreenshotByRoute(targetRoute);
         if (ss) regenScreenshot = { base64: ss.imageBase64, mediaType: ss.mediaType };
       } catch (err) {

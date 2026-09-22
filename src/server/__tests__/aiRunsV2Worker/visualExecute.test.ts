@@ -7,9 +7,22 @@ const spec = {
   subjectId: 'prototype-1',
   subjectKind: 'design-prototype' as const,
   prototypePrompt: { branch: 'maxview' as const },
-  promptInputs: { featureName: 'Standup summary' },
+  promptInputs: {
+    featureName: 'Standup summary',
+    featureDescription: '',
+    planSection: '',
+    pbiSection: '### PBI 1: Show the summary',
+    scopingSection: 'Only render the described feature.',
+    extendMode: false,
+    targetRoute: null,
+    existingPageContext: '',
+    targetScreenHint: '',
+    pageScreenshotHint: '',
+    sourceFiles: [],
+    omittedSourcePaths: [],
+  },
   designSystem: {},
-  designReference: { navItems: [] },
+  designReference: { navItems: [], images: [] },
   model: { modelId: 'anthropic.claude', maxTokens: 8000, timeoutMs: 600_000 },
   usage: { feature: 'design-prototype' },
   outputPath: 'prototype.html',
@@ -89,10 +102,15 @@ describe('visual execute', () => {
         ...spec,
         designReference: {
           navItems: [],
-          screenshotBase64: 'QUJD',
-          screenshotMediaType: 'image/png',
-          screenshotWidth: 1024,
-          screenshotHeight: 810,
+          images: [
+            {
+              kind: 'design-reference',
+              base64: 'QUJD',
+              mediaType: 'image/png',
+              width: 1024,
+              height: 810,
+            },
+          ],
         },
       } as never,
       command: {} as never,
@@ -100,30 +118,9 @@ describe('visual execute', () => {
       signal: new AbortController().signal,
     });
 
-    expect(invokeModel.mock.calls[0][2]).toEqual({
-      base64: 'QUJD',
-      mediaType: 'image/png',
-    });
-  });
-
-  it('defaults the media type to png, matching the in-process Figma reference', async () => {
-    const invokeModel = jest.fn().mockResolvedValue('<html/>');
-    const execute = createVisualExecute({ invokeModel });
-
-    await execute({
-      specification: {
-        ...spec,
-        designReference: { navItems: [], screenshotBase64: 'QUJD' },
-      } as never,
-      command: {} as never,
-      checkpoints: checkpoints().port as never,
-      signal: new AbortController().signal,
-    });
-
-    expect(invokeModel.mock.calls[0][2]).toEqual({
-      base64: 'QUJD',
-      mediaType: 'image/png',
-    });
+    expect(invokeModel.mock.calls[0][2]).toEqual([
+      { base64: 'QUJD', mediaType: 'image/png' },
+    ]);
   });
 
   it('passes no image when the specification carries no screenshot', async () => {
@@ -137,7 +134,7 @@ describe('visual execute', () => {
       signal: new AbortController().signal,
     });
 
-    expect(invokeModel.mock.calls[0][2]).toBeUndefined();
+    expect(invokeModel.mock.calls[0][2]).toEqual([]);
   });
 
   /** UI Lab attaches the same Figma reference in process, so it travels too. */
@@ -150,18 +147,73 @@ describe('visual execute', () => {
         ...spec,
         subjectKind: 'ui-lab-screen',
         outputPath: 'design.html',
-        promptInputs: { userPrompt: 'A timecard approval queue' },
-        designReference: { navItems: [], screenshotBase64: 'QUJD' },
+        promptInputs: {
+          userPrompt: 'A timecard approval queue',
+          targetRoute: null,
+          designSystemName: 'APEX',
+          skillMarkdown: '# UI Lab',
+          componentIndex: '- AppHeader',
+          existingPageContext: '',
+        },
+        designReference: {
+          navItems: [],
+          images: [
+            {
+              kind: 'design-reference',
+              base64: 'QUJD',
+              mediaType: 'image/png',
+            },
+          ],
+        },
       } as never,
       command: {} as never,
       checkpoints: checkpoints().port as never,
       signal: new AbortController().signal,
     });
 
-    expect(invokeModel.mock.calls[0][2]).toEqual({
-      base64: 'QUJD',
-      mediaType: 'image/png',
+    expect(invokeModel.mock.calls[0][2]).toEqual([
+      { base64: 'QUJD', mediaType: 'image/png' },
+    ]);
+  });
+
+  it('hands EXTEND images to the model in their immutable order', async () => {
+    const invokeModel = jest.fn().mockResolvedValue('<html/>');
+    const execute = createVisualExecute({ invokeModel });
+
+    await execute({
+      specification: {
+        ...spec,
+        promptInputs: {
+          ...spec.promptInputs,
+          extendMode: true,
+          targetRoute: '/timecards',
+          existingPageContext: 'export const Timecards = () => null;',
+        },
+        designReference: {
+          navItems: [],
+          images: [
+            {
+              kind: 'design-reference',
+              base64: 'QUJD',
+              mediaType: 'image/png',
+            },
+            {
+              kind: 'existing-page',
+              base64: 'REVG',
+              mediaType: 'image/jpeg',
+            },
+          ],
+        },
+      } as never,
+      command: {} as never,
+      checkpoints: checkpoints().port as never,
+      signal: new AbortController().signal,
     });
+
+    expect(invokeModel.mock.calls[0][2]).toEqual([
+      { base64: 'QUJD', mediaType: 'image/png' },
+      { base64: 'REVG', mediaType: 'image/jpeg' },
+    ]);
   });
 
   it('refuses a specification that does not validate', async () => {
@@ -217,7 +269,14 @@ describe('visual execute', () => {
         ...spec,
         subjectKind: 'ui-lab-screen',
         outputPath: 'design.html',
-        promptInputs: { userPrompt: 'A timecard approval queue' },
+        promptInputs: {
+          userPrompt: 'A timecard approval queue',
+          targetRoute: null,
+          designSystemName: 'APEX',
+          skillMarkdown: '# UI Lab',
+          componentIndex: '- AppHeader',
+          existingPageContext: '',
+        },
       } as never,
       command: {} as never,
       checkpoints: checkpoints().port as never,

@@ -10,6 +10,7 @@ import type { RepoReader } from '../../../shared/types/repoReader';
 import type {
   DesignPrototypeVisualSpecification,
   PrototypePromptSelection,
+  VisualImageBlock,
   VisualModelSettings,
   VisualNavItem,
   VisualUsageAttribution,
@@ -21,7 +22,6 @@ import {
 import { createRepoDesignContextReader } from '../designContext/repoDesignContextReader';
 import {
   buildPrototypeVisualSpecification,
-  type VisualReferenceScreenshot,
 } from './visualSpecificationBuilder';
 
 /**
@@ -34,8 +34,9 @@ export type PrototypeDesignContext = Readonly<{
   screenInventory: unknown;
   colorTokens: unknown;
   navItems: ReadonlyArray<VisualNavItem>;
-}> &
-  VisualReferenceScreenshot;
+  /** Shared reference blocks, before any per-route EXTEND screenshot. */
+  images: ReadonlyArray<VisualImageBlock>;
+}>;
 
 export type AssemblePrototypeSpecificationInput = Readonly<{
   prototypeId: string;
@@ -46,6 +47,8 @@ export type AssemblePrototypeSpecificationInput = Readonly<{
   prototypePrompt: PrototypePromptSelection;
   promptInputs: Record<string, unknown>;
   sourcePaths: ReadonlyArray<string>;
+  /** Per-feature blocks appended after the shared design reference. */
+  images: ReadonlyArray<VisualImageBlock>;
   model: VisualModelSettings;
   usage: VisualUsageAttribution;
 }>;
@@ -89,10 +92,7 @@ export function createPrototypeSpecificationAssembler(deps: {
         screenInventory: context.screenInventory,
         colorTokens: context.colorTokens,
         navItems: context.navItems,
-        screenshotBase64: context.screenshotBase64,
-        screenshotMediaType: context.screenshotMediaType,
-        screenshotWidth: context.screenshotWidth,
-        screenshotHeight: context.screenshotHeight,
+        images: [...context.images, ...input.images],
         model: input.model,
         usage: input.usage,
       });

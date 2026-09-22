@@ -9,9 +9,25 @@ const spec: DesignPrototypeVisualSpecification = {
   subjectId: 'prototype-1',
   subjectKind: 'design-prototype',
   prototypePrompt: { branch: 'maxview' },
-  promptInputs: { featureTitle: 'Standup summary' },
+  promptInputs: {
+    featureName: 'Standup summary',
+    featureDescription: '',
+    planSection: '',
+    pbiSection: '### PBI 1: Show the summary',
+    scopingSection: 'Only render the described feature.',
+    extendMode: false,
+    targetRoute: null,
+    existingPageContext: '',
+    targetScreenHint: '',
+    pageScreenshotHint: '',
+    sourceFiles: [],
+    omittedSourcePaths: [],
+  },
   designSystem: { catalog: { routes: [] }, colorTokens: {} },
-  designReference: { navItems: [{ label: 'Home', route: '/' }] },
+  designReference: {
+    navItems: [{ label: 'Home', route: '/' }],
+    images: [],
+  },
   model: { modelId: 'anthropic.claude', maxTokens: 8000, timeoutMs: 600_000 },
   usage: { feature: 'design-prototype', project: 'Apex' },
   outputPath: 'prototype.html',
@@ -110,6 +126,106 @@ describe('visual execution specification', () => {
     ).toBe(false);
   });
 
+  it('requires an explicit ordered image list rather than defaulting a missing one', () => {
+    expect(
+      isAiRunV2VisualSpecification({
+        ...spec,
+        designReference: { navItems: spec.designReference.navItems },
+      }),
+    ).toBe(false);
+  });
+
+  it('refuses malformed image blocks and image blocks in the wrong order', () => {
+    const figma = {
+      kind: 'design-reference',
+      base64: 'QUJD',
+      mediaType: 'image/png',
+    };
+    const page = {
+      kind: 'existing-page',
+      base64: 'REVG',
+      mediaType: 'image/jpeg',
+    };
+
+    expect(
+      isAiRunV2VisualSpecification({
+        ...spec,
+        designReference: { ...spec.designReference, images: [{ ...figma, base64: '' }] },
+      }),
+    ).toBe(false);
+    expect(
+      isAiRunV2VisualSpecification({
+        ...spec,
+        designReference: { ...spec.designReference, images: [{ ...figma, mediaType: 'text/plain' }] },
+      }),
+    ).toBe(false);
+    expect(
+      isAiRunV2VisualSpecification({
+        ...spec,
+        promptInputs: {
+          ...spec.promptInputs,
+          extendMode: true,
+          targetRoute: '/timecards',
+        },
+        designReference: { ...spec.designReference, images: [page, figma] },
+      }),
+    ).toBe(false);
+  });
+
+  it('requires every resolved prototype prompt input', () => {
+    for (const field of [
+      'featureName',
+      'featureDescription',
+      'planSection',
+      'pbiSection',
+      'scopingSection',
+      'extendMode',
+      'targetRoute',
+      'existingPageContext',
+      'targetScreenHint',
+      'pageScreenshotHint',
+      'sourceFiles',
+      'omittedSourcePaths',
+    ]) {
+      const promptInputs = { ...spec.promptInputs } as Record<string, unknown>;
+      delete promptInputs[field];
+      expect(
+        isAiRunV2VisualSpecification({ ...spec, promptInputs }),
+      ).toBe(false);
+    }
+  });
+
+  it('requires EXTEND context to name a route and carry source or a page image', () => {
+    const extend = {
+      ...spec,
+      promptInputs: {
+        ...spec.promptInputs,
+        extendMode: true,
+        targetRoute: '/timecards',
+        existingPageContext: 'export const Timecards = () => null;',
+      },
+    };
+    expect(isAiRunV2VisualSpecification(extend)).toBe(true);
+    expect(
+      isAiRunV2VisualSpecification({
+        ...extend,
+        promptInputs: {
+          ...extend.promptInputs,
+          targetRoute: null,
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isAiRunV2VisualSpecification({
+        ...extend,
+        promptInputs: {
+          ...extend.promptInputs,
+          existingPageContext: '',
+        },
+      }),
+    ).toBe(false);
+  });
+
   it('requires an output path so the owning service can find the artifact', () => {
     expect(isAiRunV2VisualSpecification({ ...spec, outputPath: '' })).toBe(
       false,
@@ -187,6 +303,14 @@ describe('the prototype prompt branch', () => {
       isAiRunV2VisualSpecification({
         ...base,
         subjectKind: 'ui-lab-screen',
+        promptInputs: {
+          userPrompt: 'A timecard approval queue',
+          targetRoute: null,
+          designSystemName: 'APEX',
+          skillMarkdown: '# UI Lab',
+          componentIndex: '- AppHeader',
+          existingPageContext: '',
+        },
         outputPath: 'design.html',
       }),
     ).toBe(true);

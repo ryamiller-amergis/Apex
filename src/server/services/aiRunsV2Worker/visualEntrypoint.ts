@@ -32,7 +32,7 @@ export const USAGE_FILE_NAME = VISUAL_USAGE_FILE_NAME;
 export type InvokeVisualModel = (
   prompt: string,
   model: VisualModelSettings,
-  image?: VisualReferenceImage,
+  images: ReadonlyArray<VisualReferenceImage>,
 ) => Promise<string | VisualModelResult>;
 
 /**
@@ -44,16 +44,13 @@ export type InvokeVisualModel = (
  * The media type defaults to png because that is what `bedrockService` and
  * `uiLabBedrockService` hardcode for the Figma reference.
  */
-function visualReferenceImage(
+function visualReferenceImages(
   specification: AiRunV2VisualSpecification,
-): VisualReferenceImage | undefined {
-  const { screenshotBase64, screenshotMediaType } = specification.designReference;
-  if (!screenshotBase64) return undefined;
-
-  return {
-    base64: screenshotBase64,
-    mediaType: screenshotMediaType ?? 'image/png',
-  };
+): ReadonlyArray<VisualReferenceImage> {
+  return specification.designReference.images.map((image) => ({
+    base64: image.base64,
+    mediaType: image.mediaType,
+  }));
 }
 
 /**
@@ -127,7 +124,7 @@ export function createVisualExecute(deps: {
     const result = await deps.invokeModel(
       buildVisualPrompt(specification),
       specification.model,
-      visualReferenceImage(specification),
+      visualReferenceImages(specification),
     );
     const html = typeof result === 'string' ? result : result.html;
     if (!html.trim()) {
@@ -170,8 +167,8 @@ export function createVisualExecute(deps: {
 }
 
 const executeVisualWorkload: ExecuteWorkload = createVisualExecute({
-  invokeModel: (prompt, model, image) =>
-    createBedrockVisualClient().invokeModel(prompt, model, image),
+  invokeModel: (prompt, model, images) =>
+    createBedrockVisualClient().invokeModel(prompt, model, images),
 });
 
 export async function startVisualWorker(): Promise<void> {

@@ -70,7 +70,7 @@ describe('bedrockVisualClient', () => {
     await client.invokeModel(
       'a prompt',
       MODEL,
-      { base64: 'QUJD', mediaType: 'image/png' },
+      [{ base64: 'QUJD', mediaType: 'image/png' }],
     );
 
     const payload = JSON.parse(send.mock.calls[0][0].input.body as string);
@@ -92,11 +92,40 @@ describe('bedrockVisualClient', () => {
     await client.invokeModel(
       'a prompt',
       MODEL,
-      { base64: 'QUJD', mediaType: 'image/jpeg' },
+      [{ base64: 'QUJD', mediaType: 'image/jpeg' }],
     );
 
     const payload = JSON.parse(send.mock.calls[0][0].input.body as string);
     expect(payload.messages[0].content[0].source.media_type).toBe('image/jpeg');
+  });
+
+  it('preserves every image block in specification order before the prompt', async () => {
+    const send = jest
+      .fn()
+      .mockResolvedValue(response({ content: [{ type: 'text', text: '<html/>' }] }));
+    const client = createBedrockVisualClient({ client: { send } as never });
+
+    await client.invokeModel(
+      'an EXTEND prompt',
+      MODEL,
+      [
+        { base64: 'QUJD', mediaType: 'image/png' },
+        { base64: 'REVG', mediaType: 'image/jpeg' },
+      ],
+    );
+
+    const payload = JSON.parse(send.mock.calls[0][0].input.body as string);
+    expect(payload.messages[0].content).toEqual([
+      {
+        type: 'image',
+        source: { type: 'base64', media_type: 'image/png', data: 'QUJD' },
+      },
+      {
+        type: 'image',
+        source: { type: 'base64', media_type: 'image/jpeg', data: 'REVG' },
+      },
+      { type: 'text', text: 'an EXTEND prompt' },
+    ]);
   });
 
   /**
@@ -124,7 +153,7 @@ describe('bedrockVisualClient', () => {
     await client.invokeModel(
       'a prompt',
       MODEL,
-      { base64: '', mediaType: 'image/png' },
+      [{ base64: '', mediaType: 'image/png' }],
     );
 
     const payload = JSON.parse(send.mock.calls[0][0].input.body as string);

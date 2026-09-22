@@ -37,7 +37,7 @@ export type BedrockVisualClient = {
   invokeModel(
     prompt: string,
     model: VisualModelSettings,
-    image?: VisualReferenceImage,
+    images?: ReadonlyArray<VisualReferenceImage>,
   ): Promise<VisualModelResult>;
 };
 
@@ -75,19 +75,20 @@ type SendableClient = Pick<BedrockRuntimeClient, 'send'>;
  */
 function buildContent(
   prompt: string,
-  image?: VisualReferenceImage,
+  images: ReadonlyArray<VisualReferenceImage> = [],
 ): string | unknown[] {
-  if (!image?.base64) return prompt;
+  const present = images.filter((image) => image.base64);
+  if (present.length === 0) return prompt;
 
   return [
-    {
+    ...present.map((image) => ({
       type: 'image',
       source: {
         type: 'base64',
         media_type: image.mediaType,
         data: image.base64,
       },
-    },
+    })),
     { type: 'text', text: prompt },
   ];
 }
@@ -105,7 +106,7 @@ export function createBedrockVisualClient(options?: {
   const now = options?.now ?? Date.now;
 
   return {
-    async invokeModel(prompt, model, image) {
+    async invokeModel(prompt, model, images) {
       const command = new InvokeModelCommand({
         modelId: model.modelId,
         contentType: 'application/json',
@@ -113,7 +114,7 @@ export function createBedrockVisualClient(options?: {
         body: JSON.stringify({
           anthropic_version: 'bedrock-2023-05-31',
           max_tokens: model.maxTokens,
-          messages: [{ role: 'user', content: buildContent(prompt, image) }],
+          messages: [{ role: 'user', content: buildContent(prompt, images) }],
           // Only where the specification carries one: UI Lab's in-process
           // payload omits the key when the project set no temperature, and
           // the model's own default is not the worker's to choose.

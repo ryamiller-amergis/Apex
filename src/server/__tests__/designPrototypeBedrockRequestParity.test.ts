@@ -81,11 +81,15 @@ jest.mock('../services/designSystemService', () => ({
   getScreenInventory: jest.fn(async () => SCREEN_INVENTORY),
   componentIndexPaths: jest.fn(() => ['/src/client/components']),
   isComponentSourcePath: jest.fn(() => true),
-  fetchExistingPageContext: jest.fn(async () => ''),
+  fetchExistingPageContext: jest.fn(async () => EXISTING_PAGE_CONTEXT),
 }));
 
 jest.mock('../services/designTokensService', () => ({
   getMaxviewColorTokens: jest.fn(() => COLOR_TOKENS),
+}));
+
+jest.mock('../services/pageScreenshotService', () => ({
+  getScreenshotByRoute: jest.fn(async () => PAGE_SCREENSHOT),
 }));
 
 jest.mock('../services/figmaReferenceService', () => ({
@@ -172,10 +176,40 @@ const FEATURE = {
   ],
 };
 
+const EXTEND_FEATURE = {
+  ...FEATURE,
+  title: 'Timecard approval column',
+  description: 'Add an approval action to each existing timecard.',
+  route: '/timecards',
+};
+
+const EXISTING_PAGE_CONTEXT =
+  'export function Timecards() { return <TimecardGrid />; }';
+
+const PAGE_SCREENSHOT = {
+  id: 'screenshot-1',
+  route: '/timecards',
+  displayUrl: 'https://maxview.example/timecards',
+  imageBase64: 'REVG',
+  mediaType: 'image/jpeg',
+  width: 1280,
+  height: 720,
+  uploadedBy: 'user-1',
+  createdAt: '2026-09-01T00:00:00.000Z',
+  updatedAt: '2026-09-01T00:00:00.000Z',
+};
+
 const PROJECT_DESIGN_SYSTEM: PrototypeContext = {
   appName: 'Apex',
   designSystemMarkdown: '## Apex tokens\n\n:root { --apex-primary: #4f46e5; }',
   isProjectSpecific: true,
+  extend: {
+    provider: 'ado',
+    adoProject: 'Apex',
+    repo: 'AI-Pilot',
+    branch: 'main',
+    screenInventoryPath: '.cursor/skills/design-system/screens.md',
+  },
 };
 
 const DISPATCHED: AdmitV2RunResult = {
@@ -425,13 +459,13 @@ const mockResolvePrototypeContext = (
   }
 ).resolvePrototypeContext;
 
-function arrangePrd(): void {
+function arrangePrd(feature: typeof FEATURE | typeof EXTEND_FEATURE = FEATURE): void {
   mockDb.query.prds.findFirst.mockResolvedValue({
     id: 'prd-1',
     project: 'Apex',
     authorId: 'user-1',
     skillSettingsId: null,
-    backlogJson: { features: [FEATURE] },
+    backlogJson: { features: [feature] },
   });
   mockDb.query.designPlans.findFirst.mockResolvedValue(undefined);
   mockDb.query.designPrototypes.findFirst.mockResolvedValue(undefined);
@@ -454,8 +488,10 @@ async function waitForCapturedRequest(label: string): Promise<void> {
 }
 
 /** The request the proven in-process path sends for the fixture. */
-async function captureInProcessRequest(): Promise<BedrockRequest> {
-  arrangePrd();
+async function captureInProcessRequest(
+  feature: typeof FEATURE | typeof EXTEND_FEATURE = FEATURE,
+): Promise<BedrockRequest> {
+  arrangePrd(feature);
   await generatePrototypesForPrd('prd-1', { isFeatureEnabled: async () => false });
   await waitForCapturedRequest('in-process');
   return takeCapturedRequest('in-process');
@@ -466,8 +502,10 @@ async function captureInProcessRequest(): Promise<BedrockRequest> {
  * and admits the specification, then the worker executes it through the same
  * Bedrock client binding `visualEntrypoint` uses in the worker image.
  */
-async function captureV2Request(): Promise<BedrockRequest> {
-  arrangePrd();
+async function captureV2Request(
+  feature: typeof FEATURE | typeof EXTEND_FEATURE = FEATURE,
+): Promise<BedrockRequest> {
+  arrangePrd(feature);
 
   let admitted: AiRunV2VisualSpecification | undefined;
   // Admission falls back in process rather than stranding a row, and swallows
@@ -568,6 +606,22 @@ describe('prototype Bedrock request parity between the in-process path and the V
 
     const inProcess = await captureInProcessRequest();
     const v2 = await captureV2Request();
+
+    expect(compareBedrockRequests(inProcess, v2)).toEqual([]);
+  });
+
+  it('sends the same EXTEND request for the bundled MaxView design system', async () => {
+    const inProcess = await captureInProcessRequest(EXTEND_FEATURE);
+    const v2 = await captureV2Request(EXTEND_FEATURE);
+
+    expect(compareBedrockRequests(inProcess, v2)).toEqual([]);
+  });
+
+  it('sends the same EXTEND request for a project design system', async () => {
+    mockResolvePrototypeContext.mockResolvedValue(PROJECT_DESIGN_SYSTEM);
+
+    const inProcess = await captureInProcessRequest(EXTEND_FEATURE);
+    const v2 = await captureV2Request(EXTEND_FEATURE);
 
     expect(compareBedrockRequests(inProcess, v2)).toEqual([]);
   });

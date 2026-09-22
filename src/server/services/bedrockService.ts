@@ -14,9 +14,11 @@ import type { VisualModelSettings } from '../../shared/types/aiRunV2VisualSpec';
 import { resolvePrototypeExtendMode } from './prototypeContextService';
 import {
   buildProjectPrototypeScopingSection,
+  buildPrototypePageScreenshotHint,
   buildPrototypePbiSection,
   buildPrototypePlanSection,
   buildPrototypeScopingSection,
+  buildPrototypeTargetScreenHint,
 } from './designContext/prototypePromptSections';
 
 /** Attribution context passed down from callers to the invokeModel wrapper. */
@@ -3702,19 +3704,15 @@ export async function generateDesignPrototypeHtml(
     pageScreenshot: input.pageScreenshot,
   });
 
-  // EXTEND mode: surface the target screen's personas/states from the inventory (when known).
-  const targetScreen = input.targetRoute
-    ? screenInventory.find(s => inventoryRouteMatches(s.route, input.targetRoute!))
-    : undefined;
-  const targetScreenHint = extendMode && (targetScreen?.userTypes?.length || targetScreen?.states)
-    ? `\n\n**Existing page context from inventory:**` +
-      (targetScreen?.userTypes?.length ? `\n- Serves user types: ${targetScreen.userTypes.join(', ')}` : '') +
-      (targetScreen?.states ? `\n- Known UI states: ${targetScreen.states}` : '')
-    : '';
-
-  const pageScreenshotHint = extendMode && input.pageScreenshot
-    ? `\n\n**A screenshot of the ACTUAL existing page is provided as a vision input. It is the AUTHORITATIVE ground truth for the existing page's layout, structure, and control types.** Reproduce the layout you see — the same regions, the same arrangement, and the same entry mechanism (e.g. per-day cards vs. a table/grid). Do NOT substitute a different layout, and do NOT let the feature description or design brief change the existing layout.`
-    : '';
+  const targetScreenHint = buildPrototypeTargetScreenHint({
+    extendMode,
+    targetRoute: input.targetRoute,
+    screenInventory,
+  });
+  const pageScreenshotHint = buildPrototypePageScreenshotHint({
+    extendMode,
+    hasPageScreenshot: Boolean(input.pageScreenshot),
+  });
 
   const scopingSection = buildPrototypeScopingSection({
     extendMode,

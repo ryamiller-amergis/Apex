@@ -25,6 +25,7 @@ const designContext = {
   screenInventory: [],
   colorTokens: 'primary.main: #123456',
   navItems: [{ label: 'Home', route: '/' }],
+  images: [],
 };
 
 const promptInputs = {
@@ -33,6 +34,11 @@ const promptInputs = {
   planSection: '',
   pbiSection: '- PBI-1',
   scopingSection: '',
+  extendMode: false,
+  targetRoute: null,
+  existingPageContext: '',
+  targetScreenHint: '',
+  pageScreenshotHint: '',
 };
 
 describe('prototypeSpecificationAssembler', () => {
@@ -47,6 +53,7 @@ describe('prototypeSpecificationAssembler', () => {
       prototypePrompt: { branch: 'maxview' },
       promptInputs,
       sourcePaths: ['/src/components/Board.tsx'],
+      images: [],
       model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
       usage: { feature: 'design-prototype', project: 'Apex' },
     });
@@ -70,6 +77,7 @@ describe('prototypeSpecificationAssembler', () => {
       prototypePrompt: { branch: 'maxview' },
       promptInputs,
       sourcePaths: ['/a.tsx', '/b.tsx'],
+      images: [],
       model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
       usage: { feature: 'design-prototype' },
     });
@@ -82,10 +90,15 @@ describe('prototypeSpecificationAssembler', () => {
       reader: reader({}),
       loadDesignContext: async () => ({
         ...designContext,
-        screenshotBase64: 'QUJD',
-        screenshotMediaType: 'image/png',
-        screenshotWidth: 1024,
-        screenshotHeight: 810,
+        images: [
+          {
+            kind: 'design-reference' as const,
+            base64: 'QUJD',
+            mediaType: 'image/png' as const,
+            width: 1024,
+            height: 810,
+          },
+        ],
       }),
     });
 
@@ -94,16 +107,22 @@ describe('prototypeSpecificationAssembler', () => {
       prototypePrompt: { branch: 'maxview' },
       promptInputs,
       sourcePaths: [],
+      images: [],
       model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
       usage: { feature: 'design-prototype' },
     });
 
     expect(spec.designReference).toEqual({
       navItems: designContext.navItems,
-      screenshotBase64: 'QUJD',
-      screenshotMediaType: 'image/png',
-      screenshotWidth: 1024,
-      screenshotHeight: 810,
+      images: [
+        {
+          kind: 'design-reference',
+          base64: 'QUJD',
+          mediaType: 'image/png',
+          width: 1024,
+          height: 810,
+        },
+      ],
     });
   });
 
@@ -117,7 +136,13 @@ describe('prototypeSpecificationAssembler', () => {
       reader: reader({ '/a.tsx': 'x'.repeat(80), '/b.tsx': 'y'.repeat(80) }),
       loadDesignContext: async () => ({
         ...designContext,
-        screenshotBase64: 'z'.repeat(5_000),
+        images: [
+          {
+            kind: 'design-reference' as const,
+            base64: 'z'.repeat(5_000),
+            mediaType: 'image/png' as const,
+          },
+        ],
       }),
       budgetBytes: 100,
     });
@@ -127,6 +152,7 @@ describe('prototypeSpecificationAssembler', () => {
       prototypePrompt: { branch: 'maxview' },
       promptInputs,
       sourcePaths: ['/a.tsx', '/b.tsx'],
+      images: [],
       model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
       usage: { feature: 'design-prototype' },
     });
@@ -135,7 +161,7 @@ describe('prototypeSpecificationAssembler', () => {
       { path: '/a.tsx', content: 'x'.repeat(80) },
     ]);
     expect(spec.promptInputs.omittedSourcePaths).toEqual(['/b.tsx']);
-    expect(spec.designReference.screenshotBase64).toHaveLength(5_000);
+    expect(spec.designReference.images[0].base64).toHaveLength(5_000);
   });
 
   it('omits the screenshot fields when there is no reference to send', async () => {
@@ -149,11 +175,15 @@ describe('prototypeSpecificationAssembler', () => {
       prototypePrompt: { branch: 'maxview' },
       promptInputs,
       sourcePaths: [],
+      images: [],
       model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
       usage: { feature: 'design-prototype' },
     });
 
-    expect(spec.designReference).toEqual({ navItems: designContext.navItems });
+    expect(spec.designReference).toEqual({
+      navItems: designContext.navItems,
+      images: [],
+    });
   });
 
   it('still produces a usable specification when no source is requested', async () => {
@@ -167,6 +197,7 @@ describe('prototypeSpecificationAssembler', () => {
       prototypePrompt: { branch: 'maxview' },
       promptInputs,
       sourcePaths: [],
+      images: [],
       model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
       usage: { feature: 'design-prototype' },
     });

@@ -9,6 +9,7 @@
  * the worker reproduces these strings byte-for-byte.
  */
 import type { PbiRequirement } from '../../../shared/types/designPrototype';
+import type { ScreenInventoryRoute } from '../../../shared/types/designSystem';
 
 /** Authoritative design-plan decisions for one feature, as the prompt consumes them. */
 export type PrototypePlanInput = Readonly<{
@@ -22,6 +23,52 @@ export type PrototypePlanInput = Readonly<{
   rationale?: string;
   notes?: string;
 }>;
+
+function normaliseRouteForMatch(route: string): string {
+  let normalised = (route ?? '').trim().split(/[?#]/)[0].toLowerCase();
+  if (normalised.length > 1 && normalised.endsWith('/')) {
+    normalised = normalised.slice(0, -1);
+  }
+  if (normalised && !normalised.startsWith('/')) normalised = `/${normalised}`;
+  return normalised;
+}
+
+function inventoryRouteMatches(inventoryRoute: string, target: string): boolean {
+  const normalisedTarget = normaliseRouteForMatch(target);
+  return inventoryRoute
+    .split(',')
+    .some((route) => normaliseRouteForMatch(route) === normalisedTarget);
+}
+
+export function buildPrototypeTargetScreenHint(input: {
+  extendMode: boolean;
+  targetRoute?: string;
+  screenInventory: ReadonlyArray<ScreenInventoryRoute>;
+}): string {
+  if (!input.extendMode || !input.targetRoute) return '';
+  const targetScreen = input.screenInventory.find((screen) =>
+    inventoryRouteMatches(screen.route, input.targetRoute!),
+  );
+  if (!targetScreen?.userTypes?.length && !targetScreen?.states) return '';
+  return (
+    '\n\n**Existing page context from inventory:**'
+    + (targetScreen.userTypes?.length
+      ? `\n- Serves user types: ${targetScreen.userTypes.join(', ')}`
+      : '')
+    + (targetScreen.states
+      ? `\n- Known UI states: ${targetScreen.states}`
+      : '')
+  );
+}
+
+export function buildPrototypePageScreenshotHint(input: {
+  extendMode: boolean;
+  hasPageScreenshot: boolean;
+}): string {
+  return input.extendMode && input.hasPageScreenshot
+    ? '\n\n**A screenshot of the ACTUAL existing page is provided as a vision input. It is the AUTHORITATIVE ground truth for the existing page\'s layout, structure, and control types.** Reproduce the layout you see — the same regions, the same arrangement, and the same entry mechanism (e.g. per-day cards vs. a table/grid). Do NOT substitute a different layout, and do NOT let the feature description or design brief change the existing layout.'
+    : '';
+}
 
 export function buildPrototypePbiSection(
   pbis: ReadonlyArray<PbiRequirement>,

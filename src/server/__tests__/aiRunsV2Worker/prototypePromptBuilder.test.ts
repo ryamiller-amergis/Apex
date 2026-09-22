@@ -33,7 +33,7 @@ const spec: DesignPrototypeVisualSpecification = {
     ],
     colorTokens: 'primary.main: #123456',
   },
-  designReference: { navItems: [{ label: 'Home', route: '/' }] },
+  designReference: { navItems: [{ label: 'Home', route: '/' }], images: [] },
   model: { modelId: 'anthropic.claude', maxTokens: 32_000, timeoutMs: 720_000 },
   usage: { feature: 'design-prototype' },
   outputPath: 'prototype.html',
