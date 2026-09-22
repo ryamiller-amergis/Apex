@@ -7,6 +7,7 @@ const mockMarkTerminal = jest.fn();
 const mockRecoverStaleDispatchedRuns = jest.fn();
 const mockWorkerReaperAction = jest.fn();
 const mockWithRepoCacheLease = jest.fn();
+const mockIsDocumentHarvestPending = jest.fn().mockResolvedValue(false);
 
 jest.mock('../db/drizzle', () => ({
   db: {
@@ -73,6 +74,10 @@ jest.mock('../services/workerTierTelemetry', () => ({
     reaperAction: (...args: unknown[]) => mockWorkerReaperAction(...args),
     terminalReason: jest.fn(),
   },
+}));
+jest.mock('../services/aiRunV2/finishedAttemptReader', () => ({
+  isDocumentHarvestPendingForRun: (...args: unknown[]) =>
+    mockIsDocumentHarvestPending(...args),
 }));
 
 import {
@@ -1977,6 +1982,36 @@ describe('getThreadRunStateSnapshot', () => {
     expect(mockChatThreadFindFirst).not.toHaveBeenCalled();
   });
 
+  it('keeps a terminal V2 document waiting while its artifact harvest is pending', async () => {
+    mockIsDocumentHarvestPending.mockResolvedValueOnce(true);
+    mockFindMany.mockResolvedValue([{
+      id: 'run-v2-document',
+      threadId: 'thread-1',
+      status: 'completed',
+      ownerInstance: null,
+      createdAt: timestamp(60_000),
+      startedAt: timestamp(60_000),
+      heartbeatAt: timestamp(60_000),
+      progressAt: timestamp(60_000),
+      updatedAt: timestamp(60_000),
+      timeoutAt: null,
+      eventDriven: false,
+      lane: 'background',
+      dispatchMessageId: 'dispatch-v2',
+      transportVersion: 'servicebus-blob-v2',
+    }]);
+
+    await expect(
+      getThreadRunStateSnapshot('thread-1', { now: () => now, config }),
+    ).resolves.toMatchObject({
+      isAlive: false,
+      canFailGeneration: false,
+    });
+    expect(mockIsDocumentHarvestPending).toHaveBeenCalledWith(
+      'run-v2-document',
+    );
+  });
+
   it('does not fall back to feature-flag lookups for event-driven classification', async () => {
     mockFindMany.mockResolvedValue([{
       id: 'run-dispatched',
@@ -2122,6 +2157,25 @@ describe('canThisInstanceFailGeneration', () => {
       updatedAt: timestamp(0),
     });
     await expect(canThisInstanceFailGeneration('thread-1')).resolves.toBe(true);
+  });
+
+  it('does not let a file watcher fail a terminal V2 document before harvest', async () => {
+    mockIsDocumentHarvestPending.mockResolvedValueOnce(true);
+    mockFindFirst.mockResolvedValue({
+      id: 'run-v2-document',
+      status: 'completed',
+      ownerInstance: null,
+      updatedAt: timestamp(0),
+      timeoutAt: null,
+      transportVersion: 'servicebus-blob-v2',
+    });
+
+    await expect(
+      canThisInstanceFailGeneration('thread-1'),
+    ).resolves.toBe(false);
+    expect(mockIsDocumentHarvestPending).toHaveBeenCalledWith(
+      'run-v2-document',
+    );
   });
 
   it('returns true when ownerInstance is null (legacy/reaped)', async () => {

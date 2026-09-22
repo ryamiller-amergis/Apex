@@ -10,6 +10,7 @@ import {
 } from '../../../shared/types/aiRunV2';
 import { applyTerminalRunEffects as defaultTerminalEffects } from '../agentRunTerminalEffects';
 import type { RunAttemptRepository } from '../aiRunV2/runAttemptRepository';
+import { recordV2TerminalUsage as defaultRecordTerminalUsage } from '../aiRunV2/runUsageRecorder';
 import type { Clock, OrchestratorMetrics, QueueConsumer } from './ports';
 import { noopMetrics, systemClock } from './ports';
 
@@ -21,6 +22,7 @@ export type ResultConsumerDeps = Readonly<{
   signal?: AbortSignal;
   maxDeliveryCount?: number;
   applyTerminalRunEffects?: typeof defaultTerminalEffects;
+  recordTerminalUsage?: typeof defaultRecordTerminalUsage;
 }>;
 
 export type ResultConsumer = {
@@ -40,6 +42,8 @@ export function createResultConsumer(deps: ResultConsumerDeps): ResultConsumer {
   const maxDelivery = deps.maxDeliveryCount ?? 5;
   const applyTerminalEffects =
     deps.applyTerminalRunEffects ?? defaultTerminalEffects;
+  const recordTerminalUsage =
+    deps.recordTerminalUsage ?? defaultRecordTerminalUsage;
 
   async function processOnce(): Promise<'processed' | 'idle' | 'poison'> {
     const message = await deps.consumer.receive({ timeoutSeconds: 5 });
@@ -98,6 +102,8 @@ export function createResultConsumer(deps: ResultConsumerDeps): ResultConsumer {
         metrics.increment('orchestrator.result.idempotent');
         return 'processed';
       }
+
+      await recordTerminalUsage(result);
 
       // The attempt transaction wrote the run header but nothing else a V1
       // terminal does. Run the shared effects on the header it returned, then

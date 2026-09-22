@@ -40,6 +40,7 @@ import {
   RepoCacheLeaseLostError,
   withRepoCacheLease,
 } from './repoCacheLeaseService';
+import { isDocumentHarvestPendingForRun } from './aiRunV2/finishedAttemptReader';
 
 const REAP_INTERVAL_MS = 60_000;
 export const RETIRE_REAP_INTERVAL_MS = 5 * 60_000;
@@ -436,6 +437,7 @@ export function isTerminalAgentRunStatus(status: string): boolean {
 }
 
 type ThreadRunSnapshotRow = {
+  id?: string;
   status: string;
   ownerInstance: string | null;
   updatedAt: string;
@@ -448,6 +450,7 @@ type ThreadRunSnapshotRow = {
   eventDriven?: boolean | null;
   lane?: string | null;
   dispatchMessageId?: string | null;
+  transportVersion?: string;
 };
 
 export interface ThreadRunStateSnapshot {
@@ -513,6 +516,22 @@ function canThisInstanceFailLatestRun(
   return Number.isFinite(updatedMs) && nowMs - updatedMs >= orphanGraceMs;
 }
 
+async function hasPendingDocumentHarvest(
+  latest: Pick<
+    ThreadRunSnapshotRow,
+    'id' | 'status' | 'transportVersion'
+  > | null,
+): Promise<boolean> {
+  if (
+    !latest?.id
+    || latest.transportVersion !== 'servicebus-blob-v2'
+    || !isTerminalAgentRunStatus(latest.status)
+  ) {
+    return false;
+  }
+  return isDocumentHarvestPendingForRun(latest.id).catch(() => true);
+}
+
 /**
  * How long a non-owner watcher waits after a terminal agent_runs row before
  * taking over finalization. Gives the owning instance a chance to persist
@@ -534,6 +553,7 @@ export async function getThreadRunStateSnapshot(
     where: eq(agentRuns.threadId, threadId),
     orderBy: [desc(agentRuns.createdAt)],
     columns: {
+      id: true,
       status: true,
       ownerInstance: true,
       updatedAt: true,
@@ -546,6 +566,7 @@ export async function getThreadRunStateSnapshot(
       eventDriven: true,
       lane: true,
       dispatchMessageId: true,
+      transportVersion: true,
     },
   });
 
@@ -559,6 +580,13 @@ export async function getThreadRunStateSnapshot(
       && !hasWorkerLifecycleRows
       && await eventDrivenTerminationEnabled(threadId).catch(() => false)
     );
+  const mayFailGeneration = canThisInstanceFailLatestRun(
+    latest,
+    nowMs,
+    orphanGraceMs,
+  );
+  const pendingDocumentHarvest =
+    mayFailGeneration && await hasPendingDocumentHarvest(latest);
 
   return {
     latestRun: latest
@@ -573,7 +601,7 @@ export async function getThreadRunStateSnapshot(
     isAlive: activeRows.some((row) =>
       isAliveThreadRunSnapshotRow(row, nowMs, config, eventDrivenEnabled),
     ),
-    canFailGeneration: canThisInstanceFailLatestRun(latest, nowMs, orphanGraceMs),
+    canFailGeneration: mayFailGeneration && !pendingDocumentHarvest,
   };
 }
 
@@ -581,19 +609,23 @@ export async function getThreadRunStateSnapshot(
  * Return the most recent agent_runs row for a thread (by createdAt DESC).
  */
 export async function getLatestThreadRun(threadId: string): Promise<{
+  id?: string;
   status: string;
   ownerInstance: string | null;
   updatedAt: string;
   timeoutAt: string | null;
+  transportVersion?: string;
 } | null> {
   const row = await db.query.agentRuns.findFirst({
     where: eq(agentRuns.threadId, threadId),
     orderBy: desc(agentRuns.createdAt),
     columns: {
+      id: true,
       status: true,
       ownerInstance: true,
       updatedAt: true,
       timeoutAt: true,
+      transportVersion: true,
     },
   });
   return row ?? null;
@@ -635,7 +667,9 @@ export async function canThisInstanceFailGeneration(
   const nowMs = options.now?.() ?? Date.now();
   const orphanGraceMs = options.orphanGraceMs ?? GENERATION_FAIL_ORPHAN_GRACE_MS;
   const latest = await getLatestThreadRun(threadId);
-  return canThisInstanceFailLatestRun(latest, nowMs, orphanGraceMs);
+  const mayFail = canThisInstanceFailLatestRun(latest, nowMs, orphanGraceMs);
+  if (!mayFail) return false;
+  return !(await hasPendingDocumentHarvest(latest));
 }
 
 function warningFor(health: AgentRunHealth, config: AgentRunHealthConfig): string | null {

@@ -98,6 +98,82 @@ describe('finished V2 attempt reader', () => {
     expect(found.get('prototype:proto-1')?.manifestRef).toBeNull();
   });
 
+  it('lists only the newest unharvested document runs with their workflow class', async () => {
+    const execute = jest.fn().mockResolvedValue([
+      {
+        thread_id: 'thread-prd',
+        attempt_id: 'attempt-3',
+        attempt_number: 3,
+        run_id: 'run-prd',
+        dispatch_message_id: 'dispatch-3',
+        status: 'completed',
+        manifest_ref: {
+          container: 'ai-run-artifacts',
+          key: 'runs/run-prd/attempts/3/manifest.json',
+        },
+        failure_detail: null,
+        workflow_class: 'prd',
+      },
+      {
+        thread_id: 'thread-invalid',
+        attempt_id: 'attempt-invalid',
+        attempt_number: 1,
+        run_id: 'run-invalid',
+        dispatch_message_id: 'dispatch-invalid',
+        status: 'completed',
+        manifest_ref: null,
+        failure_detail: null,
+        workflow_class: 'not-a-document-workflow',
+      },
+    ]);
+    const reader = createFinishedAttemptReader({
+      executor: { execute },
+      inbox: inbox(),
+    });
+
+    await expect(reader.listFinishedDocuments(25)).resolves.toEqual([
+      {
+        attemptId: 'attempt-3',
+        attemptNumber: 3,
+        runId: 'run-prd',
+        threadId: 'thread-prd',
+        dispatchMessageId: 'dispatch-3',
+        status: 'completed',
+        manifestRef: {
+          container: 'ai-run-artifacts',
+          key: 'runs/run-prd/attempts/3/manifest.json',
+        },
+        failureDetail: null,
+        workflowClass: 'prd',
+      },
+    ]);
+
+    const text = sqlText(execute.mock.calls[0][0]);
+    expect(text).toContain("execution_snapshot->>'workflowClass'");
+    expect(text).toContain('artifact-harvest:');
+    expect(text).toContain('processed_at');
+    expect(text).toContain('newer.thread_id');
+    expect(text).toContain('LIMIT');
+  });
+
+  it('reports a terminal document run as pending until its harvest claim is processed', async () => {
+    const execute = jest.fn().mockResolvedValue([{ pending: true }]);
+    const reader = createFinishedAttemptReader({
+      executor: { execute },
+      inbox: inbox(),
+    });
+
+    await expect(
+      reader.isDocumentHarvestPending('run-prd'),
+    ).resolves.toBe(true);
+
+    const text = sqlText(execute.mock.calls[0][0]);
+    expect(text).toContain("r.transport_version = 'servicebus-blob-v2'");
+    expect(text).toContain("execution_snapshot->>'workflowClass'");
+    expect(text).toContain('artifact-harvest:');
+    expect(text).toContain('processed_at');
+  });
+
   const attempt = {
     attemptId: 'attempt-1',
     runId: 'run-1',

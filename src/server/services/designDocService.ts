@@ -2062,7 +2062,16 @@ export function startValidationWatcher(designDocId: string, validationThreadId: 
 
       const scorecard = parseAgentValidationScorecard(scorecardRaw);
       const reportMd = readOutputValidationScorecardMd(validationThreadId) ?? undefined;
-      await syncValidationResult(designDocId, scorecard, reportMd);
+      const applied = await syncValidationResult(
+        designDocId,
+        scorecard,
+        reportMd,
+        { expectedThreadId: validationThreadId },
+      );
+      if (!applied) {
+        cleanupWorkspace(validationThreadId);
+        return;
+      }
       console.log(`[validationWatcher] Scorecard synced — score=${scorecard.overall_score} is_ready=${scorecard.is_ready} (designDocId=${designDocId})`);
       cleanupWorkspace(validationThreadId);
     } catch (err) {
@@ -2134,7 +2143,8 @@ export async function syncValidationResult(
   designDocId: string,
   scorecard: ValidationScorecard,
   reportMd?: string,
-): Promise<void> {
+  completionGuard?: { expectedThreadId: string },
+): Promise<boolean> {
   const newStatus: DesignDocStatus = 'pending_review';
   const effectiveReportMd = reportMd ?? generateFallbackReport(scorecard);
   const updates: Partial<typeof designDocs.$inferInsert> = {
@@ -2146,7 +2156,24 @@ export async function syncValidationResult(
   };
   if (newStatus) updates.status = newStatus;
 
-  await db.update(designDocs).set(updates).where(eq(designDocs.id, designDocId));
+  const update = db.update(designDocs).set(updates);
+  if (completionGuard) {
+    const applied = await update
+      .where(
+        and(
+          eq(designDocs.id, designDocId),
+          eq(designDocs.status, 'validating'),
+          eq(
+            designDocs.validationThreadId,
+            completionGuard.expectedThreadId,
+          ),
+        ),
+      )
+      .returning({ id: designDocs.id });
+    if (applied.length === 0) return false;
+  } else {
+    await update.where(eq(designDocs.id, designDocId));
+  }
 
   notifyAiCompletion('design_doc_validation_complete', designDocId, {
     title: '',
@@ -2161,6 +2188,7 @@ export async function syncValidationResult(
       console.error(`[syncValidationResult] Failed to notify approvers (docId=${designDocId})`, err),
     );
   }
+  return true;
 }
 
 export async function cancelValidation(id: string, requestingUserId: string): Promise<void> {

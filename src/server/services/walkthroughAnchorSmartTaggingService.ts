@@ -24,6 +24,7 @@ import {
   isTerminalAgentRunStatus,
   isThreadRunAlive,
 } from './agentRunReaperService';
+import { isDocumentHarvestPendingForRun } from './aiRunV2/finishedAttemptReader';
 import { createNotification } from './notificationService';
 import { resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
@@ -649,6 +650,62 @@ function failedResponse(
   };
 }
 
+/**
+ * Apply a verified V2 artifact without relying on the in-memory poll watcher.
+ * The pending-row update is the compare-and-set: a replay sees no rows changed,
+ * so it cannot reapply tags or emit a second completion notification.
+ */
+export async function applyV2SmartTaggingResult(input: {
+  threadId: string;
+  runId: string;
+  rawJson: string;
+}): Promise<boolean> {
+  const thread = await db.query.chatThreads.findFirst({
+    where: eq(chatThreads.id, input.threadId),
+    columns: { userId: true, kickoff: true },
+  });
+  if (!thread) {
+    throw new WalkthroughAnchorSmartTaggingOrchestrationError(
+      'NOT_FOUND',
+      'Smart-tagging thread not found.',
+    );
+  }
+
+  const parsed = parseWalkthroughAnchorSmartTaggingOutput(input.rawJson);
+  const testIds = parsed.suggestions.map((suggestion) => suggestion.testId);
+  const provenanceBase: WalkthroughAnchorSmartTagMergeProvenanceBase = {
+    provider: 'cursor',
+    model: thread.kickoff.model?.trim() || 'unknown',
+    skillPath:
+      thread.kickoff.skillPath?.trim()
+      || DEFAULT_WALKTHROUGH_ANCHOR_SMART_TAGGING_SKILL_PATH,
+    generatedAt: new Date().toISOString(),
+    threadId: input.threadId,
+    runId: input.runId,
+  };
+  const updated =
+    await walkthroughAnchorRegistryService.applySmartTagSuggestionsToPending({
+      testIds,
+      result: parsed,
+      provenanceBase,
+      actor: { id: thread.userId },
+    });
+  if (updated.length === 0) return false;
+
+  await createNotification(thread.userId, {
+    type: 'ai',
+    title: 'Walkthrough tags refined',
+    body: 'Background AI finished refining uncertain walkthrough anchors.',
+    link: '/platform-admin',
+  }).catch((err) => {
+    console.warn(
+      '[walkthroughAnchorSmartTagging] notify failed:',
+      err instanceof Error ? err.message : String(err),
+    );
+  });
+  return true;
+}
+
 function chunkCandidates(
   candidates: WalkthroughAnchorSmartTaggingCandidateInput[],
   size: number
@@ -856,6 +913,14 @@ export async function getSmartTaggingResult(
     }
     const latest = await getLatestThreadRun(threadId);
     if (latest && !isTerminalAgentRunStatus(latest.status)) {
+      return { status: 'pending', provenance };
+    }
+    if (
+      latest?.id
+      && latest.transportVersion === 'servicebus-blob-v2'
+      && isTerminalAgentRunStatus(latest.status)
+      && await isDocumentHarvestPendingForRun(latest.id).catch(() => true)
+    ) {
       return { status: 'pending', provenance };
     }
     // skipAutoKickoff leaves the in-process thread idle; a background worker

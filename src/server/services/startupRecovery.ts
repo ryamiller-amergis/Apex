@@ -28,6 +28,7 @@ import { startTestCaseWatcher, isTestCaseWatcherActive, routeTestCaseGenerationK
 import { routeDocumentValidationKickoff } from './documentValidationService';
 import { failStalePrototypes } from './designPrototypeService';
 import { harvestFinishedV2Prototypes } from './designPrototypeV2Harvest';
+import { harvestFinishedV2Documents } from './documentV2Harvest';
 import {
   findRunningInterviewThreads,
   clearStaleRun,
@@ -329,6 +330,16 @@ export async function recoverInFlightWork(
     if (signal?.aborted || err instanceof RepoCacheLeaseLostError) throw err;
     console.error('[recovery] Failed to recover abandoned dev session setups:', err);
   }
+
+  await runRecoveryCategory('finished document runs', signal, async () => {
+    const harvestedDocuments = await harvestFinishedV2Documents();
+    if (harvestedDocuments > 0) {
+      recovered += harvestedDocuments;
+      console.log(
+        `[recovery] Applied ${harvestedDocuments} finished durable document run(s)`,
+      );
+    }
+  });
 
   await runRecoveryCategory('generating PRDs', signal, async () => {
   const generatingPrds = await db.query.prds.findMany({

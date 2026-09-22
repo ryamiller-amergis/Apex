@@ -806,7 +806,11 @@ export async function syncPrdContent(
   content: string,
   backlogJson?: unknown,
   finalStatus: PrdStatus = 'draft',
-): Promise<void> {
+  completionGuard?: {
+    expectedStatus: 'generating';
+    expectedThreadId: string;
+  },
+): Promise<boolean> {
   // Auto-infer an existing-page `route` per feature so the design-prototype generator
   // can run in EXTEND mode for features that modify existing MaxView pages. Best-effort:
   // inference failures or a missing inventory leave the backlog unchanged.
@@ -859,15 +863,28 @@ export async function syncPrdContent(
     stampedContent = content;
   }
 
-  await db
+  const update = db
     .update(prds)
     .set({
       content: stampedContent,
       status: finalStatus,
       ...(resolvedBacklog !== undefined ? { backlogJson: resolvedBacklog as any } : {}),
       updatedAt: new Date().toISOString(),
-    })
-    .where(eq(prds.id, id));
+    });
+  if (completionGuard) {
+    const applied = await update
+      .where(
+        and(
+          eq(prds.id, id),
+          eq(prds.status, completionGuard.expectedStatus),
+          eq(prds.chatThreadId, completionGuard.expectedThreadId),
+        ),
+      )
+      .returning({ id: prds.id });
+    return applied.length === 1;
+  }
+  await update.where(eq(prds.id, id));
+  return true;
 }
 
 const WATCHER_INTERVAL_MS = 5_000;
@@ -962,14 +979,19 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
     activePrdWatchers.delete(prdId);
     console.log(`[prdWatcher] Run finished with complete output — syncing to DB (prdId=${prdId})`);
     try {
-      await runGroundingService.persistThenMarkTerminalInactive(
+      const completion = await runGroundingService.persistThenMarkTerminalInactive(
           {
             runType: 'chat',
             runId: chatThreadId,
             project: prdRow.project,
           },
-          () => syncPrdContent(prdId, content, backlog),
+          () =>
+            syncPrdContent(prdId, content, backlog, 'draft', {
+              expectedStatus: 'generating',
+              expectedThreadId: chatThreadId,
+            }),
         );
+      if (!completion.persisted) return;
       console.log(`[prdWatcher] Sync complete — PRD is now draft (prdId=${prdId})`);
       try {
         const prdRowAfterSync = await db.query.prds.findFirst({

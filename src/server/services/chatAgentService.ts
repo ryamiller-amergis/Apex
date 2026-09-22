@@ -3358,6 +3358,7 @@ async function syncOutputToDbFromWorkspace(
     where: eq(prds.chatThreadId, threadId),
   });
   if (prdRow) {
+    if (prdRow.status !== 'generating') return;
     const content = readOutputPrd(threadId);
     const backlog = readOutputBacklog(threadId);
     const { isPrdGenerationOutputComplete } = await import(
@@ -3365,7 +3366,17 @@ async function syncOutputToDbFromWorkspace(
     );
     const outputComplete = isPrdGenerationOutputComplete(content, backlog);
     if (outputComplete && content) {
-      await syncPrdContent(prdRow.id, content, backlog ?? undefined);
+      const applied = await syncPrdContent(
+        prdRow.id,
+        content,
+        backlog ?? undefined,
+        'draft',
+        {
+          expectedStatus: 'generating',
+          expectedThreadId: threadId,
+        },
+      );
+      if (!applied) return;
       console.log(
         `[chat] post-run: synced PRD output to DB (prdId=${prdRow.id})`
       );
@@ -3383,7 +3394,13 @@ async function syncOutputToDbFromWorkspace(
       await db
         .update(prds)
         .set({ status: 'draft', updatedAt: new Date().toISOString() })
-        .where(and(eq(prds.id, prdRow.id), eq(prds.status, 'generating')));
+        .where(
+          and(
+            eq(prds.id, prdRow.id),
+            eq(prds.status, 'generating'),
+            eq(prds.chatThreadId, threadId),
+          ),
+        );
       console.warn(
         `[chat] post-run: agent produced incomplete/stub PRD output — reset to draft (prdId=${prdRow.id})`
       );
@@ -3427,9 +3444,11 @@ async function syncOutputToDbFromWorkspace(
       authorId: true,
       designPrototypeId: true,
       featureIndex: true,
+      status: true,
     },
   });
   if (ddGenRow) {
+    if (ddGenRow.status !== 'generating') return;
     const { finalizeSingleFeatureDoc, isSingleFeatureDesignDocRow } =
       await import('./designDocService');
     // Single-feature docs finalize in place; legacy seeds fan out to child rows.
@@ -3490,6 +3509,7 @@ async function syncOutputToDbFromWorkspace(
     where: eq(designDocs.validationThreadId, threadId),
   });
   if (ddValRow) {
+    if (ddValRow.status !== 'validating') return;
     const scorecardRaw = readOutputValidationScorecard(threadId);
     if (scorecardRaw) {
       try {
@@ -3507,7 +3527,13 @@ async function syncOutputToDbFromWorkspace(
         }
         const scorecard = parseAgentValidationScorecard(scorecardRaw);
         const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
-        await syncValidationResult(ddValRow.id, scorecard, reportMd);
+        const applied = await syncValidationResult(
+          ddValRow.id,
+          scorecard,
+          reportMd,
+          { expectedThreadId: threadId },
+        );
+        if (!applied) return;
         console.log(
           `[chat] post-run: synced validation scorecard to DB (designDocId=${ddValRow.id})`
         );
@@ -3517,11 +3543,13 @@ async function syncOutputToDbFromWorkspace(
           `[chat] post-run: failed to parse validation scorecard`,
           err
         );
-        await syncValidationResult(
+        const applied = await syncValidationResult(
           ddValRow.id,
           buildUnusableValidationScorecard(NO_SCORECARD_REASON),
+          undefined,
+          { expectedThreadId: threadId },
         );
-        fullySynced = true;
+        fullySynced = applied;
       }
     } else {
       // Agent completed but wrote no scorecard file.
@@ -3537,15 +3565,19 @@ async function syncOutputToDbFromWorkspace(
         freshDoc?.validationThreadId === threadId &&
         freshDoc?.status === 'validating'
       ) {
-        await syncValidationResult(
+        const applied = await syncValidationResult(
           ddValRow.id,
           buildUnusableValidationScorecard(NO_SCORECARD_REASON),
+          undefined,
+          { expectedThreadId: threadId },
         );
-        console.warn(
-          `[chat] post-run: validation agent wrote no scorecard (designDocId=${ddValRow.id})`
-        );
+        fullySynced = applied;
+        if (applied) {
+          console.warn(
+            `[chat] post-run: validation agent wrote no scorecard (designDocId=${ddValRow.id})`
+          );
+        }
       }
-      fullySynced = true; // workspace can be cleaned
     }
     if (fullySynced) cleanupWorkspaceDir(workspaceDir);
     return;
@@ -3579,6 +3611,7 @@ async function syncOutputToDbFromWorkspace(
     where: eq(prds.validationThreadId, threadId),
   });
   if (prdValRow) {
+    if (prdValRow.status !== 'validating') return;
     const scorecardRaw = readOutputValidationScorecard(threadId);
     if (scorecardRaw) {
       try {
@@ -3599,7 +3632,7 @@ async function syncOutputToDbFromWorkspace(
           await import('./documentValidationService');
         const effectiveReportMd = reportMd ?? generateFallbackReport(scorecard);
         const newStatus = scorecard.is_ready ? 'pending_review' : 'draft';
-        await db
+        const applied = await db
           .update(prds)
           .set({
             validationScore: Math.round(scorecard.overall_score),
@@ -3609,7 +3642,15 @@ async function syncOutputToDbFromWorkspace(
             status: newStatus,
             updatedAt: new Date().toISOString(),
           })
-          .where(eq(prds.id, prdValRow.id));
+          .where(
+            and(
+              eq(prds.id, prdValRow.id),
+              eq(prds.status, 'validating'),
+              eq(prds.validationThreadId, threadId),
+            ),
+          )
+          .returning({ id: prds.id });
+        if (applied.length === 0) return;
         console.log(
           `[chat] post-run: synced PRD validation scorecard to DB (prdId=${prdValRow.id})`
         );
@@ -3622,7 +3663,7 @@ async function syncOutputToDbFromWorkspace(
         const { generateFallbackReport } =
           await import('./documentValidationService');
         const scorecard = buildUnusableValidationScorecard(NO_SCORECARD_REASON);
-        await db
+        const applied = await db
           .update(prds)
           .set({
             validationScore: 0,
@@ -3632,8 +3673,15 @@ async function syncOutputToDbFromWorkspace(
             status: 'draft',
             updatedAt: new Date().toISOString(),
           })
-          .where(and(eq(prds.id, prdValRow.id), eq(prds.status, 'validating')));
-        fullySynced = true;
+          .where(
+            and(
+              eq(prds.id, prdValRow.id),
+              eq(prds.status, 'validating'),
+              eq(prds.validationThreadId, threadId),
+            ),
+          )
+          .returning({ id: prds.id });
+        fullySynced = applied.length === 1;
       }
     } else {
       const freshPrd = await db.query.prds.findFirst({
@@ -3647,7 +3695,7 @@ async function syncOutputToDbFromWorkspace(
         const { generateFallbackReport } =
           await import('./documentValidationService');
         const scorecard = buildUnusableValidationScorecard(NO_SCORECARD_REASON);
-        await db
+        const applied = await db
           .update(prds)
           .set({
             validationScore: 0,
@@ -3657,7 +3705,15 @@ async function syncOutputToDbFromWorkspace(
             status: 'draft',
             updatedAt: new Date().toISOString(),
           })
-          .where(eq(prds.id, prdValRow.id));
+          .where(
+            and(
+              eq(prds.id, prdValRow.id),
+              eq(prds.status, 'validating'),
+              eq(prds.validationThreadId, threadId),
+            ),
+          )
+          .returning({ id: prds.id });
+        if (applied.length === 0) return;
         console.warn(
           `[chat] post-run: PRD validation agent wrote no scorecard (prdId=${prdValRow.id})`
         );

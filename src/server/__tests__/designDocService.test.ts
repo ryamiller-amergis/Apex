@@ -1221,6 +1221,28 @@ describe('syncValidationResult', () => {
     expect(typeof callArg.validationReportMd).toBe('string');
     expect(callArg.validationReportMd).toContain('Validation Report');
   });
+
+  it('does not notify when a validation completion loses its thread CAS', async () => {
+    const returningMock = jest.fn().mockResolvedValue([]);
+    const whereMock = jest.fn().mockReturnValue({
+      returning: returningMock,
+    });
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+    const scorecard = makeScorecardFixture({
+      overall_score: 95,
+      is_ready: true,
+      verdict: 'ready',
+    });
+
+    await expect(
+      syncValidationResult('doc-1', scorecard as any, undefined, {
+        expectedThreadId: 'validation-thread',
+      }),
+    ).resolves.toBe(false);
+
+    expect(mockNotifyApproversDocumentReady).not.toHaveBeenCalled();
+  });
 });
 
 // ── markValidationReady ───────────────────────────────────────────────────────

@@ -85,6 +85,9 @@ jest.mock('../services/designPrototypeService', () => ({
 jest.mock('../services/designPrototypeV2Harvest', () => ({
   harvestFinishedV2Prototypes: jest.fn().mockResolvedValue(0),
 }));
+jest.mock('../services/documentV2Harvest', () => ({
+  harvestFinishedV2Documents: jest.fn().mockResolvedValue(0),
+}));
 jest.mock('../services/chatThreadRepository', () => ({
   findRunningInterviewThreads: jest.fn(),
   clearStaleRun: jest.fn(),
@@ -1123,5 +1126,46 @@ describe('finished durable prototype runs', () => {
     } finally {
       consoleSpy.mockRestore();
     }
+  });
+});
+
+describe('finished durable document runs', () => {
+  const harvestDocuments = () =>
+    jest.requireMock('../services/documentV2Harvest')
+      .harvestFinishedV2Documents as jest.Mock;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockFindMany.mockResolvedValue([]);
+    mockPrdsFindMany.mockResolvedValue([]);
+    mockDesignDocsFindMany.mockResolvedValue([]);
+    mockTestCasesFindMany.mockResolvedValue([]);
+    mockedFindRunning.mockResolvedValue([]);
+    harvestDocuments().mockResolvedValue(0);
+    jest.requireMock('../services/designPrototypeV2Harvest')
+      .harvestFinishedV2Prototypes.mockResolvedValue(0);
+    jest.requireMock('../services/designPrototypeService')
+      .failStalePrototypes.mockResolvedValue(0);
+    jest.requireMock('../services/pdfAssemblyService')
+      .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
+    jest.requireMock('../services/featureRequestAnalysisService')
+      .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
+  });
+
+  it('harvests terminal document artifacts before restarting file watchers', async () => {
+    const order: string[] = [];
+    harvestDocuments().mockImplementation(async () => {
+      order.push('document-harvest');
+      return 1;
+    });
+    mockPrdsFindMany.mockImplementation(async () => {
+      order.push('prd-recovery-query');
+      return [];
+    });
+
+    await recoverInFlightWork();
+
+    expect(order[0]).toBe('document-harvest');
+    expect(order).toContain('prd-recovery-query');
   });
 });

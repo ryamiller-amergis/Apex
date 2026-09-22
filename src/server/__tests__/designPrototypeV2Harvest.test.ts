@@ -125,6 +125,8 @@ function arrangeSweep(attempt: FinishedV2Attempt | null) {
     listFinishedByThread: jest.fn().mockResolvedValue(
       attempt ? new Map([[attempt.threadId, attempt]]) : new Map(),
     ),
+    listFinishedDocuments: jest.fn().mockResolvedValue([]),
+    isDocumentHarvestPending: jest.fn().mockResolvedValue(false),
     claimHarvest: jest.fn().mockResolvedValue('claimed'),
     completeHarvest: jest.fn().mockResolvedValue(undefined),
   };
@@ -351,6 +353,8 @@ describe('harvestFinishedV2Prototypes', () => {
           ],
         ]),
       ),
+      listFinishedDocuments: jest.fn().mockResolvedValue([]),
+      isDocumentHarvestPending: jest.fn().mockResolvedValue(false),
       claimHarvest: jest.fn().mockResolvedValue('claimed'),
       completeHarvest: jest.fn().mockResolvedValue(undefined),
     };

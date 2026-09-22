@@ -13,6 +13,7 @@ import fs from 'fs';
 
 jest.mock('fs');
 const mockFs = fs as jest.Mocked<typeof fs>;
+const mockIsDocumentHarvestPending = jest.fn().mockResolvedValue(false);
 
 jest.mock('../db/drizzle', () => ({
   db: {
@@ -54,6 +55,10 @@ jest.mock('../services/agentRunReaperService', () => ({
   getLatestThreadRun: jest.fn().mockResolvedValue(null),
   isTerminalAgentRunStatus: (status: string) =>
     status === 'completed' || status === 'failed' || status === 'cancelled',
+}));
+jest.mock('../services/aiRunV2/finishedAttemptReader', () => ({
+  isDocumentHarvestPendingForRun: (...args: unknown[]) =>
+    mockIsDocumentHarvestPending(...args),
 }));
 
 jest.mock('../services/notificationService', () => ({
@@ -108,8 +113,10 @@ import {
 } from '../services/agentRunReaperService';
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
+import { createNotification } from '../services/notificationService';
 import * as walkthroughAnchorRegistryService from '../services/walkthroughAnchorRegistryService';
 import {
+  applyV2SmartTaggingResult,
   startSmartTagging,
   getSmartTaggingResult,
   cancelSmartTagging,
@@ -471,6 +478,32 @@ describe('walkthroughAnchorSmartTaggingService', () => {
       ).not.toHaveBeenCalled();
     });
 
+    it('stays pending after V2 terminal until the durable artifact is harvested', async () => {
+      await startAndClearInFlight();
+      mockedDb.query.chatThreads.findFirst.mockResolvedValue({
+        userId: USER_ID,
+        workspaceDir: '/tmp/ws',
+        status: 'idle',
+      });
+      mockFs.existsSync.mockReturnValue(false);
+      mockedIsThreadIdle.mockReturnValue(true);
+      mockedIsThreadLoaded.mockReturnValue(true);
+      mockedGetLatestThreadRun.mockResolvedValue({
+        id: 'run-v2',
+        status: 'completed',
+        ownerInstance: null,
+        updatedAt: '2026-09-22T12:00:00.000Z',
+        timeoutAt: null,
+        transportVersion: 'servicebus-blob-v2',
+      });
+      mockIsDocumentHarvestPending.mockResolvedValueOnce(true);
+
+      await expect(
+        getSmartTaggingResult(THREAD_ID, USER_ID),
+      ).resolves.toMatchObject({ status: 'pending' });
+      expect(mockIsDocumentHarvestPending).toHaveBeenCalledWith('run-v2');
+    });
+
     it('names routing as the cause when neither the worker nor the fallback started the batch', async () => {
       const mockedRoute = routeBackgroundWorkflow as jest.MockedFunction<
         typeof routeBackgroundWorkflow
@@ -590,6 +623,61 @@ describe('walkthroughAnchorSmartTaggingService', () => {
       expect(
         mockedRegistry.applySmartTagSuggestionsToPending
       ).toHaveBeenCalled();
+    });
+  });
+
+  describe('applyV2SmartTaggingResult', () => {
+    it('reconstructs durable provenance and notifies only when pending rows changed', async () => {
+      mockedDb.query.chatThreads.findFirst.mockResolvedValue({
+        userId: USER_ID,
+        kickoff: {
+          model: 'claude-sonnet-4',
+          skillPath:
+            '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+        },
+      });
+      mockedRegistry.applySmartTagSuggestionsToPending
+        .mockResolvedValueOnce([
+          {
+            id: 'row-1',
+            testId: 'new-candidate',
+          } as unknown as WalkthroughAnchorRegistryRecord,
+        ])
+        .mockResolvedValueOnce([]);
+
+      await expect(
+        applyV2SmartTaggingResult({
+          threadId: THREAD_ID,
+          runId: 'run-v2',
+          rawJson: VALID_SMART_TAG_OUTPUT,
+        }),
+      ).resolves.toBe(true);
+      await expect(
+        applyV2SmartTaggingResult({
+          threadId: THREAD_ID,
+          runId: 'run-v2',
+          rawJson: VALID_SMART_TAG_OUTPUT,
+        }),
+      ).resolves.toBe(false);
+
+      expect(
+        mockedRegistry.applySmartTagSuggestionsToPending,
+      ).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          testIds: ['new-candidate'],
+          actor: { id: USER_ID },
+          provenanceBase: expect.objectContaining({
+            provider: 'cursor',
+            model: 'claude-sonnet-4',
+            skillPath:
+              '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+            threadId: THREAD_ID,
+            runId: 'run-v2',
+          }),
+        }),
+      );
+      expect(createNotification).toHaveBeenCalledTimes(1);
     });
   });
 

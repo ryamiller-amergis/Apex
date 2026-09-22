@@ -17,6 +17,10 @@ import {
   isAiRunBlobRef,
   type AiRunBlobRef,
 } from '../../../shared/types/aiRunV2';
+import {
+  isDocumentWorkflowClass,
+  type AiRunV2DocumentSpecification,
+} from '../../../shared/types/aiRunV2DocumentSpec';
 import { createInboxRepository, type InboxRepository } from './inboxRepository';
 import type { SqlExecutor } from './outboxRepository';
 
@@ -33,12 +37,22 @@ export type FinishedV2Attempt = Readonly<{
   failureDetail: string | null;
 }>;
 
+export type FinishedV2DocumentAttempt = FinishedV2Attempt &
+  Readonly<{
+    attemptNumber: number;
+    workflowClass: AiRunV2DocumentSpecification['workflowClass'];
+  }>;
+
 export type HarvestClaim = 'claimed' | 'already_harvested';
 
 export type FinishedAttemptReader = {
   listFinishedByThread(
     threadIds: readonly string[],
   ): Promise<Map<string, FinishedV2Attempt>>;
+  listFinishedDocuments(
+    limit: number,
+  ): Promise<FinishedV2DocumentAttempt[]>;
+  isDocumentHarvestPending(runId: string): Promise<boolean>;
   claimHarvest(attempt: FinishedV2Attempt): Promise<HarvestClaim>;
   completeHarvest(attemptId: string): Promise<void>;
 };
@@ -122,6 +136,115 @@ export function createFinishedAttemptReader(deps?: {
       return finished;
     },
 
+    async listFinishedDocuments(limit) {
+      const boundedLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+      const result = await executor.execute(sql`
+        SELECT latest.*
+        FROM (
+          SELECT DISTINCT ON (r.thread_id)
+            r.thread_id,
+            r.created_at AS run_created_at,
+            r.execution_snapshot->>'workflowClass' AS workflow_class,
+            a.id AS attempt_id,
+            a.attempt_number,
+            a.run_id,
+            a.dispatch_message_id,
+            a.status,
+            a.manifest_ref,
+            a.failure_detail
+          FROM ai_run_attempts a
+          JOIN agent_runs r ON r.id = a.run_id
+          WHERE r.transport_version = 'servicebus-blob-v2'
+            AND r.status IN ('completed', 'failed', 'cancelled')
+            AND a.status IN ('completed', 'failed', 'cancelled')
+            AND r.execution_snapshot->>'workflowClass' IN (
+              'prd',
+              'design-doc',
+              'validation',
+              'test-cases',
+              'walkthrough-smart-tagging'
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM agent_runs newer
+              WHERE newer.thread_id = r.thread_id
+                AND (
+                  newer.created_at > r.created_at
+                  OR (
+                    newer.created_at = r.created_at
+                    AND newer.id > r.id
+                  )
+                )
+            )
+          ORDER BY
+            r.thread_id,
+            r.created_at DESC,
+            a.attempt_number DESC
+        ) latest
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM ai_run_inbox harvested
+          WHERE harvested.event_id =
+            'artifact-harvest:' || latest.attempt_id
+            AND harvested.processed_at IS NOT NULL
+        )
+        ORDER BY latest.run_created_at ASC, latest.run_id ASC
+        LIMIT ${boundedLimit}
+      `);
+
+      const finished: FinishedV2DocumentAttempt[] = [];
+      for (const row of resultRows<Record<string, unknown>>(result)) {
+        if (!isDocumentWorkflowClass(row.workflow_class)) continue;
+        finished.push({
+          attemptId: String(row.attempt_id),
+          attemptNumber: Number(row.attempt_number),
+          runId: String(row.run_id),
+          threadId: String(row.thread_id),
+          dispatchMessageId: String(row.dispatch_message_id),
+          status: row.status as FinishedV2AttemptStatus,
+          manifestRef: parseManifestRef(row.manifest_ref),
+          failureDetail:
+            row.failure_detail == null ? null : String(row.failure_detail),
+          workflowClass: row.workflow_class,
+        });
+      }
+      return finished;
+    },
+
+    async isDocumentHarvestPending(runId) {
+      const result = await executor.execute(sql`
+        SELECT TRUE AS pending
+        FROM agent_runs r
+        JOIN LATERAL (
+          SELECT attempt.id, attempt.status
+          FROM ai_run_attempts attempt
+          WHERE attempt.run_id = r.id
+          ORDER BY attempt.attempt_number DESC
+          LIMIT 1
+        ) latest_attempt ON TRUE
+        WHERE r.id = ${runId}
+          AND r.transport_version = 'servicebus-blob-v2'
+          AND r.status IN ('completed', 'failed', 'cancelled')
+          AND latest_attempt.status IN ('completed', 'failed', 'cancelled')
+          AND r.execution_snapshot->>'workflowClass' IN (
+            'prd',
+            'design-doc',
+            'validation',
+            'test-cases',
+            'walkthrough-smart-tagging'
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM ai_run_inbox harvested
+            WHERE harvested.event_id =
+              'artifact-harvest:' || latest_attempt.id
+              AND harvested.processed_at IS NOT NULL
+          )
+        LIMIT 1
+      `);
+      return resultRows(result).length > 0;
+    },
+
     async claimHarvest(attempt) {
       const claim = await inbox.claimEvent({
         eventId: harvestEventId(attempt.attemptId),
@@ -146,4 +269,10 @@ export function createFinishedAttemptReader(deps?: {
       await inbox.markProcessed(harvestEventId(attemptId));
     },
   };
+}
+
+export function isDocumentHarvestPendingForRun(
+  runId: string,
+): Promise<boolean> {
+  return createFinishedAttemptReader().isDocumentHarvestPending(runId);
 }

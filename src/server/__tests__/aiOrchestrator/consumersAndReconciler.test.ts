@@ -116,6 +116,68 @@ describe('resultConsumer', () => {
     );
     expect(completed).toEqual(['lock-r']);
   });
+
+  it('records terminal usage only after the fenced transition wins', async () => {
+    const resultBody = {
+      schemaVersion: AI_RUN_V2_SCHEMA_VERSION,
+      eventId: 'evt-usage',
+      runId: 'run-usage',
+      attemptId: 'attempt-usage',
+      attemptNumber: 1,
+      dispatchMessageId: 'dispatch-usage',
+      timestamp: '2026-09-18T12:00:00.000Z',
+      kind: 'terminal',
+      status: 'completed',
+      artifactStatus: 'manifest_written',
+      durationMs: 2_500,
+      inputTokens: 100,
+      outputTokens: 200,
+      cacheReadTokens: 30,
+      cacheWriteTokens: 4,
+    } as const;
+    let delivery = 0;
+    const consumer: QueueConsumer = {
+      receive: async () => {
+        delivery += 1;
+        return {
+          lockToken: `lock-${delivery}`,
+          messageId: `message-${delivery}`,
+          deliveryCount: delivery,
+          body: resultBody,
+        };
+      },
+      complete: async () => undefined,
+      abandon: async () => undefined,
+      deadLetter: async () => undefined,
+    };
+    const transitionAttempt = jest
+      .fn()
+      .mockResolvedValueOnce({
+        status: 'ok',
+        attemptId: 'attempt-usage',
+        to: 'completed',
+        run: null,
+      })
+      .mockResolvedValueOnce({
+        status: 'illegal_transition',
+        from: 'completed',
+        to: 'completed',
+      });
+    const recordTerminalUsage = jest.fn().mockResolvedValue(undefined);
+    const handler = createResultConsumer({
+      consumer,
+      attempts: { transitionAttempt } as never,
+      recordTerminalUsage,
+    } as Parameters<typeof createResultConsumer>[0] & {
+      recordTerminalUsage: typeof recordTerminalUsage;
+    });
+
+    await handler.processOnce();
+    await handler.processOnce();
+
+    expect(recordTerminalUsage).toHaveBeenCalledTimes(1);
+    expect(recordTerminalUsage).toHaveBeenCalledWith(resultBody);
+  });
 });
 
 describe('reconciler', () => {
