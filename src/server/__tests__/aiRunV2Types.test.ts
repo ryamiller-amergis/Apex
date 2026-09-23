@@ -107,6 +107,7 @@ describe('AI-run V2 shared types', () => {
       kind: 'dispatch_command',
       transport: 'servicebus-blob-v2',
       workloadLane: 'document',
+      capacityClass: 'batch',
       specRef: blobRef,
     };
     expect(isAiRunV2Command(command)).toBe(true);
@@ -133,14 +134,14 @@ describe('AI-run V2 shared types', () => {
     ).toBe(false);
   });
 
-  it('requires an explicit subject kind on visual dispatch commands', () => {
+  it('requires an explicit generic capacity class on dispatch commands', () => {
     expect(
       isAiRunV2Command({
         ...envelopeBase,
         kind: 'dispatch_command',
         transport: 'servicebus-blob-v2',
         workloadLane: 'visual',
-        visualSubjectKind: 'ui-lab-screen',
+        capacityClass: 'interactive',
         specRef: { container: 'ai-run-artifacts', key: 'specs/run-1.json' },
       }),
     ).toBe(true);
@@ -150,6 +151,16 @@ describe('AI-run V2 shared types', () => {
         kind: 'dispatch_command',
         transport: 'servicebus-blob-v2',
         workloadLane: 'visual',
+        specRef: { container: 'ai-run-artifacts', key: 'specs/run-1.json' },
+      }),
+    ).toBe(false);
+    expect(
+      isAiRunV2Command({
+        ...envelopeBase,
+        kind: 'dispatch_command',
+        transport: 'servicebus-blob-v2',
+        workloadLane: 'visual',
+        capacityClass: 'ui-lab-screen',
         specRef: { container: 'ai-run-artifacts', key: 'specs/run-1.json' },
       }),
     ).toBe(false);

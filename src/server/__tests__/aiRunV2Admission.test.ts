@@ -124,6 +124,7 @@ describe('V2 admission', () => {
         threadId: 'thread-1',
         projectId: 'project-1',
         workloadLane: 'document',
+        capacityClass: 'batch',
         timeoutAt: '2026-09-18T13:00:00.000Z',
         specification: { prompt: 'write a design doc' },
       }),
@@ -160,7 +161,7 @@ describe('V2 admission', () => {
       threadId: 'thread-1',
       projectId: 'project-1',
       workloadLane: 'visual',
-      visualSubjectKind: 'design-prototype',
+      capacityClass: 'batch',
       timeoutAt: '2026-09-18T13:00:00.000Z',
       specification: {},
     });
@@ -168,7 +169,7 @@ describe('V2 admission', () => {
     expect(createDispatchedV2Run).toHaveBeenCalledWith(
       expect.objectContaining({
         workloadLane: 'visual',
-        visualSubjectKind: 'design-prototype',
+        capacityClass: 'batch',
       }),
     );
   });
@@ -189,6 +190,7 @@ describe('V2 admission', () => {
       threadId: 'thread-1',
       projectId: 'project-1',
       workloadLane: 'document',
+      capacityClass: 'batch',
       timeoutAt: '2026-09-18T13:00:00.000Z',
       specification: {},
     });

@@ -4,11 +4,6 @@
  * Task 3 defines the closed enums and envelopes only. V1 HTTP/Files transport
  * remains the live path until Task 8 cutover.
  */
-import {
-  isVisualSubjectKind,
-  type VisualSubjectKind,
-} from './aiRunV2VisualSpec';
-
 export const AI_RUN_V2_SCHEMA_VERSION = 2 as const;
 
 export const AI_RUN_TRANSPORT_VERSIONS = [
@@ -28,6 +23,13 @@ export const AI_RUN_V2_WORKLOAD_LANES = [
   'agentic',
 ] as const;
 export type AiRunV2WorkloadLane = (typeof AI_RUN_V2_WORKLOAD_LANES)[number];
+
+export const AI_RUN_V2_CAPACITY_CLASSES = [
+  'interactive',
+  'batch',
+] as const;
+export type AiRunV2CapacityClass =
+  (typeof AI_RUN_V2_CAPACITY_CLASSES)[number];
 
 export const AI_RUN_V2_LANE_QUEUES: Readonly<
   Record<AiRunV2WorkloadLane, string>
@@ -145,7 +147,7 @@ export type AiRunV2Command = AiRunV2EnvelopeBase &
     kind: 'dispatch_command';
     transport: 'servicebus-blob-v2';
     workloadLane: AiRunV2WorkloadLane;
-    visualSubjectKind?: VisualSubjectKind;
+    capacityClass: AiRunV2CapacityClass;
     specRef: AiRunBlobRef;
     /** Absolute attempt deadline, resolved before dispatch by App Service. */
     deadlineAt?: string;
@@ -314,6 +316,15 @@ export function isAiRunV2WorkloadLane(
   );
 }
 
+export function isAiRunV2CapacityClass(
+  value: unknown,
+): value is AiRunV2CapacityClass {
+  return (
+    typeof value === 'string'
+    && (AI_RUN_V2_CAPACITY_CLASSES as readonly string[]).includes(value)
+  );
+}
+
 export function isAiRunBlobRef(value: unknown): value is AiRunBlobRef {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Record<string, unknown>;
@@ -339,15 +350,11 @@ function hasEnvelopeBase(value: unknown): value is AiRunV2EnvelopeBase {
 export function isAiRunV2Command(value: unknown): value is AiRunV2Command {
   if (!hasEnvelopeBase(value)) return false;
   const candidate = value as Record<string, unknown>;
-  const visualSubjectMatchesLane =
-    candidate.workloadLane === 'visual'
-      ? isVisualSubjectKind(candidate.visualSubjectKind)
-      : candidate.visualSubjectKind === undefined;
   return (
     candidate.kind === 'dispatch_command' &&
     candidate.transport === 'servicebus-blob-v2' &&
     isAiRunV2WorkloadLane(candidate.workloadLane) &&
-    visualSubjectMatchesLane &&
+    isAiRunV2CapacityClass(candidate.capacityClass) &&
     isAiRunBlobRef(candidate.specRef) &&
     (
       candidate.deadlineAt === undefined

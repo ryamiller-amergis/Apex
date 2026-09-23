@@ -439,6 +439,7 @@ describe('reconciler', () => {
       });
       const reconciler = makeReconciler(dispatchNextAttempt, {
         workloadLane: 'document',
+        capacityClass: 'batch',
         specRef: { container: 'ai-run-artifacts', key: 'spec.json' },
         attemptCount: 1,
       });
@@ -448,6 +449,7 @@ describe('reconciler', () => {
       expect(dispatchNextAttempt).toHaveBeenCalledWith({
         runId: 'r1',
         workloadLane: 'document',
+        capacityClass: 'batch',
         specRef: { container: 'ai-run-artifacts', key: 'spec.json' },
       });
     });
@@ -458,6 +460,7 @@ describe('reconciler', () => {
         dispatchNextAttempt,
         {
           workloadLane: 'document',
+          capacityClass: 'batch',
           specRef: { container: 'ai-run-artifacts', key: 'spec.json' },
           attemptCount: 3,
         },
@@ -483,7 +486,7 @@ describe('reconciler', () => {
         .mockRejectedValue(new Error('outbox unavailable'));
       const reconciler = makeReconciler(dispatchNextAttempt, {
         workloadLane: 'visual',
-        visualSubjectKind: 'design-prototype',
+        capacityClass: 'batch',
         specRef: { container: 'ai-run-artifacts', key: 'spec.json' },
         attemptCount: 1,
       });

@@ -505,6 +505,7 @@ export function createBackgroundWorkflowRouter(
           threadId: input.threadId,
           projectId: prepared.projectId,
           workloadLane: V2_WORKLOAD_LANE,
+          capacityClass: 'batch',
           timeoutAt,
           specification: specification as unknown as Record<string, unknown>,
           executionSnapshot:

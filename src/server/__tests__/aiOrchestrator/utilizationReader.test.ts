@@ -6,18 +6,42 @@ describe('utilizationReader', () => {
       executor: {
         execute: async () => ({
           rows: [
-            { workload_lane: 'document', in_flight: 3 },
             {
-              workload_lane: 'visual',
-              visual_subject_kind: 'design-prototype',
-              in_flight: 1,
+              attempt_status: 'running',
+              published_at: '2026-09-22T12:00:00.000Z',
+              workload_lane: 'document',
+              capacity_class: 'batch',
             },
             {
-              workload_lane: 'visual',
-              visual_subject_kind: 'ui-lab-screen',
-              in_flight: 1,
+              attempt_status: 'checking_worker',
+              published_at: '2026-09-22T12:00:00.000Z',
+              workload_lane: 'document',
+              capacity_class: 'batch',
             },
-            { workload_lane: 'agentic', in_flight: 1 },
+            {
+              attempt_status: 'finalizing',
+              published_at: '2026-09-22T12:00:00.000Z',
+              workload_lane: 'document',
+              capacity_class: 'batch',
+            },
+            {
+              attempt_status: 'dispatched',
+              published_at: '2026-09-22T12:00:00.000Z',
+              workload_lane: 'visual',
+              capacity_class: 'batch',
+            },
+            {
+              attempt_status: 'running',
+              published_at: '2026-09-22T12:00:00.000Z',
+              workload_lane: 'visual',
+              capacity_class: 'interactive',
+            },
+            {
+              attempt_status: 'running',
+              published_at: '2026-09-22T12:00:00.000Z',
+              workload_lane: 'agentic',
+              capacity_class: 'interactive',
+            },
           ],
         }),
       },
@@ -34,9 +58,9 @@ describe('utilizationReader', () => {
     // Visual is the only Bedrock lane; everything else counts against Cursor.
     expect(utilization.bedrockInFlight).toBe(2);
     expect(utilization.cursorInFlight).toBe(4);
-    expect(utilization.visualSubjectInFlight).toEqual({
-      'design-prototype': 1,
-      'ui-lab-screen': 1,
+    expect(utilization.providerClassInFlight).toEqual({
+      cursor: { batch: 3, interactive: 1 },
+      bedrock: { batch: 1, interactive: 1 },
     });
   });
 
@@ -45,9 +69,30 @@ describe('utilizationReader', () => {
       executor: {
         execute: async () => ({
           rows: [
-            { workload_lane: null, in_flight: 5 },
-            { workload_lane: 'batch', in_flight: 4 },
-            { workload_lane: 'fast', in_flight: 2 },
+            {
+              attempt_status: 'running',
+              published_at: '2026-09-22T12:00:00.000Z',
+              workload_lane: null,
+              capacity_class: 'batch',
+            },
+            {
+              attempt_status: 'running',
+              published_at: '2026-09-22T12:00:00.000Z',
+              workload_lane: 'batch',
+              capacity_class: 'batch',
+            },
+            {
+              attempt_status: 'running',
+              published_at: '2026-09-22T12:00:00.000Z',
+              workload_lane: 'fast',
+              capacity_class: 'interactive',
+            },
+            {
+              attempt_status: 'running',
+              published_at: '2026-09-22T12:00:00.000Z',
+              workload_lane: 'fast',
+              capacity_class: 'interactive',
+            },
           ],
         }),
       },
@@ -69,9 +114,51 @@ describe('utilizationReader', () => {
       cursorInFlight: 0,
       bedrockInFlight: 0,
       laneInFlight: { document: 0, visual: 0, fast: 0, agentic: 0 },
-      visualSubjectInFlight: {
-        'design-prototype': 0,
-        'ui-lab-screen': 0,
+      providerClassInFlight: {
+        cursor: { batch: 0, interactive: 0 },
+        bedrock: { batch: 0, interactive: 0 },
+      },
+    });
+  });
+
+  it('does not count dispatched attempts until their outbox command is published', async () => {
+    const rows: Array<{
+      attempt_status: string;
+      published_at: string | null;
+      workload_lane: string;
+      capacity_class: string;
+    }> = [
+      {
+        attempt_status: 'dispatched',
+        published_at: null,
+        workload_lane: 'visual',
+        capacity_class: 'interactive',
+      },
+      {
+        attempt_status: 'dispatched',
+        published_at: null,
+        workload_lane: 'visual',
+        capacity_class: 'interactive',
+      },
+    ];
+    const executor = { execute: jest.fn(async () => ({ rows })) };
+    const reader = createUtilizationReader({ executor });
+
+    expect(await reader.read()).toMatchObject({
+      bedrockInFlight: 0,
+      laneInFlight: { visual: 0 },
+      providerClassInFlight: {
+        bedrock: { batch: 0, interactive: 0 },
+      },
+    });
+
+    rows[0].published_at = '2026-09-22T12:00:00.000Z';
+    rows[1].published_at = '2026-09-22T12:00:01.000Z';
+    expect(await reader.read()).toMatchObject({
+      bedrockInFlight: 2,
+      laneInFlight: { visual: 2 },
+      providerClassInFlight: {
+        bedrock: { batch: 0, interactive: 2 },
       },
     });
   });

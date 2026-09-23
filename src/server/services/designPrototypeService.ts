@@ -1051,7 +1051,7 @@ async function admitPendingPrototypesToV2(params: {
           threadId,
           projectId: params.project,
           workloadLane: VISUAL_WORKLOAD_LANE,
-          visualSubjectKind: 'design-prototype',
+          capacityClass: 'batch',
           timeoutAt,
           specification: specification as unknown as Record<string, unknown>,
           executionSnapshot: {

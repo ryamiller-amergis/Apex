@@ -1,6 +1,7 @@
 import { createOutboxDrainer } from '../../services/aiOrchestrator/outboxDrainer';
 import type { OutboxRow } from '../../services/aiRunV2/outboxRepository';
 import { emptyUtilization } from '../../services/aiOrchestrator/providerGovernor';
+import { createUtilizationReader } from '../../services/aiOrchestrator/utilizationReader';
 import type { HeldDistributedLease } from '../../services/aiRunV2/distributedLeaseRepository';
 
 function row(id: string, payload: Record<string, unknown> = {}): OutboxRow {
@@ -12,6 +13,7 @@ function row(id: string, payload: Record<string, unknown> = {}): OutboxRow {
     attemptId: 'attempt-1',
     payload: {
       workloadLane: 'document',
+      capacityClass: 'batch',
       dispatchMessageId: id,
       ...payload,
     },
@@ -27,6 +29,17 @@ function row(id: string, payload: Record<string, unknown> = {}): OutboxRow {
 }
 
 describe('outboxDrainer', () => {
+  function lease(): HeldDistributedLease {
+    return {
+      leaseKey: 'outbox',
+      holderId: 'test',
+      fencingToken: 1n,
+      signal: new AbortController().signal,
+      assertOwned: async () => undefined,
+      release: async () => undefined,
+    };
+  }
+
   it('publishes allowed claims and marks them published', async () => {
     const published: string[] = [];
     const failed: string[] = [];
@@ -101,7 +114,7 @@ describe('outboxDrainer', () => {
           row('msg-doc', { workloadLane: 'document' }),
           row('msg-vis', {
             workloadLane: 'visual',
-            visualSubjectKind: 'design-prototype',
+            capacityClass: 'batch',
           }),
           row('msg-fast', { workloadLane: 'fast' }),
           row('msg-agent', { workloadLane: 'agentic' }),
@@ -191,5 +204,95 @@ describe('outboxDrainer', () => {
     const count = await drainer.drainOnce();
     expect(count).toBe(0);
     expect(failed[0]).toContain('uncertain_workers_paused');
+  });
+
+  it('publishes the first batch visual command without counting its unpublished attempt', async () => {
+    const publish = jest.fn().mockResolvedValue(undefined);
+    const utilization = createUtilizationReader({
+      executor: {
+        execute: async () => ({
+          rows: [
+            {
+              attempt_status: 'dispatched',
+              published_at: null,
+              workload_lane: 'visual',
+              capacity_class: 'batch',
+            },
+          ],
+        }),
+      },
+    });
+    const drainer = createOutboxDrainer({
+      executor: { execute: async () => [] },
+      publisher: { publish },
+      getUtilization: () => utilization.read(),
+      getUncertainWorkerCount: async () => 0,
+      enableNotify: false,
+      acquireOutboxLease: async (work) => work(lease()),
+      outbox: {
+        enqueue: async () => [],
+        claimBatch: async () => [
+          row('prototype-1', {
+            workloadLane: 'visual',
+            capacityClass: 'batch',
+          }),
+        ],
+        markPublished: async (ids) => ids.length,
+        markFailed: async () => true,
+      },
+    });
+
+    await expect(drainer.drainOnce()).resolves.toBe(1);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('publishes two interactive visual commands without self-counting either attempt', async () => {
+    const publish = jest.fn().mockResolvedValue(undefined);
+    const utilization = createUtilizationReader({
+      executor: {
+        execute: async () => ({
+          rows: [
+            {
+              attempt_status: 'dispatched',
+              published_at: null,
+              workload_lane: 'visual',
+              capacity_class: 'interactive',
+            },
+            {
+              attempt_status: 'dispatched',
+              published_at: null,
+              workload_lane: 'visual',
+              capacity_class: 'interactive',
+            },
+          ],
+        }),
+      },
+    });
+    const drainer = createOutboxDrainer({
+      executor: { execute: async () => [] },
+      publisher: { publish },
+      getUtilization: () => utilization.read(),
+      getUncertainWorkerCount: async () => 0,
+      enableNotify: false,
+      acquireOutboxLease: async (work) => work(lease()),
+      outbox: {
+        enqueue: async () => [],
+        claimBatch: async () => [
+          row('interactive-1', {
+            workloadLane: 'visual',
+            capacityClass: 'interactive',
+          }),
+          row('interactive-2', {
+            workloadLane: 'visual',
+            capacityClass: 'interactive',
+          }),
+        ],
+        markPublished: async (ids) => ids.length,
+        markFailed: async () => true,
+      },
+    });
+
+    await expect(drainer.drainOnce()).resolves.toBe(2);
+    expect(publish).toHaveBeenCalledTimes(2);
   });
 });

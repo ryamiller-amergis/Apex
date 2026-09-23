@@ -7,14 +7,12 @@ import { sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import {
   isAiRunBlobRef,
+  isAiRunV2CapacityClass,
   isAiRunV2WorkloadLane,
   type AiRunBlobRef,
+  type AiRunV2CapacityClass,
   type AiRunV2WorkloadLane,
 } from '../../../shared/types/aiRunV2';
-import {
-  isVisualSubjectKind,
-  type VisualSubjectKind,
-} from '../../../shared/types/aiRunV2VisualSpec';
 import {
   withDistributedLease,
   type HeldDistributedLease,
@@ -47,7 +45,7 @@ export type QueuedAttemptRow = Readonly<{
  */
 export type RetryContext = Readonly<{
   workloadLane: AiRunV2WorkloadLane;
-  visualSubjectKind?: VisualSubjectKind;
+  capacityClass: AiRunV2CapacityClass;
   specRef: AiRunBlobRef;
   attemptCount: number;
 }>;
@@ -227,7 +225,7 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
     const result = await deps.executor.execute(sql`
       SELECT
         o.payload->>'workloadLane' AS workload_lane,
-        o.payload->>'visualSubjectKind' AS visual_subject_kind,
+        o.payload->>'capacityClass' AS capacity_class,
         o.payload->'specRef' AS spec_ref,
         (
           SELECT COUNT(*)::int
@@ -248,18 +246,13 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
     if (
       !isAiRunV2WorkloadLane(found.workload_lane) ||
       !isAiRunBlobRef(specRef) ||
-      (
-        found.workload_lane === 'visual'
-        && !isVisualSubjectKind(found.visual_subject_kind)
-      )
+      !isAiRunV2CapacityClass(found.capacity_class)
     ) {
       return null;
     }
     return {
       workloadLane: found.workload_lane,
-      ...(isVisualSubjectKind(found.visual_subject_kind)
-        ? { visualSubjectKind: found.visual_subject_kind }
-        : {}),
+      capacityClass: found.capacity_class,
       specRef,
       attemptCount: Number(found.attempt_count ?? 0),
     };
@@ -290,7 +283,7 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
       await deps.attempts.dispatchNextAttempt({
         runId: row.runId,
         workloadLane: context.workloadLane,
-        visualSubjectKind: context.visualSubjectKind,
+        capacityClass: context.capacityClass,
         specRef: context.specRef,
       });
       metrics.increment('orchestrator.reconciler.retry_dispatched');

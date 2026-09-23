@@ -138,7 +138,7 @@ describe('AI-run V2 run attempt repository', () => {
         projectId: 'project-1',
         lane: 'background',
         workloadLane: 'visual',
-        visualSubjectKind: 'design-prototype',
+        capacityClass: 'batch',
         timeoutAt: '2026-09-18T13:00:00.000Z',
         specRef,
       }),
@@ -215,6 +215,7 @@ describe('AI-run V2 run attempt repository', () => {
         projectId: 'project-1',
         lane: 'background',
         workloadLane: 'document',
+        capacityClass: 'batch',
         timeoutAt: '2026-09-18T13:00:00.000Z',
         specRef,
       }),
@@ -239,6 +240,7 @@ describe('AI-run V2 run attempt repository', () => {
       repo.dispatchNextAttempt({
         runId: 'run-1',
         workloadLane: 'document',
+        capacityClass: 'batch',
         specRef,
       }),
     ).rejects.toThrow('cancelled run');

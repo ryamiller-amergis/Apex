@@ -5,8 +5,10 @@
  * command payload, so in-flight counts join back to the originating outbox row.
  */
 import { sql } from 'drizzle-orm';
-import { isAiRunV2WorkloadLane } from '../../../shared/types/aiRunV2';
-import { isVisualSubjectKind } from '../../../shared/types/aiRunV2VisualSpec';
+import {
+  isAiRunV2CapacityClass,
+  isAiRunV2WorkloadLane,
+} from '../../../shared/types/aiRunV2';
 import type { SqlExecutor } from '../aiRunV2/outboxRepository';
 import { emptyUtilization, providerForLane } from './providerGovernor';
 import type { ProviderUtilization } from './types';
@@ -16,9 +18,10 @@ export type UtilizationReaderDeps = Readonly<{
 }>;
 
 type LaneCountRow = Readonly<{
+  attempt_status: unknown;
+  published_at: unknown;
   workload_lane: unknown;
-  visual_subject_kind: unknown;
-  in_flight: unknown;
+  capacity_class: unknown;
 }>;
 
 function resultRows<T>(result: unknown): T[] {
@@ -31,9 +34,10 @@ export function createUtilizationReader(deps: UtilizationReaderDeps) {
     async read(): Promise<ProviderUtilization> {
       const result = await deps.executor.execute(sql`
         SELECT
+          a.status AS attempt_status,
+          o.published_at,
           o.payload->>'workloadLane' AS workload_lane,
-          o.payload->>'visualSubjectKind' AS visual_subject_kind,
-          COUNT(*)::int AS in_flight
+          o.payload->>'capacityClass' AS capacity_class
         FROM ai_run_attempts a
         JOIN agent_runs r
           ON r.id = a.run_id
@@ -42,34 +46,39 @@ export function createUtilizationReader(deps: UtilizationReaderDeps) {
           ON o.attempt_id = a.id
          AND o.kind = 'dispatch_command'
         WHERE a.status IN ('dispatched', 'running', 'checking_worker', 'finalizing')
-        GROUP BY 1, 2
       `);
 
       const utilization = {
         cursorInFlight: 0,
         bedrockInFlight: 0,
         laneInFlight: { ...emptyUtilization().laneInFlight },
-        visualSubjectInFlight: {
-          ...emptyUtilization().visualSubjectInFlight,
+        providerClassInFlight: {
+          cursor: { ...emptyUtilization().providerClassInFlight.cursor },
+          bedrock: { ...emptyUtilization().providerClassInFlight.bedrock },
         },
       };
 
       for (const row of resultRows<LaneCountRow>(result)) {
+        const countsAsInFlight =
+          row.attempt_status === 'running'
+          || row.attempt_status === 'checking_worker'
+          || row.attempt_status === 'finalizing'
+          || (
+            row.attempt_status === 'dispatched'
+            && row.published_at != null
+          );
+        if (!countsAsInFlight) continue;
         const lane = row.workload_lane;
         if (!isAiRunV2WorkloadLane(lane)) continue;
-        const count = Number(row.in_flight ?? 0);
-        if (!Number.isFinite(count) || count <= 0) continue;
-        utilization.laneInFlight[lane] += count;
-        if (providerForLane(lane) === 'cursor') {
-          utilization.cursorInFlight += count;
+        const provider = providerForLane(lane);
+        utilization.laneInFlight[lane] += 1;
+        if (provider === 'cursor') {
+          utilization.cursorInFlight += 1;
         } else {
-          utilization.bedrockInFlight += count;
+          utilization.bedrockInFlight += 1;
         }
-        if (
-          lane === 'visual'
-          && isVisualSubjectKind(row.visual_subject_kind)
-        ) {
-          utilization.visualSubjectInFlight[row.visual_subject_kind] += count;
+        if (isAiRunV2CapacityClass(row.capacity_class)) {
+          utilization.providerClassInFlight[provider][row.capacity_class] += 1;
         }
       }
 

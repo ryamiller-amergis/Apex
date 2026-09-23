@@ -13,7 +13,11 @@ const baseRow = (id: string, extra: Partial<OutboxRow> = {}): OutboxRow => ({
   kind: 'dispatch_command',
   runId: 'run-1',
   attemptId: 'attempt-1',
-  payload: { workloadLane: 'document', dispatchMessageId: id },
+  payload: {
+    workloadLane: 'document',
+    capacityClass: 'batch',
+    dispatchMessageId: id,
+  },
   availableAt: '2026-09-18T12:00:00.000Z',
   claimedBy: 'drainer',
   claimedAt: '2026-09-18T12:00:00.000Z',
@@ -39,6 +43,7 @@ describe('providerGovernor', () => {
     expect(
       evaluateDispatchCapacity({
         lane: 'document',
+        capacityClass: 'batch',
         utilization: util,
         uncertainWorkerCount: 0,
         uncertainPauseThreshold: 2,
@@ -52,6 +57,7 @@ describe('providerGovernor', () => {
     expect(
       evaluateDispatchCapacity({
         lane: 'visual',
+        capacityClass: 'batch',
         utilization: bedrock,
         uncertainWorkerCount: 0,
         uncertainPauseThreshold: 2,
@@ -64,6 +70,7 @@ describe('providerGovernor', () => {
     expect(
       evaluateDispatchCapacity({
         lane: 'document',
+        capacityClass: 'batch',
         utilization: emptyUtilization(),
         uncertainWorkerCount: 2,
         uncertainPauseThreshold: 2,
@@ -85,6 +92,7 @@ describe('providerGovernor', () => {
     expect(
       evaluateDispatchCapacity({
         lane: 'document',
+        capacityClass: 'batch',
         utilization: util,
         uncertainWorkerCount: 0,
         uncertainPauseThreshold: 2,
@@ -97,14 +105,14 @@ describe('providerGovernor', () => {
       baseRow(`prototype-${index}`, {
         payload: {
           workloadLane: 'visual',
-          visualSubjectKind: 'design-prototype',
+          capacityClass: 'batch',
           dispatchMessageId: `prototype-${index}`,
         },
       }));
     const uiLabRow = baseRow('ui-lab', {
       payload: {
         workloadLane: 'visual',
-        visualSubjectKind: 'ui-lab-screen',
+        capacityClass: 'interactive',
         dispatchMessageId: 'ui-lab',
       },
     });
@@ -118,11 +126,49 @@ describe('providerGovernor', () => {
 
     expect(allowed).toHaveLength(2);
     expect(
-      allowed.map((item) => item.outbox.payload.visualSubjectKind),
-    ).toEqual(['design-prototype', 'ui-lab-screen']);
+      allowed.map((item) => item.outbox.payload.capacityClass),
+    ).toEqual(['batch', 'interactive']);
     expect(allowed.length).toBeLessThanOrEqual(
       DEFAULT_PROVIDER_CAPACITY.bedrockCap,
     );
+  });
+
+  it('allows two interactive visual runs but never exceeds provider cap two', () => {
+    const planned = planAdmissionBatch({
+      rows: [
+        baseRow('interactive-1', {
+          payload: {
+            workloadLane: 'visual',
+            capacityClass: 'interactive',
+            dispatchMessageId: 'interactive-1',
+          },
+        }),
+        baseRow('interactive-2', {
+          payload: {
+            workloadLane: 'visual',
+            capacityClass: 'interactive',
+            dispatchMessageId: 'interactive-2',
+          },
+        }),
+        baseRow('interactive-3', {
+          payload: {
+            workloadLane: 'visual',
+            capacityClass: 'interactive',
+            dispatchMessageId: 'interactive-3',
+          },
+        }),
+      ],
+      utilization: emptyUtilization(),
+      uncertainWorkerCount: 0,
+    });
+
+    expect(
+      planned.map((item) => item.decision.status),
+    ).toEqual(['allow', 'allow', 'deny']);
+    expect(planned[2].decision).toEqual({
+      status: 'deny',
+      reason: 'provider_cap',
+    });
   });
 });
 
@@ -133,7 +179,7 @@ describe('admissionController', () => {
       baseRow('b', {
         payload: {
           workloadLane: 'visual',
-          visualSubjectKind: 'design-prototype',
+          capacityClass: 'batch',
           dispatchMessageId: 'b',
         },
       }),

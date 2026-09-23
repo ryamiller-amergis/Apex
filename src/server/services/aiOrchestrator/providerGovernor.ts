@@ -10,7 +10,7 @@ import type {
   ProviderUtilization,
 } from './types';
 import { DEFAULT_PROVIDER_CAPACITY } from './types';
-import type { VisualSubjectKind } from '../../../shared/types/aiRunV2VisualSpec';
+import type { AiRunV2CapacityClass } from '../../../shared/types/aiRunV2';
 
 export function providerForLane(lane: AiOrchestratorLane): AiOrchestratorProvider {
   return lane === 'visual' ? 'bedrock' : 'cursor';
@@ -22,7 +22,7 @@ export function evaluateDispatchCapacity(input: {
   config?: ProviderCapacityConfig;
   uncertainWorkerCount: number;
   uncertainPauseThreshold: number;
-  visualSubjectKind?: VisualSubjectKind | null;
+  capacityClass?: AiRunV2CapacityClass | null;
 }): DispatchDecision {
   const config = input.config ?? DEFAULT_PROVIDER_CAPACITY;
   if (input.uncertainWorkerCount >= input.uncertainPauseThreshold) {
@@ -40,22 +40,20 @@ export function evaluateDispatchCapacity(input: {
     return { status: 'deny', reason: 'provider_cap' };
   }
 
-  if (input.lane === 'visual') {
-    if (!input.visualSubjectKind) {
-      return { status: 'deny', reason: 'unknown_visual_subject' };
-    }
-    if (input.visualSubjectKind === 'design-prototype') {
-      const prototypeSlots = Math.max(
+  if (!input.capacityClass) {
+    return { status: 'deny', reason: 'unknown_capacity_class' };
+  }
+  if (provider === 'bedrock' && input.capacityClass === 'batch') {
+      const batchSlots = Math.max(
         0,
-        config.bedrockCap - config.uiLabReservedBedrockSlots,
+        config.bedrockCap - config.interactiveReservedBedrockSlots,
       );
       if (
-        input.utilization.visualSubjectInFlight['design-prototype']
-        >= prototypeSlots
+        input.utilization.providerClassInFlight.bedrock.batch
+        >= batchSlots
       ) {
-        return { status: 'deny', reason: 'ui_lab_reserved' };
+        return { status: 'deny', reason: 'interactive_reserved' };
       }
-    }
   }
 
   const laneFloor = config.laneFloors[input.lane];
@@ -99,9 +97,9 @@ export function emptyUtilization(): ProviderUtilization {
       fast: 0,
       agentic: 0,
     },
-    visualSubjectInFlight: {
-      'design-prototype': 0,
-      'ui-lab-screen': 0,
+    providerClassInFlight: {
+      cursor: { interactive: 0, batch: 0 },
+      bedrock: { interactive: 0, batch: 0 },
     },
   };
 }

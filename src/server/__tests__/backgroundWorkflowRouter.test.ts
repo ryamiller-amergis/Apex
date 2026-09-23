@@ -524,6 +524,7 @@ describe('background workflow routing', () => {
         threadId: 'thread-1',
         projectId: 'project-1',
         workloadLane: 'document',
+        capacityClass: 'batch',
         specification: expect.objectContaining({ workflowClass: 'prd' }),
       }),
     );

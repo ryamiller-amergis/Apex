@@ -18,6 +18,7 @@ function command(overrides: Record<string, unknown> = {}) {
     kind: 'dispatch_command',
     transport: 'servicebus-blob-v2',
     workloadLane: 'document',
+    capacityClass: 'batch',
     specRef,
     ...overrides,
   };
@@ -355,7 +356,7 @@ describe('V2 worker run loop', () => {
   it('reports a truncated model response as internal_error with the message a human can act on', async () => {
     const { bus, calls } = fakeBus(command({
       workloadLane: 'visual',
-      visualSubjectKind: 'design-prototype',
+      capacityClass: 'batch',
     }));
     const worker = createV2Worker({
       bus,
@@ -398,7 +399,7 @@ describe('V2 worker run loop', () => {
   it('settles a truncated attempt instead of leaving it to be redelivered', async () => {
     const { bus, calls } = fakeBus(command({
       workloadLane: 'visual',
-      visualSubjectKind: 'design-prototype',
+      capacityClass: 'batch',
     }));
     const worker = createV2Worker({
       bus,

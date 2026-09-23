@@ -151,8 +151,7 @@ export function createOutboxRepository(executor: SqlExecutor) {
             )
           ORDER BY
             CASE
-              WHEN payload->>'workloadLane' = 'visual'
-                AND payload->>'visualSubjectKind' = 'design-prototype'
+              WHEN payload->>'capacityClass' = 'batch'
               THEN 1
               ELSE 0
             END ASC,

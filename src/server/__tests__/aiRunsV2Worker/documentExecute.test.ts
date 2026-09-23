@@ -25,6 +25,7 @@ function command(): AiRunV2Command {
     kind: 'dispatch_command',
     transport: 'servicebus-blob-v2',
     workloadLane: 'document',
+    capacityClass: 'batch',
     specRef: {
       container: 'ai-run-artifacts',
       key: 'runs/run-1/attempts/1/spec.json',

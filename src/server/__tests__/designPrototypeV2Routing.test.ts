@@ -186,9 +186,7 @@ describe('generatePrototypesForPrd V2 transport routing', () => {
 
     expect(admitV2Run).toHaveBeenCalledTimes(2);
     expect(admitV2Run.mock.calls[0][0].workloadLane).toBe('visual');
-    expect(admitV2Run.mock.calls[0][0].visualSubjectKind).toBe(
-      'design-prototype',
-    );
+    expect(admitV2Run.mock.calls[0][0].capacityClass).toBe('batch');
     expect(admitV2Run.mock.calls[0][0].projectId).toBe('Apex');
     expect(admitV2Run.mock.calls[0][0].executionSnapshot).toMatchObject({
       workflowClass: 'design-prototype',

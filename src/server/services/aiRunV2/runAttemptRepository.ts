@@ -3,10 +3,12 @@ import { randomUUID } from 'node:crypto';
 import { db } from '../../db/drizzle';
 import {
   AI_RUN_V2_SCHEMA_VERSION,
+  isAiRunV2CapacityClass,
   isAiRunV2ActiveAttemptStatus,
   isAiRunV2TerminalAttemptStatus,
   type AiRunBlobRef,
   type AiRunV2AttemptStatus,
+  type AiRunV2CapacityClass,
   type AiRunV2Checkpoint,
   type AiRunV2Command,
   type AiRunV2FailureCategory,
@@ -17,7 +19,6 @@ import type {
   AgentRunStatus,
   AgentRunTerminalReason,
 } from '../../../shared/types/agentRunLifecycle';
-import type { VisualSubjectKind } from '../../../shared/types/aiRunV2VisualSpec';
 import type { TerminalRunSubject } from '../agentRunTerminalEffects';
 import { createOutboxRepository, type SqlExecutor } from './outboxRepository';
 import { createInboxRepository } from './inboxRepository';
@@ -51,7 +52,7 @@ export type CreateQueuedV2RunResult =
 export type CreateDispatchedV2RunInput = CreateQueuedV2RunInput &
   Readonly<{
     workloadLane: AiRunV2WorkloadLane;
-    visualSubjectKind?: VisualSubjectKind;
+    capacityClass: AiRunV2CapacityClass;
   }>;
 
 export type CreateDispatchedV2RunResult =
@@ -69,7 +70,7 @@ export type DispatchNextAttemptInput = Readonly<{
   runId: string;
   dispatchMessageId?: string;
   workloadLane: AiRunV2WorkloadLane;
-  visualSubjectKind?: VisualSubjectKind;
+  capacityClass: AiRunV2CapacityClass;
   specRef: AiRunBlobRef;
   deadlineAt?: string;
 }>;
@@ -191,17 +192,11 @@ function toV1TerminalReason(
     : null;
 }
 
-function assertVisualSubjectIdentity(input: {
-  workloadLane: AiRunV2WorkloadLane;
-  visualSubjectKind?: VisualSubjectKind;
+function assertCapacityClass(input: {
+  capacityClass: AiRunV2CapacityClass;
 }): void {
-  if (
-    (input.workloadLane === 'visual')
-    !== (input.visualSubjectKind !== undefined)
-  ) {
-    throw new Error(
-      'visualSubjectKind is required only for visual dispatch commands',
-    );
+  if (!isAiRunV2CapacityClass(input.capacityClass)) {
+    throw new Error('capacityClass is required for V2 dispatch commands');
   }
 }
 
@@ -339,7 +334,7 @@ export function createRunAttemptRepository(options?: {
           await transactionBoundRepository.dispatchNextAttempt({
             runId: created.runId,
             workloadLane: input.workloadLane,
-            visualSubjectKind: input.visualSubjectKind,
+            capacityClass: input.capacityClass,
             specRef: input.specRef,
             deadlineAt: input.timeoutAt,
           });
@@ -357,7 +352,7 @@ export function createRunAttemptRepository(options?: {
     async dispatchNextAttempt(
       input: DispatchNextAttemptInput
     ): Promise<DispatchNextAttemptResult> {
-      assertVisualSubjectIdentity(input);
+      assertCapacityClass(input);
       return runInTransaction(async (executor) => {
         const outbox = createOutboxRepository(executor);
 
@@ -443,9 +438,7 @@ export function createRunAttemptRepository(options?: {
             kind: 'dispatch_command',
             transport: 'servicebus-blob-v2',
             workloadLane: input.workloadLane,
-            ...(input.visualSubjectKind
-              ? { visualSubjectKind: input.visualSubjectKind }
-              : {}),
+            capacityClass: input.capacityClass,
             specRef: input.specRef,
             deadlineAt,
           };
@@ -527,9 +520,7 @@ export function createRunAttemptRepository(options?: {
           kind: 'dispatch_command',
           transport: 'servicebus-blob-v2',
           workloadLane: input.workloadLane,
-          ...(input.visualSubjectKind
-            ? { visualSubjectKind: input.visualSubjectKind }
-            : {}),
+          capacityClass: input.capacityClass,
           specRef: input.specRef,
           deadlineAt,
         };

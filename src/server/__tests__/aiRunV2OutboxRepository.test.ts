@@ -106,15 +106,17 @@ describe('AI-run V2 outbox repository', () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
-  it('claims UI Lab before prototype rows without adding another queue', async () => {
+  it('claims interactive work before batch work without domain inspection', async () => {
     const execute = jest.fn().mockResolvedValue([]);
     const repo = createOutboxRepository({ execute });
 
     await repo.claimBatch(10, 'drainer-a', 60_000);
 
     const query = sqlText(execute.mock.calls[0][0]);
-    expect(query).toContain("payload->>'visualSubjectKind'");
-    expect(query).toContain("'design-prototype'");
+    expect(query).toContain("payload->>'capacityClass'");
+    expect(query).toContain("'batch'");
     expect(query).toContain('CASE');
+    expect(query).not.toContain('ui-lab');
+    expect(query).not.toContain('design-prototype');
   });
 });
