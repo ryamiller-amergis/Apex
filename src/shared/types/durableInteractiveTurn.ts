@@ -134,6 +134,8 @@ export type InteractiveTurnAcceptedResponse = Readonly<{
 }>;
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const CANONICAL_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO_TIMESTAMP_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-](\d{2}):(\d{2}))$/;
 
@@ -143,6 +145,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+export function isCanonicalUuid(value: unknown): value is string {
+  return typeof value === 'string' && CANONICAL_UUID_PATTERN.test(value);
 }
 
 function isIsoTimestamp(value: unknown): value is string {
@@ -231,7 +237,7 @@ function isAttachmentRef(
 ): value is ImmutableInteractiveAttachmentRef {
   if (!isRecord(value)) return false;
   return (
-    isNonEmptyString(value.attachmentId) &&
+    isCanonicalUuid(value.attachmentId) &&
     isNonEmptyString(value.name) &&
     isNonEmptyString(value.contentType) &&
     isNonNegativeInteger(value.sizeBytes) &&
@@ -253,7 +259,7 @@ function isMcpDescriptor(
         value.serverName === 'maxview') &&
       (value.profileId === undefined || isNonEmptyString(value.profileId)) &&
       (value.calendarSessionId === undefined ||
-        isNonEmptyString(value.calendarSessionId)) &&
+        isCanonicalUuid(value.calendarSessionId)) &&
       typeof value.enableRepoBrowse === 'boolean'
     );
   }
@@ -285,7 +291,7 @@ function isMcpDescriptor(
 function isToolGrant(value: unknown): value is FrozenInteractiveToolGrant {
   if (!isRecord(value)) return false;
   if (
-    !isNonEmptyString(value.userId) ||
+    !isCanonicalUuid(value.userId) ||
     !isNonEmptyString(value.projectId) ||
     !Array.isArray(value.allowedOperations) ||
     !value.allowedOperations.every(
@@ -341,9 +347,9 @@ export function isDurableInteractiveTurnSpecification(
   if (
     value.schemaVersion !== DURABLE_INTERACTIVE_SPEC_VERSION ||
     value.kind !== 'interactive-turn' ||
-    !isNonEmptyString(value.turnId) ||
-    !isNonEmptyString(value.threadId) ||
-    !isNonEmptyString(value.userId) ||
+    !isCanonicalUuid(value.turnId) ||
+    !isCanonicalUuid(value.threadId) ||
+    !isCanonicalUuid(value.userId) ||
     !isNonEmptyString(value.projectId) ||
     !isInteractiveClass(value.interactiveClass) ||
     !isWorkflowClass(value.workflowClass) ||
@@ -367,7 +373,7 @@ export function isDurableInteractiveTurnSpecification(
 
   if (
     !isRecord(value.currentMessage) ||
-    !isNonEmptyString(value.currentMessage.id) ||
+    !isCanonicalUuid(value.currentMessage.id) ||
     typeof value.currentMessage.text !== 'string' ||
     typeof value.currentMessage.hidden !== 'boolean' ||
     !Array.isArray(value.currentMessage.attachments) ||
@@ -381,7 +387,7 @@ export function isDurableInteractiveTurnSpecification(
     !value.transcript.every(
       (entry) =>
         isRecord(entry) &&
-        isNonEmptyString(entry.id) &&
+        isCanonicalUuid(entry.id) &&
         (entry.role === 'user' || entry.role === 'agent') &&
         typeof entry.text === 'string' &&
         isIsoTimestamp(entry.timestamp)
@@ -424,13 +430,13 @@ export function isInteractiveDispatchOutboxPayload(
     value.schemaVersion === 2 &&
     value.kind === 'interactive_dispatch' &&
     value.transport === 'dapr-actor-v2' &&
-    isNonEmptyString(value.runId) &&
-    isNonEmptyString(value.attemptId) &&
+    isCanonicalUuid(value.runId) &&
+    isCanonicalUuid(value.attemptId) &&
     Number.isSafeInteger(value.attemptNumber) &&
     (value.attemptNumber as number) > 0 &&
-    isNonEmptyString(value.dispatchMessageId) &&
-    isNonEmptyString(value.threadId) &&
-    isNonEmptyString(value.userId) &&
+    isCanonicalUuid(value.dispatchMessageId) &&
+    isCanonicalUuid(value.threadId) &&
+    isCanonicalUuid(value.userId) &&
     isInteractiveClass(value.interactiveClass) &&
     value.workloadLane === value.interactiveClass &&
     value.capacityClass === 'interactive' &&

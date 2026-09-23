@@ -6,12 +6,18 @@ import {
 } from '../services/interactiveActorHost/interactiveSessionActorClass';
 import type { InteractiveSessionActor } from '../services/interactiveActorHost/interactiveSessionActor';
 
+const TURN_ID = '10000000-0000-4000-8000-000000000001';
+const THREAD_ID = '10000000-0000-4000-8000-000000000002';
+const USER_ID = '10000000-0000-4000-8000-000000000003';
+const RUN_ID = '20000000-0000-4000-8000-000000000001';
+const DISPATCH_MESSAGE_ID = '20000000-0000-4000-8000-000000000002';
+
 const durableSnapshot: DurableInteractiveTurnSpecification = {
   schemaVersion: 1,
   kind: 'interactive-turn',
-  turnId: 'turn-1',
-  threadId: 'thread-1',
-  userId: 'user-1',
+  turnId: TURN_ID,
+  threadId: THREAD_ID,
+  userId: USER_ID,
   projectId: 'project-1',
   interactiveClass: 'fast',
   workflowClass: 'home-chat',
@@ -19,7 +25,7 @@ const durableSnapshot: DurableInteractiveTurnSpecification = {
   effort: 'low',
   skill: null,
   currentMessage: {
-    id: 'turn-1',
+    id: TURN_ID,
     text: 'Hello',
     hidden: false,
     attachments: [],
@@ -49,14 +55,14 @@ describe('interactive compatibility actor class', () => {
       getBootstrap: jest.fn().mockResolvedValue({
         projectId: 'project-1',
         run: {
-          id: 'run-1',
-          threadId: 'thread-1',
+          id: RUN_ID,
+          threadId: THREAD_ID,
           status: 'dispatched',
           projectId: 'project-1',
           lane: 'ai-runs-interactive',
           queuedAt: '2026-09-23T15:00:00.000Z',
           dispatchedAt: '2026-09-23T15:00:01.000Z',
-          dispatchMessageId: 'dispatch-1',
+          dispatchMessageId: DISPATCH_MESSAGE_ID,
           executionSnapshot: durableSnapshot,
           cancelRequested: false,
           cancelState: null,
@@ -71,13 +77,13 @@ describe('interactive compatibility actor class', () => {
     setInteractiveActorRuntime({ logic, callback });
 
     const actor = {
-      getActorId: () => ({ getId: () => 'thread-1' }),
+      getActorId: () => ({ getId: () => THREAD_ID }),
     } as unknown as InteractiveSessionActorImpl;
 
     await expect(
       InteractiveSessionActorImpl.prototype.handleTurn.call(actor, {
-        runId: 'run-1',
-        dispatchMessageId: 'dispatch-1',
+        runId: RUN_ID,
+        dispatchMessageId: DISPATCH_MESSAGE_ID,
       })
     ).rejects.toThrow(
       'Durable interactive turns require the direct actor V2 executor'

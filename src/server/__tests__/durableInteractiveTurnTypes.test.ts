@@ -1,5 +1,6 @@
 import {
   absoluteTurnMsForClass,
+  isCanonicalUuid,
   isDurableInteractiveTurnSpecification,
   isInteractiveDispatchOutboxPayload,
   type DurableInteractiveTurnSpecification,
@@ -7,13 +8,22 @@ import {
 import { isAiRunTransportVersion } from '../../shared/types/aiRunV2';
 
 const SHA256 = 'a'.repeat(64);
+const TURN_ID = '10000000-0000-4000-8000-000000000001';
+const THREAD_ID = '10000000-0000-4000-8000-000000000002';
+const USER_ID = 'AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE';
+const TRANSCRIPT_MESSAGE_ID = '10000000-0000-4000-8000-000000000003';
+const ATTACHMENT_ID = '10000000-0000-4000-8000-000000000004';
+const CALENDAR_SESSION_ID = '10000000-0000-4000-8000-000000000005';
+const RUN_ID = '20000000-0000-4000-8000-000000000001';
+const ATTEMPT_ID = '20000000-0000-4000-8000-000000000002';
+const DISPATCH_MESSAGE_ID = '20000000-0000-4000-8000-000000000003';
 
 const validSpecification: DurableInteractiveTurnSpecification = {
   schemaVersion: 1,
   kind: 'interactive-turn',
-  turnId: 'turn-1',
-  threadId: 'thread-1',
-  userId: 'user-1',
+  turnId: TURN_ID,
+  threadId: THREAD_ID,
+  userId: USER_ID,
   projectId: 'project-1',
   interactiveClass: 'fast',
   workflowClass: 'home-chat',
@@ -21,14 +31,14 @@ const validSpecification: DurableInteractiveTurnSpecification = {
   effort: 'low',
   skill: null,
   currentMessage: {
-    id: 'message-1',
+    id: TURN_ID,
     text: 'Hello',
     hidden: false,
     attachments: [],
   },
   transcript: [
     {
-      id: 'message-0',
+      id: TRANSCRIPT_MESSAGE_ID,
       role: 'agent',
       text: 'How can I help?',
       timestamp: '2026-09-23T14:00:00.000Z',
@@ -47,6 +57,22 @@ const validSpecification: DurableInteractiveTurnSpecification = {
   },
 };
 
+const validDispatch = {
+  schemaVersion: 2,
+  kind: 'interactive_dispatch',
+  transport: 'dapr-actor-v2',
+  runId: RUN_ID,
+  attemptId: ATTEMPT_ID,
+  attemptNumber: 1,
+  dispatchMessageId: DISPATCH_MESSAGE_ID,
+  threadId: THREAD_ID,
+  userId: USER_ID,
+  interactiveClass: 'fast',
+  workloadLane: 'fast',
+  capacityClass: 'interactive',
+  deadlineAt: '2026-09-23T15:00:00.000Z',
+} as const;
+
 describe('durable interactive turn contracts', () => {
   it('recognizes the direct actor transport', () => {
     expect(isAiRunTransportVersion('dapr-actor-v2')).toBe(true);
@@ -55,6 +81,23 @@ describe('durable interactive turn contracts', () => {
   it('freezes only the approved class absolute deadlines', () => {
     expect(absoluteTurnMsForClass('fast')).toBe(300_000);
     expect(absoluteTurnMsForClass('agentic')).toBe(1_200_000);
+  });
+
+  it.each([
+    '10000000-0000-4000-8000-000000000001',
+    'AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE',
+  ])('accepts canonical UUID %s case-insensitively', (value) => {
+    expect(isCanonicalUuid(value)).toBe(true);
+  });
+
+  it.each([
+    'run-1',
+    '10000000000040008000000000000001',
+    '{10000000-0000-4000-8000-000000000001}',
+    '10000000-0000-4000-8000-00000000000g',
+    '10000000-0000-4000-8000-00000000001',
+  ])('rejects malformed UUID %s', (value) => {
+    expect(isCanonicalUuid(value)).toBe(false);
   });
 
   it('accepts a complete frozen turn specification', () => {
@@ -75,7 +118,7 @@ describe('durable interactive turn contracts', () => {
           ...validSpecification.currentMessage,
           attachments: [
             {
-              attachmentId: 'attachment-1',
+              attachmentId: ATTACHMENT_ID,
               name: 'notes.txt',
               contentType: 'text/plain',
               sizeBytes: 12,
@@ -100,6 +143,7 @@ describe('durable interactive turn contracts', () => {
             kind: 'internal-proxy',
             serverName: 'ado-skills',
             profileId: 'profile-1',
+            calendarSessionId: CALENDAR_SESSION_ID,
             enableRepoBrowse: true,
           },
           {
@@ -110,7 +154,7 @@ describe('durable interactive turn contracts', () => {
           },
         ],
         toolGrant: {
-          userId: 'user-1',
+          userId: USER_ID,
           projectId: 'project-1',
           allowedOperations: ['ado:read', 'ado:write'],
           expiresAt: '2026-09-23T15:00:00.000Z',
@@ -131,20 +175,157 @@ describe('durable interactive turn contracts', () => {
     ).toBe(true);
   });
 
+  it.each(['turnId', 'threadId', 'userId'] as const)(
+    'rejects malformed top-level %s',
+    (field) => {
+      expect(
+        isDurableInteractiveTurnSpecification({
+          ...validSpecification,
+          [field]: `${field}-1`,
+        })
+      ).toBe(false);
+    }
+  );
+
+  it.each([
+    [
+      'current message id',
+      {
+        ...validSpecification,
+        currentMessage: {
+          ...validSpecification.currentMessage,
+          id: 'message-1',
+        },
+      },
+    ],
+    [
+      'attachment id',
+      {
+        ...validSpecification,
+        currentMessage: {
+          ...validSpecification.currentMessage,
+          attachments: [
+            {
+              attachmentId: 'attachment-1',
+              name: 'notes.txt',
+              contentType: 'text/plain',
+              sizeBytes: 12,
+              sha256: SHA256,
+              blobRef: {
+                container: 'ai-run-artifacts',
+                key: 'interactive/attachment',
+              },
+              materializedPath: 'attachments/notes.txt',
+            },
+          ],
+        },
+      },
+    ],
+    [
+      'transcript message id',
+      {
+        ...validSpecification,
+        transcript: [
+          {
+            id: 'message-0',
+            role: 'agent',
+            text: 'How can I help?',
+            timestamp: '2026-09-23T14:00:00.000Z',
+          },
+        ],
+      },
+    ],
+    [
+      'calendar session id',
+      {
+        ...validSpecification,
+        mcpServers: [
+          {
+            kind: 'internal-proxy',
+            serverName: 'calendar-assistant',
+            calendarSessionId: 'calendar-session-1',
+            enableRepoBrowse: false,
+          },
+        ],
+      },
+    ],
+    [
+      'tool grant user id',
+      {
+        ...validSpecification,
+        toolGrant: {
+          userId: 'user-1',
+          projectId: 'project-1',
+          allowedOperations: ['ado:read'],
+          expiresAt: '2026-09-23T15:00:00.000Z',
+          encryptedAdoToken: null,
+        },
+      },
+    ],
+  ])('rejects malformed nested %s', (_name, candidate) => {
+    expect(isDurableInteractiveTurnSpecification(candidate)).toBe(false);
+  });
+
+  it('keeps semantic strings outside UUID validation', () => {
+    expect(
+      isDurableInteractiveTurnSpecification({
+        ...validSpecification,
+        projectId: 'project-1',
+        model: 'model-a',
+        skill: {
+          name: 'skill-name',
+          path: '.cursor/skills/skill-name/SKILL.md',
+          sha256: SHA256,
+          content: '# Skill',
+        },
+        grounding: {
+          provider: 'ado',
+          project: 'Apex',
+          repository: 'Apex',
+          sha: 'abc123',
+          profileId: 'profile-1',
+        },
+        mcpServers: [
+          {
+            kind: 'internal-proxy',
+            serverName: 'ado-skills',
+            profileId: 'profile-1',
+            enableRepoBrowse: true,
+          },
+        ],
+      })
+    ).toBe(true);
+  });
+
+  it.each([
+    'runId',
+    'attemptId',
+    'dispatchMessageId',
+    'threadId',
+    'userId',
+  ] as const)('rejects a dispatch with malformed %s', (field) => {
+    expect(
+      isInteractiveDispatchOutboxPayload({
+        ...validDispatch,
+        [field]: `${field}-1`,
+      })
+    ).toBe(false);
+  });
+
   it('accepts strict ISO timestamps on a real leap day', () => {
     expect(
       isDurableInteractiveTurnSpecification({
         ...validSpecification,
         transcript: [
           {
-            id: 'message-0',
+            id: TRANSCRIPT_MESSAGE_ID,
             role: 'agent',
             text: 'Leap day',
             timestamp: '2024-02-29T23:59:59.123Z',
           },
         ],
         toolGrant: {
-          userId: 'user-1',
+          userId: USER_ID,
           projectId: 'project-1',
           allowedOperations: ['ado:read'],
           expiresAt: '2024-02-29T23:59:59+05:30',
@@ -164,18 +345,7 @@ describe('durable interactive turn contracts', () => {
   ])('rejects impossible ISO calendar timestamp %s', (deadlineAt) => {
     expect(
       isInteractiveDispatchOutboxPayload({
-        schemaVersion: 2,
-        kind: 'interactive_dispatch',
-        transport: 'dapr-actor-v2',
-        runId: 'run-1',
-        attemptId: 'attempt-1',
-        attemptNumber: 1,
-        dispatchMessageId: 'fence-1',
-        threadId: 'thread-1',
-        userId: 'user-1',
-        interactiveClass: 'fast',
-        workloadLane: 'fast',
-        capacityClass: 'interactive',
+        ...validDispatch,
         deadlineAt,
       })
     ).toBe(false);
@@ -192,7 +362,7 @@ describe('durable interactive turn contracts', () => {
         ...validSpecification,
         transcript: [
           {
-            id: 'message-0',
+            id: TRANSCRIPT_MESSAGE_ID,
             role: 'agent',
             text: 'Invalid timestamp',
             timestamp,
@@ -229,7 +399,7 @@ describe('durable interactive turn contracts', () => {
         ...validSpecification,
         transcript: [
           {
-            id: 'message-0',
+            id: TRANSCRIPT_MESSAGE_ID,
             role: 'agent',
             text: 'How can I help?',
             timestamp: 'not-a-timestamp',
@@ -245,7 +415,7 @@ describe('durable interactive turn contracts', () => {
           ...validSpecification.currentMessage,
           attachments: [
             {
-              attachmentId: 'attachment-1',
+              attachmentId: ATTACHMENT_ID,
               name: 'notes.txt',
               contentType: 'text/plain',
               sizeBytes: 12,
@@ -269,62 +439,19 @@ describe('durable interactive turn contracts', () => {
   });
 
   it('accepts a matching interactive dispatch', () => {
-    expect(
-      isInteractiveDispatchOutboxPayload({
-        schemaVersion: 2,
-        kind: 'interactive_dispatch',
-        transport: 'dapr-actor-v2',
-        runId: 'run-1',
-        attemptId: 'attempt-1',
-        attemptNumber: 1,
-        dispatchMessageId: 'fence-1',
-        threadId: 'thread-1',
-        userId: 'user-1',
-        interactiveClass: 'fast',
-        workloadLane: 'fast',
-        capacityClass: 'interactive',
-        deadlineAt: '2026-09-23T15:00:00.000Z',
-      })
-    ).toBe(true);
+    expect(isInteractiveDispatchOutboxPayload(validDispatch)).toBe(true);
   });
 
   it('rejects a dispatch with a mismatched lane and class', () => {
     expect(
       isInteractiveDispatchOutboxPayload({
-        schemaVersion: 2,
-        kind: 'interactive_dispatch',
-        transport: 'dapr-actor-v2',
-        runId: 'run-1',
-        attemptId: 'attempt-1',
-        attemptNumber: 1,
-        dispatchMessageId: 'fence-1',
-        threadId: 'thread-1',
-        userId: 'user-1',
-        interactiveClass: 'fast',
+        ...validDispatch,
         workloadLane: 'agentic',
-        capacityClass: 'interactive',
-        deadlineAt: '2026-09-23T15:00:00.000Z',
       })
     ).toBe(false);
   });
 
   it('rejects dispatches with malformed deadlines or attempt numbers', () => {
-    const validDispatch = {
-      schemaVersion: 2,
-      kind: 'interactive_dispatch',
-      transport: 'dapr-actor-v2',
-      runId: 'run-1',
-      attemptId: 'attempt-1',
-      attemptNumber: 1,
-      dispatchMessageId: 'fence-1',
-      threadId: 'thread-1',
-      userId: 'user-1',
-      interactiveClass: 'agentic',
-      workloadLane: 'agentic',
-      capacityClass: 'interactive',
-      deadlineAt: '2026-09-23T15:00:00.000Z',
-    };
-
     expect(
       isInteractiveDispatchOutboxPayload({
         ...validDispatch,

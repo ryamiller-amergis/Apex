@@ -37,9 +37,9 @@ const snapshot: Readonly<ExecutionSnapshot> = Object.freeze({
 const durableSnapshot: DurableInteractiveTurnSpecification = {
   schemaVersion: 1,
   kind: 'interactive-turn',
-  turnId: 'turn-1',
-  threadId: 'thread-1',
-  userId: 'user-1',
+  turnId: '10000000-0000-4000-8000-000000000001',
+  threadId: '10000000-0000-4000-8000-000000000002',
+  userId: '10000000-0000-4000-8000-000000000003',
   projectId: 'project-1',
   interactiveClass: 'fast',
   workflowClass: 'home-chat',
@@ -47,7 +47,7 @@ const durableSnapshot: DurableInteractiveTurnSpecification = {
   effort: 'low',
   skill: null,
   currentMessage: {
-    id: 'turn-1',
+    id: '10000000-0000-4000-8000-000000000001',
     text: 'Hello',
     hidden: false,
     attachments: [],

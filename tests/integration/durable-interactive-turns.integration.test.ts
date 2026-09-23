@@ -20,7 +20,17 @@ const DUPLICATE_TURN_ID = '20000000-0000-4000-8000-000000000002';
 const SECOND_TURN_ID = '20000000-0000-4000-8000-000000000003';
 const ATTACHMENT_ID = '30000000-0000-4000-8000-000000000001';
 const ATTACHMENT_MESSAGE_ID = '30000000-0000-4000-8000-000000000002';
-const USER_ID = `${PREFIX}user`;
+const USER_ID = '40000000-0000-4000-8000-000000000001';
+const FIRST_RUN_ID = '50000000-0000-4000-8000-000000000001';
+const SECOND_RUN_ID = '50000000-0000-4000-8000-000000000002';
+const SAME_THREAD_RUN_ID = '50000000-0000-4000-8000-000000000003';
+const INVALID_CLASS_RUN_ID = '50000000-0000-4000-8000-000000000004';
+const INVALID_HASH_RUN_ID = '50000000-0000-4000-8000-000000000005';
+const MISSING_FIELDS_RUN_ID = '50000000-0000-4000-8000-000000000006';
+const DUPLICATE_TURN_RUN_ID = '50000000-0000-4000-8000-000000000007';
+const DOWN_CHECK_RUN_ID = '50000000-0000-4000-8000-000000000008';
+const ATTEMPT_ID = '60000000-0000-4000-8000-000000000001';
+const DISPATCH_MESSAGE_ID = '60000000-0000-4000-8000-000000000002';
 
 const specification: DurableInteractiveTurnSpecification = {
   schemaVersion: 1,
@@ -73,7 +83,11 @@ async function cleanupFixtures(): Promise<void> {
      WHERE run_id LIKE $1 OR idempotency_key LIKE $1`,
     [`${PREFIX}%`]
   );
-  await pool.query(`DELETE FROM agent_runs WHERE id LIKE $1`, [`${PREFIX}%`]);
+  await pool.query(
+    `DELETE FROM agent_runs
+     WHERE id LIKE $1 OR id = ANY($2::text[])`,
+    [`${PREFIX}%`, [FIRST_RUN_ID, SECOND_RUN_ID]]
+  );
   await pool.query(
     `DELETE FROM chat_threads
      WHERE id::text = ANY($1::text[])`,
@@ -174,7 +188,7 @@ describe('durable interactive turns migration', () => {
         `INSERT INTO agent_runs (
            id, thread_id, status, interactive_class
          ) VALUES ($1, $2, 'completed', 'slow')`,
-        [`${PREFIX}invalid-class`, FIRST_THREAD_ID]
+        [INVALID_CLASS_RUN_ID, FIRST_THREAD_ID]
       )
     ).rejects.toMatchObject({
       code: '23514',
@@ -187,7 +201,7 @@ describe('durable interactive turns migration', () => {
            id, thread_id, status, client_turn_id, client_turn_hash
          ) VALUES ($1, $2, 'completed', $3, $4)`,
         [
-          `${PREFIX}invalid-turn-hash`,
+          INVALID_HASH_RUN_ID,
           FIRST_THREAD_ID,
           DUPLICATE_TURN_ID,
           'A'.repeat(64),
@@ -215,7 +229,7 @@ describe('durable interactive turns migration', () => {
         `INSERT INTO agent_runs (
            id, thread_id, status, transport_version
          ) VALUES ($1, $2, 'completed', 'dapr-actor-v2')`,
-        [`${PREFIX}missing-dapr-fields`, FIRST_THREAD_ID]
+        [MISSING_FIELDS_RUN_ID, FIRST_THREAD_ID]
       )
     ).rejects.toMatchObject({
       code: '23514',
@@ -223,7 +237,7 @@ describe('durable interactive turns migration', () => {
     });
 
     await insertDaprRun({
-      runId: `${PREFIX}run-1`,
+      runId: FIRST_RUN_ID,
       threadId: FIRST_THREAD_ID,
       turnId: FIRST_TURN_ID,
       interactiveClass: 'fast',
@@ -237,9 +251,9 @@ describe('durable interactive turns migration', () => {
          $1, $2, 1, $3, 'queued', 'pending', $4::jsonb
        )`,
       [
-        `${PREFIX}attempt-1`,
-        `${PREFIX}run-1`,
-        `${PREFIX}fence-1`,
+        ATTEMPT_ID,
+        FIRST_RUN_ID,
+        DISPATCH_MESSAGE_ID,
         JSON.stringify(specification),
       ]
     );
@@ -248,7 +262,7 @@ describe('durable interactive turns migration', () => {
       `SELECT spec_snapshot
        FROM ai_run_attempts
        WHERE id = $1`,
-      [`${PREFIX}attempt-1`]
+      [ATTEMPT_ID]
     );
     expect(attempt.rows[0]?.spec_snapshot).toEqual(specification);
 
@@ -257,12 +271,7 @@ describe('durable interactive turns migration', () => {
         `INSERT INTO agent_runs (
            id, thread_id, status, client_turn_id, client_turn_hash
          ) VALUES ($1, $2, 'completed', $3, $4)`,
-        [
-          `${PREFIX}duplicate-turn`,
-          FIRST_THREAD_ID,
-          FIRST_TURN_ID,
-          'b'.repeat(64),
-        ]
+        [DUPLICATE_TURN_RUN_ID, FIRST_THREAD_ID, FIRST_TURN_ID, 'b'.repeat(64)]
       )
     ).rejects.toMatchObject({
       code: '23505',
@@ -271,7 +280,7 @@ describe('durable interactive turns migration', () => {
 
     await expect(
       insertDaprRun({
-        runId: `${PREFIX}same-thread`,
+        runId: SAME_THREAD_RUN_ID,
         threadId: FIRST_THREAD_ID,
         turnId: DUPLICATE_TURN_ID,
         interactiveClass: 'agentic',
@@ -283,7 +292,7 @@ describe('durable interactive turns migration', () => {
     });
 
     await insertDaprRun({
-      runId: `${PREFIX}run-2`,
+      runId: SECOND_RUN_ID,
       threadId: SECOND_THREAD_ID,
       turnId: SECOND_TURN_ID,
       interactiveClass: 'agentic',
@@ -333,7 +342,7 @@ describe('durable interactive turns migration', () => {
         `INSERT INTO agent_runs (
            id, thread_id, status, transport_version
          ) VALUES ($1, $2, 'completed', 'dapr-actor-v2')`,
-        [`${PREFIX}down-check`, FIRST_THREAD_ID]
+        [DOWN_CHECK_RUN_ID, FIRST_THREAD_ID]
       )
     ).rejects.toMatchObject({
       code: '23514',
