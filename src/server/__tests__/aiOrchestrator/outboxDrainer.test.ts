@@ -1078,7 +1078,7 @@ describe('outboxDrainer', () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it('excludes seen deferred rows on refill after a slow invoke so deeper work is claimed', async () => {
+  it('refills a freed planner slot before claiming deeper work on the next page', async () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date('2026-09-23T15:00:00.000Z'));
     try {
@@ -1158,7 +1158,7 @@ describe('outboxDrainer', () => {
         .mockImplementationOnce(
           () => new Promise<Response>(() => undefined),
         )
-        .mockResolvedValueOnce(
+        .mockResolvedValue(
           new Response(JSON.stringify({ accepted: true }), {
             status: 200,
             headers: { 'content-type': 'application/json' },
@@ -1225,12 +1225,9 @@ describe('outboxDrainer', () => {
         await Promise.resolve();
       }
       expect(fetchImpl).toHaveBeenCalledTimes(1);
-      expect(releaseClaim).toHaveBeenCalledWith(
-        'deferred-seen',
-        expect.any(String),
-        '2026-09-23T15:00:05.000Z',
-        'interactive_cap',
-      );
+      // Waiters stay claimed until the in-flight selected row finishes so a
+      // freed planner slot can refill them in the same drain.
+      expect(releaseClaim).not.toHaveBeenCalled();
 
       await jest.advanceTimersByTimeAsync(5_000);
       await expect(pending).resolves.toBe(1);
@@ -1241,11 +1238,17 @@ describe('outboxDrainer', () => {
         expect.any(String),
         'deadline_expired',
       );
-      expect(claimInteractiveCandidates).toHaveBeenCalledTimes(3);
+      expect(claimInteractiveCandidates).toHaveBeenCalledTimes(2);
       expect(fetchImpl).toHaveBeenCalledTimes(2);
       expect(markPublished).toHaveBeenCalledWith(
-        ['deeper-valid'],
+        ['deferred-seen'],
         expect.any(String),
+      );
+      expect(releaseClaim).toHaveBeenCalledWith(
+        'deeper-valid',
+        expect.any(String),
+        expect.any(String),
+        'interactive_cap',
       );
       expect(claims.get('deferred-seen')).toEqual({
         claimedBy: null,
@@ -1764,6 +1767,345 @@ describe('outboxDrainer', () => {
     );
     expect(releaseClaim).toHaveBeenCalledWith(
       'second-waiter',
+      expect.any(String),
+      expect.any(String),
+      'interactive_cap',
+    );
+  });
+
+  it('frees a planner-owned slot when expire returns already-terminal after selection', async () => {
+    const selectedExpired = {
+      ...interactiveRow(
+        'selected-already-terminal',
+        'fast',
+        '2026-09-23T15:05:00.000Z',
+        {
+          attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          dispatchMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        },
+      ),
+      attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      createdAt: '2026-09-23T15:00:00.000Z',
+    };
+    const queuedWaiter = {
+      ...interactiveRow(
+        'waiter-after-already-terminal',
+        'fast',
+        '2026-09-23T15:10:00.000Z',
+        {
+          attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          dispatchMessageId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        },
+      ),
+      attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      createdAt: '2026-09-23T15:00:01.000Z',
+    };
+    const dispatch = jest.fn().mockResolvedValue(undefined);
+    const markPublished = jest.fn(async (ids: string[]) => ids.length);
+    const failExpiredInteractiveDispatch = jest
+      .fn()
+      .mockResolvedValue({ outcome: 'already-terminal' } as const);
+    let nowCalls = 0;
+    const base = emptyUtilization();
+    const drainer = createOutboxDrainer({
+      executor: { execute: async () => [] },
+      publisher: { publish: jest.fn() },
+      interactiveDispatchClient: { dispatch },
+      attempts: {
+        readInteractiveDispatchState: async () => 'queued',
+        markInteractiveDispatched: async () => 'dispatched',
+        failExpiredInteractiveDispatch,
+        failInvalidInteractiveDispatch: async () => terminalizedResult(),
+      },
+      getUtilization: async () => ({
+        ...base,
+        cursorInFlight: 15,
+        interactiveClassInFlight: { fast: 15, agentic: 0 },
+        providerClassInFlight: {
+          ...base.providerClassInFlight,
+          cursor: { batch: 0, interactive: 15 },
+        },
+      }),
+      getUncertainWorkerCount: async () => 0,
+      clock: {
+        now: () => {
+          nowCalls += 1;
+          return nowCalls === 1
+            ? new Date('2026-09-23T15:00:00.000Z')
+            : new Date('2026-09-23T15:06:00.000Z');
+        },
+        sleep: async () => undefined,
+      },
+      enableNotify: false,
+      acquireOutboxLease: async (work) => work(lease()),
+      outbox: fakeOutbox({
+        claimInteractiveCandidates: jest
+          .fn()
+          .mockResolvedValueOnce([selectedExpired, queuedWaiter])
+          .mockResolvedValue([]),
+        markPublished,
+      }),
+    });
+
+    await expect(drainer.drainOnce()).resolves.toBe(2);
+    expect(failExpiredInteractiveDispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(markPublished).toHaveBeenCalledWith(
+      ['selected-already-terminal'],
+      expect.any(String),
+    );
+    expect(markPublished).toHaveBeenCalledWith(
+      ['waiter-after-already-terminal'],
+      expect.any(String),
+    );
+  });
+
+  it('frees a planner-owned slot on mark fence-mismatch and dispatches a waiter', async () => {
+    const selectedStale = {
+      ...interactiveRow(
+        'selected-fence-mismatch',
+        'fast',
+        '2026-09-23T15:10:00.000Z',
+        {
+          attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          dispatchMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        },
+      ),
+      attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      createdAt: '2026-09-23T15:00:00.000Z',
+    };
+    const queuedWaiter = {
+      ...interactiveRow(
+        'waiter-after-mark-fence-mismatch',
+        'fast',
+        '2026-09-23T15:10:00.000Z',
+        {
+          attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          dispatchMessageId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        },
+      ),
+      attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      createdAt: '2026-09-23T15:00:01.000Z',
+    };
+    const dispatch = jest.fn().mockResolvedValue(undefined);
+    const markPublished = jest.fn(async (ids: string[]) => ids.length);
+    const markDiscarded = jest.fn().mockResolvedValue(true);
+    const base = emptyUtilization();
+    const drainer = createOutboxDrainer({
+      executor: { execute: async () => [] },
+      publisher: { publish: jest.fn() },
+      interactiveDispatchClient: { dispatch },
+      attempts: {
+        readInteractiveDispatchState: async () => 'queued',
+        markInteractiveDispatched: jest
+          .fn()
+          .mockResolvedValueOnce('fence-mismatch')
+          .mockResolvedValue('dispatched'),
+        failExpiredInteractiveDispatch: async () => terminalizedResult(),
+        failInvalidInteractiveDispatch: async () => terminalizedResult(),
+      },
+      getUtilization: async () => ({
+        ...base,
+        cursorInFlight: 15,
+        interactiveClassInFlight: { fast: 15, agentic: 0 },
+        providerClassInFlight: {
+          ...base.providerClassInFlight,
+          cursor: { batch: 0, interactive: 15 },
+        },
+      }),
+      getUncertainWorkerCount: async () => 0,
+      clock: {
+        now: () => new Date('2026-09-23T15:00:00.000Z'),
+        sleep: async () => undefined,
+      },
+      enableNotify: false,
+      acquireOutboxLease: async (work) => work(lease()),
+      outbox: fakeOutbox({
+        claimInteractiveCandidates: jest
+          .fn()
+          .mockResolvedValueOnce([selectedStale, queuedWaiter])
+          .mockResolvedValue([]),
+        markPublished,
+        markDiscarded,
+      }),
+    });
+
+    await expect(drainer.drainOnce()).resolves.toBe(1);
+    expect(markDiscarded).toHaveBeenCalledWith(
+      'selected-fence-mismatch',
+      expect.any(String),
+      'fence_mismatch',
+    );
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(markPublished).toHaveBeenCalledWith(
+      ['waiter-after-mark-fence-mismatch'],
+      expect.any(String),
+    );
+  });
+
+  it('frees a planner-owned slot when markInteractiveDispatched throws', async () => {
+    const selectedThrow = {
+      ...interactiveRow(
+        'selected-mark-throw',
+        'fast',
+        '2026-09-23T15:10:00.000Z',
+        {
+          attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          dispatchMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        },
+      ),
+      attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      createdAt: '2026-09-23T15:00:00.000Z',
+    };
+    const queuedWaiter = {
+      ...interactiveRow(
+        'waiter-after-mark-throw',
+        'fast',
+        '2026-09-23T15:10:00.000Z',
+        {
+          attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          dispatchMessageId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        },
+      ),
+      attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      createdAt: '2026-09-23T15:00:01.000Z',
+    };
+    const dispatch = jest.fn().mockResolvedValue(undefined);
+    const markPublished = jest.fn(async (ids: string[]) => ids.length);
+    const markFailed = jest.fn().mockResolvedValue(true);
+    const base = emptyUtilization();
+    const drainer = createOutboxDrainer({
+      executor: { execute: async () => [] },
+      publisher: { publish: jest.fn() },
+      interactiveDispatchClient: { dispatch },
+      attempts: {
+        readInteractiveDispatchState: async () => 'queued',
+        markInteractiveDispatched: jest
+          .fn()
+          .mockRejectedValueOnce(new Error('db unavailable'))
+          .mockResolvedValue('dispatched'),
+        failExpiredInteractiveDispatch: async () => terminalizedResult(),
+        failInvalidInteractiveDispatch: async () => terminalizedResult(),
+      },
+      getUtilization: async () => ({
+        ...base,
+        cursorInFlight: 15,
+        interactiveClassInFlight: { fast: 15, agentic: 0 },
+        providerClassInFlight: {
+          ...base.providerClassInFlight,
+          cursor: { batch: 0, interactive: 15 },
+        },
+      }),
+      getUncertainWorkerCount: async () => 0,
+      clock: {
+        now: () => new Date('2026-09-23T15:00:00.000Z'),
+        sleep: async () => undefined,
+      },
+      enableNotify: false,
+      acquireOutboxLease: async (work) => work(lease()),
+      outbox: fakeOutbox({
+        claimInteractiveCandidates: jest
+          .fn()
+          .mockResolvedValueOnce([selectedThrow, queuedWaiter])
+          .mockResolvedValue([]),
+        markPublished,
+        markFailed,
+      }),
+    });
+
+    await expect(drainer.drainOnce()).resolves.toBe(1);
+    expect(markFailed).toHaveBeenCalledWith(
+      'selected-mark-throw',
+      expect.any(String),
+      'db unavailable',
+      10_000,
+    );
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(markPublished).toHaveBeenCalledWith(
+      ['waiter-after-mark-throw'],
+      expect.any(String),
+    );
+  });
+
+  it('does not free a utilization-only recovery slot on fence-mismatch', async () => {
+    const recoveryStale = {
+      ...interactiveRow(
+        'recovery-fence-mismatch',
+        'fast',
+        '2026-09-23T15:10:00.000Z',
+        {
+          attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          dispatchMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        },
+      ),
+      attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      createdAt: '2026-09-23T15:00:00.000Z',
+    };
+    const queuedWaiter = {
+      ...interactiveRow(
+        'waiter-after-recovery-fence',
+        'fast',
+        '2026-09-23T15:10:00.000Z',
+        {
+          attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          dispatchMessageId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        },
+      ),
+      attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      createdAt: '2026-09-23T15:00:01.000Z',
+    };
+    const dispatch = jest.fn().mockResolvedValue(undefined);
+    const releaseClaim = jest.fn().mockResolvedValue(true);
+    const markDiscarded = jest.fn().mockResolvedValue(true);
+    const base = emptyUtilization();
+    const drainer = createOutboxDrainer({
+      executor: { execute: async () => [] },
+      publisher: { publish: jest.fn() },
+      interactiveDispatchClient: { dispatch },
+      attempts: {
+        readInteractiveDispatchState: jest
+          .fn()
+          .mockResolvedValueOnce('dispatched')
+          .mockResolvedValueOnce('queued'),
+        markInteractiveDispatched: async () => 'fence-mismatch',
+        failExpiredInteractiveDispatch: async () => terminalizedResult(),
+        failInvalidInteractiveDispatch: async () => terminalizedResult(),
+      },
+      getUtilization: async () => ({
+        ...base,
+        cursorInFlight: 16,
+        interactiveClassInFlight: { fast: 16, agentic: 0 },
+        providerClassInFlight: {
+          ...base.providerClassInFlight,
+          cursor: { batch: 0, interactive: 16 },
+        },
+      }),
+      getUncertainWorkerCount: async () => 0,
+      clock: {
+        now: () => new Date('2026-09-23T15:00:00.000Z'),
+        sleep: async () => undefined,
+      },
+      enableNotify: false,
+      acquireOutboxLease: async (work) => work(lease()),
+      outbox: fakeOutbox({
+        claimInteractiveCandidates: jest
+          .fn()
+          .mockResolvedValueOnce([recoveryStale, queuedWaiter])
+          .mockResolvedValue([]),
+        markDiscarded,
+        releaseClaim,
+      }),
+    });
+
+    await expect(drainer.drainOnce()).resolves.toBe(0);
+    expect(markDiscarded).toHaveBeenCalledWith(
+      'recovery-fence-mismatch',
+      expect.any(String),
+      'fence_mismatch',
+    );
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(releaseClaim).toHaveBeenCalledWith(
+      'waiter-after-recovery-fence',
       expect.any(String),
       expect.any(String),
       'interactive_cap',

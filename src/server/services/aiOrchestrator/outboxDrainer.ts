@@ -253,7 +253,14 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
       InteractiveDispatchState,
       'queued' | 'dispatched' | 'running'
     >;
+    /** True when utilization snapshot counted this attempt as in-flight. */
     capacityCharged: boolean;
+    /**
+     * True when this drain's planner incremented the mutable reservation for
+     * the attempt. Distinct from utilization-backed charge so abandon paths
+     * (fence mismatch / not-found / mark throw) release only planner slots.
+     */
+    reservationOwned: boolean;
   }>;
 
   function compareActiveInteractiveCandidates(
@@ -294,14 +301,15 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
     interactiveClass: InteractiveClass,
     reservation: ProviderCapacityReservation,
     releasedAttemptIds: Set<string>,
-    capacityCharged: boolean,
+    shouldRelease: boolean,
   ): void {
-    if (!capacityCharged) return;
+    if (!shouldRelease) return;
     if (releasedAttemptIds.has(attemptId)) return;
     releasedAttemptIds.add(attemptId);
     releaseInteractiveClassReservation(interactiveClass, reservation);
   }
 
+  /** Terminal sync: free utilization-backed or planner-owned slots. */
   function releaseInteractiveReservation(
     active: ActiveInteractiveCandidate,
     reservation: ProviderCapacityReservation,
@@ -312,7 +320,26 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
       active.candidate.payload.interactiveClass,
       reservation,
       releasedAttemptIds,
-      active.capacityCharged,
+      active.capacityCharged || active.reservationOwned,
+    );
+  }
+
+  /**
+   * Abandon without a live in-flight attempt: free only planner-owned slots.
+   * Utilization-backed recovery must keep the slot on fence mismatch so a
+   * live replacement is not over-admitted.
+   */
+  function releasePlannerOwnedReservation(
+    active: ActiveInteractiveCandidate,
+    reservation: ProviderCapacityReservation,
+    releasedAttemptIds: Set<string>,
+  ): void {
+    releaseChargedAttemptCapacity(
+      active.candidate.payload.attemptId,
+      active.candidate.payload.interactiveClass,
+      reservation,
+      releasedAttemptIds,
+      active.reservationOwned,
     );
   }
 
@@ -349,14 +376,30 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
           return { published: 0, discarded };
         }
         case 'already-terminal': {
+          // Attempt is terminal now; sync utilization-backed and planner slots.
+          releaseInteractiveReservation(
+            active,
+            reservation,
+            releasedAttemptIds,
+          );
           const published = await markRowPublished(row);
           return { published, discarded: 0 };
         }
         case 'fence-mismatch': {
+          releasePlannerOwnedReservation(
+            active,
+            reservation,
+            releasedAttemptIds,
+          );
           const discarded = await discardRow(row, 'fence_mismatch');
           return { published: 0, discarded };
         }
         case 'not-found': {
+          releasePlannerOwnedReservation(
+            active,
+            reservation,
+            releasedAttemptIds,
+          );
           const discarded =
             await discardRow(row, 'attempt_not_found');
           return { published: 0, discarded };
@@ -369,6 +412,11 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
         }
       }
     } catch (err) {
+      releasePlannerOwnedReservation(
+        active,
+        reservation,
+        releasedAttemptIds,
+      );
       const detail = err instanceof Error ? err.message : String(err);
       await outbox.markFailed(row.id, holderId, detail, 10_000);
       metrics.increment('orchestrator.interactive.terminalize_failed');
@@ -400,6 +448,12 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
         expectedDispatchMessageId: payload.dispatchMessageId,
       });
     } catch (err) {
+      // Mark never took durable ownership; free planner reservation only.
+      releasePlannerOwnedReservation(
+        active,
+        reservation,
+        releasedAttemptIds,
+      );
       const detail = err instanceof Error ? err.message : String(err);
       await outbox.markFailed(row.id, holderId, detail, 10_000);
       metrics.increment('orchestrator.interactive.invoke_failed');
@@ -430,10 +484,20 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
               return { published, discarded: 0 };
             }
             case 'fence-mismatch': {
+              releasePlannerOwnedReservation(
+                active,
+                reservation,
+                releasedAttemptIds,
+              );
               const discarded = await discardRow(row, 'fence_mismatch');
               return { published: 0, discarded };
             }
             case 'not-found': {
+              releasePlannerOwnedReservation(
+                active,
+                reservation,
+                releasedAttemptIds,
+              );
               const discarded =
                 await discardRow(row, 'attempt_not_found');
               return { published: 0, discarded };
@@ -452,10 +516,20 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
           break;
         }
         case 'fence-mismatch': {
+          releasePlannerOwnedReservation(
+            active,
+            reservation,
+            releasedAttemptIds,
+          );
           const discarded = await discardRow(row, 'fence_mismatch');
           return { published: 0, discarded };
         }
         case 'not-found': {
+          releasePlannerOwnedReservation(
+            active,
+            reservation,
+            releasedAttemptIds,
+          );
           const discarded = await discardRow(row, 'attempt_not_found');
           return { published: 0, discarded };
         }
@@ -501,6 +575,7 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
             releasedAttemptIds,
           );
         }
+        // Attempt is durably dispatched; keep the reservation for recovery.
         const detail = err instanceof Error ? err.message : String(err);
         await outbox.markFailed(row.id, holderId, detail, 10_000);
         metrics.increment('orchestrator.interactive.invoke_failed');
@@ -514,6 +589,15 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
       const published = await markRowPublished(row);
       return { published, discarded: 0 };
     } catch (err) {
+      // After a successful mark as dispatched, ownership stays with recovery.
+      // Before that, only planner-owned slots must be returned.
+      if (marked !== 'dispatched' && marked !== 'already-dispatched') {
+        releasePlannerOwnedReservation(
+          active,
+          reservation,
+          releasedAttemptIds,
+        );
+      }
       const detail = err instanceof Error ? err.message : String(err);
       await outbox.markFailed(row.id, holderId, detail, 10_000);
       metrics.increment('orchestrator.interactive.invoke_failed');
@@ -595,6 +679,7 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
             candidate,
             state,
             capacityCharged: state !== 'queued',
+            reservationOwned: false,
           };
           if (Date.parse(candidate.payload.deadlineAt) <= now.getTime()) {
             const outcome = await expireInteractiveCandidate(
@@ -619,16 +704,75 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
       }
     }
 
-    const selected = planInteractiveAdmissionBatch({
+    const selectedById = new Map(
+      queued.map((active) => [active.candidate.outbox.id, active]),
+    );
+    const consumeQueuedForDispatch = (
+      candidates: InteractiveAdmissionCandidate[],
+    ): ActiveInteractiveCandidate[] =>
+      candidates.map((candidate) => {
+        const active = selectedById.get(candidate.outbox.id);
+        if (!active) {
+          throw new Error(
+            `Missing selected interactive candidate: ${candidate.outbox.id}`,
+          );
+        }
+        selectedById.delete(candidate.outbox.id);
+        return {
+          ...active,
+          capacityCharged: true,
+          reservationOwned: true,
+        };
+      });
+
+    const initialSelected = planInteractiveAdmissionBatch({
       candidates: queued.map(({ candidate }) => candidate),
       utilization,
       reservation,
       config,
       now,
     });
-    const selectedIds = new Set(
-      selected.map((candidate) => candidate.outbox.id),
-    );
+    const dispatchable = [
+      ...recovery,
+      ...consumeQueuedForDispatch(initialSelected),
+    ].sort(compareActiveInteractiveCandidates);
+    for (const active of dispatchable) {
+      const outcome = await dispatchInteractiveCandidate(
+        active,
+        reservation,
+        releasedAttemptIds,
+      );
+      published += outcome.published;
+      discarded += outcome.discarded;
+    }
+
+    // After releases during dispatch, admit waiters that still fit before
+    // deferring them under a stale interactive_cap.
+    while (selectedById.size > 0) {
+      const refillSelected = planInteractiveAdmissionBatch({
+        candidates: [...selectedById.values()].map(
+          ({ candidate }) => candidate,
+        ),
+        utilization,
+        reservation,
+        config,
+        now,
+      });
+      if (refillSelected.length === 0) break;
+      const refillDispatchable = consumeQueuedForDispatch(
+        refillSelected,
+      ).sort(compareActiveInteractiveCandidates);
+      for (const active of refillDispatchable) {
+        const outcome = await dispatchInteractiveCandidate(
+          active,
+          reservation,
+          releasedAttemptIds,
+        );
+        published += outcome.published;
+        discarded += outcome.discarded;
+      }
+    }
+
     const interactiveInFlight =
       reservation.interactiveClassInFlight.fast +
       reservation.interactiveClassInFlight.agentic;
@@ -641,39 +785,13 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
     const deferredUntil = new Date(
       clock.now().getTime() + 5_000,
     ).toISOString();
-    for (const active of queued) {
-      if (selectedIds.has(active.candidate.outbox.id)) continue;
+    for (const active of selectedById.values()) {
       await outbox.releaseClaim(
         active.candidate.outbox.id,
         holderId,
         deferredUntil,
         deferralReason,
       );
-    }
-
-    const selectedById = new Map(
-      queued.map((active) => [active.candidate.outbox.id, active]),
-    );
-    const dispatchable = [
-      ...recovery,
-      ...selected.map((candidate) => {
-        const active = selectedById.get(candidate.outbox.id);
-        if (!active) {
-          throw new Error(
-            `Missing selected interactive candidate: ${candidate.outbox.id}`,
-          );
-        }
-        return { ...active, capacityCharged: true };
-      }),
-    ].sort(compareActiveInteractiveCandidates);
-    for (const active of dispatchable) {
-      const outcome = await dispatchInteractiveCandidate(
-        active,
-        reservation,
-        releasedAttemptIds,
-      );
-      published += outcome.published;
-      discarded += outcome.discarded;
     }
     return { published, discarded };
   }

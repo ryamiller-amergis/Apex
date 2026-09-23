@@ -637,3 +637,42 @@ git diff --check: exit 0
 ### Concerns
 
 None specific to this capacity-ownership fix.
+
+## Review remediation: planner-owned reservation release
+
+### Spec reference
+
+Final Task 3 review (after charged-only release) found planner-owned
+mutable reservation slots still leaked when:
+
+- expire returned `already-terminal`
+- mark returned `fence-mismatch` / `not-found`
+- `markInteractiveDispatched` threw before durable ownership
+
+Utilization-only recovery must still keep the slot on fence mismatch so a
+live replacement is not over-admitted. Waiters deferred before dispatch could
+not observe a slot freed during dispatch in the same drain.
+
+### Implementation
+
+- Track `reservationOwned` separately from utilization-backed `capacityCharged`.
+- Terminal sync releases when either flag is set.
+- Abandon paths (fence mismatch, not-found, mark throw, terminalize failure)
+  release only when `reservationOwned`.
+- Defer unselected waiters only after dispatch/refill so a freed planner slot
+  can admit them in the same drain.
+
+### Verification
+
+```text
+PASS: outboxDrainer 28 tests
+PASS: aiOrchestrator 6 suites / 70 tests
+npm run build:server → exit 0
+ReadLints: 0 errors
+```
+
+### Review-fix files
+
+- `src/server/services/aiOrchestrator/outboxDrainer.ts`
+- `src/server/__tests__/aiOrchestrator/outboxDrainer.test.ts`
+- `.superpowers/sdd/task-3-report.md`
