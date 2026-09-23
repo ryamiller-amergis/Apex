@@ -7,6 +7,7 @@ import type {
   AiOrchestratorProvider,
   DispatchDecision,
   InteractiveCapacityDecision,
+  ProviderCapacityReservation,
   ProviderCapacityConfig,
   ProviderUtilization,
 } from './types';
@@ -24,15 +25,36 @@ export function evaluateInteractiveCapacity(
   config: ProviderCapacityConfig = DEFAULT_PROVIDER_CAPACITY,
 ): InteractiveCapacityDecision {
   const totalInteractiveInFlight =
-    utilization.laneInFlight.fast + utilization.laneInFlight.agentic;
+    utilization.interactiveClassInFlight.fast +
+    utilization.interactiveClassInFlight.agentic;
   if (totalInteractiveInFlight >= config.interactiveCap) {
     return { status: 'deny', reason: 'interactive_cap' };
+  }
+  if (utilization.cursorInFlight >= config.cursorCap) {
+    return { status: 'deny', reason: 'provider_cap' };
   }
   return {
     status: 'allow',
     borrowed:
-      utilization.laneInFlight[interactiveClass] >=
+      utilization.interactiveClassInFlight[interactiveClass] >=
       config.laneFloors[interactiveClass],
+  };
+}
+
+export function createProviderCapacityReservation(
+  utilization: ProviderUtilization,
+): ProviderCapacityReservation {
+  return {
+    cursorInFlight: utilization.cursorInFlight,
+    bedrockInFlight: utilization.bedrockInFlight,
+    laneInFlight: { ...utilization.laneInFlight },
+    interactiveClassInFlight: {
+      ...utilization.interactiveClassInFlight,
+    },
+    providerClassInFlight: {
+      cursor: { ...utilization.providerClassInFlight.cursor },
+      bedrock: { ...utilization.providerClassInFlight.bedrock },
+    },
   };
 }
 
@@ -114,6 +136,10 @@ export function emptyUtilization(): ProviderUtilization {
     laneInFlight: {
       document: 0,
       visual: 0,
+      fast: 0,
+      agentic: 0,
+    },
+    interactiveClassInFlight: {
       fast: 0,
       agentic: 0,
     },

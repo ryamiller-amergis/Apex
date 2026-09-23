@@ -144,6 +144,12 @@ export type FailExpiredInteractiveDispatchInput = Readonly<{
   detail: string;
 }>;
 
+export type InteractiveTerminalizeResult =
+  | 'terminalized'
+  | 'already-terminal'
+  | 'fence-mismatch'
+  | 'not-found';
+
 export type RunAttemptRepository = {
   createQueuedV2Run(
     input: CreateQueuedV2RunInput,
@@ -168,7 +174,10 @@ export type RunAttemptRepository = {
   ): Promise<MarkInteractiveDispatchedResult>;
   failExpiredInteractiveDispatch(
     input: FailExpiredInteractiveDispatchInput,
-  ): Promise<void>;
+  ): Promise<InteractiveTerminalizeResult>;
+  failInvalidInteractiveDispatch(
+    input: FailExpiredInteractiveDispatchInput,
+  ): Promise<InteractiveTerminalizeResult>;
 };
 
 type TransactionRunner = <T>(
@@ -289,6 +298,164 @@ export function createRunAttemptRepository(options?: {
 }): RunAttemptRepository {
   const runInTransaction =
     options?.runInTransaction ?? defaultTransactionRunner;
+
+  async function terminalizeInteractiveDispatch(
+    input: FailExpiredInteractiveDispatchInput,
+    failureCategory: Extract<
+      AiRunV2FailureCategory,
+      'hard_timeout' | 'validation_failed'
+    >,
+    sourceName: 'timeout' | 'validation',
+  ): Promise<InteractiveTerminalizeResult> {
+    return runInTransaction(async (executor) => {
+      const result = await executor.execute(sql`
+        SELECT
+          attempt.status AS attempt_status,
+          attempt.dispatch_message_id,
+          attempt.run_id,
+          run.thread_id,
+          run.status AS run_status,
+          now() AS transition_at
+        FROM ai_run_attempts AS attempt
+        JOIN agent_runs AS run
+          ON run.id = attempt.run_id
+         AND run.transport_version = 'dapr-actor-v2'
+        WHERE attempt.id = ${input.attemptId}
+        FOR UPDATE OF attempt, run
+      `);
+      const row = resultRows<InteractiveAttemptRow>(result)[0];
+      if (!row) return 'not-found';
+      if (row.dispatch_message_id !== input.expectedDispatchMessageId) {
+        return 'fence-mismatch';
+      }
+      if (
+        isAiRunV2TerminalAttemptStatus(row.attempt_status) ||
+        row.run_status === 'completed' ||
+        row.run_status === 'failed' ||
+        row.run_status === 'cancelled'
+      ) {
+        return 'already-terminal';
+      }
+      if (!row.run_id || !row.thread_id) return 'not-found';
+
+      const timestamp = transitionTimestamp(row);
+      const errorEventId = randomUUID();
+      const doneEventId = randomUUID();
+      const sourceInstance =
+        `interactive-orchestrator-${sourceName}:${input.attemptId}`;
+      const errorEvent = {
+        type: 'error' as const,
+        error: input.detail,
+        errorCode: 'fatal' as const,
+        runId: row.run_id,
+      };
+      const doneEvent = {
+        type: 'done' as const,
+        runId: row.run_id,
+      };
+
+      await executor.execute(sql`
+        UPDATE ai_run_attempts
+        SET
+          status = 'failed',
+          failure_category = ${failureCategory},
+          failure_detail = ${input.detail},
+          updated_at = ${timestamp}::timestamptz
+        WHERE id = ${input.attemptId}
+          AND dispatch_message_id = ${input.expectedDispatchMessageId}
+          AND status IN (
+            'queued',
+            'dispatched',
+            'running',
+            'checking_worker',
+            'finalizing'
+          )
+      `);
+      await executor.execute(sql`
+        UPDATE agent_runs
+        SET
+          status = 'failed',
+          last_error = ${input.detail},
+          progress_phase = 'completion',
+          progress_label = ${input.detail},
+          progress_at = ${timestamp}::timestamptz,
+          updated_at = ${timestamp}::timestamptz
+        WHERE id = ${row.run_id}
+          AND transport_version = 'dapr-actor-v2'
+          AND status IN ('queued', 'dispatched', 'running')
+      `);
+      await executor.execute(sql`
+        UPDATE chat_threads
+        SET
+          status = 'idle',
+          active_run_id = NULL,
+          last_error = ${input.detail},
+          last_activity_at = ${timestamp}::timestamptz
+        WHERE id = ${row.thread_id}::uuid
+          AND active_run_id = ${row.run_id}
+      `);
+      await executor.execute(sql`
+        INSERT INTO agent_run_events (
+          event_id,
+          thread_id,
+          run_id,
+          source_instance,
+          sequence,
+          event_timestamp,
+          event_type,
+          phase,
+          status,
+          detail,
+          event
+        ) VALUES
+        (
+          ${errorEventId}::uuid,
+          ${row.thread_id},
+          ${row.run_id},
+          ${sourceInstance},
+          1,
+          ${timestamp}::timestamptz,
+          'error',
+          'completion',
+          'failed',
+          ${input.detail},
+          ${JSON.stringify(errorEvent)}::jsonb
+        ),
+        (
+          ${doneEventId}::uuid,
+          ${row.thread_id},
+          ${row.run_id},
+          ${sourceInstance},
+          2,
+          ${timestamp}::timestamptz,
+          'done',
+          'completion',
+          'failed',
+          ${input.detail},
+          ${JSON.stringify(doneEvent)}::jsonb
+        )
+      `);
+      await executor.execute(sql`
+        SELECT pg_notify(
+          'agent_run_events',
+          json_build_object(
+            'threadId', ${row.thread_id},
+            'eventId', ${errorEventId}
+          )::text
+        )
+      `);
+      await executor.execute(sql`
+        SELECT pg_notify(
+          'agent_run_events',
+          json_build_object(
+            'threadId', ${row.thread_id},
+            'eventId', ${doneEventId}
+          )::text
+        )
+      `);
+      return 'terminalized';
+    });
+  }
 
   return {
     async readInteractiveDispatchState(
@@ -429,149 +596,22 @@ export function createRunAttemptRepository(options?: {
 
     async failExpiredInteractiveDispatch(
       input: FailExpiredInteractiveDispatchInput,
-    ): Promise<void> {
-      await runInTransaction(async (executor) => {
-        const result = await executor.execute(sql`
-          SELECT
-            attempt.status AS attempt_status,
-            attempt.dispatch_message_id,
-            attempt.run_id,
-            run.thread_id,
-            run.status AS run_status,
-            now() AS transition_at
-          FROM ai_run_attempts AS attempt
-          JOIN agent_runs AS run
-            ON run.id = attempt.run_id
-           AND run.transport_version = 'dapr-actor-v2'
-          WHERE attempt.id = ${input.attemptId}
-          FOR UPDATE OF attempt, run
-        `);
-        const row = resultRows<InteractiveAttemptRow>(result)[0];
-        if (
-          !row ||
-          row.dispatch_message_id !== input.expectedDispatchMessageId ||
-          isAiRunV2TerminalAttemptStatus(row.attempt_status)
-        ) {
-          return;
-        }
-        if (!row.run_id || !row.thread_id) return;
+    ): Promise<InteractiveTerminalizeResult> {
+      return terminalizeInteractiveDispatch(
+        input,
+        'hard_timeout',
+        'timeout',
+      );
+    },
 
-        const timestamp = transitionTimestamp(row);
-        const errorEventId = randomUUID();
-        const doneEventId = randomUUID();
-        const sourceInstance =
-          `interactive-orchestrator-timeout:${input.attemptId}`;
-        const errorEvent = {
-          type: 'error' as const,
-          error: input.detail,
-          errorCode: 'fatal' as const,
-          runId: row.run_id,
-        };
-        const doneEvent = {
-          type: 'done' as const,
-          runId: row.run_id,
-        };
-
-        await executor.execute(sql`
-          UPDATE ai_run_attempts
-          SET
-            status = 'failed',
-            failure_category = 'hard_timeout',
-            failure_detail = ${input.detail},
-            updated_at = ${timestamp}::timestamptz
-          WHERE id = ${input.attemptId}
-            AND dispatch_message_id = ${input.expectedDispatchMessageId}
-            AND status IN (
-              'queued',
-              'dispatched',
-              'running',
-              'checking_worker',
-              'finalizing'
-            )
-        `);
-        await executor.execute(sql`
-          UPDATE agent_runs
-          SET
-            status = 'failed',
-            last_error = ${input.detail},
-            progress_phase = 'completion',
-            progress_label = ${input.detail},
-            progress_at = ${timestamp}::timestamptz,
-            updated_at = ${timestamp}::timestamptz
-          WHERE id = ${row.run_id}
-            AND transport_version = 'dapr-actor-v2'
-            AND status IN ('queued', 'dispatched', 'running')
-        `);
-        await executor.execute(sql`
-          UPDATE chat_threads
-          SET
-            status = 'idle',
-            active_run_id = NULL,
-            last_error = ${input.detail},
-            last_activity_at = ${timestamp}::timestamptz
-          WHERE id = ${row.thread_id}::uuid
-            AND active_run_id = ${row.run_id}
-        `);
-        await executor.execute(sql`
-          INSERT INTO agent_run_events (
-            event_id,
-            thread_id,
-            run_id,
-            source_instance,
-            sequence,
-            event_timestamp,
-            event_type,
-            phase,
-            status,
-            detail,
-            event
-          ) VALUES
-          (
-            ${errorEventId}::uuid,
-            ${row.thread_id},
-            ${row.run_id},
-            ${sourceInstance},
-            1,
-            ${timestamp}::timestamptz,
-            'error',
-            'completion',
-            'failed',
-            ${input.detail},
-            ${JSON.stringify(errorEvent)}::jsonb
-          ),
-          (
-            ${doneEventId}::uuid,
-            ${row.thread_id},
-            ${row.run_id},
-            ${sourceInstance},
-            2,
-            ${timestamp}::timestamptz,
-            'done',
-            'completion',
-            'failed',
-            ${input.detail},
-            ${JSON.stringify(doneEvent)}::jsonb
-          )
-        `);
-        await executor.execute(sql`
-          SELECT pg_notify(
-            'agent_run_events',
-            json_build_object(
-              'threadId', ${row.thread_id},
-              'eventId', ${errorEventId}
-            )::text
-          )
-        `);
-        await executor.execute(sql`
-          SELECT pg_notify(
-            'agent_run_events',
-            json_build_object(
-              'threadId', ${row.thread_id},
-              'eventId', ${doneEventId}
-            )::text
-          )
-        `);
-      });
+    async failInvalidInteractiveDispatch(
+      input: FailExpiredInteractiveDispatchInput,
+    ): Promise<InteractiveTerminalizeResult> {
+      return terminalizeInteractiveDispatch(
+        input,
+        'validation_failed',
+        'validation',
+      );
     },
 
     async createQueuedV2Run(

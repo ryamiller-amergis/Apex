@@ -1,10 +1,15 @@
 import type { InteractiveClass } from '../../../shared/types/durableInteractiveTurn';
 import {
+  planAdmissionBatch,
   planInteractiveAdmissionBatch,
   toInteractiveAdmissionCandidate,
   type InteractiveAdmissionCandidate,
 } from '../../services/aiOrchestrator/admissionController';
-import { emptyUtilization } from '../../services/aiOrchestrator/providerGovernor';
+import {
+  createProviderCapacityReservation,
+  emptyUtilization,
+  evaluateInteractiveCapacity,
+} from '../../services/aiOrchestrator/providerGovernor';
 import type { OutboxRow } from '../../services/aiRunV2/outboxRepository';
 
 const DEADLINE_AT = '2026-09-23T16:00:00.000Z';
@@ -68,8 +73,7 @@ function utilization(input: { fast: number; agentic: number }) {
   return {
     ...base,
     cursorInFlight: input.fast + input.agentic,
-    laneInFlight: {
-      ...base.laneInFlight,
+    interactiveClassInFlight: {
       fast: input.fast,
       agentic: input.agentic,
     },
@@ -87,6 +91,19 @@ function planIds(
     maxDispatches,
     now: NOW,
   }).map((candidate) => candidate.outbox.id);
+}
+
+function backgroundRow(id: string): OutboxRow {
+  return {
+    ...row(id, 'fast', '2026-09-23T15:00:00.000Z'),
+    kind: 'dispatch_command',
+    payload: {
+      kind: 'dispatch_command',
+      workloadLane: 'document',
+      capacityClass: 'batch',
+      dispatchMessageId: `${id}-dispatch`,
+    },
+  };
 }
 
 describe('interactive admission planning', () => {
@@ -167,5 +184,77 @@ describe('interactive admission planning', () => {
         1,
       ),
     ).toEqual([]);
+  });
+
+  it('does not treat Service Bus fast lanes as Dapr fast floor usage', () => {
+    const base = emptyUtilization();
+    const mixed = {
+      ...base,
+      cursorInFlight: 16,
+      laneInFlight: {
+        ...base.laneInFlight,
+        fast: 14,
+      },
+      interactiveClassInFlight: {
+        fast: 0,
+        agentic: 2,
+      },
+    };
+
+    expect(evaluateInteractiveCapacity(mixed, 'fast')).toEqual({
+      status: 'allow',
+      borrowed: false,
+    });
+  });
+
+  it('reserves one global Cursor slot across interactive-first and background planning', () => {
+    const base = emptyUtilization();
+    const mixed = {
+      ...base,
+      cursorInFlight: 19,
+      laneInFlight: {
+        ...base.laneInFlight,
+        document: 17,
+      },
+      interactiveClassInFlight: {
+        fast: 1,
+        agentic: 1,
+      },
+      providerClassInFlight: {
+        ...base.providerClassInFlight,
+        cursor: { batch: 17, interactive: 2 },
+      },
+    };
+    const reservation = createProviderCapacityReservation(mixed);
+    const direct = planInteractiveAdmissionBatch({
+      candidates: candidates([
+        row('older-fast', 'fast', '2026-09-23T15:00:00.000Z', 'model-z'),
+        row(
+          'newer-agentic',
+          'agentic',
+          '2026-09-23T15:00:01.000Z',
+          'model-a',
+        ),
+      ]),
+      utilization: mixed,
+      reservation,
+      maxDispatches: 2,
+      now: NOW,
+    });
+    const background = planAdmissionBatch({
+      rows: [backgroundRow('background')],
+      utilization: mixed,
+      reservation,
+      uncertainWorkerCount: 0,
+    });
+
+    expect(direct.map((candidate) => candidate.outbox.id)).toEqual([
+      'older-fast',
+    ]);
+    expect(background[0].decision).toEqual({
+      status: 'deny',
+      reason: 'provider_cap',
+    });
+    expect(reservation.cursorInFlight).toBe(20);
   });
 });

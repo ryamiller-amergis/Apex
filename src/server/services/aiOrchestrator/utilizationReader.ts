@@ -71,6 +71,9 @@ export function createUtilizationReader(deps: UtilizationReaderDeps) {
         cursorInFlight: 0,
         bedrockInFlight: 0,
         laneInFlight: { ...emptyUtilization().laneInFlight },
+        interactiveClassInFlight: {
+          ...emptyUtilization().interactiveClassInFlight,
+        },
         providerClassInFlight: {
           cursor: { ...emptyUtilization().providerClassInFlight.cursor },
           bedrock: { ...emptyUtilization().providerClassInFlight.bedrock },
@@ -86,7 +89,7 @@ export function createUtilizationReader(deps: UtilizationReaderDeps) {
           ) {
             continue;
           }
-          utilization.laneInFlight[row.interactive_class] += 1;
+          utilization.interactiveClassInFlight[row.interactive_class] += 1;
           utilization.cursorInFlight += 1;
           utilization.providerClassInFlight.cursor.interactive += 1;
           continue;

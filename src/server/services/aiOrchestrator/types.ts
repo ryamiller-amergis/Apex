@@ -4,7 +4,6 @@
  */
 
 import {
-  AI_RUN_V2_WORKLOAD_LANES,
   type AiRunV2CapacityClass,
   type AiRunV2WorkloadLane,
 } from '../../../shared/types/aiRunV2';
@@ -44,6 +43,7 @@ export type ProviderUtilization = Readonly<{
   cursorInFlight: number;
   bedrockInFlight: number;
   laneInFlight: Readonly<Record<AiOrchestratorLane, number>>;
+  interactiveClassInFlight: Readonly<Record<InteractiveClass, number>>;
   providerClassInFlight: Readonly<
     Record<
       AiOrchestratorProvider,
@@ -51,6 +51,17 @@ export type ProviderUtilization = Readonly<{
     >
   >;
 }>;
+
+export type ProviderCapacityReservation = {
+  cursorInFlight: number;
+  bedrockInFlight: number;
+  laneInFlight: Record<AiOrchestratorLane, number>;
+  interactiveClassInFlight: Record<InteractiveClass, number>;
+  providerClassInFlight: Record<
+    AiOrchestratorProvider,
+    Record<AiRunV2CapacityClass, number>
+  >;
+};
 
 export type DispatchDecision =
   | { status: 'allow'; provider: AiOrchestratorProvider; lane: AiOrchestratorLane }
@@ -67,7 +78,10 @@ export type DispatchDecision =
 
 export type InteractiveCapacityDecision =
   | Readonly<{ status: 'allow'; borrowed: boolean }>
-  | Readonly<{ status: 'deny'; reason: 'interactive_cap' }>;
+  | Readonly<{
+      status: 'deny';
+      reason: 'interactive_cap' | 'provider_cap';
+    }>;
 
 export type DispatchDestination =
   | Readonly<{ kind: 'service-bus'; queueName: string }>
@@ -97,3 +111,4 @@ export const UNCERTAIN_WORKER_PAUSE_THRESHOLD = 2;
 export const OUTBOX_SAFETY_SWEEP_MS = 30_000;
 export const DEFAULT_OUTBOX_CLAIM_MS = 30_000;
 export const DEFAULT_OUTBOX_BATCH_SIZE = 10;
+export const MAX_OUTBOX_DRAIN_PAGES = 8;

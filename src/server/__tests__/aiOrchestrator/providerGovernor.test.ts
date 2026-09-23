@@ -39,8 +39,7 @@ function interactiveUtilization(input: {
   return {
     ...utilization,
     cursorInFlight: interactive,
-    laneInFlight: {
-      ...utilization.laneInFlight,
+    interactiveClassInFlight: {
       fast: input.fast,
       agentic: input.agentic,
     },
@@ -221,6 +220,17 @@ describe('providerGovernor', () => {
         'fast',
       ),
     ).toEqual({ status: 'allow', borrowed: true });
+  });
+
+  it('binds Dapr admission to the shared Cursor provider cap', () => {
+    const utilization = interactiveUtilization({ fast: 1, agentic: 1 });
+
+    expect(
+      evaluateInteractiveCapacity(
+        { ...utilization, cursorInFlight: 20 },
+        'fast',
+      ),
+    ).toEqual({ status: 'deny', reason: 'provider_cap' });
   });
 
   it('keeps document and visual floors while setting both interactive floors to two', () => {

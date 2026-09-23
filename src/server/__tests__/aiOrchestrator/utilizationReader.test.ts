@@ -61,6 +61,10 @@ describe('utilizationReader', () => {
       fast: 0,
       agentic: 1,
     });
+    expect(utilization.interactiveClassInFlight).toEqual({
+      fast: 0,
+      agentic: 0,
+    });
     // Visual is the only Bedrock lane; everything else counts against Cursor.
     expect(utilization.bedrockInFlight).toBe(2);
     expect(utilization.cursorInFlight).toBe(4);
@@ -113,6 +117,7 @@ describe('utilizationReader', () => {
     expect(utilization.cursorInFlight).toBe(2);
     expect(utilization.bedrockInFlight).toBe(0);
     expect(utilization.laneInFlight.fast).toBe(2);
+    expect(utilization.interactiveClassInFlight.fast).toBe(0);
   });
 
   it('reports zero utilization when nothing is in flight', async () => {
@@ -124,6 +129,7 @@ describe('utilizationReader', () => {
       cursorInFlight: 0,
       bedrockInFlight: 0,
       laneInFlight: { document: 0, visual: 0, fast: 0, agentic: 0 },
+      interactiveClassInFlight: { fast: 0, agentic: 0 },
       providerClassInFlight: {
         cursor: { batch: 0, interactive: 0 },
         bedrock: { batch: 0, interactive: 0 },
@@ -216,12 +222,70 @@ describe('utilizationReader', () => {
       laneInFlight: {
         document: 0,
         visual: 0,
-        fast: 1,
-        agentic: 1,
+        fast: 0,
+        agentic: 0,
       },
+      interactiveClassInFlight: { fast: 1, agentic: 1 },
       providerClassInFlight: {
         cursor: { batch: 0, interactive: 2 },
         bedrock: { batch: 0, interactive: 0 },
+      },
+    });
+  });
+
+  it('keeps Service Bus lanes separate from Dapr classes while sharing Cursor utilization', async () => {
+    const reader = createUtilizationReader({
+      executor: {
+        execute: async () => ({
+          rows: [
+            {
+              transport_version: 'servicebus-blob-v2',
+              attempt_status: 'running',
+              published_at: '2026-09-23T15:00:00.000Z',
+              workload_lane: 'document',
+              capacity_class: 'batch',
+              interactive_class: null,
+            },
+            {
+              transport_version: 'servicebus-blob-v2',
+              attempt_status: 'running',
+              published_at: '2026-09-23T15:00:00.000Z',
+              workload_lane: 'fast',
+              capacity_class: 'interactive',
+              interactive_class: null,
+            },
+            {
+              transport_version: 'dapr-actor-v2',
+              attempt_status: 'dispatched',
+              published_at: null,
+              workload_lane: null,
+              capacity_class: null,
+              interactive_class: 'fast',
+            },
+            {
+              transport_version: 'dapr-actor-v2',
+              attempt_status: 'running',
+              published_at: null,
+              workload_lane: null,
+              capacity_class: null,
+              interactive_class: 'agentic',
+            },
+          ],
+        }),
+      },
+    });
+
+    expect(await reader.read()).toMatchObject({
+      cursorInFlight: 4,
+      laneInFlight: {
+        document: 1,
+        visual: 0,
+        fast: 1,
+        agentic: 0,
+      },
+      interactiveClassInFlight: {
+        fast: 1,
+        agentic: 1,
       },
     });
   });

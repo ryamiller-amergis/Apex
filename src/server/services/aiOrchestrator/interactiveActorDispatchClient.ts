@@ -4,8 +4,16 @@ import type {
 } from '../../../shared/types/durableInteractiveTurn';
 
 export interface InteractiveActorDispatchClient {
-  dispatch(payload: InteractiveDispatchOutboxPayload): Promise<void>;
+  dispatch(
+    payload: InteractiveDispatchOutboxPayload,
+    options: InteractiveActorDispatchRequestOptions,
+  ): Promise<void>;
 }
+
+export type InteractiveActorDispatchRequestOptions = Readonly<{
+  signal: AbortSignal;
+  deadlineAt: string;
+}>;
 
 export type InteractiveActorDispatchClientOptions = Readonly<{
   fastUrl?: string | null;
@@ -53,14 +61,19 @@ export function createInteractiveActorDispatchClient(
   const fetchImpl = options.fetchImpl ?? fetch;
 
   return {
-    async dispatch(payload: InteractiveDispatchOutboxPayload): Promise<void> {
+    async dispatch(
+      payload: InteractiveDispatchOutboxPayload,
+      requestOptions: InteractiveActorDispatchRequestOptions,
+    ): Promise<void> {
       const url = endpointForClass(payload.interactiveClass, endpoints);
       const response = await fetchImpl(url, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
+          'x-apex-dispatch-deadline': requestOptions.deadlineAt,
         },
         body: JSON.stringify(payload),
+        signal: requestOptions.signal,
       });
       if (!response.ok) {
         throw new Error(

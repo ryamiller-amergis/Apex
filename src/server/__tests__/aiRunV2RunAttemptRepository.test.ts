@@ -644,11 +644,13 @@ describe('AI-run V2 run attempt repository', () => {
       runInTransaction: async (work) => work({ execute }),
     });
 
-    await repo.failExpiredInteractiveDispatch({
-      attemptId: 'attempt-1',
-      expectedDispatchMessageId: 'dispatch-1',
-      detail: 'Interactive turn exceeded its absolute deadline',
-    });
+    await expect(
+      repo.failExpiredInteractiveDispatch({
+        attemptId: 'attempt-1',
+        expectedDispatchMessageId: 'dispatch-1',
+        detail: 'Interactive turn exceeded its absolute deadline',
+      }),
+    ).resolves.toBe('terminalized');
 
     const statements = execute.mock.calls
       .flatMap(([query]) => boundStrings(query))
@@ -661,5 +663,85 @@ describe('AI-run V2 run attempt repository', () => {
       'interactive-orchestrator-timeout:attempt-1',
     );
     expect(statements).toContain('pg_notify');
+  });
+
+  it('fencedly terminalizes a safely identified malformed dispatch as validation_failed', async () => {
+    const execute = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          attempt_status: 'queued',
+          dispatch_message_id: 'dispatch-1',
+          run_id: 'run-1',
+          thread_id: 'thread-1',
+          run_status: 'queued',
+        },
+      ])
+      .mockResolvedValue([]);
+    const repo = createRunAttemptRepository({
+      runInTransaction: async (work) => work({ execute }),
+    });
+
+    await expect(
+      repo.failInvalidInteractiveDispatch({
+        attemptId: 'attempt-1',
+        expectedDispatchMessageId: 'dispatch-1',
+        detail: 'Interactive dispatch payload failed validation',
+      }),
+    ).resolves.toBe('terminalized');
+
+    const statements = execute.mock.calls
+      .flatMap(([query]) => boundStrings(query))
+      .join('\n');
+    expect(statements).toContain('validation_failed');
+    expect(statements).toContain(
+      'interactive-orchestrator-validation:attempt-1',
+    );
+    expect(statements).toContain('"type":"error"');
+    expect(statements).toContain('"type":"done"');
+  });
+
+  it('does not terminalize a stale fence and treats a terminal replay idempotently', async () => {
+    const staleExecute = jest.fn().mockResolvedValueOnce([
+      {
+        attempt_status: 'queued',
+        dispatch_message_id: 'dispatch-current',
+        run_id: 'run-1',
+        thread_id: 'thread-1',
+        run_status: 'queued',
+      },
+    ]);
+    const staleRepo = createRunAttemptRepository({
+      runInTransaction: async (work) => work({ execute: staleExecute }),
+    });
+    await expect(
+      staleRepo.failInvalidInteractiveDispatch({
+        attemptId: 'attempt-1',
+        expectedDispatchMessageId: 'dispatch-stale',
+        detail: 'stale',
+      }),
+    ).resolves.toBe('fence-mismatch');
+    expect(staleExecute).toHaveBeenCalledTimes(1);
+
+    const terminalExecute = jest.fn().mockResolvedValueOnce([
+      {
+        attempt_status: 'failed',
+        dispatch_message_id: 'dispatch-1',
+        run_id: 'run-1',
+        thread_id: 'thread-1',
+        run_status: 'failed',
+      },
+    ]);
+    const terminalRepo = createRunAttemptRepository({
+      runInTransaction: async (work) => work({ execute: terminalExecute }),
+    });
+    await expect(
+      terminalRepo.failInvalidInteractiveDispatch({
+        attemptId: 'attempt-1',
+        expectedDispatchMessageId: 'dispatch-1',
+        detail: 'duplicate',
+      }),
+    ).resolves.toBe('already-terminal');
+    expect(terminalExecute).toHaveBeenCalledTimes(1);
   });
 });

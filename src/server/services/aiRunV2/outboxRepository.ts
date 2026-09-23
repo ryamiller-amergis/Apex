@@ -298,6 +298,27 @@ export function createOutboxRepository(executor: SqlExecutor) {
       return resultRows(result).length;
     },
 
+    async markDiscarded(
+      id: string,
+      holderId: string,
+      reason: string,
+    ): Promise<boolean> {
+      const result = await executor.execute(sql`
+        UPDATE ai_run_outbox
+        SET
+          published_at = now(),
+          last_error = ${reason},
+          claimed_by = NULL,
+          claimed_at = NULL,
+          claim_expires_at = NULL
+        WHERE id = ${id}
+          AND claimed_by = ${holderId}
+          AND published_at IS NULL
+        RETURNING id
+      `);
+      return resultRows(result).length > 0;
+    },
+
     async markFailed(
       id: string,
       holderId: string,

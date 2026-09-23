@@ -3,6 +3,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { AI_RUN_V2_LANE_QUEUES } from '../../../shared/types/aiRunV2';
+import { isCanonicalUuid } from '../../../shared/types/durableInteractiveTurn';
 import {
   withDistributedLease,
   type HeldDistributedLease,
@@ -31,11 +32,19 @@ import {
 } from './outboxNotify';
 import type { Clock, CommandPublisher, OrchestratorMetrics } from './ports';
 import { noopMetrics, systemClock } from './ports';
-import type { ProviderCapacityConfig, ProviderUtilization } from './types';
+import {
+  createProviderCapacityReservation,
+} from './providerGovernor';
+import type {
+  ProviderCapacityConfig,
+  ProviderCapacityReservation,
+  ProviderUtilization,
+} from './types';
 import {
   DEFAULT_OUTBOX_BATCH_SIZE,
   DEFAULT_OUTBOX_CLAIM_MS,
   DEFAULT_PROVIDER_CAPACITY,
+  MAX_OUTBOX_DRAIN_PAGES,
   OUTBOX_SAFETY_SWEEP_MS,
   UNCERTAIN_WORKER_PAUSE_THRESHOLD,
 } from './types';
@@ -49,6 +58,7 @@ export type OutboxDrainerDeps = Readonly<{
     | 'readInteractiveDispatchState'
     | 'markInteractiveDispatched'
     | 'failExpiredInteractiveDispatch'
+    | 'failInvalidInteractiveDispatch'
   >;
   getUtilization: () => Promise<ProviderUtilization>;
   getUncertainWorkerCount: () => Promise<number>;
@@ -118,14 +128,82 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
     return marked > 0 ? 1 : 0;
   }
 
+  type PageOutcome = Readonly<{
+    published: number;
+    discarded: number;
+  }>;
+
+  const noOutcome = (): PageOutcome => ({ published: 0, discarded: 0 });
+
+  async function discardRow(
+    row: OutboxRow,
+    reason: string,
+  ): Promise<number> {
+    const discarded = await outbox.markDiscarded(row.id, holderId, reason);
+    if (discarded) {
+      metrics.increment('orchestrator.interactive.discarded', { reason });
+      return 1;
+    }
+    return 0;
+  }
+
+  function safeDispatchIdentity(row: OutboxRow): Readonly<{
+    attemptId: string;
+    expectedDispatchMessageId: string;
+  }> | null {
+    const attemptId = row.payload.attemptId;
+    const dispatchMessageId = row.payload.dispatchMessageId;
+    if (
+      !isCanonicalUuid(attemptId) ||
+      !isCanonicalUuid(dispatchMessageId) ||
+      row.attemptId !== attemptId
+    ) {
+      return null;
+    }
+    return {
+      attemptId,
+      expectedDispatchMessageId: dispatchMessageId,
+    };
+  }
+
+  async function discardInvalidRow(
+    row: OutboxRow,
+    reason: string,
+    detail: string,
+  ): Promise<number> {
+    const identity = safeDispatchIdentity(row);
+    if (identity) {
+      try {
+        await deps.attempts.failInvalidInteractiveDispatch({
+          ...identity,
+          detail,
+        });
+      } catch (err) {
+        const failureDetail =
+          err instanceof Error ? err.message : String(err);
+        await outbox.markFailed(
+          row.id,
+          holderId,
+          failureDetail,
+          10_000,
+        );
+        metrics.increment('orchestrator.interactive.terminalize_failed');
+        return 0;
+      }
+    }
+    return discardRow(row, reason);
+  }
+
   async function processBackgroundRows(
     rows: OutboxRow[],
     utilization: ProviderUtilization,
+    reservation: ProviderCapacityReservation,
     uncertainWorkerCount: number,
-  ): Promise<number> {
+  ): Promise<PageOutcome> {
     const planned = planAdmissionBatch({
       rows,
       utilization,
+      reservation,
       uncertainWorkerCount,
       config,
       uncertainPauseThreshold: UNCERTAIN_WORKER_PAUSE_THRESHOLD,
@@ -155,7 +233,7 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
         metrics.increment('orchestrator.outbox.publish_failed');
       }
     }
-    return published;
+    return { published, discarded: 0 };
   }
 
   type ActiveInteractiveCandidate = Readonly<{
@@ -164,6 +242,7 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
       InteractiveDispatchState,
       'queued' | 'dispatched' | 'running'
     >;
+    capacityCharged: boolean;
   }>;
 
   function compareActiveInteractiveCandidates(
@@ -177,15 +256,100 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
     return left.candidate.outbox.id.localeCompare(right.candidate.outbox.id);
   }
 
-  async function dispatchInteractiveCandidate(
+  function releaseInteractiveReservation(
     active: ActiveInteractiveCandidate,
-  ): Promise<number> {
+    reservation: ProviderCapacityReservation,
+  ): void {
+    if (!active.capacityCharged) return;
+    const interactiveClass = active.candidate.payload.interactiveClass;
+    reservation.interactiveClassInFlight[interactiveClass] = Math.max(
+      0,
+      reservation.interactiveClassInFlight[interactiveClass] - 1,
+    );
+    reservation.cursorInFlight = Math.max(
+      0,
+      reservation.cursorInFlight - 1,
+    );
+    reservation.providerClassInFlight.cursor.interactive = Math.max(
+      0,
+      reservation.providerClassInFlight.cursor.interactive - 1,
+    );
+  }
+
+  async function expireInteractiveCandidate(
+    active: ActiveInteractiveCandidate,
+    reservation: ProviderCapacityReservation,
+  ): Promise<PageOutcome> {
     const { outbox: row, payload } = active.candidate;
     try {
-      const marked = await deps.attempts.markInteractiveDispatched({
+      const result = await deps.attempts.failExpiredInteractiveDispatch({
+        attemptId: payload.attemptId,
+        expectedDispatchMessageId: payload.dispatchMessageId,
+        detail: 'Interactive turn exceeded its absolute deadline',
+      });
+      switch (result) {
+        case 'terminalized': {
+          releaseInteractiveReservation(active, reservation);
+          const discarded = await discardRow(row, 'deadline_expired');
+          metrics.increment('orchestrator.interactive.deadline_expired');
+          return { published: 0, discarded };
+        }
+        case 'already-terminal': {
+          releaseInteractiveReservation(active, reservation);
+          const published = await markRowPublished(row);
+          return { published, discarded: 0 };
+        }
+        case 'fence-mismatch': {
+          const discarded = await discardRow(row, 'fence_mismatch');
+          return { published: 0, discarded };
+        }
+        case 'not-found': {
+          releaseInteractiveReservation(active, reservation);
+          const discarded =
+            await discardRow(row, 'attempt_not_found');
+          return { published: 0, discarded };
+        }
+        default: {
+          const unhandled: never = result;
+          throw new Error(
+            `Unsupported interactive terminal result: ${String(unhandled)}`,
+          );
+        }
+      }
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      await outbox.markFailed(row.id, holderId, detail, 10_000);
+      metrics.increment('orchestrator.interactive.terminalize_failed');
+      return noOutcome();
+    }
+  }
+
+  async function dispatchInteractiveCandidate(
+    active: ActiveInteractiveCandidate,
+    reservation: ProviderCapacityReservation,
+  ): Promise<PageOutcome> {
+    const { outbox: row, payload } = active.candidate;
+    const deadlineMs = Date.parse(payload.deadlineAt);
+    if (deadlineMs <= clock.now().getTime()) {
+      return expireInteractiveCandidate(active, reservation);
+    }
+
+    let marked: Awaited<
+      ReturnType<typeof deps.attempts.markInteractiveDispatched>
+    >;
+    try {
+      marked = await deps.attempts.markInteractiveDispatched({
         attemptId: payload.attemptId,
         expectedDispatchMessageId: payload.dispatchMessageId,
       });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      await outbox.markFailed(row.id, holderId, detail, 10_000);
+      metrics.increment('orchestrator.interactive.invoke_failed');
+      return noOutcome();
+    }
+
+    try {
       switch (marked) {
         case 'dispatched':
           break;
@@ -199,14 +363,21 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
             case 'dispatched':
             case 'running':
               break;
-            case 'terminal':
-            case 'fence-mismatch':
-            case 'not-found':
-              metrics.increment(
-                'orchestrator.interactive.invalid_dispatch',
-                { reason: replayState },
-              );
-              return markRowPublished(row);
+            case 'terminal': {
+              releaseInteractiveReservation(active, reservation);
+              const published = await markRowPublished(row);
+              return { published, discarded: 0 };
+            }
+            case 'fence-mismatch': {
+              const discarded = await discardRow(row, 'fence_mismatch');
+              return { published: 0, discarded };
+            }
+            case 'not-found': {
+              releaseInteractiveReservation(active, reservation);
+              const discarded =
+                await discardRow(row, 'attempt_not_found');
+              return { published: 0, discarded };
+            }
             case 'queued':
               throw new Error(
                 `Interactive attempt remained queued after dispatch: ${payload.attemptId}`,
@@ -220,12 +391,15 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
           }
           break;
         }
-        case 'fence-mismatch':
-        case 'not-found':
-          metrics.increment('orchestrator.interactive.invalid_dispatch', {
-            reason: marked,
-          });
-          return markRowPublished(row);
+        case 'fence-mismatch': {
+          const discarded = await discardRow(row, 'fence_mismatch');
+          return { published: 0, discarded };
+        }
+        case 'not-found': {
+          releaseInteractiveReservation(active, reservation);
+          const discarded = await discardRow(row, 'attempt_not_found');
+          return { published: 0, discarded };
+        }
         default: {
           const unhandled: never = marked;
           throw new Error(
@@ -233,35 +407,72 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
           );
         }
       }
-      await deps.interactiveDispatchClient.dispatch(payload);
+
+      const invocationNowMs = clock.now().getTime();
+      if (deadlineMs <= invocationNowMs) {
+        return expireInteractiveCandidate(active, reservation);
+      }
+      const controller = new AbortController();
+      let deadlineReached = false;
+      let timeout: ReturnType<typeof setTimeout>;
+      const deadline = new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          deadlineReached = true;
+          controller.abort();
+          reject(new Error('Interactive dispatch deadline reached'));
+        }, deadlineMs - invocationNowMs);
+      });
+      try {
+        await Promise.race([
+          deps.interactiveDispatchClient.dispatch(payload, {
+            signal: controller.signal,
+            deadlineAt: payload.deadlineAt,
+          }),
+          deadline,
+        ]);
+      } catch (err) {
+        if (deadlineReached) {
+          return expireInteractiveCandidate(active, reservation);
+        }
+        const detail = err instanceof Error ? err.message : String(err);
+        await outbox.markFailed(row.id, holderId, detail, 10_000);
+        metrics.increment('orchestrator.interactive.invoke_failed');
+        return noOutcome();
+      } finally {
+        clearTimeout(timeout!);
+      }
       metrics.increment('orchestrator.outbox.published', {
         lane: payload.interactiveClass,
       });
-      return markRowPublished(row);
+      const published = await markRowPublished(row);
+      return { published, discarded: 0 };
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       await outbox.markFailed(row.id, holderId, detail, 10_000);
       metrics.increment('orchestrator.interactive.invoke_failed');
-      return 0;
+      return noOutcome();
     }
   }
 
   async function processInteractiveRows(
     rows: OutboxRow[],
     utilization: ProviderUtilization,
-  ): Promise<number> {
+    reservation: ProviderCapacityReservation,
+  ): Promise<PageOutcome> {
     const now = clock.now();
     const queued: ActiveInteractiveCandidate[] = [];
     const recovery: ActiveInteractiveCandidate[] = [];
     let published = 0;
+    let discarded = 0;
 
     for (const row of rows) {
       const candidate = toInteractiveAdmissionCandidate(row);
       if (!candidate) {
-        metrics.increment('orchestrator.interactive.invalid_dispatch', {
-          reason: 'payload',
-        });
-        published += await markRowPublished(row);
+        discarded += await discardInvalidRow(
+          row,
+          'invalid_payload',
+          'Interactive dispatch payload failed validation',
+        );
         continue;
       }
 
@@ -280,34 +491,29 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
 
       switch (state) {
         case 'terminal':
-        case 'fence-mismatch':
-        case 'not-found':
           published += await markRowPublished(row);
+          break;
+        case 'fence-mismatch':
+          discarded += await discardRow(row, 'fence_mismatch');
+          break;
+        case 'not-found':
+          discarded += await discardRow(row, 'attempt_not_found');
           break;
         case 'queued':
         case 'dispatched':
         case 'running': {
+          const active: ActiveInteractiveCandidate = {
+            candidate,
+            state,
+            capacityCharged: state !== 'queued',
+          };
           if (Date.parse(candidate.payload.deadlineAt) <= now.getTime()) {
-            try {
-              await deps.attempts.failExpiredInteractiveDispatch({
-                attemptId: candidate.payload.attemptId,
-                expectedDispatchMessageId:
-                  candidate.payload.dispatchMessageId,
-                detail: 'Interactive turn exceeded its absolute deadline',
-              });
-              published += await markRowPublished(row);
-              metrics.increment('orchestrator.interactive.deadline_expired');
-            } catch (err) {
-              const detail =
-                err instanceof Error ? err.message : String(err);
-              await outbox.markFailed(row.id, holderId, detail, 10_000);
-              metrics.increment(
-                'orchestrator.interactive.terminalize_failed',
-              );
-            }
+            const outcome =
+              await expireInteractiveCandidate(active, reservation);
+            discarded += outcome.discarded;
+            published += outcome.published;
             break;
           }
-          const active = { candidate, state };
           if (state === 'queued') queued.push(active);
           else recovery.push(active);
           break;
@@ -324,20 +530,32 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
     const selected = planInteractiveAdmissionBatch({
       candidates: queued.map(({ candidate }) => candidate),
       utilization,
+      reservation,
       config,
       now,
     });
     const selectedIds = new Set(
       selected.map((candidate) => candidate.outbox.id),
     );
-    const deferredUntil = new Date(now.getTime() + 5_000).toISOString();
+    const interactiveInFlight =
+      reservation.interactiveClassInFlight.fast +
+      reservation.interactiveClassInFlight.agentic;
+    const deferralReason =
+      interactiveInFlight >= config.interactiveCap
+        ? 'interactive_cap'
+        : reservation.cursorInFlight >= config.cursorCap
+          ? 'provider_cap'
+          : 'interactive_cap';
+    const deferredUntil = new Date(
+      clock.now().getTime() + 5_000,
+    ).toISOString();
     for (const active of queued) {
       if (selectedIds.has(active.candidate.outbox.id)) continue;
       await outbox.releaseClaim(
         active.candidate.outbox.id,
         holderId,
         deferredUntil,
-        'interactive_cap',
+        deferralReason,
       );
     }
 
@@ -353,13 +571,16 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
             `Missing selected interactive candidate: ${candidate.outbox.id}`,
           );
         }
-        return active;
+        return { ...active, capacityCharged: true };
       }),
     ].sort(compareActiveInteractiveCandidates);
     for (const active of dispatchable) {
-      published += await dispatchInteractiveCandidate(active);
+      const outcome =
+        await dispatchInteractiveCandidate(active, reservation);
+      published += outcome.published;
+      discarded += outcome.discarded;
     }
-    return published;
+    return { published, discarded };
   }
 
   async function drainOnce(): Promise<number> {
@@ -368,60 +589,92 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
         deps.getUtilization(),
         deps.getUncertainWorkerCount(),
       ]);
-      const backgroundClaimed = await outbox.claimBatch(
-        batchSize,
-        holderId,
-        claimMs,
-      );
-      const interactiveClaimed = await outbox.claimInteractiveCandidates(
-        config.interactiveCap,
-        Math.max(
-          config.laneFloors.fast,
-          config.laneFloors.agentic,
-        ),
-        holderId,
-        claimMs,
-      );
-      const claimed = [
-        ...new Map(
-          [...backgroundClaimed, ...interactiveClaimed].map((row) => [
-            row.id,
-            row,
-          ]),
-        ).values(),
-      ];
-      if (claimed.length === 0) return 0;
+      const reservation =
+        createProviderCapacityReservation(utilization);
+      const seenOutboxIds = new Set<string>();
+      const pendingBackgroundRows: OutboxRow[] = [];
+      let totalClaimed = 0;
+      let totalPublished = 0;
 
-      const backgroundRows: OutboxRow[] = [];
-      const interactiveRows: OutboxRow[] = [];
-      let published = 0;
-      for (const row of claimed) {
-        const kind = row.kind;
-        switch (kind) {
-          case 'dispatch_command':
-            backgroundRows.push(row);
-            break;
-          case 'interactive_dispatch':
-            interactiveRows.push(row);
-            break;
-          case 'checkpoint_notify':
-          case 'terminal_result':
-            published += await markRowPublished(row);
-            break;
-          default: {
-            const unhandled: never = kind;
-            throw new Error(`Unsupported outbox kind: ${String(unhandled)}`);
+      for (let page = 0; page < MAX_OUTBOX_DRAIN_PAGES; page += 1) {
+        const backgroundClaimed = await outbox.claimBatch(
+          batchSize,
+          holderId,
+          claimMs,
+        );
+        const interactiveClaimed =
+          await outbox.claimInteractiveCandidates(
+            config.interactiveCap,
+            Math.max(
+              config.laneFloors.fast,
+              config.laneFloors.agentic,
+            ),
+            holderId,
+            claimMs,
+          );
+        const claimed = [
+          ...new Map(
+            [...backgroundClaimed, ...interactiveClaimed].map((row) => [
+              row.id,
+              row,
+            ]),
+          ).values(),
+        ].filter((row) => {
+          if (seenOutboxIds.has(row.id)) return false;
+          seenOutboxIds.add(row.id);
+          return true;
+        });
+        if (claimed.length === 0) break;
+
+        totalClaimed += claimed.length;
+        const interactiveRows: OutboxRow[] = [];
+        let pagePublished = 0;
+        let pageDiscarded = 0;
+        for (const row of claimed) {
+          const kind = row.kind;
+          switch (kind) {
+            case 'dispatch_command':
+              pendingBackgroundRows.push(row);
+              break;
+            case 'interactive_dispatch':
+              interactiveRows.push(row);
+              break;
+            case 'checkpoint_notify':
+            case 'terminal_result':
+              pagePublished += await markRowPublished(row);
+              break;
+            default: {
+              const unhandled: never = kind;
+              throw new Error(
+                `Unsupported outbox kind: ${String(unhandled)}`,
+              );
+            }
           }
         }
+
+        const interactiveOutcome = await processInteractiveRows(
+          interactiveRows,
+          utilization,
+          reservation,
+        );
+        pagePublished += interactiveOutcome.published;
+        pageDiscarded += interactiveOutcome.discarded;
+
+        totalPublished += pagePublished;
+
+        if (pagePublished + pageDiscarded === 0) break;
       }
-      published += await processBackgroundRows(
-        backgroundRows,
+
+      const backgroundOutcome = await processBackgroundRows(
+        pendingBackgroundRows,
         utilization,
+        reservation,
         uncertain,
       );
-      published += await processInteractiveRows(interactiveRows, utilization);
-      metrics.gauge('orchestrator.outbox.batch', claimed.length);
-      return published;
+      totalPublished += backgroundOutcome.published;
+
+      metrics.gauge('orchestrator.outbox.batch', totalClaimed);
+      return totalPublished;
     });
   }
 

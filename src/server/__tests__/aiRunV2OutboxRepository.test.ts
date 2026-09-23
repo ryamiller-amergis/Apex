@@ -167,4 +167,23 @@ describe('AI-run V2 outbox repository', () => {
     expect(query).not.toContain('publish_attempts =');
     expect(query).not.toContain('published_at =');
   });
+
+  it('terminally discards an invalid row while preserving its reason', async () => {
+    const execute = jest.fn().mockResolvedValueOnce([{ id: 'outbox-1' }]);
+    const repo = createOutboxRepository({ execute });
+
+    await expect(
+      repo.markDiscarded(
+        'outbox-1',
+        'drainer-a',
+        'invalid_payload: schema validation failed',
+      ),
+    ).resolves.toBe(true);
+
+    const query = sqlText(execute.mock.calls[0][0]);
+    expect(query).toContain('published_at = now()');
+    expect(query).toContain('last_error =');
+    expect(query).toContain('claimed_by = NULL');
+    expect(query).not.toContain('last_error = NULL');
+  });
 });

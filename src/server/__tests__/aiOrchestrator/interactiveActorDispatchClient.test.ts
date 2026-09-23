@@ -51,13 +51,21 @@ describe('interactiveActorDispatchClient', () => {
     });
 
     const request = payload({ interactiveClass: 'agentic' });
-    await client.dispatch(request);
+    const controller = new AbortController();
+    await client.dispatch(request, {
+      signal: controller.signal,
+      deadlineAt: request.deadlineAt,
+    });
 
     expect(fetchImpl).toHaveBeenCalledWith(
       'https://agentic.example/dispatch',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify(request),
+        signal: controller.signal,
+        headers: expect.objectContaining({
+          'x-apex-dispatch-deadline': request.deadlineAt,
+        }),
       }),
     );
     expect(fetchImpl).not.toHaveBeenCalledWith(
@@ -75,7 +83,10 @@ describe('interactiveActorDispatchClient', () => {
     });
 
     await expect(
-      client.dispatch(payload({ interactiveClass: 'agentic' })),
+      client.dispatch(payload({ interactiveClass: 'agentic' }), {
+        signal: new AbortController().signal,
+        deadlineAt: BASE_PAYLOAD.deadlineAt,
+      }),
     ).rejects.toThrow(
       'Interactive agentic dispatch endpoint is not configured',
     );
@@ -92,9 +103,12 @@ describe('interactiveActorDispatchClient', () => {
       fetchImpl: rejectedFetch,
     });
 
-    await expect(rejectedClient.dispatch(payload())).rejects.toThrow(
-      'Interactive fast dispatch failed with status 503',
-    );
+    await expect(
+      rejectedClient.dispatch(payload(), {
+        signal: new AbortController().signal,
+        deadlineAt: BASE_PAYLOAD.deadlineAt,
+      }),
+    ).rejects.toThrow('Interactive fast dispatch failed with status 503');
 
     const unacceptedFetch = jest
       .fn()
@@ -105,8 +119,38 @@ describe('interactiveActorDispatchClient', () => {
       fetchImpl: unacceptedFetch,
     });
 
-    await expect(unacceptedClient.dispatch(payload())).rejects.toThrow(
-      'Interactive fast dispatch was not accepted',
+    await expect(
+      unacceptedClient.dispatch(payload(), {
+        signal: new AbortController().signal,
+        deadlineAt: BASE_PAYLOAD.deadlineAt,
+      }),
+    ).rejects.toThrow('Interactive fast dispatch was not accepted');
+  });
+
+  it('passes abort through to a hanging fetch', async () => {
+    const fetchImpl = jest.fn(
+      (_url: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            const error = new Error('aborted');
+            error.name = 'AbortError';
+            reject(error);
+          });
+        }),
     );
+    const client = createInteractiveActorDispatchClient({
+      fastUrl: 'https://fast.example',
+      agenticUrl: 'https://agentic.example',
+      fetchImpl,
+    });
+    const controller = new AbortController();
+    const pending = client.dispatch(payload(), {
+      signal: controller.signal,
+      deadlineAt: BASE_PAYLOAD.deadlineAt,
+    });
+
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
   });
 });

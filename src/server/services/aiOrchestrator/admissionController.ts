@@ -12,10 +12,15 @@ import {
   type InteractiveDispatchOutboxPayload,
 } from '../../../shared/types/durableInteractiveTurn';
 import type { OutboxRow } from '../aiRunV2/outboxRepository';
-import { evaluateDispatchCapacity, providerForLane } from './providerGovernor';
+import {
+  createProviderCapacityReservation,
+  evaluateDispatchCapacity,
+  providerForLane,
+} from './providerGovernor';
 import type {
   AiOrchestratorLane,
   DispatchDecision,
+  ProviderCapacityReservation,
   ProviderCapacityConfig,
   ProviderUtilization,
 } from './types';
@@ -43,7 +48,9 @@ export function toInteractiveAdmissionCandidate(
 ): InteractiveAdmissionCandidate | null {
   if (
     row.kind !== 'interactive_dispatch' ||
-    !isInteractiveDispatchOutboxPayload(row.payload)
+    !isInteractiveDispatchOutboxPayload(row.payload) ||
+    row.runId !== row.payload.runId ||
+    row.attemptId !== row.payload.attemptId
   ) {
     return null;
   }
@@ -66,23 +73,33 @@ function compareInteractiveCandidates(
 export function planInteractiveAdmissionBatch(input: {
   candidates: ReadonlyArray<InteractiveAdmissionCandidate>;
   utilization: ProviderUtilization;
+  reservation?: ProviderCapacityReservation;
   config?: ProviderCapacityConfig;
   maxDispatches?: number;
   now?: Date;
 }): InteractiveAdmissionCandidate[] {
   const config = input.config ?? DEFAULT_PROVIDER_CAPACITY;
   const nowMs = (input.now ?? new Date()).getTime();
-  const inFlight = {
-    fast: input.utilization.laneInFlight.fast,
-    agentic: input.utilization.laneInFlight.agentic,
-  };
-  const totalInteractiveInFlight = inFlight.fast + inFlight.agentic;
-  const capSlots = Math.max(
+  const reservation =
+    input.reservation ??
+    createProviderCapacityReservation(input.utilization);
+  const totalInteractiveInFlight =
+    reservation.interactiveClassInFlight.fast +
+    reservation.interactiveClassInFlight.agentic;
+  const interactiveSlots = Math.max(
     0,
     config.interactiveCap - totalInteractiveInFlight,
   );
+  const cursorSlots = Math.max(
+    0,
+    config.cursorCap - reservation.cursorInFlight,
+  );
+  const capSlots = Math.min(interactiveSlots, cursorSlots);
   const requestedSlots = input.maxDispatches ?? capSlots;
-  let availableSlots = Math.min(capSlots, Math.max(0, requestedSlots));
+  let availableSlots = Math.min(
+    capSlots,
+    Math.max(0, requestedSlots),
+  );
   const remaining = input.candidates
     .filter((candidate) => Date.parse(candidate.payload.deadlineAt) > nowMs)
     .sort(compareInteractiveCandidates);
@@ -91,12 +108,18 @@ export function planInteractiveAdmissionBatch(input: {
   while (availableSlots > 0 && remaining.length > 0) {
     const floorEligible = remaining.filter(
       (candidate) =>
-        inFlight[candidate.payload.interactiveClass] <
+        reservation.interactiveClassInFlight[
+          candidate.payload.interactiveClass
+        ] <
         config.laneFloors[candidate.payload.interactiveClass],
     );
     const selected = (floorEligible.length > 0 ? floorEligible : remaining)[0];
     planned.push(selected);
-    inFlight[selected.payload.interactiveClass] += 1;
+    reservation.interactiveClassInFlight[
+      selected.payload.interactiveClass
+    ] += 1;
+    reservation.cursorInFlight += 1;
+    reservation.providerClassInFlight.cursor.interactive += 1;
     remaining.splice(remaining.indexOf(selected), 1);
     availableSlots -= 1;
   }
@@ -123,6 +146,7 @@ export function resolveCapacityClassFromOutbox(
 export function planAdmissionBatch(input: {
   rows: OutboxRow[];
   utilization: ProviderUtilization;
+  reservation?: ProviderCapacityReservation;
   uncertainWorkerCount: number;
   config?: ProviderCapacityConfig;
   uncertainPauseThreshold?: number;
@@ -130,20 +154,9 @@ export function planAdmissionBatch(input: {
   const config = input.config ?? DEFAULT_PROVIDER_CAPACITY;
   const threshold =
     input.uncertainPauseThreshold ?? UNCERTAIN_WORKER_PAUSE_THRESHOLD;
-  const working = {
-    cursorInFlight: input.utilization.cursorInFlight,
-    bedrockInFlight: input.utilization.bedrockInFlight,
-    laneInFlight: {
-      document: input.utilization.laneInFlight.document,
-      visual: input.utilization.laneInFlight.visual,
-      fast: input.utilization.laneInFlight.fast,
-      agentic: input.utilization.laneInFlight.agentic,
-    },
-    providerClassInFlight: {
-      cursor: { ...input.utilization.providerClassInFlight.cursor },
-      bedrock: { ...input.utilization.providerClassInFlight.bedrock },
-    },
-  };
+  const working =
+    input.reservation ??
+    createProviderCapacityReservation(input.utilization);
   const planned: AdmissionCandidate[] = [];
 
   for (const row of input.rows) {
