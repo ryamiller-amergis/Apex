@@ -504,3 +504,136 @@ git diff --check: exit 0
 ### Concerns
 
 None specific to these two remaining races.
+
+---
+
+## Review remediation (capacity over-release)
+
+### Result
+
+- Status: `DONE`
+- Review-fix commit: `da03b2ad`
+  (`fix: prevent interactive capacity over-release`)
+- Previous reviewed range ended at `a3dbbcc6`.
+- No push, cloud operation, infrastructure change, deployment change,
+  migration, environment example, or protected configuration change was made.
+- Only Task 3 source, test, and this report path were staged. Pre-existing
+  worktree changes remained unstaged.
+
+### Problem
+
+The prior in-cycle reservation release treated first-read terminal leftover
+ACKs and any successfully discarded malformed row with a known interactive
+class as capacity owners. That freed mutable slots the utilization snapshot
+never counted for those attempts, so a saturated drain could admit a 17th
+interactive turn. `discardInvalidRow` also ignored `failInvalid` outcomes, so
+fence-mismatch / not-found / queued terminalization could still release.
+
+### Fixes
+
+#### Explicit charged-capacity ownership
+
+- `failExpiredInteractiveDispatch` / `failInvalidInteractiveDispatch` now
+  return a discriminated result with `priorAttemptStatus` and
+  `capacityCharged` when an attempt is newly terminalized.
+- `capacityCharged` is true only for prior `dispatched` / `running` status
+  (the same set utilization counts for Dapr interactive work).
+
+#### Release only when charged ownership is proven
+
+- First-read terminal leftover ACKs publish the outbox row and do **not**
+  release a mutable slot.
+- Malformed discard releases only when `failInvalid` returns
+  `terminalized` with `capacityCharged: true`.
+- Queued terminalization, fence mismatch, not-found, and already-terminal do
+  **not** release.
+- Genuinely charged expire / charged malformed terminalization frees exactly
+  one slot so one waiter can dispatch in the same drain.
+- Planner-charged selected queued turns still release on successful
+  `terminalized` expire via the candidate's ledger `capacityCharged` flag.
+
+#### Single release per attempt per drain
+
+- `processInteractiveRows` tracks `releasedAttemptIds` and refuses a second
+  decrement for the same attempt id in one drain cycle.
+
+### Strict TDD evidence
+
+Red (before fixes):
+
+```text
+FAIL: does not free a saturated slot for a first-read terminal leftover ACK
+FAIL: does not free a slot when queued malformed terminalization succeeds
+FAIL: does not free a slot on malformed fence mismatch with a live replacement
+Exit code: 1
+```
+
+Green after fixes on those regressions plus:
+
+- frees exactly one charged dispatched slot and dispatches one waiter
+- does not double-release the same charged attempt in one drain
+- repository reports `capacityCharged` for dispatched terminalization
+
+### Final verification
+
+Focused Task 3 suite:
+
+```text
+PASS: 7 test suites
+PASS: 88 tests
+Exit code: 0
+```
+
+Mixed orchestrator/V2 suite:
+
+```text
+PASS: 20 test suites (aiOrchestrator + aiRunV2)
+PASS: 210 tests
+Exit code: 0
+```
+
+Additional mixed lifecycle suite:
+
+```text
+PASS: 5 test suites
+PASS: 237 tests
+Exit code: 0
+```
+
+Server type-check:
+
+```text
+npm run build:server
+> tsc -p tsconfig.server.json
+Exit code: 0
+```
+
+Focused lint/diff:
+
+```text
+ReadLints: 0 errors
+git diff --check: exit 0
+```
+
+### Review-fix files
+
+- `src/server/services/aiOrchestrator/outboxDrainer.ts`
+- `src/server/services/aiRunV2/runAttemptRepository.ts`
+- `src/server/__tests__/aiOrchestrator/outboxDrainer.test.ts`
+- `src/server/__tests__/aiRunV2RunAttemptRepository.test.ts`
+- `.superpowers/sdd/task-3-report.md`
+
+### Final self-review
+
+- Confirmed saturated 16 + terminal leftover ACK defers the waiter under
+  `interactive_cap` and does not admit a 17th turn.
+- Confirmed queued malformed terminalization and fence-mismatch discards do
+  not free slots.
+- Confirmed charged dispatched malformed terminalization frees exactly one
+  slot and dispatches one waiter.
+- Confirmed repeated expire + malformed rows for the same attempt release once.
+- Confirmed no unrelated or protected file was staged.
+
+### Concerns
+
+None specific to this capacity-ownership fix.
