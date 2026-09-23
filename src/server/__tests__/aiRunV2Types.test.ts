@@ -77,15 +77,21 @@ describe('AI-run V2 shared types', () => {
       'verified',
       'failed',
     ]);
-    expect(AI_RUN_V2_FAILURE_CATEGORIES).toContain('poison_message');
-    expect(AI_RUN_V2_FAILURE_CATEGORIES).toEqual(
-      expect.arrayContaining([
-        'hard_timeout',
-        'tool_timeout',
-        'worker_start_failed',
-        'validation_failed',
-      ]),
-    );
+    expect(AI_RUN_V2_FAILURE_CATEGORIES).toEqual([
+      'worker_lost',
+      'progress_timeout',
+      'queue_ttl',
+      'dispatch_ttl',
+      'forced_cancel',
+      'poison_message',
+      'artifact_verification_failed',
+      'lease_lost',
+      'internal_error',
+      'hard_timeout',
+      'tool_timeout',
+      'worker_start_failed',
+      'validation_failed',
+    ]);
     expect(AI_CONTROL_PLANE_LEASE_KEYS).toEqual([
       'admission',
       'recovery',

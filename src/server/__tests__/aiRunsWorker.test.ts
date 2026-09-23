@@ -5,8 +5,12 @@ import { execFileSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
+import type {
+  AgentRunExecutionSnapshot,
+  ExecutionSnapshot,
+} from '../../shared/types/agentRunLifecycle';
 import type { AiRunIngestBody } from '../../shared/types/aiRunIngest';
+import type { DurableInteractiveTurnSpecification } from '../../shared/types/durableInteractiveTurn';
 import type { CursorExecutionRun } from '../services/cursorExecutionCore';
 import {
   AI_RUNS_DEFAULT_HEARTBEAT_MS,
@@ -29,6 +33,38 @@ const snapshot: Readonly<ExecutionSnapshot> = Object.freeze({
   projectId: 'project-1',
   threadId: 'thread-1',
 });
+
+const durableSnapshot: DurableInteractiveTurnSpecification = {
+  schemaVersion: 1,
+  kind: 'interactive-turn',
+  turnId: 'turn-1',
+  threadId: 'thread-1',
+  userId: 'user-1',
+  projectId: 'project-1',
+  interactiveClass: 'fast',
+  workflowClass: 'home-chat',
+  model: 'model-a',
+  effort: 'low',
+  skill: null,
+  currentMessage: {
+    id: 'turn-1',
+    text: 'Hello',
+    hidden: false,
+    attachments: [],
+  },
+  transcript: [],
+  grounding: null,
+  mcpServers: [],
+  toolGrant: null,
+  currentPrompt: 'Hello',
+  recreationPrompt: 'Hello',
+  deadlines: {
+    absoluteTurnMs: 300_000,
+    repositoryPreparationMs: null,
+    firstEventMs: 30_000,
+    toolCallMs: 60_000,
+  },
+};
 
 const dispatch = {
   runId: 'run-1',
@@ -57,6 +93,7 @@ function createRun(options: {
 
 function setup(options: {
   run?: ReturnType<typeof createRun>;
+  executionSnapshot?: AgentRunExecutionSnapshot;
   postIngest?: (
     projectId: string,
     runId: string,
@@ -97,7 +134,7 @@ function setup(options: {
         lane: 'background',
         status: 'dispatched',
         dispatchMessageId: 'dispatch-current',
-        executionSnapshot: snapshot,
+        executionSnapshot: options.executionSnapshot ?? snapshot,
         cancelRequested: false,
       },
     }),
@@ -122,6 +159,18 @@ function setup(options: {
 }
 
 describe('aiRunsWorker host', () => {
+  it('rejects durable interactive snapshots before compatibility work starts', async () => {
+    const ctx = setup({ executionSnapshot: durableSnapshot });
+
+    await expect(ctx.worker.execute(dispatch)).rejects.toThrow(
+      'Background worker cannot execute a durable interactive turn'
+    );
+    expect(ctx.postIngest).not.toHaveBeenCalled();
+    expect(ctx.openCheckout).not.toHaveBeenCalled();
+    expect(ctx.createExecution).not.toHaveBeenCalled();
+    expect(ctx.flushArtifacts).not.toHaveBeenCalled();
+  });
+
   it('TBI-004 DoD-3 / BR-010 / AC-0 / VT-01: flushes after core success and before completed terminal', async () => {
     const ctx = setup();
 

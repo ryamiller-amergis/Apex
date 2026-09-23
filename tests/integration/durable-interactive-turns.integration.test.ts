@@ -18,6 +18,8 @@ const SECOND_THREAD_ID = '10000000-0000-4000-8000-000000000003';
 const FIRST_TURN_ID = '20000000-0000-4000-8000-000000000001';
 const DUPLICATE_TURN_ID = '20000000-0000-4000-8000-000000000002';
 const SECOND_TURN_ID = '20000000-0000-4000-8000-000000000003';
+const ATTACHMENT_ID = '30000000-0000-4000-8000-000000000001';
+const ATTACHMENT_MESSAGE_ID = '30000000-0000-4000-8000-000000000002';
 const USER_ID = `${PREFIX}user`;
 
 const specification: DurableInteractiveTurnSpecification = {
@@ -165,6 +167,59 @@ describe('durable interactive turns migration', () => {
     expect(legacy.rows[0]).toEqual({
       interactive_class: 'agentic',
       requested_by_user_id: USER_ID,
+    });
+
+    await expect(
+      pool.query(
+        `INSERT INTO agent_runs (
+           id, thread_id, status, interactive_class
+         ) VALUES ($1, $2, 'completed', 'slow')`,
+        [`${PREFIX}invalid-class`, FIRST_THREAD_ID]
+      )
+    ).rejects.toMatchObject({
+      code: '23514',
+      constraint: 'agent_runs_interactive_class_check',
+    });
+
+    await expect(
+      pool.query(
+        `INSERT INTO agent_runs (
+           id, thread_id, status, client_turn_id, client_turn_hash
+         ) VALUES ($1, $2, 'completed', $3, $4)`,
+        [
+          `${PREFIX}invalid-turn-hash`,
+          FIRST_THREAD_ID,
+          DUPLICATE_TURN_ID,
+          'A'.repeat(64),
+        ]
+      )
+    ).rejects.toMatchObject({
+      code: '23514',
+      constraint: 'agent_runs_client_turn_hash_check',
+    });
+
+    await expect(
+      pool.query(
+        `INSERT INTO chat_message_attachments (
+           id, message_id, name, type, size, sha256
+         ) VALUES ($1, $2, 'notes.txt', 'text/plain', 12, $3)`,
+        [ATTACHMENT_ID, ATTACHMENT_MESSAGE_ID, 'g'.repeat(64)]
+      )
+    ).rejects.toMatchObject({
+      code: '23514',
+      constraint: 'chat_message_attachments_sha256_check',
+    });
+
+    await expect(
+      pool.query(
+        `INSERT INTO agent_runs (
+           id, thread_id, status, transport_version
+         ) VALUES ($1, $2, 'completed', 'dapr-actor-v2')`,
+        [`${PREFIX}missing-dapr-fields`, FIRST_THREAD_ID]
+      )
+    ).rejects.toMatchObject({
+      code: '23514',
+      constraint: 'agent_runs_dapr_actor_v2_required_fields_check',
     });
 
     await insertDaprRun({

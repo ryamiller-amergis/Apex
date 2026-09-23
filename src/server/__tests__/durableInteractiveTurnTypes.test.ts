@@ -131,6 +131,77 @@ describe('durable interactive turn contracts', () => {
     ).toBe(true);
   });
 
+  it('accepts strict ISO timestamps on a real leap day', () => {
+    expect(
+      isDurableInteractiveTurnSpecification({
+        ...validSpecification,
+        transcript: [
+          {
+            id: 'message-0',
+            role: 'agent',
+            text: 'Leap day',
+            timestamp: '2024-02-29T23:59:59.123Z',
+          },
+        ],
+        toolGrant: {
+          userId: 'user-1',
+          projectId: 'project-1',
+          allowedOperations: ['ado:read'],
+          expiresAt: '2024-02-29T23:59:59+05:30',
+          encryptedAdoToken: null,
+        },
+      })
+    ).toBe(true);
+  });
+
+  it.each([
+    '2026-02-30T15:00:00.000Z',
+    '2025-02-29T15:00:00.000Z',
+    '2026-04-31T15:00:00.000Z',
+    '2026-13-01T15:00:00.000Z',
+    '2026-09-23T24:00:00.000Z',
+    '2026-09-23T15:00:00+14:01',
+  ])('rejects impossible ISO calendar timestamp %s', (deadlineAt) => {
+    expect(
+      isInteractiveDispatchOutboxPayload({
+        schemaVersion: 2,
+        kind: 'interactive_dispatch',
+        transport: 'dapr-actor-v2',
+        runId: 'run-1',
+        attemptId: 'attempt-1',
+        attemptNumber: 1,
+        dispatchMessageId: 'fence-1',
+        threadId: 'thread-1',
+        userId: 'user-1',
+        interactiveClass: 'fast',
+        workloadLane: 'fast',
+        capacityClass: 'interactive',
+        deadlineAt,
+      })
+    ).toBe(false);
+  });
+
+  it.each([
+    '2026-09-23 15:00:00Z',
+    '2026-09-23T15:00:00',
+    '2026-09-23',
+    '09/23/2026 15:00:00Z',
+  ])('rejects alternate timestamp format %s', (timestamp) => {
+    expect(
+      isDurableInteractiveTurnSpecification({
+        ...validSpecification,
+        transcript: [
+          {
+            id: 'message-0',
+            role: 'agent',
+            text: 'Invalid timestamp',
+            timestamp,
+          },
+        ],
+      })
+    ).toBe(false);
+  });
+
   it.each([
     [
       'a class/deadline mismatch',
