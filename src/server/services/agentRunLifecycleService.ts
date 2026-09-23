@@ -15,6 +15,7 @@ import {
   isAgentRunTerminalReason,
   isAgentRunTerminalStatus,
   type AgentRunCancelState,
+  type AgentRunExecutionSnapshot,
   type AgentRunLane,
   type AgentRunStatus,
   type AgentRunTerminalReason,
@@ -85,7 +86,7 @@ export type AgentRunLifecycleRow = {
   queuedAt: string | null;
   dispatchedAt: string | null;
   dispatchMessageId: string | null;
-  executionSnapshot: ExecutionSnapshot | null;
+  executionSnapshot: AgentRunExecutionSnapshot | null;
   cancelRequested: boolean;
   cancelState: AgentRunCancelState | null;
   terminalReason: AgentRunTerminalReason | null;
@@ -709,7 +710,9 @@ export async function markTerminal(
 /**
  * Read-only snapshot accessor for tests / callers verifying immutability (AC-d).
  */
-export async function getExecutionSnapshot(runId: string): Promise<ExecutionSnapshot | null> {
+export async function getExecutionSnapshot(
+  runId: string,
+): Promise<AgentRunExecutionSnapshot | null> {
   const run = await loadRun(runId);
   return run?.executionSnapshot ?? null;
 }

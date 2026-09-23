@@ -5,10 +5,10 @@ import type {
 } from './chat';
 import type {
   AgentRunCancelState,
+  AgentRunExecutionSnapshot,
   AgentRunLane,
   AgentRunStatus,
   AgentRunTerminalReason,
-  ExecutionSnapshot,
 } from './agentRunLifecycle';
 
 export const AI_RUN_INGEST_KINDS = [
@@ -95,7 +95,7 @@ export type AiRunBootstrapRun = Readonly<{
   queuedAt: string | null;
   dispatchedAt: string | null;
   dispatchMessageId: string | null;
-  executionSnapshot: ExecutionSnapshot;
+  executionSnapshot: AgentRunExecutionSnapshot;
   cancelRequested: boolean;
   cancelState: AgentRunCancelState | null;
   terminalReason: AgentRunTerminalReason | null;

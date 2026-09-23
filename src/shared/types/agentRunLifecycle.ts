@@ -3,6 +3,7 @@
  * Human-readable labels are rendered downstream in FEAT-006 (TBI-008).
  */
 
+import type { DurableInteractiveTurnSpecification } from './durableInteractiveTurn';
 import type { EffortLevel } from './effort';
 import type { SkillProvider } from './projectSettings';
 
@@ -68,6 +69,10 @@ export interface ExecutionSnapshot {
   projectId: string;
   threadId: string;
 }
+
+export type AgentRunExecutionSnapshot =
+  | ExecutionSnapshot
+  | DurableInteractiveTurnSpecification;
 
 /** Accessible label map for lifecycle statuses (PBI-001 a11y NFR). */
 export const AGENT_RUN_STATUS_LABELS: Record<AgentRunStatus, string> = {

@@ -16,6 +16,7 @@
  * entrypoint calls {@link setInteractiveActorRuntime} before `server.start()`.
  */
 import { AbstractActor } from '@dapr/dapr';
+import type { AgentRunExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
 import { INTERACTIVE_LANE } from '../../../shared/types/interactiveWorkflow';
 import type { AiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
 import { workerTierTelemetry } from '../workerTierTelemetry';
@@ -32,6 +33,15 @@ export interface InteractiveActorRuntime {
 }
 
 let runtime: InteractiveActorRuntime | undefined;
+
+function isDurableInteractiveSnapshot(
+  snapshot: AgentRunExecutionSnapshot,
+): snapshot is Extract<
+  AgentRunExecutionSnapshot,
+  { kind: 'interactive-turn' }
+> {
+  return 'kind' in snapshot && snapshot.kind === 'interactive-turn';
+}
 
 export function setInteractiveActorRuntime(next: InteractiveActorRuntime): void {
   runtime = next;
@@ -96,7 +106,13 @@ export class InteractiveSessionActorImpl
       // ignore
     }
 
-    const snapshot = Object.freeze({ ...bootstrap.run.executionSnapshot });
+    const persistedSnapshot = bootstrap.run.executionSnapshot;
+    if (isDurableInteractiveSnapshot(persistedSnapshot)) {
+      throw new Error(
+        'Durable interactive turns require the direct actor V2 executor',
+      );
+    }
+    const snapshot = Object.freeze({ ...persistedSnapshot });
 
     // A stale fence aborts before any warm-checkout access or ingest (BR-018).
     if (

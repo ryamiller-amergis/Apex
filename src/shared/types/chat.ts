@@ -468,6 +468,8 @@ export interface ChatTurnSkill {
 }
 
 export interface SendMessageRequest {
+  /** Client-generated durable turn identity; optional during rollout. */
+  turnId?: string;
   text: string;
   /** Optional model override for this turn. If different from the thread's current model,
    *  the agent will be disposed and resumed with the new model. */

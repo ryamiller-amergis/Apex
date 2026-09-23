@@ -31,6 +31,7 @@ import type {
 import {
   isAgentRunTerminalReason,
   isAgentRunTerminalStatus,
+  type AgentRunExecutionSnapshot,
 } from '../../shared/types/agentRunLifecycle';
 import {
   isAiRunIngestKind,
@@ -68,6 +69,15 @@ const EVENT_STATUSES: ReadonlySet<string> = new Set([
   'failed',
   'cancelled',
 ]);
+
+function isDurableInteractiveSnapshot(
+  snapshot: AgentRunExecutionSnapshot,
+): snapshot is Extract<
+  AgentRunExecutionSnapshot,
+  { kind: 'interactive-turn' }
+> {
+  return 'kind' in snapshot && snapshot.kind === 'interactive-turn';
+}
 
 export class AiRunIngestError extends Error {
   constructor(
@@ -145,7 +155,14 @@ async function persistBackgroundRunUsage(
 ): Promise<void> {
   if (existing.lane === INTERACTIVE_LANE) return;
   const snapshot = existing.executionSnapshot;
-  if (!snapshot?.model || !existing.threadId) return;
+  if (
+    !snapshot
+    || isDurableInteractiveSnapshot(snapshot)
+    || !snapshot.model
+    || !existing.threadId
+  ) {
+    return;
+  }
   if (
     body.durationMs === undefined
     && body.inputTokens === undefined
@@ -774,7 +791,11 @@ export async function ingest(
   }
 
   if (body.status === 'completed') {
-    const workspaceDir = existing.executionSnapshot?.workspaceRef;
+    const snapshot = existing.executionSnapshot;
+    const workspaceDir =
+      snapshot && !isDurableInteractiveSnapshot(snapshot)
+        ? snapshot.workspaceRef
+        : undefined;
     if (!workspaceDir) {
       throw new AiRunIngestError(
         'Completed terminal ingest requires a workspace reference',

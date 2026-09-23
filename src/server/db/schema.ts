@@ -29,11 +29,15 @@ import type {
 } from '../../shared/types/chat';
 import type {
   AgentRunCancelState,
+  AgentRunExecutionSnapshot,
   AgentRunLane,
   AgentRunStatus,
   AgentRunTerminalReason,
-  ExecutionSnapshot,
 } from '../../shared/types/agentRunLifecycle';
+import type {
+  DurableInteractiveTurnSpecification,
+  InteractiveClass,
+} from '../../shared/types/durableInteractiveTurn';
 import type {
   AiControlPlaneLeaseKey,
   AiRunArtifactStatus,
@@ -129,7 +133,14 @@ export const chatMessageAttachments = pgTable('chat_message_attachments', {
   type: text('type').notNull().default('text/plain'),
   size: integer('size').notNull(),
   path: text('path'),
-});
+  blobRef: jsonb('blob_ref').$type<AiRunBlobRef>(),
+  sha256: text('sha256'),
+}, (t) => ({
+  sha256Check: check(
+    'chat_message_attachments_sha256_check',
+    sql`${t.sha256} IS NULL OR ${t.sha256} ~ '^[0-9a-f]{64}$'`,
+  ),
+}));
 
 // ── Relations (enable db.query.* relational API) ──────────────────────────────
 
@@ -1658,12 +1669,16 @@ export const agentRuns = pgTable('agent_runs', {
   queuedAt: timestamp('queued_at', { withTimezone: true, mode: 'string' }),
   dispatchedAt: timestamp('dispatched_at', { withTimezone: true, mode: 'string' }),
   dispatchMessageId: text('dispatch_message_id'),
-  executionSnapshot: jsonb('execution_snapshot').$type<ExecutionSnapshot>(),
+  executionSnapshot: jsonb('execution_snapshot').$type<AgentRunExecutionSnapshot>(),
   cancelRequested: boolean('cancel_requested').notNull().default(false),
   cancelState: text('cancel_state').$type<AgentRunCancelState>(),
   terminalReason: text('terminal_reason').$type<AgentRunTerminalReason>(),
-  // Task 3 durable protocol: V1 default; V2 admission writes servicebus-blob-v2.
+  // Durable protocol: V1 default; background and interactive V2 write explicit transports.
   transportVersion: text('transport_version').$type<AiRunTransportVersion>().notNull().default('http-files-v1'),
+  requestedByUserId: text('requested_by_user_id'),
+  interactiveClass: text('interactive_class').$type<InteractiveClass>(),
+  clientTurnId: uuid('client_turn_id'),
+  clientTurnHash: text('client_turn_hash'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
@@ -1677,6 +1692,15 @@ export const agentRuns = pgTable('agent_runs', {
   v2ActiveThreadIdx: uniqueIndex('uq_agent_runs_v2_active_thread')
     .on(t.threadId)
     .where(sql`${t.transportVersion} = 'servicebus-blob-v2' AND ${t.status} IN ('queued', 'dispatched', 'running')`),
+  clientTurnUniq: uniqueIndex('uq_agent_runs_client_turn')
+    .on(t.threadId, t.clientTurnId)
+    .where(sql`${t.clientTurnId} IS NOT NULL`),
+  interactiveActiveThreadUniq: uniqueIndex('uq_agent_runs_interactive_active_thread')
+    .on(t.threadId)
+    .where(sql`${t.lane} = 'ai-runs-interactive' AND ${t.status} IN ('queued', 'dispatched', 'running')`),
+  interactiveUserActiveIdx: index('idx_agent_runs_interactive_user_active')
+    .on(t.requestedByUserId, t.interactiveClass, t.createdAt)
+    .where(sql`${t.lane} = 'ai-runs-interactive' AND ${t.status} IN ('queued', 'dispatched', 'running')`),
   queuedWorkerIdx: index('idx_agent_runs_queued_at_worker')
     .on(t.queuedAt)
     .where(sql`${t.lane} = 'background'`),
@@ -1702,7 +1726,19 @@ export const agentRuns = pgTable('agent_runs', {
   ),
   transportVersionCheck: check(
     'agent_runs_transport_version_check',
-    sql`${t.transportVersion} IN ('http-files-v1', 'servicebus-blob-v2')`,
+    sql`${t.transportVersion} IN ('http-files-v1', 'servicebus-blob-v2', 'dapr-actor-v2')`,
+  ),
+  interactiveClassCheck: check(
+    'agent_runs_interactive_class_check',
+    sql`${t.interactiveClass} IS NULL OR ${t.interactiveClass} IN ('fast', 'agentic')`,
+  ),
+  clientTurnHashCheck: check(
+    'agent_runs_client_turn_hash_check',
+    sql`${t.clientTurnHash} IS NULL OR ${t.clientTurnHash} ~ '^[0-9a-f]{64}$'`,
+  ),
+  daprActorRequiredFieldsCheck: check(
+    'agent_runs_dapr_actor_v2_required_fields_check',
+    sql`${t.transportVersion} <> 'dapr-actor-v2' OR (${t.requestedByUserId} IS NOT NULL AND ${t.interactiveClass} IS NOT NULL AND ${t.clientTurnId} IS NOT NULL AND ${t.clientTurnHash} IS NOT NULL)`,
   ),
   nonTerminalTimeoutCheck: check(
     'agent_runs_non_terminal_timeout_at_check',
@@ -1742,6 +1778,7 @@ export const aiRunAttempts = pgTable('ai_run_attempts', {
   lastCheckpointSequence: integer('last_checkpoint_sequence').notNull().default(0),
   lastCheckpointAt: timestamp('last_checkpoint_at', { withTimezone: true, mode: 'string' }),
   specRef: jsonb('spec_ref').$type<AiRunBlobRef>(),
+  specSnapshot: jsonb('spec_snapshot').$type<DurableInteractiveTurnSpecification>(),
   manifestRef: jsonb('manifest_ref').$type<AiRunBlobRef>(),
   failureCategory: text('failure_category').$type<AiRunV2FailureCategory>(),
   failureDetail: text('failure_detail'),
@@ -1764,7 +1801,7 @@ export const aiRunAttempts = pgTable('ai_run_attempts', {
   ),
   failureCategoryCheck: check(
     'ai_run_attempts_failure_category_check',
-    sql`${t.failureCategory} IS NULL OR ${t.failureCategory} IN ('worker_lost', 'progress_timeout', 'queue_ttl', 'dispatch_ttl', 'forced_cancel', 'poison_message', 'artifact_verification_failed', 'lease_lost', 'internal_error')`,
+    sql`${t.failureCategory} IS NULL OR ${t.failureCategory} IN ('worker_lost', 'progress_timeout', 'queue_ttl', 'dispatch_ttl', 'forced_cancel', 'poison_message', 'artifact_verification_failed', 'lease_lost', 'internal_error', 'hard_timeout', 'tool_timeout', 'worker_start_failed', 'validation_failed')`,
   ),
   attemptNumberCheck: check(
     'ai_run_attempts_attempt_number_check',
@@ -1796,6 +1833,12 @@ export const aiRunOutbox = pgTable('ai_run_outbox', {
   dueIdx: index('idx_ai_run_outbox_due')
     .on(t.availableAt, t.createdAt)
     .where(sql`${t.publishedAt} IS NULL`),
+  interactiveDueIdx: index('idx_ai_run_outbox_interactive_due')
+    .on(t.createdAt, t.id)
+    .where(sql`${t.kind} = 'interactive_dispatch' AND ${t.publishedAt} IS NULL`),
+  interactiveClassDueIdx: index('idx_ai_run_outbox_interactive_class_due')
+    .on(sql`(${t.payload}->>'interactiveClass')`, t.createdAt, t.id)
+    .where(sql`${t.kind} = 'interactive_dispatch' AND ${t.publishedAt} IS NULL`),
   publishAttemptsCheck: check(
     'ai_run_outbox_publish_attempts_check',
     sql`${t.publishAttempts} >= 0`,

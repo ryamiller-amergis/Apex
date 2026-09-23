@@ -9,6 +9,7 @@ export const AI_RUN_V2_SCHEMA_VERSION = 2 as const;
 export const AI_RUN_TRANSPORT_VERSIONS = [
   'http-files-v1',
   'servicebus-blob-v2',
+  'dapr-actor-v2',
 ] as const;
 export type AiRunTransportVersion = (typeof AI_RUN_TRANSPORT_VERSIONS)[number];
 
@@ -90,6 +91,10 @@ export const AI_RUN_V2_FAILURE_CATEGORIES = [
   'artifact_verification_failed',
   'lease_lost',
   'internal_error',
+  'hard_timeout',
+  'tool_timeout',
+  'worker_start_failed',
+  'validation_failed',
 ] as const;
 export type AiRunV2FailureCategory =
   (typeof AI_RUN_V2_FAILURE_CATEGORIES)[number];

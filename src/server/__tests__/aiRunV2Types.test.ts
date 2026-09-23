@@ -46,6 +46,7 @@ describe('AI-run V2 shared types', () => {
     expect(AI_RUN_TRANSPORT_VERSIONS).toEqual([
       'http-files-v1',
       'servicebus-blob-v2',
+      'dapr-actor-v2',
     ]);
     expect(AI_RUN_V2_ATTEMPT_STATUSES).toEqual([
       'queued',
@@ -77,6 +78,14 @@ describe('AI-run V2 shared types', () => {
       'failed',
     ]);
     expect(AI_RUN_V2_FAILURE_CATEGORIES).toContain('poison_message');
+    expect(AI_RUN_V2_FAILURE_CATEGORIES).toEqual(
+      expect.arrayContaining([
+        'hard_timeout',
+        'tool_timeout',
+        'worker_start_failed',
+        'validation_failed',
+      ]),
+    );
     expect(AI_CONTROL_PLANE_LEASE_KEYS).toEqual([
       'admission',
       'recovery',
