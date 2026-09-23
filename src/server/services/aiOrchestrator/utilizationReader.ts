@@ -6,6 +6,7 @@
  */
 import { sql } from 'drizzle-orm';
 import { isAiRunV2WorkloadLane } from '../../../shared/types/aiRunV2';
+import { isVisualSubjectKind } from '../../../shared/types/aiRunV2VisualSpec';
 import type { SqlExecutor } from '../aiRunV2/outboxRepository';
 import { emptyUtilization, providerForLane } from './providerGovernor';
 import type { ProviderUtilization } from './types';
@@ -16,6 +17,7 @@ export type UtilizationReaderDeps = Readonly<{
 
 type LaneCountRow = Readonly<{
   workload_lane: unknown;
+  visual_subject_kind: unknown;
   in_flight: unknown;
 }>;
 
@@ -30,6 +32,7 @@ export function createUtilizationReader(deps: UtilizationReaderDeps) {
       const result = await deps.executor.execute(sql`
         SELECT
           o.payload->>'workloadLane' AS workload_lane,
+          o.payload->>'visualSubjectKind' AS visual_subject_kind,
           COUNT(*)::int AS in_flight
         FROM ai_run_attempts a
         JOIN agent_runs r
@@ -39,13 +42,16 @@ export function createUtilizationReader(deps: UtilizationReaderDeps) {
           ON o.attempt_id = a.id
          AND o.kind = 'dispatch_command'
         WHERE a.status IN ('dispatched', 'running', 'checking_worker', 'finalizing')
-        GROUP BY 1
+        GROUP BY 1, 2
       `);
 
       const utilization = {
         cursorInFlight: 0,
         bedrockInFlight: 0,
         laneInFlight: { ...emptyUtilization().laneInFlight },
+        visualSubjectInFlight: {
+          ...emptyUtilization().visualSubjectInFlight,
+        },
       };
 
       for (const row of resultRows<LaneCountRow>(result)) {
@@ -58,6 +64,12 @@ export function createUtilizationReader(deps: UtilizationReaderDeps) {
           utilization.cursorInFlight += count;
         } else {
           utilization.bedrockInFlight += count;
+        }
+        if (
+          lane === 'visual'
+          && isVisualSubjectKind(row.visual_subject_kind)
+        ) {
+          utilization.visualSubjectInFlight[row.visual_subject_kind] += count;
         }
       }
 

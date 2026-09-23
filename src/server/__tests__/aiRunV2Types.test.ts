@@ -133,6 +133,28 @@ describe('AI-run V2 shared types', () => {
     ).toBe(false);
   });
 
+  it('requires an explicit subject kind on visual dispatch commands', () => {
+    expect(
+      isAiRunV2Command({
+        ...envelopeBase,
+        kind: 'dispatch_command',
+        transport: 'servicebus-blob-v2',
+        workloadLane: 'visual',
+        visualSubjectKind: 'ui-lab-screen',
+        specRef: { container: 'ai-run-artifacts', key: 'specs/run-1.json' },
+      }),
+    ).toBe(true);
+    expect(
+      isAiRunV2Command({
+        ...envelopeBase,
+        kind: 'dispatch_command',
+        transport: 'servicebus-blob-v2',
+        workloadLane: 'visual',
+        specRef: { container: 'ai-run-artifacts', key: 'specs/run-1.json' },
+      }),
+    ).toBe(false);
+  });
+
   it('rejects commands with unknown schema versions, kinds, or missing fences', () => {
     expect(
       isAiRunV2Command({

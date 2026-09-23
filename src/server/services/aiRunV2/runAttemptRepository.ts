@@ -17,6 +17,7 @@ import type {
   AgentRunStatus,
   AgentRunTerminalReason,
 } from '../../../shared/types/agentRunLifecycle';
+import type { VisualSubjectKind } from '../../../shared/types/aiRunV2VisualSpec';
 import type { TerminalRunSubject } from '../agentRunTerminalEffects';
 import { createOutboxRepository, type SqlExecutor } from './outboxRepository';
 import { createInboxRepository } from './inboxRepository';
@@ -50,6 +51,7 @@ export type CreateQueuedV2RunResult =
 export type CreateDispatchedV2RunInput = CreateQueuedV2RunInput &
   Readonly<{
     workloadLane: AiRunV2WorkloadLane;
+    visualSubjectKind?: VisualSubjectKind;
   }>;
 
 export type CreateDispatchedV2RunResult =
@@ -67,6 +69,7 @@ export type DispatchNextAttemptInput = Readonly<{
   runId: string;
   dispatchMessageId?: string;
   workloadLane: AiRunV2WorkloadLane;
+  visualSubjectKind?: VisualSubjectKind;
   specRef: AiRunBlobRef;
   deadlineAt?: string;
 }>;
@@ -186,6 +189,20 @@ function toV1TerminalReason(
   return V1_TERMINAL_REASONS.has(failureCategory)
     ? (failureCategory as AgentRunTerminalReason)
     : null;
+}
+
+function assertVisualSubjectIdentity(input: {
+  workloadLane: AiRunV2WorkloadLane;
+  visualSubjectKind?: VisualSubjectKind;
+}): void {
+  if (
+    (input.workloadLane === 'visual')
+    !== (input.visualSubjectKind !== undefined)
+  ) {
+    throw new Error(
+      'visualSubjectKind is required only for visual dispatch commands',
+    );
+  }
 }
 
 const defaultTransactionRunner: TransactionRunner = async (work) =>
@@ -322,6 +339,7 @@ export function createRunAttemptRepository(options?: {
           await transactionBoundRepository.dispatchNextAttempt({
             runId: created.runId,
             workloadLane: input.workloadLane,
+            visualSubjectKind: input.visualSubjectKind,
             specRef: input.specRef,
             deadlineAt: input.timeoutAt,
           });
@@ -339,6 +357,7 @@ export function createRunAttemptRepository(options?: {
     async dispatchNextAttempt(
       input: DispatchNextAttemptInput
     ): Promise<DispatchNextAttemptResult> {
+      assertVisualSubjectIdentity(input);
       return runInTransaction(async (executor) => {
         const outbox = createOutboxRepository(executor);
 
@@ -424,6 +443,9 @@ export function createRunAttemptRepository(options?: {
             kind: 'dispatch_command',
             transport: 'servicebus-blob-v2',
             workloadLane: input.workloadLane,
+            ...(input.visualSubjectKind
+              ? { visualSubjectKind: input.visualSubjectKind }
+              : {}),
             specRef: input.specRef,
             deadlineAt,
           };
@@ -505,6 +527,9 @@ export function createRunAttemptRepository(options?: {
           kind: 'dispatch_command',
           transport: 'servicebus-blob-v2',
           workloadLane: input.workloadLane,
+          ...(input.visualSubjectKind
+            ? { visualSubjectKind: input.visualSubjectKind }
+            : {}),
           specRef: input.specRef,
           deadlineAt,
         };

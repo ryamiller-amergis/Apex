@@ -56,6 +56,12 @@ export type VisualDesignReference = Readonly<{
  */
 export type VisualSubjectKind = 'design-prototype' | 'ui-lab-screen';
 
+export function isVisualSubjectKind(
+  value: unknown,
+): value is VisualSubjectKind {
+  return value === 'design-prototype' || value === 'ui-lab-screen';
+}
+
 /**
  * The design system a UI Lab screen is generated against, chosen from the
  * project on the App Service side. It selects the palette, the component

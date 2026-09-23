@@ -7,6 +7,24 @@ import { planAdmissionBatch } from '../../services/aiOrchestrator/admissionContr
 import type { OutboxRow } from '../../services/aiRunV2/outboxRepository';
 import { DEFAULT_PROVIDER_CAPACITY } from '../../services/aiOrchestrator/types';
 
+const baseRow = (id: string, extra: Partial<OutboxRow> = {}): OutboxRow => ({
+  id,
+  idempotencyKey: `${id}:dispatch`,
+  kind: 'dispatch_command',
+  runId: 'run-1',
+  attemptId: 'attempt-1',
+  payload: { workloadLane: 'document', dispatchMessageId: id },
+  availableAt: '2026-09-18T12:00:00.000Z',
+  claimedBy: 'drainer',
+  claimedAt: '2026-09-18T12:00:00.000Z',
+  claimExpiresAt: '2026-09-18T12:01:00.000Z',
+  publishAttempts: 1,
+  lastError: null,
+  publishedAt: null,
+  createdAt: '2026-09-18T12:00:00.000Z',
+  ...extra,
+});
+
 describe('providerGovernor', () => {
   it('maps lanes to providers', () => {
     expect(providerForLane('visual')).toBe('bedrock');
@@ -73,32 +91,51 @@ describe('providerGovernor', () => {
       }),
     ).toEqual({ status: 'allow', provider: 'cursor', lane: 'document' });
   });
+
+  it('reserves one Bedrock slot so prototype batches cannot starve UI Lab', () => {
+    const prototypeRows = Array.from({ length: 20 }, (_, index) =>
+      baseRow(`prototype-${index}`, {
+        payload: {
+          workloadLane: 'visual',
+          visualSubjectKind: 'design-prototype',
+          dispatchMessageId: `prototype-${index}`,
+        },
+      }));
+    const uiLabRow = baseRow('ui-lab', {
+      payload: {
+        workloadLane: 'visual',
+        visualSubjectKind: 'ui-lab-screen',
+        dispatchMessageId: 'ui-lab',
+      },
+    });
+
+    const planned = planAdmissionBatch({
+      rows: [...prototypeRows, uiLabRow],
+      utilization: emptyUtilization(),
+      uncertainWorkerCount: 0,
+    });
+    const allowed = planned.filter((item) => item.decision.status === 'allow');
+
+    expect(allowed).toHaveLength(2);
+    expect(
+      allowed.map((item) => item.outbox.payload.visualSubjectKind),
+    ).toEqual(['design-prototype', 'ui-lab-screen']);
+    expect(allowed.length).toBeLessThanOrEqual(
+      DEFAULT_PROVIDER_CAPACITY.bedrockCap,
+    );
+  });
 });
 
 describe('admissionController', () => {
-  const baseRow = (id: string, extra: Partial<OutboxRow> = {}): OutboxRow => ({
-    id,
-    idempotencyKey: `${id}:dispatch`,
-    kind: 'dispatch_command',
-    runId: 'run-1',
-    attemptId: 'attempt-1',
-    payload: { workloadLane: 'document', dispatchMessageId: id },
-    availableAt: '2026-09-18T12:00:00.000Z',
-    claimedBy: 'drainer',
-    claimedAt: '2026-09-18T12:00:00.000Z',
-    claimExpiresAt: '2026-09-18T12:01:00.000Z',
-    publishAttempts: 1,
-    lastError: null,
-    publishedAt: null,
-    createdAt: '2026-09-18T12:00:00.000Z',
-    ...extra,
-  });
-
   it('plans allows until provider capacity is consumed in-batch', () => {
     const rows = [
       baseRow('a'),
       baseRow('b', {
-        payload: { workloadLane: 'visual', dispatchMessageId: 'b' },
+        payload: {
+          workloadLane: 'visual',
+          visualSubjectKind: 'design-prototype',
+          dispatchMessageId: 'b',
+        },
       }),
     ];
     const planned = planAdmissionBatch({

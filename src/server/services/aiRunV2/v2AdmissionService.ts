@@ -23,6 +23,7 @@ export type AdmitV2RunInput = Readonly<{
   threadId: string;
   projectId: string;
   workloadLane: AiRunV2WorkloadLane;
+  visualSubjectKind?: VisualSubjectKind;
   timeoutAt: string;
   specification: Record<string, unknown>;
   /** Optional copy persisted on the run header for generic completion/usage. */
@@ -111,6 +112,14 @@ export function createV2AdmissionService(deps?: {
 
   return {
     async admit(input: AdmitV2RunInput): Promise<AdmitV2RunResult> {
+      if (
+        (input.workloadLane === 'visual') !==
+        (input.visualSubjectKind !== undefined)
+      ) {
+        throw new Error(
+          'visualSubjectKind is required only for visual workload admission',
+        );
+      }
       const runId = input.runId ?? newRunId();
       // The specification must exist before the command references it.
       const specRef = await specifications.write({
@@ -125,6 +134,7 @@ export function createV2AdmissionService(deps?: {
         projectId: input.projectId,
         lane: agentRunLaneFor(input.workloadLane),
         workloadLane: input.workloadLane,
+        visualSubjectKind: input.visualSubjectKind,
         timeoutAt: input.timeoutAt,
         specRef,
         executionSnapshot: input.executionSnapshot,

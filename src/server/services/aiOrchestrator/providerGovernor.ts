@@ -10,6 +10,7 @@ import type {
   ProviderUtilization,
 } from './types';
 import { DEFAULT_PROVIDER_CAPACITY } from './types';
+import type { VisualSubjectKind } from '../../../shared/types/aiRunV2VisualSpec';
 
 export function providerForLane(lane: AiOrchestratorLane): AiOrchestratorProvider {
   return lane === 'visual' ? 'bedrock' : 'cursor';
@@ -21,6 +22,7 @@ export function evaluateDispatchCapacity(input: {
   config?: ProviderCapacityConfig;
   uncertainWorkerCount: number;
   uncertainPauseThreshold: number;
+  visualSubjectKind?: VisualSubjectKind | null;
 }): DispatchDecision {
   const config = input.config ?? DEFAULT_PROVIDER_CAPACITY;
   if (input.uncertainWorkerCount >= input.uncertainPauseThreshold) {
@@ -36,6 +38,24 @@ export function evaluateDispatchCapacity(input: {
     provider === 'cursor' ? config.cursorCap : config.bedrockCap;
   if (providerInFlight >= providerCap) {
     return { status: 'deny', reason: 'provider_cap' };
+  }
+
+  if (input.lane === 'visual') {
+    if (!input.visualSubjectKind) {
+      return { status: 'deny', reason: 'unknown_visual_subject' };
+    }
+    if (input.visualSubjectKind === 'design-prototype') {
+      const prototypeSlots = Math.max(
+        0,
+        config.bedrockCap - config.uiLabReservedBedrockSlots,
+      );
+      if (
+        input.utilization.visualSubjectInFlight['design-prototype']
+        >= prototypeSlots
+      ) {
+        return { status: 'deny', reason: 'ui_lab_reserved' };
+      }
+    }
   }
 
   const laneFloor = config.laneFloors[input.lane];
@@ -78,6 +98,10 @@ export function emptyUtilization(): ProviderUtilization {
       visual: 0,
       fast: 0,
       agentic: 0,
+    },
+    visualSubjectInFlight: {
+      'design-prototype': 0,
+      'ui-lab-screen': 0,
     },
   };
 }

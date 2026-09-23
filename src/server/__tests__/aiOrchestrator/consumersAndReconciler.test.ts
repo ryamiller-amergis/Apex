@@ -483,6 +483,7 @@ describe('reconciler', () => {
         .mockRejectedValue(new Error('outbox unavailable'));
       const reconciler = makeReconciler(dispatchNextAttempt, {
         workloadLane: 'visual',
+        visualSubjectKind: 'design-prototype',
         specRef: { container: 'ai-run-artifacts', key: 'spec.json' },
         attemptCount: 1,
       });

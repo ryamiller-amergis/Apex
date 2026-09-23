@@ -99,7 +99,10 @@ describe('outboxDrainer', () => {
         enqueue: async () => [],
         claimBatch: async () => [
           row('msg-doc', { workloadLane: 'document' }),
-          row('msg-vis', { workloadLane: 'visual' }),
+          row('msg-vis', {
+            workloadLane: 'visual',
+            visualSubjectKind: 'design-prototype',
+          }),
           row('msg-fast', { workloadLane: 'fast' }),
           row('msg-agent', { workloadLane: 'agentic' }),
         ],

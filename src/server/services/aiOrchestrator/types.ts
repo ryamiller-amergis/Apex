@@ -7,6 +7,7 @@ import {
   AI_RUN_V2_WORKLOAD_LANES,
   type AiRunV2WorkloadLane,
 } from '../../../shared/types/aiRunV2';
+import type { VisualSubjectKind } from '../../../shared/types/aiRunV2VisualSpec';
 
 export const AI_ORCHESTRATOR_PROVIDERS = ['cursor', 'bedrock'] as const;
 export type AiOrchestratorProvider =
@@ -18,6 +19,8 @@ export type AiOrchestratorLane = AiRunV2WorkloadLane;
 export type ProviderCapacityConfig = Readonly<{
   cursorCap: number;
   bedrockCap: number;
+  /** Bedrock slots prototype batches cannot consume. UI Lab may borrow all free slots. */
+  uiLabReservedBedrockSlots: number;
   /** Per-lane reserved floors that may borrow from unused shared capacity. */
   laneFloors: Readonly<Record<AiOrchestratorLane, number>>;
 }>;
@@ -25,6 +28,7 @@ export type ProviderCapacityConfig = Readonly<{
 export const DEFAULT_PROVIDER_CAPACITY: ProviderCapacityConfig = {
   cursorCap: 20,
   bedrockCap: 2,
+  uiLabReservedBedrockSlots: 1,
   laneFloors: {
     document: 4,
     visual: 2,
@@ -37,6 +41,7 @@ export type ProviderUtilization = Readonly<{
   cursorInFlight: number;
   bedrockInFlight: number;
   laneInFlight: Readonly<Record<AiOrchestratorLane, number>>;
+  visualSubjectInFlight: Readonly<Record<VisualSubjectKind, number>>;
 }>;
 
 export type DispatchDecision =
@@ -46,6 +51,8 @@ export type DispatchDecision =
       reason:
         | 'provider_cap'
         | 'lane_cap'
+        | 'ui_lab_reserved'
+        | 'unknown_visual_subject'
         | 'uncertain_workers_paused'
         | 'unknown_lane';
     };

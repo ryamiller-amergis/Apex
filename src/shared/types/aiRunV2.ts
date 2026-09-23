@@ -4,6 +4,10 @@
  * Task 3 defines the closed enums and envelopes only. V1 HTTP/Files transport
  * remains the live path until Task 8 cutover.
  */
+import {
+  isVisualSubjectKind,
+  type VisualSubjectKind,
+} from './aiRunV2VisualSpec';
 
 export const AI_RUN_V2_SCHEMA_VERSION = 2 as const;
 
@@ -141,6 +145,7 @@ export type AiRunV2Command = AiRunV2EnvelopeBase &
     kind: 'dispatch_command';
     transport: 'servicebus-blob-v2';
     workloadLane: AiRunV2WorkloadLane;
+    visualSubjectKind?: VisualSubjectKind;
     specRef: AiRunBlobRef;
     /** Absolute attempt deadline, resolved before dispatch by App Service. */
     deadlineAt?: string;
@@ -334,10 +339,15 @@ function hasEnvelopeBase(value: unknown): value is AiRunV2EnvelopeBase {
 export function isAiRunV2Command(value: unknown): value is AiRunV2Command {
   if (!hasEnvelopeBase(value)) return false;
   const candidate = value as Record<string, unknown>;
+  const visualSubjectMatchesLane =
+    candidate.workloadLane === 'visual'
+      ? isVisualSubjectKind(candidate.visualSubjectKind)
+      : candidate.visualSubjectKind === undefined;
   return (
     candidate.kind === 'dispatch_command' &&
     candidate.transport === 'servicebus-blob-v2' &&
     isAiRunV2WorkloadLane(candidate.workloadLane) &&
+    visualSubjectMatchesLane &&
     isAiRunBlobRef(candidate.specRef) &&
     (
       candidate.deadlineAt === undefined

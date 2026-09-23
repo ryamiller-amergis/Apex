@@ -149,7 +149,16 @@ export function createOutboxRepository(executor: SqlExecutor) {
               OR claim_expires_at IS NULL
               OR claim_expires_at <= now()
             )
-          ORDER BY available_at ASC, created_at ASC, id ASC
+          ORDER BY
+            CASE
+              WHEN payload->>'workloadLane' = 'visual'
+                AND payload->>'visualSubjectKind' = 'design-prototype'
+              THEN 1
+              ELSE 0
+            END ASC,
+            available_at ASC,
+            created_at ASC,
+            id ASC
           FOR UPDATE SKIP LOCKED
           LIMIT ${limit}
         )

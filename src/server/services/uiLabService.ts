@@ -567,6 +567,7 @@ async function runGenerationV2(input: {
       threadId,
       projectId: design.project,
       workloadLane: VISUAL_WORKLOAD_LANE,
+      visualSubjectKind: 'ui-lab-screen',
       timeoutAt: new Date(
         dependencies.now().getTime() + dependencies.resolveHardLimitMs(),
       ).toISOString(),

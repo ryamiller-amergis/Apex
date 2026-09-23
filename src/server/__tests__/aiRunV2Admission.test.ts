@@ -160,12 +160,16 @@ describe('V2 admission', () => {
       threadId: 'thread-1',
       projectId: 'project-1',
       workloadLane: 'visual',
+      visualSubjectKind: 'design-prototype',
       timeoutAt: '2026-09-18T13:00:00.000Z',
       specification: {},
     });
 
     expect(createDispatchedV2Run).toHaveBeenCalledWith(
-      expect.objectContaining({ workloadLane: 'visual' }),
+      expect.objectContaining({
+        workloadLane: 'visual',
+        visualSubjectKind: 'design-prototype',
+      }),
     );
   });
 

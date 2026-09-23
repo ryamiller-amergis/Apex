@@ -138,6 +138,7 @@ describe('AI-run V2 run attempt repository', () => {
         projectId: 'project-1',
         lane: 'background',
         workloadLane: 'visual',
+        visualSubjectKind: 'design-prototype',
         timeoutAt: '2026-09-18T13:00:00.000Z',
         specRef,
       }),

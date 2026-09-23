@@ -7,7 +7,16 @@ describe('utilizationReader', () => {
         execute: async () => ({
           rows: [
             { workload_lane: 'document', in_flight: 3 },
-            { workload_lane: 'visual', in_flight: 2 },
+            {
+              workload_lane: 'visual',
+              visual_subject_kind: 'design-prototype',
+              in_flight: 1,
+            },
+            {
+              workload_lane: 'visual',
+              visual_subject_kind: 'ui-lab-screen',
+              in_flight: 1,
+            },
             { workload_lane: 'agentic', in_flight: 1 },
           ],
         }),
@@ -25,6 +34,10 @@ describe('utilizationReader', () => {
     // Visual is the only Bedrock lane; everything else counts against Cursor.
     expect(utilization.bedrockInFlight).toBe(2);
     expect(utilization.cursorInFlight).toBe(4);
+    expect(utilization.visualSubjectInFlight).toEqual({
+      'design-prototype': 1,
+      'ui-lab-screen': 1,
+    });
   });
 
   it('ignores rows whose dispatch command carried no usable lane', async () => {
@@ -56,6 +69,10 @@ describe('utilizationReader', () => {
       cursorInFlight: 0,
       bedrockInFlight: 0,
       laneInFlight: { document: 0, visual: 0, fast: 0, agentic: 0 },
+      visualSubjectInFlight: {
+        'design-prototype': 0,
+        'ui-lab-screen': 0,
+      },
     });
   });
 });

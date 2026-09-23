@@ -144,6 +144,7 @@ describe('UI Lab V2 generation routing', () => {
         threadId: 'ui-lab:design-1',
         projectId: 'MaxView',
         workloadLane: 'visual',
+        visualSubjectKind: 'ui-lab-screen',
         specification: expect.objectContaining({
           subjectId: 'design-1',
           subjectKind: 'ui-lab-screen',

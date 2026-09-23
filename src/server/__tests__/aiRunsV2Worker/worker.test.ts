@@ -353,7 +353,10 @@ describe('V2 worker run loop', () => {
    * prototype row verbatim.
    */
   it('reports a truncated model response as internal_error with the message a human can act on', async () => {
-    const { bus, calls } = fakeBus(command({ workloadLane: 'visual' }));
+    const { bus, calls } = fakeBus(command({
+      workloadLane: 'visual',
+      visualSubjectKind: 'design-prototype',
+    }));
     const worker = createV2Worker({
       bus,
       execute: async () => {
@@ -393,7 +396,10 @@ describe('V2 worker run loop', () => {
    * and that needs a missing worker, not a finished one.
    */
   it('settles a truncated attempt instead of leaving it to be redelivered', async () => {
-    const { bus, calls } = fakeBus(command({ workloadLane: 'visual' }));
+    const { bus, calls } = fakeBus(command({
+      workloadLane: 'visual',
+      visualSubjectKind: 'design-prototype',
+    }));
     const worker = createV2Worker({
       bus,
       execute: async () => {
