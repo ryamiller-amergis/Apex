@@ -81,3 +81,48 @@ Final verification:
 No migration, protected config, infrastructure, cloud, deployment, push, or PR
 change was made. Task 6 remains pending final review rather than declared
 complete.
+
+## Final stream re-review remediation — 2026-09-22
+
+Status: DONE
+
+Commits:
+- `8c70ecea` — enforce the absolute V1 UI Lab stream deadline.
+- `9197bb34` — replay run-filtered authoritative final snapshots.
+
+Resolved:
+- Initial generation and regeneration now keep one absolute Bedrock deadline
+  active through retries, backoff, request send, and the entire streaming body.
+  A stream that stalls after headers aborts promptly, and timers/listeners are
+  removed on both normal and timeout paths.
+- Ready/completed replay resolves the latest completed UI Lab run and passes
+  its run ID through every replay page. Events from adjacent generations are
+  ignored and cannot be republished under the wrong run.
+- The final durable event is an authoritative normalized/sanitized HTML
+  snapshot. The browser replaces raw partial HTML with that snapshot instead
+  of slicing it with offsets from a different representation. Snapshot event
+  IDs deduplicate reconnects.
+- Missing snapshots are regenerated deterministically from ready HTML. Replay
+  after raw deltas, before or after the snapshot, remains lossless through
+  more than 500 events.
+
+TDD evidence:
+- V1 timeout RED: both stalled-body generation and regeneration tests resolved
+  instead of timing out; GREEN: stalled and normal stream tests passed with no
+  pending fake timers.
+- Replay/snapshot RED: 8 tests failed, including missing snapshot replacement
+  and absent completed-run filtering; GREEN: server replay, route, routing, and
+  client-hook suites passed.
+- Added fenced-markdown and sanitizer-altered fixtures, adjacent-generation
+  filtering, disconnect-before-snapshot recovery, snapshot deduplication, and
+  completed-run pagination beyond 500 events.
+
+Final verification:
+- Covering matrix: 45 suites, 595 tests passed.
+- Server build/type-check: passed.
+- Client build/type-check: passed with the existing Vite third-party annotation
+  and chunk-size warnings only.
+- Worker database-isolation and committed/working diff checks passed.
+
+No migration, protected config, infrastructure, cloud, deployment, push, or PR
+change was made.
