@@ -1,7 +1,10 @@
 import {
   createInteractiveWorkflowRouter,
+  createLegacyInteractiveWorkflowRouter,
   type InteractiveWorkflowRouteInput,
   type InteractiveWorkflowRouterDependencies,
+  type LegacyInteractiveWorkflowRouteInput,
+  type LegacyInteractiveWorkflowRouterDependencies,
 } from '../services/interactiveWorkflowRouter';
 
 jest.mock('../db/drizzle', () => ({ db: {} }));
@@ -119,4 +122,119 @@ describe('canonical interactive workflow routing', () => {
     ).resolves.toMatchObject({ route: 'durable' });
   });
 
+});
+
+function makeLegacyInput(
+  overrides: Partial<LegacyInteractiveWorkflowRouteInput> = {},
+): LegacyInteractiveWorkflowRouteInput {
+  return {
+    userId: 'user-1',
+    project: 'Apex',
+    workflowClass: 'interview',
+    threadId: 'thread-1',
+    runId: 'run-1',
+    dispatchToActor: jest.fn().mockResolvedValue(undefined),
+    runInProcess: jest.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
+function makeLegacyDependencies(
+  overrides: Partial<LegacyInteractiveWorkflowRouterDependencies> = {},
+): LegacyInteractiveWorkflowRouterDependencies {
+  return {
+    isFeatureEnabled: jest.fn().mockResolvedValue(true),
+    admissionService: {
+      admit: jest.fn().mockResolvedValue({
+        admitted: true,
+        shed: false,
+        slot: 'reserved',
+        dispatchMessageId: 'dispatch-1',
+        interactiveInFlight: 1,
+        reserved: 4,
+        burstMax: 12,
+      }),
+    },
+    trackEvent: jest.fn(),
+    ...overrides,
+  };
+}
+
+describe('legacy interactive actor routing', () => {
+  it('dispatches an admitted legacy turn to its actor', async () => {
+    const dependencies = makeLegacyDependencies();
+    const input = makeLegacyInput();
+
+    await expect(
+      createLegacyInteractiveWorkflowRouter(dependencies).route(input),
+    ).resolves.toEqual({
+      route: 'actor',
+      runId: 'run-1',
+      dispatchMessageId: 'dispatch-1',
+      slot: 'reserved',
+    });
+    expect(input.dispatchToActor).toHaveBeenCalledTimes(1);
+    expect(input.runInProcess).not.toHaveBeenCalled();
+    expect(dependencies.isFeatureEnabled).toHaveBeenCalledWith(
+      'ai-runs-interactive',
+      {
+        userId: 'user-1',
+        project: 'Apex',
+        caller: 'interview',
+      },
+    );
+  });
+
+  it.each([
+    ['disabled', jest.fn().mockResolvedValue(false), 'flag-disabled'],
+    [
+      'evaluation error',
+      jest.fn().mockRejectedValue(new Error('flag unavailable')),
+      'flag-evaluation-error',
+    ],
+  ] as const)('runs in process when the legacy flag has %s', async (
+    _case,
+    evaluate,
+    reason,
+  ) => {
+    const dependencies = makeLegacyDependencies({
+      isFeatureEnabled: evaluate,
+    });
+    const input = makeLegacyInput();
+
+    await expect(
+      createLegacyInteractiveWorkflowRouter(dependencies).route(input),
+    ).resolves.toEqual({ route: 'in-process', reason });
+    expect(input.runInProcess).toHaveBeenCalledTimes(1);
+    expect(input.dispatchToActor).not.toHaveBeenCalled();
+    expect(dependencies.admissionService!.admit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['over-capacity', 'shed'],
+    ['race-lost', 'race-lost'],
+  ] as const)('runs in process after legacy admission %s', async (
+    admissionReason,
+    routeReason,
+  ) => {
+    const dependencies = makeLegacyDependencies({
+      admissionService: {
+        admit: jest.fn().mockResolvedValue({
+          admitted: false,
+          shed: true,
+          reason: admissionReason,
+          interactiveInFlight: 16,
+          reserved: 4,
+          burstMax: 12,
+        }),
+      },
+    });
+    const input = makeLegacyInput();
+
+    await expect(
+      createLegacyInteractiveWorkflowRouter(dependencies).route(input),
+    ).resolves.toEqual({ route: 'in-process', reason: routeReason });
+    expect(input.runInProcess).toHaveBeenCalledTimes(1);
+    expect(input.dispatchToActor).not.toHaveBeenCalled();
+  });
 });

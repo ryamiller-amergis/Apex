@@ -1,6 +1,7 @@
 import {
   absoluteTurnMsForClass,
   isCanonicalUuid,
+  isDurableUserIdentity,
   isDurableInteractiveTurnSpecification,
   isInteractiveDispatchOutboxPayload,
   type DurableInteractiveTurnSpecification,
@@ -10,7 +11,7 @@ import { isAiRunTransportVersion } from '../../shared/types/aiRunV2';
 const SHA256 = 'a'.repeat(64);
 const TURN_ID = '10000000-0000-4000-8000-000000000001';
 const THREAD_ID = '10000000-0000-4000-8000-000000000002';
-const USER_ID = 'AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE';
+const USER_ID = 'internal:workflow-user';
 const TRANSCRIPT_MESSAGE_ID = '10000000-0000-4000-8000-000000000003';
 const ATTACHMENT_ID = '10000000-0000-4000-8000-000000000004';
 const CALENDAR_SESSION_ID = '10000000-0000-4000-8000-000000000005';
@@ -100,6 +101,21 @@ describe('durable interactive turn contracts', () => {
     expect(isCanonicalUuid(value)).toBe(false);
   });
 
+  it.each([
+    'user-1',
+    'internal:workflow-user',
+    'AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE',
+  ])('accepts bounded nonempty user identity %s', (value) => {
+    expect(isDurableUserIdentity(value)).toBe(true);
+  });
+
+  it.each(['', '   ', ' user-1 ', `x${'\0'}y`, 'x'.repeat(257)])(
+    'rejects invalid user identity text',
+    (value) => {
+      expect(isDurableUserIdentity(value)).toBe(false);
+    },
+  );
+
   it('accepts a complete frozen turn specification', () => {
     expect(isDurableInteractiveTurnSpecification(validSpecification)).toBe(
       true
@@ -175,7 +191,7 @@ describe('durable interactive turn contracts', () => {
     ).toBe(true);
   });
 
-  it.each(['turnId', 'threadId', 'userId'] as const)(
+  it.each(['turnId', 'threadId'] as const)(
     'rejects malformed top-level %s',
     (field) => {
       expect(
@@ -185,6 +201,24 @@ describe('durable interactive turn contracts', () => {
         })
       ).toBe(false);
     }
+  );
+
+  it.each(['', '   ', ' user-1 ', `x${'\0'}y`, 'x'.repeat(257)])(
+    'rejects invalid top-level user identity',
+    (userId) => {
+      expect(
+        isDurableInteractiveTurnSpecification({
+          ...validSpecification,
+          userId,
+        }),
+      ).toBe(false);
+      expect(
+        isInteractiveDispatchOutboxPayload({
+          ...validDispatch,
+          userId,
+        }),
+      ).toBe(false);
+    },
   );
 
   it.each([
@@ -249,19 +283,6 @@ describe('durable interactive turn contracts', () => {
         ],
       },
     ],
-    [
-      'tool grant user id',
-      {
-        ...validSpecification,
-        toolGrant: {
-          userId: 'user-1',
-          projectId: 'project-1',
-          allowedOperations: ['ado:read'],
-          expiresAt: '2026-09-23T15:00:00.000Z',
-          encryptedAdoToken: null,
-        },
-      },
-    ],
   ])('rejects malformed nested %s', (_name, candidate) => {
     expect(isDurableInteractiveTurnSpecification(candidate)).toBe(false);
   });
@@ -302,7 +323,6 @@ describe('durable interactive turn contracts', () => {
     'attemptId',
     'dispatchMessageId',
     'threadId',
-    'userId',
   ] as const)('rejects a dispatch with malformed %s', (field) => {
     expect(
       isInteractiveDispatchOutboxPayload({

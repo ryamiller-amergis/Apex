@@ -628,6 +628,7 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
   }
 
   const thread = (req as ThreadRequest).thread!;
+  const requesterUserId = getUserId(req);
 
   let releaseAdoWriteTurn = () => {};
   let durableToolGrant:
@@ -656,7 +657,7 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
       const token = await getAdoTokenForUser(req);
       releaseAdoWriteTurn = await registerChatAdoWriteTurn({
         threadId: req.params.id,
-        userId: getUserId(req),
+        userId: requesterUserId,
         project: thread.kickoff.project,
         token,
         isSuperAdmin: isSuperAdminRequest(req),
@@ -697,6 +698,7 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
         turnId: body.turnId,
         turnIdPolicy: 'required',
         legacyCompletion: 'detach',
+        requesterUserId,
         toolGrant: durableToolGrant,
         onLegacySettled: releaseAdoWriteTurn,
       },

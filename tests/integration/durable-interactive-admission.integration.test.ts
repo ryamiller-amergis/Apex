@@ -395,15 +395,54 @@ describe('durable interactive atomic admission', () => {
     });
   });
 
-  it('returns conflict for the same turn identity with a different hash', async () => {
+  it.each([
+    'queued',
+    'dispatched',
+    'running',
+    'completed',
+    'failed',
+    'cancelled',
+  ] as const)(
+    'returns delayed duplicate with persisted %s status',
+    async (status) => {
+      const threadId = THREAD_IDS[0];
+      const userId = USER_IDS[0];
+      const turnId = TURN_IDS[0];
+      await insertThread(threadId, userId);
+      const repository = createDurableInteractiveTurnRepository();
+      const input = preparedTurn({ threadId, turnId, userId });
+      const first = await repository.admit(input);
+      expect(isAccepted(first)).toBe(true);
+      await pool.query(
+        `UPDATE agent_runs SET status = $1 WHERE thread_id = $2`,
+        [status, threadId],
+      );
+      if (['completed', 'failed', 'cancelled'].includes(status)) {
+        await pool.query(
+          `UPDATE chat_threads
+           SET status = 'idle', active_run_id = NULL
+           WHERE id = $1::uuid`,
+          [threadId],
+        );
+      }
+
+      await expect(repository.admit(input)).resolves.toMatchObject({
+        status,
+        turnId,
+        idempotent: true,
+      });
+    },
+  );
+
+  it('concurrently accepts one same-turn hash and conflicts the other', async () => {
     const threadId = THREAD_IDS[0];
     const userId = USER_IDS[0];
     const turnId = TURN_IDS[0];
     await insertThread(threadId, userId);
     const repository = createDurableInteractiveTurnRepository();
 
-    await repository.admit(preparedTurn({ threadId, turnId, userId }));
-    await expect(
+    const results = await Promise.all([
+      repository.admit(preparedTurn({ threadId, turnId, userId })),
       repository.admit(
         preparedTurn({
           threadId,
@@ -412,7 +451,10 @@ describe('durable interactive atomic admission', () => {
           requestHash: 'b'.repeat(64),
         }),
       ),
-    ).resolves.toEqual({ status: 'turn_conflict' });
+    ]);
+
+    expect(results.filter(isAccepted)).toHaveLength(1);
+    expect(results).toContainEqual({ status: 'turn_conflict' });
     await expect(committedCounts(threadId)).resolves.toMatchObject({
       messages: 1,
       runs: 1,
@@ -447,6 +489,47 @@ describe('durable interactive atomic admission', () => {
     expect(results.filter(isAccepted)).toHaveLength(1);
     expect(results).toContainEqual(
       expect.objectContaining({ status: 'thread_active' }),
+    );
+  });
+
+  it('serializes two authorized callers sharing one thread', async () => {
+    const threadId = THREAD_IDS[0];
+    await insertThread(threadId, USER_IDS[0]);
+    const repository = createDurableInteractiveTurnRepository();
+
+    const results = await Promise.all([
+      repository.admit(
+        preparedTurn({
+          threadId,
+          turnId: TURN_IDS[0],
+          userId: 'authorized-admin',
+          requestHash: 'a'.repeat(64),
+        }),
+      ),
+      repository.admit(
+        preparedTurn({
+          threadId,
+          turnId: TURN_IDS[1],
+          userId: 'assigned-approver',
+          requestHash: 'b'.repeat(64),
+        }),
+      ),
+    ]);
+
+    expect(results.filter(isAccepted)).toHaveLength(1);
+    expect(results).toContainEqual(
+      expect.objectContaining({ status: 'thread_active' }),
+    );
+    const acceptedRun = await pool.query<{
+      requested_by_user_id: string;
+    }>(
+      `SELECT requested_by_user_id
+       FROM agent_runs
+       WHERE thread_id = $1`,
+      [threadId],
+    );
+    expect(['authorized-admin', 'assigned-approver']).toContain(
+      acceptedRun.rows[0]?.requested_by_user_id,
     );
   });
 

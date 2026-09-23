@@ -183,6 +183,7 @@ import {
   createThread,
   CANCELLABLE_AGENT_RUN_STATUSES,
   sendMessage,
+  getThread,
   closeThread,
   permanentlyDeleteThread,
   markAsInterviewThread,
@@ -1446,6 +1447,86 @@ describe('canonical durable send wrapper', () => {
       expect(mockDurableInteractiveAdmit).not.toHaveBeenCalled();
     } finally {
       mockIsThreadRunAlive.mockResolvedValue(false);
+      await closeThread(thread.id);
+    }
+  });
+
+  it.each(['completed', 'failed', 'cancelled'] as const)(
+    'does not resurrect in-memory thread state for delayed %s duplicate',
+    async (status) => {
+      const accepted = {
+        turnId,
+        runId,
+        status,
+        interactiveClass: 'fast' as const,
+      };
+      mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+      mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+        async (input: {
+          admitDurable(): Promise<typeof accepted>;
+        }) => ({
+          route: 'durable',
+          response: await input.admitDurable(),
+        }),
+      );
+      const thread = await createThread(
+        'developer-1',
+        baseKickoff(),
+        { skipAutoKickoff: true },
+      );
+
+      try {
+        await sendMessage(thread.id, 'Delayed duplicate', undefined, [], {
+          turnId,
+          turnIdPolicy: 'required',
+        });
+        const hydrated = await getThread(thread.id);
+        expect(hydrated?.status).not.toBe('running');
+        expect(hydrated?.activeRunId).toBeUndefined();
+      } finally {
+        await closeThread(thread.id);
+      }
+    },
+  );
+
+  it('uses the authorized requester for flag context, quota, grant, and audit input', async () => {
+    const accepted = {
+      turnId,
+      runId,
+      status: 'queued' as const,
+      interactiveClass: 'fast' as const,
+    };
+    mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        userId: string;
+        admitDurable(): Promise<typeof accepted>;
+      }) => {
+        expect(input.userId).toBe('authorized-admin');
+        return {
+          route: 'durable',
+          response: await input.admitDurable(),
+        };
+      },
+    );
+    const thread = await createThread(
+      'thread-owner',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+
+    try {
+      await sendMessage(thread.id, 'Authorized send', undefined, [], {
+        turnId,
+        turnIdPolicy: 'required',
+        requesterUserId: 'authorized-admin',
+      });
+      expect(mockDurableInteractiveAdmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'authorized-admin',
+        }),
+      );
+    } finally {
       await closeThread(thread.id);
     }
   });

@@ -6,8 +6,12 @@ import type {
   InteractiveClass,
   InteractiveDispatchOutboxPayload,
   InteractiveTurnAcceptedResponse,
+  InteractiveTurnAcceptedStatus,
 } from '../../shared/types/durableInteractiveTurn';
-import { isCanonicalUuid } from '../../shared/types/durableInteractiveTurn';
+import {
+  isCanonicalUuid,
+  isDurableUserIdentity,
+} from '../../shared/types/durableInteractiveTurn';
 import { db } from '../db/drizzle';
 import {
   notifyOutbox,
@@ -77,17 +81,27 @@ function isoTimestamp(value: unknown, label: string): string {
   return date.toISOString();
 }
 
-function duplicateStatus(status: string): 'queued' | 'dispatched' {
-  return status === 'queued' ? 'queued' : 'dispatched';
+function duplicateStatus(status: string): InteractiveTurnAcceptedStatus {
+  switch (status) {
+    case 'queued':
+    case 'dispatched':
+    case 'running':
+    case 'completed':
+    case 'failed':
+    case 'cancelled':
+      return status;
+    default:
+      throw new Error(`Unsupported durable interactive run status: ${status}`);
+  }
 }
 
 function assertPreparedTurn(input: PreparedDurableInteractiveTurn): void {
   if (
     !isCanonicalUuid(input.turnId) ||
     !isCanonicalUuid(input.threadId) ||
-    !isCanonicalUuid(input.userId)
+    !isDurableUserIdentity(input.userId)
   ) {
-    throw new Error('Durable interactive turn identifiers must be UUIDs');
+    throw new Error('Durable interactive turn identity is invalid');
   }
   if (!/^[0-9a-f]{64}$/.test(input.requestHash)) {
     throw new Error('Durable interactive request hash must be lowercase SHA-256');
@@ -293,6 +307,7 @@ export function createDurableInteractiveTurnRepository(options?: {
             client_turn_id,
             client_turn_hash,
             cancel_requested,
+            event_driven,
             progress_phase,
             progress_label,
             heartbeat_at,
@@ -314,6 +329,7 @@ export function createDurableInteractiveTurnRepository(options?: {
             ${input.turnId}::uuid,
             ${input.requestHash},
             FALSE,
+            TRUE,
             'queued',
             ${QUEUED_PROGRESS_LABEL},
             ${acceptedAt}::timestamptz,

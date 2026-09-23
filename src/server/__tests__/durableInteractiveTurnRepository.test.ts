@@ -186,6 +186,14 @@ function repositoryHarness(options?: {
         interactive_class: 'fast',
       };
     },
+    setExistingStatus(status: string) {
+      existing = {
+        id: RUN_ID,
+        client_turn_hash: 'a'.repeat(64),
+        status,
+        interactive_class: 'fast',
+      };
+    },
   };
 }
 
@@ -220,6 +228,51 @@ describe('durable interactive turn repository', () => {
         statement.includes('INSERT INTO chat_messages'),
       ),
     ).toHaveLength(1);
+  });
+
+  it.each([
+    'queued',
+    'dispatched',
+    'running',
+    'completed',
+    'failed',
+    'cancelled',
+  ] as const)(
+    'returns the original exhaustive %s status for a delayed duplicate',
+    async (status) => {
+      const harness = repositoryHarness();
+      harness.setExistingStatus(status);
+
+      await expect(
+        harness.repository.admit(preparedTurn()),
+      ).resolves.toMatchObject({
+        status,
+        runId: RUN_ID,
+        turnId: TURN_ID,
+        idempotent: true,
+      });
+      expect(
+        harness.sqlStatements.some((statement) =>
+          statement.includes('INSERT INTO chat_messages'),
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it('accepts a bounded non-UUID requester identity for locks and limits', async () => {
+    const { repository, queries } = repositoryHarness();
+    const userId = 'internal:workflow-user';
+    const frozen = specification({ userId });
+
+    await expect(
+      repository.admit(
+        preparedTurn({
+          userId,
+          specification: frozen,
+        }),
+      ),
+    ).resolves.toMatchObject({ status: 'queued' });
+    expect(queries.flatMap((query) => boundStrings(query))).toContain(userId);
   });
 
   it('returns a turn conflict before limits or writes when the hash differs', async () => {
@@ -304,6 +357,18 @@ describe('durable interactive turn repository', () => {
           statement.includes("status = 'running'"),
       ),
     ).toBe(true);
+  });
+
+  it('persists durable canonical turns as event-driven at admission', async () => {
+    const { repository, sqlStatements } = repositoryHarness();
+
+    await repository.admit(preparedTurn());
+
+    const runInsert = sqlStatements.find((statement) =>
+      statement.includes('INSERT INTO agent_runs'),
+    );
+    expect(runInsert).toContain('event_driven');
+    expect(runInsert).toMatch(/event_driven[\s\S]*TRUE/);
   });
 
   it('stores attempt one, its fence, the snapshot, and interactive outbox payload together', async () => {
@@ -441,6 +506,8 @@ function durableServiceHarness(options?: {
     >
   >;
   grounding?: DurableInteractiveTurnSpecification['grounding'];
+  groundingError?: Error;
+  maxviewCapability?: 'disabled' | 'enabled' | 'unavailable';
 }) {
   const admitted: PreparedDurableInteractiveTurn[] = [];
   const order: string[] = [];
@@ -495,17 +562,22 @@ function durableServiceHarness(options?: {
       path: '.cursor/skills/app-knowledge/SKILL.md',
       content: '# App Knowledge\nAnswer from the repository.',
     }),
-    resolveGrounding: jest.fn().mockResolvedValue(
-      options && 'grounding' in options
-        ? options.grounding
-        : {
-            provider: 'github',
-            project: 'project-1',
-            repository: 'repo-1',
-            sha: 'abc123',
-            profileId: 'profile-1',
-          },
-    ),
+    resolveGrounding: options?.groundingError
+      ? jest.fn().mockRejectedValue(options.groundingError)
+      : jest.fn().mockResolvedValue(
+          options && 'grounding' in options
+            ? options.grounding
+            : {
+                provider: 'github',
+                project: 'project-1',
+                repository: 'repo-1',
+                sha: 'abc123',
+                profileId: 'profile-1',
+              },
+        ),
+    resolveMaxviewCapability: jest
+      .fn()
+      .mockResolvedValue(options?.maxviewCapability ?? 'disabled'),
     resolveDeadlines: jest.fn(({ interactiveClass, requiresRepositoryPreparation }) => ({
       absoluteTurnMs:
         interactiveClass === 'fast' ? 300_000 : 1_200_000,
@@ -686,6 +758,79 @@ describe('durable interactive turn service', () => {
     expect(repository.admit).not.toHaveBeenCalled();
   });
 
+  it('maps thrown grounding resolution to the explicit 422 unavailable code', async () => {
+    const thread = authoritativeThread({
+      kickoff: {
+        project: 'project-1',
+        repo: 'repo-1',
+        skillProvider: 'github',
+        skillPath: '.cursor/skills/app-knowledge/SKILL.md',
+      },
+    });
+    const { service, repository } = durableServiceHarness({
+      thread,
+      groundingError: new Error('grounding resolver unavailable'),
+    });
+
+    await expect(
+      service.admit({
+        threadId: THREAD_ID,
+        userId: USER_ID,
+        workflowClass: 'home-chat',
+        turnId: TURN_ID,
+        text: 'How does Apex work?',
+        attachments: [],
+      }),
+    ).rejects.toMatchObject({
+      status: 422,
+      code: 'INTERACTIVE_V2_GROUNDING_UNAVAILABLE',
+    });
+    expect(repository.admit).not.toHaveBeenCalled();
+  });
+
+  it('freezes enabled registered MaxView as an agentic internal proxy capability', async () => {
+    const { service, admitted } = durableServiceHarness({
+      maxviewCapability: 'enabled',
+    });
+
+    await service.admit({
+      threadId: THREAD_ID,
+      userId: USER_ID,
+      workflowClass: 'home-chat',
+      turnId: TURN_ID,
+      text: 'Inspect a timecard',
+      attachments: [],
+    });
+
+    expect(admitted[0].interactiveClass).toBe('agentic');
+    expect(admitted[0].specification.mcpServers).toContainEqual({
+      kind: 'internal-proxy',
+      serverName: 'maxview',
+      enableRepoBrowse: false,
+    });
+  });
+
+  it('fails explicitly when registered MaxView is enabled but unavailable', async () => {
+    const { service, repository } = durableServiceHarness({
+      maxviewCapability: 'unavailable',
+    });
+
+    await expect(
+      service.admit({
+        threadId: THREAD_ID,
+        userId: USER_ID,
+        workflowClass: 'home-chat',
+        turnId: TURN_ID,
+        text: 'Inspect a timecard',
+        attachments: [],
+      }),
+    ).rejects.toMatchObject({
+      status: 422,
+      code: 'INTERACTIVE_V2_MAXVIEW_UNAVAILABLE',
+    });
+    expect(repository.admit).not.toHaveBeenCalled();
+  });
+
   it('freezes visible transcript, skill, grounding, prompts, and deadlines', async () => {
     const thread = authoritativeThread({
       kickoff: {
@@ -735,6 +880,44 @@ describe('durable interactive turn service', () => {
       toolCallMs: 60_000,
     });
   });
+
+  it.each([
+    'queued',
+    'dispatched',
+    'running',
+    'completed',
+    'failed',
+    'cancelled',
+  ] as const)(
+    'preserves the repository %s response for client-compatible idempotency',
+    async (status) => {
+      const { service } = durableServiceHarness({
+        repositoryResult: {
+          turnId: TURN_ID,
+          runId: RUN_ID,
+          status,
+          interactiveClass: 'fast',
+          idempotent: true,
+        },
+      });
+
+      await expect(
+        service.admit({
+          threadId: THREAD_ID,
+          userId: USER_ID,
+          workflowClass: 'home-chat',
+          turnId: TURN_ID,
+          text: 'Hello',
+          attachments: [],
+        }),
+      ).resolves.toEqual({
+        turnId: TURN_ID,
+        runId: RUN_ID,
+        status,
+        interactiveClass: 'fast',
+      });
+    },
+  );
 
   it.each([
     {

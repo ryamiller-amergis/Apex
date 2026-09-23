@@ -1736,6 +1736,10 @@ export const agentRuns = pgTable('agent_runs', {
     'agent_runs_client_turn_hash_check',
     sql`${t.clientTurnHash} IS NULL OR ${t.clientTurnHash} ~ '^[0-9a-f]{64}$'`,
   ),
+  requestedByUserIdCheck: check(
+    'agent_runs_requested_by_user_id_check',
+    sql`${t.requestedByUserId} IS NULL OR (${t.requestedByUserId} = btrim(${t.requestedByUserId}) AND char_length(${t.requestedByUserId}) BETWEEN 1 AND 256)`,
+  ),
   daprActorRequiredFieldsCheck: check(
     'agent_runs_dapr_actor_v2_required_fields_check',
     sql`${t.transportVersion} <> 'dapr-actor-v2' OR (${t.requestedByUserId} IS NOT NULL AND ${t.interactiveClass} IS NOT NULL AND ${t.clientTurnId} IS NOT NULL AND ${t.clientTurnHash} IS NOT NULL)`,

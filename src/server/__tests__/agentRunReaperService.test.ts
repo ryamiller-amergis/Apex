@@ -656,6 +656,48 @@ describe('reapOrphanedRuns', () => {
     mockWorkerReaperAction.mockReset();
   });
 
+  it.each([
+    ['off', jest.fn().mockResolvedValue(false)],
+    ['error', jest.fn().mockRejectedValue(new Error('flag unavailable'))],
+  ] as const)(
+    'keeps an event-driven durable queued turn past 90s when termination flag is %s',
+    async (_case, evaluateFlag) => {
+      mockFindMany.mockResolvedValue([
+        {
+          id: 'run-durable-queued',
+          threadId: 'thread-durable',
+          status: 'queued',
+          lane: 'ai-runs-interactive',
+          transportVersion: 'dapr-actor-v2',
+          eventDriven: true,
+          queuedAt: timestamp(2 * 60_000),
+          createdAt: timestamp(2 * 60_000),
+          startedAt: timestamp(2 * 60_000),
+          heartbeatAt: timestamp(2 * 60_000),
+          progressAt: null,
+          progressPhase: 'queued',
+          timeoutAt: timestamp(-3 * 60_000),
+          updatedAt: timestamp(2 * 60_000),
+          cancelRequested: false,
+          lastError: null,
+        },
+      ]);
+
+      await reapOrphanedRuns({
+        now: () => now,
+        config,
+        eventDrivenTerminationEnabled: evaluateFlag,
+      });
+
+      expect(evaluateFlag).not.toHaveBeenCalled();
+      expect(mockMarkTerminal).not.toHaveBeenCalled();
+      expect(mockUpdateSet).not.toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'failed' }),
+      );
+      expect(notifyRunEvent).not.toHaveBeenCalled();
+    },
+  );
+
   it('uses the complete non-terminal query without a reaper limit or custom ordering', async () => {
     mockFindMany.mockResolvedValue([]);
 

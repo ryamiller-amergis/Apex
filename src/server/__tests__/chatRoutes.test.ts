@@ -1306,4 +1306,60 @@ describe('POST /api/chat/threads/:id/messages — durable admission boundary', (
     expect(response.body.runId).toBe(runId);
     expect(mockChatService.recoverStaleRunningThread).not.toHaveBeenCalled();
   });
+
+  it('passes the authorized non-owner requester instead of the thread owner', async () => {
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: { ...idleThread, userId: 'thread-owner' },
+      access: 'read',
+    });
+    mockCanWriteThread.mockResolvedValue(true);
+    mockChatService.sendMessage.mockResolvedValue({
+      route: 'durable',
+      response: {
+        turnId,
+        runId,
+        status: 'queued',
+        interactiveClass: 'fast',
+      },
+    });
+
+    const response = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ turnId, text: 'Authorized approver send' });
+
+    expect(response.status).toBe(202);
+    expect(mockChatService.sendMessage).toHaveBeenCalledWith(
+      threadId,
+      'Authorized approver send',
+      undefined,
+      [],
+      expect.objectContaining({
+        requesterUserId: 'user-1',
+      }),
+    );
+  });
+
+  it('returns a terminal idempotent status for delayed duplicate requests', async () => {
+    mockChatService.sendMessage.mockResolvedValue({
+      route: 'durable',
+      response: {
+        turnId,
+        runId,
+        status: 'completed',
+        interactiveClass: 'fast',
+      },
+    });
+
+    const response = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ turnId, text: 'Delayed retry' });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({
+      turnId,
+      runId,
+      status: 'completed',
+      interactiveClass: 'fast',
+    });
+  });
 });

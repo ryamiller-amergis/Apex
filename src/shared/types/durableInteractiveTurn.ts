@@ -126,10 +126,21 @@ export type InteractiveDispatchOutboxPayload = Readonly<{
   deadlineAt: string;
 }>;
 
+export const INTERACTIVE_TURN_ACCEPTED_STATUSES = [
+  'queued',
+  'dispatched',
+  'running',
+  'completed',
+  'failed',
+  'cancelled',
+] as const;
+export type InteractiveTurnAcceptedStatus =
+  (typeof INTERACTIVE_TURN_ACCEPTED_STATUSES)[number];
+
 export type InteractiveTurnAcceptedResponse = Readonly<{
   turnId: string;
   runId: string;
-  status: 'queued' | 'dispatched';
+  status: InteractiveTurnAcceptedStatus;
   interactiveClass: InteractiveClass;
 }>;
 
@@ -149,6 +160,16 @@ function isNonEmptyString(value: unknown): value is string {
 
 export function isCanonicalUuid(value: unknown): value is string {
   return typeof value === 'string' && CANONICAL_UUID_PATTERN.test(value);
+}
+
+export function isDurableUserIdentity(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length <= 256 &&
+    value.trim().length > 0 &&
+    value === value.trim() &&
+    !value.includes('\0')
+  );
 }
 
 function isIsoTimestamp(value: unknown): value is string {
@@ -291,7 +312,7 @@ function isMcpDescriptor(
 function isToolGrant(value: unknown): value is FrozenInteractiveToolGrant {
   if (!isRecord(value)) return false;
   if (
-    !isCanonicalUuid(value.userId) ||
+    !isDurableUserIdentity(value.userId) ||
     !isNonEmptyString(value.projectId) ||
     !Array.isArray(value.allowedOperations) ||
     !value.allowedOperations.every(
@@ -349,7 +370,7 @@ export function isDurableInteractiveTurnSpecification(
     value.kind !== 'interactive-turn' ||
     !isCanonicalUuid(value.turnId) ||
     !isCanonicalUuid(value.threadId) ||
-    !isCanonicalUuid(value.userId) ||
+    !isDurableUserIdentity(value.userId) ||
     !isNonEmptyString(value.projectId) ||
     !isInteractiveClass(value.interactiveClass) ||
     !isWorkflowClass(value.workflowClass) ||
@@ -436,7 +457,7 @@ export function isInteractiveDispatchOutboxPayload(
     (value.attemptNumber as number) > 0 &&
     isCanonicalUuid(value.dispatchMessageId) &&
     isCanonicalUuid(value.threadId) &&
-    isCanonicalUuid(value.userId) &&
+    isDurableUserIdentity(value.userId) &&
     isInteractiveClass(value.interactiveClass) &&
     value.workloadLane === value.interactiveClass &&
     value.capacityClass === 'interactive' &&

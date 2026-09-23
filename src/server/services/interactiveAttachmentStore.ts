@@ -31,6 +31,7 @@ export interface InteractiveAttachmentStore {
   upload(input: {
     threadId: string;
     turnId: string;
+    attachmentIndex?: number;
     attachment: ChatAttachment;
   }): Promise<ImmutableInteractiveAttachmentRef>;
 }
@@ -137,10 +138,13 @@ export function createInteractiveAttachmentStore(options?: {
 
   return {
     async upload(input) {
+      const attachmentIndex = input.attachmentIndex ?? 0;
       if (
         !isCanonicalUuid(input.threadId) ||
         !isCanonicalUuid(input.turnId) ||
-        !isCanonicalUuid(input.attachment.id)
+        !isCanonicalUuid(input.attachment.id) ||
+        !Number.isSafeInteger(attachmentIndex) ||
+        attachmentIndex < 0
       ) {
         throw new InteractiveAttachmentError(
           'INTERACTIVE_V2_ATTACHMENT_SIZE_MISMATCH',
@@ -203,7 +207,7 @@ export function createInteractiveAttachmentStore(options?: {
           '.ai-pilot',
           'attachments',
           input.turnId,
-          sanitizeAttachmentName(input.attachment.name),
+          `${String(attachmentIndex + 1).padStart(2, '0')}-${sanitizeAttachmentName(input.attachment.name)}`,
         ),
       };
     },

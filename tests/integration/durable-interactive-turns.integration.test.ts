@@ -20,7 +20,7 @@ const DUPLICATE_TURN_ID = '20000000-0000-4000-8000-000000000002';
 const SECOND_TURN_ID = '20000000-0000-4000-8000-000000000003';
 const ATTACHMENT_ID = '30000000-0000-4000-8000-000000000001';
 const ATTACHMENT_MESSAGE_ID = '30000000-0000-4000-8000-000000000002';
-const USER_ID = '40000000-0000-4000-8000-000000000001';
+const USER_ID = 'internal:integration-user';
 const FIRST_RUN_ID = '50000000-0000-4000-8000-000000000001';
 const SECOND_RUN_ID = '50000000-0000-4000-8000-000000000002';
 const SAME_THREAD_RUN_ID = '50000000-0000-4000-8000-000000000003';
@@ -29,6 +29,7 @@ const INVALID_HASH_RUN_ID = '50000000-0000-4000-8000-000000000005';
 const MISSING_FIELDS_RUN_ID = '50000000-0000-4000-8000-000000000006';
 const DUPLICATE_TURN_RUN_ID = '50000000-0000-4000-8000-000000000007';
 const DOWN_CHECK_RUN_ID = '50000000-0000-4000-8000-000000000008';
+const INVALID_USER_RUN_ID = '50000000-0000-4000-8000-000000000009';
 const ATTEMPT_ID = '60000000-0000-4000-8000-000000000001';
 const DISPATCH_MESSAGE_ID = '60000000-0000-4000-8000-000000000002';
 
@@ -234,6 +235,29 @@ describe('durable interactive turns migration', () => {
     ).rejects.toMatchObject({
       code: '23514',
       constraint: 'agent_runs_dapr_actor_v2_required_fields_check',
+    });
+
+    await expect(
+      pool.query(
+        `INSERT INTO agent_runs (
+           id, thread_id, status, project_id, lane, timeout_at,
+           transport_version, requested_by_user_id, interactive_class,
+           client_turn_id, client_turn_hash
+         ) VALUES (
+           $1, $2, 'queued', 'project-1', 'ai-runs-interactive',
+           now() + interval '5 minutes', 'dapr-actor-v2', '   ',
+           'fast', $3, $4
+         )`,
+        [
+          INVALID_USER_RUN_ID,
+          FIRST_THREAD_ID,
+          DUPLICATE_TURN_ID,
+          'a'.repeat(64),
+        ],
+      ),
+    ).rejects.toMatchObject({
+      code: '23514',
+      constraint: 'agent_runs_requested_by_user_id_check',
     });
 
     await insertDaprRun({

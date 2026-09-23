@@ -40,7 +40,7 @@ describe('interactive attachment store', () => {
       ),
     );
     expect(stored.materializedPath).toBe(
-      `.ai-pilot/attachments/${TURN_ID}/notes.txt`,
+      `.ai-pilot/attachments/${TURN_ID}/01-notes.txt`,
     );
     expect(stored.sha256).toBe(
       createHash('sha256').update(Buffer.from('hello')).digest('hex'),
@@ -56,6 +56,61 @@ describe('interactive attachment store', () => {
         }),
       }),
     );
+  });
+
+  it('prefixes duplicate and sanitization-colliding names by ordered position', async () => {
+    const uploadData = jest.fn().mockResolvedValue({});
+    const store = createInteractiveAttachmentStore({
+      container: containerWith({ uploadData }),
+    });
+    const first = await store.upload({
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      attachmentIndex: 0,
+      attachment: {
+        id: ATTACHMENT_ID,
+        name: 'same name.txt',
+        type: 'text/plain',
+        size: 1,
+        content: 'a',
+      },
+    });
+    const second = await store.upload({
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      attachmentIndex: 1,
+      attachment: {
+        id: '30000000-0000-4000-8000-000000000002',
+        name: 'same@name.txt',
+        type: 'text/plain',
+        size: 1,
+        content: 'b',
+      },
+    });
+    const duplicate = await store.upload({
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      attachmentIndex: 2,
+      attachment: {
+        id: '30000000-0000-4000-8000-000000000003',
+        name: 'same name.txt',
+        type: 'text/plain',
+        size: 1,
+        content: 'c',
+      },
+    });
+
+    expect(first.materializedPath).toBe(
+      `.ai-pilot/attachments/${TURN_ID}/01-same_name.txt`,
+    );
+    expect(second.materializedPath).toBe(
+      `.ai-pilot/attachments/${TURN_ID}/02-same_name.txt`,
+    );
+    expect(duplicate.materializedPath).toBe(
+      `.ai-pilot/attachments/${TURN_ID}/03-same_name.txt`,
+    );
+    expect(first.materializedPath).not.toBe(second.materializedPath);
+    expect(first.materializedPath).not.toBe(duplicate.materializedPath);
   });
 
   it('decodes base64 before hashing and verifies the decoded byte length', async () => {

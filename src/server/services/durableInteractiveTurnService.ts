@@ -16,19 +16,23 @@ import type {
   InteractiveDeadlinePolicy,
   InteractiveTurnAcceptedResponse,
 } from '../../shared/types/durableInteractiveTurn';
-import { isCanonicalUuid } from '../../shared/types/durableInteractiveTurn';
+import {
+  isCanonicalUuid,
+  isDurableUserIdentity,
+} from '../../shared/types/durableInteractiveTurn';
 import type {
   ProjectSkillConfigResponse,
   QuickMcpPill,
-  SkillProvider,
 } from '../../shared/types/projectSettings';
 import type { GroundingProfileId } from '../../shared/types/repoReader';
+import type { RepoReader } from '../../shared/types/repoReader';
 import { callerGroundingService } from './callerGroundingService';
 import { groundingProfileResolver } from './groundingProfileResolver';
 import type { ThreadAccessResult } from './threadAccessService';
 import { resolveThreadAccess } from './threadAccessService';
 import { resolveSkillConfig } from './projectSettingsService';
-import { getSkillFile } from './skillCatalogFacade';
+import { isFeatureEnabled } from './featureFlagService';
+import { isMaxviewConfigured } from './maxviewAuthService';
 import {
   classifyInteractiveTurn,
   type InteractiveClassificationInput,
@@ -96,6 +100,18 @@ type LoadSkillInput = Readonly<{
   thread: ChatThread;
   skill: ChatTurnSkill;
   grounding: FrozenGrounding;
+  registration: DurableInteractiveSkillRegistration;
+  builtInRoots: ReadonlyArray<BuiltInSkillRoot>;
+}>;
+
+export type DurableInteractiveSkillRegistration =
+  | 'project'
+  | 'built-in'
+  | 'unknown';
+
+export type BuiltInSkillRoot = Readonly<{
+  requestPrefix: string;
+  absolutePath: string;
 }>;
 
 type ServiceDependencies = Readonly<{
@@ -109,9 +125,13 @@ type ServiceDependencies = Readonly<{
   loadSkill: (
     input: LoadSkillInput,
   ) => Promise<{ path: string; content: string } | null>;
+  builtInSkillRoots: ReadonlyArray<BuiltInSkillRoot>;
   resolveGrounding: (
     input: ResolveGroundingInput,
   ) => Promise<FrozenGrounding>;
+  resolveMaxviewCapability: (
+    input: Readonly<{ userId: string; project: string }>,
+  ) => Promise<'disabled' | 'enabled' | 'unavailable'>;
   resolveDeadlines: (
     input: Readonly<{
       interactiveClass: 'fast' | 'agentic';
@@ -128,18 +148,135 @@ export class DurableInteractiveTurnError extends Error {
   constructor(
     readonly code:
       | 'INVALID_TURN_ID'
+      | 'INVALID_REQUESTER_ID'
       | 'THREAD_ACTIVE_TURN'
       | 'TURN_ID_CONFLICT'
       | 'USER_INTERACTIVE_LIMIT'
       | 'USER_AGENTIC_LIMIT'
       | 'INTERACTIVE_V2_STDIO_MCP_UNSUPPORTED'
-      | 'INTERACTIVE_V2_GROUNDING_UNAVAILABLE',
+      | 'INTERACTIVE_V2_GROUNDING_UNAVAILABLE'
+      | 'INTERACTIVE_V2_SKILL_UNAVAILABLE'
+      | 'INTERACTIVE_V2_MAXVIEW_UNAVAILABLE',
     readonly status: 400 | 409 | 422 | 429,
   ) {
     super(code);
     this.name = 'DurableInteractiveTurnError';
   }
 }
+
+function unavailableSkill(): DurableInteractiveTurnError {
+  return new DurableInteractiveTurnError(
+    'INTERACTIVE_V2_SKILL_UNAVAILABLE',
+    422,
+  );
+}
+
+function strictPortableSkillPath(value: string): string {
+  const trimmed = value.trim();
+  if (
+    !trimmed ||
+    trimmed.includes('\0') ||
+    path.isAbsolute(trimmed) ||
+    path.win32.isAbsolute(trimmed) ||
+    path.posix.isAbsolute(trimmed)
+  ) {
+    throw unavailableSkill();
+  }
+  const segments = trimmed.replace(/\\/g, '/').split('/');
+  if (
+    segments.some(
+      (segment) => !segment || segment === '.' || segment === '..',
+    )
+  ) {
+    throw unavailableSkill();
+  }
+  return segments.join('/');
+}
+
+function isContainedPath(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative !== '..' &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}
+
+export function isAllowlistedBuiltInSkillPath(
+  skillPath: string,
+  roots: ReadonlyArray<BuiltInSkillRoot>,
+): boolean {
+  let normalized: string;
+  try {
+    normalized = strictPortableSkillPath(skillPath);
+  } catch {
+    return false;
+  }
+  return roots.some((root) => {
+    const prefix = strictPortableSkillPath(root.requestPrefix);
+    return normalized.startsWith(`${prefix}/`);
+  });
+}
+
+export async function loadDurableInteractiveSkill(
+  input: Readonly<{
+    path: string;
+    registration: DurableInteractiveSkillRegistration;
+    pinnedReader: RepoReader | null;
+  }>,
+  options: Readonly<{
+    builtInRoots: ReadonlyArray<BuiltInSkillRoot>;
+  }>,
+): Promise<{ path: string; content: string }> {
+  const normalized = strictPortableSkillPath(input.path);
+  if (input.registration === 'unknown') throw unavailableSkill();
+
+  if (input.pinnedReader) {
+    try {
+      const content = await input.pinnedReader.readFile(normalized);
+      if (typeof content !== 'string') throw unavailableSkill();
+      return { path: normalized, content };
+    } catch {
+      throw unavailableSkill();
+    }
+  }
+
+  if (input.registration !== 'built-in') throw unavailableSkill();
+  for (const root of options.builtInRoots) {
+    const prefix = strictPortableSkillPath(root.requestPrefix);
+    if (!normalized.startsWith(`${prefix}/`)) continue;
+    const suffix = normalized.slice(prefix.length + 1);
+    try {
+      const realRoot = fs.realpathSync(root.absolutePath);
+      const candidate = path.resolve(realRoot, ...suffix.split('/'));
+      if (!isContainedPath(realRoot, candidate)) throw unavailableSkill();
+      const metadata = fs.lstatSync(candidate);
+      if (metadata.isSymbolicLink() || !metadata.isFile()) {
+        throw unavailableSkill();
+      }
+      const realCandidate = fs.realpathSync(candidate);
+      if (!isContainedPath(realRoot, realCandidate)) throw unavailableSkill();
+      return {
+        path: normalized,
+        content: fs.readFileSync(realCandidate, 'utf8'),
+      };
+    } catch {
+      throw unavailableSkill();
+    }
+  }
+  throw unavailableSkill();
+}
+
+const DEFAULT_BUILT_IN_SKILL_ROOTS: ReadonlyArray<BuiltInSkillRoot> = [
+  {
+    requestPrefix: '.cursor/skills',
+    absolutePath: path.resolve(process.cwd(), '.cursor', 'skills'),
+  },
+  {
+    requestPrefix: '.agents/skills',
+    absolutePath: path.resolve(process.cwd(), '.agents', 'skills'),
+  },
+];
 
 function normalizePath(value: string): string {
   return value.replace(/\\/g, '/').replace(/^\/+/, '');
@@ -155,7 +292,7 @@ function selectedSkill(
 ): ChatTurnSkill | null {
   const selectedPath = turnSkill?.path ?? thread.kickoff.skillPath;
   if (!selectedPath?.trim()) return null;
-  const normalizedPath = normalizePath(selectedPath.trim());
+  const normalizedPath = strictPortableSkillPath(selectedPath);
   const fallbackName =
     normalizedPath.split('/').filter(Boolean).slice(-2, -1)[0] ??
     normalizedPath;
@@ -211,12 +348,34 @@ function registeredSkillName(
   return option?.friendlyName?.trim() || null;
 }
 
+function skillRegistration(
+  thread: ChatThread,
+  turnSkill: ChatTurnSkill | undefined,
+  skill: ChatTurnSkill | null,
+  config: ProjectSkillConfigResponse | null,
+  builtInRoots: ReadonlyArray<BuiltInSkillRoot>,
+): DurableInteractiveSkillRegistration | null {
+  if (!skill) return null;
+  const normalized = strictPortableSkillPath(skill.path).toLowerCase();
+  const frozenOnThread =
+    !turnSkill &&
+    normalizePath(thread.kickoff.skillPath ?? '').toLowerCase() === normalized;
+  if (frozenOnThread || configuredSkillPaths(config).has(normalized)) {
+    return 'project';
+  }
+  if (isAllowlistedBuiltInSkillPath(skill.path, builtInRoots)) {
+    return 'built-in';
+  }
+  return 'unknown';
+}
+
 function capabilityMetadata(
   thread: ChatThread,
   skill: ChatTurnSkill | null,
-  config: ProjectSkillConfigResponse | null,
+  registration: DurableInteractiveSkillRegistration | null,
   attachmentCount: number,
   toolGrant: DurableInteractiveToolGrantInput | undefined,
+  maxviewEnabled: boolean,
 ): InteractiveClassificationInput['capabilityMetadata'] {
   const capabilities: InteractiveCapability[] = ['plain-chat'];
   if (attachmentCount > 0) capabilities.push('attachments');
@@ -228,15 +387,14 @@ function capabilityMetadata(
     capabilities.push('mcp');
   }
   if (toolGrant) capabilities.push('ado');
+  if (maxviewEnabled) {
+    capabilities.push('mcp', 'tool-heavy');
+  }
 
   if (!skill) {
     return { status: 'known', capabilities };
   }
-  const configured = configuredSkillPaths(config);
-  const pathWasFrozenOnThread =
-    normalizePath(thread.kickoff.skillPath ?? '').toLowerCase() ===
-    skill.path.toLowerCase();
-  if (!pathWasFrozenOnThread && !configured.has(skill.path.toLowerCase())) {
+  if (registration === 'unknown') {
     return { status: 'unknown' };
   }
   return { status: 'known', capabilities };
@@ -358,6 +516,7 @@ function recreationPrompt(input: {
 function frozenMcpDescriptors(
   thread: ChatThread,
   hasAdoCapability: boolean,
+  maxviewEnabled: boolean,
   grounding: FrozenGrounding,
 ): FrozenInteractiveMcpDescriptor[] {
   const descriptors: FrozenInteractiveMcpDescriptor[] = [];
@@ -394,6 +553,13 @@ function frozenMcpDescriptors(
       enableRepoBrowse: Boolean(grounding),
     });
   }
+  if (maxviewEnabled) {
+    descriptors.push({
+      kind: 'internal-proxy',
+      serverName: 'maxview',
+      enableRepoBrowse: false,
+    });
+  }
   return descriptors;
 }
 
@@ -427,47 +593,25 @@ function requestHash(input: {
 async function defaultLoadSkill(
   input: LoadSkillInput,
 ): Promise<{ path: string; content: string } | null> {
+  let pinnedReader: RepoReader | null = null;
   if (input.grounding) {
     try {
-      const reader =
+      pinnedReader =
         await groundingProfileResolver.resolveConnectionProfile(
           input.grounding.profileId as GroundingProfileId,
         );
-      const content = await reader?.readFile(input.skill.path);
-      if (content) return { path: input.skill.path, content };
     } catch {
-      // Continue to the established provider/local fallback.
+      throw unavailableSkill();
     }
   }
-  const provider: SkillProvider = input.thread.kickoff.skillProvider ?? 'ado';
-  const branch =
-    input.thread.kickoff.skillBranch ??
-    input.thread.kickoff.branch ??
-    'main';
-  try {
-    const content = await getSkillFile(
-      input.thread.kickoff.project,
-      input.thread.kickoff.repo,
-      input.skill.path,
-      branch,
-      provider,
-    );
-    if (content) return { path: input.skill.path, content };
-  } catch {
-    // The checked-out server source is the established local skill fallback.
-  }
-
-  const localPath = path.resolve(process.cwd(), input.skill.path);
-  try {
-    const metadata = fs.lstatSync(localPath);
-    if (!metadata.isFile() || metadata.isSymbolicLink()) return null;
-    return {
+  return loadDurableInteractiveSkill(
+    {
       path: input.skill.path,
-      content: fs.readFileSync(localPath, 'utf8'),
-    };
-  } catch {
-    return null;
-  }
+      registration: input.registration,
+      pinnedReader,
+    },
+    { builtInRoots: input.builtInRoots },
+  );
 }
 
 async function defaultResolveGrounding(
@@ -511,6 +655,29 @@ async function defaultResolveGrounding(
   };
 }
 
+export async function resolveDurableMaxviewCapability(
+  input: Readonly<{ userId: string; project: string }>,
+  dependencies: Readonly<{
+    evaluate: typeof isFeatureEnabled;
+    isConfigured: typeof isMaxviewConfigured;
+  }> = {
+    evaluate: isFeatureEnabled,
+    isConfigured: isMaxviewConfigured,
+  },
+): Promise<'disabled' | 'enabled' | 'unavailable'> {
+  let enabled = false;
+  try {
+    enabled = await dependencies.evaluate('maxview-mcp', {
+      userId: input.userId,
+      project: input.project,
+    });
+  } catch {
+    return 'disabled';
+  }
+  if (!enabled) return 'disabled';
+  return dependencies.isConfigured() ? 'enabled' : 'unavailable';
+}
+
 let resolvedDefaultAttachmentStore: InteractiveAttachmentStore | null = null;
 
 const lazyDefaultAttachmentStore: InteractiveAttachmentStore = {
@@ -527,7 +694,9 @@ function defaultDependencies(): ServiceDependencies {
     resolveThreadAccess,
     resolveSkillConfig,
     loadSkill: defaultLoadSkill,
+    builtInSkillRoots: DEFAULT_BUILT_IN_SKILL_ROOTS,
     resolveGrounding: defaultResolveGrounding,
+    resolveMaxviewCapability: resolveDurableMaxviewCapability,
     resolveDeadlines: resolveInteractiveDeadlinePolicy,
     encryptToolGrant: encryptInteractiveToolGrant,
     now: () => new Date(),
@@ -543,6 +712,9 @@ export function createDurableInteractiveTurnService(
     async admit(input) {
       if (!isCanonicalUuid(input.turnId)) {
         throw new DurableInteractiveTurnError('INVALID_TURN_ID', 400);
+      }
+      if (!isDurableUserIdentity(input.userId)) {
+        throw new DurableInteractiveTurnError('INVALID_REQUESTER_ID', 400);
       }
       const access = await deps.resolveThreadAccess(
         input.userId,
@@ -568,19 +740,39 @@ export function createDurableInteractiveTurnService(
                 initiallySelectedSkill.name,
             }
           : initiallySelectedSkill;
+      const registration = skillRegistration(
+        thread,
+        input.turnSkill,
+        skill,
+        config,
+        deps.builtInSkillRoots,
+      );
+      if (registration === 'unknown') throw unavailableSkill();
       if (isStdioMcp(thread.kickoff.mcpPill)) {
         throw new DurableInteractiveTurnError(
           'INTERACTIVE_V2_STDIO_MCP_UNSUPPORTED',
           422,
         );
       }
+      const maxviewCapability = await deps.resolveMaxviewCapability({
+        userId: input.userId,
+        project: thread.kickoff.project,
+      });
+      if (maxviewCapability === 'unavailable') {
+        throw new DurableInteractiveTurnError(
+          'INTERACTIVE_V2_MAXVIEW_UNAVAILABLE',
+          422,
+        );
+      }
+      const maxviewEnabled = maxviewCapability === 'enabled';
 
       const metadata = capabilityMetadata(
         thread,
         skill,
-        config,
+        registration,
         attachments.length,
         input.toolGrant,
+        maxviewEnabled,
       );
       const classification = classifyInteractiveTurn({
         effort: (thread.kickoff.effort as EffortLevel | undefined) ?? null,
@@ -590,22 +782,39 @@ export function createDurableInteractiveTurnService(
       const requiresRepositoryPreparation = classHasCapability(
         classification.reasons,
         'workspace',
-      );
+      ) || registration === 'project';
 
       const immutableAttachments = [];
-      for (const attachment of attachments) {
+      for (
+        let attachmentIndex = 0;
+        attachmentIndex < attachments.length;
+        attachmentIndex += 1
+      ) {
+        const attachment = attachments[attachmentIndex];
         immutableAttachments.push(
           await deps.attachmentStore.upload({
             threadId: input.threadId,
             turnId: input.turnId,
+            attachmentIndex,
             attachment,
           }),
         );
       }
 
-      const grounding = requiresRepositoryPreparation
-        ? await deps.resolveGrounding({ thread, userId: input.userId })
-        : null;
+      let grounding: FrozenGrounding = null;
+      if (requiresRepositoryPreparation) {
+        try {
+          grounding = await deps.resolveGrounding({
+            thread,
+            userId: input.userId,
+          });
+        } catch {
+          throw new DurableInteractiveTurnError(
+            'INTERACTIVE_V2_GROUNDING_UNAVAILABLE',
+            422,
+          );
+        }
+      }
       if (requiresRepositoryPreparation && grounding === null) {
         throw new DurableInteractiveTurnError(
           'INTERACTIVE_V2_GROUNDING_UNAVAILABLE',
@@ -618,11 +827,17 @@ export function createDurableInteractiveTurnService(
         thread.kickoff.model?.trim() ||
         DEFAULT_MODEL;
       const loadedSkill = skill
-        ? await deps.loadSkill({ thread, skill, grounding })
+        ? await deps.loadSkill({
+            thread,
+            skill,
+            grounding,
+            registration: registration ?? 'unknown',
+            builtInRoots: deps.builtInSkillRoots,
+          })
         : null;
       if (skill && !loadedSkill) {
         throw new DurableInteractiveTurnError(
-          'INTERACTIVE_V2_GROUNDING_UNAVAILABLE',
+          'INTERACTIVE_V2_SKILL_UNAVAILABLE',
           422,
         );
       }
@@ -690,6 +905,7 @@ export function createDurableInteractiveTurnService(
         mcpServers: frozenMcpDescriptors(
           thread,
           hasAdoCapability,
+          maxviewEnabled,
           grounding,
         ),
         toolGrant,
@@ -722,6 +938,10 @@ export function createDurableInteractiveTurnService(
       switch (admitted.status) {
         case 'queued':
         case 'dispatched':
+        case 'running':
+        case 'completed':
+        case 'failed':
+        case 'cancelled':
           return {
             turnId: admitted.turnId,
             runId: admitted.runId,

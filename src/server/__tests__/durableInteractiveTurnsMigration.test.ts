@@ -19,6 +19,10 @@ describe('durable interactive turns migration', () => {
     expect(sql).toContain('uq_agent_runs_client_turn');
     expect(sql).toContain('uq_agent_runs_interactive_active_thread');
     expect(sql).toContain('idx_agent_runs_interactive_user_active');
+    expect(sql).toContain('agent_runs_requested_by_user_id_check');
+    expect(sql).toContain(
+      'char_length(requested_by_user_id) BETWEEN 1 AND 256',
+    );
     expect(sql).toContain('idx_ai_run_outbox_interactive_due');
     expect(sql).toContain('idx_ai_run_outbox_interactive_class_due');
     expect(sql).toContain(

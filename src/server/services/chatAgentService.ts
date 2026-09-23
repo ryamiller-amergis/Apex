@@ -4207,6 +4207,7 @@ export type InteractiveSendOptions = Readonly<{
   turnId?: string;
   turnIdPolicy?: 'required' | 'generate';
   legacyCompletion?: 'await' | 'detach';
+  requesterUserId?: string;
   toolGrant?: DurableInteractiveToolGrantInput;
   onLegacySettled?: () => void;
 }>;
@@ -6397,10 +6398,33 @@ function reflectDurableAdmission(
   } else {
     timestamp = existingMessage.ts;
   }
-  state.thread.status = 'running';
-  state.thread.activeRunId = response.runId;
   state.thread.lastActivityAt = timestamp;
-  broadcast(state, { type: 'status', status: 'running' });
+  switch (response.status) {
+    case 'queued':
+    case 'dispatched':
+    case 'running':
+      state.thread.status = 'running';
+      state.thread.activeRunId = response.runId;
+      broadcast(state, { type: 'status', status: 'running' });
+      return;
+    case 'completed':
+    case 'cancelled':
+      state.thread.status = 'idle';
+      state.thread.activeRunId = undefined;
+      broadcast(state, { type: 'status', status: 'idle' });
+      return;
+    case 'failed':
+      state.thread.status = 'error';
+      state.thread.activeRunId = undefined;
+      broadcast(state, { type: 'status', status: 'error' });
+      return;
+    default: {
+      const unhandled: never = response.status;
+      throw new Error(
+        `Unsupported interactive response status: ${String(unhandled)}`,
+      );
+    }
+  }
 }
 
 function reportDetachedLegacyError(threadId: string, error: unknown): void {
@@ -6441,9 +6465,10 @@ export async function sendMessage(
   if (!state) throw new Error(`Thread ${threadId} not found`);
   const workflowClass = resolveInteractiveWorkflowClass(state);
   const legacyCompletion = options?.legacyCompletion ?? 'await';
+  const requesterUserId = options?.requesterUserId ?? state.thread.userId;
 
   const decision = await interactiveWorkflowRouter.route({
-    userId: state.thread.userId,
+    userId: requesterUserId,
     project: state.thread.kickoff.project,
     workflowClass,
     threadId,
@@ -6492,7 +6517,7 @@ export async function sendMessage(
         (options?.turnIdPolicy === 'required' ? '' : uuidv4());
       return durableInteractiveTurnService.admit({
         threadId,
-        userId: state.thread.userId,
+        userId: requesterUserId,
         workflowClass,
         turnId,
         text,

@@ -43,6 +43,7 @@ WHERE run.lane = 'ai-runs-interactive'
 ALTER TABLE agent_runs
   DROP CONSTRAINT IF EXISTS agent_runs_interactive_class_check,
   DROP CONSTRAINT IF EXISTS agent_runs_client_turn_hash_check,
+  DROP CONSTRAINT IF EXISTS agent_runs_requested_by_user_id_check,
   DROP CONSTRAINT IF EXISTS agent_runs_dapr_actor_v2_required_fields_check;
 
 ALTER TABLE agent_runs
@@ -55,6 +56,14 @@ ALTER TABLE agent_runs
     CHECK (
       client_turn_hash IS NULL
       OR client_turn_hash ~ '^[0-9a-f]{64}$'
+    ),
+  ADD CONSTRAINT agent_runs_requested_by_user_id_check
+    CHECK (
+      requested_by_user_id IS NULL
+      OR (
+        requested_by_user_id = btrim(requested_by_user_id)
+        AND char_length(requested_by_user_id) BETWEEN 1 AND 256
+      )
     ),
   ADD CONSTRAINT agent_runs_dapr_actor_v2_required_fields_check
     CHECK (
@@ -171,6 +180,7 @@ DROP INDEX IF EXISTS uq_agent_runs_client_turn;
 
 ALTER TABLE agent_runs
   DROP CONSTRAINT IF EXISTS agent_runs_dapr_actor_v2_required_fields_check,
+  DROP CONSTRAINT IF EXISTS agent_runs_requested_by_user_id_check,
   DROP CONSTRAINT IF EXISTS agent_runs_client_turn_hash_check,
   DROP CONSTRAINT IF EXISTS agent_runs_interactive_class_check,
   DROP CONSTRAINT IF EXISTS agent_runs_transport_version_check;
