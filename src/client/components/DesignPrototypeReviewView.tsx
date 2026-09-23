@@ -26,6 +26,7 @@ import {
   DESIGN_PROTOTYPE_STATE_NAMES,
 } from '../../shared/types/designPrototype';
 import type { DesignPrototypeSummary, DesignPrototypeStateName } from '../../shared/types/designPrototype';
+import { effortLabel } from '../../shared/utils/effort';
 import type { UiMock } from '../../shared/types/backlog';
 import DesignTokenInspector from './DesignTokenInspector';
 const BoundaryEditor = lazy(() => import('./BoundaryEditor'));
@@ -409,6 +410,9 @@ const DesignPrototypeReviewView: React.FC = () => {
           </span>
           {selectedProto?.model && (
             <span className={styles.modelText}>Model: {selectedProto.model}</span>
+          )}
+          {selectedProto?.effort && (
+            <span className={styles.modelText}>Effort: {effortLabel(selectedProto.effort)}</span>
           )}
           {selectedProto && (
             <ArtifactUsageStrip

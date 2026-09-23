@@ -89,10 +89,12 @@ describe('createAdr reviewer eligibility', () => {
       repo: 'Apex',
       title: 'Owner may review',
       chatThreadId: 'thread-owner-reviewer',
+      effort: 'high',
       reviewerIds: ['owner-1', 'u2', 'owner-1'],
     });
 
     expect(values).toHaveBeenCalledWith(expect.objectContaining({
+      effort: 'high',
       reviewerIds: ['owner-1', 'u2'],
     }));
     expect(assignApprovers).toHaveBeenCalledWith(

@@ -781,9 +781,27 @@ export async function ingest(
         'AI_RUN_ILLEGAL_TRANSITION',
       );
     }
-    await (
-      dependencies.consumeCompletedArtifacts ?? consumeCompletedArtifacts
-    )(existing.threadId, workspaceDir);
+    // Runs before markTerminal so a completed run's output is durable before
+    // anything observes the run as finished. A throw here therefore leaves the
+    // run non-terminal and answers the worker with a bare 500, which is
+    // retryable but anonymous — name the subsystem so a recurrence is
+    // diagnosable without reproducing it.
+    try {
+      await (
+        dependencies.consumeCompletedArtifacts ?? consumeCompletedArtifacts
+      )(existing.threadId, workspaceDir);
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: 'AiRunTerminalArtifactSyncFailed',
+        runId,
+        threadId: existing.threadId,
+        lane: existing.lane ?? null,
+        errorType: error instanceof Error ? error.name : 'UnknownError',
+        errorMessage:
+          error instanceof Error ? error.message.slice(0, 200) : 'unknown',
+      }));
+      throw error;
+    }
 
     // Persist Cursor agent id for interactive restart recovery (best effort).
     if (existing.lane === INTERACTIVE_LANE) {

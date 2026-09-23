@@ -30,6 +30,7 @@ describe('getEntityUsageRollup', () => {
     whereMock.mockResolvedValue([
       {
         modelId: 'composer-2.5',
+        effort: 'high',
         inputTokens: 100,
         outputTokens: 20,
         cacheReadTokens: 5,
@@ -46,6 +47,7 @@ describe('getEntityUsageRollup', () => {
       },
       {
         modelId: 'composer-2.5-fast',
+        effort: null,
         inputTokens: 50,
         outputTokens: 10,
         cacheReadTokens: 0,
@@ -79,6 +81,8 @@ describe('getEntityUsageRollup', () => {
     expect(rollup.pendingSteps).toEqual([]);
     expect(rollup.runs).toHaveLength(2);
     expect(rollup.runs[0].label).toBe('Interview');
+    expect(rollup.runs[0].effort).toBe('high');
+    expect(rollup.runs[1].effort).toBeNull();
   });
 
   it('falls back to first-to-last elapsed time when durations are missing', async () => {

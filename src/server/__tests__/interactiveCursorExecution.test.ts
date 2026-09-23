@@ -17,6 +17,7 @@ import {
   acquireInteractiveCursorAgent,
   createInteractiveCursorExecution,
 } from '../services/interactiveActorHost/interactiveCursorExecution';
+import { createLocalCursorExecution } from '../services/aiRunsWorker/cursorExecution';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
 import type { RepoReader } from '../../shared/types/repoReader';
 
@@ -36,6 +37,7 @@ describe('interactive Cursor execution repository tools', () => {
     const snapshot: ExecutionSnapshot = {
       prompt: 'Run the pre-loaded interview skill.',
       model: 'composer-2.5',
+      effort: 'high',
       workspaceRef: '/shared/grounding/checkout',
       workflowClass: 'interview',
       skillPath: '/.cursor/skills/grill-with-docs/SKILL.md',
@@ -58,9 +60,46 @@ describe('interactive Cursor execution repository tools', () => {
             customTools,
           },
           mcpServers: {},
+          model: {
+            id: 'composer-2.5',
+            params: [{ id: 'effort', value: 'high' }],
+          },
         }),
       );
       expect(execution.agentId).toBe('agent-1');
+    } finally {
+      delete process.env.CURSOR_API_KEY;
+      jest.clearAllMocks();
+    }
+  });
+
+  it('DoD-1: sends frozen effort through the background Cursor model params', async () => {
+    process.env.CURSOR_API_KEY = 'test-key';
+    const run = { supports: jest.fn(), stream: jest.fn(), wait: jest.fn() };
+    mockCreateAgent.mockResolvedValue({
+      send: jest.fn().mockResolvedValue(run),
+      [Symbol.asyncDispose]: jest.fn().mockResolvedValue(undefined),
+    });
+    mockCreateNativeReadTools.mockReturnValue({});
+    const snapshot: ExecutionSnapshot = {
+      prompt: 'Generate the PRD.',
+      model: 'claude-opus-4-6',
+      effort: 'medium',
+      workspaceRef: '/worker',
+      workflowClass: 'prd',
+      skillPath: '.cursor/skills/to-prd/SKILL.md',
+      projectId: 'Apex',
+      threadId: 'thread-worker',
+    };
+
+    try {
+      await createLocalCursorExecution(snapshot, {} as RepoReader);
+      expect(mockCreateAgent).toHaveBeenCalledWith(expect.objectContaining({
+        model: {
+          id: 'claude-opus-4-6',
+          params: [{ id: 'effort', value: 'medium' }],
+        },
+      }));
     } finally {
       delete process.env.CURSOR_API_KEY;
       jest.clearAllMocks();

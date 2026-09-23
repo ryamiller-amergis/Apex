@@ -3,7 +3,7 @@ import { dismissOverlays } from '../support/overlays';
 
 /**
  * Page object for the Interviews dashboard (/backlog).
- * Covers the Interviews, PRDs, Design Prototypes, and Design Docs tabs.
+ * Covers the Interviews, PRDs, and Designs tabs.
  */
 export class InterviewDashboardPage {
   constructor(private readonly page: Page) {}
@@ -47,15 +47,13 @@ export class InterviewDashboardPage {
    * The dashboard section selector is rendered as buttons labelled
    * "Interviews (N)", "PRDs (N)", etc. — not ARIA tabs.
    */
-  tabButton(tabName: 'Interviews' | 'PRDs' | 'Design Prototypes' | 'Design Docs') {
+  tabButton(tabName: 'Interviews' | 'PRDs' | 'Designs' | 'Design Prototypes' | 'Design Docs') {
     const testId =
       tabName === 'Interviews'
         ? 'tab-interviews'
         : tabName === 'PRDs'
           ? 'tab-prds'
-          : tabName === 'Design Prototypes'
-            ? 'tab-design-prototypes'
-            : 'tab-design-docs';
+          : 'tab-designs';
     return this.page.getByTestId(testId);
   }
 
@@ -64,7 +62,7 @@ export class InterviewDashboardPage {
   }
 
   /** Click the named section button. */
-  async clickTab(tabName: 'Interviews' | 'PRDs' | 'Design Prototypes' | 'Design Docs'): Promise<void> {
+  async clickTab(tabName: 'Interviews' | 'PRDs' | 'Designs' | 'Design Prototypes' | 'Design Docs'): Promise<void> {
     await this.tabButton(tabName).click();
   }
 

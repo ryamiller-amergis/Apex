@@ -476,6 +476,15 @@ export async function transition(
     }
   }
 
+  // The reaper measures the worker progress timeout from progress_at, falling
+  // back to started_at until the worker reports meaningful progress. Enqueue
+  // stamps started_at, so leaving it alone bills the queue wait to the worker:
+  // a run that waited longer than that timeout is failed on the first reap
+  // after it starts, however healthy it is. queued_at keeps the enqueue time.
+  if (to === 'running') {
+    setValues.startedAt = nowIso;
+  }
+
   if (options.ownerInstance !== undefined) {
     setValues.ownerInstance = options.ownerInstance;
   }

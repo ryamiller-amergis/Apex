@@ -448,6 +448,7 @@ describe('createPrd', () => {
       userId: 'user-1',
       chatThreadId: 'thread-abc',
       title: 'My PRD',
+      effort: 'low',
     });
 
     expect(result).toEqual({ prdId: 'prd-new', threadId: 'thread-abc' });
@@ -457,6 +458,7 @@ describe('createPrd', () => {
         authorId: 'user-1',
         chatThreadId: 'thread-abc',
         title: 'My PRD',
+        effort: 'low',
         status: 'generating',
         content: '',
       }),
@@ -2134,8 +2136,10 @@ describe('PRD validation lifecycle', () => {
     expect(mockCreateThread).toHaveBeenCalledWith(
       'user-1',
       expect.objectContaining({
+        agentModule: 'prdAssistant',
         skillPath: '.cursor/skills/prd-assistant/SKILL.md',
         model: 'assistant-model',
+        assistantType: 'prd',
       }),
       { skipAutoKickoff: true },
     );
@@ -2369,8 +2373,10 @@ describe('triggerFixCoverageGaps', () => {
     expect(mockCreateThread).toHaveBeenCalledWith(
       'user-1',
       expect.objectContaining({
+        agentModule: 'prdAssistant',
         skillPath: '.cursor/skills/prd-assistant/SKILL.md',
         model: 'assistant-model',
+        assistantType: 'prd',
       }),
       { skipAutoKickoff: true },
     );

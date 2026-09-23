@@ -78,6 +78,12 @@ import {
   projectApproverGroups,
   projectApprovalModes,
 } from '../db/schema';
+import type {
+  QuickMcpPill,
+  QuickSkillPill,
+} from '../../shared/types/projectSettings';
+import { readFileSync } from 'fs';
+import path from 'path';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
 const { seedDefaultGroupsForProject: mockSeedDefaultGroupsForProject } =
@@ -558,6 +564,119 @@ describe('upsertSkillConfig', () => {
       expect.objectContaining({ documentType: 'test_case', mode: 'all_required' }),
       expect.objectContaining({ documentType: 'adr', mode: 'any_one' }),
     ]);
+  });
+});
+
+// ── upsertSkillConfig — per-skill effort levels (FEAT-002) ────────────────────────
+
+const EFFORT_FIELDS = [
+  'interviewEffort',
+  'prdEffort',
+  'adrEffort',
+  'designDocEffort',
+  'designDocAssistantEffort',
+  'designPrototypeEffort',
+  'testCaseEffort',
+  'designDocValidationEffort',
+  'prdAssistantEffort',
+  'prdValidationEffort',
+  'developmentEffort',
+  'standupEffort',
+  'featureRequestEffort',
+  'technicalEffort',
+  'issueEffort',
+  'calendarAssistantEffort',
+  'loadTestGenerationEffort',
+  'designModuleEffort',
+  'designModuleScopingEffort',
+  'defaultEffort',
+] as const;
+
+describe('upsertSkillConfig effort levels', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsCheckoutReadinessEnabled.mockResolvedValue(false);
+  });
+
+  /** Drives the INSERT branch and returns the spy that captured the written row. */
+  function mockInsertPath() {
+    const valuesMock = jest.fn().mockReturnValue({
+      returning: jest.fn().mockResolvedValue([defaultRow]),
+    });
+    const insertMock = jest.fn().mockImplementation((table) =>
+      table === projectSkillSettings
+        ? { values: valuesMock }
+        : {
+            values: jest.fn().mockReturnValue({
+              onConflictDoUpdate: jest.fn().mockResolvedValue(undefined),
+            }),
+          }
+    );
+
+    mockDb.transaction.mockImplementation(async (fn: any) =>
+      fn({
+        select: jest.fn().mockReturnValue({
+          from: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockResolvedValue([]),
+        }),
+        insert: insertMock,
+        update: jest.fn().mockReturnValue({
+          set: jest.fn().mockReturnThis(),
+          where: jest.fn().mockResolvedValue(undefined),
+        }),
+      })
+    );
+
+    return valuesMock;
+  }
+
+  it('FEAT-002 PBI-001 AC-0 / TBI-004 DoD-0 persists a selected effort level', async () => {
+    const valuesMock = mockInsertPath();
+
+    await upsertSkillConfig(makeUpsertInput({ interviewEffort: 'medium' }));
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ interviewEffort: 'medium' })
+    );
+  });
+
+  it('FEAT-002 PBI-001 AC-2 / TBI-004 DoD-3 persists null when a level is cleared to Inherit', async () => {
+    const valuesMock = mockInsertPath();
+
+    await upsertSkillConfig(
+      makeUpsertInput({ prdEffort: null, designDocEffort: 'high' })
+    );
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ prdEffort: null, designDocEffort: 'high' })
+    );
+  });
+
+  it('FEAT-002 TBI-004 DoD-0 persists all twenty effort fields', async () => {
+    const valuesMock = mockInsertPath();
+    const supplied = Object.fromEntries(
+      EFFORT_FIELDS.map((field, index) => [
+        field,
+        (['low', 'medium', 'high'] as const)[index % 3],
+      ])
+    );
+
+    await upsertSkillConfig(makeUpsertInput(supplied));
+
+    expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining(supplied));
+  });
+
+  it('FEAT-002 TBI-004 DoD-3 writes null for every omitted effort field', async () => {
+    const valuesMock = mockInsertPath();
+
+    await upsertSkillConfig(makeUpsertInput());
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining(
+        Object.fromEntries(EFFORT_FIELDS.map((field) => [field, null]))
+      )
+    );
   });
 });
 
@@ -1204,5 +1323,214 @@ describe('approval mode survives pool changes', () => {
     await expect(getApprovalMode('cfg-default', 'adr')).resolves.toBe(
       'all_required'
     );
+  });
+});
+
+// ── Quick pill allow-lists (FEAT-001 TBI-001 DoD-0..3) ───────────────────────
+
+/**
+ * Source-level contract check for the shared pill types. ts-jest runs with
+ * `diagnostics: false`, so the optional-field declarations are asserted against
+ * the declaration text here; `tsc --noEmit` remains the type-check owner.
+ */
+const SHARED_PROJECT_SETTINGS_SOURCE = readFileSync(
+  path.join(__dirname, '../../shared/types/projectSettings.ts'),
+  'utf8'
+);
+
+function interfaceBody(name: string): string {
+  const header = new RegExp(
+    `interface ${name}(?: extends [^{]+)?\\s*\\{`
+  ).exec(SHARED_PROJECT_SETTINGS_SOURCE);
+  if (!header) throw new Error(`interface ${name} not found`);
+  const start = header.index + header[0].length;
+  const end = SHARED_PROJECT_SETTINGS_SOURCE.indexOf('\n}', start);
+  return SHARED_PROJECT_SETTINGS_SOURCE.slice(start, end);
+}
+
+const skillPillWithAllowList: QuickSkillPill = {
+  label: 'Kick Off',
+  skillPath: '.cursor/skills/kick-off/SKILL.md',
+  model: 'claude-4.6-sonnet',
+  allowedUserIds: ['user-alice', 'user-bob'],
+  allowedGroupIds: ['grp-designers'],
+};
+
+const legacySkillPill: QuickSkillPill = {
+  label: 'Ask Apex',
+  skillPath: '.cursor/skills/app-knowledge/SKILL.md',
+};
+
+const httpMcpPillWithAllowList: QuickMcpPill = {
+  label: 'Twilio Docs',
+  mcpServerName: 'twilio-docs',
+  transport: 'http',
+  url: 'https://mcp.twilio.com/docs',
+  allowedUserIds: ['user-carol'],
+  // BR-001: an empty array is stored verbatim, not rewritten to a default
+  allowedGroupIds: [],
+};
+
+const stdioMcpPillWithAllowList: QuickMcpPill = {
+  label: 'SendGrid',
+  mcpServerName: 'sendgrid',
+  transport: 'stdio',
+  command: 'npx',
+  args: ['-y', 'sendgrid-mcp'],
+  allowedUserIds: [],
+  allowedGroupIds: ['grp-platform-admins'],
+};
+
+const legacyMcpPill: QuickMcpPill = {
+  label: 'Figma',
+  mcpServerName: 'figma',
+  transport: 'http',
+  url: 'https://mcp.figma.com',
+};
+
+/** Drives the INSERT branch of upsertSkillConfig; returns the write spy. */
+function mockPillInsertPath() {
+  const valuesMock = jest.fn().mockReturnValue({
+    returning: jest.fn().mockResolvedValue([defaultRow]),
+  });
+  const insertMock = jest.fn().mockImplementation((table) =>
+    table === projectSkillSettings
+      ? { values: valuesMock }
+      : {
+          values: jest.fn().mockReturnValue({
+            onConflictDoUpdate: jest.fn().mockResolvedValue(undefined),
+          }),
+        }
+  );
+
+  mockDb.transaction.mockImplementation(async (fn: any) =>
+    fn({
+      select: jest.fn().mockReturnValue({
+        from: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockResolvedValue([]),
+      }),
+      insert: insertMock,
+      update: jest.fn().mockReturnValue({
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockResolvedValue(undefined),
+      }),
+    })
+  );
+
+  return valuesMock;
+}
+
+/** The row written to project_skill_settings by the captured upsert. */
+function writtenRow(valuesMock: jest.Mock): Record<string, any> {
+  return valuesMock.mock.calls[0][0];
+}
+
+describe('quick pill allow-lists', () => {
+  beforeEach(() => {
+    resetDbMocks();
+    mockIsCheckoutReadinessEnabled.mockResolvedValue(false);
+  });
+
+  it.each(['QuickSkillPill', 'QuickMcpPillBase'])(
+    'TBI-001 DoD-0 / VT-01 %s declares optional nullable allowedUserIds and allowedGroupIds',
+    (name) => {
+      const body = interfaceBody(name);
+
+      expect(body).toMatch(/allowedUserIds\?:\s*string\[\]\s*\|\s*null;/);
+      expect(body).toMatch(/allowedGroupIds\?:\s*string\[\]\s*\|\s*null;/);
+    }
+  );
+
+  it('TBI-001 DoD-2 / VT-02 (PBI-001 AC-0, PBI-002 AC-0) upsert persists allow-lists on skill and MCP pills verbatim', async () => {
+    const valuesMock = mockPillInsertPath();
+
+    await upsertSkillConfig(
+      makeUpsertInput({
+        quickSkillPills: [skillPillWithAllowList],
+        quickMcpPills: [httpMcpPillWithAllowList, stdioMcpPillWithAllowList],
+      })
+    );
+
+    const row = writtenRow(valuesMock);
+    expect(row.quickSkillPills).toEqual([skillPillWithAllowList]);
+    expect(row.quickMcpPills).toEqual([
+      httpMcpPillWithAllowList,
+      stdioMcpPillWithAllowList,
+    ]);
+  });
+
+  it('TBI-001 DoD-1 / VT-03 read returns the full stored pill arrays including allow-list fields', async () => {
+    mockDb.select.mockReturnValue(
+      selectResolving(
+        [
+          {
+            ...defaultRow,
+            quickSkillPills: [skillPillWithAllowList, legacySkillPill],
+            quickMcpPills: [stdioMcpPillWithAllowList, legacyMcpPill],
+          },
+        ],
+        'limit'
+      )
+    );
+
+    const config = await getSkillConfigById('cfg-default');
+
+    expect(config?.quickSkillPills).toEqual([
+      skillPillWithAllowList,
+      legacySkillPill,
+    ]);
+    expect(config?.quickMcpPills).toEqual([
+      stdioMcpPillWithAllowList,
+      legacyMcpPill,
+    ]);
+    // legacy pill keeps exactly its stored keys — no allow-list fields appear
+    expect(Object.keys(config!.quickSkillPills![1])).toEqual(
+      Object.keys(legacySkillPill)
+    );
+    expect(config!.quickMcpPills![1]).not.toHaveProperty('allowedUserIds');
+    expect(config!.quickMcpPills![1]).not.toHaveProperty('allowedGroupIds');
+  });
+
+  it('TBI-001 DoD-3 / VT-08 (PBI-001 AC-2, PBI-002 AC-2) pills with omitted allow-lists round-trip without synthesized defaults', async () => {
+    const valuesMock = mockPillInsertPath();
+
+    await upsertSkillConfig(
+      makeUpsertInput({
+        quickSkillPills: [legacySkillPill],
+        quickMcpPills: [legacyMcpPill],
+      })
+    );
+
+    const row = writtenRow(valuesMock);
+    expect(Object.keys(row.quickSkillPills[0])).toEqual(
+      Object.keys(legacySkillPill)
+    );
+    expect(Object.keys(row.quickMcpPills[0])).toEqual(
+      Object.keys(legacyMcpPill)
+    );
+    expect(row.quickSkillPills[0]).not.toHaveProperty('allowedUserIds');
+    expect(row.quickSkillPills[0]).not.toHaveProperty('allowedGroupIds');
+    expect(row.quickMcpPills[0]).not.toHaveProperty('allowedUserIds');
+    expect(row.quickMcpPills[0]).not.toHaveProperty('allowedGroupIds');
+
+    jest.clearAllMocks();
+    mockDb.select.mockReturnValue(
+      selectResolving(
+        [
+          {
+            ...defaultRow,
+            quickSkillPills: row.quickSkillPills,
+            quickMcpPills: row.quickMcpPills,
+          },
+        ],
+        'limit'
+      )
+    );
+
+    const config = await getSkillConfigById('cfg-default');
+
+    expect(config?.quickSkillPills).toEqual([legacySkillPill]);
+    expect(config?.quickMcpPills).toEqual([legacyMcpPill]);
   });
 });

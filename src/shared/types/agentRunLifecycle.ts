@@ -3,6 +3,7 @@
  * Human-readable labels are rendered downstream in FEAT-006 (TBI-008).
  */
 
+import type { EffortLevel } from './effort';
 import type { SkillProvider } from './projectSettings';
 
 export type AgentRunStatus =
@@ -28,6 +29,8 @@ export type AgentRunTerminalReason =
   | 'worker_lost'
   | 'progress_timeout'
   | 'queue_ttl'
+  /** Dispatch accepted but the worker never reported; see the reaper dispatch TTL. */
+  | 'dispatch_ttl'
   | 'forced_cancel';
 
 export type AgentRunCancelState = 'requested' | 'acknowledged' | 'completed';
@@ -36,6 +39,8 @@ export type AgentRunCancelState = 'requested' | 'acknowledged' | 'completed';
 export interface ExecutionSnapshot {
   prompt: string;
   model: string;
+  /** Reasoning effort frozen at thread kickoff; omitted to use the SDK/model default. */
+  effort?: EffortLevel;
   /**
    * Writable Agent cwd (`.ai-pilot` scratch/outputs). For PRD/design-doc this is
    * the thin thread workspace — not a full repo clone.
@@ -84,6 +89,7 @@ export const AGENT_RUN_TERMINAL_REASONS: ReadonlySet<AgentRunTerminalReason> = n
   'worker_lost',
   'progress_timeout',
   'queue_ttl',
+  'dispatch_ttl',
   'forced_cancel',
 ]);
 

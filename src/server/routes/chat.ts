@@ -12,6 +12,8 @@ import {
   isPrdReady,
   getThread,
   recoverStaleRunningThread,
+  isExplicitAdoWriteIntent,
+  skillRequiresAdoOperations,
 } from '../services/chatAgentService';
 import { db } from '../db/drizzle';
 import { eq, desc } from 'drizzle-orm';
@@ -26,6 +28,7 @@ import type {
   ChatAttachment,
   ChatTurnSkill,
   ChatThread,
+  ChatThreadKickoff,
   ChatThreadStatus,
   SseEvent,
   SseStatusEvent,
@@ -33,6 +36,7 @@ import type {
   SendMessageRequest,
 } from '../../shared/types/chat';
 import type { ThreadAccess } from '../services/threadAccessService';
+import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import { requirePermission } from '../middleware/rbac';
 import { writeSseEvent, startSseHeartbeat } from '../utils/sseResponse';
 import {
@@ -49,6 +53,16 @@ import {
 import { getMyWorkSessionContext, logMyWorkSession } from '../services/myWorkSessionLogger';
 import { isFeatureEnabled } from '../services/featureFlagService';
 import { trackEvent } from '../services/telemetry';
+import { deriveAgentModule } from '../services/agentEffortResolver';
+import { resolveSkillConfig } from '../services/projectSettingsService';
+import { getAdoTokenForUser } from '../services/adoUserToken';
+import { registerChatAdoWriteTurn } from '../services/chatAdoWriteAuth';
+import { isSuperAdminRequest } from '../utils/superAdmin';
+import { getUserGroupIds } from '../services/groupService';
+import {
+  resolveThreadCreationAdmission,
+  type ThreadCreationDenialReason,
+} from '../services/homePillAccessResolver';
 
 const router = Router();
 
@@ -57,6 +71,35 @@ const MAX_CHAT_ATTACHMENTS = 5;
 const MAX_CHAT_ATTACHMENT_BYTES = 1024 * 1024;
 const MAX_CHAT_ATTACHMENT_TOTAL_BYTES = 4 * 1024 * 1024;
 const MAX_STREAM_EVENT_IDS = 2_000;
+
+/** Stable, user-readable text for each Home pill admission denial (FEAT-002 / TBI-005). */
+const THREAD_CREATION_DENIAL_MESSAGES: Record<ThreadCreationDenialReason, string> = {
+  skill_pill_not_allowed:
+    'You are not allowed to start a chat with this Home skill. Ask a project admin for access.',
+  mcp_pill_not_allowed:
+    'You are not allowed to start a chat with this Home MCP server. Ask a project admin for access.',
+  pilless_chat_not_allowed:
+    'You have no available Home skills for this project, so you cannot start a chat here. Ask a project admin for access to a Home skill or MCP server.',
+};
+
+/**
+ * True when the kickoff exactly names one of the project's configured Home quick
+ * pills. Such a kickoff is a Home start and stays subject to pill admission even
+ * when its skill path also maps to a non-Home agent module.
+ */
+function namesHomePill(
+  kickoff: Partial<ChatThreadKickoff>,
+  skillConfig: ProjectSkillConfig | null,
+): boolean {
+  const { skillPath } = kickoff;
+  const mcpServerName = kickoff.mcpPill?.mcpServerName;
+  return Boolean(
+    (skillPath
+      && skillConfig?.quickSkillPills?.some((pill) => pill.skillPath === skillPath))
+    || (mcpServerName
+      && skillConfig?.quickMcpPills?.some((pill) => pill.mcpServerName === mcpServerName)),
+  );
+}
 
 export function eventForRunEnvelope(envelope: AgentRunEventEnvelope): SseEvent {
   const event: SseEvent = envelope.event.type === 'cancel'
@@ -326,7 +369,44 @@ router.post('/threads', async (req: Request, res: Response) => {
 
   try {
     const userId = getUserId(req);
-    const kickoff = body.kickoff;
+    const {
+      effort: _clientEffort,
+      agentModule: _clientAgentModule,
+      ...clientKickoff
+    } = body.kickoff;
+    const skillConfig = await resolveSkillConfig({
+      project: clientKickoff.project,
+      settingsId: clientKickoff.skillSettingsId ?? undefined,
+    });
+    const agentModule = deriveAgentModule(clientKickoff, skillConfig);
+
+    // Home pill admission (TBI-005) covers Home starts only: a kickoff that names
+    // a configured quick pill, or one the server cannot map to any module (Home
+    // free chat, or an unrecognized direct call). Configured Interview/ADR/PRD/
+    // assistant/development/standup workflows keep their own gates (BR-008).
+    // Runs before any persistence, so a denied kickoff leaves no thread row.
+    if (namesHomePill(clientKickoff, skillConfig) || agentModule === undefined) {
+      const isSuperAdmin = isSuperAdminRequest(req);
+      const admission = resolveThreadCreationAdmission({
+        skillPills: skillConfig?.quickSkillPills,
+        mcpPills: skillConfig?.quickMcpPills,
+        callerId: userId,
+        callerGroupIds: isSuperAdmin ? [] : await getUserGroupIds(userId),
+        isSuperAdmin,
+        skillPath: clientKickoff.skillPath,
+        mcpServerName: clientKickoff.mcpPill?.mcpServerName,
+      });
+      if (!admission.admitted) {
+        return res
+          .status(403)
+          .json({ error: THREAD_CREATION_DENIAL_MESSAGES[admission.reason] });
+      }
+    }
+
+    const kickoff = {
+      ...clientKickoff,
+      ...(agentModule ? { agentModule } : {}),
+    };
     const thread = await createThread(userId, kickoff, {
       skipAutoKickoff: Boolean(body.skipAutoKickoff),
     });
@@ -470,10 +550,23 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
   });
 
   const lastEventId = req.get('Last-Event-ID')?.trim() || undefined;
-  const replayEvents = await replayRunEvents(req.params.id, lastEventId).catch((err) => {
-    console.error(`[chat] run-event replay failed for thread ${req.params.id}:`, (err as Error).message);
-    return [];
-  });
+  // A cold page load already receives persisted messages and the authoritative
+  // thread status above. Replaying old tool/phase events for an idle thread
+  // makes completed work look like it started again. Only resume durable
+  // events when the browser supplied a cursor or a run is currently active.
+  const shouldReplayEvents =
+    Boolean(lastEventId) || hydrated?.status === 'running';
+  const replayEvents = shouldReplayEvents
+    ? await replayRunEvents(
+      req.params.id,
+      lastEventId,
+      500,
+      hydrated?.activeRunId,
+    ).catch((err) => {
+      console.error(`[chat] run-event replay failed for thread ${req.params.id}:`, (err as Error).message);
+      return [];
+    })
+    : [];
   for (const envelope of replayEvents) sendEnvelope(envelope);
 
   // Historical phase/done events must not override the current thread state.
@@ -539,6 +632,41 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
     // Dead run cleared — accept the message.
   }
 
+  let releaseAdoWriteTurn = () => {};
+  const calendarAssistant =
+    thread.kickoff.assistantType === 'calendar-work-item';
+  const explicitAdoWrite =
+    !calendarAssistant && isExplicitAdoWriteIntent(body.text ?? '');
+  const operationalAdoWrite =
+    !calendarAssistant &&
+    (skillRequiresAdoOperations(
+      turnSkill?.path ??
+        thread.kickoff.skillPath ??
+        thread.kickoff.standupSkillPath,
+      turnSkill?.name ?? thread.kickoff.pillLabel,
+    ) ||
+      Boolean(thread.kickoff.standupSessionId) ||
+      thread.kickoff.mode === 'standup-participant' ||
+      thread.kickoff.mode === 'standup-facilitator');
+  if (explicitAdoWrite || operationalAdoWrite) {
+    try {
+      const token = await getAdoTokenForUser(req);
+      releaseAdoWriteTurn = await registerChatAdoWriteTurn({
+        threadId: req.params.id,
+        userId: getUserId(req),
+        project: thread.kickoff.project,
+        token,
+        isSuperAdmin: isSuperAdminRequest(req),
+      });
+    } catch (err: unknown) {
+      if (explicitAdoWrite) {
+        return res
+          .status(errorStatus(err, 403))
+          .json({ error: errorMessage(err) });
+      }
+    }
+  }
+
   // Fire-and-forget: response streams via SSE/WS; 202 returns immediately.
   // Breadcrumb BEFORE the async turn so a hang inside sendMessage is still visible.
   const threadId = req.params.id;
@@ -553,14 +681,16 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
   res.status(202).json({ ok: true });
   sendMessage(threadId, body.text ?? '', body.model, attachments, {
     turnSkill,
-  }).catch((err: unknown) => {
-    console.error(`[chat] sendMessage error for thread ${threadId}:`, errorMessage(err));
-    trackEvent('chat.send.failed', {
-      threadId,
-      errorType: err instanceof Error ? err.name : 'UnknownError',
-      errorMessage: errorMessage(err).slice(0, 200),
+  })
+    .finally(releaseAdoWriteTurn)
+    .catch((err: unknown) => {
+      console.error(`[chat] sendMessage error for thread ${threadId}:`, errorMessage(err));
+      trackEvent('chat.send.failed', {
+        threadId,
+        errorType: err instanceof Error ? err.name : 'UnknownError',
+        errorMessage: errorMessage(err).slice(0, 200),
+      });
     });
-  });
 });
 
 /**

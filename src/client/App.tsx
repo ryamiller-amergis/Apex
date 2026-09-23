@@ -17,6 +17,7 @@ import { PlanningTabs, type PlanningTab } from './components/PlanningTabs';
 import { ApexLoader } from './components/ApexLoader';
 import { ProjectSelector } from './components/ProjectSelector';
 import { AgentHome } from './components/AgentHome';
+import { FoundationSkillUpdateBanner } from './components/FoundationSkillUpdateBanner';
 import { ChatAgentPanel, type StartPanelChatOptions } from './components/ChatAgentPanel';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { ToastContainer } from './components/ToastContainer';
@@ -34,10 +35,10 @@ import { PdfToolsRouteGuard } from './components/PdfToolsRouteGuard';
 import { DesktopOnlyGate } from './components/DesktopOnlyGate';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
+import { canAccessMyWork } from './utils/canAccessMyWork';
 import { setInteractiveWsEnabled } from './utils/threadEventStream';
 import { IS_BETA_RELEASE } from './config/release';
 import { RESTRICTED_ACCESS_PROJECT } from '../shared/types/restrictedAccess';
-import type { WorkItem } from './types/workitem';
 import './App.css';
 
 // Lazy-loaded views for code splitting
@@ -135,7 +136,6 @@ function App() {
   const [chatOpen, setChatOpen] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [activeThreadProject, setActiveThreadProject] = useState<string | null>(null);
-  const [homeSelectedItem, setHomeSelectedItem] = useState<WorkItem | null>(null);
   const [pendingProject, setPendingProject] = useState<string | null>(null);
   const [calendarAssistantOpen, setCalendarAssistantOpen] = useState(false);
   const [calendarAssistantAnchor, setCalendarAssistantAnchor] = useState<{
@@ -225,9 +225,12 @@ function App() {
   useEffect(() => {
     if (currentView !== 'home') {
       setChatOpen(false);
-      setHomeSelectedItem(null);
     }
   }, [currentView]);
+
+  const handleHomeViewChange = useCallback((view: 'chat' | 'status') => {
+    setChatOpen(view === 'chat');
+  }, []);
 
   useEffect(() => {
     const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
@@ -246,8 +249,6 @@ function App() {
     isSuperAdmin,
     isRestricted,
     restrictedModules,
-    isAdmin,
-    groups,
     permissionsLoaded,
     workItems,
     workBoardEnabled,
@@ -460,7 +461,15 @@ function App() {
     if (currentView === 'backlog'       && !isSuperAdmin && (!effectiveEnabledViews.includes('backlog')   || !can('interviews:view'))) navigate(fallback);
     if (currentView === 'adr'           && !isSuperAdmin && (!effectiveEnabledViews.includes('adr')       || !can('adr:view'))) navigate(fallback);
     if (currentView === 'notifications' && !can('notifications:view'))  navigate(fallback);
-    if (currentView === 'my-work'       && !isSuperAdmin && (!effectiveEnabledViews.includes('my-work') || !can('dev-workbench:view'))) navigate(fallback);
+    if (
+      currentView === 'my-work'
+      && !canAccessMyWork({
+        can,
+        isSuperAdmin,
+        isInAnyGroup,
+        enabledViews: effectiveEnabledViews,
+      })
+    ) navigate(fallback);
     if (currentView === 'standup'        && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
     if (currentView === 'standup-manage' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:manage')))      navigate(fallback);
     if (currentView === 'standup-summary' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
@@ -554,6 +563,7 @@ function App() {
           body: JSON.stringify({
             text: options.initialMessage,
             model: options.model ?? DEFAULT_MODEL_ID,
+            ...(options.attachments?.length ? { attachments: options.attachments } : {}),
           }),
         });
       }
@@ -875,6 +885,25 @@ function App() {
             </div>
           )}
 
+          {/*
+            Sits outside agent-home-keepalive on purpose: the Home chat panel is an
+            absolute overlay pinned below the tab strip, so a banner inside that
+            container would be covered by it.
+          */}
+          {canAccessHome && currentView === 'home'
+            && isInAnyGroup(['Manager', 'Product-Owner'])
+            && activeSkillConfig?.skillRepo && (
+            <div className="foundation-skill-banner-row">
+              <FoundationSkillUpdateBanner
+                project={selectedProject || null}
+                repo={activeSkillConfig.skillRepo}
+                provider={activeSkillConfig.skillProvider ?? 'ado'}
+                branch={activeSkillConfig.skillBranch ?? 'main'}
+                {...{ 'data-testid': 'agent-home-foundation-skill-banner' }}
+              />
+            </div>
+          )}
+
           {canAccessHome ? (
             <div
               className="agent-home-keepalive"
@@ -890,38 +919,36 @@ function App() {
                 <FeatureFlagDemo project={selectedProject} />
                 <AgentHome
                   selectedProject={selectedProject}
-                  selectedAreaPath={selectedAreaPath}
-                  selectedSkillSettingsId={selectedSkillSettingsId}
-                  isAdmin={isSuperAdmin || isAdmin || (groups ?? []).includes('Manager') || (groups ?? []).includes('Product-Owner')}
-                  isChatOpen={chatOpen}
-                  canOpenChat={can('chat:view') && can('chat:create')}
-                  onOpenChatPanel={() => setChatOpen((open) => !open)}
+                  isActive={currentView === 'home'}
+                  onHomeViewChange={handleHomeViewChange}
                   onRestoreThread={(id) => {
                     setActiveThreadId(id);
                     setActiveThreadProject(selectedProject);
                   }}
-                  onSelectWorkItem={(workItem) => {
-                    setChatOpen(false);
-                    setHomeSelectedItem(workItem);
-                  }}
                 />
-                {homeSelectedItem && currentView === 'home' && (
-                  <Suspense fallback={null}>
-                    {/* data-testid-exempt — DetailsPanel owns its panel chrome; no data-testid prop */}
-                    <DetailsPanel
-                      workItem={homeSelectedItem}
-                      onClose={() => setHomeSelectedItem(null)}
-                      onUpdateDueDate={handleDueDateChange}
-                      allWorkItems={workItems}
-                      onUpdateField={handleFieldUpdate}
-                      isSaving={isSaving}
-                      project={selectedProject}
-                      areaPath={selectedAreaPath}
-                      onSelectItem={setHomeSelectedItem}
-                      onOpenAssistant={handleOpenCalendarAssistant}
-                    />
-                  </Suspense>
-                )}
+                {/* data-testid-exempt — ChatAgentPanel API has no data-testid prop */}
+                <ChatAgentPanel
+                  thread={projectScopedActiveThread}
+                  activeThreadId={projectScopedActiveThread?.id ?? null}
+                  isLoadingThread={
+                    Boolean(activeThreadId)
+                    && activeThreadProject === selectedProject
+                    && (isFetchingActiveThread || !projectScopedActiveThread)
+                  }
+                  isOpen={currentView === 'home' && chatOpen}
+                  onClose={() => setChatOpen(false)}
+                  onNewChat={handleStartPanelChat}
+                  onSelectThread={(id) => {
+                    setActiveThreadId(id || null);
+                    setActiveThreadProject(id ? selectedProject : null);
+                  }}
+                  selectedProject={selectedProject}
+                  canStartNewChat={!!panelRepo && !isLoadingSkillRepos && !startChat.isPending}
+                  isStartingNewChat={startChat.isPending}
+                  newChatError={startChat.error?.message}
+                  launchedFromHome
+                  selectedSkillSettingsId={selectedSkillSettingsId}
+                />
               </ErrorBoundary>
             </div>
           ) : currentView === 'home' ? (
@@ -1465,29 +1492,6 @@ function App() {
           />
         )}
 
-        {/* data-testid-exempt — ChatAgentPanel API has no data-testid prop */}
-        <ChatAgentPanel
-          thread={projectScopedActiveThread}
-          activeThreadId={projectScopedActiveThread?.id ?? null}
-          isLoadingThread={
-            Boolean(activeThreadId)
-            && activeThreadProject === selectedProject
-            && (isFetchingActiveThread || !projectScopedActiveThread)
-          }
-          isOpen={currentView === 'home' && chatOpen}
-          onClose={() => setChatOpen(false)}
-          onNewChat={handleStartPanelChat}
-          onSelectThread={(id) => {
-            setActiveThreadId(id || null);
-            setActiveThreadProject(id ? selectedProject : null);
-          }}
-          selectedProject={selectedProject}
-          canStartNewChat={!!panelRepo && !isLoadingSkillRepos && !startChat.isPending}
-          isStartingNewChat={startChat.isPending}
-          newChatError={startChat.error?.message}
-          launchedFromHome={currentView === 'home'}
-          selectedSkillSettingsId={selectedSkillSettingsId}
-        />
       </NotificationWrapper>
       </DndProvider>
     </ErrorBoundary>

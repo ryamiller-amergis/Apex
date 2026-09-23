@@ -3,6 +3,8 @@
 export type ApexWorkItemStatus = 'idea' | 'ready' | 'in-progress' | 'review' | 'done';
 export type ApexWorkItemType = 'Epic' | 'Feature' | 'PBI' | 'TBI' | 'Bug';
 export type ApexWorkItemSourceType = 'prd' | 'feature_request' | 'standalone';
+export type ApexWorkItemPriority = 'critical' | 'high' | 'medium' | 'low';
+export const APEX_ASSIGNEE_ID = 'apex';
 export type ApexWorkItemEventAction =
   | 'created'
   | 'updated'
@@ -63,6 +65,7 @@ export interface WorkItemOwnerSummary {
   oid: string;
   displayName: string;
   email: string;
+  isApex?: boolean;
 }
 
 // ── Release ──────────────────────────────────────────────────────────────────
@@ -162,6 +165,11 @@ export interface ApexWorkItem {
   type: ApexWorkItemType;
   status: ApexWorkItemStatus;
   owner: WorkItemOwnerSummary;
+  assignedToApex: boolean;
+  priority: ApexWorkItemPriority | null;
+  priorityRank: number | null;
+  aiPriorityRationale: string | null;
+  aiRankedAt: string | null;
   collaborators: WorkItemOwnerSummary[];
   acceptanceCriteria: AcceptanceCriterion[];
   branch: string | null;
@@ -371,6 +379,15 @@ export interface BulkUpdateApexWorkItemsDTO {
   targetStatus?: ApexWorkItemStatus;
   ownerId?: string;
   releaseId?: string | null;
+}
+
+export interface RankApexWorkItemsDTO {
+  ids: string[];
+}
+
+export interface RankApexWorkItemsResult {
+  items: ApexWorkItem[];
+  rankedAt: string;
 }
 
 // ── Filters ──────────────────────────────────────────────────────────────────

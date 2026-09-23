@@ -203,6 +203,7 @@ function toSummary(row: typeof designPrototypes.$inferSelect): DesignPrototypeSu
     authorId: row.authorId,
     authorName: resolveUserName(row.authorId),
     model: row.model ?? undefined,
+    effort: row.effort ?? undefined,
     status: row.status as DesignPrototypeSummary['status'],
     mockVersion: row.mockVersion,
     reviewerId: row.reviewerId ?? undefined,

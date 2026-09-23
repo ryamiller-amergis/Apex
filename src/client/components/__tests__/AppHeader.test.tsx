@@ -267,6 +267,90 @@ describe('AppHeader — Work Board visibility', () => {
   });
 });
 
+// ── My Work: Developer group or Project Admin, super admin always ─────────────
+
+describe('AppHeader — My Work visibility', () => {
+  const inDeveloperGroup = (groups: string[]) => groups.includes('Developer');
+
+  it('renders My Work for a Developer with dev-workbench:view and the menu enabled', () => {
+    const can = (key: string) => key === 'dev-workbench:view';
+    render(
+      <AppHeader
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['my-work']}
+        isInAnyGroup={inDeveloperGroup}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'My Work' })).toBeInTheDocument();
+  });
+
+  it('renders My Work for a Project Admin with admin:roles but no Developer group', () => {
+    const can = (key: string) => key === 'dev-workbench:view' || key === 'admin:roles';
+    render(
+      <AppHeader
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['my-work']}
+        isInAnyGroup={() => false}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'My Work' })).toBeInTheDocument();
+  });
+
+  it('renders My Work for a super admin even without menu, permission, or group', () => {
+    render(
+      <AppHeader
+        {...baseProps}
+        can={(_k) => false}
+        isSuperAdmin
+        menuEnabledViews={[]}
+        isInAnyGroup={() => false}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'My Work' })).toBeInTheDocument();
+  });
+
+  it('does NOT render My Work when the menu view is disabled', () => {
+    const can = (key: string) => key === 'dev-workbench:view' || key === 'admin:roles';
+    render(
+      <AppHeader
+        {...baseProps}
+        can={can}
+        menuEnabledViews={[]}
+        isInAnyGroup={inDeveloperGroup}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'My Work' })).not.toBeInTheDocument();
+  });
+
+  it('does NOT render My Work when dev-workbench:view is missing', () => {
+    const can = (key: string) => key === 'admin:roles';
+    render(
+      <AppHeader
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['my-work']}
+        isInAnyGroup={inDeveloperGroup}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'My Work' })).not.toBeInTheDocument();
+  });
+
+  it('does NOT render My Work when the user is neither a Developer nor holds admin:roles', () => {
+    const can = (key: string) => key === 'dev-workbench:view';
+    render(
+      <AppHeader
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['my-work']}
+        isInAnyGroup={() => false}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'My Work' })).not.toBeInTheDocument();
+  });
+});
+
 // ── Super admin sees all feature views ─────────────────────────────────────────
 
 describe('AppHeader — isSuperAdmin=true', () => {

@@ -33,6 +33,21 @@ const MAX_BACKGROUND_IN_FLIGHT_LIMIT = 100;
 const DEFAULT_BACKGROUND_PUBLISH_GRACE_MS = 60_000;
 const MIN_BACKGROUND_PUBLISH_GRACE_MS = 1_000;
 const MAX_BACKGROUND_PUBLISH_GRACE_MS = 10 * 60_000;
+const DEFAULT_BACKGROUND_DISPATCH_TTL_MS = 30 * 60_000;
+const MIN_BACKGROUND_DISPATCH_TTL_MS = 60_000;
+const MAX_BACKGROUND_DISPATCH_TTL_MS = 24 * 60 * 60_000;
+
+/**
+ * Consecutive republish failures for one run before the sweep says so plainly.
+ *
+ * A single failure is routine and the next sweep usually clears it. A run that
+ * fails this many times running has a dispatch no retry is going to place, and
+ * it will keep failing until the TTL expires — roughly 180 attempts at the
+ * default grace. Those attempts previously logged one indistinguishable line
+ * each, so the only symptom anyone saw was a design doc failing for no stated
+ * reason.
+ */
+const REPUBLISH_ESCALATION_THRESHOLD = 5;
 const DEFAULT_STALE_DISPATCH_BATCH_SIZE = 100;
 const MAX_STALE_DISPATCH_BATCH_SIZE = 100;
 const BACKGROUND_LANE = 'background';
@@ -80,6 +95,7 @@ export type StaleDispatch = Readonly<{
 export interface StaleDispatchRecoveryStore {
   findStaleDispatches(
     dispatchedBefore: string,
+    dispatchedAtOrAfter: string,
     limit: number,
   ): Promise<StaleDispatch[]>;
 }
@@ -259,6 +275,7 @@ const postgresAdmissionStore: AdmissionStore = {
 const postgresStaleDispatchRecoveryStore: StaleDispatchRecoveryStore = {
   async findStaleDispatches(
     dispatchedBefore: string,
+    dispatchedAtOrAfter: string,
     limit: number,
   ): Promise<StaleDispatch[]> {
     const result = await db.execute(sql`
@@ -271,6 +288,7 @@ const postgresStaleDispatchRecoveryStore: StaleDispatchRecoveryStore = {
         AND dispatch_message_id IS NOT NULL
         AND dispatched_at IS NOT NULL
         AND dispatched_at < ${dispatchedBefore}
+        AND dispatched_at >= ${dispatchedAtOrAfter}
       ORDER BY dispatched_at ASC, id ASC
       LIMIT ${limit}
     `);
@@ -322,10 +340,45 @@ export function resolveBackgroundPublishGraceMs(
     : DEFAULT_BACKGROUND_PUBLISH_GRACE_MS;
 }
 
+/**
+ * Upper bound on how long a `dispatched` row stays eligible for republish.
+ *
+ * Republish is only safe while the run can still succeed. Past this age the
+ * reaper's dispatch TTL fails the row instead, so the sweep must stop selecting
+ * it — otherwise a run the worker can never complete is re-enqueued on every
+ * sweep forever and the queue grows without bound.
+ *
+ * Must stay aligned with the reaper's dispatch TTL, which reads the same value.
+ */
+export function resolveBackgroundDispatchTtlMs(
+  rawValue = process.env.AI_RUNS_BACKGROUND_DISPATCH_TTL_MS,
+): number {
+  const normalized = rawValue?.trim();
+  if (!normalized || !/^\d+$/.test(normalized)) {
+    return DEFAULT_BACKGROUND_DISPATCH_TTL_MS;
+  }
+  const parsed = Number(normalized);
+  return Number.isSafeInteger(parsed)
+    && parsed >= MIN_BACKGROUND_DISPATCH_TTL_MS
+    && parsed <= MAX_BACKGROUND_DISPATCH_TTL_MS
+    ? parsed
+    : DEFAULT_BACKGROUND_DISPATCH_TTL_MS;
+}
+
+/**
+ * Broker error text may echo request headers, so only the numeric HTTP status
+ * is safe to log. Anything unparseable is reported as `unknown`.
+ */
+function publishFailureStatus(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  return /\((\d{3})\)\s*$/.exec(message)?.[1] ?? 'unknown';
+}
+
 type StaleDispatchRecoveryDependencies = {
   store?: StaleDispatchRecoveryStore;
   publisher?: ServiceBusPublisher;
   resolveGraceMs?: () => number;
+  resolveTtlMs?: () => number;
   now?: () => Date;
   batchSize?: number;
   logError?: (message: string, fields: Record<string, string>) => void;
@@ -333,8 +386,15 @@ type StaleDispatchRecoveryDependencies = {
 
 /**
  * Republish durable dispatch fences without mutating lifecycle state or
- * allocating capacity. Service Bus duplicate detection makes same-ID retries
- * idempotent; the worker fence rejects any stale delivery that races progress.
+ * allocating capacity. The worker fence rejects any stale delivery that races
+ * progress.
+ *
+ * Repeat publishes collapse on `MessageId` only while the queue has duplicate
+ * detection enabled and the repeat lands inside its history window, so the
+ * sweep must not rely on the broker alone: selection is bounded to runs young
+ * enough to still succeed (see `resolveBackgroundDispatchTtlMs`). Without that
+ * bound a permanently stuck `dispatched` row is re-enqueued every sweep for as
+ * long as it exists.
  */
 export function createStaleDispatchRecoveryService(
   dependencies: StaleDispatchRecoveryDependencies = {},
@@ -345,6 +405,8 @@ export function createStaleDispatchRecoveryService(
     dependencies.store ?? postgresStaleDispatchRecoveryStore;
   const resolveGraceMs =
     dependencies.resolveGraceMs ?? resolveBackgroundPublishGraceMs;
+  const resolveTtlMs =
+    dependencies.resolveTtlMs ?? resolveBackgroundDispatchTtlMs;
   const now = dependencies.now ?? (() => new Date());
   const requestedBatchSize =
     dependencies.batchSize ?? DEFAULT_STALE_DISPATCH_BATCH_SIZE;
@@ -358,16 +420,32 @@ export function createStaleDispatchRecoveryService(
     ?? ((message: string, fields: Record<string, string>) => {
       console.error(message, JSON.stringify(fields));
     });
+  // Per-run failure streaks, kept across sweeps so a stuck dispatch can be
+  // named once instead of re-reported on every cycle.
+  const failureStreaks = new Map<
+    string,
+    { failures: number; escalated: boolean; lastSeenMs: number }
+  >();
 
   return {
     async recoverStaleDispatchedRuns(): Promise<StaleDispatchRecoveryResult> {
-      const cutoff = new Date(
-        now().getTime() - resolveGraceMs(),
-      ).toISOString();
+      const nowMs = now().getTime();
+      const cutoff = new Date(nowMs - resolveGraceMs()).toISOString();
+      const floor = new Date(nowMs - resolveTtlMs()).toISOString();
       const staleDispatches = await store.findStaleDispatches(
         cutoff,
+        floor,
         batchSize,
       );
+
+      // Selection is bounded by the dispatch TTL, so anything not seen within
+      // that span has aged out and will never be selected again.
+      const streakFloorMs = nowMs - resolveTtlMs();
+      for (const [runId, streak] of failureStreaks) {
+        if (streak.lastSeenMs < streakFloorMs) {
+          failureStreaks.delete(runId);
+        }
+      }
       const publisher = dependencies.publisher ?? getServiceBusPublisher();
       let published = 0;
       let failed = 0;
@@ -380,8 +458,22 @@ export function createStaleDispatchRecoveryService(
         try {
           await publisher.publish(message);
           published += 1;
-        } catch {
+          failureStreaks.delete(staleDispatch.runId);
+        } catch (error) {
           failed += 1;
+          const publishStatus = publishFailureStatus(error);
+          const streak = failureStreaks.get(staleDispatch.runId)
+            ?? { failures: 0, escalated: false, lastSeenMs: nowMs };
+          streak.failures += 1;
+          streak.lastSeenMs = nowMs;
+          const crossedThreshold =
+            !streak.escalated
+            && streak.failures >= REPUBLISH_ESCALATION_THRESHOLD;
+          if (crossedThreshold) {
+            streak.escalated = true;
+          }
+          failureStreaks.set(staleDispatch.runId, streak);
+
           try {
             logError('[agent-run-admission] stale dispatch republish failed', {
               runId: staleDispatch.runId,
@@ -389,7 +481,22 @@ export function createStaleDispatchRecoveryService(
               lane: BACKGROUND_LANE,
               reason: 'sweep',
               status: 'republish_failed',
+              publishStatus,
             });
+            if (crossedThreshold) {
+              logError(
+                '[agent-run-admission] stale dispatch unrecoverable',
+                {
+                  runId: staleDispatch.runId,
+                  dispatchMessageId: staleDispatch.dispatchMessageId,
+                  lane: BACKGROUND_LANE,
+                  reason: 'sweep',
+                  status: 'republish_unrecoverable',
+                  publishStatus,
+                  consecutiveFailures: String(streak.failures),
+                },
+              );
+            }
           } catch {
             // Logging must not prevent the remaining bounded batch from retrying.
           }

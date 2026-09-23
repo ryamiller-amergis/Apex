@@ -7,6 +7,7 @@ import express from 'express';
 import { requireAiRunnerAuth } from '../../middleware/aiRunnerAuth';
 import type { RepositoryIdentity } from '../../../shared/types/repoReader';
 import { git, safeArgs } from '../../utils/asyncGit';
+import { exitAfterFlush } from '../../utils/processExit';
 import { createGroundingBundleStore } from '../grounding/bundleStoreService';
 import { listSkillConfigsForProject } from '../projectSettingsService';
 import {
@@ -243,6 +244,9 @@ async function main(): Promise<void> {
 }
 
 if (require.main === module) {
+  // main() resolves once the server is listening, so only the failure path
+  // exits. Telemetry is flushed first because this is the last chance to
+  // report why the service never came up.
   main().catch((error) => {
     console.error(
       JSON.stringify({
@@ -250,6 +254,6 @@ if (require.main === module) {
         errorMessage: error instanceof Error ? error.message : String(error),
       })
     );
-    process.exitCode = 1;
+    return exitAfterFlush(1, { flush: () => flushTelemetry() });
   });
 }

@@ -40,6 +40,7 @@ import type { UiLabHistoryEntry } from '../../shared/types/uiLab';
 import type { DevSessionSetupPhase } from '../../shared/types/devWorkbench';
 import type { DesignPlanFeature, DesignPlanHistoryEntry } from '../../shared/types/designPlan';
 import type { QuickSkillPill, QuickMcpPill, InterviewSkillOption, PrototypeEngine } from '../../shared/types/projectSettings';
+import type { EffortLevel } from '../../shared/types/effort';
 import type { ApprovalMode, OwnerApprovalStatus, ReviewerDocumentType } from '../../shared/types/approvals';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { ArtifactDoneEventType } from '../../shared/types/homeDashboard';
@@ -468,6 +469,7 @@ export const interviews = pgTable('interviews', {
   project: text('project').notNull(),
   repo: text('repo').notNull(),
   model: text('model'),
+  effort: text('effort').$type<EffortLevel>(),
   prdOwnerId: text('prd_owner_id').references(() => appUsers.oid, { onDelete: 'set null' }),
   designDocOwnerId: text('design_doc_owner_id').references(() => appUsers.oid, { onDelete: 'set null' }),
   designPrototypeOwnerId: text('design_prototype_owner_id').references(() => appUsers.oid, { onDelete: 'set null' }),
@@ -518,6 +520,7 @@ export const adrs = pgTable('adrs', {
   project: text('project').notNull(),
   repo: text('repo').notNull(),
   model: text('model'),
+  effort: text('effort').$type<EffortLevel>(),
   skillSettingsId: uuid('skill_settings_id').references(() => projectSkillSettings.id, { onDelete: 'set null' }),
   status: text('status').notNull().default('in_progress'),
   content: text('content').notNull().default(''),
@@ -536,6 +539,7 @@ export const prds = pgTable('prds', {
   project: text('project').notNull(),
   title: text('title').notNull().default('Untitled PRD'),
   model: text('model'),
+  effort: text('effort').$type<EffortLevel>(),
   content: text('content').notNull().default(''),
   backlogJson: jsonb('backlog_json'),
   status: text('status').notNull().default('draft'),
@@ -592,6 +596,7 @@ export const designDocs = pgTable('design_docs', {
   authorId: text('author_id').notNull(),
   title: text('title').notNull().default('Untitled Design Doc'),
   model: text('model'),
+  effort: text('effort').$type<EffortLevel>(),
   designContent: text('design_content').notNull().default(''),
   techSpecContent: text('tech_spec_content').notNull().default(''),
   assumptionsContent: text('assumptions_content').notNull().default(''),
@@ -755,19 +760,30 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designPrototypeSkillPath: text('design_prototype_skill_path'),
   testCaseSkillPath: text('test_case_skill_path'),
   interviewModel: text('interview_model'),
+  interviewEffort: text('interview_effort').$type<EffortLevel>(),
   prdModel: text('prd_model'),
+  prdEffort: text('prd_effort').$type<EffortLevel>(),
   adrModel: text('adr_model'),
+  adrEffort: text('adr_effort').$type<EffortLevel>(),
   designDocModel: text('design_doc_model'),
+  designDocEffort: text('design_doc_effort').$type<EffortLevel>(),
   designDocAssistantModel: text('design_doc_assistant_model'),
+  designDocAssistantEffort: text('design_doc_assistant_effort').$type<EffortLevel>(),
   designPrototypeModel: text('design_prototype_model'),
+  designPrototypeEffort: text('design_prototype_effort').$type<EffortLevel>(),
   testCaseModel: text('test_case_model'),
+  testCaseEffort: text('test_case_effort').$type<EffortLevel>(),
   designDocValidationSkillPath: text('design_doc_validation_skill_path'),
   designDocValidationModel: text('design_doc_validation_model'),
+  designDocValidationEffort: text('design_doc_validation_effort').$type<EffortLevel>(),
   prdAssistantSkillPath: text('prd_assistant_skill_path'),
   prdAssistantModel: text('prd_assistant_model'),
+  prdAssistantEffort: text('prd_assistant_effort').$type<EffortLevel>(),
   prdValidationSkillPath: text('prd_validation_skill_path'),
   prdValidationModel: text('prd_validation_model'),
+  prdValidationEffort: text('prd_validation_effort').$type<EffortLevel>(),
   defaultModel: text('default_model'),
+  defaultEffort: text('default_effort').$type<EffortLevel>(),
   prdReviewBedrockModelId: text('prd_review_bedrock_model_id'),
   prdReviewBedrockMaxTokens: integer('prd_review_bedrock_max_tokens'),
   designPrototypeBedrockModelId: text('design_prototype_bedrock_model_id'),
@@ -788,14 +804,19 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   uiLabSkillPath: text('ui_lab_skill_path'),
   developmentSkillPath: text('development_skill_path'),
   developmentModel: text('development_model'),
+  developmentEffort: text('development_effort').$type<EffortLevel>(),
   standupSkillPath: text('standup_skill_path'),
   standupModel: text('standup_model'),
+  standupEffort: text('standup_effort').$type<EffortLevel>(),
   featureRequestSkillPath: text('feature_request_skill_path'),
   featureRequestModel: text('feature_request_model'),
+  featureRequestEffort: text('feature_request_effort').$type<EffortLevel>(),
   technicalSkillPath: text('technical_skill_path'),
   technicalModel: text('technical_model'),
+  technicalEffort: text('technical_effort').$type<EffortLevel>(),
   issueSkillPath: text('issue_skill_path'),
   issueModel: text('issue_model'),
+  issueEffort: text('issue_effort').$type<EffortLevel>(),
   skillProvider: text('skill_provider').notNull().default('ado'),
   interviewSkillOptions: jsonb('interview_skill_options').$type<InterviewSkillOption[]>(),
   prototypeStageEnabled: boolean('prototype_stage_enabled').notNull().default(true),
@@ -812,12 +833,16 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   cursorServiceAccountId: text('cursor_service_account_id'),
   calendarAssistantSkillPath: text('calendar_assistant_skill_path'),
   calendarAssistantModel: text('calendar_assistant_model'),
+  calendarAssistantEffort: text('calendar_assistant_effort').$type<EffortLevel>(),
   loadTestGenerationSkillPath: text('load_test_generation_skill_path'),
   loadTestGenerationModel: text('load_test_generation_model'),
+  loadTestGenerationEffort: text('load_test_generation_effort').$type<EffortLevel>(),
   designModuleSkillPath: text('design_module_skill_path'),
   designModuleModel: text('design_module_model'),
+  designModuleEffort: text('design_module_effort').$type<EffortLevel>(),
   designModuleScopingSkillPath: text('design_module_scoping_skill_path'),
   designModuleScopingModel: text('design_module_scoping_model'),
+  designModuleScopingEffort: text('design_module_scoping_effort').$type<EffortLevel>(),
   /** Admin-managed checkout readiness for this skill-settings repository identity. */
   repositoryCheckoutStatus: text('repository_checkout_status').notNull().default('not_cloned'),
   repositoryCheckoutSha: text('repository_checkout_sha'),
@@ -1129,6 +1154,7 @@ export const designPrototypes = pgTable('design_prototypes', {
   featureIndex: integer('feature_index').notNull(),
   authorId: text('author_id').notNull(),
   model: text('model'),
+  effort: text('effort').$type<EffortLevel>(),
   status: text('status').notNull().default('generating'),
   mockHtml: text('mock_html'),
   mockVersion: integer('mock_version').notNull().default(1),
@@ -1483,6 +1509,8 @@ export const featureRequests = pgTable('feature_requests', {
   interviewId: uuid('interview_id').references(() => interviews.id, { onDelete: 'set null' }),
   submittedBy: text('submitted_by').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
   sourceProject: text('source_project').notNull(),
+  assignedToOid: text('assigned_to_oid').references(() => appUsers.oid, { onDelete: 'set null' }),
+  assignedToApex: boolean('assigned_to_apex').notNull().default(false),
   status: text('status').notNull().default('new'),
   aiStatus: text('ai_status').notNull().default('pending'),
   aiPriority: text('ai_priority'),
@@ -1500,6 +1528,13 @@ export const featureRequests = pgTable('feature_requests', {
   typeStatusCreatedIdx: index('idx_feature_requests_type_status_created').on(t.type, t.status, t.createdAt),
   submittedByIdx: index('idx_feature_requests_submitted_by').on(t.submittedBy),
   sourceProjectIdx: index('idx_feature_requests_source_project').on(t.sourceProject),
+  assignedToOidIdx: index('idx_feature_requests_assigned_to_oid')
+    .on(t.assignedToOid)
+    .where(sql`${t.assignedToOid} IS NOT NULL`),
+  exclusiveAssigneeCheck: check(
+    'feature_requests_exclusive_assignee_check',
+    sql`(${t.assignedToOid} IS NOT NULL)::integer + (${t.assignedToApex} = TRUE)::integer <= 1`,
+  ),
 }));
 
 export const featureRequestAdrs = pgTable('feature_request_adrs', {
@@ -1520,6 +1555,10 @@ export const featureRequestsRelations = relations(featureRequests, ({ one, many 
   }),
   submitter: one(appUsers, {
     fields: [featureRequests.submittedBy],
+    references: [appUsers.oid],
+  }),
+  assignee: one(appUsers, {
+    fields: [featureRequests.assignedToOid],
     references: [appUsers.oid],
   }),
   adrLinks: many(featureRequestAdrs),
@@ -1658,7 +1697,7 @@ export const agentRuns = pgTable('agent_runs', {
   ),
   terminalReasonCheck: check(
     'agent_runs_terminal_reason_check',
-    sql`${t.terminalReason} IS NULL OR ${t.terminalReason} IN ('worker_lost', 'progress_timeout', 'queue_ttl', 'forced_cancel')`,
+    sql`${t.terminalReason} IS NULL OR ${t.terminalReason} IN ('worker_lost', 'progress_timeout', 'queue_ttl', 'forced_cancel', 'dispatch_ttl')`,
   ),
   nonTerminalTimeoutCheck: check(
     'agent_runs_non_terminal_timeout_at_check',
@@ -1710,6 +1749,7 @@ export const aiUsageEvents = pgTable('ai_usage_events', {
   id: uuid('id').primaryKey().defaultRandom(),
   provider: text('provider').notNull(),
   modelId: text('model_id').notNull(),
+  effort: text('effort').$type<EffortLevel>(),
   feature: text('feature').notNull(),
   project: text('project').notNull(),
   skillPath: text('skill_path'),
@@ -1866,6 +1906,7 @@ import type {
   ApexWorkItemStatus,
   ApexWorkItemType,
   ApexWorkItemSourceType,
+  ApexWorkItemPriority,
   ApexWorkItemEventAction,
   ApexReleaseStatus,
   ApexWorkItemLinkType,
@@ -1895,7 +1936,12 @@ export const apexWorkItems = pgTable('apex_work_items', {
   outcome: text('outcome').notNull().default(''),
   type: text('type').$type<ApexWorkItemType>().notNull(),
   status: text('status').$type<ApexWorkItemStatus>().notNull().default('idea'),
-  ownerOid: text('owner_oid').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  ownerOid: text('owner_oid').references(() => appUsers.oid, { onDelete: 'restrict' }),
+  assignedToApex: boolean('assigned_to_apex').notNull().default(false),
+  priority: text('priority').$type<ApexWorkItemPriority>(),
+  priorityRank: integer('priority_rank'),
+  aiPriorityRationale: text('ai_priority_rationale'),
+  aiRankedAt: timestamp('ai_ranked_at', { withTimezone: true, mode: 'string' }),
   acceptanceCriteria: jsonb('acceptance_criteria').$type<AcceptanceCriterion[]>().notNull().default([]),
   branch: text('branch'),
   prUrl: text('pr_url'),
@@ -1925,6 +1971,7 @@ export const apexWorkItems = pgTable('apex_work_items', {
   statusPosIdx: index('idx_apex_work_items_status_pos').on(t.status, t.position),
   projectStatusPosIdx: index('idx_apex_work_items_project_status_pos').on(t.project, t.status, t.position),
   projectOwnerIdx: index('idx_apex_work_items_project_owner').on(t.project, t.ownerOid),
+  projectPriorityRankIdx: index('idx_apex_work_items_project_priority_rank').on(t.project, t.priorityRank),
   projectItemNumberIdx: uniqueIndex('idx_apex_work_items_project_item_number').on(t.project, t.itemNumber),
   projectAdoIdx: uniqueIndex('idx_apex_work_items_project_ado')
     .on(t.project, t.adoWorkItemId)
@@ -2480,6 +2527,7 @@ import type {
   FoundationSkillAuditAction,
   FoundationSkillCompatibilityStatus,
   FoundationSkillArtifactManifest,
+  FoundationSkillProjectNotes,
 } from '../../shared/types/foundationSkills';
 
 export const foundationSkillReleases = pgTable('foundation_skill_releases', {
@@ -2497,6 +2545,7 @@ export const foundationSkillReleases = pgTable('foundation_skill_releases', {
   manifestSnapshot:    jsonb('manifest_snapshot').$type<FoundationSkillArtifactManifest>(),
   releaseNotes:        text('release_notes'),
   breakingChanges:     text('breaking_changes'),
+  projectNotes:        jsonb('project_notes').$type<Record<string, FoundationSkillProjectNotes>>().notNull().default({}),
   publishedBy:         text('published_by'),
   publishedAt:         timestamp('published_at', { withTimezone: true, mode: 'string' }),
   deprecatedBy:        text('deprecated_by'),

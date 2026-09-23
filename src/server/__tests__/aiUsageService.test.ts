@@ -192,7 +192,11 @@ describe('aiUsageService', () => {
       pricingLimit.mockResolvedValue([pricingRow('composer-2.5')]);
 
       await recordCursorChatUsage({
-        kickoff: { skillPath: '.cursor/skills/grill-with-docs/SKILL.md', project: 'Apex' },
+        kickoff: {
+          skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+          project: 'Apex',
+          effort: 'medium',
+        },
         modelId: 'composer-2.5',
         threadId: 'thread-9',
         runId: 'run-9',
@@ -207,6 +211,7 @@ describe('aiUsageService', () => {
         expect.objectContaining({
           provider: 'cursor',
           modelId: 'composer-2.5',
+          effort: 'medium',
           feature: 'interview',
           project: 'Apex',
           threadId: 'thread-9',

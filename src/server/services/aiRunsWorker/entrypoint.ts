@@ -7,7 +7,8 @@
 import { DefaultAzureCredential } from '@azure/identity';
 import type { DispatchMessage } from '../../../shared/types/agentRunAdmission';
 import { getAiRunnerCallbackToken } from '../aiRunsCallbackToken';
-import { createAiRunsCallbackClient } from './callbackClient';
+import { exitAfterFlush } from '../../utils/processExit';
+import { AiRunCallbackError, createAiRunsCallbackClient } from './callbackClient';
 import { createLocalCursorExecution } from './cursorExecution';
 import { createAiRunsWorker } from './worker';
 import {
@@ -145,11 +146,24 @@ export async function main(): Promise<void> {
 }
 
 if (require.main === module) {
-  main().catch((error) => {
-    console.error(JSON.stringify({
-      event: 'AiRunsWorkerFatal',
-      errorType: error instanceof Error ? error.name : 'UnknownError',
-    }));
-    process.exitCode = 1;
-  });
+  // One message per execution, so the replica has to be released as soon as the
+  // outcome is recorded — see exitAfterFlush for why returning from main() is
+  // not enough on its own.
+  main()
+    .then(() => exitAfterFlush(0))
+    .catch((error) => {
+      // Callback failures are the common fatal path and the error name alone
+      // cannot distinguish a rejected token from an overloaded API, so report the
+      // structured status/code. Free-form messages stay out: they can echo
+      // request headers.
+      const callbackError = error instanceof AiRunCallbackError ? error : null;
+      console.error(JSON.stringify({
+        event: 'AiRunsWorkerFatal',
+        errorType: error instanceof Error ? error.name : 'UnknownError',
+        ...(callbackError
+          ? { callbackStatus: callbackError.status, callbackCode: callbackError.code }
+          : {}),
+      }));
+      return exitAfterFlush(1);
+    });
 }

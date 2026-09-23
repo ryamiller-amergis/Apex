@@ -3,6 +3,7 @@ import { db } from '../db/drizzle';
 import { interviews, prds } from '../db/schema';
 import type { Interview, InterviewStatus, InterviewSummary, PrdSummary } from '../../shared/types/interview';
 import type { PrdStatus } from '../../shared/types/interview';
+import type { EffortLevel } from '../../shared/types/effort';
 import { cancelRun, markAsInterviewThread } from './chatAgentService';
 import { createNotification } from './notificationService';
 import { getSkillSettingsName } from './projectSettingsService';
@@ -26,6 +27,7 @@ export async function createInterview(opts: {
   title?: string;
   chatThreadId: string;
   model?: string;
+  effort?: EffortLevel;
   skillSettingsId?: string | null;
   prdOwnerId?: string;
   designDocOwnerId?: string;
@@ -50,6 +52,7 @@ export async function createInterview(opts: {
       project: opts.project,
       repo: opts.repo,
       model: opts.model ?? null,
+      effort: opts.effort ?? null,
       skillSettingsId: opts.skillSettingsId ?? null,
       status: 'in_progress',
       prdOwnerId: opts.prdOwnerId ?? null,
@@ -187,6 +190,7 @@ export async function listInterviews(
       project: interviews.project,
       repo: interviews.repo,
       model: interviews.model,
+      effort: interviews.effort,
       status: interviews.status,
       prdOwnerId: interviews.prdOwnerId,
       designDocOwnerId: interviews.designDocOwnerId,
@@ -224,6 +228,7 @@ export async function listInterviews(
     project: row.project,
     repo: row.repo,
     model: row.model ?? undefined,
+    effort: row.effort ?? undefined,
     status: row.status as InterviewStatus,
     prdCount: prdCountMap.get(row.id) ?? 0,
     prdOwnerId: row.prdOwnerId ?? undefined,
@@ -260,6 +265,7 @@ export async function getInterview(id: string): Promise<Interview | null> {
     project: p.project,
     title: p.title,
     model: p.model ?? undefined,
+    effort: p.effort ?? undefined,
     status: p.status as PrdStatus,
     reviewerId: p.reviewerId ?? undefined,
     reviewComment: p.reviewComment ?? undefined,
@@ -276,6 +282,7 @@ export async function getInterview(id: string): Promise<Interview | null> {
     project: row.project,
     repo: row.repo,
     model: row.model ?? undefined,
+    effort: row.effort ?? undefined,
     status: row.status as InterviewStatus,
     prdCount: row.prds.length,
     prdOwnerId: row.prdOwnerId ?? undefined,

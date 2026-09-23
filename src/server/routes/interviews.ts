@@ -100,7 +100,7 @@ import {
   markValidationReady,
   overrideDesignDocValidation,
 } from '../services/designDocService';
-import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, updateThreadKickoffContext, sendMessage } from '../services/chatAgentService';
+import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, getThreadAsync, updateThreadKickoffContext, sendMessage } from '../services/chatAgentService';
 import { propagatePipelineGrounding } from '../services/runGroundingService';
 import { getApproverPoolForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
@@ -244,7 +244,8 @@ router.post('/', requirePermission('interviews:manage'), requireGroupMembership(
     }
     // @feature-flag:project-repository-checkout-readiness end
 
-    const result = await createInterview({ userId, project, repo, title, chatThreadId, model, skillSettingsId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds, prototypeStageEnabled, testCasesEnabled });
+    const sourceThread = await getThreadAsync(chatThreadId);
+    const result = await createInterview({ userId, project, repo, title, chatThreadId, model, effort: sourceThread?.kickoff.effort, skillSettingsId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds, prototypeStageEnabled, testCasesEnabled });
     res.status(201).json(result);
   } catch (err) {
     console.error('[interviews] POST / failed:', err);
@@ -748,6 +749,7 @@ async function startDesignDocsForApprovedPrd(
         userId,
         {
           project: prd.project,
+          agentModule: 'designDoc',
           repo: skillConfig?.skillRepo ?? prd.project,
           branch: skillConfig?.skillBranch ?? 'main',
           skillProvider: skillConfig?.skillProvider ?? undefined,
@@ -770,6 +772,7 @@ async function startDesignDocsForApprovedPrd(
         featureIndex,
         title: featureTitle,
         model,
+        effort: thread.kickoff.effort,
         skillSettingsId: prd.skillSettingsId ?? null,
       });
 
@@ -998,6 +1001,7 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
 
     const thread = await createThread(userId, {
       project: prd.project,
+      agentModule: 'prdAssistant',
       repo: skillConfig?.skillRepo ?? prd.project,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider ?? undefined,
@@ -1880,6 +1884,7 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
     // Create with auto-kickoff disabled — persist DB state first, then fire the agent.
     const thread = await createThread(userId, {
       project: doc.project,
+      agentModule: 'designDoc',
       repo: skillConfig?.skillRepo ?? doc.project,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider ?? undefined,
@@ -2031,6 +2036,7 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
 
     const thread = await createThread(userId, {
       project: doc.project,
+      agentModule: 'designDocAssistant',
       repo: skillConfig?.skillRepo ?? doc.project,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider ?? undefined,
@@ -3280,6 +3286,7 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
       chatThreadId,
       title,
       model,
+      effort: (await getThreadAsync(chatThreadId))?.kickoff.effort,
       skillSettingsId: interview.skillSettingsId ?? null,
     });
     // Return immediately so the client can navigate to the generating skeleton.

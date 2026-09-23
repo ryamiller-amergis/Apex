@@ -46,6 +46,7 @@ import { FixValidationPanel } from './FixValidationPanel';
 import { ApexFixRunningBanner } from './ApexFixRunningBanner';
 import type { ContentSnapshot, GapChangeEntry } from './FixValidationPanel';
 import type { DesignDocStatus, ValidationScorecardGap, ValidationScorecard, ValidationScorecardFeature } from '../../shared/types/interview';
+import { effortLabel } from '../../shared/utils/effort';
 import {
   collectValidationGaps,
   designDocFeatureSectionScore,
@@ -2188,6 +2189,12 @@ export const DesignDocReviewView: React.FC = () => {
                 <span className={styles.metaItem}>
                   <span className={styles.metaLabel}>Model:</span>
                   <span className={styles.metaValue}>{doc.model}</span>
+                </span>
+              )}
+              {doc.effort && (
+                <span className={styles.metaItem}>
+                  <span className={styles.metaLabel}>Effort:</span>
+                  <span className={styles.metaValue}>{effortLabel(doc.effort)}</span>
                 </span>
               )}
               {doc.skillSettingsName && (

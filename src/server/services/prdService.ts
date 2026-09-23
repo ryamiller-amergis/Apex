@@ -8,6 +8,7 @@ const authorUser = alias(appUsers, 'author_user');
 const prdOwnerUser = alias(appUsers, 'prd_owner_user');
 import type { Prd, PrdStatus, PrdSummary, PrdValidationBaseline, PrdReadinessOverride, ReviewPrdRequest, TestCaseSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { CreatePrdAdoItemsRequest, CreatePrdAdoItemsResponse, SelectedBacklogEpic, SelectedBacklogFeature, SelectedBacklogPBI, GlobalBusinessRule, DependencyGraphNode } from '../../shared/types/interview';
+import type { EffortLevel } from '../../shared/types/effort';
 import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread, cancelRun, prepareBackgroundWorkflowTurn, isThreadIdle, hydrateThread } from './chatAgentService';
 import { isThreadRunAlive } from './agentRunReaperService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
@@ -183,6 +184,7 @@ export async function createPrd(opts: {
   chatThreadId: string;
   title?: string;
   model?: string;
+  effort?: EffortLevel;
   skillSettingsId?: string | null;
 }): Promise<{ prdId: string; threadId: string }> {
   // Insert only — never await grounding/materialization here. Interview "Generate
@@ -198,6 +200,7 @@ export async function createPrd(opts: {
       authorId: opts.userId,
       title: opts.title ?? 'Untitled PRD',
       model: opts.model ?? null,
+      effort: opts.effort ?? null,
       skillSettingsId: opts.skillSettingsId ?? null,
       content: '',
       status: 'generating',
@@ -1028,6 +1031,7 @@ function rowToPrdSummary(
     project: row.project,
     title: row.title,
     model: row.model ?? undefined,
+    effort: row.effort ?? undefined,
     skillSettingsId: row.skillSettingsId ?? null,
     skillSettingsName: skillSettingsName ?? null,
     status: row.status as PrdStatus,
@@ -2113,12 +2117,14 @@ export async function triggerFixPrdValidation(
 
     const thread = await createChatThread(userId, {
       project: prd.project,
+      agentModule: 'prdAssistant',
       repo: skillConfig?.skillRepo ?? prd.project,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider ?? undefined,
       skillPath: skillConfig?.prdAssistantSkillPath ?? undefined,
       freeformContext: context,
       model,
+      assistantType: 'prd',
       skillSettingsId: prd.skillSettingsId ?? skillConfig?.id ?? null,
     }, { skipAutoKickoff: true });
 
@@ -2333,12 +2339,14 @@ export async function triggerFixCoverageGaps(
 
     const thread = await createChatThread(userId, {
       project: prd.project,
+      agentModule: 'prdAssistant',
       repo: skillConfig?.skillRepo ?? prd.project,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider ?? undefined,
       skillPath: skillConfig?.prdAssistantSkillPath ?? undefined,
       freeformContext: context,
       model,
+      assistantType: 'prd',
       skillSettingsId: prd.skillSettingsId ?? skillConfig?.id ?? null,
     }, { skipAutoKickoff: true });
 

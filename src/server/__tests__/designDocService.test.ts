@@ -36,6 +36,7 @@ jest.mock('../db/drizzle', () => {
         interviews: { findFirst: jest.fn() },
         designPlans: { findFirst: jest.fn() },
         designPrototypes: { findFirst: jest.fn() },
+        agentRuns: { findFirst: jest.fn() },
       },
       insert: jest.fn().mockImplementation(makeInsertChain),
       update: jest.fn().mockImplementation(makeUpdateChain),
@@ -53,6 +54,7 @@ jest.mock('../services/chatAgentService', () => ({
   readOutputValidationScorecardMd: jest.fn().mockReturnValue(null),
   readAllOutputDesignDocFeatures: jest.fn().mockReturnValue([]),
   isThreadIdle: jest.fn().mockReturnValue(false),
+  isOutputWorkspaceReadable: jest.fn().mockReturnValue(true),
   createThread: jest.fn(),
   sendMessage: jest.fn().mockResolvedValue(undefined),
   prepareBackgroundWorkflowTurn: jest.fn().mockResolvedValue({
@@ -104,6 +106,9 @@ jest.mock('../services/runGroundingService', () => ({
 jest.mock('../services/agentRunReaperService', () => ({
   isThreadRunAlive: jest.fn().mockResolvedValue(false),
   canThisInstanceFailGeneration: jest.fn().mockResolvedValue(true),
+  // No row means the watcher charges the tick, matching a doc whose run never
+  // materialized. Tests that exercise the queue wait override this.
+  getLatestThreadRun: jest.fn().mockResolvedValue(null),
 }));
 
 jest.mock('../utils/rbacHelpers', () => ({
@@ -155,6 +160,7 @@ import {
   startDesignDocWatcher,
   startSingleFeatureDocWatcher,
   startSingleFeatureDesignDocWatcher,
+  startValidationWatcher,
   finalizeSingleFeatureDoc,
   isSingleFeatureDesignDocRow,
 } from '../services/designDocService';
@@ -256,6 +262,7 @@ describe('createDesignDoc', () => {
       userId: 'user-1',
       chatThreadId: 'thread-abc',
       title: 'My Design Doc',
+      effort: 'high',
     });
 
     expect(result).toEqual({ designDocId: 'doc-new' });
@@ -265,6 +272,7 @@ describe('createDesignDoc', () => {
         authorId: 'user-1',
         chatThreadId: 'thread-abc',
         title: 'My Design Doc',
+        effort: 'high',
         status: 'generating',
         designContent: '',
         techSpecContent: '',
@@ -1414,11 +1422,24 @@ describe('startDesignDocWatcher', () => {
 describe('startSingleFeatureDocWatcher', () => {
   const { isThreadIdle: mockIsThreadIdle } =
     jest.requireMock('../services/chatAgentService') as { isThreadIdle: jest.Mock };
-  const { isThreadRunAlive: mockIsThreadRunAlive, canThisInstanceFailGeneration: mockCanFail } =
-    jest.requireMock('../services/agentRunReaperService') as {
+  const {
+    isThreadRunAlive: mockIsThreadRunAlive,
+    canThisInstanceFailGeneration: mockCanFail,
+    getLatestThreadRun: mockLatestRun,
+  } = jest.requireMock('../services/agentRunReaperService') as {
       isThreadRunAlive: jest.Mock;
       canThisInstanceFailGeneration: jest.Mock;
+      getLatestThreadRun: jest.Mock;
     };
+
+  function runRow(status: string) {
+    return {
+      status,
+      ownerInstance: null,
+      updatedAt: '2026-08-06T00:00:00.000Z',
+      timeoutAt: null,
+    };
+  }
   const {
     readOutputDesignDoc: mockDesign,
     readOutputTechSpec: mockTech,
@@ -1437,11 +1458,21 @@ describe('startSingleFeatureDocWatcher', () => {
     mockAssumptions.mockReturnValue(null);
     mockIsThreadIdle.mockReturnValue(true);
     mockCanFail.mockResolvedValue(true);
+    mockLatestRun.mockResolvedValue(null);
   });
 
   afterEach(() => {
     jest.useRealTimers();
   });
+
+  // The fail path awaits the doc guard, the run's terminal reason, and the
+  // grounding write before the status update lands, so counting hops by hand
+  // breaks whenever one more await joins the chain.
+  async function flushPendingWork(): Promise<void> {
+    for (let hop = 0; hop < 10; hop += 1) {
+      await Promise.resolve();
+    }
+  }
 
   it('does not fail generation while agent_runs says the run is still alive', async () => {
     mockIsThreadRunAlive.mockResolvedValue(true);
@@ -1474,13 +1505,79 @@ describe('startSingleFeatureDocWatcher', () => {
     startSingleFeatureDocWatcher('doc-1', 'thread-1', 'prd-1', 'proj-alpha');
 
     jest.advanceTimersByTime(5_000);
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushPendingWork();
 
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'generation_failed' }),
     );
+  });
+
+  it('saves output the recovery sweep cleared while the watcher was waiting to write', async () => {
+    // Production sequence: all three files present at 18:43:55, gone at
+    // 18:44:09, generation_failed at 18:44:11 despite the agent succeeding.
+    mockDesign.mockReturnValue('# design');
+    mockTech.mockReturnValue('# tech spec');
+    mockAssumptions.mockReturnValue('# assumptions');
+    mockIsThreadRunAlive.mockResolvedValue(true);
+    mockCanFail.mockResolvedValue(true);
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'doc-1', skillSettingsId: null });
+    mockDb.query.chatThreads = { findFirst: jest.fn().mockResolvedValue(null) };
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    startSingleFeatureDocWatcher('doc-1', 'thread-1', 'prd-1', 'proj-alpha');
+
+    // Tick one: complete output, but the run still looks alive so the watcher
+    // declines to write. This is where the content has to be captured.
+    jest.advanceTimersByTime(5_000);
+    await flushPendingWork();
+    expect(setMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'generation_failed' }),
+    );
+
+    // The sweep clears the workspace, then the run goes terminal.
+    mockDesign.mockReturnValue(null);
+    mockTech.mockReturnValue(null);
+    mockAssumptions.mockReturnValue(null);
+    mockIsThreadRunAlive.mockResolvedValue(false);
+
+    jest.advanceTimersByTime(5_000);
+    await flushPendingWork();
+
+    const written = setMock.mock.calls
+      .map(([values]) => values as Record<string, unknown>)
+      .find((values) => values.designContent !== undefined);
+    expect(written).toBeDefined();
+    expect(written?.designContent).toBe('# design');
+    expect(written?.techSpecContent).toBe('# tech spec');
+    expect(written?.assumptionsContent).toBe('# assumptions');
+    expect(setMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'generation_failed' }),
+    );
+  });
+
+  it('blames the dispatch, not the agent, when the run never reached a worker', async () => {
+    mockIsThreadRunAlive.mockResolvedValue(false);
+    mockCanFail.mockResolvedValue(true);
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'doc-1', skillSettingsId: null });
+    mockDb.query.agentRuns.findFirst.mockResolvedValue({ terminalReason: 'dispatch_ttl' });
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+    mockDb.query.chatThreads = { findFirst: jest.fn().mockResolvedValue(null) };
+
+    startSingleFeatureDocWatcher('doc-1', 'thread-1', 'prd-1', 'proj-alpha');
+
+    jest.advanceTimersByTime(5_000);
+    await flushPendingWork();
+
+    const recorded = setMock.mock.calls
+      .map(([values]) => values as { status?: string; generationError?: string })
+      .find((values) => values.status === 'generation_failed');
+    expect(recorded?.generationError).toContain('Dispatch never reached a worker');
+    expect(recorded?.generationError).toContain('dispatch_ttl');
+    expect(recorded?.generationError).not.toContain('Missing output files');
   });
 
   it('keeps polling when canFail is false (does not abandon the watcher)', async () => {
@@ -1494,9 +1591,7 @@ describe('startSingleFeatureDocWatcher', () => {
 
     // First tick: not allowed to fail yet — must not mark failed and must keep watching
     jest.advanceTimersByTime(5_000);
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushPendingWork();
 
     expect(setMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ status: 'generation_failed' }),
@@ -1508,12 +1603,89 @@ describe('startSingleFeatureDocWatcher', () => {
     mockDb.query.chatThreads = { findFirst: jest.fn().mockResolvedValue(null) };
 
     jest.advanceTimersByTime(5_000);
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushPendingWork();
 
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'generation_failed' }),
+    );
+  });
+
+  it('times out on the original deadline even while recovery keeps restarting the watcher', async () => {
+    // Regression: the tick counter restarted from zero on every recovery
+    // restart, so the timeout was unreachable and docs stayed in `generating`.
+    mockIsThreadRunAlive.mockResolvedValue(true);
+    mockCanFail.mockResolvedValue(false);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    startSingleFeatureDocWatcher('doc-deadline', 'thread-deadline', 'prd-1', 'proj-alpha');
+
+    // Restart on the one-minute cadence startup recovery uses.
+    for (let minute = 0; minute < 31; minute += 1) {
+      await jest.advanceTimersByTimeAsync(60_000);
+      startSingleFeatureDocWatcher('doc-deadline', 'thread-deadline', 'prd-1', 'proj-alpha');
+    }
+    await jest.advanceTimersByTimeAsync(5_000);
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'generation_failed',
+        generationError: 'Generation timed out',
+      }),
+    );
+  });
+
+  it('does not spend the budget while the doc is still waiting for a worker', async () => {
+    // Approving a PRD submits more docs than the lane runs at once, so a doc can
+    // wait longer than it takes to generate. Charging that wait to the agent
+    // expired docs no worker had opened yet.
+    mockIsThreadRunAlive.mockResolvedValue(true);
+    mockCanFail.mockResolvedValue(false);
+    mockLatestRun.mockResolvedValue(runRow('queued'));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    startSingleFeatureDocWatcher('doc-queued', 'thread-queued', 'prd-1', 'proj-alpha');
+
+    // Twice the whole budget, every tick of it spent queued.
+    await jest.advanceTimersByTimeAsync(60 * 60_000);
+
+    expect(setMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'generation_failed' }),
+    );
+  });
+
+  it('gives the agent the full budget once a worker picks the doc up', async () => {
+    mockIsThreadRunAlive.mockResolvedValue(true);
+    mockCanFail.mockResolvedValue(false);
+    mockLatestRun.mockResolvedValue(runRow('queued'));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    startSingleFeatureDocWatcher('doc-late', 'thread-late', 'prd-1', 'proj-alpha');
+
+    // A full budget's worth of queue wait costs the agent nothing.
+    await jest.advanceTimersByTimeAsync(30 * 60_000);
+    expect(setMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'generation_failed' }),
+    );
+
+    // Only now does the clock start, and it runs for the whole budget.
+    mockLatestRun.mockResolvedValue(runRow('running'));
+    await jest.advanceTimersByTimeAsync(30 * 60_000 - 10_000);
+    expect(setMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'generation_failed' }),
+    );
+
+    await jest.advanceTimersByTimeAsync(10_000);
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'generation_failed',
+        generationError: 'Generation timed out',
+      }),
     );
   });
 
@@ -1586,6 +1758,69 @@ describe('startSingleFeatureDocWatcher', () => {
         designContent: '# Design',
         techSpecContent: '# Tech',
         assumptionsContent: '# Assumptions',
+      }),
+    );
+  });
+});
+
+describe('startValidationWatcher', () => {
+  const {
+    readOutputValidationScorecard: mockScorecard,
+    isThreadIdle: mockIsThreadIdle,
+    isOutputWorkspaceReadable: mockReadable,
+  } = jest.requireMock('../services/chatAgentService') as {
+    readOutputValidationScorecard: jest.Mock;
+    isThreadIdle: jest.Mock;
+    isOutputWorkspaceReadable: jest.Mock;
+  };
+  const {
+    isThreadRunAlive: mockIsThreadRunAlive,
+    canThisInstanceFailGeneration: mockCanFail,
+  } = jest.requireMock('../services/agentRunReaperService') as {
+    isThreadRunAlive: jest.Mock;
+    canThisInstanceFailGeneration: jest.Mock;
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    mockScorecard.mockReturnValue(null);
+    mockIsThreadIdle.mockReturnValue(true);
+    mockIsThreadRunAlive.mockResolvedValue(false);
+    mockCanFail.mockResolvedValue(true);
+    mockReadable.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('waits rather than blaming the agent when the workspace cannot be read', async () => {
+    // A thread that has not hydrated has no workspace, so the scorecard read
+    // returns null for the same reason whether or not the agent wrote one.
+    mockReadable.mockReturnValue(false);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    startValidationWatcher('doc-unreadable', 'thread-unreadable');
+    await jest.advanceTimersByTimeAsync(60_000);
+
+    expect(setMock).not.toHaveBeenCalled();
+  });
+
+  it('records the missing scorecard once the workspace is readable', async () => {
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    startValidationWatcher('doc-noscorecard', 'thread-noscorecard');
+    await jest.advanceTimersByTimeAsync(5_000);
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'pending_review',
+        validationScorecard: expect.anything(),
       }),
     );
   });
@@ -1825,7 +2060,7 @@ describe('startSingleFeatureDesignDocWatcher — routing context injection', () 
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
 
-    mockCreateThread.mockResolvedValue({ id: 'thread-new' });
+    mockCreateThread.mockResolvedValue({ id: 'thread-new', kickoff: {} });
   }
 
   beforeEach(() => {

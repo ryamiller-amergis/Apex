@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useId } from 'react';
+import React, { useState, useRef, useMemo, useEffect, useId } from 'react';
 import {
   useFoundationSkillReleases,
   useFoundationSkillCandidates,
@@ -27,6 +27,7 @@ import type {
   FoundationSkillCatalogEntry,
   FoundationSkillTeamRepo,
   FoundationSkillReleaseValidationIssue,
+  FoundationSkillProjectNotes,
 } from '../../shared/types/foundationSkills';
 import {
   alwaysInstallSkillsFromCatalog,
@@ -1019,6 +1020,103 @@ const ProjectSkillAssignment: React.FC<{
   );
 };
 
+// ── ProjectNotesEditor — per-project release notes ───────────────────────────
+
+const EMPTY_PROJECT_NOTES: FoundationSkillProjectNotes = {
+  releaseNotes: null,
+  breakingChanges: null,
+};
+
+/** Drops blank entries and any project no longer in the audience. */
+function pruneProjectNotes(
+  notes: Record<string, FoundationSkillProjectNotes>,
+  projects: string[]
+): Record<string, FoundationSkillProjectNotes> {
+  const out: Record<string, FoundationSkillProjectNotes> = {};
+  for (const project of projects) {
+    const releaseNotes = notes[project]?.releaseNotes?.trim() || null;
+    const breakingChanges = notes[project]?.breakingChanges?.trim() || null;
+    if (releaseNotes || breakingChanges) {
+      out[project] = { releaseNotes, breakingChanges };
+    }
+  }
+  return out;
+}
+
+const ProjectNotesEditor: React.FC<{
+  projects: string[];
+  projectNotes: Record<string, FoundationSkillProjectNotes>;
+  onChange: (project: string, notes: FoundationSkillProjectNotes) => void;
+  idPrefix: string;
+}> = ({ projects, projectNotes, onChange, idPrefix }) => {
+  if (projects.length === 0) {
+    return (
+      <p className={styles.fieldHint}>
+        Choose specific projects to write notes for each one. Teams never see
+        the release notes above — those stay in Platform Admin.
+      </p>
+    );
+  }
+
+  return (
+    <div className={styles.projectSkillAssignment}>
+      {projects.map((project) => {
+        const notes = projectNotes[project] ?? EMPTY_PROJECT_NOTES;
+        return (
+          <div key={project} className={styles.projectSkillCard}>
+            <div className={styles.projectSkillCardBody}>
+              <div className={styles.formRow}>
+                <label
+                  className={styles.label}
+                  htmlFor={`${idPrefix}-project-notes-${project}`}
+                >
+                  {project} — release notes
+                </label>
+                <textarea
+                  id={`${idPrefix}-project-notes-${project}`}
+                  className={styles.textarea}
+                  rows={3}
+                  value={notes.releaseNotes ?? ''}
+                  onChange={(e) =>
+                    onChange(project, {
+                      ...notes,
+                      releaseNotes: e.target.value || null,
+                    })
+                  }
+                  placeholder={`What changed for ${project}?`}
+                  {...{ 'data-testid': `fs-project-notes-${project}` }}
+                />
+              </div>
+              <div className={styles.formRow}>
+                <label
+                  className={styles.label}
+                  htmlFor={`${idPrefix}-project-breaking-${project}`}
+                >
+                  {project} — breaking changes
+                </label>
+                <textarea
+                  id={`${idPrefix}-project-breaking-${project}`}
+                  className={styles.textarea}
+                  rows={2}
+                  value={notes.breakingChanges ?? ''}
+                  onChange={(e) =>
+                    onChange(project, {
+                      ...notes,
+                      breakingChanges: e.target.value || null,
+                    })
+                  }
+                  placeholder={`Manual work ${project} must do`}
+                  {...{ 'data-testid': `fs-project-breaking-${project}` }}
+                />
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 // ── CreateReleaseWizard ───────────────────────────────────────────────────────
 
 type WizardStep = 'details' | 'audience' | 'skills' | 'review';
@@ -1075,6 +1173,9 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({
   >([]);
   const [projectSkillPicks, setProjectSkillPicks] = useState<
     Record<string, string[]>
+  >({});
+  const [projectNotes, setProjectNotes] = useState<
+    Record<string, FoundationSkillProjectNotes>
   >({});
   const [error, setError] = useState<string | null>(null);
 
@@ -1259,6 +1360,10 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({
         skillTargets: selectedSkillTargets,
         releaseNotes: releaseNotes.trim() || null,
         breakingChanges: breakingChanges.trim() || null,
+        projectNotes: pruneProjectNotes(
+          projectNotes,
+          audienceMode === 'specific' ? selectedProjects : []
+        ),
       });
       const nextCandidate = candidates[0]?.version ?? '';
       setVersion(nextCandidate);
@@ -1270,6 +1375,7 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({
       setSelected([]);
       setExplicitSelectedSkills(catalog.map((s) => s.name));
       setProjectSkillPicks({});
+      setProjectNotes({});
       setStep('details');
       onCreated();
     } catch (err: unknown) {
@@ -1459,8 +1565,8 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({
                 {...{ 'data-testid': 'fs-wizard-breaking' }}
               />
               <p className={styles.fieldHint}>
-                Filling this in flags the release as breaking in every
-                team&apos;s update banner.
+                These notes stay in Platform Admin. Write what each team sees —
+                including breaking changes — on the Audience step.
               </p>
             </div>
           </div>
@@ -1480,6 +1586,19 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({
               idPrefix="fs"
               {...{ 'data-testid': 'fs-wizard-audience-field' }}
             />
+
+            <div className={styles.formRow}>
+              <span className={styles.label}>Notes for each project</span>
+              <ProjectNotesEditor
+                projects={audienceMode === 'specific' ? selectedProjects : []}
+                projectNotes={projectNotes}
+                onChange={(project, notes) =>
+                  setProjectNotes((prev) => ({ ...prev, [project]: notes }))
+                }
+                idPrefix="fs-wizard"
+                {...{ 'data-testid': 'fs-wizard-project-notes' }}
+              />
+            </div>
           </div>
         )}
 
@@ -1878,6 +1997,8 @@ const EditReleasePanel: React.FC<{
   isSaving: boolean;
 }> = ({ release, onSave, onCancel, isSaving }) => {
   const isDraft = release.status === 'draft';
+  // Audience is DB-only metadata, so a published release can still be retargeted.
+  const canEditAudience = isDraft || release.status === 'published';
 
   const [version, setVersion] = useState(release.version);
   const [artifactVersion, setArtifact] = useState(release.artifactVersion);
@@ -1897,24 +2018,43 @@ const EditReleasePanel: React.FC<{
   const [projectSkillPicks, setProjectSkillPicks] = useState<
     Record<string, string[]>
   >(() => seedProjectPicksFromRelease(release));
+  const [projectNotes, setProjectNotes] = useState<
+    Record<string, FoundationSkillProjectNotes>
+  >(release.projectNotes ?? {});
 
   const seededRef = useRef(false);
 
   const { skills: catalog, isLoading: catalogLoading } =
     useShippableFoundationSkills();
 
+  // A published release ships a fixed skill set, so only those skills can be retargeted.
+  // Skills dropped from the current catalog still need an entry to stay assignable.
+  const editableCatalog = useMemo<FoundationSkillCatalogEntry[]>(() => {
+    if (isDraft) return catalog;
+    const byName = new Map(catalog.map((s) => [s.name, s]));
+    return (release.selectedSkills ?? []).map(
+      (name) =>
+        byName.get(name) ?? {
+          name,
+          summary: '',
+          tier: 'shippable' as const,
+          dependsOn: [],
+        }
+    );
+  }, [catalog, isDraft, release.selectedSkills]);
+
   // Older releases predate per-skill selection; fall back to "everything".
   useEffect(() => {
-    if (seededRef.current || catalog.length === 0) return;
+    if (seededRef.current || editableCatalog.length === 0) return;
     seededRef.current = true;
     if (!release.selectedSkills?.length)
-      setExplicitSelectedSkills(catalog.map((s) => s.name));
-  }, [catalog, release.selectedSkills]);
+      setExplicitSelectedSkills(editableCatalog.map((s) => s.name));
+  }, [editableCatalog, release.selectedSkills]);
 
   // Keep per-project pick maps aligned when the project list changes while editing.
   useEffect(() => {
-    if (audienceMode !== 'specific' || catalog.length === 0) return;
-    const allNames = catalog.map((s) => s.name);
+    if (audienceMode !== 'specific' || editableCatalog.length === 0) return;
+    const allNames = editableCatalog.map((s) => s.name);
     setProjectSkillPicks((prev) => {
       const next: Record<string, string[]> = {};
       let changed = Object.keys(prev).some(
@@ -1932,14 +2072,14 @@ const EditReleasePanel: React.FC<{
         ? next
         : prev;
     });
-  }, [audienceMode, selectedProjects, catalog]);
+  }, [audienceMode, selectedProjects, editableCatalog]);
 
   const allModeSelection = resolveFoundationSkillSelection(
-    catalog,
+    editableCatalog,
     explicitSelectedSkills
   );
   const projectAssignment = resolveProjectAssignment(
-    catalog,
+    editableCatalog,
     selectedProjects,
     projectSkillPicks
   );
@@ -1959,10 +2099,17 @@ const EditReleasePanel: React.FC<{
   const selectedSkillTargets =
     audienceMode === 'specific' ? projectAssignment.skillTargets : {};
 
+  const unassignedSkills =
+    canEditAudience && !isDraft && audienceMode === 'specific'
+      ? (release.selectedSkills ?? []).filter(
+          (name) => !selectionState.effectiveSelectedSkills.includes(name)
+        )
+      : [];
+
   const handleSave = async () => {
     setLocalErr(null);
     if (
-      isDraft &&
+      canEditAudience &&
       audienceMode === 'specific' &&
       selectedProjects.length === 0
     ) {
@@ -1973,16 +2120,28 @@ const EditReleasePanel: React.FC<{
       setLocalErr('At least one skill must be selected.');
       return;
     }
+    if (unassignedSkills.length > 0) {
+      setLocalErr(
+        `A published release keeps its skills: assign ${unassignedSkills.join(', ')} to at least one project, or deprecate this release instead.`
+      );
+      return;
+    }
     await onSave({
       ...(isDraft && {
         version: version.trim(),
         artifactVersion: artifactVersion.trim() || version.trim(),
-        targetProjects: audienceMode === 'specific' ? selectedProjects : [],
         selectedSkills: selectionState.dependencyOrder,
+      }),
+      ...(canEditAudience && {
+        targetProjects: audienceMode === 'specific' ? selectedProjects : [],
         skillTargets: selectedSkillTargets,
       }),
       releaseNotes: notes.trim() || null,
       breakingChanges: breaking.trim() || null,
+      projectNotes: pruneProjectNotes(
+        projectNotes,
+        audienceMode === 'specific' ? selectedProjects : []
+      ),
     });
   };
 
@@ -2028,7 +2187,7 @@ const EditReleasePanel: React.FC<{
         </div>
       )}
 
-      {isDraft && (
+      {canEditAudience && (
         <>
           <AudienceField
             mode={audienceMode}
@@ -2051,8 +2210,8 @@ const EditReleasePanel: React.FC<{
             </span>
             {audienceMode === 'specific' ? (
               <ProjectSkillAssignment
-                catalog={catalog}
-                isCatalogLoading={catalogLoading}
+                catalog={editableCatalog}
+                isCatalogLoading={isDraft && catalogLoading}
                 projects={selectedProjects}
                 projectSkillPicks={projectSkillPicks}
                 onProjectPicksChange={(project, picks) =>
@@ -2068,9 +2227,9 @@ const EditReleasePanel: React.FC<{
                   }))
                 }
               />
-            ) : (
+            ) : isDraft ? (
               <SkillPicker
-                catalog={catalog}
+                catalog={editableCatalog}
                 isCatalogLoading={catalogLoading}
                 explicitSelectedSkills={allModeSelection.explicitSelectedSkills}
                 effectiveSelectedSkills={
@@ -2079,16 +2238,24 @@ const EditReleasePanel: React.FC<{
                 requiredBy={allModeSelection.requiredBy}
                 onSkillToggle={(name) =>
                   setExplicitSelectedSkills((prev) =>
-                    withoutRemovableSkills(catalog, prev, name)
+                    withoutRemovableSkills(editableCatalog, prev, name)
                   )
                 }
                 onSelectAll={() =>
-                  setExplicitSelectedSkills(catalog.map((s) => s.name))
+                  setExplicitSelectedSkills(editableCatalog.map((s) => s.name))
                 }
                 onClearAll={() =>
-                  setExplicitSelectedSkills(lockedAlwaysInstallSkills(catalog))
+                  setExplicitSelectedSkills(
+                    lockedAlwaysInstallSkills(editableCatalog)
+                  )
                 }
               />
+            ) : (
+              <p className={styles.fieldHint}>
+                All {editableCatalog.length} skills in this release are
+                available to every project. Switch to specific projects to
+                narrow the audience.
+              </p>
             )}
           </div>
         </>
@@ -2119,6 +2286,19 @@ const EditReleasePanel: React.FC<{
           onChange={(e) => setBreaking(e.target.value)}
           rows={2}
           {...{ 'data-testid': `fs-edit-breaking-${release.id}` }}
+        />
+      </div>
+
+      <div className={styles.formRow}>
+        <span className={styles.label}>Notes for each project</span>
+        <ProjectNotesEditor
+          projects={audienceMode === 'specific' ? selectedProjects : []}
+          projectNotes={projectNotes}
+          onChange={(project, next) =>
+            setProjectNotes((prev) => ({ ...prev, [project]: next }))
+          }
+          idPrefix={`er-${release.id}`}
+          {...{ 'data-testid': `fs-edit-project-notes-${release.id}` }}
         />
       </div>
 

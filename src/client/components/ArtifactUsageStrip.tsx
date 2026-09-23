@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchEntityUsage } from '../hooks/useArtifactUsage';
 import type { EntityUsageRollup } from '../../shared/types/aiCostAnalytics';
+import { effortLabel } from '../../shared/utils/effort';
 import styles from './ArtifactUsageStrip.module.css';
 
 export function formatUsageTokens(n: number): string {
@@ -116,7 +117,8 @@ export const ArtifactUsageStrip: React.FC<ArtifactUsageStripProps> = ({ endpoint
             >
               <span className={styles.runLabel}>{run.label || 'Agent run'}</span>
               {' · '}
-              {run.modelId} ·{' '}
+              {run.modelId}
+              {run.effort ? ` · ${effortLabel(run.effort)}` : ''} ·{' '}
               {formatUsageTokens(run.inputTokens + run.outputTokens + run.cacheReadTokens)} tokens
               {run.durationMs != null ? ` · ${formatUsageDuration(run.durationMs)}` : ''}
               {` · ${formatUsageCost(run.costUsd)}`}

@@ -35,15 +35,27 @@ jest.mock('../../hooks/useChatThreads', () => ({
   }),
 }));
 
+type MockSkillConfigState = {
+  data: Record<string, unknown> | null | undefined;
+  isLoading: boolean;
+  isError: boolean;
+};
+
+const DEFAULT_MOCK_SKILL_CONFIG: MockSkillConfigState = {
+  data: {
+    quickSkillPills: [{ label: 'Write PRD', skillPath: '/to-prd', model: 'auto' }],
+    quickMcpPills: [{ label: 'ADO', mcpServerName: 'ado', model: 'auto' }],
+  },
+  isLoading: false,
+  isError: false,
+};
+
+let mockSkillConfigState: MockSkillConfigState = DEFAULT_MOCK_SKILL_CONFIG;
+
 jest.mock('../../hooks/useProjectSkillConfig', () => ({
   useAvailableModels: () => ({ data: [], isLoading: false }),
   useGlobalDefaultModel: () => ({ data: { value: 'auto' } }),
-  useProjectSkillConfig: () => ({
-    data: {
-      quickSkillPills: [{ label: 'Write PRD', skillPath: '/to-prd', model: 'auto' }],
-      quickMcpPills: [{ label: 'ADO', mcpServerName: 'ado', model: 'auto' }],
-    },
-  }),
+  useProjectSkillConfig: () => mockSkillConfigState,
 }));
 
 jest.mock('../../hooks/useChatAttachments', () => ({
@@ -125,13 +137,52 @@ const thread: ChatThread = {
 describe('ChatAgentPanel shared Home shell', () => {
   beforeEach(() => {
     global.fetch = jest.fn();
+    localStorage.clear();
     mockSessionOverrides = {};
+    mockSkillConfigState = DEFAULT_MOCK_SKILL_CONFIG;
     mockRetryLast.mockClear();
     mockSend.mockClear();
   });
 
   afterEach(() => {
     (global as unknown as { fetch?: typeof fetch }).fetch = undefined;
+  });
+
+  it('renders Home chat as page layout without drawer controls', () => {
+    render(
+      <ChatAgentPanel
+        thread={null}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+      />,
+    );
+
+    const shell = screen.getByTestId('agent-slideout-shell');
+    expect(shell).toHaveClass('homePanel');
+    expect(shell).not.toHaveAttribute('style');
+    expect(screen.queryByTestId('chat-agent-close-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('chat-agent-width-toggle-btn')).not.toBeInTheDocument();
+    expect(screen.queryByRole('separator', { name: 'Resize panel' })).not.toBeInTheDocument();
+    // The tab strip names the page; the panel keeps no title bar of its own.
+    expect(screen.queryByRole('heading', { name: 'Agent Chat' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('chat-agent-new-chat-btn')).not.toBeInTheDocument();
+  });
+
+  it('offers New on Home only once a conversation is running', () => {
+    render(
+      <ChatAgentPanel
+        thread={thread}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+      />,
+    );
+    expect(screen.getByTestId('chat-agent-new-chat-btn')).toBeInTheDocument();
   });
 
   it('TBI-006 DoD-1 shows Home-only pills and opens full history from the header', () => {
@@ -148,6 +199,9 @@ describe('ChatAgentPanel shared Home shell', () => {
     );
 
     expect(screen.getByTestId('agent-slideout-shell')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-agent-home-hold')).toBeInTheDocument();
+    expect(screen.getByText('What do you want to work on?')).toBeInTheDocument();
+    expect(screen.queryByText('No conversation yet')).not.toBeInTheDocument();
     expect(screen.getByText('Write PRD')).toBeInTheDocument();
     expect(screen.getByText('ADO')).toBeInTheDocument();
     expect(screen.queryByLabelText('Recent Threads')).not.toBeInTheDocument();
@@ -334,14 +388,14 @@ describe('ChatAgentPanel shared Home shell', () => {
 
     expect(screen.queryByText('No conversation yet')).not.toBeInTheDocument();
     expect(screen.getByText('Agent is thinking…')).toBeInTheDocument();
-    expect(screen.getByTestId('chat-agent-skill-pill-to-prd')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByTestId('chat-agent-skill-pill-to-prd')).not.toBeInTheDocument();
     expect(screen.getByTestId('chat-agent-pill-description')).toHaveTextContent(
       'Generate a PRD from interview notes',
     );
     expect(screen.getByTestId('chat-run-spinner')).toBeInTheDocument();
   });
 
-  it('lets an active Home conversation select a skill for its next message', () => {
+  it('hides skill and MCP selection once a Home conversation is active', () => {
     render(
       <ChatAgentPanel
         thread={thread}
@@ -353,11 +407,8 @@ describe('ChatAgentPanel shared Home shell', () => {
       />,
     );
 
-    const skillPill = screen.getByTestId('chat-agent-skill-pill-to-prd');
-    expect(skillPill).toBeEnabled();
-    fireEvent.click(skillPill);
-    expect(skillPill).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByText(/Write PRD selected for the next message/)).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-agent-skill-pill-to-prd')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('chat-agent-mcp-pill-ado')).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByTestId('chat-agent-message-input'), {
       target: { value: 'Summarize the requirements' },
@@ -367,8 +418,32 @@ describe('ChatAgentPanel shared Home shell', () => {
     expect(mockSend).toHaveBeenCalledWith('Summarize the requirements', {
       model: 'auto',
       attachments: [],
-      skill: { name: 'Write PRD', path: '/to-prd' },
     });
+  });
+
+  it('renders streaming output and labels token output as responding', () => {
+    mockSessionOverrides = {
+      streamingText: '**Rendered**\n\n### Live heading',
+      isRunning: true,
+      status: 'running',
+    };
+
+    render(
+      <ChatAgentPanel
+        thread={thread}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+      />,
+    );
+
+    // The shared Jest setup intentionally replaces react-markdown with a text
+    // passthrough; the component integration is covered here without asserting
+    // markup that the test environment removes.
+    expect(screen.getByText(/\*\*Rendered\*\*/)).toBeInTheDocument();
+    expect(screen.getByText('Agent is responding…')).toBeInTheDocument();
   });
 
   it('explains an empty transcript instead of rendering a blank pane', () => {
@@ -430,5 +505,195 @@ describe('ChatAgentPanel shared Home shell', () => {
 
     expect(screen.getByText('○ Connecting…')).toBeInTheDocument();
     expect(screen.queryByTestId('chat-agent-connection-banner')).not.toBeInTheDocument();
+  });
+
+  describe('Home pill access', () => {
+    const BLOCKED_MESSAGE =
+      "You don't have access to any Home skills on this project."
+      + " Ask a Project Admin to add you to a pill's allow-list.";
+
+    const renderHomeCompose = (onNewChat = jest.fn()) => {
+      render(
+        <ChatAgentPanel
+          thread={null}
+          isOpen
+          onClose={jest.fn()}
+          onNewChat={onNewChat}
+          launchedFromHome
+          selectedProject="Apex"
+        />,
+      );
+      return onNewChat;
+    };
+
+    it('TBI-006 DoD-0 / PBI-003 AC-0 renders only the caller-filtered pills', () => {
+      mockSkillConfigState = {
+        data: {
+          quickSkillPills: [{ label: 'Allowed Skill', skillPath: '/allowed', model: 'auto' }],
+          quickMcpPills: [],
+          homePillsConfigured: true,
+        },
+        isLoading: false,
+        isError: false,
+      };
+      renderHomeCompose();
+
+      expect(screen.getByTestId('chat-agent-skill-pill-allowed')).toBeInTheDocument();
+      expect(screen.queryByTestId('chat-agent-skill-pill-to-prd')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('chat-agent-mcp-pill-ado')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('chat-agent-home-blocked-notice')).not.toBeInTheDocument();
+    });
+
+    it('VT-20 / PBI-006 AC-0 blocks pill-less send when the project has pills the caller cannot see', () => {
+      mockSkillConfigState = {
+        data: { quickSkillPills: [], quickMcpPills: [], homePillsConfigured: true },
+        isLoading: false,
+        isError: false,
+      };
+      const onNewChat = renderHomeCompose();
+
+      const notice = screen.getByTestId('chat-agent-home-blocked-notice');
+      expect(notice).toHaveTextContent(BLOCKED_MESSAGE);
+      expect(notice).toHaveAttribute('role', 'status');
+      expect(notice).toHaveAttribute('aria-live', 'polite');
+
+      fireEvent.change(screen.getByTestId('chat-agent-message-input'), {
+        target: { value: 'Let me in anyway' },
+      });
+      const send = screen.getByRole('button', { name: 'Send mock' });
+      expect(send).toBeDisabled();
+      fireEvent.click(send);
+      expect(onNewChat).not.toHaveBeenCalled();
+    });
+
+    it('blocks pill-less send from the non-Home composer when the caller cannot see configured pills', () => {
+      mockSkillConfigState = {
+        data: { quickSkillPills: [], quickMcpPills: [], homePillsConfigured: true },
+        isLoading: false,
+        isError: false,
+      };
+      const onNewChat = jest.fn();
+      render(
+        <ChatAgentPanel
+          thread={null}
+          isOpen
+          onClose={jest.fn()}
+          onNewChat={onNewChat}
+          launchedFromHome={false}
+          selectedProject="Apex"
+        />,
+      );
+
+      expect(screen.queryByLabelText('Home chat shortcuts')).not.toBeInTheDocument();
+      const notice = screen.getByTestId('chat-agent-home-blocked-notice');
+      expect(notice).toHaveTextContent(BLOCKED_MESSAGE);
+
+      fireEvent.change(screen.getByTestId('chat-agent-message-input'), {
+        target: { value: 'Let me in anyway' },
+      });
+      const send = screen.getByRole('button', { name: 'Send mock' });
+      expect(send).toBeDisabled();
+      fireEvent.click(send);
+      expect(onNewChat).not.toHaveBeenCalled();
+    });
+
+    it('VT-21 / PBI-006 AC-2 keeps free chat when the project configures no Home pills', () => {
+      mockSkillConfigState = {
+        data: { quickSkillPills: [], quickMcpPills: [], homePillsConfigured: false },
+        isLoading: false,
+        isError: false,
+      };
+      const onNewChat = renderHomeCompose();
+
+      expect(screen.queryByTestId('chat-agent-home-blocked-notice')).not.toBeInTheDocument();
+      fireEvent.change(screen.getByTestId('chat-agent-message-input'), {
+        target: { value: 'Start a free chat' },
+      });
+      const send = screen.getByRole('button', { name: 'Send mock' });
+      expect(send).toBeEnabled();
+      fireEvent.click(send);
+      expect(onNewChat).toHaveBeenCalledWith(expect.objectContaining({
+        initialMessage: 'Start a free chat',
+      }));
+    });
+
+    it('PBI-006 AC-2 treats an absent project skill config as free chat', () => {
+      mockSkillConfigState = { data: null, isLoading: false, isError: false };
+      const onNewChat = renderHomeCompose();
+
+      expect(screen.queryByTestId('chat-agent-home-blocked-notice')).not.toBeInTheDocument();
+      fireEvent.change(screen.getByTestId('chat-agent-message-input'), {
+        target: { value: 'No config here' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Send mock' }));
+      expect(onNewChat).toHaveBeenCalledWith(expect.objectContaining({
+        initialMessage: 'No config here',
+      }));
+    });
+
+    it('TBI-006 NFR disables send while the skill config is still loading, without a no-access notice', () => {
+      mockSkillConfigState = { data: undefined, isLoading: true, isError: false };
+      const onNewChat = renderHomeCompose();
+
+      expect(screen.queryByTestId('chat-agent-home-blocked-notice')).not.toBeInTheDocument();
+      fireEvent.change(screen.getByTestId('chat-agent-message-input'), {
+        target: { value: 'Too early' },
+      });
+      const send = screen.getByRole('button', { name: 'Send mock' });
+      expect(send).toBeDisabled();
+      fireEvent.click(send);
+      expect(onNewChat).not.toHaveBeenCalled();
+    });
+
+    it('TBI-006 NFR disables send when the skill config request fails, even with stale data', () => {
+      mockSkillConfigState = {
+        data: {
+          quickSkillPills: [{ label: 'Stale Skill', skillPath: '/stale', model: 'auto' }],
+          quickMcpPills: [],
+          homePillsConfigured: true,
+        },
+        isLoading: false,
+        isError: true,
+      };
+      const onNewChat = renderHomeCompose();
+
+      expect(screen.queryByTestId('chat-agent-home-blocked-notice')).not.toBeInTheDocument();
+      fireEvent.change(screen.getByTestId('chat-agent-message-input'), {
+        target: { value: 'Config broke' },
+      });
+      const send = screen.getByRole('button', { name: 'Send mock' });
+      expect(send).toBeDisabled();
+      fireEvent.click(send);
+      expect(onNewChat).not.toHaveBeenCalled();
+    });
+
+    it('PBI-007 leaves an active Home thread usable when the caller loses pill access', () => {
+      mockSkillConfigState = {
+        data: { quickSkillPills: [], quickMcpPills: [], homePillsConfigured: true },
+        isLoading: false,
+        isError: false,
+      };
+      render(
+        <ChatAgentPanel
+          thread={thread}
+          isOpen
+          onClose={jest.fn()}
+          onNewChat={jest.fn()}
+          launchedFromHome
+          selectedProject="Apex"
+        />,
+      );
+
+      expect(screen.queryByTestId('chat-agent-home-blocked-notice')).not.toBeInTheDocument();
+      fireEvent.change(screen.getByTestId('chat-agent-message-input'), {
+        target: { value: 'Continue the conversation' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Send mock' }));
+
+      expect(mockSend).toHaveBeenCalledWith('Continue the conversation', {
+        model: 'auto',
+        attachments: [],
+      });
+    });
   });
 });

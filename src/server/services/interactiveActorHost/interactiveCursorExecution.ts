@@ -17,6 +17,7 @@ import type {
 } from '../aiRunsWorker/cursorExecution';
 import type { RepoReader } from '../../../shared/types/repoReader';
 import { createNativeReadTools } from '../nativeReadToolAdapter';
+import { buildCursorModelSelection } from '../agentEffortResolver';
 
 /**
  * The remote agent is gone — reaped after an idle gap, or not visible under the
@@ -35,7 +36,10 @@ export interface InteractiveCursorAgentHandle {
   agentId: string | null;
   model: string;
   workspaceRef: string;
-  send(prompt: string): Promise<WorkerCursorExecutionRun>;
+  send(
+    prompt: string,
+    options?: { onDelta?(update: unknown): Promise<void> | void },
+  ): Promise<WorkerCursorExecutionRun>;
   dispose(): Promise<void>;
 }
 
@@ -59,7 +63,7 @@ export async function acquireInteractiveCursorAgent(
   // resolves live repository MCP servers.
   const agentOptions = {
     apiKey,
-    model: { id: snapshot.model },
+    model: buildCursorModelSelection(snapshot.model, snapshot.effort),
     local,
     mcpServers: {},
   };
@@ -95,9 +99,17 @@ export async function acquireInteractiveCursorAgent(
     agentId,
     model: snapshot.model,
     workspaceRef: snapshot.workspaceRef,
-    async send(prompt: string): Promise<WorkerCursorExecutionRun> {
+    async send(
+      prompt: string,
+      options?: { onDelta?(update: unknown): Promise<void> | void },
+    ): Promise<WorkerCursorExecutionRun> {
       if (disposed) throw new Error('Interactive Cursor agent is disposed');
-      const run = await agent.send(prompt);
+      const onDelta = options?.onDelta;
+      const run = onDelta
+        ? await agent.send(prompt, {
+          onDelta: ({ update }) => onDelta(update),
+        })
+        : await agent.send(prompt);
       return run as unknown as WorkerCursorExecutionRun;
     },
     async dispose(): Promise<void> {

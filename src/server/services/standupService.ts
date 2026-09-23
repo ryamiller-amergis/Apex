@@ -169,6 +169,7 @@ export async function generateDailySessions(): Promise<number> {
       const participantId = uuidv4();
       const kickoff: ChatThreadKickoff = {
         project: config.project,
+        agentModule: 'standup',
         repo: skillRepo,
         branch: skillBranch,
         mode: 'standup-participant',
@@ -278,6 +279,7 @@ export async function triggerSessionForConfig(
     const participantId = uuidv4();
     const kickoff: ChatThreadKickoff = {
       project: config.project,
+      agentModule: 'standup',
       repo: skillRepo,
       branch: skillBranch,
       mode: 'standup-participant',
@@ -477,6 +479,7 @@ export async function runFacilitator(sessionId: string): Promise<void> {
 
   const kickoff: ChatThreadKickoff = {
     project: session.config.project,
+    agentModule: 'standup',
     repo: '',
     mode: 'standup-facilitator',
     standupSessionId: sessionId,
@@ -531,6 +534,7 @@ export async function completeSession(sessionId: string, summaryMarkdown?: strin
       const owner = userIds[0] ?? 'system-standup-facilitator';
       const kickoff: ChatThreadKickoff = {
         project,
+        agentModule: 'standup',
         repo: '',
         mode: 'standup-followup',
         standupSessionId: sessionId,

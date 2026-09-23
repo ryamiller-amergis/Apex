@@ -51,15 +51,21 @@ jest.mock('../components/AppHeader', () => ({
 
 jest.mock('../components/AgentHome', () => ({
   AgentHome: (props: {
-    canOpenChat?: boolean;
-    onOpenChatPanel?: () => void;
+    isActive?: boolean;
+    onHomeViewChange?: (view: 'chat' | 'status') => void;
     onRestoreThread?: (id: string) => void;
   }) => {
     mockAgentHomeProps = props;
+    const React = jest.requireActual<typeof import('react')>('react');
+    const { isActive, onHomeViewChange } = props;
+    React.useEffect(() => {
+      if (isActive) onHomeViewChange?.('chat');
+    }, [isActive, onHomeViewChange]);
     return (
       <div data-testid="agent-home">
         Agent Home Content
-        <button type="button" onClick={props.onOpenChatPanel}>Toggle chat</button>
+        <button type="button" onClick={() => props.onHomeViewChange?.('chat')}>Chat tab</button>
+        <button type="button" onClick={() => props.onHomeViewChange?.('status')}>Status tab</button>
       </div>
     );
   },
@@ -116,8 +122,8 @@ jest.mock('react-dnd-html5-backend', () => ({
 
 const mockedUseFeatureFlags = useFeatureFlags as jest.MockedFunction<typeof useFeatureFlags>;
 let mockAgentHomeProps: {
-  canOpenChat?: boolean;
-  onOpenChatPanel?: () => void;
+  isActive?: boolean;
+  onHomeViewChange?: (view: 'chat' | 'status') => void;
   onRestoreThread?: (id: string) => void;
 } = {};
 let mockChatPanelProps: {
@@ -236,16 +242,17 @@ describe('App — Home access with permission + flag both enabled (default)', ()
     expect(await screen.findByTestId('agent-home')).toBeInTheDocument();
   });
 
-  it('PBI-006 AC-0 opens the shared chat panel from the Home toggle', async () => {
+  it('opens shared chat by default and closes it on Project status', async () => {
     (useAppShell as jest.Mock).mockReturnValue(makeAppShell({
       can: (key: string) => ['home:view', 'chat:view', 'chat:create'].includes(key),
     }));
     renderApp('/home');
 
     expect(await screen.findByTestId('agent-home')).toBeInTheDocument();
-    expect(mockAgentHomeProps.canOpenChat).toBe(true);
-    expect(mockChatPanelProps.isOpen).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle chat' }));
+    expect(await screen.findByTestId('chat-agent-panel-open')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Status tab' }));
+    expect(screen.queryByTestId('chat-agent-panel-open')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Chat tab' }));
     expect(await screen.findByTestId('chat-agent-panel-open')).toBeInTheDocument();
   });
 
@@ -255,7 +262,6 @@ describe('App — Home access with permission + flag both enabled (default)', ()
     }));
     renderApp('/home');
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Toggle chat' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Panel new' }));
 
     expect(mockStartChatMutateAsync).not.toHaveBeenCalled();

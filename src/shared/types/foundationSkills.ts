@@ -50,8 +50,11 @@ export interface FoundationSkillRelease {
    *  Empty array means "all projects". Absent key inherits targetProjects. */
   skillTargets: Record<string, string[]>;
   manifestSnapshot: FoundationSkillArtifactManifest | null;
+  /** Admin-facing notes. Consumer projects only ever see their own projectNotes entry. */
   releaseNotes: string | null;
   breakingChanges: string | null;
+  /** Apex project name → the notes written for that project. */
+  projectNotes: Record<string, FoundationSkillProjectNotes>;
   publishedBy: string | null;
   publishedAt: string | null;
   deprecatedBy: string | null;
@@ -59,6 +62,11 @@ export interface FoundationSkillRelease {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface FoundationSkillProjectNotes {
+  releaseNotes: string | null;
+  breakingChanges: string | null;
 }
 
 export interface FoundationSkillArtifactManifestSkill {
@@ -130,6 +138,8 @@ export interface CreateFoundationSkillReleaseRequest {
   skillTargets?: Record<string, string[]>;
   releaseNotes?: string | null;
   breakingChanges?: string | null;
+  /** Per-project notes. Projects absent from this map receive no notes. */
+  projectNotes?: Record<string, FoundationSkillProjectNotes>;
 }
 
 export interface PublishFoundationSkillReleaseRequest {
@@ -366,6 +376,38 @@ export function getEffectiveTargetProjects(
   const override = release.skillTargets?.[skillName];
   if (override !== undefined) return override;
   return release.targetProjects ?? [];
+}
+
+/**
+ * Notes written for one project. Shared releaseNotes/breakingChanges stay
+ * admin-facing, so a project without an entry sees nothing.
+ */
+export function getProjectReleaseNotes(
+  release: Pick<FoundationSkillRelease, 'projectNotes'>,
+  apexProject: string | null | undefined,
+): FoundationSkillProjectNotes {
+  const entry = apexProject ? release.projectNotes?.[apexProject] : undefined;
+  return {
+    releaseNotes:    entry?.releaseNotes ?? null,
+    breakingChanges: entry?.breakingChanges ?? null,
+  };
+}
+
+/**
+ * The release as one project sees it: its own notes in place of the shared ones,
+ * and no other project's notes.
+ */
+export function toProjectReleaseView(
+  release: FoundationSkillRelease,
+  apexProject: string | null | undefined,
+): FoundationSkillRelease {
+  const notes = getProjectReleaseNotes(release, apexProject);
+  return {
+    ...release,
+    releaseNotes:    notes.releaseNotes,
+    breakingChanges: notes.breakingChanges,
+    projectNotes:    {},
+  };
 }
 
 /**

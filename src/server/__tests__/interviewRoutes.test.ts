@@ -25,7 +25,7 @@ jest.mock('../services/chatAgentService', () => ({
   readOutputAssumptions: jest.fn().mockReturnValue(null),
   readOutputValidationScorecard: jest.fn().mockReturnValue(null),
   readOutputValidationScorecardMd: jest.fn().mockReturnValue(null),
-  createThread: jest.fn().mockResolvedValue({ id: 'thread-mock' }),
+  createThread: jest.fn().mockResolvedValue({ id: 'thread-mock', kickoff: {} }),
   sendMessage: jest.fn().mockResolvedValue(undefined),
   getThreadAsync: jest.fn().mockResolvedValue(null),
 }));
@@ -528,6 +528,31 @@ describe('POST /api/interviews', () => {
     expect(res.body).toMatchObject({ interviewId: 'interview-new', threadId: 'thread-new' });
     expect(mockInterviewService.createInterview).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'user-test', project: 'proj', repo: 'org/repo' }),
+    );
+  });
+
+  it('PBI-003 AC-0 / VT-01 snapshots persisted kickoff effort instead of request effort', async () => {
+    const { getThreadAsync } = jest.requireMock('../services/chatAgentService') as {
+      getThreadAsync: jest.Mock;
+    };
+    getThreadAsync.mockResolvedValueOnce({ kickoff: { effort: 'medium' } });
+    mockInterviewService.createInterview.mockResolvedValue({
+      interviewId: 'interview-effort',
+      threadId: 'thread-x',
+    });
+
+    const res = await request(buildApp())
+      .post('/api/interviews')
+      .send({
+        project: 'proj',
+        repo: 'org/repo',
+        chatThreadId: 'thread-x',
+        effort: 'high',
+      });
+
+    expect(res.status).toBe(201);
+    expect(mockInterviewService.createInterview).toHaveBeenCalledWith(
+      expect.objectContaining({ effort: 'medium' }),
     );
   });
 
@@ -1462,6 +1487,7 @@ describe('POST /api/interviews/prds/:prdId/owner-approve', () => {
     mockRecordOwnerApproval.mockResolvedValue({ status: 'approved' });
     mockGetUnresolvedCount.mockResolvedValue(0);
     mockIsSuperAdminRequest.mockReturnValue(false);
+    mockCreateThread.mockResolvedValue({ id: 'thread-mock', kickoff: {} });
   });
 
   it('returns 200 when owner approves a pending_review PRD after reviewers complete', async () => {

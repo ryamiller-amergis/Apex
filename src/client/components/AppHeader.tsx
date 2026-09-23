@@ -6,6 +6,7 @@ import { FeatureRequestModal } from './FeatureRequestModal';
 import { NotificationBell } from './NotificationBell';
 import { UserMenu } from './UserMenu';
 import { useBreakpoint } from '../hooks/useBreakpoint';
+import { canAccessMyWork } from '../utils/canAccessMyWork';
 import type { ThemeMode } from '../hooks/useAppShell';
 import type { ProjectRepoConfigSummary } from '../../shared/types/projectSettings';
 import type { WorkItemType } from '../../shared/types/featureRequest';
@@ -149,8 +150,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     if (item.view === 'home') return canAccessHome;
     if (item.view === 'admin') return can('admin:roles');
     if (item.view === 'my-work') {
-      if (!isSuperAdmin && !menuEnabledViews.includes('my-work')) return false;
-      return can('dev-workbench:view') && (isInAnyGroup?.(['Developer']) ?? false);
+      return canAccessMyWork({ can, isSuperAdmin, isInAnyGroup, enabledViews: menuEnabledViews });
     }
     if (item.view === 'standup') {
       if (!isSuperAdmin && !menuEnabledViews.includes('standup')) return false;
