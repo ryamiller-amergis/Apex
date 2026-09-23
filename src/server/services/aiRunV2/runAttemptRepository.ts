@@ -145,10 +145,14 @@ export type FailExpiredInteractiveDispatchInput = Readonly<{
 }>;
 
 export type InteractiveTerminalizeResult =
-  | 'terminalized'
-  | 'already-terminal'
-  | 'fence-mismatch'
-  | 'not-found';
+  | Readonly<{
+      outcome: 'terminalized';
+      priorAttemptStatus: AiRunV2AttemptStatus;
+      capacityCharged: boolean;
+    }>
+  | Readonly<{ outcome: 'already-terminal' }>
+  | Readonly<{ outcome: 'fence-mismatch' }>
+  | Readonly<{ outcome: 'not-found' }>;
 
 export type RunAttemptRepository = {
   createQueuedV2Run(
@@ -219,6 +223,13 @@ function mapInteractiveDispatchState(
       throw new Error(`Unsupported attempt status: ${String(unhandled)}`);
     }
   }
+}
+
+/** Interactive utilization counts only dispatched/running Dapr attempts. */
+function interactiveAttemptCapacityCharged(
+  status: AiRunV2AttemptStatus,
+): boolean {
+  return status === 'dispatched' || status === 'running';
 }
 
 function transitionTimestamp(row: InteractiveAttemptRow): string {
@@ -324,9 +335,9 @@ export function createRunAttemptRepository(options?: {
         FOR UPDATE OF attempt, run
       `);
       const row = resultRows<InteractiveAttemptRow>(result)[0];
-      if (!row) return 'not-found';
+      if (!row) return { outcome: 'not-found' };
       if (row.dispatch_message_id !== input.expectedDispatchMessageId) {
-        return 'fence-mismatch';
+        return { outcome: 'fence-mismatch' };
       }
       if (
         isAiRunV2TerminalAttemptStatus(row.attempt_status) ||
@@ -334,10 +345,13 @@ export function createRunAttemptRepository(options?: {
         row.run_status === 'failed' ||
         row.run_status === 'cancelled'
       ) {
-        return 'already-terminal';
+        return { outcome: 'already-terminal' };
       }
-      if (!row.run_id || !row.thread_id) return 'not-found';
+      if (!row.run_id || !row.thread_id) return { outcome: 'not-found' };
 
+      const priorAttemptStatus = row.attempt_status;
+      const capacityCharged =
+        interactiveAttemptCapacityCharged(priorAttemptStatus);
       const timestamp = transitionTimestamp(row);
       const errorEventId = randomUUID();
       const doneEventId = randomUUID();
@@ -453,7 +467,11 @@ export function createRunAttemptRepository(options?: {
           )::text
         )
       `);
-      return 'terminalized';
+      return {
+        outcome: 'terminalized',
+        priorAttemptStatus,
+        capacityCharged,
+      };
     });
   }
 

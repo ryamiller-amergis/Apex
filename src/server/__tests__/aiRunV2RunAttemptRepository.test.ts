@@ -650,7 +650,11 @@ describe('AI-run V2 run attempt repository', () => {
         expectedDispatchMessageId: 'dispatch-1',
         detail: 'Interactive turn exceeded its absolute deadline',
       }),
-    ).resolves.toBe('terminalized');
+    ).resolves.toEqual({
+      outcome: 'terminalized',
+      priorAttemptStatus: 'queued',
+      capacityCharged: false,
+    });
 
     const statements = execute.mock.calls
       .flatMap(([query]) => boundStrings(query))
@@ -688,7 +692,11 @@ describe('AI-run V2 run attempt repository', () => {
         expectedDispatchMessageId: 'dispatch-1',
         detail: 'Interactive dispatch payload failed validation',
       }),
-    ).resolves.toBe('terminalized');
+    ).resolves.toEqual({
+      outcome: 'terminalized',
+      priorAttemptStatus: 'queued',
+      capacityCharged: false,
+    });
 
     const statements = execute.mock.calls
       .flatMap(([query]) => boundStrings(query))
@@ -720,7 +728,7 @@ describe('AI-run V2 run attempt repository', () => {
         expectedDispatchMessageId: 'dispatch-stale',
         detail: 'stale',
       }),
-    ).resolves.toBe('fence-mismatch');
+    ).resolves.toEqual({ outcome: 'fence-mismatch' });
     expect(staleExecute).toHaveBeenCalledTimes(1);
 
     const terminalExecute = jest.fn().mockResolvedValueOnce([
@@ -741,7 +749,37 @@ describe('AI-run V2 run attempt repository', () => {
         expectedDispatchMessageId: 'dispatch-1',
         detail: 'duplicate',
       }),
-    ).resolves.toBe('already-terminal');
+    ).resolves.toEqual({ outcome: 'already-terminal' });
     expect(terminalExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports capacityCharged when terminalizing a dispatched interactive attempt', async () => {
+    const execute = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          attempt_status: 'dispatched',
+          dispatch_message_id: 'dispatch-1',
+          run_id: 'run-1',
+          thread_id: 'thread-1',
+          run_status: 'dispatched',
+        },
+      ])
+      .mockResolvedValue([]);
+    const repo = createRunAttemptRepository({
+      runInTransaction: async (work) => work({ execute }),
+    });
+
+    await expect(
+      repo.failInvalidInteractiveDispatch({
+        attemptId: 'attempt-1',
+        expectedDispatchMessageId: 'dispatch-1',
+        detail: 'Interactive dispatch payload failed validation',
+      }),
+    ).resolves.toEqual({
+      outcome: 'terminalized',
+      priorAttemptStatus: 'dispatched',
+      capacityCharged: true,
+    });
   });
 });

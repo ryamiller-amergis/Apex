@@ -10,6 +10,7 @@ import {
 } from '../aiRunV2/distributedLeaseRepository';
 import type {
   InteractiveDispatchState,
+  InteractiveTerminalizeResult,
   RunAttemptRepository,
 } from '../aiRunV2/runAttemptRepository';
 import {
@@ -171,11 +172,17 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
     row: OutboxRow,
     reason: string,
     detail: string,
-  ): Promise<number> {
+  ): Promise<
+    Readonly<{
+      discarded: number;
+      terminalize: InteractiveTerminalizeResult | null;
+    }>
+  > {
     const identity = safeDispatchIdentity(row);
+    let terminalize: InteractiveTerminalizeResult | null = null;
     if (identity) {
       try {
-        await deps.attempts.failInvalidInteractiveDispatch({
+        terminalize = await deps.attempts.failInvalidInteractiveDispatch({
           ...identity,
           detail,
         });
@@ -189,10 +196,13 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
           10_000,
         );
         metrics.increment('orchestrator.interactive.terminalize_failed');
-        return 0;
+        return { discarded: 0, terminalize: null };
       }
     }
-    return discardRow(row, reason);
+    return {
+      discarded: await discardRow(row, reason),
+      terminalize,
+    };
   }
 
   async function processBackgroundRows(
@@ -275,14 +285,34 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
     );
   }
 
+  /**
+   * Release one mutable reservation slot only when this drain owns charged
+   * capacity for the attempt and has not already released it.
+   */
+  function releaseChargedAttemptCapacity(
+    attemptId: string,
+    interactiveClass: InteractiveClass,
+    reservation: ProviderCapacityReservation,
+    releasedAttemptIds: Set<string>,
+    capacityCharged: boolean,
+  ): void {
+    if (!capacityCharged) return;
+    if (releasedAttemptIds.has(attemptId)) return;
+    releasedAttemptIds.add(attemptId);
+    releaseInteractiveClassReservation(interactiveClass, reservation);
+  }
+
   function releaseInteractiveReservation(
     active: ActiveInteractiveCandidate,
     reservation: ProviderCapacityReservation,
+    releasedAttemptIds: Set<string>,
   ): void {
-    if (!active.capacityCharged) return;
-    releaseInteractiveClassReservation(
+    releaseChargedAttemptCapacity(
+      active.candidate.payload.attemptId,
       active.candidate.payload.interactiveClass,
       reservation,
+      releasedAttemptIds,
+      active.capacityCharged,
     );
   }
 
@@ -296,6 +326,7 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
   async function expireInteractiveCandidate(
     active: ActiveInteractiveCandidate,
     reservation: ProviderCapacityReservation,
+    releasedAttemptIds: Set<string>,
   ): Promise<PageOutcome> {
     const { outbox: row, payload } = active.candidate;
     try {
@@ -304,15 +335,20 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
         expectedDispatchMessageId: payload.dispatchMessageId,
         detail: 'Interactive turn exceeded its absolute deadline',
       });
-      switch (result) {
+      switch (result.outcome) {
         case 'terminalized': {
-          releaseInteractiveReservation(active, reservation);
+          // Planner-charged queued turns still hold a ledger slot even when
+          // the attempt was never utilization-charged in the snapshot.
+          releaseInteractiveReservation(
+            active,
+            reservation,
+            releasedAttemptIds,
+          );
           const discarded = await discardRow(row, 'deadline_expired');
           metrics.increment('orchestrator.interactive.deadline_expired');
           return { published: 0, discarded };
         }
         case 'already-terminal': {
-          releaseInteractiveReservation(active, reservation);
           const published = await markRowPublished(row);
           return { published, discarded: 0 };
         }
@@ -321,7 +357,6 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
           return { published: 0, discarded };
         }
         case 'not-found': {
-          releaseInteractiveReservation(active, reservation);
           const discarded =
             await discardRow(row, 'attempt_not_found');
           return { published: 0, discarded };
@@ -344,11 +379,16 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
   async function dispatchInteractiveCandidate(
     active: ActiveInteractiveCandidate,
     reservation: ProviderCapacityReservation,
+    releasedAttemptIds: Set<string>,
   ): Promise<PageOutcome> {
     const { outbox: row, payload } = active.candidate;
     const deadlineMs = Date.parse(payload.deadlineAt);
     if (deadlineMs <= clock.now().getTime()) {
-      return expireInteractiveCandidate(active, reservation);
+      return expireInteractiveCandidate(
+        active,
+        reservation,
+        releasedAttemptIds,
+      );
     }
 
     let marked: Awaited<
@@ -381,7 +421,11 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
             case 'running':
               break;
             case 'terminal': {
-              releaseInteractiveReservation(active, reservation);
+              releaseInteractiveReservation(
+                active,
+                reservation,
+                releasedAttemptIds,
+              );
               const published = await markRowPublished(row);
               return { published, discarded: 0 };
             }
@@ -390,7 +434,6 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
               return { published: 0, discarded };
             }
             case 'not-found': {
-              releaseInteractiveReservation(active, reservation);
               const discarded =
                 await discardRow(row, 'attempt_not_found');
               return { published: 0, discarded };
@@ -413,7 +456,6 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
           return { published: 0, discarded };
         }
         case 'not-found': {
-          releaseInteractiveReservation(active, reservation);
           const discarded = await discardRow(row, 'attempt_not_found');
           return { published: 0, discarded };
         }
@@ -427,7 +469,11 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
 
       const invocationNowMs = clock.now().getTime();
       if (deadlineMs <= invocationNowMs) {
-        return expireInteractiveCandidate(active, reservation);
+        return expireInteractiveCandidate(
+          active,
+          reservation,
+          releasedAttemptIds,
+        );
       }
       const controller = new AbortController();
       let deadlineReached = false;
@@ -449,7 +495,11 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
         ]);
       } catch (err) {
         if (deadlineReached) {
-          return expireInteractiveCandidate(active, reservation);
+          return expireInteractiveCandidate(
+            active,
+            reservation,
+            releasedAttemptIds,
+          );
         }
         const detail = err instanceof Error ? err.message : String(err);
         await outbox.markFailed(row.id, holderId, detail, 10_000);
@@ -479,6 +529,7 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
     const now = clock.now();
     const queued: ActiveInteractiveCandidate[] = [];
     const recovery: ActiveInteractiveCandidate[] = [];
+    const releasedAttemptIds = new Set<string>();
     let published = 0;
     let discarded = 0;
 
@@ -487,14 +538,26 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
       if (!candidate) {
         const identity = safeDispatchIdentity(row);
         const interactiveClass = interactiveClassFromPayload(row.payload);
-        const discardedCount = await discardInvalidRow(
+        const invalid = await discardInvalidRow(
           row,
           'invalid_payload',
           'Interactive dispatch payload failed validation',
         );
-        discarded += discardedCount;
-        if (discardedCount > 0 && identity && interactiveClass) {
-          releaseInteractiveClassReservation(interactiveClass, reservation);
+        discarded += invalid.discarded;
+        if (
+          invalid.discarded > 0 &&
+          identity &&
+          interactiveClass &&
+          invalid.terminalize?.outcome === 'terminalized' &&
+          invalid.terminalize.capacityCharged
+        ) {
+          releaseChargedAttemptCapacity(
+            identity.attemptId,
+            interactiveClass,
+            reservation,
+            releasedAttemptIds,
+            true,
+          );
         }
         continue;
       }
@@ -514,14 +577,9 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
 
       switch (state) {
         case 'terminal': {
-          const publishedCount = await markRowPublished(row);
-          published += publishedCount;
-          if (publishedCount > 0) {
-            releaseInteractiveClassReservation(
-              candidate.payload.interactiveClass,
-              reservation,
-            );
-          }
+          // Leftover ACK: utilization never counts terminal attempts, so do
+          // not release a mutable slot that belonged to other in-flight work.
+          published += await markRowPublished(row);
           break;
         }
         case 'fence-mismatch':
@@ -539,8 +597,11 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
             capacityCharged: state !== 'queued',
           };
           if (Date.parse(candidate.payload.deadlineAt) <= now.getTime()) {
-            const outcome =
-              await expireInteractiveCandidate(active, reservation);
+            const outcome = await expireInteractiveCandidate(
+              active,
+              reservation,
+              releasedAttemptIds,
+            );
             discarded += outcome.discarded;
             published += outcome.published;
             break;
@@ -606,8 +667,11 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
       }),
     ].sort(compareActiveInteractiveCandidates);
     for (const active of dispatchable) {
-      const outcome =
-        await dispatchInteractiveCandidate(active, reservation);
+      const outcome = await dispatchInteractiveCandidate(
+        active,
+        reservation,
+        releasedAttemptIds,
+      );
       published += outcome.published;
       discarded += outcome.discarded;
     }

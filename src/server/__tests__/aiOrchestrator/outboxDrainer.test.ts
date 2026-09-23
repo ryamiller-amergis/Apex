@@ -4,10 +4,26 @@ import type {
   OutboxRepository,
   OutboxRow,
 } from '../../services/aiRunV2/outboxRepository';
+import type { InteractiveTerminalizeResult } from '../../services/aiRunV2/runAttemptRepository';
 import { emptyUtilization } from '../../services/aiOrchestrator/providerGovernor';
 import { createUtilizationReader } from '../../services/aiOrchestrator/utilizationReader';
 import type { HeldDistributedLease } from '../../services/aiRunV2/distributedLeaseRepository';
 import { MAX_OUTBOX_DRAIN_PAGES } from '../../services/aiOrchestrator/types';
+
+function terminalizedResult(
+  priorAttemptStatus:
+    | 'queued'
+    | 'dispatched'
+    | 'running' = 'queued',
+): InteractiveTerminalizeResult {
+  return {
+    outcome: 'terminalized',
+    priorAttemptStatus,
+    capacityCharged:
+      priorAttemptStatus === 'dispatched' ||
+      priorAttemptStatus === 'running',
+  };
+}
 
 function row(id: string, payload: Record<string, unknown> = {}): OutboxRow {
   return {
@@ -87,8 +103,10 @@ function noInteractiveDeps() {
     attempts: {
       readInteractiveDispatchState: async () => 'not-found' as const,
       markInteractiveDispatched: async () => 'not-found' as const,
-      failExpiredInteractiveDispatch: async () => 'not-found' as const,
-      failInvalidInteractiveDispatch: async () => 'not-found' as const,
+      failExpiredInteractiveDispatch: async () =>
+        ({ outcome: 'not-found' }) as const,
+      failInvalidInteractiveDispatch: async () =>
+        ({ outcome: 'not-found' }) as const,
     },
   };
 }
@@ -378,8 +396,8 @@ describe('outboxDrainer', () => {
       attempts: {
         readInteractiveDispatchState: async () => 'queued',
         markInteractiveDispatched,
-        failExpiredInteractiveDispatch: async () => 'terminalized',
-        failInvalidInteractiveDispatch: async () => 'terminalized',
+        failExpiredInteractiveDispatch: async () => terminalizedResult(),
+        failInvalidInteractiveDispatch: async () => terminalizedResult(),
       },
       getUtilization: async () => emptyUtilization(),
       getUncertainWorkerCount: async () => 0,
@@ -428,8 +446,8 @@ describe('outboxDrainer', () => {
       attempts: {
         readInteractiveDispatchState: async () => 'queued',
         markInteractiveDispatched,
-        failExpiredInteractiveDispatch: async () => 'terminalized',
-        failInvalidInteractiveDispatch: async () => 'terminalized',
+        failExpiredInteractiveDispatch: async () => terminalizedResult(),
+        failInvalidInteractiveDispatch: async () => terminalizedResult(),
       },
       getUtilization: async () => ({
         ...utilization,
@@ -493,8 +511,8 @@ describe('outboxDrainer', () => {
       attempts: {
         readInteractiveDispatchState: state,
         markInteractiveDispatched,
-        failExpiredInteractiveDispatch: async () => 'terminalized',
-        failInvalidInteractiveDispatch: async () => 'terminalized',
+        failExpiredInteractiveDispatch: async () => terminalizedResult(),
+        failInvalidInteractiveDispatch: async () => terminalizedResult(),
       },
       getUtilization: async () => {
         const utilization = emptyUtilization();
@@ -544,7 +562,7 @@ describe('outboxDrainer', () => {
     const dispatch = jest.fn();
     const failExpiredInteractiveDispatch = jest
       .fn()
-      .mockResolvedValue('terminalized');
+      .mockResolvedValue(terminalizedResult());
     const markPublished = jest.fn(async (ids: string[]) => ids.length);
     const markDiscarded = jest.fn().mockResolvedValue(true);
     const drainer = createOutboxDrainer({
@@ -555,7 +573,7 @@ describe('outboxDrainer', () => {
         readInteractiveDispatchState: async () => 'queued',
         markInteractiveDispatched: jest.fn(),
         failExpiredInteractiveDispatch,
-        failInvalidInteractiveDispatch: async () => 'terminalized',
+        failInvalidInteractiveDispatch: async () => terminalizedResult(),
       },
       getUtilization: async () => emptyUtilization(),
       getUncertainWorkerCount: async () => 0,
@@ -650,8 +668,8 @@ describe('outboxDrainer', () => {
       attempts: {
         readInteractiveDispatchState: async () => 'queued',
         markInteractiveDispatched: async () => 'dispatched',
-        failExpiredInteractiveDispatch: async () => 'terminalized',
-        failInvalidInteractiveDispatch: async () => 'terminalized',
+        failExpiredInteractiveDispatch: async () => terminalizedResult(),
+        failInvalidInteractiveDispatch: async () => terminalizedResult(),
       },
       getUtilization: async () => ({
         ...base,
@@ -698,7 +716,7 @@ describe('outboxDrainer', () => {
     });
     const failExpiredInteractiveDispatch = jest
       .fn()
-      .mockResolvedValue('terminalized');
+      .mockResolvedValue(terminalizedResult());
     const markDiscarded = jest.fn().mockResolvedValue(true);
     const drainer = createOutboxDrainer({
       executor: { execute: async () => [] },
@@ -708,7 +726,7 @@ describe('outboxDrainer', () => {
         readInteractiveDispatchState: async () => 'queued',
         markInteractiveDispatched: async () => 'dispatched',
         failExpiredInteractiveDispatch,
-        failInvalidInteractiveDispatch: async () => 'terminalized',
+        failInvalidInteractiveDispatch: async () => terminalizedResult(),
       },
       getUtilization: async () => emptyUtilization(),
       getUncertainWorkerCount: async () => 0,
@@ -769,7 +787,7 @@ describe('outboxDrainer', () => {
       });
       const failExpiredInteractiveDispatch = jest
         .fn()
-        .mockResolvedValue('terminalized');
+        .mockResolvedValue(terminalizedResult());
       const markDiscarded = jest.fn().mockResolvedValue(true);
       const markPublished = jest.fn(async (ids: string[]) => ids.length);
       const drainer = createOutboxDrainer({
@@ -780,7 +798,7 @@ describe('outboxDrainer', () => {
           readInteractiveDispatchState: async () => 'queued',
           markInteractiveDispatched: async () => 'dispatched',
           failExpiredInteractiveDispatch,
-          failInvalidInteractiveDispatch: async () => 'terminalized',
+          failInvalidInteractiveDispatch: async () => terminalizedResult(),
         },
         getUtilization: async () => emptyUtilization(),
         getUncertainWorkerCount: async () => 0,
@@ -868,8 +886,8 @@ describe('outboxDrainer', () => {
       attempts: {
         readInteractiveDispatchState,
         markInteractiveDispatched: async () => 'dispatched',
-        failExpiredInteractiveDispatch: async () => 'terminalized',
-        failInvalidInteractiveDispatch: async () => 'terminalized',
+        failExpiredInteractiveDispatch: async () => terminalizedResult(),
+        failInvalidInteractiveDispatch: async () => terminalizedResult(),
       },
       getUtilization: async () => ({
         ...base,
@@ -967,7 +985,7 @@ describe('outboxDrainer', () => {
     const markDiscarded = jest.fn().mockResolvedValue(true);
     const failInvalidInteractiveDispatch = jest
       .fn()
-      .mockResolvedValue('terminalized');
+      .mockResolvedValue(terminalizedResult());
     const readInteractiveDispatchState = jest
       .fn()
       .mockResolvedValueOnce('not-found')
@@ -1158,7 +1176,7 @@ describe('outboxDrainer', () => {
       });
       const failExpiredInteractiveDispatch = jest
         .fn()
-        .mockResolvedValue('terminalized');
+        .mockResolvedValue(terminalizedResult());
       const base = emptyUtilization();
       const drainer = createOutboxDrainer({
         executor: { execute: async () => [] },
@@ -1172,7 +1190,7 @@ describe('outboxDrainer', () => {
           readInteractiveDispatchState: async () => 'queued',
           markInteractiveDispatched: async () => 'dispatched',
           failExpiredInteractiveDispatch,
-          failInvalidInteractiveDispatch: async () => 'terminalized',
+          failInvalidInteractiveDispatch: async () => terminalizedResult(),
         },
         getUtilization: async () => ({
           ...base,
@@ -1246,54 +1264,139 @@ describe('outboxDrainer', () => {
     }
   });
 
-  it('releases reserved utilization when terminal and malformed rows finalize before planning', async () => {
-    const terminalRow = {
+  it('does not free a saturated slot for a first-read terminal leftover ACK', async () => {
+    const terminalLeftover = {
       ...interactiveRow(
-        'terminal-frees-slot',
+        'terminal-leftover-ack',
         'fast',
         '2026-09-23T15:10:00.000Z',
+        {
+          attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          dispatchMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        },
       ),
+      attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       createdAt: '2026-09-23T15:00:00.000Z',
     };
-    const malformedInFlight = {
+    const queuedWaiter = {
       ...interactiveRow(
-        'malformed-frees-slot',
+        'waiter-should-defer',
         'fast',
         '2026-09-23T15:10:00.000Z',
+        {
+          attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          dispatchMessageId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        },
       ),
+      attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
       createdAt: '2026-09-23T15:00:01.000Z',
-      payload: {
-        ...interactiveRow('malformed-frees-slot').payload,
-        capacityClass: 'batch',
-      },
-    };
-    const queued = {
-      ...interactiveRow(
-        'queued-after-free',
-        'fast',
-        '2026-09-23T15:10:00.000Z',
-      ),
-      createdAt: '2026-09-23T15:00:02.000Z',
     };
     const dispatch = jest.fn().mockResolvedValue(undefined);
+    const releaseClaim = jest.fn().mockResolvedValue(true);
     const markPublished = jest.fn(async (ids: string[]) => ids.length);
-    const markDiscarded = jest.fn().mockResolvedValue(true);
-    const failInvalidInteractiveDispatch = jest
-      .fn()
-      .mockResolvedValue('terminalized');
-    const readInteractiveDispatchState = jest
-      .fn()
-      .mockResolvedValueOnce('terminal')
-      .mockResolvedValueOnce('queued');
     const base = emptyUtilization();
     const drainer = createOutboxDrainer({
       executor: { execute: async () => [] },
       publisher: { publish: jest.fn() },
       interactiveDispatchClient: { dispatch },
       attempts: {
-        readInteractiveDispatchState,
+        readInteractiveDispatchState: jest
+          .fn()
+          .mockResolvedValueOnce('terminal')
+          .mockResolvedValueOnce('queued'),
         markInteractiveDispatched: async () => 'dispatched',
-        failExpiredInteractiveDispatch: async () => 'terminalized',
+        failExpiredInteractiveDispatch: async () => terminalizedResult(),
+        failInvalidInteractiveDispatch: async () => terminalizedResult(),
+      },
+      getUtilization: async () => ({
+        ...base,
+        cursorInFlight: 16,
+        interactiveClassInFlight: { fast: 16, agentic: 0 },
+        providerClassInFlight: {
+          ...base.providerClassInFlight,
+          cursor: { batch: 0, interactive: 16 },
+        },
+      }),
+      getUncertainWorkerCount: async () => 0,
+      clock: {
+        now: () => new Date('2026-09-23T15:00:00.000Z'),
+        sleep: async () => undefined,
+      },
+      enableNotify: false,
+      acquireOutboxLease: async (work) => work(lease()),
+      outbox: fakeOutbox({
+        claimInteractiveCandidates: jest
+          .fn()
+          .mockResolvedValueOnce([terminalLeftover, queuedWaiter])
+          .mockResolvedValue([]),
+        markPublished,
+        releaseClaim,
+      }),
+    });
+
+    await expect(drainer.drainOnce()).resolves.toBe(1);
+    expect(markPublished).toHaveBeenCalledWith(
+      ['terminal-leftover-ack'],
+      expect.any(String),
+    );
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(releaseClaim).toHaveBeenCalledWith(
+      'waiter-should-defer',
+      expect.any(String),
+      expect.any(String),
+      'interactive_cap',
+    );
+  });
+
+  it('does not free a slot when queued malformed terminalization succeeds', async () => {
+    const malformedQueued = {
+      ...interactiveRow(
+        'malformed-queued',
+        'fast',
+        '2026-09-23T15:10:00.000Z',
+        {
+          attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          dispatchMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        },
+      ),
+      attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      createdAt: '2026-09-23T15:00:00.000Z',
+      payload: {
+        ...interactiveRow('malformed-queued', 'fast', '2026-09-23T15:10:00.000Z', {
+          attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          dispatchMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        }).payload,
+        capacityClass: 'batch',
+      },
+    };
+    const queuedWaiter = {
+      ...interactiveRow(
+        'waiter-after-queued-malformed',
+        'fast',
+        '2026-09-23T15:10:00.000Z',
+        {
+          attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          dispatchMessageId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        },
+      ),
+      attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      createdAt: '2026-09-23T15:00:01.000Z',
+    };
+    const dispatch = jest.fn().mockResolvedValue(undefined);
+    const releaseClaim = jest.fn().mockResolvedValue(true);
+    const markDiscarded = jest.fn().mockResolvedValue(true);
+    const failInvalidInteractiveDispatch = jest
+      .fn()
+      .mockResolvedValue(terminalizedResult('queued'));
+    const base = emptyUtilization();
+    const drainer = createOutboxDrainer({
+      executor: { execute: async () => [] },
+      publisher: { publish: jest.fn() },
+      interactiveDispatchClient: { dispatch },
+      attempts: {
+        readInteractiveDispatchState: async () => 'queued',
+        markInteractiveDispatched: async () => 'dispatched',
+        failExpiredInteractiveDispatch: async () => terminalizedResult(),
         failInvalidInteractiveDispatch,
       },
       getUtilization: async () => ({
@@ -1315,28 +1418,355 @@ describe('outboxDrainer', () => {
       outbox: fakeOutbox({
         claimInteractiveCandidates: jest
           .fn()
-          .mockResolvedValueOnce([terminalRow, malformedInFlight, queued])
+          .mockResolvedValueOnce([malformedQueued, queuedWaiter])
+          .mockResolvedValue([]),
+        markDiscarded,
+        releaseClaim,
+      }),
+    });
+
+    await expect(drainer.drainOnce()).resolves.toBe(0);
+    expect(failInvalidInteractiveDispatch).toHaveBeenCalledTimes(1);
+    expect(markDiscarded).toHaveBeenCalledWith(
+      'malformed-queued',
+      expect.any(String),
+      'invalid_payload',
+    );
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(releaseClaim).toHaveBeenCalledWith(
+      'waiter-after-queued-malformed',
+      expect.any(String),
+      expect.any(String),
+      'interactive_cap',
+    );
+  });
+
+  it('does not free a slot on malformed fence mismatch with a live replacement', async () => {
+    const malformedStale = {
+      ...interactiveRow(
+        'malformed-stale-fence',
+        'fast',
+        '2026-09-23T15:10:00.000Z',
+        {
+          attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          dispatchMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        },
+      ),
+      attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      createdAt: '2026-09-23T15:00:00.000Z',
+      payload: {
+        ...interactiveRow(
+          'malformed-stale-fence',
+          'fast',
+          '2026-09-23T15:10:00.000Z',
+          {
+            attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            dispatchMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          },
+        ).payload,
+        capacityClass: 'batch',
+      },
+    };
+    const queuedWaiter = {
+      ...interactiveRow(
+        'waiter-after-fence-mismatch',
+        'fast',
+        '2026-09-23T15:10:00.000Z',
+        {
+          attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          dispatchMessageId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        },
+      ),
+      attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      createdAt: '2026-09-23T15:00:01.000Z',
+    };
+    const dispatch = jest.fn().mockResolvedValue(undefined);
+    const releaseClaim = jest.fn().mockResolvedValue(true);
+    const markDiscarded = jest.fn().mockResolvedValue(true);
+    const failInvalidInteractiveDispatch = jest
+      .fn()
+      .mockResolvedValue({ outcome: 'fence-mismatch' } as const);
+    const base = emptyUtilization();
+    const drainer = createOutboxDrainer({
+      executor: { execute: async () => [] },
+      publisher: { publish: jest.fn() },
+      interactiveDispatchClient: { dispatch },
+      attempts: {
+        readInteractiveDispatchState: async () => 'queued',
+        markInteractiveDispatched: async () => 'dispatched',
+        failExpiredInteractiveDispatch: async () => terminalizedResult(),
+        failInvalidInteractiveDispatch,
+      },
+      getUtilization: async () => ({
+        ...base,
+        cursorInFlight: 16,
+        interactiveClassInFlight: { fast: 16, agentic: 0 },
+        providerClassInFlight: {
+          ...base.providerClassInFlight,
+          cursor: { batch: 0, interactive: 16 },
+        },
+      }),
+      getUncertainWorkerCount: async () => 0,
+      clock: {
+        now: () => new Date('2026-09-23T15:00:00.000Z'),
+        sleep: async () => undefined,
+      },
+      enableNotify: false,
+      acquireOutboxLease: async (work) => work(lease()),
+      outbox: fakeOutbox({
+        claimInteractiveCandidates: jest
+          .fn()
+          .mockResolvedValueOnce([malformedStale, queuedWaiter])
+          .mockResolvedValue([]),
+        markDiscarded,
+        releaseClaim,
+      }),
+    });
+
+    await expect(drainer.drainOnce()).resolves.toBe(0);
+    expect(failInvalidInteractiveDispatch).toHaveBeenCalledTimes(1);
+    expect(markDiscarded).toHaveBeenCalledWith(
+      'malformed-stale-fence',
+      expect.any(String),
+      'invalid_payload',
+    );
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(releaseClaim).toHaveBeenCalledWith(
+      'waiter-after-fence-mismatch',
+      expect.any(String),
+      expect.any(String),
+      'interactive_cap',
+    );
+  });
+
+  it('frees exactly one charged dispatched slot and dispatches one waiter', async () => {
+    const chargedMalformed = {
+      ...interactiveRow(
+        'malformed-charged-dispatched',
+        'fast',
+        '2026-09-23T15:10:00.000Z',
+        {
+          attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          dispatchMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        },
+      ),
+      attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      createdAt: '2026-09-23T15:00:00.000Z',
+      payload: {
+        ...interactiveRow(
+          'malformed-charged-dispatched',
+          'fast',
+          '2026-09-23T15:10:00.000Z',
+          {
+            attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            dispatchMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          },
+        ).payload,
+        capacityClass: 'batch',
+      },
+    };
+    const queuedWaiter = {
+      ...interactiveRow(
+        'waiter-after-charged-free',
+        'fast',
+        '2026-09-23T15:10:00.000Z',
+        {
+          attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          dispatchMessageId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        },
+      ),
+      attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      createdAt: '2026-09-23T15:00:01.000Z',
+    };
+    const dispatch = jest.fn().mockResolvedValue(undefined);
+    const markPublished = jest.fn(async (ids: string[]) => ids.length);
+    const markDiscarded = jest.fn().mockResolvedValue(true);
+    const failInvalidInteractiveDispatch = jest
+      .fn()
+      .mockResolvedValue(terminalizedResult('dispatched'));
+    const base = emptyUtilization();
+    const drainer = createOutboxDrainer({
+      executor: { execute: async () => [] },
+      publisher: { publish: jest.fn() },
+      interactiveDispatchClient: { dispatch },
+      attempts: {
+        readInteractiveDispatchState: async () => 'queued',
+        markInteractiveDispatched: async () => 'dispatched',
+        failExpiredInteractiveDispatch: async () => terminalizedResult(),
+        failInvalidInteractiveDispatch,
+      },
+      getUtilization: async () => ({
+        ...base,
+        cursorInFlight: 16,
+        interactiveClassInFlight: { fast: 16, agentic: 0 },
+        providerClassInFlight: {
+          ...base.providerClassInFlight,
+          cursor: { batch: 0, interactive: 16 },
+        },
+      }),
+      getUncertainWorkerCount: async () => 0,
+      clock: {
+        now: () => new Date('2026-09-23T15:00:00.000Z'),
+        sleep: async () => undefined,
+      },
+      enableNotify: false,
+      acquireOutboxLease: async (work) => work(lease()),
+      outbox: fakeOutbox({
+        claimInteractiveCandidates: jest
+          .fn()
+          .mockResolvedValueOnce([chargedMalformed, queuedWaiter])
           .mockResolvedValue([]),
         markPublished,
         markDiscarded,
       }),
     });
 
-    await expect(drainer.drainOnce()).resolves.toBe(2);
+    await expect(drainer.drainOnce()).resolves.toBe(1);
     expect(failInvalidInteractiveDispatch).toHaveBeenCalledTimes(1);
     expect(markDiscarded).toHaveBeenCalledWith(
-      'malformed-frees-slot',
+      'malformed-charged-dispatched',
       expect.any(String),
       'invalid_payload',
     );
-    expect(markPublished).toHaveBeenCalledWith(
-      ['terminal-frees-slot'],
-      expect.any(String),
-    );
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(markPublished).toHaveBeenCalledWith(
-      ['queued-after-free'],
+      ['waiter-after-charged-free'],
       expect.any(String),
+    );
+  });
+
+  it('does not double-release the same charged attempt in one drain', async () => {
+    const chargedAttemptId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const chargedDispatchMessageId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const chargedPayload = {
+      attemptId: chargedAttemptId,
+      dispatchMessageId: chargedDispatchMessageId,
+    };
+    const expiredCharged = {
+      ...interactiveRow(
+        'expired-charged',
+        'fast',
+        '2026-09-23T14:59:00.000Z',
+        chargedPayload,
+      ),
+      attemptId: chargedAttemptId,
+      createdAt: '2026-09-23T15:00:00.000Z',
+    };
+    const malformedSameAttempt = {
+      ...interactiveRow(
+        'malformed-same-attempt',
+        'fast',
+        '2026-09-23T15:10:00.000Z',
+        chargedPayload,
+      ),
+      attemptId: chargedAttemptId,
+      createdAt: '2026-09-23T15:00:01.000Z',
+      payload: {
+        ...interactiveRow(
+          'malformed-same-attempt',
+          'fast',
+          '2026-09-23T15:10:00.000Z',
+          chargedPayload,
+        ).payload,
+        capacityClass: 'batch',
+      },
+    };
+    const firstWaiter = {
+      ...interactiveRow(
+        'first-waiter',
+        'fast',
+        '2026-09-23T15:10:00.000Z',
+        {
+          attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          dispatchMessageId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        },
+      ),
+      attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      createdAt: '2026-09-23T15:00:02.000Z',
+    };
+    const secondWaiter = {
+      ...interactiveRow(
+        'second-waiter',
+        'fast',
+        '2026-09-23T15:10:00.000Z',
+        {
+          attemptId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+          dispatchMessageId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        },
+      ),
+      attemptId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      createdAt: '2026-09-23T15:00:03.000Z',
+    };
+    const dispatch = jest.fn().mockResolvedValue(undefined);
+    const releaseClaim = jest.fn().mockResolvedValue(true);
+    const markPublished = jest.fn(async (ids: string[]) => ids.length);
+    const markDiscarded = jest.fn().mockResolvedValue(true);
+    const failExpiredInteractiveDispatch = jest
+      .fn()
+      .mockResolvedValue(terminalizedResult('dispatched'));
+    const failInvalidInteractiveDispatch = jest
+      .fn()
+      .mockResolvedValue(terminalizedResult('dispatched'));
+    const base = emptyUtilization();
+    const drainer = createOutboxDrainer({
+      executor: { execute: async () => [] },
+      publisher: { publish: jest.fn() },
+      interactiveDispatchClient: { dispatch },
+      attempts: {
+        readInteractiveDispatchState: jest
+          .fn()
+          .mockResolvedValueOnce('dispatched')
+          .mockResolvedValueOnce('queued')
+          .mockResolvedValueOnce('queued'),
+        markInteractiveDispatched: async () => 'dispatched',
+        failExpiredInteractiveDispatch,
+        failInvalidInteractiveDispatch,
+      },
+      getUtilization: async () => ({
+        ...base,
+        cursorInFlight: 16,
+        interactiveClassInFlight: { fast: 16, agentic: 0 },
+        providerClassInFlight: {
+          ...base.providerClassInFlight,
+          cursor: { batch: 0, interactive: 16 },
+        },
+      }),
+      getUncertainWorkerCount: async () => 0,
+      clock: {
+        now: () => new Date('2026-09-23T15:00:00.000Z'),
+        sleep: async () => undefined,
+      },
+      enableNotify: false,
+      acquireOutboxLease: async (work) => work(lease()),
+      outbox: fakeOutbox({
+        claimInteractiveCandidates: jest
+          .fn()
+          .mockResolvedValueOnce([
+            expiredCharged,
+            malformedSameAttempt,
+            firstWaiter,
+            secondWaiter,
+          ])
+          .mockResolvedValue([]),
+        markPublished,
+        markDiscarded,
+        releaseClaim,
+      }),
+    });
+
+    await expect(drainer.drainOnce()).resolves.toBe(1);
+    expect(failExpiredInteractiveDispatch).toHaveBeenCalledTimes(1);
+    expect(failInvalidInteractiveDispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(markPublished).toHaveBeenCalledWith(
+      ['first-waiter'],
+      expect.any(String),
+    );
+    expect(releaseClaim).toHaveBeenCalledWith(
+      'second-waiter',
+      expect.any(String),
+      expect.any(String),
+      'interactive_cap',
     );
   });
 });
