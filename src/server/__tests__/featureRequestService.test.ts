@@ -7,6 +7,25 @@ jest.mock('../utils/superAdmin', () => ({
   getSuperAdminEmails: jest.fn(() => ['admin1@example.com', 'admin2@example.com']),
 }));
 
+jest.mock('../services/projectAssigneeService', () => ({
+  APEX_OWNER: {
+    oid: 'apex',
+    displayName: 'Apex',
+    email: '',
+    isApex: true,
+  },
+  assertEligibleHumanAssignee: jest.fn(),
+  listProjectAssignees: jest.fn(),
+}));
+
+jest.mock('../services/notificationService', () => ({
+  createNotification: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock('../services/featureRequestRankingService', () => ({
+  generateFeatureRequestRankings: jest.fn(),
+}));
+
 jest.mock('../db/drizzle', () => {
   const makeInsertChain = () => ({
     values: jest.fn().mockReturnThis(),
@@ -29,6 +48,10 @@ jest.mock('../db/drizzle', () => {
 
   return {
     db: {
+      query: {
+        featureRequests: { findFirst: jest.fn() },
+        appUsers: { findFirst: jest.fn() },
+      },
       insert: jest.fn().mockImplementation(makeInsertChain),
       update: jest.fn().mockImplementation(makeUpdateChain),
       select: jest.fn().mockImplementation(makeSelectChain),
@@ -42,12 +65,27 @@ import {
   listFeatureRequests,
   getFeatureRequest,
   updateFeatureRequest,
+  rankFeatureRequests,
   linkInterview,
   resolveApexReviewers,
-  resolveFeatureRequestReviewers,
 } from '../services/featureRequestService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
+const assigneeService = jest.requireMock(
+  '../services/projectAssigneeService',
+) as {
+  assertEligibleHumanAssignee: jest.Mock;
+};
+const notificationService = jest.requireMock(
+  '../services/notificationService',
+) as {
+  createNotification: jest.Mock;
+};
+const rankingService = jest.requireMock(
+  '../services/featureRequestRankingService',
+) as {
+  generateFeatureRequestRankings: jest.Mock;
+};
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -61,6 +99,8 @@ function makeRow(overrides: Partial<Record<string, unknown>> = {}) {
     interviewId: null,
     submittedBy: 'user-1',
     sourceProject: 'Apex',
+    assignedToOid: null,
+    assignedToApex: false,
     status: 'new',
     aiStatus: 'pending',
     aiPriority: null,
@@ -197,7 +237,8 @@ describe('listFeatureRequests', () => {
     const rows = [makeRow(), makeRow({ id: 'fr-2', title: 'Keyboard shortcuts', submitterName: 'Bob' })];
     const orderByMock = jest.fn().mockResolvedValue(rows);
     const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
+    const assigneeJoinMock = jest.fn().mockReturnValue({ where: whereMock });
+    const leftJoinMock = jest.fn().mockReturnValue({ leftJoin: assigneeJoinMock });
     const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
     mockDb.select
       .mockReturnValueOnce({ from: fromMock })
@@ -229,7 +270,8 @@ describe('listFeatureRequests', () => {
   it('returns empty array when no requests', async () => {
     const orderByMock = jest.fn().mockResolvedValue([]);
     const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
+    const assigneeJoinMock = jest.fn().mockReturnValue({ where: whereMock });
+    const leftJoinMock = jest.fn().mockReturnValue({ leftJoin: assigneeJoinMock });
     const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
     mockDb.select.mockReturnValue({ from: fromMock });
 
@@ -247,7 +289,8 @@ describe('getFeatureRequest', () => {
   it('returns a single feature request with submitter name', async () => {
     const row = makeRow();
     const whereMock = jest.fn().mockResolvedValue([row]);
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
+    const assigneeJoinMock = jest.fn().mockReturnValue({ where: whereMock });
+    const leftJoinMock = jest.fn().mockReturnValue({ leftJoin: assigneeJoinMock });
     const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
     mockDb.select
       .mockReturnValueOnce({ from: fromMock })
@@ -277,7 +320,8 @@ describe('getFeatureRequest', () => {
 
   it('returns null when not found', async () => {
     const whereMock = jest.fn().mockResolvedValue([]);
-    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
+    const assigneeJoinMock = jest.fn().mockReturnValue({ where: whereMock });
+    const leftJoinMock = jest.fn().mockReturnValue({ leftJoin: assigneeJoinMock });
     const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
     mockDb.select.mockReturnValue({ from: fromMock });
 
@@ -290,7 +334,10 @@ describe('getFeatureRequest', () => {
 // ── updateFeatureRequest ──────────────────────────────────────────────────────
 
 describe('updateFeatureRequest', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockDb.query.featureRequests.findFirst.mockResolvedValue(makeRow());
+  });
 
   it('updates status and returns the updated row', async () => {
     const updatedRow = makeRow({ status: 'planned', reviewedBy: 'reviewer-1' });
@@ -345,6 +392,174 @@ describe('updateFeatureRequest', () => {
     expect(setArg.reviewedBy).toBe('reviewer-1');
     expect(setArg.updatedAt).toBeDefined();
     expect(setArg.status).toBeUndefined();
+  });
+
+  it('validates a human assignee against the request project and stores only the human column', async () => {
+    const updatedRow = makeRow({
+      assignedToOid: 'user-2',
+      assignedToApex: false,
+    });
+    const setMock = jest.fn().mockReturnValue({
+      where: jest.fn().mockReturnValue({
+        returning: jest.fn().mockResolvedValue([updatedRow]),
+      }),
+    });
+    mockDb.update.mockReturnValue({ set: setMock });
+    mockDb.query.appUsers.findFirst.mockResolvedValue({
+      oid: 'user-2',
+      displayName: 'Bob',
+      email: 'bob@example.com',
+    });
+
+    await updateFeatureRequest('fr-1', 'reviewer-1', {
+      assigneeId: 'user-2',
+    });
+
+    expect(
+      assigneeService.assertEligibleHumanAssignee,
+    ).toHaveBeenCalledWith('Apex', 'user-2');
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assignedToOid: 'user-2',
+        assignedToApex: false,
+      }),
+    );
+  });
+
+  it('rejects a human assignee outside the request project', async () => {
+    assigneeService.assertEligibleHumanAssignee.mockRejectedValueOnce(
+      new Error('Assignee must be a member of the selected project'),
+    );
+
+    await expect(
+      updateFeatureRequest('fr-1', 'reviewer-1', {
+        assigneeId: 'outside-user',
+      }),
+    ).rejects.toThrow(/member of the selected project/);
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it('stores Apex exclusively and skips person notification', async () => {
+    const updatedRow = makeRow({
+      assignedToOid: null,
+      assignedToApex: true,
+    });
+    const setMock = jest.fn().mockReturnValue({
+      where: jest.fn().mockReturnValue({
+        returning: jest.fn().mockResolvedValue([updatedRow]),
+      }),
+    });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await updateFeatureRequest('fr-1', 'reviewer-1', {
+      assigneeId: 'apex',
+    });
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assignedToOid: null,
+        assignedToApex: true,
+      }),
+    );
+    expect(notificationService.createNotification).not.toHaveBeenCalled();
+  });
+
+  it('notifies a newly assigned human who is not the actor', async () => {
+    const updatedRow = makeRow({
+      assignedToOid: 'user-2',
+      assignedToApex: false,
+    });
+    mockDb.update.mockReturnValue({
+      set: jest.fn().mockReturnValue({
+        where: jest.fn().mockReturnValue({
+          returning: jest.fn().mockResolvedValue([updatedRow]),
+        }),
+      }),
+    });
+    mockDb.query.appUsers.findFirst
+      .mockResolvedValueOnce({
+        oid: 'reviewer-1',
+        displayName: 'Reviewer',
+        email: 'reviewer@example.com',
+      })
+      .mockResolvedValueOnce({
+        oid: 'user-2',
+        displayName: 'Bob',
+        email: 'bob@example.com',
+      });
+
+    await updateFeatureRequest('fr-1', 'reviewer-1', {
+      assigneeId: 'user-2',
+    });
+
+    expect(notificationService.createNotification).toHaveBeenCalledWith(
+      'user-2',
+      expect.objectContaining({
+        type: 'user-action',
+        title: 'Work item assigned to you',
+        link: '/feature-requests?tab=feature&id=fr-1',
+      }),
+    );
+  });
+});
+
+describe('rankFeatureRequests', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('persists AI rank, tier, and rationale in one transaction', async () => {
+    const row = makeRow();
+    rankingService.generateFeatureRequestRankings.mockResolvedValue([
+      { id: 'fr-1', priority: 'high', rationale: 'High customer impact.' },
+    ]);
+    const txWhere = jest.fn().mockResolvedValue(undefined);
+    const txSet = jest
+      .fn()
+      .mockReturnValue({ where: txWhere });
+    const txUpdate = jest.fn().mockReturnValue({ set: txSet });
+    mockDb.transaction.mockImplementation(
+      (callback: (tx: unknown) => unknown) =>
+        callback({ update: txUpdate }),
+    );
+
+    mockDb.select
+      .mockReturnValueOnce({
+        from: jest.fn().mockReturnValue({
+          where: jest.fn().mockResolvedValue([row]),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: jest.fn().mockReturnValue({
+          leftJoin: jest.fn().mockReturnValue({
+            leftJoin: jest.fn().mockReturnValue({
+              where: jest.fn().mockResolvedValue([row]),
+            }),
+          }),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: jest.fn().mockReturnValue({
+          innerJoin: jest.fn().mockReturnValue({
+            where: jest.fn().mockResolvedValue([]),
+          }),
+        }),
+      });
+
+    const result = await rankFeatureRequests(
+      'reviewer-1',
+      'Apex',
+      ['fr-1'],
+    );
+
+    expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+    expect(txSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rank: 1,
+        aiPriority: 'high',
+        aiRationale: 'High customer impact.',
+        aiStatus: 'complete',
+      }),
+    );
+    expect(result.items).toHaveLength(1);
   });
 });
 

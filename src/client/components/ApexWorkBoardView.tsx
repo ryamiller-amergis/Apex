@@ -23,6 +23,8 @@ import {
   useMoveApexWorkItem,
   useCreateApexRelease,
   useBulkUpdateApexWorkItems,
+  useRankApexWorkItems,
+  useUpdateApexWorkItem,
   useApexWorkBoardStream,
   useImportApexWorkItemsFromAdo,
   type AdoImportResult,
@@ -31,6 +33,8 @@ import { useAppShell } from '../hooks/useAppShell';
 import { ApexWorkItemCard } from './ApexWorkItemCard';
 import { ApexWorkItemDetailPanel } from './ApexWorkItemDetailPanel';
 import { WorkBoardHelpCallout } from './WorkBoardHelpCallout';
+import { DataGridFilterSelect, DataGridToolbar } from './DataGridToolbar';
+import gridStyles from './DataGrid.module.css';
 import styles from './ApexWorkBoardView.module.css';
 
 const DND_TYPE = 'APEX_CARD';
@@ -212,6 +216,8 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
   const [importOpen, setImportOpen] = useState(false);
   const [importDryRun, setImportDryRun] = useState(true);
   const [importResult, setImportResult] = useState<AdoImportResult | null>(null);
+  const [backlogPage, setBacklogPage] = useState(1);
+  const [backlogPageSize, setBacklogPageSize] = useState(25);
 
   useEffect(() => {
     const next = loadSavedFilters(project);
@@ -259,6 +265,8 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
   const moveMutation = useMoveApexWorkItem(filters);
   const createRelease = useCreateApexRelease(project);
   const bulkUpdate = useBulkUpdateApexWorkItems(project);
+  const rankItems = useRankApexWorkItems(project);
+  const updateItem = useUpdateApexWorkItem(project);
   const adoImport = useImportApexWorkItemsFromAdo(project);
   useApexWorkBoardStream(project);
 
@@ -318,9 +326,37 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
   }, [facets?.releases, items]);
 
   const backlogItems = useMemo(
-    () => [...items].sort((a, b) => a.position - b.position || a.itemNumber - b.itemNumber),
+    () => [...items].sort(
+      (a, b) => (a.priorityRank ?? Number.MAX_SAFE_INTEGER) - (b.priorityRank ?? Number.MAX_SAFE_INTEGER)
+        || a.position - b.position
+        || a.itemNumber - b.itemNumber,
+    ),
     [items],
   );
+  const backlogPageCount = Math.max(1, Math.ceil(backlogItems.length / backlogPageSize));
+  const visibleBacklogItems = useMemo(
+    () => backlogItems.slice((backlogPage - 1) * backlogPageSize, backlogPage * backlogPageSize),
+    [backlogItems, backlogPage, backlogPageSize],
+  );
+  const canManage = can('work-board:manage');
+
+  useEffect(() => {
+    setBacklogPage(1);
+  }, [
+    project,
+    ownerFilter,
+    typeFilter,
+    epicFilter,
+    featureFilter,
+    sourceFilter,
+    releaseFilter,
+    search,
+    backlogPageSize,
+  ]);
+
+  useEffect(() => {
+    setBacklogPage((page) => Math.min(page, backlogPageCount));
+  }, [backlogPageCount]);
 
   const deliveryTypesSelected =
     typeFilter.length === APEX_BOARD_CARD_TYPES.length
@@ -449,7 +485,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
                 </button>
               </div>
             )}
-            <button
+            {can('work-board:manage') && <button
               type="button"
               className={`${styles.filterChip} ${selectMode ? styles.filterChipActive : ''}`}
               onClick={() => {
@@ -461,7 +497,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
               {...{ 'data-testid': 'work-board-select-mode' }}
             >
               {selectMode ? 'Done selecting' : 'Select'}
-            </button>
+            </button>}
             {can('work-board:admin') && (
               <button
                 type="button"
@@ -487,6 +523,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
           </div>
         </div>
 
+        {viewMode === 'board' && (
         <div className={styles.filterBar}>
           <select
             className={styles.filterSelect}
@@ -614,6 +651,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
             </button>
           )}
         </div>
+        )}
 
         {/* Quick create release */}
         <div className={styles.filterBar} style={{ paddingTop: 0 }}>
@@ -711,54 +749,202 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
           </button>
         </div>
       ) : viewMode === 'backlog' ? (
-        <div className={styles.canvas} style={{ flexDirection: 'column', padding: 24, overflow: 'auto' }} {...{ 'data-testid': 'work-board-backlog' }}>
+        <section className={`${gridStyles.section} ${styles.backlogSection}`} {...{ 'data-testid': 'work-board-backlog' }}>
+          <div className={gridStyles.header}>
+            <div>
+              <h2 className={gridStyles.title}>Backlog</h2>
+              <p className={gridStyles.hint}>Ranked delivery work for the current project and filters.</p>
+            </div>
+            {canManage && (
+              <div className={gridStyles.headerActions}>
+                <button
+                  type="button"
+                  className={gridStyles.buttonPrimary}
+                  disabled={rankItems.isPending || backlogItems.length === 0}
+                  onClick={() => rankItems.mutate({ ids: backlogItems.map((item) => item.id) })}
+                  data-testid="work-board-rank-filtered"
+                >
+                  {rankItems.isPending ? 'Ranking…' : `AI rank filtered backlog (${backlogItems.length})`}
+                </button>
+              </div>
+            )}
+          </div>
+          <DataGridToolbar
+            searchValue={search}
+            onSearchChange={setSearch}
+            searchPlaceholder="Search APX-# or title…"
+            searchTestId="work-board-search-work-items-input"
+          >
+            <DataGridFilterSelect
+              label="Assignee"
+              value={ownerFilter}
+              onChange={setOwnerFilter}
+              testId="work-board-filter-by-owner-select"
+              options={[
+                { label: 'All assignees', value: 'all' },
+                ...owners.map((owner) => ({ label: owner.displayName, value: owner.oid })),
+              ]}
+              {...{ 'data-testid': 'work-board-filter-by-owner-select' }}
+            />
+            <DataGridFilterSelect
+              label="Type"
+              value={deliveryTypesSelected ? 'delivery' : 'all'}
+              onChange={(value) => setTypeFilter(
+                value === 'delivery' ? [...APEX_BOARD_CARD_TYPES] : [...APEX_WORK_ITEM_TYPES],
+              )}
+              testId="work-board-backlog-type-filter"
+              options={[
+                { label: 'Delivery', value: 'delivery' },
+                { label: 'All types', value: 'all' },
+              ]}
+              {...{ 'data-testid': 'work-board-backlog-type-filter' }}
+            />
+            <DataGridFilterSelect
+              label="Release"
+              value={releaseFilter}
+              onChange={setReleaseFilter}
+              includeEmptyOption
+              emptyOptionLabel="All releases"
+              testId="work-board-release-filter"
+              options={[
+                { label: 'No release', value: 'none' },
+                ...(facets?.releases ?? []).map((release) => ({ label: release.name, value: release.id })),
+              ]}
+              {...{ 'data-testid': 'work-board-release-filter' }}
+            />
+            <DataGridFilterSelect
+              label="Source"
+              value={sourceFilter}
+              onChange={setSourceFilter}
+              includeEmptyOption
+              emptyOptionLabel="All sources"
+              testId="work-board-filter-by-source-select"
+              options={[
+                { label: 'From PRD', value: 'prd' },
+                { label: 'From FR', value: 'feature_request' },
+                { label: 'Standalone', value: 'standalone' },
+              ]}
+              {...{ 'data-testid': 'work-board-filter-by-source-select' }}
+            />
+          </DataGridToolbar>
+          {rankItems.isError && <div className={gridStyles.error} role="alert">{rankItems.error.message}</div>}
           {backlogItems.length === 0 ? (
-            <div className={styles.emptyState} role="status">
-              <p className={styles.emptyStateText}>No work items match the current filters.</p>
-              <button type="button" className={styles.btnPrimary} onClick={clearFilters} {...{ 'data-testid': 'work-board-btn-primary' }}>
-                Clear filters
-              </button>
+            <div className={gridStyles.empty} role="status">
+              No work items match the current filters.
             </div>
           ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+            <div className={gridStyles.tableWrap}>
+            <table className={gridStyles.table} data-testid="work-board-backlog-table">
               <thead>
-                <tr style={{ textAlign: 'left', color: 'var(--text-muted)' }}>
-                  <th style={{ padding: 8 }} />
-                  <th style={{ padding: 8 }}>ID</th>
-                  <th style={{ padding: 8 }}>Title</th>
-                  <th style={{ padding: 8 }}>Type</th>
-                  <th style={{ padding: 8 }}>Status</th>
-                  <th style={{ padding: 8 }}>Release</th>
-                  <th style={{ padding: 8 }}>Owner</th>
+                <tr>
+                  <th aria-label="Select" />
+                  <th>Rank</th>
+                  <th>ID</th>
+                  <th>Title</th>
+                  <th>Type</th>
+                  <th>Priority</th>
+                  <th>Status</th>
+                  <th>Release</th>
+                  <th>Assignee</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {backlogItems.map((item) => (
-                  <tr
-                    key={item.id}
-                    style={{ borderTop: '1px solid var(--border-color)', cursor: 'pointer' }}
-                    onClick={() => handleCardOpen(item.id)}
-                   {...{ 'data-testid': `work-board-tr-${item.id}` }}>
-                    <td style={{ padding: 8 }} onClick={(e) => e.stopPropagation()} {...{ 'data-testid': 'work-board-td-cell' }}>
-                      <input
+                {visibleBacklogItems.map((item) => (
+                  <tr key={item.id} data-testid={`work-board-tr-${item.id}`}>
+                    <td>
+                      {canManage && <input
                         type="checkbox"
                         checked={selectedIds.has(item.id)}
                         onChange={() => toggleSelected(item.id)}
                         aria-label={`Select APX-${item.itemNumber}`}
-                       {...{ 'data-testid': 'work-board-checkbox-input' }} />
+                        data-testid={`work-board-select-${item.id}`}
+                      />}
                     </td>
-                    <td style={{ padding: 8 }}>APX-{item.itemNumber}</td>
-                    <td style={{ padding: 8, color: 'var(--text-primary)' }}>{item.title}</td>
-                    <td style={{ padding: 8 }}>{item.type}</td>
-                    <td style={{ padding: 8 }}>{STATUS_META[item.status].label}</td>
-                    <td style={{ padding: 8 }}>{item.release?.name ?? '—'}</td>
-                    <td style={{ padding: 8 }}>{item.owner.displayName}</td>
+                    <td>{item.priorityRank ?? '—'}</td>
+                    <td>APX-{item.itemNumber}</td>
+                    <td className={styles.backlogTitle}>{item.title}</td>
+                    <td>{item.type}</td>
+                    <td>
+                      {item.priority ? (
+                        <span
+                          className={`${styles.priorityBadge} ${styles[`priority${item.priority[0].toUpperCase()}${item.priority.slice(1)}`]}`}
+                          title={item.aiPriorityRationale ?? undefined}
+                        >
+                          {item.priority}
+                        </span>
+                      ) : '—'}
+                    </td>
+                    <td>{STATUS_META[item.status].label}</td>
+                    <td>{item.release?.name ?? '—'}</td>
+                    <td>
+                      {canManage ? (
+                        <select
+                          className={styles.backlogAssignee}
+                          value={item.owner.oid}
+                          onChange={(event) => updateItem.mutate({ id: item.id, ownerId: event.target.value })}
+                          aria-label={`Assign APX-${item.itemNumber}`}
+                          data-testid={`work-board-assignee-${item.id}`}
+                        >
+                          {owners.map((owner) => (
+                            <option key={owner.oid} value={owner.oid}>{owner.displayName}</option>
+                          ))}
+                        </select>
+                      ) : item.owner.displayName}
+                    </td>
+                    <td>
+                      <div className={gridStyles.rowActions}>
+                        <button
+                          type="button"
+                          className={gridStyles.buttonGhost}
+                          onClick={() => handleCardOpen(item.id)}
+                          data-testid={`work-board-edit-${item.id}`}
+                        >
+                          Edit
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            </div>
           )}
-        </div>
+          <div className={styles.pagination} data-testid="work-board-pagination">
+            <span>
+              {backlogItems.length === 0 ? '0' : (backlogPage - 1) * backlogPageSize + 1}
+              –{Math.min(backlogPage * backlogPageSize, backlogItems.length)} of {backlogItems.length}
+            </span>
+            <label>
+              Rows
+              <select
+                value={backlogPageSize}
+                onChange={(event) => setBacklogPageSize(Number(event.target.value))}
+                data-testid="work-board-page-size"
+              >
+                {[10, 25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+              </select>
+            </label>
+            <button
+              type="button"
+              className={gridStyles.buttonGhost}
+              disabled={backlogPage === 1}
+              onClick={() => setBacklogPage((page) => page - 1)}
+              data-testid="work-board-page-previous"
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              className={gridStyles.buttonGhost}
+              disabled={backlogPage >= backlogPageCount}
+              onClick={() => setBacklogPage((page) => page + 1)}
+              data-testid="work-board-page-next"
+            >
+              Next
+            </button>
+          </div>
+        </section>
       ) : lens === 'release' ? (
         <div className={styles.canvas} {...{ 'data-testid': 'work-board-release-lanes' }}>
           {releaseLanes.map((lane) => (

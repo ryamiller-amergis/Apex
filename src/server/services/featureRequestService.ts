@@ -1,4 +1,5 @@
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../db/drizzle';
 import {
   adrs,
@@ -20,7 +21,17 @@ import type {
   WorkItemType,
   UpdateFeatureRequestDTO,
 } from '../../shared/types/featureRequest';
+import { APEX_ASSIGNEE_ID } from '../../shared/types/apexWorkItem';
+import { createNotification } from './notificationService';
+import {
+  APEX_OWNER,
+  assertEligibleHumanAssignee,
+  listProjectAssignees,
+} from './projectAssigneeService';
+import { generateFeatureRequestRankings } from './featureRequestRankingService';
 import { getSuperAdminEmails } from '../utils/superAdmin';
+
+const featureRequestAssignee = alias(appUsers, 'feature_request_assignee');
 
 // ── Row → shared type mapper ──────────────────────────────────────────────────
 
@@ -33,6 +44,8 @@ interface FeatureRequestRow {
   interviewId: string | null;
   submittedBy: string;
   sourceProject: string;
+  assignedToOid: string | null;
+  assignedToApex: boolean;
   status: string;
   aiStatus: string;
   aiPriority: string | null;
@@ -46,6 +59,8 @@ interface FeatureRequestRow {
   createdAt: string;
   updatedAt: string;
   submitterName?: string | null;
+  assigneeName?: string | null;
+  assigneeEmail?: string | null;
 }
 
 function toFeatureRequest(row: FeatureRequestRow, linkedAdrs: LinkedAdrSummary[] = []): FeatureRequest {
@@ -58,6 +73,17 @@ function toFeatureRequest(row: FeatureRequestRow, linkedAdrs: LinkedAdrSummary[]
     interviewId: row.interviewId,
     submittedBy: row.submittedBy,
     sourceProject: row.sourceProject,
+    assignedTo: row.assignedToApex
+      ? APEX_OWNER
+      : row.assignedToOid
+        ? {
+            oid: row.assignedToOid,
+            displayName:
+              row.assigneeName ?? row.assigneeEmail ?? row.assignedToOid,
+            email: row.assigneeEmail ?? '',
+          }
+        : null,
+    assignedToApex: row.assignedToApex,
     status: row.status as FeatureRequestStatus,
     aiStatus: row.aiStatus as FeatureRequestAiStatus,
     aiPriority: row.aiPriority as FeatureRequestPriority | null,
@@ -201,6 +227,8 @@ export async function listFeatureRequests(project: string): Promise<FeatureReque
       interviewId: featureRequests.interviewId,
       submittedBy: featureRequests.submittedBy,
       sourceProject: featureRequests.sourceProject,
+      assignedToOid: featureRequests.assignedToOid,
+      assignedToApex: featureRequests.assignedToApex,
       status: featureRequests.status,
       aiStatus: featureRequests.aiStatus,
       aiPriority: featureRequests.aiPriority,
@@ -214,9 +242,15 @@ export async function listFeatureRequests(project: string): Promise<FeatureReque
       createdAt: featureRequests.createdAt,
       updatedAt: featureRequests.updatedAt,
       submitterName: appUsers.displayName,
+      assigneeName: featureRequestAssignee.displayName,
+      assigneeEmail: featureRequestAssignee.email,
     })
     .from(featureRequests)
     .leftJoin(appUsers, eq(featureRequests.submittedBy, appUsers.oid))
+    .leftJoin(
+      featureRequestAssignee,
+      eq(featureRequests.assignedToOid, featureRequestAssignee.oid),
+    )
     .where(eq(featureRequests.sourceProject, project))
     .orderBy(sql`${featureRequests.rank} NULLS LAST`, desc(featureRequests.createdAt));
 
@@ -237,6 +271,8 @@ export async function getFeatureRequest(id: string): Promise<FeatureRequest | nu
       interviewId: featureRequests.interviewId,
       submittedBy: featureRequests.submittedBy,
       sourceProject: featureRequests.sourceProject,
+      assignedToOid: featureRequests.assignedToOid,
+      assignedToApex: featureRequests.assignedToApex,
       status: featureRequests.status,
       aiStatus: featureRequests.aiStatus,
       aiPriority: featureRequests.aiPriority,
@@ -250,9 +286,15 @@ export async function getFeatureRequest(id: string): Promise<FeatureRequest | nu
       createdAt: featureRequests.createdAt,
       updatedAt: featureRequests.updatedAt,
       submitterName: appUsers.displayName,
+      assigneeName: featureRequestAssignee.displayName,
+      assigneeEmail: featureRequestAssignee.email,
     })
     .from(featureRequests)
     .leftJoin(appUsers, eq(featureRequests.submittedBy, appUsers.oid))
+    .leftJoin(
+      featureRequestAssignee,
+      eq(featureRequests.assignedToOid, featureRequestAssignee.oid),
+    )
     .where(eq(featureRequests.id, id));
 
   if (rows.length === 0) return null;
@@ -282,6 +324,11 @@ export async function updateFeatureRequest(
   userId: string,
   patch: UpdateFeatureRequestDTO,
 ): Promise<FeatureRequest> {
+  const existing = await db.query.featureRequests.findFirst({
+    where: eq(featureRequests.id, id),
+  });
+  if (!existing) throw httpError('Feature request not found', 404);
+
   const set: Record<string, unknown> = {
     reviewedBy: userId,
     updatedAt: new Date().toISOString(),
@@ -290,6 +337,18 @@ export async function updateFeatureRequest(
   if (patch.teamPriority !== undefined) set.teamPriority = patch.teamPriority;
   if (patch.teamRisk !== undefined) set.teamRisk = patch.teamRisk;
   if (patch.rank !== undefined) set.rank = patch.rank;
+  if (patch.assigneeId !== undefined) {
+    const assignedToApex = patch.assigneeId === APEX_ASSIGNEE_ID;
+    if (patch.assigneeId && !assignedToApex) {
+      await assertEligibleHumanAssignee(
+        existing.sourceProject,
+        patch.assigneeId,
+      );
+    }
+    set.assignedToOid =
+      patch.assigneeId && !assignedToApex ? patch.assigneeId : null;
+    set.assignedToApex = assignedToApex;
+  }
 
   const [row] = await db
     .update(featureRequests)
@@ -297,7 +356,123 @@ export async function updateFeatureRequest(
     .where(eq(featureRequests.id, id))
     .returning();
 
-  return toFeatureRequest(row);
+  const assigneeChanged =
+    patch.assigneeId !== undefined &&
+    (patch.assigneeId === APEX_ASSIGNEE_ID
+      ? !existing.assignedToApex
+      : patch.assigneeId !== existing.assignedToOid);
+  if (
+    assigneeChanged &&
+    patch.assigneeId &&
+    patch.assigneeId !== APEX_ASSIGNEE_ID &&
+    patch.assigneeId !== userId
+  ) {
+    const actor = await db.query.appUsers.findFirst({
+      where: eq(appUsers.oid, userId),
+    });
+    const actorName = actor?.displayName ?? actor?.email ?? userId;
+    createNotification(patch.assigneeId, {
+      type: 'user-action',
+      title: 'Work item assigned to you',
+      body: `${actorName} assigned "${existing.title}" to you`,
+      link: `/feature-requests?tab=${existing.type}&id=${id}`,
+    }).catch(() => {});
+  }
+
+  let assigneeName: string | null = null;
+  let assigneeEmail: string | null = null;
+  if (row.assignedToOid) {
+    const assignee = await db.query.appUsers.findFirst({
+      where: eq(appUsers.oid, row.assignedToOid),
+    });
+    assigneeName = assignee?.displayName ?? null;
+    assigneeEmail = assignee?.email ?? null;
+  }
+  return toFeatureRequest({ ...row, assigneeName, assigneeEmail });
+}
+
+export async function listFeatureRequestAssignees(project: string) {
+  if (!project.trim()) throw httpError('project is required', 400);
+  return listProjectAssignees(project.trim());
+}
+
+export async function rankFeatureRequests(
+  userId: string,
+  project: string,
+  ids: string[],
+): Promise<{ items: FeatureRequest[]; rankedAt: string }> {
+  const uniqueIds = [...new Set(ids)];
+  if (!uniqueIds.length) throw httpError('ids required', 400);
+  if (uniqueIds.length !== ids.length) {
+    throw httpError('ids must be unique', 400);
+  }
+
+  const rows = await db
+    .select()
+    .from(featureRequests)
+    .where(inArray(featureRequests.id, uniqueIds));
+  if (
+    rows.length !== uniqueIds.length ||
+    rows.some((row) => row.sourceProject !== project)
+  ) {
+    throw httpError(
+      'One or more feature requests do not belong to the selected project',
+      400,
+    );
+  }
+
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const rankings = await generateFeatureRequestRankings(
+    project,
+    userId,
+    uniqueIds.map((id) => {
+      const row = byId.get(id)!;
+      return {
+        id: row.id,
+        type: row.type as WorkItemType,
+        title: row.title,
+        request: row.request,
+        advantage: row.advantage,
+        status: row.status as FeatureRequestStatus,
+        aiPriority: row.aiPriority as FeatureRequestPriority | null,
+        aiRisk: row.aiRisk as FeatureRequestRisk | null,
+        teamPriority: row.teamPriority as FeatureRequestPriority | null,
+        teamRisk: row.teamRisk as FeatureRequestRisk | null,
+      };
+    }),
+  );
+
+  const rankedAt = new Date().toISOString();
+  await db.transaction(async (tx) => {
+    for (let index = 0; index < rankings.length; index += 1) {
+      const ranking = rankings[index];
+      await tx
+        .update(featureRequests)
+        .set({
+          rank: index + 1,
+          aiPriority: ranking.priority,
+          aiRationale: ranking.rationale,
+          aiStatus: 'complete',
+          reviewedBy: userId,
+          updatedAt: rankedAt,
+        })
+        .where(
+          and(
+            eq(featureRequests.id, ranking.id),
+            eq(featureRequests.sourceProject, project),
+          ),
+        );
+    }
+  });
+
+  const rankedItems = await Promise.all(
+    rankings.map(async (ranking) => {
+      const item = await getFeatureRequest(ranking.id);
+      if (!item) throw httpError('Feature request not found', 404);
+      return item;
+    }),
+  );
+  return { items: rankedItems, rankedAt };
 }
 
 // ── linkInterview ─────────────────────────────────────────────────────────────

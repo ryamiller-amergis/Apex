@@ -2131,6 +2131,22 @@ async function invokeModel(
   return text;
 }
 
+/** Invoke the standard text-only Bedrock path for small, strict-JSON workflows. */
+export async function invokeBedrockText(
+  prompt: string,
+  usageCtx: BedrockUsageContext,
+  options: { modelId?: string; maxTokens?: number } = {},
+): Promise<string> {
+  return invokeModel(
+    prompt,
+    undefined,
+    options.modelId ?? MODEL_ID,
+    options.maxTokens ?? 4096,
+    undefined,
+    usageCtx,
+  );
+}
+
 function parseUiMockResult(
   text: string,
   catalog: DesignSystemCatalog,
