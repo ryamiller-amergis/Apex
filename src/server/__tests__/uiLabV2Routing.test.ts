@@ -249,17 +249,24 @@ describe('UI Lab V2 generation routing', () => {
     ]);
     const admitV2Run = jest.fn();
     const observeV2Run = jest.fn();
+    const replayCompletedV2Run = jest.fn().mockResolvedValue(undefined);
 
     await runGeneration('design-1', jest.fn(), 'user-1', {
       afterEventId: '3f44f6f1-ec42-4aa6-9df4-0d8ce8438491',
       isFeatureEnabled: jest.fn().mockResolvedValue(true),
       admitV2Run,
       observeV2Run,
+      replayCompletedV2Run,
     });
 
     expect(admitV2Run).not.toHaveBeenCalled();
     expect(observeV2Run).not.toHaveBeenCalled();
     expect(generateUiLabDesign).not.toHaveBeenCalled();
+    expect(replayCompletedV2Run).toHaveBeenCalledWith({
+      threadId: 'ui-lab:design-1',
+      afterEventId: '3f44f6f1-ec42-4aa6-9df4-0d8ce8438491',
+      onToken: expect.any(Function),
+    });
   });
 
   it('canonicalizes the persisted generation timestamp before reconnect lookup', async () => {

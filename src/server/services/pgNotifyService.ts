@@ -146,13 +146,17 @@ function rowToEnvelope(row: Record<string, any>): AgentRunEventEnvelope {
   };
 }
 
-async function loadRunEvent(eventId: string): Promise<AgentRunEventEnvelope | null> {
+export async function loadRunEvent(
+  eventId: string,
+  threadId?: string,
+): Promise<AgentRunEventEnvelope | null> {
   const result = await pool.query(
     `SELECT event_id, thread_id, run_id, source_instance, sequence,
             event_timestamp, event_type, phase, status, detail, event
        FROM agent_run_events
-      WHERE event_id = $1`,
-    [eventId],
+      WHERE event_id = $1
+        AND ($2::text IS NULL OR thread_id = $2)`,
+    [eventId, threadId ?? null],
   );
   return result.rows[0] ? rowToEnvelope(result.rows[0]) : null;
 }
@@ -411,6 +415,7 @@ export async function replayRunEvents(
   afterEventId?: string,
   limit = 500,
   runId?: string,
+  coldStart: 'recent' | 'oldest' = 'recent',
 ): Promise<AgentRunEventEnvelope[]> {
   const boundedLimit = Math.max(1, Math.min(limit, 500));
 
@@ -429,13 +434,28 @@ export async function replayRunEvents(
            FROM agent_run_events
           WHERE thread_id = $1
             AND ordinal > $2
+            AND ($4::text IS NULL OR run_id = $4)
           ORDER BY ordinal ASC
           LIMIT $3`,
-        [threadId, cursor.rows[0].ordinal, boundedLimit],
+        [threadId, cursor.rows[0].ordinal, boundedLimit, runId ?? null],
       );
       return result.rows.map(rowToEnvelope);
     }
     // Missing cursor: same newest-first window as a cold replay.
+  }
+
+  if (coldStart === 'oldest') {
+    const result = await pool.query(
+      `SELECT event_id, thread_id, run_id, source_instance, sequence,
+              event_timestamp, event_type, phase, status, detail, event
+         FROM agent_run_events
+        WHERE thread_id = $1
+          AND ($3::text IS NULL OR run_id = $3)
+        ORDER BY ordinal ASC
+        LIMIT $2`,
+      [threadId, boundedLimit, runId ?? null],
+    );
+    return result.rows.map(rowToEnvelope);
   }
 
   const result = await pool.query(

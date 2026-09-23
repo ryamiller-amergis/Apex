@@ -1,11 +1,15 @@
 import type { AgentRunEventEnvelope } from '../../shared/types/chat';
-import { observeUiLabV2Run } from '../services/uiLabV2Stream';
+import {
+  observeUiLabV2Run,
+  replayCompletedUiLabV2Run,
+} from '../services/uiLabV2Stream';
 
 function token(
   eventId: string,
   sequence: number,
   offset: number,
   text: string,
+  streamSnapshot = false,
 ): AgentRunEventEnvelope {
   return {
     eventId,
@@ -21,6 +25,7 @@ function token(
       type: 'token',
       text,
       streamOffset: offset,
+      ...(streamSnapshot ? { streamSnapshot: true } : {}),
     },
   };
 }
@@ -66,6 +71,8 @@ describe('observeUiLabV2Run', () => {
         ]),
         subscribeRunEvents: jest.fn(() => () => undefined),
         harvestRun,
+        publishFinalSnapshot: jest.fn(async ({ html }) =>
+          token('snapshot-1', 99, 0, html, true)),
       },
     );
 
@@ -96,6 +103,8 @@ describe('observeUiLabV2Run', () => {
           outcome: 'ready',
           html: '<html>ok</html>',
         }),
+        publishFinalSnapshot: jest.fn(async ({ html }) =>
+          token('snapshot-1', 99, 0, html, true)),
       },
     );
     await Promise.resolve();
@@ -135,11 +144,16 @@ describe('observeUiLabV2Run', () => {
           done(),
         ]),
         subscribeRunEvents: jest.fn(() => () => undefined),
+        loadRunEvent: jest.fn().mockResolvedValue(
+          token(afterEventId, 1, 0, '<html>'),
+        ),
         harvestRun: jest.fn().mockResolvedValue({
           status: 'settled',
           outcome: 'ready',
           html: '<html>ok</html>',
         }),
+        publishFinalSnapshot: jest.fn(async ({ html }) =>
+          token('snapshot-1', 99, 0, html, true)),
       },
     );
 
@@ -147,5 +161,145 @@ describe('observeUiLabV2Run', () => {
       'ok</html>',
       '00000000-0000-4000-8000-000000000002',
     );
+  });
+
+  it('persists and emits a replayable final snapshot tail with an event id', async () => {
+    const onToken = jest.fn();
+    const final = token(
+      '00000000-0000-4000-8000-000000000099',
+      99,
+      0,
+      '<html>ok</html>',
+      true,
+    );
+    const publishFinalSnapshot = jest.fn().mockResolvedValue(final);
+
+    await observeUiLabV2Run(
+      { ...INPUT, onToken },
+      {
+        replayRunEvents: jest.fn().mockResolvedValue([
+          token('00000000-0000-4000-8000-000000000001', 1, 0, '<html>'),
+          done(),
+        ]),
+        subscribeRunEvents: jest.fn(() => () => undefined),
+        harvestRun: jest.fn().mockResolvedValue({
+          status: 'settled',
+          outcome: 'ready',
+          html: '<html>ok</html>',
+        }),
+        publishFinalSnapshot,
+      },
+    );
+
+    expect(publishFinalSnapshot).toHaveBeenCalledWith({
+      threadId: INPUT.threadId,
+      runId: INPUT.runId,
+      html: '<html>ok</html>',
+    });
+    expect(onToken).toHaveBeenLastCalledWith(
+      'ok</html>',
+      final.eventId,
+    );
+  });
+
+  it('paginates more than 500 durable events until terminal', async () => {
+    const firstPage = Array.from({ length: 500 }, (_, index) =>
+      token(`event-${index}`, index + 1, index, 'x'));
+    const finalToken = token('event-500', 501, 500, 'y');
+    const replayRunEvents = jest.fn(async (
+      _threadId: string,
+      afterEventId?: string,
+    ) => afterEventId ? [finalToken, done()] : firstPage);
+    let live: ((event: AgentRunEventEnvelope) => void) | undefined;
+    const observing = observeUiLabV2Run(
+      { ...INPUT, onToken: jest.fn() },
+      {
+        replayRunEvents: replayRunEvents as never,
+        subscribeRunEvents: jest.fn((_threadId, callback) => {
+          live = callback;
+          return () => undefined;
+        }),
+        harvestRun: jest.fn().mockResolvedValue({
+          status: 'settled',
+          outcome: 'ready',
+          html: `${'x'.repeat(500)}y`,
+        }),
+        publishFinalSnapshot: jest.fn(async () =>
+          token('event-final', 999, 0, `${'x'.repeat(500)}y`, true)),
+      },
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    if (replayRunEvents.mock.calls.length < 2) live?.(done());
+    await observing;
+
+    expect(replayRunEvents).toHaveBeenCalledTimes(2);
+    expect(replayRunEvents.mock.calls[1][1]).toBe('event-499');
+  });
+});
+
+describe('replayCompletedUiLabV2Run', () => {
+  const cursor = token('cursor-event', 1, 0, '<html>');
+  const snapshot = token(
+    'snapshot-event',
+    2,
+    0,
+    '<html>ok</html>',
+    true,
+  );
+
+  it('backfills missing final text before completing a ready reconnect', async () => {
+    const onToken = jest.fn();
+
+    await replayCompletedUiLabV2Run(
+      {
+        threadId: INPUT.threadId,
+        afterEventId: cursor.eventId,
+        onToken,
+      },
+      {
+        loadRunEvent: jest.fn().mockResolvedValue(cursor),
+        replayRunEvents: jest.fn().mockResolvedValue([snapshot]),
+      },
+    );
+
+    expect(onToken).toHaveBeenCalledWith('ok</html>', snapshot.eventId);
+  });
+
+  it('does not duplicate final text after reconnecting from the snapshot id', async () => {
+    const onToken = jest.fn();
+
+    await replayCompletedUiLabV2Run(
+      {
+        threadId: INPUT.threadId,
+        afterEventId: snapshot.eventId,
+        onToken,
+      },
+      {
+        loadRunEvent: jest.fn().mockResolvedValue(snapshot),
+        replayRunEvents: jest.fn().mockResolvedValue([]),
+      },
+    );
+
+    expect(onToken).not.toHaveBeenCalled();
+  });
+
+  it('deduplicates a repeated final snapshot event id', async () => {
+    const onToken = jest.fn();
+
+    await replayCompletedUiLabV2Run(
+      {
+        threadId: INPUT.threadId,
+        afterEventId: cursor.eventId,
+        onToken,
+      },
+      {
+        loadRunEvent: jest.fn().mockResolvedValue(cursor),
+        replayRunEvents: jest.fn().mockResolvedValue([snapshot, snapshot]),
+      },
+    );
+
+    expect(onToken).toHaveBeenCalledTimes(1);
   });
 });

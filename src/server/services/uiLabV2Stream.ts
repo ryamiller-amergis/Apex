@@ -1,5 +1,8 @@
 import type { AgentRunEventEnvelope } from '../../shared/types/chat';
+import { v5 as uuidv5 } from 'uuid';
 import {
+  loadRunEvent as loadDurableRunEvent,
+  notifyRunEvent,
   replayRunEvents as replayDurableRunEvents,
   subscribeRunEvents as subscribeToRunEvents,
 } from './pgNotifyService';
@@ -10,6 +13,8 @@ import {
 
 type ReplayRunEvents = typeof replayDurableRunEvents;
 type SubscribeRunEvents = typeof subscribeToRunEvents;
+type LoadRunEvent = typeof loadDurableRunEvent;
+const REPLAY_PAGE_SIZE = 500;
 
 export type ObserveUiLabV2RunInput = Readonly<{
   designId: string;
@@ -23,6 +28,7 @@ export type ObserveUiLabV2RunInput = Readonly<{
 export type ObserveUiLabV2RunDependencies = Readonly<{
   replayRunEvents?: ReplayRunEvents;
   subscribeRunEvents?: SubscribeRunEvents;
+  loadRunEvent?: LoadRunEvent;
   harvestRun?: (
     input: Readonly<{
       designId: string;
@@ -30,6 +36,11 @@ export type ObserveUiLabV2RunDependencies = Readonly<{
       generationStartedAt: string;
     }>,
   ) => Promise<UiLabRunHarvestResult>;
+  publishFinalSnapshot?: (input: Readonly<{
+    threadId: string;
+    runId: string;
+    html: string;
+  }>) => Promise<AgentRunEventEnvelope>;
 }>;
 
 export type ObserveUiLabV2Run = (
@@ -42,17 +53,85 @@ type PendingDelta = Readonly<{
   eventId: string;
 }>;
 
+function tokenEndOffset(envelope: AgentRunEventEnvelope): number | null {
+  if (envelope.event.type !== 'token') return null;
+  if (envelope.event.streamSnapshot) return envelope.event.text.length;
+  const offset = envelope.event.streamOffset;
+  if (!Number.isSafeInteger(offset) || (offset as number) < 0) return null;
+  return (offset as number) + envelope.event.text.length;
+}
+
+async function publishFinalSnapshot(
+  input: Readonly<{ threadId: string; runId: string; html: string }>,
+): Promise<AgentRunEventEnvelope> {
+  const timestamp = new Date().toISOString();
+  const eventId = uuidv5(
+    `ui-lab-final-snapshot:${input.runId}`,
+    uuidv5.URL,
+  );
+  const envelope: AgentRunEventEnvelope = {
+    eventId,
+    threadId: input.threadId,
+    runId: input.runId,
+    sourceInstance: `ui-lab-final-snapshot:${input.runId}`,
+    sequence: 1,
+    timestamp,
+    type: 'token',
+    phase: 'completion',
+    status: 'completed',
+    event: {
+      type: 'token',
+      text: input.html,
+      streamOffset: 0,
+      streamSnapshot: true,
+      runId: input.runId,
+      eventTimestamp: timestamp,
+    },
+  };
+  await notifyRunEvent(envelope, { persist: true });
+  return envelope;
+}
+
+async function replayAllPages(input: {
+  replay: ReplayRunEvents;
+  threadId: string;
+  afterEventId?: string;
+  runId?: string;
+  onPage: (events: AgentRunEventEnvelope[]) => Promise<void>;
+}): Promise<void> {
+  let cursor = input.afterEventId;
+  for (;;) {
+    const page = await input.replay(
+      input.threadId,
+      cursor,
+      REPLAY_PAGE_SIZE,
+      input.runId,
+      'oldest',
+    );
+    if (page.length === 0) return;
+    await input.onPage(page);
+    const nextCursor = page[page.length - 1]?.eventId;
+    if (!nextCursor || nextCursor === cursor || page.length < REPLAY_PAGE_SIZE) {
+      return;
+    }
+    cursor = nextCursor;
+  }
+}
+
 export const observeUiLabV2Run: ObserveUiLabV2Run = async (
   input,
   dependencies = {},
 ) => {
   const replay = dependencies.replayRunEvents ?? replayDurableRunEvents;
   const subscribe = dependencies.subscribeRunEvents ?? subscribeToRunEvents;
+  const loadEvent = dependencies.loadRunEvent ?? loadDurableRunEvent;
   const harvest = dependencies.harvestRun ?? harvestUiLabV2Run;
+  const publishSnapshot =
+    dependencies.publishFinalSnapshot ?? publishFinalSnapshot;
 
   const seenEventIds = new Set<string>();
   const pendingDeltas = new Map<number, PendingDelta>();
-  let nextOffset: number | null = input.afterEventId ? null : 0;
+  let nextOffset: number | null = 0;
   let terminalSeen = false;
   let replaying = true;
   const pendingLive: AgentRunEventEnvelope[] = [];
@@ -63,6 +142,10 @@ export const observeUiLabV2Run: ObserveUiLabV2Run = async (
     resolveCompletion = resolve;
     rejectCompletion = reject;
   });
+  if (input.afterEventId) {
+    const cursor = await loadEvent(input.afterEventId, input.threadId);
+    nextOffset = cursor ? tokenEndOffset(cursor) : null;
+  }
 
   const flushDeltas = (): void => {
     while (nextOffset !== null) {
@@ -76,6 +159,14 @@ export const observeUiLabV2Run: ObserveUiLabV2Run = async (
 
   const acceptDelta = (envelope: AgentRunEventEnvelope): void => {
     if (envelope.event.type !== 'token') return;
+    if (envelope.event.streamSnapshot) {
+      const offset = nextOffset ?? 0;
+      const suffix = envelope.event.text.slice(offset);
+      if (suffix) input.onToken(suffix, envelope.eventId);
+      nextOffset = envelope.event.text.length;
+      pendingDeltas.clear();
+      return;
+    }
     const offset = envelope.event.streamOffset;
     if (!Number.isSafeInteger(offset) || (offset as number) < 0) return;
     const numericOffset = offset as number;
@@ -112,14 +203,13 @@ export const observeUiLabV2Run: ObserveUiLabV2Run = async (
       );
     }
     if (result.status === 'settled' && result.outcome === 'ready') {
-      const offset = nextOffset ?? 0;
-      const finalSuffix = result.html.slice(offset);
-      if (finalSuffix) {
-        // This suffix comes from the verified artifact, not a durable progress
-        // event. Keeping the SSE id unchanged lets a reconnect replay `done`.
-        input.onToken(finalSuffix);
-        nextOffset = result.html.length;
-      }
+      const snapshot = await publishSnapshot({
+        threadId: input.threadId,
+        runId: input.runId,
+        html: result.html,
+      });
+      seenEventIds.add(snapshot.eventId);
+      acceptDelta(snapshot);
     }
     resolveCompletion();
   };
@@ -156,15 +246,15 @@ export const observeUiLabV2Run: ObserveUiLabV2Run = async (
   });
 
   try {
-    const durable = await replay(
-      input.threadId,
-      input.afterEventId,
-      500,
-      input.runId,
-    );
-    for (const envelope of durable) {
-      await handle(envelope);
-    }
+    await replayAllPages({
+      replay,
+      threadId: input.threadId,
+      afterEventId: input.afterEventId,
+      runId: input.runId,
+      onPage: async (events) => {
+        for (const envelope of events) await handle(envelope);
+      },
+    });
     replaying = false;
     for (const envelope of pendingLive) enqueue(envelope);
     await completion;
@@ -173,3 +263,48 @@ export const observeUiLabV2Run: ObserveUiLabV2Run = async (
     unsubscribe();
   }
 };
+
+export async function replayCompletedUiLabV2Run(
+  input: Readonly<{
+    threadId: string;
+    afterEventId: string;
+    onToken: (text: string, eventId?: string) => void;
+  }>,
+  dependencies: Readonly<{
+    replayRunEvents?: ReplayRunEvents;
+    loadRunEvent?: LoadRunEvent;
+  }> = {},
+): Promise<void> {
+  const replay = dependencies.replayRunEvents ?? replayDurableRunEvents;
+  const loadEvent = dependencies.loadRunEvent ?? loadDurableRunEvent;
+  const cursor = await loadEvent(input.afterEventId, input.threadId);
+  let nextOffset = cursor ? tokenEndOffset(cursor) : null;
+  const seen = new Set<string>();
+
+  await replayAllPages({
+    replay,
+    threadId: input.threadId,
+    afterEventId: input.afterEventId,
+    onPage: async (events) => {
+      for (const envelope of events) {
+        if (seen.has(envelope.eventId) || envelope.event.type !== 'token') {
+          continue;
+        }
+        seen.add(envelope.eventId);
+        if (envelope.event.streamSnapshot) {
+          const offset = nextOffset ?? 0;
+          const suffix = envelope.event.text.slice(offset);
+          if (suffix) input.onToken(suffix, envelope.eventId);
+          nextOffset = envelope.event.text.length;
+          continue;
+        }
+        const offset = envelope.event.streamOffset;
+        if (!Number.isSafeInteger(offset) || (offset as number) < 0) continue;
+        if (nextOffset === null) nextOffset = offset as number;
+        if (offset !== nextOffset) continue;
+        input.onToken(envelope.event.text, envelope.eventId);
+        nextOffset += envelope.event.text.length;
+      }
+    },
+  });
+}

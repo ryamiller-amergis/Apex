@@ -30,6 +30,7 @@ import {
 import { buildUiLabVisualSpecification } from './aiRunV2/visualSpecificationBuilder';
 import {
   observeUiLabV2Run,
+  replayCompletedUiLabV2Run,
   type ObserveUiLabV2Run,
 } from './uiLabV2Stream';
 import * as shareRepo from './uiLabShareRepository';
@@ -105,6 +106,7 @@ export type UiLabGenerationDependencies = Readonly<{
   resolveHardLimitMs?: () => number;
   afterEventId?: string;
   onTransport?: (transport: 'v1' | 'v2') => void;
+  replayCompletedV2Run?: typeof replayCompletedUiLabV2Run;
 }>;
 
 function toDesign(row: Record<string, unknown>): UiLabDesign {
@@ -670,7 +672,17 @@ export async function runGeneration(
 ): Promise<void> {
   const design = await getDesign(designId);
   if (!design) throw new Error(`UI Lab design ${designId} not found`);
-  if (dependencies.afterEventId && design.status === 'ready') return;
+  if (dependencies.afterEventId && design.status === 'ready') {
+    dependencies.onTransport?.('v2');
+    await (
+      dependencies.replayCompletedV2Run ?? replayCompletedUiLabV2Run
+    )({
+      threadId: visualRunThreadId('ui-lab-screen', design.id),
+      afterEventId: dependencies.afterEventId,
+      onToken,
+    });
+    return;
+  }
   if (dependencies.afterEventId && design.status === 'generation_failed') {
     throw new Error(design.generationError ?? 'Generation failed');
   }
