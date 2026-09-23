@@ -674,6 +674,40 @@ export async function runGeneration(
   if (dependencies.afterEventId && design.status === 'generation_failed') {
     throw new Error(design.generationError ?? 'Generation failed');
   }
+  if (design.status === 'streaming') {
+    const generationStartedAt = new Date(design.updatedAt).toISOString();
+    const threadId = visualRunThreadId('ui-lab-screen', design.id);
+    const runId = visualGenerationRunId(
+      'ui-lab-screen',
+      design.id,
+      generationStartedAt,
+    );
+    const reconcile =
+      dependencies.reconcileV2Admission ?? reconcileUiLabV2Admission;
+    const state = await reconcile({
+      runId,
+      threadId,
+      subjectId: design.id,
+      generationStartedAt,
+    });
+    if (state === 'conflicting') {
+      throw new Error(
+        `UI Lab generation ${design.id} conflicts with durable run ${runId}`,
+      );
+    }
+    if (state === 'intended') {
+      dependencies.onTransport?.('v2');
+      await (dependencies.observeV2Run ?? observeUiLabV2Run)({
+        designId: design.id,
+        runId,
+        threadId,
+        generationStartedAt,
+        onToken,
+        afterEventId: dependencies.afterEventId,
+      });
+      return;
+    }
+  }
 
   let skillConfig = null;
   try {

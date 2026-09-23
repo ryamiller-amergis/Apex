@@ -294,4 +294,54 @@ describe('UI Lab V2 generation routing', () => {
     expect(observeV2Run).toHaveBeenCalledTimes(1);
     expect(generateUiLabDesign).not.toHaveBeenCalled();
   });
+
+  it('reconnects an active V2 generation before a now-disabled flag can start V1', async () => {
+    mockSelectLimit.mockResolvedValueOnce([
+      {
+        ...DESIGN,
+        status: 'streaming',
+        updatedAt: '2026-09-22T12:01:00.000Z',
+      },
+    ]);
+    const isFeatureEnabled = jest.fn().mockResolvedValue(false);
+    const reconcileV2Admission = jest.fn().mockResolvedValue('intended');
+    const observeV2Run = jest.fn().mockResolvedValue(undefined);
+
+    await runGeneration('design-1', jest.fn(), 'user-1', {
+      isFeatureEnabled,
+      reconcileV2Admission,
+      observeV2Run,
+    });
+
+    expect(reconcileV2Admission).toHaveBeenCalledTimes(1);
+    expect(observeV2Run).toHaveBeenCalledTimes(1);
+    expect(isFeatureEnabled).not.toHaveBeenCalled();
+    expect(generateUiLabDesign).not.toHaveBeenCalled();
+  });
+
+  it('reconnects an active V2 generation before a flag evaluation error can start V1', async () => {
+    mockSelectLimit.mockResolvedValueOnce([
+      {
+        ...DESIGN,
+        status: 'streaming',
+        updatedAt: '2026-09-22T12:01:00.000Z',
+      },
+    ]);
+    const isFeatureEnabled = jest.fn().mockRejectedValue(
+      new Error('flag database unavailable'),
+    );
+    const reconcileV2Admission = jest.fn().mockResolvedValue('intended');
+    const observeV2Run = jest.fn().mockResolvedValue(undefined);
+
+    await runGeneration('design-1', jest.fn(), 'user-1', {
+      isFeatureEnabled,
+      reconcileV2Admission,
+      observeV2Run,
+    });
+
+    expect(reconcileV2Admission).toHaveBeenCalledTimes(1);
+    expect(observeV2Run).toHaveBeenCalledTimes(1);
+    expect(isFeatureEnabled).not.toHaveBeenCalled();
+    expect(generateUiLabDesign).not.toHaveBeenCalled();
+  });
 });
