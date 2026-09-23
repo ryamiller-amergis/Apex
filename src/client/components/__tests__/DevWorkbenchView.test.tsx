@@ -1,5 +1,5 @@
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { DevWorkbenchView } from '../DevWorkbenchView';
 import type { FeatureRequest } from '../../../shared/types/featureRequest';
 
@@ -131,12 +131,20 @@ const assignedBacklogItems: FeatureRequest[] = [
   },
 ];
 
+const LocationSearch: React.FC = () => {
+  const { search } = useLocation();
+  return <div data-testid="location-search">{search}</div>;
+};
+
 function renderView(initialEntry = '/my-work') {
-  return render(
-    <MemoryRouter initialEntries={[initialEntry]}>
-      <DevWorkbenchView />
-    </MemoryRouter>,
-  );
+  return render(<DevWorkbenchView />, {
+    wrapper: ({ children }) => (
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <LocationSearch />
+        {children}
+      </MemoryRouter>
+    ),
+  });
 }
 
 describe('DevWorkbenchView', () => {
@@ -999,25 +1007,78 @@ describe('DevWorkbenchView — Assigned Backlog', () => {
 
   it('opens a matching deep-linked item and clears the query params', async () => {
     const scrollIntoView = jest.fn();
-    const replaceState = jest.spyOn(window.history, 'replaceState');
     HTMLElement.prototype.scrollIntoView = scrollIntoView;
     renderView('/my-work?section=backlog&itemId=fr-1');
 
     await waitFor(() => {
       expect(screen.getByText('Context for fr-1')).toBeInTheDocument();
       expect(scrollIntoView).toHaveBeenCalled();
-      expect(replaceState).toHaveBeenCalledWith(window.history.state, '', '/my-work');
+      expect(screen.getByTestId('location-search')).toHaveTextContent('');
     });
   });
 
   it('shows a toast and clears params when a deep-linked item is missing', async () => {
-    const replaceState = jest.spyOn(window.history, 'replaceState');
     renderView('/my-work?section=backlog&itemId=missing');
 
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent(/assigned backlog item is no longer available/i);
-      expect(replaceState).toHaveBeenCalledWith(window.history.state, '', '/my-work');
+      expect(screen.getByTestId('location-search')).toHaveTextContent('');
     });
+  });
+
+  it('does not treat a failed assigned-backlog load as a missing deep-link', async () => {
+    (useAssignedBacklog as jest.Mock).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error('Network error'),
+    });
+    const { rerender } = renderView('/my-work?section=backlog&itemId=fr-1');
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText('Context for fr-1')).not.toBeInTheDocument();
+    expect(screen.getByTestId('location-search')).toHaveTextContent('?section=backlog&itemId=fr-1');
+
+    (useAssignedBacklog as jest.Mock).mockReturnValue({
+      data: assignedBacklogItems,
+      isLoading: false,
+      error: null,
+    });
+    rerender(<DevWorkbenchView />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Context for fr-1')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+  });
+
+  it('keeps the deep-link modal open when ADO work items finish loading', async () => {
+    mockApexWorkbenchHooks('MaxView');
+    (useAssignedBacklog as jest.Mock).mockReturnValue({
+      data: assignedBacklogItems,
+      isLoading: false,
+      error: null,
+    });
+    (useAssignedWorkItems as jest.Mock).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      error: null,
+    });
+    const { rerender } = renderView('/my-work?section=backlog&itemId=fr-1');
+
+    await waitFor(() => {
+      expect(screen.getByText('Context for fr-1')).toBeInTheDocument();
+    });
+
+    (useAssignedWorkItems as jest.Mock).mockReturnValue({
+      data: workItems,
+      isLoading: false,
+      error: null,
+    });
+    rerender(<DevWorkbenchView />);
+
+    expect(screen.getByText('Context for fr-1')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('Implement login')).toBeInTheDocument();
   });
 });
 

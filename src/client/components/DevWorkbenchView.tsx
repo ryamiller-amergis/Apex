@@ -42,7 +42,7 @@ const formatBacklogLabel = (value: string) =>
 
 const AssignedBacklogSection: React.FC<{ project: string }> = ({ project }) => {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { can, isInAnyGroup, permissionsLoaded } = useAppShell();
   const { data: items, isLoading, error } = useAssignedBacklog(project);
   const [selectedItem, setSelectedItem] = useState<FeatureRequest | null>(null);
@@ -71,17 +71,24 @@ const AssignedBacklogSection: React.FC<{ project: string }> = ({ project }) => {
       handledDeepLinkRef.current = null;
       return;
     }
-    if (isLoading || handledDeepLinkRef.current === deepLinkId) return;
+    // Wait for a resolved list. Loading and query errors leave `items` undefined,
+    // and those must not be treated as "item no longer available."
+    if (items === undefined || handledDeepLinkRef.current === deepLinkId) return;
     handledDeepLinkRef.current = deepLinkId;
-    const match = items?.find((item) => item.id === deepLinkId);
+    const match = items.find((item) => item.id === deepLinkId);
     if (match) {
       sectionRef.current?.scrollIntoView({ block: 'start' });
       setSelectedItem(match);
     } else {
       setToastMessage('This assigned backlog item is no longer available.');
     }
-    window.history.replaceState(window.history.state, '', '/my-work');
-  }, [deepLinkId, isLoading, items]);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('section');
+      next.delete('itemId');
+      return next;
+    }, { replace: true });
+  }, [deepLinkId, items, setSearchParams]);
 
   return (
     <>
@@ -812,24 +819,6 @@ export const DevWorkbenchView: React.FC = () => {
     );
   }
 
-  if (isLoading) {
-    return (
-      <div className={styles.container} {...{ 'data-testid': 'my-work-page' }}>
-        {selectedProject && <AssignedBacklogSection project={selectedProject} />}
-        <div className={styles.loading}>Loading assigned work items...</div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className={styles.container} {...{ 'data-testid': 'my-work-page' }}>
-        {selectedProject && <AssignedBacklogSection project={selectedProject} />}
-        <div className={styles.error}>Failed to load work items: {error.message}</div>
-      </div>
-    );
-  }
-
   return (
     <div className={styles.container} {...{ 'data-testid': 'my-work-page' }}>
       <div className={styles.header} {...{ 'data-testid': 'my-work-header' }}>
@@ -839,84 +828,90 @@ export const DevWorkbenchView: React.FC = () => {
 
       {selectedProject && <AssignedBacklogSection project={selectedProject} />}
 
-      {startSession.error && (
-        <div className={styles.error}>{startSession.error.message}</div>
-      )}
+      {isLoading && <div className={styles.loading}>Loading assigned work items...</div>}
+      {error && <div className={styles.error}>Failed to load work items: {error.message}</div>}
+      {!isLoading && !error && (
+        <>
+          {startSession.error && (
+            <div className={styles.error}>{startSession.error.message}</div>
+          )}
 
-      {!workItems || workItems.length === 0 ? (
-        <div className={styles.empty} {...{ 'data-testid': 'my-work-empty' }}>
-          No active work items assigned to you.
-        </div>
-      ) : (
-        <div className={styles.list} {...{ 'data-testid': 'my-work-work-items-list' }}>
-          {sortedWorkItems.map((item) => {
-            const active = sessionByWorkItem.get(item.id);
-            const eligibility = evaluateDevStartEligibility(item, { isSuperAdmin });
-            return (
-              <div key={item.id} className={styles.item}>
-                <div className={styles['item-info']}>
-                  <span className={styles['item-title']}>{item.title}</span>
-                  <div className={styles['item-meta']}>
-                    <span className={styles['item-id']}>#{item.id}</span>
-                    <span className={styles.badge}>{item.workItemType}</span>
-                    <span className={styles.badge}>{item.state}</span>
-                    {active && <span className={styles['active-badge']}>Active Session</span>}
+          {!workItems || workItems.length === 0 ? (
+            <div className={styles.empty} {...{ 'data-testid': 'my-work-empty' }}>
+              No active work items assigned to you.
+            </div>
+          ) : (
+            <div className={styles.list} {...{ 'data-testid': 'my-work-work-items-list' }}>
+              {sortedWorkItems.map((item) => {
+                const active = sessionByWorkItem.get(item.id);
+                const eligibility = evaluateDevStartEligibility(item, { isSuperAdmin });
+                return (
+                  <div key={item.id} className={styles.item}>
+                    <div className={styles['item-info']}>
+                      <span className={styles['item-title']}>{item.title}</span>
+                      <div className={styles['item-meta']}>
+                        <span className={styles['item-id']}>#{item.id}</span>
+                        <span className={styles.badge}>{item.workItemType}</span>
+                        <span className={styles.badge}>{item.state}</span>
+                        {active && <span className={styles['active-badge']}>Active Session</span>}
+                      </div>
+                    </div>
+                    <div className={styles['item-actions']}>
+                      {active ? (
+                        <>
+                          <button
+                            className={styles['resume-btn']}
+                            onClick={() => handleResume(active.sessionId)}
+                            type="button"
+                            {...{ 'data-testid': 'my-work-resume-session-btn' }}
+                          >
+                            Resume Session
+                          </button>
+                          <button
+                            className={styles['close-btn']}
+                            onClick={() => handleClose(active.sessionId)}
+                            disabled={closingId === active.sessionId}
+                            type="button"
+                            {...{ 'data-testid': `my-work-close-session-${item.id}` }}
+                          >
+                            {closingId === active.sessionId ? 'Closing...' : 'Close Session'}
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          className={styles['start-btn']}
+                          onClick={() => handleStart(item.id)}
+                          disabled={startingId !== null || !eligibility.allowed}
+                          title={eligibility.allowed ? undefined : eligibility.reason}
+                          type="button"
+                          {...{ 'data-testid': 'my-work-start-dev-btn' }}
+                        >
+                          {startingId === item.id ? 'Starting...' : 'Start Development'}
+                        </button>
+                      )}
+                      <button
+                        className={styles['local-dev-btn']}
+                        onClick={() =>
+                          setLocalDevTarget({
+                            kind: 'ado',
+                            project: selectedProject!,
+                            workItemId: item.id,
+                            title: item.title,
+                          })
+                        }
+                        type="button"
+                        title="Download a context pack and open Cursor or VS Code locally"
+                        {...{ 'data-testid': 'my-work-start-local-dev-btn' }}
+                      >
+                        Start Local Development
+                      </button>
+                    </div>
                   </div>
-                </div>
-                <div className={styles['item-actions']}>
-                  {active ? (
-                    <>
-                      <button
-                        className={styles['resume-btn']}
-                        onClick={() => handleResume(active.sessionId)}
-                        type="button"
-                        {...{ 'data-testid': 'my-work-resume-session-btn' }}
-                      >
-                        Resume Session
-                      </button>
-                      <button
-                        className={styles['close-btn']}
-                        onClick={() => handleClose(active.sessionId)}
-                        disabled={closingId === active.sessionId}
-                        type="button"
-                        {...{ 'data-testid': `my-work-close-session-${item.id}` }}
-                      >
-                        {closingId === active.sessionId ? 'Closing...' : 'Close Session'}
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      className={styles['start-btn']}
-                      onClick={() => handleStart(item.id)}
-                      disabled={startingId !== null || !eligibility.allowed}
-                      title={eligibility.allowed ? undefined : eligibility.reason}
-                      type="button"
-                      {...{ 'data-testid': 'my-work-start-dev-btn' }}
-                    >
-                      {startingId === item.id ? 'Starting...' : 'Start Development'}
-                    </button>
-                  )}
-                  <button
-                    className={styles['local-dev-btn']}
-                    onClick={() =>
-                      setLocalDevTarget({
-                        kind: 'ado',
-                        project: selectedProject!,
-                        workItemId: item.id,
-                        title: item.title,
-                      })
-                    }
-                    type="button"
-                    title="Download a context pack and open Cursor or VS Code locally"
-                    {...{ 'data-testid': 'my-work-start-local-dev-btn' }}
-                  >
-                    Start Local Development
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
 
       {localDevTarget && (
