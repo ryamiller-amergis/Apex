@@ -62,7 +62,16 @@ import {
   INTERACTIVE_WORKFLOW_FLAG,
   type InteractiveWorkflowClass,
 } from '../../shared/types/interactiveWorkflow';
-import { interactiveWorkflowRouter } from './interactiveWorkflowRouter';
+import type { InteractiveTurnAcceptedResponse } from '../../shared/types/durableInteractiveTurn';
+import {
+  interactiveWorkflowRouter,
+  legacyInteractiveWorkflowRouter,
+} from './interactiveWorkflowRouter';
+import {
+  durableInteractiveTurnService,
+  type DurableInteractiveToolGrantInput,
+} from './durableInteractiveTurnService';
+import { resolveGroundingPreparationTimeoutMs } from './interactiveDeadlinePolicy';
 import { interactiveLiveBus } from './interactiveLiveBus';
 import { isExternalRunAbortEvent } from './agentRunAbort';
 import {
@@ -168,7 +177,6 @@ const WORKSPACE_BASE = process.env.AI_PILOT_WORKSPACE_DIR
     : path.join(os.tmpdir(), 'ai-pilot-workspaces');
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const INTERVIEW_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
-const GROUNDING_PREPARATION_TIMEOUT_MS = 2 * 60 * 1000;
 // After this much thread inactivity, a resumed SDK session is likely cold and
 // prone to emitting zero events. Proactively recreate the agent (with history)
 // instead of resuming a stale session. Overridable for tests/tuning.
@@ -3989,7 +3997,7 @@ async function ensureThreadGrounding(
 async function waitForReadyThreadGrounding(
   state: ThreadState
 ): Promise<Exclude<CallerGroundingSelection, { mode: 'preparing' }>> {
-  const deadline = Date.now() + GROUNDING_PREPARATION_TIMEOUT_MS;
+  const deadline = Date.now() + resolveGroundingPreparationTimeoutMs();
   let announcedPreparing = false;
 
   while (true) {
@@ -4186,10 +4194,27 @@ interface InteractiveDispatchAttempt {
   bypassReason?: string;
 }
 
-interface ChatSendOptions {
+export type InteractiveMessageSubmission =
+  | Readonly<{ route: 'legacy' }>
+  | Readonly<{
+      route: 'durable';
+      response: InteractiveTurnAcceptedResponse;
+    }>;
+
+export type InteractiveSendOptions = Readonly<{
   hidden?: boolean;
   turnSkill?: ChatTurnSkill;
-}
+  turnId?: string;
+  turnIdPolicy?: 'required' | 'generate';
+  legacyCompletion?: 'await' | 'detach';
+  toolGrant?: DurableInteractiveToolGrantInput;
+  onLegacySettled?: () => void;
+}>;
+
+type LegacyChatSendOptions = Pick<
+  InteractiveSendOptions,
+  'hidden' | 'turnSkill'
+>;
 
 const ADO_WRITE_TARGET =
   /\b(?:azure\s+devops|ado|work\s*items?|pbi|tbis?|epics?)\b|\b(?:bug|task|feature)\s*#?\d+\b|#\d+\b/i;
@@ -4253,7 +4278,7 @@ async function tryDispatchInteractiveTurn(
   text: string,
   modelOverride?: string,
   attachments: ChatAttachment[] = [],
-  options?: ChatSendOptions,
+  options?: LegacyChatSendOptions,
   expectedCancellationEpoch = 0
 ): Promise<InteractiveDispatchAttempt> {
   // Inert unless the actor host dispatch URL is configured (cloud only).
@@ -4495,7 +4520,7 @@ async function tryDispatchInteractiveTurn(
       }
 
       markStage('route');
-      const decision = await interactiveWorkflowRouter.route({
+      const decision = await legacyInteractiveWorkflowRouter.route({
         userId,
         project,
         workflowClass,
@@ -4654,12 +4679,12 @@ async function tryDispatchInteractiveTurn(
   }
 }
 
-export async function sendMessage(
+async function sendMessageLegacy(
   threadId: string,
   text: string,
   modelOverride?: string,
   attachments: ChatAttachment[] = [],
-  options?: ChatSendOptions
+  options?: LegacyChatSendOptions
 ): Promise<void> {
   const sendStartedAt = Date.now();
   console.log('[chat] sendMessage.start', {
@@ -6335,6 +6360,172 @@ export async function sendMessage(
     state.thread.lastActivityAt = new Date().toISOString();
     persistThread(state.thread);
     resetIdleTimer(state);
+  }
+}
+
+function reflectDurableAdmission(
+  state: ThreadState,
+  text: string,
+  attachments: ChatAttachment[],
+  options: InteractiveSendOptions | undefined,
+  response: InteractiveTurnAcceptedResponse,
+): void {
+  let timestamp = new Date().toISOString();
+  const existingMessage = state.thread.messages.find(
+    (message) => message.id === response.turnId,
+  );
+  if (!existingMessage) {
+    const message: ChatMessage = {
+      id: response.turnId,
+      role: 'user',
+      text: text.trim() || 'Uploaded files for context.',
+      ts: timestamp,
+      ...(options?.hidden ? { hidden: true } : {}),
+      ...(attachments.length > 0
+        ? {
+            attachments: attachments.map((attachment) => ({
+              id: attachment.id,
+              name: attachment.name,
+              type: attachment.type,
+              size: attachment.size,
+            })),
+          }
+        : {}),
+    };
+    state.thread.messages.push(message);
+    broadcast(state, { type: 'message', message });
+  } else {
+    timestamp = existingMessage.ts;
+  }
+  state.thread.status = 'running';
+  state.thread.activeRunId = response.runId;
+  state.thread.lastActivityAt = timestamp;
+  broadcast(state, { type: 'status', status: 'running' });
+}
+
+function reportDetachedLegacyError(threadId: string, error: unknown): void {
+  console.error(
+    `[chat] sendMessage error for thread ${threadId}:`,
+    error instanceof Error ? error.message : 'Unexpected error',
+  );
+  trackEvent('chat.send.failed', {
+    threadId,
+    errorType: error instanceof Error ? error.name : 'UnknownError',
+    errorMessage:
+      error instanceof Error ? error.message.slice(0, 200) : 'Unexpected error',
+  });
+}
+
+export function sendMessage(
+  threadId: string,
+  text: string,
+  modelOverride: string | undefined,
+  attachments: ChatAttachment[] | undefined,
+  options: InteractiveSendOptions & Readonly<{ hidden: true }>,
+): Promise<void>;
+export function sendMessage(
+  threadId: string,
+  text: string,
+  modelOverride?: string,
+  attachments?: ChatAttachment[],
+  options?: InteractiveSendOptions,
+): Promise<InteractiveMessageSubmission>;
+export async function sendMessage(
+  threadId: string,
+  text: string,
+  modelOverride?: string,
+  attachments: ChatAttachment[] = [],
+  options?: InteractiveSendOptions,
+): Promise<InteractiveMessageSubmission | void> {
+  const state = await ensureThreadState(threadId);
+  if (!state) throw new Error(`Thread ${threadId} not found`);
+  const workflowClass = resolveInteractiveWorkflowClass(state);
+  const legacyCompletion = options?.legacyCompletion ?? 'await';
+
+  const decision = await interactiveWorkflowRouter.route({
+    userId: state.thread.userId,
+    project: state.thread.kickoff.project,
+    workflowClass,
+    threadId,
+    runLegacy: async () => {
+      if (
+        legacyCompletion === 'detach' &&
+        state.thread.status === 'running'
+      ) {
+        const gate = await recoverStaleRunningThread(threadId);
+        if (gate === 'running') {
+          throw Object.assign(new Error('Agent is already running'), {
+            status: 409,
+          });
+        }
+      }
+
+      const execution = sendMessageLegacy(
+        threadId,
+        text,
+        modelOverride,
+        attachments,
+        {
+          hidden: options?.hidden,
+          turnSkill: options?.turnSkill,
+        },
+      );
+      if (legacyCompletion === 'await') {
+        try {
+          await execution;
+        } finally {
+          options?.onLegacySettled?.();
+        }
+        return;
+      }
+      void execution
+        .catch((error: unknown) => {
+          reportDetachedLegacyError(threadId, error);
+        })
+        .finally(() => {
+          options?.onLegacySettled?.();
+        });
+    },
+    admitDurable: async () => {
+      const turnId =
+        options?.turnId ??
+        (options?.turnIdPolicy === 'required' ? '' : uuidv4());
+      return durableInteractiveTurnService.admit({
+        threadId,
+        userId: state.thread.userId,
+        workflowClass,
+        turnId,
+        text,
+        modelOverride,
+        attachments,
+        hidden: options?.hidden,
+        turnSkill: options?.turnSkill,
+        toolGrant: options?.toolGrant,
+      });
+    },
+  });
+
+  switch (decision.route) {
+    case 'legacy':
+      return { route: 'legacy' };
+    case 'durable':
+      reflectDurableAdmission(
+        state,
+        text,
+        attachments,
+        options,
+        decision.response,
+      );
+      return {
+        route: 'durable',
+        response: decision.response,
+      };
+    default: {
+      const unhandled: never = decision;
+      throw new Error(
+        `Unsupported interactive route decision: ${String(unhandled)}`,
+      );
+    }
   }
 }
 

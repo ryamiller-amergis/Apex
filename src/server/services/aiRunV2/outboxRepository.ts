@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import type { AiRunV2Command } from '../../../shared/types/aiRunV2';
+import type { InteractiveDispatchOutboxPayload } from '../../../shared/types/durableInteractiveTurn';
 import { AI_RUN_OUTBOX_CHANNEL, buildOutboxNotifyPayload } from '../aiOrchestrator/outboxNotify';
 
 export type SqlExecutor = {
@@ -8,6 +9,7 @@ export type SqlExecutor = {
 
 export type OutboxKind =
   | 'dispatch_command'
+  | 'interactive_dispatch'
   | 'checkpoint_notify'
   | 'terminal_result';
 
@@ -33,7 +35,10 @@ export type EnqueueOutboxInput = Readonly<{
   kind: OutboxKind;
   runId: string;
   attemptId?: string | null;
-  payload: Record<string, unknown> | AiRunV2Command;
+  payload:
+    | Record<string, unknown>
+    | AiRunV2Command
+    | InteractiveDispatchOutboxPayload;
   availableAt?: string;
 }>;
 
@@ -85,6 +90,18 @@ function mapOutboxRow(row: Record<string, unknown>): OutboxRow {
   };
 }
 
+export async function notifyOutbox(
+  executor: SqlExecutor,
+  input: Readonly<{ outboxId: string; runId: string }>,
+): Promise<void> {
+  await executor.execute(sql`
+    SELECT pg_notify(
+      ${AI_RUN_OUTBOX_CHANNEL},
+      ${buildOutboxNotifyPayload(input)}
+    )
+  `);
+}
+
 export function createOutboxRepository(executor: SqlExecutor) {
   return {
     async enqueue(messages: EnqueueOutboxInput[]): Promise<OutboxRow[]> {
@@ -113,15 +130,10 @@ export function createOutboxRepository(executor: SqlExecutor) {
         if (row) {
           const mapped = mapOutboxRow(row);
           inserted.push(mapped);
-          await executor.execute(sql`
-            SELECT pg_notify(
-              ${AI_RUN_OUTBOX_CHANNEL},
-              ${buildOutboxNotifyPayload({
-                outboxId: mapped.id,
-                runId: mapped.runId,
-              })}
-            )
-          `);
+          await notifyOutbox(executor, {
+            outboxId: mapped.id,
+            runId: mapped.runId,
+          });
         }
       }
       return inserted;

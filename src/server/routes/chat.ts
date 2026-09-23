@@ -11,7 +11,6 @@ import {
   readOutputBacklog,
   isPrdReady,
   getThread,
-  recoverStaleRunningThread,
   isExplicitAdoWriteIntent,
   skillRequiresAdoOperations,
 } from '../services/chatAgentService';
@@ -35,6 +34,7 @@ import type {
   StartChatRequest,
   SendMessageRequest,
 } from '../../shared/types/chat';
+import type { InteractiveTurnAcceptedResponse } from '../../shared/types/durableInteractiveTurn';
 import type { ThreadAccess } from '../services/threadAccessService';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import { requirePermission } from '../middleware/rbac';
@@ -284,6 +284,9 @@ function readAttachments(raw: unknown): ChatAttachment[] {
     if (!a.id || !a.name || typeof a.content !== 'string') {
       throw new HttpError(`attachment ${index + 1} is invalid`, 400);
     }
+    if (a.encoding !== undefined && a.encoding !== 'base64') {
+      throw new HttpError(`attachment ${a.name} has an invalid encoding`, 400);
+    }
     const size = Number(a.size);
     if (!Number.isFinite(size) || size < 0) {
       throw new HttpError(`attachment ${a.name} has an invalid size`, 400);
@@ -301,6 +304,7 @@ function readAttachments(raw: unknown): ChatAttachment[] {
       type: a.type ?? 'text/plain',
       size,
       content: a.content,
+      ...(a.encoding === 'base64' ? { encoding: 'base64' as const } : {}),
     };
   });
 }
@@ -624,15 +628,14 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
   }
 
   const thread = (req as ThreadRequest).thread!;
-  if (thread.status === 'running') {
-    const gate = await recoverStaleRunningThread(req.params.id);
-    if (gate === 'running') {
-      return res.status(409).json({ error: 'Agent is already running' });
-    }
-    // Dead run cleared — accept the message.
-  }
 
   let releaseAdoWriteTurn = () => {};
+  let durableToolGrant:
+    | {
+        allowedOperations: readonly ['ado:read', 'ado:write'];
+        delegatedAdoToken: string | null;
+      }
+    | undefined;
   const calendarAssistant =
     thread.kickoff.assistantType === 'calendar-work-item';
   const explicitAdoWrite =
@@ -658,6 +661,10 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
         token,
         isSuperAdmin: isSuperAdminRequest(req),
       });
+      durableToolGrant = {
+        allowedOperations: ['ado:read', 'ado:write'],
+        delegatedAdoToken: token,
+      };
     } catch (err: unknown) {
       if (explicitAdoWrite) {
         return res
@@ -667,8 +674,8 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
     }
   }
 
-  // Fire-and-forget: response streams via SSE/WS; 202 returns immediately.
-  // Breadcrumb BEFORE the async turn so a hang inside sendMessage is still visible.
+  // The legacy callback detaches after its running-thread gate. Durable
+  // admission is awaited so the 202 can carry the persisted turn identity.
   const threadId = req.params.id;
   console.log('[chat] messages.accepted', {
     threadId,
@@ -678,19 +685,51 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
     threadId,
     attachmentCount: String(attachments.length),
   });
-  res.status(202).json({ ok: true });
-  sendMessage(threadId, body.text ?? '', body.model, attachments, {
-    turnSkill,
-  })
-    .finally(releaseAdoWriteTurn)
-    .catch((err: unknown) => {
-      console.error(`[chat] sendMessage error for thread ${threadId}:`, errorMessage(err));
-      trackEvent('chat.send.failed', {
-        threadId,
-        errorType: err instanceof Error ? err.name : 'UnknownError',
-        errorMessage: errorMessage(err).slice(0, 200),
-      });
+
+  try {
+    const submission = await sendMessage(
+      threadId,
+      body.text ?? '',
+      body.model,
+      attachments,
+      {
+        turnSkill,
+        turnId: body.turnId,
+        turnIdPolicy: 'required',
+        legacyCompletion: 'detach',
+        toolGrant: durableToolGrant,
+        onLegacySettled: releaseAdoWriteTurn,
+      },
+    );
+    if (submission?.route === 'durable') {
+      releaseAdoWriteTurn();
+      const accepted = submission.response;
+      return res.status(202).json({
+        turnId: accepted.turnId,
+        runId: accepted.runId,
+        status: accepted.status,
+        interactiveClass: accepted.interactiveClass,
+      } satisfies InteractiveTurnAcceptedResponse);
+    }
+    // Undefined is retained only for isolated route tests that mock the older
+    // void-returning send service. Production always returns a route decision.
+    if (!submission) releaseAdoWriteTurn();
+    return res.status(202).json({ ok: true });
+  } catch (err: unknown) {
+    releaseAdoWriteTurn();
+    console.error(
+      `[chat] sendMessage error for thread ${threadId}:`,
+      errorMessage(err),
+    );
+    trackEvent('chat.send.failed', {
+      threadId,
+      errorType: err instanceof Error ? err.name : 'UnknownError',
+      errorMessage: errorMessage(err).slice(0, 200),
     });
+    return res
+      .status(errorStatus(err))
+      .json({ error: errorMessage(err) });
+  }
 });
 
 /**

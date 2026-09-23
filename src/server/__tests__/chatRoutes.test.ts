@@ -864,7 +864,7 @@ describe('Home pill admission is creation-only (PBI-007 / TBI-005 DoD-4)', () =>
     });
     mockResolveThreadAccess.mockResolvedValue({ thread: ownedThread, access: 'owner' });
     mockCanWriteThread.mockResolvedValue(true);
-    mockChatService.sendMessage.mockResolvedValue(undefined);
+    mockChatService.sendMessage.mockResolvedValue({ route: 'legacy' });
   });
 
   afterEach(() => {
@@ -1052,21 +1052,22 @@ describe('POST /api/chat/threads/:id/messages — stale running self-heal', () =
     mockCanWriteThread.mockResolvedValue(true);
   });
 
-  it('accepts a message after recovering a dead running thread', async () => {
-    (mockChatService.recoverStaleRunningThread as jest.Mock).mockResolvedValue('idle');
-    mockChatService.sendMessage.mockResolvedValue(undefined);
+  it('delegates stale recovery to the legacy send callback', async () => {
+    mockChatService.sendMessage.mockResolvedValue({ route: 'legacy' });
 
     const res = await request(buildApp())
       .post(`/api/chat/threads/${threadId}/messages`)
       .send({ text: 'Continue' });
 
     expect(res.status).toBe(202);
-    expect(mockChatService.recoverStaleRunningThread).toHaveBeenCalledWith(threadId);
+    expect(mockChatService.recoverStaleRunningThread).not.toHaveBeenCalled();
     expect(mockChatService.sendMessage).toHaveBeenCalled();
   });
 
   it('returns 409 when a live run is still active', async () => {
-    (mockChatService.recoverStaleRunningThread as jest.Mock).mockResolvedValue('running');
+    mockChatService.sendMessage.mockRejectedValue(
+      Object.assign(new Error('Agent is already running'), { status: 409 }),
+    );
 
     const res = await request(buildApp())
       .post(`/api/chat/threads/${threadId}/messages`)
@@ -1074,7 +1075,8 @@ describe('POST /api/chat/threads/:id/messages — stale running self-heal', () =
 
     expect(res.status).toBe(409);
     expect(res.body).toEqual({ error: 'Agent is already running' });
-    expect(mockChatService.sendMessage).not.toHaveBeenCalled();
+    expect(mockChatService.sendMessage).toHaveBeenCalled();
+    expect(mockChatService.recoverStaleRunningThread).not.toHaveBeenCalled();
   });
 });
 
@@ -1104,7 +1106,12 @@ describe('POST /api/chat/threads/:id/messages — cached grounding delegation', 
       access: 'owner',
     });
     mockCanWriteThread.mockResolvedValue(true);
-    mockChatService.sendMessage.mockResolvedValue(undefined);
+    mockChatService.sendMessage.mockImplementation(
+      async (_threadId, _text, _model, _attachments, options) => {
+        options?.onLegacySettled?.();
+        return { route: 'legacy' };
+      },
+    );
     mockGetAdoTokenForUser.mockResolvedValue('user-ado-token');
     mockRegisterChatAdoWriteTurn.mockResolvedValue(mockReleaseAdoWriteTurn);
   });
@@ -1126,12 +1133,14 @@ describe('POST /api/chat/threads/:id/messages — cached grounding delegation', 
       'Summarize the sprint',
       undefined,
       [],
-      {
+      expect.objectContaining({
         turnSkill: {
           name: 'Scrum Assistant',
           path: '/.cursor/skills/scrum-assistant/SKILL.md',
         },
-      },
+        legacyCompletion: 'detach',
+        turnIdPolicy: 'required',
+      }),
     );
     expect(mockRegisterChatAdoWriteTurn).toHaveBeenCalledWith({
       threadId,
@@ -1181,5 +1190,120 @@ describe('POST /api/chat/threads/:id/messages — cached grounding delegation', 
     expect(res.status).toBe(202);
     expect(mockGetAdoTokenForUser).not.toHaveBeenCalled();
     expect(mockRegisterChatAdoWriteTurn).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/chat/threads/:id/messages — durable admission boundary', () => {
+  const threadId = '10000000-0000-4000-8000-000000000001';
+  const turnId = '20000000-0000-4000-8000-000000000001';
+  const runId = '50000000-0000-4000-8000-000000000001';
+  const idleThread = {
+    id: threadId,
+    userId: 'user-1',
+    kickoff: { project: 'Apex', repo: 'Apex' },
+    messages: [],
+    status: 'idle',
+    workspaceDir: '/tmp/ws',
+    flagged: false,
+    createdAt: '2026-09-23T12:00:00.000Z',
+    lastActivityAt: '2026-09-23T12:00:00.000Z',
+  } as const;
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: idleThread,
+      access: 'owner',
+    });
+    mockCanWriteThread.mockResolvedValue(true);
+  });
+
+  it('awaits durable admission and returns the accepted durable identity', async () => {
+    mockChatService.sendMessage.mockResolvedValue({
+      route: 'durable',
+      response: {
+        turnId,
+        runId,
+        status: 'queued',
+        interactiveClass: 'fast',
+      },
+    });
+
+    const response = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ turnId, text: 'Hello' });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({
+      turnId,
+      runId,
+      status: 'queued',
+      interactiveClass: 'fast',
+    });
+    expect(mockChatService.sendMessage).toHaveBeenCalledWith(
+      threadId,
+      'Hello',
+      undefined,
+      [],
+      expect.objectContaining({
+        turnId,
+        turnIdPolicy: 'required',
+        legacyCompletion: 'detach',
+      }),
+    );
+  });
+
+  it('keeps the legacy response compatible when turnId is omitted', async () => {
+    mockChatService.sendMessage.mockResolvedValue({
+      route: 'legacy',
+    });
+
+    const response = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: 'Old client' });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({ ok: true });
+  });
+
+  it('returns the stable enabled-path validation error instead of a legacy response', async () => {
+    mockChatService.sendMessage.mockRejectedValue(
+      Object.assign(new Error('INVALID_TURN_ID'), {
+        status: 400,
+        code: 'INVALID_TURN_ID',
+      }),
+    );
+
+    const response = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: 'Missing turn identity' });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: 'INVALID_TURN_ID' });
+  });
+
+  it('does not run stale legacy recovery before durable admission', async () => {
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: { ...idleThread, status: 'running' },
+      access: 'owner',
+    });
+    mockChatService.sendMessage.mockResolvedValue({
+      route: 'durable',
+      response: {
+        turnId,
+        runId,
+        status: 'queued',
+        interactiveClass: 'fast',
+      },
+    });
+
+    const response = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ turnId, text: 'Network retry' });
+
+    expect(response.status).toBe(202);
+    expect(response.body.runId).toBe(runId);
+    expect(mockChatService.recoverStaleRunningThread).not.toHaveBeenCalled();
   });
 });

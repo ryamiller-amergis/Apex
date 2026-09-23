@@ -120,10 +120,29 @@ jest.mock('../services/agentRunLifecycleService', () => ({
   enqueue: mockEnqueueAgentRun,
 }));
 
+const mockCanonicalLegacyRoute = async (input: {
+  runLegacy(): Promise<void> | void;
+}) => {
+  await input.runLegacy();
+  return { route: 'legacy' as const, reason: 'flag-disabled' as const };
+};
+const mockCanonicalInteractiveWorkflowRoute: jest.Mock = jest.fn(
+  mockCanonicalLegacyRoute,
+);
 const mockInteractiveWorkflowRoute = jest.fn();
 jest.mock('../services/interactiveWorkflowRouter', () => ({
   interactiveWorkflowRouter: {
+    route: mockCanonicalInteractiveWorkflowRoute,
+  },
+  legacyInteractiveWorkflowRouter: {
     route: mockInteractiveWorkflowRoute,
+  },
+}));
+
+const mockDurableInteractiveAdmit = jest.fn();
+jest.mock('../services/durableInteractiveTurnService', () => ({
+  durableInteractiveTurnService: {
+    admit: mockDurableInteractiveAdmit,
   },
 }));
 
@@ -1325,6 +1344,112 @@ function baseKickoff(
     ...overrides,
   };
 }
+
+describe('canonical durable send wrapper', () => {
+  const turnId = '20000000-0000-4000-8000-000000000001';
+  const runId = '50000000-0000-4000-8000-000000000001';
+
+  beforeEach(() => {
+    mockCanonicalInteractiveWorkflowRoute.mockReset();
+    mockInteractiveWorkflowRoute.mockReset();
+    mockDurableInteractiveAdmit.mockReset();
+  });
+
+  afterEach(() => {
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      mockCanonicalLegacyRoute,
+    );
+  });
+
+  it('admits durably without invoking legacy Cursor/model execution', async () => {
+    const accepted = {
+      turnId,
+      runId,
+      status: 'queued' as const,
+      interactiveClass: 'fast' as const,
+    };
+    mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        admitDurable(): Promise<typeof accepted>;
+      }) => ({
+        route: 'durable',
+        response: await input.admitDurable(),
+      }),
+    );
+    const { insertMessage: mockPgInsertMessage } = jest.requireMock(
+      '../services/chatThreadRepository',
+    ) as { insertMessage: jest.Mock };
+    const { Agent } = jest.requireMock('@cursor/sdk') as {
+      Agent: { create: jest.Mock; resume: jest.Mock };
+    };
+    mockPgInsertMessage.mockClear();
+    Agent.create.mockClear();
+    Agent.resume.mockClear();
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+
+    try {
+      await expect(
+        sendMessage(thread.id, 'Hello durable world', undefined, [], {
+          turnId,
+          turnIdPolicy: 'required',
+        }),
+      ).resolves.toEqual({
+        route: 'durable',
+        response: accepted,
+      });
+      expect(mockDurableInteractiveAdmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadId: thread.id,
+          userId: 'developer-1',
+          turnId,
+          text: 'Hello durable world',
+          attachments: [],
+        }),
+      );
+      expect(mockInteractiveWorkflowRoute).not.toHaveBeenCalled();
+      expect(mockPgInsertMessage).not.toHaveBeenCalled();
+      expect(Agent.create).not.toHaveBeenCalled();
+      expect(Agent.resume).not.toHaveBeenCalled();
+    } finally {
+      await closeThread(thread.id);
+    }
+  });
+
+  it('runs the stale-thread gate only inside the detached legacy callback', async () => {
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      mockCanonicalLegacyRoute,
+    );
+    mockIsThreadRunAlive.mockResolvedValue(true);
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+    thread.status = 'running';
+
+    try {
+      await expect(
+        sendMessage(thread.id, 'Continue', undefined, [], {
+          legacyCompletion: 'detach',
+          turnIdPolicy: 'required',
+        }),
+      ).rejects.toMatchObject({
+        status: 409,
+        message: 'Agent is already running',
+      });
+      expect(mockInteractiveWorkflowRoute).not.toHaveBeenCalled();
+      expect(mockDurableInteractiveAdmit).not.toHaveBeenCalled();
+    } finally {
+      mockIsThreadRunAlive.mockResolvedValue(false);
+      await closeThread(thread.id);
+    }
+  });
+});
 
 describe('thread kickoff effort resolution', () => {
   afterEach(() => {
