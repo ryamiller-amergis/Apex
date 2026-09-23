@@ -189,6 +189,8 @@ export interface SseTokenEvent {
   text: string;
   /** Character offset for durable streamed text; absent on legacy chat tokens. */
   streamOffset?: number;
+  /** Raw end offset when sanitized durable text consumed hidden bytes. */
+  streamEndOffset?: number;
   /** Full final text snapshot used to recover any missing streamed tail. */
   streamSnapshot?: boolean;
 }

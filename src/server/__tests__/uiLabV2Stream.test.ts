@@ -10,6 +10,7 @@ function token(
   offset: number,
   text: string,
   streamSnapshot = false,
+  streamEndOffset?: number,
 ): AgentRunEventEnvelope {
   return {
     eventId,
@@ -25,6 +26,7 @@ function token(
       type: 'token',
       text,
       streamOffset: offset,
+      ...(streamEndOffset === undefined ? {} : { streamEndOffset }),
       ...(streamSnapshot ? { streamSnapshot: true } : {}),
     },
   };
@@ -168,6 +170,34 @@ describe('observeUiLabV2Run', () => {
       'snapshot-1',
       'replace',
     );
+  });
+
+  it('advances over a durable empty marker before the next visible live delta', async () => {
+    const onToken = jest.fn();
+
+    await observeUiLabV2Run(
+      { ...INPUT, onToken },
+      {
+        replayRunEvents: jest.fn().mockResolvedValue([
+          token('marker', 1, 0, '', false, 2),
+          token('visible', 2, 2, 'ok'),
+          done(),
+        ]),
+        subscribeRunEvents: jest.fn(() => () => undefined),
+        harvestRun: jest.fn().mockResolvedValue({
+          status: 'settled',
+          outcome: 'ready',
+          html: 'ok',
+        }),
+        publishFinalSnapshot: jest.fn(async ({ html }) =>
+          token('snapshot-1', 99, 0, html, true)),
+      },
+    );
+
+    expect(onToken.mock.calls).toEqual([
+      ['ok', 'visible'],
+      ['ok', 'snapshot-1', 'replace'],
+    ]);
   });
 
   it('persists and emits a replayable final snapshot tail with an event id', async () => {
@@ -427,6 +457,34 @@ describe('replayCompletedUiLabV2Run', () => {
       snapshot.eventId,
       'replace',
     );
+  });
+
+  it('replays mixed visible and NUL-compressed deltas with the original raw offset progression', async () => {
+    const onToken = jest.fn();
+
+    await replayCompletedUiLabV2Run(
+      {
+        threadId: INPUT.threadId,
+        runId: INPUT.runId,
+        afterEventId: cursor.eventId,
+        finalHtml: '<html>abc</html>',
+        onToken,
+      },
+      {
+        loadRunEvent: jest.fn().mockResolvedValue(cursor),
+        replayRunEvents: jest.fn().mockResolvedValue([
+          token('mixed-1', 2, 6, 'ab', false, 9),
+          token('mixed-2', 3, 9, 'c</html>'),
+          token('snapshot-1', 4, 0, '<html>abc</html>', true),
+        ]),
+      },
+    );
+
+    expect(onToken.mock.calls).toEqual([
+      ['ab', 'mixed-1'],
+      ['c</html>', 'mixed-2'],
+      ['<html>abc</html>', 'snapshot-1', 'replace'],
+    ]);
   });
 
   it('replaces raw fenced and sanitizer-altered deltas with one authoritative snapshot', async () => {

@@ -411,4 +411,101 @@ describe('AI-run V2 run attempt repository', () => {
     expect(statements).toContain('ui-lab:design-1');
     expect(statements).toContain('<html>');
   });
+
+  it('persists an empty durable marker when a text delta contains only NUL bytes', async () => {
+    const eventId = '4f44f6f1-ec42-4aa6-9df4-0d8ce8438491';
+    const execute = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          id: 'attempt-1',
+          dispatch_message_id: 'dispatch-1',
+          last_checkpoint_sequence: 1,
+          status: 'running',
+          thread_id: 'ui-lab:design-1',
+        },
+      ])
+      .mockResolvedValueOnce([{ event_id: eventId }])
+      .mockResolvedValue([]);
+    const repo = createRunAttemptRepository({
+      runInTransaction: async (work) => work({ execute }),
+    });
+
+    await expect(
+      repo.acceptCheckpoint({
+        schemaVersion: AI_RUN_V2_SCHEMA_VERSION,
+        eventId,
+        runId: 'run-1',
+        attemptId: 'attempt-1',
+        attemptNumber: 1,
+        dispatchMessageId: 'dispatch-1',
+        timestamp: '2026-09-18T12:00:00.000Z',
+        kind: 'progress',
+        checkpointSequence: 2,
+        phase: 'generation',
+        status: 'running',
+        progress: {
+          kind: 'text_delta',
+          offset: 6,
+          text: '\u0000\u0000',
+        },
+      }),
+    ).resolves.toEqual({ status: 'accepted', checkpointSequence: 2 });
+
+    const statements = execute.mock.calls
+      .flatMap(([query]) => boundStrings(query))
+      .join('\n');
+    expect(statements).toContain('INSERT INTO agent_run_events');
+    expect(statements).toContain('pg_notify');
+    expect(statements).toContain('"text":""');
+    expect(statements).toContain('"streamEndOffset":8');
+  });
+
+  it('preserves the raw stream offset when a text delta mixes visible text and NUL bytes', async () => {
+    const eventId = '5f44f6f1-ec42-4aa6-9df4-0d8ce8438491';
+    const execute = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          id: 'attempt-1',
+          dispatch_message_id: 'dispatch-1',
+          last_checkpoint_sequence: 1,
+          status: 'running',
+          thread_id: 'ui-lab:design-1',
+        },
+      ])
+      .mockResolvedValueOnce([{ event_id: eventId }])
+      .mockResolvedValue([]);
+    const repo = createRunAttemptRepository({
+      runInTransaction: async (work) => work({ execute }),
+    });
+
+    await expect(
+      repo.acceptCheckpoint({
+        schemaVersion: AI_RUN_V2_SCHEMA_VERSION,
+        eventId,
+        runId: 'run-1',
+        attemptId: 'attempt-1',
+        attemptNumber: 1,
+        dispatchMessageId: 'dispatch-1',
+        timestamp: '2026-09-18T12:00:00.000Z',
+        kind: 'progress',
+        checkpointSequence: 2,
+        phase: 'generation',
+        status: 'running',
+        progress: {
+          kind: 'text_delta',
+          offset: 6,
+          text: 'a\u0000b',
+        },
+      }),
+    ).resolves.toEqual({ status: 'accepted', checkpointSequence: 2 });
+
+    const statements = execute.mock.calls
+      .flatMap(([query]) => boundStrings(query))
+      .join('\n');
+    expect(statements).toContain('"text":"ab"');
+    expect(statements).toContain('"streamOffset":6');
+    expect(statements).toContain('"streamEndOffset":9');
+  });
 });

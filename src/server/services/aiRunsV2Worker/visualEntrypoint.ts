@@ -9,6 +9,7 @@ import {
   type DesignPrototypeVisualSpecification,
   type VisualModelSettings,
 } from '../../../shared/types/aiRunV2VisualSpec';
+import type { AiRunV2Command } from '../../../shared/types/aiRunV2';
 import { createWorkerServiceBusClient } from './serviceBusClient';
 import { resolveWorkerEnvironment } from './entrypointSupport';
 import {
@@ -66,6 +67,24 @@ function visualReferenceImages(
     base64: image.base64,
     mediaType: image.mediaType,
   }));
+}
+
+export function resolveVisualCommandDeadlineMs(command: AiRunV2Command): number {
+  if (!command.deadlineAt) {
+    throw new Error('Visual command has no absolute deadline');
+  }
+  const deadlineAt = Date.parse(command.deadlineAt);
+  if (!Number.isFinite(deadlineAt)) {
+    throw new Error('Visual command has an invalid absolute deadline');
+  }
+  return Math.max(1, deadlineAt - Date.now());
+}
+
+export function resolveVisualDeadlineMs(specification: unknown): number {
+  if (!isAiRunV2VisualSpecification(specification)) {
+    throw new Error('Command referenced an invalid visual specification');
+  }
+  return specification.model.timeoutMs;
 }
 
 /**
@@ -302,6 +321,8 @@ export async function startVisualWorker(): Promise<void> {
     },
     artifactContainer: env.artifactContainer,
     containerAppsExecutionId: env.containerAppsExecutionId,
+    resolveCommandDeadlineMs: resolveVisualCommandDeadlineMs,
+    resolveDeadlineMs: resolveVisualDeadlineMs,
     signal: abort.signal,
   });
 

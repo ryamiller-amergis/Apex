@@ -694,14 +694,18 @@ export function createRunAttemptRepository(options?: {
           checkpoint.kind === 'progress'
           && checkpoint.progress?.kind === 'text_delta'
         ) {
+          const streamOffset = checkpoint.progress.offset;
+          const streamEndOffset =
+            checkpoint.progress.offset + checkpoint.progress.text.length;
           const text = checkpoint.progress.text.split('\u0000').join('');
-          if (text) {
+          if (text || streamEndOffset > streamOffset) {
             const sourceInstance =
               `ai-run-v2-checkpoint:${checkpoint.attemptId}`;
             const event = {
               type: 'token',
               text,
-              streamOffset: checkpoint.progress.offset,
+              streamOffset,
+              streamEndOffset,
               runId: checkpoint.runId,
               eventTimestamp: checkpoint.timestamp,
             };

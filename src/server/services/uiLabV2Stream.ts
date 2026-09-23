@@ -55,6 +55,7 @@ export type ObserveUiLabV2Run = (
 type PendingDelta = Readonly<{
   text: string;
   eventId: string;
+  endOffset: number;
 }>;
 
 function tokenEndOffset(envelope: AgentRunEventEnvelope): number | null {
@@ -62,7 +63,12 @@ function tokenEndOffset(envelope: AgentRunEventEnvelope): number | null {
   if (envelope.event.streamSnapshot) return envelope.event.text.length;
   const offset = envelope.event.streamOffset;
   if (!Number.isSafeInteger(offset) || (offset as number) < 0) return null;
-  return (offset as number) + envelope.event.text.length;
+  const numericOffset = offset as number;
+  const endOffset = envelope.event.streamEndOffset;
+  if (Number.isSafeInteger(endOffset) && (endOffset as number) >= numericOffset) {
+    return endOffset as number;
+  }
+  return numericOffset + envelope.event.text.length;
 }
 
 async function publishFinalSnapshot(
@@ -156,8 +162,11 @@ export const observeUiLabV2Run: ObserveUiLabV2Run = async (
       const delta = pendingDeltas.get(nextOffset);
       if (!delta) return;
       pendingDeltas.delete(nextOffset);
-      input.onToken(delta.text, delta.eventId);
-      nextOffset += delta.text.length;
+      const currentOffset = nextOffset;
+      if (delta.text) {
+        input.onToken(delta.text, delta.eventId);
+      }
+      nextOffset = Math.max(currentOffset + delta.text.length, delta.endOffset);
     }
   };
 
@@ -171,12 +180,15 @@ export const observeUiLabV2Run: ObserveUiLabV2Run = async (
     }
     const offset = envelope.event.streamOffset;
     if (!Number.isSafeInteger(offset) || (offset as number) < 0) return;
+    const endOffset = tokenEndOffset(envelope);
+    if (endOffset === null) return;
     const numericOffset = offset as number;
     if (nextOffset === null) nextOffset = numericOffset;
     if (numericOffset < nextOffset || pendingDeltas.has(numericOffset)) return;
     pendingDeltas.set(numericOffset, {
       text: envelope.event.text,
       eventId: envelope.eventId,
+      endOffset,
     });
     flushDeltas();
   };
@@ -316,10 +328,17 @@ export async function replayCompletedUiLabV2Run(
     }
     const offset = envelope.event.streamOffset;
     if (!Number.isSafeInteger(offset) || (offset as number) < 0) return;
+    const endOffset = tokenEndOffset(envelope);
+    if (endOffset === null) return;
     if (nextOffset === null) nextOffset = offset as number;
     if (offset !== nextOffset) return;
-    input.onToken(envelope.event.text, envelope.eventId);
-    nextOffset += envelope.event.text.length;
+    if (envelope.event.text) {
+      input.onToken(envelope.event.text, envelope.eventId);
+    }
+    nextOffset = Math.max(
+      nextOffset + envelope.event.text.length,
+      endOffset,
+    );
   };
 
   await replayAllPages({
