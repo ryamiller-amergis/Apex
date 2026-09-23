@@ -119,6 +119,31 @@ export type AcceptCheckpointResult =
   | { status: 'fence_mismatch' }
   | { status: 'not_found' };
 
+export type InteractiveDispatchState =
+  | 'queued'
+  | 'dispatched'
+  | 'running'
+  | 'terminal'
+  | 'fence-mismatch'
+  | 'not-found';
+
+export type ReadInteractiveDispatchStateInput = Readonly<{
+  attemptId: string;
+  expectedDispatchMessageId: string;
+}>;
+
+export type MarkInteractiveDispatchedResult =
+  | 'dispatched'
+  | 'already-dispatched'
+  | 'fence-mismatch'
+  | 'not-found';
+
+export type FailExpiredInteractiveDispatchInput = Readonly<{
+  attemptId: string;
+  expectedDispatchMessageId: string;
+  detail: string;
+}>;
+
 export type RunAttemptRepository = {
   createQueuedV2Run(
     input: CreateQueuedV2RunInput,
@@ -135,6 +160,15 @@ export type RunAttemptRepository = {
   acceptCheckpoint(
     checkpoint: AiRunV2Checkpoint,
   ): Promise<AcceptCheckpointResult>;
+  readInteractiveDispatchState(
+    input: ReadInteractiveDispatchStateInput,
+  ): Promise<InteractiveDispatchState>;
+  markInteractiveDispatched(
+    input: ReadInteractiveDispatchStateInput,
+  ): Promise<MarkInteractiveDispatchedResult>;
+  failExpiredInteractiveDispatch(
+    input: FailExpiredInteractiveDispatchInput,
+  ): Promise<void>;
 };
 
 type TransactionRunner = <T>(
@@ -144,6 +178,51 @@ type TransactionRunner = <T>(
 function resultRows<T>(result: unknown): T[] {
   if (Array.isArray(result)) return result as T[];
   return (result as { rows?: T[] } | undefined)?.rows ?? [];
+}
+
+type InteractiveAttemptRow = Readonly<{
+  attempt_status: AiRunV2AttemptStatus;
+  dispatch_message_id: string;
+  run_id?: string;
+  thread_id?: string;
+  run_status?: AgentRunStatus;
+  transition_at?: string | Date;
+}>;
+
+function mapInteractiveDispatchState(
+  status: AiRunV2AttemptStatus,
+): Exclude<InteractiveDispatchState, 'fence-mismatch' | 'not-found'> {
+  switch (status) {
+    case 'queued':
+      return 'queued';
+    case 'dispatched':
+      return 'dispatched';
+    case 'running':
+    case 'checking_worker':
+    case 'finalizing':
+      return 'running';
+    case 'completed':
+    case 'failed':
+    case 'cancelled':
+      return 'terminal';
+    default: {
+      const unhandled: never = status;
+      throw new Error(`Unsupported attempt status: ${String(unhandled)}`);
+    }
+  }
+}
+
+function transitionTimestamp(row: InteractiveAttemptRow): string {
+  if (row.transition_at instanceof Date) {
+    return row.transition_at.toISOString();
+  }
+  if (
+    typeof row.transition_at === 'string' &&
+    Number.isFinite(Date.parse(row.transition_at))
+  ) {
+    return row.transition_at;
+  }
+  return new Date().toISOString();
 }
 
 const ALLOWED_ATTEMPT_TRANSITIONS: Record<
@@ -212,6 +291,289 @@ export function createRunAttemptRepository(options?: {
     options?.runInTransaction ?? defaultTransactionRunner;
 
   return {
+    async readInteractiveDispatchState(
+      input: ReadInteractiveDispatchStateInput,
+    ): Promise<InteractiveDispatchState> {
+      return runInTransaction(async (executor) => {
+        const result = await executor.execute(sql`
+          SELECT
+            attempt.status AS attempt_status,
+            attempt.dispatch_message_id
+          FROM ai_run_attempts AS attempt
+          JOIN agent_runs AS run
+            ON run.id = attempt.run_id
+           AND run.transport_version = 'dapr-actor-v2'
+          WHERE attempt.id = ${input.attemptId}
+        `);
+        const row = resultRows<InteractiveAttemptRow>(result)[0];
+        if (!row) return 'not-found';
+        if (
+          row.dispatch_message_id !== input.expectedDispatchMessageId
+        ) {
+          return 'fence-mismatch';
+        }
+        return mapInteractiveDispatchState(row.attempt_status);
+      });
+    },
+
+    async markInteractiveDispatched(
+      input: ReadInteractiveDispatchStateInput,
+    ): Promise<MarkInteractiveDispatchedResult> {
+      return runInTransaction(async (executor) => {
+        const result = await executor.execute(sql`
+          SELECT
+            attempt.status AS attempt_status,
+            attempt.dispatch_message_id,
+            attempt.run_id,
+            run.thread_id,
+            run.status AS run_status,
+            now() AS transition_at
+          FROM ai_run_attempts AS attempt
+          JOIN agent_runs AS run
+            ON run.id = attempt.run_id
+           AND run.transport_version = 'dapr-actor-v2'
+          WHERE attempt.id = ${input.attemptId}
+          FOR UPDATE OF attempt, run
+        `);
+        const row = resultRows<InteractiveAttemptRow>(result)[0];
+        if (!row) return 'not-found';
+        if (
+          row.dispatch_message_id !== input.expectedDispatchMessageId
+        ) {
+          return 'fence-mismatch';
+        }
+        if (
+          row.attempt_status !== 'queued' ||
+          row.run_status !== 'queued'
+        ) {
+          return 'already-dispatched';
+        }
+        if (!row.run_id || !row.thread_id) return 'not-found';
+
+        const timestamp = transitionTimestamp(row);
+        const eventId = randomUUID();
+        const sourceInstance =
+          `interactive-orchestrator:${input.attemptId}`;
+        const detail = 'Dispatched to interactive worker';
+        const event = {
+          type: 'phase' as const,
+          phase: 'dispatched' as const,
+          status: 'running' as const,
+          detail,
+          runId: row.run_id,
+          eventTimestamp: timestamp,
+        };
+
+        await executor.execute(sql`
+          UPDATE ai_run_attempts
+          SET
+            status = 'dispatched',
+            updated_at = ${timestamp}::timestamptz
+          WHERE id = ${input.attemptId}
+            AND dispatch_message_id = ${input.expectedDispatchMessageId}
+            AND status = 'queued'
+        `);
+        await executor.execute(sql`
+          UPDATE agent_runs
+          SET
+            status = 'dispatched',
+            dispatch_message_id = ${input.expectedDispatchMessageId},
+            dispatched_at = ${timestamp}::timestamptz,
+            progress_phase = 'dispatched',
+            progress_label = ${detail},
+            progress_at = ${timestamp}::timestamptz,
+            updated_at = ${timestamp}::timestamptz
+          WHERE id = ${row.run_id}
+            AND transport_version = 'dapr-actor-v2'
+            AND status = 'queued'
+        `);
+        await executor.execute(sql`
+          INSERT INTO agent_run_events (
+            event_id,
+            thread_id,
+            run_id,
+            source_instance,
+            sequence,
+            event_timestamp,
+            event_type,
+            phase,
+            status,
+            detail,
+            event
+          ) VALUES (
+            ${eventId}::uuid,
+            ${row.thread_id},
+            ${row.run_id},
+            ${sourceInstance},
+            1,
+            ${timestamp}::timestamptz,
+            'phase',
+            'dispatched',
+            'running',
+            ${detail},
+            ${JSON.stringify(event)}::jsonb
+          )
+        `);
+        await executor.execute(sql`
+          SELECT pg_notify(
+            'agent_run_events',
+            json_build_object(
+              'threadId', ${row.thread_id},
+              'eventId', ${eventId}
+            )::text
+          )
+        `);
+        return 'dispatched';
+      });
+    },
+
+    async failExpiredInteractiveDispatch(
+      input: FailExpiredInteractiveDispatchInput,
+    ): Promise<void> {
+      await runInTransaction(async (executor) => {
+        const result = await executor.execute(sql`
+          SELECT
+            attempt.status AS attempt_status,
+            attempt.dispatch_message_id,
+            attempt.run_id,
+            run.thread_id,
+            run.status AS run_status,
+            now() AS transition_at
+          FROM ai_run_attempts AS attempt
+          JOIN agent_runs AS run
+            ON run.id = attempt.run_id
+           AND run.transport_version = 'dapr-actor-v2'
+          WHERE attempt.id = ${input.attemptId}
+          FOR UPDATE OF attempt, run
+        `);
+        const row = resultRows<InteractiveAttemptRow>(result)[0];
+        if (
+          !row ||
+          row.dispatch_message_id !== input.expectedDispatchMessageId ||
+          isAiRunV2TerminalAttemptStatus(row.attempt_status)
+        ) {
+          return;
+        }
+        if (!row.run_id || !row.thread_id) return;
+
+        const timestamp = transitionTimestamp(row);
+        const errorEventId = randomUUID();
+        const doneEventId = randomUUID();
+        const sourceInstance =
+          `interactive-orchestrator-timeout:${input.attemptId}`;
+        const errorEvent = {
+          type: 'error' as const,
+          error: input.detail,
+          errorCode: 'fatal' as const,
+          runId: row.run_id,
+        };
+        const doneEvent = {
+          type: 'done' as const,
+          runId: row.run_id,
+        };
+
+        await executor.execute(sql`
+          UPDATE ai_run_attempts
+          SET
+            status = 'failed',
+            failure_category = 'hard_timeout',
+            failure_detail = ${input.detail},
+            updated_at = ${timestamp}::timestamptz
+          WHERE id = ${input.attemptId}
+            AND dispatch_message_id = ${input.expectedDispatchMessageId}
+            AND status IN (
+              'queued',
+              'dispatched',
+              'running',
+              'checking_worker',
+              'finalizing'
+            )
+        `);
+        await executor.execute(sql`
+          UPDATE agent_runs
+          SET
+            status = 'failed',
+            last_error = ${input.detail},
+            progress_phase = 'completion',
+            progress_label = ${input.detail},
+            progress_at = ${timestamp}::timestamptz,
+            updated_at = ${timestamp}::timestamptz
+          WHERE id = ${row.run_id}
+            AND transport_version = 'dapr-actor-v2'
+            AND status IN ('queued', 'dispatched', 'running')
+        `);
+        await executor.execute(sql`
+          UPDATE chat_threads
+          SET
+            status = 'idle',
+            active_run_id = NULL,
+            last_error = ${input.detail},
+            last_activity_at = ${timestamp}::timestamptz
+          WHERE id = ${row.thread_id}::uuid
+            AND active_run_id = ${row.run_id}
+        `);
+        await executor.execute(sql`
+          INSERT INTO agent_run_events (
+            event_id,
+            thread_id,
+            run_id,
+            source_instance,
+            sequence,
+            event_timestamp,
+            event_type,
+            phase,
+            status,
+            detail,
+            event
+          ) VALUES
+          (
+            ${errorEventId}::uuid,
+            ${row.thread_id},
+            ${row.run_id},
+            ${sourceInstance},
+            1,
+            ${timestamp}::timestamptz,
+            'error',
+            'completion',
+            'failed',
+            ${input.detail},
+            ${JSON.stringify(errorEvent)}::jsonb
+          ),
+          (
+            ${doneEventId}::uuid,
+            ${row.thread_id},
+            ${row.run_id},
+            ${sourceInstance},
+            2,
+            ${timestamp}::timestamptz,
+            'done',
+            'completion',
+            'failed',
+            ${input.detail},
+            ${JSON.stringify(doneEvent)}::jsonb
+          )
+        `);
+        await executor.execute(sql`
+          SELECT pg_notify(
+            'agent_run_events',
+            json_build_object(
+              'threadId', ${row.thread_id},
+              'eventId', ${errorEventId}
+            )::text
+          )
+        `);
+        await executor.execute(sql`
+          SELECT pg_notify(
+            'agent_run_events',
+            json_build_object(
+              'threadId', ${row.thread_id},
+              'eventId', ${doneEventId}
+            )::text
+          )
+        `);
+      });
+    },
+
     async createQueuedV2Run(
       input: CreateQueuedV2RunInput
     ): Promise<CreateQueuedV2RunResult> {

@@ -119,4 +119,52 @@ describe('AI-run V2 outbox repository', () => {
     expect(query).not.toContain('ui-lab');
     expect(query).not.toContain('design-prototype');
   });
+
+  it('keeps background claims isolated from interactive dispatch rows', async () => {
+    const execute = jest.fn().mockResolvedValue([]);
+    const repo = createOutboxRepository({ execute });
+
+    await repo.claimBatch(10, 'drainer-a', 60_000);
+
+    const query = sqlText(execute.mock.calls[0][0]);
+    expect(query).toContain("kind <> 'interactive_dispatch'");
+  });
+
+  it('claims the bounded FIFO union needed for interactive floors and burst', async () => {
+    const execute = jest.fn().mockResolvedValue([]);
+    const repo = createOutboxRepository({ execute });
+
+    await repo.claimInteractiveCandidates(16, 2, 'drainer-a', 60_000);
+
+    const query = sqlText(execute.mock.calls[0][0]);
+    expect(query).toContain("kind = 'interactive_dispatch'");
+    expect(query).toContain("payload->>'interactiveClass' AS interactive_class");
+    expect(query).toContain("interactive_class = 'fast'");
+    expect(query).toContain("interactive_class = 'agentic'");
+    expect(query).toContain('FOR UPDATE OF outbox SKIP LOCKED');
+    expect(query).toContain('ORDER BY created_at ASC, id ASC');
+    expect(query).not.toContain('ORDER BY available_at');
+    expect(query).not.toContain('model');
+  });
+
+  it('releases an expected capacity deferral without publishing it', async () => {
+    const execute = jest.fn().mockResolvedValueOnce([{ id: 'outbox-1' }]);
+    const repo = createOutboxRepository({ execute });
+
+    await expect(
+      repo.releaseClaim(
+        'outbox-1',
+        'drainer-a',
+        '2026-09-23T15:00:05.000Z',
+        'interactive_cap',
+      ),
+    ).resolves.toBe(true);
+
+    const query = sqlText(execute.mock.calls[0][0]);
+    expect(query).toContain('claimed_by = NULL');
+    expect(query).toContain('claimed_at = NULL');
+    expect(query).toContain('claim_expires_at = NULL');
+    expect(query).not.toContain('publish_attempts =');
+    expect(query).not.toContain('published_at =');
+  });
 });

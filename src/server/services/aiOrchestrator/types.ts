@@ -8,6 +8,7 @@ import {
   type AiRunV2CapacityClass,
   type AiRunV2WorkloadLane,
 } from '../../../shared/types/aiRunV2';
+import type { InteractiveClass } from '../../../shared/types/durableInteractiveTurn';
 
 export const AI_ORCHESTRATOR_PROVIDERS = ['cursor', 'bedrock'] as const;
 export type AiOrchestratorProvider =
@@ -19,6 +20,7 @@ export type AiOrchestratorLane = AiRunV2WorkloadLane;
 export type ProviderCapacityConfig = Readonly<{
   cursorCap: number;
   bedrockCap: number;
+  interactiveCap: number;
   /** Bedrock slots batch work cannot consume. Interactive work may use any free slot. */
   interactiveReservedBedrockSlots: number;
   /** Per-lane reserved floors that may borrow from unused shared capacity. */
@@ -28,11 +30,12 @@ export type ProviderCapacityConfig = Readonly<{
 export const DEFAULT_PROVIDER_CAPACITY: ProviderCapacityConfig = {
   cursorCap: 20,
   bedrockCap: 2,
+  interactiveCap: 16,
   interactiveReservedBedrockSlots: 1,
   laneFloors: {
     document: 4,
     visual: 2,
-    fast: 4,
+    fast: 2,
     agentic: 2,
   },
 };
@@ -61,6 +64,14 @@ export type DispatchDecision =
         | 'uncertain_workers_paused'
         | 'unknown_lane';
     };
+
+export type InteractiveCapacityDecision =
+  | Readonly<{ status: 'allow'; borrowed: boolean }>
+  | Readonly<{ status: 'deny'; reason: 'interactive_cap' }>;
+
+export type DispatchDestination =
+  | Readonly<{ kind: 'service-bus'; queueName: string }>
+  | Readonly<{ kind: 'dapr-actor'; interactiveClass: InteractiveClass }>;
 
 export type PeekLockedMessage = Readonly<{
   lockToken: string;

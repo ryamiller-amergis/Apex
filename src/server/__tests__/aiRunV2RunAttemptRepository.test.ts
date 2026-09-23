@@ -508,4 +508,158 @@ describe('AI-run V2 run attempt repository', () => {
     expect(statements).toContain('"streamOffset":6');
     expect(statements).toContain('"streamEndOffset":9');
   });
+
+  it.each([
+    ['queued', 'queued'],
+    ['dispatched', 'dispatched'],
+    ['running', 'running'],
+    ['checking_worker', 'running'],
+    ['finalizing', 'running'],
+    ['completed', 'terminal'],
+    ['failed', 'terminal'],
+    ['cancelled', 'terminal'],
+  ] as const)(
+    'reads interactive %s state as %s under the dispatch fence',
+    async (attemptStatus, expectedState) => {
+      const execute = jest.fn().mockResolvedValueOnce([
+        {
+          attempt_status: attemptStatus,
+          dispatch_message_id: 'dispatch-1',
+        },
+      ]);
+      const repo = createRunAttemptRepository({
+        runInTransaction: async (work) => work({ execute }),
+      });
+
+      await expect(
+        repo.readInteractiveDispatchState({
+          attemptId: 'attempt-1',
+          expectedDispatchMessageId: 'dispatch-1',
+        }),
+      ).resolves.toBe(expectedState);
+    },
+  );
+
+  it('distinguishes missing interactive attempts from stale fences', async () => {
+    const missingExecute = jest.fn().mockResolvedValueOnce([]);
+    const missingRepo = createRunAttemptRepository({
+      runInTransaction: async (work) => work({ execute: missingExecute }),
+    });
+    await expect(
+      missingRepo.readInteractiveDispatchState({
+        attemptId: 'attempt-1',
+        expectedDispatchMessageId: 'dispatch-1',
+      }),
+    ).resolves.toBe('not-found');
+
+    const staleExecute = jest.fn().mockResolvedValueOnce([
+      {
+        attempt_status: 'queued',
+        dispatch_message_id: 'dispatch-current',
+      },
+    ]);
+    const staleRepo = createRunAttemptRepository({
+      runInTransaction: async (work) => work({ execute: staleExecute }),
+    });
+    await expect(
+      staleRepo.readInteractiveDispatchState({
+        attemptId: 'attempt-1',
+        expectedDispatchMessageId: 'dispatch-stale',
+      }),
+    ).resolves.toBe('fence-mismatch');
+  });
+
+  it('marks an interactive attempt dispatched once and persists its phase', async () => {
+    const execute = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          attempt_status: 'queued',
+          dispatch_message_id: 'dispatch-1',
+          run_id: 'run-1',
+          thread_id: 'thread-1',
+          run_status: 'queued',
+        },
+      ])
+      .mockResolvedValue([]);
+    const repo = createRunAttemptRepository({
+      runInTransaction: async (work) => work({ execute }),
+    });
+
+    await expect(
+      repo.markInteractiveDispatched({
+        attemptId: 'attempt-1',
+        expectedDispatchMessageId: 'dispatch-1',
+      }),
+    ).resolves.toBe('dispatched');
+
+    const statements = execute.mock.calls
+      .flatMap(([query]) => boundStrings(query))
+      .join('\n');
+    expect(statements).toContain('UPDATE ai_run_attempts');
+    expect(statements).toContain('UPDATE agent_runs');
+    expect(statements).toContain('INSERT INTO agent_run_events');
+    expect(statements).toContain("'dispatched'");
+    expect(statements).toContain('interactive-orchestrator:attempt-1');
+    expect(statements).toContain('pg_notify');
+  });
+
+  it('reuses an already-dispatched attempt after a lost response', async () => {
+    const execute = jest.fn().mockResolvedValueOnce([
+      {
+        attempt_status: 'dispatched',
+        dispatch_message_id: 'dispatch-1',
+        run_id: 'run-1',
+        thread_id: 'thread-1',
+        run_status: 'dispatched',
+      },
+    ]);
+    const repo = createRunAttemptRepository({
+      runInTransaction: async (work) => work({ execute }),
+    });
+
+    await expect(
+      repo.markInteractiveDispatched({
+        attemptId: 'attempt-1',
+        expectedDispatchMessageId: 'dispatch-1',
+      }),
+    ).resolves.toBe('already-dispatched');
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('fencedly terminalizes an expired interactive dispatch with error and done events', async () => {
+    const execute = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          attempt_status: 'queued',
+          dispatch_message_id: 'dispatch-1',
+          run_id: 'run-1',
+          thread_id: 'thread-1',
+          run_status: 'queued',
+        },
+      ])
+      .mockResolvedValue([]);
+    const repo = createRunAttemptRepository({
+      runInTransaction: async (work) => work({ execute }),
+    });
+
+    await repo.failExpiredInteractiveDispatch({
+      attemptId: 'attempt-1',
+      expectedDispatchMessageId: 'dispatch-1',
+      detail: 'Interactive turn exceeded its absolute deadline',
+    });
+
+    const statements = execute.mock.calls
+      .flatMap(([query]) => boundStrings(query))
+      .join('\n');
+    expect(statements).toContain('hard_timeout');
+    expect(statements).toContain('UPDATE chat_threads');
+    expect(statements).toContain('"type":"error"');
+    expect(statements).toContain('"type":"done"');
+    expect(statements).toContain(
+      'interactive-orchestrator-timeout:attempt-1',
+    );
+    expect(statements).toContain('pg_notify');
+  });
 });

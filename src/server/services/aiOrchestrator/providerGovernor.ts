@@ -6,14 +6,34 @@ import type {
   AiOrchestratorLane,
   AiOrchestratorProvider,
   DispatchDecision,
+  InteractiveCapacityDecision,
   ProviderCapacityConfig,
   ProviderUtilization,
 } from './types';
 import { DEFAULT_PROVIDER_CAPACITY } from './types';
 import type { AiRunV2CapacityClass } from '../../../shared/types/aiRunV2';
+import type { InteractiveClass } from '../../../shared/types/durableInteractiveTurn';
 
 export function providerForLane(lane: AiOrchestratorLane): AiOrchestratorProvider {
   return lane === 'visual' ? 'bedrock' : 'cursor';
+}
+
+export function evaluateInteractiveCapacity(
+  utilization: ProviderUtilization,
+  interactiveClass: InteractiveClass,
+  config: ProviderCapacityConfig = DEFAULT_PROVIDER_CAPACITY,
+): InteractiveCapacityDecision {
+  const totalInteractiveInFlight =
+    utilization.laneInFlight.fast + utilization.laneInFlight.agentic;
+  if (totalInteractiveInFlight >= config.interactiveCap) {
+    return { status: 'deny', reason: 'interactive_cap' };
+  }
+  return {
+    status: 'allow',
+    borrowed:
+      utilization.laneInFlight[interactiveClass] >=
+      config.laneFloors[interactiveClass],
+  };
 }
 
 export function evaluateDispatchCapacity(input: {

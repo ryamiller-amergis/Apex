@@ -7,36 +7,42 @@ describe('utilizationReader', () => {
         execute: async () => ({
           rows: [
             {
+              transport_version: 'servicebus-blob-v2',
               attempt_status: 'running',
               published_at: '2026-09-22T12:00:00.000Z',
               workload_lane: 'document',
               capacity_class: 'batch',
             },
             {
+              transport_version: 'servicebus-blob-v2',
               attempt_status: 'checking_worker',
               published_at: '2026-09-22T12:00:00.000Z',
               workload_lane: 'document',
               capacity_class: 'batch',
             },
             {
+              transport_version: 'servicebus-blob-v2',
               attempt_status: 'finalizing',
               published_at: '2026-09-22T12:00:00.000Z',
               workload_lane: 'document',
               capacity_class: 'batch',
             },
             {
+              transport_version: 'servicebus-blob-v2',
               attempt_status: 'dispatched',
               published_at: '2026-09-22T12:00:00.000Z',
               workload_lane: 'visual',
               capacity_class: 'batch',
             },
             {
+              transport_version: 'servicebus-blob-v2',
               attempt_status: 'running',
               published_at: '2026-09-22T12:00:00.000Z',
               workload_lane: 'visual',
               capacity_class: 'interactive',
             },
             {
+              transport_version: 'servicebus-blob-v2',
               attempt_status: 'running',
               published_at: '2026-09-22T12:00:00.000Z',
               workload_lane: 'agentic',
@@ -70,24 +76,28 @@ describe('utilizationReader', () => {
         execute: async () => ({
           rows: [
             {
+              transport_version: 'servicebus-blob-v2',
               attempt_status: 'running',
               published_at: '2026-09-22T12:00:00.000Z',
               workload_lane: null,
               capacity_class: 'batch',
             },
             {
+              transport_version: 'servicebus-blob-v2',
               attempt_status: 'running',
               published_at: '2026-09-22T12:00:00.000Z',
               workload_lane: 'batch',
               capacity_class: 'batch',
             },
             {
+              transport_version: 'servicebus-blob-v2',
               attempt_status: 'running',
               published_at: '2026-09-22T12:00:00.000Z',
               workload_lane: 'fast',
               capacity_class: 'interactive',
             },
             {
+              transport_version: 'servicebus-blob-v2',
               attempt_status: 'running',
               published_at: '2026-09-22T12:00:00.000Z',
               workload_lane: 'fast',
@@ -123,18 +133,21 @@ describe('utilizationReader', () => {
 
   it('does not count dispatched attempts until their outbox command is published', async () => {
     const rows: Array<{
+      transport_version: string;
       attempt_status: string;
       published_at: string | null;
       workload_lane: string;
       capacity_class: string;
     }> = [
       {
+        transport_version: 'servicebus-blob-v2',
         attempt_status: 'dispatched',
         published_at: null,
         workload_lane: 'visual',
         capacity_class: 'interactive',
       },
       {
+        transport_version: 'servicebus-blob-v2',
         attempt_status: 'dispatched',
         published_at: null,
         workload_lane: 'visual',
@@ -159,6 +172,56 @@ describe('utilizationReader', () => {
       laneInFlight: { visual: 2 },
       providerClassInFlight: {
         bedrock: { batch: 0, interactive: 2 },
+      },
+    });
+  });
+
+  it('counts only dispatched or running Dapr turns from the persisted class', async () => {
+    const reader = createUtilizationReader({
+      executor: {
+        execute: async () => ({
+          rows: [
+            {
+              transport_version: 'dapr-actor-v2',
+              attempt_status: 'queued',
+              published_at: null,
+              workload_lane: null,
+              capacity_class: null,
+              interactive_class: 'fast',
+            },
+            {
+              transport_version: 'dapr-actor-v2',
+              attempt_status: 'dispatched',
+              published_at: null,
+              workload_lane: null,
+              capacity_class: null,
+              interactive_class: 'fast',
+            },
+            {
+              transport_version: 'dapr-actor-v2',
+              attempt_status: 'running',
+              published_at: null,
+              workload_lane: null,
+              capacity_class: null,
+              interactive_class: 'agentic',
+            },
+          ],
+        }),
+      },
+    });
+
+    expect(await reader.read()).toEqual({
+      cursorInFlight: 2,
+      bedrockInFlight: 0,
+      laneInFlight: {
+        document: 0,
+        visual: 0,
+        fast: 1,
+        agentic: 1,
+      },
+      providerClassInFlight: {
+        cursor: { batch: 0, interactive: 2 },
+        bedrock: { batch: 0, interactive: 0 },
       },
     });
   });

@@ -7,6 +7,10 @@ import {
   isAiRunV2WorkloadLane,
   type AiRunV2CapacityClass,
 } from '../../../shared/types/aiRunV2';
+import {
+  isInteractiveDispatchOutboxPayload,
+  type InteractiveDispatchOutboxPayload,
+} from '../../../shared/types/durableInteractiveTurn';
 import type { OutboxRow } from '../aiRunV2/outboxRepository';
 import { evaluateDispatchCapacity, providerForLane } from './providerGovernor';
 import type {
@@ -28,6 +32,77 @@ export type AdmissionCandidate = Readonly<{
   capacityClass: AiRunV2CapacityClass | null;
   decision: DispatchDecision;
 }>;
+
+export type InteractiveAdmissionCandidate = Readonly<{
+  outbox: OutboxRow;
+  payload: InteractiveDispatchOutboxPayload;
+}>;
+
+export function toInteractiveAdmissionCandidate(
+  row: OutboxRow,
+): InteractiveAdmissionCandidate | null {
+  if (
+    row.kind !== 'interactive_dispatch' ||
+    !isInteractiveDispatchOutboxPayload(row.payload)
+  ) {
+    return null;
+  }
+  return {
+    outbox: row,
+    payload: row.payload,
+  };
+}
+
+function compareInteractiveCandidates(
+  left: InteractiveAdmissionCandidate,
+  right: InteractiveAdmissionCandidate,
+): number {
+  const createdAtDifference =
+    Date.parse(left.outbox.createdAt) - Date.parse(right.outbox.createdAt);
+  if (createdAtDifference !== 0) return createdAtDifference;
+  return left.outbox.id.localeCompare(right.outbox.id);
+}
+
+export function planInteractiveAdmissionBatch(input: {
+  candidates: ReadonlyArray<InteractiveAdmissionCandidate>;
+  utilization: ProviderUtilization;
+  config?: ProviderCapacityConfig;
+  maxDispatches?: number;
+  now?: Date;
+}): InteractiveAdmissionCandidate[] {
+  const config = input.config ?? DEFAULT_PROVIDER_CAPACITY;
+  const nowMs = (input.now ?? new Date()).getTime();
+  const inFlight = {
+    fast: input.utilization.laneInFlight.fast,
+    agentic: input.utilization.laneInFlight.agentic,
+  };
+  const totalInteractiveInFlight = inFlight.fast + inFlight.agentic;
+  const capSlots = Math.max(
+    0,
+    config.interactiveCap - totalInteractiveInFlight,
+  );
+  const requestedSlots = input.maxDispatches ?? capSlots;
+  let availableSlots = Math.min(capSlots, Math.max(0, requestedSlots));
+  const remaining = input.candidates
+    .filter((candidate) => Date.parse(candidate.payload.deadlineAt) > nowMs)
+    .sort(compareInteractiveCandidates);
+  const planned: InteractiveAdmissionCandidate[] = [];
+
+  while (availableSlots > 0 && remaining.length > 0) {
+    const floorEligible = remaining.filter(
+      (candidate) =>
+        inFlight[candidate.payload.interactiveClass] <
+        config.laneFloors[candidate.payload.interactiveClass],
+    );
+    const selected = (floorEligible.length > 0 ? floorEligible : remaining)[0];
+    planned.push(selected);
+    inFlight[selected.payload.interactiveClass] += 1;
+    remaining.splice(remaining.indexOf(selected), 1);
+    availableSlots -= 1;
+  }
+
+  return planned;
+}
 
 export function resolveLaneFromOutbox(row: OutboxRow): AiOrchestratorLane | null {
   const payload = row.payload as Record<string, unknown>;

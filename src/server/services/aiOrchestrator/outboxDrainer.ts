@@ -7,13 +7,23 @@ import {
   withDistributedLease,
   type HeldDistributedLease,
 } from '../aiRunV2/distributedLeaseRepository';
+import type {
+  InteractiveDispatchState,
+  RunAttemptRepository,
+} from '../aiRunV2/runAttemptRepository';
 import {
   createOutboxRepository,
   type OutboxRepository,
   type OutboxRow,
   type SqlExecutor,
 } from '../aiRunV2/outboxRepository';
-import { planAdmissionBatch } from './admissionController';
+import {
+  planAdmissionBatch,
+  planInteractiveAdmissionBatch,
+  toInteractiveAdmissionCandidate,
+  type InteractiveAdmissionCandidate,
+} from './admissionController';
+import type { InteractiveActorDispatchClient } from './interactiveActorDispatchClient';
 import {
   initAiRunOutboxNotify,
   shutdownAiRunOutboxNotify,
@@ -33,6 +43,13 @@ import {
 export type OutboxDrainerDeps = Readonly<{
   executor: SqlExecutor;
   publisher: CommandPublisher;
+  interactiveDispatchClient: InteractiveActorDispatchClient;
+  attempts: Pick<
+    RunAttemptRepository,
+    | 'readInteractiveDispatchState'
+    | 'markInteractiveDispatched'
+    | 'failExpiredInteractiveDispatch'
+  >;
   getUtilization: () => Promise<ProviderUtilization>;
   getUncertainWorkerCount: () => Promise<number>;
   clock?: Clock;
@@ -67,6 +84,7 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
   const safetySweepMs = deps.safetySweepMs ?? OUTBOX_SAFETY_SWEEP_MS;
   const holderId = deps.holderId ?? `outbox-drainer-${randomUUID()}`;
   const enableNotify = deps.enableNotify ?? true;
+  const config = deps.config ?? DEFAULT_PROVIDER_CAPACITY;
 
   let stopRequested = false;
   let wakeQueued = false;
@@ -95,49 +113,313 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
     });
   }
 
+  async function markRowPublished(row: OutboxRow): Promise<number> {
+    const marked = await outbox.markPublished([row.id], holderId);
+    return marked > 0 ? 1 : 0;
+  }
+
+  async function processBackgroundRows(
+    rows: OutboxRow[],
+    utilization: ProviderUtilization,
+    uncertainWorkerCount: number,
+  ): Promise<number> {
+    const planned = planAdmissionBatch({
+      rows,
+      utilization,
+      uncertainWorkerCount,
+      config,
+      uncertainPauseThreshold: UNCERTAIN_WORKER_PAUSE_THRESHOLD,
+    });
+    let published = 0;
+    for (const item of planned) {
+      if (item.decision.status !== 'allow') {
+        await outbox.markFailed(
+          item.outbox.id,
+          holderId,
+          item.decision.reason,
+          5_000,
+        );
+        metrics.increment('orchestrator.admission.denied', {
+          reason: item.decision.reason,
+        });
+        continue;
+      }
+      const lane = item.decision.lane;
+      try {
+        await publishRow(item.outbox, AI_RUN_V2_LANE_QUEUES[lane]);
+        published += await markRowPublished(item.outbox);
+        metrics.increment('orchestrator.outbox.published', { lane });
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        await outbox.markFailed(item.outbox.id, holderId, detail, 10_000);
+        metrics.increment('orchestrator.outbox.publish_failed');
+      }
+    }
+    return published;
+  }
+
+  type ActiveInteractiveCandidate = Readonly<{
+    candidate: InteractiveAdmissionCandidate;
+    state: Extract<
+      InteractiveDispatchState,
+      'queued' | 'dispatched' | 'running'
+    >;
+  }>;
+
+  function compareActiveInteractiveCandidates(
+    left: ActiveInteractiveCandidate,
+    right: ActiveInteractiveCandidate,
+  ): number {
+    const createdAtDifference =
+      Date.parse(left.candidate.outbox.createdAt) -
+      Date.parse(right.candidate.outbox.createdAt);
+    if (createdAtDifference !== 0) return createdAtDifference;
+    return left.candidate.outbox.id.localeCompare(right.candidate.outbox.id);
+  }
+
+  async function dispatchInteractiveCandidate(
+    active: ActiveInteractiveCandidate,
+  ): Promise<number> {
+    const { outbox: row, payload } = active.candidate;
+    try {
+      const marked = await deps.attempts.markInteractiveDispatched({
+        attemptId: payload.attemptId,
+        expectedDispatchMessageId: payload.dispatchMessageId,
+      });
+      switch (marked) {
+        case 'dispatched':
+          break;
+        case 'already-dispatched': {
+          const replayState =
+            await deps.attempts.readInteractiveDispatchState({
+              attemptId: payload.attemptId,
+              expectedDispatchMessageId: payload.dispatchMessageId,
+            });
+          switch (replayState) {
+            case 'dispatched':
+            case 'running':
+              break;
+            case 'terminal':
+            case 'fence-mismatch':
+            case 'not-found':
+              metrics.increment(
+                'orchestrator.interactive.invalid_dispatch',
+                { reason: replayState },
+              );
+              return markRowPublished(row);
+            case 'queued':
+              throw new Error(
+                `Interactive attempt remained queued after dispatch: ${payload.attemptId}`,
+              );
+            default: {
+              const unhandled: never = replayState;
+              throw new Error(
+                `Unsupported interactive replay state: ${String(unhandled)}`,
+              );
+            }
+          }
+          break;
+        }
+        case 'fence-mismatch':
+        case 'not-found':
+          metrics.increment('orchestrator.interactive.invalid_dispatch', {
+            reason: marked,
+          });
+          return markRowPublished(row);
+        default: {
+          const unhandled: never = marked;
+          throw new Error(
+            `Unsupported interactive dispatch result: ${String(unhandled)}`,
+          );
+        }
+      }
+      await deps.interactiveDispatchClient.dispatch(payload);
+      metrics.increment('orchestrator.outbox.published', {
+        lane: payload.interactiveClass,
+      });
+      return markRowPublished(row);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      await outbox.markFailed(row.id, holderId, detail, 10_000);
+      metrics.increment('orchestrator.interactive.invoke_failed');
+      return 0;
+    }
+  }
+
+  async function processInteractiveRows(
+    rows: OutboxRow[],
+    utilization: ProviderUtilization,
+  ): Promise<number> {
+    const now = clock.now();
+    const queued: ActiveInteractiveCandidate[] = [];
+    const recovery: ActiveInteractiveCandidate[] = [];
+    let published = 0;
+
+    for (const row of rows) {
+      const candidate = toInteractiveAdmissionCandidate(row);
+      if (!candidate) {
+        metrics.increment('orchestrator.interactive.invalid_dispatch', {
+          reason: 'payload',
+        });
+        published += await markRowPublished(row);
+        continue;
+      }
+
+      let state: InteractiveDispatchState;
+      try {
+        state = await deps.attempts.readInteractiveDispatchState({
+          attemptId: candidate.payload.attemptId,
+          expectedDispatchMessageId: candidate.payload.dispatchMessageId,
+        });
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        await outbox.markFailed(row.id, holderId, detail, 10_000);
+        metrics.increment('orchestrator.interactive.state_read_failed');
+        continue;
+      }
+
+      switch (state) {
+        case 'terminal':
+        case 'fence-mismatch':
+        case 'not-found':
+          published += await markRowPublished(row);
+          break;
+        case 'queued':
+        case 'dispatched':
+        case 'running': {
+          if (Date.parse(candidate.payload.deadlineAt) <= now.getTime()) {
+            try {
+              await deps.attempts.failExpiredInteractiveDispatch({
+                attemptId: candidate.payload.attemptId,
+                expectedDispatchMessageId:
+                  candidate.payload.dispatchMessageId,
+                detail: 'Interactive turn exceeded its absolute deadline',
+              });
+              published += await markRowPublished(row);
+              metrics.increment('orchestrator.interactive.deadline_expired');
+            } catch (err) {
+              const detail =
+                err instanceof Error ? err.message : String(err);
+              await outbox.markFailed(row.id, holderId, detail, 10_000);
+              metrics.increment(
+                'orchestrator.interactive.terminalize_failed',
+              );
+            }
+            break;
+          }
+          const active = { candidate, state };
+          if (state === 'queued') queued.push(active);
+          else recovery.push(active);
+          break;
+        }
+        default: {
+          const unhandled: never = state;
+          throw new Error(
+            `Unsupported interactive dispatch state: ${String(unhandled)}`,
+          );
+        }
+      }
+    }
+
+    const selected = planInteractiveAdmissionBatch({
+      candidates: queued.map(({ candidate }) => candidate),
+      utilization,
+      config,
+      now,
+    });
+    const selectedIds = new Set(
+      selected.map((candidate) => candidate.outbox.id),
+    );
+    const deferredUntil = new Date(now.getTime() + 5_000).toISOString();
+    for (const active of queued) {
+      if (selectedIds.has(active.candidate.outbox.id)) continue;
+      await outbox.releaseClaim(
+        active.candidate.outbox.id,
+        holderId,
+        deferredUntil,
+        'interactive_cap',
+      );
+    }
+
+    const selectedById = new Map(
+      queued.map((active) => [active.candidate.outbox.id, active]),
+    );
+    const dispatchable = [
+      ...recovery,
+      ...selected.map((candidate) => {
+        const active = selectedById.get(candidate.outbox.id);
+        if (!active) {
+          throw new Error(
+            `Missing selected interactive candidate: ${candidate.outbox.id}`,
+          );
+        }
+        return active;
+      }),
+    ].sort(compareActiveInteractiveCandidates);
+    for (const active of dispatchable) {
+      published += await dispatchInteractiveCandidate(active);
+    }
+    return published;
+  }
+
   async function drainOnce(): Promise<number> {
     return acquireLease(async () => {
       const [utilization, uncertain] = await Promise.all([
         deps.getUtilization(),
         deps.getUncertainWorkerCount(),
       ]);
-      const claimed = await outbox.claimBatch(batchSize, holderId, claimMs);
+      const backgroundClaimed = await outbox.claimBatch(
+        batchSize,
+        holderId,
+        claimMs,
+      );
+      const interactiveClaimed = await outbox.claimInteractiveCandidates(
+        config.interactiveCap,
+        Math.max(
+          config.laneFloors.fast,
+          config.laneFloors.agentic,
+        ),
+        holderId,
+        claimMs,
+      );
+      const claimed = [
+        ...new Map(
+          [...backgroundClaimed, ...interactiveClaimed].map((row) => [
+            row.id,
+            row,
+          ]),
+        ).values(),
+      ];
       if (claimed.length === 0) return 0;
 
-      const planned = planAdmissionBatch({
-        rows: claimed,
-        utilization,
-        uncertainWorkerCount: uncertain,
-        config: deps.config ?? DEFAULT_PROVIDER_CAPACITY,
-        uncertainPauseThreshold: UNCERTAIN_WORKER_PAUSE_THRESHOLD,
-      });
-
+      const backgroundRows: OutboxRow[] = [];
+      const interactiveRows: OutboxRow[] = [];
       let published = 0;
-      for (const item of planned) {
-        if (item.decision.status !== 'allow') {
-          await outbox.markFailed(
-            item.outbox.id,
-            holderId,
-            item.decision.reason,
-            5_000,
-          );
-          metrics.increment('orchestrator.admission.denied', {
-            reason: item.decision.reason,
-          });
-          continue;
-        }
-        const lane = item.decision.lane;
-        try {
-          await publishRow(item.outbox, AI_RUN_V2_LANE_QUEUES[lane]);
-          await outbox.markPublished([item.outbox.id], holderId);
-          published += 1;
-          metrics.increment('orchestrator.outbox.published', { lane });
-        } catch (err) {
-          const detail = err instanceof Error ? err.message : String(err);
-          await outbox.markFailed(item.outbox.id, holderId, detail, 10_000);
-          metrics.increment('orchestrator.outbox.publish_failed');
+      for (const row of claimed) {
+        const kind = row.kind;
+        switch (kind) {
+          case 'dispatch_command':
+            backgroundRows.push(row);
+            break;
+          case 'interactive_dispatch':
+            interactiveRows.push(row);
+            break;
+          case 'checkpoint_notify':
+          case 'terminal_result':
+            published += await markRowPublished(row);
+            break;
+          default: {
+            const unhandled: never = kind;
+            throw new Error(`Unsupported outbox kind: ${String(unhandled)}`);
+          }
         }
       }
+      published += await processBackgroundRows(
+        backgroundRows,
+        utilization,
+        uncertain,
+      );
+      published += await processInteractiveRows(interactiveRows, utilization);
       metrics.gauge('orchestrator.outbox.batch', claimed.length);
       return published;
     });

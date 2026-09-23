@@ -155,6 +155,7 @@ export function createOutboxRepository(executor: SqlExecutor) {
           SELECT id
           FROM ai_run_outbox
           WHERE published_at IS NULL
+            AND kind <> 'interactive_dispatch'
             AND available_at <= now()
             AND (
               claimed_by IS NULL
@@ -182,6 +183,101 @@ export function createOutboxRepository(executor: SqlExecutor) {
         FROM due
         WHERE outbox.id = due.id
         RETURNING outbox.*
+      `);
+      return resultRows<Record<string, unknown>>(result).map(mapOutboxRow);
+    },
+
+    async claimInteractiveCandidates(
+      globalLimit: number,
+      perClassFloorLimit: number,
+      holderId: string,
+      claimMs: number,
+    ): Promise<OutboxRow[]> {
+      if (!Number.isInteger(globalLimit) || globalLimit <= 0) {
+        throw new Error('globalLimit must be a positive integer');
+      }
+      if (
+        !Number.isInteger(perClassFloorLimit) ||
+        perClassFloorLimit <= 0
+      ) {
+        throw new Error('perClassFloorLimit must be a positive integer');
+      }
+      if (!Number.isInteger(claimMs) || claimMs <= 0) {
+        throw new Error('claimMs must be a positive integer');
+      }
+      const result = await executor.execute(sql`
+        WITH eligible AS MATERIALIZED (
+          SELECT
+            id,
+            created_at,
+            payload->>'interactiveClass' AS interactive_class
+          FROM ai_run_outbox
+          WHERE kind = 'interactive_dispatch'
+            AND published_at IS NULL
+            AND available_at <= now()
+            AND (
+              claimed_by IS NULL
+              OR claim_expires_at IS NULL
+              OR claim_expires_at <= now()
+            )
+        ),
+        global_candidates AS (
+          SELECT id
+          FROM eligible
+          ORDER BY created_at ASC, id ASC
+          LIMIT ${globalLimit}
+        ),
+        fast_candidates AS (
+          SELECT id
+          FROM eligible
+          WHERE interactive_class = 'fast'
+          ORDER BY created_at ASC, id ASC
+          LIMIT ${perClassFloorLimit}
+        ),
+        agentic_candidates AS (
+          SELECT id
+          FROM eligible
+          WHERE interactive_class = 'agentic'
+          ORDER BY created_at ASC, id ASC
+          LIMIT ${perClassFloorLimit}
+        ),
+        candidate_ids AS (
+          SELECT id FROM global_candidates
+          UNION
+          SELECT id FROM fast_candidates
+          UNION
+          SELECT id FROM agentic_candidates
+        ),
+        due AS (
+          SELECT outbox.id
+          FROM ai_run_outbox AS outbox
+          JOIN candidate_ids AS candidate
+            ON candidate.id = outbox.id
+          WHERE outbox.published_at IS NULL
+            AND outbox.available_at <= now()
+            AND (
+              outbox.claimed_by IS NULL
+              OR outbox.claim_expires_at IS NULL
+              OR outbox.claim_expires_at <= now()
+            )
+          ORDER BY outbox.created_at ASC, outbox.id ASC
+          FOR UPDATE OF outbox SKIP LOCKED
+        ),
+        updated AS (
+          UPDATE ai_run_outbox AS outbox
+          SET
+            claimed_by = ${holderId},
+            claimed_at = now(),
+            claim_expires_at =
+              now() + (${claimMs} * interval '1 millisecond'),
+            publish_attempts = outbox.publish_attempts + 1
+          FROM due
+          WHERE outbox.id = due.id
+          RETURNING outbox.*
+        )
+        SELECT *
+        FROM updated
+        ORDER BY created_at ASC, id ASC
       `);
       return resultRows<Record<string, unknown>>(result).map(mapOutboxRow);
     },
@@ -219,6 +315,31 @@ export function createOutboxRepository(executor: SqlExecutor) {
           claimed_at = NULL,
           claim_expires_at = NULL,
           available_at = now() + (${retryDelayMs} * interval '1 millisecond')
+        WHERE id = ${id}
+          AND claimed_by = ${holderId}
+          AND published_at IS NULL
+        RETURNING id
+      `);
+      return resultRows(result).length > 0;
+    },
+
+    async releaseClaim(
+      id: string,
+      holderId: string,
+      availableAt: string,
+      detail: string,
+    ): Promise<boolean> {
+      if (!Number.isFinite(Date.parse(availableAt))) {
+        throw new Error('availableAt must be a valid timestamp');
+      }
+      const result = await executor.execute(sql`
+        UPDATE ai_run_outbox
+        SET
+          last_error = ${detail},
+          claimed_by = NULL,
+          claimed_at = NULL,
+          claim_expires_at = NULL,
+          available_at = ${availableAt}::timestamptz
         WHERE id = ${id}
           AND claimed_by = ${holderId}
           AND published_at IS NULL

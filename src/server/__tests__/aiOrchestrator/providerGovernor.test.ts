@@ -1,5 +1,6 @@
 import {
   evaluateDispatchCapacity,
+  evaluateInteractiveCapacity,
   emptyUtilization,
   providerForLane,
 } from '../../services/aiOrchestrator/providerGovernor';
@@ -28,6 +29,30 @@ const baseRow = (id: string, extra: Partial<OutboxRow> = {}): OutboxRow => ({
   createdAt: '2026-09-18T12:00:00.000Z',
   ...extra,
 });
+
+function interactiveUtilization(input: {
+  fast: number;
+  agentic: number;
+}) {
+  const utilization = emptyUtilization();
+  const interactive = input.fast + input.agentic;
+  return {
+    ...utilization,
+    cursorInFlight: interactive,
+    laneInFlight: {
+      ...utilization.laneInFlight,
+      fast: input.fast,
+      agentic: input.agentic,
+    },
+    providerClassInFlight: {
+      ...utilization.providerClassInFlight,
+      cursor: {
+        ...utilization.providerClassInFlight.cursor,
+        interactive,
+      },
+    },
+  };
+}
 
 describe('providerGovernor', () => {
   it('maps lanes to providers', () => {
@@ -168,6 +193,45 @@ describe('providerGovernor', () => {
     expect(planned[2].decision).toEqual({
       status: 'deny',
       reason: 'provider_cap',
+    });
+  });
+
+  it('reserves two slots for each class and borrows through sixteen', () => {
+    expect(
+      evaluateInteractiveCapacity(
+        interactiveUtilization({ fast: 2, agentic: 0 }),
+        'agentic',
+      ),
+    ).toEqual({ status: 'allow', borrowed: false });
+    expect(
+      evaluateInteractiveCapacity(
+        interactiveUtilization({ fast: 14, agentic: 1 }),
+        'agentic',
+      ),
+    ).toEqual({ status: 'allow', borrowed: false });
+    expect(
+      evaluateInteractiveCapacity(
+        interactiveUtilization({ fast: 14, agentic: 2 }),
+        'fast',
+      ),
+    ).toEqual({ status: 'deny', reason: 'interactive_cap' });
+    expect(
+      evaluateInteractiveCapacity(
+        interactiveUtilization({ fast: 2, agentic: 2 }),
+        'fast',
+      ),
+    ).toEqual({ status: 'allow', borrowed: true });
+  });
+
+  it('keeps document and visual floors while setting both interactive floors to two', () => {
+    expect(DEFAULT_PROVIDER_CAPACITY).toMatchObject({
+      interactiveCap: 16,
+      laneFloors: {
+        document: 4,
+        visual: 2,
+        fast: 2,
+        agentic: 2,
+      },
     });
   });
 });

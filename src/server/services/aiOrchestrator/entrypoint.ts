@@ -15,6 +15,7 @@ import {
   createServiceBusRestCommandPublisher,
   createServiceBusRestQueueConsumer,
 } from './serviceBusRestClient';
+import { createInteractiveActorDispatchClient } from './interactiveActorDispatchClient';
 import type { ExecutionProbe } from './ports';
 
 const executor = { execute: (query: unknown) => db.execute(query as never) };
@@ -74,6 +75,10 @@ async function main(): Promise<void> {
     queueName: 'ai-runs-v2-document',
     noop: noopBus,
   });
+  const interactiveDispatchClient = createInteractiveActorDispatchClient({
+    fastUrl: process.env.AI_RUNS_INTERACTIVE_FAST_DISPATCH_URL,
+    agenticUrl: process.env.AI_RUNS_INTERACTIVE_AGENTIC_DISPATCH_URL,
+  });
   const checkpointConsumerPort = createServiceBusRestQueueConsumer({
     namespace: namespace || 'noop.servicebus.windows.net',
     queueName:
@@ -103,6 +108,8 @@ async function main(): Promise<void> {
   const outboxDrainer = createOutboxDrainer({
     executor,
     publisher,
+    interactiveDispatchClient,
+    attempts: runAttemptRepository,
     getUtilization: () => utilization.read(),
     getUncertainWorkerCount: () => reconciler.countUncertainWorkers(),
     metrics,
