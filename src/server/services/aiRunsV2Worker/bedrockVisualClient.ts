@@ -49,6 +49,7 @@ export type BedrockVisualClient = {
     images: ReadonlyArray<VisualReferenceImage>,
     onText: (text: string) => void | Promise<void>,
     signal?: AbortSignal,
+    execution?: Readonly<{ absoluteTimeout?: boolean }>,
   ): Promise<VisualModelResult>;
 };
 
@@ -104,6 +105,20 @@ function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
       resolve();
     }, ms);
     signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function nextWithAbort<T>(
+  iterator: AsyncIterator<T>,
+  signal: AbortSignal,
+): Promise<IteratorResult<T>> {
+  if (signal.aborted) throw abortError(signal);
+  return new Promise<IteratorResult<T>>((resolve, reject) => {
+    const onAbort = (): void => reject(abortError(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+    void iterator.next().then(resolve, reject).finally(() => {
+      signal.removeEventListener('abort', onAbort);
+    });
   });
 }
 
@@ -168,16 +183,20 @@ function buildStreamingContent(
 
 export function createBedrockVisualClient(options?: {
   client?: SendableClient;
-  region?: string;
   now?: () => number;
   sleep?: RetrySleep;
   random?: () => number;
 }): BedrockVisualClient {
-  const client =
-    options?.client ??
-    new BedrockRuntimeClient({
-      region: options?.region ?? process.env.AWS_REGION ?? 'us-east-1',
-    });
+  const clientsByRegion = new Map<string, BedrockRuntimeClient>();
+  const clientFor = (model: VisualModelSettings): SendableClient => {
+    if (options?.client) return options.client;
+    let client = clientsByRegion.get(model.region);
+    if (!client) {
+      client = new BedrockRuntimeClient({ region: model.region });
+      clientsByRegion.set(model.region, client);
+    }
+    return client;
+  };
   const now = options?.now ?? Date.now;
   const sleep = options?.sleep ?? sleepWithAbort;
   const random = options?.random ?? Math.random;
@@ -210,7 +229,7 @@ export function createBedrockVisualClient(options?: {
         signal?.addEventListener('abort', abortForAttempt, { once: true });
         const timer = setTimeout(() => controller.abort(), model.timeoutMs);
         try {
-          return await (client as BedrockRuntimeClient).send(command, {
+          return await (clientFor(model) as BedrockRuntimeClient).send(command, {
             abortSignal: controller.signal,
           });
         } catch (error) {
@@ -289,7 +308,14 @@ export function createBedrockVisualClient(options?: {
       };
     },
 
-    async invokeStreamingModel(prompt, model, images, onText, signal) {
+    async invokeStreamingModel(
+      prompt,
+      model,
+      images,
+      onText,
+      signal,
+      execution,
+    ) {
       const command = new InvokeModelWithResponseStreamCommand({
         modelId: model.modelId,
         contentType: 'application/json',
@@ -310,15 +336,35 @@ export function createBedrockVisualClient(options?: {
       });
 
       const startedAt = now();
+      const absoluteDeadline = execution?.absoluteTimeout
+        ? new AbortController()
+        : null;
+      const timeoutError = new Error(
+        `Bedrock request timed out after ${Math.round(
+          model.timeoutMs / 1000,
+        )}s (model=${model.modelId})`,
+      );
+      timeoutError.name = 'AbortError';
+      const absoluteTimer = absoluteDeadline
+        ? setTimeout(() => absoluteDeadline.abort(timeoutError), model.timeoutMs)
+        : null;
+      const abortAbsolute = (): void => absoluteDeadline?.abort(signal?.reason);
+      signal?.addEventListener('abort', abortAbsolute, { once: true });
+      const executionSignal = absoluteDeadline?.signal ?? signal;
       const sendAttempt = async () => {
-        if (signal?.aborted) throw abortError(signal);
+        if (executionSignal?.aborted) throw abortError(executionSignal);
+        if (absoluteDeadline) {
+          return (clientFor(model) as BedrockRuntimeClient).send(command, {
+            abortSignal: executionSignal,
+          });
+        }
         const controller = new AbortController();
         const abortForAttempt = (): void =>
           controller.abort(signal?.reason);
         signal?.addEventListener('abort', abortForAttempt, { once: true });
         const timer = setTimeout(() => controller.abort(), model.timeoutMs);
         try {
-          return await (client as BedrockRuntimeClient).send(command, {
+          return await (clientFor(model) as BedrockRuntimeClient).send(command, {
             abortSignal: controller.signal,
           });
         } catch (error) {
@@ -330,103 +376,114 @@ export function createBedrockVisualClient(options?: {
         }
       };
 
-      let response;
-      for (
-        let attempt = 1;
-        attempt <= model.retry.maxAttempts;
-        attempt += 1
-      ) {
-        try {
-          response = await sendAttempt();
-          break;
-        } catch (error) {
-          if (signal?.aborted) throw abortError(signal);
-          if (
-            !isBedrockRetryable(error)
-            || attempt === model.retry.maxAttempts
-          ) {
-            throw error;
+      try {
+        let response;
+        for (
+          let attempt = 1;
+          attempt <= model.retry.maxAttempts;
+          attempt += 1
+        ) {
+          try {
+            response = await sendAttempt();
+            break;
+          } catch (error) {
+            if (executionSignal?.aborted) throw abortError(executionSignal);
+            if (
+              !isBedrockRetryable(error)
+              || attempt === model.retry.maxAttempts
+            ) {
+              throw error;
+            }
+            let delay =
+              model.retry.initialBackoffMs
+              * Math.pow(model.retry.backoffMultiplier, attempt - 1);
+            if (model.retry.jitter) {
+              delay *= 0.5 + random();
+            }
+            await sleep(delay, executionSignal);
           }
-          let delay =
-            model.retry.initialBackoffMs
-            * Math.pow(model.retry.backoffMultiplier, attempt - 1);
-          if (model.retry.jitter) {
-            delay *= 0.5 + random();
-          }
-          await sleep(delay, signal);
         }
-      }
-      if (!response) throw new Error('Bedrock returned no response');
+        if (!response) throw new Error('Bedrock returned no response');
 
-      let html = '';
-      let inputTokens = 0;
-      let outputTokens = 0;
-      let cacheReadTokens = 0;
-      let cacheWriteTokens = 0;
-      const body = (
-        response as {
-          body?: AsyncIterable<{
-            chunk?: { bytes?: Uint8Array };
-          }>;
-        }
-      ).body;
-      for await (const event of body ?? []) {
-        if (!event.chunk?.bytes) continue;
-        try {
-          const parsed = JSON.parse(
-            new TextDecoder().decode(event.chunk.bytes),
-          ) as {
-            type?: string;
-            delta?: { type?: string; text?: string };
-            usage?: {
-              input_tokens?: number;
-              output_tokens?: number;
-              cache_read_input_tokens?: number;
-              cache_creation_input_tokens?: number;
-            };
-            message?: {
+        let html = '';
+        let inputTokens = 0;
+        let outputTokens = 0;
+        let cacheReadTokens = 0;
+        let cacheWriteTokens = 0;
+        const body = (
+          response as {
+            body?: AsyncIterable<{
+              chunk?: { bytes?: Uint8Array };
+            }>;
+          }
+        ).body;
+        const iterator = body?.[Symbol.asyncIterator]();
+        while (iterator) {
+          const next = absoluteDeadline
+            ? await nextWithAbort(iterator, executionSignal!)
+            : await iterator.next();
+          if (next.done) break;
+          const event = next.value;
+          if (!event.chunk?.bytes) continue;
+          try {
+            const parsed = JSON.parse(
+              new TextDecoder().decode(event.chunk.bytes),
+            ) as {
+              type?: string;
+              delta?: { type?: string; text?: string };
               usage?: {
                 input_tokens?: number;
                 output_tokens?: number;
                 cache_read_input_tokens?: number;
                 cache_creation_input_tokens?: number;
               };
+              message?: {
+                usage?: {
+                  input_tokens?: number;
+                  output_tokens?: number;
+                  cache_read_input_tokens?: number;
+                  cache_creation_input_tokens?: number;
+                };
+              };
             };
-          };
-          if (
-            parsed.type === 'content_block_delta'
-            && parsed.delta?.type === 'text_delta'
-          ) {
-            const text = parsed.delta.text ?? '';
-            html += text;
-            await onText(text);
-          }
-          const usage = parsed.message?.usage ?? parsed.usage;
-          if (usage) {
-            if (usage.input_tokens) inputTokens = usage.input_tokens;
-            if (usage.output_tokens) outputTokens = usage.output_tokens;
-            if (usage.cache_read_input_tokens) {
-              cacheReadTokens = usage.cache_read_input_tokens;
+            if (
+              parsed.type === 'content_block_delta'
+              && parsed.delta?.type === 'text_delta'
+            ) {
+              const text = parsed.delta.text ?? '';
+              html += text;
+              await onText(text);
             }
-            if (usage.cache_creation_input_tokens) {
-              cacheWriteTokens = usage.cache_creation_input_tokens;
+            const usage = parsed.message?.usage ?? parsed.usage;
+            if (usage) {
+              if (usage.input_tokens) inputTokens = usage.input_tokens;
+              if (usage.output_tokens) outputTokens = usage.output_tokens;
+              if (usage.cache_read_input_tokens) {
+                cacheReadTokens = usage.cache_read_input_tokens;
+              }
+              if (usage.cache_creation_input_tokens) {
+                cacheWriteTokens = usage.cache_creation_input_tokens;
+              }
             }
+          } catch {
+            // Match the in-process UI Lab stream: malformed event chunks are skipped.
           }
-        } catch {
-          // Match the in-process UI Lab stream: malformed event chunks are skipped.
         }
-      }
 
-      return {
-        html,
-        usage: {
-          inputTokens,
-          outputTokens,
-          cacheReadTokens,
-          cacheWriteTokens,
-        },
-        durationMs: now() - startedAt,
-      };
+        return {
+          html,
+          usage: {
+            inputTokens,
+            outputTokens,
+            cacheReadTokens,
+            cacheWriteTokens,
+          },
+          durationMs: now() - startedAt,
+        };
+      } finally {
+        if (absoluteTimer) clearTimeout(absoluteTimer);
+        signal?.removeEventListener('abort', abortAbsolute);
+      }
     },
   };
 }

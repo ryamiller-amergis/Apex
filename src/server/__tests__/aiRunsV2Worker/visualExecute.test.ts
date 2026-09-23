@@ -25,6 +25,7 @@ const spec = {
   designReference: { navItems: [], images: [] },
   model: {
     modelId: 'anthropic.claude',
+    region: 'us-east-1',
     maxTokens: 8000,
     timeoutMs: 600_000,
     retry: {
@@ -92,6 +93,7 @@ describe('visual execute', () => {
     expect(prompt).toContain('**Feature:** Standup summary');
     expect(model).toEqual({
       modelId: 'anthropic.claude',
+      region: 'us-east-1',
       maxTokens: 8000,
       timeoutMs: 600_000,
       retry: {
@@ -330,6 +332,8 @@ describe('visual execute', () => {
         _model: unknown,
         _images: unknown,
         onText: (text: string) => void,
+        _signal: AbortSignal,
+        _execution: { absoluteTimeout: true },
       ) => {
         onText('<html>');
         onText('ok</html>');
@@ -381,6 +385,9 @@ describe('visual execute', () => {
 
     expect(invokeModel).not.toHaveBeenCalled();
     expect(invokeStreamingModel).toHaveBeenCalledTimes(1);
+    expect(invokeStreamingModel.mock.calls[0][5]).toEqual({
+      absoluteTimeout: true,
+    });
     expect(publishProgress).toHaveBeenCalledWith(
       'generation',
       'running',
@@ -449,6 +456,47 @@ describe('visual execute', () => {
       outputTokens: Math.ceil('<html>ok</html>'.length / 4),
     });
     expect(usage.inputTokens).toBeGreaterThan(0);
+  });
+
+  it('estimates fenced output from the same raw response as V1', async () => {
+    const raw = '```html\n<html>ok</html>\n```';
+    const execute = createVisualExecute({
+      invokeModel: jest.fn(),
+      invokeStreamingModel: async () => ({
+        html: raw,
+        usage: { inputTokens: 0, outputTokens: 0 },
+        durationMs: 25,
+      }),
+      createProgressBatcher: ({ publish }) => ({
+        push: () => undefined,
+        close: () => publish(raw, 0),
+      }),
+    });
+
+    const outcome = await execute({
+      specification: {
+        ...spec,
+        subjectKind: 'ui-lab-screen',
+        outputPath: 'design.html',
+        promptInputs: {
+          userPrompt: 'A timecard approval queue',
+          targetRoute: null,
+          designSystemName: 'APEX',
+          skillMarkdown: '# UI Lab',
+          componentIndex: '- AppHeader',
+          existingPageContext: '',
+        },
+      } as never,
+      command: {} as never,
+      checkpoints: checkpoints().port as never,
+      signal: new AbortController().signal,
+    });
+
+    expect(outcome.files[0].content).toBe('<html>ok</html>');
+    expect(JSON.parse(outcome.files[1].content as string)).toMatchObject({
+      tokenSource: 'estimated',
+      outputTokens: Math.ceil(raw.length / 4),
+    });
   });
 
   /**

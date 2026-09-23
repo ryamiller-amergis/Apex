@@ -29,6 +29,7 @@ function streamingResponse(events: unknown[]) {
  */
 const MODEL = {
   modelId: 'anthropic.claude',
+  region: 'us-east-1',
   maxTokens: 8_000,
   timeoutMs: 600_000,
   retry: {
@@ -439,6 +440,65 @@ describe('bedrockVisualClient', () => {
       await refusal;
       expect(send).toHaveBeenCalledTimes(1);
       expect(sleep).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps the V2 streaming deadline active through body iteration', async () => {
+    jest.useFakeTimers();
+    try {
+      let releaseBody!: () => void;
+      let nextCall = 0;
+      const body = {
+        [Symbol.asyncIterator]() {
+          return {
+            next: () => {
+              nextCall += 1;
+              if (nextCall === 1) {
+                return Promise.resolve({
+                  done: false,
+                  value: {
+                    chunk: {
+                      bytes: new TextEncoder().encode(
+                        JSON.stringify({
+                          type: 'message_start',
+                          message: { usage: { input_tokens: 1 } },
+                        }),
+                      ),
+                    },
+                  },
+                });
+              }
+              return new Promise<IteratorResult<unknown>>((resolve) => {
+                releaseBody = () => resolve({ done: true, value: undefined });
+              });
+            },
+          };
+        },
+      };
+      const send = jest.fn().mockResolvedValue({ body });
+      const client = createBedrockVisualClient({
+        client: { send } as never,
+      });
+      const result = client.invokeStreamingModel(
+        'a prompt',
+        { ...MODEL, timeoutMs: 10 },
+        [],
+        jest.fn(),
+        undefined,
+        { absoluteTimeout: true },
+      );
+      const refusal = expect(result).rejects.toThrow(
+        'Bedrock request timed out after 0s',
+      );
+
+      await Promise.resolve();
+      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(10);
+      releaseBody?.();
+
+      await refusal;
     } finally {
       jest.useRealTimers();
     }

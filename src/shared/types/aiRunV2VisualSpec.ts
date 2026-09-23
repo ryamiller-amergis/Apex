@@ -124,6 +124,8 @@ export type VisualRetrySettings = Readonly<{
 
 export type VisualModelSettings = Readonly<{
   modelId: string;
+  /** Bedrock endpoint region resolved by App Service for this model id. */
+  region: string;
   /** Project override where set, otherwise the lane's own app default. */
   maxTokens: number;
   timeoutMs: number;
@@ -198,6 +200,7 @@ function isPositiveNumber(value: unknown): value is number {
 function isResolvedModel(value: unknown): boolean {
   if (!isRecord(value)) return false;
   if (!isNonEmptyString(value.modelId)) return false;
+  if (!isNonEmptyString(value.region)) return false;
   if (!isPositiveNumber(value.maxTokens)) return false;
   if (!isPositiveNumber(value.timeoutMs)) return false;
   if (!isRecord(value.retry)) return false;

@@ -30,6 +30,7 @@ const spec: DesignPrototypeVisualSpecification = {
   },
   model: {
     modelId: 'anthropic.claude',
+    region: 'us-east-1',
     maxTokens: 8000,
     timeoutMs: 600_000,
     retry: {
@@ -61,7 +62,9 @@ function projectPromptWithout(field: string): Record<string, unknown> {
 }
 
 /** Drops one model field, which the typed shape no longer lets a caller do. */
-function modelWithout(field: 'maxTokens' | 'timeoutMs'): Record<string, unknown> {
+function modelWithout(
+  field: 'region' | 'maxTokens' | 'timeoutMs',
+): Record<string, unknown> {
   const model: Record<string, unknown> = { ...spec.model };
   delete model[field];
   return model;
@@ -101,6 +104,9 @@ describe('visual execution specification', () => {
    * run is the only honest answer, and it happens before the model call.
    */
   it('refuses a specification that carries no token ceiling or no timeout', () => {
+    expect(
+      isAiRunV2VisualSpecification({ ...spec, model: modelWithout('region') }),
+    ).toBe(false);
     expect(
       isAiRunV2VisualSpecification({ ...spec, model: modelWithout('maxTokens') }),
     ).toBe(false);

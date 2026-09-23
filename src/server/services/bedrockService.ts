@@ -26,6 +26,7 @@ import {
   buildPrototypeTargetScreenHint,
 } from './designContext/prototypePromptSections';
 import { normalizeGeneratedPrototypeHtml } from '../utils/htmlSanitizer';
+import { resolveVisualModelRegion } from './visualModelRegion';
 
 /** Attribution context passed down from callers to the invokeModel wrapper. */
 export interface BedrockUsageContext {
@@ -39,6 +40,17 @@ export interface BedrockUsageContext {
 const client = new BedrockRuntimeClient({
   region: process.env.AWS_REGION ?? 'us-east-1',
 });
+const visualClientsByRegion = new Map<string, BedrockRuntimeClient>();
+
+function visualClientForModel(modelId: string): BedrockRuntimeClient {
+  const region = resolveVisualModelRegion(modelId);
+  let resolved = visualClientsByRegion.get(region);
+  if (!resolved) {
+    resolved = new BedrockRuntimeClient({ region });
+    visualClientsByRegion.set(region, resolved);
+  }
+  return resolved;
+}
 
 const controlPlaneClient = new BedrockClient({
   region: process.env.AWS_REGION ?? 'us-east-1',
@@ -183,6 +195,7 @@ export function resolvePrototypeVisualModel(input: {
 }): VisualModelSettings {
   return {
     modelId: input.modelId,
+    region: resolveVisualModelRegion(input.modelId),
     maxTokens: resolvePrototypeMaxTokens(input.maxTokens),
     timeoutMs: resolveInvokeTimeoutMs(input.timeoutMs),
     retry: resolvePrototypeRetrySettings(),
@@ -2140,7 +2153,9 @@ async function invokeModel(
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), effectiveTimeout);
       try {
-        return await client.send(command, { abortSignal: controller.signal });
+        return await visualClientForModel(modelId).send(command, {
+          abortSignal: controller.signal,
+        });
       } catch (err) {
         if (controller.signal.aborted) {
           throw new Error(

@@ -63,6 +63,7 @@ describe('prototype lane model settings', () => {
   it('resolves the ceiling and timeout the in-process path applies when the project sets none', () => {
     expect(resolvePrototypeVisualModel({ modelId: 'anthropic.claude' })).toEqual({
       modelId: 'anthropic.claude',
+      region: 'us-east-1',
       maxTokens: PROTOTYPE_DEFAULT_MAX_TOKENS,
       timeoutMs: PROTOTYPE_DEFAULT_TIMEOUT_MS,
       retry: PROTOTYPE_RETRY,
@@ -78,6 +79,7 @@ describe('prototype lane model settings', () => {
       }),
     ).toEqual({
       modelId: 'anthropic.claude',
+      region: 'us-east-1',
       maxTokens: 9_000,
       timeoutMs: 90_000,
       retry: PROTOTYPE_RETRY,
@@ -107,6 +109,7 @@ describe('prototype lane model settings', () => {
       }),
     ).toEqual({
       modelId: 'anthropic.claude',
+      region: 'us-east-1',
       maxTokens: PROTOTYPE_DEFAULT_MAX_TOKENS,
       timeoutMs: PROTOTYPE_DEFAULT_TIMEOUT_MS,
       retry: PROTOTYPE_RETRY,
@@ -127,6 +130,7 @@ describe('prototype lane model settings', () => {
 
     expect(resolved).toEqual({
       modelId: 'anthropic.claude',
+      region: 'us-east-1',
       maxTokens: 48_000,
       timeoutMs: 300_000,
       retry: PROTOTYPE_RETRY,
@@ -160,6 +164,7 @@ describe('UI Lab lane model settings', () => {
   it("resolves its own defaults rather than the prototype lane's", () => {
     expect(resolveUiLabVisualModel({ modelId: 'anthropic.claude' })).toEqual({
       modelId: 'anthropic.claude',
+      region: 'us-east-1',
       maxTokens: UI_LAB_DEFAULT_MAX_TOKENS,
       timeoutMs: UI_LAB_DEFAULT_TIMEOUT_MS,
       retry: UI_LAB_RETRY,
@@ -188,6 +193,7 @@ describe('UI Lab lane model settings', () => {
       }),
     ).toEqual({
       modelId: 'anthropic.claude',
+      region: 'us-east-1',
       maxTokens: 24_000,
       timeoutMs: 120_000,
       retry: UI_LAB_RETRY,
@@ -208,6 +214,7 @@ describe('UI Lab lane model settings', () => {
 
     expect(resolved).toEqual({
       modelId: 'anthropic.claude',
+      region: 'us-east-1',
       maxTokens: 20_000,
       timeoutMs: 420_000,
       retry: UI_LAB_RETRY,
@@ -226,5 +233,18 @@ describe('UI Lab lane model settings', () => {
 
       expect(Object.keys(model)).not.toContain('temperature');
     }
+  });
+
+  it('resolves cross-region inference profiles on App Service', () => {
+    expect(
+      resolvePrototypeVisualModel({
+        modelId: 'us.anthropic.claude-sonnet-4-6',
+      }).region,
+    ).toBe('us-east-1');
+    expect(
+      resolveUiLabVisualModel({
+        modelId: 'us.anthropic.claude-sonnet-4-6',
+      }).region,
+    ).toBe('us-east-1');
   });
 });

@@ -21,6 +21,7 @@ import {
   type ResolvedUiLabPromptInput,
 } from './aiRunsV2Worker/uiLabPromptBuilder';
 import { createBedrockVisualClient } from './aiRunsV2Worker/bedrockVisualClient';
+import { resolveVisualModelRegion } from './visualModelRegion';
 
 /**
  * Cross-region inference profiles (us.anthropic.* model IDs) must be invoked
@@ -29,14 +30,6 @@ import { createBedrockVisualClient } from './aiRunsV2Worker/bedrockVisualClient'
  * override to us-east-1 for these profiles; a BEDROCK_UI_LAB_REGION env var
  * can override this when deploying in a non-standard setup.
  */
-function resolveBedrockRegion(modelId: string): string {
-  const explicit = process.env.BEDROCK_UI_LAB_REGION;
-  if (explicit) return explicit;
-  // Cross-region inference profile IDs start with a geo prefix ("us.", "eu.", "ap.")
-  if (/^(us|eu|ap)\./.test(modelId)) return 'us-east-1';
-  return process.env.AWS_REGION ?? 'us-east-1';
-}
-
 const DEFAULT_UI_LAB_MODEL =
   process.env.BEDROCK_UI_LAB_MODEL_ID ??
   process.env.BEDROCK_UI_MOCK_MODEL_ID ??
@@ -78,6 +71,10 @@ export function resolveUiLabVisualModel(input: {
 }): VisualModelSettings {
   return {
     modelId: input.modelId ?? DEFAULT_UI_LAB_MODEL,
+    region: resolveVisualModelRegion(
+      input.modelId ?? DEFAULT_UI_LAB_MODEL,
+      process.env.BEDROCK_UI_LAB_REGION,
+    ),
     maxTokens: input.maxTokens ?? DEFAULT_UI_LAB_MAX_TOKENS,
     timeoutMs: input.timeoutMs ?? DEFAULT_UI_LAB_TIMEOUT_MS,
     retry: {
@@ -331,31 +328,15 @@ export interface UiLabEditOptions {
 
 async function invokeStreaming(
   prompt: string,
-  modelId: string,
-  maxTokens: number,
-  timeoutMs: number,
-  temperature: number | undefined,
+  model: VisualModelSettings,
   onToken: (chunk: string) => void,
   figmaBase64?: string,
   project?: string,
   userId?: string,
 ): Promise<string> {
-  const result = await createBedrockVisualClient({
-    region: resolveBedrockRegion(modelId),
-  }).invokeStreamingModel(
+  const result = await createBedrockVisualClient().invokeStreamingModel(
     prompt,
-    {
-      modelId,
-      maxTokens,
-      timeoutMs,
-      retry: {
-        maxAttempts: UI_LAB_RETRY_MAX_ATTEMPTS,
-        initialBackoffMs: UI_LAB_RETRY_INITIAL_BACKOFF_MS,
-        backoffMultiplier: 2,
-        jitter: true,
-      },
-      ...(temperature === undefined ? {} : { temperature }),
-    },
+    model,
     figmaBase64
       ? [{ base64: figmaBase64, mediaType: 'image/png' }]
       : [],
@@ -377,7 +358,7 @@ async function invokeStreaming(
 
   computeCost({
     provider: 'bedrock',
-    modelId,
+    modelId: model.modelId,
     inputTokens: recordInputTokens,
     outputTokens: recordOutputTokens,
     cacheReadTokens: hasExactTokens ? cacheReadTokens : 0,
@@ -385,7 +366,7 @@ async function invokeStreaming(
   })
     .then((costUsd) => recordAiUsage({
       provider: 'bedrock',
-      modelId,
+      modelId: model.modelId,
       feature: 'ui-lab',
       project: project ?? 'unknown',
       userId,
@@ -405,7 +386,7 @@ async function invokeStreaming(
 }
 
 export async function generateUiLabDesign(opts: UiLabGenerateOptions): Promise<string> {
-  const { modelId, maxTokens, timeoutMs } = resolveUiLabVisualModel(opts);
+  const model = resolveUiLabVisualModel(opts);
   const designReference = resolveUiLabDesignReference();
   const figmaBase64 = designReference.images[0]?.base64;
 
@@ -422,10 +403,7 @@ export async function generateUiLabDesign(opts: UiLabGenerateOptions): Promise<s
 
   return invokeStreaming(
     prompt,
-    modelId,
-    maxTokens,
-    timeoutMs,
-    opts.temperature,
+    model,
     opts.onToken,
     figmaBase64,
     opts.project,
@@ -434,7 +412,7 @@ export async function generateUiLabDesign(opts: UiLabGenerateOptions): Promise<s
 }
 
 export async function editUiLabDesign(opts: UiLabEditOptions): Promise<string> {
-  const { modelId, maxTokens, timeoutMs } = resolveUiLabVisualModel(opts);
+  const model = resolveUiLabVisualModel(opts);
 
   const promptInput = await resolveUiLabPromptInput({
     userPrompt: opts.featureText ?? opts.instruction,
@@ -455,7 +433,14 @@ export async function editUiLabDesign(opts: UiLabEditOptions): Promise<string> {
     promptInput.designSystemName,
   );
 
-  return invokeStreaming(prompt, modelId, maxTokens, timeoutMs, opts.temperature, opts.onToken, undefined, opts.project, opts.userId);
+  return invokeStreaming(
+    prompt,
+    model,
+    opts.onToken,
+    undefined,
+    opts.project,
+    opts.userId,
+  );
 }
 
 /** Strip markdown fences that models sometimes wrap their HTML output in */

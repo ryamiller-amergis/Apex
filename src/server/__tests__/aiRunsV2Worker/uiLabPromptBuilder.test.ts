@@ -35,6 +35,7 @@ const spec: AiRunV2VisualSpecification = {
   designReference: { navItems: [{ label: 'Home', route: '/' }], images: [] },
   model: {
     modelId: 'anthropic.claude',
+    region: 'us-east-1',
     maxTokens: 16_000,
     timeoutMs: 600_000,
     retry: {

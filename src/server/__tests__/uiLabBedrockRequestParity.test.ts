@@ -1,4 +1,7 @@
-const requests: Array<Record<string, unknown>> = [];
+const requests: Array<{
+  input: Record<string, unknown>;
+  region: string;
+}> = [];
 let timeoutMode = false;
 
 const MODEL_HTML =
@@ -9,11 +12,15 @@ jest.mock('@aws-sdk/client-bedrock-runtime', () => {
   return {
     ...actual,
     BedrockRuntimeClient: class {
+      private readonly region: string;
+      constructor(options: { region: string }) {
+        this.region = options.region;
+      }
       async send(
         command: { input: Record<string, unknown> },
         options?: { abortSignal?: AbortSignal },
       ): Promise<unknown> {
-        requests.push(command.input);
+        requests.push({ input: command.input, region: this.region });
         if (timeoutMode) {
           return new Promise<never>((_resolve, reject) => {
             options?.abortSignal?.addEventListener(

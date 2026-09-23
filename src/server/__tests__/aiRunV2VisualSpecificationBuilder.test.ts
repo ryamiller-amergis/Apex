@@ -29,6 +29,7 @@ const base = {
   images: [],
   model: {
     modelId: 'anthropic.claude',
+    region: 'us-east-1',
     maxTokens: 32_000,
     timeoutMs: 720_000,
     retry: {
@@ -138,6 +139,7 @@ const uiLab = {
   images: [],
   model: {
     modelId: 'anthropic.claude',
+    region: 'us-east-1',
     maxTokens: 16_000,
     timeoutMs: 600_000,
     retry: {

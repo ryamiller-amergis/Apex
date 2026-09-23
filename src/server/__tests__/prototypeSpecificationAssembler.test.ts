@@ -43,6 +43,7 @@ const promptInputs = {
 
 const MODEL = {
   modelId: 'anthropic.claude',
+  region: 'us-east-1',
   maxTokens: 32_000,
   timeoutMs: 720_000,
   retry: {

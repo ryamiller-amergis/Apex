@@ -21,7 +21,10 @@
  * applied to both sides, so an unexpected difference still fails.
  */
 
-const mockBedrockRequests: Array<{ input: Record<string, unknown> }> = [];
+const mockBedrockRequests: Array<{
+  input: Record<string, unknown>;
+  region: string;
+}> = [];
 const mockSourceFiles: Record<string, string> = {
   '/src/client/components/StandupSummary.tsx':
     'export const StandupSummary = () => <section>Summary</section>;',
@@ -43,8 +46,12 @@ jest.mock('@aws-sdk/client-bedrock-runtime', () => {
   return {
     ...actual,
     BedrockRuntimeClient: class {
+      private readonly region: string;
+      constructor(options: { region: string }) {
+        this.region = options.region;
+      }
       async send(command: { input: Record<string, unknown> }): Promise<unknown> {
-        mockBedrockRequests.push(command);
+        mockBedrockRequests.push({ ...command, region: this.region });
         return {
           body: new TextEncoder().encode(
             JSON.stringify({
@@ -286,6 +293,7 @@ const DISPATCHED: AdmitV2RunResult = {
 type ContentBlock = Record<string, unknown>;
 
 type BedrockRequest = Readonly<{
+  region: unknown;
   modelId: unknown;
   accept: unknown;
   contentType: unknown;
@@ -300,7 +308,13 @@ function takeCapturedRequest(label: string): BedrockRequest {
   if (typeof body !== 'string') {
     throw new Error(`The ${label} path sent a non-string request body`);
   }
-  return { modelId, accept, contentType, payload: JSON.parse(body) as Record<string, unknown> };
+  return {
+    region: command.region,
+    modelId,
+    accept,
+    contentType,
+    payload: JSON.parse(body) as Record<string, unknown>,
+  };
 }
 
 /* ── Named allowances ────────────────────────────────────────────────────── */
@@ -437,6 +451,7 @@ export function compareBedrockRequests(
   const differences: string[] = [];
 
   compareScalar(differences, 'modelId', inProcess.modelId, v2.modelId);
+  compareScalar(differences, 'region', inProcess.region, v2.region);
   compareScalar(differences, 'accept', inProcess.accept, v2.accept);
   compareScalar(differences, 'contentType', inProcess.contentType, v2.contentType);
 
@@ -680,6 +695,7 @@ function request(overrides: {
   content: unknown;
 }): BedrockRequest {
   return {
+    region: 'us-east-1',
     modelId: overrides.modelId ?? 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
     accept: 'application/json',
     contentType: 'application/json',

@@ -47,6 +47,7 @@ export type InvokeStreamingVisualModel = (
   images: ReadonlyArray<VisualReferenceImage>,
   onText: (text: string) => void | Promise<void>,
   signal: AbortSignal,
+  execution: Readonly<{ absoluteTimeout: true }>,
 ) => Promise<VisualModelResult>;
 
 /**
@@ -179,6 +180,7 @@ export function createVisualExecute(deps: {
             images,
             (text) => batcher.push(text),
             signal,
+            { absoluteTimeout: true },
           );
         } finally {
           await batcher.close();
@@ -217,7 +219,7 @@ export function createVisualExecute(deps: {
         ? Math.ceil(prompt.length / 4)
         : result.usage.inputTokens;
       const outputTokens = estimateUiLabUsage
-        ? Math.ceil(html.length / 4)
+        ? Math.ceil(result.html.length / 4)
         : result.usage.outputTokens;
       files.push({
         path: USAGE_FILE_NAME,
@@ -252,13 +254,21 @@ export function createVisualExecute(deps: {
 const executeVisualWorkload: ExecuteWorkload = createVisualExecute({
   invokeModel: (prompt, model, images, signal) =>
     createBedrockVisualClient().invokeModel(prompt, model, images, signal),
-  invokeStreamingModel: (prompt, model, images, onText, signal) =>
+  invokeStreamingModel: (
+    prompt,
+    model,
+    images,
+    onText,
+    signal,
+    execution,
+  ) =>
     createBedrockVisualClient().invokeStreamingModel(
       prompt,
       model,
       images,
       onText,
       signal,
+      execution,
     ),
 });
 
