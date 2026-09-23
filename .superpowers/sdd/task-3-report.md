@@ -390,3 +390,117 @@ log, npm `devdir`, and ESLint legacy-configuration warnings.
 ### Concerns
 
 None specific to these review findings.
+
+---
+
+## Review remediation (refill races)
+
+### Result
+
+- Status: `DONE`
+- Review-fix commit: `099c4f42`
+  (`fix: close interactive outbox refill races`)
+- Previous reviewed range ended at `f9275c88`.
+- No push, cloud operation, infrastructure change, deployment change,
+  migration, environment example, or protected configuration change was made.
+- Only Task 3 source, test, and this report path were staged. Pre-existing
+  worktree changes remained unstaged.
+
+### Fixes
+
+#### Seen/deferred claim leak on refill
+
+- `claimInteractiveCandidates` now accepts optional `excludeIds` and omits
+  those rows from the eligible CTE (`NOT (id = ANY(...))`).
+- The drainer passes the same-lease `seenOutboxIds` set into every interactive
+  claim page so a deferred row that becomes due again during a slow invoke is
+  not re-selected ahead of deeper work.
+- As a safety net, any re-claimed seen row is immediately `releaseClaim`ed under
+  the same holder instead of being dropped while still owned.
+
+#### In-cycle reservation release before replanning
+
+- Added a shared `releaseInteractiveClassReservation` helper on the mutable
+  reservation ledger (class + Cursor + provider interactive counters, clamped
+  at zero).
+- Terminal publishes and malformed rows that fencedly terminalize an attempt
+  with a known interactive class release one reserved slot before planning the
+  remaining queued candidates in the same drain.
+- Existing capacity-charged expire/replay release paths reuse the same helper
+  so a row cannot double-subtract.
+
+### Strict TDD evidence
+
+Red (before fixes):
+
+```text
+FAIL: excludes seen deferred rows on refill after a slow invoke
+FAIL: releases reserved utilization when terminal and malformed rows finalize
+FAIL: excludes already-seen outbox ids from interactive claim selection
+Exit code: 1
+```
+
+Green after fixes on the same three regressions.
+
+### Final verification
+
+Focused Task 3 suite:
+
+```text
+PASS: 7 test suites
+PASS: 83 tests
+Exit code: 0
+```
+
+Mixed orchestrator/V2 suite:
+
+```text
+PASS: 20 test suites (aiOrchestrator + aiRunV2)
+PASS: 205 tests
+Exit code: 0
+```
+
+Additional mixed lifecycle/admission suite:
+
+```text
+PASS: 5 test suites
+PASS: 63 tests
+Exit code: 0
+```
+
+Server type-check:
+
+```text
+npm run build:server
+> tsc -p tsconfig.server.json
+Exit code: 0
+```
+
+Focused lint/diff:
+
+```text
+ReadLints: 0 errors
+git diff --check: exit 0
+```
+
+### Review-fix files
+
+- `src/server/services/aiOrchestrator/outboxDrainer.ts`
+- `src/server/services/aiRunV2/outboxRepository.ts`
+- `src/server/__tests__/aiOrchestrator/outboxDrainer.test.ts`
+- `src/server/__tests__/aiRunV2OutboxRepository.test.ts`
+- `.superpowers/sdd/task-3-report.md`
+
+### Final self-review
+
+- Confirmed deferred/seen rows cannot keep claim ownership after being skipped.
+- Confirmed refill under the same lease can reach a deeper valid row without
+  waiting for claim expiry or the 30-second sweep.
+- Confirmed saturated snapshots free class/Cursor slots when terminal/malformed
+  rows finalize before planning, and queued work can dispatch in the same drain.
+- Confirmed reservation decrements are clamped and shared through one helper.
+- Confirmed no unrelated or protected file was staged.
+
+### Concerns
+
+None specific to these two remaining races.
