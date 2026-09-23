@@ -100,9 +100,17 @@ function parseGenerationOwner(value: unknown): PrototypeGenerationOwner | null {
     return null;
   }
   const snapshot = parsed as Record<string, unknown>;
+  const isOwnedVisualGeneration =
+    (
+      snapshot.workflowClass === 'design-prototype'
+      && snapshot.subjectKind === 'design-prototype'
+    )
+    || (
+      snapshot.workflowClass === 'ui-lab'
+      && snapshot.subjectKind === 'ui-lab-screen'
+    );
   if (
-    snapshot.workflowClass !== 'design-prototype'
-    || snapshot.subjectKind !== 'design-prototype'
+    !isOwnedVisualGeneration
     || typeof snapshot.subjectId !== 'string'
     || !snapshot.subjectId.trim()
     || typeof snapshot.generationStartedAt !== 'string'

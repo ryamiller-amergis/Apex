@@ -10,7 +10,10 @@ import {
 import { getMaxviewColorTokens, getApexColorTokens } from './designTokensService';
 import { getFigmaReference } from './figmaReferenceService';
 import { recordAiUsage, computeCost } from './aiUsageService';
-import type { VisualModelSettings } from '../../shared/types/aiRunV2VisualSpec';
+import type {
+  VisualDesignReference,
+  VisualModelSettings,
+} from '../../shared/types/aiRunV2VisualSpec';
 import {
   buildResolvedUiLabContextSection,
   buildResolvedUiLabPrompt,
@@ -217,6 +220,28 @@ export async function resolveUiLabPromptInput(input: {
   };
 }
 
+export function resolveUiLabDesignReference(): VisualDesignReference {
+  try {
+    const reference = getFigmaReference();
+    return {
+      navItems: reference.navItems,
+      images: reference.tablePageBase64
+        ? [
+            {
+              kind: 'design-reference',
+              base64: reference.tablePageBase64,
+              mediaType: 'image/png',
+              width: reference.tablePageWidth,
+              height: reference.tablePageHeight,
+            },
+          ]
+        : [],
+    };
+  } catch {
+    return { navItems: [], images: [] };
+  }
+}
+
 function buildEditPrompt(
   userInstruction: string,
   currentHtml: string,
@@ -380,14 +405,8 @@ async function invokeStreaming(
 
 export async function generateUiLabDesign(opts: UiLabGenerateOptions): Promise<string> {
   const { modelId, maxTokens, timeoutMs } = resolveUiLabVisualModel(opts);
-
-  let figmaBase64: string | undefined;
-  try {
-    const figmaRef = getFigmaReference();
-    figmaBase64 = figmaRef.tablePageBase64 ?? undefined;
-  } catch {
-    // non-fatal
-  }
+  const designReference = resolveUiLabDesignReference();
+  const figmaBase64 = designReference.images[0]?.base64;
 
   const promptInput = await resolveUiLabPromptInput({
     userPrompt: opts.prompt,

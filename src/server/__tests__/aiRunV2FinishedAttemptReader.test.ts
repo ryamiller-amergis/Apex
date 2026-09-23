@@ -67,6 +67,40 @@ describe('finished V2 attempt reader', () => {
     expect(found.has('prototype:proto-2')).toBe(false);
   });
 
+  it('returns UI Lab generation ownership from the generic run snapshot', async () => {
+    const execute = jest.fn().mockResolvedValue([
+      {
+        thread_id: 'ui-lab:design-1',
+        attempt_id: 'attempt-1',
+        run_id: 'run-1',
+        dispatch_message_id: 'dispatch-1',
+        status: 'completed',
+        manifest_ref: {
+          container: 'ai-run-artifacts',
+          key: 'runs/run-1/attempts/1/manifest.json',
+        },
+        failure_detail: null,
+        execution_snapshot: {
+          workflowClass: 'ui-lab',
+          subjectKind: 'ui-lab-screen',
+          subjectId: 'design-1',
+          generationStartedAt: '2026-09-22T12:00:00.000Z',
+        },
+      },
+    ]);
+    const reader = createFinishedAttemptReader({
+      executor: { execute },
+      inbox: inbox(),
+    });
+
+    const found = await reader.listFinishedByThread(['ui-lab:design-1']);
+
+    expect(found.get('ui-lab:design-1')?.generationOwner).toEqual({
+      subjectId: 'design-1',
+      generationStartedAt: '2026-09-22T12:00:00.000Z',
+    });
+  });
+
   it('selects only V2 runs whose header and attempt are both terminal', async () => {
     const execute = jest.fn().mockResolvedValue([]);
     const reader = createFinishedAttemptReader({ executor: { execute }, inbox: inbox() });

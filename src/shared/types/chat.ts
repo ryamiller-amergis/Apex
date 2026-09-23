@@ -187,6 +187,8 @@ export type SseEventType =
 export interface SseTokenEvent {
   type: 'token';
   text: string;
+  /** Character offset for durable streamed text; absent on legacy chat tokens. */
+  streamOffset?: number;
 }
 
 export interface SseMessageEvent {

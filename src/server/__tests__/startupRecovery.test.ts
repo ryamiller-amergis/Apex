@@ -85,6 +85,9 @@ jest.mock('../services/designPrototypeService', () => ({
 jest.mock('../services/designPrototypeV2Harvest', () => ({
   harvestFinishedV2Prototypes: jest.fn().mockResolvedValue(0),
 }));
+jest.mock('../services/uiLabV2Harvest', () => ({
+  harvestFinishedV2UiLabDesigns: jest.fn().mockResolvedValue(0),
+}));
 jest.mock('../services/documentV2Harvest', () => ({
   harvestFinishedV2Documents: jest.fn().mockResolvedValue(0),
 }));
@@ -1126,6 +1129,15 @@ describe('finished durable prototype runs', () => {
     } finally {
       consoleSpy.mockRestore();
     }
+  });
+
+  it('uses the same 60-second recovery cycle as UI Lab fallback harvest', async () => {
+    const harvestUiLab = jest.requireMock('../services/uiLabV2Harvest')
+      .harvestFinishedV2UiLabDesigns as jest.Mock;
+
+    await recoverInFlightWork();
+
+    expect(harvestUiLab).toHaveBeenCalledTimes(1);
   });
 });
 

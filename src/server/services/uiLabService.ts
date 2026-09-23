@@ -1,12 +1,37 @@
 import { db } from '../db/drizzle';
-import { uiLabDesigns, uiLabComments, uiLabDesignShares } from '../db/schema';
-import { and, eq, desc } from 'drizzle-orm';
+import {
+  agentRuns,
+  uiLabDesigns,
+  uiLabComments,
+  uiLabDesignShares,
+} from '../db/schema';
+import { and, eq, desc, inArray } from 'drizzle-orm';
 import { sanitizeMockHtml } from '../utils/htmlSanitizer';
-import { generateUiLabDesign, editUiLabDesign, extractHtml } from './uiLabBedrockService';
+import {
+  generateUiLabDesign,
+  editUiLabDesign,
+  extractHtml,
+  resolveUiLabDesignReference,
+  resolveUiLabPromptInput,
+  resolveUiLabVisualModel,
+} from './uiLabBedrockService';
 import { getSkillConfig } from './projectSettingsService';
 import { createNotification } from './notificationService';
 import { getUserPermissions } from './rbacService';
 import { getUserGroupNames } from './groupService';
+import { isFeatureEnabled } from './featureFlagService';
+import { resolveAgentRunHardLimitMs } from './agentRunReaperService';
+import {
+  createV2AdmissionService,
+  visualGenerationRunId,
+  visualRunThreadId,
+  type V2AdmissionService,
+} from './aiRunV2/v2AdmissionService';
+import { buildUiLabVisualSpecification } from './aiRunV2/visualSpecificationBuilder';
+import {
+  observeUiLabV2Run,
+  type ObserveUiLabV2Run,
+} from './uiLabV2Stream';
 import * as shareRepo from './uiLabShareRepository';
 import type {
   UiLabDesign,
@@ -50,6 +75,36 @@ export class UiLabValidationError extends Error {
     this.name = 'UiLabValidationError';
   }
 }
+
+const UI_LAB_V2_TRANSPORT_FLAG = 'ui-lab-v2-transport';
+const VISUAL_WORKLOAD_LANE = 'visual' as const;
+
+export type UiLabV2AdmissionState =
+  | 'intended'
+  | 'absent'
+  | 'conflicting';
+
+export type ReconcileUiLabV2Admission = (input: Readonly<{
+  runId: string;
+  threadId: string;
+  subjectId: string;
+  generationStartedAt: string;
+}>) => Promise<UiLabV2AdmissionState>;
+
+type FeatureFlagEvaluator = (
+  key: string,
+  context: { userId: string; project: string; caller?: string },
+) => Promise<boolean>;
+
+export type UiLabGenerationDependencies = Readonly<{
+  isFeatureEnabled?: FeatureFlagEvaluator;
+  admitV2Run?: V2AdmissionService['admit'];
+  reconcileV2Admission?: ReconcileUiLabV2Admission;
+  observeV2Run?: ObserveUiLabV2Run;
+  now?: () => Date;
+  resolveHardLimitMs?: () => number;
+  afterEventId?: string;
+}>;
 
 function toDesign(row: Record<string, unknown>): UiLabDesign {
   return row as unknown as UiLabDesign;
@@ -286,47 +341,68 @@ export async function saveHtml(
   return toDesign(rows[0] as Record<string, unknown>);
 }
 
-/** Called by the SSE route. Streams tokens via onToken, then persists the final result. */
-export async function runGeneration(
-  designId: string,
-  onToken: (chunk: string) => void,
-  userId?: string,
-): Promise<void> {
-  const design = await getDesign(designId);
-  if (!design) throw new Error(`UI Lab design ${designId} not found`);
+export async function reconcileUiLabV2Admission(
+  input: Parameters<ReconcileUiLabV2Admission>[0],
+): Promise<UiLabV2AdmissionState> {
+  const rows = await db
+    .select({
+      id: agentRuns.id,
+      threadId: agentRuns.threadId,
+      transportVersion: agentRuns.transportVersion,
+      executionSnapshot: agentRuns.executionSnapshot,
+    })
+    .from(agentRuns)
+    .where(eq(agentRuns.id, input.runId));
+  const run = rows[0];
+  if (!run) return 'absent';
+  const snapshot = run.executionSnapshot as Record<string, unknown> | null;
+  return (
+    run.threadId === input.threadId
+    && run.transportVersion === 'servicebus-blob-v2'
+    && snapshot?.workflowClass === 'ui-lab'
+    && snapshot.subjectKind === 'ui-lab-screen'
+    && snapshot.subjectId === input.subjectId
+    && snapshot.generationStartedAt === input.generationStartedAt
+  )
+    ? 'intended'
+    : 'conflicting';
+}
 
-  let skillConfig = null;
-  try {
-    skillConfig = await getSkillConfig(design.project);
-  } catch {
-    // non-fatal — use defaults
-  }
-
-  const modelId = skillConfig?.uiLabBedrockModelId ?? undefined;
-  const maxTokens = skillConfig?.uiLabBedrockMaxTokens ?? undefined;
-  const timeoutMs = skillConfig?.uiLabBedrockTimeoutMs ?? undefined;
-  const temperature = skillConfig?.uiLabBedrockTemperature ?? undefined;
-
+async function runGenerationInProcess(input: {
+  design: UiLabDesign;
+  skillConfig: Awaited<ReturnType<typeof getSkillConfig>> | null;
+  modelId?: string;
+  maxTokens?: number;
+  timeoutMs?: number;
+  temperature?: number;
+  onToken: (chunk: string, eventId?: string) => void;
+  userId?: string;
+}): Promise<void> {
+  const { design } = input;
   await db
     .update(uiLabDesigns)
-    .set({ status: 'streaming', model: modelId ?? null, updatedAt: new Date().toISOString() })
-    .where(eq(uiLabDesigns.id, designId));
+    .set({
+      status: 'streaming',
+      model: input.modelId ?? null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(uiLabDesigns.id, design.id));
 
   try {
     const rawHtml = await generateUiLabDesign({
       prompt: design.prompt,
       targetRoute: design.targetRoute,
-      modelId,
-      maxTokens: maxTokens ?? undefined,
-      timeoutMs: timeoutMs ?? undefined,
-      temperature: temperature ?? undefined,
-      onToken,
+      modelId: input.modelId,
+      maxTokens: input.maxTokens,
+      timeoutMs: input.timeoutMs,
+      temperature: input.temperature,
+      onToken: input.onToken,
       project: design.project,
-      userId,
-      uiLabSkillPath: skillConfig?.uiLabSkillPath ?? undefined,
-      skillRepo: skillConfig?.skillRepo ?? undefined,
-      skillBranch: skillConfig?.skillBranch ?? undefined,
-      skillProvider: skillConfig?.skillProvider ?? undefined,
+      userId: input.userId,
+      uiLabSkillPath: input.skillConfig?.uiLabSkillPath ?? undefined,
+      skillRepo: input.skillConfig?.skillRepo ?? undefined,
+      skillBranch: input.skillConfig?.skillBranch ?? undefined,
+      skillProvider: input.skillConfig?.skillProvider ?? undefined,
     });
 
     const html = sanitizeMockHtml(extractHtml(rawHtml));
@@ -348,7 +424,7 @@ export async function runGeneration(
         generationError: null,
         updatedAt: now,
       })
-      .where(eq(uiLabDesigns.id, designId));
+      .where(eq(uiLabDesigns.id, design.id));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     await db
@@ -358,9 +434,282 @@ export async function runGeneration(
         generationError: msg,
         updatedAt: new Date().toISOString(),
       })
-      .where(eq(uiLabDesigns.id, designId));
+      .where(eq(uiLabDesigns.id, design.id));
     throw err;
   }
+}
+
+async function runGenerationV2(input: {
+  design: UiLabDesign;
+  skillConfig: Awaited<ReturnType<typeof getSkillConfig>> | null;
+  modelId?: string;
+  maxTokens?: number;
+  timeoutMs?: number;
+  temperature?: number;
+  onToken: (chunk: string, eventId?: string) => void;
+  userId?: string;
+  dependencies: Required<Pick<
+    UiLabGenerationDependencies,
+    | 'admitV2Run'
+    | 'reconcileV2Admission'
+    | 'observeV2Run'
+    | 'now'
+    | 'resolveHardLimitMs'
+  >> & Pick<UiLabGenerationDependencies, 'afterEventId'>;
+}): Promise<boolean> {
+  const { design, dependencies } = input;
+  const threadId = visualRunThreadId('ui-lab-screen', design.id);
+
+  if (design.status === 'streaming') {
+    const generationStartedAt = design.updatedAt;
+    const runId = visualGenerationRunId(
+      'ui-lab-screen',
+      design.id,
+      generationStartedAt,
+    );
+    const state = await dependencies.reconcileV2Admission({
+      runId,
+      threadId,
+      subjectId: design.id,
+      generationStartedAt,
+    });
+    if (state !== 'intended') return false;
+    await dependencies.observeV2Run({
+      designId: design.id,
+      runId,
+      threadId,
+      generationStartedAt,
+      onToken: input.onToken,
+      afterEventId: input.dependencies.afterEventId,
+    });
+    return true;
+  }
+
+  let specification;
+  try {
+    const [promptInput, designReference] = await Promise.all([
+      resolveUiLabPromptInput({
+        userPrompt: design.prompt,
+        targetRoute: design.targetRoute,
+        project: design.project,
+        uiLabSkillPath: input.skillConfig?.uiLabSkillPath ?? undefined,
+        skillRepo: input.skillConfig?.skillRepo ?? undefined,
+        skillBranch: input.skillConfig?.skillBranch ?? undefined,
+        skillProvider: input.skillConfig?.skillProvider ?? undefined,
+      }),
+      Promise.resolve(resolveUiLabDesignReference()),
+    ]);
+    specification = buildUiLabVisualSpecification({
+      designId: design.id,
+      userPrompt: promptInput.userPrompt,
+      targetRoute: promptInput.targetRoute,
+      designSystemName: promptInput.designSystemName,
+      skillMarkdown: promptInput.skillMarkdown,
+      componentIndex: promptInput.componentIndex,
+      existingPageContext: promptInput.existingPageContext,
+      colorTokens: promptInput.colorTokens,
+      catalog: promptInput.catalog,
+      screenInventory: promptInput.screenInventory,
+      navItems: designReference.navItems,
+      images: designReference.images,
+      model: resolveUiLabVisualModel({
+        modelId: input.modelId,
+        maxTokens: input.maxTokens,
+        timeoutMs: input.timeoutMs,
+        temperature: input.temperature,
+      }),
+      usage: {
+        feature: 'ui-lab',
+        project: design.project,
+        userId: input.userId,
+      },
+    });
+  } catch {
+    return false;
+  }
+
+  const generationStartedAt = dependencies.now().toISOString();
+  const claimed = await db
+    .update(uiLabDesigns)
+    .set({
+      status: 'streaming',
+      model: specification.model.modelId,
+      generationError: null,
+      updatedAt: generationStartedAt,
+    })
+    .where(
+      and(
+        eq(uiLabDesigns.id, design.id),
+        eq(uiLabDesigns.updatedAt, design.updatedAt),
+        inArray(uiLabDesigns.status, ['generating', 'generation_failed']),
+      ),
+    )
+    .returning({ id: uiLabDesigns.id });
+  if (claimed.length !== 1) {
+    throw new Error(`UI Lab design ${design.id} generation was already claimed`);
+  }
+
+  const runId = visualGenerationRunId(
+    'ui-lab-screen',
+    design.id,
+    generationStartedAt,
+  );
+  const admissionIdentity = {
+    runId,
+    threadId,
+    subjectId: design.id,
+    generationStartedAt,
+  };
+  let admissionResponseReceived = false;
+  try {
+    const admitted = await dependencies.admitV2Run({
+      runId,
+      threadId,
+      projectId: design.project,
+      workloadLane: VISUAL_WORKLOAD_LANE,
+      timeoutAt: new Date(
+        dependencies.now().getTime() + dependencies.resolveHardLimitMs(),
+      ).toISOString(),
+      specification: specification as unknown as Record<string, unknown>,
+      executionSnapshot: {
+        workflowClass: 'ui-lab',
+        subjectKind: 'ui-lab-screen',
+        subjectId: design.id,
+        generationStartedAt,
+      },
+    });
+    admissionResponseReceived = true;
+    switch (admitted.status) {
+      case 'dispatched':
+        break;
+      case 'active_run_conflict':
+        if (
+          admitted.existingRunId !== runId
+          || admitted.existingTransportVersion !== 'servicebus-blob-v2'
+        ) {
+          throw new Error(
+            `UI Lab V2 admission conflicted with run ${admitted.existingRunId}`,
+          );
+        }
+        break;
+      default: {
+        const unhandled: never = admitted;
+        throw new Error(`Unsupported UI Lab admission: ${String(unhandled)}`);
+      }
+    }
+  } catch (error) {
+    const state = await dependencies.reconcileV2Admission(admissionIdentity);
+    if (state === 'intended') {
+      // The durable run won even though its admission response was ambiguous.
+    } else if (state === 'absent' && !admissionResponseReceived) {
+      return false;
+    } else {
+      throw error;
+    }
+  }
+
+  await dependencies.observeV2Run({
+    designId: design.id,
+    runId,
+    threadId,
+    generationStartedAt,
+    onToken: input.onToken,
+    afterEventId: input.dependencies.afterEventId,
+  });
+  return true;
+}
+
+/** Called by the SSE route. Streams tokens via onToken, then persists the final result. */
+export async function runGeneration(
+  designId: string,
+  onToken: (chunk: string, eventId?: string) => void,
+  userId?: string,
+  dependencies: UiLabGenerationDependencies = {},
+): Promise<void> {
+  const design = await getDesign(designId);
+  if (!design) throw new Error(`UI Lab design ${designId} not found`);
+  if (dependencies.afterEventId && design.status === 'ready') return;
+  if (dependencies.afterEventId && design.status === 'generation_failed') {
+    throw new Error(design.generationError ?? 'Generation failed');
+  }
+
+  let skillConfig = null;
+  try {
+    skillConfig = await getSkillConfig(design.project);
+  } catch {
+    // non-fatal — use defaults
+  }
+
+  const modelId = skillConfig?.uiLabBedrockModelId ?? undefined;
+  const maxTokens = skillConfig?.uiLabBedrockMaxTokens ?? undefined;
+  const timeoutMs = skillConfig?.uiLabBedrockTimeoutMs ?? undefined;
+  const temperature = skillConfig?.uiLabBedrockTemperature ?? undefined;
+  const evaluateFlag = dependencies.isFeatureEnabled ?? isFeatureEnabled;
+  let useV2Transport = false;
+  try {
+    useV2Transport = await evaluateFlag(UI_LAB_V2_TRANSPORT_FLAG, {
+      userId: design.authorId,
+      project: design.project,
+      caller: 'ui-lab',
+    });
+  } catch {
+    useV2Transport = false;
+  }
+
+  // Retain enabled after UI Lab V2 has held full rollout for two stable sprints.
+  // @feature-flag:ui-lab-v2-transport start winner=enabled
+  if (useV2Transport) {
+    // @feature-flag:ui-lab-v2-transport enabled-start
+    const handled = await runGenerationV2({
+      design,
+      skillConfig,
+      modelId,
+      maxTokens,
+      timeoutMs,
+      temperature,
+      onToken,
+      userId,
+      dependencies: {
+        admitV2Run:
+          dependencies.admitV2Run
+          ?? ((admission) => createV2AdmissionService().admit(admission)),
+        reconcileV2Admission:
+          dependencies.reconcileV2Admission ?? reconcileUiLabV2Admission,
+        observeV2Run: dependencies.observeV2Run ?? observeUiLabV2Run,
+        now: dependencies.now ?? (() => new Date()),
+        resolveHardLimitMs:
+          dependencies.resolveHardLimitMs ?? resolveAgentRunHardLimitMs,
+        afterEventId: dependencies.afterEventId,
+      },
+    });
+    if (!handled) {
+      await runGenerationInProcess({
+        design,
+        skillConfig,
+        modelId,
+        maxTokens,
+        timeoutMs,
+        temperature,
+        onToken,
+        userId,
+      });
+    }
+    // @feature-flag:ui-lab-v2-transport enabled-end
+  } else {
+    // @feature-flag:ui-lab-v2-transport disabled-start
+    await runGenerationInProcess({
+      design,
+      skillConfig,
+      modelId,
+      maxTokens,
+      timeoutMs,
+      temperature,
+      onToken,
+      userId,
+    });
+    // @feature-flag:ui-lab-v2-transport disabled-end
+  }
+  // @feature-flag:ui-lab-v2-transport end
 }
 
 /** Called by the SSE route for regeneration. */

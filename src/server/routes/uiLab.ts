@@ -238,14 +238,26 @@ router.get('/:id/stream', projectFromDesignId, requirePermission('ui-lab:manage'
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
-  const send = (type: string, data: Record<string, unknown>) => {
+  const send = (
+    type: string,
+    data: Record<string, unknown>,
+    eventId?: string,
+  ) => {
+    if (eventId) res.write(`id: ${eventId}\n`);
     res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
   };
 
   try {
-    await runGeneration(id, (chunk) => {
-      send('token', { text: chunk });
-    }, (req.user as any)?.profile?.oid as string | undefined);
+    await runGeneration(
+      id,
+      (chunk, eventId) => {
+        send('token', { text: chunk }, eventId);
+      },
+      (req.user as any)?.profile?.oid as string | undefined,
+      {
+        afterEventId: req.get('Last-Event-ID')?.trim() || undefined,
+      },
+    );
     send('complete', {});
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

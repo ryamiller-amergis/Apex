@@ -28,6 +28,7 @@ import { startTestCaseWatcher, isTestCaseWatcherActive, routeTestCaseGenerationK
 import { routeDocumentValidationKickoff } from './documentValidationService';
 import { failStalePrototypes } from './designPrototypeService';
 import { harvestFinishedV2Prototypes } from './designPrototypeV2Harvest';
+import { harvestFinishedV2UiLabDesigns } from './uiLabV2Harvest';
 import { harvestFinishedV2Documents } from './documentV2Harvest';
 import {
   findRunningInterviewThreads,
@@ -734,6 +735,19 @@ export async function recoverInFlightWork(
     if (signal?.aborted || err instanceof RepoCacheLeaseLostError) throw err;
     console.error('[recovery] Failed to recover stuck interview threads:', err);
   }
+
+  // Normal interactive UI Lab completion is event-driven by its SSE owner.
+  // This sweep is the fallback when no browser or App Service instance was
+  // listening at terminal time.
+  await runRecoveryCategory('finished UI Lab runs', signal, async () => {
+    const harvested = await harvestFinishedV2UiLabDesigns();
+    if (harvested > 0) {
+      recovered += harvested;
+      console.log(
+        `[recovery] Applied ${harvested} finished durable UI Lab run(s)`,
+      );
+    }
+  });
 
   // ── Prototypes whose V2 run has finished ──────────────────────────────────
   // A visual run finishes on a worker and is finalized by the orchestrator;
