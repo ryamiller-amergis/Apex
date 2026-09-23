@@ -459,9 +459,9 @@ in the running App Service imports):**
 
 ### Task 6: Build document and visual workers
 
-**Status:** The document lane and initial design-prototype visual slice are
-implemented on this branch. This does not declare Task 6 complete; UI Lab is
-tracked separately pending the streaming/cadence/flag product decisions below.
+**Status:** The document, design-prototype, and initial UI Lab visual code
+paths are implemented on this branch. This does not declare Task 6 complete;
+the combined slice remains pending final review.
 
 **Files:**
 
@@ -524,8 +524,9 @@ tracked separately pending the streaming/cadence/flag product decisions below.
   proven path: the first two stay on V1, the last two recover in-process.
 - [x] Route initial design-prototype generation to the visual lane behind
   `ai-runs-v2-transport`, with per-prototype fallback to the unchanged
-  in-process path. UI Lab remains deferred for the explicit UX decisions
-  below.
+  in-process path.
+- [x] Route initial UI Lab generation behind the separate
+  `ui-lab-v2-transport` flag while regeneration and editing remain in process.
 
   **Decision (2026-09-21):** the owning service applies its own artifacts. The
   orchestrator finalizes the attempt and knows nothing about prototypes; each
@@ -598,9 +599,9 @@ tracked separately pending the streaming/cadence/flag product decisions below.
 
   **Harvest follow-up state:**
 
-  - Document workflows and design prototypes now have durable artifact
-    harvesters. `uiLabService` still admits nothing — see the UI Lab note
-    below.
+  - Document workflows, design prototypes, and UI Lab now have durable
+    artifact harvesters. UI Lab normally harvests from its live terminal event;
+    the 60-second recovery cycle is its no-listener fallback.
   - **Closed 2026-09-22 — prototype recovery now honors the V2 deadline.**
     `failStalePrototypes` keeps the existing 25-minute cutoff, but its update
     excludes a prototype while the matching `servicebus-blob-v2` run is active
@@ -638,79 +639,41 @@ tracked separately pending the streaming/cadence/flag product decisions below.
      admission is refused as a conflict.
   3. Completion convergence — see the note under Task 8 below.
 
-  **UI Lab onto the visual lane (2026-09-21) — half built, and the reason it
-  stops there.**
+  **UI Lab onto the visual lane — implemented 2026-09-22, pending final Task 6
+  review.**
 
-  Built:
-
-  - `visualEntrypoint.buildVisualPrompt` dispatches on `subjectKind` with a
-    `never` check. It did not before: `createVisualExecute` called
-    `buildPrototypePrompt` unconditionally while
-    `aiRunV2VisualSpec.ts` had declared `'design-prototype' | 'ui-lab-screen'`
-    since it was written. A UI Lab specification would have been answered with
-    prototype instructions — four state sections, the purple NEW annotation,
-    the MaxView shell — and the result uploaded as a finished artifact with
-    nothing raised anywhere. Closed before anything else.
-  - `aiRunsV2Worker/uiLabPromptBuilder.ts` ports `buildContextSection` and
-    `buildGenerationPrompt` out of `uiLabBedrockService`, prose copied rather
-    than rewritten. No database import; the guard suite still passes.
-  - `buildUiLabVisualSpecification` fills exactly the `promptInputs` keys the
-    worker reads, asserted through the built prompt so a rename on either side
-    fails a test instead of dropping a prompt section in silence. Output path
-    is `design.html`.
-  - `visualRunThreadId` now takes the subject kind and switches exhaustively.
-    It hardcoded `prototype:`, so a UI Lab run admitted through it would have
-    landed in the prototype namespace — harmless only because the prototype
-    harvest keys off `design_prototypes` rows, and a trap for whoever wires
-    admission next.
-
-  **Not built: admission, the App Service context loader, and the harvest.**
-  UI Lab is not prototype work with a different prompt. Every generation is
-  driven by `GET /api/ui-lab/:id/stream`, which holds an SSE connection open
-  and forwards Bedrock tokens to `useUiLabStream`, which renders the partial
-  HTML into the canvas as it arrives. `runGeneration` has no other caller.
-  V2 cannot carry that: the worker uploads a finished artifact to Blob, the
-  orchestrator finalizes the attempt, and the owning service applies it from
-  the 60-second recovery sweep. There is no token channel back to a waiting
-  browser, and up to 60 seconds of dead air after the model has already
-  finished. Wiring admission without settling this would trade a live stream
-  for a blank screen and call it a transport change.
-
-  Three decisions belong to whoever picks this up, none of them mine to make
-  quietly:
-
-  1. **Does UI Lab give up live streaming?** If yes, `useUiLabStream` and the
-     two SSE routes come out and the existing `refetchInterval` polling in
-     `useUiLabDesigns` carries the result — a client change, and a visible
-     downgrade for the author watching. If no, the visual lane needs a
-     progress channel (the checkpoint queue already carries progress;
-     nothing forwards it to a browser).
-  2. **Harvest cadence.** 60 seconds is invisible for a batch of prototypes
-     nobody is watching. It is not acceptable for a user at a screen. Either
-     UI Lab gets an event-driven apply or the sweep interval changes for
-     everything.
-  3. **`ai-runs-v2-transport` is one flag**, already shared by the document
-     lane and the visual lane. Adding UI Lab to it means enabling V2 for
-     PRDs also degrades UI Lab's UX in the same switch. UI Lab needs its own
-     flag or the existing one needs per-lane scoping.
-
-  **Regeneration stays in process** either way, matching the prototype
-  boundary: the V2 visual lane admits initial generation only, and the CAS in
-  the harvest is restricted to the initial-generation status for the same
-  reason.
-
-  **Queue topology — recommendation: keep one `ai-runs-v2-visual` queue.**
-  Not changed here; the queues live in `infra/ai-platform-v2-contracts.json`
-  and the Terraform is not applied. Two separate queues would not buy
-  isolation, because the contended resource is not the queue — it is the two
-  Bedrock slots (`bedrockCap: 2`, `visual` lane floor 2 in
-  `aiOrchestrator/types.ts`). A second queue drains into the same cap, so a
-  batch of prototypes still starves an interactive UI Lab request; it would
-  only add a queue, an identity, and a second consumer to operate. The real
-  fix is priority *within* the lane: let UI Lab preempt or reserve one of the
-  two slots, so a 20-prototype PRD cannot make an author wait behind it. Split
-  the queue only if the lanes stop sharing a worker image or get separate
-  provider caps — at which point they are no longer one lane.
+  - Initial generation has its own cleanup-ready server flag,
+    `ui-lab-v2-transport`, default off. Regeneration and manual editing remain
+    in process. Ambiguous admission is reconciled by deterministic run,
+    thread, subject, and generation identity before V1 can start.
+  - App Service resolves the skill, catalog, screen inventory, route source,
+    tokens, image blocks, model, temperature, timeout, and retry policy into
+    the immutable `ui-lab-screen` specification. The worker remains
+    PostgreSQL-free and dispatches exhaustively by `subjectKind`.
+  - The shared Bedrock streaming client preserves image/text order,
+    temperature, retries, errors, token usage, and final HTML across both
+    transports. Progress batches at 250 ms with a 16 KiB message bound.
+  - Accepted text deltas become generic durable run events in the existing
+    checkpoint transaction and PostgreSQL fan-out. The UI Lab SSE owner
+    translates them back to the existing token contract, replays by event ID,
+    orders by stream offset, and keeps partial HTML on screen while
+    `EventSource` reconnects.
+  - Terminal events drive immediate checksum-verified `design.html` and
+    validated `usage.json` harvest. The durable attempt claim plus the UI Lab
+    row's generation timestamp CAS prevent stale retries, duplicate history,
+    duplicate application, and duplicate usage. Failure, cancellation, and
+    verification errors move the row to `generation_failed`.
+  - The existing 60-second startup recovery cycle harvests UI Lab only when no
+    live listener handled completion.
+  - The shared `ai-runs-v2-visual` queue remains unchanged. Commands carry
+    `visualSubjectKind`; the Bedrock cap remains two, one slot is reserved from
+    prototype batches, and UI Lab may use that slot plus any other free slot.
+    Outbox claiming deprioritizes prototypes so a queue batch cannot hide UI
+    Lab behind twenty older prototype commands.
+  - Request, response, token stream, final normalization, usage fallback, and
+    timeout parity have differential coverage. The route-object
+    `[object Object]` prompt defect was corrected in the one prompt builder
+    both transports now use.
 
   **Two things found that the visual lane already gets wrong for prototypes:**
 
@@ -770,12 +733,11 @@ tracked separately pending the streaming/cadence/flag product decisions below.
     page screenshot, or only the page screenshot for a project design system.
     Differential fixtures prove the full Bedrock payload matches both
     in-process EXTEND branches.
-  - `uiLabBedrockService.buildContextSection` joins `PageRoute` objects
-    straight into the prompt, so "### Application routes" has always read
-    `[object Object]`. Carried across verbatim and pinned with a test rather
-    than fixed, because a transport move is the wrong place to change what the
-    model is asked. `uiLabBedrockService.buildCatalogSection` is also dead —
-    it builds an empty literal and nothing calls it.
+  - ~~`uiLabBedrockService.buildContextSection` joined `PageRoute` objects
+    straight into the prompt, rendering `[object Object]`.~~ **Fixed
+    2026-09-22.** Both paths now use one DB-free prompt builder, which renders
+    route path and title. Differential request tests keep the fix in parity
+    instead of preserving the broken prompt.
 
   **A differential test for the whole class (2026-09-21).** Every defect above
   is the same species — an input channel the in-process path supplies that the
@@ -946,8 +908,9 @@ tracked separately pending the streaming/cadence/flag product decisions below.
     mean `VisualModelResult` carrying a stop reason — a new channel, next to
     the partial HTML it is supposed to stop. `createVisualExecute` already
     takes a plain `string` from injected fakes and has nowhere to hang one.
-    In the client, the fragment never becomes a `VisualModelResult` at all,
-    and the UI Lab lane inherits the check when it is wired up.
+    In the client, the fragment never becomes a `VisualModelResult` at all.
+    This check applies to the prototype non-streaming call; UI Lab uses the
+    shared streaming call described below.
   - **`VisualModelTruncatedError` is worker-local, and its message is
     `BedrockModelTruncatedError`'s word for word.** `bedrockService` cannot be
     imported — it records usage and pulls PostgreSQL into the worker image,
@@ -989,14 +952,10 @@ tracked separately pending the streaming/cadence/flag product decisions below.
     `generation_failed` with exactly the string `generateSinglePrototype`
     writes in process. It does not sit in `generating` waiting for
     `failStalePrototypes`, and it is not applied as HTML.
-  - **Known divergence, deliberate.** `uiLabBedrockService` streams and reads
-    no stop reason, so a truncated UI Lab screen currently succeeds in
-    process and would now fail on V2. The V2 direction is the correct one and
-    UI Lab has no admission yet (see above), so this is noted rather than
-    reconciled. The message also names `BEDROCK_UI_MOCK_MAX_TOKENS`, which is
-    the prototype lane's variable; UI Lab's is `BEDROCK_UI_LAB_MAX_TOKENS`.
-    Matching the in-process prototype sentence exactly is worth more today
-    than a message that is right for a lane V2 does not yet carry.
+  - **UI Lab parity is exact.** Its V1 and V2 paths now call the same streaming
+    client and therefore interpret stream events and stop metadata identically.
+    This keeps the existing UI Lab response behavior while the prototype
+    non-streaming path continues to reject `max_tokens` fragments.
 
 - [x] Ephemeral workspace and repo-read wiring for the worker processes.
 
