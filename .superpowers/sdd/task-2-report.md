@@ -488,3 +488,167 @@ error-path logs and the unset unit-test database warning.
 The prior browser `turnId` concern remains: client paths were not part of Task
 2's named scope and still need rollout wiring before enabling the canonical
 flag for browser traffic.
+
+---
+
+## Final re-review remediation
+
+### Result
+
+- Status: `DONE`
+- Re-review fix commit: `c22600d1`
+  (`fix: close durable turn review gaps`)
+- No push, cloud operation, infrastructure change, deployment change, or
+  protected configuration change was made.
+- The prior browser `turnId` concern is resolved by this commit.
+
+### Fixes
+
+- Skill source selection now branches on registration before any read:
+  - `project` requires the exact pinned reader and requested path
+  - `built-in` ignores any repository reader and uses only the allowlisted
+    local built-in root
+  - `unknown` returns explicit unavailable
+  - same-path repository content cannot override a built-in, and same-path
+    local content cannot override a registered project skill
+- Browser sends now generate a UUID once per user send attempt. One automatic
+  network retry reuses the serialized request and the same `turnId`; a new
+  user send gets a new UUID.
+- `SendMessageRequest.turnId` is required for typed browser callers.
+- Added `turnId` to every direct chat message POST:
+  - Agent Home/session hook
+  - Home initial-message send
+  - Interview kickoff
+  - ADR kickoff
+  - Design-doc discussion kickoff
+  - typed `useSendMessage` callers
+- Duplicate repository results now include an internal
+  `shouldReflectThreadState` decision derived while holding the thread lock.
+  An old terminal duplicate returns its original result but cannot replace or
+  clear a newer active run in memory.
+- Restored the legacy router's multi-workflow targeting regression and
+  already-dispatched-drain regression after a flag change.
+
+### TDD red evidence
+
+Skill precedence:
+
+```text
+npx jest src/server/__tests__/durableInteractiveTurnService.test.ts --runInBand -t "override the same"
+FAIL: built-in registration returned repository content instead of the
+allowlisted local built-in.
+```
+
+Browser admission identity:
+
+```text
+npx jest src/client/hooks/__tests__/useAgentChatSession.test.ts --runInBand -t "send posts|turnId"
+FAIL: 3 tests
+```
+
+The red cases proved that the body omitted `turnId`, a network failure was not
+retried, and separate user sends had no independent identities.
+
+Superseded terminal duplicate:
+
+```text
+npx jest src/server/__tests__/durableInteractiveTurnRepository.test.ts --runInBand -t "superseded|newer active"
+FAIL: repository/service omitted reflection ownership metadata.
+
+npx jest src/server/__tests__/chatAgentService.test.ts --runInBand -t "newer active run"
+FAIL: old completed duplicate cleared newer-active-run and set the thread idle.
+```
+
+The restored legacy router tests passed immediately against the preserved
+legacy implementation; no behavior change was needed there.
+
+### Final verification
+
+Server Task 1/Task 2/chat/router/reaper suite:
+
+```text
+Test Suites: 14 passed, 14 total
+Tests:       441 passed, 441 total
+Exit code: 0
+```
+
+Client Home/Interview/ADR/direct-send suite:
+
+```text
+Test Suites: 5 passed, 5 total
+Tests:       88 passed, 88 total
+Exit code: 0
+```
+
+Sequential PostgreSQL integration:
+
+```text
+Migration: 1 passed
+Admission/concurrency: 21 passed
+Exit code: 0
+```
+
+Builds:
+
+```text
+npm run build:server
+Exit code: 0
+
+npm run build:client
+Exit code: 0
+```
+
+Focused lint/diff:
+
+```text
+ESLint: 0 errors
+git diff --check: exit 0
+git diff --cached --check: exit 0
+```
+
+Lint reports existing warnings in the touched large UI modules and the known
+unused server import, but no errors. Builds retain the existing Vite/Application
+Insights warnings.
+
+### Final re-review files
+
+- `src/shared/types/chat.ts`
+- `src/shared/types/durableInteractiveTurn.ts`
+- `src/server/services/durableInteractiveTurnRepository.ts`
+- `src/server/services/durableInteractiveTurnService.ts`
+- `src/server/services/chatAgentService.ts`
+- `src/server/__tests__/durableInteractiveTurnService.test.ts`
+- `src/server/__tests__/durableInteractiveTurnRepository.test.ts`
+- `src/server/__tests__/chatAgentService.test.ts`
+- `src/server/__tests__/interactiveWorkflowRouter.test.ts`
+- `tests/integration/durable-interactive-admission.integration.test.ts`
+- `src/client/utils/chatTurnId.ts`
+- `src/client/hooks/useAgentChatSession.ts`
+- `src/client/hooks/useChatThreads.ts`
+- `src/client/App.tsx`
+- `src/client/components/InterviewChatView.tsx`
+- `src/client/components/AdrChatView.tsx`
+- `src/client/components/DesignDocReviewView.tsx`
+- `src/client/hooks/__tests__/useAgentChatSession.test.ts`
+- `src/client/components/__tests__/InterviewChatView.NewInterviewCompose.test.tsx`
+- `src/client/components/__tests__/AdrChatView.NewAdrCompose.test.tsx`
+- `.superpowers/sdd/task-2-report.md`
+
+### Final self-review
+
+- Confirmed built-in registration never calls the pinned reader.
+- Confirmed project registration never resolves or reads a local built-in.
+- Confirmed each browser send serializes its turn ID once before fetch retry.
+- Confirmed all direct `/api/chat/threads/:id/messages` callers include
+  `turnId`.
+- Confirmed the HTTP response omits internal reflection metadata.
+- Confirmed the thread lock supplies `active_run_id` before duplicate response
+  ownership is decided.
+- Confirmed a superseded old terminal run does not mutate message cache,
+  `status`, `activeRunId`, or `lastActivityAt`.
+- Confirmed canonical routing remains one-way and legacy routing behavior is
+  preserved under canonical flag off/error.
+
+### Concerns
+
+None specific to these re-review findings.
