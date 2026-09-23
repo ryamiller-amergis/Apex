@@ -229,12 +229,21 @@ describe('uiLab routes — project ui-lab enablement enforcement', () => {
       mockUiLab.runGeneration.mockImplementation(
         async (
           _id,
-          onToken: (text: string, eventId?: string) => void,
+          onToken: (
+            text: string,
+            eventId?: string,
+            mode?: 'append' | 'replace',
+          ) => void,
           _userId,
           options?: { onTransport?: (transport: 'v1' | 'v2') => void },
         ) => {
           options?.onTransport?.('v2');
           onToken('<html>', '3f44f6f1-ec42-4aa6-9df4-0d8ce8438491');
+          onToken(
+            '<html>ready</html>',
+            '3f44f6f1-ec42-4aa6-9df4-0d8ce8438492',
+            'replace',
+          );
         },
       );
 
@@ -251,6 +260,9 @@ describe('uiLab routes — project ui-lab enablement enforcement', () => {
       );
       expect(res.text).toContain(
         'data: {"type":"transport","transport":"v2"}',
+      );
+      expect(res.text).toContain(
+        'data: {"type":"snapshot","text":"<html>ready</html>"}',
       );
       expect(mockUiLab.runGeneration).toHaveBeenCalledWith(
         'd1',

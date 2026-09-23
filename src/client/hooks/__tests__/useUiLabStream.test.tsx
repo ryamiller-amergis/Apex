@@ -93,4 +93,31 @@ describe('useUiLabStream reconnect behavior', () => {
 
     expect(result.current.streamedHtml).toBe('<html>');
   });
+
+  it('replaces raw partial HTML with one deduplicated final snapshot', () => {
+    const { result } = renderHook(() => useUiLabStream(), { wrapper });
+    act(() => result.current.startStream('design-1', 'generate'));
+    const source = FakeEventSource.latest!;
+    const snapshotId = '3f44f6f1-ec42-4aa6-9df4-0d8ce8438492';
+
+    act(() => {
+      source.emit({ type: 'transport', transport: 'v2' });
+      source.emit({
+        type: 'token',
+        text: '```html\n<html><a href="javascript:x">ready',
+      }, '3f44f6f1-ec42-4aa6-9df4-0d8ce8438491');
+      source.emit({
+        type: 'snapshot',
+        text: '<html><a href="removed:x">ready</a></html>',
+      }, snapshotId);
+      source.emit({
+        type: 'snapshot',
+        text: '<html><a href="removed:x">ready</a></html>',
+      }, snapshotId);
+    });
+
+    expect(result.current.streamedHtml).toBe(
+      '<html><a href="removed:x">ready</a></html>',
+    );
+  });
 });

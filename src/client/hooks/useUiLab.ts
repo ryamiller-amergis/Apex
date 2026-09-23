@@ -296,7 +296,10 @@ export function useUiLabStream(onComplete?: (designId: string) => void): UiLabSt
             const chunk = JSON.parse(e.data) as UiLabStreamChunk;
             if (chunk.type === 'transport' && chunk.transport) {
               transportRef.current = chunk.transport;
-            } else if (chunk.type === 'token' && chunk.text) {
+            } else if (
+              (chunk.type === 'token' || chunk.type === 'snapshot')
+              && chunk.text
+            ) {
               if (
                 e.lastEventId
                 && seenEventIdsRef.current.has(e.lastEventId)
@@ -306,7 +309,9 @@ export function useUiLabStream(onComplete?: (designId: string) => void): UiLabSt
               if (e.lastEventId) {
                 seenEventIdsRef.current.add(e.lastEventId);
               }
-              bufferRef.current += chunk.text;
+              bufferRef.current = chunk.type === 'snapshot'
+                ? chunk.text
+                : bufferRef.current + chunk.text;
               setStreamedHtml(bufferRef.current);
             } else if (chunk.type === 'complete') {
               es.close();

@@ -79,6 +79,7 @@ describe('observeUiLabV2Run', () => {
     expect(onToken.mock.calls).toEqual([
       ['<html>', '00000000-0000-4000-8000-000000000001'],
       ['ok</html>', '00000000-0000-4000-8000-000000000002'],
+      ['<html>ok</html>', 'snapshot-1', 'replace'],
     ]);
     expect(harvestRun).toHaveBeenCalledWith({
       designId: 'design-1',
@@ -129,6 +130,7 @@ describe('observeUiLabV2Run', () => {
     expect(onToken.mock.calls.map(([text]) => text)).toEqual([
       '<html>',
       'ok</html>',
+      '<html>ok</html>',
     ]);
   });
 
@@ -160,6 +162,11 @@ describe('observeUiLabV2Run', () => {
     expect(onToken).toHaveBeenCalledWith(
       'ok</html>',
       '00000000-0000-4000-8000-000000000002',
+    );
+    expect(onToken).toHaveBeenLastCalledWith(
+      '<html>ok</html>',
+      'snapshot-1',
+      'replace',
     );
   });
 
@@ -197,8 +204,9 @@ describe('observeUiLabV2Run', () => {
       html: '<html>ok</html>',
     });
     expect(onToken).toHaveBeenLastCalledWith(
-      'ok</html>',
+      '<html>ok</html>',
       final.eventId,
+      'replace',
     );
   });
 
@@ -255,6 +263,7 @@ describe('replayCompletedUiLabV2Run', () => {
     await replayCompletedUiLabV2Run(
       {
         threadId: INPUT.threadId,
+        runId: INPUT.runId,
         afterEventId: cursor.eventId,
         finalHtml: '<html>ok</html>',
         onToken,
@@ -265,7 +274,11 @@ describe('replayCompletedUiLabV2Run', () => {
       },
     );
 
-    expect(onToken).toHaveBeenCalledWith('ok</html>', snapshot.eventId);
+    expect(onToken).toHaveBeenCalledWith(
+      '<html>ok</html>',
+      snapshot.eventId,
+      'replace',
+    );
   });
 
   it('does not duplicate final text after reconnecting from the snapshot id', async () => {
@@ -274,6 +287,7 @@ describe('replayCompletedUiLabV2Run', () => {
     await replayCompletedUiLabV2Run(
       {
         threadId: INPUT.threadId,
+        runId: INPUT.runId,
         afterEventId: snapshot.eventId,
         finalHtml: '<html>ok</html>',
         onToken,
@@ -293,6 +307,7 @@ describe('replayCompletedUiLabV2Run', () => {
     await replayCompletedUiLabV2Run(
       {
         threadId: INPUT.threadId,
+        runId: INPUT.runId,
         afterEventId: cursor.eventId,
         finalHtml: '<html>ok</html>',
         onToken,
@@ -313,6 +328,7 @@ describe('replayCompletedUiLabV2Run', () => {
     await replayCompletedUiLabV2Run(
       {
         threadId: INPUT.threadId,
+        runId: INPUT.runId,
         afterEventId: cursor.eventId,
         finalHtml: '<html>ok</html>',
         onToken,
@@ -329,6 +345,126 @@ describe('replayCompletedUiLabV2Run', () => {
       runId: cursor.runId,
       html: '<html>ok</html>',
     });
-    expect(onToken).toHaveBeenCalledWith('ok</html>', snapshot.eventId);
+    expect(onToken).toHaveBeenCalledWith(
+      '<html>ok</html>',
+      snapshot.eventId,
+      'replace',
+    );
+  });
+
+  it('filters completed replay to the cursor run id', async () => {
+    const onToken = jest.fn();
+    const wrongRun = {
+      ...token('wrong-run-event', 2, 6, 'WRONG'),
+      runId: 'run-2',
+    };
+    const replayRunEvents = jest.fn().mockResolvedValue([
+      wrongRun,
+      snapshot,
+    ]);
+
+    await replayCompletedUiLabV2Run(
+      {
+        threadId: INPUT.threadId,
+        runId: INPUT.runId,
+        afterEventId: cursor.eventId,
+        finalHtml: '<html>ok</html>',
+        onToken,
+      },
+      {
+        loadRunEvent: jest.fn().mockResolvedValue(cursor),
+        replayRunEvents,
+      },
+    );
+
+    expect(replayRunEvents).toHaveBeenCalledWith(
+      INPUT.threadId,
+      cursor.eventId,
+      500,
+      cursor.runId,
+      'oldest',
+    );
+    expect(onToken).toHaveBeenCalledTimes(1);
+    expect(onToken).toHaveBeenCalledWith(
+      '<html>ok</html>',
+      snapshot.eventId,
+      'replace',
+    );
+  });
+
+  it('paginates more than 500 completed-run events with the same run filter', async () => {
+    const firstPage = Array.from({ length: 500 }, (_, index) =>
+      token(`completed-${index}`, index + 2, 6 + index, 'x'));
+    const replayRunEvents = jest.fn(async (
+      _threadId: string,
+      afterEventId?: string,
+      _limit?: number,
+      runId?: string,
+    ) => {
+      expect(runId).toBe(INPUT.runId);
+      return afterEventId === cursor.eventId ? firstPage : [snapshot];
+    });
+    const onToken = jest.fn();
+
+    await replayCompletedUiLabV2Run(
+      {
+        threadId: INPUT.threadId,
+        runId: INPUT.runId,
+        afterEventId: cursor.eventId,
+        finalHtml: '<html>ok</html>',
+        onToken,
+      },
+      {
+        loadRunEvent: jest.fn().mockResolvedValue(cursor),
+        replayRunEvents: replayRunEvents as never,
+      },
+    );
+
+    expect(replayRunEvents).toHaveBeenCalledTimes(2);
+    expect(replayRunEvents.mock.calls[1][1]).toBe('completed-499');
+    expect(onToken).toHaveBeenLastCalledWith(
+      '<html>ok</html>',
+      snapshot.eventId,
+      'replace',
+    );
+  });
+
+  it('replaces raw fenced and sanitizer-altered deltas with one authoritative snapshot', async () => {
+    const onToken = jest.fn();
+    const raw =
+      '```html\n<html><a href="javascript:alert(1)">ready</a></html>\n```';
+    const finalHtml =
+      '<html><a href="removed:alert(1)">ready</a></html>';
+    const finalSnapshot = token(
+      'sanitized-snapshot',
+      99,
+      0,
+      finalHtml,
+      true,
+    );
+
+    await observeUiLabV2Run(
+      { ...INPUT, onToken },
+      {
+        replayRunEvents: jest.fn().mockResolvedValue([
+          token('raw-delta', 1, 0, raw),
+          done(),
+        ]),
+        subscribeRunEvents: jest.fn(() => () => undefined),
+        harvestRun: jest.fn().mockResolvedValue({
+          status: 'settled',
+          outcome: 'ready',
+          html: finalHtml,
+        }),
+        publishFinalSnapshot: jest.fn().mockResolvedValue(finalSnapshot),
+      },
+    );
+
+    expect(onToken).toHaveBeenNthCalledWith(1, raw, 'raw-delta');
+    expect(onToken).toHaveBeenLastCalledWith(
+      finalHtml,
+      finalSnapshot.eventId,
+      'replace',
+    );
   });
 });

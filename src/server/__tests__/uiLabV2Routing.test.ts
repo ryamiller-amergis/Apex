@@ -250,6 +250,7 @@ describe('UI Lab V2 generation routing', () => {
     const admitV2Run = jest.fn();
     const observeV2Run = jest.fn();
     const replayCompletedV2Run = jest.fn().mockResolvedValue(undefined);
+    const resolveCompletedV2RunId = jest.fn().mockResolvedValue('run-1');
 
     await runGeneration('design-1', jest.fn(), 'user-1', {
       afterEventId: '3f44f6f1-ec42-4aa6-9df4-0d8ce8438491',
@@ -257,6 +258,7 @@ describe('UI Lab V2 generation routing', () => {
       admitV2Run,
       observeV2Run,
       replayCompletedV2Run,
+      resolveCompletedV2RunId,
     });
 
     expect(admitV2Run).not.toHaveBeenCalled();
@@ -264,6 +266,7 @@ describe('UI Lab V2 generation routing', () => {
     expect(generateUiLabDesign).not.toHaveBeenCalled();
     expect(replayCompletedV2Run).toHaveBeenCalledWith({
       threadId: 'ui-lab:design-1',
+      runId: 'run-1',
       afterEventId: '3f44f6f1-ec42-4aa6-9df4-0d8ce8438491',
       finalHtml: '<html>ready</html>',
       onToken: expect.any(Function),

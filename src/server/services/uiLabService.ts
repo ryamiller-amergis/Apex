@@ -28,6 +28,7 @@ import {
   type V2AdmissionService,
 } from './aiRunV2/v2AdmissionService';
 import { buildUiLabVisualSpecification } from './aiRunV2/visualSpecificationBuilder';
+import { createFinishedAttemptReader } from './aiRunV2/finishedAttemptReader';
 import {
   observeUiLabV2Run,
   replayCompletedUiLabV2Run,
@@ -107,7 +108,23 @@ export type UiLabGenerationDependencies = Readonly<{
   afterEventId?: string;
   onTransport?: (transport: 'v1' | 'v2') => void;
   replayCompletedV2Run?: typeof replayCompletedUiLabV2Run;
+  resolveCompletedV2RunId?: (
+    designId: string,
+    threadId: string,
+  ) => Promise<string | null>;
 }>;
+
+async function resolveCompletedUiLabV2RunId(
+  designId: string,
+  threadId: string,
+): Promise<string | null> {
+  const attempts = await createFinishedAttemptReader()
+    .listFinishedByThread([threadId]);
+  const attempt = attempts.get(threadId);
+  return attempt?.generationOwner?.subjectId === designId
+    ? attempt.runId
+    : null;
+}
 
 function toDesign(row: Record<string, unknown>): UiLabDesign {
   return row as unknown as UiLabDesign;
@@ -378,7 +395,11 @@ async function runGenerationInProcess(input: {
   maxTokens?: number;
   timeoutMs?: number;
   temperature?: number;
-  onToken: (chunk: string, eventId?: string) => void;
+  onToken: (
+    chunk: string,
+    eventId?: string,
+    mode?: 'append' | 'replace',
+  ) => void;
   userId?: string;
 }): Promise<void> {
   const { design } = input;
@@ -471,7 +492,11 @@ async function runGenerationV2(input: {
   maxTokens?: number;
   timeoutMs?: number;
   temperature?: number;
-  onToken: (chunk: string, eventId?: string) => void;
+  onToken: (
+    chunk: string,
+    eventId?: string,
+    mode?: 'append' | 'replace',
+  ) => void;
   onTransport?: (transport: 'v1' | 'v2') => void;
   userId?: string;
   dependencies: Required<Pick<
@@ -666,18 +691,33 @@ async function runGenerationV2(input: {
 /** Called by the SSE route. Streams tokens via onToken, then persists the final result. */
 export async function runGeneration(
   designId: string,
-  onToken: (chunk: string, eventId?: string) => void,
+  onToken: (
+    chunk: string,
+    eventId?: string,
+    mode?: 'append' | 'replace',
+  ) => void,
   userId?: string,
   dependencies: UiLabGenerationDependencies = {},
 ): Promise<void> {
   const design = await getDesign(designId);
   if (!design) throw new Error(`UI Lab design ${designId} not found`);
   if (dependencies.afterEventId && design.status === 'ready') {
+    const threadId = visualRunThreadId('ui-lab-screen', design.id);
+    const runId = await (
+      dependencies.resolveCompletedV2RunId
+      ?? resolveCompletedUiLabV2RunId
+    )(design.id, threadId);
+    if (!runId) {
+      throw new Error(
+        `UI Lab design ${design.id} has no completed durable run to replay`,
+      );
+    }
     dependencies.onTransport?.('v2');
     await (
       dependencies.replayCompletedV2Run ?? replayCompletedUiLabV2Run
     )({
-      threadId: visualRunThreadId('ui-lab-screen', design.id),
+      threadId,
+      runId,
       afterEventId: dependencies.afterEventId,
       finalHtml: design.html ?? '',
       onToken,

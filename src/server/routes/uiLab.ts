@@ -250,8 +250,8 @@ router.get('/:id/stream', projectFromDesignId, requirePermission('ui-lab:manage'
   try {
     await runGeneration(
       id,
-      (chunk, eventId) => {
-        send('token', { text: chunk }, eventId);
+      (chunk, eventId, mode) => {
+        send(mode === 'replace' ? 'snapshot' : 'token', { text: chunk }, eventId);
       },
       (req.user as any)?.profile?.oid as string | undefined,
       {

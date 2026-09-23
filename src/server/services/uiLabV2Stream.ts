@@ -21,7 +21,11 @@ export type ObserveUiLabV2RunInput = Readonly<{
   runId: string;
   threadId: string;
   generationStartedAt: string;
-  onToken: (text: string, eventId?: string) => void;
+  onToken: (
+    text: string,
+    eventId?: string,
+    mode?: 'append' | 'replace',
+  ) => void;
   afterEventId?: string;
 }>;
 
@@ -160,10 +164,8 @@ export const observeUiLabV2Run: ObserveUiLabV2Run = async (
   const acceptDelta = (envelope: AgentRunEventEnvelope): void => {
     if (envelope.event.type !== 'token') return;
     if (envelope.event.streamSnapshot) {
-      const offset = nextOffset ?? 0;
-      const suffix = envelope.event.text.slice(offset);
-      if (suffix) input.onToken(suffix, envelope.eventId);
-      nextOffset = envelope.event.text.length;
+      input.onToken(envelope.event.text, envelope.eventId, 'replace');
+      nextOffset = null;
       pendingDeltas.clear();
       return;
     }
@@ -267,9 +269,14 @@ export const observeUiLabV2Run: ObserveUiLabV2Run = async (
 export async function replayCompletedUiLabV2Run(
   input: Readonly<{
     threadId: string;
+    runId: string;
     afterEventId: string;
     finalHtml: string;
-    onToken: (text: string, eventId?: string) => void;
+    onToken: (
+      text: string,
+      eventId?: string,
+      mode?: 'append' | 'replace',
+    ) => void;
   }>,
   dependencies: Readonly<{
     replayRunEvents?: ReplayRunEvents;
@@ -286,20 +293,25 @@ export async function replayCompletedUiLabV2Run(
   const publishSnapshot =
     dependencies.publishFinalSnapshot ?? publishFinalSnapshot;
   const cursor = await loadEvent(input.afterEventId, input.threadId);
+  const runId = input.runId;
   let nextOffset = cursor ? tokenEndOffset(cursor) : null;
   let sawSnapshot =
     cursor?.event.type === 'token' && Boolean(cursor.event.streamSnapshot);
   const seen = new Set<string>();
 
   const accept = (envelope: AgentRunEventEnvelope): void => {
-    if (seen.has(envelope.eventId) || envelope.event.type !== 'token') return;
+    if (
+      (runId && envelope.runId !== runId)
+      || seen.has(envelope.eventId)
+      || envelope.event.type !== 'token'
+    ) {
+      return;
+    }
     seen.add(envelope.eventId);
     if (envelope.event.streamSnapshot) {
       sawSnapshot = true;
-      const offset = nextOffset ?? 0;
-      const suffix = envelope.event.text.slice(offset);
-      if (suffix) input.onToken(suffix, envelope.eventId);
-      nextOffset = envelope.event.text.length;
+      input.onToken(envelope.event.text, envelope.eventId, 'replace');
+      nextOffset = null;
       return;
     }
     const offset = envelope.event.streamOffset;
@@ -314,14 +326,15 @@ export async function replayCompletedUiLabV2Run(
     replay,
     threadId: input.threadId,
     afterEventId: input.afterEventId,
+    runId,
     onPage: async (events) => {
       for (const envelope of events) accept(envelope);
     },
   });
-  if (!sawSnapshot && cursor?.runId) {
+  if (!sawSnapshot) {
     accept(await publishSnapshot({
       threadId: input.threadId,
-      runId: cursor.runId,
+      runId,
       html: input.finalHtml,
     }));
   }
