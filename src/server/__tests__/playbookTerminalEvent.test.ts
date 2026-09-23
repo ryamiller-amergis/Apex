@@ -45,7 +45,11 @@ jest.mock('../services/chatAgentService', () => ({
   readOutputValidationScorecardMd: jest.fn().mockReturnValue(null),
 }));
 
-import type { AgentRunEventEnvelope, AgentRunEventStatus } from '../../shared/types/chat';
+import type {
+  AgentRunEventEnvelope,
+  AgentRunEventStatus,
+  AgentRunEventType,
+} from '../../shared/types/chat';
 import {
   handleTerminalAgentRunEvent,
   isTerminalRunEvent,
@@ -57,6 +61,15 @@ const RUN_ID = 'run-3';
 /** The graph node, as distinct from the step-run row — it is what the engine is parked at. */
 const STEP_ID = 'do-the-work';
 
+/** The envelope type the ingest path builds for each outcome. */
+const TYPE_FOR_STATUS: Record<AgentRunEventStatus, AgentRunEventType> = {
+  completed: 'done',
+  failed: 'error',
+  cancelled: 'cancel',
+  running: 'phase',
+  pending: 'phase',
+};
+
 function event(status: AgentRunEventStatus): AgentRunEventEnvelope {
   return {
     eventId: `evt-${status}`,
@@ -65,10 +78,30 @@ function event(status: AgentRunEventStatus): AgentRunEventEnvelope {
     sourceInstance: 'host:1:uuid',
     sequence: 1,
     timestamp: '2026-09-19T12:00:00.000Z',
-    type: 'phase',
+    type: TYPE_FOR_STATUS[status],
     phase: 'completion',
     status,
     event: { type: 'phase', phase: 'completion', status },
+  } as AgentRunEventEnvelope;
+}
+
+/**
+ * Progress from one phase of a turn that is still going, which is what an agent emits between
+ * `analysis` and `implementation`. It reports `completed` because that phase completed.
+ */
+function phaseCompletedEvent(): AgentRunEventEnvelope {
+  return {
+    eventId: 'evt-phase-analysis',
+    threadId: 'thread-1',
+    runId: AGENT_RUN_ID,
+    sourceInstance: 'host:1:uuid',
+    sequence: 4,
+    timestamp: '2026-09-19T12:00:00.000Z',
+    type: 'phase',
+    phase: 'analysis',
+    status: 'completed',
+    detail: 'Analysis completed',
+    event: { type: 'phase', phase: 'analysis', status: 'completed', durationMs: 218 },
   } as AgentRunEventEnvelope;
 }
 
@@ -105,6 +138,14 @@ describe('which events count as terminal', () => {
 
     expect(isTerminalRunEvent(event('running'))).toBe(false);
     expect(isTerminalRunEvent(event('pending'))).toBe(false);
+  });
+
+  /**
+   * A turn moving from `analysis` to `implementation` emits exactly this. Reading `status` alone
+   * ended the step 218ms into the run, resuming it with no answer and reporting the run complete.
+   */
+  it('does not treat a finished phase of an unfinished turn as terminal', () => {
+    expect(isTerminalRunEvent(phaseCompletedEvent())).toBe(false);
   });
 
   it('ignores a non-terminal event without touching the database', async () => {

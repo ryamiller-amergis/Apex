@@ -19,6 +19,7 @@
 import { createThread, getThread } from '../chatAgentService';
 import { enqueue } from '../agentRunLifecycleService';
 import { getSkillConfig } from '../projectSettingsService';
+import { getDefaultModel } from '../appSettingsService';
 import {
   PlaybookMcpCapabilityError,
   resolvePlaybookMcpCapability,
@@ -73,6 +74,12 @@ export async function executeCursorAgentStep(
 
   const skillConfig = await getSkillConfig(context.project);
 
+  // The SDK rejects a blank model id outright, so a step in a project with no configured default
+  // cannot fall through to the empty string. This is the resolution the interactive lane already
+  // applies, which is why the gap only ever showed up on the Playbook path.
+  const model =
+    config.model?.trim() || skillConfig?.defaultModel?.trim() || (await getDefaultModel());
+
   const existingThread = config.threadId ? await getThread(config.threadId) : null;
   if (config.threadId && !existingThread) {
     throw new Error(`Validation thread "${config.threadId}" was not found.`);
@@ -89,7 +96,7 @@ export async function executeCursorAgentStep(
       skillProvider: skillConfig?.skillProvider,
       skillPath: config.skillPath,
       freeformContext: config.prompt,
-      model: config.model ?? skillConfig?.defaultModel ?? undefined,
+      model,
       playbookMcpProfile: config.mcpProfile,
     },
     // The adapter owns the enqueue, so the thread must not start a turn of its own.
@@ -98,7 +105,7 @@ export async function executeCursorAgentStep(
 
   const snapshot: ExecutionSnapshot = {
     prompt: config.prompt,
-    model: config.model ?? skillConfig?.defaultModel ?? '',
+    model,
     workspaceRef: thread.workspaceDir,
     workflowClass: 'playbook-step',
     skillPath: config.skillPath,

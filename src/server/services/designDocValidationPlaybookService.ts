@@ -15,6 +15,8 @@ import { CURSOR_AGENT_DEADLINE_MS } from './playbookSteps/registry';
 
 export const DESIGN_DOC_VALIDATION_PLAYBOOK_KEY = 'design-doc-validation';
 export const DESIGN_DOC_VALIDATION_PLAYBOOK_NAME = 'Design-Doc Validation';
+export const DESIGN_DOC_VALIDATION_PLAYBOOK_DESCRIPTION =
+  'Manually started design-doc scoring, shared ingestion, ready review, and revision notice.';
 
 export interface DesignDocValidationPlaybookOptions {
   skillPath: string;
@@ -148,8 +150,7 @@ export async function publishDesignDocValidationPlaybook(input: {
   const created = await createDefinition({
     project: input.project,
     name: DESIGN_DOC_VALIDATION_PLAYBOOK_NAME,
-    description:
-      'Manually started design-doc scoring, shared ingestion, ready review, and revision notice.',
+    description: DESIGN_DOC_VALIDATION_PLAYBOOK_DESCRIPTION,
     graph: buildDesignDocValidationPlaybookGraph({
       skillPath,
       model: settings?.designDocValidationModel,

@@ -26,13 +26,31 @@ import {
 } from './chatAgentService';
 import { parseStepOutput } from './playbookSteps/descriptorValidation';
 import { failStepRun, resumeStepRun } from './playbookSteps/stepRuns';
-import type { AgentRunEventEnvelope, AgentRunEventStatus } from '../../shared/types/chat';
+import type {
+  AgentRunEventEnvelope,
+  AgentRunEventStatus,
+  AgentRunEventType,
+} from '../../shared/types/chat';
 
 /** The three outcomes that end an agent run. Anything else is progress, not a conclusion. */
 const TERMINAL_EVENT_STATUSES: ReadonlySet<AgentRunEventStatus> = new Set([
   'completed',
   'failed',
   'cancelled',
+]);
+
+/**
+ * The event types that describe the run itself. Terminal envelopes are built as one of these.
+ *
+ * Status alone cannot answer the question. An envelope carries a `status` for the event it
+ * describes, not for the run, so a `phase` event reports `completed` when that phase ends while
+ * the turn carries on. Reading status by itself ended a step on the first phase to finish, which
+ * resumed it with no answer to pass on and reported the run a success.
+ */
+const TERMINAL_EVENT_TYPES: ReadonlySet<AgentRunEventType> = new Set([
+  'done',
+  'error',
+  'cancel',
 ]);
 
 export type TerminalEventOutcome =
@@ -45,8 +63,13 @@ export type TerminalEventOutcome =
   /** No Playbook step is waiting on this agent run. Most events are this: ordinary chat traffic. */
   | { handled: 'not-correlated' };
 
+/**
+ * Both halves are required, and the asymmetry is deliberate: missing a real terminal costs a
+ * delay, because the reconciliation sweep finds it within the minute, while acting on a false one
+ * completes the run with no output and nothing afterwards corrects it.
+ */
 export function isTerminalRunEvent(event: AgentRunEventEnvelope): boolean {
-  return TERMINAL_EVENT_STATUSES.has(event.status);
+  return TERMINAL_EVENT_TYPES.has(event.type) && TERMINAL_EVENT_STATUSES.has(event.status);
 }
 
 /**

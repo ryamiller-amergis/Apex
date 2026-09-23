@@ -37,11 +37,21 @@ const run: PlaybookRunDetail = {
     resumeToken: null,
     outputInline: null,
     outputBlobRef: null,
+    gatePoolKey: 'design_doc',
     expiresAt: '2026-09-23T12:00:00.000Z',
     startedAt: '2026-09-22T12:00:00.000Z',
     completedAt: null,
     createdAt: '2026-09-22T12:00:00.000Z',
     updatedAt: '2026-09-22T12:00:00.000Z',
+  }],
+};
+
+const unpooledRun: PlaybookRunDetail = {
+  ...run,
+  steps: [{
+    ...run.steps[0],
+    gatePoolKey: null,
+    inputInline: { subject: 'Approve the run before the agent sends work outside Apex' },
   }],
 };
 
@@ -89,5 +99,15 @@ describe('PlaybookGateReviewPanel', () => {
     render(<PlaybookGateReviewPanel project="Apex" run={run} />);
     expect(screen.getByText('Resolved inputs')).toBeInTheDocument();
     expect(screen.getByTestId('playbook-gate-empty-inputs')).toBeInTheDocument();
+  });
+
+  it('lets the initiator decide a gate with no approver pool without calling the pooled endpoint', () => {
+    render(<PlaybookGateReviewPanel project="Apex" run={unpooledRun} />);
+    expect(usePlaybookGate).toHaveBeenCalledWith('Apex', null, null);
+    expect(screen.getByTestId('playbook-gate-mode')).toHaveTextContent(
+      'Decided by whoever started this run',
+    );
+    fireEvent.click(screen.getByTestId('playbook-gate-approve'));
+    expect(mutate).toHaveBeenCalledWith({ decision: 'approved' });
   });
 });
