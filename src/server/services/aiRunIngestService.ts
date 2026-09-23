@@ -8,7 +8,7 @@
 import { randomUUID } from 'crypto';
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { agentRuns } from '../db/schema';
+import { agentRuns, aiRunAttempts, chatThreads } from '../db/schema';
 import {
   markTerminal,
   transition,
@@ -38,14 +38,30 @@ import {
   isAiRunTerminalIngestStatus,
   type AiRunIngestBody,
   type AiRunBootstrapResponse,
+  type AiRunBootstrapResult,
   type AiRunIngestErrorCode,
   type AiRunProgressIngest,
   type AiRunTerminalIngest,
+  type InteractiveActorBootstrap,
 } from '../../shared/types/aiRunIngest';
+import {
+  isDurableInteractiveTurnSpecification,
+  type DurableInteractiveTurnSpecification,
+} from '../../shared/types/durableInteractiveTurn';
 import { INTERACTIVE_LANE } from '../../shared/types/interactiveWorkflow';
+import { isAiRunV2AttemptStatus } from '../../shared/types/aiRunV2';
 import { workerTierTelemetry } from './workerTierTelemetry';
 import { recordCursorChatUsage } from './aiUsageService';
 import type { RecordUsageInput } from '../../shared/types/aiCostAnalytics';
+import { clampInteractiveDeadlinePolicy } from './interactiveDeadlinePolicy';
+import { issueInteractiveToolProxyToken } from './interactiveToolProxyToken';
+import {
+  applyInteractiveArtifacts,
+  createBlobInteractiveArtifactReader,
+} from './interactiveArtifactApplier';
+import { resolveArtifactContainerClient } from './aiRunV2/artifactContainer';
+import type { AiRunBlobRef, AiRunV2ArtifactManifest } from '../../shared/types/aiRunV2';
+import { isAiRunV2ArtifactManifest } from '../../shared/types/aiRunV2';
 
 const MAX_DETAIL_LENGTH = 500;
 const AGENT_RUN_PHASES: ReadonlySet<string> = new Set([
@@ -378,11 +394,15 @@ async function loadRun(
  * Return the frozen worker bootstrap only for the current external dispatch.
  * The lookup is intentionally read-only and the fence is checked before all
  * other lifecycle details so stale workers deterministically receive conflict.
+ *
+ * For `dapr-actor-v2`, selects the attempt by exact `dispatch_message_id`,
+ * parses `spec_snapshot`, clamps effective deadlines, and returns
+ * {@link InteractiveActorBootstrap}.
  */
 export async function getBootstrap(
   runId: string,
   dispatchMessageId: string,
-): Promise<AiRunBootstrapResponse> {
+): Promise<AiRunBootstrapResult> {
   if (!runId?.trim() || !dispatchMessageId?.trim()) {
     throw new AiRunIngestError(
       'runId and dispatchMessageId are required',
@@ -400,6 +420,11 @@ export async function getBootstrap(
       'AI_RUN_DISPATCH_MISMATCH',
     );
   }
+
+  if (existing.transportVersion === 'dapr-actor-v2') {
+    return getInteractiveActorBootstrap(existing, dispatchMessageId);
+  }
+
   if (
     (existing.lane !== 'background' && existing.lane !== INTERACTIVE_LANE)
     || (existing.status !== 'dispatched' && existing.status !== 'running')
@@ -426,6 +451,168 @@ export async function getBootstrap(
     },
     ...(cursorAgentId != null ? { cursorAgentId } : {}),
   };
+}
+
+function resolveInteractiveCallbackBaseUrl(): string {
+  const configured =
+    process.env.AI_RUNS_APEX_CALLBACK_BASE_URL?.trim() ||
+    process.env.APEX_CALLBACK_URL?.trim() ||
+    process.env.PUBLIC_APP_URL?.trim();
+  if (configured) return configured.replace(/\/+$/, '');
+  const port = process.env.PORT?.trim() || '3001';
+  return `http://localhost:${port}`;
+}
+
+function buildInteractiveProxyMcpServers(input: {
+  runId: string;
+  attemptId: string;
+  dispatchMessageId: string;
+  absoluteDeadlineAt: string;
+  specification: DurableInteractiveTurnSpecification;
+}): InteractiveActorBootstrap['mcpServers'] {
+  const secret = process.env.SESSION_SECRET?.trim();
+  if (!secret) {
+    throw new AiRunIngestError(
+      'SESSION_SECRET is required for interactive tool proxy tokens',
+      'AI_RUN_ILLEGAL_TRANSITION',
+    );
+  }
+  const base = resolveInteractiveCallbackBaseUrl();
+  const servers: Record<
+    string,
+    { url: string; headers?: Record<string, string> }
+  > = {};
+  for (const descriptor of input.specification.mcpServers) {
+    const token = issueInteractiveToolProxyToken(
+      {
+        runId: input.runId,
+        attemptId: input.attemptId,
+        dispatchMessageId: input.dispatchMessageId,
+        serverName: descriptor.serverName,
+        expiresAt: input.absoluteDeadlineAt,
+      },
+      secret,
+    );
+    servers[descriptor.serverName] = {
+      url: `${base}/api/internal/ai-runs/${encodeURIComponent(input.runId)}/tools/${encodeURIComponent(descriptor.serverName)}?token=${encodeURIComponent(token)}`,
+    };
+  }
+  return servers;
+}
+
+async function getInteractiveActorBootstrap(
+  existing: typeof agentRuns.$inferSelect,
+  dispatchMessageId: string,
+): Promise<InteractiveActorBootstrap> {
+  if (!existing.projectId) {
+    throw new AiRunIngestError(
+      'AI run is not available for external bootstrap',
+      'AI_RUN_ILLEGAL_TRANSITION',
+    );
+  }
+
+  const [attempt] = await db
+    .select()
+    .from(aiRunAttempts)
+    .where(
+      and(
+        eq(aiRunAttempts.runId, existing.id),
+        eq(aiRunAttempts.dispatchMessageId, dispatchMessageId),
+      ),
+    )
+    .limit(1);
+  if (!attempt) {
+    throw new AiRunIngestError(
+      'dispatchMessageId does not match this run',
+      'AI_RUN_DISPATCH_MISMATCH',
+    );
+  }
+  if (!isAiRunV2AttemptStatus(attempt.status)) {
+    throw new AiRunIngestError(
+      'AI run attempt status is invalid',
+      'AI_RUN_ILLEGAL_TRANSITION',
+    );
+  }
+  if (!isDurableInteractiveTurnSpecification(attempt.specSnapshot)) {
+    throw new AiRunIngestError(
+      'Interactive attempt is missing a frozen specification',
+      'AI_RUN_ILLEGAL_TRANSITION',
+    );
+  }
+
+  const absoluteDeadlineAt =
+    existing.timeoutAt?.trim() ||
+    new Date(
+      Date.now() + attempt.specSnapshot.deadlines.absoluteTurnMs,
+    ).toISOString();
+  const remainingMs = Date.parse(absoluteDeadlineAt) - Date.now();
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+    throw new AiRunIngestError(
+      'Interactive absolute deadline has expired',
+      'AI_RUN_ILLEGAL_TRANSITION',
+    );
+  }
+
+  const effectiveDeadlines = clampInteractiveDeadlinePolicy(
+    attempt.specSnapshot.deadlines,
+    Math.floor(remainingMs),
+  );
+
+  const { getCursorAgentId } = await import('./chatThreadRepository');
+  const cursorAgentId = (await getCursorAgentId(existing.threadId)) ?? null;
+
+  return {
+    kind: 'interactive-actor-v2',
+    specification: attempt.specSnapshot,
+    runId: existing.id,
+    attemptId: attempt.id,
+    attemptNumber: attempt.attemptNumber,
+    attemptStatus: attempt.status,
+    dispatchMessageId,
+    absoluteDeadlineAt,
+    effectiveDeadlines,
+    cursorAgentId,
+    mcpServers: buildInteractiveProxyMcpServers({
+      runId: existing.id,
+      attemptId: attempt.id,
+      dispatchMessageId,
+      absoluteDeadlineAt,
+      specification: attempt.specSnapshot,
+    }),
+    projectId: existing.projectId,
+  };
+}
+
+async function assertAttemptFence(
+  existing: typeof agentRuns.$inferSelect,
+  body: AiRunIngestBody,
+): Promise<void> {
+  if (existing.transportVersion !== 'dapr-actor-v2') return;
+  if (!body.attemptId?.trim()) {
+    throw new AiRunIngestError(
+      'attemptId is required for dapr-actor-v2 ingest',
+      'AI_RUN_VALIDATION',
+    );
+  }
+  const [attempt] = await db
+    .select()
+    .from(aiRunAttempts)
+    .where(
+      and(
+        eq(aiRunAttempts.id, body.attemptId),
+        eq(aiRunAttempts.runId, existing.id),
+      ),
+    )
+    .limit(1);
+  if (
+    !attempt ||
+    attempt.dispatchMessageId !== body.dispatchMessageId
+  ) {
+    throw new AiRunIngestError(
+      'attemptId/dispatchMessageId does not match this run',
+      'AI_RUN_DISPATCH_MISMATCH',
+    );
+  }
 }
 
 function assertLifecycleSuccess(result: LifecycleResult): AgentRunLifecycleRow {
@@ -607,6 +794,73 @@ async function updateWorkerClocks(
   return updated[0];
 }
 
+async function applyActorArtifactManifest(input: {
+  threadId: string;
+  runId: string;
+  attemptId: string;
+  attemptNumber: number | undefined;
+  manifestRef: AiRunBlobRef;
+  dependencies: AiRunIngestDependencies;
+}): Promise<void> {
+  const [attempt] = await db
+    .select()
+    .from(aiRunAttempts)
+    .where(eq(aiRunAttempts.id, input.attemptId))
+    .limit(1);
+  if (!attempt) {
+    throw new AiRunIngestError(
+      'attemptId does not match this run',
+      'AI_RUN_DISPATCH_MISMATCH',
+    );
+  }
+  const container = resolveArtifactContainerClient(input.manifestRef.container);
+  const raw = await container
+    .getBlockBlobClient(input.manifestRef.key)
+    .downloadToBuffer();
+  const parsed: unknown = JSON.parse(raw.toString('utf8'));
+  if (!isAiRunV2ArtifactManifest(parsed)) {
+    throw new AiRunIngestError(
+      'Invalid actor artifact manifest',
+      'AI_RUN_VALIDATION',
+    );
+  }
+  const [thread] = await db
+    .select({ workspaceDir: chatThreads.workspaceDir })
+    .from(chatThreads)
+    .where(eq(chatThreads.id, input.threadId))
+    .limit(1);
+  const workspaceRoot = thread?.workspaceDir?.trim();
+  if (!workspaceRoot) {
+    throw new AiRunIngestError(
+      'Completed terminal ingest requires a workspace reference',
+      'AI_RUN_ILLEGAL_TRANSITION',
+    );
+  }
+  await applyInteractiveArtifacts({
+    workspaceRoot,
+    manifest: parsed,
+    expected: {
+      runId: input.runId,
+      attemptId: input.attemptId,
+      attemptNumber: attempt.attemptNumber,
+    },
+    reader: createBlobInteractiveArtifactReader(async (ref) =>
+      resolveArtifactContainerClient(ref.container)
+        .getBlockBlobClient(ref.key)
+        .downloadToBuffer(),
+    ),
+  });
+  await db
+    .update(aiRunAttempts)
+    .set({
+      manifestRef: input.manifestRef,
+      artifactStatus: 'verified',
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(aiRunAttempts.id, input.attemptId));
+  void input.dependencies;
+}
+
 export async function ingest(
   projectId: string,
   runId: string,
@@ -633,6 +887,7 @@ export async function ingest(
       'AI_RUN_DISPATCH_MISMATCH',
     );
   }
+  await assertAttemptFence(existing, body);
 
   const nowIso = new Date().toISOString();
   const detail = sanitizeDetail(body.detail);
@@ -791,45 +1046,65 @@ export async function ingest(
   }
 
   if (body.status === 'completed') {
-    const snapshot = existing.executionSnapshot;
-    const workspaceDir =
-      snapshot && !isDurableInteractiveSnapshot(snapshot)
-        ? snapshot.workspaceRef
-        : undefined;
-    if (!workspaceDir) {
-      throw new AiRunIngestError(
-        'Completed terminal ingest requires a workspace reference',
-        'AI_RUN_ILLEGAL_TRANSITION',
-      );
-    }
-    // Runs before markTerminal so a completed run's output is durable before
-    // anything observes the run as finished. A throw here therefore leaves the
-    // run non-terminal and answers the worker with a bare 500, which is
-    // retryable but anonymous — name the subsystem so a recurrence is
-    // diagnosable without reproducing it.
-    try {
-      await (
-        dependencies.consumeCompletedArtifacts ?? consumeCompletedArtifacts
-      )(existing.threadId, workspaceDir);
-    } catch (error) {
-      console.error(JSON.stringify({
-        event: 'AiRunTerminalArtifactSyncFailed',
-        runId,
-        threadId: existing.threadId,
-        lane: existing.lane ?? null,
-        errorType: error instanceof Error ? error.name : 'UnknownError',
-        errorMessage:
-          error instanceof Error ? error.message.slice(0, 200) : 'unknown',
-      }));
-      throw error;
-    }
+    if (existing.transportVersion === 'dapr-actor-v2') {
+      if (body.artifactManifestRef) {
+        await applyActorArtifactManifest({
+          threadId: existing.threadId,
+          runId,
+          attemptId: body.attemptId!,
+          attemptNumber: undefined,
+          manifestRef: body.artifactManifestRef,
+          dependencies,
+        });
+      }
+      if (existing.lane === INTERACTIVE_LANE) {
+        const cursorAgentId = sanitizeCursorAgentId(body.cursorAgentId);
+        if (cursorAgentId !== undefined) {
+          const { setCursorAgentId } = await import('./chatThreadRepository');
+          await setCursorAgentId(existing.threadId, cursorAgentId).catch(() => {});
+        }
+      }
+    } else {
+      const snapshot = existing.executionSnapshot;
+      const workspaceDir =
+        snapshot && !isDurableInteractiveSnapshot(snapshot)
+          ? snapshot.workspaceRef
+          : undefined;
+      if (!workspaceDir) {
+        throw new AiRunIngestError(
+          'Completed terminal ingest requires a workspace reference',
+          'AI_RUN_ILLEGAL_TRANSITION',
+        );
+      }
+      // Runs before markTerminal so a completed run's output is durable before
+      // anything observes the run as finished. A throw here therefore leaves the
+      // run non-terminal and answers the worker with a bare 500, which is
+      // retryable but anonymous — name the subsystem so a recurrence is
+      // diagnosable without reproducing it.
+      try {
+        await (
+          dependencies.consumeCompletedArtifacts ?? consumeCompletedArtifacts
+        )(existing.threadId, workspaceDir);
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: 'AiRunTerminalArtifactSyncFailed',
+          runId,
+          threadId: existing.threadId,
+          lane: existing.lane ?? null,
+          errorType: error instanceof Error ? error.name : 'UnknownError',
+          errorMessage:
+            error instanceof Error ? error.message.slice(0, 200) : 'unknown',
+        }));
+        throw error;
+      }
 
-    // Persist Cursor agent id for interactive restart recovery (best effort).
-    if (existing.lane === INTERACTIVE_LANE) {
-      const cursorAgentId = sanitizeCursorAgentId(body.cursorAgentId);
-      if (cursorAgentId !== undefined) {
-        const { setCursorAgentId } = await import('./chatThreadRepository');
-        await setCursorAgentId(existing.threadId, cursorAgentId).catch(() => {});
+      // Persist Cursor agent id for interactive restart recovery (best effort).
+      if (existing.lane === INTERACTIVE_LANE) {
+        const cursorAgentId = sanitizeCursorAgentId(body.cursorAgentId);
+        if (cursorAgentId !== undefined) {
+          const { setCursorAgentId } = await import('./chatThreadRepository');
+          await setCursorAgentId(existing.threadId, cursorAgentId).catch(() => {});
+        }
       }
     }
   } else {

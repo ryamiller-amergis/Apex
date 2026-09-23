@@ -6654,6 +6654,46 @@ export async function cancelRun(threadId: string): Promise<void> {
       project: state.thread.kickoff.project,
     }
   ).catch(() => false);
+
+  // dapr-actor-v2: Stop only persists cancel_requested on the active run/fence.
+  // The actor observes the flag on the next progress/heartbeat and acknowledges.
+  const [activeRunRow] = await db
+    .select({
+      id: agentRuns.id,
+      transportVersion: agentRuns.transportVersion,
+      dispatchMessageId: agentRuns.dispatchMessageId,
+      status: agentRuns.status,
+    })
+    .from(agentRuns)
+    .where(eq(agentRuns.id, activeRunId))
+    .limit(1)
+    .catch(() => []);
+
+  if (activeRunRow?.transportVersion === 'dapr-actor-v2') {
+    await db
+      .update(agentRuns)
+      .set({
+        cancelRequested: true,
+        cancelState: 'requested',
+        updatedAt: new Date().toISOString(),
+      })
+      .where(
+        and(
+          eq(agentRuns.id, activeRunId),
+          eq(
+            agentRuns.dispatchMessageId,
+            activeRunRow.dispatchMessageId ?? '',
+          ),
+          inArray(agentRuns.status, [...CANCELLABLE_AGENT_RUN_STATUSES]),
+        ),
+      )
+      .catch((e) => {
+        console.error('[chat] Failed to mark dapr-actor-v2 cancel requested:', e);
+      });
+    broadcast(state, { type: 'status', status: 'running' });
+    return;
+  }
+
   // @feature-flag:event-driven-run-termination start winner=enabled
   if (eventDrivenTerminationEnabled) {
     // @feature-flag:event-driven-run-termination enabled-start

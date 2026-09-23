@@ -17,6 +17,10 @@
  */
 import { AbstractActor } from '@dapr/dapr';
 import type { AgentRunExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
+import {
+  isInteractiveActorBootstrap,
+  type InteractiveActorBootstrap,
+} from '../../../shared/types/aiRunIngest';
 import { INTERACTIVE_LANE } from '../../../shared/types/interactiveWorkflow';
 import type { AiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
 import { workerTierTelemetry } from '../workerTierTelemetry';
@@ -57,6 +61,24 @@ export interface IInteractiveSessionActor {
   handleTurn(
     payload: InteractiveDispatchPayload,
   ): Promise<InteractiveTurnOutcome>;
+}
+
+function priorOutcomeForTerminalAttempt(
+  bootstrap: InteractiveActorBootstrap,
+): InteractiveTurnOutcome {
+  switch (bootstrap.attemptStatus) {
+    case 'completed':
+      return {
+        status: 'completed',
+        cursorAgentId: bootstrap.cursorAgentId,
+      };
+    case 'cancelled':
+      return { status: 'cancelled' };
+    case 'failed':
+      return { status: 'cancelled' };
+    default:
+      return { status: 'fence-conflict' };
+  }
 }
 
 export class InteractiveSessionActorImpl
@@ -104,6 +126,33 @@ export class InteractiveSessionActorImpl
       );
     } catch {
       // ignore
+    }
+
+    // Durable interactive V2 bootstrap — attempt-aware path.
+    if (isInteractiveActorBootstrap(bootstrap)) {
+      if (bootstrap.dispatchMessageId !== payload.dispatchMessageId) {
+        return { status: 'fence-conflict' };
+      }
+      if (
+        bootstrap.attemptStatus === 'completed' ||
+        bootstrap.attemptStatus === 'failed' ||
+        bootstrap.attemptStatus === 'cancelled'
+      ) {
+        return priorOutcomeForTerminalAttempt(bootstrap);
+      }
+      if (
+        bootstrap.attemptStatus !== 'queued' &&
+        bootstrap.attemptStatus !== 'dispatched' &&
+        bootstrap.attemptStatus !== 'running'
+      ) {
+        return { status: 'fence-conflict' };
+      }
+
+      const threadId = this.getActorId().getId();
+      return active.logic.handleDurableTurn({
+        threadId,
+        bootstrap,
+      });
     }
 
     const persistedSnapshot = bootstrap.run.executionSnapshot;

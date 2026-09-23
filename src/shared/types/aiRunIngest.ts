@@ -26,6 +26,11 @@ export type AiRunTerminalIngestStatus = Extract<
 
 type AiRunIngestBase = {
   dispatchMessageId: string;
+  /**
+   * Attempt id for dapr-actor-v2 fenced ingest. Required when the run uses
+   * attempt-scoped dispatch; omitted for legacy background workers.
+   */
+  attemptId?: string;
   detail?: string;
 };
 
@@ -60,6 +65,11 @@ export type AiRunTerminalIngest = AiRunIngestBase & {
    * Only applied on successful `completed` terminals for the interactive lane.
    */
   cursorAgentId?: string | null;
+  /**
+   * Optional actor-uploaded artifact manifest ref. Verified/applied before
+   * terminal success for dapr-actor-v2.
+   */
+  artifactManifestRef?: import('./aiRunV2').AiRunBlobRef | null;
   /** Wall-clock duration of the worker execution, when known. */
   durationMs?: number;
   /** Runtime-reported token counts. Omitted when the runtime reported none. */
@@ -105,16 +115,62 @@ export type AiRunBootstrapRun = Readonly<{
 }>;
 
 export type AiRunBootstrapResponse = Readonly<{
+  kind?: 'legacy';
   projectId: string;
   run: AiRunBootstrapRun;
   /** Thread-persisted Cursor agent id for interactive resume after actor restart. */
   cursorAgentId?: string | null;
 }>;
 
+/**
+ * Clamped sub-deadlines returned only from App Service bootstrap. The actor
+ * never resolves or replaces these values.
+ */
+export type EffectiveInteractiveDeadlines = Readonly<{
+  repositoryPreparationMs: number | null;
+  firstEventMs: number;
+  toolCallMs: number;
+}>;
+
+/**
+ * Project-confidential interactive actor bootstrap. Selected by run id + exact
+ * dispatch fence from `ai_run_attempts.spec_snapshot` (never a newer attempt).
+ */
+export type InteractiveActorBootstrap = Readonly<{
+  kind: 'interactive-actor-v2';
+  specification: import('./durableInteractiveTurn').DurableInteractiveTurnSpecification;
+  runId: string;
+  attemptId: string;
+  attemptNumber: number;
+  attemptStatus: import('./aiRunV2').AiRunV2AttemptStatus;
+  dispatchMessageId: string;
+  absoluteDeadlineAt: string;
+  effectiveDeadlines: EffectiveInteractiveDeadlines;
+  cursorAgentId: string | null;
+  mcpServers: Readonly<
+    Record<string, Readonly<{ url: string; headers?: Readonly<Record<string, string>> }>>
+  >;
+  projectId: string;
+}>;
+
+export type AiRunBootstrapResult =
+  | AiRunBootstrapResponse
+  | InteractiveActorBootstrap;
+
 export type AiRunIngestResponse = Readonly<{
   ok: boolean;
   cancelRequested: boolean;
 }>;
+
+export function isInteractiveActorBootstrap(
+  value: unknown,
+): value is InteractiveActorBootstrap {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    (value as InteractiveActorBootstrap).kind === 'interactive-actor-v2'
+  );
+}
 
 export function isAiRunIngestKind(value: unknown): value is AiRunIngestKind {
   return typeof value === 'string'

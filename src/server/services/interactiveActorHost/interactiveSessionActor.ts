@@ -51,6 +51,7 @@ import {
   INTERACTIVE_TOKEN_BATCH_MAX_BYTES,
 } from '../interactiveTokenBatcher';
 import type { InteractiveCursorAgentHandle } from './interactiveCursorExecution';
+import type { InteractiveActorBootstrap } from '../../../shared/types/aiRunIngest';
 import { createPerThreadTurnQueue, type PerThreadTurnQueue } from './perThreadTurnQueue';
 
 /** Default cadence for durable progress heartbeats (clocks + cancel signal). */
@@ -184,8 +185,28 @@ export interface InteractiveActorDependencies {
   acquireAgent(
     snapshot: Readonly<ExecutionSnapshot>,
     checkout: WarmThreadCheckout,
-    options: { resumeAgentId?: string | null },
+    options: {
+      resumeAgentId?: string | null;
+      mcpServers?: Readonly<Record<string, { url: string }>>;
+    },
   ): Promise<InteractiveCursorAgentHandle>;
+  /**
+   * Durable V2 acquisition that returns warm/resumed/recreated modes. When
+   * omitted, {@link handleDurableTurn} falls back to {@link acquireAgent}.
+   */
+  acquireDurableAgent?(
+    bootstrap: InteractiveActorBootstrap,
+    checkout: WarmThreadCheckout,
+    options: { resumeAgentId?: string | null },
+  ): Promise<
+    import('./interactiveCursorExecution').InteractiveAgentAcquisition
+  >;
+  /** Materialize a pinned attempt-local workspace for durable turns. */
+  materializeWorkspace?(
+    bootstrap: InteractiveActorBootstrap,
+    destination: string,
+    signal: AbortSignal,
+  ): Promise<WarmThreadCheckout>;
   /** Fenced runner ingest (reuses /api/internal/ai-runs/.../ingest). */
   postIngest(
     projectId: string,
@@ -213,6 +234,10 @@ export interface InteractiveActorDependencies {
 
 export interface InteractiveSessionActor {
   handleTurn(request: InteractiveTurnRequest): Promise<InteractiveTurnOutcome>;
+  handleDurableTurn(request: {
+    threadId: string;
+    bootstrap: InteractiveActorBootstrap;
+  }): Promise<InteractiveTurnOutcome>;
   /** Dispose every warm checkout + cached Agent (process shutdown / deactivation). */
   disposeAll(): Promise<void>;
 }
@@ -653,6 +678,14 @@ export function createInteractiveSessionActor(
       // BR-015: serialize per thread — one in-flight turn, applied in order.
       return turnQueue.submit(request.threadId, () => runTurn(request));
     },
+    handleDurableTurn(request: {
+      threadId: string;
+      bootstrap: InteractiveActorBootstrap;
+    }): Promise<InteractiveTurnOutcome> {
+      return turnQueue.submit(request.threadId, () =>
+        runDurableTurn(request.threadId, request.bootstrap),
+      );
+    },
     async disposeAll(): Promise<void> {
       const threadIds = new Set([
         ...warmCheckouts.keys(),
@@ -664,4 +697,380 @@ export function createInteractiveSessionActor(
       agentIdByThread.clear();
     },
   };
+
+  async function runDurableTurn(
+    threadId: string,
+    bootstrap: InteractiveActorBootstrap,
+  ): Promise<InteractiveTurnOutcome> {
+    const {
+      runId,
+      dispatchMessageId,
+      projectId,
+      specification,
+      effectiveDeadlines,
+      absoluteDeadlineAt,
+      attemptId,
+      cursorAgentId,
+      mcpServers,
+    } = bootstrap;
+
+    const absoluteMs = Date.parse(absoluteDeadlineAt);
+    const nowMs = now();
+    if (
+      !Number.isFinite(absoluteMs) ||
+      absoluteMs <= nowMs ||
+      !Number.isFinite(effectiveDeadlines.firstEventMs) ||
+      effectiveDeadlines.firstEventMs <= 0 ||
+      !Number.isFinite(effectiveDeadlines.toolCallMs) ||
+      effectiveDeadlines.toolCallMs <= 0 ||
+      (effectiveDeadlines.repositoryPreparationMs !== null &&
+        (!(effectiveDeadlines.repositoryPreparationMs > 0)))
+    ) {
+      throw new Error('Interactive effective deadlines are missing or expired');
+    }
+
+    const absoluteAbort = new AbortController();
+    const absoluteTimer = setTimeout(
+      () => absoluteAbort.abort(new Error('hard_timeout')),
+      Math.max(1, absoluteMs - nowMs),
+    );
+
+    let agentHandle: InteractiveCursorAgentHandle | undefined;
+    let retainAgent = false;
+    let activeRun: WorkerCursorExecutionRun | undefined;
+    let fenceConflict = false;
+    let cancellationRequested = false;
+    let failureCategory: 'hard_timeout' | 'tool_timeout' | null = null;
+
+    const stopRun = async (): Promise<void> => {
+      if (activeRun?.cancel) await activeRun.cancel().catch(() => {});
+    };
+
+    const post = async (body: AiRunIngestBody): Promise<void> => {
+      if (fenceConflict) return;
+      try {
+        const response = await dependencies.postIngest(projectId, runId, {
+          ...body,
+          attemptId,
+          dispatchMessageId,
+        });
+        if (response.cancelRequested && body.kind !== 'cancel_ack') {
+          cancellationRequested = true;
+          await stopRun();
+        }
+      } catch (error) {
+        if (error instanceof AiRunFenceConflictError) {
+          fenceConflict = true;
+          await stopRun();
+          return;
+        }
+        throw error;
+      }
+    };
+
+    try {
+      await publishLive(threadId, createCursorRunEventEnvelope({
+        threadId,
+        runId,
+        sourceInstance,
+        sequence: 1,
+        timestamp: new Date(now()).toISOString(),
+        event: {
+          type: 'phase',
+          phase: 'setup',
+          status: 'running',
+          detail: INTERACTIVE_STARTING_DETAIL,
+        },
+      })).catch(() => {});
+
+      const destination =
+        warmCheckouts.get(threadId)?.workspacePath ??
+        `${specification.threadId}-${attemptId}`;
+
+      let checkout = warmCheckouts.get(threadId);
+      if (!checkout) {
+        if (dependencies.materializeWorkspace) {
+          const prepMs = effectiveDeadlines.repositoryPreparationMs;
+          const prepAbort = new AbortController();
+          const onAbsoluteAbort = () => prepAbort.abort(absoluteAbort.signal.reason);
+          absoluteAbort.signal.addEventListener('abort', onAbsoluteAbort, {
+            once: true,
+          });
+          let prepTimer: ReturnType<typeof setTimeout> | undefined;
+          if (prepMs != null) {
+            prepTimer = setTimeout(
+              () => prepAbort.abort(new Error('repository_preparation_timeout')),
+              prepMs,
+            );
+          }
+          try {
+            checkout = await dependencies.materializeWorkspace(
+              bootstrap,
+              destination,
+              prepAbort.signal,
+            );
+          } finally {
+            if (prepTimer) clearTimeout(prepTimer);
+            absoluteAbort.signal.removeEventListener('abort', onAbsoluteAbort);
+          }
+        } else {
+          checkout = await dependencies.openWarmCheckout(threadId, {
+            prompt: specification.currentPrompt,
+            model: specification.model,
+            effort: specification.effort ?? undefined,
+            workspaceRef: destination,
+            workflowClass: 'agent_home_chat',
+            skillPath: specification.skill?.path ?? '',
+            projectId: specification.projectId,
+            threadId: specification.threadId,
+          });
+        }
+        warmCheckouts.set(threadId, checkout);
+      }
+
+      const cached = agentCache.get(threadId);
+      const cacheCompatible =
+        cached &&
+        cached.handle.model === specification.model &&
+        cached.handle.workspaceRef === checkout.workspacePath;
+
+      let acquisitionMode: 'warm' | 'resumed' | 'recreated' = 'warm';
+      if (cacheCompatible && cached) {
+        agentHandle = cached.handle;
+        acquisitionMode = 'warm';
+      } else {
+        if (cached) await disposeAgentEntry(threadId);
+        const resumeAgentId =
+          cursorAgentId ?? agentIdByThread.get(threadId) ?? null;
+        if (dependencies.acquireDurableAgent) {
+          const acquired = await dependencies.acquireDurableAgent(
+            bootstrap,
+            checkout,
+            { resumeAgentId },
+          );
+          agentHandle = acquired.handle;
+          acquisitionMode = acquired.mode;
+        } else {
+          agentHandle = await dependencies.acquireAgent(
+            {
+              prompt: specification.currentPrompt,
+              model: specification.model,
+              effort: specification.effort ?? undefined,
+              workspaceRef: checkout.workspacePath,
+              workflowClass: 'agent_home_chat',
+              skillPath: specification.skill?.path ?? '',
+              projectId: specification.projectId,
+              threadId: specification.threadId,
+            },
+            checkout,
+            { resumeAgentId, mcpServers },
+          );
+          acquisitionMode = resumeAgentId ? 'resumed' : 'recreated';
+        }
+      }
+
+      if (agentHandle.agentId) {
+        agentIdByThread.set(threadId, agentHandle.agentId);
+      }
+
+      const prompt =
+        acquisitionMode === 'recreated'
+          ? specification.recreationPrompt
+          : specification.currentPrompt;
+
+      const firstEventMs = Math.min(
+        effectiveDeadlines.firstEventMs,
+        absoluteMs - now(),
+      );
+      if (!(firstEventMs > 0)) {
+        throw Object.assign(new Error('hard_timeout'), { code: 'hard_timeout' });
+      }
+
+      let firstEventSeen = false;
+      const firstEventTimer = setTimeout(() => {
+        if (!firstEventSeen) {
+          failureCategory = 'hard_timeout';
+          absoluteAbort.abort(new Error('hard_timeout'));
+          void stopRun();
+        }
+      }, firstEventMs);
+
+      try {
+        const turnEndMonitor = createCursorTurnEndMonitor();
+        activeRun = await agentHandle.send(prompt, {
+          onDelta: (update) => {
+            if (!firstEventSeen) {
+              firstEventSeen = true;
+              clearTimeout(firstEventTimer);
+            }
+            turnEndMonitor.observe(update);
+          },
+        });
+
+        const result = await executeCursorExecutionCore({
+          snapshot: {
+            prompt,
+            model: specification.model,
+            effort: specification.effort ?? undefined,
+            workspaceRef: checkout.workspacePath,
+            workflowClass: 'agent_home_chat',
+            skillPath: specification.skill?.path ?? '',
+            projectId: specification.projectId,
+            threadId: specification.threadId,
+          },
+          run: activeRun,
+          context: { runId, sourceInstance },
+          sink: {
+            publish: async (event: SseEvent) => {
+              if (fenceConflict) throw new AiRunFenceConflictError();
+              if (cancellationRequested) {
+                throw new InteractiveCancellationObservedError();
+              }
+              if (absoluteAbort.signal.aborted) {
+                throw absoluteAbort.signal.reason instanceof Error
+                  ? absoluteAbort.signal.reason
+                  : new Error('hard_timeout');
+              }
+              if (!firstEventSeen) {
+                firstEventSeen = true;
+                clearTimeout(firstEventTimer);
+              }
+              if (event.type === 'tool_call' || event.type === 'tool_status') {
+                const toolMs = Math.min(
+                  effectiveDeadlines.toolCallMs,
+                  absoluteMs - now(),
+                );
+                if (!(toolMs > 0)) {
+                  failureCategory = 'tool_timeout';
+                  throw Object.assign(new Error('tool_timeout'), {
+                    code: 'tool_timeout',
+                  });
+                }
+              }
+              await publishLive(
+                threadId,
+                createCursorRunEventEnvelope({
+                  threadId,
+                  runId,
+                  sourceInstance,
+                  sequence: 1,
+                  timestamp: new Date(now()).toISOString(),
+                  event,
+                }),
+              ).catch(() => {});
+              await post({
+                dispatchMessageId,
+                attemptId,
+                kind: 'progress',
+                phase: 'implementation',
+                status: 'running',
+              });
+            },
+          },
+          hooks: {
+            beforeStreamEvent: () => {
+              if (fenceConflict) throw new AiRunFenceConflictError();
+              if (cancellationRequested) {
+                throw new InteractiveCancellationObservedError();
+              }
+            },
+          },
+          nextSequence: () => 1,
+          turnEnd: turnEndMonitor.completion,
+        });
+
+        if (cancellationRequested) {
+          throw new InteractiveCancellationObservedError();
+        }
+        if (!isSuccessfulWait(result)) {
+          throw new Error('Interactive turn did not finish successfully');
+        }
+
+        const finalText = result.text;
+        if (finalText && finalText.trim().length > 0) {
+          const finalMessage: ChatMessage = {
+            id: randomUUID(),
+            role: 'agent',
+            text: finalText,
+            ts: new Date(now()).toISOString(),
+          };
+          await post({
+            dispatchMessageId,
+            attemptId,
+            kind: 'progress',
+            event: { type: 'message', message: finalMessage },
+          });
+        }
+
+        await post({
+          dispatchMessageId,
+          attemptId,
+          kind: 'terminal',
+          status: 'completed',
+          artifactsFlushed: true,
+          cursorAgentId: agentHandle.agentId ?? null,
+        });
+
+        agentCache.set(threadId, { handle: agentHandle, lastUsedAt: now() });
+        retainAgent = true;
+        return {
+          status: 'completed',
+          cursorAgentId: agentHandle.agentId ?? null,
+        };
+      } finally {
+        clearTimeout(firstEventTimer);
+      }
+    } catch (error) {
+      if (fenceConflict || error instanceof AiRunFenceConflictError) {
+        await disposeAgentEntry(threadId);
+        return { status: 'fence-conflict' };
+      }
+      if (
+        cancellationRequested ||
+        error instanceof InteractiveCancellationObservedError ||
+        isStopRaceIngestError(error)
+      ) {
+        await disposeAgentEntry(threadId);
+        await post({
+          dispatchMessageId,
+          attemptId,
+          kind: 'cancel_ack',
+          detail: 'Interactive turn stopped',
+        });
+        return { status: 'cancelled' };
+      }
+
+      await disposeAgentEntry(threadId);
+      const code =
+        failureCategory ||
+        (error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        ((error as { code?: string }).code === 'hard_timeout' ||
+          (error as { code?: string }).code === 'tool_timeout')
+          ? ((error as { code: 'hard_timeout' | 'tool_timeout' }).code)
+          : null);
+      const detail =
+        code === 'tool_timeout'
+          ? 'Interactive tool deadline exceeded'
+          : code === 'hard_timeout'
+            ? 'Interactive absolute deadline exceeded'
+            : describeInteractiveFailure(error).reason;
+      await post({
+        dispatchMessageId,
+        attemptId,
+        kind: 'terminal',
+        status: 'failed',
+        detail,
+        artifactsFlushed: false,
+      }).catch(() => {});
+      if (code) return { status: 'cancelled' };
+      throw error;
+    } finally {
+      clearTimeout(absoluteTimer);
+      if (!retainAgent && agentHandle && !agentCache.has(threadId)) {
+        await agentHandle.dispose().catch(() => {});
+      }
+    }
+  }
 }

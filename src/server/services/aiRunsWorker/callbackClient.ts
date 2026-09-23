@@ -1,9 +1,16 @@
 import type { DispatchMessage } from '../../../shared/types/agentRunAdmission';
 import type {
   AiRunBootstrapResponse,
+  AiRunBootstrapResult,
   AiRunIngestBody,
   AiRunIngestResponse,
+  InteractiveActorBootstrap,
 } from '../../../shared/types/aiRunIngest';
+import {
+  isInteractiveActorBootstrap,
+} from '../../../shared/types/aiRunIngest';
+import { isDurableInteractiveTurnSpecification } from '../../../shared/types/durableInteractiveTurn';
+import { isAiRunV2AttemptStatus } from '../../../shared/types/aiRunV2';
 
 export class AiRunCallbackError extends Error {
   constructor(
@@ -25,7 +32,7 @@ export class AiRunFenceConflictError extends AiRunCallbackError {
 }
 
 export interface AiRunsCallbackClient {
-  getBootstrap(dispatch: DispatchMessage): Promise<AiRunBootstrapResponse>;
+  getBootstrap(dispatch: DispatchMessage): Promise<AiRunBootstrapResult>;
   postIngest(
     projectId: string,
     runId: string,
@@ -95,6 +102,43 @@ async function assertOk(response: Response): Promise<unknown> {
 export type AiRunsCallbackGetToken = (options?: {
   forceRefresh?: boolean;
 }) => Promise<string>;
+
+function parseBootstrapResponse(body: unknown): AiRunBootstrapResult {
+  if (isInteractiveActorBootstrap(body)) {
+    if (
+      !isDurableInteractiveTurnSpecification(body.specification) ||
+      !isAiRunV2AttemptStatus(body.attemptStatus) ||
+      typeof body.runId !== 'string' ||
+      typeof body.attemptId !== 'string' ||
+      typeof body.dispatchMessageId !== 'string' ||
+      typeof body.absoluteDeadlineAt !== 'string' ||
+      typeof body.projectId !== 'string' ||
+      !body.effectiveDeadlines ||
+      typeof body.effectiveDeadlines.firstEventMs !== 'number' ||
+      typeof body.effectiveDeadlines.toolCallMs !== 'number'
+    ) {
+      throw new AiRunCallbackError(
+        'Interactive actor bootstrap response is invalid',
+        502,
+        'AI_RUN_VALIDATION',
+      );
+    }
+    return body as InteractiveActorBootstrap;
+  }
+  if (
+    !body ||
+    typeof body !== 'object' ||
+    typeof (body as AiRunBootstrapResponse).projectId !== 'string' ||
+    !(body as AiRunBootstrapResponse).run
+  ) {
+    throw new AiRunCallbackError(
+      'AI run bootstrap response is invalid',
+      502,
+      'AI_RUN_VALIDATION',
+    );
+  }
+  return body as AiRunBootstrapResponse;
+}
 
 export function createAiRunsCallbackClient(options: {
   callbackBaseUrl: string;
@@ -178,10 +222,11 @@ export function createAiRunsCallbackClient(options: {
       const query = new URLSearchParams({
         dispatchMessageId: dispatch.dispatchMessageId,
       });
-      return requestWithRetry(
+      const body = await requestWithRetry(
         `${base}/api/internal/ai-runs/${encodeURIComponent(dispatch.runId)}/bootstrap?${query}`,
         { method: 'GET' },
-      ) as Promise<AiRunBootstrapResponse>;
+      );
+      return parseBootstrapResponse(body);
     },
 
     async postIngest(projectId, runId, body) {
