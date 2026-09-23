@@ -256,6 +256,7 @@ describe('generatePrototypesForPrd V2 transport routing', () => {
 
     expect(admitV2Run.mock.calls[0][0].specification.model).toEqual({
       modelId: expect.any(String),
+      region: 'us-east-1',
       maxTokens: 32_000,
       timeoutMs: 12 * 60_000,
       retry: {
