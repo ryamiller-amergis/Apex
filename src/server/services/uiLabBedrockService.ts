@@ -341,6 +341,8 @@ async function invokeStreaming(
       ? [{ base64: figmaBase64, mediaType: 'image/png' }]
       : [],
     onToken,
+    undefined,
+    { absoluteTimeout: true },
   );
   const inputTokens = result.usage.inputTokens;
   const outputTokens = result.usage.outputTokens;

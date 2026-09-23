@@ -3,6 +3,8 @@ const requests: Array<{
   region: string;
 }> = [];
 let timeoutMode = false;
+let stallBodyMode = false;
+let releaseStalledBody: (() => void) | null = null;
 
 const MODEL_HTML =
   '<!DOCTYPE html><html><body><!-- STATE:DEFAULT:START -->ok<!-- STATE:DEFAULT:END --></body></html>';
@@ -29,6 +31,39 @@ jest.mock('@aws-sdk/client-bedrock-runtime', () => {
               { once: true },
             );
           });
+        }
+        if (stallBodyMode) {
+          let nextCall = 0;
+          return {
+            body: {
+              [Symbol.asyncIterator]() {
+                return {
+                  next: () => {
+                    nextCall += 1;
+                    if (nextCall === 1) {
+                      return Promise.resolve({
+                        done: false,
+                        value: {
+                          chunk: {
+                            bytes: new TextEncoder().encode(
+                              JSON.stringify({
+                                type: 'message_start',
+                                message: { usage: { input_tokens: 1 } },
+                              }),
+                            ),
+                          },
+                        },
+                      });
+                    }
+                    return new Promise<IteratorResult<unknown>>((resolve) => {
+                      releaseStalledBody = () =>
+                        resolve({ done: true, value: undefined });
+                    });
+                  },
+                };
+              },
+            },
+          };
         }
         if (command.constructor.name.includes('WithResponseStream')) {
           async function* body() {
@@ -128,6 +163,7 @@ jest.mock('../services/aiUsageService', () => ({
 
 import { buildUiLabVisualSpecification } from '../services/aiRunV2/visualSpecificationBuilder';
 import {
+  editUiLabDesign,
   extractHtml,
   generateUiLabDesign,
   resolveUiLabVisualModel,
@@ -149,6 +185,8 @@ describe('UI Lab Bedrock request parity', () => {
   beforeEach(() => {
     requests.length = 0;
     timeoutMode = false;
+    stallBodyMode = false;
+    releaseStalledBody = null;
   });
 
   it('sends the same request through in-process and V2 generation', async () => {
@@ -273,6 +311,8 @@ describe('UI Lab Bedrock request parity', () => {
           model,
           [],
           jest.fn(),
+          undefined,
+          { absoluteTimeout: true },
         )
         .catch((error: Error) => error);
       await jest.advanceTimersByTimeAsync(10);
@@ -287,6 +327,65 @@ describe('UI Lab Bedrock request parity', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it.each(['generation', 'regeneration'] as const)(
+    'keeps the flag-off V1 absolute timeout active through %s body iteration',
+    async (mode) => {
+      jest.useFakeTimers();
+      stallBodyMode = true;
+      try {
+        const operation = mode === 'generation'
+          ? generateUiLabDesign({
+              prompt: 'Build a queue',
+              project: 'MaxView',
+              modelId: 'anthropic.claude',
+              maxTokens: 16_000,
+              timeoutMs: 10,
+              onToken: jest.fn(),
+            })
+          : editUiLabDesign({
+              currentHtml: '<html>before</html>',
+              instruction: 'Change the heading',
+              featureText: 'Build a queue',
+              project: 'MaxView',
+              modelId: 'anthropic.claude',
+              maxTokens: 16_000,
+              timeoutMs: 10,
+              onToken: jest.fn(),
+            });
+        const refusal = expect(operation).rejects.toThrow(
+          'Bedrock request timed out after 0s',
+        );
+
+        await Promise.resolve();
+        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(10);
+        releaseStalledBody?.();
+        await refusal;
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
+    },
+  );
+
+  it('streams and completes flag-off V1 regeneration normally', async () => {
+    const tokens: string[] = [];
+
+    await expect(
+      editUiLabDesign({
+        currentHtml: '<html>before</html>',
+        instruction: 'Change the heading',
+        featureText: 'Build a queue',
+        project: 'MaxView',
+        modelId: 'anthropic.claude',
+        maxTokens: 16_000,
+        timeoutMs: 600_000,
+        onToken: (text) => tokens.push(text),
+      }),
+    ).resolves.toBe(MODEL_HTML);
+    expect(tokens).toEqual([MODEL_HTML]);
   });
 
   it.each([
