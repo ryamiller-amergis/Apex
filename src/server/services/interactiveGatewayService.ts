@@ -32,8 +32,10 @@ import type {
   SseEvent,
 } from '../../shared/types/chat';
 import {
+  replayRunEventPage as defaultReplayRunEventPage,
   replayRunEvents as defaultReplayRunEvents,
   subscribeRunEvents as defaultSubscribeRunEvents,
+  type RunEventPage,
 } from './pgNotifyService';
 import { interactiveLiveBus } from './interactiveLiveBus';
 import {
@@ -83,11 +85,28 @@ export interface InteractiveGatewayDependencies {
   loadThreadSnapshot: (
     threadId: string
   ) => Promise<InteractiveThreadSnapshot | null>;
-  replayRunEvents: (
+  /**
+   * Paginated durable replay. Preferred by the gateway; loops while `hasMore`.
+   */
+  replayRunEventPage?: (
+    threadId: string,
+    options?: {
+      afterEventId?: string;
+      limit?: number;
+      runId?: string;
+      coldStart?: 'recent' | 'oldest';
+    }
+  ) => Promise<RunEventPage>;
+  /**
+   * One-page wrapper retained for callers/tests that still inject the legacy
+   * shape. When only this is provided, the gateway pages through it.
+   */
+  replayRunEvents?: (
     threadId: string,
     lastEventId?: string,
     limit?: number,
     runId?: string,
+    coldStart?: 'recent' | 'oldest',
   ) => Promise<AgentRunEventEnvelope[]>;
   /**
    * Subscribe to durable run events as they are committed. This closes the
@@ -106,7 +125,7 @@ export interface InteractiveGatewayDependencies {
   /**
    * Subscribe to the thread's live run-event fan-out (Redis). The actor tier
    * publishes ephemeral token/tool/progress envelopes here; durability rides
-   * Postgres `replayRunEvents`. When Redis is unconfigured this is a no-op and
+   * Postgres `replayRunEventPage`. When Redis is unconfigured this is a no-op and
    * the socket relies on replay + the client's `/run-status` safety net.
    */
   subscribeLiveEvents: (
@@ -134,6 +153,7 @@ const defaultDependencies: InteractiveGatewayDependencies = {
       activeRunId: thread.activeRunId,
     };
   },
+  replayRunEventPage: defaultReplayRunEventPage,
   replayRunEvents: defaultReplayRunEvents,
   subscribeDurableEvents: defaultSubscribeRunEvents,
   subscribeToThread: defaultSubscribeToThread,
@@ -141,6 +161,30 @@ const defaultDependencies: InteractiveGatewayDependencies = {
     interactiveLiveBus.subscribe(threadId, callback),
   eventForRunEnvelope: defaultEventForRunEnvelope,
 };
+
+function resolveReplayPage(
+  dependencies: InteractiveGatewayDependencies,
+): NonNullable<InteractiveGatewayDependencies['replayRunEventPage']> {
+  if (dependencies.replayRunEventPage) {
+    return dependencies.replayRunEventPage;
+  }
+  const legacy = dependencies.replayRunEvents ?? defaultReplayRunEvents;
+  return async (threadId, options = {}) => {
+    const events = await legacy(
+      threadId,
+      options.afterEventId,
+      options.limit ?? 500,
+      options.runId,
+      options.coldStart,
+    );
+    return {
+      events,
+      nextEventId:
+        events.length > 0 ? events[events.length - 1]!.eventId : null,
+      hasMore: events.length >= (options.limit ?? 500),
+    };
+  };
+}
 
 /**
  * Attach `socket` to `threadId`'s stream. Resolves once replay has flushed and
@@ -154,6 +198,7 @@ export async function attachInteractiveThreadStream(
   dependencies: InteractiveGatewayDependencies = defaultDependencies
 ): Promise<() => void> {
   void options.localInstance; // retained for API compatibility; unused live-path filter
+  const replayPage = resolveReplayPage(dependencies);
   const sentEventIds = new Set<string>();
   const sentMessageIds = new Set<string>();
   let replaying = true;
@@ -257,22 +302,32 @@ export async function attachInteractiveThreadStream(
     // A failed snapshot does not prevent durable/live streaming.
   }
 
-  let replayEvents: AgentRunEventEnvelope[] = [];
   const shouldReplayEvents =
     Boolean(options.lastEventId) || !snapshot || snapshot.status === 'running';
   if (shouldReplayEvents) {
+    const coldStart =
+      !options.lastEventId && snapshot?.status === 'running'
+        ? 'oldest'
+        : options.lastEventId
+          ? 'oldest'
+          : 'recent';
+    let afterEventId = options.lastEventId;
     try {
-      replayEvents = await dependencies.replayRunEvents(
-        threadId,
-        options.lastEventId,
-        500,
-        snapshot?.activeRunId,
-      );
+      for (;;) {
+        const page = await replayPage(threadId, {
+          afterEventId,
+          limit: 500,
+          runId: snapshot?.activeRunId,
+          coldStart: afterEventId ? 'oldest' : coldStart,
+        });
+        for (const envelope of page.events) sendEnvelope(envelope);
+        if (!page.hasMore || !page.nextEventId) break;
+        afterEventId = page.nextEventId;
+      }
     } catch {
-      replayEvents = [];
+      // Replay failure does not prevent live streaming.
     }
   }
-  for (const envelope of replayEvents) sendEnvelope(envelope);
 
   // Flush live events buffered during replay, ordered so replay precedes live.
   replaying = false;

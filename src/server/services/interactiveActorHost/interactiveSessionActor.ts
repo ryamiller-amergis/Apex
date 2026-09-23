@@ -53,6 +53,10 @@ import {
   createIncrementalTokenBatcher,
   INTERACTIVE_TOKEN_BATCH_MAX_BYTES,
 } from '../interactiveTokenBatcher';
+import {
+  createInteractiveDurableStreamBatcher,
+  buildOffsetLiveTokenEvent,
+} from '../interactiveDurableStreamBatcher';
 import type { InteractiveCursorAgentHandle } from './interactiveCursorExecution';
 import type { InteractiveActorBootstrap } from '../../../shared/types/aiRunIngest';
 import { createPerThreadTurnQueue, type PerThreadTurnQueue } from './perThreadTurnQueue';
@@ -949,6 +953,86 @@ export function createInteractiveSessionActor(
         }
       }, firstEventMs);
 
+      const liveBatcher = createIncrementalTokenBatcher({
+        maxBytes: batchMaxBytes,
+        now,
+      });
+      let liveSequence = 0;
+      let liveStreamOffset = 0;
+      let lastMatchingLive:
+        | Readonly<{
+            eventId: string;
+            streamOffset: number;
+            streamEndOffset: number;
+            text: string;
+          }>
+        | null = null;
+
+      const publishLiveEnvelope = async (
+        event: SseEvent,
+        eventId?: string,
+      ): Promise<string> => {
+        const envelope = createCursorRunEventEnvelope({
+          eventId,
+          threadId,
+          runId,
+          sourceInstance,
+          sequence: (liveSequence += 1),
+          timestamp: new Date(now()).toISOString(),
+          event,
+        });
+        await publishLive(threadId, envelope).catch(() => {});
+        return envelope.eventId;
+      };
+
+      const durableBatcher = createInteractiveDurableStreamBatcher({
+        persist: async ({ event, eventId }) => {
+          const matching =
+            lastMatchingLive &&
+            lastMatchingLive.streamOffset === event.streamOffset &&
+            lastMatchingLive.streamEndOffset === event.streamEndOffset &&
+            lastMatchingLive.text === event.text;
+          await post({
+            dispatchMessageId,
+            attemptId,
+            kind: 'progress',
+            phase: 'implementation',
+            status: 'running',
+            event,
+          });
+          if (!matching) {
+            await publishLiveEnvelope(
+              buildOffsetLiveTokenEvent(event),
+              eventId,
+            );
+          }
+        },
+      });
+
+      const publishLiveTokenBatches = async (
+        batches: string[],
+      ): Promise<void> => {
+        for (const text of batches) {
+          if (!text) continue;
+          const streamOffset = liveStreamOffset;
+          const streamEndOffset = streamOffset + text.length;
+          liveStreamOffset = streamEndOffset;
+          const tokenEvent = buildOffsetLiveTokenEvent({
+            text,
+            streamOffset,
+            streamEndOffset,
+          });
+          const eventId = await publishLiveEnvelope(tokenEvent);
+          lastMatchingLive = {
+            eventId,
+            streamOffset,
+            streamEndOffset,
+            text,
+          };
+          await durableBatcher.push(text);
+        }
+      };
+
       try {
         const turnEndMonitor = createCursorTurnEndMonitor();
         activeRunRef = await agentHandle.send(prompt, {
@@ -1000,24 +1084,21 @@ export function createInteractiveSessionActor(
                   clearToolTimer();
                 }
               }
-              await publishLive(
-                threadId,
-                createCursorRunEventEnvelope({
-                  threadId,
-                  runId,
-                  sourceInstance,
-                  sequence: 1,
-                  timestamp: new Date(now()).toISOString(),
+              if (event.type === 'token') {
+                await publishLiveTokenBatches(
+                  liveBatcher.push(event.text, now()),
+                );
+              } else {
+                await publishLiveEnvelope(event);
+                await post({
+                  dispatchMessageId,
+                  attemptId,
+                  kind: 'progress',
+                  phase: 'implementation',
+                  status: 'running',
                   event,
-                }),
-              ).catch(() => {});
-              await post({
-                dispatchMessageId,
-                attemptId,
-                kind: 'progress',
-                phase: 'implementation',
-                status: 'running',
-              });
+                });
+              }
             },
           },
           hooks: {
@@ -1031,6 +1112,12 @@ export function createInteractiveSessionActor(
           nextSequence: () => 1,
           turnEnd: turnEndMonitor.completion,
         });
+
+        const liveTail = liveBatcher.flush();
+        if (liveTail) {
+          await publishLiveTokenBatches([liveTail]);
+        }
+        await durableBatcher.flush();
 
         clearToolTimer();
 

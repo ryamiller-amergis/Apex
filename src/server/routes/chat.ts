@@ -40,7 +40,7 @@ import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import { requirePermission } from '../middleware/rbac';
 import { writeSseEvent, startSseHeartbeat } from '../utils/sseResponse';
 import {
-  replayRunEvents,
+  replayRunEventPage,
   RUN_EVENT_SOURCE_INSTANCE,
   subscribeRunEvents,
 } from '../services/pgNotifyService';
@@ -143,6 +143,10 @@ export function shouldForwardPgRunEvent(
 }
 
 export function shouldAssignRunEventSseId(envelope: AgentRunEventEnvelope): boolean {
+  if (envelope.event.type === 'token') {
+    const offset = envelope.event.streamOffset;
+    return typeof offset === 'number' && Number.isFinite(offset) && offset >= 0;
+  }
   return envelope.event.type === 'phase'
     || envelope.event.type === 'health'
     || envelope.event.type === 'tool_call'
@@ -560,18 +564,30 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
   // events when the browser supplied a cursor or a run is currently active.
   const shouldReplayEvents =
     Boolean(lastEventId) || hydrated?.status === 'running';
-  const replayEvents = shouldReplayEvents
-    ? await replayRunEvents(
-      req.params.id,
-      lastEventId,
-      500,
-      hydrated?.activeRunId,
-    ).catch((err) => {
-      console.error(`[chat] run-event replay failed for thread ${req.params.id}:`, (err as Error).message);
-      return [];
-    })
-    : [];
-  for (const envelope of replayEvents) sendEnvelope(envelope);
+  let replayedEventCount = 0;
+  if (shouldReplayEvents) {
+    const coldStart: 'oldest' = 'oldest';
+    let afterEventId = lastEventId;
+    try {
+      for (;;) {
+        const page = await replayRunEventPage(req.params.id, {
+          afterEventId,
+          limit: 500,
+          runId: hydrated?.activeRunId,
+          coldStart,
+        });
+        for (const envelope of page.events) sendEnvelope(envelope);
+        replayedEventCount += page.events.length;
+        if (!page.hasMore || !page.nextEventId) break;
+        afterEventId = page.nextEventId;
+      }
+    } catch (err) {
+      console.error(
+        `[chat] run-event replay failed for thread ${req.params.id}:`,
+        (err as Error).message,
+      );
+    }
+  }
 
   // Historical phase/done events must not override the current thread state.
   // Send the authoritative snapshot after replay, then drain events that
@@ -591,7 +607,7 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
       ...myWorkContext,
       threadStatus: hydrated?.status ?? thread.status,
       replayedMessageCount: replayMessages.length,
-      replayedEventCount: replayEvents.length,
+      replayedEventCount,
       resumedFromEvent: Boolean(lastEventId),
     });
   }

@@ -1,5 +1,6 @@
 import { renderHook, act } from '@testing-library/react';
-import { useChatStream } from '../useChatStream';
+import { durableTokenKey, useChatStream } from '../useChatStream';
+import type { SseTokenEvent } from '../../../shared/types/chat';
 
 // ── EventSource mock ───────────────────────────────────────────────────────────
 
@@ -139,6 +140,74 @@ describe('useChatStream', () => {
       lastES!.emit('message', { type: 'token', text: ', world' });
     });
     expect(result.current.streamingText).toBe('Hello, world');
+  });
+
+  it('merges durable offset tokens with dedupe, overlap, and pending gaps', () => {
+    expect(
+      durableTokenKey('e1', {
+        type: 'token',
+        text: 'hi',
+        streamOffset: 0,
+      } satisfies SseTokenEvent)
+    ).toBe('e1:0');
+    expect(
+      durableTokenKey('e1', { type: 'token', text: 'hi' } satisfies SseTokenEvent)
+    ).toBe('e1:legacy');
+
+    const { result } = renderHook(() => useChatStream('t1'));
+    act(() => {
+      lastES!.emit(
+        'message',
+        { type: 'token', text: 'Hello', streamOffset: 0, streamEndOffset: 5 },
+        'evt-a'
+      );
+      // Duplicate key ignored.
+      lastES!.emit(
+        'message',
+        { type: 'token', text: 'Hello', streamOffset: 0, streamEndOffset: 5 },
+        'evt-a'
+      );
+      // Gap held until the missing offset arrives.
+      lastES!.emit(
+        'message',
+        { type: 'token', text: '!', streamOffset: 11, streamEndOffset: 12 },
+        'evt-c'
+      );
+      lastES!.emit(
+        'message',
+        { type: 'token', text: ' world', streamOffset: 5, streamEndOffset: 11 },
+        'evt-b'
+      );
+    });
+    expect(result.current.streamingText).toBe('Hello world!');
+
+    act(() => {
+      // Equal overlapping prefix: append only the unseen suffix.
+      lastES!.emit(
+        'message',
+        {
+          type: 'token',
+          text: ' world!!',
+          streamOffset: 5,
+          streamEndOffset: 13,
+        },
+        'evt-d'
+      );
+    });
+    expect(result.current.streamingText).toBe('Hello world!!');
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'message',
+        message: {
+          id: 'final-1',
+          role: 'agent',
+          text: 'Hello world!!',
+          ts: '2026-01-01T00:00:00Z',
+        },
+      });
+    });
+    expect(result.current.streamingText).toBe('');
   });
 
   it('commits message event and clears streaming buffer', () => {
@@ -312,7 +381,7 @@ describe('useChatStream', () => {
         },
         'event-0'
       );
-      for (let i = 1; i <= 512; i++) {
+      for (let i = 1; i <= 2048; i++) {
         lastES!.emit(
           'message',
           {

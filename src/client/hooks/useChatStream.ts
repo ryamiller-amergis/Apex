@@ -15,6 +15,7 @@ import type {
   SsePhaseEvent,
   SseRetryingEvent,
   SseThinkingEvent,
+  SseTokenEvent,
   SseToolStatusEvent,
 } from '../../shared/types/chat';
 import { v4 as uuidv4 } from 'uuid';
@@ -33,6 +34,10 @@ export function sortChatMessagesByTs(messages: ChatMessage[]): ChatMessage[] {
     if (byTs !== 0) return byTs;
     return a.id.localeCompare(b.id);
   });
+}
+
+export function durableTokenKey(eventId: string, event: SseTokenEvent): string {
+  return `${eventId}:${event.streamOffset ?? 'legacy'}`;
 }
 
 export interface ToolProgress {
@@ -99,7 +104,7 @@ interface UseChatStreamOptions {
   initialPrdReady?: boolean;
 }
 
-const MAX_SEEN_EVENT_IDS = 512;
+const MAX_SEEN_EVENT_IDS = 2048;
 const MAX_PHASE_EVENTS = 200;
 /**
  * Only these SSE event types carry durable `id:` frames from the server.
@@ -249,6 +254,9 @@ export function useChatStream(
   const streamRef = useRef<ThreadStreamHandle | null>(null);
   // Buffer tokens into the in-progress message
   const streamBufferRef = useRef('');
+  const pendingOffsetTokensRef = useRef<
+    Map<number, { text: string; key: string }>
+  >(new Map());
   const retryTimeoutRef = useRef<number | null>(null);
   const pollTimerRef = useRef<number | null>(null);
   const seenEventIdsRef = useRef<Set<string>>(new Set());
@@ -320,6 +328,7 @@ export function useChatStream(
     setEventDrivenTermination(false);
     eventDrivenTerminationRef.current = false;
     streamBufferRef.current = '';
+    pendingOffsetTokensRef.current.clear();
     seenEventIdsRef.current.clear();
     seenEventIdOrderRef.current = [];
     clearRetryTimeout();
@@ -415,8 +424,64 @@ export function useChatStream(
       switch (event.type) {
         case 'token': {
           setLastProgressAt(Date.now());
-          streamBufferRef.current += event.text;
-          setStreamingText(streamBufferRef.current);
+          const tokenEvent = event as SseTokenEvent;
+          if (lastEventId) {
+            const key = durableTokenKey(lastEventId, tokenEvent);
+            if (!rememberEventId(key)) break;
+          }
+
+          const offset = tokenEvent.streamOffset;
+          if (
+            typeof offset !== 'number' ||
+            !Number.isSafeInteger(offset) ||
+            offset < 0
+          ) {
+            // Legacy tokens without offsets continue append-only.
+            streamBufferRef.current += tokenEvent.text;
+            setStreamingText(streamBufferRef.current);
+          } else {
+            const current = streamBufferRef.current;
+            const currentLen = current.length;
+            if (offset === currentLen) {
+              streamBufferRef.current = current + tokenEvent.text;
+            } else if (offset < currentLen) {
+              const overlapLen = Math.min(
+                tokenEvent.text.length,
+                currentLen - offset,
+              );
+              const existingOverlap = current.slice(offset, offset + overlapLen);
+              const incomingOverlap = tokenEvent.text.slice(0, overlapLen);
+              if (existingOverlap === incomingOverlap) {
+                const suffix = tokenEvent.text.slice(overlapLen);
+                if (suffix) {
+                  streamBufferRef.current = current + suffix;
+                }
+              } else {
+                streamBufferRef.current =
+                  current.slice(0, offset) + tokenEvent.text;
+              }
+            } else {
+              pendingOffsetTokensRef.current.set(offset, {
+                text: tokenEvent.text,
+                key: lastEventId
+                  ? durableTokenKey(lastEventId, tokenEvent)
+                  : `pending:${offset}`,
+              });
+            }
+
+            // Drain any pending chunks that now abut the buffer.
+            for (;;) {
+              const next = pendingOffsetTokensRef.current.get(
+                streamBufferRef.current.length,
+              );
+              if (!next) break;
+              pendingOffsetTokensRef.current.delete(
+                streamBufferRef.current.length,
+              );
+              streamBufferRef.current += next.text;
+            }
+            setStreamingText(streamBufferRef.current);
+          }
           setIsRetrying(false);
           setRetryReason(null);
           clearRetryTimeout();
@@ -427,6 +492,7 @@ export function useChatStream(
           const messageEvent = event as SseMessageEvent;
           setLastProgressAt(Date.now());
           streamBufferRef.current = '';
+          pendingOffsetTokensRef.current.clear();
           setStreamingText('');
           setThinkingText('');
           setToolProgress([]);
@@ -601,6 +667,7 @@ export function useChatStream(
         case 'done': {
           setLastProgressAt(Date.now());
           streamBufferRef.current = '';
+          pendingOffsetTokensRef.current.clear();
           setStreamingText('');
           setThinkingText('');
           setToolProgress([]);

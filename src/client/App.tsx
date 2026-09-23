@@ -312,18 +312,16 @@ function App() {
   const showBetaAnnouncement = useFeatureFlag('beta-to-prod-announcement', selectedProject);
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
-  const interactiveWsEnabled = homeFlags['ai-runs-interactive'] === true;
+  const interactiveWsEnabled = homeFlags['ai-runs-v2-transport'] === true;
 
-  // @feature-flag:ai-runs-interactive start winner=disabled
-  // FEAT-007: flip the chat stream transport to the WebSocket agent gateway when
-  // ai-runs-interactive is enabled for this project; falls back to SSE otherwise.
+  // Prefer the WebSocket agent gateway when the durable interactive transport
+  // flag is enabled; SSE remains the stream-transport fallback only.
   // Wait until flags resolve so we do not open SSE first, then leave it stuck
   // after the flag loads as true (useChatStream reopens on the change event).
   useEffect(() => {
     if (homeFlagsLoading) return;
     setInteractiveWsEnabled(interactiveWsEnabled);
   }, [homeFlagsLoading, interactiveWsEnabled]);
-  // @feature-flag:ai-runs-interactive end
 
   const canAccessHome =
     !isRestricted &&

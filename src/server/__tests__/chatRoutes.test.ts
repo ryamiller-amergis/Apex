@@ -86,6 +86,11 @@ jest.mock('../services/chatThreadRepository', () => ({
 jest.mock('../services/pgNotifyService', () => ({
   RUN_EVENT_SOURCE_INSTANCE: 'worker-a',
   replayRunEvents: jest.fn().mockResolvedValue([]),
+  replayRunEventPage: jest.fn().mockResolvedValue({
+    events: [],
+    nextEventId: null,
+    hasMore: false,
+  }),
   subscribeRunEvents: jest.fn().mockReturnValue(() => {}),
 }));
 
@@ -198,6 +203,16 @@ describe('chat run-event SSE transport', () => {
       type: 'token',
       event: { type: 'token', text: 'ephemeral' },
     })).toBe(false);
+    expect(shouldAssignRunEventSseId({
+      ...envelope,
+      type: 'token',
+      event: {
+        type: 'token',
+        text: 'durable',
+        streamOffset: 0,
+        streamEndOffset: 7,
+      },
+    })).toBe(true);
   });
 
   it('PBI-002 AC-0 advertises event-driven authority in the initial stream status', () => {

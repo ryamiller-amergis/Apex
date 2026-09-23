@@ -27,6 +27,8 @@
 import Redis from 'ioredis';
 import type { AgentRunEventEnvelope } from '../../shared/types/chat';
 
+export { buildOffsetLiveTokenEvent } from './interactiveDurableStreamBatcher';
+
 const CHANNEL_PREFIX = 'apex:interactive:live';
 
 /** Minimal ioredis surface used by the bus (satisfied by a `ws`-style fake). */
