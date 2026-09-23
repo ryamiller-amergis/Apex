@@ -83,10 +83,9 @@ export type InteractiveCapability = (typeof INTERACTIVE_CAPABILITIES)[number];
 
 export type InteractiveDeadlinePolicy = Readonly<{
   absoluteTurnMs: 300_000 | 1_200_000;
-  repositoryPreparationMs: null | 300_000;
-  firstEventWarmMs: 15_000 | 30_000;
-  firstEventColdMs: 30_000;
-  toolCallMs: 60_000 | 90_000;
+  repositoryPreparationMs: number | null;
+  firstEventMs: number;
+  toolCallMs: number;
 }>;
 
 export type ImmutableInteractiveAttachmentRef = Readonly<{
@@ -201,8 +200,9 @@ export type AgentRunExecutionSnapshot =
 ```
 
 The actor bootstrap adds the current attempt ID, dispatch fence, absolute
-deadline, and signed proxy endpoints to the persisted specification. Those
-values are facts from the accepted attempt, not worker-selected defaults.
+deadline, remaining-time-clamped effective sub-deadlines, and signed proxy
+endpoints to the persisted specification. Those values are facts from the
+accepted attempt and App Service configuration, not worker-selected defaults.
 Consumers narrow `AgentRunExecutionSnapshot` with
 `kind === 'interactive-turn'`; legacy `ExecutionSnapshot` has no `kind`.
 
@@ -215,38 +215,35 @@ interactive API status, transport version, or dispatch destination must have a
 `src/server/services/interactiveTurnClassifier.ts` owns classification. It
 does not inspect prompt prose.
 
-The model registry records the current client model catalog:
+Models never participate in classification, priority, eligibility, or
+scheduling. `model` remains a frozen execution input in
+`DurableInteractiveTurnSpecification`; changing only the model cannot change a
+turn’s class or queue order.
 
-- `composer-2`: fast
-- `claude-sonnet-4-6`: fast
-- `gpt-5.5`: fast
-- `gemini-3.1-pro`: fast
-- `claude-opus-4-6`: agentic
+The classifier consumes only server-resolved skill/capability metadata and
+effort. A turn is fast only when all of these are proven:
 
-An unregistered model is agentic.
+- the skill/capability metadata is known
+- effort is not `high`
+- the turn needs plain chat
+- it needs no materialized or writable repository workspace
+- it has no attachments
+- it needs no ADO operation
+- it needs no internal or external MCP server
+- it is not tool-heavy
 
-The skill registry records exact normalized built-in skill markers and their
-declared default class and capabilities. A turn with no skill starts from its
-model default. A project quick skill is looked up by its server-resolved path;
-a path that is not in the registry is agentic. The client cannot submit
-classification metadata.
+Any workspace, attachment, ADO, MCP, or tool-heavy capability upgrades the
+turn to agentic. `effort: high`, an unknown skill, missing/unknown capability
+metadata, conflicting metadata, or any uncertain classification also produces
+agentic. No value can downgrade an agentic decision.
 
-Classification starts with the more expensive of the registered model and
-skill defaults. It then applies upgrades:
+The resulting class is persisted on `agent_runs` and copied to the outbox
+payload; the orchestrator never reclassifies it and never reads model when
+selecting work.
 
-- `effort: high` upgrades to agentic.
-- A turn that requires a materialized or writable repository workspace upgrades
-  to agentic. Merely having optional repository metadata does not classify a
-  plain-chat turn as workspace-bound.
-- Any attachment upgrades to agentic.
-- Explicit ADO writes or an ADO-operational skill upgrade to agentic.
-- Any internal or external MCP server upgrades to agentic.
-- A skill registered as tool-heavy upgrades to agentic.
-- Missing or unknown metadata upgrades to agentic.
-
-No effort value, capability, client input, or explicit override can downgrade
-an agentic decision. The resulting class is persisted on `agent_runs` and
-copied to the outbox payload; the orchestrator never reclassifies it.
+Class chooses the direct actor endpoint, reserved-floor eligibility, and the
+5-minute versus 20-minute absolute deadline. It is not a general priority;
+within the currently eligible set, accepted FIFO order decides.
 
 ## Database and migration
 
@@ -277,8 +274,10 @@ It makes these additive changes:
 - Add `idx_agent_runs_interactive_user_active` on
   `(requested_by_user_id, interactive_class, created_at)` for nonterminal
   interactive runs.
-- Add `idx_ai_run_outbox_interactive_due` on
-  `((payload->>'interactiveClass'), available_at, created_at)` for unpublished
+- Add `idx_ai_run_outbox_interactive_due` on `(created_at, id)` for
+  unpublished `interactive_dispatch` rows.
+- Add `idx_ai_run_outbox_interactive_class_due` on
+  `((payload->>'interactiveClass'), created_at, id)` for unpublished
   `interactive_dispatch` rows.
 
 Existing interactive rows are backfilled with
@@ -411,9 +410,26 @@ Interactive capacity is:
 - shared burst above the two floors: 12
 
 Each class gets its two-slot floor. Either class may use free shared burst
-capacity, including an unused slot from the other class. Queued work in a class
-below its floor is selected before additional borrowing by the other class.
-Running work is never preempted.
+capacity, including an unused slot from the other class. Running work is never
+preempted.
+
+Scheduling is FIFO by the accepted PostgreSQL order
+`(ai_run_outbox.created_at, ai_run_outbox.id)`, subject only to floor
+eligibility:
+
+1. Determine which classes are below their two-slot floor.
+2. For each available slot, if queued work exists for a below-floor class,
+   select the oldest queued turn among those floor-eligible classes. This
+   prevents either class from starving.
+3. After floor deficits are satisfied—or when no queued work exists for a
+   deficit—shared burst selects the oldest queued turn regardless of class.
+4. Continue until total active interactive work reaches 16 or no queued turn
+   remains.
+
+This is work-conserving: an empty class never strands capacity. A newly queued
+floor-deficit turn does not preempt running borrowed work; it becomes eligible
+first when a slot is released. Model is absent from every eligibility and
+ordering decision.
 
 The orchestrator marks the attempt dispatched under its current fence, invokes
 the class endpoint, and marks the outbox row published after the endpoint
@@ -434,25 +450,38 @@ bounded and counts against it.
 Fast turns use:
 
 - absolute deadline: 5 minutes
-- repository preparation: not allowed; a workspace need upgrades the turn
-  to agentic
-- first event: 15 seconds with a compatible warm agent, 30 seconds after a
-  cold create or resume
-- each tool call: 60 seconds
+- repository preparation: not applicable because any workspace requirement is
+  agentic
+- first-event and tool deadlines: the existing App Service-resolved configured
+  values, clamped by time remaining before the absolute deadline
 
 Agentic turns use:
 
 - absolute deadline: 20 minutes, including queue wait, pinned repository
   materialization, attachment materialization, agent creation/resume, tools,
   model output, artifact upload, and terminal persistence
-- repository preparation sub-deadline: 5 minutes
-- first event: 30 seconds
-- each tool call: 90 seconds
+- repository-preparation, first-event, and tool deadlines: the existing App
+  Service-resolved configured values, each clamped by time remaining before the
+  absolute deadline
 
-App Service freezes these values in the specification and persists the absolute
-timestamp in `agent_runs.timeout_at`. The actor receives all values and has no
-fallback numbers. Retry sets a fresh absolute timestamp from the same persisted
-class and frozen duration policy.
+App Service resolves the existing sources of truth:
+
+- `resolveAgentFirstEventTimeoutMs()` for first event
+- `resolveAgentMcpToolTimeoutMs()` for one MCP/tool call
+- the existing `GROUNDING_PREPARATION_TIMEOUT_MS` used by
+  `waitForReadyThreadGrounding` for repository preparation; implementation may
+  expose a resolver for that existing value/configuration source but may not
+  introduce a new Task 7 number
+
+App Service freezes those resolved values in the specification and persists the
+absolute timestamp in `agent_runs.timeout_at`. On actor bootstrap it computes
+the remaining absolute time and returns each effective sub-deadline as
+`min(frozen configured value, remaining absolute time)`;
+`repositoryPreparationMs` is null when no materialization is required. Before
+arming first-event after preparation and before each later tool call, the actor
+applies the same minimum against the then-current remaining absolute time. The
+actor holds no fallback values. Retry resolves the current App Service
+configuration again and sets a fresh absolute timestamp.
 
 First-event timing starts immediately before `agent.send`. A tool timer starts
 on its first tool-call event and ends on that call’s completion/error event.
@@ -598,6 +627,8 @@ transaction it:
 - refreshes any delegated tool grant from the authenticated retry request and
   freezes a new attempt-specific specification; message, attachment refs,
   transcript, skill, model, class, and grounding remain unchanged
+- resolves the current existing first-event/tool/repository-preparation
+  configuration and replaces only the frozen sub-deadlines
 - creates attempt N+1 with a fresh attempt ID and dispatch fence
 - writes a new `interactive_dispatch` outbox row
 - sets the existing run and thread active again
@@ -676,13 +707,18 @@ Azure rollout, canaries, and legacy retirement remain deferred operations.
 - Duplicate `turnId` requests return one bubble and one run.
 - Per-user limit tests return the exact 429 codes; global saturation stays
   queued.
-- Classifier fixtures cover every upgrade and unknown metadata.
+- Classifier fixtures prove plain-chat-only is fast; every expensive,
+  high-effort, unknown, conflicting, or uncertain capability set is agentic;
+  changing only model changes neither class nor order.
 - The orchestrator reserves two warm slots per class, borrows to a total of 16,
-  and invokes the correct direct endpoint without Service Bus.
+  invokes the correct direct endpoint without Service Bus, selects the oldest
+  eligible `(created_at, id)`, prevents class starvation with floors, and uses
+  shared burst in global FIFO order.
 - Cold actor tests recreate from the durable transcript after
   `agent_not_found`.
-- Deadline tests prove 5-minute and 20-minute absolute bounds, 5-minute repo
-  preparation, fast warm/cold first events, and 60/90-second tools.
+- Deadline tests prove 5-minute and 20-minute absolute bounds, resolution from
+  the existing first-event/tool/repository-preparation sources, clamping to
+  remaining absolute time, and no worker defaults.
 - Redis interruption followed by replay reconstructs a response with more than
   500 durable events exactly once.
 - Home, Interview, and ADR retry tests reuse run/message identity and preserve

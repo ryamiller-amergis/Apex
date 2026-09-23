@@ -33,11 +33,16 @@ WebSocket/SSE, Jest.
 - Persisted class values are exactly `fast` and `agentic`.
 - Fast absolute deadline is 300,000 ms. Agentic absolute deadline is
   1,200,000 ms and includes queueing and repository preparation.
-- First-event limits are 15,000 ms fast-warm, 30,000 ms fast-cold, and
-  30,000 ms agentic. Tool limits are 60,000 ms fast and 90,000 ms agentic.
-- Agentic repository preparation is capped at 300,000 ms.
+- Models are frozen execution input only. No model field, family, registry, or
+  capability affects class, priority, eligibility, capacity, or scheduling.
+- App Service resolves first-event, tool, and repository-preparation deadlines
+  from the existing code/configuration sources, freezes them, and clamps them
+  to the remaining absolute deadline. Workers have no fallback numbers.
 - Warm floors are two fast and two agentic. Shared burst may raise total
   active interactive turns to 16, never above 16.
+- Scheduling order is FIFO by accepted outbox `(created_at, id)`. Floor-deficit
+  work is eligible for reserved slots; shared burst chooses the oldest queued
+  turn regardless of class. Running work is never preempted.
 - One thread may have one nonterminal interactive run.
 - One user may have two nonterminal interactive runs across threads and one
   nonterminal agentic run.
@@ -78,11 +83,13 @@ WebSocket/SSE, Jest.
 ### Classification and atomic admission
 
 - `src/server/services/interactiveTurnClassifier.ts` — deterministic,
-  metadata-based fast/agentic classifier.
+  capability-only fast/agentic classifier; model is not an input.
 - `src/server/services/interactiveAttachmentStore.ts` — immutable Blob upload
   and content validation before the transaction.
 - `src/server/services/interactiveToolGrantCrypto.ts` — encrypt/decrypt
   run-bound delegated ADO credentials with a domain-separated existing secret.
+- `src/server/services/interactiveDeadlinePolicy.ts` — resolve existing
+  App Service deadline sources and clamp them to remaining absolute time.
 - `src/server/services/durableInteractiveTurnRepository.ts` — the sole atomic
   send/retry writer.
 - `src/server/services/durableInteractiveTurnService.ts` — resolve/freeze
@@ -104,8 +111,8 @@ WebSocket/SSE, Jest.
   direct destination types.
 - `src/server/services/aiOrchestrator/providerGovernor.ts` — two/two floors,
   shared burst, and total 16.
-- `src/server/services/aiOrchestrator/admissionController.ts` — fair,
-  class-aware interactive planning.
+- `src/server/services/aiOrchestrator/admissionController.ts` — FIFO
+  floor-eligible and shared-burst planning.
 - `src/server/services/aiOrchestrator/outboxDrainer.ts` — branch exhaustively
   between Service Bus background commands and direct Dapr dispatches.
 - `src/server/services/aiOrchestrator/utilizationReader.ts` — count persisted
@@ -196,10 +203,14 @@ WebSocket/SSE, Jest.
 
 ```typescript
 export type InteractiveClassificationInput = Readonly<{
-  model: string;
   effort: EffortLevel | null;
   skillPath: string | null;
-  capabilities: ReadonlyArray<InteractiveCapability>;
+  capabilityMetadata:
+    | Readonly<{
+        status: 'known';
+        capabilities: ReadonlyArray<InteractiveCapability>;
+      }>
+    | Readonly<{ status: 'unknown' | 'conflicting' | 'uncertain' }>;
 }>;
 
 export type InteractiveClassification = Readonly<{
@@ -212,7 +223,7 @@ export type InteractiveClassification = Readonly<{
 
 ```typescript
 import {
-  deadlinePolicyFor,
+  absoluteTurnMsForClass,
   isDurableInteractiveTurnSpecification,
   isInteractiveDispatchOutboxPayload,
 } from '../../shared/types/durableInteractiveTurn';
@@ -222,21 +233,9 @@ it('recognizes the direct actor transport', () => {
   expect(isAiRunTransportVersion('dapr-actor-v2')).toBe(true);
 });
 
-it('freezes exact class deadlines', () => {
-  expect(deadlinePolicyFor('fast')).toEqual({
-    absoluteTurnMs: 300_000,
-    repositoryPreparationMs: null,
-    firstEventWarmMs: 15_000,
-    firstEventColdMs: 30_000,
-    toolCallMs: 60_000,
-  });
-  expect(deadlinePolicyFor('agentic')).toEqual({
-    absoluteTurnMs: 1_200_000,
-    repositoryPreparationMs: 300_000,
-    firstEventWarmMs: 30_000,
-    firstEventColdMs: 30_000,
-    toolCallMs: 90_000,
-  });
+it('freezes only the approved class absolute deadlines', () => {
+  expect(absoluteTurnMsForClass('fast')).toBe(300_000);
+  expect(absoluteTurnMsForClass('agentic')).toBe(1_200_000);
 });
 
 it('rejects a dispatch with a mismatched lane and class', () => {
@@ -283,10 +282,12 @@ import {
 const plain = (
   overrides: Partial<InteractiveClassificationInput> = {}
 ): InteractiveClassificationInput => ({
-  model: 'composer-2',
   effort: 'low',
   skillPath: null,
-  capabilities: ['plain-chat'],
+  capabilityMetadata: {
+    status: 'known',
+    capabilities: ['plain-chat'],
+  },
   ...overrides,
 });
 
@@ -294,27 +295,54 @@ it('keeps a registered low-effort plain turn fast', () => {
   expect(classifyInteractiveTurn(plain()).interactiveClass).toBe('fast');
 });
 
+const requiring = (
+  capability: Exclude<InteractiveCapability, 'plain-chat'>
+): Partial<InteractiveClassificationInput> => ({
+  capabilityMetadata: {
+    status: 'known',
+    capabilities: ['plain-chat', capability],
+  },
+});
+
 it.each([
   ['high effort', { effort: 'high' }],
-  ['workspace', { capabilities: ['workspace'] }],
-  ['attachments', { capabilities: ['attachments'] }],
-  ['ado', { capabilities: ['ado'] }],
-  ['mcp', { capabilities: ['mcp'] }],
-  ['tool heavy', { capabilities: ['tool-heavy'] }],
+  ['workspace', requiring('workspace')],
+  ['attachments', requiring('attachments')],
+  ['ado', requiring('ado')],
+  ['mcp', requiring('mcp')],
+  ['tool heavy', requiring('tool-heavy')],
 ] as const)('upgrades %s and never downgrades it', (_name, override) => {
   expect(classifyInteractiveTurn(plain(override)).interactiveClass).toBe(
     'agentic'
   );
 });
 
-it('defaults unknown model or skill metadata to agentic', () => {
+it.each(['unknown', 'conflicting', 'uncertain'] as const)(
+  'defaults %s capability metadata to agentic',
+  (status) => {
+    expect(
+      classifyInteractiveTurn(plain({ capabilityMetadata: { status } }))
+        .interactiveClass
+    ).toBe('agentic');
+  }
+);
+
+it('defaults an unknown skill to agentic', () => {
   expect(
-    classifyInteractiveTurn(plain({ model: 'future-model' })).interactiveClass
+    classifyInteractiveTurn(
+      plain({
+        skillPath: '/unknown/SKILL.md',
+        capabilityMetadata: { status: 'unknown' },
+      })
+    ).interactiveClass
   ).toBe('agentic');
-  expect(
-    classifyInteractiveTurn(plain({ skillPath: '/unknown/SKILL.md' }))
-      .interactiveClass
-  ).toBe('agentic');
+});
+
+it('ignores model when callers carry it beside classification input', () => {
+  const first = { ...plain(), model: 'model-a' };
+  const second = { ...plain(), model: 'model-b' };
+  expect(classifyInteractiveTurn(first).interactiveClass).toBe('fast');
+  expect(classifyInteractiveTurn(second).interactiveClass).toBe('fast');
 });
 ```
 
@@ -345,26 +373,14 @@ export const INTERACTIVE_CAPABILITIES = [
   'tool-heavy',
 ] as const;
 
-export function deadlinePolicyFor(
+export function absoluteTurnMsForClass(
   interactiveClass: InteractiveClass
-): InteractiveDeadlinePolicy {
+): 300_000 | 1_200_000 {
   switch (interactiveClass) {
     case 'fast':
-      return {
-        absoluteTurnMs: 300_000,
-        repositoryPreparationMs: null,
-        firstEventWarmMs: 15_000,
-        firstEventColdMs: 30_000,
-        toolCallMs: 60_000,
-      };
+      return 300_000;
     case 'agentic':
-      return {
-        absoluteTurnMs: 1_200_000,
-        repositoryPreparationMs: 300_000,
-        firstEventWarmMs: 30_000,
-        firstEventColdMs: 30_000,
-        toolCallMs: 90_000,
-      };
+      return 1_200_000;
     default: {
       const unhandled: never = interactiveClass;
       throw new Error(`Unsupported interactive class: ${String(unhandled)}`);
@@ -376,7 +392,9 @@ export function deadlinePolicyFor(
 Define every interface exactly as written in the design. Type guards must
 validate ISO timestamps, UUID-like nonempty identifiers, matching
 `interactiveClass`/`workloadLane`, the fixed transport/kind/capacity class,
-Blob refs, allowed MCP discriminants, and exact deadline values.
+Blob refs, allowed MCP discriminants, exact absolute deadlines, positive finite
+resolved first-event/tool values, and positive finite repository-preparation
+values when present.
 
 Add `dapr-actor-v2` to `AI_RUN_TRANSPORT_VERSIONS` and add
 `hard_timeout`, `tool_timeout`, `worker_start_failed`, and
@@ -401,45 +419,50 @@ offset/snapshot fields on `SseTokenEvent`.
 
 - [ ] **Step 6: Implement deterministic classifier metadata**
 
-Use these exact registered model defaults:
+Do not create or read model classification metadata. Register normalized skill
+markers to capability metadata:
 
 ```typescript
-const MODEL_CLASS: Readonly<Record<string, InteractiveClass>> = {
-  'composer-2': 'fast',
-  'claude-sonnet-4-6': 'fast',
-  'gpt-5.5': 'fast',
-  'gemini-3.1-pro': 'fast',
-  'claude-opus-4-6': 'agentic',
-};
-```
-
-Register these normalized skill markers as agentic:
-
-```typescript
-const AGENTIC_SKILL_MARKERS = [
-  'app-knowledge',
-  'daily-standup',
-  'grill-with-docs',
-  'grill-design',
-  'adr-interview',
-  'adr-finalize',
-  'to-prd',
-  'prd-spec-review',
-  'prd-design-spec',
-  'design-spec-review',
-  'create-test-case',
-  'design-module-scoping',
-  'walkthrough-',
-  'k6-load-test-generation',
-  'feature-request-analysis',
-  'issue-analysis',
-  'technical-analysis',
+const SKILL_CAPABILITY_RULES = [
+  {
+    markers: [
+      'app-knowledge',
+      'grill-with-docs',
+      'grill-design',
+      'design-module-scoping',
+      'walkthrough-',
+      'k6-load-test-generation',
+      'feature-request-analysis',
+      'issue-analysis',
+      'technical-analysis',
+    ],
+    capabilities: ['plain-chat', 'workspace', 'tool-heavy'],
+  },
+  {
+    markers: ['daily-standup'],
+    capabilities: ['plain-chat', 'ado', 'mcp', 'tool-heavy'],
+  },
+  {
+    markers: [
+      'adr-interview',
+      'adr-finalize',
+      'to-prd',
+      'prd-spec-review',
+      'prd-design-spec',
+      'design-spec-review',
+      'create-test-case',
+    ],
+    capabilities: ['plain-chat', 'workspace', 'mcp', 'tool-heavy'],
+  },
 ] as const;
 ```
 
-No skill means “plain chat” and starts from the model default. A nonempty skill
-path matching no registered marker is unknown and therefore agentic. Apply
-`high` effort and the five expensive capabilities as one-way upgrades. Return:
+A turn with no skill has known `['plain-chat']` metadata unless attachment,
+ADO, MCP, workspace, or tool requirements add capabilities. A nonempty skill
+path matching no registered rule has unknown metadata and is agentic. Known
+metadata is fast only when the normalized set is exactly plain chat and effort
+is not high. Unknown/conflicting metadata, high effort, or any expensive
+capability is agentic. Model is never read. Return:
 
 ```typescript
 export type InteractiveClassification = Readonly<{
@@ -466,6 +489,7 @@ expect(sql).toContain('uq_agent_runs_client_turn');
 expect(sql).toContain('uq_agent_runs_interactive_active_thread');
 expect(sql).toContain('idx_agent_runs_interactive_user_active');
 expect(sql).toContain('idx_ai_run_outbox_interactive_due');
+expect(sql).toContain('idx_ai_run_outbox_interactive_class_due');
 expect(sql).toContain('Cannot create uq_agent_runs_interactive_active_thread');
 expect(sql).toContain('Cannot remove durable interactive turn schema');
 ```
@@ -495,7 +519,10 @@ The up migration must:
 4. Add the class, lowercase 64-hex hash, and `dapr-actor-v2` required-field
    checks.
 5. Abort if any thread has multiple nonterminal interactive rows.
-6. Create the four indexes named in the design.
+6. Create the five indexes named in the design. The two interactive outbox
+   indexes order by `(created_at, id)` globally and by
+   `(interactiveClass, created_at, id)` per class; neither uses model or sorts
+   by `available_at`.
 
 The down migration must run this precondition before dropping anything:
 
@@ -569,6 +596,7 @@ git commit -m "feat: define durable interactive turn contracts"
 
 - Create: `src/server/services/interactiveAttachmentStore.ts`
 - Create: `src/server/services/interactiveToolGrantCrypto.ts`
+- Create: `src/server/services/interactiveDeadlinePolicy.ts`
 - Create: `src/server/services/durableInteractiveTurnRepository.ts`
 - Create: `src/server/services/durableInteractiveTurnService.ts`
 - Modify: `src/server/services/interactiveWorkflowRouter.ts`
@@ -577,6 +605,7 @@ git commit -m "feat: define durable interactive turn contracts"
 - Modify: `src/server/routes/chat.ts`
 - Test: `src/server/__tests__/interactiveAttachmentStore.test.ts`
 - Test: `src/server/__tests__/interactiveToolGrantCrypto.test.ts`
+- Test: `src/server/__tests__/interactiveDeadlinePolicy.test.ts`
 - Test: `src/server/__tests__/durableInteractiveTurnRepository.test.ts`
 - Test: `src/server/__tests__/interactiveWorkflowRouter.test.ts`
 - Test: `src/server/__tests__/chatRoutes.test.ts`
@@ -590,6 +619,8 @@ git commit -m "feat: define durable interactive turn contracts"
   `createInteractiveAttachmentStore`,
   `encryptInteractiveToolGrant`,
   `decryptInteractiveToolGrant`,
+  `resolveInteractiveDeadlinePolicy`,
+  `clampInteractiveDeadlinePolicy`,
   `DurableInteractiveTurnRepository.admit`,
   `createDurableInteractiveTurnService().admit`,
   a unified `sendMessage` wrapper for HTTP and internal callers, and canonical
@@ -627,6 +658,12 @@ export type InteractiveMessageSubmission =
       route: 'durable';
       response: InteractiveTurnAcceptedResponse;
     }>;
+
+export type EffectiveInteractiveDeadlines = Readonly<{
+  repositoryPreparationMs: number | null;
+  firstEventMs: number;
+  toolCallMs: number;
+}>;
 
 export type InteractiveSendOptions = Readonly<{
   hidden?: boolean;
@@ -692,6 +729,40 @@ it('does not insert a second bubble for a duplicate turn', async () => {
     )
   ).toHaveLength(1);
 });
+
+it('freezes existing configured deadlines without class or model constants', () => {
+  const policy = resolveInteractiveDeadlinePolicy(
+    {
+      interactiveClass: 'agentic',
+      requiresRepositoryPreparation: true,
+    },
+    {
+      resolveFirstEventMs: () => 47_001,
+      resolveToolCallMs: () => 63_002,
+      resolveRepositoryPreparationMs: () => 119_003,
+    }
+  );
+  expect(policy).toEqual({
+    absoluteTurnMs: 1_200_000,
+    repositoryPreparationMs: 119_003,
+    firstEventMs: 47_001,
+    toolCallMs: 63_002,
+  });
+});
+
+it('clamps every effective sub-deadline to remaining absolute time', () => {
+  const resolved = {
+    absoluteTurnMs: 1_200_000 as const,
+    repositoryPreparationMs: 119_003,
+    firstEventMs: 47_001,
+    toolCallMs: 63_002,
+  };
+  expect(clampInteractiveDeadlinePolicy(resolved, 9_000)).toEqual({
+    repositoryPreparationMs: 9_000,
+    firstEventMs: 9_000,
+    toolCallMs: 9_000,
+  });
+});
 ```
 
 - [ ] **Step 2: Run the tests and verify red**
@@ -699,10 +770,10 @@ it('does not insert a second bubble for a duplicate turn', async () => {
 Run:
 
 ```bash
-npx jest src/server/__tests__/interactiveAttachmentStore.test.ts src/server/__tests__/interactiveToolGrantCrypto.test.ts src/server/__tests__/durableInteractiveTurnRepository.test.ts --runInBand
+npx jest src/server/__tests__/interactiveAttachmentStore.test.ts src/server/__tests__/interactiveToolGrantCrypto.test.ts src/server/__tests__/interactiveDeadlinePolicy.test.ts src/server/__tests__/durableInteractiveTurnRepository.test.ts --runInBand
 ```
 
-Expected: FAIL because the three implementation modules are absent.
+Expected: FAIL because the four implementation modules are absent.
 
 - [ ] **Step 3: Implement immutable attachment upload**
 
@@ -742,7 +813,28 @@ and GCM tag. A missing secret returns
 Write tests proving ciphertext does not contain the token, an exact round trip
 works, an expired grant fails, and a changed IV/ciphertext/tag each fail.
 
-- [ ] **Step 5: Implement the sole atomic writer**
+- [ ] **Step 5: Resolve existing deadline policy**
+
+`resolveInteractiveDeadlinePolicy` receives class and
+`requiresRepositoryPreparation`; it reads:
+
+- `resolveAgentFirstEventTimeoutMs()`
+- `resolveAgentMcpToolTimeoutMs()`
+- an exported resolver for the existing
+  `GROUNDING_PREPARATION_TIMEOUT_MS` value/configuration source currently used
+  by `waitForReadyThreadGrounding`
+
+The new grounding resolver preserves the existing value/configuration source;
+it does not introduce a Task 7 duration. Validate every resolved value as a
+positive finite integer. Set only `absoluteTurnMs` from class. Set
+`repositoryPreparationMs` to null when repository materialization is not
+required. The resolver has no model parameter.
+
+`clampInteractiveDeadlinePolicy(policy, remainingAbsoluteMs)` returns each
+nonnull sub-deadline as `Math.min(resolved, remainingAbsoluteMs)` and rejects
+nonpositive remaining time. It adds no fallback.
+
+- [ ] **Step 6: Implement the sole atomic writer**
 
 Define:
 
@@ -786,21 +878,22 @@ application-clock deadline.
 Do not call `createDispatchedV2Run`: interactive admission must stay queued
 until the orchestrator owns capacity.
 
-- [ ] **Step 6: Implement turn preparation without model execution**
+- [ ] **Step 7: Implement turn preparation without model execution**
 
 `createDurableInteractiveTurnService` must:
 
 1. validate `turnId` as a UUID
-2. load the authoritative thread and registered skill/model metadata
-3. determine capability inputs without scanning prompt prose
+2. load the authoritative thread and registered skill/capability metadata
+3. classify from capability metadata and effort without reading model or
+   scanning prompt prose
 4. reject stdio MCP with the exact 422 code
 5. upload all attachments before the transaction
 6. resolve pinned grounding for a workspace-bound turn or return
    `INTERACTIVE_V2_GROUNDING_UNAVAILABLE`; freeze `grounding: null` for a
    plain-chat turn
-7. freeze visible transcript, current/recreation prompts, skill content/hash,
-   MCP descriptors, the encrypted run-bound tool grant, model, effort, and
-   deadlines
+7. resolve model separately as execution input, then freeze visible transcript,
+   current/recreation prompts, skill content/hash, MCP descriptors, the
+   encrypted run-bound tool grant, model, effort, and deadlines
 8. calculate canonical SHA-256 over normalized text/model/skill and ordered
    attachment IDs/hashes
 9. call repository `admit`
@@ -809,7 +902,7 @@ until the orchestrator owns capacity.
 It must not import `@cursor/sdk`, `interactiveCursorExecution`, `Agent`, or any
 model client.
 
-- [ ] **Step 7: Write canonical routing tests**
+- [ ] **Step 8: Write canonical routing tests**
 
 Add these cases to `interactiveWorkflowRouter.test.ts`:
 
@@ -836,7 +929,7 @@ it('never invokes current execution after the canonical flag is true', async () 
 });
 ```
 
-- [ ] **Step 8: Run routing tests and verify red**
+- [ ] **Step 9: Run routing tests and verify red**
 
 Run:
 
@@ -847,7 +940,7 @@ npx jest src/server/__tests__/interactiveWorkflowRouter.test.ts --runInBand
 Expected: FAIL because the router still evaluates `ai-runs-interactive` and
 routes admission failures in-process.
 
-- [ ] **Step 9: Add the cleanup-ready canonical split**
+- [ ] **Step 10: Add the cleanup-ready canonical split**
 
 Evaluate `ai-runs-v2-transport` first with feature-flag markers whose enabled
 branch is the winner. Put the complete current send behavior behind the
@@ -868,7 +961,7 @@ No module outside `chatAgentService.ts` may import `sendMessageLegacy`.
 Keep the current `tryDispatchInteractiveTurn` and `ai-runs-interactive` logic
 inside `sendMessageLegacy`. Do not remove it in Task 2.
 
-- [ ] **Step 10: Change the send route response boundary**
+- [ ] **Step 11: Change the send route response boundary**
 
 Use Task 1's optional `SendMessageRequest.turnId` for rollout compatibility and
 make the canonical enabled branch reject a missing/invalid value with 400. The
@@ -891,7 +984,7 @@ fire-and-forget behavior by calling unified `sendMessage` with
 pre-existing running-thread recovery check only to that legacy branch; the
 durable repository owns its own active-run check.
 
-- [ ] **Step 11: Prove transaction rollback and concurrent limits**
+- [ ] **Step 12: Prove transaction rollback and concurrent limits**
 
 The integration test must inject a failure after each of these statements:
 message, attachments, run, attempt, outbox, queued event, and thread update.
@@ -916,21 +1009,21 @@ npx jest --config jest.config.integration.js tests/integration/durable-interacti
 
 Expected: PASS.
 
-- [ ] **Step 12: Run Task 2 green checks**
+- [ ] **Step 13: Run Task 2 green checks**
 
 Run:
 
 ```bash
-npx jest src/server/__tests__/interactiveAttachmentStore.test.ts src/server/__tests__/interactiveToolGrantCrypto.test.ts src/server/__tests__/durableInteractiveTurnRepository.test.ts src/server/__tests__/interactiveWorkflowRouter.test.ts src/server/__tests__/chatRoutes.test.ts src/server/__tests__/chatAgentService.test.ts --runInBand
+npx jest src/server/__tests__/interactiveAttachmentStore.test.ts src/server/__tests__/interactiveToolGrantCrypto.test.ts src/server/__tests__/interactiveDeadlinePolicy.test.ts src/server/__tests__/durableInteractiveTurnRepository.test.ts src/server/__tests__/interactiveWorkflowRouter.test.ts src/server/__tests__/chatRoutes.test.ts src/server/__tests__/chatAgentService.test.ts --runInBand
 npm run build:server
 ```
 
 Expected: PASS with no canonical-enabled call to current execution.
 
-- [ ] **Step 13: Commit Task 2**
+- [ ] **Step 14: Commit Task 2**
 
 ```bash
-git add src/server/services/interactiveAttachmentStore.ts src/server/services/interactiveToolGrantCrypto.ts src/server/services/durableInteractiveTurnRepository.ts src/server/services/durableInteractiveTurnService.ts src/server/services/interactiveWorkflowRouter.ts src/server/services/chatAgentService.ts src/server/services/aiRunV2/outboxRepository.ts src/server/routes/chat.ts src/server/__tests__/interactiveAttachmentStore.test.ts src/server/__tests__/interactiveToolGrantCrypto.test.ts src/server/__tests__/durableInteractiveTurnRepository.test.ts src/server/__tests__/interactiveWorkflowRouter.test.ts src/server/__tests__/chatRoutes.test.ts tests/integration/durable-interactive-admission.integration.test.ts
+git add src/server/services/interactiveAttachmentStore.ts src/server/services/interactiveToolGrantCrypto.ts src/server/services/interactiveDeadlinePolicy.ts src/server/services/durableInteractiveTurnRepository.ts src/server/services/durableInteractiveTurnService.ts src/server/services/interactiveWorkflowRouter.ts src/server/services/chatAgentService.ts src/server/services/aiRunV2/outboxRepository.ts src/server/routes/chat.ts src/server/__tests__/interactiveAttachmentStore.test.ts src/server/__tests__/interactiveToolGrantCrypto.test.ts src/server/__tests__/interactiveDeadlinePolicy.test.ts src/server/__tests__/durableInteractiveTurnRepository.test.ts src/server/__tests__/interactiveWorkflowRouter.test.ts src/server/__tests__/chatRoutes.test.ts tests/integration/durable-interactive-admission.integration.test.ts
 git commit -m "feat: persist interactive turns atomically"
 ```
 
@@ -1000,7 +1093,61 @@ it('calls only the endpoint matching persisted class', async () => {
     expect.anything()
   );
 });
+
+it('selects the oldest shared-burst turn regardless of class or model', () => {
+  const first = candidates([
+    row('older', 'agentic', '2026-09-23T15:00:00.000Z', 'model-a'),
+    row('newer', 'fast', '2026-09-23T15:00:01.000Z', 'model-b'),
+  ]);
+  const changedModels = candidates([
+    row('older', 'agentic', '2026-09-23T15:00:00.000Z', 'model-z'),
+    row('newer', 'fast', '2026-09-23T15:00:01.000Z', 'model-a'),
+  ]);
+  expect(planIds(first, { fast: 2, agentic: 2 }, 1)).toEqual(['older']);
+  expect(planIds(changedModels, { fast: 2, agentic: 2 }, 1)).toEqual(['older']);
+});
+
+it('uses a released slot for the oldest floor-deficit class turn', () => {
+  const queued = candidates([
+    row('older-agentic', 'agentic', '2026-09-23T15:00:00.000Z'),
+    row('waiting-fast', 'fast', '2026-09-23T15:00:01.000Z'),
+  ]);
+  expect(planIds(queued, { fast: 0, agentic: 15 }, 1)).toEqual([
+    'waiting-fast',
+  ]);
+});
+
+it('protects the agentic floor symmetrically', () => {
+  const queued = candidates([
+    row('older-fast', 'fast', '2026-09-23T15:00:00.000Z'),
+    row('waiting-agentic', 'agentic', '2026-09-23T15:00:01.000Z'),
+  ]);
+  expect(planIds(queued, { fast: 15, agentic: 0 }, 1)).toEqual([
+    'waiting-agentic',
+  ]);
+});
+
+it('is work-conserving when the floor-deficit class has no queued turn', () => {
+  const queued = candidates([
+    row('agentic-only', 'agentic', '2026-09-23T15:00:00.000Z'),
+  ]);
+  expect(planIds(queued, { fast: 0, agentic: 15 }, 1)).toEqual([
+    'agentic-only',
+  ]);
+});
+
+it('breaks equal accepted timestamps by outbox id', () => {
+  const queued = candidates([
+    row('b', 'fast', '2026-09-23T15:00:00.000Z'),
+    row('a', 'agentic', '2026-09-23T15:00:00.000Z'),
+  ]);
+  expect(planIds(queued, { fast: 2, agentic: 2 }, 2)).toEqual(['a', 'b']);
+});
 ```
+
+The test-only `row` helper may accept a model to build a full frozen
+specification, but the `AdmissionCandidate` it returns must omit model. Assert
+`Object.hasOwn(candidate, 'model')` is false before planning.
 
 - [ ] **Step 2: Run focused tests and verify red**
 
@@ -1044,27 +1191,43 @@ Capacity evaluation order is:
 
 1. deny expired payload
 2. deny at total interactive 16
-3. allow a class below its floor
-4. allow either class in remaining shared burst
+3. calculate `availableSlots = 16 - totalInteractiveInFlight`
+4. while slots remain, select the oldest `(createdAt, outbox.id)` candidate
+   among classes below their two-slot floor and increment the planned class
+   count
+5. when no queued floor-deficit candidate remains, select the oldest remaining
+   candidate by `(createdAt, outbox.id)` regardless of class until capacity is
+   full
 
-Do not preempt or relabel a persisted class.
+If a below-floor class has no queued candidate, do not reserve an idle slot;
+shared work borrows it. Do not preempt or relabel running work. Do not read
+model from the specification, run snapshot, outbox, or candidate.
 
-- [ ] **Step 5: Add fair interactive outbox claiming**
+- [ ] **Step 5: Add FIFO interactive outbox claiming**
 
 Add:
 
 ```typescript
-claimInteractiveBatch(
-  perClassLimit: number,
+claimInteractiveCandidates(
+  globalLimit: 16,
+  perClassFloorLimit: 2,
   holderId: string,
   claimMs: number,
 ): Promise<OutboxRow[]>;
 ```
 
-Use `row_number() OVER (PARTITION BY payload->>'interactiveClass' ORDER BY
-available_at, created_at, id)` and select up to `perClassLimit` from each class.
-Order the claimed union by oldest due time. Rows below their two-slot floor are
-planned before rows that borrow shared burst.
+For unpublished due `interactive_dispatch` rows, union:
+
+- the oldest 16 globally by `(created_at, id)`
+- the oldest two fast rows by `(created_at, id)`
+- the oldest two agentic rows by `(created_at, id)`
+
+Deduplicate IDs, lock with `FOR UPDATE SKIP LOCKED`, and return the final set
+ordered only by `(created_at, id)`. `available_at <= now()` is an eligibility
+filter, never a sort key. This bounded window contains every row needed to fill
+the two floors and at most 16 available slots without allowing one class’s long
+queue to hide the other class’s floor candidates. Neither SQL nor returned
+`OutboxRow` reads or carries model.
 
 Add `releaseClaim(id, holderId, availableAt, detail)` for expected capacity
 deferral. It clears claim fields without incrementing a failure metric or
@@ -1221,6 +1384,7 @@ export type InteractiveActorBootstrap = Readonly<{
   attemptStatus: AiRunV2AttemptStatus;
   dispatchMessageId: string;
   absoluteDeadlineAt: string;
+  effectiveDeadlines: EffectiveInteractiveDeadlines;
   cursorAgentId: string | null;
   mcpServers: Readonly<Record<string, McpServerConfig>>;
 }>;
@@ -1399,11 +1563,24 @@ All six writes occur in one transaction.
 
 - [ ] **Step 8: Enforce all deadlines from bootstrap**
 
-Use one absolute `AbortController` timer ending at
-`absoluteDeadlineAt`. Agentic materialization is additionally raced against
-`repositoryPreparationMs`. Arm first-event immediately before `agent.send`,
-choosing warm/cold from acquisition mode. Arm each tool call with
-`toolCallMs`.
+At bootstrap, App Service calls `clampInteractiveDeadlinePolicy` with the
+persisted configured values and milliseconds remaining before
+`absoluteDeadlineAt`, then returns `effectiveDeadlines`. Use one absolute
+`AbortController` timer ending at `absoluteDeadlineAt`. Race materialization
+only when `repositoryPreparationMs` is nonnull. Arm the single resolved
+first-event deadline immediately before `agent.send` as
+`Math.min(effectiveDeadlines.firstEventMs, absoluteDeadlineAt - now)`;
+warm/cold acquisition does not choose a different value. Before every tool call, use
+`Math.min(effectiveDeadlines.toolCallMs, absoluteDeadlineAt - now)`.
+
+The actor rejects missing, nonpositive, or expired effective values. It never
+reads environment variables, imports App Service deadline resolvers, or fills
+in a duration.
+
+Tests inject non-round configured values, consume queue time before bootstrap,
+and assert every actor timer equals the clamped bootstrap value. A separate
+guard scans actor-host modules for the three App Service resolver names and the
+removed fixed constants.
 
 On expiry:
 
@@ -1697,6 +1874,7 @@ export type RetryDurableInteractiveRunInput = Readonly<{
   runId: string;
   userId: string;
   refreshedToolGrant: FrozenInteractiveToolGrant | null;
+  refreshedDeadlines: InteractiveDeadlinePolicy;
 }>;
 
 export interface DurableInteractiveTurnRepository {
@@ -1766,8 +1944,11 @@ Lock user, thread, run, and latest attempt. Require:
 
 The retry service resolves a fresh delegated grant from the authenticated
 request when the failed attempt’s specification allowed ADO operations. It
-clones the failed attempt’s specification, replacing only `toolGrant`, and
-passes that immutable value as the new attempt’s `spec_snapshot`.
+also resolves the current existing first-event/tool/repository-preparation
+configuration. It clones the failed attempt’s specification, replacing only
+`toolGrant` and `deadlines`; message, attachments, transcript, skill, model,
+class, and grounding stay frozen. It passes that immutable value as the new
+attempt’s `spec_snapshot`.
 
 Recheck per-user limits. Set a new `timeout_at` using the database clock plus
 the persisted class’s exact absolute duration. Insert attempt N+1 and
@@ -2014,7 +2195,7 @@ git commit -m "fix: remove enabled interactive execution fallback"
 - [ ] **Step 1: Run focused server suites**
 
 ```bash
-npx jest src/server/__tests__/durableInteractiveTurnTypes.test.ts src/server/__tests__/interactiveTurnClassifier.test.ts src/server/__tests__/durableInteractiveTurnsMigration.test.ts src/server/__tests__/interactiveAttachmentStore.test.ts src/server/__tests__/interactiveToolGrantCrypto.test.ts src/server/__tests__/durableInteractiveTurnRepository.test.ts src/server/__tests__/interactiveWorkflowRouter.test.ts src/server/__tests__/interactiveV2NoFallback.test.ts src/server/__tests__/interactiveDurableStreamBatcher.test.ts src/server/__tests__/interactiveLiveBus.test.ts src/server/__tests__/interactiveGatewayService.test.ts src/server/__tests__/interactiveCursorExecution.test.ts src/server/__tests__/interactiveSessionActor.test.ts src/server/__tests__/interactiveActorHostEntrypoint.test.ts src/server/__tests__/interactiveToolProxyToken.test.ts src/server/__tests__/interactiveToolProxyService.test.ts src/server/__tests__/interactiveArtifactApplier.test.ts src/server/__tests__/aiRunsInternalRoutes.test.ts src/server/__tests__/aiRunIngestService.test.ts src/server/__tests__/chatRoutes.test.ts src/server/__tests__/chatAgentService.test.ts src/server/__tests__/aiOrchestrator --runInBand
+npx jest src/server/__tests__/durableInteractiveTurnTypes.test.ts src/server/__tests__/interactiveTurnClassifier.test.ts src/server/__tests__/durableInteractiveTurnsMigration.test.ts src/server/__tests__/interactiveAttachmentStore.test.ts src/server/__tests__/interactiveToolGrantCrypto.test.ts src/server/__tests__/interactiveDeadlinePolicy.test.ts src/server/__tests__/durableInteractiveTurnRepository.test.ts src/server/__tests__/interactiveWorkflowRouter.test.ts src/server/__tests__/interactiveV2NoFallback.test.ts src/server/__tests__/interactiveDurableStreamBatcher.test.ts src/server/__tests__/interactiveLiveBus.test.ts src/server/__tests__/interactiveGatewayService.test.ts src/server/__tests__/interactiveCursorExecution.test.ts src/server/__tests__/interactiveSessionActor.test.ts src/server/__tests__/interactiveActorHostEntrypoint.test.ts src/server/__tests__/interactiveToolProxyToken.test.ts src/server/__tests__/interactiveToolProxyService.test.ts src/server/__tests__/interactiveArtifactApplier.test.ts src/server/__tests__/aiRunsInternalRoutes.test.ts src/server/__tests__/aiRunIngestService.test.ts src/server/__tests__/chatRoutes.test.ts src/server/__tests__/chatAgentService.test.ts src/server/__tests__/aiOrchestrator --runInBand
 ```
 
 Expected: PASS.
@@ -2054,6 +2235,7 @@ Run:
 
 ```bash
 rg -n "T[B]D|T[O]DO|implement[[:space:]]+later|fill[[:space:]]+in[[:space:]]+details|ai-runs-interactive-v2|servicebus.*interactive|in-process fallback" src docs/superpowers/specs/2026-09-23-durable-interactive-turns-design.md docs/superpowers/plans/2026-09-23-durable-interactive-turns.md
+rg -n "MODEL_CLAS[S]|model[[:space:]]+registr[y]|registered[[:space:]]+mode[l]|model[[:space:]]+defaul[t]|firstEventWarmM[s]|firstEventColdM[s]|15_00[0]|30_00[0]|60_00[0]|90_00[0]|repositoryPreparationMs:[[:space:]]*300_00[0]" docs/superpowers/specs/2026-09-23-durable-interactive-turns-design.md docs/superpowers/plans/2026-09-23-durable-interactive-turns.md
 rg -n "InteractiveClass|InteractiveDeadlinePolicy|DurableInteractiveTurnSpecification|InteractiveDispatchOutboxPayload|InteractiveTurnAcceptedResponse" src
 rg -n "switch \\(" src/shared/types/durableInteractiveTurn.ts src/server/services/interactiveTurnClassifier.ts src/server/services/aiOrchestrator src/server/services/interactiveActorHost
 ```
@@ -2063,6 +2245,9 @@ Expected:
 - no new Task 7 flag
 - no interactive Service Bus publisher
 - no enabled-path App Service model execution
+- no model field or registry in classifier/scheduler input
+- FIFO ordering is `(created_at, id)` and shared burst ignores class/model
+- no invented fixed sub-deadline remains
 - names exactly match Task 1 contracts
 - every relevant switch has a `never` branch
 - only legacy comments/tests mention in-process fallback
