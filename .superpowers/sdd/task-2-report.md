@@ -652,3 +652,128 @@ Insights warnings.
 ### Concerns
 
 None specific to these re-review findings.
+
+---
+
+## Idempotent reflection race remediation
+
+### Result
+
+- Status: `DONE`
+- Race-fix commit: `3cddfb92`
+  (`fix: ignore idempotent duplicate reflections`)
+- No push, cloud, infrastructure, deployment, or protected configuration
+  changes were made.
+
+### Fix
+
+The repository's transaction result remains useful for the persisted response,
+but it is no longer treated as permission to mutate process-local thread state
+when the result is idempotent.
+
+- Repository `idempotent` metadata now flows through the durable service and
+  canonical router as internal response metadata.
+- `reflectDurableAdmission` returns immediately for every idempotent duplicate,
+  before touching messages, status, active run, activity time, or subscribers.
+- The HTTP route continues to return only the public persisted response; it
+  omits both `idempotent` and thread-reflection metadata.
+- Fresh admissions still reflect immediately. The first same-process send
+  therefore adds its bubble/status once, while a repeated network send is a
+  process-local no-op.
+- The prior `active_run_id` ownership hint remains a second guard for fresh
+  non-idempotent reflection.
+
+### TDD red evidence
+
+Command:
+
+```text
+npx jest src/server/__tests__/chatAgentService.test.ts --runInBand -t "newer active run|ordinary network duplicate"
+```
+
+Before the fix:
+
+```text
+FAIL: 2 tests
+- a stale completed duplicate changed newer-active-run to idle/undefined
+- an ordinary queued network duplicate emitted another running status event
+```
+
+The race test constructs the duplicate result, then deterministically assigns
+`newer-active-run` before the mocked admission resolves to the wrapper. This
+models the exact transaction-return/reflection gap.
+
+### Verification
+
+Focused server admission/chat/router suite:
+
+```text
+Test Suites: 5 passed, 5 total
+Tests:       237 passed, 237 total
+Exit code: 0
+```
+
+Focused Home/Interview/ADR browser suite:
+
+```text
+Test Suites: 3 passed, 3 total
+Tests:       63 passed, 63 total
+Exit code: 0
+```
+
+PostgreSQL admission integration:
+
+```text
+Test Suites: 1 passed, 1 total
+Tests:       21 passed, 21 total
+Exit code: 0
+```
+
+Type-check/build:
+
+```text
+npm run build:server
+Exit code: 0
+
+npx tsc -p tsconfig.client.json --noEmit
+Exit code: 0
+
+npm run build:client
+Exit code: 0
+```
+
+Focused lint/diff:
+
+```text
+ESLint: 0 errors
+git diff --check: exit 0
+git diff --cached --check: exit 0
+```
+
+The touched large UI files retain existing lint warnings; no new lint error was
+introduced.
+
+### Race-fix files
+
+- `src/shared/types/durableInteractiveTurn.ts`
+- `src/server/services/durableInteractiveTurnService.ts`
+- `src/server/services/chatAgentService.ts`
+- `src/server/__tests__/durableInteractiveTurnRepository.test.ts`
+- `src/server/__tests__/chatAgentService.test.ts`
+- `.superpowers/sdd/task-2-report.md`
+
+### Final self-review
+
+- Confirmed idempotent duplicate reflection is unconditional no-op, so no
+  ownership decision can become stale between database commit and reflection.
+- Confirmed ordinary network duplication returns the persisted response while
+  adding no bubble and emitting no second status event.
+- Revalidated strict built-in/project skill precedence, stable browser turn
+  IDs, direct browser send coverage, and both restored legacy router
+  regressions.
+- Confirmed all scoped source/test files are committed and no unrelated
+  worktree file was staged.
+
+### Concerns
+
+None.
