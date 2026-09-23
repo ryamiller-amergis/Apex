@@ -4,7 +4,7 @@
 
 - Status: `DONE`
 - Branch: `tbi/infra-changes`
-- Implementation commit: (this commit)
+- Implementation commit: `038fd6716c5e315c1de8c15f620bf083ea45560e`
   (`feat: replay durable interactive token streams`)
 - No push, pull request, cloud operation, infrastructure change, deployment
   change, migration application, or protected configuration change was made.
