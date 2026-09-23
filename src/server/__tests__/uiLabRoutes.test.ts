@@ -227,7 +227,13 @@ describe('uiLab routes — project ui-lab enablement enforcement', () => {
         project: 'MaxView',
       } as any);
       mockUiLab.runGeneration.mockImplementation(
-        async (_id, onToken: (text: string, eventId?: string) => void) => {
+        async (
+          _id,
+          onToken: (text: string, eventId?: string) => void,
+          _userId,
+          options?: { onTransport?: (transport: 'v1' | 'v2') => void },
+        ) => {
+          options?.onTransport?.('v2');
           onToken('<html>', '3f44f6f1-ec42-4aa6-9df4-0d8ce8438491');
         },
       );
@@ -243,12 +249,16 @@ describe('uiLab routes — project ui-lab enablement enforcement', () => {
       expect(res.text).toContain(
         'data: {"type":"token","text":"<html>"}',
       );
+      expect(res.text).toContain(
+        'data: {"type":"transport","transport":"v2"}',
+      );
       expect(mockUiLab.runGeneration).toHaveBeenCalledWith(
         'd1',
         expect.any(Function),
         'user-1',
         {
           afterEventId: '3f44f6f1-ec42-4aa6-9df4-0d8ce8438490',
+          onTransport: expect.any(Function),
         },
       );
     });

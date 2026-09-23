@@ -22,7 +22,10 @@ jest.mock('../services/aiUsageService', () => ({
 
 import type { FinishedV2Attempt } from '../services/aiRunV2/finishedAttemptReader';
 import { ArtifactVerificationError } from '../services/aiRunV2/artifactReader';
-import { harvestFinishedV2UiLabDesigns } from '../services/uiLabV2Harvest';
+import {
+  harvestFinishedV2UiLabDesigns,
+  harvestUiLabV2Run,
+} from '../services/uiLabV2Harvest';
 
 const GENERATION_STARTED_AT = '2026-09-22T12:00:00.000Z';
 const MANIFEST_REF = {
@@ -187,5 +190,36 @@ describe('harvestFinishedV2UiLabDesigns', () => {
     expect(artifactReader.readManifest).not.toHaveBeenCalled();
     expect(mockUpdateSet).not.toHaveBeenCalled();
     expect(attempts.completeHarvest).toHaveBeenCalledWith('attempt-1');
+  });
+
+  it('loads the interactive design directly instead of scanning the fallback batch', async () => {
+    mockSelectLimit.mockResolvedValue([]);
+    const attempts = finishedAttempts(attempt());
+    const loadDesign = jest.fn().mockResolvedValue({
+      id: 'design-1',
+      title: 'Timecards',
+      prompt: 'Build a queue',
+      generationStartedAt: GENERATION_STARTED_AT,
+    });
+
+    await expect(
+      harvestUiLabV2Run(
+        {
+          designId: 'design-1',
+          runId: 'run-1',
+          generationStartedAt: GENERATION_STARTED_AT,
+        },
+        {
+          loadDesign,
+          finishedAttempts: attempts,
+          artifacts: artifacts() as never,
+        },
+      ),
+    ).resolves.toMatchObject({
+      status: 'settled',
+      outcome: 'ready',
+    });
+
+    expect(loadDesign).toHaveBeenCalledWith('design-1');
   });
 });

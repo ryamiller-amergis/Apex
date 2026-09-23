@@ -17,6 +17,7 @@ const DESIGN = {
 
 const mockSelectLimit = jest.fn();
 const mockUpdateReturning = jest.fn();
+const mockUpdateSet = jest.fn();
 
 jest.mock('../db/drizzle', () => ({
   db: {
@@ -26,7 +27,7 @@ jest.mock('../db/drizzle', () => ({
       limit: mockSelectLimit,
     })),
     update: jest.fn(() => ({
-      set: jest.fn().mockReturnThis(),
+      set: mockUpdateSet.mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       returning: mockUpdateReturning,
       then: (
@@ -102,6 +103,7 @@ jest.mock('../services/groupService', () => ({
 jest.mock('../services/uiLabShareRepository', () => ({}));
 
 import { runGeneration } from '../services/uiLabService';
+import { visualGenerationRunId } from '../services/aiRunV2/v2AdmissionService';
 
 describe('UI Lab V2 generation routing', () => {
   beforeEach(() => {
@@ -229,6 +231,12 @@ describe('UI Lab V2 generation routing', () => {
 
     await expect(run).rejects.toThrow('conflicted with run other-run');
     expect(generateUiLabDesign).not.toHaveBeenCalled();
+    expect(mockUpdateSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'generation_failed',
+        generationError: expect.stringContaining('other-run'),
+      }),
+    );
   });
 
   it('completes a reconnect after another listener already applied the result', async () => {
@@ -251,6 +259,39 @@ describe('UI Lab V2 generation routing', () => {
 
     expect(admitV2Run).not.toHaveBeenCalled();
     expect(observeV2Run).not.toHaveBeenCalled();
+    expect(generateUiLabDesign).not.toHaveBeenCalled();
+  });
+
+  it('canonicalizes the persisted generation timestamp before reconnect lookup', async () => {
+    mockSelectLimit.mockResolvedValueOnce([
+      {
+        ...DESIGN,
+        status: 'streaming',
+        updatedAt: '2026-09-22 12:01:00+00',
+      },
+    ]);
+    const reconcileV2Admission = jest.fn().mockResolvedValue('intended');
+    const observeV2Run = jest.fn().mockResolvedValue(undefined);
+
+    await runGeneration('design-1', jest.fn(), 'user-1', {
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      reconcileV2Admission,
+      observeV2Run,
+      admitV2Run: jest.fn(),
+    });
+
+    const canonical = '2026-09-22T12:01:00.000Z';
+    expect(reconcileV2Admission).toHaveBeenCalledWith({
+      runId: visualGenerationRunId(
+        'ui-lab-screen',
+        'design-1',
+        canonical,
+      ),
+      threadId: 'ui-lab:design-1',
+      subjectId: 'design-1',
+      generationStartedAt: canonical,
+    });
+    expect(observeV2Run).toHaveBeenCalledTimes(1);
     expect(generateUiLabDesign).not.toHaveBeenCalled();
   });
 });

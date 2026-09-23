@@ -119,7 +119,8 @@ export interface CreateUiLabShareRequest {
 }
 
 export interface UiLabStreamChunk {
-  type: 'token' | 'complete' | 'error';
+  type: 'transport' | 'token' | 'complete' | 'error';
+  transport?: 'v1' | 'v2';
   text?: string;
   error?: string;
 }

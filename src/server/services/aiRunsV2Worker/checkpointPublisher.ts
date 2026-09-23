@@ -51,6 +51,7 @@ export function createCheckpointPublisher(
   const now = deps.now ?? (() => new Date());
   const newEventId = deps.newEventId ?? randomUUID;
   let sequence = 0;
+  let sendChain: Promise<void> = Promise.resolve();
 
   function envelope(): Omit<AiRunV2Checkpoint, 'kind' | 'checkpointSequence'> {
     return {
@@ -65,7 +66,10 @@ export function createCheckpointPublisher(
   }
 
   async function publish(checkpoint: AiRunV2Checkpoint): Promise<void> {
-    await deps.send(checkpoint.eventId, checkpoint);
+    const current = sendChain.then(() =>
+      deps.send(checkpoint.eventId, checkpoint));
+    sendChain = current.catch(() => undefined);
+    await current;
   }
 
   return {

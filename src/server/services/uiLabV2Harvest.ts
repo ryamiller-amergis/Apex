@@ -21,12 +21,17 @@ import { UI_LAB_OUTPUT_PATH } from './aiRunV2/visualSpecificationBuilder';
 
 const HARVEST_BATCH_SIZE = 100;
 
-type WaitingUiLabDesign = Readonly<{
+export type UiLabHarvestDesign = Readonly<{
   id: string;
   title: string;
   prompt: string;
   generationStartedAt: string;
+  status?: string;
+  html?: string | null;
+  generationError?: string | null;
 }>;
+
+type WaitingUiLabDesign = UiLabHarvestDesign;
 
 type ReportedUsage = Readonly<{
   modelId: string;
@@ -44,6 +49,7 @@ export type UiLabHarvestDependencies = Readonly<{
   finishedAttempts?: FinishedAttemptReader;
   artifacts?: ArtifactReader;
   batchSize?: number;
+  loadDesign?: (designId: string) => Promise<UiLabHarvestDesign | null>;
 }>;
 
 export type UiLabRunHarvestResult =
@@ -323,6 +329,25 @@ async function waitingDesigns(
     .limit(limit);
 }
 
+async function loadUiLabDesignForHarvest(
+  designId: string,
+): Promise<UiLabHarvestDesign | null> {
+  const rows = await db
+    .select({
+      id: uiLabDesigns.id,
+      title: uiLabDesigns.title,
+      prompt: uiLabDesigns.prompt,
+      generationStartedAt: uiLabDesigns.updatedAt,
+      status: uiLabDesigns.status,
+      html: uiLabDesigns.html,
+      generationError: uiLabDesigns.generationError,
+    })
+    .from(uiLabDesigns)
+    .where(eq(uiLabDesigns.id, designId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 export async function harvestUiLabV2Run(
   input: Readonly<{
     designId: string;
@@ -331,9 +356,23 @@ export async function harvestUiLabV2Run(
   }>,
   dependencies: UiLabHarvestDependencies = {},
 ): Promise<UiLabRunHarvestResult> {
-  const waiting = (await waitingDesigns(dependencies.batchSize ?? HARVEST_BATCH_SIZE))
-    .find((design) => design.id === input.designId);
+  const waiting = await (
+    dependencies.loadDesign ?? loadUiLabDesignForHarvest
+  )(input.designId);
   if (!waiting) return { status: 'already_harvested' };
+  if (waiting.status === 'ready' && typeof waiting.html === 'string') {
+    return { status: 'settled', outcome: 'ready', html: waiting.html };
+  }
+  if (waiting.status === 'generation_failed') {
+    return {
+      status: 'settled',
+      outcome: 'failed',
+      error: waiting.generationError ?? 'Generation failed',
+    };
+  }
+  if (waiting.status && waiting.status !== 'streaming') {
+    return { status: 'already_harvested' };
+  }
   if (
     Date.parse(waiting.generationStartedAt)
     !== Date.parse(input.generationStartedAt)

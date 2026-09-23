@@ -39,4 +39,34 @@ describe('checkpointPublisher', () => {
       progress: { kind: 'text_delta', offset: 0, text: '<html>' },
     });
   });
+
+  it('serializes concurrent heartbeat and progress sends in sequence order', async () => {
+    let releaseFirst!: () => void;
+    const firstPending = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const sent: number[] = [];
+    const send = jest.fn(async (_messageId, body) => {
+      sent.push(body.checkpointSequence);
+      if (body.checkpointSequence === 1) await firstPending;
+    });
+    const publisher = createCheckpointPublisher({
+      target: {
+        runId: 'run-1',
+        attemptId: 'attempt-1',
+        attemptNumber: 1,
+        dispatchMessageId: 'dispatch-1',
+      },
+      send,
+    });
+
+    const progress = publisher.publishProgress('generation', 'running');
+    const heartbeat = publisher.publishHeartbeat();
+    await Promise.resolve();
+
+    expect(send).toHaveBeenCalledTimes(1);
+    releaseFirst();
+    await Promise.all([progress, heartbeat]);
+    expect(sent).toEqual([1, 2]);
+  });
 });

@@ -104,6 +104,7 @@ export type UiLabGenerationDependencies = Readonly<{
   now?: () => Date;
   resolveHardLimitMs?: () => number;
   afterEventId?: string;
+  onTransport?: (transport: 'v1' | 'v2') => void;
 }>;
 
 function toDesign(row: Record<string, unknown>): UiLabDesign {
@@ -439,6 +440,28 @@ async function runGenerationInProcess(input: {
   }
 }
 
+async function failClaimedUiLabGeneration(
+  designId: string,
+  generationStartedAt: string,
+  error: unknown,
+): Promise<void> {
+  const message = error instanceof Error ? error.message : String(error);
+  await db
+    .update(uiLabDesigns)
+    .set({
+      status: 'generation_failed',
+      generationError: message,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(
+      and(
+        eq(uiLabDesigns.id, designId),
+        eq(uiLabDesigns.status, 'streaming'),
+        eq(uiLabDesigns.updatedAt, generationStartedAt),
+      ),
+    );
+}
+
 async function runGenerationV2(input: {
   design: UiLabDesign;
   skillConfig: Awaited<ReturnType<typeof getSkillConfig>> | null;
@@ -447,6 +470,7 @@ async function runGenerationV2(input: {
   timeoutMs?: number;
   temperature?: number;
   onToken: (chunk: string, eventId?: string) => void;
+  onTransport?: (transport: 'v1' | 'v2') => void;
   userId?: string;
   dependencies: Required<Pick<
     UiLabGenerationDependencies,
@@ -461,7 +485,7 @@ async function runGenerationV2(input: {
   const threadId = visualRunThreadId('ui-lab-screen', design.id);
 
   if (design.status === 'streaming') {
-    const generationStartedAt = design.updatedAt;
+    const generationStartedAt = new Date(design.updatedAt).toISOString();
     const runId = visualGenerationRunId(
       'ui-lab-screen',
       design.id,
@@ -474,6 +498,7 @@ async function runGenerationV2(input: {
       generationStartedAt,
     });
     if (state !== 'intended') return false;
+    input.onTransport?.('v2');
     await dependencies.observeV2Run({
       designId: design.id,
       runId,
@@ -599,16 +624,32 @@ async function runGenerationV2(input: {
       }
     }
   } catch (error) {
-    const state = await dependencies.reconcileV2Admission(admissionIdentity);
+    let state: UiLabV2AdmissionState;
+    try {
+      state = await dependencies.reconcileV2Admission(admissionIdentity);
+    } catch {
+      await failClaimedUiLabGeneration(
+        design.id,
+        generationStartedAt,
+        error,
+      );
+      throw error;
+    }
     if (state === 'intended') {
       // The durable run won even though its admission response was ambiguous.
     } else if (state === 'absent' && !admissionResponseReceived) {
       return false;
     } else {
+      await failClaimedUiLabGeneration(
+        design.id,
+        generationStartedAt,
+        error,
+      );
       throw error;
     }
   }
 
+  input.onTransport?.('v2');
   await dependencies.observeV2Run({
     designId: design.id,
     runId,
@@ -669,6 +710,7 @@ export async function runGeneration(
       timeoutMs,
       temperature,
       onToken,
+      onTransport: dependencies.onTransport,
       userId,
       dependencies: {
         admitV2Run:
@@ -684,6 +726,7 @@ export async function runGeneration(
       },
     });
     if (!handled) {
+      dependencies.onTransport?.('v1');
       await runGenerationInProcess({
         design,
         skillConfig,
@@ -698,6 +741,7 @@ export async function runGeneration(
     // @feature-flag:ui-lab-v2-transport enabled-end
   } else {
     // @feature-flag:ui-lab-v2-transport disabled-start
+    dependencies.onTransport?.('v1');
     await runGenerationInProcess({
       design,
       skillConfig,

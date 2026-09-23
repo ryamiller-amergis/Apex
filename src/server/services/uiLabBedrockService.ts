@@ -10,6 +10,7 @@ import {
 import { getMaxviewColorTokens, getApexColorTokens } from './designTokensService';
 import { getFigmaReference } from './figmaReferenceService';
 import { recordAiUsage, computeCost } from './aiUsageService';
+import { normalizeGeneratedPrototypeHtml } from '../utils/htmlSanitizer';
 import type {
   VisualDesignReference,
   VisualModelSettings,
@@ -459,9 +460,5 @@ export async function editUiLabDesign(opts: UiLabEditOptions): Promise<string> {
 
 /** Strip markdown fences that models sometimes wrap their HTML output in */
 export function extractHtml(raw: string): string {
-  const stripped = raw
-    .replace(/^```html\s*/i, '')
-    .replace(/```\s*$/, '')
-    .trim();
-  return stripped.startsWith('<!DOCTYPE') || stripped.startsWith('<html') ? stripped : raw.trim();
+  return normalizeGeneratedPrototypeHtml(raw);
 }

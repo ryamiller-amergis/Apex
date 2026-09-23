@@ -256,6 +256,9 @@ router.get('/:id/stream', projectFromDesignId, requirePermission('ui-lab:manage'
       (req.user as any)?.profile?.oid as string | undefined,
       {
         afterEventId: req.get('Last-Event-ID')?.trim() || undefined,
+        onTransport: (transport) => {
+          send('transport', { transport });
+        },
       },
     );
     send('complete', {});

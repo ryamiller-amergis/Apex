@@ -121,11 +121,13 @@ jest.mock('../services/aiUsageService', () => ({
 
 import { buildUiLabVisualSpecification } from '../services/aiRunV2/visualSpecificationBuilder';
 import {
+  extractHtml,
   generateUiLabDesign,
   resolveUiLabVisualModel,
 } from '../services/uiLabBedrockService';
 import { createBedrockVisualClient } from '../services/aiRunsV2Worker/bedrockVisualClient';
 import { createVisualExecute } from '../services/aiRunsV2Worker/visualEntrypoint';
+import { normalizeGeneratedPrototypeHtml } from '../utils/htmlSanitizer';
 
 function checkpoints() {
   return {
@@ -278,5 +280,15 @@ describe('UI Lab Bedrock request parity', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it.each([
+    '```html\n<html>ready</html>\n```',
+    '```\n<html>ready</html>\n```',
+    '  <html>ready</html>  ',
+    'model refused',
+    '',
+  ])('normalizes the final persisted HTML identically for %j', (raw) => {
+    expect(extractHtml(raw)).toBe(normalizeGeneratedPrototypeHtml(raw));
   });
 });
