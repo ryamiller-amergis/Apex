@@ -34,6 +34,7 @@ Commits:
 - `637a63ef` — persist UI Lab output, usage, and harvest completion atomically.
 - `e8d05729` — freeze Bedrock region, enforce the V2 stream deadline, and align raw-response estimates.
 - `939dba34` — recover missing final snapshots on ready reconnect.
+- `295f8ebd` — assert prototype region propagation at admission.
 
 Resolved:
 - Dispatched attempts no longer consume capacity until their outbox command is
