@@ -611,11 +611,7 @@ export async function listApexWorkItems(filters: ApexWorkItemFilters): Promise<A
     .select()
     .from(apexWorkItems)
     .where(and(...conditions))
-    .orderBy(
-      sql`${apexWorkItems.priorityRank} asc nulls last`,
-      asc(apexWorkItems.status),
-      asc(apexWorkItems.position),
-    );
+    .orderBy(asc(apexWorkItems.status), asc(apexWorkItems.position));
 
   const items = await Promise.all(rows.map((r) => toApexWorkItem(r)));
   maybeNotifyDueSoon();

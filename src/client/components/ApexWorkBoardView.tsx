@@ -361,6 +361,10 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
   const deliveryTypesSelected =
     typeFilter.length === APEX_BOARD_CARD_TYPES.length
     && APEX_BOARD_CARD_TYPES.every((t) => typeFilter.includes(t));
+  const allTypesSelected =
+    typeFilter.length === APEX_WORK_ITEM_TYPES.length
+    && APEX_WORK_ITEM_TYPES.every((t) => typeFilter.includes(t));
+  const backlogTypeValue = deliveryTypesSelected ? 'delivery' : allTypesSelected ? 'all' : 'custom';
 
   const hasActiveFilters =
     (ownerFilter && ownerFilter !== currentUserId) ||
@@ -788,17 +792,43 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
             />
             <DataGridFilterSelect
               label="Type"
-              value={deliveryTypesSelected ? 'delivery' : 'all'}
-              onChange={(value) => setTypeFilter(
-                value === 'delivery' ? [...APEX_BOARD_CARD_TYPES] : [...APEX_WORK_ITEM_TYPES],
-              )}
+              value={backlogTypeValue}
+              onChange={(value) => {
+                if (value === 'delivery') setTypeFilter([...APEX_BOARD_CARD_TYPES]);
+                else if (value === 'all') setTypeFilter([...APEX_WORK_ITEM_TYPES]);
+              }}
               testId="work-board-backlog-type-filter"
               options={[
                 { label: 'Delivery', value: 'delivery' },
                 { label: 'All types', value: 'all' },
+                ...(backlogTypeValue === 'custom' ? [{ label: 'Custom types', value: 'custom' }] : []),
               ]}
               {...{ 'data-testid': 'work-board-backlog-type-filter' }}
             />
+            {facets && facets.epicTitles.length > 0 && (
+              <DataGridFilterSelect
+                label="Epic"
+                value={epicFilter}
+                onChange={(value) => { setEpicFilter(value); setFeatureFilter(''); }}
+                includeEmptyOption
+                emptyOptionLabel="All epics"
+                testId="work-board-filter-by-epic-select"
+                options={facets.epicTitles.map((epic) => ({ label: epic, value: epic }))}
+                {...{ 'data-testid': 'work-board-filter-by-epic-select' }}
+              />
+            )}
+            {facets && facets.featureTitles.length > 0 && (
+              <DataGridFilterSelect
+                label="Feature"
+                value={featureFilter}
+                onChange={setFeatureFilter}
+                includeEmptyOption
+                emptyOptionLabel="All features"
+                testId="work-board-filter-by-feature-select"
+                options={facets.featureTitles.map((feature) => ({ label: feature, value: feature }))}
+                {...{ 'data-testid': 'work-board-filter-by-feature-select' }}
+              />
+            )}
             <DataGridFilterSelect
               label="Release"
               value={releaseFilter}

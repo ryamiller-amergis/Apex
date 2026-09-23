@@ -278,4 +278,29 @@ describe('ApexWorkBoardView', () => {
     fireEvent.click(screen.getByTestId('work-board-view-backlog'));
     expect(screen.getAllByRole('option', { name: 'Apex' }).length).toBeGreaterThan(0);
   });
+
+  it('shows Custom types when the board type subset is neither delivery nor all', () => {
+    setup();
+    fireEvent.click(screen.getByTestId('work-board-filter-chip-Epic'));
+    fireEvent.click(screen.getByTestId('work-board-view-backlog'));
+    expect(screen.getByTestId('work-board-backlog-type-filter')).toHaveValue('custom');
+    fireEvent.change(screen.getByTestId('work-board-backlog-type-filter'), { target: { value: 'all' } });
+    expect(mockUseItems).toHaveBeenCalledWith(
+      expect.objectContaining({
+        types: expect.arrayContaining(['PBI', 'TBI', 'Bug', 'Epic', 'Feature']),
+      }),
+    );
+  });
+
+  it('keeps epic and feature filters visible on the backlog toolbar', () => {
+    setup();
+    fireEvent.change(screen.getByTestId('work-board-filter-by-epic-select'), { target: { value: 'Epic One' } });
+    fireEvent.change(screen.getByTestId('work-board-filter-by-feature-select'), { target: { value: 'Feature One' } });
+    fireEvent.click(screen.getByTestId('work-board-view-backlog'));
+    expect(screen.getByTestId('work-board-filter-by-epic-select')).toHaveValue('Epic One');
+    expect(screen.getByTestId('work-board-filter-by-feature-select')).toHaveValue('Feature One');
+    expect(mockUseItems).toHaveBeenCalledWith(
+      expect.objectContaining({ epicTitle: 'Epic One', featureTitle: 'Feature One' }),
+    );
+  });
 });
