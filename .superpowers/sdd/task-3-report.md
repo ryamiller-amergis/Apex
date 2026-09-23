@@ -221,3 +221,172 @@ public methods and the required green command explicitly runs those suites.
 ## Concerns
 
 None specific to Task 3.
+
+---
+
+## Review remediation
+
+### Result
+
+- Status: `DONE`
+- Review-fix commit: `97cb5f54`
+  (`fix: harden interactive orchestrator dispatch`)
+- No push, cloud operation, infrastructure change, deployment change,
+  migration, environment example, or protected configuration change was made.
+- Only Task 3 source and test paths were staged. Pre-existing worktree changes
+  remained unstaged.
+
+### Fixes
+
+#### Mixed capacity
+
+- Added a dedicated `interactiveClassInFlight` counter for direct Dapr fast and
+  agentic work. Service Bus `laneInFlight.fast/agentic` no longer changes the
+  Dapr 2/2 floors or direct ceiling.
+- Both transports still contribute to `cursorInFlight`.
+- Added one mutable capacity reservation shared by direct and background
+  planners for the whole leased drain cycle.
+- Direct floor planning runs first, then background planning uses the remaining
+  provider capacity. A cycle cannot reserve more than 20 Cursor slots.
+- Direct planning remains capped at 16, floor-aware, FIFO by
+  `(created_at, id)`, and model-independent.
+
+#### Deadline at invocation
+
+- The drainer reads the injected clock immediately before each direct row and
+  again immediately before HTTP.
+- Expired rows are fencedly terminalized without HTTP.
+- Direct calls now receive the absolute deadline and an `AbortSignal`; the
+  deadline is also forwarded in `x-apex-dispatch-deadline`.
+- Invocation races an absolute-deadline timer. At expiry it aborts fetch,
+  persists `hard_timeout`, durably discards the outbox row with
+  `deadline_expired`, releases the reservation, and continues to the next row.
+- The race bounds the row even if an injected fetch implementation ignores
+  abort.
+
+#### Same-lease refill
+
+- The drainer now reclaims bounded pages under the same distributed lease after
+  stale, invalid, missing, or terminal rows are removed.
+- The loop stops on no eligible rows, no progress, or the fixed eight-page
+  limit.
+- Seen outbox IDs prevent a broken repository fake or claim race from spinning
+  on the same row.
+- Background candidates remain claimed while direct stale windows refill, so a
+  valid floor-eligible direct turn gets the shared Cursor slot before
+  background planning.
+
+#### Invalid durability
+
+- Added `markDiscarded`, which terminally removes a row from eligibility while
+  preserving `last_error`; it does not use the successful publication path.
+- Malformed rows with a safe attempt/fence are fencedly failed as
+  `validation_failed`, an existing Task 1 category, with durable error/done
+  events.
+- Malformed rows without a safe identity retain `invalid_payload` on the
+  outbox row.
+- Missing attempts and stale fences retain `attempt_not_found` and
+  `fence_mismatch` respectively and never invoke either transport.
+- Valid terminal replays remain idempotent successful acknowledgements; they
+  do not emit another actor call or failure.
+
+### Strict TDD evidence
+
+Review regression command before fixes:
+
+```text
+npx jest src/server/__tests__/aiOrchestrator/providerGovernor.test.ts src/server/__tests__/aiOrchestrator/admissionController.test.ts src/server/__tests__/aiOrchestrator/utilizationReader.test.ts src/server/__tests__/aiOrchestrator/interactiveActorDispatchClient.test.ts src/server/__tests__/aiOrchestrator/outboxDrainer.test.ts src/server/__tests__/aiRunV2RunAttemptRepository.test.ts src/server/__tests__/aiRunV2OutboxRepository.test.ts --runInBand
+```
+
+Red output:
+
+```text
+FAIL: 7 test suites
+Tests: 27 failed, 53 passed
+Exit code: 1
+```
+
+The failures proved mixed transports shared lane counters instead of direct
+class counters, planners could independently over-reserve Cursor, fetch had no
+deadline signal, clock changes between rows were ignored, one page could hide
+valid work for 30 seconds, and invalid rows were marked as successful with
+their reason cleared.
+
+### Final verification
+
+Focused Task 3 suite:
+
+```text
+PASS: 7 test suites
+PASS: 80 tests
+Exit code: 0
+```
+
+Mixed orchestrator/V2 lifecycle suite:
+
+```text
+PASS: 5 test suites
+PASS: 72 tests
+Exit code: 0
+```
+
+The mixed suite covers consumers/reconciliation, V2 admission, completion
+convergence, V2 contracts, and the shared agent-run lifecycle.
+
+Server type-check:
+
+```text
+npm run build:server
+> tsc -p tsconfig.server.json
+Exit code: 0
+```
+
+Focused lint and diff:
+
+```text
+ESLint: 0 errors, 0 warnings
+git diff --check: exit 0
+git diff --cached --check: exit 0
+```
+
+Test output retains the existing unset `DATABASE_URL`, intentional lifecycle
+log, npm `devdir`, and ESLint legacy-configuration warnings.
+
+### Review-fix files
+
+- `src/server/services/aiOrchestrator/interactiveActorDispatchClient.ts`
+- `src/server/services/aiOrchestrator/types.ts`
+- `src/server/services/aiOrchestrator/providerGovernor.ts`
+- `src/server/services/aiOrchestrator/admissionController.ts`
+- `src/server/services/aiOrchestrator/outboxDrainer.ts`
+- `src/server/services/aiOrchestrator/utilizationReader.ts`
+- `src/server/services/aiRunV2/runAttemptRepository.ts`
+- `src/server/services/aiRunV2/outboxRepository.ts`
+- `src/server/__tests__/aiOrchestrator/interactiveActorDispatchClient.test.ts`
+- `src/server/__tests__/aiOrchestrator/providerGovernor.test.ts`
+- `src/server/__tests__/aiOrchestrator/admissionController.test.ts`
+- `src/server/__tests__/aiOrchestrator/outboxDrainer.test.ts`
+- `src/server/__tests__/aiOrchestrator/utilizationReader.test.ts`
+- `src/server/__tests__/aiRunV2RunAttemptRepository.test.ts`
+- `src/server/__tests__/aiRunV2OutboxRepository.test.ts`
+- `.superpowers/sdd/task-3-report.md`
+
+### Final self-review
+
+- Confirmed Service Bus fast/agentic rows affect global Cursor usage but never
+  Dapr floor counts.
+- Confirmed direct and background planning mutate the same reservation and
+  direct floor eligibility receives the first shared slot.
+- Confirmed every direct HTTP call receives the persisted class, deadline, and
+  abort signal; there is no App Service or cross-class endpoint fallback.
+- Confirmed timeout, invalid-payload, stale-fence, and missing-attempt rows
+  retain durable reasons and do not increment successful-publication metrics.
+- Confirmed bounded refill stays under the existing outbox lease and does not
+  wait for the 30-second safety sweep.
+- Confirmed no model reference exists in capacity, claim, FIFO, or endpoint
+  selection.
+- Confirmed no unrelated or protected file was staged.
+
+### Concerns
+
+None specific to these review findings.
