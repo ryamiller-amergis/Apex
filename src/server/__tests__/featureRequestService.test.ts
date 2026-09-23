@@ -63,6 +63,7 @@ jest.mock('../db/drizzle', () => {
 import {
   createFeatureRequest,
   listFeatureRequests,
+  listAssignedToUser,
   getFeatureRequest,
   updateFeatureRequest,
   rankFeatureRequests,
@@ -278,6 +279,108 @@ describe('listFeatureRequests', () => {
     const result = await listFeatureRequests('Apex');
 
     expect(result).toEqual([]);
+  });
+});
+
+// ── listAssignedToUser ────────────────────────────────────────────────────────
+
+/**
+ * Walks a Drizzle SQL expression tree and collects the referenced column names
+ * and bound parameter values, so tests can assert which filters were applied
+ * without a real database.
+ */
+function collectFilter(
+  node: unknown,
+  acc: { columns: string[]; params: unknown[] } = { columns: [], params: [] },
+): { columns: string[]; params: unknown[] } {
+  if (node === null || typeof node !== 'object') return acc;
+  if (Array.isArray(node)) {
+    for (const child of node) collectFilter(child, acc);
+    return acc;
+  }
+  const candidate = node as Record<string, unknown>;
+  if (Array.isArray(candidate.queryChunks)) {
+    return collectFilter(candidate.queryChunks, acc);
+  }
+  if (candidate.table && typeof candidate.name === 'string') {
+    acc.columns.push(candidate.name);
+    return acc;
+  }
+  if ('encoder' in candidate && 'value' in candidate) {
+    acc.params.push(candidate.value);
+    return acc;
+  }
+  return acc;
+}
+
+describe('listAssignedToUser', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  function mockAssignedQuery(rows: unknown[]) {
+    const limitMock = jest.fn().mockResolvedValue(rows);
+    const orderByMock = jest.fn().mockReturnValue({ limit: limitMock });
+    const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
+    const assigneeJoinMock = jest.fn().mockReturnValue({ where: whereMock });
+    const leftJoinMock = jest.fn().mockReturnValue({ leftJoin: assigneeJoinMock });
+    const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
+    mockDb.select.mockReturnValueOnce({ from: fromMock });
+    // loadLinkedAdrs only queries when there is at least one row to enrich.
+    if (rows.length > 0) {
+      mockDb.select.mockReturnValueOnce({
+        from: jest.fn().mockReturnValue({
+          innerJoin: jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue([]) }),
+        }),
+      });
+    }
+    return { whereMock, limitMock };
+  }
+
+  it('maps assigned rows into feature requests with the assignee attached', async () => {
+    mockAssignedQuery([
+      makeRow({
+        assignedToOid: 'user-2',
+        assigneeName: 'Bob',
+        assigneeEmail: 'bob@example.com',
+        status: 'planned',
+      }),
+    ]);
+
+    const result = await listAssignedToUser('Apex', 'user-2');
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      id: 'fr-1',
+      status: 'planned',
+      assignedToApex: false,
+      assignedTo: { oid: 'user-2', displayName: 'Bob', email: 'bob@example.com' },
+      linkedAdrs: [],
+    });
+  });
+
+  it('filters by project, assignee, non-Apex, and the open backlog statuses', async () => {
+    const { whereMock, limitMock } = mockAssignedQuery([]);
+
+    const result = await listAssignedToUser('Apex', 'user-2');
+
+    expect(result).toEqual([]);
+    const filter = collectFilter(whereMock.mock.calls[0][0]);
+    expect(filter.columns).toEqual(
+      expect.arrayContaining(['source_project', 'assigned_to_oid', 'assigned_to_apex', 'status']),
+    );
+    expect(filter.params).toEqual(
+      expect.arrayContaining([
+        'Apex',
+        'user-2',
+        false,
+        'new',
+        'under-review',
+        'in-interview',
+        'planned',
+      ]),
+    );
+    expect(filter.params).not.toEqual(expect.arrayContaining(['declined']));
+    expect(filter.params).not.toEqual(expect.arrayContaining(['done']));
+    expect(limitMock).toHaveBeenCalledWith(100);
   });
 });
 
@@ -497,7 +600,8 @@ describe('updateFeatureRequest', () => {
       expect.objectContaining({
         type: 'user-action',
         title: 'Work item assigned to you',
-        link: '/feature-requests?tab=feature&id=fr-1',
+        body: 'Reviewer assigned "Dark mode" to you',
+        link: '/my-work?section=backlog&itemId=fr-1',
       }),
     );
   });

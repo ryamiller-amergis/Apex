@@ -1,25 +1,47 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useApexFeatureContext } from '../hooks/useApexBacklog';
+import { useAppShell } from '../hooks/useAppShell';
 import type {
   ApexFeatureContextBacklogItem,
   ApexFeatureContextPrototype,
   BacklogFeatureItem,
 } from '../../shared/types/devWorkbench';
 import type { UiMock } from '../../shared/types/backlog';
+import type { FeatureRequest } from '../../shared/types/featureRequest';
 import {
   computeFeatureWorkStatus,
   formatMyWorkStatusLabel,
 } from '../../shared/utils/myWorkStatus';
 import { useActiveSessions } from '../hooks/useDevWorkbench';
+import {
+  isInterviewableWorkItemType,
+  toFeatureRequestInterviewPrefill,
+} from '../utils/featureRequestInterview';
 import { MarkdownWithMermaid } from './MarkdownWithMermaid';
 import { UiMockPreview } from './UiMockPreview';
 import styles from './FeatureContextModal.module.css';
 
-export interface FeatureContextModalProps {
+interface CommonFeatureContextModalProps {
   project: string;
-  feature: BacklogFeatureItem;
   onClose: () => void;
 }
+
+interface DevelopmentFeatureContextModalProps extends CommonFeatureContextModalProps {
+  viewMode?: 'development';
+  feature: BacklogFeatureItem;
+  intakeItem?: never;
+}
+
+interface IntakeFeatureContextModalProps extends CommonFeatureContextModalProps {
+  viewMode: 'intake';
+  intakeItem: FeatureRequest;
+  feature?: never;
+}
+
+export type FeatureContextModalProps =
+  | DevelopmentFeatureContextModalProps
+  | IntakeFeatureContextModalProps;
 
 type TabId = 'prd' | 'backlog' | 'design' | 'tech' | 'assumptions' | 'prototype';
 
@@ -115,7 +137,7 @@ const BacklogItemCard: React.FC<{
   );
 };
 
-export const FeatureContextModal: React.FC<FeatureContextModalProps> = ({
+const DevelopmentFeatureContextModal: React.FC<DevelopmentFeatureContextModalProps> = ({
   project,
   feature,
   onClose,
@@ -392,6 +414,186 @@ export const FeatureContextModal: React.FC<FeatureContextModalProps> = ({
       </div>
     </div>
   );
+};
+
+const formatIntakeLabel = (value: string) =>
+  value
+    .split('-')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+
+const IntakeFeatureContextModal: React.FC<IntakeFeatureContextModalProps> = ({
+  intakeItem,
+  onClose,
+}) => {
+  const navigate = useNavigate();
+  const { can, isInAnyGroup, permissionsLoaded } = useAppShell();
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
+  const titleId = useId();
+  const canStartInterview =
+    permissionsLoaded
+    && can('interviews:manage')
+    && isInAnyGroup(['BA', 'Manager', 'Product-Owner'])
+    && isInterviewableWorkItemType(intakeItem.type)
+    && !intakeItem.interviewId;
+  const canOpenInterview =
+    isInterviewableWorkItemType(intakeItem.type) && !!intakeItem.interviewId;
+
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    closeBtnRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previous?.focus?.();
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className={styles.overlay}
+      onClick={onClose}
+      {...{ 'data-testid': 'feature-context-modal-overlay' }}
+    >
+      <div
+        className={styles.modal}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onClick={(event) => event.stopPropagation()}
+        {...{ 'data-testid': 'feature-context-modal' }}
+      >
+        <header className={styles.header}>
+          <div className={styles['header-main']}>
+            <div className={styles['header-meta']}>
+              <span className={styles['feature-id']}>{formatIntakeLabel(intakeItem.type)}</span>
+              <span className={styles.badge}>{formatIntakeLabel(intakeItem.status)}</span>
+              {intakeItem.teamPriority && (
+                <span className={styles.badge}>{formatIntakeLabel(intakeItem.teamPriority)}</span>
+              )}
+            </div>
+            <h2 id={titleId} className={styles.title}>{intakeItem.title}</h2>
+            <p className={styles.subtitle}>Apex Backlog request</p>
+          </div>
+          <button
+            ref={closeBtnRef}
+            type="button"
+            className={styles['close-btn']}
+            onClick={onClose}
+            aria-label="Close"
+            {...{ 'data-testid': 'feature-context-close-btn' }}
+          >
+            Close
+          </button>
+        </header>
+
+        <div className={styles.body}>
+          <div
+            className={styles.tabs}
+            role="tablist"
+            aria-orientation="vertical"
+            aria-label="Feature context sections"
+            {...{ 'data-testid': 'feature-context-tabs' }}
+          >
+            <button
+              type="button"
+              role="tab"
+              id="feature-context-tab-request"
+              aria-selected="true"
+              aria-controls="feature-context-panel-request"
+              tabIndex={0}
+              className={`${styles.tab} ${styles['tab-active']}`}
+              {...{ 'data-testid': 'feature-context-tab-request' }}
+            >
+              <span className={styles['tab-label']}>Request</span>
+            </button>
+          </div>
+
+          <div
+            className={styles.panel}
+            role="tabpanel"
+            id="feature-context-panel-request"
+            aria-labelledby="feature-context-tab-request"
+            {...{ 'data-testid': 'feature-context-panel' }}
+          >
+            <div className={styles['intake-content']}>
+              <section className={styles['intake-section']}>
+                <h3>Request</h3>
+                <p>{intakeItem.request}</p>
+              </section>
+              {intakeItem.advantage && (
+                <section className={styles['intake-section']}>
+                  <h3>Advantage</h3>
+                  <p>{intakeItem.advantage}</p>
+                </section>
+              )}
+              <section className={styles['intake-section']}>
+                <h3>Submitted by</h3>
+                <p>{intakeItem.submitterName || intakeItem.submittedBy}</p>
+              </section>
+              <section className={styles['intake-section']}>
+                <h3>Linked ADRs</h3>
+                {intakeItem.linkedAdrs.length > 0 ? (
+                  <ul className={styles['intake-adrs']}>
+                    {intakeItem.linkedAdrs.map((adr) => <li key={adr.id}>{adr.title}</li>)}
+                  </ul>
+                ) : (
+                  <p>None</p>
+                )}
+              </section>
+              {intakeItem.type === 'issue' && (
+                <p className={styles['intake-helper']}>
+                  Issues are not interviewed from My Work.
+                </p>
+              )}
+              {(canStartInterview || canOpenInterview) && (
+                <div className={styles['intake-actions']}>
+                  {canOpenInterview ? (
+                    <button
+                      type="button"
+                      className={styles['interview-btn']}
+                      onClick={() => navigate(`/backlog/interview/${intakeItem.interviewId}`)}
+                      {...{ 'data-testid': 'feature-context-open-interview-btn' }}
+                    >
+                      Open Interview
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className={styles['interview-btn']}
+                      onClick={() => navigate('/backlog/interview/new', {
+                        state: {
+                          featureRequest: toFeatureRequestInterviewPrefill(intakeItem),
+                        },
+                      })}
+                      {...{ 'data-testid': 'feature-context-start-interview-btn' }}
+                    >
+                      Start Interview
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export const FeatureContextModal: React.FC<FeatureContextModalProps> = (props) => {
+  if (props.viewMode === 'intake') {
+    // data-testid-exempt — intake modal root sets feature-context-modal
+    return <IntakeFeatureContextModal {...props} />;
+  }
+  // data-testid-exempt — development modal root sets feature-context-modal
+  return <DevelopmentFeatureContextModal {...props} />;
 };
 
 export default FeatureContextModal;

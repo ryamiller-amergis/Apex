@@ -33,6 +33,49 @@ import { getSuperAdminEmails } from '../utils/superAdmin';
 
 const featureRequestAssignee = alias(appUsers, 'feature_request_assignee');
 
+/** Columns every list/detail read selects, shaped for `toFeatureRequest`. */
+const featureRequestColumns = {
+  id: featureRequests.id,
+  type: featureRequests.type,
+  title: featureRequests.title,
+  request: featureRequests.request,
+  advantage: featureRequests.advantage,
+  interviewId: featureRequests.interviewId,
+  submittedBy: featureRequests.submittedBy,
+  sourceProject: featureRequests.sourceProject,
+  assignedToOid: featureRequests.assignedToOid,
+  assignedToApex: featureRequests.assignedToApex,
+  status: featureRequests.status,
+  aiStatus: featureRequests.aiStatus,
+  aiPriority: featureRequests.aiPriority,
+  aiRisk: featureRequests.aiRisk,
+  aiRationale: featureRequests.aiRationale,
+  aiThreadId: featureRequests.aiThreadId,
+  teamPriority: featureRequests.teamPriority,
+  teamRisk: featureRequests.teamRisk,
+  rank: featureRequests.rank,
+  reviewedBy: featureRequests.reviewedBy,
+  createdAt: featureRequests.createdAt,
+  updatedAt: featureRequests.updatedAt,
+  submitterName: appUsers.displayName,
+  assigneeName: featureRequestAssignee.displayName,
+  assigneeEmail: featureRequestAssignee.email,
+};
+
+/**
+ * Statuses an assignee still has work to do on. `declined` and `done` are
+ * finished and never appear on My Work.
+ */
+const ASSIGNED_BACKLOG_STATUSES: FeatureRequestStatus[] = [
+  'new',
+  'under-review',
+  'in-interview',
+  'planned',
+];
+
+/** Upper bound on one user's assigned items in a project (no pagination in v1). */
+const ASSIGNED_BACKLOG_LIMIT = 100;
+
 // ── Row → shared type mapper ──────────────────────────────────────────────────
 
 interface FeatureRequestRow {
@@ -218,33 +261,7 @@ export async function createFeatureRequest(
 
 export async function listFeatureRequests(project: string): Promise<FeatureRequest[]> {
   const rows = await db
-    .select({
-      id: featureRequests.id,
-      type: featureRequests.type,
-      title: featureRequests.title,
-      request: featureRequests.request,
-      advantage: featureRequests.advantage,
-      interviewId: featureRequests.interviewId,
-      submittedBy: featureRequests.submittedBy,
-      sourceProject: featureRequests.sourceProject,
-      assignedToOid: featureRequests.assignedToOid,
-      assignedToApex: featureRequests.assignedToApex,
-      status: featureRequests.status,
-      aiStatus: featureRequests.aiStatus,
-      aiPriority: featureRequests.aiPriority,
-      aiRisk: featureRequests.aiRisk,
-      aiRationale: featureRequests.aiRationale,
-      aiThreadId: featureRequests.aiThreadId,
-      teamPriority: featureRequests.teamPriority,
-      teamRisk: featureRequests.teamRisk,
-      rank: featureRequests.rank,
-      reviewedBy: featureRequests.reviewedBy,
-      createdAt: featureRequests.createdAt,
-      updatedAt: featureRequests.updatedAt,
-      submitterName: appUsers.displayName,
-      assigneeName: featureRequestAssignee.displayName,
-      assigneeEmail: featureRequestAssignee.email,
-    })
+    .select(featureRequestColumns)
     .from(featureRequests)
     .leftJoin(appUsers, eq(featureRequests.submittedBy, appUsers.oid))
     .leftJoin(
@@ -258,37 +275,44 @@ export async function listFeatureRequests(project: string): Promise<FeatureReque
   return rows.map((row) => toFeatureRequest(row, linksByRequest.get(row.id) ?? []));
 }
 
+// ── listAssignedToUser ────────────────────────────────────────────────────────
+
+/**
+ * Apex Backlog items assigned to one person in one project — the My Work
+ * "Assigned Backlog" list. Self-only and project-only scoping live in the
+ * query, so a caller cannot widen the result by passing a different project
+ * or user than their own.
+ */
+export async function listAssignedToUser(
+  project: string,
+  userId: string,
+): Promise<FeatureRequest[]> {
+  const rows = await db
+    .select(featureRequestColumns)
+    .from(featureRequests)
+    .leftJoin(appUsers, eq(featureRequests.submittedBy, appUsers.oid))
+    .leftJoin(
+      featureRequestAssignee,
+      eq(featureRequests.assignedToOid, featureRequestAssignee.oid),
+    )
+    .where(and(
+      eq(featureRequests.sourceProject, project),
+      eq(featureRequests.assignedToOid, userId),
+      eq(featureRequests.assignedToApex, false),
+      inArray(featureRequests.status, ASSIGNED_BACKLOG_STATUSES),
+    ))
+    .orderBy(sql`${featureRequests.rank} NULLS LAST`, desc(featureRequests.createdAt))
+    .limit(ASSIGNED_BACKLOG_LIMIT);
+
+  const linksByRequest = await loadLinkedAdrs(rows.map((row) => row.id));
+  return rows.map((row) => toFeatureRequest(row, linksByRequest.get(row.id) ?? []));
+}
+
 // ── getFeatureRequest ─────────────────────────────────────────────────────────
 
 export async function getFeatureRequest(id: string): Promise<FeatureRequest | null> {
   const rows = await db
-    .select({
-      id: featureRequests.id,
-      type: featureRequests.type,
-      title: featureRequests.title,
-      request: featureRequests.request,
-      advantage: featureRequests.advantage,
-      interviewId: featureRequests.interviewId,
-      submittedBy: featureRequests.submittedBy,
-      sourceProject: featureRequests.sourceProject,
-      assignedToOid: featureRequests.assignedToOid,
-      assignedToApex: featureRequests.assignedToApex,
-      status: featureRequests.status,
-      aiStatus: featureRequests.aiStatus,
-      aiPriority: featureRequests.aiPriority,
-      aiRisk: featureRequests.aiRisk,
-      aiRationale: featureRequests.aiRationale,
-      aiThreadId: featureRequests.aiThreadId,
-      teamPriority: featureRequests.teamPriority,
-      teamRisk: featureRequests.teamRisk,
-      rank: featureRequests.rank,
-      reviewedBy: featureRequests.reviewedBy,
-      createdAt: featureRequests.createdAt,
-      updatedAt: featureRequests.updatedAt,
-      submitterName: appUsers.displayName,
-      assigneeName: featureRequestAssignee.displayName,
-      assigneeEmail: featureRequestAssignee.email,
-    })
+    .select(featureRequestColumns)
     .from(featureRequests)
     .leftJoin(appUsers, eq(featureRequests.submittedBy, appUsers.oid))
     .leftJoin(
@@ -375,7 +399,7 @@ export async function updateFeatureRequest(
       type: 'user-action',
       title: 'Work item assigned to you',
       body: `${actorName} assigned "${existing.title}" to you`,
-      link: `/feature-requests?tab=${existing.type}&id=${id}`,
+      link: `/my-work?section=backlog&itemId=${encodeURIComponent(id)}`,
     }).catch(() => {});
   }
 

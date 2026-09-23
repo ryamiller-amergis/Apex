@@ -1,6 +1,7 @@
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { DevWorkbenchView } from '../DevWorkbenchView';
+import type { FeatureRequest } from '../../../shared/types/featureRequest';
 
 const mockNavigate = jest.fn();
 const mockStartMutateAsync = jest.fn();
@@ -18,6 +19,7 @@ jest.mock('../../hooks/useAppShell', () => ({
 }));
 
 jest.mock('../../hooks/useDevWorkbench', () => ({
+  useAssignedBacklog: jest.fn(),
   useAssignedWorkItems: jest.fn(),
   useActiveSessions: jest.fn(),
   useStartDevSession: jest.fn(),
@@ -49,9 +51,14 @@ jest.mock('../StartLocalDevModal', () => ({
 
 jest.mock('../FeatureContextModal', () => ({
   __esModule: true,
-  default: ({ feature, onClose }: { feature: { featureId: string }; onClose: () => void }) => (
+  default: ({ feature, intakeItem, viewMode, onClose }: {
+    feature?: { featureId: string };
+    intakeItem?: { id: string };
+    viewMode?: string;
+    onClose: () => void;
+  }) => (
     <div data-testid="feature-context-modal">
-      <span>Context for {feature.featureId}</span>
+      <span>Context for {viewMode === 'intake' ? intakeItem?.id : feature?.featureId}</span>
       <button type="button" onClick={onClose}>Close Context</button>
     </div>
   ),
@@ -59,6 +66,7 @@ jest.mock('../FeatureContextModal', () => ({
 
 import { useAppShell } from '../../hooks/useAppShell';
 import {
+  useAssignedBacklog,
   useAssignedWorkItems,
   useActiveSessions,
   useStartDevSession,
@@ -70,6 +78,10 @@ import { useApexBacklogFeatures } from '../../hooks/useApexBacklog';
 import { useProjectMenuConfig } from '../../hooks/useProjectMenuConfig';
 import { useAssignedBoardItems } from '../../hooks/useApexWorkItems';
 import type { ActiveDevSession, ApexBacklogGroup } from '../../../shared/types/devWorkbench';
+
+afterEach(() => {
+  jest.restoreAllMocks();
+});
 
 const workItems = [
   {
@@ -91,9 +103,37 @@ const workItems = [
   },
 ];
 
-function renderView() {
+const assignedBacklogItems: FeatureRequest[] = [
+  {
+    id: 'fr-1',
+    type: 'feature',
+    title: 'Assigned intake feature',
+    request: 'A detailed request that belongs in the assigned backlog.',
+    advantage: 'Customer value',
+    interviewId: null,
+    submittedBy: 'user-1',
+    sourceProject: 'MaxView',
+    assignedTo: null,
+    assignedToApex: false,
+    status: 'new',
+    aiStatus: 'complete',
+    aiPriority: 'high',
+    aiRisk: 'low',
+    aiRationale: null,
+    aiThreadId: null,
+    teamPriority: 'critical',
+    teamRisk: null,
+    rank: null,
+    reviewedBy: null,
+    createdAt: '2026-09-01T00:00:00Z',
+    updatedAt: '2026-09-01T00:00:00Z',
+    linkedAdrs: [],
+  },
+];
+
+function renderView(initialEntry = '/my-work') {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <DevWorkbenchView />
     </MemoryRouter>,
   );
@@ -103,7 +143,18 @@ describe('DevWorkbenchView', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    (useAppShell as jest.Mock).mockReturnValue({ selectedProject: 'MaxView', isSuperAdmin: false });
+    (useAppShell as jest.Mock).mockReturnValue({
+      selectedProject: 'MaxView',
+      isSuperAdmin: false,
+      permissionsLoaded: true,
+      can: () => false,
+      isInAnyGroup: () => false,
+    });
+    (useAssignedBacklog as jest.Mock).mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+    });
     (useAssignedWorkItems as jest.Mock).mockReturnValue({
       data: workItems,
       isLoading: false,
@@ -266,7 +317,13 @@ describe('DevWorkbenchView', () => {
   });
 
   it('enables Start Development on any type for super admins (Bug in an allowed state)', () => {
-    (useAppShell as jest.Mock).mockReturnValue({ selectedProject: 'MaxView', isSuperAdmin: true });
+    (useAppShell as jest.Mock).mockReturnValue({
+      selectedProject: 'MaxView',
+      isSuperAdmin: true,
+      permissionsLoaded: true,
+      can: () => true,
+      isInAnyGroup: () => true,
+    });
     (useAssignedWorkItems as jest.Mock).mockReturnValue({
       data: [{
         id: 11, title: 'Admin bug', workItemType: 'Bug',
@@ -375,6 +432,14 @@ function mockApexWorkbenchHooks(project = 'Apex') {
   (useAppShell as jest.Mock).mockReturnValue({
     selectedProject: project,
     usesBoardWorkItems: project.toLowerCase() === 'apex',
+    permissionsLoaded: true,
+    can: () => false,
+    isInAnyGroup: () => false,
+  });
+  (useAssignedBacklog as jest.Mock).mockReturnValue({
+    data: [],
+    isLoading: false,
+    error: null,
   });
   (useProjectMenuConfig as jest.Mock).mockReturnValue({
     enabledViews: [],
@@ -900,6 +965,59 @@ describe('DevWorkbenchView — Apex backlog (Mark Complete)', () => {
     expect(screen.queryByRole('button', { name: /resume session/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /close session/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Start Development$/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('DevWorkbenchView — Assigned Backlog', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockApexWorkbenchHooks();
+    (useAssignedBacklog as jest.Mock).mockReturnValue({
+      data: assignedBacklogItems,
+      isLoading: false,
+      error: null,
+    });
+  });
+
+  it('renders Assigned Backlog first with item details and View Context', () => {
+    renderView();
+    const page = screen.getByTestId('my-work-page');
+    const sections = within(page).getAllByRole('region');
+
+    expect(sections[0]).toHaveAttribute('data-testid', 'my-work-assigned-backlog-section');
+    expect(screen.getByTestId('my-work-assigned-backlog-row-fr-1')).toHaveTextContent('Assigned intake feature');
+    expect(screen.getByTestId('my-work-assigned-backlog-row-fr-1')).toHaveTextContent(/critical/i);
+    fireEvent.click(screen.getByTestId('my-work-assigned-backlog-view-context-fr-1'));
+    expect(screen.getByText('Context for fr-1')).toBeInTheDocument();
+  });
+
+  it('always renders the exact Assigned Backlog empty copy', () => {
+    (useAssignedBacklog as jest.Mock).mockReturnValue({ data: [], isLoading: false, error: null });
+    renderView();
+    expect(screen.getByText('No Apex Backlog items assigned to you.')).toBeInTheDocument();
+  });
+
+  it('opens a matching deep-linked item and clears the query params', async () => {
+    const scrollIntoView = jest.fn();
+    const replaceState = jest.spyOn(window.history, 'replaceState');
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    renderView('/my-work?section=backlog&itemId=fr-1');
+
+    await waitFor(() => {
+      expect(screen.getByText('Context for fr-1')).toBeInTheDocument();
+      expect(scrollIntoView).toHaveBeenCalled();
+      expect(replaceState).toHaveBeenCalledWith(window.history.state, '', '/my-work');
+    });
+  });
+
+  it('shows a toast and clears params when a deep-linked item is missing', async () => {
+    const replaceState = jest.spyOn(window.history, 'replaceState');
+    renderView('/my-work?section=backlog&itemId=missing');
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/assigned backlog item is no longer available/i);
+      expect(replaceState).toHaveBeenCalledWith(window.history.state, '', '/my-work');
+    });
   });
 });
 
