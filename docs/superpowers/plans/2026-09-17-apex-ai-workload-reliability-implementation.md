@@ -460,9 +460,9 @@ in the running App Service imports):**
 ### Task 6: Build document and visual workers
 
 **Status:** Complete for this branch (code only). Document, design-prototype,
-and UI Lab generation execute through V2 behind default-off flags. Container
-App hosting, deploy wiring, Azure apply, and live smoke tests remain deferred
-to the end-of-code-track operations section.
+and UI Lab generation execute through V2 behind one default-off rollout flag.
+Container App hosting, deploy wiring, Azure apply, and live smoke tests remain
+deferred to the end-of-code-track operations section.
 
 **Files:**
 
@@ -504,10 +504,14 @@ to the end-of-code-track operations section.
 
 **Final verification evidence (2026-09-22, branch `tbi/infra-changes`):**
 
-- Task 6 matrix: 55 suites / 1,055 tests passed.
+- Task 6 matrix: 56 suites / 1,066 tests passed.
 - `npm run build:server` and the full client production build passed.
 - Worker import-graph guard remains green: document and visual workers import
   no database module.
+- One default-off `ai-runs-v2-transport` rollout flag gates every new Task 6
+  V2 admission: documents, design prototypes, and initial UI Lab generation.
+  The legacy `ai-runs-background` flag controls only the V1 document-worker
+  fallback while V2 is off.
 - Final whole-slice review approved after all findings were remediated.
 - Neither entrypoint is started from App Service `index.ts`; no Container App,
   deploy workflow, Terraform apply, or Azure resource was changed.
@@ -523,14 +527,15 @@ to the end-of-code-track operations section.
   Cursor workflows; visual runs execute Bedrock from the immutable visual
   specification.
 - [x] `backgroundWorkflowRouter.ts` chooses V2 behind `ai-runs-v2-transport`
-  (default off) inside the existing `ai-runs-background` enabled branch. An
-  unreadable V2 flag, a refused admission, or a thrown admission all keep the
-  proven path: the first two stay on V1, the last two recover in-process.
+  (default off), independently of `ai-runs-background`. When V2 is off or
+  unreadable, `ai-runs-background` alone chooses the existing V1 worker;
+  otherwise the unchanged in-process path runs. V2 admission never starts a
+  second transport, and ambiguous admission handling remains unchanged.
 - [x] Route initial design-prototype generation to the visual lane behind
   `ai-runs-v2-transport`, with per-prototype fallback to the unchanged
   in-process path.
-- [x] Route initial UI Lab generation behind the separate
-  `ui-lab-v2-transport` flag while regeneration and editing remain in process.
+- [x] Route initial UI Lab generation behind the same
+  `ai-runs-v2-transport` flag while regeneration and editing remain in process.
 
   **Decision (2026-09-21):** the owning service applies its own artifacts. The
   orchestrator finalizes the attempt and knows nothing about prototypes; each
@@ -646,10 +651,10 @@ to the end-of-code-track operations section.
   **UI Lab onto the visual lane — implemented 2026-09-22, pending final Task 6
   review.**
 
-  - Initial generation has its own cleanup-ready server flag,
-    `ui-lab-v2-transport`, default off. Regeneration and manual editing remain
-    in process. Ambiguous admission is reconciled by deterministic run,
-    thread, subject, and generation identity before V1 can start.
+  - Initial generation uses the Task 6 cleanup-ready server flag,
+    `ai-runs-v2-transport`, default off. Regeneration and manual editing remain
+    in process. Ambiguous admission is reconciled by deterministic run, thread,
+    subject, and generation identity before the in-process path can start.
   - App Service resolves the skill, catalog, screen inventory, route source,
     tokens, image blocks, model, temperature, timeout, and retry policy into
     the immutable `ui-lab-screen` specification. The worker remains

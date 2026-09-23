@@ -747,50 +747,59 @@ export function createBackgroundWorkflowRouter(
     };
   };
 
+  const routeLegacyOrInProcess = async (
+    input: BackgroundWorkflowRouteInput,
+  ): Promise<WorkflowRouteDecision> => {
+    let enabled = false;
+    let evaluationReason = 'flag-disabled';
+    try {
+      enabled = await evaluateFlag(BACKGROUND_WORKFLOW_FLAG, {
+        userId: input.userId,
+        project: input.destinationRun.project,
+        caller: input.workflowClass,
+      });
+    } catch {
+      evaluationReason = 'flag-evaluation-error';
+    }
+
+    // Retain enabled after two stable sprints at full rollout.
+    // @feature-flag:ai-runs-background start winner=enabled
+    if (!enabled) {
+      // @feature-flag:ai-runs-background disabled-start
+      routeDecision(input, 'in-process', evaluationReason);
+      let execution: Promise<void>;
+      try {
+        execution = Promise.resolve(input.runInProcess());
+      } catch {
+        execution = Promise.reject(new Error('In-process workflow failed'));
+      }
+      void execution.catch(async () => {
+        await Promise.resolve(
+          input.reportRecoverablePreparationFailure({
+            reason: 'materialization-unavailable',
+            workflowClass: input.workflowClass,
+            project: input.destinationRun.project,
+            runId: input.destinationRun.runId,
+          }),
+        ).catch(() => undefined);
+      });
+      const decision: WorkflowRouteDecision = {
+        route: 'in-process',
+        reason: 'flag-disabled',
+      };
+      // @feature-flag:ai-runs-background disabled-end
+      return decision;
+    }
+
+    // @feature-flag:ai-runs-background enabled-start
+    const decision = await routeWorker(input, false);
+    // @feature-flag:ai-runs-background enabled-end
+    // @feature-flag:ai-runs-background end
+    return decision;
+  };
+
   return {
     async route(input) {
-      let enabled = false;
-      let evaluationReason = 'flag-disabled';
-      try {
-        enabled = await evaluateFlag(BACKGROUND_WORKFLOW_FLAG, {
-          userId: input.userId,
-          project: input.destinationRun.project,
-          caller: input.workflowClass,
-        });
-      } catch {
-        evaluationReason = 'flag-evaluation-error';
-      }
-
-      // Retain enabled after two stable sprints at full rollout.
-      // @feature-flag:ai-runs-background start winner=enabled
-      if (!enabled) {
-        // @feature-flag:ai-runs-background disabled-start
-        routeDecision(input, 'in-process', evaluationReason);
-        let execution: Promise<void>;
-        try {
-          execution = Promise.resolve(input.runInProcess());
-        } catch {
-          execution = Promise.reject(new Error('In-process workflow failed'));
-        }
-        void execution.catch(async () => {
-          await Promise.resolve(
-            input.reportRecoverablePreparationFailure({
-              reason: 'materialization-unavailable',
-              workflowClass: input.workflowClass,
-              project: input.destinationRun.project,
-              runId: input.destinationRun.runId,
-            }),
-          ).catch(() => undefined);
-        });
-        const decision: WorkflowRouteDecision = {
-          route: 'in-process',
-          reason: 'flag-disabled',
-        };
-        // @feature-flag:ai-runs-background disabled-end
-        return decision;
-      }
-
-      // @feature-flag:ai-runs-background enabled-start
       let useV2Transport = false;
       try {
         useV2Transport = await evaluateFlag(V2_TRANSPORT_FLAG, {
@@ -799,12 +808,23 @@ export function createBackgroundWorkflowRouter(
           caller: input.workflowClass,
         });
       } catch {
-        // An unreadable V2 flag keeps the proven V1 transport.
+        // An unreadable V2 flag keeps the proven V1 or in-process path.
         useV2Transport = false;
       }
-      const decision = await routeWorker(input, useV2Transport);
-      // @feature-flag:ai-runs-background enabled-end
-      // @feature-flag:ai-runs-background end
+
+      let decision: WorkflowRouteDecision;
+      // Retain enabled once V2 carries production document traffic.
+      // @feature-flag:ai-runs-v2-transport start winner=enabled
+      if (useV2Transport) {
+        // @feature-flag:ai-runs-v2-transport enabled-start
+        decision = await routeWorker(input, true);
+        // @feature-flag:ai-runs-v2-transport enabled-end
+      } else {
+        // @feature-flag:ai-runs-v2-transport disabled-start
+        decision = await routeLegacyOrInProcess(input);
+        // @feature-flag:ai-runs-v2-transport disabled-end
+      }
+      // @feature-flag:ai-runs-v2-transport end
       return decision;
     },
   };

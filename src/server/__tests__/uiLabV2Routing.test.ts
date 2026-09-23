@@ -112,7 +112,7 @@ describe('UI Lab V2 generation routing', () => {
     mockUpdateReturning.mockResolvedValue([{ id: DESIGN.id }]);
   });
 
-  it('admits initial generation behind its own flag and never starts V1', async () => {
+  it('admits initial generation behind the canonical V2 flag and never starts V1', async () => {
     const admitV2Run = jest.fn().mockResolvedValue({
       status: 'dispatched',
       runId: 'run-1',
@@ -134,7 +134,7 @@ describe('UI Lab V2 generation routing', () => {
     });
 
     expect(isFeatureEnabled).toHaveBeenCalledWith(
-      'ui-lab-v2-transport',
+      'ai-runs-v2-transport',
       {
         userId: 'author-1',
         project: 'MaxView',
@@ -175,6 +175,22 @@ describe('UI Lab V2 generation routing', () => {
 
     await runGeneration('design-1', onToken, 'user-1', {
       isFeatureEnabled: jest.fn().mockResolvedValue(false),
+      admitV2Run,
+    });
+
+    expect(admitV2Run).not.toHaveBeenCalled();
+    expect(generateUiLabDesign).toHaveBeenCalledTimes(1);
+    expect(onToken).toHaveBeenCalledWith('<html>v1</html>');
+  });
+
+  it('keeps the existing live in-process stream when the canonical flag cannot be read', async () => {
+    const onToken = jest.fn();
+    const admitV2Run = jest.fn();
+
+    await runGeneration('design-1', onToken, 'user-1', {
+      isFeatureEnabled: jest
+        .fn()
+        .mockRejectedValue(new Error('flag store unavailable')),
       admitV2Run,
     });
 

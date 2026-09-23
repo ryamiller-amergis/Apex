@@ -494,6 +494,93 @@ describe('background workflow routing', () => {
     );
   });
 
+  it.each([
+    {
+      name: 'V2 enabled and legacy disabled admits V2',
+      v2: 'enabled',
+      legacy: 'disabled',
+      expectedTransport: 'v2',
+      expectedFlagKeys: ['ai-runs-v2-transport'],
+    },
+    {
+      name: 'V2 disabled and legacy enabled retains V1',
+      v2: 'disabled',
+      legacy: 'enabled',
+      expectedTransport: 'v1',
+      expectedFlagKeys: ['ai-runs-v2-transport', 'ai-runs-background'],
+    },
+    {
+      name: 'both flags disabled runs in process',
+      v2: 'disabled',
+      legacy: 'disabled',
+      expectedTransport: 'in-process',
+      expectedFlagKeys: ['ai-runs-v2-transport', 'ai-runs-background'],
+    },
+    {
+      name: 'unreadable V2 and enabled legacy retains V1',
+      v2: 'error',
+      legacy: 'enabled',
+      expectedTransport: 'v1',
+      expectedFlagKeys: ['ai-runs-v2-transport', 'ai-runs-background'],
+    },
+  ] as const)(
+    '$name',
+    async ({
+      v2,
+      legacy,
+      expectedTransport,
+      expectedFlagKeys,
+    }) => {
+      const isFeatureEnabled = jest.fn(
+        async (key: string): Promise<boolean> => {
+          const outcome =
+            key === 'ai-runs-v2-transport'
+              ? v2
+              : key === 'ai-runs-background'
+                ? legacy
+                : 'disabled';
+          if (outcome === 'error') {
+            throw new Error('flag store unavailable');
+          }
+          return outcome === 'enabled';
+        },
+      );
+      const admitV2Run = jest.fn().mockResolvedValue({
+        status: 'dispatched',
+        runId: 'run-1',
+        attemptId: 'attempt-1',
+        attemptNumber: 1,
+        dispatchMessageId: 'dispatch-1',
+        outboxId: 'outbox-1',
+      });
+      const dependencies = makeDependencies({
+        isFeatureEnabled,
+        admitV2Run,
+      });
+      const input = makeInput();
+
+      const decision = await createBackgroundWorkflowRouter(dependencies).route(
+        input,
+      );
+
+      expect(isFeatureEnabled.mock.calls.map(([key]) => key)).toEqual(
+        expectedFlagKeys,
+      );
+      expect(admitV2Run).toHaveBeenCalledTimes(
+        expectedTransport === 'v2' ? 1 : 0,
+      );
+      expect(dependencies.enqueue).toHaveBeenCalledTimes(
+        expectedTransport === 'v1' ? 1 : 0,
+      );
+      expect(input.runInProcess).toHaveBeenCalledTimes(
+        expectedTransport === 'in-process' ? 1 : 0,
+      );
+      expect(decision.route).toBe(
+        expectedTransport === 'in-process' ? 'in-process' : 'worker',
+      );
+    },
+  );
+
   it('admits onto the V2 transport instead of V1 when the flag is on', async () => {
     const admitV2Run = jest.fn().mockResolvedValue({
       status: 'dispatched',

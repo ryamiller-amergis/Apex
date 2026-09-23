@@ -78,7 +78,7 @@ export class UiLabValidationError extends Error {
   }
 }
 
-const UI_LAB_V2_TRANSPORT_FLAG = 'ui-lab-v2-transport';
+const V2_TRANSPORT_FLAG = 'ai-runs-v2-transport';
 const VISUAL_WORKLOAD_LANE = 'visual' as const;
 
 export type UiLabV2AdmissionState =
@@ -776,7 +776,7 @@ export async function runGeneration(
   const evaluateFlag = dependencies.isFeatureEnabled ?? isFeatureEnabled;
   let useV2Transport = false;
   try {
-    useV2Transport = await evaluateFlag(UI_LAB_V2_TRANSPORT_FLAG, {
+    useV2Transport = await evaluateFlag(V2_TRANSPORT_FLAG, {
       userId: design.authorId,
       project: design.project,
       caller: 'ui-lab',
@@ -785,10 +785,10 @@ export async function runGeneration(
     useV2Transport = false;
   }
 
-  // Retain enabled after UI Lab V2 has held full rollout for two stable sprints.
-  // @feature-flag:ui-lab-v2-transport start winner=enabled
+  // Retain enabled after Task 6 V2 has held full rollout for two stable sprints.
+  // @feature-flag:ai-runs-v2-transport start winner=enabled
   if (useV2Transport) {
-    // @feature-flag:ui-lab-v2-transport enabled-start
+    // @feature-flag:ai-runs-v2-transport enabled-start
     const handled = await runGenerationV2({
       design,
       skillConfig,
@@ -825,9 +825,9 @@ export async function runGeneration(
         userId,
       });
     }
-    // @feature-flag:ui-lab-v2-transport enabled-end
+    // @feature-flag:ai-runs-v2-transport enabled-end
   } else {
-    // @feature-flag:ui-lab-v2-transport disabled-start
+    // @feature-flag:ai-runs-v2-transport disabled-start
     dependencies.onTransport?.('v1');
     await runGenerationInProcess({
       design,
@@ -839,9 +839,9 @@ export async function runGeneration(
       onToken,
       userId,
     });
-    // @feature-flag:ui-lab-v2-transport disabled-end
+    // @feature-flag:ai-runs-v2-transport disabled-end
   }
-  // @feature-flag:ui-lab-v2-transport end
+  // @feature-flag:ai-runs-v2-transport end
 }
 
 /** Called by the SSE route for regeneration. */
