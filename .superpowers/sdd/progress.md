@@ -13,11 +13,11 @@
 - Task 2 atomic admission: complete (`588538a5..4f814e74`), final review approved with no findings.
 - Task 3 orchestrator capacity scheduling and direct Dapr dispatch: complete (`4f814e74..129a4857`), final review approved with no findings (including planner-owned reservation release remediation).
 - Task 4 actor parity / deadlines: complete (`e227ac5a..05020cfa`), final review approved with no findings after remediation.
-- Task 5 stream persist/replay: complete (`2f3b2942..91dc0131`). Implementation commit `038fd671`; report `91dc0131`. Focused suite 100 passed; server + client typecheck green. Spot-check of batcher/gateway/client/WS-flag contracts passed; formal long reviewer was interrupted — optional quick re-review before Task 6 if desired.
+- Task 5 stream persist/replay: **not complete** — implementation `038fd671` / report `91dc0131`, but final review **REQUEST CHANGES** ([Review Task 5](64033d8c-9de4-4541-8b03-7819b20be915)). High: (1) batcher advances offset before persist and swallows timer persist errors; (2) Redis/Postgres never share batcher `eventId` on matching boundaries; (3) SSE path never subscribes Redis live bus before/during page replay. Medium/low: durable dual-publish actor test missing; legacy hasMore heuristic; negative/NaN SSE id cases.
 
 ## Stop / resume
 
-- **Stopped for the day after Task 5** (2026-09-23).
-- **Resume tomorrow at plan Task 6:** Retry failed runs without resending text (Home / Interview / ADR client parity).
+- **Stopped for the day** (2026-09-23) after the Task 5 review returned REQUEST CHANGES.
+- **Resume tomorrow:** Task 5 remediation (High 1–3 + covering tests) → then plan Task 6 retry.
 - Still deferred until asked: push, PR, Azure apply, Container Apps / deploy.
 - Branch: `tbi/infra-changes` (ahead of origin; local only).
