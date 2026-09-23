@@ -1,8 +1,9 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppShell } from '../hooks/useAppShell';
 import {
   useActiveSessions,
+  useAssignedBacklog,
   useAssignedWorkItems,
   useCloseDevSession,
   useCompleteFeature,
@@ -12,6 +13,7 @@ import {
 import { useApexBacklogFeatures } from '../hooks/useApexBacklog';
 import { useAssignedBoardItems } from '../hooks/useApexWorkItems';
 import type { ApexWorkItem } from '../../shared/types/apexWorkItem';
+import type { FeatureRequest } from '../../shared/types/featureRequest';
 import { STATUS_META } from '../../shared/types/apexWorkItem';
 import type { BacklogFeatureItem, ActiveDevSession, ApexBacklogGroup } from '../../shared/types/devWorkbench';
 import {
@@ -26,7 +28,163 @@ import {
 } from '../../shared/utils/myWorkStatus';
 import StartLocalDevModal, { type StartLocalDevTarget } from './StartLocalDevModal';
 import FeatureContextModal from './FeatureContextModal';
+import {
+  isInterviewableWorkItemType,
+  toFeatureRequestInterviewPrefill,
+} from '../utils/featureRequestInterview';
 import styles from './DevWorkbenchView.module.css';
+
+const formatBacklogLabel = (value: string) =>
+  value
+    .split('-')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+
+const AssignedBacklogSection: React.FC<{ project: string }> = ({ project }) => {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { can, isInAnyGroup, permissionsLoaded } = useAppShell();
+  const { data: items, isLoading, error } = useAssignedBacklog(project);
+  const [selectedItem, setSelectedItem] = useState<FeatureRequest | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  const handledDeepLinkRef = useRef<string | null>(null);
+  const deepLinkId =
+    searchParams.get('section') === 'backlog' ? searchParams.get('itemId') : null;
+  const canStartInterview =
+    permissionsLoaded
+    && can('interviews:manage')
+    && isInAnyGroup(['BA', 'Manager', 'Product-Owner']);
+
+  const openInterview = (item: FeatureRequest) => {
+    if (item.interviewId) {
+      navigate(`/backlog/interview/${item.interviewId}`);
+      return;
+    }
+    navigate('/backlog/interview/new', {
+      state: { featureRequest: toFeatureRequestInterviewPrefill(item) },
+    });
+  };
+
+  useEffect(() => {
+    if (!deepLinkId) {
+      handledDeepLinkRef.current = null;
+      return;
+    }
+    // Wait for a resolved list. Loading and query errors leave `items` undefined,
+    // and those must not be treated as "item no longer available."
+    if (items === undefined || handledDeepLinkRef.current === deepLinkId) return;
+    handledDeepLinkRef.current = deepLinkId;
+    const match = items.find((item) => item.id === deepLinkId);
+    if (match) {
+      sectionRef.current?.scrollIntoView({ block: 'start' });
+      setSelectedItem(match);
+    } else {
+      setToastMessage('This assigned backlog item is no longer available.');
+    }
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('section');
+      next.delete('itemId');
+      return next;
+    }, { replace: true });
+  }, [deepLinkId, items, setSearchParams]);
+
+  return (
+    <>
+      <section
+        ref={sectionRef}
+        className={styles.section}
+        aria-labelledby="assigned-backlog-heading"
+        {...{ 'data-testid': 'my-work-assigned-backlog-section' }}
+      >
+        <div className={styles['section-header']}>
+          <h2 id="assigned-backlog-heading">Assigned Backlog</h2>
+          <p>Apex Backlog items assigned to you</p>
+        </div>
+        {isLoading && <div className={styles.loading}>Loading assigned backlog…</div>}
+        {error && <div className={styles.error}>Failed to load assigned backlog: {error.message}</div>}
+        {!isLoading && !error && (!items || items.length === 0) && (
+          <div
+            className={styles['section-empty']}
+            {...{ 'data-testid': 'my-work-assigned-backlog-empty' }}
+          >
+            No Apex Backlog items assigned to you.
+          </div>
+        )}
+        {!!items?.length && (
+          <div className={styles.list} {...{ 'data-testid': 'my-work-assigned-backlog-list' }}>
+            {items.map((item) => {
+              const interviewable = isInterviewableWorkItemType(item.type);
+              const showInterview = interviewable && (!!item.interviewId || canStartInterview);
+              return (
+                <div
+                  key={item.id}
+                  className={styles.item}
+                  {...{ 'data-testid': `my-work-assigned-backlog-row-${item.id}` }}
+                >
+                  <div className={styles['item-info']}>
+                    <span className={styles['item-title']}>{item.title}</span>
+                    <div className={styles['item-meta']}>
+                      <span className={styles.badge}>{formatBacklogLabel(item.type)}</span>
+                      <span className={styles.badge}>{formatBacklogLabel(item.status)}</span>
+                      {item.teamPriority && (
+                        <span className={styles.badge}>
+                          Priority: {formatBacklogLabel(item.teamPriority)}
+                        </span>
+                      )}
+                    </div>
+                    <p className={styles['assigned-request']}>{item.request}</p>
+                  </div>
+                  <div className={styles['item-actions']}>
+                    <button
+                      type="button"
+                      className={styles['assigned-view-btn']}
+                      onClick={() => setSelectedItem(item)}
+                      {...{ 'data-testid': `my-work-assigned-backlog-view-context-${item.id}` }}
+                    >
+                      View Context
+                    </button>
+                    {showInterview && (
+                      <button
+                        type="button"
+                        className={styles['assigned-interview-btn']}
+                        onClick={() => openInterview(item)}
+                        {...{ 'data-testid': `my-work-assigned-backlog-interview-${item.id}` }}
+                      >
+                        {item.interviewId ? 'Open Interview' : 'Start Interview'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {toastMessage && (
+        <div
+          className={styles.toast}
+          role="alert"
+          {...{ 'data-testid': 'my-work-assigned-backlog-toast' }}
+        >
+          {toastMessage}
+        </div>
+      )}
+
+      {selectedItem && (
+        // data-testid-exempt — FeatureContextModal root already sets data-testid
+        <FeatureContextModal
+          project={project}
+          viewMode="intake"
+          intakeItem={selectedItem}
+          onClose={() => setSelectedItem(null)}
+        />
+      )}
+    </>
+  );
+};
 
 const BoardAssignedSection: React.FC<{ project: string }> = ({ project }) => {
   const navigate = useNavigate();
@@ -36,7 +194,7 @@ const BoardAssignedSection: React.FC<{ project: string }> = ({ project }) => {
     <section
       className={styles.section}
       aria-labelledby="board-assigned-heading"
-      data-testid="my-work-board-assigned-section"
+      {...{ 'data-testid': 'my-work-board-assigned-section' }}
     >
       <div className={styles['section-header']}>
         <h2 id="board-assigned-heading">Work Board assignments</h2>
@@ -45,12 +203,12 @@ const BoardAssignedSection: React.FC<{ project: string }> = ({ project }) => {
       {isLoading && <div className={styles.loading}>Loading board items…</div>}
       {error && <div className={styles.error}>Failed to load board items: {error.message}</div>}
       {!isLoading && !error && (!boardItems || boardItems.length === 0) && (
-        <div className={styles['section-empty']} data-testid="my-work-board-assigned-empty">
+        <div className={styles['section-empty']} {...{ 'data-testid': 'my-work-board-assigned-empty' }}>
           No Work Board items assigned to you.
         </div>
       )}
       {!!boardItems?.length && (
-        <div className={styles.list} data-testid="my-work-board-assigned-list">
+        <div className={styles.list} {...{ 'data-testid': 'my-work-board-assigned-list' }}>
           {boardItems.map((item: ApexWorkItem) => (
             <div key={item.id} className={styles.item}>
               <div className={styles['item-info']}>
@@ -68,7 +226,7 @@ const BoardAssignedSection: React.FC<{ project: string }> = ({ project }) => {
                   type="button"
                   className={styles['view-context-btn']}
                   onClick={() => navigate(`/work-board?item=${encodeURIComponent(item.id)}`)}
-                  data-testid={`my-work-board-item-link-${item.itemNumber}`}
+                  {...{ 'data-testid': `my-work-board-item-link-${item.itemNumber}` }}
                 >
                   Open on board
                 </button>
@@ -642,6 +800,7 @@ export const DevWorkbenchView: React.FC = () => {
               : 'Work Board items assigned to you'}
           </p>
         </div>
+        <AssignedBacklogSection project={selectedProject} />
         {showBoardAssigned && <BoardAssignedSection project={selectedProject} />}
         {usesAppNativeRequirements && (
           <section
@@ -660,22 +819,6 @@ export const DevWorkbenchView: React.FC = () => {
     );
   }
 
-  if (isLoading) {
-    return (
-      <div className={styles.container} {...{ 'data-testid': 'my-work-page' }}>
-        <div className={styles.loading}>Loading assigned work items...</div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className={styles.container} {...{ 'data-testid': 'my-work-page' }}>
-        <div className={styles.error}>Failed to load work items: {error.message}</div>
-      </div>
-    );
-  }
-
   return (
     <div className={styles.container} {...{ 'data-testid': 'my-work-page' }}>
       <div className={styles.header} {...{ 'data-testid': 'my-work-header' }}>
@@ -683,84 +826,92 @@ export const DevWorkbenchView: React.FC = () => {
         <p className={styles.subtitle}>Work items assigned to you — start a development session to begin coding</p>
       </div>
 
-      {startSession.error && (
-        <div className={styles.error}>{startSession.error.message}</div>
-      )}
+      {selectedProject && <AssignedBacklogSection project={selectedProject} />}
 
-      {!workItems || workItems.length === 0 ? (
-        <div className={styles.empty} {...{ 'data-testid': 'my-work-empty' }}>
-          No active work items assigned to you.
-        </div>
-      ) : (
-        <div className={styles.list} {...{ 'data-testid': 'my-work-work-items-list' }}>
-          {sortedWorkItems.map((item) => {
-            const active = sessionByWorkItem.get(item.id);
-            const eligibility = evaluateDevStartEligibility(item, { isSuperAdmin });
-            return (
-              <div key={item.id} className={styles.item}>
-                <div className={styles['item-info']}>
-                  <span className={styles['item-title']}>{item.title}</span>
-                  <div className={styles['item-meta']}>
-                    <span className={styles['item-id']}>#{item.id}</span>
-                    <span className={styles.badge}>{item.workItemType}</span>
-                    <span className={styles.badge}>{item.state}</span>
-                    {active && <span className={styles['active-badge']}>Active Session</span>}
+      {isLoading && <div className={styles.loading}>Loading assigned work items...</div>}
+      {error && <div className={styles.error}>Failed to load work items: {error.message}</div>}
+      {!isLoading && !error && (
+        <>
+          {startSession.error && (
+            <div className={styles.error}>{startSession.error.message}</div>
+          )}
+
+          {!workItems || workItems.length === 0 ? (
+            <div className={styles.empty} {...{ 'data-testid': 'my-work-empty' }}>
+              No active work items assigned to you.
+            </div>
+          ) : (
+            <div className={styles.list} {...{ 'data-testid': 'my-work-work-items-list' }}>
+              {sortedWorkItems.map((item) => {
+                const active = sessionByWorkItem.get(item.id);
+                const eligibility = evaluateDevStartEligibility(item, { isSuperAdmin });
+                return (
+                  <div key={item.id} className={styles.item}>
+                    <div className={styles['item-info']}>
+                      <span className={styles['item-title']}>{item.title}</span>
+                      <div className={styles['item-meta']}>
+                        <span className={styles['item-id']}>#{item.id}</span>
+                        <span className={styles.badge}>{item.workItemType}</span>
+                        <span className={styles.badge}>{item.state}</span>
+                        {active && <span className={styles['active-badge']}>Active Session</span>}
+                      </div>
+                    </div>
+                    <div className={styles['item-actions']}>
+                      {active ? (
+                        <>
+                          <button
+                            className={styles['resume-btn']}
+                            onClick={() => handleResume(active.sessionId)}
+                            type="button"
+                            {...{ 'data-testid': 'my-work-resume-session-btn' }}
+                          >
+                            Resume Session
+                          </button>
+                          <button
+                            className={styles['close-btn']}
+                            onClick={() => handleClose(active.sessionId)}
+                            disabled={closingId === active.sessionId}
+                            type="button"
+                            {...{ 'data-testid': `my-work-close-session-${item.id}` }}
+                          >
+                            {closingId === active.sessionId ? 'Closing...' : 'Close Session'}
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          className={styles['start-btn']}
+                          onClick={() => handleStart(item.id)}
+                          disabled={startingId !== null || !eligibility.allowed}
+                          title={eligibility.allowed ? undefined : eligibility.reason}
+                          type="button"
+                          {...{ 'data-testid': 'my-work-start-dev-btn' }}
+                        >
+                          {startingId === item.id ? 'Starting...' : 'Start Development'}
+                        </button>
+                      )}
+                      <button
+                        className={styles['local-dev-btn']}
+                        onClick={() =>
+                          setLocalDevTarget({
+                            kind: 'ado',
+                            project: selectedProject!,
+                            workItemId: item.id,
+                            title: item.title,
+                          })
+                        }
+                        type="button"
+                        title="Download a context pack and open Cursor or VS Code locally"
+                        {...{ 'data-testid': 'my-work-start-local-dev-btn' }}
+                      >
+                        Start Local Development
+                      </button>
+                    </div>
                   </div>
-                </div>
-                <div className={styles['item-actions']}>
-                  {active ? (
-                    <>
-                      <button
-                        className={styles['resume-btn']}
-                        onClick={() => handleResume(active.sessionId)}
-                        type="button"
-                        {...{ 'data-testid': 'my-work-resume-session-btn' }}
-                      >
-                        Resume Session
-                      </button>
-                      <button
-                        className={styles['close-btn']}
-                        onClick={() => handleClose(active.sessionId)}
-                        disabled={closingId === active.sessionId}
-                        type="button"
-                        {...{ 'data-testid': `my-work-close-session-${item.id}` }}
-                      >
-                        {closingId === active.sessionId ? 'Closing...' : 'Close Session'}
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      className={styles['start-btn']}
-                      onClick={() => handleStart(item.id)}
-                      disabled={startingId !== null || !eligibility.allowed}
-                      title={eligibility.allowed ? undefined : eligibility.reason}
-                      type="button"
-                      {...{ 'data-testid': 'my-work-start-dev-btn' }}
-                    >
-                      {startingId === item.id ? 'Starting...' : 'Start Development'}
-                    </button>
-                  )}
-                  <button
-                    className={styles['local-dev-btn']}
-                    onClick={() =>
-                      setLocalDevTarget({
-                        kind: 'ado',
-                        project: selectedProject!,
-                        workItemId: item.id,
-                        title: item.title,
-                      })
-                    }
-                    type="button"
-                    title="Download a context pack and open Cursor or VS Code locally"
-                    {...{ 'data-testid': 'my-work-start-local-dev-btn' }}
-                  >
-                    Start Local Development
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
 
       {localDevTarget && (

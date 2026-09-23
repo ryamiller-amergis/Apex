@@ -18,10 +18,15 @@ import {
   designDocs,
   designPrototypes,
   designPlans,
-  userProjectAssignments,
 } from '../db/schema';
 import { createNotification } from './notificationService';
+import { generateApexWorkItemRankings } from './apexWorkItemRankingService';
 import { emitBoardChange } from './apexWorkBoardBus';
+import {
+  APEX_OWNER,
+  assertEligibleHumanAssignee,
+  listProjectAssignees,
+} from './projectAssigneeService';
 import { resolveDataRoot } from '../utils/dataDir';
 import type {
   ApexRelease,
@@ -36,6 +41,7 @@ import type {
   ApexWorkItemHierarchyNode,
   ApexWorkItemStatus,
   ApexWorkItemType,
+  ApexWorkItemPriority,
   AcceptanceCriterion,
   BulkUpdateApexWorkItemsDTO,
   CreateApexReleaseDTO,
@@ -53,8 +59,10 @@ import type {
   UpdateApexWorkItemDTO,
   WorkItemOwnerSummary,
 } from '../../shared/types/apexWorkItem';
+import { APEX_ASSIGNEE_ID } from '../../shared/types/apexWorkItem';
 
 const MAX_BOARD_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+export { APEX_OWNER };
 
 // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -390,7 +398,9 @@ async function toApexWorkItem(
   row: typeof apexWorkItems.$inferSelect,
   includeEvents = false,
 ): Promise<ApexWorkItem> {
-  const owner = await resolveOwnerSummary(row.ownerOid);
+  const owner = row.assignedToApex
+    ? APEX_OWNER
+    : await resolveOwnerSummary(row.ownerOid!);
   const collaborators = await loadCollaborators(row.id);
   const events = includeEvents ? await loadEvents(row.id) : undefined;
   let release: ApexRelease | null = null;
@@ -407,6 +417,11 @@ async function toApexWorkItem(
     type: row.type as ApexWorkItemType,
     status: row.status as ApexWorkItemStatus,
     owner,
+    assignedToApex: row.assignedToApex,
+    priority: row.priority as ApexWorkItemPriority | null,
+    priorityRank: row.priorityRank ?? null,
+    aiPriorityRationale: row.aiPriorityRationale ?? null,
+    aiRankedAt: row.aiRankedAt ?? null,
     collaborators,
     acceptanceCriteria: (row.acceptanceCriteria ?? []) as AcceptanceCriterion[],
     branch: row.branch ?? null,
@@ -439,20 +454,7 @@ async function toApexWorkItem(
 
 export async function listEligibleOwners(project: string): Promise<WorkItemOwnerSummary[]> {
   const p = requireProject(project);
-  const assignees = await db
-    .select({ oid: appUsers.oid, displayName: appUsers.displayName, email: appUsers.email })
-    .from(appUsers)
-    .innerJoin(userProjectAssignments, eq(userProjectAssignments.userId, appUsers.oid))
-    .where(eq(userProjectAssignments.project, p));
-  // De-dupe
-  const seen = new Set<string>();
-  return assignees
-    .filter((u) => {
-      if (seen.has(u.oid)) return false;
-      seen.add(u.oid);
-      return true;
-    })
-    .map(toOwnerSummary);
+  return listProjectAssignees(p);
 }
 
 // â”€â”€ Releases â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -566,7 +568,11 @@ export async function listApexWorkItems(filters: ApexWorkItemFilters): Promise<A
   const conditions = [eq(apexWorkItems.project, project)];
 
   if (filters.ownerId && filters.ownerId !== 'all') {
-    conditions.push(eq(apexWorkItems.ownerOid, filters.ownerId));
+    conditions.push(
+      filters.ownerId === APEX_ASSIGNEE_ID
+        ? eq(apexWorkItems.assignedToApex, true)
+        : eq(apexWorkItems.ownerOid, filters.ownerId),
+    );
   }
   if (filters.types && filters.types.length > 0) {
     conditions.push(inArray(apexWorkItems.type, filters.types));
@@ -767,6 +773,8 @@ export async function createApexWorkItem(
   dto: CreateApexWorkItemDTO,
 ): Promise<ApexWorkItem> {
   const project = requireProject(dto.project);
+  const assignedToApex = dto.ownerId === APEX_ASSIGNEE_ID;
+  if (!assignedToApex) await assertEligibleHumanAssignee(project, dto.ownerId);
   const designLinks = dto.designDocId || dto.designPrototypeId
     ? { designDocId: dto.designDocId ?? null, designPrototypeId: dto.designPrototypeId ?? null }
     : await resolveDesignLinksForFeature({
@@ -785,7 +793,8 @@ export async function createApexWorkItem(
         outcome: dto.outcome,
         type: dto.type,
         status: dto.status ?? 'idea',
-        ownerOid: dto.ownerId,
+        ownerOid: assignedToApex ? null : dto.ownerId,
+        assignedToApex,
         acceptanceCriteria: dto.acceptanceCriteria ? acWithIds(dto.acceptanceCriteria) : [],
         branch: dto.branch ?? null,
         prUrl: dto.prUrl ?? null,
@@ -1001,6 +1010,8 @@ export async function materializeFromPrdWithItems(
   dto: MaterializeFromPrdDTO & { items: BacklogItemMeta[] },
 ): Promise<MaterializeResult> {
   const project = requireProject(dto.project);
+  const assignedToApex = dto.ownerId === APEX_ASSIGNEE_ID;
+  if (!assignedToApex) await assertEligibleHumanAssignee(project, dto.ownerId);
   if (!dto.items.length) throw httpError('No items to materialize');
 
   const preview = await previewMaterializeFromPrd(dto);
@@ -1135,7 +1146,8 @@ export async function materializeFromPrdWithItems(
           outcome: step.item.description,
           type: step.item.type,
           status: 'ready',
-          ownerOid: dto.ownerId,
+          ownerOid: assignedToApex ? null : dto.ownerId,
+          assignedToApex,
           acceptanceCriteria: ac,
           position: 9999,
           sourceType: 'prd',
@@ -1345,6 +1357,8 @@ export async function createFromDrafts(
   dto: CreateFromDraftsDTO,
 ): Promise<CreateFromDraftsResult> {
   const project = requireProject(dto.project);
+  const assignedToApex = dto.ownerId === APEX_ASSIGNEE_ID;
+  if (!assignedToApex) await assertEligibleHumanAssignee(project, dto.ownerId);
   const fr = await db.query.featureRequests.findFirst({
     where: eq(featureRequests.id, dto.featureRequestId),
   });
@@ -1420,7 +1434,8 @@ export async function createFromDrafts(
           outcome: draft.outcome,
           type: draft.type,
           status: 'ready',
-          ownerOid: dto.ownerId,
+          ownerOid: assignedToApex ? null : dto.ownerId,
+          assignedToApex,
           acceptanceCriteria: draft.acceptanceCriteria
             ? acWithIds(draft.acceptanceCriteria as Omit<AcceptanceCriterion, 'id'>[])
             : [],
@@ -1498,8 +1513,16 @@ export async function updateApexWorkItem(
   if (dto.parentId !== undefined) { set.parentId = dto.parentId; }
   if (dto.acceptanceCriteria !== undefined) { set.acceptanceCriteria = dto.acceptanceCriteria; }
 
-  const ownerChanged = dto.ownerId !== undefined && dto.ownerId !== existing.ownerOid;
-  if (dto.ownerId !== undefined) { set.ownerOid = dto.ownerId; }
+  const nextAssignedToApex = dto.ownerId === APEX_ASSIGNEE_ID;
+  const ownerChanged = dto.ownerId !== undefined && (
+    nextAssignedToApex !== existing.assignedToApex
+    || (!nextAssignedToApex && dto.ownerId !== existing.ownerOid)
+  );
+  if (dto.ownerId !== undefined) {
+    if (!nextAssignedToApex) await assertEligibleHumanAssignee(existing.project, dto.ownerId);
+    set.ownerOid = nextAssignedToApex ? null : dto.ownerId;
+    set.assignedToApex = nextAssignedToApex;
+  }
 
   const releaseChanged = dto.releaseId !== undefined && dto.releaseId !== existing.releaseId;
   if (dto.releaseId !== undefined) { set.releaseId = dto.releaseId; }
@@ -1518,7 +1541,10 @@ export async function updateApexWorkItem(
 
     if (ownerChanged) {
       await appendEvent(tx, id, actorId, 'assigned', {
-        details: { previousOwner: existing.ownerOid, newOwner: dto.ownerId! },
+        details: {
+          previousOwner: existing.assignedToApex ? APEX_ASSIGNEE_ID : existing.ownerOid,
+          newOwner: dto.ownerId!,
+        },
       });
     } else if (releaseChanged) {
       await appendEvent(tx, id, actorId, 'release_set', {
@@ -1529,7 +1555,7 @@ export async function updateApexWorkItem(
     }
   });
 
-  if (ownerChanged && dto.ownerId !== actorId) {
+  if (ownerChanged && !nextAssignedToApex && dto.ownerId !== actorId) {
     const actorName = await resolveActorName(actorId);
     createNotification(dto.ownerId!, {
       type: 'user-action',
@@ -1613,7 +1639,7 @@ export async function moveApexWorkItem(
   }
 
   // Notify owner of state change (skip self)
-  if (fromStatus !== toStatus && existing.ownerOid !== actorId) {
+  if (fromStatus !== toStatus && existing.ownerOid && existing.ownerOid !== actorId) {
     const actorName = await resolveActorName(actorId);
     createNotification(existing.ownerOid, {
       type: 'user-action',
@@ -1652,6 +1678,81 @@ export async function bulkUpdateApexWorkItems(
   }
   emitBoardChange(p, { action: 'bulk', itemIds: dto.ids });
   return results;
+}
+
+export async function rankApexWorkItems(
+  actorId: string,
+  project: string,
+  ids: string[],
+): Promise<{ items: ApexWorkItem[]; rankedAt: string }> {
+  const p = requireProject(project);
+  const uniqueIds = [...new Set(ids)];
+  if (!uniqueIds.length) throw httpError('ids required');
+  if (uniqueIds.length !== ids.length) throw httpError('ids must be unique');
+
+  const rows = await db
+    .select({
+      item: apexWorkItems,
+      releaseName: apexReleases.name,
+      releaseTargetDate: apexReleases.targetDate,
+    })
+    .from(apexWorkItems)
+    .leftJoin(apexReleases, eq(apexWorkItems.releaseId, apexReleases.id))
+    .where(inArray(apexWorkItems.id, uniqueIds));
+
+  if (rows.length !== uniqueIds.length || rows.some((row) => row.item.project !== p)) {
+    throw httpError('One or more work items do not belong to the selected project', 400);
+  }
+
+  const byId = new Map(rows.map((row) => [row.item.id, row]));
+  const rankings = await generateApexWorkItemRankings(
+    p,
+    actorId,
+    uniqueIds.map((id) => {
+      const row = byId.get(id)!;
+      return {
+        id: row.item.id,
+        itemNumber: row.item.itemNumber,
+        title: row.item.title,
+        outcome: row.item.outcome,
+        type: row.item.type as ApexWorkItemType,
+        status: row.item.status as ApexWorkItemStatus,
+        dueDate: row.item.dueDate,
+        releaseName: row.releaseName,
+        releaseTargetDate: row.releaseTargetDate,
+        epicTitle: row.item.epicTitle,
+        featureTitle: row.item.featureTitle,
+        acceptanceCriteria: (row.item.acceptanceCriteria ?? []) as AcceptanceCriterion[],
+      };
+    }),
+  );
+
+  const rankedAt = new Date().toISOString();
+  await db.transaction(async (tx) => {
+    for (let index = 0; index < rankings.length; index += 1) {
+      const ranking = rankings[index];
+      await tx
+        .update(apexWorkItems)
+        .set({
+          priority: ranking.priority,
+          priorityRank: index + 1,
+          aiPriorityRationale: ranking.rationale,
+          aiRankedAt: rankedAt,
+          updatedBy: actorId,
+          updatedAt: rankedAt,
+        })
+        .where(and(eq(apexWorkItems.id, ranking.id), eq(apexWorkItems.project, p)));
+    }
+  });
+
+  const rankedItems = await Promise.all(
+    rankings.map(async (ranking) => {
+      const row = await db.query.apexWorkItems.findFirst({ where: eq(apexWorkItems.id, ranking.id) });
+      return toApexWorkItem(row!);
+    }),
+  );
+  emitBoardChange(p, { action: 'ai_ranked', itemIds: rankings.map((ranking) => ranking.id) });
+  return { items: rankedItems, rankedAt };
 }
 
 // â”€â”€ Comments â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1737,7 +1838,7 @@ export async function addComment(
     }
   }
 
-  if (item.ownerOid !== actorId) {
+  if (item.ownerOid && item.ownerOid !== actorId) {
     createNotification(item.ownerOid, {
       type: 'user-action',
       title: 'New comment on your work item',

@@ -197,6 +197,97 @@ describe('AppSidebar — desktop navigation', () => {
   });
 });
 
+describe('AppSidebar — My Work visibility', () => {
+  const inDeveloperGroup = (groups: string[]) => groups.includes('Developer');
+
+  it('shows My Work for a Developer with dev-workbench:view and the menu enabled', () => {
+    const can = (key: string) => key === 'dev-workbench:view';
+    const onNavigateMyWork = jest.fn();
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['my-work']}
+        isInAnyGroup={inDeveloperGroup}
+        onNavigateMyWork={onNavigateMyWork}
+      />,
+    );
+    const myWork = screen.getByRole('button', { name: 'My Work' });
+    expect(myWork).toBeInTheDocument();
+    fireEvent.click(myWork);
+    expect(onNavigateMyWork).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows My Work for a Project Admin with admin:roles but no Developer group', () => {
+    const can = (key: string) => key === 'dev-workbench:view' || key === 'admin:roles';
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['my-work']}
+        isInAnyGroup={() => false}
+        onNavigateMyWork={jest.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'My Work' })).toBeInTheDocument();
+  });
+
+  it('shows My Work for a super admin even without menu, permission, or group', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        isSuperAdmin
+        menuEnabledViews={[]}
+        isInAnyGroup={() => false}
+        onNavigateMyWork={jest.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'My Work' })).toBeInTheDocument();
+  });
+
+  it('hides My Work when the menu view is disabled', () => {
+    const can = (key: string) => key === 'dev-workbench:view' || key === 'admin:roles';
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={[]}
+        isInAnyGroup={inDeveloperGroup}
+        onNavigateMyWork={jest.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'My Work' })).not.toBeInTheDocument();
+  });
+
+  it('hides My Work when dev-workbench:view is missing', () => {
+    const can = (key: string) => key === 'admin:roles';
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['my-work']}
+        isInAnyGroup={inDeveloperGroup}
+        onNavigateMyWork={jest.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'My Work' })).not.toBeInTheDocument();
+  });
+
+  it('hides My Work when the user is neither a Developer nor holds admin:roles', () => {
+    const can = (key: string) => key === 'dev-workbench:view';
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['my-work']}
+        isInAnyGroup={() => false}
+        onNavigateMyWork={jest.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'My Work' })).not.toBeInTheDocument();
+  });
+});
+
 describe('AppSidebar — Work Board flag', () => {
   it('hides Work Board for a super admin when the feature flag is off', () => {
     render(

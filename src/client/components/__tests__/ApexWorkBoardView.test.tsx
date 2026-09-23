@@ -23,13 +23,16 @@ jest.mock('../../hooks/useApexWorkItems', () => ({
   useMoveApexWorkItem: jest.fn(),
   useCreateApexRelease: jest.fn(),
   useBulkUpdateApexWorkItems: jest.fn(),
+  useRankApexWorkItems: jest.fn(),
+  useUpdateApexWorkItem: jest.fn(),
   useApexWorkBoardStream: jest.fn(),
   useImportApexWorkItemsFromAdo: jest.fn(),
   usePreviewMaterializeFromPrd: jest.fn(),
 }));
 
+let canManage = false;
 jest.mock('../../hooks/useAppShell', () => ({
-  useAppShell: () => ({ can: () => false }),
+  useAppShell: () => ({ can: (permission: string) => permission === 'work-board:manage' && canManage }),
 }));
 
 jest.mock('../ApexWorkItemDetailPanel', () => ({
@@ -50,6 +53,8 @@ import {
   useMoveApexWorkItem,
   useCreateApexRelease,
   useBulkUpdateApexWorkItems,
+  useRankApexWorkItems,
+  useUpdateApexWorkItem,
   useApexWorkBoardStream,
   useImportApexWorkItemsFromAdo,
 } from '../../hooks/useApexWorkItems';
@@ -60,6 +65,8 @@ const mockUseFacets = useApexWorkItemFacets as jest.Mock;
 const mockUseMove = useMoveApexWorkItem as jest.Mock;
 const mockUseCreateRelease = useCreateApexRelease as jest.Mock;
 const mockUseBulk = useBulkUpdateApexWorkItems as jest.Mock;
+const mockUseRank = useRankApexWorkItems as jest.Mock;
+const mockUseUpdate = useUpdateApexWorkItem as jest.Mock;
 const mockUseStream = useApexWorkBoardStream as jest.Mock;
 const mockUseImport = useImportApexWorkItemsFromAdo as jest.Mock;
 
@@ -91,6 +98,7 @@ const MOCK_ITEMS = [
 const MOCK_OWNERS = [
   { oid: 'u1', displayName: 'Aneesh', email: 'a@a.com' },
   { oid: 'u2', displayName: 'Ryan', email: 'r@r.com' },
+  { oid: 'apex', displayName: 'Apex', email: '', isApex: true },
 ];
 
 function stubBoardHooks() {
@@ -107,6 +115,8 @@ function stubBoardHooks() {
   mockUseMove.mockReturnValue({ mutate: jest.fn() });
   mockUseCreateRelease.mockReturnValue({ mutate: jest.fn() });
   mockUseBulk.mockReturnValue({ mutate: jest.fn() });
+  mockUseRank.mockReturnValue({ mutate: jest.fn(), isPending: false, isError: false, error: null });
+  mockUseUpdate.mockReturnValue({ mutate: jest.fn() });
   mockUseStream.mockReturnValue(undefined);
   mockUseImport.mockReturnValue({ mutate: jest.fn(), isPending: false, isError: false, error: null });
 }
@@ -127,7 +137,11 @@ function setup() {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('ApexWorkBoardView', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    canManage = false;
+    localStorage.clear();
+  });
 
   it('renders all 5 column headers', () => {
     setup();
@@ -238,6 +252,55 @@ describe('ApexWorkBoardView', () => {
       expect.objectContaining({
         types: expect.arrayContaining(['PBI', 'TBI', 'Bug', 'Epic', 'Feature']),
       }),
+    );
+  });
+
+  it('opens the drawer only from the explicit backlog Edit action', () => {
+    setup();
+    fireEvent.click(screen.getByTestId('work-board-view-backlog'));
+    fireEvent.click(screen.getByTestId('work-board-tr-i1'));
+    expect(screen.queryByTestId('detail-panel')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('work-board-edit-i1'));
+    expect(screen.getByTestId('detail-panel')).toBeInTheDocument();
+  });
+
+  it('submits every filtered row to AI ranking, not only a page', () => {
+    canManage = true;
+    setup();
+    fireEvent.click(screen.getByTestId('work-board-view-backlog'));
+    fireEvent.click(screen.getByTestId('work-board-rank-filtered'));
+    expect(mockUseRank().mutate).toHaveBeenCalledWith({ ids: ['i1', 'i2'] });
+  });
+
+  it('shows Apex as a real assignee option for managers', () => {
+    canManage = true;
+    setup();
+    fireEvent.click(screen.getByTestId('work-board-view-backlog'));
+    expect(screen.getAllByRole('option', { name: 'Apex' }).length).toBeGreaterThan(0);
+  });
+
+  it('shows Custom types when the board type subset is neither delivery nor all', () => {
+    setup();
+    fireEvent.click(screen.getByTestId('work-board-filter-chip-Epic'));
+    fireEvent.click(screen.getByTestId('work-board-view-backlog'));
+    expect(screen.getByTestId('work-board-backlog-type-filter')).toHaveValue('custom');
+    fireEvent.change(screen.getByTestId('work-board-backlog-type-filter'), { target: { value: 'all' } });
+    expect(mockUseItems).toHaveBeenCalledWith(
+      expect.objectContaining({
+        types: expect.arrayContaining(['PBI', 'TBI', 'Bug', 'Epic', 'Feature']),
+      }),
+    );
+  });
+
+  it('keeps epic and feature filters visible on the backlog toolbar', () => {
+    setup();
+    fireEvent.change(screen.getByTestId('work-board-filter-by-epic-select'), { target: { value: 'Epic One' } });
+    fireEvent.change(screen.getByTestId('work-board-filter-by-feature-select'), { target: { value: 'Feature One' } });
+    fireEvent.click(screen.getByTestId('work-board-view-backlog'));
+    expect(screen.getByTestId('work-board-filter-by-epic-select')).toHaveValue('Epic One');
+    expect(screen.getByTestId('work-board-filter-by-feature-select')).toHaveValue('Feature One');
+    expect(mockUseItems).toHaveBeenCalledWith(
+      expect.objectContaining({ epicTitle: 'Epic One', featureTitle: 'Feature One' }),
     );
   });
 });
