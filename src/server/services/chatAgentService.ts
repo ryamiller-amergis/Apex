@@ -6371,6 +6371,7 @@ function reflectDurableAdmission(
   options: InteractiveSendOptions | undefined,
   response: InteractiveTurnAcceptedResponse,
 ): void {
+  if (response.idempotent === true) return;
   if (response.shouldReflectThreadState === false) return;
   let timestamp = new Date().toISOString();
   const existingMessage = state.thread.messages.find(

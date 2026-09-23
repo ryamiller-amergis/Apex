@@ -142,6 +142,8 @@ export type InteractiveTurnAcceptedResponse = Readonly<{
   runId: string;
   status: InteractiveTurnAcceptedStatus;
   interactiveClass: InteractiveClass;
+  /** Internal App Service hint; omitted from the HTTP response. */
+  idempotent?: boolean;
   /** Internal App Service hint; the HTTP route intentionally omits it. */
   shouldReflectThreadState?: boolean;
 }>;

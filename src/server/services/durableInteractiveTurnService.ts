@@ -969,7 +969,13 @@ export function createDurableInteractiveTurnService(
             runId: admitted.runId,
             status: admitted.status,
             interactiveClass: admitted.interactiveClass,
-            shouldReflectThreadState: admitted.shouldReflectThreadState,
+            idempotent: admitted.idempotent,
+            ...(admitted.shouldReflectThreadState === undefined
+              ? {}
+              : {
+                  shouldReflectThreadState:
+                    admitted.shouldReflectThreadState,
+                }),
           };
         case 'thread_active':
           throw new DurableInteractiveTurnError('THREAD_ACTIVE_TURN', 409);

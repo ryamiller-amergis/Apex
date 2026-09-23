@@ -1537,9 +1537,22 @@ describe('canonical durable send wrapper', () => {
       runId,
       status: 'completed' as const,
       interactiveClass: 'fast' as const,
-      shouldReflectThreadState: false,
+      idempotent: true,
+      // Deliberately stale: the newer run claims the thread after this
+      // transaction result was captured but before reflection.
+      shouldReflectThreadState: true,
     };
-    mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+    const thread = await createThread(
+      'thread-owner',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+    mockDurableInteractiveAdmit.mockImplementation(async () => {
+      const capturedDuplicate = accepted;
+      thread.status = 'running';
+      thread.activeRunId = 'newer-active-run';
+      return capturedDuplicate;
+    });
     mockCanonicalInteractiveWorkflowRoute.mockImplementation(
       async (input: {
         admitDurable(): Promise<typeof accepted>;
@@ -1548,13 +1561,6 @@ describe('canonical durable send wrapper', () => {
         response: await input.admitDurable(),
       }),
     );
-    const thread = await createThread(
-      'thread-owner',
-      baseKickoff(),
-      { skipAutoKickoff: true },
-    );
-    thread.status = 'running';
-    thread.activeRunId = 'newer-active-run';
 
     try {
       await sendMessage(thread.id, 'Old delayed retry', undefined, [], {
@@ -1566,6 +1572,67 @@ describe('canonical durable send wrapper', () => {
         activeRunId: 'newer-active-run',
       });
     } finally {
+      thread.status = 'idle';
+      thread.activeRunId = undefined;
+      await closeThread(thread.id);
+    }
+  });
+
+  it('returns an ordinary network duplicate without another bubble or status echo', async () => {
+    let call = 0;
+    mockDurableInteractiveAdmit.mockImplementation(async () => {
+      call += 1;
+      return {
+        turnId,
+        runId,
+        status: 'queued' as const,
+        interactiveClass: 'fast' as const,
+        idempotent: call > 1,
+        shouldReflectThreadState: true,
+      };
+    });
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        admitDurable(): Promise<{
+          turnId: string;
+          runId: string;
+          status: 'queued';
+          interactiveClass: 'fast';
+          idempotent: boolean;
+          shouldReflectThreadState: boolean;
+        }>;
+      }) => ({
+        route: 'durable',
+        response: await input.admitDurable(),
+      }),
+    );
+    const thread = await createThread(
+      'thread-owner',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+    const events: Array<{ type: string }> = [];
+    const unsubscribe = subscribeToThread(thread.id, (event) => {
+      events.push(event);
+    });
+
+    try {
+      await sendMessage(thread.id, 'Network retry', undefined, [], {
+        turnId,
+        turnIdPolicy: 'required',
+      });
+      expect((await getThread(thread.id))?.messages).toHaveLength(1);
+      events.length = 0;
+
+      await sendMessage(thread.id, 'Network retry', undefined, [], {
+        turnId,
+        turnIdPolicy: 'required',
+      });
+
+      expect((await getThread(thread.id))?.messages).toHaveLength(1);
+      expect(events).toEqual([]);
+    } finally {
+      unsubscribe();
       thread.status = 'idle';
       thread.activeRunId = undefined;
       await closeThread(thread.id);

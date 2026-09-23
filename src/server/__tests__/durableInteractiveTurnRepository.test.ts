@@ -965,6 +965,7 @@ describe('durable interactive turn service', () => {
         runId: RUN_ID,
         status,
         interactiveClass: 'fast',
+        idempotent: true,
       });
     },
   );
