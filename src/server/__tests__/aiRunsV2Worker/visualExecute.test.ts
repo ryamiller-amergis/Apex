@@ -397,6 +397,60 @@ describe('visual execute', () => {
     ]);
   });
 
+  it('matches the in-process UI Lab usage estimate when streaming omits counts', async () => {
+    const execute = createVisualExecute({
+      invokeModel: jest.fn(),
+      invokeStreamingModel: async (
+        _prompt,
+        _model,
+        _images,
+        onText,
+      ) => {
+        onText('<html>ok</html>');
+        return {
+          html: '<html>ok</html>',
+          usage: { inputTokens: 0, outputTokens: 0 },
+          durationMs: 25,
+        };
+      },
+      createProgressBatcher: ({ publish }) => {
+        let text = '';
+        return {
+          push: (delta: string) => {
+            text += delta;
+          },
+          close: () => publish(text, 0),
+        };
+      },
+    });
+
+    const outcome = await execute({
+      specification: {
+        ...spec,
+        subjectKind: 'ui-lab-screen',
+        outputPath: 'design.html',
+        promptInputs: {
+          userPrompt: 'A timecard approval queue',
+          targetRoute: null,
+          designSystemName: 'APEX',
+          skillMarkdown: '# UI Lab',
+          componentIndex: '- AppHeader',
+          existingPageContext: '',
+        },
+      } as never,
+      command: {} as never,
+      checkpoints: checkpoints().port as never,
+      signal: new AbortController().signal,
+    });
+
+    const usage = JSON.parse(outcome.files[1].content as string);
+    expect(usage).toMatchObject({
+      tokenSource: 'estimated',
+      outputTokens: Math.ceil('<html>ok</html>'.length / 4),
+    });
+    expect(usage.inputTokens).toBeGreaterThan(0);
+  });
+
   /**
    * Both prototype prompts answer the same subject kind, so the kind alone
    * cannot pick between them. Answering a project that has its own design

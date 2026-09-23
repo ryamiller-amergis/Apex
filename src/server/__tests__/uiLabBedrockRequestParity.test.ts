@@ -23,7 +23,7 @@ jest.mock('@aws-sdk/client-bedrock-runtime', () => {
             );
           });
         }
-        if (requests.length === 1) {
+        if (command.constructor.name.includes('WithResponseStream')) {
           async function* body() {
             yield {
               chunk: {
@@ -150,7 +150,8 @@ describe('UI Lab Bedrock request parity', () => {
       temperature: 0.2,
     });
 
-    await generateUiLabDesign({
+    const v1Tokens: string[] = [];
+    const v1Html = await generateUiLabDesign({
       prompt: 'Build a timecard approval queue',
       targetRoute: '/timecards',
       project: 'MaxView',
@@ -158,7 +159,7 @@ describe('UI Lab Bedrock request parity', () => {
       maxTokens: model.maxTokens,
       timeoutMs: model.timeoutMs,
       temperature: model.temperature,
-      onToken: jest.fn(),
+      onToken: (text) => v1Tokens.push(text),
     });
 
     const specification = buildUiLabVisualSpecification({
@@ -197,17 +198,32 @@ describe('UI Lab Bedrock request parity', () => {
       model,
       usage: { feature: 'ui-lab', project: 'MaxView' },
     });
+    const workerTokens: string[] = [];
     const execute = createVisualExecute({
-      invokeModel: (prompt, settings, images, signal) =>
-        createBedrockVisualClient().invokeModel(
+      invokeModel: jest.fn(),
+      invokeStreamingModel: (prompt, settings, images, onText, signal) =>
+        createBedrockVisualClient().invokeStreamingModel(
           prompt,
           settings,
           images,
+          onText,
           signal,
         ),
+      createProgressBatcher: ({ publish }) => {
+        let text = '';
+        return {
+          push: (delta: string) => {
+            text += delta;
+          },
+          close: async () => {
+            workerTokens.push(text);
+            await publish(text, 0);
+          },
+        };
+      },
     });
 
-    await execute({
+    const outcome = await execute({
       specification,
       command: {} as never,
       checkpoints: checkpoints(),
@@ -216,6 +232,8 @@ describe('UI Lab Bedrock request parity', () => {
 
     expect(requests).toHaveLength(2);
     expect(requests[0]).toEqual(requests[1]);
+    expect(workerTokens).toEqual(v1Tokens);
+    expect(outcome.files[0].content).toBe(v1Html);
   });
 
   it('surfaces the same timeout error through both streaming paths', async () => {

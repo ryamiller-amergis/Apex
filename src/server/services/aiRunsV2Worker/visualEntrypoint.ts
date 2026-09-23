@@ -209,6 +209,16 @@ export function createVisualExecute(deps: {
     // A worker cannot write a usage row, so the cost rides along as an
     // artifact and the owning service records it when it applies the output.
     if (typeof result !== 'string') {
+      const hasExactTokens =
+        result.usage.inputTokens > 0 || result.usage.outputTokens > 0;
+      const estimateUiLabUsage =
+        specification.subjectKind === 'ui-lab-screen' && !hasExactTokens;
+      const inputTokens = estimateUiLabUsage
+        ? Math.ceil(prompt.length / 4)
+        : result.usage.inputTokens;
+      const outputTokens = estimateUiLabUsage
+        ? Math.ceil(html.length / 4)
+        : result.usage.outputTokens;
       files.push({
         path: USAGE_FILE_NAME,
         content: JSON.stringify(
@@ -217,11 +227,16 @@ export function createVisualExecute(deps: {
             feature: specification.usage.feature,
             project: specification.usage.project,
             userId: specification.usage.userId,
-            inputTokens: result.usage.inputTokens,
-            outputTokens: result.usage.outputTokens,
+            inputTokens,
+            outputTokens,
             cacheReadTokens: result.usage.cacheReadTokens,
             cacheWriteTokens: result.usage.cacheWriteTokens,
             durationMs: result.durationMs,
+            ...(specification.subjectKind === 'ui-lab-screen'
+              ? {
+                  tokenSource: estimateUiLabUsage ? 'estimated' : 'exact',
+                }
+              : {}),
           },
           null,
           2,
