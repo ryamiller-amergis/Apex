@@ -12,4 +12,5 @@
 - Task 1 contracts/migration/classifier: complete (`31334322..588538a5`), final review approved with no findings.
 - Task 2 atomic admission: complete (`588538a5..4f814e74`), final review approved with no findings.
 - Task 3 orchestrator capacity scheduling and direct Dapr dispatch: complete (`4f814e74..129a4857`), final review approved with no findings (including planner-owned reservation release remediation).
-- Task 4 actor parity / deadlines: in progress.
+- Task 4 actor parity / deadlines: complete (`e227ac5a..05020cfa`), final review approved with no findings after remediation.
+- Task 5 stream persist/replay: in progress.
