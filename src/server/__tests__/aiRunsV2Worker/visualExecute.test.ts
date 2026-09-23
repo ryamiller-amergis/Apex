@@ -322,6 +322,81 @@ describe('visual execute', () => {
     expect(outcome.files[0].path).toBe('design.html');
   });
 
+  it('streams UI Lab deltas through bounded progress checkpoints', async () => {
+    const invokeModel = jest.fn();
+    const invokeStreamingModel = jest.fn(
+      async (
+        _prompt: string,
+        _model: unknown,
+        _images: unknown,
+        onText: (text: string) => void,
+      ) => {
+        onText('<html>');
+        onText('ok</html>');
+        return {
+          html: '<html>ok</html>',
+          usage: { inputTokens: 12, outputTokens: 34 },
+          durationMs: 56,
+        };
+      },
+    );
+    const publishProgress = jest.fn().mockResolvedValue(undefined);
+    const execute = createVisualExecute({
+      invokeModel,
+      invokeStreamingModel,
+      createProgressBatcher: ({ publish }) => {
+        let buffered = '';
+        return {
+          push: (text: string) => {
+            buffered += text;
+          },
+          close: async () => {
+            await publish(buffered, 0);
+          },
+        };
+      },
+    });
+
+    const outcome = await execute({
+      specification: {
+        ...spec,
+        subjectKind: 'ui-lab-screen',
+        outputPath: 'design.html',
+        promptInputs: {
+          userPrompt: 'A timecard approval queue',
+          targetRoute: null,
+          designSystemName: 'APEX',
+          skillMarkdown: '# UI Lab',
+          componentIndex: '- AppHeader',
+          existingPageContext: '',
+        },
+      } as never,
+      command: {} as never,
+      checkpoints: {
+        ...checkpoints().port,
+        publishProgress,
+      } as never,
+      signal: new AbortController().signal,
+    });
+
+    expect(invokeModel).not.toHaveBeenCalled();
+    expect(invokeStreamingModel).toHaveBeenCalledTimes(1);
+    expect(publishProgress).toHaveBeenCalledWith(
+      'generation',
+      'running',
+      undefined,
+      {
+        kind: 'text_delta',
+        offset: 0,
+        text: '<html>ok</html>',
+      },
+    );
+    expect(outcome.files.map((file) => file.path)).toEqual([
+      'design.html',
+      'usage.json',
+    ]);
+  });
+
   /**
    * Both prototype prompts answer the same subject kind, so the kind alone
    * cannot pick between them. Answering a project that has its own design

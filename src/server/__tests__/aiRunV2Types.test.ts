@@ -1,4 +1,5 @@
 import {
+  AI_RUN_V2_MAX_PROGRESS_TEXT_BYTES,
   AI_CONTROL_PLANE_LEASE_KEYS,
   AI_RUN_ARTIFACT_STATUSES,
   AI_RUN_TRANSPORT_VERSIONS,
@@ -201,6 +202,40 @@ describe('AI-run V2 shared types', () => {
     expect(isAiRunV2Checkpoint(started)).toBe(true);
     expect(isAiRunV2Checkpoint(heartbeat)).toBe(true);
     expect(isAiRunV2Checkpoint(progress)).toBe(true);
+  });
+
+  it('accepts a bounded generic text delta on a progress checkpoint', () => {
+    expect(
+      isAiRunV2Checkpoint({
+        ...envelopeBase,
+        kind: 'progress',
+        checkpointSequence: 3,
+        phase: 'generation',
+        status: 'running',
+        progress: {
+          kind: 'text_delta',
+          offset: 12,
+          text: '<body>',
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects text progress that exceeds the message bound', () => {
+    expect(
+      isAiRunV2Checkpoint({
+        ...envelopeBase,
+        kind: 'progress',
+        checkpointSequence: 3,
+        phase: 'generation',
+        status: 'running',
+        progress: {
+          kind: 'text_delta',
+          offset: 0,
+          text: 'x'.repeat(AI_RUN_V2_MAX_PROGRESS_TEXT_BYTES + 1),
+        },
+      }),
+    ).toBe(false);
   });
 
   it('rejects checkpoints with stale schema, unknown kinds, or non-positive sequences', () => {

@@ -98,6 +98,17 @@ export const AI_RUN_V2_CHECKPOINT_KINDS = [
 ] as const;
 export type AiRunV2CheckpointKind = (typeof AI_RUN_V2_CHECKPOINT_KINDS)[number];
 
+export const AI_RUN_V2_MAX_PROGRESS_TEXT_BYTES = 16 * 1024;
+
+export type AiRunV2TextDeltaProgress = Readonly<{
+  kind: 'text_delta';
+  /** Character offset in the complete streamed text. */
+  offset: number;
+  text: string;
+}>;
+
+export type AiRunV2RunProgress = AiRunV2TextDeltaProgress;
+
 export const AI_RUN_V2_RESULT_KINDS = ['terminal'] as const;
 export type AiRunV2ResultKind = (typeof AI_RUN_V2_RESULT_KINDS)[number];
 
@@ -155,6 +166,7 @@ export type AiRunV2ProgressCheckpoint = AiRunV2EnvelopeBase &
     phase: string;
     status: string;
     detail?: string;
+    progress?: AiRunV2RunProgress;
   }>;
 
 export type AiRunV2Checkpoint =
@@ -210,6 +222,19 @@ function isNonNegativeInteger(value: unknown): value is number {
 
 function isNonNegativeNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function isAiRunV2RunProgress(value: unknown): value is AiRunV2RunProgress {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    candidate.kind === 'text_delta'
+    && Number.isSafeInteger(candidate.offset)
+    && (candidate.offset as number) >= 0
+    && isNonEmptyString(candidate.text)
+    && new TextEncoder().encode(candidate.text).byteLength
+      <= AI_RUN_V2_MAX_PROGRESS_TEXT_BYTES
+  );
 }
 
 export function isAiRunTransportVersion(
@@ -338,7 +363,12 @@ export function isAiRunV2Checkpoint(
   }
   if (candidate.kind === 'progress') {
     return (
-      isNonEmptyString(candidate.phase) && isNonEmptyString(candidate.status)
+      isNonEmptyString(candidate.phase)
+      && isNonEmptyString(candidate.status)
+      && (
+        candidate.progress === undefined
+        || isAiRunV2RunProgress(candidate.progress)
+      )
     );
   }
   return false;

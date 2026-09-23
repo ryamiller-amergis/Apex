@@ -27,6 +27,10 @@ import {
 } from './visualConcurrency';
 import { createV2Worker, type ExecuteWorkload } from './worker';
 import { normalizeGeneratedPrototypeHtml } from '../../utils/htmlSanitizer';
+import {
+  createStreamProgressBatcher,
+  type StreamProgressBatcherOptions,
+} from './streamProgressBatcher';
 
 export const USAGE_FILE_NAME = VISUAL_USAGE_FILE_NAME;
 
@@ -36,6 +40,14 @@ export type InvokeVisualModel = (
   images: ReadonlyArray<VisualReferenceImage>,
   signal: AbortSignal,
 ) => Promise<string | VisualModelResult>;
+
+export type InvokeStreamingVisualModel = (
+  prompt: string,
+  model: VisualModelSettings,
+  images: ReadonlyArray<VisualReferenceImage>,
+  onText: (text: string) => void | Promise<void>,
+  signal: AbortSignal,
+) => Promise<VisualModelResult>;
 
 /**
  * The reference screenshot both in-process visual paths attach as a vision
@@ -116,6 +128,10 @@ function buildVisualPrompt(specification: AiRunV2VisualSpecification): string {
  */
 export function createVisualExecute(deps: {
   invokeModel: InvokeVisualModel;
+  invokeStreamingModel?: InvokeStreamingVisualModel;
+  createProgressBatcher?: (
+    options: StreamProgressBatcherOptions,
+  ) => ReturnType<typeof createStreamProgressBatcher>;
 }): ExecuteWorkload {
   return async ({ specification, checkpoints, signal }) => {
     if (!isAiRunV2VisualSpecification(specification)) {
@@ -123,12 +139,61 @@ export function createVisualExecute(deps: {
     }
     await checkpoints.publishProgress('execution', 'running');
 
-    const result = await deps.invokeModel(
-      buildVisualPrompt(specification),
-      specification.model,
-      visualReferenceImages(specification),
-      signal,
-    );
+    const prompt = buildVisualPrompt(specification);
+    const images = visualReferenceImages(specification);
+    let result: string | VisualModelResult;
+    switch (specification.subjectKind) {
+      case 'design-prototype':
+        result = await deps.invokeModel(
+          prompt,
+          specification.model,
+          images,
+          signal,
+        );
+        break;
+      case 'ui-lab-screen': {
+        if (!deps.invokeStreamingModel) {
+          result = await deps.invokeModel(
+            prompt,
+            specification.model,
+            images,
+            signal,
+          );
+          break;
+        }
+        const createBatcher =
+          deps.createProgressBatcher ?? createStreamProgressBatcher;
+        const batcher = createBatcher({
+          publish: (text, offset) =>
+            checkpoints.publishProgress(
+              'generation',
+              'running',
+              undefined,
+              { kind: 'text_delta', offset, text },
+            ),
+        });
+        try {
+          result = await deps.invokeStreamingModel(
+            prompt,
+            specification.model,
+            images,
+            (text) => batcher.push(text),
+            signal,
+          );
+        } finally {
+          await batcher.close();
+        }
+        break;
+      }
+      default: {
+        const unhandled: never = specification;
+        throw new Error(
+          `Unsupported visual subjectKind: ${String(
+            (unhandled as { subjectKind?: unknown }).subjectKind,
+          )}`,
+        );
+      }
+    }
     const html = normalizeGeneratedPrototypeHtml(
       typeof result === 'string' ? result : result.html,
     );
@@ -154,6 +219,8 @@ export function createVisualExecute(deps: {
             userId: specification.usage.userId,
             inputTokens: result.usage.inputTokens,
             outputTokens: result.usage.outputTokens,
+            cacheReadTokens: result.usage.cacheReadTokens,
+            cacheWriteTokens: result.usage.cacheWriteTokens,
             durationMs: result.durationMs,
           },
           null,
@@ -170,6 +237,14 @@ export function createVisualExecute(deps: {
 const executeVisualWorkload: ExecuteWorkload = createVisualExecute({
   invokeModel: (prompt, model, images, signal) =>
     createBedrockVisualClient().invokeModel(prompt, model, images, signal),
+  invokeStreamingModel: (prompt, model, images, onText, signal) =>
+    createBedrockVisualClient().invokeStreamingModel(
+      prompt,
+      model,
+      images,
+      onText,
+      signal,
+    ),
 });
 
 export async function startVisualWorker(): Promise<void> {

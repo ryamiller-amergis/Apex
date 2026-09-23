@@ -1,4 +1,5 @@
 const requests: Array<Record<string, unknown>> = [];
+let timeoutMode = false;
 
 const MODEL_HTML =
   '<!DOCTYPE html><html><body><!-- STATE:DEFAULT:START -->ok<!-- STATE:DEFAULT:END --></body></html>';
@@ -8,8 +9,20 @@ jest.mock('@aws-sdk/client-bedrock-runtime', () => {
   return {
     ...actual,
     BedrockRuntimeClient: class {
-      async send(command: { input: Record<string, unknown> }): Promise<unknown> {
+      async send(
+        command: { input: Record<string, unknown> },
+        options?: { abortSignal?: AbortSignal },
+      ): Promise<unknown> {
         requests.push(command.input);
+        if (timeoutMode) {
+          return new Promise<never>((_resolve, reject) => {
+            options?.abortSignal?.addEventListener(
+              'abort',
+              () => reject(new Error('socket aborted')),
+              { once: true },
+            );
+          });
+        }
         if (requests.length === 1) {
           async function* body() {
             yield {
@@ -126,6 +139,7 @@ function checkpoints() {
 describe('UI Lab Bedrock request parity', () => {
   beforeEach(() => {
     requests.length = 0;
+    timeoutMode = false;
   });
 
   it('sends the same request through in-process and V2 generation', async () => {
@@ -202,5 +216,49 @@ describe('UI Lab Bedrock request parity', () => {
 
     expect(requests).toHaveLength(2);
     expect(requests[0]).toEqual(requests[1]);
+  });
+
+  it('surfaces the same timeout error through both streaming paths', async () => {
+    jest.useFakeTimers();
+    timeoutMode = true;
+    try {
+      const model = resolveUiLabVisualModel({
+        modelId: 'anthropic.claude',
+        maxTokens: 16_000,
+        timeoutMs: 10,
+        temperature: 0.2,
+      });
+      const inProcess = generateUiLabDesign({
+        prompt: 'Build a queue',
+        project: 'MaxView',
+        modelId: model.modelId,
+        maxTokens: model.maxTokens,
+        timeoutMs: model.timeoutMs,
+        temperature: model.temperature,
+        onToken: jest.fn(),
+      }).catch((error: Error) => error);
+      await jest.advanceTimersByTimeAsync(10);
+      const inProcessError = await inProcess;
+
+      const worker = createBedrockVisualClient()
+        .invokeStreamingModel(
+          'prompt',
+          model,
+          [],
+          jest.fn(),
+        )
+        .catch((error: Error) => error);
+      await jest.advanceTimersByTimeAsync(10);
+      const workerError = await worker;
+
+      expect(inProcessError).toBeInstanceOf(Error);
+      expect(workerError).toBeInstanceOf(Error);
+      if (!(inProcessError instanceof Error) || !(workerError instanceof Error)) {
+        throw new Error('Expected both streaming paths to reject');
+      }
+      expect(workerError.message).toBe(inProcessError.message);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

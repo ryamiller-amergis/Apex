@@ -9,6 +9,20 @@ function response(body: unknown) {
   };
 }
 
+function streamingResponse(events: unknown[]) {
+  return {
+    body: (async function* stream() {
+      for (const event of events) {
+        yield {
+          chunk: {
+            bytes: new TextEncoder().encode(JSON.stringify(event)),
+          },
+        };
+      }
+    })(),
+  };
+}
+
 /**
  * Every value the client sends arrives on the specification, so the fixture
  * carries a complete one. There is nothing left for the client to default.
@@ -26,6 +40,63 @@ const MODEL = {
 };
 
 describe('bedrockVisualClient', () => {
+  it('streams text deltas and returns the full HTML with reported usage', async () => {
+    const send = jest.fn().mockResolvedValue(
+      streamingResponse([
+        {
+          type: 'message_start',
+          message: {
+            usage: {
+              input_tokens: 120,
+              cache_read_input_tokens: 8,
+              cache_creation_input_tokens: 3,
+            },
+          },
+        },
+        {
+          type: 'content_block_delta',
+          delta: { type: 'text_delta', text: '<html>' },
+        },
+        {
+          type: 'content_block_delta',
+          delta: { type: 'text_delta', text: 'ok</html>' },
+        },
+        {
+          type: 'message_delta',
+          usage: { output_tokens: 3400 },
+        },
+      ]),
+    );
+    const onText = jest.fn();
+    const client = createBedrockVisualClient({ client: { send } as never });
+
+    const result = await client.invokeStreamingModel(
+      'a prompt',
+      { ...MODEL, temperature: 0.2 },
+      [],
+      onText,
+    );
+
+    expect(onText.mock.calls.map(([text]) => text)).toEqual([
+      '<html>',
+      'ok</html>',
+    ]);
+    expect(result).toMatchObject({
+      html: '<html>ok</html>',
+      usage: {
+        inputTokens: 120,
+        outputTokens: 3400,
+        cacheReadTokens: 8,
+        cacheWriteTokens: 3,
+      },
+    });
+    const payload = JSON.parse(send.mock.calls[0][0].input.body as string);
+    expect(payload.messages[0].content).toEqual([
+      { type: 'text', text: 'a prompt' },
+    ]);
+    expect(payload.temperature).toBe(0.2);
+  });
+
   it('returns the model text and the tokens it reported', async () => {
     const send = jest.fn().mockResolvedValue(
       response({

@@ -623,9 +623,15 @@ export function createRunAttemptRepository(options?: {
         const inbox = createInboxRepository(executor);
 
         const attemptResult = await executor.execute(sql`
-          SELECT id, dispatch_message_id, last_checkpoint_sequence, status
-          FROM ai_run_attempts
-          WHERE id = ${checkpoint.attemptId}
+          SELECT
+            attempt.id,
+            attempt.dispatch_message_id,
+            attempt.last_checkpoint_sequence,
+            attempt.status,
+            run.thread_id
+          FROM ai_run_attempts attempt
+          JOIN agent_runs run ON run.id = attempt.run_id
+          WHERE attempt.id = ${checkpoint.attemptId}
           FOR UPDATE
         `);
         const attempt = resultRows<{
@@ -633,6 +639,7 @@ export function createRunAttemptRepository(options?: {
           dispatch_message_id: string;
           last_checkpoint_sequence: number;
           status: AiRunV2AttemptStatus;
+          thread_id: string;
         }>(attemptResult)[0];
         if (!attempt) return { status: 'not_found' };
         if (attempt.dispatch_message_id !== checkpoint.dispatchMessageId) {
@@ -665,6 +672,61 @@ export function createRunAttemptRepository(options?: {
         });
         if (claim.status !== 'inserted') {
           return { status: 'duplicate' };
+        }
+
+        if (
+          checkpoint.kind === 'progress'
+          && checkpoint.progress?.kind === 'text_delta'
+        ) {
+          const text = checkpoint.progress.text.split('\u0000').join('');
+          if (text) {
+            const sourceInstance =
+              `ai-run-v2-checkpoint:${checkpoint.attemptId}`;
+            const event = {
+              type: 'token',
+              text,
+              streamOffset: checkpoint.progress.offset,
+              runId: checkpoint.runId,
+              eventTimestamp: checkpoint.timestamp,
+            };
+            await executor.execute(sql`
+              INSERT INTO agent_run_events (
+                event_id,
+                thread_id,
+                run_id,
+                source_instance,
+                sequence,
+                event_timestamp,
+                event_type,
+                phase,
+                status,
+                detail,
+                event
+              ) VALUES (
+                ${checkpoint.eventId}::uuid,
+                ${attempt.thread_id},
+                ${checkpoint.runId},
+                ${sourceInstance},
+                ${checkpoint.checkpointSequence},
+                ${checkpoint.timestamp},
+                'token',
+                'implementation',
+                'running',
+                NULL,
+                ${JSON.stringify(event)}::jsonb
+              )
+              ON CONFLICT (event_id) DO NOTHING
+            `);
+            await executor.execute(sql`
+              SELECT pg_notify(
+                'agent_run_events',
+                json_build_object(
+                  'threadId', ${attempt.thread_id},
+                  'eventId', ${checkpoint.eventId}
+                )::text
+              )
+            `);
+          }
         }
 
         // The started checkpoint carries the only execution id the reconciler

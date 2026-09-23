@@ -9,12 +9,15 @@
 import {
   BedrockRuntimeClient,
   InvokeModelCommand,
+  InvokeModelWithResponseStreamCommand,
 } from '@aws-sdk/client-bedrock-runtime';
 import type { VisualModelSettings } from '../../../shared/types/aiRunV2VisualSpec';
 
 export type VisualModelUsage = Readonly<{
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
 }>;
 
 export type VisualModelResult = Readonly<{
@@ -38,6 +41,13 @@ export type BedrockVisualClient = {
     prompt: string,
     model: VisualModelSettings,
     images?: ReadonlyArray<VisualReferenceImage>,
+    signal?: AbortSignal,
+  ): Promise<VisualModelResult>;
+  invokeStreamingModel(
+    prompt: string,
+    model: VisualModelSettings,
+    images: ReadonlyArray<VisualReferenceImage>,
+    onText: (text: string) => void | Promise<void>,
     signal?: AbortSignal,
   ): Promise<VisualModelResult>;
 };
@@ -144,6 +154,16 @@ function buildContent(
     })),
     { type: 'text', text: prompt },
   ];
+}
+
+function buildStreamingContent(
+  prompt: string,
+  images: ReadonlyArray<VisualReferenceImage>,
+): unknown[] {
+  const content = buildContent(prompt, images);
+  return typeof content === 'string'
+    ? [{ type: 'text', text: content }]
+    : content;
 }
 
 export function createBedrockVisualClient(options?: {
@@ -264,6 +284,146 @@ export function createBedrockVisualClient(options?: {
         usage: {
           inputTokens: decoded.usage?.input_tokens ?? 0,
           outputTokens: decoded.usage?.output_tokens ?? 0,
+        },
+        durationMs: now() - startedAt,
+      };
+    },
+
+    async invokeStreamingModel(prompt, model, images, onText, signal) {
+      const command = new InvokeModelWithResponseStreamCommand({
+        modelId: model.modelId,
+        contentType: 'application/json',
+        accept: 'application/json',
+        body: JSON.stringify({
+          anthropic_version: 'bedrock-2023-05-31',
+          max_tokens: model.maxTokens,
+          messages: [
+            {
+              role: 'user',
+              content: buildStreamingContent(prompt, images),
+            },
+          ],
+          ...(model.temperature !== undefined
+            ? { temperature: model.temperature }
+            : {}),
+        }),
+      });
+
+      const startedAt = now();
+      const sendAttempt = async () => {
+        if (signal?.aborted) throw abortError(signal);
+        const controller = new AbortController();
+        const abortForAttempt = (): void =>
+          controller.abort(signal?.reason);
+        signal?.addEventListener('abort', abortForAttempt, { once: true });
+        const timer = setTimeout(() => controller.abort(), model.timeoutMs);
+        try {
+          return await (client as BedrockRuntimeClient).send(command, {
+            abortSignal: controller.signal,
+          });
+        } catch (error) {
+          if (signal?.aborted) throw abortError(signal);
+          throw error;
+        } finally {
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', abortForAttempt);
+        }
+      };
+
+      let response;
+      for (
+        let attempt = 1;
+        attempt <= model.retry.maxAttempts;
+        attempt += 1
+      ) {
+        try {
+          response = await sendAttempt();
+          break;
+        } catch (error) {
+          if (signal?.aborted) throw abortError(signal);
+          if (
+            !isBedrockRetryable(error)
+            || attempt === model.retry.maxAttempts
+          ) {
+            throw error;
+          }
+          let delay =
+            model.retry.initialBackoffMs
+            * Math.pow(model.retry.backoffMultiplier, attempt - 1);
+          if (model.retry.jitter) {
+            delay *= 0.5 + random();
+          }
+          await sleep(delay, signal);
+        }
+      }
+      if (!response) throw new Error('Bedrock returned no response');
+
+      let html = '';
+      let inputTokens = 0;
+      let outputTokens = 0;
+      let cacheReadTokens = 0;
+      let cacheWriteTokens = 0;
+      const body = (
+        response as {
+          body?: AsyncIterable<{
+            chunk?: { bytes?: Uint8Array };
+          }>;
+        }
+      ).body;
+      for await (const event of body ?? []) {
+        if (!event.chunk?.bytes) continue;
+        try {
+          const parsed = JSON.parse(
+            new TextDecoder().decode(event.chunk.bytes),
+          ) as {
+            type?: string;
+            delta?: { type?: string; text?: string };
+            usage?: {
+              input_tokens?: number;
+              output_tokens?: number;
+              cache_read_input_tokens?: number;
+              cache_creation_input_tokens?: number;
+            };
+            message?: {
+              usage?: {
+                input_tokens?: number;
+                output_tokens?: number;
+                cache_read_input_tokens?: number;
+                cache_creation_input_tokens?: number;
+              };
+            };
+          };
+          if (
+            parsed.type === 'content_block_delta'
+            && parsed.delta?.type === 'text_delta'
+          ) {
+            const text = parsed.delta.text ?? '';
+            html += text;
+            await onText(text);
+          }
+          const usage = parsed.message?.usage ?? parsed.usage;
+          if (usage) {
+            if (usage.input_tokens) inputTokens = usage.input_tokens;
+            if (usage.output_tokens) outputTokens = usage.output_tokens;
+            if (usage.cache_read_input_tokens) {
+              cacheReadTokens = usage.cache_read_input_tokens;
+            }
+            if (usage.cache_creation_input_tokens) {
+              cacheWriteTokens = usage.cache_creation_input_tokens;
+            }
+          }
+        } catch {
+          // Match the in-process UI Lab stream: malformed event chunks are skipped.
+        }
+      }
+
+      return {
+        html,
+        usage: {
+          inputTokens,
+          outputTokens,
+          cacheReadTokens,
+          cacheWriteTokens,
         },
         durationMs: now() - startedAt,
       };

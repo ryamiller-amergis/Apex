@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import {
   AI_RUN_V2_SCHEMA_VERSION,
   type AiRunV2Checkpoint,
+  type AiRunV2RunProgress,
 } from '../../../shared/types/aiRunV2';
 
 export const CHECKPOINT_INTERVAL_MS = 30_000;
@@ -35,7 +36,12 @@ export type CheckpointPublisher = {
   /** Sequence numbers start at 1 and never repeat for an attempt. */
   publishStarted(containerAppsExecutionId: string): Promise<void>;
   publishHeartbeat(): Promise<void>;
-  publishProgress(phase: string, status: string, detail?: string): Promise<void>;
+  publishProgress(
+    phase: string,
+    status: string,
+    detail?: string,
+    progress?: AiRunV2RunProgress,
+  ): Promise<void>;
   lastSequence(): number;
 };
 
@@ -82,7 +88,7 @@ export function createCheckpointPublisher(
       });
     },
 
-    async publishProgress(phase, status, detail) {
+    async publishProgress(phase, status, detail, progress) {
       sequence += 1;
       await publish({
         ...envelope(),
@@ -91,6 +97,7 @@ export function createCheckpointPublisher(
         phase,
         status,
         ...(detail === undefined ? {} : { detail }),
+        ...(progress === undefined ? {} : { progress }),
       });
     },
 

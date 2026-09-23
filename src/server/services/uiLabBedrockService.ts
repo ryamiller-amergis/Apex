@@ -2,8 +2,6 @@ import { resolveLocalSkillBundle, resolveRemoteSkillBundle, logBundleDiagnostics
 import path from 'path';
 import fs from 'fs';
 const { existsSync, readFileSync } = fs;
-import { BedrockRuntimeClient, InvokeModelWithResponseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
-import { retryWithBackoff } from '../utils/retry';
 import {
   fetchExistingPageContext,
   getDesignSystemCatalog,
@@ -18,6 +16,7 @@ import {
   buildResolvedUiLabPrompt,
   type ResolvedUiLabPromptInput,
 } from './aiRunsV2Worker/uiLabPromptBuilder';
+import { createBedrockVisualClient } from './aiRunsV2Worker/bedrockVisualClient';
 
 /**
  * Cross-region inference profiles (us.anthropic.* model IDs) must be invoked
@@ -32,10 +31,6 @@ function resolveBedrockRegion(modelId: string): string {
   // Cross-region inference profile IDs start with a geo prefix ("us.", "eu.", "ap.")
   if (/^(us|eu|ap)\./.test(modelId)) return 'us-east-1';
   return process.env.AWS_REGION ?? 'us-east-1';
-}
-
-function makeClient(modelId: string): BedrockRuntimeClient {
-  return new BedrockRuntimeClient({ region: resolveBedrockRegion(modelId) });
 }
 
 const DEFAULT_UI_LAB_MODEL =
@@ -116,15 +111,6 @@ function loadApexComponentIndex(): string {
     }
   } catch { /* non-fatal */ }
   return '';
-}
-
-function isThrottleError(err: unknown): boolean {
-  const e = err as { name?: string; statusCode?: number; $metadata?: { httpStatusCode?: number } } | undefined;
-  if (!e) return false;
-  const name = e.name ?? '';
-  if (name === 'ThrottlingException' || name === 'TooManyRequestsException') return true;
-  const status = e.statusCode ?? e.$metadata?.httpStatusCode;
-  return status === 429 || (typeof status === 'number' && status >= 500 && status < 600);
 }
 
 function loadLocalSkill(): string {
@@ -328,106 +314,38 @@ async function invokeStreaming(
   project?: string,
   userId?: string,
 ): Promise<string> {
-  const client = makeClient(modelId);
-  const content: Array<Record<string, unknown>> = [];
-
-  if (figmaBase64) {
-    content.push({
-      type: 'image',
-      source: { type: 'base64', media_type: 'image/png', data: figmaBase64 },
-    });
-  }
-
-  content.push({ type: 'text', text: prompt });
-
-  const payload: Record<string, unknown> = {
-    anthropic_version: 'bedrock-2023-05-31',
-    max_tokens: maxTokens,
-    messages: [{ role: 'user', content }],
-  };
-
-  if (temperature !== undefined) {
-    payload.temperature = temperature;
-  }
-
-  const command = new InvokeModelWithResponseStreamCommand({
-    modelId,
-    contentType: 'application/json',
-    accept: 'application/json',
-    body: JSON.stringify(payload),
-  });
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  let fullText = '';
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let cacheReadTokens = 0;
-  let cacheWriteTokens = 0;
-
-  try {
-    const response = await retryWithBackoff(
-      () => client.send(command, { abortSignal: controller.signal }),
-      {
-        maxRetries: UI_LAB_RETRY_MAX_ATTEMPTS,
-        initialDelay: UI_LAB_RETRY_INITIAL_BACKOFF_MS,
+  const result = await createBedrockVisualClient({
+    region: resolveBedrockRegion(modelId),
+  }).invokeStreamingModel(
+    prompt,
+    {
+      modelId,
+      maxTokens,
+      timeoutMs,
+      retry: {
+        maxAttempts: UI_LAB_RETRY_MAX_ATTEMPTS,
+        initialBackoffMs: UI_LAB_RETRY_INITIAL_BACKOFF_MS,
+        backoffMultiplier: 2,
         jitter: true,
-        shouldRetry: isThrottleError,
       },
-    );
-
-    for await (const event of response.body ?? []) {
-      if (event.chunk?.bytes) {
-        const decoded = new TextDecoder().decode(event.chunk.bytes);
-        try {
-          const parsed = JSON.parse(decoded) as {
-            type?: string;
-            // content_block_delta
-            delta?: { type?: string; text?: string };
-            // message_delta has usage at top level
-            usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
-            // message_start has usage nested under message
-            message?: { usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } };
-          };
-
-          if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
-            const text = parsed.delta.text ?? '';
-            fullText += text;
-            onToken(text);
-          }
-
-          // message_start: input token count under parsed.message.usage
-          const startUsage = parsed.message?.usage;
-          if (startUsage) {
-            if (startUsage.input_tokens) inputTokens = startUsage.input_tokens;
-            if (startUsage.cache_read_input_tokens) cacheReadTokens = startUsage.cache_read_input_tokens;
-            if (startUsage.cache_creation_input_tokens) cacheWriteTokens = startUsage.cache_creation_input_tokens;
-          }
-
-          // message_delta: output token count under parsed.usage
-          const deltaUsage = parsed.usage;
-          if (deltaUsage) {
-            if (deltaUsage.output_tokens) outputTokens = deltaUsage.output_tokens;
-            if (deltaUsage.input_tokens) inputTokens = deltaUsage.input_tokens;
-            if (deltaUsage.cache_read_input_tokens) cacheReadTokens = deltaUsage.cache_read_input_tokens;
-            if (deltaUsage.cache_creation_input_tokens) cacheWriteTokens = deltaUsage.cache_creation_input_tokens;
-          }
-        } catch {
-          // skip malformed event chunks
-        }
-      }
-    }
-  } finally {
-    clearTimeout(timer);
-  }
+      ...(temperature === undefined ? {} : { temperature }),
+    },
+    figmaBase64
+      ? [{ base64: figmaBase64, mediaType: 'image/png' }]
+      : [],
+    onToken,
+  );
+  const inputTokens = result.usage.inputTokens;
+  const outputTokens = result.usage.outputTokens;
+  const cacheReadTokens = result.usage.cacheReadTokens ?? 0;
+  const cacheWriteTokens = result.usage.cacheWriteTokens ?? 0;
 
   // Record exact usage (fire-and-forget)
   // If streaming didn't emit usage events (some model versions), fall back to
   // character-length estimation so the interaction is still recorded.
   const hasExactTokens = inputTokens > 0 || outputTokens > 0;
   const recordInputTokens = hasExactTokens ? inputTokens : Math.ceil(prompt.length / 4);
-  const recordOutputTokens = hasExactTokens ? outputTokens : Math.ceil(fullText.length / 4);
+  const recordOutputTokens = hasExactTokens ? outputTokens : Math.ceil(result.html.length / 4);
   const tokenSource = hasExactTokens ? 'exact' as const : 'estimated' as const;
   const costSource = hasExactTokens ? 'computed' as const : 'estimated' as const;
 
@@ -452,11 +370,12 @@ async function invokeStreaming(
       tokenSource,
       costUsd,
       costSource,
+      durationMs: result.durationMs,
       status: 'success',
     }))
     .catch(() => {});
 
-  return fullText;
+  return result.html;
 }
 
 export async function generateUiLabDesign(opts: UiLabGenerateOptions): Promise<string> {

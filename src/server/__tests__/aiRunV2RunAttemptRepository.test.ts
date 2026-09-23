@@ -359,4 +359,53 @@ describe('AI-run V2 run attempt repository', () => {
       lastCheckpointSequence: 5,
     });
   });
+
+  it('persists and fans out accepted text progress in the checkpoint transaction', async () => {
+    const eventId = '3f44f6f1-ec42-4aa6-9df4-0d8ce8438491';
+    const execute = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          id: 'attempt-1',
+          dispatch_message_id: 'dispatch-1',
+          last_checkpoint_sequence: 1,
+          status: 'running',
+          thread_id: 'ui-lab:design-1',
+        },
+      ])
+      .mockResolvedValueOnce([{ event_id: eventId }])
+      .mockResolvedValue([]);
+    const repo = createRunAttemptRepository({
+      runInTransaction: async (work) => work({ execute }),
+    });
+
+    await expect(
+      repo.acceptCheckpoint({
+        schemaVersion: AI_RUN_V2_SCHEMA_VERSION,
+        eventId,
+        runId: 'run-1',
+        attemptId: 'attempt-1',
+        attemptNumber: 1,
+        dispatchMessageId: 'dispatch-1',
+        timestamp: '2026-09-18T12:00:00.000Z',
+        kind: 'progress',
+        checkpointSequence: 2,
+        phase: 'generation',
+        status: 'running',
+        progress: {
+          kind: 'text_delta',
+          offset: 0,
+          text: '<html>',
+        },
+      }),
+    ).resolves.toEqual({ status: 'accepted', checkpointSequence: 2 });
+
+    const statements = execute.mock.calls
+      .flatMap(([query]) => boundStrings(query))
+      .join('\n');
+    expect(statements).toContain('INSERT INTO agent_run_events');
+    expect(statements).toContain('pg_notify');
+    expect(statements).toContain('ui-lab:design-1');
+    expect(statements).toContain('<html>');
+  });
 });
