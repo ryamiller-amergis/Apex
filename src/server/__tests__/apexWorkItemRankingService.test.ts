@@ -12,6 +12,18 @@ describe('parseApexWorkItemRankings', () => {
     expect(result.map((entry) => entry.id)).toEqual(['a', 'b']);
   });
 
+  it('accepts a fenced result wrapped in prose', () => {
+    const entries = JSON.stringify([
+      { id: 'a', priority: 'high', rationale: 'Blocks the active release.' },
+      { id: 'b', priority: 'low', rationale: 'No current delivery dependency.' },
+    ]);
+    const result = parseApexWorkItemRankings(
+      `Here is the ranking:\n\`\`\`json\n${entries}\n\`\`\``,
+      ['a', 'b'],
+    );
+    expect(result.map((entry) => entry.id)).toEqual(['a', 'b']);
+  });
+
   it.each([
     ['missing item', JSON.stringify([{ id: 'a', priority: 'high', rationale: 'Important.' }])],
     ['duplicate item', JSON.stringify([
@@ -22,7 +34,8 @@ describe('parseApexWorkItemRankings', () => {
       { id: 'a', priority: 'urgent', rationale: 'Important.' },
       { id: 'b', priority: 'low', rationale: 'Later.' },
     ])],
-    ['markdown', '```json\n[]\n```'],
+    ['empty fenced', '```json\n[]\n```'],
+    ['prose only', 'I cannot rank these items.'],
   ])('rejects %s output', (_label, text) => {
     expect(() => parseApexWorkItemRankings(text, ['a', 'b'])).toThrow();
   });

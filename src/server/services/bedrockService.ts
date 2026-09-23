@@ -345,6 +345,28 @@ function extractJson(text: string, label: string): string {
   throw new BedrockModelRefusalError(text.trim());
 }
 
+/**
+ * Array-shaped counterpart to extractJson, for prompts that must return a
+ * top-level JSON array. Kept separate so object-returning callers never match
+ * an array that happens to appear earlier in the response.
+ */
+export function extractJsonArray(text: string, label: string): string {
+  const fencedJson = text.match(/```json\s*([\s\S]*?)\s*```/);
+  if (fencedJson) return fencedJson[1].trim();
+
+  const fencedPlain = text.match(/```\s*([\s\S]*?)\s*```/);
+  if (fencedPlain) {
+    const candidate = fencedPlain[1].trim();
+    if (candidate.startsWith('[')) return candidate;
+  }
+
+  const bare = text.match(/(\[[\s\S]*\])/);
+  if (bare) return bare[1].trim();
+
+  console.warn(`[bedrockService] ${label} — model returned non-JSON response:\n${text}`);
+  throw new BedrockModelRefusalError(text.trim());
+}
+
 /* ── Main generation function ─────────────────────────────── */
 
 export async function generatePBIFromBedrock(

@@ -20,6 +20,18 @@ describe('parseFeatureRequestRankings', () => {
     expect(result.map((entry) => entry.id)).toEqual(['a', 'b']);
   });
 
+  it('accepts a fenced result wrapped in prose', () => {
+    const entries = JSON.stringify([
+      { id: 'a', priority: 'high', rationale: 'Unblocks onboarding.' },
+      { id: 'b', priority: 'low', rationale: 'Can wait a release.' },
+    ]);
+    const result = parseFeatureRequestRankings(
+      `Here is the ranking:\n\`\`\`json\n${entries}\n\`\`\``,
+      ['a', 'b'],
+    );
+    expect(result.map((entry) => entry.id)).toEqual(['a', 'b']);
+  });
+
   it.each([
     [
       'missing item',
@@ -48,7 +60,8 @@ describe('parseFeatureRequestRankings', () => {
         { id: 'b', priority: 'low', rationale: 'Later.' },
       ]),
     ],
-    ['markdown', '```json\n[]\n```'],
+    ['empty fenced', '```json\n[]\n```'],
+    ['prose only', 'I cannot rank these items.'],
   ])('rejects %s output', (_label, text) => {
     expect(() =>
       parseFeatureRequestRankings(text, ['a', 'b']),

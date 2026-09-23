@@ -1,4 +1,4 @@
-import { invokeBedrockText } from './bedrockService';
+import { extractJsonArray, invokeBedrockText } from './bedrockService';
 import type {
   FeatureRequestPriority,
   FeatureRequestRisk,
@@ -38,7 +38,7 @@ export function parseFeatureRequestRankings(
 ): FeatureRequestRanking[] {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text.trim());
+    parsed = JSON.parse(extractJsonArray(text, 'feature request ranking'));
   } catch {
     throw new Error('AI ranking response was not valid JSON');
   }
@@ -89,7 +89,8 @@ export async function generateFeatureRequestRankings(
 ): Promise<FeatureRequestRanking[]> {
   const prompt = [
     'Rank the complete filtered Apex Backlog below from most urgent and valuable to least.',
-    'Return ONLY a JSON array in exact rank order. Include every input id exactly once.',
+    'Return ONLY a JSON array in exact rank order, with no prose and no markdown code fences.',
+    'Include every input id exactly once.',
     'Each entry must be {"id":"...","priority":"critical|high|medium|low","rationale":"one concise sentence"}.',
     'Use critical sparingly. Consider user impact, urgency, risk, current status, team overrides, and stated advantage.',
     '',

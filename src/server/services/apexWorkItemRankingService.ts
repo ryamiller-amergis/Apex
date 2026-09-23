@@ -1,4 +1,4 @@
-import { invokeBedrockText } from './bedrockService';
+import { extractJsonArray, invokeBedrockText } from './bedrockService';
 import type {
   AcceptanceCriterion,
   ApexWorkItemPriority,
@@ -35,7 +35,7 @@ export function parseApexWorkItemRankings(
 ): ApexWorkItemRanking[] {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text.trim());
+    parsed = JSON.parse(extractJsonArray(text, 'apex work item ranking'));
   } catch {
     throw new Error('AI ranking response was not valid JSON');
   }
@@ -70,7 +70,8 @@ export async function generateApexWorkItemRankings(
 ): Promise<ApexWorkItemRanking[]> {
   const prompt = [
     'Rank the complete backlog below from most urgent/valuable to least.',
-    'Return ONLY a JSON array in exact rank order. Include every input id exactly once.',
+    'Return ONLY a JSON array in exact rank order, with no prose and no markdown code fences.',
+    'Include every input id exactly once.',
     'Each entry must be {"id":"...","priority":"critical|high|medium|low","rationale":"one concise sentence"}.',
     'Use critical sparingly. Consider delivery impact, urgency, dependencies, release/due dates, hierarchy, status, outcome, and acceptance criteria.',
     '',
