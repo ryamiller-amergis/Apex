@@ -295,3 +295,196 @@ The required tests also emit existing intentional error-path logs and the
 known unset-test-database warning. Focused lint reports the existing unused
 `ValidationScorecard` import in `chatAgentService.ts`; Task 2 introduced no
 lint errors.
+
+---
+
+## Review remediation
+
+### Result
+
+- Status: `DONE_WITH_CONCERNS`
+- Review-fix commit: `df9206fe`
+  (`fix: harden durable interactive admission`)
+- No push, cloud operation, infrastructure change, deployment change, or
+  protected configuration change was made.
+- Only review-fix source, migration, and test paths were staged. Pre-existing
+  worktree changes remained unstaged.
+
+### Fixes
+
+- Replaced unrestricted local skill fallback with a closed loader:
+  - rejects absolute paths, traversal, NULs, malformed segments, non-files,
+    direct symlinks, and parent-symlink escapes
+  - reads registered project skills only through the pinned `RepoReader`
+  - reads built-in skills only from explicit `.cursor/skills` or
+    `.agents/skills` roots after realpath containment checks
+  - returns `422 INTERACTIVE_V2_SKILL_UNAVAILABLE` when a pinned read fails;
+    it never falls through to another local file
+- Relaxed requester identity from UUID-only to trimmed, nonempty, NUL-free text
+  of at most 256 characters. UUID validation remains strict for turn, thread,
+  message, attachment, attempt, fence, event, and calendar-session IDs.
+- Added matching database/schema validation for `requested_by_user_id`.
+- Expanded accepted response status to queued, dispatched, running, completed,
+  failed, and cancelled. Duplicate admission returns the persisted status
+  exactly.
+- Prevented delayed terminal duplicates from putting the in-memory thread back
+  into running state. Completed/cancelled responses settle idle; failed settles
+  error; all clear `activeRunId`.
+- Persisted durable canonical runs with `event_driven = TRUE`. Their frozen
+  five-/20-minute `timeout_at` now owns queued lifetime even when the separate
+  event-driven flag is false or unreadable.
+- Added deterministic `01-`, `02-`, ... attachment materialization prefixes so
+  duplicate and sanitized-colliding names cannot overwrite each other.
+- Thread admission now carries the authorized requester's identity from the
+  route through canonical flag context, thread access, user lock/quota,
+  encrypted grant, run audit field, and outbox payload. Thread ownership remains
+  thread metadata.
+- Added MaxView capability resolution using the authorized requester and the
+  `maxview-mcp` flag. Enabled+configured turns freeze a `maxview` internal proxy
+  and classify agentic/tool-heavy. Enabled but unconfigured returns
+  `422 INTERACTIVE_V2_MAXVIEW_UNAVAILABLE`.
+- Mapped all thrown grounding-resolution failures to
+  `422 INTERACTIVE_V2_GROUNDING_UNAVAILABLE`.
+- Restored unit coverage for the complete legacy interactive actor router.
+- Replaced the sequential same-turn/different-hash integration case with a
+  genuinely concurrent race proving exactly one accepted result and one
+  conflict.
+
+### TDD red evidence
+
+Skill safety:
+
+```text
+npx jest src/server/__tests__/durableInteractiveTurnService.test.ts --runInBand
+FAIL: 8 tests
+loadDurableInteractiveSkill was absent.
+```
+
+The red cases covered `../../`, nested traversal, absolute paths, parent
+symlink escape, unknown registration, pinned-read failure with a tempting
+local copy, valid built-in load, and valid pinned project load.
+
+Contract/admission review cases:
+
+```text
+npx jest src/server/__tests__/durableInteractiveTurnTypes.test.ts src/server/__tests__/interactiveAttachmentStore.test.ts src/server/__tests__/durableInteractiveTurnRepository.test.ts --runInBand
+FAIL: 26 tests
+```
+
+Expected failures proved the old code:
+
+- rejected non-UUID requester identities
+- collapsed running/completed/failed/cancelled duplicates to dispatched
+- persisted `event_driven = FALSE`
+- omitted ordered attachment prefixes
+- leaked grounding resolver errors as arbitrary failures
+- did not freeze or reject MaxView capability
+
+Requester and terminal reflection:
+
+```text
+npx jest src/server/__tests__/chatAgentService.test.ts src/server/__tests__/chatRoutes.test.ts --runInBand -t "authorized requester|non-owner requester|delayed .* duplicate"
+FAIL: 5 tests
+```
+
+The route omitted the requester, the wrapper used the thread owner for
+canonical routing/admission, and terminal duplicates re-entered running state.
+
+MaxView resolver:
+
+```text
+npx jest src/server/__tests__/durableInteractiveTurnService.test.ts --runInBand -t "durable MaxView"
+FAIL: 4 tests
+resolveDurableMaxviewCapability was absent.
+```
+
+### Final verification
+
+Focused Task 1 + Task 2 + reaper unit suite:
+
+```text
+Test Suites: 14 passed, 14 total
+Tests:       434 passed, 434 total
+Exit code: 0
+```
+
+Durable admission PostgreSQL integration:
+
+```text
+PASS: 1 suite
+PASS: 20 tests
+Exit code: 0
+```
+
+This includes seven rollback boundaries, all six delayed duplicate statuses,
+same-turn/same-hash idempotency, concurrent same-turn/different-hash conflict,
+two callers sharing one thread, per-thread/user/agentic limits, and absence of
+a global-capacity admission limit.
+
+Task 1 migration PostgreSQL integration:
+
+```text
+PASS: 1 suite
+PASS: 1 test
+Exit code: 0
+```
+
+Server type-check:
+
+```text
+> tsc -p tsconfig.server.json
+Exit code: 0
+```
+
+Focused lint and diff:
+
+```text
+ESLint: 0 errors, 2 existing warnings
+git diff --check: exit 0
+git diff --cached --check: exit 0
+```
+
+The warnings are the existing unused `ValidationScorecard` import and
+`requireDeferred` helper. Test output also retains existing intentional
+error-path logs and the unset unit-test database warning.
+
+### Review-fix files
+
+- `migrations/20260923140000_durable-interactive-turns.sql`
+- `src/shared/types/durableInteractiveTurn.ts`
+- `src/server/db/schema.ts`
+- `src/server/services/interactiveAttachmentStore.ts`
+- `src/server/services/durableInteractiveTurnRepository.ts`
+- `src/server/services/durableInteractiveTurnService.ts`
+- `src/server/services/chatAgentService.ts`
+- `src/server/routes/chat.ts`
+- `src/server/__tests__/durableInteractiveTurnService.test.ts`
+- `src/server/__tests__/durableInteractiveTurnTypes.test.ts`
+- `src/server/__tests__/durableInteractiveTurnsMigration.test.ts`
+- `src/server/__tests__/interactiveAttachmentStore.test.ts`
+- `src/server/__tests__/durableInteractiveTurnRepository.test.ts`
+- `src/server/__tests__/chatAgentService.test.ts`
+- `src/server/__tests__/chatRoutes.test.ts`
+- `src/server/__tests__/agentRunReaperService.test.ts`
+- `src/server/__tests__/interactiveWorkflowRouter.test.ts`
+- `tests/integration/durable-interactive-turns.integration.test.ts`
+- `tests/integration/durable-interactive-admission.integration.test.ts`
+- `.superpowers/sdd/task-2-report.md`
+
+### Review-fix self-review
+
+- Confirmed no caller-controlled path reaches `path.resolve(process.cwd(), …)`.
+- Confirmed a pinned read failure has no provider or local fallback.
+- Confirmed requester identity—not thread owner—flows through all canonical
+  admission and grant fields.
+- Confirmed every accepted-status switch is exhaustive.
+- Confirmed every canonical run is event-driven from its initial queued insert.
+- Confirmed model remains absent from classification, locks, quotas, and FIFO.
+- Confirmed no cloud, infrastructure, protected configuration, or unrelated
+  worktree file was changed or staged.
+
+### Remaining concern
+
+The prior browser `turnId` concern remains: client paths were not part of Task
+2's named scope and still need rollout wiring before enabling the canonical
+flag for browser traffic.
