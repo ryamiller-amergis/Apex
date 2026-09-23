@@ -48,6 +48,7 @@ import {
   OUTBOX_SAFETY_SWEEP_MS,
   UNCERTAIN_WORKER_PAUSE_THRESHOLD,
 } from './types';
+import type { InteractiveClass } from '../../../shared/types/durableInteractiveTurn';
 
 export type OutboxDrainerDeps = Readonly<{
   executor: SqlExecutor;
@@ -256,12 +257,10 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
     return left.candidate.outbox.id.localeCompare(right.candidate.outbox.id);
   }
 
-  function releaseInteractiveReservation(
-    active: ActiveInteractiveCandidate,
+  function releaseInteractiveClassReservation(
+    interactiveClass: InteractiveClass,
     reservation: ProviderCapacityReservation,
   ): void {
-    if (!active.capacityCharged) return;
-    const interactiveClass = active.candidate.payload.interactiveClass;
     reservation.interactiveClassInFlight[interactiveClass] = Math.max(
       0,
       reservation.interactiveClassInFlight[interactiveClass] - 1,
@@ -274,6 +273,24 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
       0,
       reservation.providerClassInFlight.cursor.interactive - 1,
     );
+  }
+
+  function releaseInteractiveReservation(
+    active: ActiveInteractiveCandidate,
+    reservation: ProviderCapacityReservation,
+  ): void {
+    if (!active.capacityCharged) return;
+    releaseInteractiveClassReservation(
+      active.candidate.payload.interactiveClass,
+      reservation,
+    );
+  }
+
+  function interactiveClassFromPayload(
+    payload: Record<string, unknown>,
+  ): InteractiveClass | null {
+    const value = payload.interactiveClass;
+    return value === 'fast' || value === 'agentic' ? value : null;
   }
 
   async function expireInteractiveCandidate(
@@ -468,11 +485,17 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
     for (const row of rows) {
       const candidate = toInteractiveAdmissionCandidate(row);
       if (!candidate) {
-        discarded += await discardInvalidRow(
+        const identity = safeDispatchIdentity(row);
+        const interactiveClass = interactiveClassFromPayload(row.payload);
+        const discardedCount = await discardInvalidRow(
           row,
           'invalid_payload',
           'Interactive dispatch payload failed validation',
         );
+        discarded += discardedCount;
+        if (discardedCount > 0 && identity && interactiveClass) {
+          releaseInteractiveClassReservation(interactiveClass, reservation);
+        }
         continue;
       }
 
@@ -490,9 +513,17 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
       }
 
       switch (state) {
-        case 'terminal':
-          published += await markRowPublished(row);
+        case 'terminal': {
+          const publishedCount = await markRowPublished(row);
+          published += publishedCount;
+          if (publishedCount > 0) {
+            releaseInteractiveClassReservation(
+              candidate.payload.interactiveClass,
+              reservation,
+            );
+          }
           break;
+        }
         case 'fence-mismatch':
           discarded += await discardRow(row, 'fence_mismatch');
           break;
@@ -611,19 +642,29 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
             ),
             holderId,
             claimMs,
+            [...seenOutboxIds],
           );
-        const claimed = [
+        const claimed: OutboxRow[] = [];
+        for (const row of [
           ...new Map(
             [...backgroundClaimed, ...interactiveClaimed].map((row) => [
               row.id,
               row,
             ]),
           ).values(),
-        ].filter((row) => {
-          if (seenOutboxIds.has(row.id)) return false;
+        ]) {
+          if (seenOutboxIds.has(row.id)) {
+            await outbox.releaseClaim(
+              row.id,
+              holderId,
+              clock.now().toISOString(),
+              'seen_outbox_id',
+            );
+            continue;
+          }
           seenOutboxIds.add(row.id);
-          return true;
-        });
+          claimed.push(row);
+        }
         if (claimed.length === 0) break;
 
         totalClaimed += claimed.length;

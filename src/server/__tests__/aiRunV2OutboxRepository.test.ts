@@ -147,6 +147,22 @@ describe('AI-run V2 outbox repository', () => {
     expect(query).not.toContain('model');
   });
 
+  it('excludes already-seen outbox ids from interactive claim selection', async () => {
+    const execute = jest.fn().mockResolvedValue([]);
+    const repo = createOutboxRepository({ execute });
+
+    await repo.claimInteractiveCandidates(16, 2, 'drainer-a', 60_000, [
+      'seen-a',
+      'seen-b',
+    ]);
+
+    const query = sqlText(execute.mock.calls[0][0]);
+    expect(query).toContain('NOT (id = ANY(');
+    expect(query).toContain('::text[]');
+    expect(JSON.stringify(execute.mock.calls[0][0])).toContain('seen-a');
+    expect(JSON.stringify(execute.mock.calls[0][0])).toContain('seen-b');
+  });
+
   it('releases an expected capacity deferral without publishing it', async () => {
     const execute = jest.fn().mockResolvedValueOnce([{ id: 'outbox-1' }]);
     const repo = createOutboxRepository({ execute });

@@ -1059,4 +1059,284 @@ describe('outboxDrainer', () => {
     expect(readInteractiveDispatchState).toHaveBeenCalledTimes(2);
     expect(dispatch).not.toHaveBeenCalled();
   });
+
+  it('excludes seen deferred rows on refill after a slow invoke so deeper work is claimed', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-09-23T15:00:00.000Z'));
+    try {
+      const hanging = {
+        ...interactiveRow(
+          'hanging-selected',
+          'fast',
+          '2026-09-23T15:00:03.000Z',
+        ),
+        createdAt: '2026-09-23T15:00:00.000Z',
+      };
+      const deferred = {
+        ...interactiveRow(
+          'deferred-seen',
+          'fast',
+          '2026-09-23T15:10:00.000Z',
+        ),
+        createdAt: '2026-09-23T15:00:01.000Z',
+      };
+      const deeper = {
+        ...interactiveRow(
+          'deeper-valid',
+          'fast',
+          '2026-09-23T15:10:00.000Z',
+        ),
+        createdAt: '2026-09-23T15:00:02.000Z',
+      };
+      const claims = new Map<
+        string,
+        { claimedBy: string | null; claimExpiresAt: string | null }
+      >();
+      const releaseClaim = jest.fn(
+        async (
+          id: string,
+          _holderId: string,
+          _availableAt: string,
+          _detail: string,
+        ) => {
+          claims.set(id, { claimedBy: null, claimExpiresAt: null });
+          return true;
+        },
+      );
+      const claimInteractiveCandidates = jest.fn(
+        async (
+          _globalLimit: number,
+          _perClassFloorLimit: number,
+          holderId: string,
+          _claimMs: number,
+          excludeIds: readonly string[] = [],
+        ) => {
+          const excluded = new Set(excludeIds);
+          const page = claimInteractiveCandidates.mock.calls.length;
+          if (page === 1) {
+            for (const row of [hanging, deferred]) {
+              claims.set(row.id, {
+                claimedBy: holderId,
+                claimExpiresAt: '2026-09-23T15:00:30.000Z',
+              });
+            }
+            return [hanging, deferred];
+          }
+          if (page === 2) {
+            expect(excluded.has('hanging-selected')).toBe(true);
+            expect(excluded.has('deferred-seen')).toBe(true);
+            expect(excluded.has('deeper-valid')).toBe(false);
+            claims.set(deeper.id, {
+              claimedBy: holderId,
+              claimExpiresAt: '2026-09-23T15:00:35.000Z',
+            });
+            return [deeper];
+          }
+          return [];
+        },
+      );
+      const fetchImpl = jest
+        .fn()
+        .mockImplementationOnce(
+          () => new Promise<Response>(() => undefined),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ accepted: true }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      const markPublished = jest.fn(async (ids: string[]) => {
+        for (const id of ids) {
+          claims.set(id, { claimedBy: null, claimExpiresAt: null });
+        }
+        return ids.length;
+      });
+      const markDiscarded = jest.fn(async (id: string) => {
+        claims.set(id, { claimedBy: null, claimExpiresAt: null });
+        return true;
+      });
+      const failExpiredInteractiveDispatch = jest
+        .fn()
+        .mockResolvedValue('terminalized');
+      const base = emptyUtilization();
+      const drainer = createOutboxDrainer({
+        executor: { execute: async () => [] },
+        publisher: { publish: jest.fn() },
+        interactiveDispatchClient: createInteractiveActorDispatchClient({
+          fastUrl: 'https://fast.example',
+          agenticUrl: 'https://agentic.example',
+          fetchImpl,
+        }),
+        attempts: {
+          readInteractiveDispatchState: async () => 'queued',
+          markInteractiveDispatched: async () => 'dispatched',
+          failExpiredInteractiveDispatch,
+          failInvalidInteractiveDispatch: async () => 'terminalized',
+        },
+        getUtilization: async () => ({
+          ...base,
+          cursorInFlight: 15,
+          interactiveClassInFlight: { fast: 15, agentic: 0 },
+          providerClassInFlight: {
+            ...base.providerClassInFlight,
+            cursor: { batch: 0, interactive: 15 },
+          },
+        }),
+        getUncertainWorkerCount: async () => 0,
+        clock: {
+          now: () => new Date(jest.now()),
+          sleep: async () => undefined,
+        },
+        enableNotify: false,
+        acquireOutboxLease: async (work) => work(lease()),
+        outbox: fakeOutbox({
+          claimInteractiveCandidates,
+          releaseClaim,
+          markPublished,
+          markDiscarded,
+        }),
+      });
+
+      const pending = drainer.drainOnce();
+      for (
+        let spin = 0;
+        spin < 40 && fetchImpl.mock.calls.length === 0;
+        spin += 1
+      ) {
+        await Promise.resolve();
+      }
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(releaseClaim).toHaveBeenCalledWith(
+        'deferred-seen',
+        expect.any(String),
+        '2026-09-23T15:00:05.000Z',
+        'interactive_cap',
+      );
+
+      await jest.advanceTimersByTimeAsync(5_000);
+      await expect(pending).resolves.toBe(1);
+
+      expect(failExpiredInteractiveDispatch).toHaveBeenCalledTimes(1);
+      expect(markDiscarded).toHaveBeenCalledWith(
+        'hanging-selected',
+        expect.any(String),
+        'deadline_expired',
+      );
+      expect(claimInteractiveCandidates).toHaveBeenCalledTimes(3);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(markPublished).toHaveBeenCalledWith(
+        ['deeper-valid'],
+        expect.any(String),
+      );
+      expect(claims.get('deferred-seen')).toEqual({
+        claimedBy: null,
+        claimExpiresAt: null,
+      });
+      expect(claims.get('hanging-selected')).toEqual({
+        claimedBy: null,
+        claimExpiresAt: null,
+      });
+      expect(claims.get('deeper-valid')).toEqual({
+        claimedBy: null,
+        claimExpiresAt: null,
+      });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('releases reserved utilization when terminal and malformed rows finalize before planning', async () => {
+    const terminalRow = {
+      ...interactiveRow(
+        'terminal-frees-slot',
+        'fast',
+        '2026-09-23T15:10:00.000Z',
+      ),
+      createdAt: '2026-09-23T15:00:00.000Z',
+    };
+    const malformedInFlight = {
+      ...interactiveRow(
+        'malformed-frees-slot',
+        'fast',
+        '2026-09-23T15:10:00.000Z',
+      ),
+      createdAt: '2026-09-23T15:00:01.000Z',
+      payload: {
+        ...interactiveRow('malformed-frees-slot').payload,
+        capacityClass: 'batch',
+      },
+    };
+    const queued = {
+      ...interactiveRow(
+        'queued-after-free',
+        'fast',
+        '2026-09-23T15:10:00.000Z',
+      ),
+      createdAt: '2026-09-23T15:00:02.000Z',
+    };
+    const dispatch = jest.fn().mockResolvedValue(undefined);
+    const markPublished = jest.fn(async (ids: string[]) => ids.length);
+    const markDiscarded = jest.fn().mockResolvedValue(true);
+    const failInvalidInteractiveDispatch = jest
+      .fn()
+      .mockResolvedValue('terminalized');
+    const readInteractiveDispatchState = jest
+      .fn()
+      .mockResolvedValueOnce('terminal')
+      .mockResolvedValueOnce('queued');
+    const base = emptyUtilization();
+    const drainer = createOutboxDrainer({
+      executor: { execute: async () => [] },
+      publisher: { publish: jest.fn() },
+      interactiveDispatchClient: { dispatch },
+      attempts: {
+        readInteractiveDispatchState,
+        markInteractiveDispatched: async () => 'dispatched',
+        failExpiredInteractiveDispatch: async () => 'terminalized',
+        failInvalidInteractiveDispatch,
+      },
+      getUtilization: async () => ({
+        ...base,
+        cursorInFlight: 16,
+        interactiveClassInFlight: { fast: 16, agentic: 0 },
+        providerClassInFlight: {
+          ...base.providerClassInFlight,
+          cursor: { batch: 0, interactive: 16 },
+        },
+      }),
+      getUncertainWorkerCount: async () => 0,
+      clock: {
+        now: () => new Date('2026-09-23T15:00:00.000Z'),
+        sleep: async () => undefined,
+      },
+      enableNotify: false,
+      acquireOutboxLease: async (work) => work(lease()),
+      outbox: fakeOutbox({
+        claimInteractiveCandidates: jest
+          .fn()
+          .mockResolvedValueOnce([terminalRow, malformedInFlight, queued])
+          .mockResolvedValue([]),
+        markPublished,
+        markDiscarded,
+      }),
+    });
+
+    await expect(drainer.drainOnce()).resolves.toBe(2);
+    expect(failInvalidInteractiveDispatch).toHaveBeenCalledTimes(1);
+    expect(markDiscarded).toHaveBeenCalledWith(
+      'malformed-frees-slot',
+      expect.any(String),
+      'invalid_payload',
+    );
+    expect(markPublished).toHaveBeenCalledWith(
+      ['terminal-frees-slot'],
+      expect.any(String),
+    );
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(markPublished).toHaveBeenCalledWith(
+      ['queued-after-free'],
+      expect.any(String),
+    );
+  });
 });

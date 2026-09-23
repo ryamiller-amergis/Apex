@@ -192,6 +192,7 @@ export function createOutboxRepository(executor: SqlExecutor) {
       perClassFloorLimit: number,
       holderId: string,
       claimMs: number,
+      excludeIds: readonly string[] = [],
     ): Promise<OutboxRow[]> {
       if (!Number.isInteger(globalLimit) || globalLimit <= 0) {
         throw new Error('globalLimit must be a positive integer');
@@ -205,6 +206,7 @@ export function createOutboxRepository(executor: SqlExecutor) {
       if (!Number.isInteger(claimMs) || claimMs <= 0) {
         throw new Error('claimMs must be a positive integer');
       }
+      const excludedIds = [...excludeIds];
       const result = await executor.execute(sql`
         WITH eligible AS MATERIALIZED (
           SELECT
@@ -215,6 +217,7 @@ export function createOutboxRepository(executor: SqlExecutor) {
           WHERE kind = 'interactive_dispatch'
             AND published_at IS NULL
             AND available_at <= now()
+            AND NOT (id = ANY(${excludedIds}::text[]))
             AND (
               claimed_by IS NULL
               OR claim_expires_at IS NULL
