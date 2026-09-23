@@ -1,11 +1,11 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, isNull } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { uiLabDesigns } from '../db/schema';
+import { aiRunInbox, aiUsageEvents, uiLabDesigns } from '../db/schema';
 import type { UiLabHistoryEntry } from '../../shared/types/uiLab';
 import type { AiRunV2ArtifactManifest } from '../../shared/types/aiRunV2';
 import { VISUAL_USAGE_FILE_NAME } from '../../shared/types/aiRunV2VisualSpec';
 import { sanitizeMockHtml } from '../utils/htmlSanitizer';
-import { computeCost, recordAiUsage } from './aiUsageService';
+import { computeCost, recordAiUsageAwaited } from './aiUsageService';
 import {
   ArtifactVerificationError,
   createArtifactReader,
@@ -13,6 +13,7 @@ import {
 } from './aiRunV2/artifactReader';
 import {
   createFinishedAttemptReader,
+  harvestEventId,
   type FinishedAttemptReader,
   type FinishedV2Attempt,
 } from './aiRunV2/finishedAttemptReader';
@@ -143,10 +144,20 @@ async function readUsage(
   );
 }
 
-async function applyHtml(
+async function applyHtmlAndUsage(
   design: WaitingUiLabDesign,
   html: string,
+  usage: ReportedUsage,
+  attempt: FinishedV2Attempt,
 ): Promise<boolean> {
+  const costUsd = await computeCost({
+    provider: 'bedrock',
+    modelId: usage.modelId,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cacheReadTokens: usage.cacheReadTokens,
+    cacheWriteTokens: usage.cacheWriteTokens,
+  });
   const now = new Date().toISOString();
   const historyEntry: UiLabHistoryEntry = {
     version: 1,
@@ -154,25 +165,66 @@ async function applyHtml(
     prompt: design.prompt,
     createdAt: now,
   };
-  const applied = await db
-    .update(uiLabDesigns)
-    .set({
-      status: 'ready',
-      html,
-      version: 1,
-      history: [historyEntry],
-      generationError: null,
-      updatedAt: now,
-    })
-    .where(
-      and(
-        eq(uiLabDesigns.id, design.id),
-        eq(uiLabDesigns.status, 'streaming'),
-        eq(uiLabDesigns.updatedAt, design.generationStartedAt),
-      ),
-    )
-    .returning({ id: uiLabDesigns.id });
-  return applied.length === 1;
+  return db.transaction(async (tx) => {
+    const applied = await tx
+      .update(uiLabDesigns)
+      .set({
+        status: 'ready',
+        html,
+        version: 1,
+        history: [historyEntry],
+        generationError: null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(uiLabDesigns.id, design.id),
+          eq(uiLabDesigns.status, 'streaming'),
+          eq(uiLabDesigns.updatedAt, design.generationStartedAt),
+        ),
+      )
+      .returning({ id: uiLabDesigns.id });
+    if (applied.length !== 1) return false;
+
+    await recordAiUsageAwaited(
+      {
+        provider: 'bedrock',
+        modelId: usage.modelId,
+        feature: 'ui-lab',
+        project: usage.project,
+        userId: usage.userId,
+        runId: attempt.runId,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cacheReadTokens: usage.cacheReadTokens,
+        cacheWriteTokens: usage.cacheWriteTokens,
+        tokenSource: usage.tokenSource,
+        costUsd,
+        costSource:
+          usage.tokenSource === 'exact' ? 'computed' : 'estimated',
+        durationMs: usage.durationMs,
+        status: 'success',
+      },
+      (values) => tx.insert(aiUsageEvents).values(values),
+    );
+
+    const completed = await tx
+      .update(aiRunInbox)
+      .set({ processedAt: now })
+      .where(
+        and(
+          eq(aiRunInbox.eventId, harvestEventId(attempt.attemptId)),
+          isNull(aiRunInbox.processedAt),
+        ),
+      )
+      .returning({ eventId: aiRunInbox.eventId });
+    if (completed.length !== 1) {
+      throw new Error(
+        `UI Lab harvest claim disappeared for ${attempt.attemptId}`,
+      );
+    }
+    return true;
+  });
 }
 
 async function failDesign(
@@ -195,42 +247,6 @@ async function failDesign(
     )
     .returning({ id: uiLabDesigns.id });
   return failed.length === 1;
-}
-
-async function recordUsage(
-  usage: ReportedUsage,
-  runId: string,
-): Promise<void> {
-  try {
-    const costUsd = await computeCost({
-      provider: 'bedrock',
-      modelId: usage.modelId,
-      inputTokens: usage.inputTokens,
-      outputTokens: usage.outputTokens,
-      cacheReadTokens: usage.cacheReadTokens,
-      cacheWriteTokens: usage.cacheWriteTokens,
-    });
-    await recordAiUsage({
-      provider: 'bedrock',
-      modelId: usage.modelId,
-      feature: 'ui-lab',
-      project: usage.project,
-      userId: usage.userId,
-      runId,
-      inputTokens: usage.inputTokens,
-      outputTokens: usage.outputTokens,
-      cacheReadTokens: usage.cacheReadTokens,
-      cacheWriteTokens: usage.cacheWriteTokens,
-      tokenSource: usage.tokenSource,
-      costUsd,
-      costSource:
-        usage.tokenSource === 'exact' ? 'computed' : 'estimated',
-      durationMs: usage.durationMs,
-      status: 'success',
-    });
-  } catch {
-    // Usage reporting cannot roll back HTML already applied to the design.
-  }
 }
 
 function failureReason(attempt: FinishedV2Attempt): string {
@@ -306,10 +322,9 @@ async function harvestOne(
     return { status: 'settled', outcome: 'failed', error: detail };
   }
 
-  if (await applyHtml(design, html)) {
-    await recordUsage(usage, attempt.runId);
+  if (!(await applyHtmlAndUsage(design, html, usage, attempt))) {
+    await finishedAttempts.completeHarvest(attempt.attemptId);
   }
-  await finishedAttempts.completeHarvest(attempt.attemptId);
   return { status: 'settled', outcome: 'ready', html };
 }
 

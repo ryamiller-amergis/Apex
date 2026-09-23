@@ -2,10 +2,17 @@ const mockUpdateReturning = jest.fn();
 const mockUpdateWhere = jest.fn(() => ({ returning: mockUpdateReturning }));
 const mockUpdateSet = jest.fn(() => ({ where: mockUpdateWhere }));
 const mockSelectLimit = jest.fn();
+const mockInsertValues = jest.fn().mockResolvedValue(undefined);
+const mockTransaction = jest.fn(async (work: (tx: unknown) => Promise<unknown>) =>
+  work({
+    update: jest.fn(() => ({ set: mockUpdateSet })),
+    insert: jest.fn(() => ({ values: mockInsertValues })),
+  }));
 
 jest.mock('../db/drizzle', () => ({
   db: {
     update: jest.fn(() => ({ set: mockUpdateSet })),
+    transaction: mockTransaction,
     select: jest.fn(() => ({
       from: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
@@ -17,7 +24,10 @@ jest.mock('../db/drizzle', () => ({
 
 jest.mock('../services/aiUsageService', () => ({
   computeCost: jest.fn(async () => 0.25),
-  recordAiUsage: jest.fn(async () => undefined),
+  recordAiUsageAwaited: jest.fn(async (
+    _input: unknown,
+    insertUsage?: (values: unknown) => PromiseLike<unknown>,
+  ) => insertUsage?.({})),
 }));
 
 import type { FinishedV2Attempt } from '../services/aiRunV2/finishedAttemptReader';
@@ -133,9 +143,9 @@ describe('harvestFinishedV2UiLabDesigns', () => {
         ],
       }),
     );
-    const { recordAiUsage } = jest.requireMock('../services/aiUsageService');
-    expect(recordAiUsage).toHaveBeenCalledTimes(1);
-    expect(recordAiUsage).toHaveBeenCalledWith(
+    const { recordAiUsageAwaited } = jest.requireMock('../services/aiUsageService');
+    expect(recordAiUsageAwaited).toHaveBeenCalledTimes(1);
+    expect(recordAiUsageAwaited).toHaveBeenCalledWith(
       expect.objectContaining({
         feature: 'ui-lab',
         project: 'MaxView',
@@ -145,8 +155,9 @@ describe('harvestFinishedV2UiLabDesigns', () => {
         cacheReadTokens: 8,
         cacheWriteTokens: 3,
       }),
+      expect.any(Function),
     );
-    expect(attempts.completeHarvest).toHaveBeenCalledWith('attempt-1');
+    expect(attempts.completeHarvest).not.toHaveBeenCalled();
   });
 
   it('fails visibly when the design artifact cannot be verified', async () => {
@@ -221,5 +232,45 @@ describe('harvestFinishedV2UiLabDesigns', () => {
     });
 
     expect(loadDesign).toHaveBeenCalledWith('design-1');
+  });
+
+  it('leaves the harvest claim open when awaited usage persistence fails', async () => {
+    const attempts = finishedAttempts(attempt());
+    const { recordAiUsageAwaited } = jest.requireMock('../services/aiUsageService');
+    recordAiUsageAwaited.mockRejectedValueOnce(new Error('usage unavailable'));
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      await expect(
+        harvestFinishedV2UiLabDesigns({
+          finishedAttempts: attempts,
+          artifacts: artifacts() as never,
+        }),
+      ).resolves.toBe(0);
+
+      expect(attempts.completeHarvest).not.toHaveBeenCalled();
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  it('does not record usage twice when a completed harvest is replayed', async () => {
+    const attempts = finishedAttempts(attempt());
+    attempts.claimHarvest
+      .mockResolvedValueOnce('claimed')
+      .mockResolvedValueOnce('already_harvested');
+    const { recordAiUsageAwaited } = jest.requireMock('../services/aiUsageService');
+
+    await harvestFinishedV2UiLabDesigns({
+      finishedAttempts: attempts,
+      artifacts: artifacts() as never,
+    });
+    await harvestFinishedV2UiLabDesigns({
+      finishedAttempts: attempts,
+      artifacts: artifacts() as never,
+    });
+
+    expect(recordAiUsageAwaited).toHaveBeenCalledTimes(1);
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
   });
 });
