@@ -6,9 +6,9 @@
  * established PostgreSQL event spine; terminal writes delegate to lifecycle.
  */
 import { randomUUID } from 'crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { agentRuns, aiRunAttempts, chatThreads } from '../db/schema';
+import { agentRuns, aiRunAttempts, chatThreads, chatMessages } from '../db/schema';
 import {
   markTerminal,
   transition,
@@ -49,7 +49,13 @@ import {
   type DurableInteractiveTurnSpecification,
 } from '../../shared/types/durableInteractiveTurn';
 import { INTERACTIVE_LANE } from '../../shared/types/interactiveWorkflow';
-import { isAiRunV2AttemptStatus } from '../../shared/types/aiRunV2';
+import {
+  isAiRunV2AttemptStatus,
+  isAiRunV2ArtifactManifest,
+  isAiRunV2FailureCategory,
+  type AiRunBlobRef,
+  type AiRunV2FailureCategory,
+} from '../../shared/types/aiRunV2';
 import { workerTierTelemetry } from './workerTierTelemetry';
 import { recordCursorChatUsage } from './aiUsageService';
 import type { RecordUsageInput } from '../../shared/types/aiCostAnalytics';
@@ -60,8 +66,6 @@ import {
   createBlobInteractiveArtifactReader,
 } from './interactiveArtifactApplier';
 import { resolveArtifactContainerClient } from './aiRunV2/artifactContainer';
-import type { AiRunBlobRef, AiRunV2ArtifactManifest } from '../../shared/types/aiRunV2';
-import { isAiRunV2ArtifactManifest } from '../../shared/types/aiRunV2';
 
 const MAX_DETAIL_LENGTH = 500;
 const AGENT_RUN_PHASES: ReadonlySet<string> = new Set([
@@ -329,6 +333,15 @@ function validateBody(body: AiRunIngestBody): void {
         'AI_RUN_VALIDATION',
       );
     }
+    if (
+      body.failureCategory !== undefined
+      && !isAiRunV2FailureCategory(body.failureCategory)
+    ) {
+      throw new AiRunIngestError(
+        'Invalid failureCategory',
+        'AI_RUN_VALIDATION',
+      );
+    }
     for (const field of [
       'durationMs',
       'inputTokens',
@@ -540,11 +553,13 @@ async function getInteractiveActorBootstrap(
     );
   }
 
-  const absoluteDeadlineAt =
-    existing.timeoutAt?.trim() ||
-    new Date(
-      Date.now() + attempt.specSnapshot.deadlines.absoluteTurnMs,
-    ).toISOString();
+  const absoluteDeadlineAt = existing.timeoutAt?.trim();
+  if (!absoluteDeadlineAt) {
+    throw new AiRunIngestError(
+      'Interactive attempt is missing timeoutAt',
+      'AI_RUN_ILLEGAL_TRANSITION',
+    );
+  }
   const remainingMs = Date.parse(absoluteDeadlineAt) - Date.now();
   if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
     throw new AiRunIngestError(
@@ -794,25 +809,18 @@ async function updateWorkerClocks(
   return updated[0];
 }
 
-async function applyActorArtifactManifest(input: {
+/**
+ * Download + checksum-verify actor artifacts onto the thread workspace.
+ * Returns the parsed manifest (for identity) so the transactional terminal
+ * path can record the ref. Filesystem writes are outside the DB transaction.
+ */
+async function verifyAndApplyActorArtifactManifest(input: {
   threadId: string;
   runId: string;
   attemptId: string;
-  attemptNumber: number | undefined;
+  attemptNumber: number;
   manifestRef: AiRunBlobRef;
-  dependencies: AiRunIngestDependencies;
 }): Promise<void> {
-  const [attempt] = await db
-    .select()
-    .from(aiRunAttempts)
-    .where(eq(aiRunAttempts.id, input.attemptId))
-    .limit(1);
-  if (!attempt) {
-    throw new AiRunIngestError(
-      'attemptId does not match this run',
-      'AI_RUN_DISPATCH_MISMATCH',
-    );
-  }
   const container = resolveArtifactContainerClient(input.manifestRef.container);
   const raw = await container
     .getBlockBlobClient(input.manifestRef.key)
@@ -842,7 +850,7 @@ async function applyActorArtifactManifest(input: {
     expected: {
       runId: input.runId,
       attemptId: input.attemptId,
-      attemptNumber: attempt.attemptNumber,
+      attemptNumber: input.attemptNumber,
     },
     reader: createBlobInteractiveArtifactReader(async (ref) =>
       resolveArtifactContainerClient(ref.container)
@@ -850,15 +858,238 @@ async function applyActorArtifactManifest(input: {
         .downloadToBuffer(),
     ),
   });
-  await db
-    .update(aiRunAttempts)
-    .set({
-      manifestRef: input.manifestRef,
-      artifactStatus: 'verified',
-      updatedAt: new Date().toISOString(),
-    })
-    .where(eq(aiRunAttempts.id, input.attemptId));
-  void input.dependencies;
+}
+
+/**
+ * Six-write fenced terminal for dapr-actor-v2: drain/accept stream events,
+ * record verified manifest, persist assistant message, terminalize attempt/run,
+ * clear matching thread active run, persist error/done — one DB transaction.
+ * Fence was already validated before this runs.
+ */
+async function terminalizeDaprActorV2(input: {
+  existing: typeof agentRuns.$inferSelect;
+  body: AiRunTerminalIngest;
+  nowIso: string;
+  detail: string | undefined;
+  attemptNumber: number;
+  dependencies: AiRunIngestDependencies;
+}): Promise<AiRunIngestResult> {
+  const { existing, body, nowIso, detail, attemptNumber, dependencies } = input;
+  const runId = existing.id;
+  const attemptId = body.attemptId!;
+  const status = body.status;
+  const failureCategory: AiRunV2FailureCategory | null =
+    status === 'failed' && body.failureCategory
+      ? body.failureCategory
+      : null;
+  const attemptTerminalStatus =
+    status === 'completed'
+      ? 'completed'
+      : status === 'cancelled'
+        ? 'cancelled'
+        : 'failed';
+
+  // Filesystem verify/apply before the DB transaction (not a SQL write).
+  if (status === 'completed' && body.artifactManifestRef) {
+    await verifyAndApplyActorArtifactManifest({
+      threadId: existing.threadId,
+      runId,
+      attemptId,
+      attemptNumber,
+      manifestRef: body.artifactManifestRef,
+    });
+  }
+
+  const terminalEvents =
+    status === 'failed'
+      ? [
+          buildTerminalEnvelope(existing, body, nowIso, status, detail),
+          buildDoneEnvelope(existing, nowIso, status, detail),
+        ]
+      : [buildTerminalEnvelope(existing, body, nowIso, status, detail)];
+
+  const assistantMessage =
+    existing.lane === INTERACTIVE_LANE && body.event?.type === 'message'
+      ? body.event.message
+      : null;
+  const cursorAgentId =
+    status === 'completed' && existing.lane === INTERACTIVE_LANE
+      ? sanitizeCursorAgentId(body.cursorAgentId)
+      : undefined;
+
+  const run = await db.transaction(async (tx) => {
+    // 1. Drain/accept already-persisted stream events: fence re-check under
+    //    the same txn. Stale fences must 409 before any of the writes below.
+    const [locked] = await tx
+      .select({
+        dispatchMessageId: agentRuns.dispatchMessageId,
+        status: agentRuns.status,
+      })
+      .from(agentRuns)
+      .where(eq(agentRuns.id, runId))
+      .limit(1);
+    if (!locked || locked.dispatchMessageId !== body.dispatchMessageId) {
+      throw new AiRunIngestError(
+        'dispatchMessageId does not match this run',
+        'AI_RUN_DISPATCH_MISMATCH',
+      );
+    }
+    if (isAgentRunTerminalStatus(locked.status)) {
+      if (locked.status === status) {
+        return (
+          await tx.select().from(agentRuns).where(eq(agentRuns.id, runId)).limit(1)
+        )[0]!;
+      }
+      throw new AiRunIngestError(
+        `Cannot apply ${status} terminal to ${locked.status} run`,
+        'AI_RUN_ILLEGAL_TRANSITION',
+      );
+    }
+
+    // 2. Record verified manifest on the attempt (files already on disk).
+    if (status === 'completed' && body.artifactManifestRef) {
+      await tx
+        .update(aiRunAttempts)
+        .set({
+          manifestRef: body.artifactManifestRef,
+          artifactStatus: 'verified',
+          updatedAt: nowIso,
+        })
+        .where(eq(aiRunAttempts.id, attemptId));
+    }
+
+    // 3. Persist final assistant message (idempotent by id).
+    if (assistantMessage) {
+      await tx
+        .insert(chatMessages)
+        .values({
+          id: assistantMessage.id,
+          threadId: existing.threadId,
+          role: assistantMessage.role,
+          text: assistantMessage.text,
+          toolName: assistantMessage.toolName ?? null,
+          hidden: assistantMessage.hidden ?? false,
+          ts: assistantMessage.ts,
+        })
+        .onConflictDoNothing();
+    }
+
+    // 4. Terminalize attempt + run.
+    await tx
+      .update(aiRunAttempts)
+      .set({
+        status: attemptTerminalStatus,
+        ...(failureCategory ? { failureCategory } : {}),
+        ...(status === 'failed' && detail ? { failureDetail: detail } : {}),
+        updatedAt: nowIso,
+      })
+      .where(
+        and(
+          eq(aiRunAttempts.id, attemptId),
+          eq(aiRunAttempts.dispatchMessageId, body.dispatchMessageId),
+        ),
+      );
+
+    const [updatedRun] = await tx
+      .update(agentRuns)
+      .set({
+        status,
+        lastError: status === 'failed' ? detail ?? status : null,
+        progressPhase: 'completion',
+        progressLabel: detail ?? status,
+        progressAt: nowIso,
+        updatedAt: nowIso,
+        ...(body.terminalReason ? { terminalReason: body.terminalReason } : {}),
+      })
+      .where(
+        and(
+          eq(agentRuns.id, runId),
+          eq(agentRuns.dispatchMessageId, body.dispatchMessageId),
+          inArray(agentRuns.status, ['queued', 'dispatched', 'running']),
+        ),
+      )
+      .returning();
+
+    if (!updatedRun) {
+      throw new AiRunIngestError(
+        `Cannot apply ${status} terminal to run`,
+        'AI_RUN_ILLEGAL_TRANSITION',
+      );
+    }
+
+    // 5. Clear matching thread active run only.
+    await tx
+      .update(chatThreads)
+      .set({
+        status: 'idle',
+        activeRunId: null,
+        lastError: status === 'failed' ? detail ?? null : null,
+        lastActivityAt: nowIso,
+      })
+      .where(
+        and(
+          eq(chatThreads.id, existing.threadId),
+          eq(chatThreads.activeRunId, runId),
+        ),
+      );
+
+    if (cursorAgentId !== undefined) {
+      await tx
+        .update(chatThreads)
+        .set({ cursorAgentId })
+        .where(eq(chatThreads.id, existing.threadId));
+    }
+
+    // 6. Persist error/done (and completed) terminal events.
+    for (const envelope of terminalEvents) {
+      await tx.execute(sql`
+        INSERT INTO agent_run_events (
+          event_id, thread_id, run_id, source_instance, sequence,
+          event_timestamp, event_type, phase, status, detail, event
+        ) VALUES (
+          ${envelope.eventId}::uuid,
+          ${envelope.threadId},
+          ${envelope.runId},
+          ${envelope.sourceInstance},
+          ${envelope.sequence},
+          ${envelope.timestamp}::timestamptz,
+          ${envelope.type},
+          ${envelope.phase},
+          ${envelope.status},
+          ${envelope.detail ?? null},
+          ${JSON.stringify(envelope.event)}::jsonb
+        )
+        ON CONFLICT (event_id) DO NOTHING
+      `);
+    }
+
+    return updatedRun;
+  });
+
+  for (const envelope of terminalEvents) {
+    await notifyRunEvent(envelope, { persist: false }).catch(() => {});
+  }
+
+  if (status === 'failed' || status === 'cancelled') {
+    await reflectFailedGeneration(existing.threadId, dependencies);
+  }
+
+  return { run: mapRow(run), cancelRequested: run.cancelRequested };
+}
+
+async function loadAttemptNumber(attemptId: string): Promise<number> {
+  const [attempt] = await db
+    .select({ attemptNumber: aiRunAttempts.attemptNumber })
+    .from(aiRunAttempts)
+    .where(eq(aiRunAttempts.id, attemptId))
+    .limit(1);
+  if (!attempt) {
+    throw new AiRunIngestError(
+      'attemptId does not match this run',
+      'AI_RUN_DISPATCH_MISMATCH',
+    );
+  }
+  return attempt.attemptNumber;
 }
 
 export async function ingest(
@@ -1045,66 +1276,58 @@ export async function ingest(
     );
   }
 
-  if (body.status === 'completed') {
-    if (existing.transportVersion === 'dapr-actor-v2') {
-      if (body.artifactManifestRef) {
-        await applyActorArtifactManifest({
-          threadId: existing.threadId,
-          runId,
-          attemptId: body.attemptId!,
-          attemptNumber: undefined,
-          manifestRef: body.artifactManifestRef,
-          dependencies,
-        });
-      }
-      if (existing.lane === INTERACTIVE_LANE) {
-        const cursorAgentId = sanitizeCursorAgentId(body.cursorAgentId);
-        if (cursorAgentId !== undefined) {
-          const { setCursorAgentId } = await import('./chatThreadRepository');
-          await setCursorAgentId(existing.threadId, cursorAgentId).catch(() => {});
-        }
-      }
-    } else {
-      const snapshot = existing.executionSnapshot;
-      const workspaceDir =
-        snapshot && !isDurableInteractiveSnapshot(snapshot)
-          ? snapshot.workspaceRef
-          : undefined;
-      if (!workspaceDir) {
-        throw new AiRunIngestError(
-          'Completed terminal ingest requires a workspace reference',
-          'AI_RUN_ILLEGAL_TRANSITION',
-        );
-      }
-      // Runs before markTerminal so a completed run's output is durable before
-      // anything observes the run as finished. A throw here therefore leaves the
-      // run non-terminal and answers the worker with a bare 500, which is
-      // retryable but anonymous — name the subsystem so a recurrence is
-      // diagnosable without reproducing it.
-      try {
-        await (
-          dependencies.consumeCompletedArtifacts ?? consumeCompletedArtifacts
-        )(existing.threadId, workspaceDir);
-      } catch (error) {
-        console.error(JSON.stringify({
-          event: 'AiRunTerminalArtifactSyncFailed',
-          runId,
-          threadId: existing.threadId,
-          lane: existing.lane ?? null,
-          errorType: error instanceof Error ? error.name : 'UnknownError',
-          errorMessage:
-            error instanceof Error ? error.message.slice(0, 200) : 'unknown',
-        }));
-        throw error;
-      }
+  if (existing.transportVersion === 'dapr-actor-v2') {
+    const attemptNumber = await loadAttemptNumber(body.attemptId!);
+    return terminalizeDaprActorV2({
+      existing,
+      body,
+      nowIso,
+      detail,
+      attemptNumber,
+      dependencies,
+    });
+  }
 
-      // Persist Cursor agent id for interactive restart recovery (best effort).
-      if (existing.lane === INTERACTIVE_LANE) {
-        const cursorAgentId = sanitizeCursorAgentId(body.cursorAgentId);
-        if (cursorAgentId !== undefined) {
-          const { setCursorAgentId } = await import('./chatThreadRepository');
-          await setCursorAgentId(existing.threadId, cursorAgentId).catch(() => {});
-        }
+  if (body.status === 'completed') {
+    const snapshot = existing.executionSnapshot;
+    const workspaceDir =
+      snapshot && !isDurableInteractiveSnapshot(snapshot)
+        ? snapshot.workspaceRef
+        : undefined;
+    if (!workspaceDir) {
+      throw new AiRunIngestError(
+        'Completed terminal ingest requires a workspace reference',
+        'AI_RUN_ILLEGAL_TRANSITION',
+      );
+    }
+    // Runs before markTerminal so a completed run's output is durable before
+    // anything observes the run as finished. A throw here therefore leaves the
+    // run non-terminal and answers the worker with a bare 500, which is
+    // retryable but anonymous — name the subsystem so a recurrence is
+    // diagnosable without reproducing it.
+    try {
+      await (
+        dependencies.consumeCompletedArtifacts ?? consumeCompletedArtifacts
+      )(existing.threadId, workspaceDir);
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: 'AiRunTerminalArtifactSyncFailed',
+        runId,
+        threadId: existing.threadId,
+        lane: existing.lane ?? null,
+        errorType: error instanceof Error ? error.name : 'UnknownError',
+        errorMessage:
+          error instanceof Error ? error.message.slice(0, 200) : 'unknown',
+      }));
+      throw error;
+    }
+
+    // Persist Cursor agent id for interactive restart recovery (best effort).
+    if (existing.lane === INTERACTIVE_LANE) {
+      const cursorAgentId = sanitizeCursorAgentId(body.cursorAgentId);
+      if (cursorAgentId !== undefined) {
+        const { setCursorAgentId } = await import('./chatThreadRepository');
+        await setCursorAgentId(existing.threadId, cursorAgentId).catch(() => {});
       }
     }
   } else {

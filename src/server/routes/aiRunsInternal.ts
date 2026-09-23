@@ -207,6 +207,17 @@ router.post(
         });
         return;
       }
+      if (
+        attempt.status !== 'queued' &&
+        attempt.status !== 'dispatched' &&
+        attempt.status !== 'running'
+      ) {
+        res.status(409).json({
+          error: 'Tool proxy requires an active attempt',
+          code: 'AI_RUN_DISPATCH_MISMATCH',
+        });
+        return;
+      }
       if (!isDurableInteractiveTurnSpecification(attempt.specSnapshot)) {
         res.status(422).json({
           error: 'Interactive attempt is missing a frozen specification',

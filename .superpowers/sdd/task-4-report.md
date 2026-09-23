@@ -126,3 +126,119 @@ npm run build:server
 - Proxy modules do not import Cursor/model.
 - `SESSION_SECRET` is required for proxy tokens and ADO grant crypto; no
   fallback secret.
+
+## Remediation (Task 4 review gaps)
+
+### Result
+
+- Status: `REMEDIATED`
+- Commit message: `fix: close Task 4 actor parity review gaps`
+- No push. Protected files untouched.
+
+### Gaps closed
+
+1. **Artifact collect/upload wired** on durable success path via
+   `uploadAttemptArtifacts` (entrypoint uses `collectInteractiveArtifacts` +
+   `createArtifactUploader`). Completed terminals set `artifactsFlushed: true`
+   and `artifactManifestRef` only after upload succeeds; skipping collect
+   never claims flush.
+2. **Tool deadline timer armed** on first `tool_call` /
+   `tool_status:running` with
+   `Math.min(effectiveDeadlines.toolCallMs, absoluteDeadlineAt - now)`;
+   cleared on tool completion; fires `tool_timeout` **failed** terminal (not
+   cancelled). Absolute timer delay clamped to 32-bit max.
+3. **Grounding required**: non-null `specification.grounding` with failed
+   pinned repo-read aborts the turn (no empty-workspace fallthrough).
+4. **Per-attempt materialization**: durable turns always use
+   `os.tmpdir()` / `AI_RUNS_INTERACTIVE_ATTEMPT_ROOT` + `attemptId`; never
+   reuse warm checkout; dispose/delete after terminal.
+5. **Six-write terminal transaction** for `dapr-actor-v2` in
+   `terminalizeDaprActorV2`: fence re-check, manifest record, assistant
+   message, attempt/run terminalize, clear matching thread active run, persist
+   error/done — one `db.transaction`. Fence 409 before those writes.
+6. **Tool proxy** requires attempt status `queued|dispatched|running` else
+   409.
+7. **Bootstrap requires `timeoutAt`**; never synthesizes `absoluteDeadlineAt`
+   from `Date.now()`.
+8. **Timeout terminals are failed** with `hard_timeout` / `tool_timeout`
+   `failureCategory`.
+9. **Materializer rejects symlinks**; mammoth imported at top of file.
+10. **Tests** cover rematerialize, tool timer abort, artifact manifest path,
+    missing `timeoutAt`, proxy active-attempt 409, fenced terminal
+    atomicity, symlink rejection.
+
+### Acceptable deferrals (unchanged)
+
+- Full non-round fake-timer matrix beyond the clamp + tool timer test
+- Localhost MCP relay for ado-skills/calendar/maxview
+
+### Verification
+
+```text
+npx jest …Task 4 suites… --runInBand
+→ Test Suites: 11 passed; Tests: 262 passed
+
+npx jest src/server/__tests__/aiRunsV2Worker/noDatabaseImports.test.ts --runInBand
+→ 47 passed
+
+npm run build:server
+→ tsc -p tsconfig.server.json (exit 0)
+```
+
+## Remediation (Task 4 review gaps)
+
+### Result
+
+- Status: `REMEDIATED`
+- Commit message: `fix: close Task 4 actor parity review gaps`
+- No push. Protected files untouched.
+
+### Gaps closed
+
+1. **Artifact collect/upload wired** on durable success path via
+   `uploadAttemptArtifacts` (entrypoint uses `collectInteractiveArtifacts` +
+   `createArtifactUploader`). Completed terminals set `artifactsFlushed: true`
+   and `artifactManifestRef` only after upload succeeds; skipping collect
+   never claims flush.
+2. **Tool deadline timer armed** on first `tool_call` /
+   `tool_status:running` with
+   `Math.min(effectiveDeadlines.toolCallMs, absoluteDeadlineAt - now)`;
+   cleared on tool completion; fires `tool_timeout` **failed** terminal (not
+   cancelled). Absolute timer delay clamped to 32-bit max.
+3. **Grounding required**: non-null `specification.grounding` with failed
+   pinned repo-read aborts the turn (no empty-workspace fallthrough).
+4. **Per-attempt materialization**: durable turns always use
+   `os.tmpdir()` / `AI_RUNS_INTERACTIVE_ATTEMPT_ROOT` + `attemptId`; never
+   reuse warm checkout; dispose/delete after terminal.
+5. **Six-write terminal transaction** for `dapr-actor-v2` in
+   `terminalizeDaprActorV2`: fence re-check, manifest record, assistant
+   message, attempt/run terminalize, clear matching thread active run, persist
+   error/done — one `db.transaction`. Fence 409 before those writes.
+6. **Tool proxy** requires attempt status `queued|dispatched|running` else
+   409.
+7. **Bootstrap requires `timeoutAt`**; never synthesizes `absoluteDeadlineAt`
+   from `Date.now()`.
+8. **Timeout terminals are failed** with `hard_timeout` / `tool_timeout`
+   `failureCategory`.
+9. **Materializer rejects symlinks**; mammoth imported at top of file.
+10. **Tests** cover rematerialize, tool timer abort, artifact manifest path,
+    missing `timeoutAt`, proxy active-attempt 409, fenced terminal
+    atomicity, symlink rejection.
+
+### Acceptable deferrals (unchanged)
+
+- Full non-round fake-timer matrix beyond the clamp + tool timer test
+- Localhost MCP relay for ado-skills/calendar/maxview
+
+### Verification
+
+```text
+npx jest …Task 4 suites… --runInBand
+→ Test Suites: 11 passed; Tests: 262 passed
+
+npx jest src/server/__tests__/aiRunsV2Worker/noDatabaseImports.test.ts --runInBand
+→ 47 passed
+
+npm run build:server
+→ tsc -p tsconfig.server.json (exit 0)
+```

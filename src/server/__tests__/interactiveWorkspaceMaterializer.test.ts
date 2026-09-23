@@ -158,4 +158,38 @@ describe('interactiveWorkspaceMaterializer', () => {
     ).rejects.toThrow();
     await expect(fs.access(destination)).rejects.toMatchObject({ code: 'ENOENT' });
   });
+
+  it('rejects writes through a planted symlink and removes the destination', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'interactive-ws-out-'));
+    try {
+      const linkPath = path.join(destination, 'linked');
+      await fs.symlink(outside, linkPath, 'junction');
+      const attachmentBytes = Buffer.from('x', 'utf8');
+      const attachmentRef: ImmutableInteractiveAttachmentRef = {
+        attachmentId: '33333333-3333-4333-8333-333333333333',
+        name: 'via-link.txt',
+        contentType: 'text/plain',
+        sizeBytes: 1,
+        sha256: sha256(attachmentBytes),
+        blobRef: { container: 'artifacts', key: 'interactive/via-link' },
+        materializedPath: 'linked/via-link.txt',
+      };
+
+      await expect(
+        materializeInteractiveWorkspace({
+          reader: null,
+          destination,
+          attachments: [attachmentRef],
+          readAttachment: async () => attachmentBytes,
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toThrow(/symlink/i);
+
+      await expect(fs.access(destination)).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
 });

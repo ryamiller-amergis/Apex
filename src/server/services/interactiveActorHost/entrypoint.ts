@@ -33,7 +33,11 @@ import {
 import type { RepoReader, RepositoryIdentity } from '../../../shared/types/repoReader';
 import { getAiRunnerCallbackToken } from '../aiRunsCallbackToken';
 import { createAiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
-import { resolveArtifactContainerClient } from '../aiRunV2/artifactContainer';
+import {
+  artifactContainerName,
+  resolveArtifactContainerClient,
+} from '../aiRunV2/artifactContainer';
+import { createArtifactUploader } from '../aiRunsV2Worker/artifactUploader';
 import { interactiveLiveBus } from '../interactiveLiveBus';
 import { LocalCheckoutReader } from '../localCheckoutReader';
 import {
@@ -45,6 +49,7 @@ import {
   createInteractiveSessionActor,
   type WarmThreadCheckout,
 } from './interactiveSessionActor';
+import { collectInteractiveArtifacts } from './interactiveArtifactCollector';
 import { materializeInteractiveWorkspace } from './interactiveWorkspaceMaterializer';
 import {
   InteractiveSessionActorImpl,
@@ -67,17 +72,20 @@ async function openPinnedReaderForBootstrap(
     sha: grounding.sha,
   };
   const serviceUrl = resolveRepoReadServiceUrl();
-  if (serviceUrl) {
-    try {
-      const reader = new RepoServiceReader({ identity, baseUrl: serviceUrl });
-      await reader.listDir('');
-      return reader;
-    } catch {
-      // Fall through.
-    }
+  if (!serviceUrl) {
+    throw new Error(
+      'Pinned grounding repository is unavailable: repo-read service URL is not configured',
+    );
   }
-  // Empty attempt workspace when no remote reader is reachable.
-  return null;
+  try {
+    const reader = new RepoServiceReader({ identity, baseUrl: serviceUrl });
+    await reader.listDir('');
+    return reader;
+  } catch (error) {
+    const reason =
+      error instanceof Error ? error.message : 'pinned repo-read open failed';
+    throw new Error(`Pinned grounding repository is unavailable: ${reason}`);
+  }
 }
 
 export interface InteractiveDispatchRequest {
@@ -338,6 +346,25 @@ export async function main(): Promise<void> {
           await fs.rm(destination, { recursive: true, force: true }).catch(() => {});
         },
       } as ReaderCheckout;
+    },
+    uploadAttemptArtifacts: async (bootstrap, workspacePath, signal) => {
+      const collected = await collectInteractiveArtifacts(workspacePath);
+      const container = artifactContainerName();
+      const uploader = createArtifactUploader({
+        target: {
+          runId: bootstrap.runId,
+          attemptId: bootstrap.attemptId,
+          attemptNumber: bootstrap.attemptNumber,
+          container,
+        },
+      });
+      return uploader.uploadAll(
+        collected.map((file) => ({
+          path: file.relativePath,
+          content: file.content,
+        })),
+        signal,
+      );
     },
     postIngest: (projectId, runId, body) =>
       callback.postIngest(projectId, runId, body),

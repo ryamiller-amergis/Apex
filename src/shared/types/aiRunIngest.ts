@@ -70,6 +70,11 @@ export type AiRunTerminalIngest = AiRunIngestBase & {
    * terminal success for dapr-actor-v2.
    */
   artifactManifestRef?: import('./aiRunV2').AiRunBlobRef | null;
+  /**
+   * V2 attempt failure category (hard_timeout / tool_timeout / …). Applied on
+   * failed dapr-actor-v2 terminals.
+   */
+  failureCategory?: import('./aiRunV2').AiRunV2FailureCategory;
   /** Wall-clock duration of the worker execution, when known. */
   durationMs?: number;
   /** Runtime-reported token counts. Omitted when the runtime reported none. */

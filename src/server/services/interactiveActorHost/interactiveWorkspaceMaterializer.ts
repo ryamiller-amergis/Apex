@@ -6,6 +6,7 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import * as mammoth from 'mammoth';
 import type { ImmutableInteractiveAttachmentRef } from '../../../shared/types/durableInteractiveTurn';
 import type { RepoReader } from '../../../shared/types/repoReader';
 
@@ -68,19 +69,58 @@ function resolveUnderDestination(
 }
 
 async function extractDocxText(buffer: Buffer): Promise<string> {
-  const mammoth = await import('mammoth');
   const result = await mammoth.extractRawText({ buffer });
   return result.value;
 }
 
+/**
+ * Reject any symlink on the path from `destination` to `target` (inclusive of
+ * existing ancestors). Prevents writing through planted links.
+ */
+async function assertNoSymlinkInPath(
+  destination: string,
+  target: string,
+): Promise<void> {
+  let current = path.resolve(destination);
+  const relative = path.relative(current, path.resolve(target));
+  if (
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error(
+      `Interactive workspace path escapes destination: ${target}`,
+    );
+  }
+  const parts = relative.split(path.sep).filter(Boolean);
+  for (const part of parts) {
+    current = path.join(current, part);
+    let stat;
+    try {
+      stat = await fs.lstat(current);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(
+        `Interactive workspace path must not be a symlink: ${current}`,
+      );
+    }
+  }
+}
+
 async function writeFileExclusive(
+  destination: string,
   target: string,
   body: Buffer | string,
   signal: AbortSignal,
 ): Promise<void> {
   assertNotAborted(signal);
+  await assertNoSymlinkInPath(destination, target);
   await fs.mkdir(path.dirname(target), { recursive: true });
   assertNotAborted(signal);
+  await assertNoSymlinkInPath(destination, target);
   await fs.writeFile(target, body, { flag: 'wx', mode: FILE_MODE });
 }
 
@@ -102,6 +142,7 @@ async function materializeRepository(
     }
     const content = await reader.readFile(relative);
     await writeFileExclusive(
+      destination,
       resolveUnderDestination(destination, relative),
       content,
       signal,
@@ -134,7 +175,7 @@ async function materializeAttachment(
     destination,
     attachment.materializedPath,
   );
-  await writeFileExclusive(target, bytes, signal);
+  await writeFileExclusive(destination, target, bytes, signal);
 
   const isDocx =
     attachment.name.toLowerCase().endsWith('.docx') ||
@@ -146,6 +187,7 @@ async function materializeAttachment(
     const extracted = await extractDocxText(bytes);
     const txtRelative = attachment.materializedPath.replace(/\.docx$/i, '.txt');
     await writeFileExclusive(
+      destination,
       resolveUnderDestination(destination, txtRelative),
       extracted,
       signal,
@@ -169,6 +211,12 @@ export async function materializeInteractiveWorkspace(
   try {
     assertNotAborted(signal);
     await fs.mkdir(destination, { recursive: true });
+    const destStat = await fs.lstat(destination);
+    if (destStat.isSymbolicLink()) {
+      throw new Error(
+        `Interactive workspace destination must not be a symlink: ${destination}`,
+      );
+    }
     if (reader) {
       await materializeRepository(reader, destination, signal);
     }
