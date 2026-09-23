@@ -459,9 +459,10 @@ in the running App Service imports):**
 
 ### Task 6: Build document and visual workers
 
-**Status:** The document, design-prototype, and initial UI Lab visual code
-paths are implemented on this branch. This does not declare Task 6 complete;
-the combined slice remains pending final review.
+**Status:** Complete for this branch (code only). Document, design-prototype,
+and UI Lab generation execute through V2 behind default-off flags. Container
+App hosting, deploy wiring, Azure apply, and live smoke tests remain deferred
+to the end-of-code-track operations section.
 
 **Files:**
 
@@ -501,14 +502,17 @@ the combined slice remains pending final review.
 - [x] Start visual concurrency at two and implement automatic rollback from
   three/four on Bedrock throttling.
 
-**Verification evidence (2026-09-21, branch `tbi/infra-changes`):**
+**Final verification evidence (2026-09-22, branch `tbi/infra-changes`):**
 
-- V2 suites: 81 passed, including a guard that walks the worker import graph
-  and fails if any module in it imports a database module.
-- `npm run build:server` clean.
-- Neither entrypoint is started from App Service `index.ts`.
+- Task 6 matrix: 55 suites / 1,055 tests passed.
+- `npm run build:server` and the full client production build passed.
+- Worker import-graph guard remains green: document and visual workers import
+  no database module.
+- Final whole-slice review approved after all findings were remediated.
+- Neither entrypoint is started from App Service `index.ts`; no Container App,
+  deploy workflow, Terraform apply, or Azure resource was changed.
 
-**Task 6 prototype-slice progress:**
+**Task 6 implementation record:**
 
 - [x] Write the execution specification to Blob and dispatch a V2 attempt from
   the admission path (`specificationWriter.ts`, `v2AdmissionService.ts`). The
