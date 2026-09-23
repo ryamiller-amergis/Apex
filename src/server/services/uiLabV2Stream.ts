@@ -268,43 +268,61 @@ export async function replayCompletedUiLabV2Run(
   input: Readonly<{
     threadId: string;
     afterEventId: string;
+    finalHtml: string;
     onToken: (text: string, eventId?: string) => void;
   }>,
   dependencies: Readonly<{
     replayRunEvents?: ReplayRunEvents;
     loadRunEvent?: LoadRunEvent;
+    publishFinalSnapshot?: (input: Readonly<{
+      threadId: string;
+      runId: string;
+      html: string;
+    }>) => Promise<AgentRunEventEnvelope>;
   }> = {},
 ): Promise<void> {
   const replay = dependencies.replayRunEvents ?? replayDurableRunEvents;
   const loadEvent = dependencies.loadRunEvent ?? loadDurableRunEvent;
+  const publishSnapshot =
+    dependencies.publishFinalSnapshot ?? publishFinalSnapshot;
   const cursor = await loadEvent(input.afterEventId, input.threadId);
   let nextOffset = cursor ? tokenEndOffset(cursor) : null;
+  let sawSnapshot =
+    cursor?.event.type === 'token' && Boolean(cursor.event.streamSnapshot);
   const seen = new Set<string>();
+
+  const accept = (envelope: AgentRunEventEnvelope): void => {
+    if (seen.has(envelope.eventId) || envelope.event.type !== 'token') return;
+    seen.add(envelope.eventId);
+    if (envelope.event.streamSnapshot) {
+      sawSnapshot = true;
+      const offset = nextOffset ?? 0;
+      const suffix = envelope.event.text.slice(offset);
+      if (suffix) input.onToken(suffix, envelope.eventId);
+      nextOffset = envelope.event.text.length;
+      return;
+    }
+    const offset = envelope.event.streamOffset;
+    if (!Number.isSafeInteger(offset) || (offset as number) < 0) return;
+    if (nextOffset === null) nextOffset = offset as number;
+    if (offset !== nextOffset) return;
+    input.onToken(envelope.event.text, envelope.eventId);
+    nextOffset += envelope.event.text.length;
+  };
 
   await replayAllPages({
     replay,
     threadId: input.threadId,
     afterEventId: input.afterEventId,
     onPage: async (events) => {
-      for (const envelope of events) {
-        if (seen.has(envelope.eventId) || envelope.event.type !== 'token') {
-          continue;
-        }
-        seen.add(envelope.eventId);
-        if (envelope.event.streamSnapshot) {
-          const offset = nextOffset ?? 0;
-          const suffix = envelope.event.text.slice(offset);
-          if (suffix) input.onToken(suffix, envelope.eventId);
-          nextOffset = envelope.event.text.length;
-          continue;
-        }
-        const offset = envelope.event.streamOffset;
-        if (!Number.isSafeInteger(offset) || (offset as number) < 0) continue;
-        if (nextOffset === null) nextOffset = offset as number;
-        if (offset !== nextOffset) continue;
-        input.onToken(envelope.event.text, envelope.eventId);
-        nextOffset += envelope.event.text.length;
-      }
+      for (const envelope of events) accept(envelope);
     },
   });
+  if (!sawSnapshot && cursor?.runId) {
+    accept(await publishSnapshot({
+      threadId: input.threadId,
+      runId: cursor.runId,
+      html: input.finalHtml,
+    }));
+  }
 }

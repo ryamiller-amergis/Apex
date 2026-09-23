@@ -256,6 +256,7 @@ describe('replayCompletedUiLabV2Run', () => {
       {
         threadId: INPUT.threadId,
         afterEventId: cursor.eventId,
+        finalHtml: '<html>ok</html>',
         onToken,
       },
       {
@@ -274,6 +275,7 @@ describe('replayCompletedUiLabV2Run', () => {
       {
         threadId: INPUT.threadId,
         afterEventId: snapshot.eventId,
+        finalHtml: '<html>ok</html>',
         onToken,
       },
       {
@@ -292,6 +294,7 @@ describe('replayCompletedUiLabV2Run', () => {
       {
         threadId: INPUT.threadId,
         afterEventId: cursor.eventId,
+        finalHtml: '<html>ok</html>',
         onToken,
       },
       {
@@ -301,5 +304,31 @@ describe('replayCompletedUiLabV2Run', () => {
     );
 
     expect(onToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('creates the final snapshot from ready HTML when the first publish was lost', async () => {
+    const onToken = jest.fn();
+    const publishFinalSnapshot = jest.fn().mockResolvedValue(snapshot);
+
+    await replayCompletedUiLabV2Run(
+      {
+        threadId: INPUT.threadId,
+        afterEventId: cursor.eventId,
+        finalHtml: '<html>ok</html>',
+        onToken,
+      },
+      {
+        loadRunEvent: jest.fn().mockResolvedValue(cursor),
+        replayRunEvents: jest.fn().mockResolvedValue([]),
+        publishFinalSnapshot,
+      },
+    );
+
+    expect(publishFinalSnapshot).toHaveBeenCalledWith({
+      threadId: INPUT.threadId,
+      runId: cursor.runId,
+      html: '<html>ok</html>',
+    });
+    expect(onToken).toHaveBeenCalledWith('ok</html>', snapshot.eventId);
   });
 });

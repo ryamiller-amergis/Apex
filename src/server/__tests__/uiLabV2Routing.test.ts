@@ -265,6 +265,7 @@ describe('UI Lab V2 generation routing', () => {
     expect(replayCompletedV2Run).toHaveBeenCalledWith({
       threadId: 'ui-lab:design-1',
       afterEventId: '3f44f6f1-ec42-4aa6-9df4-0d8ce8438491',
+      finalHtml: '<html>ready</html>',
       onToken: expect.any(Function),
     });
   });

@@ -679,6 +679,7 @@ export async function runGeneration(
     )({
       threadId: visualRunThreadId('ui-lab-screen', design.id),
       afterEventId: dependencies.afterEventId,
+      finalHtml: design.html ?? '',
       onToken,
     });
     return;
