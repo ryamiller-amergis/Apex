@@ -1530,6 +1530,47 @@ describe('canonical durable send wrapper', () => {
       await closeThread(thread.id);
     }
   });
+
+  it('keeps a newer active run when an old terminal turn is retried', async () => {
+    const accepted = {
+      turnId,
+      runId,
+      status: 'completed' as const,
+      interactiveClass: 'fast' as const,
+      shouldReflectThreadState: false,
+    };
+    mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        admitDurable(): Promise<typeof accepted>;
+      }) => ({
+        route: 'durable',
+        response: await input.admitDurable(),
+      }),
+    );
+    const thread = await createThread(
+      'thread-owner',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+    thread.status = 'running';
+    thread.activeRunId = 'newer-active-run';
+
+    try {
+      await sendMessage(thread.id, 'Old delayed retry', undefined, [], {
+        turnId,
+        turnIdPolicy: 'required',
+      });
+      await expect(getThread(thread.id)).resolves.toMatchObject({
+        status: 'running',
+        activeRunId: 'newer-active-run',
+      });
+    } finally {
+      thread.status = 'idle';
+      thread.activeRunId = undefined;
+      await closeThread(thread.id);
+    }
+  });
 });
 
 describe('thread kickoff effort resolution', () => {

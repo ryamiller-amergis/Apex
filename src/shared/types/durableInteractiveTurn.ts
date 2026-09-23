@@ -142,6 +142,8 @@ export type InteractiveTurnAcceptedResponse = Readonly<{
   runId: string;
   status: InteractiveTurnAcceptedStatus;
   interactiveClass: InteractiveClass;
+  /** Internal App Service hint; the HTTP route intentionally omits it. */
+  shouldReflectThreadState?: boolean;
 }>;
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;

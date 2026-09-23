@@ -237,4 +237,68 @@ describe('legacy interactive actor routing', () => {
     expect(input.runInProcess).toHaveBeenCalledTimes(1);
     expect(input.dispatchToActor).not.toHaveBeenCalled();
   });
+
+  it('targets every legacy interactive workflow independently by project', async () => {
+    const workflows = [
+      'interview',
+      'adr',
+      'home-chat',
+      'ask-apex',
+      'assistant',
+    ] as const;
+    const seen: Array<{ project: string; caller?: string }> = [];
+    const dependencies = makeLegacyDependencies({
+      isFeatureEnabled: jest.fn().mockImplementation(
+        async (_key: string, context: { project: string; caller?: string }) => {
+          seen.push(context);
+          return context.caller !== 'ask-apex';
+        },
+      ),
+    });
+    const router = createLegacyInteractiveWorkflowRouter(dependencies);
+
+    const decisions = await Promise.all(
+      workflows.map((workflowClass, index) =>
+        router.route(
+          makeLegacyInput({
+            workflowClass,
+            project: `P-${index}`,
+            runId: `run-${index}`,
+          }),
+        ),
+      ),
+    );
+
+    expect(seen.map((context) => context.caller)).toEqual(workflows);
+    expect(decisions.map((decision) => decision.route)).toEqual([
+      'actor',
+      'actor',
+      'actor',
+      'in-process',
+      'actor',
+    ]);
+  });
+
+  it('lets an already-dispatched legacy turn drain after the flag changes', async () => {
+    let enabled = true;
+    const dependencies = makeLegacyDependencies({
+      isFeatureEnabled: jest.fn().mockImplementation(async () => enabled),
+    });
+    const router = createLegacyInteractiveWorkflowRouter(dependencies);
+
+    const active = await router.route(
+      makeLegacyInput({ runId: 'run-active' }),
+    );
+    enabled = false;
+    const fresh = await router.route(
+      makeLegacyInput({ runId: 'run-fresh' }),
+    );
+
+    expect(active.route).toBe('actor');
+    expect(fresh).toEqual({
+      route: 'in-process',
+      reason: 'flag-disabled',
+    });
+    expect(dependencies.admissionService!.admit).toHaveBeenCalledTimes(1);
+  });
 });

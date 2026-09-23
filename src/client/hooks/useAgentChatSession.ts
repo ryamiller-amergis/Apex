@@ -13,6 +13,7 @@ import type {
   RunHealthProgress,
 } from './useChatStream';
 import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
+import { createChatTurnId } from '../utils/chatTurnId';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -70,6 +71,9 @@ export interface AgentChatSessionOptions {
 
   /** Active run id from the persisted thread, used to restore thinking after refresh. */
   initialActiveRunId?: string | null;
+
+  /** Generates the idempotency identity once per user send attempt. */
+  createTurnId?: () => string;
 }
 
 export interface SendOptions {
@@ -157,6 +161,7 @@ export function useAgentChatSession(
     visibleMessageFilter = DEFAULT_VISIBLE_FILTER,
     enablePreparationState = false,
     initialActiveRunId,
+    createTurnId = createChatTurnId,
   } = options;
 
   // --- useChatStream (the SSE subscription) ---
@@ -363,11 +368,12 @@ export function useAgentChatSession(
       setSendError(null);
       setIsStopConfirmed(false);
       setIsSending(true);
+      const turnId = createTurnId();
       optimisticBaselineIdsRef.current = new Set(
         messages.map((message) => message.id)
       );
       setOptimisticUserMessage({
-        id: `optimistic-user-${Date.now()}`,
+        id: turnId,
         role: 'user',
         text,
         ts: new Date().toISOString(),
@@ -387,19 +393,32 @@ export function useAgentChatSession(
       try {
         const endpoint =
           sendEndpoint ?? `/api/chat/threads/${threadId}/messages`;
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            text,
-            ...(opts.model ? { model: opts.model } : {}),
-            ...(opts.skill ? { skill: opts.skill } : {}),
-            ...(opts.attachments?.length
-              ? { attachments: opts.attachments }
-              : {}),
-          }),
+        const body = JSON.stringify({
+          turnId,
+          text,
+          ...(opts.model ? { model: opts.model } : {}),
+          ...(opts.skill ? { skill: opts.skill } : {}),
+          ...(opts.attachments?.length
+            ? { attachments: opts.attachments }
+            : {}),
         });
+        let res: Response | null = null;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            res = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body,
+            });
+            break;
+          } catch (error) {
+            if (attempt === 1) throw error;
+          }
+        }
+        if (!res) {
+          throw new Error('Failed to send message');
+        }
 
         if (!res.ok) {
           let msg = 'Failed to send message';
@@ -439,6 +458,7 @@ export function useAgentChatSession(
       sendEndpoint,
       afterSend,
       clearAwaitingAgentResponse,
+      createTurnId,
     ]
   );
 

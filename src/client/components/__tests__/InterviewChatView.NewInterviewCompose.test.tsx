@@ -504,6 +504,9 @@ describe('NewInterviewCompose — title required', () => {
     expect(messageCall).toBeDefined();
     const body = JSON.parse(messageCall![1].body);
     expect(body.text).toBe('Tell me about the architecture');
+    expect(body.turnId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
   });
 
   it('PBI-003 AC-0 / VT-05 Given staged links, When creation resolves, Then persistence finishes before the first message posts', async () => {

@@ -434,6 +434,59 @@ describe('durable interactive atomic admission', () => {
     },
   );
 
+  it('returns an old terminal duplicate without replacing a newer active run', async () => {
+    const threadId = THREAD_IDS[0];
+    const userId = USER_IDS[0];
+    await insertThread(threadId, userId);
+    const repository = createDurableInteractiveTurnRepository();
+    const oldInput = preparedTurn({
+      threadId,
+      turnId: TURN_IDS[0],
+      userId,
+      requestHash: 'a'.repeat(64),
+    });
+    const oldRun = await repository.admit(oldInput);
+    expect(isAccepted(oldRun)).toBe(true);
+    await pool.query(
+      `UPDATE agent_runs SET status = 'completed' WHERE thread_id = $1`,
+      [threadId],
+    );
+    await pool.query(
+      `UPDATE chat_threads
+       SET status = 'idle', active_run_id = NULL
+       WHERE id = $1::uuid`,
+      [threadId],
+    );
+    const newer = await repository.admit(
+      preparedTurn({
+        threadId,
+        turnId: TURN_IDS[1],
+        userId,
+        requestHash: 'b'.repeat(64),
+      }),
+    );
+    expect(isAccepted(newer)).toBe(true);
+    if (!isAccepted(newer)) return;
+
+    await expect(repository.admit(oldInput)).resolves.toMatchObject({
+      status: 'completed',
+      shouldReflectThreadState: false,
+    });
+    const thread = await pool.query<{
+      status: string;
+      active_run_id: string | null;
+    }>(
+      `SELECT status, active_run_id
+       FROM chat_threads
+       WHERE id = $1::uuid`,
+      [threadId],
+    );
+    expect(thread.rows[0]).toEqual({
+      status: 'running',
+      active_run_id: newer.runId,
+    });
+  });
+
   it('concurrently accepts one same-turn hash and conflicts the other', async () => {
     const threadId = THREAD_IDS[0];
     const userId = USER_IDS[0];

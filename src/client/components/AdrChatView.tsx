@@ -49,6 +49,7 @@ import {
 import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
 import { useReviewerAvailability } from '../hooks/useReviewerAvailability';
 import { parseAgentMessage, type ChoiceBlock } from '../utils/parseAgentMessage';
+import { createChatTurnId } from '../utils/chatTurnId';
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './InterviewChatView.module.css';
 import { ApexLoader } from './ApexLoader';
@@ -145,6 +146,7 @@ const NewAdrCompose: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
+          turnId: createChatTurnId(),
           text: kickoffPrompt,
           attachments,
           model,

@@ -186,6 +186,50 @@ describe('durable interactive skill loading', () => {
       '.cursor/skills/project-skill/SKILL.md',
     );
   });
+
+  it('never lets a repository file override the same built-in skill path', async () => {
+    const skillDir = path.join(builtInRoot, 'shared');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# local built-in');
+    const readFile = jest.fn().mockResolvedValue('# repository override');
+
+    await expect(
+      loadDurableInteractiveSkill(
+        {
+          path: '.cursor/skills/shared/SKILL.md',
+          registration: 'built-in',
+          pinnedReader: reader(readFile),
+        },
+        { builtInRoots: roots },
+      ),
+    ).resolves.toEqual({
+      path: '.cursor/skills/shared/SKILL.md',
+      content: '# local built-in',
+    });
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it('never lets a local built-in file override the same registered project path', async () => {
+    const skillDir = path.join(builtInRoot, 'shared');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# local built-in');
+    const readFile = jest.fn().mockResolvedValue('# pinned project');
+
+    await expect(
+      loadDurableInteractiveSkill(
+        {
+          path: '.cursor/skills/shared/SKILL.md',
+          registration: 'project',
+          pinnedReader: reader(readFile),
+        },
+        { builtInRoots: roots },
+      ),
+    ).resolves.toEqual({
+      path: '.cursor/skills/shared/SKILL.md',
+      content: '# pinned project',
+    });
+    expect(readFile).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('durable MaxView capability resolution', () => {

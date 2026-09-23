@@ -36,6 +36,7 @@ import { DesktopOnlyGate } from './components/DesktopOnlyGate';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
 import { setInteractiveWsEnabled } from './utils/threadEventStream';
+import { createChatTurnId } from './utils/chatTurnId';
 import { IS_BETA_RELEASE } from './config/release';
 import { RESTRICTED_ACCESS_PROJECT } from '../shared/types/restrictedAccess';
 import './App.css';
@@ -549,6 +550,7 @@ function App() {
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({
+            turnId: createChatTurnId(),
             text: options.initialMessage,
             model: options.model ?? DEFAULT_MODEL_ID,
             ...(options.attachments?.length ? { attachments: options.attachments } : {}),

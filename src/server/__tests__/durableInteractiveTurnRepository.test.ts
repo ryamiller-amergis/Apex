@@ -99,6 +99,7 @@ function repositoryHarness(options?: {
   activeCount?: number;
   agenticCount?: number;
   activeRunId?: string | null;
+  threadActiveRunId?: string | null;
 }) {
   const sqlStatements: string[] = [];
   const queries: unknown[] = [];
@@ -116,7 +117,13 @@ function repositoryHarness(options?: {
     sqlStatements.push(statement);
 
     if (statement.includes('FROM chat_threads')) {
-      return [{ id: THREAD_ID, user_id: USER_ID }];
+      return [
+        {
+          id: THREAD_ID,
+          user_id: USER_ID,
+          active_run_id: options?.threadActiveRunId ?? null,
+        },
+      ];
     }
     if (
       statement.includes('FROM agent_runs') &&
@@ -258,6 +265,49 @@ describe('durable interactive turn repository', () => {
       ).toBe(false);
     },
   );
+
+  it('preserves superseded duplicate reflection metadata for the wrapper', async () => {
+    const { service } = durableServiceHarness({
+      repositoryResult: {
+        turnId: TURN_ID,
+        runId: RUN_ID,
+        status: 'completed',
+        interactiveClass: 'fast',
+        idempotent: true,
+        shouldReflectThreadState: false,
+      },
+    });
+
+    await expect(
+      service.admit({
+        threadId: THREAD_ID,
+        userId: USER_ID,
+        workflowClass: 'home-chat',
+        turnId: TURN_ID,
+        text: 'Delayed old turn',
+        attachments: [],
+      }),
+    ).resolves.toMatchObject({
+      status: 'completed',
+      shouldReflectThreadState: false,
+    });
+  });
+
+  it('marks an old terminal duplicate superseded when another run owns the thread', async () => {
+    const harness = repositoryHarness({
+      threadActiveRunId: 'newer-active-run',
+    });
+    harness.setExistingStatus('completed');
+
+    await expect(
+      harness.repository.admit(preparedTurn()),
+    ).resolves.toMatchObject({
+      status: 'completed',
+      runId: RUN_ID,
+      idempotent: true,
+      shouldReflectThreadState: false,
+    });
+  });
 
   it('accepts a bounded non-UUID requester identity for locks and limits', async () => {
     const { repository, queries } = repositoryHarness();

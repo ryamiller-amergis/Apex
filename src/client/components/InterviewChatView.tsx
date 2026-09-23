@@ -37,6 +37,7 @@ import type { InterviewSkillOption } from '../../shared/types/projectSettings';
 import { effortLabel } from '../../shared/utils/effort';
 import { parseAgentMessage, isAgentOtherOptionText } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
+import { createChatTurnId } from '../utils/chatTurnId';
 import { trackEvent, trackException } from '../services/telemetry';
 import { ReadAloudButton } from './ReadAloudButton';
 import {
@@ -549,7 +550,12 @@ const NewInterviewCompose: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ text: text || 'Please use the attached files as context.', attachments, model }),
+        body: JSON.stringify({
+          turnId: createChatTurnId(),
+          text: text || 'Please use the attached files as context.',
+          attachments,
+          model,
+        }),
       });
       clearAttachments();
       if (linkedContextInitialErrorText) {

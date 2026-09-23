@@ -229,9 +229,23 @@ export async function loadDurableInteractiveSkill(
   }>,
 ): Promise<{ path: string; content: string }> {
   const normalized = strictPortableSkillPath(input.path);
-  if (input.registration === 'unknown') throw unavailableSkill();
+  switch (input.registration) {
+    case 'unknown':
+      throw unavailableSkill();
+    case 'project':
+      break;
+    case 'built-in':
+      break;
+    default: {
+      const unhandled: never = input.registration;
+      throw new Error(
+        `Unsupported interactive skill registration: ${String(unhandled)}`,
+      );
+    }
+  }
 
-  if (input.pinnedReader) {
+  if (input.registration === 'project') {
+    if (!input.pinnedReader) throw unavailableSkill();
     try {
       const content = await input.pinnedReader.readFile(normalized);
       if (typeof content !== 'string') throw unavailableSkill();
@@ -241,7 +255,6 @@ export async function loadDurableInteractiveSkill(
     }
   }
 
-  if (input.registration !== 'built-in') throw unavailableSkill();
   for (const root of options.builtInRoots) {
     const prefix = strictPortableSkillPath(root.requestPrefix);
     if (!normalized.startsWith(`${prefix}/`)) continue;
@@ -593,16 +606,25 @@ function requestHash(input: {
 async function defaultLoadSkill(
   input: LoadSkillInput,
 ): Promise<{ path: string; content: string } | null> {
-  let pinnedReader: RepoReader | null = null;
-  if (input.grounding) {
-    try {
-      pinnedReader =
-        await groundingProfileResolver.resolveConnectionProfile(
-          input.grounding.profileId as GroundingProfileId,
-        );
-    } catch {
-      throw unavailableSkill();
-    }
+  if (input.registration !== 'project') {
+    return loadDurableInteractiveSkill(
+      {
+        path: input.skill.path,
+        registration: input.registration,
+        pinnedReader: null,
+      },
+      { builtInRoots: input.builtInRoots },
+    );
+  }
+  if (!input.grounding) throw unavailableSkill();
+  let pinnedReader: RepoReader;
+  try {
+    pinnedReader =
+      await groundingProfileResolver.resolveConnectionProfile(
+        input.grounding.profileId as GroundingProfileId,
+      );
+  } catch {
+    throw unavailableSkill();
   }
   return loadDurableInteractiveSkill(
     {
@@ -947,6 +969,7 @@ export function createDurableInteractiveTurnService(
             runId: admitted.runId,
             status: admitted.status,
             interactiveClass: admitted.interactiveClass,
+            shouldReflectThreadState: admitted.shouldReflectThreadState,
           };
         case 'thread_active':
           throw new DurableInteractiveTurnError('THREAD_ACTIVE_TURN', 409);

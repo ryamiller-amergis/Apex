@@ -145,12 +145,17 @@ export function createDurableInteractiveTurnRepository(options?: {
         `);
 
         const threadResult = await executor.execute(sql`
-          SELECT id, user_id
+          SELECT id, user_id, active_run_id
           FROM chat_threads
           WHERE id = ${input.threadId}::uuid
           FOR UPDATE
         `);
-        if (resultRows(threadResult).length === 0) {
+        const lockedThread = resultRows<{
+          id: string;
+          user_id: string;
+          active_run_id: string | null;
+        }>(threadResult)[0];
+        if (!lockedThread) {
           throw Object.assign(new Error('Thread not found'), { status: 404 });
         }
 
@@ -172,6 +177,9 @@ export function createDurableInteractiveTurnRepository(options?: {
             status: duplicateStatus(existing.status),
             interactiveClass: existing.interactive_class,
             idempotent: true,
+            shouldReflectThreadState:
+              lockedThread.active_run_id === null ||
+              lockedThread.active_run_id === existing.id,
           };
         }
 
@@ -464,6 +472,7 @@ export function createDurableInteractiveTurnRepository(options?: {
           status: 'queued',
           interactiveClass: input.interactiveClass,
           idempotent: false,
+          shouldReflectThreadState: true,
         };
       });
     },

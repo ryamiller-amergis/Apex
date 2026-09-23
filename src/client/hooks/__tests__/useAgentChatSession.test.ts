@@ -50,6 +50,8 @@ const mockStreamReturn: MockStreamReturn = {
 };
 
 let currentStreamReturn: MockStreamReturn = { ...mockStreamReturn };
+const TURN_ID_1 = '10000000-0000-4000-8000-000000000001';
+const TURN_ID_2 = '10000000-0000-4000-8000-000000000002';
 
 jest.mock('../useChatStream', () => ({
   useChatStream: () => currentStreamReturn,
@@ -82,7 +84,11 @@ describe('useAgentChatSession', () => {
   });
 
   it('send posts to the correct endpoint', async () => {
-    const { result } = renderHook(() => useAgentChatSession('thread-1'));
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', {
+        createTurnId: () => TURN_ID_1,
+      }),
+    );
 
     await act(async () => {
       await result.current.send('Hello');
@@ -92,9 +98,62 @@ describe('useAgentChatSession', () => {
       '/api/chat/threads/thread-1/messages',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ text: 'Hello' }),
+        body: JSON.stringify({ turnId: TURN_ID_1, text: 'Hello' }),
       })
     );
+  });
+
+  it('reuses one turnId when the same send retries a network failure', async () => {
+    (global.fetch as jest.Mock)
+      .mockRejectedValueOnce(new TypeError('network interrupted'))
+      .mockResolvedValueOnce({ ok: true });
+    const createTurnId = jest.fn(() => TURN_ID_1);
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', { createTurnId }),
+    );
+
+    await act(async () => {
+      await result.current.send('Retry this admission');
+    });
+
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    const bodies = (global.fetch as jest.Mock).mock.calls.map((call) =>
+      JSON.parse(call[1].body),
+    );
+    expect(bodies).toEqual([
+      { turnId: TURN_ID_1, text: 'Retry this admission' },
+      { turnId: TURN_ID_1, text: 'Retry this admission' },
+    ]);
+    expect(createTurnId).toHaveBeenCalledTimes(1);
+  });
+
+  it('generates a new turnId for a new user turn', async () => {
+    const createTurnId = jest
+      .fn()
+      .mockReturnValueOnce(TURN_ID_1)
+      .mockReturnValueOnce(TURN_ID_2);
+    const first = renderHook(() =>
+      useAgentChatSession('thread-1', { createTurnId }),
+    );
+    await act(async () => {
+      await first.result.current.send('First turn');
+    });
+    first.unmount();
+
+    const second = renderHook(() =>
+      useAgentChatSession('thread-1', { createTurnId }),
+    );
+    await act(async () => {
+      await second.result.current.send('Second turn');
+    });
+
+    const bodies = (global.fetch as jest.Mock).mock.calls.map((call) =>
+      JSON.parse(call[1].body),
+    );
+    expect(bodies).toEqual([
+      { turnId: TURN_ID_1, text: 'First turn' },
+      { turnId: TURN_ID_2, text: 'Second turn' },
+    ]);
   });
 
   it('shows the user message optimistically before the agent processing state', async () => {
