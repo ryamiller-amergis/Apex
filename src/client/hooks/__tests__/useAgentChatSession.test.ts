@@ -695,4 +695,71 @@ describe('useAgentChatSession', () => {
       );
     });
   });
+
+  it('maps USER_INTERACTIVE_LIMIT to the exact user-facing copy', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: false,
+      json: async () => ({ error: 'USER_INTERACTIVE_LIMIT' }),
+    });
+    const { result } = renderHook(() => useAgentChatSession('thread-1'));
+
+    await act(async () => {
+      await result.current.send('Third turn');
+    });
+
+    expect(result.current.sendError).toBe(
+      'You already have two active AI turns. Finish or stop one before starting another.',
+    );
+  });
+
+  it('maps USER_AGENTIC_LIMIT to the exact user-facing copy', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: false,
+      json: async () => ({ error: 'USER_AGENTIC_LIMIT' }),
+    });
+    const { result } = renderHook(() => useAgentChatSession('thread-1'));
+
+    await act(async () => {
+      await result.current.send('Second agentic');
+    });
+
+    expect(result.current.sendError).toBe(
+      'You already have an agentic AI turn running. Finish or stop it before starting another.',
+    );
+  });
+
+  it('shows Queued immediately after a durable InteractiveTurnAcceptedResponse', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        turnId: TURN_ID_1,
+        runId: '50000000-0000-4000-8000-000000000001',
+        status: 'queued',
+        interactiveClass: 'fast',
+      }),
+    });
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', { createTurnId: () => TURN_ID_1 }),
+    );
+
+    await act(async () => {
+      await result.current.send('Hello durable');
+    });
+
+    expect(result.current.progressPhase).toBe('queued');
+    expect(result.current.progressLabel).toBe('Queued');
+  });
+
+  it('shows Dispatched when the durable stream advances to that phase', async () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'running',
+      progressPhase: 'dispatched',
+      progressLabel: 'Starting…',
+    };
+    const { result } = renderHook(() => useAgentChatSession('thread-1'));
+
+    expect(result.current.progressPhase).toBe('dispatched');
+    expect(result.current.progressLabel).toBe('Dispatched');
+  });
 });

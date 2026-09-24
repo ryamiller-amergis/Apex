@@ -1582,11 +1582,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               >
                 {progressPhase === 'queued' ? (
                   <span {...{ 'data-testid': 'agent-run-status-queued' }}>
-                    {friendlyChatProgressLabel(progressLabel, 'queued')}
+                    Queued
                   </span>
                 ) : progressPhase === 'dispatched' ? (
                   <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
-                    {friendlyChatProgressLabel(progressLabel, 'dispatched')}
+                    Dispatched
                   </span>
                 ) : progressLabel ? (
                   friendlyChatProgressLabel(progressLabel, progressPhase)

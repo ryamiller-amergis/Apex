@@ -405,6 +405,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     isInteractionBusy,
     status,
     progressLabel,
+    progressPhase,
     showTypingIndicator,
     sendError,
   } = session;
@@ -1204,7 +1205,13 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 className={styles.message}
                 role="status"
                 aria-live="polite"
-                aria-label={progressLabel ?? 'Agent is processing'}
+                aria-label={
+                  progressPhase === 'queued'
+                    ? 'Queued'
+                    : progressPhase === 'dispatched'
+                      ? 'Dispatched'
+                      : progressLabel ?? 'Agent is processing'
+                }
                 {...{ 'data-testid': 'chat-run-spinner' }}
               >
                 <div className={styles.agentHeader}>
@@ -1217,12 +1224,22 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                     <span className={styles.typingDot} />
                     <span className={styles.typingDot} />
                   </div>
-                  {(progressLabel || showStartupTyping) && (
+                  {(progressLabel || progressPhase || showStartupTyping) && (
                     <p
                       className={styles.progressLabel}
                       {...{ 'data-testid': 'chat-agent-progress-label' }}
                     >
-                      {progressLabel ?? 'Starting skill…'}
+                      {progressPhase === 'queued' ? (
+                        <span {...{ 'data-testid': 'agent-run-status-queued' }}>
+                          Queued
+                        </span>
+                      ) : progressPhase === 'dispatched' ? (
+                        <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
+                          Dispatched
+                        </span>
+                      ) : (
+                        progressLabel ?? 'Starting skill…'
+                      )}
                     </p>
                   )}
                 </div>

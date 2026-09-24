@@ -12,8 +12,12 @@ import type {
   RunPhaseProgress,
   RunHealthProgress,
 } from './useChatStream';
-import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
+import { friendlyChatProgressLabel, friendlyDurableInteractiveLimitError } from '../../shared/utils/chatProgressCopy';
 import { createChatTurnId } from '../utils/chatTurnId';
+
+function mapSendErrorMessage(raw: string): string {
+  return friendlyDurableInteractiveLimitError(raw) ?? raw;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -205,6 +209,10 @@ export function useAgentChatSession(
   const [sendError, setSendError] = useState<string | null>(null);
   const [optimisticUserMessage, setOptimisticUserMessage] =
     useState<ChatMessage | null>(null);
+  /** Immediate Queued/Dispatched from the 202 acceptance before stream events. */
+  const [admissionPhase, setAdmissionPhase] = useState<
+    'queued' | 'dispatched' | null
+  >(null);
   const optimisticBaselineIdsRef = useRef<Set<string>>(new Set());
 
   // Refs for pending-message tracking (generalized from Interview)
@@ -312,10 +320,29 @@ export function useAgentChatSession(
     setOptimisticUserMessage(null);
     setIsCancelling(false);
     setIsStopConfirmed(false);
+    setAdmissionPhase(null);
     pendingMessageIdsRef.current.clear();
     pendingObservedRunningRef.current = false;
     setIsAwaitingAgentResponse(false);
   }, [threadId]);
+
+  // Prefer live stream phase; keep admission phase until the stream advances.
+  useEffect(() => {
+    if (!progressPhase) return;
+    if (progressPhase === 'queued' || progressPhase === 'dispatched') {
+      setAdmissionPhase(progressPhase);
+      return;
+    }
+    setAdmissionPhase(null);
+  }, [progressPhase]);
+
+  const effectiveProgressPhase: AgentRunPhase | null =
+    progressPhase ?? admissionPhase;
+  const effectiveProgressLabel =
+    effectiveProgressPhase === 'queued' ||
+    effectiveProgressPhase === 'dispatched'
+      ? friendlyChatProgressLabel(progressLabel, effectiveProgressPhase)
+      : progressLabel;
 
   // Restore thinking after refresh when the last visible line is still the user.
   useEffect(() => {
@@ -430,7 +457,7 @@ export function useAgentChatSession(
           let msg = 'Failed to send message';
           try {
             const body = await res.json();
-            if (body?.error) msg = body.error;
+            if (body?.error) msg = mapSendErrorMessage(String(body.error));
           } catch {
             /* use default */
           }
@@ -438,6 +465,20 @@ export function useAgentChatSession(
           setOptimisticUserMessage(null);
           clearAwaitingAgentResponse();
           return;
+        }
+
+        try {
+          const accepted = (await res.json()) as {
+            status?: string;
+          } | null;
+          if (
+            accepted?.status === 'queued' ||
+            accepted?.status === 'dispatched'
+          ) {
+            setAdmissionPhase(accepted.status);
+          }
+        } catch {
+          // Legacy `{ ok: true }` responses have no durable phase.
         }
 
         clearRetryableRunId();
@@ -517,13 +558,27 @@ export function useAgentChatSession(
         let msg = 'Failed to retry run';
         try {
           const body = await res.json();
-          if (body?.error) msg = body.error;
+          if (body?.error) msg = mapSendErrorMessage(String(body.error));
         } catch {
           /* use default */
         }
         setSendError(msg);
         clearAwaitingAgentResponse();
         return;
+      }
+
+      try {
+        const accepted = (await res.json()) as {
+          status?: string;
+        } | null;
+        if (
+          accepted?.status === 'queued' ||
+          accepted?.status === 'dispatched'
+        ) {
+          setAdmissionPhase(accepted.status);
+        }
+      } catch {
+        // Empty or non-JSON success bodies are ignored.
       }
 
       clearRetryableRunId();
@@ -602,8 +657,8 @@ export function useAgentChatSession(
     toolProgress,
     phaseEvents,
     runHealth,
-    progressLabel,
-    progressPhase,
+    progressLabel: effectiveProgressLabel,
+    progressPhase: effectiveProgressPhase,
     prdReady,
     backlogReady,
     isRetrying,

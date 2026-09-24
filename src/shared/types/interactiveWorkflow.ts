@@ -1,11 +1,17 @@
 /**
  * FEAT-007 Phase 2 — Real-Time Interactive Agent Transport.
  *
- * Shared contracts for the interactive lane (WebSocket gateway + Dapr virtual
- * actors on ACA). Interactive turns are dispatched IN-CLUSTER (never through
- * Service Bus, BR-013); reserved warm actor capacity is isolated from the
- * background lane (BR-014); over-capacity turns shed immediately to the
- * in-process path rather than queuing.
+ * Shared contracts for the **legacy-only** interactive lane (WebSocket gateway
+ * + Dapr virtual actors on ACA) used while `ai-runs-v2-transport` is off or
+ * unreadable. Interactive turns are dispatched IN-CLUSTER (never through
+ * Service Bus, BR-013). Reserved warm actor capacity is isolated from the
+ * background lane; over-capacity turns shed immediately to the in-process path
+ * rather than queuing.
+ *
+ * BR-014 and BR-017 are legacy-only. When `ai-runs-v2-transport` is enabled,
+ * the approved durable design supersedes them: saturation stays queued in
+ * PostgreSQL and App Service never falls back to Cursor/model execution.
+ * See `docs/superpowers/specs/2026-09-23-durable-interactive-turns-design.md`.
  */
 
 /** DB lane value carried on `agent_runs.lane` for interactive turns. */
@@ -39,9 +45,12 @@ export const INTERACTIVE_WORKFLOW_CLASSES: readonly InteractiveWorkflowClass[] =
 export type InteractiveActorSlot = 'reserved' | 'burst';
 
 /**
- * Outcome of a reserved-capacity actor activation admission (TBI-010).
+ * Outcome of legacy-only reserved-capacity actor activation admission (TBI-010).
+ * Callable only from the canonical flag-off / flag-error branch.
  * `admitted` fills reserved first then burst; over-capacity or a lost race
- * both shed to the in-process path (never an unbounded queue wait, BR-014).
+ * both shed to the in-process path (never an unbounded queue wait).
+ * BR-014 is legacy-only — superseded by durable PostgreSQL queuing when
+ * `ai-runs-v2-transport` is enabled.
  */
 export type InteractiveAdmissionDecision =
   | {
@@ -63,9 +72,12 @@ export type InteractiveAdmissionDecision =
     };
 
 /**
- * Result of the fail-closed interactive routing seam (TBI-012). `actor` is the
- * only path that dispatches in-cluster; every other outcome (disabled, eval
- * error, shed, race) routes the turn in-process (BR-017).
+ * Result of the legacy-only interactive routing seam (TBI-012). Reachable only
+ * while `ai-runs-v2-transport` is off or unreadable. `actor` is the only path
+ * that dispatches in-cluster; every other outcome (disabled, eval error, shed,
+ * race) routes the turn in-process.
+ * BR-017 is legacy-only — the durable enabled path never falls back to
+ * App Service Cursor/model execution.
  */
 export type InteractiveRouteDecision =
   | {

@@ -4179,13 +4179,17 @@ async function postInteractiveActorDispatch(dispatch: {
 }
 
 /**
- * Fail-closed interactive routing seam (BR-017). Returns true only when the turn
- * was admitted and dispatched to the warm actor lane (the actor then streams
- * events back through the durable ingest + gateway). Any other outcome — no
- * dispatch URL, flag disabled/eval-error, over-capacity shed, lost race, or any
- * preparation/dispatch failure — returns false so the caller runs in-process.
- * On a non-actor decision the transient queued interactive row is discarded so
- * admission counts stay accurate and nothing is left dispatched without a runner.
+ * Legacy-only interactive routing seam (BR-017). Called only from the private
+ * legacy chat send path while `ai-runs-v2-transport` is off or unreadable.
+ * Returns true only when the turn was admitted and dispatched to the warm
+ * actor lane. Any other outcome — no dispatch URL, flag disabled/eval-error,
+ * attachments / workspace-bound skill / custom MCP / ADO bypasses,
+ * over-capacity shed, lost race, actor post failure, or any preparation
+ * failure — returns false so the legacy caller runs in-process.
+ *
+ * Canonical enabled traffic never enters this function: those bypasses are
+ * replaced by Tasks 2–4 durable paths or explicit validation errors
+ * (see durable interactive turns design). BR-017 is legacy-only.
  */
 interface InteractiveDispatchAttempt {
   dispatched: boolean;
@@ -4705,8 +4709,10 @@ async function sendMessageLegacy(
     state.cancellationEpoch !== expectedCancellationEpoch;
 
   // @feature-flag:ai-runs-interactive start winner=disabled
-  // FEAT-007: offload the turn to the warm Dapr actor lane when enabled + admitted.
-  // Fail-closed: any other outcome falls through to the in-process path below.
+  // Legacy-only FEAT-007: offload the turn to the warm Dapr actor lane when the
+  // interim flag is enabled + admitted. Fail-closed: any other outcome falls
+  // through to the in-process path below. Canonical `ai-runs-v2-transport`
+  // never reaches this function.
   const interactiveAttempt = await tryDispatchInteractiveTurn(
     threadId,
     text,

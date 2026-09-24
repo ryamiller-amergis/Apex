@@ -1,13 +1,19 @@
 /**
- * FEAT-007 / TBI-010 — reserved-capacity actor activation admission.
+ * FEAT-007 / TBI-010 — legacy-only reserved-capacity actor activation admission.
+ *
+ * Reachable only from the canonical `ai-runs-v2-transport` flag-off /
+ * flag-error branch (via the legacy chat send path → `legacyInteractiveWorkflowRouter`).
+ * The durable enabled path never calls this service: global saturation stays
+ * queued in PostgreSQL (approved durable design).
  *
  * Interactive "capacity" is warm actor availability, not a broker cap. In one
  * concurrency-safe DB transaction this counts interactive-lane in-flight work
  * and, if warm capacity is free, fences a queued interactive run into
  * `dispatched`. Reserved slots are filled before burst; beyond reserved+burst
- * the activation SHEDS immediately so the caller routes in-process rather than
- * queuing (BR-014). Background admission counts only its own lane, so it can
- * never consume a reserved interactive slot (lane isolation).
+ * the activation SHEDS immediately so the legacy caller routes in-process
+ * rather than queuing. BR-014 is legacy-only under that flag-off path.
+ * Background admission counts only its own lane, so it can never consume a
+ * reserved interactive slot (lane isolation).
  */
 import { randomUUID } from 'crypto';
 import { sql } from 'drizzle-orm';
@@ -200,7 +206,8 @@ export function createInteractiveActorAdmissionService(
         await tx.acquireLock();
         const interactiveInFlight = await tx.countInFlight();
 
-        // BR-014: over reserved+burst sheds immediately (never queues).
+        // BR-014 (legacy-only): over reserved+burst sheds immediately (never queues).
+        // Canonical enabled traffic queues in PostgreSQL instead — see durable design.
         if (interactiveInFlight >= capacity) {
           return {
             admitted: false,
@@ -219,8 +226,8 @@ export function createInteractiveActorAdmissionService(
           now().toISOString(),
         );
         if (!claimed) {
-          // A concurrent governor advanced this row first — fail closed to
-          // in-process rather than double-admitting.
+          // A concurrent governor advanced this row first — legacy path returns
+          // race-lost so the caller runs in-process rather than double-admitting.
           return {
             admitted: false,
             shed: true,

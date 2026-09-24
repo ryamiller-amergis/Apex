@@ -9,8 +9,10 @@ const REPO_READ_RUNNING: Record<RepoReadTool, string> = {
 };
 
 const RAW_TO_FRIENDLY: Record<string, string> = {
-  'Queued — waiting for available worker': 'Waiting…',
-  'Starting…': 'Starting…',
+  'Queued — waiting for available worker': 'Queued',
+  Queued: 'Queued',
+  'Starting…': 'Dispatched',
+  Dispatched: 'Dispatched',
   'Preparing project repository…': 'Loading…',
   'Preparing the latest repository requirements…': 'Pinning…',
   'Refreshing the repository mirror…': 'Loading…',
@@ -40,9 +42,9 @@ function matchRepoReadTool(label: string): RepoReadTool | null {
 function copyForPhase(phase: AgentRunPhase): string {
   switch (phase) {
     case 'queued':
-      return 'Waiting…';
+      return 'Queued';
     case 'dispatched':
-      return 'Starting…';
+      return 'Dispatched';
     case 'setup':
     case 'dependencies':
       return 'Loading…';
@@ -68,12 +70,16 @@ function copyForPhase(phase: AgentRunPhase): string {
 /**
  * User-facing loading copy for the bare-mirror / repo-read / actor path.
  * Stored progress labels stay machine-readable for the reaper; this is display only.
+ * Durable interactive turns show exactly "Queued" then "Dispatched" — never a
+ * numeric position or wait estimate.
  */
 export function friendlyChatProgressLabel(
   raw?: string | null,
   phase?: AgentRunPhase | null,
 ): string {
   const text = (raw ?? '').replace(/\s+/g, ' ').trim();
+  if (phase === 'queued') return 'Queued';
+  if (phase === 'dispatched') return 'Dispatched';
   if (text && ALREADY_FRIENDLY.has(text)) return text;
 
   const tool = text ? matchRepoReadTool(text) : null;
@@ -83,4 +89,18 @@ export function friendlyChatProgressLabel(
   if (text) return text;
   if (phase) return copyForPhase(phase);
   return 'Thinking…';
+}
+
+/** Exact client copy for durable per-user cap errors (stable API codes). */
+export function friendlyDurableInteractiveLimitError(
+  code: string | null | undefined,
+): string | null {
+  switch (code) {
+    case 'USER_INTERACTIVE_LIMIT':
+      return 'You already have two active AI turns. Finish or stop one before starting another.';
+    case 'USER_AGENTIC_LIMIT':
+      return 'You already have an agentic AI turn running. Finish or stop it before starting another.';
+    default:
+      return null;
+  }
 }

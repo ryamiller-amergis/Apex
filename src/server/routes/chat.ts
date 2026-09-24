@@ -741,6 +741,9 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
   });
 
   try {
+    // Unified send: canonical flag-off/error runs legacy (detach); flag-on admits
+    // durably and returns the accepted identity. Enabled-path failures never fall
+    // back to App Service Cursor/model execution.
     const submission = await sendMessage(
       threadId,
       body.text ?? '',

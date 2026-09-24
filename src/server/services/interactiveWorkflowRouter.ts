@@ -186,8 +186,10 @@ export function createLegacyInteractiveWorkflowRouter(
         evaluationFailed = true;
       }
 
-      // Retain enabled after two stable sprints at full rollout. This entire
-      // interim split is reachable only from the canonical legacy callback.
+      // Legacy-only: reachable only from the canonical flag-off/error callback
+      // (the private legacy chat send path). BR-014 / BR-017 shed-to-in-process
+      // behavior lives here; durable enabled traffic never enters this router.
+      // Retain enabled after two stable sprints at full rollout.
       // @feature-flag:ai-runs-interactive start winner=enabled
       // @feature-flag:ai-runs-interactive disabled-start
       if (evaluationFailed) {
@@ -201,7 +203,7 @@ export function createLegacyInteractiveWorkflowRouter(
       // @feature-flag:ai-runs-interactive enabled-start
       const decision = await admission.admit(input.runId);
       if (!decision.admitted) {
-        // BR-014: over-capacity / lost race sheds to in-process (never queues).
+        // BR-014 (legacy-only): over-capacity / lost race sheds to in-process.
         // The shed variant carries `reason`; read it via a narrow cast so the
         // access is stable under both the full server tsc and ts-jest's
         // per-file transform (which does not narrow this discriminated union).
