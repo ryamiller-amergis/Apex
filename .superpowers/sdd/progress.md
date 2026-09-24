@@ -15,9 +15,10 @@
 - Task 4 actor parity / deadlines: complete (`e227ac5a..05020cfa`), final review approved with no findings after remediation.
 - Task 5 stream persist/replay: complete (`2f3b2942..452bf268`). Feature `038fd671`; remediation `649333b8` (batcher persist ordering, shared Redis/Postgres eventId, SSE Redis live subscribe); report SHAs `91dc0131` / `452bf268`. Final re-review approved with no findings.
 - Task 6 retry by run identity: complete (`599a2cf0..5083acdf`). Feature `e78cc1ce`; remediation `5083acdf` (keep retryableRunId through failure done; clear only after 2xx; thread-active recheck). Final re-review approved with no findings.
+- Task 7 enabled-path cutover: complete (`010688a4..dc8b2b72`). Feature `6542cbf9`; remediation `dc8b2b72` (real no-fallback guard). Final re-review approved; Playwright E2E deferred on missing TEST_DATABASE_URL.
 
 ## Resume point
 
-- **Next:** plan Task 7 — Remove every enabled-path execution fallback + queued/dispatched copy + E2E.
+- **Next:** plan Task 8 — Final verification and evidence record.
 - Still deferred until asked: push, PR, Azure apply, Container Apps / deploy.
 - Branch: `tbi/infra-changes` (ahead of origin; local only).
