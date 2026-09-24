@@ -505,6 +505,258 @@ describe('durable interactive turn repository', () => {
   });
 });
 
+const FAILED_RUN_ID = RUN_ID;
+const RETRY_ATTEMPT_ID = '61000000-0000-4000-8000-000000000001';
+const RETRY_FENCE_ID = '71000000-0000-4000-8000-000000000001';
+const RETRY_EVENT_ID = '81000000-0000-4000-8000-000000000001';
+const RETRY_DEADLINES = {
+  absoluteTurnMs: 300_000 as const,
+  repositoryPreparationMs: null,
+  firstEventMs: 45_000,
+  toolCallMs: 60_000,
+};
+
+function retryInput(
+  overrides: Partial<{
+    threadId: string;
+    runId: string;
+    userId: string;
+    refreshedToolGrant: null;
+    refreshedDeadlines: typeof RETRY_DEADLINES;
+  }> = {},
+) {
+  return {
+    threadId: THREAD_ID,
+    runId: FAILED_RUN_ID,
+    userId: USER_ID,
+    refreshedToolGrant: null,
+    refreshedDeadlines: RETRY_DEADLINES,
+    ...overrides,
+  };
+}
+
+function retryHarness(options?: {
+  activeCount?: number;
+  agenticCount?: number;
+  runStatus?: string;
+  attemptStatus?: string;
+  transport?: string;
+  interactiveClass?: 'fast' | 'agentic';
+  missingRun?: boolean;
+  missingThread?: boolean;
+  attemptNumber?: number;
+  startWithActiveRetry?: boolean;
+}) {
+  const sqlStatements: string[] = [];
+  const queries: unknown[] = [];
+  let messageInsertCount = 0;
+  let attemptInsertCount = 0;
+  let outboxInsertCount = 0;
+  let latestAttempt = {
+    id: ATTEMPT_ID,
+    attempt_number: options?.attemptNumber ?? 1,
+    status: options?.startWithActiveRetry
+      ? 'queued'
+      : (options?.attemptStatus ?? 'failed'),
+    dispatch_message_id: FENCE_ID,
+    spec_snapshot: specification(),
+  };
+  const execute = jest.fn(async (query: unknown) => {
+    queries.push(query);
+    const statement = sqlText(query);
+    sqlStatements.push(statement);
+
+    if (statement.includes('FROM chat_threads')) {
+      if (options?.missingThread) return [];
+      return [
+        {
+          id: THREAD_ID,
+          user_id: USER_ID,
+          active_run_id: null,
+        },
+      ];
+    }
+    if (
+      statement.includes('FROM agent_runs') &&
+      statement.includes('transport_version') &&
+      statement.includes('FOR UPDATE')
+    ) {
+      if (options?.missingRun) return [];
+      return [
+        {
+          id: FAILED_RUN_ID,
+          thread_id: THREAD_ID,
+          status: options?.startWithActiveRetry
+            ? 'queued'
+            : (options?.runStatus ?? 'failed'),
+          interactive_class: options?.interactiveClass ?? 'fast',
+          transport_version: options?.transport ?? 'dapr-actor-v2',
+          requested_by_user_id: USER_ID,
+          client_turn_id: TURN_ID,
+          execution_snapshot: specification(),
+        },
+      ];
+    }
+    if (
+      statement.includes('FROM ai_run_attempts') &&
+      statement.includes('ORDER BY attempt_number DESC')
+    ) {
+      return [latestAttempt];
+    }
+    if (
+      statement.includes('FROM agent_runs') &&
+      statement.includes('requested_by_user_id') &&
+      statement.includes('COUNT')
+    ) {
+      return [
+        {
+          active_count: options?.activeCount ?? 0,
+          agentic_count: options?.agenticCount ?? 0,
+        },
+      ];
+    }
+    if (
+      statement.includes('accepted_at') &&
+      statement.includes('deadline_at')
+    ) {
+      return [
+        {
+          accepted_at: new Date(ACCEPTED_AT),
+          deadline_at: new Date(DEADLINE_AT),
+        },
+      ];
+    }
+    if (statement.includes('INSERT INTO chat_messages')) {
+      messageInsertCount += 1;
+    }
+    if (statement.includes('INSERT INTO ai_run_attempts')) {
+      attemptInsertCount += 1;
+      latestAttempt = {
+        id: RETRY_ATTEMPT_ID,
+        attempt_number: (options?.attemptNumber ?? 1) + 1,
+        status: 'queued',
+        dispatch_message_id: RETRY_FENCE_ID,
+        spec_snapshot: specification(),
+      };
+    }
+    if (statement.includes('INSERT INTO ai_run_outbox')) {
+      outboxInsertCount += 1;
+      return [{ id: 'outbox-retry-1' }];
+    }
+    if (
+      statement.includes('FROM agent_run_events') &&
+      statement.includes('MAX(sequence)')
+    ) {
+      return [{ max_sequence: 1 }];
+    }
+    return [];
+  });
+  const ids = [RETRY_ATTEMPT_ID, RETRY_FENCE_ID, RETRY_EVENT_ID];
+  let nextId = 0;
+  const repository = createDurableInteractiveTurnRepository({
+    runInTransaction: async (work) => work({ execute }),
+    newId: () =>
+      ids[nextId++] ??
+      `90000000-0000-4000-8000-${String(nextId).padStart(12, '0')}`,
+  });
+
+  return {
+    repository,
+    execute,
+    queries,
+    sqlStatements,
+    get messageInsertCount() {
+      return messageInsertCount;
+    },
+    get attemptInsertCount() {
+      return attemptInsertCount;
+    },
+    get outboxInsertCount() {
+      return outboxInsertCount;
+    },
+    get latestAttempt() {
+      return latestAttempt;
+    },
+  };
+}
+
+describe('durable interactive turn repository retry', () => {
+  it('creates a fresh attempt and reuses the original message', async () => {
+    const harness = retryHarness();
+    const retried = await harness.repository.retry(retryInput());
+
+    expect(retried).toMatchObject({
+      runId: FAILED_RUN_ID,
+      turnId: TURN_ID,
+      status: 'queued',
+      interactiveClass: 'fast',
+    });
+    expect(harness.latestAttempt.attempt_number).toBe(2);
+    expect(harness.latestAttempt.dispatch_message_id).toBe(RETRY_FENCE_ID);
+    expect(harness.latestAttempt.dispatch_message_id).not.toBe(FENCE_ID);
+    expect(harness.messageInsertCount).toBe(0);
+    expect(harness.attemptInsertCount).toBe(1);
+    expect(harness.outboxInsertCount).toBe(1);
+
+    const bound = harness.queries.flatMap((query) => boundStrings(query)).join('\n');
+    expect(bound).toContain(`${RETRY_ATTEMPT_ID}:interactive-dispatch`);
+    expect(bound).toContain('"attemptNumber":2');
+    expect(
+      harness.sqlStatements.some((statement) =>
+        statement.includes('INSERT INTO chat_messages'),
+      ),
+    ).toBe(false);
+  });
+
+  it('returns the active retry when the request is repeated', async () => {
+    const harness = retryHarness();
+    const first = await harness.repository.retry(retryInput());
+    const second = await harness.repository.retry(retryInput());
+
+    expect(first).toMatchObject({ runId: FAILED_RUN_ID, status: 'queued' });
+    expect(second).toMatchObject({
+      runId: FAILED_RUN_ID,
+      status: 'queued',
+      turnId: TURN_ID,
+    });
+    expect(harness.attemptInsertCount).toBe(1);
+    expect(harness.latestAttempt.attempt_number).toBe(2);
+  });
+
+  it('rejects non-failed runs as not retryable', async () => {
+    const harness = retryHarness({ runStatus: 'completed', attemptStatus: 'completed' });
+    await expect(harness.repository.retry(retryInput())).resolves.toEqual({
+      status: 'not_retryable',
+    });
+    expect(harness.attemptInsertCount).toBe(0);
+  });
+
+  it('rejects non-v2 transport as not retryable', async () => {
+    const harness = retryHarness({ transport: 'legacy-in-process' });
+    await expect(harness.repository.retry(retryInput())).resolves.toEqual({
+      status: 'not_retryable',
+    });
+  });
+
+  it('returns exact user limit codes without writing', async () => {
+    const harness = retryHarness({ activeCount: 2 });
+    await expect(harness.repository.retry(retryInput())).resolves.toEqual({
+      status: 'user_limit',
+      code: 'USER_INTERACTIVE_LIMIT',
+    });
+    expect(harness.attemptInsertCount).toBe(0);
+    expect(harness.outboxInsertCount).toBe(0);
+  });
+
+  it('throws thread-not-found when the run is absent from the thread', async () => {
+    const harness = retryHarness({ missingRun: true });
+    await expect(harness.repository.retry(retryInput())).rejects.toMatchObject({
+      status: 404,
+      message: 'Thread not found',
+    });
+  });
+});
+
 function authoritativeThread(
   overrides: Partial<ChatThread> = {},
 ): ChatThread {
@@ -575,6 +827,7 @@ function durableServiceHarness(options?: {
         }
       );
     }),
+    retry: jest.fn(),
   };
   const attachmentStore = {
     upload: jest.fn(async ({ attachment }: { attachment: { id: string; name: string; type: string; size: number } }) => {

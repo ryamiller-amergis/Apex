@@ -9,6 +9,7 @@ import type {
   GroundingPreparationStatus,
   SseErrorEvent,
   SseEvent,
+  SseDoneEvent,
   SseGroundingEvent,
   SseHealthEvent,
   SseMessageEvent,
@@ -93,7 +94,14 @@ interface ChatStreamState {
   isRetrying: boolean;
   /** Human-readable reason shown during retry (e.g. "Rate limited, retrying…") */
   retryReason: string | null;
+  /**
+   * Failed durable run identity captured from a terminal error event.
+   * Null when the failure has no durable run ID (local/network send errors).
+   */
+  retryableRunId: string | null;
   groundingPreparation: GroundingPreparationProgress | null;
+  /** Clears the failed durable run identity (cancel / new turn). */
+  clearRetryableRunId: () => void;
 }
 
 interface UseChatStreamOptions {
@@ -242,6 +250,7 @@ export function useChatStream(
   const [backlogReady, setBacklogReady] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [retryReason, setRetryReason] = useState<string | null>(null);
+  const [retryableRunId, setRetryableRunId] = useState<string | null>(null);
   const [groundingPreparation, setGroundingPreparation] =
     useState<GroundingPreparationProgress | null>(null);
   const [eventDrivenTermination, setEventDrivenTermination] = useState(false);
@@ -324,6 +333,7 @@ export function useChatStream(
     setBacklogReady(false);
     setIsRetrying(false);
     setRetryReason(null);
+    setRetryableRunId(null);
     setGroundingPreparation(null);
     setEventDrivenTermination(false);
     eventDrivenTerminationRef.current = false;
@@ -619,6 +629,10 @@ export function useChatStream(
           const errorEvent = event as SseErrorEvent;
           setLastProgressAt(Date.now());
           const code = errorEvent.errorCode;
+          const durableRunId =
+            typeof errorEvent.runId === 'string' && errorEvent.runId.trim()
+              ? errorEvent.runId.slice(0, 200)
+              : null;
 
           if (code === 'transient' || code === 'rate_limit') {
             const reason =
@@ -630,6 +644,7 @@ export function useChatStream(
             retryTimeoutRef.current = window.setTimeout(() => {
               setIsRetrying(false);
               setRetryReason(null);
+              if (durableRunId) setRetryableRunId(durableRunId);
               const fallbackMsg: ChatMessage = {
                 id: uuidv4(),
                 role: 'system',
@@ -643,6 +658,7 @@ export function useChatStream(
           }
 
           if (code === 'auth') {
+            setRetryableRunId(null);
             const authMsg: ChatMessage = {
               id: uuidv4(),
               role: 'system',
@@ -654,6 +670,11 @@ export function useChatStream(
             break;
           }
 
+          if (durableRunId) {
+            setRetryableRunId(durableRunId);
+          } else {
+            setRetryableRunId(null);
+          }
           const errMsg: ChatMessage = {
             id: uuidv4(),
             role: 'system',
@@ -676,14 +697,21 @@ export function useChatStream(
           setGroundingPreparation(null);
           setProgressLabel(null);
           setProgressPhase(null);
+          if (!(event as { error?: string }).error) {
+            setRetryableRunId(null);
+          }
           clearRetryTimeout();
           clearPollTimer();
           setStatus('idle');
-          if ((event as any).error) {
+          if ((event as { error?: string }).error) {
+            const doneEvent = event as SseDoneEvent & { error?: string };
+            if (typeof doneEvent.runId === 'string' && doneEvent.runId.trim()) {
+              setRetryableRunId(doneEvent.runId.slice(0, 200));
+            }
             const errMsg: ChatMessage = {
               id: uuidv4(),
               role: 'system',
-              text: `Error: ${(event as any).error}`,
+              text: `Error: ${doneEvent.error}`,
               ts: new Date().toISOString(),
             };
             setMessages((prev) => [...prev, errMsg]);
@@ -878,6 +906,8 @@ export function useChatStream(
     backlogReady,
     isRetrying,
     retryReason,
+    retryableRunId,
+    clearRetryableRunId: () => setRetryableRunId(null),
     groundingPreparation,
   };
 }

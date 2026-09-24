@@ -13,11 +13,14 @@ import type {
   FrozenInteractiveMcpDescriptor,
   FrozenInteractiveToolGrant,
   InteractiveCapability,
+  InteractiveClass,
   InteractiveDeadlinePolicy,
   InteractiveTurnAcceptedResponse,
 } from '../../shared/types/durableInteractiveTurn';
 import {
+  absoluteTurnMsForClass,
   isCanonicalUuid,
+  isDurableInteractiveTurnSpecification,
   isDurableUserIdentity,
 } from '../../shared/types/durableInteractiveTurn';
 import type {
@@ -52,6 +55,8 @@ import {
   encryptInteractiveToolGrant,
   type EncryptInteractiveToolGrantInput,
 } from './interactiveToolGrantCrypto';
+import { db } from '../db/drizzle';
+import { sql } from 'drizzle-orm';
 
 const DEFAULT_MODEL = 'composer-2';
 const MAX_TRANSCRIPT_CHARS = 120_000;
@@ -83,9 +88,24 @@ export type AdmitDurableInteractiveTurnInput = Readonly<{
   toolGrant?: DurableInteractiveToolGrantInput;
 }>;
 
+export type RetryDurableInteractiveTurnInput = Readonly<{
+  threadId: string;
+  runId: string;
+  userId: string;
+  toolGrant?: DurableInteractiveToolGrantInput;
+}>;
+
+export type DurableInteractiveRetrySource = Readonly<{
+  interactiveClass: InteractiveClass;
+  specification: DurableInteractiveTurnSpecification;
+}>;
+
 export interface DurableInteractiveTurnService {
   admit(
     input: AdmitDurableInteractiveTurnInput,
+  ): Promise<InteractiveTurnAcceptedResponse>;
+  retry(
+    input: RetryDurableInteractiveTurnInput,
   ): Promise<InteractiveTurnAcceptedResponse>;
 }
 
@@ -141,8 +161,50 @@ type ServiceDependencies = Readonly<{
   encryptToolGrant: (
     input: EncryptInteractiveToolGrantInput,
   ) => FrozenInteractiveToolGrant;
+  loadRetrySource: (
+    input: Readonly<{ threadId: string; runId: string }>,
+  ) => Promise<DurableInteractiveRetrySource | null>;
   now: () => Date;
 }>;
+
+function resultRows<T>(result: unknown): T[] {
+  if (Array.isArray(result)) return result as T[];
+  return (result as { rows?: T[] } | undefined)?.rows ?? [];
+}
+
+export async function loadDurableInteractiveRetrySource(input: Readonly<{
+  threadId: string;
+  runId: string;
+}>): Promise<DurableInteractiveRetrySource | null> {
+  if (!isCanonicalUuid(input.threadId) || !isCanonicalUuid(input.runId)) {
+    return null;
+  }
+  const result = await db.execute(sql`
+    SELECT
+      r.interactive_class,
+      a.spec_snapshot
+    FROM agent_runs r
+    INNER JOIN ai_run_attempts a ON a.run_id = r.id
+    WHERE r.id = ${input.runId}
+      AND r.thread_id = ${input.threadId}
+    ORDER BY a.attempt_number DESC
+    LIMIT 1
+  `);
+  const row = resultRows<{
+    interactive_class: InteractiveClass;
+    spec_snapshot: unknown;
+  }>(result)[0];
+  if (!row) return null;
+  const raw =
+    typeof row.spec_snapshot === 'string'
+      ? (JSON.parse(row.spec_snapshot) as unknown)
+      : row.spec_snapshot;
+  if (!isDurableInteractiveTurnSpecification(raw)) return null;
+  return {
+    interactiveClass: row.interactive_class,
+    specification: raw,
+  };
+}
 
 export class DurableInteractiveTurnError extends Error {
   constructor(
@@ -151,6 +213,7 @@ export class DurableInteractiveTurnError extends Error {
       | 'INVALID_REQUESTER_ID'
       | 'THREAD_ACTIVE_TURN'
       | 'TURN_ID_CONFLICT'
+      | 'RUN_NOT_RETRYABLE'
       | 'USER_INTERACTIVE_LIMIT'
       | 'USER_AGENTIC_LIMIT'
       | 'INTERACTIVE_V2_STDIO_MCP_UNSUPPORTED'
@@ -721,6 +784,7 @@ function defaultDependencies(): ServiceDependencies {
     resolveMaxviewCapability: resolveDurableMaxviewCapability,
     resolveDeadlines: resolveInteractiveDeadlinePolicy,
     encryptToolGrant: encryptInteractiveToolGrant,
+    loadRetrySource: loadDurableInteractiveRetrySource,
     now: () => new Date(),
   };
 }
@@ -987,6 +1051,96 @@ export function createDurableInteractiveTurnService(
           const unhandled: never = admitted;
           throw new Error(
             `Unsupported durable admission result: ${String(unhandled)}`,
+          );
+        }
+      }
+    },
+
+    async retry(input) {
+      if (!isCanonicalUuid(input.runId)) {
+        throw Object.assign(new Error('Thread not found'), { status: 404 });
+      }
+      if (!isDurableUserIdentity(input.userId)) {
+        throw new DurableInteractiveTurnError('INVALID_REQUESTER_ID', 400);
+      }
+      const access = await deps.resolveThreadAccess(
+        input.userId,
+        input.threadId,
+      );
+      if (!access) {
+        throw Object.assign(new Error('Thread not found'), { status: 404 });
+      }
+
+      const source = await deps.loadRetrySource({
+        threadId: input.threadId,
+        runId: input.runId,
+      });
+      if (!source) {
+        throw Object.assign(new Error('Thread not found'), { status: 404 });
+      }
+
+      const requiresRepositoryPreparation =
+        source.specification.deadlines.repositoryPreparationMs !== null;
+      const refreshedDeadlines = deps.resolveDeadlines({
+        interactiveClass: source.interactiveClass,
+        requiresRepositoryPreparation,
+      });
+      if (
+        refreshedDeadlines.absoluteTurnMs !==
+        absoluteTurnMsForClass(source.interactiveClass)
+      ) {
+        throw new Error(
+          'Retry deadline policy absoluteTurnMs must match interactive class',
+        );
+      }
+
+      const previousGrant = source.specification.toolGrant;
+      const needsToolGrant = previousGrant !== null || input.toolGrant !== undefined;
+      const expiresAt = new Date(
+        deps.now().getTime() + refreshedDeadlines.absoluteTurnMs,
+      ).toISOString();
+      const refreshedToolGrant = needsToolGrant
+        ? deps.encryptToolGrant({
+            userId: input.userId,
+            projectId: source.specification.projectId,
+            allowedOperations:
+              input.toolGrant?.allowedOperations ??
+              previousGrant?.allowedOperations ??
+              ['ado:read'],
+            delegatedAdoToken: input.toolGrant?.delegatedAdoToken ?? null,
+            expiresAt,
+          })
+        : null;
+
+      const retried = await deps.repository.retry({
+        threadId: input.threadId,
+        runId: input.runId,
+        userId: input.userId,
+        refreshedToolGrant,
+        refreshedDeadlines,
+      });
+
+      switch (retried.status) {
+        case 'queued':
+        case 'dispatched':
+        case 'running':
+        case 'completed':
+        case 'failed':
+        case 'cancelled':
+          return {
+            turnId: retried.turnId,
+            runId: retried.runId,
+            status: retried.status,
+            interactiveClass: retried.interactiveClass,
+          };
+        case 'user_limit':
+          throw new DurableInteractiveTurnError(retried.code, 429);
+        case 'not_retryable':
+          throw new DurableInteractiveTurnError('RUN_NOT_RETRYABLE', 409);
+        default: {
+          const unhandled: never = retried;
+          throw new Error(
+            `Unsupported durable retry result: ${String(unhandled)}`,
           );
         }
       }

@@ -64,6 +64,11 @@ import {
   resolveThreadCreationAdmission,
   type ThreadCreationDenialReason,
 } from '../services/homePillAccessResolver';
+import {
+  durableInteractiveTurnService,
+  DurableInteractiveTurnError,
+} from '../services/durableInteractiveTurnService';
+import { isCanonicalUuid } from '../../shared/types/durableInteractiveTurn';
 
 const router = Router();
 
@@ -781,6 +786,86 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
       .json({ error: errorMessage(err) });
   }
 });
+
+/**
+ * POST /api/chat/threads/:id/runs/:runId/retry
+ * Retry a failed durable interactive run without resending text or attachments.
+ */
+router.post(
+  '/threads/:id/runs/:runId/retry',
+  requireThreadWrite,
+  async (req: Request, res: Response) => {
+    const threadId = req.params.id;
+    const runId = req.params.runId;
+    if (!isCanonicalUuid(runId)) {
+      return res.status(404).json({ error: 'Thread not found' });
+    }
+
+    const thread = (req as ThreadRequest).thread!;
+    const requesterUserId = getUserId(req);
+    let releaseAdoWriteTurn = () => {};
+    let durableToolGrant:
+      | {
+          allowedOperations: readonly ['ado:read', 'ado:write'];
+          delegatedAdoToken: string | null;
+        }
+      | undefined;
+
+    const calendarAssistant =
+      thread.kickoff.assistantType === 'calendar-work-item';
+    const operationalAdoWrite =
+      !calendarAssistant &&
+      (skillRequiresAdoOperations(
+        thread.kickoff.skillPath ?? thread.kickoff.standupSkillPath,
+        thread.kickoff.pillLabel,
+      ) ||
+        Boolean(thread.kickoff.standupSessionId) ||
+        thread.kickoff.mode === 'standup-participant' ||
+        thread.kickoff.mode === 'standup-facilitator');
+    if (operationalAdoWrite) {
+      try {
+        const token = await getAdoTokenForUser(req);
+        releaseAdoWriteTurn = await registerChatAdoWriteTurn({
+          threadId,
+          userId: requesterUserId,
+          project: thread.kickoff.project,
+          token,
+          isSuperAdmin: isSuperAdminRequest(req),
+        });
+        durableToolGrant = {
+          allowedOperations: ['ado:read', 'ado:write'],
+          delegatedAdoToken: token,
+        };
+      } catch {
+        // Retry may still proceed when the failed attempt had no ADO grant.
+      }
+    }
+
+    try {
+      const accepted = await durableInteractiveTurnService.retry({
+        threadId,
+        runId,
+        userId: requesterUserId,
+        toolGrant: durableToolGrant,
+      });
+      releaseAdoWriteTurn();
+      return res.status(202).json({
+        turnId: accepted.turnId,
+        runId: accepted.runId,
+        status: accepted.status,
+        interactiveClass: accepted.interactiveClass,
+      } satisfies InteractiveTurnAcceptedResponse);
+    } catch (err: unknown) {
+      releaseAdoWriteTurn();
+      if (err instanceof DurableInteractiveTurnError) {
+        return res.status(err.status).json({ error: err.code });
+      }
+      return res
+        .status(errorStatus(err))
+        .json({ error: errorMessage(err) });
+    }
+  },
+);
 
 /**
  * POST /api/chat/threads/:id/cancel

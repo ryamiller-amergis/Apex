@@ -34,6 +34,8 @@ jest.mock('../../hooks/useAgentChatSession', () => ({
     send: mockSend,
     cancel: jest.fn(),
     retryLast: jest.fn(),
+    retryFailedRun: jest.fn(),
+    retryableRunId: null,
   }),
 }));
 

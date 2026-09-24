@@ -1160,8 +1160,10 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                       </span>
                       <button
                         className={styles.retryBtn}
-                        onClick={() => doSend(lastUserText)}
-                        disabled={isRunning}
+                        onClick={() => {
+                          void session.retryFailedRun();
+                        }}
+                        disabled={isRunning || !session.retryableRunId}
                         type="button"
                         {...{ 'data-testid': 'chat-agent-message-retry-btn' }}
                       >

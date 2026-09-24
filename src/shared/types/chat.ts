@@ -233,6 +233,7 @@ export interface SseErrorEvent {
   type: 'error';
   error: string;
   errorCode?: SseErrorCode;
+  runId?: string;
 }
 
 export interface SseRetryingEvent {

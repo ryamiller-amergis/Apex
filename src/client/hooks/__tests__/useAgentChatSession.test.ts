@@ -26,8 +26,12 @@ interface MockStreamReturn {
   backlogReady: boolean;
   isRetrying: boolean;
   retryReason: string | null;
+  retryableRunId: string | null;
+  clearRetryableRunId: () => void;
   groundingPreparation: GroundingPreparationProgress | null;
 }
+
+const mockClearRetryableRunId = jest.fn();
 
 const mockStreamReturn: MockStreamReturn = {
   messages: [],
@@ -46,6 +50,8 @@ const mockStreamReturn: MockStreamReturn = {
   backlogReady: false,
   isRetrying: false,
   retryReason: null,
+  retryableRunId: null,
+  clearRetryableRunId: mockClearRetryableRunId,
   groundingPreparation: null,
 };
 
@@ -570,6 +576,47 @@ describe('useAgentChatSession', () => {
     const { result } = renderHook(() => useAgentChatSession('thread-1'));
     expect(result.current.visibleMessages).toHaveLength(1);
     expect(result.current.visibleMessages[0].id).toBe('2');
+  });
+
+  it('retryFailedRun posts the retry route by run identity without text', async () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      retryableRunId: '50000000-0000-4000-8000-000000000001',
+      messages: [
+        {
+          id: '1',
+          role: 'user',
+          text: 'Hello world',
+          ts: '2026-01-01T00:00:00Z',
+        },
+        {
+          id: '2',
+          role: 'system',
+          text: 'Error: boom',
+          ts: '2026-01-01T00:00:02Z',
+        },
+      ] as ChatMessage[],
+      status: 'error' as const,
+    };
+    const { result } = renderHook(() => useAgentChatSession('thread-1'));
+
+    await act(async () => {
+      await result.current.retryFailedRun();
+    });
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/chat/threads/thread-1/runs/50000000-0000-4000-8000-000000000001/retry',
+        expect.objectContaining({
+          method: 'POST',
+          body: '{}',
+        }),
+      );
+    });
+    const bodies = (global.fetch as jest.Mock).mock.calls.map(
+      (call) => call[1]?.body as string,
+    );
+    expect(bodies.every((body) => !body.includes('Hello world'))).toBe(true);
   });
 
   it('retryLast resends the last user message', async () => {

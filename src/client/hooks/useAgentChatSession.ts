@@ -117,6 +117,10 @@ export interface AgentChatSession {
   // --- Actions ---
   send: (text: string, opts?: SendOptions) => Promise<void>;
   retryLast: () => void;
+  /** Retry a failed durable run by identity — never resends text. */
+  retryFailedRun: () => Promise<void>;
+  /** Failed durable run ID from the stream, if the terminal error carried one. */
+  retryableRunId: string | null;
   cancel: () => Promise<void>;
 
   // --- Errors ---
@@ -188,6 +192,8 @@ export function useAgentChatSession(
     backlogReady,
     isRetrying,
     retryReason,
+    retryableRunId,
+    clearRetryableRunId,
     groundingPreparation,
   } = stream;
 
@@ -368,6 +374,7 @@ export function useAgentChatSession(
       setSendError(null);
       setIsStopConfirmed(false);
       setIsSending(true);
+      clearRetryableRunId();
       const turnId = createTurnId();
       optimisticBaselineIdsRef.current = new Set(
         messages.map((message) => message.id)
@@ -459,10 +466,11 @@ export function useAgentChatSession(
       afterSend,
       clearAwaitingAgentResponse,
       createTurnId,
+      clearRetryableRunId,
     ]
   );
 
-  // --- Retry last user message ---
+  // --- Retry last user message (legacy blind resend; prefer retryFailedRun) ---
   const retryLast = useCallback(() => {
     if (locked || !threadId || isInteractionBusy) return;
     const lastUserMsg = [...visibleMessages]
@@ -472,12 +480,80 @@ export function useAgentChatSession(
     void send(lastUserMsg.text);
   }, [locked, threadId, isInteractionBusy, visibleMessages, send]);
 
+  // --- Retry failed durable run by identity (no text / optimistic message) ---
+  const retryFailedRun = useCallback(async () => {
+    if (locked || !threadId || isInteractionBusy) return;
+    if (!retryableRunId) return;
+
+    setSendError(null);
+    setIsStopConfirmed(false);
+    setIsSending(true);
+    beginAwaitingAgentResponse();
+    const runId = retryableRunId;
+    clearRetryableRunId();
+
+    try {
+      const endpoint = `/api/chat/threads/${threadId}/runs/${runId}/retry`;
+      let res: Response | null = null;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: '{}',
+          });
+          break;
+        } catch (error) {
+          if (attempt === 1) throw error;
+        }
+      }
+      if (!res) {
+        throw new Error('Failed to retry run');
+      }
+
+      if (!res.ok) {
+        let msg = 'Failed to retry run';
+        try {
+          const body = await res.json();
+          if (body?.error) msg = body.error;
+        } catch {
+          /* use default */
+        }
+        setSendError(msg);
+        clearAwaitingAgentResponse();
+        return;
+      }
+
+      if (afterSend) {
+        await afterSend();
+      }
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : 'Failed to retry run';
+      setSendError(msg);
+      clearAwaitingAgentResponse();
+    } finally {
+      setIsSending(false);
+    }
+  }, [
+    locked,
+    threadId,
+    isInteractionBusy,
+    retryableRunId,
+    beginAwaitingAgentResponse,
+    clearRetryableRunId,
+    afterSend,
+    clearAwaitingAgentResponse,
+  ]);
+
   // --- Cancel ---
   const cancel = useCallback(async () => {
     if (!threadId || isCancelling) return;
     const endpoint = cancelEndpoint ?? `/api/chat/threads/${threadId}/cancel`;
     setSendError(null);
     setIsCancelling(true);
+    clearRetryableRunId();
     skipThinkingRestoreRef.current = true;
     try {
       const response = await fetch(endpoint, {
@@ -509,7 +585,7 @@ export function useAgentChatSession(
       );
       setIsCancelling(false);
     }
-  }, [threadId, cancelEndpoint, isCancelling, clearAwaitingAgentResponse]);
+  }, [threadId, cancelEndpoint, isCancelling, clearAwaitingAgentResponse, clearRetryableRunId]);
 
   // --- Clear send error ---
   const clearSendError = useCallback(() => setSendError(null), []);
@@ -548,6 +624,8 @@ export function useAgentChatSession(
     // Actions
     send,
     retryLast,
+    retryFailedRun,
+    retryableRunId,
     cancel,
 
     // Errors

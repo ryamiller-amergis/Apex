@@ -911,6 +911,31 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               if (message.role === 'user') {
                 return <div key={message.id} className={`${styles.messageBubble} ${styles.messageBubbleUser}`}>{message.text}</div>;
               }
+              const isError = message.text.startsWith('Error:');
+              if (isError && !chatLocked) {
+                return (
+                  <div key={message.id} className={styles.systemErrorMsg}>
+                    <span
+                      className={styles.systemErrorText}
+                      role="alert"
+                      {...{ 'data-testid': 'chat-run-terminal' }}
+                    >
+                      {message.text}
+                    </span>
+                    <button
+                      className={styles.retryBtn}
+                      onClick={() => {
+                        void session.retryFailedRun();
+                      }}
+                      disabled={isInteractionBusy || !session.retryableRunId}
+                      type="button"
+                      {...{ 'data-testid': 'adr-retry-message' }}
+                    >
+                      ↺ Try again
+                    </button>
+                  </div>
+                );
+              }
               return <div key={message.id} className={styles.messageBubbleSystem}>{message.text}</div>;
             })}
 

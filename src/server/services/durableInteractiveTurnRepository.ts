@@ -2,14 +2,18 @@ import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import type {
   DurableInteractiveTurnSpecification,
+  FrozenInteractiveToolGrant,
   ImmutableInteractiveAttachmentRef,
   InteractiveClass,
+  InteractiveDeadlinePolicy,
   InteractiveDispatchOutboxPayload,
   InteractiveTurnAcceptedResponse,
   InteractiveTurnAcceptedStatus,
 } from '../../shared/types/durableInteractiveTurn';
 import {
+  absoluteTurnMsForClass,
   isCanonicalUuid,
+  isDurableInteractiveTurnSpecification,
   isDurableUserIdentity,
 } from '../../shared/types/durableInteractiveTurn';
 import { db } from '../db/drizzle';
@@ -42,10 +46,29 @@ export type AdmitDurableInteractiveTurnResult =
     }>
   | Readonly<{ status: 'turn_conflict' }>;
 
+export type RetryDurableInteractiveRunInput = Readonly<{
+  threadId: string;
+  runId: string;
+  userId: string;
+  refreshedToolGrant: FrozenInteractiveToolGrant | null;
+  refreshedDeadlines: InteractiveDeadlinePolicy;
+}>;
+
+export type RetryDurableInteractiveRunResult =
+  | InteractiveTurnAcceptedResponse
+  | Readonly<{
+      status: 'user_limit';
+      code: 'USER_INTERACTIVE_LIMIT' | 'USER_AGENTIC_LIMIT';
+    }>
+  | Readonly<{ status: 'not_retryable' }>;
+
 export interface DurableInteractiveTurnRepository {
   admit(
     input: PreparedDurableInteractiveTurn,
   ): Promise<AdmitDurableInteractiveTurnResult>;
+  retry(
+    input: RetryDurableInteractiveRunInput,
+  ): Promise<RetryDurableInteractiveRunResult>;
 }
 
 export type DurableInteractiveAdmissionWriteStage =
@@ -115,6 +138,34 @@ function assertPreparedTurn(input: PreparedDurableInteractiveTurn): void {
   ) {
     throw new Error('Durable interactive specification identity mismatch');
   }
+}
+
+function assertRetryInput(input: RetryDurableInteractiveRunInput): void {
+  if (
+    !isCanonicalUuid(input.threadId) ||
+    !isCanonicalUuid(input.runId) ||
+    !isDurableUserIdentity(input.userId)
+  ) {
+    throw new Error('Durable interactive retry identity is invalid');
+  }
+}
+
+function isActiveAttemptStatus(status: string): boolean {
+  return (
+    status === 'queued' || status === 'dispatched' || status === 'running'
+  );
+}
+
+function cloneSpecificationForRetry(
+  previous: DurableInteractiveTurnSpecification,
+  refreshedToolGrant: FrozenInteractiveToolGrant | null,
+  refreshedDeadlines: InteractiveDeadlinePolicy,
+): DurableInteractiveTurnSpecification {
+  return {
+    ...previous,
+    toolGrant: refreshedToolGrant,
+    deadlines: refreshedDeadlines,
+  };
 }
 
 const defaultTransactionRunner: TransactionRunner = async (work) =>
@@ -473,6 +524,349 @@ export function createDurableInteractiveTurnRepository(options?: {
           interactiveClass: input.interactiveClass,
           idempotent: false,
           shouldReflectThreadState: true,
+        };
+      });
+    },
+
+    async retry(input) {
+      assertRetryInput(input);
+      return runInTransaction(async (executor) => {
+        await executor.execute(sql`
+          SELECT pg_advisory_xact_lock(
+            hashtextextended('interactive-user:' || ${input.userId}, 0)
+          )
+        `);
+
+        const threadResult = await executor.execute(sql`
+          SELECT id, user_id, active_run_id
+          FROM chat_threads
+          WHERE id = ${input.threadId}::uuid
+          FOR UPDATE
+        `);
+        const lockedThread = resultRows<{
+          id: string;
+          user_id: string;
+          active_run_id: string | null;
+        }>(threadResult)[0];
+        if (!lockedThread) {
+          throw Object.assign(new Error('Thread not found'), { status: 404 });
+        }
+
+        const runResult = await executor.execute(sql`
+          SELECT
+            id,
+            thread_id,
+            status,
+            interactive_class,
+            transport_version,
+            requested_by_user_id,
+            client_turn_id,
+            execution_snapshot
+          FROM agent_runs
+          WHERE id = ${input.runId}
+            AND thread_id = ${input.threadId}
+          FOR UPDATE
+        `);
+        const lockedRun = resultRows<{
+          id: string;
+          thread_id: string;
+          status: string;
+          interactive_class: InteractiveClass;
+          transport_version: string | null;
+          requested_by_user_id: string | null;
+          client_turn_id: string | null;
+          execution_snapshot: unknown;
+        }>(runResult)[0];
+        if (!lockedRun) {
+          throw Object.assign(new Error('Thread not found'), { status: 404 });
+        }
+
+        const attemptResult = await executor.execute(sql`
+          SELECT
+            id,
+            attempt_number,
+            status,
+            dispatch_message_id,
+            spec_snapshot
+          FROM ai_run_attempts
+          WHERE run_id = ${input.runId}
+          ORDER BY attempt_number DESC
+          LIMIT 1
+          FOR UPDATE
+        `);
+        const latestAttempt = resultRows<{
+          id: string;
+          attempt_number: number | string;
+          status: string;
+          dispatch_message_id: string;
+          spec_snapshot: unknown;
+        }>(attemptResult)[0];
+        if (!latestAttempt) {
+          return { status: 'not_retryable' };
+        }
+
+        const latestAttemptNumber = Number(latestAttempt.attempt_number);
+        if (
+          lockedRun.transport_version === 'dapr-actor-v2' &&
+          isActiveAttemptStatus(latestAttempt.status)
+        ) {
+          if (!lockedRun.client_turn_id) {
+            return { status: 'not_retryable' };
+          }
+          return {
+            turnId: lockedRun.client_turn_id,
+            runId: lockedRun.id,
+            status: duplicateStatus(latestAttempt.status),
+            interactiveClass: lockedRun.interactive_class,
+          };
+        }
+
+        if (
+          lockedRun.transport_version !== 'dapr-actor-v2' ||
+          lockedRun.status !== 'failed' ||
+          latestAttempt.status !== 'failed' ||
+          !lockedRun.client_turn_id
+        ) {
+          return { status: 'not_retryable' };
+        }
+
+        const previousSpecRaw = latestAttempt.spec_snapshot;
+        const previousSpec =
+          typeof previousSpecRaw === 'string'
+            ? (JSON.parse(previousSpecRaw) as unknown)
+            : previousSpecRaw;
+        if (!isDurableInteractiveTurnSpecification(previousSpec)) {
+          return { status: 'not_retryable' };
+        }
+        if (
+          previousSpec.deadlines.absoluteTurnMs !==
+          absoluteTurnMsForClass(lockedRun.interactive_class)
+        ) {
+          return { status: 'not_retryable' };
+        }
+        if (
+          input.refreshedDeadlines.absoluteTurnMs !==
+          absoluteTurnMsForClass(lockedRun.interactive_class)
+        ) {
+          throw new Error(
+            'Retry deadlines absoluteTurnMs must match the persisted interactive class',
+          );
+        }
+
+        const countResult = await executor.execute(sql`
+          SELECT
+            COUNT(*)::int AS active_count,
+            COUNT(*) FILTER (
+              WHERE interactive_class = 'agentic'
+            )::int AS agentic_count
+          FROM agent_runs
+          WHERE requested_by_user_id = ${input.userId}
+            AND lane = 'ai-runs-interactive'
+            AND status IN ('queued', 'dispatched', 'running')
+        `);
+        const counts = resultRows<{
+          active_count: number | string;
+          agentic_count: number | string;
+        }>(countResult)[0];
+        const activeCount = Number(counts?.active_count ?? 0);
+        const agenticCount = Number(counts?.agentic_count ?? 0);
+        if (activeCount >= 2) {
+          return {
+            status: 'user_limit',
+            code: 'USER_INTERACTIVE_LIMIT',
+          };
+        }
+        if (
+          lockedRun.interactive_class === 'agentic' &&
+          agenticCount >= 1
+        ) {
+          return {
+            status: 'user_limit',
+            code: 'USER_AGENTIC_LIMIT',
+          };
+        }
+
+        const absoluteTurnMs = absoluteTurnMsForClass(
+          lockedRun.interactive_class,
+        );
+        const clockResult = await executor.execute(sql`
+          SELECT
+            accepted_at,
+            accepted_at + (
+              ${absoluteTurnMs}
+              * INTERVAL '1 millisecond'
+            ) AS deadline_at
+          FROM (SELECT now() AS accepted_at) AS retry_clock
+        `);
+        const clock = resultRows<{
+          accepted_at: string | Date;
+          deadline_at: string | Date;
+        }>(clockResult)[0];
+        if (!clock) {
+          throw new Error('Interactive retry database clock unavailable');
+        }
+        const acceptedAt = isoTimestamp(clock.accepted_at, 'accepted_at');
+        const deadlineAt = isoTimestamp(clock.deadline_at, 'deadline_at');
+        const attemptId = newId();
+        const dispatchMessageId = newId();
+        const eventId = newId();
+        const nextAttemptNumber = latestAttemptNumber + 1;
+        const specification = cloneSpecificationForRetry(
+          previousSpec,
+          input.refreshedToolGrant,
+          input.refreshedDeadlines,
+        );
+
+        await executor.execute(sql`
+          UPDATE agent_runs
+          SET
+            status = 'queued',
+            timeout_at = ${deadlineAt}::timestamptz,
+            execution_snapshot = ${JSON.stringify(specification)}::jsonb,
+            cancel_requested = FALSE,
+            progress_phase = 'queued',
+            progress_label = ${QUEUED_PROGRESS_LABEL},
+            heartbeat_at = ${acceptedAt}::timestamptz,
+            started_at = ${acceptedAt}::timestamptz,
+            last_error = NULL,
+            updated_at = ${acceptedAt}::timestamptz
+          WHERE id = ${input.runId}
+        `);
+        await afterWrite('run');
+
+        await executor.execute(sql`
+          INSERT INTO ai_run_attempts (
+            id,
+            run_id,
+            attempt_number,
+            dispatch_message_id,
+            status,
+            artifact_status,
+            spec_snapshot,
+            created_at,
+            updated_at
+          ) VALUES (
+            ${attemptId},
+            ${input.runId},
+            ${nextAttemptNumber},
+            ${dispatchMessageId},
+            'queued',
+            'pending',
+            ${JSON.stringify(specification)}::jsonb,
+            ${acceptedAt}::timestamptz,
+            ${acceptedAt}::timestamptz
+          )
+        `);
+        await afterWrite('attempt');
+
+        const outboxPayload: InteractiveDispatchOutboxPayload = {
+          schemaVersion: 2,
+          kind: 'interactive_dispatch',
+          transport: 'dapr-actor-v2',
+          runId: input.runId,
+          attemptId,
+          attemptNumber: nextAttemptNumber,
+          dispatchMessageId,
+          threadId: input.threadId,
+          userId: input.userId,
+          interactiveClass: lockedRun.interactive_class,
+          workloadLane: lockedRun.interactive_class,
+          capacityClass: 'interactive',
+          deadlineAt,
+        };
+        const outboxResult = await executor.execute(sql`
+          INSERT INTO ai_run_outbox (
+            idempotency_key,
+            kind,
+            run_id,
+            attempt_id,
+            payload,
+            available_at,
+            created_at
+          ) VALUES (
+            ${`${attemptId}:interactive-dispatch`},
+            'interactive_dispatch',
+            ${input.runId},
+            ${attemptId},
+            ${JSON.stringify(outboxPayload)}::jsonb,
+            ${acceptedAt}::timestamptz,
+            ${acceptedAt}::timestamptz
+          )
+          RETURNING id
+        `);
+        const outboxId = resultRows<{ id: string }>(outboxResult)[0]?.id;
+        if (!outboxId) {
+          throw new Error('Interactive retry outbox insert returned no id');
+        }
+        await afterWrite('outbox');
+
+        const sequenceResult = await executor.execute(sql`
+          SELECT COALESCE(MAX(sequence), 0)::int AS max_sequence
+          FROM agent_run_events
+          WHERE run_id = ${input.runId}
+        `);
+        const maxSequence = Number(
+          resultRows<{ max_sequence: number | string }>(sequenceResult)[0]
+            ?.max_sequence ?? 0,
+        );
+        const nextSequence = maxSequence + 1;
+        const event = {
+          type: 'phase' as const,
+          phase: 'queued' as const,
+          status: 'pending' as const,
+          detail: QUEUED_PROGRESS_LABEL,
+          runId: input.runId,
+          eventTimestamp: acceptedAt,
+        };
+        await executor.execute(sql`
+          INSERT INTO agent_run_events (
+            event_id,
+            thread_id,
+            run_id,
+            source_instance,
+            sequence,
+            event_timestamp,
+            event_type,
+            phase,
+            status,
+            detail,
+            event,
+            created_at
+          ) VALUES (
+            ${eventId}::uuid,
+            ${input.threadId},
+            ${input.runId},
+            'interactive-retry',
+            ${nextSequence},
+            ${acceptedAt}::timestamptz,
+            'phase',
+            'queued',
+            'pending',
+            ${QUEUED_PROGRESS_LABEL},
+            ${JSON.stringify(event)}::jsonb,
+            ${acceptedAt}::timestamptz
+          )
+        `);
+        await afterWrite('queued_event');
+
+        await executor.execute(sql`
+          UPDATE chat_threads
+          SET
+            status = 'running',
+            active_run_id = ${input.runId},
+            last_error = NULL,
+            last_activity_at = ${acceptedAt}::timestamptz
+          WHERE id = ${input.threadId}::uuid
+        `);
+        await afterWrite('thread');
+
+        await notifyOutbox(executor, { outboxId, runId: input.runId });
+
+        return {
+          turnId: lockedRun.client_turn_id,
+          runId: input.runId,
+          status: 'queued',
+          interactiveClass: lockedRun.interactive_class,
         };
       });
     },

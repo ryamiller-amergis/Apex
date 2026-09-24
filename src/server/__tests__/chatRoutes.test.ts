@@ -109,6 +109,25 @@ jest.mock('../services/featureFlagService', () => ({
   isFeatureEnabled: jest.fn().mockResolvedValue(false),
 }));
 
+const mockDurableRetry = jest.fn();
+jest.mock('../services/durableInteractiveTurnService', () => {
+  class DurableInteractiveTurnError extends Error {
+    constructor(
+      readonly code: string,
+      readonly status: number,
+    ) {
+      super(code);
+      this.name = 'DurableInteractiveTurnError';
+    }
+  }
+  return {
+    DurableInteractiveTurnError,
+    durableInteractiveTurnService: {
+      retry: (...args: unknown[]) => mockDurableRetry(...args),
+    },
+  };
+});
+
 jest.mock('../utils/requestUser', () => ({
   getUserId: jest.fn().mockReturnValue('user-1'),
 }));
@@ -1406,6 +1425,138 @@ describe('POST /api/chat/threads/:id/messages — durable admission boundary', (
       runId,
       status: 'completed',
       interactiveClass: 'fast',
+    });
+  });
+});
+
+describe('POST /api/chat/threads/:id/runs/:runId/retry', () => {
+  const threadId = '10000000-0000-4000-8000-000000000001';
+  const runId = '50000000-0000-4000-8000-000000000001';
+  const turnId = '20000000-0000-4000-8000-000000000001';
+  const idleThread = {
+    id: threadId,
+    userId: 'user-1',
+    kickoff: { project: 'Apex', repo: 'Apex' },
+    messages: [],
+    status: 'idle',
+    workspaceDir: '/tmp/ws',
+    flagged: false,
+    createdAt: '2026-09-23T12:00:00.000Z',
+    lastActivityAt: '2026-09-23T12:00:00.000Z',
+  } as const;
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: idleThread,
+      access: 'owner',
+    });
+    mockCanWriteThread.mockResolvedValue(true);
+    mockDurableRetry.mockReset();
+  });
+
+  it('returns 404 when the thread is inaccessible', async () => {
+    mockResolveThreadAccess.mockResolvedValue(null);
+
+    const response = await request(buildApp()).post(
+      `/api/chat/threads/${threadId}/runs/${runId}/retry`,
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: 'Thread not found' });
+    expect(mockDurableRetry).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 for a malformed run id', async () => {
+    const response = await request(buildApp()).post(
+      `/api/chat/threads/${threadId}/runs/not-a-uuid/retry`,
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: 'Thread not found' });
+    expect(mockDurableRetry).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when the service cannot see the run on the thread', async () => {
+    mockDurableRetry.mockRejectedValue(
+      Object.assign(new Error('Thread not found'), { status: 404 }),
+    );
+
+    const response = await request(buildApp()).post(
+      `/api/chat/threads/${threadId}/runs/${runId}/retry`,
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: 'Thread not found' });
+  });
+
+  it('returns 409 RUN_NOT_RETRYABLE for a nonfailed run', async () => {
+    const { DurableInteractiveTurnError } = jest.requireMock(
+      '../services/durableInteractiveTurnService',
+    ) as {
+      DurableInteractiveTurnError: new (
+        code: string,
+        status: number,
+      ) => Error & { code: string; status: number };
+    };
+    mockDurableRetry.mockRejectedValue(
+      new DurableInteractiveTurnError('RUN_NOT_RETRYABLE', 409),
+    );
+
+    const response = await request(buildApp()).post(
+      `/api/chat/threads/${threadId}/runs/${runId}/retry`,
+    );
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({ error: 'RUN_NOT_RETRYABLE' });
+  });
+
+  it('returns exact 429 codes for user caps', async () => {
+    const { DurableInteractiveTurnError } = jest.requireMock(
+      '../services/durableInteractiveTurnService',
+    ) as {
+      DurableInteractiveTurnError: new (
+        code: string,
+        status: number,
+      ) => Error & { code: string; status: number };
+    };
+    mockDurableRetry.mockRejectedValue(
+      new DurableInteractiveTurnError('USER_INTERACTIVE_LIMIT', 429),
+    );
+
+    const response = await request(buildApp()).post(
+      `/api/chat/threads/${threadId}/runs/${runId}/retry`,
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.body).toEqual({ error: 'USER_INTERACTIVE_LIMIT' });
+  });
+
+  it('returns the accepted durable identity without accepting text', async () => {
+    mockDurableRetry.mockResolvedValue({
+      turnId,
+      runId,
+      status: 'queued',
+      interactiveClass: 'fast',
+    });
+
+    const response = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/runs/${runId}/retry`)
+      .send({ text: 'should be ignored' });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({
+      turnId,
+      runId,
+      status: 'queued',
+      interactiveClass: 'fast',
+    });
+    expect(mockDurableRetry).toHaveBeenCalledWith({
+      threadId,
+      runId,
+      userId: 'user-1',
+      toolGrant: undefined,
     });
   });
 });

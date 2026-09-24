@@ -1187,7 +1187,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   }, [attachments.length, input, sendMessageToAgent]);
 
   const handleRetryLast = useCallback(() => {
-    session.retryLast();
+    void session.retryFailedRun();
   }, [session]);
 
   const handleAttachmentChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1625,7 +1625,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                     <button
                       className={styles.retryBtn}
                       onClick={() => handleRetryLast()}
-                      disabled={isInteractionBusy}
+                      disabled={isInteractionBusy || !session.retryableRunId}
                       type="button"
                       {...{ 'data-testid': 'interview-retry-message' }}
                     >
