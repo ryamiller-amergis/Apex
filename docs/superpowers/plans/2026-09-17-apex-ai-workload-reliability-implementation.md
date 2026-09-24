@@ -1025,18 +1025,86 @@ deferred to the end-of-code-track operations section.
   - WebSocket replay
   - No in-process fallback
 
-- [ ] Classify the selected skill/model as fast or agentic.
-- [ ] Enforce four-slot lane floors, shared normal capacity, and surge ceiling.
-- [ ] Enforce two active turns per user and one agentic turn per user.
-- [ ] Persist the message, run, and outbox atomically.
-- [ ] Queue overflow rather than invoking App Service.
-- [ ] Recreate an expired Cursor agent from the durable transcript.
-- [ ] Include repository preparation inside the 20-minute agentic deadline.
-- [ ] Enforce first-event and tool deadlines.
-- [ ] Replace blind text resend with idempotent failed-run retry.
-- [ ] Return `Thread not found` only for genuinely absent/inaccessible threads.
-- [ ] Replay durable events after Redis/WebSocket interruption.
-- [ ] Remove interactive App Service fallback only after all recovery tests pass.
+- [x] Classify the selected skill as fast or agentic (capability + effort only;
+  model is frozen execution input and never affects class/scheduling).
+- [x] Enforce two-slot class floors, shared burst, and total interactive cap 16.
+- [x] Enforce two active turns per user and one agentic turn per user.
+- [x] Persist the message, run, and outbox atomically.
+- [x] Queue overflow rather than invoking App Service.
+- [x] Recreate an expired Cursor agent from the durable transcript.
+- [x] Include repository preparation inside the 20-minute agentic deadline.
+- [x] Enforce first-event and tool deadlines (resolved on App Service, frozen,
+  clamped to remaining absolute time; workers hold no defaults).
+- [x] Replace blind text resend with idempotent failed-run retry.
+- [x] Return `Thread not found` only for genuinely absent/inaccessible threads.
+- [x] Replay durable events after Redis/WebSocket interruption.
+- [x] Remove interactive App Service fallback only after all recovery tests pass.
+
+**Final verification evidence (2026-09-24, branch `tbi/infra-changes` —
+plan Task 8):**
+
+- **Commit range (Tasks 1–7 implementation):** `f3e1768d..ebcedede`
+  (first contracts feature through Task 7 cutover approval docs).
+  Design/plan prelude: `82bf846d..31334322`. Full workstream through this
+  verification HEAD: `82bf846d..HEAD` (verification commit appended below).
+- **Focused server suites:** PASS — 28 suites / 546 tests
+  (`durableInteractiveTurn*` / classifier / attachment / crypto / deadlines /
+  repository / router / no-fallback / stream / live bus / gateway / cursor /
+  session actor / actor entrypoint / tool proxy / artifact applier /
+  aiRunsInternal / ingest / chat routes / chatAgentService / `aiOrchestrator`).
+- **Focused client suites:** PASS — 6 suites / 177 tests
+  (`useChatStream`, `useAgentChatSession`, `threadEventStream`,
+  `ChatAgentPanel.sharedShell`, `InterviewChatView.ExistingInterview`,
+  `AdrChatView.ExistingAdr`).
+- **Integration suites:** SKIP — `TEST_DATABASE_URL` unset; no approved local
+  test database credentials available. Not pointed at prod/staging/dev.
+  Suites deferred:
+  `durable-interactive-turns`, `durable-interactive-admission`,
+  `durable-interactive-retry`, `ai-run-v2-persistence`.
+- **Isolation guards:** PASS — 2 suites / 92 tests
+  (`aiRunsV2Worker/noDatabaseImports`, `interactiveActorNoDatabaseImports`).
+- **Builds:** `npm run build:server` PASS; `npm run build:client` PASS.
+- **Diff hygiene:** `git diff --check` PASS; no `dist/` in Task 1–7 commits;
+  implementation commits do not stage generated client output.
+- **Contradiction / type-name review:** PASS for Task 7 contracts.
+  - No `ai-runs-interactive-v2` flag; no interactive Service Bus publisher.
+  - No model registry / `MODEL_CLASS` / invented warm/cold first-event constants
+    in the design or plan.
+  - Contract names (`InteractiveClass`, `InteractiveDeadlinePolicy`,
+    `DurableInteractiveTurnSpecification`, `InteractiveDispatchOutboxPayload`,
+    `InteractiveTurnAcceptedResponse`) are the live Task 1 types (185 refs).
+  - Relevant class/outbox switches use `never` defaults; classifier has no
+    switch (capability rules only).
+  - Remaining “in-process fallback” / TBD / TODO hits are legacy document-lane
+    or unrelated PRD validation — not a new enabled-path interactive fallback.
+  - Legacy-only `interactiveActorAdmissionService` still holds
+    `MAX_FIRST_TOKEN_SLO_MS = 60_000` behind the flag-off path (expected).
+- **Scope review:** deliberate Task 1–7 commits (`f3e1768d^..ebcedede`) touch
+  **no** `package.json`, `vite.config.ts`, `src/server/index.ts`,
+  `.env.example`, `tsconfig*`, `jest.config*`, `.github/`, CI pipelines,
+  `infra/`, or `runners/`. Pre-existing **unstaged** dirty trees under
+  `infra/` and `runners/ai-orchestrator/Dockerfile` (plus other unrelated
+  working-tree edits) are noted separately and were not part of this
+  workstream commit set. Migration
+  `20260923140000_durable-interactive-turns.sql` down-guards refuse removal
+  while `dapr-actor-v2` / unpublished `interactive_dispatch` data exists;
+  up aborts on colliding active interactive threads rather than inventing a
+  winner.
+- **E2E (Playwright):** DEFERRED — documented under Task 7 cutover; blocked
+  without `TEST_DATABASE_URL` / local Apex E2E setup. Spec
+  `tests/e2e/specs/ai-runs-interactive-transport.spec.ts` is present.
+- **Ops / deploy:** No Azure apply, Terraform apply, Container Apps / deploy
+  wiring, or migration apply to any shared environment in this workstream.
+- **Deferred operations (separate approved plan required):** class dispatch
+  endpoint values, actor Blob/tool identity, deploy wiring, canary sequence,
+  migration apply, rollback observation; `ai-runs-interactive` retirement
+  after staging/prod canary + observation window.
+
+**Status:** Durable interactive turns (master-plan Task 7 / plan Tasks 1–8)
+marked **COMPLETE** for code + unit/isolation/build verification. Integration
+DB and Playwright E2E remain deferred until an approved local test database
+and E2E harness are available — they do not block this completion gate per
+the Task 8 run instructions.
 
 ---
 
