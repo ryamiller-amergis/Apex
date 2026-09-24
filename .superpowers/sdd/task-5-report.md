@@ -107,7 +107,7 @@ npx tsc -p tsconfig.client.json --noEmit
 ## Remediation (review REQUEST CHANGES)
 
 - Status: `DONE`
-- Remediation commit: *(filled after commit)*
+- Remediation commit: `649333b8996b73c43991f1ff0dc7559b94f9003c`
 - Branch: `tbi/infra-changes`
 - Feature base: `038fd671`
 - No push, PR, Azure, or protected config changes.
