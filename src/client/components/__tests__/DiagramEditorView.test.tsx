@@ -187,6 +187,43 @@ describe('DiagramEditorView / DiagramsView — FEAT-003', () => {
     );
   });
 
+  it('keeps Cancel and Build disabled while the generated scene is applying', async () => {
+    const user = userEvent.setup();
+    let resolveApply: () => void = () => {};
+    mockApplyScene.mockImplementation(
+      () => new Promise<void>((resolve) => {
+        resolveApply = resolve;
+      }),
+    );
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        title: 'Release pipeline',
+        scene: {
+          elements: [{ id: 'build', type: 'rectangle' }],
+          appState: {},
+          files: {},
+        },
+      }),
+    }) as jest.Mock;
+
+    renderEditor('new');
+    await user.click(screen.getByTestId('diagram-build-with-apex-button'));
+    await user.type(screen.getByTestId('diagram-ai-prompt'), 'Show the build stage');
+    await user.click(screen.getByTestId('diagram-ai-generate'));
+
+    await waitFor(() => expect(mockApplyScene).toHaveBeenCalled());
+    expect(screen.getByTestId('diagram-ai-dialog')).toBeInTheDocument();
+    expect(screen.getByTestId('diagram-ai-cancel')).toBeDisabled();
+    expect(screen.getByTestId('diagram-ai-generate')).toBeDisabled();
+    expect(screen.getByTestId('diagram-ai-generate')).toHaveTextContent('Building…');
+
+    resolveApply();
+
+    await waitFor(() => expect(screen.queryByTestId('diagram-ai-dialog')).not.toBeInTheDocument());
+  });
+
   it('keeps the prompt open and preserves the draft when materialization fails', async () => {
     const user = userEvent.setup();
     mockApplyScene.mockRejectedValueOnce(new Error('Apex could not draw that Diagram'));

@@ -32,11 +32,14 @@ export const BuildDiagramWithApexDialog: React.FC<BuildDiagramWithApexDialogProp
   const {
     register,
     handleSubmit,
-    formState: { errors },
+    formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: { prompt: '' },
   });
+  // Cover generate + client-side apply. Mutation isPending drops when the
+  // server returns, but mermaid materialization / applyScene can still be running.
+  const busy = generation.isPending || isSubmitting;
 
   const submit = handleSubmit(async (values) => {
     setApplyError(null);
@@ -82,7 +85,7 @@ export const BuildDiagramWithApexDialog: React.FC<BuildDiagramWithApexDialogProp
             id="diagram-ai-prompt"
             rows={6}
             placeholder="Example: Show the release flow from pull request through production deployment"
-            disabled={generation.isPending}
+            disabled={busy}
             {...register('prompt')}
             {...{ 'data-testid': 'diagram-ai-prompt' }}
           />
@@ -106,7 +109,7 @@ export const BuildDiagramWithApexDialog: React.FC<BuildDiagramWithApexDialogProp
               type="button"
               className={styles.secondary}
               onClick={onClose}
-              disabled={generation.isPending}
+              disabled={busy}
               {...{ 'data-testid': 'diagram-ai-cancel' }}
             >
               Cancel
@@ -114,10 +117,10 @@ export const BuildDiagramWithApexDialog: React.FC<BuildDiagramWithApexDialogProp
             <button
               type="submit"
               className={styles.primary}
-              disabled={generation.isPending}
+              disabled={busy}
               {...{ 'data-testid': 'diagram-ai-generate' }}
             >
-              {generation.isPending ? 'Building…' : 'Build Diagram'}
+              {busy ? 'Building…' : 'Build Diagram'}
             </button>
           </div>
         </form>
