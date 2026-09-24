@@ -35,7 +35,8 @@
 }
 
 .saveBtn,
-.secondaryBtn {
+.secondaryBtn,
+.aiBtn {
   height: 36px;
   box-sizing: border-box;
   padding: 0 16px;
@@ -48,6 +49,22 @@
   align-items: center;
   justify-content: center;
   white-space: nowrap;
+}
+
+.aiBtn {
+  gap: 7px;
+  border: 1px solid var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 9%, transparent);
+  color: var(--accent-color);
+}
+
+.aiBtn:hover {
+  background: color-mix(in srgb, var(--accent-color) 16%, transparent);
+  box-shadow: var(--glow-accent);
+}
+
+.aiSparkle {
+  flex-shrink: 0;
 }
 
 .unsaved {

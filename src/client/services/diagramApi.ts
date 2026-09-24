@@ -1,6 +1,8 @@
 import type {
   CreateDiagramInput,
   DiagramDetail,
+  GenerateDiagramInput,
+  GenerateDiagramResponse,
   DiagramListInput,
   DiagramListResponse,
   DiagramShare,
@@ -67,6 +69,17 @@ export async function createDiagram(
   input: CreateDiagramInput,
 ): Promise<DiagramDetail> {
   return apiFetch<DiagramDetail>(diagramsBase(projectId), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function generateDiagram(
+  projectId: string,
+  input: GenerateDiagramInput,
+): Promise<GenerateDiagramResponse> {
+  return apiFetch<GenerateDiagramResponse>(`${diagramsBase(projectId)}/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),

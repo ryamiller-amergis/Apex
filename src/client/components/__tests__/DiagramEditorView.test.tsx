@@ -43,6 +43,7 @@ jest.mock('../ExcalidrawAdapter', () => {
         exportPng: async () => new Blob(['x'], { type: 'image/png' }),
         exportSvg: async () => document.createElementNS('http://www.w3.org/2000/svg', 'svg'),
         exportNativeJson: async () => '{}',
+        applyScene: () => {},
       }));
       ReactActual.useEffect(() => {
         props.onCanvasHydrated?.(props.scene);
@@ -52,6 +53,9 @@ jest.mock('../ExcalidrawAdapter', () => {
         {
           'data-testid': 'diagram-editor-canvas',
           'data-editable': String(props.editable),
+          'data-element-count': String(
+            (props.scene as { elements?: unknown[] }).elements?.length ?? 0,
+          ),
         },
         ReactActual.createElement(
           'button',
@@ -137,6 +141,68 @@ describe('DiagramEditorView / DiagramsView — FEAT-003', () => {
       expect(screen.queryByTestId('diagram-unsaved-indicator')).not.toBeInTheDocument(),
     );
     expect(mockNavigate).toHaveBeenCalledWith('/diagrams/diagram-created', { replace: true });
+  });
+
+  it('V1-0/V1-1 applies a generated Bedrock scene as an editable unsaved draft', async () => {
+    const user = userEvent.setup();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        title: 'Release pipeline',
+        scene: {
+          elements: [
+            { id: 'build', type: 'rectangle' },
+            { id: 'deploy', type: 'rectangle' },
+          ],
+          appState: {},
+          files: {},
+        },
+      }),
+    }) as jest.Mock;
+
+    renderEditor('new');
+    await user.click(screen.getByTestId('diagram-build-with-apex-button'));
+    expect(screen.getByTestId('diagram-ai-dialog')).toBeInTheDocument();
+
+    await user.type(
+      screen.getByTestId('diagram-ai-prompt'),
+      'Show the build and deploy stages',
+    );
+    await user.click(screen.getByTestId('diagram-ai-generate'));
+
+    await waitFor(() => expect(screen.queryByTestId('diagram-ai-dialog')).not.toBeInTheDocument());
+    expect(screen.getByTestId('diagram-title-input')).toHaveValue('Release pipeline');
+    expect(screen.getByTestId('diagram-editor-canvas')).toHaveAttribute('data-element-count', '2');
+    expect(screen.getByTestId('diagram-unsaved-indicator')).toBeInTheDocument();
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/projects/project-a/diagrams/generate',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+      }),
+    );
+  });
+
+  it('V1-2 keeps the prompt open and preserves the draft when generation fails', async () => {
+    const user = userEvent.setup();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      json: async () => ({ error: 'Apex could not build that Diagram' }),
+    }) as jest.Mock;
+
+    renderEditor('new');
+    await user.click(screen.getByTestId('diagram-build-with-apex-button'));
+    await user.type(screen.getByTestId('diagram-ai-prompt'), 'Build a system map');
+    await user.click(screen.getByTestId('diagram-ai-generate'));
+
+    await waitFor(() => expect(screen.getByTestId('diagram-ai-error')).toHaveTextContent(
+      'Apex could not build that Diagram',
+    ));
+    expect(screen.getByTestId('diagram-ai-dialog')).toBeInTheDocument();
+    expect(screen.getByTestId('diagram-editor-canvas')).toHaveAttribute('data-element-count', '0');
+    expect(screen.getByTestId('diagram-title-input')).toHaveValue(DIAGRAM_DEFAULT_TITLE);
   });
 
   it('create → save → route flip stays clean on Back (no discard prompt)', async () => {
