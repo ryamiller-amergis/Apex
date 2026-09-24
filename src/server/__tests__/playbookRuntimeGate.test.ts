@@ -29,7 +29,12 @@ jest.mock('../services/playbookSteps', () => ({
 jest.mock('../db/drizzle', () => ({ db: {} }));
 
 import { assertStepGateSatisfied } from '../services/playbookGuardService';
-import { retryStepRunOnEngine, translate } from '../services/playbookEngine/runtime';
+import {
+  armWorkflowId,
+  engineResumeStep,
+  retryStepRunOnEngine,
+  translate,
+} from '../services/playbookEngine/runtime';
 
 const context = {
   runId: 'run-1',
@@ -78,7 +83,12 @@ function translatedSteps(graph: PlaybookGraph): GeneratedStep[] {
         steps.push(step);
         return workflow;
       }),
-      branch: jest.fn(() => workflow),
+      branch: jest.fn((pairs: Array<[unknown, GeneratedStep | { committed: boolean }]>) => {
+        for (const [, target] of pairs) {
+          if (target && 'id' in target) steps.push(target);
+        }
+        return workflow;
+      }),
       commit: jest.fn(() => ({ committed: true })),
     };
     return workflow;
@@ -211,30 +221,67 @@ describe('FEAT-008 S7 — runtime reclassification guard', () => {
 });
 
 describe('branch translation keeps arm successors', () => {
-  it('registers steps after each branch target instead of stopping at the split', () => {
-    const branched: PlaybookGraph = {
-      nodes: [
-        {
-          id: 'choose',
-          stepType: 'branch',
-          config: {
-            condition: { sourceStepId: 'choose', field: 'isReady', operator: 'eq', value: true },
-            whenTrue: 'ready',
-            whenFalse: 'revise',
-          },
+  const branched: PlaybookGraph = {
+    nodes: [
+      {
+        id: 'choose',
+        stepType: 'branch',
+        config: {
+          condition: { sourceStepId: 'choose', field: 'isReady', operator: 'eq', value: true },
+          whenTrue: 'ready',
+          whenFalse: 'revise',
         },
-        { id: 'ready', stepType: 'approval-gate', config: {} },
-        { id: 'after-ready', stepType: 'notify', config: { title: 'Filed' } },
-        { id: 'revise', stepType: 'notify', config: { title: 'Revise' } },
-      ],
-      edges: [
-        { from: 'choose', to: 'ready', condition: 'ready' },
-        { from: 'choose', to: 'revise', condition: 'revise' },
-        { from: 'ready', to: 'after-ready' },
-      ],
-    };
+      },
+      { id: 'ready', stepType: 'approval-gate', config: {} },
+      { id: 'after-ready', stepType: 'notify', config: { title: 'Filed' } },
+      { id: 'revise', stepType: 'notify', config: { title: 'Revise' } },
+    ],
+    edges: [
+      { from: 'choose', to: 'ready', condition: 'ready' },
+      { from: 'choose', to: 'revise', condition: 'revise' },
+      { from: 'ready', to: 'after-ready' },
+    ],
+  };
 
+  const leafArms: PlaybookGraph = {
+    nodes: [
+      {
+        id: 'choose',
+        stepType: 'branch',
+        config: {
+          condition: { sourceStepId: 'choose', field: 'isReady', operator: 'eq', value: true },
+          whenTrue: 'ready',
+          whenFalse: 'revise',
+        },
+      },
+      { id: 'ready', stepType: 'approval-gate', config: {} },
+      { id: 'revise', stepType: 'notify', config: { title: 'Revise' } },
+    ],
+    edges: [
+      { from: 'choose', to: 'ready', condition: 'ready' },
+      { from: 'choose', to: 'revise', condition: 'revise' },
+    ],
+  };
+
+  it('registers steps after each branch target instead of stopping at the split', () => {
     const ids = translatedSteps(branched).map((step) => step.id);
     expect(ids).toEqual(expect.arrayContaining(['choose', 'ready', 'after-ready', 'revise']));
+  });
+
+  it('resumes a one-step arm by Apex node id so a parked gate after a split can wake', () => {
+    expect(engineResumeStep(leafArms, 'run-1', 'ready')).toBe('ready');
+    expect(engineResumeStep(leafArms, 'run-1', 'revise')).toBe('revise');
+  });
+
+  it('resumes nested arm successors with the Mastra path, not the node id alone', () => {
+    expect(engineResumeStep(branched, 'run-1', 'ready')).toEqual([
+      armWorkflowId('run-1', 'ready'),
+      'ready',
+    ]);
+    expect(engineResumeStep(branched, 'run-1', 'after-ready')).toEqual([
+      armWorkflowId('run-1', 'ready'),
+      'after-ready',
+    ]);
+    expect(engineResumeStep(branched, 'run-1', 'revise')).toBe('revise');
   });
 });

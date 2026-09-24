@@ -153,11 +153,76 @@ function startNode(graph: PlaybookGraph): PlaybookGraphNode | undefined {
   return graph.nodes.find((n) => !hasInbound.has(n.id)) ?? graph.nodes[0];
 }
 
+export function armWorkflowId(runId: string, armStartId: string): string {
+  return `apex-playbook-${runId}-arm-${armStartId}`;
+}
+
+function armNeedsNesting(
+  graph: PlaybookGraph,
+  start: PlaybookGraphNode | undefined,
+): boolean {
+  if (!start) return false;
+  const outbound = graph.edges.filter((edge) => edge.from === start.id);
+  if (isBranchStepType(start.stepType) && outbound.length > 0) return true;
+  return outbound.length > 0;
+}
+
 /**
- * Walks from `start`, chaining `.then` until a branch. Each arm becomes a nested workflow so
- * successors after `approve-ready` / `notify-revision` are registered instead of dropped.
- *
- * A cycle is dropped rather than looped, matching the publish-time guards.
+ * Mastra resume handle for an Apex node. A nested branch arm is `[armWorkflowId, stepId]`;
+ * everything else is the node id so callers can keep speaking Apex vocabulary.
+ */
+export function engineResumeStep(
+  graph: PlaybookGraph,
+  runId: string,
+  stepId: string,
+): string | string[] {
+  const found = findResumePath(graph, runId, startNode(graph), stepId, [], new Set());
+  if (!found || found.length <= 1) return stepId;
+  return found;
+}
+
+function findResumePath(
+  graph: PlaybookGraph,
+  runId: string,
+  start: PlaybookGraphNode | undefined,
+  stepId: string,
+  nestedWorkflowIds: string[],
+  visited: Set<string>,
+): string[] | null {
+  let node = start;
+  while (node && !visited.has(node.id)) {
+    const current = node;
+    visited.add(current.id);
+    if (current.id === stepId) return [...nestedWorkflowIds, current.id];
+    const outbound = graph.edges.filter((edge) => edge.from === current.id);
+    if (isBranchStepType(current.stepType) && outbound.length > 0) {
+      for (const edge of outbound) {
+        const target = graph.nodes.find((n) => n.id === edge.to);
+        const nested = armNeedsNesting(graph, target)
+          ? [...nestedWorkflowIds, armWorkflowId(runId, edge.to)]
+          : nestedWorkflowIds;
+        const found = findResumePath(
+          graph,
+          runId,
+          target,
+          stepId,
+          nested,
+          new Set(visited),
+        );
+        if (found) return found;
+      }
+      return null;
+    }
+    const next = outbound[0];
+    node = next ? graph.nodes.find((n) => n.id === next.to) : undefined;
+  }
+  return null;
+}
+
+/**
+ * Walks from `start`, chaining `.then` until a branch. An arm with later successors becomes a
+ * nested workflow so those nodes are registered; a one-step arm stays a top-level step so resume
+ * can still use the Apex node id.
  */
 function chainWorkflow(
   workflow: any,
@@ -177,14 +242,18 @@ function chainWorkflow(
     if (isBranchStepType(current.stepType) && outbound.length > 0) {
       return workflow.branch(outbound.map((edge) => {
         const target = graph.nodes.find((n) => n.id === edge.to);
+        const condition = async ({ inputData }: { inputData: Record<string, unknown> }) =>
+          inputData.continuation === edge.condition;
+        if (!armNeedsNesting(graph, target)) {
+          return [condition, stepById.get(edge.to)];
+        }
         const arm = modules.createWorkflow({
-          id: `apex-playbook-${runId}-arm-${edge.to}`,
+          id: armWorkflowId(runId, edge.to),
           inputSchema: z.any(),
           outputSchema: z.any(),
         });
         return [
-          async ({ inputData }: { inputData: Record<string, unknown> }) =>
-            inputData.continuation === edge.condition,
+          condition,
           chainWorkflow(
             arm,
             target,
@@ -425,7 +494,10 @@ export async function resumeRunOnEngine(
   const run = await workflow.createRun({ runId: context.runId });
 
   try {
-    return endFrom(await run.resume({ step: stepId, resumeData: { stepId } }));
+    return endFrom(await run.resume({
+      step: engineResumeStep(graph, context.runId, stepId),
+      resumeData: { stepId },
+    }));
   } catch (error) {
     if (error instanceof Error && error.name === 'PlaybookRunTerminatedError') {
       return { endedAs: 'completed' };

@@ -14,6 +14,7 @@ import {
 } from './projectSettingsService';
 import { getStepTypeDescriptor } from './playbookSteps/registry';
 import { resumeStepRun } from './playbookSteps/stepRuns';
+import { resolveRunStepConfig } from './playbookStepBindings';
 import { getAssignmentsForProject } from './userProjectAssignmentService';
 import type { ApprovalMode, ReviewerDocumentType } from '../../shared/types/approvals';
 import type {
@@ -184,7 +185,11 @@ export async function getGateDetail(input: {
     eq(playbookStepRuns.stepId, gateConfig.gatedStepId),
   )).limit(1);
   if (!gated) throw new PlaybookGateInputRenderError();
-  const parsed = getStepTypeDescriptor(gated.stepType).inputSchema.safeParse(gated.input ?? {});
+  const resolved = await resolveRunStepConfig(
+    input.runId,
+    (gated.input ?? {}) as Record<string, unknown>,
+  );
+  const parsed = getStepTypeDescriptor(gated.stepType).inputSchema.safeParse(resolved);
   if (!parsed.success) throw new PlaybookGateInputRenderError();
 
   const current = await currentPoolUserIds(input.project, gate.gatePoolKey);
