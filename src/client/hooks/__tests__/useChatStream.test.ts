@@ -1079,6 +1079,54 @@ describe('useChatStream', () => {
     }
   });
 
+  it('keeps retryableRunId when clean done follows an error', () => {
+    const runId = '50000000-0000-4000-8000-000000000001';
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'error',
+        error: 'Worker failed',
+        runId,
+      });
+    });
+    expect(result.current.retryableRunId).toBe(runId);
+    expect(result.current.status).toBe('error');
+
+    act(() => {
+      lastES!.emit('message', { type: 'done' });
+    });
+    expect(result.current.retryableRunId).toBe(runId);
+    expect(result.current.status).toBe('idle');
+  });
+
+  it('clears retryableRunId on a successful committed message event', () => {
+    const runId = '50000000-0000-4000-8000-000000000001';
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'error',
+        error: 'Worker failed',
+        runId,
+      });
+    });
+    expect(result.current.retryableRunId).toBe(runId);
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'message',
+        message: {
+          id: 'a1',
+          role: 'agent',
+          text: 'Recovered answer',
+          ts: '2026-01-01T00:00:01Z',
+        },
+      });
+    });
+    expect(result.current.retryableRunId).toBeNull();
+  });
+
   it('resets isRetrying when threadId changes', () => {
     const { result, rerender } = renderHook(({ id }) => useChatStream(id), {
       initialProps: { id: 'thread-a' as string | null },

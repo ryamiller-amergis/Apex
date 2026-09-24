@@ -66,6 +66,7 @@ jest.mock('../useChatStream', () => ({
 describe('useAgentChatSession', () => {
   beforeEach(() => {
     currentStreamReturn = { ...mockStreamReturn };
+    mockClearRetryableRunId.mockClear();
     global.fetch = jest.fn().mockResolvedValue({ ok: true }) as jest.Mock;
     window.sessionStorage.clear();
   });
@@ -617,8 +618,54 @@ describe('useAgentChatSession', () => {
       (call) => call[1]?.body as string,
     );
     expect(bodies.every((body) => !body.includes('Hello world'))).toBe(true);
+    expect(mockClearRetryableRunId).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps retryableRunId when retry POST is non-OK', async () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      retryableRunId: '50000000-0000-4000-8000-000000000001',
+      status: 'error' as const,
+    };
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      json: async () => ({ error: 'RUN_NOT_RETRYABLE' }),
+    }) as jest.Mock;
+    const { result } = renderHook(() => useAgentChatSession('thread-1'));
+
+    await act(async () => {
+      await result.current.retryFailedRun();
+    });
+
+    await waitFor(() => {
+      expect(result.current.sendError).toBe('RUN_NOT_RETRYABLE');
+    });
+    expect(mockClearRetryableRunId).not.toHaveBeenCalled();
+  });
+
+  it('keeps retryableRunId when retry POST throws', async () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      retryableRunId: '50000000-0000-4000-8000-000000000001',
+      status: 'error' as const,
+    };
+    global.fetch = jest
+      .fn()
+      .mockRejectedValueOnce(new TypeError('network'))
+      .mockRejectedValueOnce(new TypeError('network')) as jest.Mock;
+    const { result } = renderHook(() => useAgentChatSession('thread-1'));
+
+    await act(async () => {
+      await result.current.retryFailedRun();
+    });
+
+    await waitFor(() => {
+      expect(result.current.sendError).toBe('network');
+    });
+    expect(mockClearRetryableRunId).not.toHaveBeenCalled();
+  });
+
+  // Legacy blind resend — prefer retryFailedRun for durable failed runs.
   it('retryLast resends the last user message', async () => {
     currentStreamReturn = {
       ...mockStreamReturn,

@@ -1133,6 +1133,8 @@ export function createDurableInteractiveTurnService(
             status: retried.status,
             interactiveClass: retried.interactiveClass,
           };
+        case 'thread_active':
+          throw new DurableInteractiveTurnError('THREAD_ACTIVE_TURN', 409);
         case 'user_limit':
           throw new DurableInteractiveTurnError(retried.code, 429);
         case 'not_retryable':

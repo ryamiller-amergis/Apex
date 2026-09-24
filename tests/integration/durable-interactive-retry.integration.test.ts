@@ -263,6 +263,51 @@ describe('durable interactive retry integration', () => {
     expect(thread.rows[0]?.active_run_id).toBe(admitted.runId);
   });
 
+  it('rejects retry when another nonterminal run is active on the thread', async () => {
+    const repository = createDurableInteractiveTurnRepository();
+    const failed = await repository.admit(
+      preparedTurn({ threadId: THREAD_ID, turnId: TURN_ID, userId: USER_ID }),
+    );
+    if (!('runId' in failed)) throw new Error('expected failed-run admission');
+    await markRunFailed(failed.runId);
+
+    const otherTurnId = '22000000-0000-4000-8000-000000000099';
+    const active = await repository.admit(
+      preparedTurn({
+        threadId: THREAD_ID,
+        turnId: otherTurnId,
+        userId: USER_ID,
+      }),
+    );
+    if (!('runId' in active)) throw new Error('expected active-run admission');
+
+    const beforeAttempts = await pool.query(
+      `SELECT COUNT(*)::int AS count FROM ai_run_attempts WHERE run_id = $1`,
+      [failed.runId],
+    );
+    const beforeOutbox = await pool.query(
+      `SELECT COUNT(*)::int AS count FROM ai_run_outbox WHERE run_id = $1`,
+      [failed.runId],
+    );
+
+    const result = await repository.retry(retryInput(failed.runId));
+    expect(result).toEqual({
+      status: 'thread_active',
+      activeRunId: active.runId,
+    });
+
+    const afterAttempts = await pool.query(
+      `SELECT COUNT(*)::int AS count FROM ai_run_attempts WHERE run_id = $1`,
+      [failed.runId],
+    );
+    const afterOutbox = await pool.query(
+      `SELECT COUNT(*)::int AS count FROM ai_run_outbox WHERE run_id = $1`,
+      [failed.runId],
+    );
+    expect(afterAttempts.rows[0]?.count).toBe(beforeAttempts.rows[0]?.count);
+    expect(afterOutbox.rows[0]?.count).toBe(beforeOutbox.rows[0]?.count);
+  });
+
   it('user cap rejection adds no attempt or outbox', async () => {
     const repository = createDurableInteractiveTurnRepository();
     await insertThread(OTHER_THREAD_A, USER_ID);

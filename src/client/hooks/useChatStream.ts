@@ -508,6 +508,7 @@ export function useChatStream(
           setToolProgress([]);
           setIsRetrying(false);
           setRetryReason(null);
+          setRetryableRunId(null);
           clearRetryTimeout();
           setMessages((prev) => {
             const exists = prev.some((m) => m.id === messageEvent.message.id);
@@ -697,9 +698,9 @@ export function useChatStream(
           setGroundingPreparation(null);
           setProgressLabel(null);
           setProgressPhase(null);
-          if (!(event as { error?: string }).error) {
-            setRetryableRunId(null);
-          }
+          // Keep retryableRunId across clean done after a prior failure so
+          // Retry remains available. Clear only on accepted turn, successful
+          // message, cancel, or thread change.
           clearRetryTimeout();
           clearPollTimer();
           setStatus('idle');

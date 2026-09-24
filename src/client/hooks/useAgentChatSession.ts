@@ -374,7 +374,6 @@ export function useAgentChatSession(
       setSendError(null);
       setIsStopConfirmed(false);
       setIsSending(true);
-      clearRetryableRunId();
       const turnId = createTurnId();
       optimisticBaselineIdsRef.current = new Set(
         messages.map((message) => message.id)
@@ -441,6 +440,8 @@ export function useAgentChatSession(
           return;
         }
 
+        clearRetryableRunId();
+
         // afterSend hook (e.g. refetchDiff)
         if (afterSend) {
           await afterSend();
@@ -470,7 +471,8 @@ export function useAgentChatSession(
     ]
   );
 
-  // --- Retry last user message (legacy blind resend; prefer retryFailedRun) ---
+  // Legacy blind resend of the last user message. Prefer retryFailedRun for
+  // durable failed runs so the server retries by identity without resending text.
   const retryLast = useCallback(() => {
     if (locked || !threadId || isInteractionBusy) return;
     const lastUserMsg = [...visibleMessages]
@@ -490,7 +492,6 @@ export function useAgentChatSession(
     setIsSending(true);
     beginAwaitingAgentResponse();
     const runId = retryableRunId;
-    clearRetryableRunId();
 
     try {
       const endpoint = `/api/chat/threads/${threadId}/runs/${runId}/retry`;
@@ -524,6 +525,8 @@ export function useAgentChatSession(
         clearAwaitingAgentResponse();
         return;
       }
+
+      clearRetryableRunId();
 
       if (afterSend) {
         await afterSend();

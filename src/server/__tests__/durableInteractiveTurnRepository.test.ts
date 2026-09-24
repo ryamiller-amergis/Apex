@@ -538,6 +538,7 @@ function retryInput(
 function retryHarness(options?: {
   activeCount?: number;
   agenticCount?: number;
+  activeRunId?: string | null;
   runStatus?: string;
   attemptStatus?: string;
   transport?: string;
@@ -614,6 +615,12 @@ function retryHarness(options?: {
           agentic_count: options?.agenticCount ?? 0,
         },
       ];
+    }
+    if (
+      statement.includes('FROM agent_runs') &&
+      statement.includes("status IN ('queued', 'dispatched', 'running')")
+    ) {
+      return options?.activeRunId ? [{ id: options.activeRunId }] : [];
     }
     if (
       statement.includes('accepted_at') &&
@@ -746,6 +753,26 @@ describe('durable interactive turn repository retry', () => {
     });
     expect(harness.attemptInsertCount).toBe(0);
     expect(harness.outboxInsertCount).toBe(0);
+  });
+
+  it('rejects retry when another nonterminal run is active on the thread', async () => {
+    const harness = retryHarness({
+      activeRunId: '60000000-0000-4000-8000-000000000099',
+    });
+    await expect(harness.repository.retry(retryInput())).resolves.toEqual({
+      status: 'thread_active',
+      activeRunId: '60000000-0000-4000-8000-000000000099',
+    });
+    expect(harness.attemptInsertCount).toBe(0);
+    expect(harness.outboxInsertCount).toBe(0);
+    expect(
+      harness.sqlStatements.some(
+        (statement) =>
+          statement.includes('FROM agent_runs') &&
+          statement.includes("status IN ('queued', 'dispatched', 'running')") &&
+          !statement.includes('COUNT'),
+      ),
+    ).toBe(true);
   });
 
   it('throws thread-not-found when the run is absent from the thread', async () => {

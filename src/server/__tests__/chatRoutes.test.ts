@@ -1512,6 +1512,27 @@ describe('POST /api/chat/threads/:id/runs/:runId/retry', () => {
     expect(response.body).toEqual({ error: 'RUN_NOT_RETRYABLE' });
   });
 
+  it('returns 409 THREAD_ACTIVE_TURN when another run is active on the thread', async () => {
+    const { DurableInteractiveTurnError } = jest.requireMock(
+      '../services/durableInteractiveTurnService',
+    ) as {
+      DurableInteractiveTurnError: new (
+        code: string,
+        status: number,
+      ) => Error & { code: string; status: number };
+    };
+    mockDurableRetry.mockRejectedValue(
+      new DurableInteractiveTurnError('THREAD_ACTIVE_TURN', 409),
+    );
+
+    const response = await request(buildApp()).post(
+      `/api/chat/threads/${threadId}/runs/${runId}/retry`,
+    );
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({ error: 'THREAD_ACTIVE_TURN' });
+  });
+
   it('returns exact 429 codes for user caps', async () => {
     const { DurableInteractiveTurnError } = jest.requireMock(
       '../services/durableInteractiveTurnService',

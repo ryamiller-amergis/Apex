@@ -60,6 +60,7 @@ export type RetryDurableInteractiveRunResult =
       status: 'user_limit';
       code: 'USER_INTERACTIVE_LIMIT' | 'USER_AGENTIC_LIMIT';
     }>
+  | Readonly<{ status: 'thread_active'; activeRunId: string }>
   | Readonly<{ status: 'not_retryable' }>;
 
 export interface DurableInteractiveTurnRepository {
@@ -651,6 +652,25 @@ export function createDurableInteractiveTurnRepository(options?: {
           throw new Error(
             'Retry deadlines absoluteTurnMs must match the persisted interactive class',
           );
+        }
+
+        const activeThreadResult = await executor.execute(sql`
+          SELECT id
+          FROM agent_runs
+          WHERE thread_id = ${input.threadId}
+            AND lane = 'ai-runs-interactive'
+            AND status IN ('queued', 'dispatched', 'running')
+          ORDER BY created_at ASC, id ASC
+          LIMIT 1
+        `);
+        const activeThread = resultRows<{ id: string }>(
+          activeThreadResult,
+        )[0];
+        if (activeThread) {
+          return {
+            status: 'thread_active',
+            activeRunId: activeThread.id,
+          };
         }
 
         const countResult = await executor.execute(sql`

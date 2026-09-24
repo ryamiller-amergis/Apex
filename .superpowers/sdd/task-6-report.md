@@ -68,3 +68,53 @@ npx jest --config jest.config.integration.js \
 ## Blockers
 
 None. Integration DB was available and green.
+
+---
+
+## Remediation (REQUEST CHANGES)
+
+**Base:** `e78cc1ce`  
+**Commit message:** `fix: keep retryable run id through failure done`
+
+### Changes
+
+**Critical — `useChatStream.ts`**
+- Stop clearing `retryableRunId` on clean `done` after a prior failure.
+- Clear only on: accepted turn (via session), successful committed
+  `message`, cancel, or thread change.
+- Tests: `error → done` keeps `retryableRunId`; committed `message`
+  clears it.
+
+**High — `useAgentChatSession.ts`**
+- Clear `retryableRunId` only after a 2xx retry POST (and after a 2xx
+  send). Keep it on non-OK / catch so Retry stays available.
+- `retryLast` left as legacy-only blind resend with an explicit comment.
+
+**High — `durableInteractiveTurnRepository.ts`**
+- Before promoting a failed run, recheck one-nonterminal-per-thread
+  (same query as admit). Another active run returns
+  `{ status: 'thread_active', activeRunId }`.
+- Service maps that to `409 THREAD_ACTIVE_TURN`.
+- Unit + route + integration coverage added.
+
+### Verification
+
+```text
+npx jest …Task 6 unit files… --runInBand
+→ 4 suites, 199 passed
+
+npm run build:server
+→ PASS
+
+npx tsc -p tsconfig.client.json --noEmit
+→ PASS
+
+npx jest --config jest.config.integration.js \
+  tests/integration/durable-interactive-retry.integration.test.ts --runInBand
+→ 3 passed (DB available)
+```
+
+### Remaining gaps
+
+None for the REQUEST CHANGES items. Blind `retryLast` remains available
+for non-durable / legacy paths; UI surfaces use `retryFailedRun`.
