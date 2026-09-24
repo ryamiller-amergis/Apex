@@ -20,11 +20,7 @@ import { db } from '../db/drizzle';
 import { playbookStepRuns } from '../db/schema';
 import { subscribeAllRunEvents } from './pgNotifyService';
 import { advanceRun } from './playbookAdvanceService';
-import {
-  readOutputValidationScorecard,
-  readOutputValidationScorecardMd,
-} from './chatAgentService';
-import { parseStepOutput } from './playbookSteps/descriptorValidation';
+import { cursorAgentCompletionOutput } from './playbookSteps/cursorAgentCompletion';
 import { failStepRun, resumeStepRun } from './playbookSteps/stepRuns';
 import type {
   AgentRunEventEnvelope,
@@ -101,14 +97,11 @@ export async function handleTerminalAgentRunEvent(
   if (!step) return { handled: 'not-correlated' };
 
   if (event.status === 'completed') {
-    const scorecard = event.threadId ? readOutputValidationScorecard(event.threadId) : null;
-    const reportMd = event.threadId ? readOutputValidationScorecardMd(event.threadId) : null;
-    const output = parseStepOutput(step.stepType, {
+    const output = cursorAgentCompletionOutput({
+      stepType: step.stepType,
       agentRunId: event.runId,
       completedAt: event.timestamp,
-      ...(event.threadId ? { threadId: event.threadId } : {}),
-      ...(scorecard ? { scorecard } : {}),
-      ...(reportMd ? { reportMd } : {}),
+      threadId: event.threadId,
     });
     const moved = await resumeStepRun({
       stepRunId: step.id,

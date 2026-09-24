@@ -147,30 +147,60 @@ export async function closeEngineStore(): Promise<void> {
   if (open?.close) await open.close();
 }
 
-/**
- * Orders a graph's nodes into the chain Mastra will execute.
- *
- * Start where nothing points and follow the edges, which is the same rule the publish-time guards
- * enforce when they cap fan-out at one. A node reachable only through a cycle is dropped rather
- * than looped, because the guards refuse cycles at publish time and a cycle arriving here belongs
- * to a version published before that guard existed.
- */
-function orderedNodes(graph: PlaybookGraph): PlaybookGraphNode[] {
-  if (graph.nodes.length === 0) return [];
-
+function startNode(graph: PlaybookGraph): PlaybookGraphNode | undefined {
+  if (graph.nodes.length === 0) return undefined;
   const hasInbound = new Set(graph.edges.map((edge) => edge.to));
-  let node: PlaybookGraphNode | undefined =
-    graph.nodes.find((n) => !hasInbound.has(n.id)) ?? graph.nodes[0];
+  return graph.nodes.find((n) => !hasInbound.has(n.id)) ?? graph.nodes[0];
+}
 
-  const ordered: PlaybookGraphNode[] = [];
-  const seen = new Set<string>();
-  while (node && !seen.has(node.id)) {
-    ordered.push(node);
-    seen.add(node.id);
-    const edge = graph.edges.find((e) => e.from === node!.id);
-    node = edge ? graph.nodes.find((n) => n.id === edge.to) : undefined;
+/**
+ * Walks from `start`, chaining `.then` until a branch. Each arm becomes a nested workflow so
+ * successors after `approve-ready` / `notify-revision` are registered instead of dropped.
+ *
+ * A cycle is dropped rather than looped, matching the publish-time guards.
+ */
+function chainWorkflow(
+  workflow: any,
+  start: PlaybookGraphNode | undefined,
+  graph: PlaybookGraph,
+  stepById: Map<string, unknown>,
+  modules: EngineModules,
+  runId: string,
+  visited: Set<string>,
+): any {
+  let node = start;
+  while (node && !visited.has(node.id)) {
+    const current = node;
+    visited.add(current.id);
+    workflow = workflow.then(stepById.get(current.id));
+    const outbound = graph.edges.filter((edge) => edge.from === current.id);
+    if (isBranchStepType(current.stepType) && outbound.length > 0) {
+      return workflow.branch(outbound.map((edge) => {
+        const target = graph.nodes.find((n) => n.id === edge.to);
+        const arm = modules.createWorkflow({
+          id: `apex-playbook-${runId}-arm-${edge.to}`,
+          inputSchema: z.any(),
+          outputSchema: z.any(),
+        });
+        return [
+          async ({ inputData }: { inputData: Record<string, unknown> }) =>
+            inputData.continuation === edge.condition,
+          chainWorkflow(
+            arm,
+            target,
+            graph,
+            stepById,
+            modules,
+            runId,
+            new Set(visited),
+          ).commit(),
+        ];
+      }));
+    }
+    const next = outbound[0];
+    node = next ? graph.nodes.find((n) => n.id === next.to) : undefined;
   }
-  return ordered;
+  return workflow;
 }
 
 export interface EngineRunContext {
@@ -286,25 +316,20 @@ export function translate(
     }),
   ]));
 
-  let workflow = createWorkflow({
+  const workflow = createWorkflow({
     id: `apex-playbook-${context.runId}`,
     inputSchema: z.any(),
     outputSchema: z.any(),
   });
-  const ordered = orderedNodes(graph);
-  for (const node of ordered) {
-    workflow = workflow.then(stepById.get(node.id));
-    const outbound = graph.edges.filter((edge) => edge.from === node.id);
-    if (isBranchStepType(node.stepType) && outbound.length > 0) {
-      workflow = workflow.branch(outbound.map((edge) => [
-        async ({ inputData }: { inputData: Record<string, unknown> }) =>
-          inputData.continuation === edge.condition,
-        stepById.get(edge.to),
-      ]));
-      break;
-    }
-  }
-  return workflow.commit();
+  return chainWorkflow(
+    workflow,
+    startNode(graph),
+    graph,
+    stepById,
+    modules,
+    context.runId,
+    new Set(),
+  ).commit();
 }
 
 /** Where driving a run stopped. Apex vocabulary; the engine's own statuses do not leave this file. */

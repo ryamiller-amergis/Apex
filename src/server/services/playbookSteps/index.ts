@@ -16,21 +16,17 @@ import { executeCursorAgentStep } from './cursorAgentAdapter';
 import { executeNotifyStep } from './notifyAdapter';
 import { executeIngestArtifactStep } from './ingestArtifactAdapter';
 import { executeBranchStep } from './branchAdapter';
-import { and, eq } from 'drizzle-orm';
-import { db } from '../../db/drizzle';
-import { playbookRuns, playbookStepRuns } from '../../db/schema';
 import { getUserPermissions } from '../rbacService';
 import { parseStepInput } from './descriptorValidation';
 import { getStepTypeDescriptor, requiredPermissionsForStep } from './registry';
 import { isFeatureEnabled } from '../featureFlagService';
+import { configHasBindings } from '../playbookBindingResolver';
+import { resolveRunStepConfig } from '../playbookStepBindings';
 import {
-  configHasBindings,
-  resolvePlaybookBindings,
-} from '../playbookBindingResolver';
-import type {
-  PlaybookStepAdapter,
-  PlaybookStepExecutionContext,
-  PlaybookStepOutcome,
+  recordStepInput,
+  type PlaybookStepAdapter,
+  type PlaybookStepExecutionContext,
+  type PlaybookStepOutcome,
 } from './stepRuns';
 
 const ADAPTERS: Readonly<Record<string, PlaybookStepAdapter>> = {
@@ -74,38 +70,6 @@ export class PlaybookRunTerminatedError extends Error {
     super('Playbook run ended because a stale ingestion produced no further work.');
     this.name = 'PlaybookRunTerminatedError';
   }
-}
-
-async function resolveStepConfig(
-  context: PlaybookStepExecutionContext,
-): Promise<Record<string, unknown>> {
-  if (!configHasBindings(context.config)) return context.config;
-
-  const [run] = await db
-    .select({ runInput: playbookRuns.runInput })
-    .from(playbookRuns)
-    .where(eq(playbookRuns.id, context.runId))
-    .limit(1);
-  const prior = await db
-    .select({
-      stepId: playbookStepRuns.stepId,
-      output: playbookStepRuns.outputInline,
-    })
-    .from(playbookStepRuns)
-    .where(and(
-      eq(playbookStepRuns.runId, context.runId),
-      eq(playbookStepRuns.status, 'completed'),
-    ));
-
-  const steps: Record<string, Record<string, unknown>> = {};
-  for (const row of prior) {
-    steps[row.stepId] = (row.output ?? {}) as Record<string, unknown>;
-  }
-
-  return resolvePlaybookBindings(context.config, {
-    input: (run?.runInput ?? {}) as Record<string, unknown>,
-    steps,
-  });
 }
 
 /**
@@ -155,7 +119,10 @@ export async function executeStep(
   }
 
   // Invalid stored config must cost nothing, including no permission query.
-  const boundConfig = await resolveStepConfig(context);
+  const boundConfig = await resolveRunStepConfig(context.runId, context.config);
+  if (configHasBindings(context.config)) {
+    await recordStepInput({ stepRunId: context.stepRunId, inputInline: boundConfig });
+  }
   const parsedConfig = parseStepInput(context.stepType, boundConfig);
 
   // @feature-flag:playbooks-production-adapters start winner=enabled

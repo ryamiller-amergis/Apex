@@ -336,6 +336,15 @@ describe('VT-04 — a missed terminal agent-run event is recovered', () => {
      */
     expect(await statusOf(runId, stepRunId)).toEqual(['completed', 'completed']);
     expect(outcome.advanced).toBe(1);
+    const [output] = await query<{ output_inline: Record<string, unknown> }>(
+      'SELECT output_inline FROM playbook_step_runs WHERE id = $1',
+      [stepRunId]
+    );
+    expect(output.output_inline).toEqual(expect.objectContaining({
+      agentRunId: expect.any(String),
+      threadId: expect.any(String),
+      completedAt: expect.any(String),
+    }));
   });
 
   it('fails the step, retryably, when the agent run ended badly', async () => {

@@ -88,6 +88,17 @@ export async function beginStepRun(input: {
   return row as unknown as PlaybookStepRun;
 }
 
+/** Overwrites the stored config after bindings are resolved, so later readers see real values. */
+export async function recordStepInput(input: {
+  stepRunId: string;
+  inputInline: Record<string, unknown>;
+}): Promise<void> {
+  await db
+    .update(playbookStepRuns)
+    .set({ inputInline: input.inputInline, updatedAt: nowIso() })
+    .where(eq(playbookStepRuns.id, input.stepRunId));
+}
+
 /** Persists a future step's resolved inputs so a preceding gate can render them. */
 export async function prepareStepRun(input: {
   runId: string;

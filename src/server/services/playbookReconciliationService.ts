@@ -24,6 +24,7 @@ import { and, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { agentRuns, playbookRuns, playbookStepRuns } from '../db/schema';
 import { advanceStalledRuns } from './playbookAdvanceService';
+import { cursorAgentCompletionOutput } from './playbookSteps/cursorAgentCompletion';
 import { failStepRun, resumeStepRun } from './playbookSteps/stepRuns';
 import type { PlaybookSweepOutcome } from '../../shared/types/playbook';
 import { failGatesWithEmptyCurrentPools } from './playbookGateService';
@@ -74,7 +75,11 @@ async function resumeMissedTerminalEvents(): Promise<number> {
   const stranded = await db
     .select({
       stepRunId: playbookStepRuns.id,
+      stepType: playbookStepRuns.stepType,
       agentRunStatus: agentRuns.status,
+      agentRunId: agentRuns.id,
+      threadId: agentRuns.threadId,
+      completedAt: agentRuns.updatedAt,
     })
     .from(playbookStepRuns)
     .innerJoin(agentRuns, eq(playbookStepRuns.agentRunId, agentRuns.id))
@@ -88,9 +93,17 @@ async function resumeMissedTerminalEvents(): Promise<number> {
   let moved = 0;
   for (const row of stranded) {
     if (row.agentRunStatus === 'completed') {
-      // Same conditional update the event path uses, so the two racing is a no-op rather than a
-      // double advance.
-      if (await resumeStepRun({ stepRunId: row.stepRunId })) moved += 1;
+      // Same output and conditional update the event path uses, so a missed NOTIFY still
+      // hands ingest-artifact a scorecard instead of an empty payload.
+      if (await resumeStepRun({
+        stepRunId: row.stepRunId,
+        output: cursorAgentCompletionOutput({
+          stepType: row.stepType,
+          agentRunId: row.agentRunId,
+          completedAt: row.completedAt,
+          threadId: row.threadId,
+        }),
+      })) moved += 1;
     } else {
       await failStepRun({
         stepRunId: row.stepRunId,

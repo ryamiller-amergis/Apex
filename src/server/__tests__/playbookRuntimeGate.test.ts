@@ -68,19 +68,24 @@ type GeneratedStep = {
 
 function translatedSteps(graph: PlaybookGraph): GeneratedStep[] {
   const steps: GeneratedStep[] = [];
-  const workflow: {
-    then: jest.Mock;
-    commit: jest.Mock;
-  } = {
-    then: jest.fn((step: GeneratedStep) => {
-      steps.push(step);
-      return workflow;
-    }),
-    commit: jest.fn(() => ({ committed: true })),
+  const makeWorkflow = () => {
+    const workflow: {
+      then: jest.Mock;
+      branch: jest.Mock;
+      commit: jest.Mock;
+    } = {
+      then: jest.fn((step: GeneratedStep) => {
+        steps.push(step);
+        return workflow;
+      }),
+      branch: jest.fn(() => workflow),
+      commit: jest.fn(() => ({ committed: true })),
+    };
+    return workflow;
   };
   const modules = {
     createStep: jest.fn((...args: unknown[]) => args[0]),
-    createWorkflow: jest.fn((..._args: unknown[]) => workflow),
+    createWorkflow: jest.fn((..._args: unknown[]) => makeWorkflow()),
     Mastra: class {
       constructor(..._args: unknown[]) {}
     },
@@ -202,5 +207,34 @@ describe('FEAT-008 S7 — runtime reclassification guard', () => {
       "'@mastra/core/workflows'",
       "'@mastra/pg'",
     ]);
+  });
+});
+
+describe('branch translation keeps arm successors', () => {
+  it('registers steps after each branch target instead of stopping at the split', () => {
+    const branched: PlaybookGraph = {
+      nodes: [
+        {
+          id: 'choose',
+          stepType: 'branch',
+          config: {
+            condition: { sourceStepId: 'choose', field: 'isReady', operator: 'eq', value: true },
+            whenTrue: 'ready',
+            whenFalse: 'revise',
+          },
+        },
+        { id: 'ready', stepType: 'approval-gate', config: {} },
+        { id: 'after-ready', stepType: 'notify', config: { title: 'Filed' } },
+        { id: 'revise', stepType: 'notify', config: { title: 'Revise' } },
+      ],
+      edges: [
+        { from: 'choose', to: 'ready', condition: 'ready' },
+        { from: 'choose', to: 'revise', condition: 'revise' },
+        { from: 'ready', to: 'after-ready' },
+      ],
+    };
+
+    const ids = translatedSteps(branched).map((step) => step.id);
+    expect(ids).toEqual(expect.arrayContaining(['choose', 'ready', 'after-ready', 'revise']));
   });
 });

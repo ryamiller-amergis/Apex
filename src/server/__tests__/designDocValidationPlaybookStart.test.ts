@@ -107,6 +107,7 @@ describe('FEAT-014 owner start path', () => {
     });
     expect(startRun).toHaveBeenCalledWith(expect.objectContaining({
       initiatorUserId: 'owner-1',
+      spendAdmissionEnabled: true,
       runInput: expect.objectContaining({
         documentType: 'design_doc',
         documentId: 'doc-1',

@@ -217,6 +217,7 @@ export async function startDesignDocValidationPlaybook(input: {
     project: input.project,
     definitionId: definition.id,
     initiatorUserId: document.ownerId,
+    spendAdmissionEnabled: true,
     runInput: {
       documentType: 'design_doc',
       documentId: document.id,

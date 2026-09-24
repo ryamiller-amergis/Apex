@@ -54,6 +54,10 @@ import {
   handleTerminalAgentRunEvent,
   isTerminalRunEvent,
 } from '../services/playbookTerminalEventService';
+import {
+  readOutputValidationScorecard,
+  readOutputValidationScorecardMd,
+} from '../services/chatAgentService';
 
 const AGENT_RUN_ID = 'agent-run-42';
 const STEP_RUN_ID = 'step-run-7';
@@ -166,6 +170,22 @@ describe('VT-01 — a terminal success event resumes the correlated step', () =>
     expect(resumeStepRun).toHaveBeenCalledWith({
       stepRunId: STEP_RUN_ID,
       output: { agentRunId: AGENT_RUN_ID, completedAt: '2026-09-19T12:00:00.000Z', threadId: 'thread-1' },
+    });
+  });
+
+  it('includes the validation scorecard when the finished thread wrote one', async () => {
+    (readOutputValidationScorecard as jest.Mock).mockReturnValue({ is_ready: true });
+    (readOutputValidationScorecardMd as jest.Mock).mockReturnValue('# report');
+
+    await handleTerminalAgentRunEvent(event('completed'));
+
+    expect(resumeStepRun).toHaveBeenCalledWith({
+      stepRunId: STEP_RUN_ID,
+      output: expect.objectContaining({
+        threadId: 'thread-1',
+        scorecard: { is_ready: true },
+        reportMd: '# report',
+      }),
     });
   });
 

@@ -28,6 +28,7 @@ import {
 } from './stepRuns';
 import type { ApprovalGateStepConfig } from '../../../shared/types/playbook';
 import { snapshotGateAtSuspend } from '../playbookGateService';
+import { resolveRunStepConfig } from '../playbookStepBindings';
 
 const STEP_TYPE = 'approval-gate';
 
@@ -104,7 +105,7 @@ export async function executeApprovalGateStep(
       runId: context.runId,
       stepId: gatedNode.id,
       stepType: gatedNode.stepType,
-      inputInline: gatedNode.config ?? {},
+      inputInline: await resolveRunStepConfig(context.runId, gatedNode.config ?? {}),
     });
     await snapshotGateAtSuspend({
       project: context.project,
