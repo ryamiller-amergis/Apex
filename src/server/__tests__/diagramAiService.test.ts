@@ -58,11 +58,19 @@ describe('diagramAiService', () => {
     );
     const arrow = result.scene.elements.find((element) => (
       (element as { type?: string }).type === 'arrow'
-    )) as { points?: number[][]; endArrowhead?: string | null; label?: { text?: string } };
+    )) as {
+      points?: number[][];
+      endArrowhead?: string | null;
+      label?: { text?: string };
+      start?: { id?: string };
+      end?: { id?: string };
+    };
     expect(arrow.points).toEqual(expect.arrayContaining([
       [0, 0],
       expect.any(Array),
     ]));
+    expect(arrow.start?.id).toBe('ai-node-request');
+    expect(arrow.end?.id).toBe('ai-node-validate');
     expect(arrow.endArrowhead).toBe('arrow');
     expect(arrow.label?.text).toBe('next');
     expect(mockedInvokeBedrockText).toHaveBeenCalledWith(

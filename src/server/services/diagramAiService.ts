@@ -161,6 +161,8 @@ function buildScene(graph: GeneratedGraph): ExcalidrawScene {
       width: deltaX,
       height: deltaY,
       points: [[0, 0], [deltaX, deltaY]],
+      start: { id: nodeElementId(edge.from) },
+      end: { id: nodeElementId(edge.to) },
       strokeColor: '#1e1e1e',
       strokeWidth: 2,
       endArrowhead: 'arrow',
@@ -169,7 +171,8 @@ function buildScene(graph: GeneratedGraph): ExcalidrawScene {
   });
 
   return {
-    // Shapes before arrows so convertToExcalidrawElements can resolve labels first.
+    // Shapes before arrows so convertToExcalidrawElements can resolve start/end
+    // bindings after label-based resize.
     elements: [...nodeElements, ...arrows],
     appState: {
       viewBackgroundColor: '#ffffff',
