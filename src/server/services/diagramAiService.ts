@@ -9,8 +9,9 @@ import { invokeBedrockText } from './bedrockService';
 const MAX_PROMPT_LENGTH = 4_000;
 const MAX_NODES = 20;
 const MAX_EDGES = 40;
-const NODE_WIDTH = 220;
-const NODE_HEIGHT = 100;
+/** Grid cell size — boxes auto-size to label text inside each cell. */
+const NODE_CELL_WIDTH = 280;
+const NODE_CELL_HEIGHT = 140;
 const COLUMN_GAP = 100;
 const ROW_GAP = 80;
 
@@ -102,95 +103,56 @@ function parseGraph(text: string): GeneratedGraph {
   return { title, nodes, edges };
 }
 
-function baseElement(id: string, type: string, x: number, y: number, seed: number, index: number) {
-  return {
-    id,
-    type,
-    x,
-    y,
-    width: 0,
-    height: 0,
-    angle: 0,
-    strokeColor: '#1e1e1e',
-    backgroundColor: 'transparent',
-    fillStyle: 'solid',
-    strokeWidth: 2,
-    strokeStyle: 'solid',
-    roughness: 1,
-    opacity: 100,
-    groupIds: [],
-    frameId: null,
-    roundness: null,
-    seed,
-    version: 1,
-    versionNonce: seed * 17,
-    isDeleted: false,
-    boundElements: null,
-    updated: 1,
-    link: null,
-    locked: false,
-    index: `a${index}`,
-  };
+function nodeElementId(nodeId: string): string {
+  return `ai-node-${nodeId}`;
 }
 
+/**
+ * Excalidraw skeleton elements (labels on shapes). The client runs
+ * convertToExcalidrawElements, which binds labels and sizes boxes to fit text.
+ */
 function buildScene(graph: GeneratedGraph): ExcalidrawScene {
   const columns = Math.min(3, Math.ceil(Math.sqrt(graph.nodes.length)));
   const positioned: PositionedNode[] = graph.nodes.map((node, index) => ({
     ...node,
-    x: 100 + (index % columns) * (NODE_WIDTH + COLUMN_GAP),
-    y: 100 + Math.floor(index / columns) * (NODE_HEIGHT + ROW_GAP),
+    x: 100 + (index % columns) * (NODE_CELL_WIDTH + COLUMN_GAP),
+    y: 100 + Math.floor(index / columns) * (NODE_CELL_HEIGHT + ROW_GAP),
   }));
   const positions = new Map(positioned.map((node) => [node.id, node]));
 
   const arrows = graph.edges.map((edge, index) => {
     const from = positions.get(edge.from)!;
     const to = positions.get(edge.to)!;
-    const x = from.x + NODE_WIDTH / 2;
-    const y = from.y + NODE_HEIGHT / 2;
-    const deltaX = to.x - from.x;
-    const deltaY = to.y - from.y;
     return {
-      ...baseElement(`ai-arrow-${index}`, 'arrow', x, y, 1_000 + index, index),
-      width: deltaX,
-      height: deltaY,
-      points: [[0, 0], [deltaX, deltaY]],
-      lastCommittedPoint: null,
-      startBinding: null,
-      endBinding: null,
-      startArrowhead: null,
+      type: 'arrow',
+      id: `ai-arrow-${index}`,
+      x: from.x,
+      y: from.y,
+      start: { id: nodeElementId(edge.from) },
+      end: { id: nodeElementId(edge.to) },
+      strokeColor: '#1e1e1e',
+      strokeWidth: 2,
       endArrowhead: 'arrow',
     };
   });
 
-  const nodeElements = positioned.flatMap((node, index) => {
-    const rectangleId = `ai-node-${index}`;
-    const zIndex = graph.edges.length + (index * 2);
-    return [
-      {
-        ...baseElement(rectangleId, 'rectangle', node.x, node.y, 2_000 + index, zIndex),
-        width: NODE_WIDTH,
-        height: NODE_HEIGHT,
-        backgroundColor: '#e7f5ff',
-        roundness: { type: 3 },
-      },
-      {
-        ...baseElement(`ai-label-${index}`, 'text', node.x + 20, node.y + 36, 3_000 + index, zIndex + 1),
-        width: NODE_WIDTH - 40,
-        height: 28,
-        strokeWidth: 1,
-        roughness: 0,
-        fontSize: 20,
-        fontFamily: 1,
-        text: node.label,
-        originalText: node.label,
-        textAlign: 'center',
-        verticalAlign: 'middle',
-        containerId: null,
-        autoResize: false,
-        lineHeight: 1.25,
-      },
-    ];
-  });
+  const nodeElements = positioned.map((node) => ({
+    type: 'rectangle',
+    id: nodeElementId(node.id),
+    x: node.x,
+    y: node.y,
+    strokeColor: '#1e1e1e',
+    strokeWidth: 2,
+    backgroundColor: '#e7f5ff',
+    roundness: { type: 3 },
+    label: {
+      text: node.label,
+      fontSize: 20,
+      fontFamily: 1,
+      textAlign: 'center',
+      verticalAlign: 'middle',
+    },
+  }));
 
   return {
     elements: [...arrows, ...nodeElements],

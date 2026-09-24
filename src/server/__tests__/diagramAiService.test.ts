@@ -40,15 +40,20 @@ describe('diagramAiService', () => {
     ))).toHaveLength(3);
     expect(result.scene.elements.filter((element) => (
       (element as { type?: string }).type === 'text'
-    ))).toHaveLength(3);
+    ))).toHaveLength(0);
+    const rectangle = result.scene.elements.find((element) => (
+      (element as { type?: string }).type === 'rectangle'
+    )) as { label?: { text?: string; fontFamily?: number } };
+    expect(rectangle.label?.text).toBe('Receive order');
+    expect(rectangle.label?.fontFamily).toBe(1);
     expect(result.scene.elements.filter((element) => (
       (element as { type?: string }).type === 'arrow'
     ))).toHaveLength(2);
-    const text = result.scene.elements.find((element) => (
-      (element as { type?: string }).type === 'text'
-    )) as { fontFamily?: number; index?: string };
-    expect(text.fontFamily).toBe(1);
-    expect(text.index).toMatch(/^a\d+$/);
+    const arrow = result.scene.elements.find((element) => (
+      (element as { type?: string }).type === 'arrow'
+    )) as { start?: { id?: string }; end?: { id?: string } };
+    expect(arrow.start?.id).toBe('ai-node-request');
+    expect(arrow.end?.id).toBe('ai-node-validate');
     expect(mockedInvokeBedrockText).toHaveBeenCalledWith(
       expect.stringContaining('Show how an order moves from intake to shipping'),
       {
