@@ -3,6 +3,7 @@ import { ErrorBoundary } from 'react-error-boundary';
 import type { ExcalidrawScene } from '../../shared/types/diagram';
 import { isDarkFamilyTheme } from '../../shared/walkthroughAssets';
 import { useAppShell } from '../hooks/useAppShell';
+import { convertDiagramElements } from '../utils/diagramConvert';
 import { cloneDiagramScene, fromDiagramScene, toDiagramScene } from '../utils/diagramScene';
 import type { ThumbnailSource } from '../utils/diagramThumbnail';
 import styles from './ExcalidrawAdapter.module.css';
@@ -86,6 +87,16 @@ function ExcalidrawHost({
   const onSceneChangeRef = useRef(onSceneChange);
   onSceneChangeRef.current = onSceneChange;
   const initial = useMemo(() => fromDiagramScene(initialScene), [initialScene]);
+  const initialElements = useMemo(
+    () => convertDiagramElements(
+      mod.convertToExcalidrawElements as (
+        skeleton: unknown[] | null,
+        opts?: { regenerateIds: boolean },
+      ) => unknown[],
+      initial.elements,
+    ),
+    [mod, initial.elements],
+  );
   const libraryReturnUrl = `${window.location.origin}${window.location.pathname}`;
 
   useEffect(() => {
@@ -127,7 +138,7 @@ function ExcalidrawHost({
         excalidrawAPI={handleApi}
         theme={theme}
         initialData={{
-          elements: initial.elements as never[],
+          elements: initialElements as never[],
           appState: {
             ...(initial.appState as Record<string, unknown>),
             theme,
@@ -178,7 +189,13 @@ export const ExcalidrawAdapter = React.forwardRef(function ExcalidrawAdapter(
     const api = apiRef.current;
     if (!api || !mod) return false;
     const { elements, appState } = fromDiagramScene(nextScene);
-    const converted = mod.convertToExcalidrawElements(elements as never[], { regenerateIds: false });
+    const converted = convertDiagramElements(
+      mod.convertToExcalidrawElements as (
+        skeleton: unknown[] | null,
+        opts?: { regenerateIds: boolean },
+      ) => unknown[],
+      elements,
+    );
     api.updateScene({
       elements: converted as never[],
       appState: {

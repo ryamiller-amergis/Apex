@@ -59,20 +59,16 @@ describe('diagramAiService', () => {
     const arrow = result.scene.elements.find((element) => (
       (element as { type?: string }).type === 'arrow'
     )) as {
-      points?: number[][];
       endArrowhead?: string | null;
-      label?: { text?: string };
-      start?: { id?: string };
-      end?: { id?: string };
+      start?: { id?: string; type?: string };
+      end?: { id?: string; type?: string };
+      points?: unknown;
+      label?: unknown;
     };
-    expect(arrow.points).toEqual(expect.arrayContaining([
-      [0, 0],
-      expect.any(Array),
-    ]));
-    expect(arrow.start?.id).toBe('ai-node-request');
-    expect(arrow.end?.id).toBe('ai-node-validate');
-    expect(arrow.endArrowhead).toBe('arrow');
-    expect(arrow.label?.text).toBe('next');
+    expect(arrow.endArrowhead).toBe('arrow');    expect(arrow.start).toEqual({ type: 'rectangle', id: 'ai-node-request' });
+    expect(arrow.end).toEqual({ type: 'rectangle', id: 'ai-node-validate' });
+    expect(arrow.points).toBeUndefined();
+    expect(arrow.label).toBeUndefined();
     expect(mockedInvokeBedrockText).toHaveBeenCalledWith(
       expect.stringContaining('Show how an order moves from intake to shipping'),
       {
