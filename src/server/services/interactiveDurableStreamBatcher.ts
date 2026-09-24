@@ -87,7 +87,6 @@ export function createInteractiveDurableStreamBatcher(
   let timer: ReturnType<typeof setTimeout> | null = null;
   let lastWriteAt: number | null = null;
   let writeChain: Promise<void> = Promise.resolve();
-  let closed = false;
 
   const clearTimer = (): void => {
     if (timer !== null) {
@@ -121,7 +120,7 @@ export function createInteractiveDurableStreamBatcher(
   };
 
   const scheduleTick = (): void => {
-    if (closed || timer !== null || !buffer) return;
+    if (timer !== null || !buffer) return;
     const delay =
       lastWriteAt === null
         ? intervalMs
@@ -145,7 +144,7 @@ export function createInteractiveDurableStreamBatcher(
     },
 
     async push(text: string): Promise<void> {
-      if (closed || !text) return;
+      if (!text) return;
       buffer += text;
       scheduleTick();
       await writeChain;

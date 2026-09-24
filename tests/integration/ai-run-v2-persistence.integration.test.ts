@@ -158,6 +158,8 @@ describe('AI-run V2 persistence integration', () => {
     const firstDispatch = await repo.dispatchNextAttempt({
       runId,
       dispatchMessageId: `${PREFIX}dispatch-1`,
+      workloadLane: 'document',
+      capacityClass: 'batch',
       specRef,
     });
     expect(firstDispatch.attemptNumber).toBe(1);
@@ -194,6 +196,8 @@ describe('AI-run V2 persistence integration', () => {
     const secondDispatch = await repo.dispatchNextAttempt({
       runId,
       dispatchMessageId: `${PREFIX}dispatch-2`,
+      workloadLane: 'document',
+      capacityClass: 'batch',
       specRef,
     });
     expect(secondDispatch.attemptNumber).toBe(2);
@@ -373,6 +377,8 @@ describe('AI-run V2 persistence integration', () => {
     const dispatch = await repo.dispatchNextAttempt({
       runId,
       dispatchMessageId: `${PREFIX}dispatch-ckpt`,
+      workloadLane: 'document',
+      capacityClass: 'batch',
       specRef,
     });
 

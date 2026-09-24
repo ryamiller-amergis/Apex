@@ -114,7 +114,7 @@ describe('V2 document execution', () => {
         run: {
           supports: () => false,
           async *stream() {
-            return;
+            yield undefined as never;
           },
           async wait() {
             const output = path.join(workspacePath, '.ai-pilot', 'output');
@@ -208,7 +208,7 @@ describe('V2 document execution', () => {
           run: {
             supports: () => false,
             async *stream() {
-              return;
+              yield undefined as never;
             },
             async wait() {
               throw new Error('Cursor failed');
@@ -353,7 +353,7 @@ describe('V2 document execution', () => {
       run: {
         supports: () => false,
         async *stream() {
-          return;
+          yield undefined as never;
         },
         async wait() {
           const output = path.join(
@@ -467,7 +467,7 @@ describe('V2 document execution', () => {
           run: {
             supports: () => false,
             async *stream() {
-              return;
+              yield undefined as never;
             },
             async wait() {
               const output = path.join(
@@ -527,7 +527,7 @@ describe('V2 document execution', () => {
           run: {
             supports: () => false,
             async *stream() {
-              return;
+              yield undefined as never;
             },
             wait: () =>
               new Promise<never>(() => {

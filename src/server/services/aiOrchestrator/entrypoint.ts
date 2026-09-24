@@ -52,8 +52,13 @@ async function main(): Promise<void> {
     const insights = (globalThis as { appInsights?: { trackEvent?: unknown } })
       .appInsights;
     if (insights && typeof insights.trackEvent === 'function') {
+      const trackEvent = insights.trackEvent as (event: {
+        name: string;
+        properties?: Record<string, string>;
+        measurements?: Record<string, number>;
+      }) => void;
       setOrchestratorTrackEvent((name, properties, measurements) => {
-        (insights.trackEvent as Function)({
+        trackEvent({
           name,
           properties,
           measurements,

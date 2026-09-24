@@ -37,9 +37,13 @@ const UI_LAB_RETRY = {
 /**
  * Both app defaults are read from the environment once, at module load, so
  * the only way to observe the override is to load the module again under it.
- * That is why this file re-requires rather than importing at the top.
+ * That is why this file re-imports inside isolateModulesAsync rather than
+ * using the top-level imports for env-tuned cases.
  */
-function underEnvironment<T>(env: Record<string, string>, read: () => T): T {
+async function underEnvironment<T>(
+  env: Record<string, string>,
+  read: () => Promise<T>,
+): Promise<T> {
   const previous: Record<string, string | undefined> = {};
   for (const [key, value] of Object.entries(env)) {
     previous[key] = process.env[key];
@@ -47,8 +51,8 @@ function underEnvironment<T>(env: Record<string, string>, read: () => T): T {
   }
   try {
     let result!: T;
-    jest.isolateModules(() => {
-      result = read();
+    await jest.isolateModulesAsync(async () => {
+      result = await read();
     });
     return result;
   } finally {
@@ -116,16 +120,16 @@ describe('prototype lane model settings', () => {
     });
   });
 
-  it('carries the environment-tuned app default, which a worker cannot read', () => {
-    const resolved = underEnvironment(
+  it('carries the environment-tuned app default, which a worker cannot read', async () => {
+    const resolved = await underEnvironment(
       {
         BEDROCK_UI_MOCK_MAX_TOKENS: '48000',
         BEDROCK_INVOKE_TIMEOUT_MS: '300000',
       },
-      () =>
-        (
-          require('../services/bedrockService') as typeof import('../services/bedrockService')
-        ).resolvePrototypeVisualModel({ modelId: 'anthropic.claude' }),
+      async () =>
+        (await import('../services/bedrockService')).resolvePrototypeVisualModel({
+          modelId: 'anthropic.claude',
+        }),
     );
 
     expect(resolved).toEqual({
@@ -137,13 +141,13 @@ describe('prototype lane model settings', () => {
     });
   });
 
-  it('carries the configured retry attempt count from App Service', () => {
-    const resolved = underEnvironment(
+  it('carries the configured retry attempt count from App Service', async () => {
+    const resolved = await underEnvironment(
       { BEDROCK_INVOKE_MAX_ATTEMPTS: '7' },
-      () =>
-        (
-          require('../services/bedrockService') as typeof import('../services/bedrockService')
-        ).resolvePrototypeVisualModel({ modelId: 'anthropic.claude' }),
+      async () =>
+        (await import('../services/bedrockService')).resolvePrototypeVisualModel({
+          modelId: 'anthropic.claude',
+        }),
     );
 
     expect(resolved.retry).toEqual({
@@ -200,16 +204,16 @@ describe('UI Lab lane model settings', () => {
     });
   });
 
-  it('carries the environment-tuned UI Lab default', () => {
-    const resolved = underEnvironment(
+  it('carries the environment-tuned UI Lab default', async () => {
+    const resolved = await underEnvironment(
       {
         BEDROCK_UI_LAB_MAX_TOKENS: '20000',
         BEDROCK_UI_LAB_TIMEOUT_MS: '420000',
       },
-      () =>
-        (
-          require('../services/uiLabBedrockService') as typeof import('../services/uiLabBedrockService')
-        ).resolveUiLabVisualModel({ modelId: 'anthropic.claude' }),
+      async () =>
+        (await import('../services/uiLabBedrockService')).resolveUiLabVisualModel({
+          modelId: 'anthropic.claude',
+        }),
     );
 
     expect(resolved).toEqual({

@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve, sep } from 'node:path';
 
 /**
  * The interactive actor host must not open PostgreSQL. Walk the relative-import
@@ -82,7 +82,7 @@ describe('interactive actor host database isolation', () => {
     for (const pattern of FORBIDDEN_IMPORT) {
       expect(source).not.toMatch(pattern);
     }
-    if (file.includes(`${join('services', 'aiRunV2')}${require('path').sep}`)) {
+    if (file.includes(`${join('services', 'aiRunV2')}${sep}`)) {
       // Any pulled aiRunV2 helper must itself be free of db imports.
       for (const pattern of FORBIDDEN_IMPORT) {
         expect(source).not.toMatch(pattern);

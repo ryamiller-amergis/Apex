@@ -70,6 +70,9 @@ resource "azurerm_resource_group" "ai_platform_v2" {
 
 # ---------------------------------------------------------------------------
 # Service Bus — new Central US Standard namespace + V2 queues
+# contracts.zoneRedundant applies to the Container Apps Environment below.
+# Azure Service Bus zone redundancy requires the Premium SKU; under Standard
+# leave zone_redundant unset/false so the first apply does not claim ZR.
 # ---------------------------------------------------------------------------
 
 resource "azurerm_servicebus_namespace" "ai_platform_v2" {

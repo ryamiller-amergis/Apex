@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   encryptInteractiveToolGrant,
 } from '../services/interactiveToolGrantCrypto';
@@ -173,13 +175,10 @@ describe('interactiveToolProxyService', () => {
   });
 
   it('does not import Cursor or model modules', () => {
-    const source = jest.requireActual('fs').readFileSync(
-      require('path').join(
-        __dirname,
-        '../services/interactiveToolProxyService.ts',
-      ),
+    const source = readFileSync(
+      join(__dirname, '../services/interactiveToolProxyService.ts'),
       'utf8',
-    ) as string;
+    );
     expect(source).not.toMatch(/@cursor\/sdk/);
     expect(source).not.toMatch(/agentEffortResolver|modelsService|Agent\.create/);
   });

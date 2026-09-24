@@ -94,13 +94,12 @@ function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
       reject(abortError(signal));
       return;
     }
-    let timer: ReturnType<typeof setTimeout>;
     const onAbort = (): void => {
       clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
       reject(abortError(signal!));
     };
-    timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       signal?.removeEventListener('abort', onAbort);
       resolve();
     }, ms);

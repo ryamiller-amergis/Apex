@@ -50,11 +50,25 @@ function loadContracts(): AiPlatformV2Contracts {
 
 describe('AI Platform V2 infrastructure contracts', () => {
   const contracts = loadContracts();
+  const platformTf = readFileSync(
+    resolve(__dirname, '../../../infra/ai-platform-v2.tf'),
+    'utf8',
+  );
 
-  it('targets Central US with Standard SKU and zone redundancy at creation', () => {
+  it('targets Central US with Standard SKU and CAE zone redundancy at creation', () => {
     expect(contracts.location).toBe('centralus');
     expect(contracts.sku).toBe('Standard');
     expect(contracts.zoneRedundant).toBe(true);
+    // zoneRedundant is CAE-only under Standard SB (Premium would be required
+    // for Service Bus ZR). The CAE AzAPI body must apply it; SB must not.
+    expect(platformTf).toMatch(
+      /zoneRedundant\s*=\s*local\.ai_platform_v2_contracts\.zoneRedundant/,
+    );
+    const sbBlock = platformTf.slice(
+      platformTf.indexOf('resource "azurerm_servicebus_namespace" "ai_platform_v2"'),
+      platformTf.indexOf('resource "azurerm_servicebus_queue" "ai_platform_v2"'),
+    );
+    expect(sbBlock).not.toMatch(/zone_redundant\s*=\s*true/);
   });
 
   it('declares Consumption and repo-read workload profiles', () => {

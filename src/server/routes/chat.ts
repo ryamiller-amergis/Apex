@@ -603,7 +603,7 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
     Boolean(lastEventId) || hydrated?.status === 'running';
   let replayedEventCount = 0;
   if (shouldReplayEvents) {
-    const coldStart: 'oldest' = 'oldest';
+    const coldStart = 'oldest' as const;
     let afterEventId = lastEventId;
     try {
       for (;;) {
