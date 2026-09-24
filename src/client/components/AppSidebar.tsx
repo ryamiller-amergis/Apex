@@ -1,5 +1,6 @@
 import React from 'react';
 import { useBreakpoint } from '../hooks/useBreakpoint';
+import { canAccessMyWork } from '../utils/canAccessMyWork';
 import styles from './AppSidebar.module.css';
 
 interface NavItem {
@@ -269,8 +270,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
 
   const isItemVisible = (item: NavItem): boolean => {
     if (item.view === 'my-work') {
-      if (!isSuperAdmin && !menuEnabledViews.includes('my-work')) return false;
-      return can('dev-workbench:view') && (isInAnyGroup?.(['Developer']) ?? false);
+      return canAccessMyWork({ can, isSuperAdmin, isInAnyGroup, enabledViews: menuEnabledViews });
     }
     if (item.view === 'standup') {
       if (!isSuperAdmin && !menuEnabledViews.includes('standup')) return false;

@@ -3,8 +3,16 @@ import request from 'supertest';
 import featureRequestsRouter from '../routes/featureRequests';
 
 jest.mock('../middleware/rbac', () => ({
-  requirePermission: () => (_req: unknown, _res: unknown, next: () => void) =>
-    next(),
+  requirePermission: (permission: string) => (
+    req: any,
+    res: any,
+    next: () => void,
+  ) => {
+    if (req.get('x-deny-permission') === permission) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    return next();
+  },
   resolveRequestProject: (req: any) => (req.query?.project as string) || (req.body?.project as string) || req.get?.('x-apex-project') || undefined,
 }));
 
@@ -20,6 +28,8 @@ jest.mock('../services/featureRequestService', () => ({
   updateFeatureRequest: jest.fn(),
   linkInterview: jest.fn(),
   resolveFeatureRequestReviewers: jest.fn(),
+  listFeatureRequestAssignees: jest.fn(),
+  rankFeatureRequests: jest.fn(),
 }));
 
 jest.mock('../services/featureRequestAnalysisService', () => ({
@@ -209,5 +219,22 @@ describe('cross-project isolation on single-item endpoints', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.title).toBe('Amego item');
+  });
+});
+
+describe('feature request manage permission', () => {
+  it.each([
+    ['patch assignment', 'patch', '/api/feature-requests/req-1', { assigneeId: 'user-2' }],
+    ['bulk AI rank', 'post', '/api/feature-requests/rank?project=Apex', { ids: ['req-1'] }],
+  ])('blocks %s without feature-requests:manage', async (_label, method, url, body) => {
+    const testRequest =
+      method === 'patch'
+        ? request(buildApp()).patch(url)
+        : request(buildApp()).post(url);
+    const response = await testRequest
+      .set('x-deny-permission', 'feature-requests:manage')
+      .send(body);
+
+    expect(response.status).toBe(403);
   });
 });

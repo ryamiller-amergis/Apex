@@ -35,6 +35,7 @@ import { PdfToolsRouteGuard } from './components/PdfToolsRouteGuard';
 import { DesktopOnlyGate } from './components/DesktopOnlyGate';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
+import { canAccessMyWork } from './utils/canAccessMyWork';
 import { setInteractiveWsEnabled } from './utils/threadEventStream';
 import { createChatTurnId } from './utils/chatTurnId';
 import { IS_BETA_RELEASE } from './config/release';
@@ -456,7 +457,15 @@ function App() {
     if (currentView === 'backlog'       && !isSuperAdmin && (!effectiveEnabledViews.includes('backlog')   || !can('interviews:view'))) navigate(fallback);
     if (currentView === 'adr'           && !isSuperAdmin && (!effectiveEnabledViews.includes('adr')       || !can('adr:view'))) navigate(fallback);
     if (currentView === 'notifications' && !can('notifications:view'))  navigate(fallback);
-    if (currentView === 'my-work'       && !isSuperAdmin && (!effectiveEnabledViews.includes('my-work') || !can('dev-workbench:view'))) navigate(fallback);
+    if (
+      currentView === 'my-work'
+      && !canAccessMyWork({
+        can,
+        isSuperAdmin,
+        isInAnyGroup,
+        enabledViews: effectiveEnabledViews,
+      })
+    ) navigate(fallback);
     if (currentView === 'standup'        && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
     if (currentView === 'standup-manage' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:manage')))      navigate(fallback);
     if (currentView === 'standup-summary' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);

@@ -301,6 +301,62 @@
   min-height: 360px;
 }
 
+.intake-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 760px;
+}
+
+.intake-section h3 {
+  margin: 0 0 6px;
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+}
+
+.intake-section p,
+.intake-adrs {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+.intake-adrs {
+  padding-left: 20px;
+}
+
+.intake-helper {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.intake-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+.interview-btn {
+  padding: 8px 16px;
+  border: 1px solid var(--accent-color);
+  border-radius: 6px;
+  background: var(--accent-color);
+  color: var(--on-accent);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.interview-btn:hover {
+  background: var(--accent-hover);
+}
+
 @media (max-width: 720px) {
   .overlay {
     padding: 12px;

@@ -59,15 +59,25 @@ poll_interval        = "30"
 port                 = "8080"
 
 # PostgreSQL Database Configuration
-postgresql_location                          = "East US 2"
-postgresql_server_name                       = "psql-hub-dev"
-postgresql_admin_username                    = "pgadmin"
-postgresql_admin_password                    = "ChangeMe123!" # Must include upper, lower, number, min 8 chars
-postgresql_database_name                     = "aipilot"
-postgresql_sku_name                          = "B_Standard_B1ms"
-postgresql_storage_mb                        = 32768
-postgresql_backup_retention_days             = 7
-postgresql_azure_services_firewall_rule_name = "allow-azure-services"
+# Keep postgresql_location equal to app_service_location. Prod ran cross-region
+# (East US 2 database, Central US app) until 2026-09-18 and paid ~30 ms on every
+# query for it.
+postgresql_server_name    = "psql-hub-dev"
+postgresql_location       = "Central US"
+postgresql_admin_username = "pgadmin"
+postgresql_admin_password = "ChangeMe123!"  # Must include upper, lower, number, min 8 chars
+postgresql_database_name  = "aipilot"
+postgresql_sku_name       = "B_Standard_B1ms"
+# Azure grows storage but never shrinks it — lowering this fails the apply.
+postgresql_storage_mb = 32768
+# 7-35 days. Backups die with the server, so this is the whole recovery window.
+postgresql_backup_retention_days = 7
+# Portal-created servers carry a generated rule name. Rule names are ForceNew,
+# so set this to the existing name rather than letting Terraform recreate it.
+# postgresql_azure_services_firewall_rule_name = "allow-azure-services"
+# Query diagnostics. Both are dynamic — changing them does not restart the server.
+# postgresql_pg_stat_statements_track      = "top"   # none | top | all
+# postgresql_log_min_duration_statement_ms = 5000    # -1 disables
 
 # Shared async Blob platform
 # One private storage account per environment. Add containers for new modules.

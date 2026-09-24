@@ -236,9 +236,9 @@ variable "port" {
 }
 
 variable "postgresql_location" {
-  description = "Azure region for the PostgreSQL Flexible Server (may differ from main location if subscription quota requires it)"
+  description = "Azure region for the PostgreSQL Flexible Server (may differ from main location if subscription quota requires it). Keep this equal to app_service_location: a cross-region server adds ~30 ms to every query."
   type        = string
-  default     = "East US 2"
+  default     = "Central US"
 }
 
 variable "postgresql_resource_group_name" {
@@ -250,7 +250,7 @@ variable "postgresql_resource_group_name" {
 variable "postgresql_server_name" {
   description = "Name of the PostgreSQL Flexible Server (must be globally unique)"
   type        = string
-  default     = "psql-apex-eus2"
+  default     = "psql-apex-cus"
 }
 
 variable "postgresql_admin_username" {
@@ -279,42 +279,47 @@ variable "postgresql_sku_name" {
 }
 
 variable "postgresql_storage_mb" {
-  description = "Provisioned PostgreSQL storage in MiB. Set this to the existing server size before import because Flexible Server storage cannot shrink."
+  description = "Provisioned storage for the PostgreSQL Flexible Server. Azure can grow this but never shrink it, so lowering the value fails the apply."
   type        = number
   default     = 32768
-
-  validation {
-    condition = contains(
-      [32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4193280, 4194304, 8388608, 16777216, 33553408],
-      var.postgresql_storage_mb,
-    )
-    error_message = "postgresql_storage_mb must be a supported Azure PostgreSQL Flexible Server storage size."
-  }
 }
 
 variable "postgresql_backup_retention_days" {
-  description = "PostgreSQL point-in-time backup retention in days."
+  description = "Point-in-time restore window (7-35 days). Backups are deleted with the server, so this is the only recovery window once a replaced server is removed."
   type        = number
   default     = 7
 
   validation {
-    condition = (
-      floor(var.postgresql_backup_retention_days) == var.postgresql_backup_retention_days
-      && var.postgresql_backup_retention_days >= 7
-      && var.postgresql_backup_retention_days <= 35
-    )
+    condition     = var.postgresql_backup_retention_days >= 7 && var.postgresql_backup_retention_days <= 35
     error_message = "postgresql_backup_retention_days must be between 7 and 35."
   }
 }
 
 variable "postgresql_azure_services_firewall_rule_name" {
-  description = "Name of the PostgreSQL 0.0.0.0 Azure-services firewall rule. Override to match an existing rule before Terraform import."
+  description = "Name of the 0.0.0.0 allow-Azure-services firewall rule. Rule names are ForceNew, so servers created through the portal keep their generated name here."
   type        = string
   default     = "allow-azure-services"
+}
+
+variable "postgresql_pg_stat_statements_track" {
+  description = "Which statements pg_stat_statements records: none, top, or all. 'top' covers statements issued directly by the app and is what identifies a query holding pool connections."
+  type        = string
+  default     = "top"
 
   validation {
-    condition     = length(trimspace(var.postgresql_azure_services_firewall_rule_name)) > 0
-    error_message = "postgresql_azure_services_firewall_rule_name must not be empty."
+    condition     = contains(["none", "top", "all"], var.postgresql_pg_stat_statements_track)
+    error_message = "postgresql_pg_stat_statements_track must be none, top, or all."
+  }
+}
+
+variable "postgresql_log_min_duration_statement_ms" {
+  description = "Log statements slower than this many milliseconds. -1 disables logging; 0 logs everything and will flood the log."
+  type        = number
+  default     = 5000
+
+  validation {
+    condition     = var.postgresql_log_min_duration_statement_ms >= -1
+    error_message = "postgresql_log_min_duration_statement_ms must be -1 (disabled) or a non-negative millisecond threshold."
   }
 }
 
