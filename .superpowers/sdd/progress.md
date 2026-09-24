@@ -22,8 +22,10 @@
 
 **Durable interactive turns workstream: COMPLETE** (code + unit/isolation/build verification). Integration DB suites and Playwright E2E stay deferred until an approved local test database / E2E harness exists — not inventing credentials; not pointing at prod/staging/dev.
 
+**Merged `origin/main` (2026-09-24):** `8d642f51`. Conflicts only in `infra/variables.tf` + `infra/terraform.tfvars.example` (took main’s Central US Postgres alignment + query-diagnostics). App.tsx / schema auto-merged; durable WS flag and `dapr-actor-v2` schema checks intact. Migration order OK (`…100000` / `…113000` from main, then `…140000` durable interactive). Server + client typecheck green after merge. No Terraform apply.
+
 ## Resume point
 
-- **Next:** deferred ops only when asked — push, PR, Azure/Terraform apply, Container Apps / deploy wiring, migration apply to a shared environment, Playwright E2E against an approved test DB, `ai-runs-interactive` retirement after canary + observation.
+- **Next:** push/PR when ready (PR will migrate+deploy shared **dev**). Deferred ops: class dispatch endpoints / actor identity / canary remain separate.
 - Still deferred until asked: push, PR, Azure apply, Container Apps / deploy.
-- Branch: `tbi/infra-changes` (ahead of origin; local only).
+- Branch: `tbi/infra-changes` (ahead of origin; includes merge of `main`).

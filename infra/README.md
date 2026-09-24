@@ -180,12 +180,14 @@ Dev and prod **must not share state**. See [Workspaces and environments](#worksp
 | `ado_project` | Azure DevOps project | (required) |
 | `github_org` | GitHub org for checkout (`GITHUB_ORG`; not the Apex product name) | `""` |
 | `github_token` | GitHub PAT for clone/fetch (`GITHUB_TOKEN`; same as App Service) | `null` |
-| `postgresql_location` | PostgreSQL Flexible Server region | `East US 2` |
-| `postgresql_server_name` | PostgreSQL Flexible Server name | `psql-apex-eus2` |
+| `postgresql_location` | PostgreSQL Flexible Server region (keep equal to `app_service_location`) | `Central US` |
+| `postgresql_server_name` | PostgreSQL Flexible Server name | `psql-hub-dev` |
 | `postgresql_sku_name` | PostgreSQL compute SKU | `B_Standard_B1ms` |
 | `postgresql_storage_mb` | Provisioned storage in MiB; cannot be reduced after growth | `32768` |
 | `postgresql_backup_retention_days` | Point-in-time backup retention | `7` |
 | `postgresql_azure_services_firewall_rule_name` | Name of the `0.0.0.0` Azure-services firewall rule | `allow-azure-services` |
+| `postgresql_pg_stat_statements_track` | `pg_stat_statements` capture mode (`none` / `top` / `all`) | `top` |
+| `postgresql_log_min_duration_statement_ms` | Log statements slower than this many ms (`-1` disables) | `5000` |
 
 The App Service plan uses the fixed `app_service_worker_count`. Production
 autoscaling is intentionally deferred until Interview and other long-running AI
