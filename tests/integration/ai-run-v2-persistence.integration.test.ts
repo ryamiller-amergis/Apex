@@ -184,6 +184,7 @@ describe('AI-run V2 persistence integration', () => {
       status: 'ok',
       attemptId: firstDispatch.attemptId,
       to: 'running',
+      run: null,
     });
 
     await repo.transitionAttempt({
