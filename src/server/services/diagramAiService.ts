@@ -133,6 +133,7 @@ function buildScene(graph: GeneratedGraph): ExcalidrawScene {
       strokeColor: '#1e1e1e',
       strokeWidth: 2,
       endArrowhead: 'arrow',
+      ...(edge.label ? { label: { text: edge.label } } : {}),
     };
   });
 
@@ -154,8 +155,10 @@ function buildScene(graph: GeneratedGraph): ExcalidrawScene {
     },
   }));
 
+  // convertToExcalidrawElements looks up arrow start/end ids in already-converted
+  // elements, so bound rectangles must appear before the arrows that reference them.
   return {
-    elements: [...arrows, ...nodeElements],
+    elements: [...nodeElements, ...arrows],
     appState: {
       viewBackgroundColor: '#ffffff',
     },

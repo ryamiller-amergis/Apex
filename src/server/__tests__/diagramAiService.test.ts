@@ -49,11 +49,19 @@ describe('diagramAiService', () => {
     expect(result.scene.elements.filter((element) => (
       (element as { type?: string }).type === 'arrow'
     ))).toHaveLength(2);
+    const elementTypes = result.scene.elements.map(
+      (element) => (element as { type?: string }).type,
+    );
+    expect(elementTypes.lastIndexOf('rectangle')).toBeGreaterThan(-1);
+    expect(elementTypes.indexOf('arrow')).toBeGreaterThan(
+      elementTypes.lastIndexOf('rectangle'),
+    );
     const arrow = result.scene.elements.find((element) => (
       (element as { type?: string }).type === 'arrow'
-    )) as { start?: { id?: string }; end?: { id?: string } };
+    )) as { start?: { id?: string }; end?: { id?: string }; label?: { text?: string } };
     expect(arrow.start?.id).toBe('ai-node-request');
     expect(arrow.end?.id).toBe('ai-node-validate');
+    expect(arrow.label?.text).toBe('next');
     expect(mockedInvokeBedrockText).toHaveBeenCalledWith(
       expect.stringContaining('Show how an order moves from intake to shipping'),
       {

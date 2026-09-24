@@ -86,10 +86,6 @@ function ExcalidrawHost({
   const onSceneChangeRef = useRef(onSceneChange);
   onSceneChangeRef.current = onSceneChange;
   const initial = useMemo(() => fromDiagramScene(initialScene), [initialScene]);
-  const initialElements = useMemo(
-    () => mod.convertToExcalidrawElements(initial.elements as never[], { regenerateIds: false }),
-    [mod, initial],
-  );
   const libraryReturnUrl = `${window.location.origin}${window.location.pathname}`;
 
   useEffect(() => {
@@ -131,7 +127,7 @@ function ExcalidrawHost({
         excalidrawAPI={handleApi}
         theme={theme}
         initialData={{
-          elements: initialElements as never[],
+          elements: initial.elements as never[],
           appState: {
             ...(initial.appState as Record<string, unknown>),
             theme,
