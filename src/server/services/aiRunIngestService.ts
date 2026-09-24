@@ -45,6 +45,7 @@ import {
   type InteractiveActorBootstrap,
 } from '../../shared/types/aiRunIngest';
 import {
+  isCanonicalUuid,
   isDurableInteractiveTurnSpecification,
   type DurableInteractiveTurnSpecification,
 } from '../../shared/types/durableInteractiveTurn';
@@ -295,6 +296,12 @@ function validateBody(body: AiRunIngestBody): void {
     }
     if (body.status !== undefined && !isAgentRunEventStatus(body.status)) {
       throw new AiRunIngestError('Invalid progress status', 'AI_RUN_VALIDATION');
+    }
+    if (body.eventId !== undefined && !isCanonicalUuid(body.eventId)) {
+      throw new AiRunIngestError(
+        'progress eventId must be a canonical UUID',
+        'AI_RUN_VALIDATION',
+      );
     }
   }
 
@@ -690,7 +697,7 @@ function buildProgressEnvelope(
       };
 
   return {
-    eventId: randomUUID(),
+    eventId: body.eventId ?? randomUUID(),
     threadId: row.threadId,
     runId: row.id,
     sourceInstance: RUN_EVENT_SOURCE_INSTANCE,

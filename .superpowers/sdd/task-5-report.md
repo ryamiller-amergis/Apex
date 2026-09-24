@@ -103,5 +103,49 @@ npx tsc -p tsconfig.client.json --noEmit
   modified.
 - `threadEventStream.ts` already preferred WS with SSE fallback; Task 5 only
   needed the App flag switch to `ai-runs-v2-transport`.
-- Ingest still allocates its own Postgres `eventId` for progress rows; client
-  offset merge handles overlapping live/durable deliveries when ids differ.
+
+## Remediation (review REQUEST CHANGES)
+
+- Status: `DONE`
+- Remediation commit: *(filled after commit)*
+- Branch: `tbi/infra-changes`
+- Feature base: `038fd671`
+- No push, PR, Azure, or protected config changes.
+
+### High 1 — Batcher persist ordering
+
+- `emitOneChunk` advances `buffer` / `nextOffset` only after successful `persist`.
+- Timer path keeps rejections on `writeChain` (dangling `.catch` does not
+  reassign the chain); `flush()` rejects so the actor can fail the turn.
+- Tests: persist failure does not drop text or create offset holes; flush
+  rejects after timer failure.
+
+### High 2 — Shared eventId Redis ↔ Postgres
+
+- `AiRunProgressIngest.eventId` optional; fenced ingest validates UUID and uses
+  it in `buildProgressEnvelope` (Postgres insert already `ON CONFLICT DO NOTHING`).
+- Durable batcher generates `eventId` and passes it into progress ingest.
+- When live and durable chunk boundaries match, Redis eventId (allocated before
+  publish) is reused for Postgres; otherwise durable id is published to both.
+
+### High 3 — SSE Redis live subscribe
+
+- `chat.ts` stream: under `ai-runs-v2-transport`, `interactiveLiveBus.subscribe`
+  before page one; buffer during `hasMore` loop; flush after final page; dedupe
+  by `eventId` and token `streamOffset`.
+
+### Medium / Low
+
+- Durable-path actor test: dual-publish Redis + durable progress with offsets;
+  flush before message/terminal.
+- Legacy `resolveReplayPage` requests `limit + 1` and slices like
+  `replayRunEventPage` (no false `hasMore` without LIMIT+1).
+- `shouldAssignRunEventSseId`: `streamOffset` `-1` / `NaN` → false.
+
+### Verify
+
+```text
+npx jest … (9 suites) → 215 passed
+npm run build:server → exit 0
+npx tsc -p tsconfig.client.json --noEmit → exit 0
+```

@@ -183,4 +183,60 @@ describe('createInteractiveDurableStreamBatcher', () => {
     ]);
     expect(batcher.nextOffset).toBe(INTERACTIVE_DURABLE_STREAM_MAX_BYTES * 2 + 4);
   });
+
+  it('does not advance offset or drop text when persist fails on flush', async () => {
+    const persist = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('db down'))
+      .mockResolvedValue(undefined);
+    const batcher = createInteractiveDurableStreamBatcher({
+      persist,
+      createEventId: () => 'event-1',
+    });
+
+    await batcher.push('hello');
+    await expect(batcher.flush()).rejects.toThrow('db down');
+    expect(batcher.nextOffset).toBe(0);
+    expect(persist).toHaveBeenCalledTimes(1);
+    expect(persist.mock.calls[0][0].event).toEqual(
+      expect.objectContaining({
+        text: 'hello',
+        streamOffset: 0,
+        streamEndOffset: 5,
+      }),
+    );
+
+    // A fresh chain after the failed flush must still drain the same text
+    // without creating an offset hole.
+    await batcher.flush();
+    expect(persist).toHaveBeenCalledTimes(2);
+    expect(persist.mock.calls[1][0].event).toEqual(
+      expect.objectContaining({
+        text: 'hello',
+        streamOffset: 0,
+        streamEndOffset: 5,
+      }),
+    );
+    expect(batcher.nextOffset).toBe(5);
+  });
+
+  it('keeps timer persist failures on the write chain so flush rejects', async () => {
+    const persist = jest.fn().mockRejectedValue(new Error('db down'));
+    const batcher = createInteractiveDurableStreamBatcher({
+      persist,
+      createEventId: () => 'event-1',
+    });
+
+    await batcher.push('hello');
+    await jest.advanceTimersByTimeAsync(INTERACTIVE_DURABLE_STREAM_INTERVAL_MS);
+    await expect(batcher.flush()).rejects.toThrow('db down');
+    expect(batcher.nextOffset).toBe(0);
+    expect(persist).toHaveBeenCalled();
+    expect(
+      persist.mock.calls.every(
+        (call) =>
+          call[0].event.streamOffset === 0 && call[0].event.text === 'hello',
+      ),
+    ).toBe(true);
+  });
 });

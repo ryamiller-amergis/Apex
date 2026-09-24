@@ -169,19 +169,24 @@ function resolveReplayPage(
     return dependencies.replayRunEventPage;
   }
   const legacy = dependencies.replayRunEvents ?? defaultReplayRunEvents;
+  // Legacy one-page helpers do not use LIMIT+1. Request one extra row and apply
+  // the same hasMore slice as replayRunEventPage so a full page is not treated
+  // as a false "has more" when that was the final page.
   return async (threadId, options = {}) => {
+    const boundedLimit = Math.max(1, Math.min(options.limit ?? 500, 500));
     const events = await legacy(
       threadId,
       options.afterEventId,
-      options.limit ?? 500,
+      boundedLimit + 1,
       options.runId,
       options.coldStart,
     );
+    const hasMore = events.length > boundedLimit;
+    const page = hasMore ? events.slice(0, boundedLimit) : events;
     return {
-      events,
-      nextEventId:
-        events.length > 0 ? events[events.length - 1]!.eventId : null,
-      hasMore: events.length >= (options.limit ?? 500),
+      events: page,
+      nextEventId: page.length > 0 ? page[page.length - 1]!.eventId : null,
+      hasMore,
     };
   };
 }

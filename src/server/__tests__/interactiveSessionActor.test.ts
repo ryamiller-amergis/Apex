@@ -809,4 +809,83 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     });
     setTimeoutSpy.mockRestore();
   }, 15_000);
+
+  it('dual-publishes Redis live + durable progress with shared offsets; flush before message/terminal', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const { publishLive, live } = captureLive();
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          tokens: ['hello'],
+          agentId: 'agent-shared',
+          workspaceRef: checkout.workspacePath,
+        }),
+      ),
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+      }),
+      uploadAttemptArtifacts: jest.fn(async () => ({
+        container: 'artifacts',
+        key: 'runs/r/attempts/1/manifest.json',
+      })),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+      publishLive,
+    });
+
+    const outcome = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap(),
+    });
+    expect(outcome.status).toBe('completed');
+
+    const durableTokens = posted.filter(
+      (b): b is Extract<AiRunIngestBody, { kind: 'progress' }> & {
+        event: { type: 'token'; text: string; streamOffset: number; streamEndOffset: number };
+        eventId: string;
+      } =>
+        b.kind === 'progress'
+        && b.event?.type === 'token'
+        && typeof b.eventId === 'string'
+        && typeof b.event.streamOffset === 'number'
+        && typeof b.event.streamEndOffset === 'number',
+    );
+    expect(durableTokens.length).toBeGreaterThan(0);
+    for (const body of durableTokens) {
+      expect(body.eventId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      );
+      expect(body.event.streamOffset).toBeGreaterThanOrEqual(0);
+    }
+
+    const liveTokens = live.filter((e) => e.event.type === 'token');
+    expect(liveTokens.length).toBeGreaterThan(0);
+    const liveById = new Map(liveTokens.map((e) => [e.eventId, e]));
+    for (const body of durableTokens) {
+      const shared = liveById.get(body.eventId);
+      expect(shared).toBeDefined();
+      expect(shared!.event).toEqual(
+        expect.objectContaining({
+          type: 'token',
+          text: body.event.text,
+          streamOffset: body.event.streamOffset,
+          streamEndOffset: body.event.streamEndOffset,
+        }),
+      );
+    }
+
+    const tokenIdx = posted.findIndex(
+      (b) => b.kind === 'progress' && b.event?.type === 'token',
+    );
+    const messageIdx = posted.findIndex(
+      (b) => b.kind === 'progress' && b.event?.type === 'message',
+    );
+    const terminalIdx = posted.findIndex((b) => b.kind === 'terminal');
+    expect(tokenIdx).toBeGreaterThanOrEqual(0);
+    expect(messageIdx).toBeGreaterThan(tokenIdx);
+    expect(terminalIdx).toBeGreaterThan(messageIdx);
+  });
 });

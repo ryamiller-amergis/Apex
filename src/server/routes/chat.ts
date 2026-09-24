@@ -44,6 +44,7 @@ import {
   RUN_EVENT_SOURCE_INSTANCE,
   subscribeRunEvents,
 } from '../services/pgNotifyService';
+import { interactiveLiveBus } from '../services/interactiveLiveBus';
 import {
   assessAgentRunHealth,
   resolveAgentRunHealthConfig,
@@ -126,6 +127,15 @@ async function isEventDrivenTerminationEnabled(thread: ChatThread): Promise<bool
   const project = thread.kickoff?.project;
   if (!project) return false;
   return isFeatureEnabled('event-driven-run-termination', {
+    userId: thread.userId,
+    project,
+  }).catch(() => false);
+}
+
+async function isAiRunsV2TransportEnabled(thread: ChatThread): Promise<boolean> {
+  const project = thread.kickoff?.project;
+  if (!project) return false;
+  return isFeatureEnabled('ai-runs-v2-transport', {
     userId: thread.userId,
     project,
   }).catch(() => false);
@@ -442,6 +452,7 @@ router.get('/threads/:id', requireThreadRead, (req: Request, res: Response) => {
 router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: Response) => {
   const thread = (req as ThreadRequest).thread!;
   const eventDrivenTermination = await isEventDrivenTerminationEnabled(thread);
+  const v2Transport = await isAiRunsV2TransportEnabled(thread);
   const streamStartedAt = Date.now();
   const myWorkContext = thread.kickoff?.mode === 'development'
     ? await getMyWorkSessionContext(req.params.id).catch(() => null)
@@ -456,7 +467,9 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
   let stopHeartbeat = () => {};
   let unsubscribe = () => {};
   let unsubNotify = () => {};
+  let unsubLive = () => {};
   const sentEventIds = new Set<string>();
+  const sentTokenOffsets = new Set<number>();
   const sentEventIdOrder: string[] = [];
   let replaying = true;
   const pendingLiveEvents: AgentRunEventEnvelope[] = [];
@@ -476,6 +489,7 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
     stopHeartbeat();
     unsubscribe();
     unsubNotify();
+    unsubLive();
   };
 
   const sendEvent = (event: object, eventId?: string) => {
@@ -500,6 +514,14 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
       sendEvent({ type: 'status', status: 'idle' });
       sendEvent({ type: 'done', runId: envelope.runId }, envelope.eventId);
       return;
+    }
+    // Dedupe Redis live vs durable replay by eventId and by token offsets.
+    if (envelope.event.type === 'token') {
+      const offset = envelope.event.streamOffset;
+      if (typeof offset === 'number' && Number.isFinite(offset)) {
+        if (sentTokenOffsets.has(offset)) return;
+        sentTokenOffsets.add(offset);
+      }
     }
     sendEvent(
       eventForRunEnvelope(envelope),
@@ -546,6 +568,9 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
     sendEvent({ type: 'message', message: msg });
   }
 
+  // Subscribe BEFORE durable page replay so live Redis / PG events that arrive
+  // during the async hasMore loop are buffered and flushed after the final page
+  // (mirrors interactiveGatewayService).
   unsubscribe = subscribeToThread(req.params.id, sendLocalEvent);
 
   // Cross-worker: also subscribe via Postgres LISTEN/NOTIFY so tokens from
@@ -556,6 +581,13 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
     if (!shouldForwardPgRunEvent(envelope)) return;
     queueOrSendEnvelope(envelope);
   });
+
+  // Under ai-runs-v2-transport, WS→SSE fallback must see Redis live tokens.
+  if (v2Transport) {
+    unsubLive = interactiveLiveBus.subscribe(req.params.id, (envelope) => {
+      queueOrSendEnvelope(envelope);
+    });
+  }
 
   const lastEventId = req.get('Last-Event-ID')?.trim() || undefined;
   // A cold page load already receives persisted messages and the authoritative

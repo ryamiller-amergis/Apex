@@ -100,12 +100,9 @@ export function createInteractiveDurableStreamBatcher(
     if (!buffer) return false;
     const { chunk, rest } = takeUtf8Prefix(buffer, maxBytes);
     if (!chunk) return false;
-    buffer = rest;
     const streamOffset = nextOffset;
     const streamEndOffset = streamOffset + chunk.length;
-    nextOffset = streamEndOffset;
     const eventId = createEventId();
-    lastWriteAt = now();
     await persist({
       eventId,
       event: {
@@ -115,6 +112,11 @@ export function createInteractiveDurableStreamBatcher(
         streamEndOffset,
       },
     });
+    // Advance only after a successful persist so failures neither drop text
+    // nor create offset holes.
+    buffer = rest;
+    nextOffset = streamEndOffset;
+    lastWriteAt = now();
     return true;
   };
 
@@ -126,14 +128,14 @@ export function createInteractiveDurableStreamBatcher(
         : Math.max(0, intervalMs - (now() - lastWriteAt));
     timer = setTimeout(() => {
       timer = null;
-      writeChain = writeChain
-        .then(async () => {
-          const wrote = await emitOneChunk();
-          if (wrote && buffer) scheduleTick();
-        })
-        .catch(() => {
-          // Persist failures propagate to callers awaiting push/flush chains.
-        });
+      // Do not swallow rejections on the chain — flush()/push() must observe
+      // persist failures. A dangling catch only prevents unhandledRejection
+      // warnings without clearing the rejection for awaiters.
+      writeChain = writeChain.then(async () => {
+        const wrote = await emitOneChunk();
+        if (wrote && buffer) scheduleTick();
+      });
+      void writeChain.catch(() => {});
     }, delay);
   };
 
@@ -165,7 +167,9 @@ export function createInteractiveDurableStreamBatcher(
           if (!wrote) break;
         }
       };
-      writeChain = writeChain.then(drain);
+      // Resume after a prior rejected chain so a later flush can drain text that
+      // remains after a failed persist (offsets were not advanced).
+      writeChain = writeChain.then(drain, drain);
       await writeChain;
     },
   };

@@ -173,7 +173,7 @@ describe('attachInteractiveThreadStream', () => {
     expect(deps.replayRunEvents).toHaveBeenCalledWith(
       't1',
       undefined,
-      500,
+      501,
       'run-current',
       'oldest',
     );
@@ -270,7 +270,7 @@ describe('attachInteractiveThreadStream', () => {
     expect(deps.replayRunEvents).toHaveBeenCalledWith(
       't1',
       'e0',
-      500,
+      501,
       undefined,
       'oldest',
     );

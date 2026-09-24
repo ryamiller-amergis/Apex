@@ -94,6 +94,17 @@ jest.mock('../services/pgNotifyService', () => ({
   subscribeRunEvents: jest.fn().mockReturnValue(() => {}),
 }));
 
+const mockLiveSubscribe = jest.fn().mockReturnValue(() => {});
+jest.mock('../services/interactiveLiveBus', () => ({
+  interactiveLiveBus: {
+    subscribe: (...args: unknown[]) => mockLiveSubscribe(...args),
+    publish: jest.fn(),
+    isEnabled: jest.fn().mockReturnValue(false),
+    init: jest.fn(),
+    shutdown: jest.fn(),
+  },
+}));
+
 jest.mock('../services/featureFlagService', () => ({
   isFeatureEnabled: jest.fn().mockResolvedValue(false),
 }));
@@ -213,6 +224,26 @@ describe('chat run-event SSE transport', () => {
         streamEndOffset: 7,
       },
     })).toBe(true);
+    expect(shouldAssignRunEventSseId({
+      ...envelope,
+      type: 'token',
+      event: {
+        type: 'token',
+        text: 'bad',
+        streamOffset: -1,
+        streamEndOffset: 0,
+      },
+    })).toBe(false);
+    expect(shouldAssignRunEventSseId({
+      ...envelope,
+      type: 'token',
+      event: {
+        type: 'token',
+        text: 'bad',
+        streamOffset: Number.NaN,
+        streamEndOffset: 0,
+      },
+    })).toBe(false);
   });
 
   it('PBI-002 AC-0 advertises event-driven authority in the initial stream status', () => {

@@ -385,6 +385,52 @@ describe('aiRunIngestService accepted events', () => {
     );
   });
 
+  it('accepts a caller-supplied progress eventId for Redis↔Postgres identity', async () => {
+    mockFindFirst.mockResolvedValue(baseRow());
+    const eventId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+
+    await ingest('project-1', 'run-1', {
+      dispatchMessageId: 'dispatch-current',
+      kind: 'progress',
+      phase: 'implementation',
+      status: 'running',
+      eventId,
+      event: {
+        type: 'token',
+        text: 'hi',
+        streamOffset: 0,
+        streamEndOffset: 2,
+      },
+    });
+
+    expect(mockNotifyRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventId,
+        type: 'token',
+        event: expect.objectContaining({
+          type: 'token',
+          text: 'hi',
+          streamOffset: 0,
+          streamEndOffset: 2,
+        }),
+      }),
+      { persist: true },
+    );
+  });
+
+  it('rejects a non-UUID progress eventId', async () => {
+    mockFindFirst.mockResolvedValue(baseRow());
+
+    await expect(
+      ingest('project-1', 'run-1', {
+        dispatchMessageId: 'dispatch-current',
+        kind: 'progress',
+        eventId: 'not-a-uuid',
+        event: { type: 'token', text: 'x' },
+      }),
+    ).rejects.toMatchObject({ code: 'AI_RUN_VALIDATION' });
+  });
+
   it('PBI-004 AC-2 / VT-04: next callback reports cancellation request', async () => {
     mockFindFirst.mockResolvedValue(baseRow({ cancelRequested: true }));
     mockReturning.mockResolvedValue([baseRow({ cancelRequested: true })]);

@@ -987,23 +987,32 @@ export function createInteractiveSessionActor(
 
       const durableBatcher = createInteractiveDurableStreamBatcher({
         persist: async ({ event, eventId }) => {
-          const matching =
-            lastMatchingLive &&
+          const matchedLive =
+            lastMatchingLive !== null &&
             lastMatchingLive.streamOffset === event.streamOffset &&
             lastMatchingLive.streamEndOffset === event.streamEndOffset &&
-            lastMatchingLive.text === event.text;
+            lastMatchingLive.text === event.text
+              ? lastMatchingLive
+              : null;
+          // Shared id when live Redis and durable Postgres share a chunk
+          // boundary; otherwise the batcher's id is published to both.
+          const sharedEventId = matchedLive ? matchedLive.eventId : eventId;
+          if (matchedLive) {
+            lastMatchingLive = null;
+          }
           await post({
             dispatchMessageId,
             attemptId,
             kind: 'progress',
             phase: 'implementation',
             status: 'running',
+            eventId: sharedEventId,
             event,
           });
-          if (!matching) {
+          if (!matchedLive) {
             await publishLiveEnvelope(
               buildOffsetLiveTokenEvent(event),
-              eventId,
+              sharedEventId,
             );
           }
         },
@@ -1022,7 +1031,10 @@ export function createInteractiveSessionActor(
             streamOffset,
             streamEndOffset,
           });
-          const eventId = await publishLiveEnvelope(tokenEvent);
+          // Allocate before Redis publish so a matching durable persist can
+          // reuse the same eventId in Postgres.
+          const eventId = randomUUID();
+          await publishLiveEnvelope(tokenEvent, eventId);
           lastMatchingLive = {
             eventId,
             streamOffset,

@@ -43,6 +43,12 @@ export type AiRunProgressIngest = AiRunIngestBase & {
   phase?: AgentRunPhase;
   status?: AgentRunEventStatus;
   event?: SseEvent;
+  /**
+   * Optional caller-supplied durable event id. When live Redis fan-out and
+   * Postgres share a chunk boundary, both sides must use the same id so
+   * reconnect dedupe works. Inserts use ON CONFLICT DO NOTHING.
+   */
+  eventId?: string;
 };
 
 export type AiRunCancelAckIngest = AiRunIngestBase & {
