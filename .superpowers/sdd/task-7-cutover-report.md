@@ -92,3 +92,71 @@ npx playwright test tests/e2e/specs/ai-runs-interactive-transport.spec.ts --proj
 - Playwright may skip when the local Apex E2E server or WebSocket routing is
   unavailable; unit/build verification is the required gate.
 - Unrelated dirty infra / Terraform files were not staged.
+
+---
+
+## REQUEST CHANGES remediation — real no-fallback guard
+
+**Base:** `6542cbf9`  
+**Commit message:** `fix: make interactive v2 no-fallback guard real`
+
+### What changed
+
+1. **Per-stage failure injection is real**
+   - `failStage(stage)` builds a `createDurableInteractiveTurnService` harness
+     that fails only the named stage:
+     - `attachment-validation` / `attachment-upload` via attachment store
+     - `classification` via mocked `classifyInteractiveTurn`
+     - `grounding` via `resolveGrounding` rejection (workspace skill)
+     - `database` / `outbox` via repository `admit` (database succeeds before
+       outbox throws)
+   - Each case asserts `reached` includes that stage and later stages did not
+     run.
+
+2. **Legacy callbacks are wired into the SUT**
+   - `runLegacy` mirrors `chatAgentService` enabled-path shape: it calls
+     `sendMessageLegacy` → `postLegacyActor` → `runInProcess`.
+   - Those spies are passed into `createInteractiveWorkflowRouter.route`, so
+     `.not.toHaveBeenCalled()` is meaningful when flag-on admit rejects.
+   - Dedicated test covers all six stages for the chatAgentService-shaped
+     callback contract.
+
+3. **Static scan widened to the durable retry call graph**
+   - Walks transitive relative imports from durable service/repository,
+     attachment store, classifier, deadlines, tool-grant crypto, and outbox
+     repository under `src/server` + `src/shared`.
+   - Stops at `chatAgentService` (legacy execution). Documents the only
+     allowed edges: `threadAccessService`, `adrService`,
+     `designModuleService` → `chatAgentService` (thread helpers only).
+   - Core durable modules must not reference `chatAgentService`.
+   - `chat.ts` retry handler must call `durableInteractiveTurnService.retry`
+     and must not call `sendMessage` / `sendMessageLegacy` /
+     `tryDispatchInteractiveTurn` / `runInProcess`.
+
+4. **E2E retry no longer soft-passes**
+   - SSE error payload uses `error` (not `message`).
+   - Waits for `chat-run-terminal`, then requires
+     `interview-retry-message` (skip with explicit reason if missing).
+   - Always asserts retry POST count === 1 after click.
+
+### Verification
+
+```text
+npx jest src/server/__tests__/interactiveV2NoFallback.test.ts \
+  src/server/__tests__/interactiveWorkflowRouter.test.ts \
+  src/server/__tests__/chatAgentService.test.ts \
+  src/client/hooks/__tests__/useAgentChatSession.test.ts --runInBand
+→ 4 suites, 178 passed
+
+npm run build:server
+→ PASS
+
+npx tsc -p tsconfig.client.json --noEmit
+→ PASS
+```
+
+### Remaining gaps
+
+- Playwright E2E still deferred when `TEST_DATABASE_URL` / local Apex E2E
+  server is unavailable (OK to defer per review).
+- Unrelated dirty infra / Terraform files were not staged.

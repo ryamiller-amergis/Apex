@@ -336,7 +336,7 @@ test.describe('durable interactive transport cutover @ai-runs-v2-transport', () 
         body: [
           `data: ${JSON.stringify({
             type: 'error',
-            message: 'Actor failed',
+            error: 'Actor failed',
             runId: RUN_ID,
           })}`,
           '',
@@ -349,13 +349,20 @@ test.describe('durable interactive transport cutover @ai-runs-v2-transport', () 
     await loginAsPersona('ba');
     await page.goto(`/backlog/interview/${interviewId}`);
 
-    const retryButton = page.getByRole('button', { name: /retry/i }).first();
-    if (await retryButton.isVisible().catch(() => false)) {
-      await retryButton.click();
-      await expect.poll(() => retryPosts).toBe(1);
-    }
-
     await expect(page.getByText('Original question')).toHaveCount(1);
+    await expect(page.getByTestId('chat-run-terminal')).toBeVisible({
+      timeout: 15_000,
+    });
+
+    const retryButton = page.getByTestId('interview-retry-message');
+    if (!(await retryButton.isVisible().catch(() => false))) {
+      test.skip(
+        true,
+        'Retry control missing: expected interview-retry-message after durable run failure',
+      );
+    }
+    await retryButton.click();
+    await expect.poll(() => retryPosts).toBe(1);
     expect(messagePosts).toBe(0);
   });
 
