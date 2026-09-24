@@ -9,6 +9,7 @@ import { DiagramsView } from '../DiagramsView';
 
 const mockCan = jest.fn((key: string) => key === 'diagram:create' || key === 'diagram:edit' || key === 'diagram:view');
 const mockNavigate = jest.fn();
+const mockApplyScene = jest.fn(async () => {});
 
 jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: () => ({ can: mockCan }),
@@ -43,7 +44,7 @@ jest.mock('../ExcalidrawAdapter', () => {
         exportPng: async () => new Blob(['x'], { type: 'image/png' }),
         exportSvg: async () => document.createElementNS('http://www.w3.org/2000/svg', 'svg'),
         exportNativeJson: async () => '{}',
-        applyScene: () => {},
+        applyScene: mockApplyScene,
       }));
       ReactActual.useEffect(() => {
         props.onCanvasHydrated?.(props.scene);
@@ -104,6 +105,8 @@ function renderEditor(mode: 'new' | 'existing' = 'new', diagramId: string | null
 describe('DiagramEditorView / DiagramsView — FEAT-003', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockApplyScene.mockReset();
+    mockApplyScene.mockResolvedValue(undefined);
     mockCan.mockImplementation(
       (key: string) => key === 'diagram:create' || key === 'diagram:edit' || key === 'diagram:view',
     );
@@ -182,6 +185,36 @@ describe('DiagramEditorView / DiagramsView — FEAT-003', () => {
         credentials: 'include',
       }),
     );
+  });
+
+  it('keeps the prompt open and preserves the draft when materialization fails', async () => {
+    const user = userEvent.setup();
+    mockApplyScene.mockRejectedValueOnce(new Error('Apex could not draw that Diagram'));
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        title: 'Broken mermaid graph',
+        scene: {
+          elements: [],
+          appState: { apexAiMermaid: 'flowchart TD\n  end["Auth [JWT]"]' },
+          files: {},
+        },
+      }),
+    }) as jest.Mock;
+
+    renderEditor('new');
+    await user.click(screen.getByTestId('diagram-build-with-apex-button'));
+    await user.type(screen.getByTestId('diagram-ai-prompt'), 'Show auth and cache');
+    await user.click(screen.getByTestId('diagram-ai-generate'));
+
+    await waitFor(() => expect(screen.getByTestId('diagram-ai-error')).toHaveTextContent(
+      'Apex could not draw that Diagram',
+    ));
+    expect(screen.getByTestId('diagram-ai-dialog')).toBeInTheDocument();
+    expect(screen.getByTestId('diagram-editor-canvas')).toHaveAttribute('data-element-count', '0');
+    expect(screen.getByTestId('diagram-title-input')).toHaveValue(DIAGRAM_DEFAULT_TITLE);
+    expect(screen.queryByTestId('diagram-unsaved-indicator')).not.toBeInTheDocument();
   });
 
   it('V1-2 keeps the prompt open and preserves the draft when generation fails', async () => {

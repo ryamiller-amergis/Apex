@@ -6,8 +6,25 @@ export interface GraphForMermaid {
 /** Transient appState key — client materializes to Excalidraw elements; not persisted. */
 export const APEX_AI_MERMAID_APP_STATE_KEY = 'apexAiMermaid';
 
+/** Flowchart keywords that mermaid-to-excalidraw cannot parse as node ids. */
+const MERMAID_RESERVED_IDS = new Set([
+  'end',
+  'subgraph',
+  'graph',
+  'flowchart',
+  'style',
+  'class',
+  'classdef',
+  'click',
+  'direction',
+  'linkstyle',
+]);
+
 function mermaidNodeId(rawId: string, used: Set<string>): string {
-  const base = rawId.replace(/[^a-zA-Z0-9_]/g, '_').replace(/^(\d)/, 'n$1') || 'node';
+  let base = rawId.replace(/[^a-zA-Z0-9_]/g, '_').replace(/^(\d)/, 'n$1') || 'node';
+  if (MERMAID_RESERVED_IDS.has(base.toLowerCase())) {
+    base = `n_${base}`;
+  }
   let candidate = base;
   let suffix = 1;
   while (used.has(candidate)) {
@@ -22,6 +39,7 @@ function escapeMermaidLabel(label: string): string {
   return label
     .replace(/\\/g, '\\\\')
     .replace(/"/g, '#quot;')
+    .replace(/]/g, '#93;')
     .replace(/\n/g, ' ');
 }
 

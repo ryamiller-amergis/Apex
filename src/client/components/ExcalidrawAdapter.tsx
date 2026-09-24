@@ -207,8 +207,9 @@ export const ExcalidrawAdapter = React.forwardRef(function ExcalidrawAdapter(
   const hostEpoch = sceneEpoch ?? 'initial';
 
   const pushSceneToCanvas = useCallback(async (nextScene: ExcalidrawScene) => {
-    const api = apiRef.current;
-    if (!api || !mod) return false;
+    if (!mod) return false;
+    // Parse before checking the imperative API so Mermaid failures surface to
+    // applyScene callers instead of being queued as a pending empty draft.
     const materialized = await materializeDiagramScene(
       mod.convertToExcalidrawElements as (
         skeleton: unknown[] | null,
@@ -216,6 +217,8 @@ export const ExcalidrawAdapter = React.forwardRef(function ExcalidrawAdapter(
       ) => unknown[],
       nextScene,
     );
+    const api = apiRef.current;
+    if (!api) return false;
     api.updateScene({
       elements: materialized.elements as never[],
       appState: {

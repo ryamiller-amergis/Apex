@@ -63,6 +63,22 @@ describe('diagramAiService', () => {
     );
   });
 
+  it('renames reserved node ids and escapes labels so Mermaid can parse the flowchart', () => {
+    const mermaid = graphToMermaid({
+      nodes: [
+        { id: 'end', label: 'Auth [JWT]' },
+        { id: 'cache', label: 'Cache [Redis]' },
+      ],
+      edges: [{ from: 'end', to: 'cache' }],
+    });
+
+    expect(mermaid).toContain('flowchart TD');
+    expect(mermaid).not.toMatch(/(?:^|\s)end\[/);
+    expect(mermaid).toContain('n_end["Auth [JWT#93;"]');
+    expect(mermaid).toContain('cache["Cache [Redis#93;"]');
+    expect(mermaid).toContain('n_end --> cache');
+  });
+
   it('V1-4 rejects an empty prompt before invoking Bedrock', async () => {
     await expect(generateDiagramFromPrompt('project-a', '   ', 'user-1'))
       .rejects.toBeInstanceOf(DiagramValidationError);

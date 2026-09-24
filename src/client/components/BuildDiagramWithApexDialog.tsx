@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -18,7 +18,7 @@ type FormValues = z.infer<typeof formSchema>;
 
 interface BuildDiagramWithApexDialogProps {
   projectId: string;
-  onApply: (result: GenerateDiagramResponse) => void;
+  onApply: (result: GenerateDiagramResponse) => void | Promise<void>;
   onClose: () => void;
 }
 
@@ -27,6 +27,7 @@ export const BuildDiagramWithApexDialog: React.FC<BuildDiagramWithApexDialogProp
   onApply,
   onClose,
 }) => {
+  const [applyError, setApplyError] = useState<string | null>(null);
   const generation = useGenerateDiagram(projectId);
   const {
     register,
@@ -38,11 +39,18 @@ export const BuildDiagramWithApexDialog: React.FC<BuildDiagramWithApexDialogProp
   });
 
   const submit = handleSubmit(async (values) => {
+    setApplyError(null);
     try {
       const result = await generation.mutateAsync(values);
-      onApply(result);
-    } catch {
-      // The mutation error stays visible in the dialog so the current draft is untouched.
+      await onApply(result);
+    } catch (error) {
+      // Keep the dialog open and the current draft untouched. Mutation errors
+      // land on generation.error; apply/materialize errors need local state.
+      setApplyError(
+        error instanceof Error && error.message
+          ? error.message
+          : 'Apex could not build that Diagram',
+      );
     }
   });
 
@@ -83,13 +91,13 @@ export const BuildDiagramWithApexDialog: React.FC<BuildDiagramWithApexDialogProp
               {errors.prompt.message}
             </p>
           )}
-          {generation.error && (
+          {(generation.error || applyError) && (
             <p
               className={styles.error}
               role="alert"
               {...{ 'data-testid': 'diagram-ai-error' }}
             >
-              {generation.error.message}
+              {applyError ?? generation.error?.message}
             </p>
           )}
 
