@@ -107,6 +107,14 @@ function nodeElementId(nodeId: string): string {
   return `ai-node-${nodeId}`;
 }
 
+/** Approximate node center for grid layout (boxes auto-size to label text). */
+function nodeCenter(node: PositionedNode): { x: number; y: number } {
+  return {
+    x: node.x + NODE_CELL_WIDTH / 2,
+    y: node.y + NODE_CELL_HEIGHT / 2,
+  };
+}
+
 /**
  * Excalidraw skeleton elements (labels on shapes). The client runs
  * convertToExcalidrawElements, which binds labels and sizes boxes to fit text.
@@ -119,23 +127,6 @@ function buildScene(graph: GeneratedGraph): ExcalidrawScene {
     y: 100 + Math.floor(index / columns) * (NODE_CELL_HEIGHT + ROW_GAP),
   }));
   const positions = new Map(positioned.map((node) => [node.id, node]));
-
-  const arrows = graph.edges.map((edge, index) => {
-    const from = positions.get(edge.from)!;
-    const to = positions.get(edge.to)!;
-    return {
-      type: 'arrow',
-      id: `ai-arrow-${index}`,
-      x: from.x,
-      y: from.y,
-      start: { id: nodeElementId(edge.from) },
-      end: { id: nodeElementId(edge.to) },
-      strokeColor: '#1e1e1e',
-      strokeWidth: 2,
-      endArrowhead: 'arrow',
-      ...(edge.label ? { label: { text: edge.label } } : {}),
-    };
-  });
 
   const nodeElements = positioned.map((node) => ({
     type: 'rectangle',
@@ -155,9 +146,30 @@ function buildScene(graph: GeneratedGraph): ExcalidrawScene {
     },
   }));
 
-  // convertToExcalidrawElements looks up arrow start/end ids in already-converted
-  // elements, so bound rectangles must appear before the arrows that reference them.
+  const arrows = graph.edges.map((edge, index) => {
+    const from = positions.get(edge.from)!;
+    const to = positions.get(edge.to)!;
+    const start = nodeCenter(from);
+    const end = nodeCenter(to);
+    const deltaX = end.x - start.x;
+    const deltaY = end.y - start.y;
+    return {
+      type: 'arrow',
+      id: `ai-arrow-${index}`,
+      x: start.x,
+      y: start.y,
+      width: deltaX,
+      height: deltaY,
+      points: [[0, 0], [deltaX, deltaY]],
+      strokeColor: '#1e1e1e',
+      strokeWidth: 2,
+      endArrowhead: 'arrow',
+      ...(edge.label ? { label: { text: edge.label } } : {}),
+    };
+  });
+
   return {
+    // Shapes before arrows so convertToExcalidrawElements can resolve labels first.
     elements: [...nodeElements, ...arrows],
     appState: {
       viewBackgroundColor: '#ffffff',
