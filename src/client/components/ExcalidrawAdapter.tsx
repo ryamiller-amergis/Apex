@@ -3,8 +3,8 @@ import { ErrorBoundary } from 'react-error-boundary';
 import type { ExcalidrawScene } from '../../shared/types/diagram';
 import { isDarkFamilyTheme } from '../../shared/walkthroughAssets';
 import { useAppShell } from '../hooks/useAppShell';
-import { convertDiagramElements } from '../utils/diagramConvert';
-import { cloneDiagramScene, fromDiagramScene, toDiagramScene } from '../utils/diagramScene';
+import { materializeDiagramScene } from '../utils/diagramMaterialize';
+import { cloneDiagramScene, toDiagramScene } from '../utils/diagramScene';
 import type { ThumbnailSource } from '../utils/diagramThumbnail';
 import styles from './ExcalidrawAdapter.module.css';
 
@@ -19,7 +19,7 @@ export interface ExcalidrawAdapterHandle {
    * Replace the live canvas without remounting Excalidraw (Build with Apex).
    * No-op until the imperative API is ready.
    */
-  applyScene: (scene: ExcalidrawScene) => void;
+  applyScene: (scene: ExcalidrawScene) => Promise<void>;
   exportPng: () => Promise<Blob>;
   exportSvg: () => Promise<SVGSVGElement>;
   exportNativeJson: () => Promise<string>;
@@ -86,17 +86,25 @@ function ExcalidrawHost({
   onApiRef.current = onApi;
   const onSceneChangeRef = useRef(onSceneChange);
   onSceneChangeRef.current = onSceneChange;
-  const initial = useMemo(() => fromDiagramScene(initialScene), [initialScene]);
-  const initialElements = useMemo(
-    () => convertDiagramElements(
-      mod.convertToExcalidrawElements as (
-        skeleton: unknown[] | null,
-        opts?: { regenerateIds: boolean },
-      ) => unknown[],
-      initial.elements,
-    ),
-    [mod, initial.elements],
-  );
+  const [materializedInitial, setMaterializedInitial] = useState<ExcalidrawScene | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const materialized = await materializeDiagramScene(
+        mod.convertToExcalidrawElements as (
+          skeleton: unknown[] | null,
+          opts?: { regenerateIds: boolean },
+        ) => unknown[],
+        initialScene,
+      );
+      if (cancelled) return;
+      setMaterializedInitial(materialized);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mod, initialScene]);
   const libraryReturnUrl = `${window.location.origin}${window.location.pathname}`;
 
   useEffect(() => {
@@ -128,6 +136,19 @@ function ExcalidrawHost({
     );
   }, []);
 
+  if (!materializedInitial) {
+    return (
+      <div
+        className={styles.loading}
+        role="status"
+        aria-live="polite"
+        {...{ 'data-testid': 'diagram-editor-canvas-preparing' }}
+      >
+        Preparing canvas…
+      </div>
+    );
+  }
+
   return (
     <div
       className={[styles.canvas, fullscreen && styles.canvasFullscreen].filter(Boolean).join(' ')}
@@ -138,12 +159,12 @@ function ExcalidrawHost({
         excalidrawAPI={handleApi}
         theme={theme}
         initialData={{
-          elements: initialElements as never[],
+          elements: materializedInitial.elements as never[],
           appState: {
-            ...(initial.appState as Record<string, unknown>),
+            ...(materializedInitial.appState as Record<string, unknown>),
             theme,
           } as never,
-          files: initial.files as never,
+          files: materializedInitial.files as never,
         }}
         viewModeEnabled={!editable}
         libraryReturnUrl={libraryReturnUrl}
@@ -185,29 +206,28 @@ export const ExcalidrawAdapter = React.forwardRef(function ExcalidrawAdapter(
   const pendingSceneRef = useRef<ExcalidrawScene | null>(null);
   const hostEpoch = sceneEpoch ?? 'initial';
 
-  const pushSceneToCanvas = useCallback((nextScene: ExcalidrawScene) => {
+  const pushSceneToCanvas = useCallback(async (nextScene: ExcalidrawScene) => {
     const api = apiRef.current;
     if (!api || !mod) return false;
-    const { elements, appState } = fromDiagramScene(nextScene);
-    const converted = convertDiagramElements(
+    const materialized = await materializeDiagramScene(
       mod.convertToExcalidrawElements as (
         skeleton: unknown[] | null,
         opts?: { regenerateIds: boolean },
       ) => unknown[],
-      elements,
+      nextScene,
     );
     api.updateScene({
-      elements: converted as never[],
+      elements: materialized.elements as never[],
       appState: {
-        ...appState,
+        ...materialized.appState,
         theme: excalidrawTheme,
       },
     });
     return true;
   }, [mod, excalidrawTheme]);
 
-  const applyScene = useCallback((nextScene: ExcalidrawScene) => {
-    if (!pushSceneToCanvas(nextScene)) {
+  const applyScene = useCallback(async (nextScene: ExcalidrawScene) => {
+    if (!await pushSceneToCanvas(nextScene)) {
       pendingSceneRef.current = cloneDiagramScene(nextScene);
     }
   }, [pushSceneToCanvas]);
@@ -300,14 +320,16 @@ export const ExcalidrawAdapter = React.forwardRef(function ExcalidrawAdapter(
     const pending = pendingSceneRef.current;
     if (pending) {
       pendingSceneRef.current = null;
-      if (pushSceneToCanvas(pending)) {
-        setTimeout(() => {
-          const live = readLiveScene();
-          onCanvasHydratedRef.current?.(live);
-        }, 0);
-        return;
-      }
-      pendingSceneRef.current = pending;
+      void (async () => {
+        if (await pushSceneToCanvas(pending)) {
+          setTimeout(() => {
+            const live = readLiveScene();
+            onCanvasHydratedRef.current?.(live);
+          }, 0);
+          return;
+        }
+        pendingSceneRef.current = pending;
+      })();
     }
     if (didHydrateRef.current) {
       return;

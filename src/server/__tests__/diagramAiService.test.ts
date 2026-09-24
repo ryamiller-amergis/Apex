@@ -1,4 +1,8 @@
 import { DiagramAiGenerationError, DiagramValidationError } from '../../shared/types/diagram';
+import {
+  APEX_AI_MERMAID_APP_STATE_KEY,
+  graphToMermaid,
+} from '../../shared/utils/graphToMermaid';
 import { invokeBedrockText } from '../services/bedrockService';
 import { generateDiagramFromPrompt } from '../services/diagramAiService';
 
@@ -13,7 +17,7 @@ describe('diagramAiService', () => {
     jest.clearAllMocks();
   });
 
-  it('V1-1/V1-4 turns a bounded Bedrock graph into an editable Excalidraw scene', async () => {
+  it('V1-1/V1-4 turns a bounded Bedrock graph into Mermaid for client materialization', async () => {
     mockedInvokeBedrockText.mockResolvedValue(JSON.stringify({
       title: 'Order processing',
       nodes: [
@@ -34,41 +38,19 @@ describe('diagramAiService', () => {
     );
 
     expect(result.title).toBe('Order processing');
-    expect(result.scene.files).toEqual({});
-    expect(result.scene.elements.filter((element) => (
-      (element as { type?: string }).type === 'rectangle'
-    ))).toHaveLength(3);
-    expect(result.scene.elements.filter((element) => (
-      (element as { type?: string }).type === 'text'
-    ))).toHaveLength(0);
-    const rectangle = result.scene.elements.find((element) => (
-      (element as { type?: string }).type === 'rectangle'
-    )) as { label?: { text?: string; fontFamily?: number } };
-    expect(rectangle.label?.text).toBe('Receive order');
-    expect(rectangle.label?.fontFamily).toBe(1);
-    expect(result.scene.elements.filter((element) => (
-      (element as { type?: string }).type === 'arrow'
-    ))).toHaveLength(2);
-    const elementTypes = result.scene.elements.map(
-      (element) => (element as { type?: string }).type,
-    );
-    expect(elementTypes.lastIndexOf('rectangle')).toBeGreaterThan(-1);
-    expect(elementTypes.indexOf('arrow')).toBeGreaterThan(
-      elementTypes.lastIndexOf('rectangle'),
-    );
-    const arrow = result.scene.elements.find((element) => (
-      (element as { type?: string }).type === 'arrow'
-    )) as {
-      endArrowhead?: string | null;
-      start?: { id?: string; type?: string };
-      end?: { id?: string; type?: string };
-      points?: unknown;
-      label?: unknown;
-    };
-    expect(arrow.endArrowhead).toBe('arrow');    expect(arrow.start).toEqual({ type: 'rectangle', id: 'ai-node-request' });
-    expect(arrow.end).toEqual({ type: 'rectangle', id: 'ai-node-validate' });
-    expect(arrow.points).toBeUndefined();
-    expect(arrow.label).toBeUndefined();
+    expect(result.scene.elements).toEqual([]);
+    const mermaid = result.scene.appState[APEX_AI_MERMAID_APP_STATE_KEY];
+    expect(typeof mermaid).toBe('string');
+    expect(mermaid).toContain('flowchart TD');
+    expect(mermaid).toContain('Receive order');
+    expect(mermaid).toContain('request --> validate');
+    expect(graphToMermaid({
+      nodes: [
+        { id: 'request', label: 'Receive order' },
+        { id: 'validate', label: 'Validate payment' },
+      ],
+      edges: [{ from: 'request', to: 'validate' }],
+    })).toContain('request --> validate');
     expect(mockedInvokeBedrockText).toHaveBeenCalledWith(
       expect.stringContaining('Show how an order moves from intake to shipping'),
       {
@@ -109,8 +91,8 @@ describe('diagramAiService', () => {
 
     const result = await generateDiagramFromPrompt('project-a', 'Build a flow', 'user-1');
 
-    expect(result.scene.elements.filter((element) => (
-      (element as { type?: string }).type === 'arrow'
-    ))).toHaveLength(1);
+    const mermaid = result.scene.appState[APEX_AI_MERMAID_APP_STATE_KEY] as string;
+    expect(mermaid).toContain('one --> two');
+    expect(mermaid).not.toContain('missing');
   });
 });

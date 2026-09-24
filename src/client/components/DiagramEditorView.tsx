@@ -134,9 +134,9 @@ export const DiagramEditorView: React.FC<DiagramEditorViewProps> = ({
     }
   }, [editor]);
 
-  const handleAiApply = useCallback((result: GenerateDiagramResponse) => {
+  const handleAiApply = useCallback(async (result: GenerateDiagramResponse) => {
     editor.replaceDraft(result.scene, result.title);
-    adapterRef.current?.applyScene?.(result.scene);
+    await adapterRef.current?.applyScene?.(result.scene);
     setShowAiBuilder(false);
   }, [editor]);
 
