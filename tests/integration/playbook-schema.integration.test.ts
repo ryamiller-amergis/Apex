@@ -678,9 +678,19 @@ describe('VT-02 — the playbook migrations roll back cleanly', () => {
     if (firstPlaybook < 0) {
       throw new Error('Missing the first Playbook migration (20260918120000).');
     }
-    // Down from HEAD through the first Playbook file, including later non-Playbook files that
-    // landed after it. A fixed count goes stale the moment another migration is added.
-    await migrateDown(rollbackScratch.connectionString, files.length - firstPlaybook);
+    const lastPlaybook = files.findLastIndex((file) =>
+      file.startsWith('20260918') || file.startsWith('20260919') || file.startsWith('20260922')
+    );
+    // Later files on main disable their down path. Un-record them so this suite can reverse the
+    // Playbook files without asking node-pg-migrate to run a disabled down.
+    for (const file of files.slice(lastPlaybook + 1)) {
+      const name = file.replace(/\.sql$/i, '');
+      await rollbackClient.query(
+        'DELETE FROM pgmigrations WHERE name = $1 OR name = $2',
+        [name, name.split('_')[0]],
+      );
+    }
+    await migrateDown(rollbackScratch.connectionString, lastPlaybook - firstPlaybook + 1);
 
     const { rows: tables } = await rollbackClient.query(
       `SELECT table_name FROM information_schema.tables
