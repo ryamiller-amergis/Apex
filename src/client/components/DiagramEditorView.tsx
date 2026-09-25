@@ -1,8 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import type { GenerateDiagramResponse } from '../../shared/types/diagram';
 import { useAppShell } from '../hooks/useAppShell';
 import { useDiagramEditor } from '../hooks/useDiagramEditor';
 import type { ExcalidrawAdapterHandle } from './ExcalidrawAdapter';
+import { AiSparkleIcon } from './AiSparkleIcon';
+import { BuildDiagramWithApexDialog } from './BuildDiagramWithApexDialog';
 import { ExcalidrawAdapter } from './ExcalidrawAdapter';
 import { DiagramExportMenu } from './DiagramExportMenu';
 import { DiagramTitleEditor } from './DiagramTitleEditor';
@@ -51,6 +54,7 @@ export const DiagramEditorView: React.FC<DiagramEditorViewProps> = ({
   const [isReloading, setIsReloading] = useState(false);
   const [showConflict, setShowConflict] = useState(false);
   const [showShare, setShowShare] = useState(false);
+  const [showAiBuilder, setShowAiBuilder] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   /** Pending in-app leave path while dirty — Apex uses BrowserRouter, so useBlocker is unavailable. */
   const [pendingLeavePath, setPendingLeavePath] = useState<string | null>(null);
@@ -130,6 +134,12 @@ export const DiagramEditorView: React.FC<DiagramEditorViewProps> = ({
     }
   }, [editor]);
 
+  const handleAiApply = useCallback(async (result: GenerateDiagramResponse) => {
+    await adapterRef.current?.applyScene?.(result.scene);
+    editor.replaceDraft(result.scene, result.title);
+    setShowAiBuilder(false);
+  }, [editor]);
+
   if (editor.isLoading) {
     return (
       <div className={styles.page} {...{ 'data-testid': 'diagram-editor-loading' }}>
@@ -199,6 +209,18 @@ export const DiagramEditorView: React.FC<DiagramEditorViewProps> = ({
         />
 
         <div className={styles.toolbarActions}>
+          {mode === 'new' && editable && (
+            <button
+              type="button"
+              className={styles.aiBtn}
+              onClick={() => setShowAiBuilder(true)}
+              {...{ 'data-testid': 'diagram-build-with-apex-button' }}
+            >
+              <AiSparkleIcon size={14} className={styles.aiSparkle} />
+              Build with Apex
+            </button>
+          )}
+
           {viewOnly && (
             <span
               className={styles.unsaved}
@@ -296,9 +318,9 @@ export const DiagramEditorView: React.FC<DiagramEditorViewProps> = ({
 
       <div className={styles.canvasWrap}>
         <ExcalidrawAdapter
-          key={canvasInstanceKey}
           ref={adapterRef}
           scene={editor.scene}
+          sceneEpoch={canvasInstanceKey}
           editable={editable}
           fullscreen={isFullscreen}
           onSceneChange={editor.onSceneChange}
@@ -337,6 +359,15 @@ export const DiagramEditorView: React.FC<DiagramEditorViewProps> = ({
           diagramTitle={editor.title}
           onClose={() => setShowShare(false)}
           {...{ 'data-testid': 'share-diagram-dialog' }}
+        />
+      )}
+
+      {showAiBuilder && (
+        <BuildDiagramWithApexDialog
+          projectId={projectId}
+          onApply={handleAiApply}
+          onClose={() => setShowAiBuilder(false)}
+          {...{ 'data-testid': 'diagram-ai-builder-dialog' }}
         />
       )}
     </div>
