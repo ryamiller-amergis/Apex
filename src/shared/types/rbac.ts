@@ -76,6 +76,17 @@ export interface UpdateRolePermissionsRequest {
   permissionIds: string[];
 }
 
+export interface RbacConfigurationWarning {
+  code: 'PLAYBOOK_AUTHOR_WITHOUT_RUN';
+  message: string;
+  permissionKeys: ['playbooks:author', 'playbooks:run'];
+}
+
+export interface RbacMutationResponse {
+  ok: true;
+  warnings: RbacConfigurationWarning[];
+}
+
 export interface CreateRoleRequest {
   name: string;
   description?: string;

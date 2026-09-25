@@ -41,6 +41,15 @@ export interface DocumentValidationAdapter {
   onValidationComplete?(scorecard: ValidationScorecard): Promise<void>;
 }
 
+export type ValidationIngestOutcome =
+  | { kind: 'success'; scorecardRaw: string | ValidationScorecard; reportMd?: string }
+  | { kind: 'timeout'; reason: string }
+  | { kind: 'unusable'; reason: string };
+
+export type ValidationIngestResult =
+  | { disposition: 'applied'; scorecard: ValidationScorecard }
+  | { disposition: 'discarded_stale' };
+
 const activeValidationWatchers = new Map<string, ReturnType<typeof setInterval>>();
 
 export function stopDocumentValidationWatcher(documentId: string): void {
@@ -66,6 +75,52 @@ async function cleanupWorkspace(threadId: string): Promise<void> {
       fs.rmSync(row.workspaceDir, { recursive: true, force: true });
     }
   } catch { /* non-fatal */ }
+}
+
+/**
+ * The only validation-outcome transition. It arbitrates the active thread
+ * before persisting status/score state or running completion effects.
+ */
+export async function ingestValidationScorecard(
+  adapter: DocumentValidationAdapter,
+  validationThreadId: string,
+  outcome: ValidationIngestOutcome,
+): Promise<ValidationIngestResult> {
+  if (!(await adapter.isCurrentValidationThread(validationThreadId))) {
+    console.log(
+      `[validationTransition] Discarded stale result — thread ${validationThreadId} no longer active ` +
+      `(documentId=${adapter.getDocumentId()}, outcome=${outcome.kind})`,
+    );
+    return { disposition: 'discarded_stale' };
+  }
+
+  let scorecard: ValidationScorecard;
+  let reportMd: string | undefined;
+  if (outcome.kind === 'success') {
+    try {
+      scorecard = typeof outcome.scorecardRaw === 'string'
+        ? parseAgentValidationScorecard(outcome.scorecardRaw)
+        : outcome.scorecardRaw;
+      reportMd = outcome.reportMd;
+    } catch {
+      scorecard = buildUnusableValidationScorecard(NO_SCORECARD_REASON);
+    }
+  } else {
+    scorecard = buildUnusableValidationScorecard(outcome.reason);
+  }
+
+  await adapter.updateDbForValidationResult(
+    scorecard,
+    reportMd ?? generateFallbackReport(scorecard),
+  );
+  if (adapter.onValidationComplete) {
+    await adapter.onValidationComplete(scorecard);
+  }
+  console.log(
+    `[validationTransition] Applied — documentId=${adapter.getDocumentId()} ` +
+    `threadId=${validationThreadId} outcome=${outcome.kind}`,
+  );
+  return { disposition: 'applied', scorecard };
 }
 
 export async function autoStartDocumentValidation(adapter: DocumentValidationAdapter): Promise<void> {
@@ -217,7 +272,10 @@ export function startDocumentValidationWatcher(
     if (attempts > VALIDATION_WATCHER_MAX_ATTEMPTS) {
       finish();
       console.warn(`[documentValidationWatcher] Timed out (documentId=${documentId})`);
-      await persistUnusableValidationResult(adapter, VALIDATION_TIMEOUT_REASON, validationThreadId);
+      await ingestValidationScorecard(adapter, validationThreadId, {
+        kind: 'timeout',
+        reason: VALIDATION_TIMEOUT_REASON,
+      });
       return;
     }
 
@@ -236,7 +294,10 @@ export function startDocumentValidationWatcher(
       ) {
         finish();
         console.warn(`[documentValidationWatcher] Agent completed without scorecard (documentId=${documentId})`);
-        await persistUnusableValidationResult(adapter, NO_SCORECARD_REASON, validationThreadId);
+        await ingestValidationScorecard(adapter, validationThreadId, {
+          kind: 'unusable',
+          reason: NO_SCORECARD_REASON,
+        });
       }
       return;
     }
@@ -244,25 +305,20 @@ export function startDocumentValidationWatcher(
     finish();
 
     try {
-      const isCurrent = await adapter.isCurrentValidationThread(validationThreadId);
-      if (!isCurrent) {
-        console.log(`[documentValidationWatcher] Discarded stale result — thread ${validationThreadId} no longer active (documentId=${documentId})`);
-        cleanupWorkspace(validationThreadId);
-        return;
-      }
-
-      const scorecard = parseAgentValidationScorecard(scorecardRaw);
-      const reportMd = readOutputValidationScorecardMd(validationThreadId) ?? generateFallbackReport(scorecard);
-      await adapter.updateDbForValidationResult(scorecard, reportMd);
-      console.log(`[documentValidationWatcher] Scorecard synced — score=${scorecard.overall_score} is_ready=${scorecard.is_ready} (documentId=${documentId})`);
+      const result = await ingestValidationScorecard(adapter, validationThreadId, {
+        kind: 'success',
+        scorecardRaw,
+        reportMd: readOutputValidationScorecardMd(validationThreadId) ?? undefined,
+      });
       cleanupWorkspace(validationThreadId);
-
-      if (adapter.onValidationComplete) {
-        await adapter.onValidationComplete(scorecard);
+      if (result.disposition === 'applied') {
+        console.log(
+          `[documentValidationWatcher] Scorecard synced — score=${result.scorecard.overall_score} ` +
+          `is_ready=${result.scorecard.is_ready} (documentId=${documentId})`,
+        );
       }
     } catch (err) {
-      console.error(`[documentValidationWatcher] Failed to parse/sync scorecard (documentId=${documentId})`, err);
-      await persistUnusableValidationResult(adapter, NO_SCORECARD_REASON, validationThreadId);
+      console.error(`[documentValidationWatcher] Failed to sync scorecard (documentId=${documentId})`, err);
     }
   }, VALIDATION_WATCHER_INTERVAL_MS);
 
@@ -286,12 +342,9 @@ export async function persistUnusableValidationResult(
   reason: string,
   validationThreadId?: string | null,
 ): Promise<void> {
-  if (validationThreadId) {
-    const isCurrent = await adapter.isCurrentValidationThread(validationThreadId);
-    if (!isCurrent) return;
-  }
-  const scorecard = buildUnusableValidationScorecard(reason);
-  await adapter.updateDbForValidationResult(scorecard, generateFallbackReport(scorecard));
+  const threadId = validationThreadId ?? adapter.getValidationThreadId();
+  if (!threadId) return;
+  await ingestValidationScorecard(adapter, threadId, { kind: 'unusable', reason });
 }
 
 export function generateFallbackReport(scorecard: ValidationScorecard): string {

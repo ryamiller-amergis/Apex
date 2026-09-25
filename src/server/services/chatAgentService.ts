@@ -68,11 +68,11 @@ import {
   skillNameFromPath,
   skillPathCandidates,
 } from '../../shared/skillPaths';
-import { syncPrdContent } from './prdService';
+import { createPrdValidationAdapter, syncPrdContent } from './prdService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import {
+  createDesignDocValidationAdapter,
   syncDesignDocContent,
-  syncValidationResult,
   syncPerFeatureDesignDocs,
 } from './designDocService';
 import {
@@ -80,8 +80,9 @@ import {
   syncTestCaseOutput,
   triggerTestCaseGeneration,
 } from './testCaseService';
-import type { ValidationScorecard } from '../../shared/types/interview';
-import { parseAgentValidationScorecard, buildUnusableValidationScorecard, NO_SCORECARD_REASON } from '../../shared/utils/validationReport';
+import type { Prd } from '../../shared/types/interview';
+import { NO_SCORECARD_REASON } from '../../shared/utils/validationReport';
+import { ingestValidationScorecard } from './documentValidationService';
 import type {
   ChatThreadSearchResult,
   ChatThreadSummary,
@@ -662,6 +663,21 @@ export function buildMcpServers(
   const servers: Record<string, McpServerConfig> = {};
 
   const port = process.env.PORT ?? '3001';
+
+  /*
+   * Playbook profiles are server-selected, never merged with user pills or always-on operational
+   * servers. GitHub's repository server is read-only. ADO Playbooks use the existing native
+   * repository-read tools and therefore mount no MCP server; the general ado-skills server also
+   * contains mutation tools and must not be reachable from this profile.
+   */
+  if (kickoff.playbookMcpProfile === 'repository-read-only') {
+    if (kickoff.skillProvider === 'github') {
+      servers['github-repo'] = {
+        url: `http://localhost:${port}/mcp/github-repo`,
+      };
+    }
+    return servers;
+  }
 
   // Calendar assistant threads use a restricted MCP that only exposes the
   // propose_work_item_changes tool — never the general ado-skills MCP.
@@ -3491,61 +3507,22 @@ async function syncOutputToDbFromWorkspace(
   });
   if (ddValRow) {
     const scorecardRaw = readOutputValidationScorecard(threadId);
-    if (scorecardRaw) {
-      try {
-        // Re-verify thread ownership — another validation may have started
-        const freshDoc = await db.query.designDocs.findFirst({
-          where: eq(designDocs.id, ddValRow.id),
-          columns: { validationThreadId: true },
-        });
-        if (freshDoc?.validationThreadId !== threadId) {
-          console.log(
-            `[chat] post-run: discarded stale validation scorecard — thread ${threadId} no longer active (designDocId=${ddValRow.id})`
-          );
-          cleanupWorkspaceDir(workspaceDir);
-          return;
-        }
-        const scorecard = parseAgentValidationScorecard(scorecardRaw);
-        const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
-        await syncValidationResult(ddValRow.id, scorecard, reportMd);
-        console.log(
-          `[chat] post-run: synced validation scorecard to DB (designDocId=${ddValRow.id})`
-        );
-        fullySynced = true;
-      } catch (err) {
-        console.error(
-          `[chat] post-run: failed to parse validation scorecard`,
-          err
-        );
-        await syncValidationResult(
-          ddValRow.id,
-          buildUnusableValidationScorecard(NO_SCORECARD_REASON),
-        );
-        fullySynced = true;
-      }
-    } else {
-      // Agent completed but wrote no scorecard file.
-      // Keep the generated content accessible by moving to pending_review (matching the
-      // watcher's own idle-without-scorecard path). The approval gate will still require a
-      // valid validation score if a skill is configured — this just unblocks the author
-      // from seeing and reviewing the content rather than hiding it in a Draft state.
-      const freshDoc = await db.query.designDocs.findFirst({
-        where: eq(designDocs.id, ddValRow.id),
-        columns: { validationThreadId: true, status: true },
-      });
-      if (
-        freshDoc?.validationThreadId === threadId &&
-        freshDoc?.status === 'validating'
-      ) {
-        await syncValidationResult(
-          ddValRow.id,
-          buildUnusableValidationScorecard(NO_SCORECARD_REASON),
-        );
-        console.warn(
-          `[chat] post-run: validation agent wrote no scorecard (designDocId=${ddValRow.id})`
-        );
-      }
-      fullySynced = true; // workspace can be cleaned
+    const result = await ingestValidationScorecard(
+      createDesignDocValidationAdapter(ddValRow.id),
+      threadId,
+      scorecardRaw
+        ? {
+            kind: 'success',
+            scorecardRaw,
+            reportMd: readOutputValidationScorecardMd(threadId) ?? undefined,
+          }
+        : { kind: 'unusable', reason: NO_SCORECARD_REASON },
+    );
+    fullySynced = result.disposition === 'applied';
+    if (!scorecardRaw && fullySynced) {
+      console.warn(
+        `[chat] post-run: validation agent wrote no scorecard (designDocId=${ddValRow.id})`,
+      );
     }
     if (fullySynced) cleanupWorkspaceDir(workspaceDir);
     return;
@@ -3580,89 +3557,22 @@ async function syncOutputToDbFromWorkspace(
   });
   if (prdValRow) {
     const scorecardRaw = readOutputValidationScorecard(threadId);
-    if (scorecardRaw) {
-      try {
-        const freshPrd = await db.query.prds.findFirst({
-          where: eq(prds.id, prdValRow.id),
-          columns: { validationThreadId: true },
-        });
-        if (freshPrd?.validationThreadId !== threadId) {
-          console.log(
-            `[chat] post-run: discarded stale PRD validation scorecard — thread ${threadId} no longer active (prdId=${prdValRow.id})`
-          );
-          cleanupWorkspaceDir(workspaceDir);
-          return;
-        }
-        const scorecard = parseAgentValidationScorecard(scorecardRaw);
-        const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
-        const { generateFallbackReport } =
-          await import('./documentValidationService');
-        const effectiveReportMd = reportMd ?? generateFallbackReport(scorecard);
-        const newStatus = scorecard.is_ready ? 'pending_review' : 'draft';
-        await db
-          .update(prds)
-          .set({
-            validationScore: Math.round(scorecard.overall_score),
-            validationScorecard: scorecard,
-            validationPhase: scorecard.review_phase,
-            validationReportMd: effectiveReportMd,
-            status: newStatus,
-            updatedAt: new Date().toISOString(),
-          })
-          .where(eq(prds.id, prdValRow.id));
-        console.log(
-          `[chat] post-run: synced PRD validation scorecard to DB (prdId=${prdValRow.id})`
-        );
-        fullySynced = true;
-      } catch (err) {
-        console.error(
-          `[chat] post-run: failed to parse PRD validation scorecard`,
-          err
-        );
-        const { generateFallbackReport } =
-          await import('./documentValidationService');
-        const scorecard = buildUnusableValidationScorecard(NO_SCORECARD_REASON);
-        await db
-          .update(prds)
-          .set({
-            validationScore: 0,
-            validationScorecard: scorecard,
-            validationPhase: scorecard.review_phase,
-            validationReportMd: generateFallbackReport(scorecard),
-            status: 'draft',
-            updatedAt: new Date().toISOString(),
-          })
-          .where(and(eq(prds.id, prdValRow.id), eq(prds.status, 'validating')));
-        fullySynced = true;
-      }
-    } else {
-      const freshPrd = await db.query.prds.findFirst({
-        where: eq(prds.id, prdValRow.id),
-        columns: { validationThreadId: true, status: true },
-      });
-      if (
-        freshPrd?.validationThreadId === threadId &&
-        freshPrd?.status === 'validating'
-      ) {
-        const { generateFallbackReport } =
-          await import('./documentValidationService');
-        const scorecard = buildUnusableValidationScorecard(NO_SCORECARD_REASON);
-        await db
-          .update(prds)
-          .set({
-            validationScore: 0,
-            validationScorecard: scorecard,
-            validationPhase: scorecard.review_phase,
-            validationReportMd: generateFallbackReport(scorecard),
-            status: 'draft',
-            updatedAt: new Date().toISOString(),
-          })
-          .where(eq(prds.id, prdValRow.id));
-        console.warn(
-          `[chat] post-run: PRD validation agent wrote no scorecard (prdId=${prdValRow.id})`
-        );
-      }
-      fullySynced = true;
+    const result = await ingestValidationScorecard(
+      createPrdValidationAdapter(prdValRow as unknown as Prd),
+      threadId,
+      scorecardRaw
+        ? {
+            kind: 'success',
+            scorecardRaw,
+            reportMd: readOutputValidationScorecardMd(threadId) ?? undefined,
+          }
+        : { kind: 'unusable', reason: NO_SCORECARD_REASON },
+    );
+    fullySynced = result.disposition === 'applied';
+    if (!scorecardRaw && fullySynced) {
+      console.warn(
+        `[chat] post-run: PRD validation agent wrote no scorecard (prdId=${prdValRow.id})`,
+      );
     }
     if (fullySynced) cleanupWorkspaceDir(workspaceDir);
     return;

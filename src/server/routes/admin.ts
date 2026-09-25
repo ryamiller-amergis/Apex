@@ -135,8 +135,8 @@ router.put('/roles/:id/permissions', async (req: Request, res: Response): Promis
       res.status(400).json({ error: 'permissionIds must be an array' });
       return;
     }
-    await rbacService.updateRolePermissions(id, permissionIds);
-    res.status(204).send();
+    const result = await rbacService.updateRolePermissions(id, permissionIds);
+    res.status(200).json(result);
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -218,9 +218,13 @@ router.post('/users/:oid/project-roles', async (req: Request, res: Response): Pr
       return;
     }
     const assignedBy = (req.user as any)?.profile?.oid ?? 'unknown';
-    await rbacService.assignProjectRole(oid, project, roleId, assignedBy);
-    res.json({ ok: true });
-  } catch {
+    const result = await rbacService.assignProjectRole(oid, project, roleId, assignedBy);
+    res.json(result);
+  } catch (error) {
+    if (error instanceof rbacService.ProjectRoleScopeError) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
     res.status(500).json({ error: 'Internal server error' });
   }
 });

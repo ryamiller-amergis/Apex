@@ -32,6 +32,10 @@ This skill is loaded when the `rbac-governance` rule determines that an add, rem
 | `deployments:create` | deployments | Create deployments | ✓ | ✓ | |
 | `deployments:manage` | deployments | Manage existing deployments | ✓ | | |
 | `planning:view` | planning | View planning analytics pages | ✓ | ✓ | ✓ |
+| `playbooks:view` | playbooks | View Playbook definitions, runs and step status | ✓ | ✓ | ✓ |
+| `playbooks:run` | playbooks | Start Playbook runs; does not authorize the run's step effects | ✓ | ✓ | |
+| `playbooks:author` | playbooks | Author, publish, and deprecate Playbook definitions | | | |
+| `playbooks:admin` | playbooks | Administer Playbooks and cancel or retry any project run | ✓ | | |
 | `skills:manage` | skills | Manage agent skills | ✓ | | |
 | `wiki:write` | wiki | Create and edit wiki pages | ✓ | ✓ | |
 | `workitems:write` | workitems | Create and edit work items | ✓ | ✓ | |

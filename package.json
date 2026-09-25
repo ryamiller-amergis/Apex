@@ -29,7 +29,7 @@
     "test:e2e:reset-db": "ts-node -P tsconfig.e2e.json tests/e2e/data/reset.ts",
     "e2e:triage": "ts-node -P tsconfig.server.json scripts/e2e/cursor-triage.ts",
     "playwright:install": "playwright install chromium --with-deps",
-    "test:integration": "jest --config jest.config.integration.js",
+    "test:integration": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.integration.js",
     "lint": "prettier --check .",
     "lint:check": "npm run lint:eslint && npm run lint:theme-contrast",
     "lint:eslint": "cross-env ESLINT_USE_FLAT_CONFIG=false eslint src/client src/server src/shared --ext .ts,.tsx",
@@ -124,6 +124,8 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.12.1",
+    "@mastra/core": "1.67.0",
+    "@mastra/pg": "1.25.0",
     "@playwright/test": "^1.61.1",
     "@testing-library/jest-dom": "^6.1.5",
     "@testing-library/react": "^14.1.2",

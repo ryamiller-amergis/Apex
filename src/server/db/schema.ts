@@ -1,4 +1,4 @@
-import { bigserial, boolean, check, date, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigserial, boolean, check, date, index, integer, jsonb, numeric, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type { RepoProvider, RepoRole, RunType } from '../../shared/types/runGrounding';
@@ -41,7 +41,7 @@ import type { DevSessionSetupPhase } from '../../shared/types/devWorkbench';
 import type { DesignPlanFeature, DesignPlanHistoryEntry } from '../../shared/types/designPlan';
 import type { QuickSkillPill, QuickMcpPill, InterviewSkillOption, PrototypeEngine } from '../../shared/types/projectSettings';
 import type { EffortLevel } from '../../shared/types/effort';
-import type { ApprovalMode, OwnerApprovalStatus } from '../../shared/types/approvals';
+import type { ApprovalMode, OwnerApprovalStatus, ReviewerDocumentType } from '../../shared/types/approvals';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { ArtifactDoneEventType } from '../../shared/types/homeDashboard';
 import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmin';
@@ -65,6 +65,12 @@ import type {
   DiagramShareAccess,
   ExcalidrawScene,
 } from '../../shared/types/diagram';
+import type {
+  PlaybookGraph,
+  PlaybookRunStatus,
+  PlaybookStepRunStatus,
+  PlaybookVersionStatus,
+} from '../../shared/types/playbook';
 import type { ApiKeyCadence, ApiKeyScope } from '../../shared/types/apiKey';
 import type { SafeTraceDetails, TraceEventType } from '../../shared/types/observability';
 import type {
@@ -2737,4 +2743,226 @@ export const artifactDoneEvents = pgTable('artifact_done_events', {
     'artifact_done_events_artifact_type_check',
     sql`${t.artifactType} IN ('interview', 'prd', 'test_case', 'design_prototype', 'design_doc')`,
   ),
+}));
+
+// ── Playbook orchestration (Apex-owned run truth) ─────────────────────────────
+
+export const playbookSpendPolicies = pgTable('playbook_spend_policies', {
+  project: text('project').primaryKey(),
+  enabled: boolean('enabled').notNull().default(false),
+  baselineCostUsd: numeric('baseline_cost_usd', { precision: 18, scale: 6 }).notNull(),
+  capUsd: numeric('cap_usd', { precision: 18, scale: 6 }).notNull(),
+  warningActive: boolean('warning_active').notNull().default(false),
+  warningGeneration: integer('warning_generation').notNull().default(0),
+  warningCrossedAt: timestamp('warning_crossed_at', { withTimezone: true, mode: 'string' }),
+  warningRecipientUserIds: jsonb('warning_recipient_user_ids').$type<string[]>().notNull().default([]),
+  overrideByUserId: text('override_by_user_id').references(() => appUsers.oid, {
+    onDelete: 'set null',
+  }),
+  overrideToUsd: numeric('override_to_usd', { precision: 18, scale: 6 }),
+  overrideAt: timestamp('override_at', { withTimezone: true, mode: 'string' }),
+  overrideReason: text('override_reason'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  enabledIdx: index('idx_playbook_spend_policies_enabled').on(t.enabled),
+  baselineNonnegative: check(
+    'playbook_spend_policies_baseline_nonnegative',
+    sql`${t.baselineCostUsd} >= 0`,
+  ),
+  capPositive: check('playbook_spend_policies_cap_positive', sql`${t.capUsd} > 0`),
+  warningGenerationNonnegative: check(
+    'playbook_spend_policies_warning_generation_nonnegative',
+    sql`${t.warningGeneration} >= 0`,
+  ),
+  warningStateComplete: check(
+    'playbook_spend_policies_warning_state_complete',
+    sql`(${t.warningActive} = false AND ${t.warningCrossedAt} IS NULL)
+      OR (${t.warningActive} = true AND ${t.warningCrossedAt} IS NOT NULL)`,
+  ),
+}));
+
+// These four tables are the whole of what Apex needs to answer "what happened, and what happens
+// next" for a Playbook run. The engine's own tables live in the `playbook_engine` schema and are a
+// disposable execution cache — nothing here references them, and exit criterion E4 drops them
+// mid-run to prove it.
+
+export const playbookDefinitions = pgTable('playbook_definitions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  name: text('name').notNull(),
+  description: text('description'),
+  createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectCreatedIdx: index('idx_playbook_definitions_project_created').on(t.project, t.createdAt),
+  projectNameUq: uniqueIndex('uq_playbook_definitions_project_name')
+    .on(t.project, sql`lower(btrim(${t.name}))`),
+  nameNotBlank: check(
+    'playbook_definitions_name_not_blank',
+    sql`length(btrim(${t.name})) > 0`,
+  ),
+}));
+
+export const playbookDefinitionVersions = pgTable('playbook_definition_versions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  definitionId: uuid('definition_id').notNull()
+    .references(() => playbookDefinitions.id, { onDelete: 'cascade' }),
+  versionNumber: integer('version_number').notNull(),
+  graph: jsonb('graph').$type<PlaybookGraph>().notNull(),
+  status: text('status').$type<PlaybookVersionStatus>().notNull().default('draft'),
+  publishedBy: text('published_by').references(() => appUsers.oid, { onDelete: 'set null' }),
+  publishedAt: timestamp('published_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  // Optimistic draft concurrency and auditable working-copy revision (FEAT-007).
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  definitionVersionUq: unique('uq_playbook_definition_versions_number')
+    .on(t.definitionId, t.versionNumber),
+  definitionIdx: index('idx_playbook_definition_versions_definition')
+    .on(t.definitionId, t.versionNumber),
+  statusIdx: index('idx_playbook_definition_versions_status').on(t.definitionId, t.status),
+  // Database enforcement of exactly one retained draft per definition (FEAT-007 user decision).
+  oneDraftUq: uniqueIndex('uq_playbook_definition_versions_one_draft')
+    .on(t.definitionId)
+    .where(sql`${t.status} = 'draft'`),
+  statusCheck: check(
+    'playbook_definition_versions_status_check',
+    sql`${t.status} IN ('draft', 'published', 'deprecated', 'archived')`,
+  ),
+  versionNumberCheck: check(
+    'playbook_definition_versions_version_number_check',
+    sql`${t.versionNumber} >= 1`,
+  ),
+}));
+
+export const playbookRuns = pgTable('playbook_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  // Restrict, not cascade: a version a run pinned is never hard-deleted, so BR-006 has a database
+  // backstop even though version immutability itself is enforced in the service.
+  definitionVersionId: uuid('definition_version_id').notNull()
+    .references(() => playbookDefinitionVersions.id, { onDelete: 'restrict' }),
+  initiatorUserId: text('initiator_user_id').notNull()
+    .references(() => appUsers.oid, { onDelete: 'restrict' }),
+  status: text('status').$type<PlaybookRunStatus>().notNull().default('running'),
+  // Null for current-version resolution; required and trimmed for explicit older pins (TBI-031).
+  versionPinReason: text('version_pin_reason'),
+  // Canonical Playbook start bindings. Null for Phase 0/1 runs that had no bound artifact.
+  runInput: jsonb('run_input').$type<Record<string, unknown>>(),
+  // Incremented by the runtime, never computed on read — the structural guards that read them are
+  // synchronous, and an aggregate scan in an admission check is how guards get disabled.
+  stepCount: integer('step_count').notNull().default(0),
+  agentStepCount: integer('agent_step_count').notNull().default(0),
+  startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectStartedIdx: index('idx_playbook_runs_project_started').on(t.project, t.startedAt),
+  projectStatusIdx: index('idx_playbook_runs_project_status').on(t.project, t.status),
+  definitionVersionIdx: index('idx_playbook_runs_definition_version').on(t.definitionVersionId),
+  statusCheck: check(
+    'playbook_runs_status_check',
+    sql`${t.status} IN ('running', 'suspended', 'completed', 'cancelled', 'failed', 'expired')`,
+  ),
+  stepCountCheck: check('playbook_runs_step_count_check', sql`${t.stepCount} >= 0`),
+  agentStepCountCheck: check('playbook_runs_agent_step_count_check', sql`${t.agentStepCount} >= 0`),
+}));
+
+export const playbookStepRuns = pgTable('playbook_step_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  runId: uuid('run_id').notNull().references(() => playbookRuns.id, { onDelete: 'cascade' }),
+  // The node id inside the pinned version's graph, which is jsonb — so this is not a foreign key.
+  stepId: text('step_id').notNull(),
+  stepType: text('step_type').notNull(),
+  status: text('status').$type<PlaybookStepRunStatus>().notNull().default('pending'),
+  // Null for approval-gate and notify steps, which correlate to no agent run.
+  agentRunId: text('agent_run_id').references(() => agentRuns.id, { onDelete: 'set null' }),
+  resumeToken: text('resume_token'),
+  inputInline: jsonb('input_inline').$type<Record<string, unknown>>(),
+  gatePoolKey: text('gate_pool_key').$type<ReviewerDocumentType>(),
+  gateApprovalMode: text('gate_approval_mode').$type<ApprovalMode>(),
+  outputInline: jsonb('output_inline').$type<Record<string, unknown>>(),
+  outputBlobRef: jsonb('output_blob_ref').$type<ArtifactRef>(),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }),
+  startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
+  completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  runStepUq: unique('uq_playbook_step_runs_run_step').on(t.runId, t.stepId),
+  runIdx: index('idx_playbook_step_runs_run').on(t.runId, t.createdAt),
+  // Partial over open statuses so a reconciliation pass costs time proportional to outstanding
+  // suspensions rather than to all run history.
+  expiresAtIdx: index('idx_playbook_step_runs_expires_at')
+    .on(t.expiresAt)
+    .where(sql`${t.expiresAt} IS NOT NULL AND ${t.status} IN ('pending', 'running', 'suspended')`),
+  agentRunIdx: index('idx_playbook_step_runs_agent_run')
+    .on(t.agentRunId)
+    .where(sql`${t.agentRunId} IS NOT NULL`),
+  statusCheck: check(
+    'playbook_step_runs_status_check',
+    sql`${t.status} IN ('pending', 'running', 'suspended', 'completed', 'failed', 'failed_retryable', 'cancelled', 'expired')`,
+  ),
+}));
+
+export const playbookGateApprovers = pgTable('playbook_gate_approvers', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  stepRunId: uuid('step_run_id').notNull()
+    .references(() => playbookStepRuns.id, { onDelete: 'cascade' }),
+  approverUserId: text('approver_user_id').notNull()
+    .references(() => appUsers.oid, { onDelete: 'restrict' }),
+  sourceGroupIds: jsonb('source_group_ids').$type<string[]>().notNull().default([]),
+  decision: text('decision').$type<'approved' | 'rejected'>(),
+  comment: text('comment'),
+  decidedAt: timestamp('decided_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  stepUserUq: unique('uq_playbook_gate_approvers_step_user').on(t.stepRunId, t.approverUserId),
+  userDecisionIdx: index('idx_playbook_gate_approvers_user_decision')
+    .on(t.approverUserId, t.decision),
+  stepIdx: index('idx_playbook_gate_approvers_step').on(t.stepRunId),
+}));
+
+// Relations exist so the projection can load a run with its steps and pinned version in one
+// round trip through db.query.*, per .cursor/rules/postgresql-db.mdc.
+
+export const playbookDefinitionsRelations = relations(playbookDefinitions, ({ many }) => ({
+  versions: many(playbookDefinitionVersions),
+}));
+
+export const playbookDefinitionVersionsRelations = relations(
+  playbookDefinitionVersions,
+  ({ one, many }) => ({
+    definition: one(playbookDefinitions, {
+      fields: [playbookDefinitionVersions.definitionId],
+      references: [playbookDefinitions.id],
+    }),
+    runs: many(playbookRuns),
+  }),
+);
+
+export const playbookRunsRelations = relations(playbookRuns, ({ one, many }) => ({
+  definitionVersion: one(playbookDefinitionVersions, {
+    fields: [playbookRuns.definitionVersionId],
+    references: [playbookDefinitionVersions.id],
+  }),
+  steps: many(playbookStepRuns),
+}));
+
+export const playbookStepRunsRelations = relations(playbookStepRuns, ({ one, many }) => ({
+  run: one(playbookRuns, {
+    fields: [playbookStepRuns.runId],
+    references: [playbookRuns.id],
+  }),
+  gateApprovers: many(playbookGateApprovers),
+}));
+
+export const playbookGateApproversRelations = relations(playbookGateApprovers, ({ one }) => ({
+  stepRun: one(playbookStepRuns, {
+    fields: [playbookGateApprovers.stepRunId],
+    references: [playbookStepRuns.id],
+  }),
 }));

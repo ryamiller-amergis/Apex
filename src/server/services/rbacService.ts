@@ -9,9 +9,46 @@ import {
   appUsers,
   userProjectAssignments,
 } from '../db/schema';
-import type { AppPermission, AppRole, RoleWithPermissions, UserWithRoles } from '../../shared/types/rbac';
+import type {
+  AppPermission,
+  AppRole,
+  RbacConfigurationWarning,
+  RbacMutationResponse,
+  RoleWithPermissions,
+  UserWithRoles,
+} from '../../shared/types/rbac';
 import type { ActiveUser } from '../../shared/types/interview';
 import { resolveCurrentChangelogVersion } from './changelogService';
+
+const PLAYBOOK_AUTHOR_PERMISSION = 'playbooks:author';
+const PLAYBOOK_RUN_PERMISSION = 'playbooks:run';
+
+function getPlaybookAuthorWithoutRunWarnings(
+  permissionKeys: Iterable<string>,
+): RbacConfigurationWarning[] {
+  const keys = new Set(permissionKeys);
+  if (!keys.has(PLAYBOOK_AUTHOR_PERMISSION) || keys.has(PLAYBOOK_RUN_PERMISSION)) {
+    return [];
+  }
+
+  return [{
+    code: 'PLAYBOOK_AUTHOR_WITHOUT_RUN',
+    message: 'Playbook author permission is present without run permission; the member can author but cannot run what they author.',
+    permissionKeys: [PLAYBOOK_AUTHOR_PERMISSION, PLAYBOOK_RUN_PERMISSION],
+  }];
+}
+
+export class ProjectRoleScopeError extends Error {
+  readonly userId: string;
+  readonly project: string;
+
+  constructor(userId: string, project: string) {
+    super(`User ${userId} is not assigned to project ${project}`);
+    this.name = 'ProjectRoleScopeError';
+    this.userId = userId;
+    this.project = project;
+  }
+}
 
 // ── getUserPermissions ─────────────────────────────────────────────────────────
 
@@ -174,8 +211,15 @@ export async function updateRole(
 export async function updateRolePermissions(
   roleId: string,
   permissionIds: string[],
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<RbacMutationResponse> {
+  return db.transaction(async (tx) => {
+    const selectedPermissions = permissionIds.length > 0
+      ? await tx
+        .select({ id: appPermissions.id, key: appPermissions.key })
+        .from(appPermissions)
+        .where(inArray(appPermissions.id, permissionIds))
+      : [];
+
     await tx.delete(appRolePermissions).where(eq(appRolePermissions.roleId, roleId));
 
     if (permissionIds.length > 0) {
@@ -183,6 +227,13 @@ export async function updateRolePermissions(
         permissionIds.map((permissionId) => ({ roleId, permissionId })),
       );
     }
+
+    return {
+      ok: true,
+      warnings: getPlaybookAuthorWithoutRunWarnings(
+        selectedPermissions.map((permission) => permission.key),
+      ),
+    };
   });
 }
 
@@ -312,11 +363,31 @@ export async function assignProjectRole(
   project: string,
   roleId: string,
   assignedBy: string,
-): Promise<void> {
+): Promise<RbacMutationResponse> {
+  const memberships = await db
+    .select({ userId: userProjectAssignments.userId })
+    .from(userProjectAssignments)
+    .where(
+      and(
+        eq(userProjectAssignments.userId, userId),
+        eq(userProjectAssignments.project, project),
+      ),
+    );
+
+  if (memberships.length === 0) {
+    throw new ProjectRoleScopeError(userId, project);
+  }
+
   await db
     .insert(appUserProjectRoles)
     .values({ userId, project, roleId, assignedBy })
     .onConflictDoNothing();
+
+  const effectivePermissions = await getUserPermissions(userId, project);
+  return {
+    ok: true,
+    warnings: getPlaybookAuthorWithoutRunWarnings(effectivePermissions),
+  };
 }
 
 // ── removeProjectRole ─────────────────────────────────────────────────────────

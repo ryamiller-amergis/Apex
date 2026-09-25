@@ -81,6 +81,7 @@ import {
   acceptFixValidation,
   assertDesignDocApprovalReady,
   cancelValidation,
+  createDesignDocValidationAdapter,
   createDesignDoc,
   deleteDesignDoc,
   dismissDesignDocFixSession,
@@ -98,7 +99,6 @@ import {
   autoStartValidation,
   markValidationReady,
   overrideDesignDocValidation,
-  syncValidationResult,
 } from '../services/designDocService';
 import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, getThreadAsync, updateThreadKickoffContext, sendMessage } from '../services/chatAgentService';
 import { propagatePipelineGrounding } from '../services/runGroundingService';
@@ -112,9 +112,17 @@ import {
   recalculateTestCaseCoverage,
   triggerTestCaseGeneration,
 } from '../services/testCaseService';
-import { generateFallbackReport as generateFallbackValidationReport } from '../services/documentValidationService';
-import { normalizeValidationScorecard } from '../../shared/utils/validationReport';
+import {
+  generateFallbackReport as generateFallbackValidationReport,
+  ingestValidationScorecard,
+} from '../services/documentValidationService';
 import { isProjectRepositoryCheckoutReadinessEnabled } from '../services/featureFlagService';
+import {
+  DesignDocValidationPlaybookConfigurationError,
+  DesignDocValidationPlaybookForbiddenError,
+  DesignDocValidationPlaybookNotFoundError,
+  startDesignDocValidationPlaybook,
+} from '../services/designDocValidationPlaybookService';
 import {
   assertResolvedProjectRepositoryReady,
   ProjectRepositoryNotReady,
@@ -2105,6 +2113,46 @@ router.post('/design-docs/:id/validation-thread', requirePermission('interviews:
   }
 });
 
+router.post(
+  '/design-docs/:id/validation-playbook',
+  requirePermission('playbooks:run'),
+  async (req, res, next) => {
+    try {
+      const callerUserId = getUserId(req);
+      const project = typeof req.body?.project === 'string' ? req.body.project : '';
+      if (!callerUserId) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      if (!project.trim()) {
+        res.status(400).json({ error: 'project is required' });
+        return;
+      }
+
+      const result = await startDesignDocValidationPlaybook({
+        designDocId: req.params.id,
+        project,
+        callerUserId,
+      });
+      res.status(result.outcome === 'started' ? 201 : 200).json(result);
+    } catch (err) {
+      if (err instanceof DesignDocValidationPlaybookForbiddenError) {
+        res.status(403).json({ error: err.message });
+        return;
+      }
+      if (err instanceof DesignDocValidationPlaybookNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      if (err instanceof DesignDocValidationPlaybookConfigurationError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      next(err);
+    }
+  },
+);
+
 // GET /design-docs/:id/validation — get validation state
 router.get('/design-docs/:id/validation', requirePermission('interviews:view'), async (req, res, next) => {
   try {
@@ -2129,17 +2177,44 @@ router.post('/design-docs/:id/validation/refresh', requirePermission('interviews
     if (!doc.validationThreadId) { res.status(400).json({ error: 'No validation thread exists' }); return; }
 
     const scorecardRaw = readOutputValidationScorecard(doc.validationThreadId);
-    const scorecard = scorecardRaw ? normalizeValidationScorecard(JSON.parse(scorecardRaw)) : null;
-    if (scorecard) {
+    if (scorecardRaw) {
       const reportMd = readOutputValidationScorecardMd(doc.validationThreadId) ?? undefined;
-      await syncValidationResult(req.params.id, scorecard, reportMd);
-      res.json({ ok: true, score: scorecard.overall_score, is_ready: scorecard.is_ready });
+      const result = await ingestValidationScorecard(
+        createDesignDocValidationAdapter(req.params.id),
+        doc.validationThreadId,
+        { kind: 'success', scorecardRaw, reportMd },
+      );
+      if (result.disposition === 'discarded_stale') {
+        res.status(409).json({ error: 'Validation result is stale' });
+        return;
+      }
+      res.json({
+        ok: true,
+        score: result.scorecard.overall_score,
+        is_ready: result.scorecard.is_ready,
+      });
       return;
     }
 
     if (doc.validationScorecard && doc.status !== 'validating') {
-      await syncValidationResult(req.params.id, doc.validationScorecard, doc.validationReportMd ?? undefined);
-      res.json({ ok: true, score: doc.validationScorecard.overall_score, is_ready: doc.validationScorecard.is_ready });
+      const result = await ingestValidationScorecard(
+        createDesignDocValidationAdapter(req.params.id),
+        doc.validationThreadId,
+        {
+          kind: 'success',
+          scorecardRaw: doc.validationScorecard,
+          reportMd: doc.validationReportMd ?? undefined,
+        },
+      );
+      if (result.disposition === 'discarded_stale') {
+        res.status(409).json({ error: 'Validation result is stale' });
+        return;
+      }
+      res.json({
+        ok: true,
+        score: result.scorecard.overall_score,
+        is_ready: result.scorecard.is_ready,
+      });
       return;
     }
 
@@ -2171,7 +2246,13 @@ router.get('/design-docs/:id/validation/report', requirePermission('interviews:v
     let md = doc.validationReportMd;
     if (!md && doc.validationScorecard) {
       md = generateFallbackReport(doc.validationScorecard);
-      await syncValidationResult(req.params.id, doc.validationScorecard, md);
+      if (doc.validationThreadId) {
+        await ingestValidationScorecard(
+          createDesignDocValidationAdapter(req.params.id),
+          doc.validationThreadId,
+          { kind: 'success', scorecardRaw: doc.validationScorecard, reportMd: md },
+        );
+      }
     }
     if (!md) {
       if (doc.status === 'validating') {

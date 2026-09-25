@@ -24,6 +24,7 @@ import {
   useCloneProjectRepository,
 } from '../hooks/useProjectRepositoryReadiness';
 import styles from './AdminProjectSettings.module.css';
+import { PlaybookSpendPolicyCard } from './PlaybookSpendPolicyCard';
 
 // ── BranchCombobox ─────────────────────────────────────────────────────────────
 
@@ -2197,6 +2198,11 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
             </button>
           )}
         </div>
+
+        <PlaybookSpendPolicyCard
+          project={selectedProject}
+          data-testid="playbook-spend-policy-card-entry"
+        />
 
         {/* ── Edit form (accordion layout) ────────────────────────────── */}
         {edit && (

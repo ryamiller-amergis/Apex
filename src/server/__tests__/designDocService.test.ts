@@ -1813,6 +1813,11 @@ describe('startValidationWatcher', () => {
     const whereMock = jest.fn().mockResolvedValue(undefined);
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
+    // Ingest discards a scorecard when this thread is no longer the document's
+    // current validation thread. The row has to say it still is.
+    mockDb.query.designDocs.findFirst.mockResolvedValue({
+      validationThreadId: 'thread-noscorecard',
+    });
 
     startValidationWatcher('doc-noscorecard', 'thread-noscorecard');
     await jest.advanceTimersByTimeAsync(5_000);

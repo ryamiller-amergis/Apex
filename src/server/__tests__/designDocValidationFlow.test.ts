@@ -986,6 +986,7 @@ describe('startValidationWatcher', () => {
   it('resets status to pending_review when agent finishes without producing a scorecard', async () => {
     agentSvc.readOutputValidationScorecard.mockReturnValue(null);
     agentSvc.isThreadIdle.mockReturnValue(true); // agent is done but no scorecard
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ validationThreadId: 'thread-idle' });
     const updateChain = makeUpdateChain();
     mockDb.update.mockReturnValue(updateChain);
 
@@ -1053,6 +1054,7 @@ describe('startValidationWatcher', () => {
   it('resets status to pending_review on timeout after max attempts', async () => {
     agentSvc.readOutputValidationScorecard.mockReturnValue(null);
     agentSvc.isThreadIdle.mockReturnValue(false);
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ validationThreadId: 'thread-slow' });
     const updateChain = makeUpdateChain();
     mockDb.update.mockReturnValue(updateChain);
 

@@ -515,6 +515,7 @@ interface DesignPrdGroupCardProps {
   canDelete: boolean;
   onDeleteDoc: (doc: DesignDocSummary) => void;
   onDeletePrototype: (proto: DesignPrototypeSummary) => void;
+  'data-testid'?: string;
 }
 
 const DesignPrdGroupCard: React.FC<DesignPrdGroupCardProps> = ({
@@ -524,6 +525,7 @@ const DesignPrdGroupCard: React.FC<DesignPrdGroupCardProps> = ({
   canDelete,
   onDeleteDoc,
   onDeletePrototype,
+  ...rest
 }) => {
   const countParts = [
     group.docs.length > 0 ? countLabel(group.docs.length, 'doc', 'docs') : null,
@@ -531,6 +533,7 @@ const DesignPrdGroupCard: React.FC<DesignPrdGroupCardProps> = ({
   ].filter((part): part is string => part !== null);
 
   return (
+    <div {...{ 'data-testid': rest['data-testid'] ?? `design-prd-group-card-${group.prdId}` }}>
     <section className={styles.group} {...{ 'data-testid': 'design-prd-group' }}>
       <button
         className={styles.groupHeader}
@@ -576,6 +579,7 @@ const DesignPrdGroupCard: React.FC<DesignPrdGroupCardProps> = ({
         </div>
       )}
     </section>
+    </div>
   );
 };
 
@@ -931,6 +935,7 @@ export const InterviewsDashboard: React.FC = () => {
               {designGroups.map((group) => (
                 <DesignPrdGroupCard
                   key={group.prdId}
+                  {...{ 'data-testid': `design-prd-group-card-${group.prdId}` }}
                   group={group}
                   expanded={isDesignGroupOpen(group.prdId)}
                   onToggle={() => toggleDesignGroup(group.prdId)}

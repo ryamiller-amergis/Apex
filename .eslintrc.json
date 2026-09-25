@@ -22,6 +22,23 @@
   "ignorePatterns": ["dist/", "node_modules/", "*.js"],
   "overrides": [
     {
+      "files": ["src/**/*.{ts,tsx}"],
+      "excludedFiles": ["src/server/services/playbookEngine/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["@mastra", "@mastra/**", "@voltagent", "@voltagent/**"],
+                "message": "Playbook engine packages may only be imported inside src/server/services/playbookEngine/. Call that module's Apex-vocabulary operations instead, so replacing the engine stays a change to one directory."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "files": ["src/client/**/*.{ts,tsx}"],
       "env": {
         "browser": true
