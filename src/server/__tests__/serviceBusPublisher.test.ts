@@ -29,6 +29,7 @@ describe('serviceBusPublisher', () => {
   const originalNamespace = process.env.AI_RUNS_SERVICEBUS_NAMESPACE;
   const originalQueueName = process.env.AI_RUNS_BACKGROUND_QUEUE_NAME;
   const originalPublisher = process.env.AI_RUNS_DISPATCH_PUBLISHER;
+  const originalAzureClientId = process.env.AZURE_CLIENT_ID;
   const originalFetch = global.fetch;
 
   beforeEach(() => {
@@ -54,6 +55,7 @@ describe('serviceBusPublisher', () => {
     restoreEnv('AI_RUNS_SERVICEBUS_NAMESPACE', originalNamespace);
     restoreEnv('AI_RUNS_BACKGROUND_QUEUE_NAME', originalQueueName);
     restoreEnv('AI_RUNS_DISPATCH_PUBLISHER', originalPublisher);
+    restoreEnv('AZURE_CLIENT_ID', originalAzureClientId);
     setServiceBusPublisher(null);
     global.fetch = originalFetch;
   });
@@ -109,11 +111,25 @@ describe('serviceBusPublisher', () => {
 
   test('BR-006/security: uses managed identity credentials in production', () => {
     process.env.NODE_ENV = 'production';
+    delete process.env.AZURE_CLIENT_ID;
 
     createServiceBusCredential();
 
     expect(mockManagedIdentityCredential).toHaveBeenCalledTimes(1);
+    expect(mockManagedIdentityCredential).toHaveBeenCalledWith();
     expect(mockAzureCliCredential).not.toHaveBeenCalled();
+  });
+
+  test('BR-006/security: uses AZURE_CLIENT_ID for user-assigned MI in production', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.AZURE_CLIENT_ID = '9737cad5-cec1-48e8-b072-5888738e3700';
+
+    createServiceBusCredential();
+
+    expect(mockManagedIdentityCredential).toHaveBeenCalledTimes(1);
+    expect(mockManagedIdentityCredential).toHaveBeenCalledWith({
+      clientId: '9737cad5-cec1-48e8-b072-5888738e3700',
+    });
   });
 
   test('BR-006/security: fails deterministically when namespace is missing', async () => {

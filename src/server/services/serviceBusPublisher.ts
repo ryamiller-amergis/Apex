@@ -44,9 +44,13 @@ export function getServiceBusPublisher(): ServiceBusPublisher {
 
 /** Production uses the queue-scoped managed identity; local development uses Azure CLI. */
 export function createServiceBusCredential(): TokenCredential {
-  return process.env.NODE_ENV === 'production'
-    ? new ManagedIdentityCredential()
-    : new AzureCliCredential();
+  if (process.env.NODE_ENV !== 'production') {
+    return new AzureCliCredential();
+  }
+  const clientId = process.env.AZURE_CLIENT_ID?.trim();
+  return clientId
+    ? new ManagedIdentityCredential({ clientId })
+    : new ManagedIdentityCredential();
 }
 
 /**
