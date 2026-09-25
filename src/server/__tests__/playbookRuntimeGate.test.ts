@@ -25,7 +25,10 @@ jest.mock('../services/playbookSteps', () => ({
 }));
 
 jest.mock('../services/playbookStepBindings', () => ({
-  resolveRunStepConfig: jest.fn(async (_runId: string, config: Record<string, unknown>) => config),
+  resolveRunStepConfig: jest.fn(async (_runId: string, config: Record<string, unknown>) => ({
+    ...config,
+    __resolved: true,
+  })),
 }));
 
 // The gate rule is real and reads the production registry; only its unused database dependency is
@@ -145,6 +148,7 @@ describe('FEAT-008 S7 — runtime reclassification guard', () => {
       runId: 'run-1',
       stepId: 'external',
       stepType: 'cursor-agent',
+      inputInline: expect.objectContaining({ __resolved: true }),
     }));
     expect(executeStep).not.toHaveBeenCalled();
     expect(failStepRunForHuman).toHaveBeenCalledWith({
@@ -199,6 +203,12 @@ describe('FEAT-008 S7 — runtime reclassification guard', () => {
     );
 
     expect(executeStep).toHaveBeenCalledTimes(1);
+    expect(executeStep).toHaveBeenCalledWith(expect.objectContaining({
+      config: {
+        skillPath: '.cursor/skills/app-knowledge/SKILL.md',
+        prompt: 'Review',
+      },
+    }));
     expect(failStepRunForHuman).not.toHaveBeenCalled();
     expect(completeStepRunIfOpen).toHaveBeenCalledWith({
       stepRunId: 'step-run-external',

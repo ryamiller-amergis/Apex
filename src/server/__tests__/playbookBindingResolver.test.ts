@@ -53,4 +53,19 @@ describe('FEAT-014 Playbook binding resolver', () => {
       reportMd: 'Use ${HOME} and keep doc-1',
     });
   });
+
+  it('substitutes leftover documented placeholders if the first result is resolved again', () => {
+    const once = resolvePlaybookBindings({
+      reportMd: '${steps.score.reportMd}',
+    }, {
+      input: { documentId: 'WRONG' },
+      steps: { score: { reportMd: 'Keep ${input.documentId} from the agent' } },
+    });
+    expect(once).toEqual({ reportMd: 'Keep ${input.documentId} from the agent' });
+    expect(configHasBindings(once)).toBe(true);
+    expect(resolvePlaybookBindings(once, {
+      input: { documentId: 'WRONG' },
+      steps: { score: { reportMd: 'Keep ${input.documentId} from the agent' } },
+    })).toEqual({ reportMd: 'Keep WRONG from the agent' });
+  });
 });

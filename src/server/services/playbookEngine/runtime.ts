@@ -347,6 +347,11 @@ export function translate(
 
         let outcome;
         try {
+          /*
+           * Adapter dispatch resolves the published templates itself. Passing the already-
+           * substituted `boundConfig` would run that pass again on leftover `${input.*}` /
+           * `${steps.*.*}` inside agent text and overwrite the stored input.
+           */
           outcome = await executeStep({
             runId: context.runId,
             stepRunId: stepRun.id,
@@ -354,7 +359,7 @@ export function translate(
             stepType: node.stepType,
             project: context.project,
             initiatorUserId: context.initiatorUserId,
-            config: boundConfig,
+            config: node.config ?? {},
             graph,
           });
         } catch (error) {

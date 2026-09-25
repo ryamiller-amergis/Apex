@@ -533,7 +533,8 @@ const DesignPrdGroupCard: React.FC<DesignPrdGroupCardProps> = ({
   ].filter((part): part is string => part !== null);
 
   return (
-    <section className={styles.group} {...{ 'data-testid': rest['data-testid'] ?? 'design-prd-group' }}>
+    <div {...{ 'data-testid': rest['data-testid'] ?? `design-prd-group-card-${group.prdId}` }}>
+    <section className={styles.group} {...{ 'data-testid': 'design-prd-group' }}>
       <button
         className={styles.groupHeader}
         type="button"
@@ -578,6 +579,7 @@ const DesignPrdGroupCard: React.FC<DesignPrdGroupCardProps> = ({
         </div>
       )}
     </section>
+    </div>
   );
 };
 

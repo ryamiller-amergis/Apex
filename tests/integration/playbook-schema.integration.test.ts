@@ -8,6 +8,8 @@
  *
  * Covers VT-01, VT-02, VT-05, VT-06, VT-07, VT-09, VT-10, VT-11, VT-12, VT-13 and VT-18.
  */
+import fs from 'fs';
+import path from 'path';
 import pg from 'pg';
 import {
   createScratchDatabase,
@@ -134,6 +136,7 @@ describe('VT-01 — migrations create the documented shape', () => {
       'id',
       'initiator_user_id',
       'project',
+      'run_input',
       'started_at',
       'status',
       'step_count',
@@ -162,7 +165,10 @@ describe('VT-01 — migrations create the documented shape', () => {
       'completed_at',
       'created_at',
       'expires_at',
+      'gate_approval_mode',
+      'gate_pool_key',
       'id',
+      'input_inline',
       'output_blob_ref',
       'output_inline',
       'resume_token',
@@ -665,10 +671,16 @@ describe('VT-02 — the playbook migrations roll back cleanly', () => {
     if (rollbackScratch) await rollbackScratch.drop();
   });
 
-  it('reverses all nine Playbook migrations, leaving no table, index or permission behind', async () => {
-    // Ten files must be reversed: the nine Playbook migrations plus the changelog migration
-    // ordered between lifecycle and archive. Stopping at nine leaves the first schema migration.
-    await migrateDown(rollbackScratch.connectionString, 10);
+  it('reverses every Playbook migration, leaving no table, index or permission behind', async () => {
+    const migrationsDir = path.resolve(__dirname, '../../migrations');
+    const files = fs.readdirSync(migrationsDir).filter((file) => file.endsWith('.sql')).sort();
+    const firstPlaybook = files.findIndex((file) => file.startsWith('20260918120000'));
+    if (firstPlaybook < 0) {
+      throw new Error('Missing the first Playbook migration (20260918120000).');
+    }
+    // Down from HEAD through the first Playbook file, including later non-Playbook files that
+    // landed after it. A fixed count goes stale the moment another migration is added.
+    await migrateDown(rollbackScratch.connectionString, files.length - firstPlaybook);
 
     const { rows: tables } = await rollbackClient.query(
       `SELECT table_name FROM information_schema.tables
