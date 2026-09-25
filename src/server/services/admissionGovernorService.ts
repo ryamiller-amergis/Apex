@@ -4,6 +4,11 @@
  * The database transaction persists dispatch fences before this service
  * publishes payload-free Service Bus messages. Publish failures intentionally
  * leave dispatched rows durable for the S5 recovery sweep.
+ *
+ * Every query here is restricted to the V1 transport. A `servicebus-blob-v2`
+ * run already holds a fence on its `ai_run_attempts` row and is budgeted by the
+ * orchestrator's utilization reader, so admitting one would overwrite that fence
+ * and charge the same work to two capacity models.
  */
 import { randomUUID } from 'crypto';
 import { sql } from 'drizzle-orm';
@@ -159,14 +164,17 @@ const postgresAdmissionStore: AdmissionStore = {
           SELECT
             COUNT(*) FILTER (
               WHERE lane = ${BACKGROUND_LANE}
+                AND transport_version <> 'servicebus-blob-v2'
                 AND status IN ('dispatched', 'running')
             )::int AS in_flight,
             COUNT(*) FILTER (
               WHERE lane = ${BACKGROUND_LANE}
+                AND transport_version <> 'servicebus-blob-v2'
                 AND status = 'queued'
             )::int AS queued_depth,
             MIN(queued_at) FILTER (
               WHERE lane = ${BACKGROUND_LANE}
+                AND transport_version <> 'servicebus-blob-v2'
                 AND status = 'queued'
             ) AS oldest_queued_at
           FROM agent_runs
@@ -197,6 +205,7 @@ const postgresAdmissionStore: AdmissionStore = {
             SELECT project_id, COUNT(*)::int AS in_flight
             FROM agent_runs
             WHERE lane = ${BACKGROUND_LANE}
+              AND transport_version <> 'servicebus-blob-v2'
               AND status IN ('dispatched', 'running')
             GROUP BY project_id
           ),
@@ -210,6 +219,7 @@ const postgresAdmissionStore: AdmissionStore = {
             LEFT JOIN project_in_flight
               ON project_in_flight.project_id = queued.project_id
             WHERE queued.lane = ${BACKGROUND_LANE}
+              AND queued.transport_version <> 'servicebus-blob-v2'
               AND queued.status = 'queued'
               AND queued.project_id IS NOT NULL
               AND queued.queued_at IS NOT NULL
@@ -284,6 +294,7 @@ const postgresStaleDispatchRecoveryStore: StaleDispatchRecoveryStore = {
         dispatch_message_id
       FROM agent_runs
       WHERE lane = ${BACKGROUND_LANE}
+        AND transport_version <> 'servicebus-blob-v2'
         AND status = 'dispatched'
         AND dispatch_message_id IS NOT NULL
         AND dispatched_at IS NOT NULL

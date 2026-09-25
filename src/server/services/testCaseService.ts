@@ -631,7 +631,11 @@ export async function markTestCaseFailed(
     .update(testCases)
     .set({ status: 'failed', updatedAt: new Date().toISOString() })
     .where(
-      and(eq(testCases.id, testCaseId), eq(testCases.status, 'generating'))
+      and(
+        eq(testCases.id, testCaseId),
+        eq(testCases.chatThreadId, chatThreadId),
+        eq(testCases.status, 'generating'),
+      )
     );
 
   const prdRow = await db.query.prds.findFirst({
@@ -1032,6 +1036,9 @@ export async function syncTestCaseOutput(
     await cleanupWorkspace(chatThreadId);
     return false;
   }
+  if (currentRow.status !== 'generating') {
+    return false;
+  }
 
   const testCasesMd = await readOutputTestCasesMd(
     chatThreadId,
@@ -1055,7 +1062,31 @@ export async function syncTestCaseOutput(
     updatedAt: readyAt,
   };
 
-  await db.update(testCases).set(updates).where(eq(testCases.id, testCaseId));
+  const applied = await db.transaction(async (tx) => {
+    const updatedRows = await tx
+      .update(testCases)
+      .set(updates)
+      .where(
+        and(
+          eq(testCases.id, testCaseId),
+          eq(testCases.chatThreadId, chatThreadId),
+          eq(testCases.status, 'generating'),
+        ),
+      )
+      .returning({ id: testCases.id });
+    if (updatedRows.length === 0) return false;
+    if (backlogWithTestCaseCounts !== null) {
+      await tx
+        .update(prds)
+        .set({
+          backlogJson: backlogWithTestCaseCounts as any,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(prds.id, prdId));
+    }
+    return true;
+  });
+  if (!applied) return false;
 
   // Frozen cycle-time end instant — insert-once, so a regeneration keeps the
   // first suite-ready timestamp (FEAT-001 / TBI-002).
@@ -1064,16 +1095,6 @@ export async function syncTestCaseOutput(
   } catch (err) {
     console.error(`[testCase] Failed to record done event (testCaseId=${testCaseId})`, err);
   }
-  if (backlogWithTestCaseCounts !== null) {
-    await db
-      .update(prds)
-      .set({
-        backlogJson: backlogWithTestCaseCounts as any,
-        updatedAt: new Date().toISOString(),
-      })
-      .where(eq(prds.id, prdId));
-  }
-
   await cleanupWorkspace(chatThreadId);
   await cleanupWorkspace(prdRow?.chatThreadId);
   console.log(

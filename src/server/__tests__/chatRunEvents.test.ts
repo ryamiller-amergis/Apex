@@ -152,6 +152,29 @@ describe('createRunEventEnvelope', () => {
       detail: 'Implementing FEAT-001',
     });
   });
+
+  it('preserves durable token offsets for replay pagination', () => {
+    const event = createRunEventEnvelope({
+      eventId: 'event-token',
+      threadId: 'thread-1',
+      runId: 'run-1',
+      sequence: 2,
+      timestamp: '2026-07-14T12:00:01.000Z',
+      event: {
+        type: 'token',
+        text: 'hello',
+        streamOffset: 0,
+        streamEndOffset: 5,
+      },
+    });
+
+    expect(event.event).toEqual({
+      type: 'token',
+      text: 'hello',
+      streamOffset: 0,
+      streamEndOffset: 5,
+    });
+  });
 });
 
 describe('authoritative terminal safety', () => {

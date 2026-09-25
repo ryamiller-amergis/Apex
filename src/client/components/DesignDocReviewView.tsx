@@ -54,6 +54,7 @@ import {
   designDocHasProposedChanges,
   isDesignDocSingleCommentFixPending,
 } from '../utils/apexFixHelpers';
+import { createChatTurnId } from '../utils/chatTurnId';
 import {
   APEX_FIX_TIMEOUT_MS,
   agentErrorFromChatThreadStatus,
@@ -471,7 +472,10 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ text: contextMsg }),
+      body: JSON.stringify({
+        turnId: createChatTurnId(),
+        text: contextMsg,
+      }),
     });
   }, [threadId, isRunning, discussContext]);
 

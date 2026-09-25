@@ -86,12 +86,47 @@ jest.mock('../services/chatThreadRepository', () => ({
 jest.mock('../services/pgNotifyService', () => ({
   RUN_EVENT_SOURCE_INSTANCE: 'worker-a',
   replayRunEvents: jest.fn().mockResolvedValue([]),
+  replayRunEventPage: jest.fn().mockResolvedValue({
+    events: [],
+    nextEventId: null,
+    hasMore: false,
+  }),
   subscribeRunEvents: jest.fn().mockReturnValue(() => {}),
+}));
+
+const mockLiveSubscribe = jest.fn().mockReturnValue(() => {});
+jest.mock('../services/interactiveLiveBus', () => ({
+  interactiveLiveBus: {
+    subscribe: (...args: unknown[]) => mockLiveSubscribe(...args),
+    publish: jest.fn(),
+    isEnabled: jest.fn().mockReturnValue(false),
+    init: jest.fn(),
+    shutdown: jest.fn(),
+  },
 }));
 
 jest.mock('../services/featureFlagService', () => ({
   isFeatureEnabled: jest.fn().mockResolvedValue(false),
 }));
+
+const mockDurableRetry = jest.fn();
+jest.mock('../services/durableInteractiveTurnService', () => {
+  class DurableInteractiveTurnError extends Error {
+    constructor(
+      readonly code: string,
+      readonly status: number,
+    ) {
+      super(code);
+      this.name = 'DurableInteractiveTurnError';
+    }
+  }
+  return {
+    DurableInteractiveTurnError,
+    durableInteractiveTurnService: {
+      retry: (...args: unknown[]) => mockDurableRetry(...args),
+    },
+  };
+});
 
 jest.mock('../utils/requestUser', () => ({
   getUserId: jest.fn().mockReturnValue('user-1'),
@@ -197,6 +232,36 @@ describe('chat run-event SSE transport', () => {
       ...envelope,
       type: 'token',
       event: { type: 'token', text: 'ephemeral' },
+    })).toBe(false);
+    expect(shouldAssignRunEventSseId({
+      ...envelope,
+      type: 'token',
+      event: {
+        type: 'token',
+        text: 'durable',
+        streamOffset: 0,
+        streamEndOffset: 7,
+      },
+    })).toBe(true);
+    expect(shouldAssignRunEventSseId({
+      ...envelope,
+      type: 'token',
+      event: {
+        type: 'token',
+        text: 'bad',
+        streamOffset: -1,
+        streamEndOffset: 0,
+      },
+    })).toBe(false);
+    expect(shouldAssignRunEventSseId({
+      ...envelope,
+      type: 'token',
+      event: {
+        type: 'token',
+        text: 'bad',
+        streamOffset: Number.NaN,
+        streamEndOffset: 0,
+      },
     })).toBe(false);
   });
 
@@ -864,7 +929,7 @@ describe('Home pill admission is creation-only (PBI-007 / TBI-005 DoD-4)', () =>
     });
     mockResolveThreadAccess.mockResolvedValue({ thread: ownedThread, access: 'owner' });
     mockCanWriteThread.mockResolvedValue(true);
-    mockChatService.sendMessage.mockResolvedValue(undefined);
+    mockChatService.sendMessage.mockResolvedValue({ route: 'legacy' });
   });
 
   afterEach(() => {
@@ -1052,21 +1117,22 @@ describe('POST /api/chat/threads/:id/messages — stale running self-heal', () =
     mockCanWriteThread.mockResolvedValue(true);
   });
 
-  it('accepts a message after recovering a dead running thread', async () => {
-    (mockChatService.recoverStaleRunningThread as jest.Mock).mockResolvedValue('idle');
-    mockChatService.sendMessage.mockResolvedValue(undefined);
+  it('delegates stale recovery to the legacy send callback', async () => {
+    mockChatService.sendMessage.mockResolvedValue({ route: 'legacy' });
 
     const res = await request(buildApp())
       .post(`/api/chat/threads/${threadId}/messages`)
       .send({ text: 'Continue' });
 
     expect(res.status).toBe(202);
-    expect(mockChatService.recoverStaleRunningThread).toHaveBeenCalledWith(threadId);
+    expect(mockChatService.recoverStaleRunningThread).not.toHaveBeenCalled();
     expect(mockChatService.sendMessage).toHaveBeenCalled();
   });
 
   it('returns 409 when a live run is still active', async () => {
-    (mockChatService.recoverStaleRunningThread as jest.Mock).mockResolvedValue('running');
+    mockChatService.sendMessage.mockRejectedValue(
+      Object.assign(new Error('Agent is already running'), { status: 409 }),
+    );
 
     const res = await request(buildApp())
       .post(`/api/chat/threads/${threadId}/messages`)
@@ -1074,7 +1140,8 @@ describe('POST /api/chat/threads/:id/messages — stale running self-heal', () =
 
     expect(res.status).toBe(409);
     expect(res.body).toEqual({ error: 'Agent is already running' });
-    expect(mockChatService.sendMessage).not.toHaveBeenCalled();
+    expect(mockChatService.sendMessage).toHaveBeenCalled();
+    expect(mockChatService.recoverStaleRunningThread).not.toHaveBeenCalled();
   });
 });
 
@@ -1104,7 +1171,12 @@ describe('POST /api/chat/threads/:id/messages — cached grounding delegation', 
       access: 'owner',
     });
     mockCanWriteThread.mockResolvedValue(true);
-    mockChatService.sendMessage.mockResolvedValue(undefined);
+    mockChatService.sendMessage.mockImplementation(
+      async (_threadId, _text, _model, _attachments, options) => {
+        options?.onLegacySettled?.();
+        return { route: 'legacy' };
+      },
+    );
     mockGetAdoTokenForUser.mockResolvedValue('user-ado-token');
     mockRegisterChatAdoWriteTurn.mockResolvedValue(mockReleaseAdoWriteTurn);
   });
@@ -1126,12 +1198,14 @@ describe('POST /api/chat/threads/:id/messages — cached grounding delegation', 
       'Summarize the sprint',
       undefined,
       [],
-      {
+      expect.objectContaining({
         turnSkill: {
           name: 'Scrum Assistant',
           path: '/.cursor/skills/scrum-assistant/SKILL.md',
         },
-      },
+        legacyCompletion: 'detach',
+        turnIdPolicy: 'required',
+      }),
     );
     expect(mockRegisterChatAdoWriteTurn).toHaveBeenCalledWith({
       threadId,
@@ -1181,5 +1255,329 @@ describe('POST /api/chat/threads/:id/messages — cached grounding delegation', 
     expect(res.status).toBe(202);
     expect(mockGetAdoTokenForUser).not.toHaveBeenCalled();
     expect(mockRegisterChatAdoWriteTurn).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/chat/threads/:id/messages — durable admission boundary', () => {
+  const threadId = '10000000-0000-4000-8000-000000000001';
+  const turnId = '20000000-0000-4000-8000-000000000001';
+  const runId = '50000000-0000-4000-8000-000000000001';
+  const idleThread = {
+    id: threadId,
+    userId: 'user-1',
+    kickoff: { project: 'Apex', repo: 'Apex' },
+    messages: [],
+    status: 'idle',
+    workspaceDir: '/tmp/ws',
+    flagged: false,
+    createdAt: '2026-09-23T12:00:00.000Z',
+    lastActivityAt: '2026-09-23T12:00:00.000Z',
+  } as const;
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: idleThread,
+      access: 'owner',
+    });
+    mockCanWriteThread.mockResolvedValue(true);
+  });
+
+  it('awaits durable admission and returns the accepted durable identity', async () => {
+    mockChatService.sendMessage.mockResolvedValue({
+      route: 'durable',
+      response: {
+        turnId,
+        runId,
+        status: 'queued',
+        interactiveClass: 'fast',
+      },
+    });
+
+    const response = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ turnId, text: 'Hello' });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({
+      turnId,
+      runId,
+      status: 'queued',
+      interactiveClass: 'fast',
+    });
+    expect(mockChatService.sendMessage).toHaveBeenCalledWith(
+      threadId,
+      'Hello',
+      undefined,
+      [],
+      expect.objectContaining({
+        turnId,
+        turnIdPolicy: 'required',
+        legacyCompletion: 'detach',
+      }),
+    );
+  });
+
+  it('keeps the legacy response compatible when turnId is omitted', async () => {
+    mockChatService.sendMessage.mockResolvedValue({
+      route: 'legacy',
+    });
+
+    const response = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: 'Old client' });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({ ok: true });
+  });
+
+  it('returns the stable enabled-path validation error instead of a legacy response', async () => {
+    mockChatService.sendMessage.mockRejectedValue(
+      Object.assign(new Error('INVALID_TURN_ID'), {
+        status: 400,
+        code: 'INVALID_TURN_ID',
+      }),
+    );
+
+    const response = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: 'Missing turn identity' });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: 'INVALID_TURN_ID' });
+  });
+
+  it('does not run stale legacy recovery before durable admission', async () => {
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: { ...idleThread, status: 'running' },
+      access: 'owner',
+    });
+    mockChatService.sendMessage.mockResolvedValue({
+      route: 'durable',
+      response: {
+        turnId,
+        runId,
+        status: 'queued',
+        interactiveClass: 'fast',
+      },
+    });
+
+    const response = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ turnId, text: 'Network retry' });
+
+    expect(response.status).toBe(202);
+    expect(response.body.runId).toBe(runId);
+    expect(mockChatService.recoverStaleRunningThread).not.toHaveBeenCalled();
+  });
+
+  it('passes the authorized non-owner requester instead of the thread owner', async () => {
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: { ...idleThread, userId: 'thread-owner' },
+      access: 'read',
+    });
+    mockCanWriteThread.mockResolvedValue(true);
+    mockChatService.sendMessage.mockResolvedValue({
+      route: 'durable',
+      response: {
+        turnId,
+        runId,
+        status: 'queued',
+        interactiveClass: 'fast',
+      },
+    });
+
+    const response = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ turnId, text: 'Authorized approver send' });
+
+    expect(response.status).toBe(202);
+    expect(mockChatService.sendMessage).toHaveBeenCalledWith(
+      threadId,
+      'Authorized approver send',
+      undefined,
+      [],
+      expect.objectContaining({
+        requesterUserId: 'user-1',
+      }),
+    );
+  });
+
+  it('returns a terminal idempotent status for delayed duplicate requests', async () => {
+    mockChatService.sendMessage.mockResolvedValue({
+      route: 'durable',
+      response: {
+        turnId,
+        runId,
+        status: 'completed',
+        interactiveClass: 'fast',
+      },
+    });
+
+    const response = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ turnId, text: 'Delayed retry' });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({
+      turnId,
+      runId,
+      status: 'completed',
+      interactiveClass: 'fast',
+    });
+  });
+});
+
+describe('POST /api/chat/threads/:id/runs/:runId/retry', () => {
+  const threadId = '10000000-0000-4000-8000-000000000001';
+  const runId = '50000000-0000-4000-8000-000000000001';
+  const turnId = '20000000-0000-4000-8000-000000000001';
+  const idleThread = {
+    id: threadId,
+    userId: 'user-1',
+    kickoff: { project: 'Apex', repo: 'Apex' },
+    messages: [],
+    status: 'idle',
+    workspaceDir: '/tmp/ws',
+    flagged: false,
+    createdAt: '2026-09-23T12:00:00.000Z',
+    lastActivityAt: '2026-09-23T12:00:00.000Z',
+  } as const;
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: idleThread,
+      access: 'owner',
+    });
+    mockCanWriteThread.mockResolvedValue(true);
+    mockDurableRetry.mockReset();
+  });
+
+  it('returns 404 when the thread is inaccessible', async () => {
+    mockResolveThreadAccess.mockResolvedValue(null);
+
+    const response = await request(buildApp()).post(
+      `/api/chat/threads/${threadId}/runs/${runId}/retry`,
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: 'Thread not found' });
+    expect(mockDurableRetry).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 for a malformed run id', async () => {
+    const response = await request(buildApp()).post(
+      `/api/chat/threads/${threadId}/runs/not-a-uuid/retry`,
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: 'Thread not found' });
+    expect(mockDurableRetry).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when the service cannot see the run on the thread', async () => {
+    mockDurableRetry.mockRejectedValue(
+      Object.assign(new Error('Thread not found'), { status: 404 }),
+    );
+
+    const response = await request(buildApp()).post(
+      `/api/chat/threads/${threadId}/runs/${runId}/retry`,
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: 'Thread not found' });
+  });
+
+  it('returns 409 RUN_NOT_RETRYABLE for a nonfailed run', async () => {
+    const { DurableInteractiveTurnError } = jest.requireMock(
+      '../services/durableInteractiveTurnService',
+    ) as {
+      DurableInteractiveTurnError: new (
+        code: string,
+        status: number,
+      ) => Error & { code: string; status: number };
+    };
+    mockDurableRetry.mockRejectedValue(
+      new DurableInteractiveTurnError('RUN_NOT_RETRYABLE', 409),
+    );
+
+    const response = await request(buildApp()).post(
+      `/api/chat/threads/${threadId}/runs/${runId}/retry`,
+    );
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({ error: 'RUN_NOT_RETRYABLE' });
+  });
+
+  it('returns 409 THREAD_ACTIVE_TURN when another run is active on the thread', async () => {
+    const { DurableInteractiveTurnError } = jest.requireMock(
+      '../services/durableInteractiveTurnService',
+    ) as {
+      DurableInteractiveTurnError: new (
+        code: string,
+        status: number,
+      ) => Error & { code: string; status: number };
+    };
+    mockDurableRetry.mockRejectedValue(
+      new DurableInteractiveTurnError('THREAD_ACTIVE_TURN', 409),
+    );
+
+    const response = await request(buildApp()).post(
+      `/api/chat/threads/${threadId}/runs/${runId}/retry`,
+    );
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({ error: 'THREAD_ACTIVE_TURN' });
+  });
+
+  it('returns exact 429 codes for user caps', async () => {
+    const { DurableInteractiveTurnError } = jest.requireMock(
+      '../services/durableInteractiveTurnService',
+    ) as {
+      DurableInteractiveTurnError: new (
+        code: string,
+        status: number,
+      ) => Error & { code: string; status: number };
+    };
+    mockDurableRetry.mockRejectedValue(
+      new DurableInteractiveTurnError('USER_INTERACTIVE_LIMIT', 429),
+    );
+
+    const response = await request(buildApp()).post(
+      `/api/chat/threads/${threadId}/runs/${runId}/retry`,
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.body).toEqual({ error: 'USER_INTERACTIVE_LIMIT' });
+  });
+
+  it('returns the accepted durable identity without accepting text', async () => {
+    mockDurableRetry.mockResolvedValue({
+      turnId,
+      runId,
+      status: 'queued',
+      interactiveClass: 'fast',
+    });
+
+    const response = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/runs/${runId}/retry`)
+      .send({ text: 'should be ignored' });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({
+      turnId,
+      runId,
+      status: 'queued',
+      interactiveClass: 'fast',
+    });
+    expect(mockDurableRetry).toHaveBeenCalledWith({
+      threadId,
+      runId,
+      userId: 'user-1',
+      toolGrant: undefined,
+    });
   });
 });

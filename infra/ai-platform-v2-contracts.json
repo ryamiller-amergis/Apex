@@ -1,0 +1,72 @@
+{
+  "location": "centralus",
+  "sku": "Standard",
+  "zoneRedundant": true,
+  "publicEndpointsForFirstSmoke": true,
+  "privateEndpointsDeferred": true,
+  "workloadProfiles": [
+    {
+      "name": "Consumption",
+      "workloadProfileType": "Consumption"
+    },
+    {
+      "name": "repo-read",
+      "workloadProfileType": "D4",
+      "minimumCount": 1,
+      "maximumCount": 2
+    }
+  ],
+  "artifactContainer": "ai-run-artifacts",
+  "artifactLifecycleDays": 90,
+  "identities": [
+    "orchestrator",
+    "document",
+    "visual",
+    "fast-interactive",
+    "agentic"
+  ],
+  "queues": {
+    "ai-runs-v2-document": {
+      "kind": "command",
+      "requiresDuplicateDetection": true,
+      "requiresSession": false
+    },
+    "ai-runs-v2-visual": {
+      "kind": "command",
+      "requiresDuplicateDetection": true,
+      "requiresSession": false
+    },
+    "ai-runs-v2-fast": {
+      "kind": "command",
+      "requiresDuplicateDetection": true,
+      "requiresSession": false
+    },
+    "ai-runs-v2-agentic": {
+      "kind": "command",
+      "requiresDuplicateDetection": true,
+      "requiresSession": false
+    },
+    "ai-runs-v2-checkpoint": {
+      "kind": "checkpoint",
+      "requiresDuplicateDetection": false,
+      "requiresSession": false
+    },
+    "ai-runs-v2-result": {
+      "kind": "result",
+      "requiresDuplicateDetection": true,
+      "requiresSession": false
+    }
+  },
+  "queueDefaults": {
+    "maxDeliveryCount": 5,
+    "deadLetteringOnMessageExpiration": true,
+    "lockDuration": "PT5M",
+    "duplicateDetectionHistoryTimeWindow": "PT30M"
+  },
+  "cutover": {
+    "additiveOnly": true,
+    "retainEastUsV1ServiceBus": true,
+    "retainEastUsSharedStorage": true,
+    "stopAndDeleteOldOnlyAfterProdProof": true
+  }
+}

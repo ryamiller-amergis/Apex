@@ -535,3 +535,357 @@ describe('interactiveSessionActor', () => {
     expect(disposeCheckout).toHaveBeenCalled();
   });
 });
+
+describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
+  const TURN_ID = '10000000-0000-4000-8000-000000000001';
+  const THREAD_ID = '10000000-0000-4000-8000-000000000002';
+  const USER_ID = '10000000-0000-4000-8000-000000000003';
+
+  function makeDurableBootstrap(
+    overrides: Partial<
+      import('../../shared/types/aiRunIngest').InteractiveActorBootstrap
+    > = {},
+  ): import('../../shared/types/aiRunIngest').InteractiveActorBootstrap {
+    const attemptId =
+      overrides.attemptId ?? '20000000-0000-4000-8000-000000000003';
+    return {
+      kind: 'interactive-actor-v2',
+      specification: {
+        schemaVersion: 1,
+        kind: 'interactive-turn',
+        turnId: TURN_ID,
+        threadId: THREAD_ID,
+        userId: USER_ID,
+        projectId: 'proj-1',
+        interactiveClass: 'fast',
+        workflowClass: 'home-chat',
+        model: 'auto',
+        effort: 'low',
+        skill: null,
+        currentMessage: {
+          id: TURN_ID,
+          text: 'Hello',
+          hidden: false,
+          attachments: [],
+        },
+        transcript: [],
+        grounding: null,
+        mcpServers: [],
+        toolGrant: null,
+        currentPrompt: 'Hello',
+        recreationPrompt: 'Hello (recreated)',
+        deadlines: {
+          absoluteTurnMs: 300_000,
+          repositoryPreparationMs: null,
+          firstEventMs: 30_000,
+          toolCallMs: 60_000,
+        },
+      },
+      runId: 'run-durable-1',
+      attemptId,
+      attemptNumber: 1,
+      attemptStatus: 'dispatched',
+      dispatchMessageId: 'dispatch-durable-1',
+      absoluteDeadlineAt: '2099-01-01T00:00:00.000Z',
+      effectiveDeadlines: {
+        repositoryPreparationMs: null,
+        firstEventMs: 30_000,
+        toolCallMs: 60_000,
+      },
+      cursorAgentId: null,
+      mcpServers: {},
+      projectId: 'proj-1',
+      ...overrides,
+    };
+  }
+
+  it('rematerializes a fresh attempt-local workspace per durable attempt', async () => {
+    const destinations: string[] = [];
+    const dispose = jest.fn(async () => {});
+    const materializeWorkspace = jest.fn(
+      async (_bootstrap, destination: string) => {
+        destinations.push(destination);
+        return {
+          workspacePath: destination,
+          dispose,
+        };
+      },
+    );
+    const uploadAttemptArtifacts = jest.fn(async () => ({
+      container: 'artifacts',
+      key: 'runs/r/attempts/1/manifest.json',
+    }));
+    const posted: AiRunIngestBody[] = [];
+
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          tokens: ['ok'],
+          agentId: 'agent-1',
+          workspaceRef: checkout.workspacePath,
+        }),
+      ),
+      materializeWorkspace,
+      uploadAttemptArtifacts,
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+    });
+
+    const first = makeDurableBootstrap({
+      attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    });
+    const second = makeDurableBootstrap({
+      attemptId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      dispatchMessageId: 'dispatch-durable-2',
+      runId: 'run-durable-2',
+    });
+
+    await actor.handleDurableTurn({ threadId: THREAD_ID, bootstrap: first });
+    await actor.handleDurableTurn({ threadId: THREAD_ID, bootstrap: second });
+
+    expect(materializeWorkspace).toHaveBeenCalledTimes(2);
+    expect(destinations[0]).not.toEqual(destinations[1]);
+    expect(destinations[0]).toContain('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    expect(destinations[1]).toContain('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
+    expect(destinations.every((d) => d.includes('apex-interactive-attempt'))).toBe(
+      true,
+    );
+    expect(dispose).toHaveBeenCalledTimes(2);
+  });
+
+  it('posts completed terminal with artifactManifestRef only after upload succeeds', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const manifestRef = {
+      container: 'artifacts',
+      key: 'runs/r/attempts/1/manifest.json',
+    };
+    const uploadAttemptArtifacts = jest.fn(async () => manifestRef);
+
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          tokens: ['done'],
+          agentId: 'agent-1',
+          workspaceRef: checkout.workspacePath,
+        }),
+      ),
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+        dispose: async () => {},
+      }),
+      uploadAttemptArtifacts,
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+    });
+
+    await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap(),
+    });
+
+    expect(uploadAttemptArtifacts).toHaveBeenCalledTimes(1);
+    const terminal = posted.find((b) => b.kind === 'terminal');
+    expect(terminal).toMatchObject({
+      kind: 'terminal',
+      status: 'completed',
+      artifactsFlushed: true,
+      artifactManifestRef: manifestRef,
+    });
+  });
+
+  it('never claims artifactsFlushed when collect/upload is skipped', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          tokens: ['done'],
+          workspaceRef: checkout.workspacePath,
+        }),
+      ),
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+      }),
+      // uploadAttemptArtifacts intentionally omitted
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+    });
+
+    await expect(
+      actor.handleDurableTurn({
+        threadId: THREAD_ID,
+        bootstrap: makeDurableBootstrap(),
+      }),
+    ).rejects.toThrow(/artifact collect\/upload/i);
+
+    const completed = posted.find(
+      (b) => b.kind === 'terminal' && b.status === 'completed',
+    );
+    expect(completed).toBeUndefined();
+    const failed = posted.find(
+      (b) => b.kind === 'terminal' && b.status === 'failed',
+    );
+    expect(failed).toMatchObject({ artifactsFlushed: false });
+  });
+
+  it('arms the tool deadline timer and fails with tool_timeout (not cancelled)', async () => {
+    const posted: AiRunIngestBody[] = [];
+    let cancelCalled = false;
+    const waitGate = deferred();
+    const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          toolCall: true,
+          tokens: [],
+          waitGate: waitGate.promise,
+          workspaceRef: checkout.workspacePath,
+          onCancel: () => {
+            cancelCalled = true;
+            waitGate.resolve();
+          },
+        }),
+      ),
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+      }),
+      uploadAttemptArtifacts: jest.fn(),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+    });
+
+    const bootstrap = makeDurableBootstrap({
+      absoluteDeadlineAt: new Date(Date.now() + 120_000).toISOString(),
+      effectiveDeadlines: {
+        repositoryPreparationMs: null,
+        firstEventMs: 60_000,
+        toolCallMs: 40,
+      },
+    });
+
+    const turnPromise = actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap,
+    });
+
+    // Wait until a tool timer has been armed (clamped toolCallMs).
+    let toolTimerCb: (() => void) | undefined;
+    for (let i = 0; i < 100 && !toolTimerCb; i += 1) {
+      await new Promise((r) => setImmediate(r));
+      for (const call of setTimeoutSpy.mock.calls) {
+        const delay = call[1];
+        if (typeof delay === 'number' && delay > 0 && delay <= 40) {
+          toolTimerCb = call[0] as () => void;
+          break;
+        }
+      }
+    }
+    expect(toolTimerCb).toBeDefined();
+    toolTimerCb!();
+
+    const outcome = await turnPromise;
+    expect(outcome).toEqual({
+      status: 'failed',
+      failureCategory: 'tool_timeout',
+    });
+    expect(cancelCalled).toBe(true);
+    const terminal = posted.find((b) => b.kind === 'terminal');
+    expect(terminal).toMatchObject({
+      status: 'failed',
+      failureCategory: 'tool_timeout',
+      artifactsFlushed: false,
+    });
+    setTimeoutSpy.mockRestore();
+  }, 15_000);
+
+  it('dual-publishes Redis live + durable progress with shared offsets; flush before message/terminal', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const { publishLive, live } = captureLive();
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          tokens: ['hello'],
+          agentId: 'agent-shared',
+          workspaceRef: checkout.workspacePath,
+        }),
+      ),
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+      }),
+      uploadAttemptArtifacts: jest.fn(async () => ({
+        container: 'artifacts',
+        key: 'runs/r/attempts/1/manifest.json',
+      })),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+      publishLive,
+    });
+
+    const outcome = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap(),
+    });
+    expect(outcome.status).toBe('completed');
+
+    const durableTokens = posted.filter(
+      (b): b is Extract<AiRunIngestBody, { kind: 'progress' }> & {
+        event: { type: 'token'; text: string; streamOffset: number; streamEndOffset: number };
+        eventId: string;
+      } =>
+        b.kind === 'progress'
+        && b.event?.type === 'token'
+        && typeof b.eventId === 'string'
+        && typeof b.event.streamOffset === 'number'
+        && typeof b.event.streamEndOffset === 'number',
+    );
+    expect(durableTokens.length).toBeGreaterThan(0);
+    for (const body of durableTokens) {
+      expect(body.eventId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      );
+      expect(body.event.streamOffset).toBeGreaterThanOrEqual(0);
+    }
+
+    const liveTokens = live.filter((e) => e.event.type === 'token');
+    expect(liveTokens.length).toBeGreaterThan(0);
+    const liveById = new Map(liveTokens.map((e) => [e.eventId, e]));
+    for (const body of durableTokens) {
+      const shared = liveById.get(body.eventId);
+      expect(shared).toBeDefined();
+      expect(shared!.event).toEqual(
+        expect.objectContaining({
+          type: 'token',
+          text: body.event.text,
+          streamOffset: body.event.streamOffset,
+          streamEndOffset: body.event.streamEndOffset,
+        }),
+      );
+    }
+
+    const tokenIdx = posted.findIndex(
+      (b) => b.kind === 'progress' && b.event?.type === 'token',
+    );
+    const messageIdx = posted.findIndex(
+      (b) => b.kind === 'progress' && b.event?.type === 'message',
+    );
+    const terminalIdx = posted.findIndex((b) => b.kind === 'terminal');
+    expect(tokenIdx).toBeGreaterThanOrEqual(0);
+    expect(messageIdx).toBeGreaterThan(tokenIdx);
+    expect(terminalIdx).toBeGreaterThan(messageIdx);
+  });
+});

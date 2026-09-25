@@ -237,6 +237,7 @@ function makeInterview(overrides: Partial<Interview> = {}): Interview {
 const mockSend = jest.fn().mockResolvedValue(undefined);
 const mockCancel = jest.fn().mockResolvedValue(undefined);
 const mockRetryLast = jest.fn();
+const mockRetryFailedRun = jest.fn().mockResolvedValue(undefined);
 const mockClearSendError = jest.fn();
 
 const idleStream = {
@@ -264,6 +265,8 @@ const idleStream = {
   isInteractionBusy: false,
   send: mockSend,
   retryLast: mockRetryLast,
+  retryFailedRun: mockRetryFailedRun,
+  retryableRunId: null as string | null,
   cancel: mockCancel,
   sendError: null,
   clearSendError: mockClearSendError,
@@ -552,9 +555,9 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
     const labelRegion = screen.getByTestId('agent-run-status-label');
     expect(labelRegion).toHaveAttribute('role', 'status');
     expect(labelRegion).toHaveAttribute('aria-live', 'polite');
-    expect(labelRegion).toHaveTextContent('Waiting…');
+    expect(labelRegion).toHaveTextContent('Queued');
     expect(screen.getByTestId('agent-run-status-queued')).toHaveTextContent(
-      'Waiting…',
+      'Queued',
     );
     expect(screen.queryByTestId('agent-run-status-dispatched')).not.toBeInTheDocument();
   });
@@ -572,8 +575,8 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
 
     renderExistingInterview();
 
-    expect(screen.getByTestId('agent-run-status-label')).toHaveTextContent('Starting…');
-    expect(screen.getByTestId('agent-run-status-dispatched')).toHaveTextContent('Starting…');
+    expect(screen.getByTestId('agent-run-status-label')).toHaveTextContent('Dispatched');
+    expect(screen.getByTestId('agent-run-status-dispatched')).toHaveTextContent('Dispatched');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
@@ -976,6 +979,49 @@ describe('ExistingInterviewView — processing state after send', () => {
     expect(screen.getByText('Unable to queue message')).toBeInTheDocument();
     expect(input).toBeEnabled();
     expect(screen.queryByTestId('interview-agent-processing')).not.toBeInTheDocument();
+  });
+
+  it('retries a failed durable run by identity without resending text', () => {
+    mockRetryFailedRun.mockClear();
+    mockSend.mockClear();
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      messages: [
+        {
+          id: 'u1',
+          role: 'user',
+          text: 'Original interview answer',
+          ts: '2026-09-23T12:00:00.000Z',
+        },
+        {
+          id: 'e1',
+          role: 'system',
+          text: 'Error: worker failed',
+          ts: '2026-09-23T12:00:01.000Z',
+        },
+      ],
+      visibleMessages: [
+        {
+          id: 'u1',
+          role: 'user',
+          text: 'Original interview answer',
+          ts: '2026-09-23T12:00:00.000Z',
+        },
+        {
+          id: 'e1',
+          role: 'system',
+          text: 'Error: worker failed',
+          ts: '2026-09-23T12:00:01.000Z',
+        },
+      ],
+      status: 'error',
+      retryableRunId: '50000000-0000-4000-8000-000000000001',
+    });
+
+    renderExistingInterview();
+    fireEvent.click(screen.getByTestId('interview-retry-message'));
+    expect(mockRetryFailedRun).toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
   });
 
   it('stays disabled throughout the running state and unlocks when the run ends', () => {

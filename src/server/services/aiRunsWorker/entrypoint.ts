@@ -120,7 +120,20 @@ export async function main(): Promise<void> {
     getToken: getAiRunnerCallbackToken,
   });
   const worker = createAiRunsWorker({
-    getBootstrap: (message) => callback.getBootstrap(message),
+    getBootstrap: async (message) => {
+      const bootstrap = await callback.getBootstrap(message);
+      if (
+        bootstrap &&
+        typeof bootstrap === 'object' &&
+        'kind' in bootstrap &&
+        bootstrap.kind === 'interactive-actor-v2'
+      ) {
+        throw new Error(
+          'Interactive actor bootstrap is not supported by the background worker',
+        );
+      }
+      return bootstrap as import('../../../shared/types/aiRunIngest').AiRunBootstrapResponse;
+    },
     openCheckout: (snapshot) => openGroundedReader(snapshot),
     createExecution: (snapshot, checkout) =>
       createLocalCursorExecution(

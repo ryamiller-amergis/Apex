@@ -37,6 +37,7 @@ import type { InterviewSkillOption } from '../../shared/types/projectSettings';
 import { effortLabel } from '../../shared/utils/effort';
 import { parseAgentMessage, isAgentOtherOptionText } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
+import { createChatTurnId } from '../utils/chatTurnId';
 import { trackEvent, trackException } from '../services/telemetry';
 import { ReadAloudButton } from './ReadAloudButton';
 import {
@@ -549,7 +550,12 @@ const NewInterviewCompose: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ text: text || 'Please use the attached files as context.', attachments, model }),
+        body: JSON.stringify({
+          turnId: createChatTurnId(),
+          text: text || 'Please use the attached files as context.',
+          attachments,
+          model,
+        }),
       });
       clearAttachments();
       if (linkedContextInitialErrorText) {
@@ -1181,7 +1187,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   }, [attachments.length, input, sendMessageToAgent]);
 
   const handleRetryLast = useCallback(() => {
-    session.retryLast();
+    void session.retryFailedRun();
   }, [session]);
 
   const handleAttachmentChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1576,11 +1582,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               >
                 {progressPhase === 'queued' ? (
                   <span {...{ 'data-testid': 'agent-run-status-queued' }}>
-                    {friendlyChatProgressLabel(progressLabel, 'queued')}
+                    Queued
                   </span>
                 ) : progressPhase === 'dispatched' ? (
                   <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
-                    {friendlyChatProgressLabel(progressLabel, 'dispatched')}
+                    Dispatched
                   </span>
                 ) : progressLabel ? (
                   friendlyChatProgressLabel(progressLabel, progressPhase)
@@ -1619,7 +1625,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                     <button
                       className={styles.retryBtn}
                       onClick={() => handleRetryLast()}
-                      disabled={isInteractionBusy}
+                      disabled={isInteractionBusy || !session.retryableRunId}
                       type="button"
                       {...{ 'data-testid': 'interview-retry-message' }}
                     >

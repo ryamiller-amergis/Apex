@@ -12,7 +12,12 @@ import type {
   RunPhaseProgress,
   RunHealthProgress,
 } from './useChatStream';
-import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
+import { friendlyChatProgressLabel, friendlyDurableInteractiveLimitError } from '../../shared/utils/chatProgressCopy';
+import { createChatTurnId } from '../utils/chatTurnId';
+
+function mapSendErrorMessage(raw: string): string {
+  return friendlyDurableInteractiveLimitError(raw) ?? raw;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -70,6 +75,9 @@ export interface AgentChatSessionOptions {
 
   /** Active run id from the persisted thread, used to restore thinking after refresh. */
   initialActiveRunId?: string | null;
+
+  /** Generates the idempotency identity once per user send attempt. */
+  createTurnId?: () => string;
 }
 
 export interface SendOptions {
@@ -113,6 +121,10 @@ export interface AgentChatSession {
   // --- Actions ---
   send: (text: string, opts?: SendOptions) => Promise<void>;
   retryLast: () => void;
+  /** Retry a failed durable run by identity — never resends text. */
+  retryFailedRun: () => Promise<void>;
+  /** Failed durable run ID from the stream, if the terminal error carried one. */
+  retryableRunId: string | null;
   cancel: () => Promise<void>;
 
   // --- Errors ---
@@ -157,6 +169,7 @@ export function useAgentChatSession(
     visibleMessageFilter = DEFAULT_VISIBLE_FILTER,
     enablePreparationState = false,
     initialActiveRunId,
+    createTurnId = createChatTurnId,
   } = options;
 
   // --- useChatStream (the SSE subscription) ---
@@ -183,6 +196,8 @@ export function useAgentChatSession(
     backlogReady,
     isRetrying,
     retryReason,
+    retryableRunId,
+    clearRetryableRunId,
     groundingPreparation,
   } = stream;
 
@@ -194,6 +209,10 @@ export function useAgentChatSession(
   const [sendError, setSendError] = useState<string | null>(null);
   const [optimisticUserMessage, setOptimisticUserMessage] =
     useState<ChatMessage | null>(null);
+  /** Immediate Queued/Dispatched from the 202 acceptance before stream events. */
+  const [admissionPhase, setAdmissionPhase] = useState<
+    'queued' | 'dispatched' | null
+  >(null);
   const optimisticBaselineIdsRef = useRef<Set<string>>(new Set());
 
   // Refs for pending-message tracking (generalized from Interview)
@@ -301,10 +320,29 @@ export function useAgentChatSession(
     setOptimisticUserMessage(null);
     setIsCancelling(false);
     setIsStopConfirmed(false);
+    setAdmissionPhase(null);
     pendingMessageIdsRef.current.clear();
     pendingObservedRunningRef.current = false;
     setIsAwaitingAgentResponse(false);
   }, [threadId]);
+
+  // Prefer live stream phase; keep admission phase until the stream advances.
+  useEffect(() => {
+    if (!progressPhase) return;
+    if (progressPhase === 'queued' || progressPhase === 'dispatched') {
+      setAdmissionPhase(progressPhase);
+      return;
+    }
+    setAdmissionPhase(null);
+  }, [progressPhase]);
+
+  const effectiveProgressPhase: AgentRunPhase | null =
+    progressPhase ?? admissionPhase;
+  const effectiveProgressLabel =
+    effectiveProgressPhase === 'queued' ||
+    effectiveProgressPhase === 'dispatched'
+      ? friendlyChatProgressLabel(progressLabel, effectiveProgressPhase)
+      : progressLabel;
 
   // Restore thinking after refresh when the last visible line is still the user.
   useEffect(() => {
@@ -363,11 +401,12 @@ export function useAgentChatSession(
       setSendError(null);
       setIsStopConfirmed(false);
       setIsSending(true);
+      const turnId = createTurnId();
       optimisticBaselineIdsRef.current = new Set(
         messages.map((message) => message.id)
       );
       setOptimisticUserMessage({
-        id: `optimistic-user-${Date.now()}`,
+        id: turnId,
         role: 'user',
         text,
         ts: new Date().toISOString(),
@@ -387,25 +426,38 @@ export function useAgentChatSession(
       try {
         const endpoint =
           sendEndpoint ?? `/api/chat/threads/${threadId}/messages`;
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            text,
-            ...(opts.model ? { model: opts.model } : {}),
-            ...(opts.skill ? { skill: opts.skill } : {}),
-            ...(opts.attachments?.length
-              ? { attachments: opts.attachments }
-              : {}),
-          }),
+        const body = JSON.stringify({
+          turnId,
+          text,
+          ...(opts.model ? { model: opts.model } : {}),
+          ...(opts.skill ? { skill: opts.skill } : {}),
+          ...(opts.attachments?.length
+            ? { attachments: opts.attachments }
+            : {}),
         });
+        let res: Response | null = null;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            res = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body,
+            });
+            break;
+          } catch (error) {
+            if (attempt === 1) throw error;
+          }
+        }
+        if (!res) {
+          throw new Error('Failed to send message');
+        }
 
         if (!res.ok) {
           let msg = 'Failed to send message';
           try {
             const body = await res.json();
-            if (body?.error) msg = body.error;
+            if (body?.error) msg = mapSendErrorMessage(String(body.error));
           } catch {
             /* use default */
           }
@@ -414,6 +466,22 @@ export function useAgentChatSession(
           clearAwaitingAgentResponse();
           return;
         }
+
+        try {
+          const accepted = (await res.json()) as {
+            status?: string;
+          } | null;
+          if (
+            accepted?.status === 'queued' ||
+            accepted?.status === 'dispatched'
+          ) {
+            setAdmissionPhase(accepted.status);
+          }
+        } catch {
+          // Legacy `{ ok: true }` responses have no durable phase.
+        }
+
+        clearRetryableRunId();
 
         // afterSend hook (e.g. refetchDiff)
         if (afterSend) {
@@ -439,10 +507,13 @@ export function useAgentChatSession(
       sendEndpoint,
       afterSend,
       clearAwaitingAgentResponse,
+      createTurnId,
+      clearRetryableRunId,
     ]
   );
 
-  // --- Retry last user message ---
+  // Legacy blind resend of the last user message. Prefer retryFailedRun for
+  // durable failed runs so the server retries by identity without resending text.
   const retryLast = useCallback(() => {
     if (locked || !threadId || isInteractionBusy) return;
     const lastUserMsg = [...visibleMessages]
@@ -452,12 +523,95 @@ export function useAgentChatSession(
     void send(lastUserMsg.text);
   }, [locked, threadId, isInteractionBusy, visibleMessages, send]);
 
+  // --- Retry failed durable run by identity (no text / optimistic message) ---
+  const retryFailedRun = useCallback(async () => {
+    if (locked || !threadId || isInteractionBusy) return;
+    if (!retryableRunId) return;
+
+    setSendError(null);
+    setIsStopConfirmed(false);
+    setIsSending(true);
+    beginAwaitingAgentResponse();
+    const runId = retryableRunId;
+
+    try {
+      const endpoint = `/api/chat/threads/${threadId}/runs/${runId}/retry`;
+      let res: Response | null = null;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: '{}',
+          });
+          break;
+        } catch (error) {
+          if (attempt === 1) throw error;
+        }
+      }
+      if (!res) {
+        throw new Error('Failed to retry run');
+      }
+
+      if (!res.ok) {
+        let msg = 'Failed to retry run';
+        try {
+          const body = await res.json();
+          if (body?.error) msg = mapSendErrorMessage(String(body.error));
+        } catch {
+          /* use default */
+        }
+        setSendError(msg);
+        clearAwaitingAgentResponse();
+        return;
+      }
+
+      try {
+        const accepted = (await res.json()) as {
+          status?: string;
+        } | null;
+        if (
+          accepted?.status === 'queued' ||
+          accepted?.status === 'dispatched'
+        ) {
+          setAdmissionPhase(accepted.status);
+        }
+      } catch {
+        // Empty or non-JSON success bodies are ignored.
+      }
+
+      clearRetryableRunId();
+
+      if (afterSend) {
+        await afterSend();
+      }
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : 'Failed to retry run';
+      setSendError(msg);
+      clearAwaitingAgentResponse();
+    } finally {
+      setIsSending(false);
+    }
+  }, [
+    locked,
+    threadId,
+    isInteractionBusy,
+    retryableRunId,
+    beginAwaitingAgentResponse,
+    clearRetryableRunId,
+    afterSend,
+    clearAwaitingAgentResponse,
+  ]);
+
   // --- Cancel ---
   const cancel = useCallback(async () => {
     if (!threadId || isCancelling) return;
     const endpoint = cancelEndpoint ?? `/api/chat/threads/${threadId}/cancel`;
     setSendError(null);
     setIsCancelling(true);
+    clearRetryableRunId();
     skipThinkingRestoreRef.current = true;
     try {
       const response = await fetch(endpoint, {
@@ -489,7 +643,7 @@ export function useAgentChatSession(
       );
       setIsCancelling(false);
     }
-  }, [threadId, cancelEndpoint, isCancelling, clearAwaitingAgentResponse]);
+  }, [threadId, cancelEndpoint, isCancelling, clearAwaitingAgentResponse, clearRetryableRunId]);
 
   // --- Clear send error ---
   const clearSendError = useCallback(() => setSendError(null), []);
@@ -503,8 +657,8 @@ export function useAgentChatSession(
     toolProgress,
     phaseEvents,
     runHealth,
-    progressLabel,
-    progressPhase,
+    progressLabel: effectiveProgressLabel,
+    progressPhase: effectiveProgressPhase,
     prdReady,
     backlogReady,
     isRetrying,
@@ -528,6 +682,8 @@ export function useAgentChatSession(
     // Actions
     send,
     retryLast,
+    retryFailedRun,
+    retryableRunId,
     cancel,
 
     // Errors

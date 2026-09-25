@@ -1,10 +1,13 @@
 const mockFindMany = jest.fn();
 const mockFindFirst = jest.fn();
+const mockChatThreadFindFirst = jest.fn();
 const mockUpdateWhere = jest.fn();
 const mockUpdateSet = jest.fn(() => ({ where: mockUpdateWhere }));
 const mockMarkTerminal = jest.fn();
 const mockRecoverStaleDispatchedRuns = jest.fn();
 const mockWorkerReaperAction = jest.fn();
+const mockWithRepoCacheLease = jest.fn();
+const mockIsDocumentHarvestPending = jest.fn().mockResolvedValue(false);
 
 jest.mock('../db/drizzle', () => ({
   db: {
@@ -12,6 +15,9 @@ jest.mock('../db/drizzle', () => ({
       agentRuns: {
         findMany: (...args: unknown[]) => mockFindMany(...args),
         findFirst: (...args: unknown[]) => mockFindFirst(...args),
+      },
+      chatThreads: {
+        findFirst: (...args: unknown[]) => mockChatThreadFindFirst(...args),
       },
     },
     update: jest.fn(() => ({ set: mockUpdateSet })),
@@ -35,6 +41,27 @@ jest.mock('../services/admissionGovernorService', () => ({
     mockRecoverStaleDispatchedRuns(...args),
   resolveBackgroundDispatchTtlMs: () => 30 * 60_000,
 }));
+jest.mock('../services/repoCacheLeaseService', () => {
+  class NonblockingRepoCacheLeaseUnavailableError extends Error {
+    constructor(cacheKey: string) {
+      super(`Nonblocking repository cache lease unavailable: ${cacheKey}`);
+      this.name = 'NonblockingRepoCacheLeaseUnavailableError';
+    }
+  }
+
+  class RepoCacheLeaseLostError extends Error {
+    constructor(detail = 'Repository cache lease was lost') {
+      super(detail);
+      this.name = 'RepoCacheLeaseLostError';
+    }
+  }
+
+  return {
+    withRepoCacheLease: (...args: unknown[]) => mockWithRepoCacheLease(...args),
+    NonblockingRepoCacheLeaseUnavailableError,
+    RepoCacheLeaseLostError,
+  };
+});
 jest.mock('../services/workerTierTelemetry', () => ({
   workerTierTelemetry: {
     inflight: jest.fn(),
@@ -48,6 +75,10 @@ jest.mock('../services/workerTierTelemetry', () => ({
     terminalReason: jest.fn(),
   },
 }));
+jest.mock('../services/aiRunV2/finishedAttemptReader', () => ({
+  isDocumentHarvestPendingForRun: (...args: unknown[]) =>
+    mockIsDocumentHarvestPending(...args),
+}));
 
 import {
   assessAgentRunHealth,
@@ -56,12 +87,19 @@ import {
   isTerminalAgentRunStatus,
   isInFlightToolProgressLabel,
   getLatestThreadRun,
+  getThreadRunStateSnapshot,
   canThisInstanceFailGeneration,
   reapOrphanedRuns,
+  startReaper,
+  stopReaper,
   shouldRunRetireReconciler,
   type AgentRunHealthConfig,
 } from '../services/agentRunReaperService';
 import { finalizeReconciledAgentRun, notifyRunEvent } from '../services/pgNotifyService';
+import {
+  NonblockingRepoCacheLeaseUnavailableError,
+  RepoCacheLeaseLostError,
+} from '../services/repoCacheLeaseService';
 
 const config: AgentRunHealthConfig = {
   heartbeatTimeoutMs: 5 * 60_000,
@@ -85,6 +123,28 @@ function timestamp(msAgo: number): string {
   return new Date(now - msAgo).toISOString();
 }
 
+function requireDeferred<T>(value: T | null | undefined, label: string): NonNullable<T> {
+  if (value == null) {
+    throw new Error(`${label} was not set`);
+  }
+  return value;
+}
+
+function createDeferredCallback<TArgs extends unknown[]>(label: string) {
+  let callback: ((...args: TArgs) => void) | null = null;
+  return {
+    set(next: (...args: TArgs) => void): void {
+      callback = next;
+    },
+    call(...args: TArgs): void {
+      if (!callback) {
+        throw new Error(`${label} was not set`);
+      }
+      callback(...args);
+    },
+  };
+}
+
 /**
  * Collect the string literals bound into a Drizzle filter. The table metadata
  * in these objects is self-referential, so JSON.stringify cannot be used.
@@ -96,6 +156,286 @@ function boundStrings(value: unknown, seen = new Set<unknown>()): string[] {
   return Object.values(value as Record<string, unknown>)
     .flatMap((entry) => boundStrings(entry, seen));
 }
+
+async function flushAsyncWork(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+describe('startReaper leader election', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    mockWithRepoCacheLease.mockResolvedValue(undefined);
+    mockFindMany.mockResolvedValue([]);
+  });
+
+  afterEach(async () => {
+    stopReaper();
+    await flushAsyncWork();
+    jest.useRealTimers();
+  });
+
+  it('routes immediate and periodic reaper cycles through the sweep lease', async () => {
+    startReaper();
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
+    expect(mockWithRepoCacheLease).toHaveBeenNthCalledWith(
+      1,
+      'agent-run-reaper:sweep',
+      expect.any(Function),
+      {
+        leaseMs: 55_000,
+        heartbeatMs: 15_000,
+        waitMs: 0,
+        releaseOnComplete: false,
+      },
+    );
+
+    await jest.advanceTimersByTimeAsync(60_000);
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+    expect(mockWithRepoCacheLease).toHaveBeenNthCalledWith(
+      2,
+      'agent-run-reaper:sweep',
+      expect.any(Function),
+      {
+        leaseMs: 55_000,
+        heartbeatMs: 15_000,
+        waitMs: 0,
+        releaseOnComplete: false,
+      },
+    );
+  });
+
+  it('skips quietly when another instance holds the reaper lease', async () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockWithRepoCacheLease.mockRejectedValueOnce(
+      new NonblockingRepoCacheLeaseUnavailableError('agent-run-reaper:sweep'),
+    );
+
+    startReaper();
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
+    expect(consoleSpy).not.toHaveBeenCalled();
+    consoleSpy.mockRestore();
+  });
+
+  it('does not overlap local reaper cycles while one is still running', async () => {
+    const leaseGate = createDeferredCallback<[]>('resolveLease');
+    mockWithRepoCacheLease.mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        leaseGate.set(resolve);
+      }),
+    );
+
+    startReaper();
+    await flushAsyncWork();
+    await jest.advanceTimersByTimeAsync(120_000);
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
+
+    leaseGate.call();
+    await flushAsyncWork();
+    await jest.advanceTimersByTimeAsync(60_000);
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+  });
+
+  it('logs unexpected failures and still allows the next cycle to run', async () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockWithRepoCacheLease
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce(undefined);
+
+    startReaper();
+    await flushAsyncWork();
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '[reaper] Initial reap failed:',
+      expect.objectContaining({ message: 'boom' }),
+    );
+
+    await jest.advanceTimersByTimeAsync(60_000);
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+    consoleSpy.mockRestore();
+  });
+
+  it('clears scheduler state when stopped so a fresh start can run again', async () => {
+    const leaseGate = createDeferredCallback<[]>('resolveLease');
+    mockWithRepoCacheLease.mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        leaseGate.set(resolve);
+      }),
+    );
+
+    startReaper();
+    await flushAsyncWork();
+    stopReaper();
+
+    mockWithRepoCacheLease.mockResolvedValueOnce(undefined);
+    startReaper();
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
+
+    leaseGate.call();
+    await flushAsyncWork();
+    await jest.advanceTimersByTimeAsync(60_000);
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+  });
+
+  it('runs reaper work exactly once when the lease holder callback executes', async () => {
+    startReaper();
+    await flushAsyncWork();
+
+    const mainOperation = mockWithRepoCacheLease.mock.calls[0]?.[1] as ((lease: {
+      signal: AbortSignal;
+      assertOwned(): Promise<void>;
+    }) => Promise<void>) | undefined;
+
+    expect(mainOperation).toBeDefined();
+    mockWithRepoCacheLease.mockResolvedValue(undefined);
+    await mainOperation?.({
+      signal: new AbortController().signal,
+      assertOwned: jest.fn().mockResolvedValue(undefined),
+    });
+
+    expect(mockFindMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the retire lease handoff rather than process-local cadence', async () => {
+    const expiredEventDrivenRow = {
+      id: 'run-ed-expired',
+      threadId: 'thread-ed',
+      status: 'running',
+      eventDriven: true,
+      createdAt: timestamp(3 * 60 * 60_000),
+      startedAt: timestamp(3 * 60 * 60_000),
+      heartbeatAt: timestamp(3 * 60 * 60_000),
+      progressAt: timestamp(3 * 60 * 60_000),
+      timeoutAt: timestamp(60_000),
+      lastError: null,
+    };
+    startReaper();
+    await flushAsyncWork();
+
+    const mainOperation = mockWithRepoCacheLease.mock.calls[0]?.[1] as ((lease: {
+      signal: AbortSignal;
+      assertOwned(): Promise<void>;
+    }) => Promise<void>) | undefined;
+
+    expect(mainOperation).toBeDefined();
+    mockFindMany.mockResolvedValue([expiredEventDrivenRow]);
+    mockWithRepoCacheLease.mockReset();
+    mockWithRepoCacheLease.mockRejectedValueOnce(
+      new NonblockingRepoCacheLeaseUnavailableError('agent-run-retire-reconciler:sweep'),
+    );
+    await mainOperation?.({
+      signal: new AbortController().signal,
+      assertOwned: jest.fn().mockResolvedValue(undefined),
+    });
+
+    expect(finalizeReconciledAgentRun).not.toHaveBeenCalled();
+    mockWithRepoCacheLease.mockReset();
+    jest.mocked(finalizeReconciledAgentRun).mockResolvedValue(true);
+    mockFindMany.mockResolvedValue([expiredEventDrivenRow]);
+    mockWithRepoCacheLease.mockResolvedValue(undefined);
+    await mainOperation?.({
+      signal: new AbortController().signal,
+      assertOwned: jest.fn().mockResolvedValue(undefined),
+    });
+
+    expect(finalizeReconciledAgentRun).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('reaper cooperative aborts', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockFindMany.mockResolvedValue([]);
+    jest.mocked(finalizeReconciledAgentRun).mockResolvedValue(true);
+  });
+
+  it('stops before the next row after lease ownership is lost', async () => {
+    const controller = new AbortController();
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-background-expired-1',
+        threadId: 'thread-background-1',
+        status: 'queued',
+        lane: 'background',
+        queuedAt: timestamp(31 * 60_000),
+        createdAt: timestamp(31 * 60_000),
+        progressPhase: null,
+        lastError: null,
+      },
+      {
+        id: 'run-background-expired-2',
+        threadId: 'thread-background-2',
+        status: 'queued',
+        lane: 'background',
+        queuedAt: timestamp(31 * 60_000),
+        createdAt: timestamp(31 * 60_000),
+        progressPhase: null,
+        lastError: null,
+      },
+    ]);
+    jest.mocked(finalizeReconciledAgentRun).mockImplementationOnce(async () => {
+      controller.abort(new RepoCacheLeaseLostError('Repository cache lease was lost'));
+      return true;
+    });
+
+    await expect(
+      reapOrphanedRuns({ now: () => now, config: workerConfig, signal: controller.signal }),
+    ).rejects.toBeInstanceOf(RepoCacheLeaseLostError);
+
+    expect(finalizeReconciledAgentRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts between publishing health and publishing cancel', async () => {
+    const controller = new AbortController();
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-legacy-abort',
+        threadId: 'thread-legacy',
+        status: 'running',
+        createdAt: timestamp(10 * 60_000),
+        startedAt: timestamp(10 * 60_000),
+        heartbeatAt: timestamp(6 * 60_000),
+        progressAt: timestamp(10_000),
+        timeoutAt: timestamp(-60 * 60_000),
+        lastError: null,
+      },
+    ]);
+    jest.mocked(notifyRunEvent).mockImplementationOnce(async () => {
+      controller.abort(new RepoCacheLeaseLostError('Repository cache lease was lost'));
+      return undefined;
+    });
+
+    await expect(
+      reapOrphanedRuns({ now: () => now, config, signal: controller.signal }),
+    ).rejects.toBeInstanceOf(RepoCacheLeaseLostError);
+
+    expect(notifyRunEvent).toHaveBeenCalledTimes(1);
+    expect(notifyRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'health',
+        event: expect.objectContaining({ health: 'worker_lost' }),
+      }),
+      { persist: true },
+    );
+  });
+});
 
 describe('assessAgentRunHealth', () => {
   it('TBI-001 DoD-3 uses the env-overridable two-hour hard-run budget', () => {
@@ -314,6 +654,108 @@ describe('reapOrphanedRuns', () => {
       failed: 0,
     });
     mockWorkerReaperAction.mockReset();
+  });
+
+  it.each([
+    ['off', jest.fn().mockResolvedValue(false)],
+    ['error', jest.fn().mockRejectedValue(new Error('flag unavailable'))],
+  ] as const)(
+    'keeps an event-driven durable queued turn past 90s when termination flag is %s',
+    async (_case, evaluateFlag) => {
+      mockFindMany.mockResolvedValue([
+        {
+          id: 'run-durable-queued',
+          threadId: 'thread-durable',
+          status: 'queued',
+          lane: 'ai-runs-interactive',
+          transportVersion: 'dapr-actor-v2',
+          eventDriven: true,
+          queuedAt: timestamp(2 * 60_000),
+          createdAt: timestamp(2 * 60_000),
+          startedAt: timestamp(2 * 60_000),
+          heartbeatAt: timestamp(2 * 60_000),
+          progressAt: null,
+          progressPhase: 'queued',
+          timeoutAt: timestamp(-3 * 60_000),
+          updatedAt: timestamp(2 * 60_000),
+          cancelRequested: false,
+          lastError: null,
+        },
+      ]);
+
+      await reapOrphanedRuns({
+        now: () => now,
+        config,
+        eventDrivenTerminationEnabled: evaluateFlag,
+      });
+
+      expect(evaluateFlag).not.toHaveBeenCalled();
+      expect(mockMarkTerminal).not.toHaveBeenCalled();
+      expect(mockUpdateSet).not.toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'failed' }),
+      );
+      expect(notifyRunEvent).not.toHaveBeenCalled();
+    },
+  );
+
+  it('uses the complete non-terminal query without a reaper limit or custom ordering', async () => {
+    mockFindMany.mockResolvedValue([]);
+
+    await reapOrphanedRuns({ now: () => now, config });
+
+    expect(mockFindMany).toHaveBeenCalledTimes(1);
+    expect(mockFindMany.mock.calls[0][0].limit).toBeUndefined();
+    expect(mockFindMany.mock.calls[0][0].orderBy).toBeUndefined();
+  });
+
+  it('processes row 201 in the same full-scan cycle', async () => {
+    const rows = Array.from({ length: 201 }, (_, index) => ({
+      id: `run-background-${String(index + 1).padStart(3, '0')}`,
+      threadId: `thread-background-${String(index + 1).padStart(3, '0')}`,
+      status: 'queued',
+      lane: 'background',
+      queuedAt: timestamp((31 + index) * 60_000),
+      createdAt: timestamp((31 + index) * 60_000),
+      progressPhase: null,
+      lastError: null,
+    }));
+    mockFindMany.mockResolvedValueOnce(rows);
+
+    await reapOrphanedRuns({ now: () => now, config: workerConfig });
+    const runIds = jest.mocked(finalizeReconciledAgentRun).mock.calls
+      .map(([input]) => input.runId);
+    expect(finalizeReconciledAgentRun).toHaveBeenCalledTimes(201);
+    expect(runIds).toContain('run-background-201');
+  });
+
+  it('preserves the query return order without in-memory re-sorting', async () => {
+    mockFindMany.mockResolvedValueOnce([
+      {
+        id: 'run-b',
+        threadId: 'thread-b',
+        status: 'queued',
+        lane: 'background',
+        queuedAt: timestamp(31 * 60_000),
+        createdAt: timestamp(31 * 60_000),
+        progressPhase: null,
+        lastError: null,
+      },
+      {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'queued',
+        lane: 'background',
+        queuedAt: timestamp(31 * 60_000),
+        createdAt: timestamp(31 * 60_000),
+        progressPhase: null,
+        lastError: null,
+      },
+    ]);
+
+    await reapOrphanedRuns({ now: () => now, config: workerConfig });
+
+    expect(jest.mocked(finalizeReconciledAgentRun).mock.calls.map(([input]) => input.runId))
+      .toEqual(['run-b', 'run-a']);
   });
 
   it('TBI-005 DoD-3 defaults worker clocks and accepts positive env overrides', () => {
@@ -667,6 +1109,86 @@ describe('reapOrphanedRuns', () => {
       expect.objectContaining({ status: 'failed' }),
     );
     expect(notifyRunEvent).not.toHaveBeenCalled();
+  });
+
+  it('leaves a running V2 row to the orchestrator while still reaping its V1 twin', async () => {
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-v2-running',
+        threadId: 'thread-v2',
+        status: 'running',
+        lane: 'background',
+        transportVersion: 'servicebus-blob-v2',
+        dispatchMessageId: 'dispatch-v2',
+        createdAt: timestamp(20 * 60_000),
+        startedAt: timestamp(20 * 60_000),
+        heartbeatAt: timestamp(20 * 60_000),
+        progressAt: timestamp(20 * 60_000),
+        updatedAt: timestamp(20 * 60_000),
+        cancelRequested: false,
+      },
+      {
+        id: 'run-v1-running',
+        threadId: 'thread-v1',
+        status: 'running',
+        lane: 'background',
+        transportVersion: 'http-files-v1',
+        dispatchMessageId: 'dispatch-v1',
+        createdAt: timestamp(20 * 60_000),
+        startedAt: timestamp(20 * 60_000),
+        heartbeatAt: timestamp(20 * 60_000),
+        progressAt: timestamp(20 * 60_000),
+        updatedAt: timestamp(20 * 60_000),
+        cancelRequested: false,
+      },
+    ]);
+
+    await reapOrphanedRuns({ now: () => now, config });
+
+    expect(mockMarkTerminal).toHaveBeenCalledTimes(1);
+    expect(mockMarkTerminal).toHaveBeenCalledWith(
+      'run-v1-running',
+      expect.objectContaining({ terminalReason: 'worker_lost' }),
+    );
+  });
+
+  it('leaves a queued V2 row past the V1 queue TTL to the orchestrator', async () => {
+    mockFindMany.mockResolvedValue([{
+      id: 'run-v2-queued',
+      threadId: 'thread-v2',
+      status: 'queued',
+      lane: 'background',
+      transportVersion: 'servicebus-blob-v2',
+      queuedAt: timestamp(31 * 60_000),
+      createdAt: timestamp(31 * 60_000),
+      progressPhase: null,
+      lastError: null,
+    }]);
+
+    await reapOrphanedRuns({ now: () => now, config });
+
+    expect(finalizeReconciledAgentRun).not.toHaveBeenCalled();
+    expect(mockUpdateSet).not.toHaveBeenCalled();
+  });
+
+  it('never republishes or terminalizes a dispatched V2 row on the V1 dispatch clocks', async () => {
+    mockFindMany.mockResolvedValue([{
+      id: 'run-v2-dispatched',
+      threadId: 'thread-v2',
+      status: 'dispatched',
+      lane: 'background',
+      transportVersion: 'servicebus-blob-v2',
+      dispatchMessageId: 'dispatch-v2',
+      dispatchedAt: timestamp(30 * 60_000 + 1),
+      updatedAt: timestamp(30 * 60_000 + 1),
+      progressPhase: null,
+      cancelRequested: false,
+    }]);
+
+    await reapOrphanedRuns({ now: () => now, config });
+
+    expect(mockMarkTerminal).not.toHaveBeenCalled();
+    expect(mockRecoverStaleDispatchedRuns).not.toHaveBeenCalled();
   });
 
   it('AC-3/VT-04/queue_ttl defaults to 30 minutes and accepts only positive env overrides', () => {
@@ -1431,6 +1953,180 @@ describe('getLatestThreadRun', () => {
   });
 });
 
+describe('getThreadRunStateSnapshot', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('loads queued latest-run facts in one query and pauses the watcher budget', async () => {
+    mockFindMany.mockResolvedValue([{
+      id: 'run-queued',
+      threadId: 'thread-1',
+      status: 'queued',
+      ownerInstance: 'worker-a',
+      createdAt: timestamp(30_000),
+      startedAt: timestamp(30_000),
+      heartbeatAt: timestamp(30_000),
+      progressAt: timestamp(30_000),
+      updatedAt: timestamp(30_000),
+      timeoutAt: timestamp(-60 * 60_000),
+      eventDriven: false,
+      lane: 'background',
+      dispatchMessageId: 'dispatch-queued',
+    }]);
+
+    await expect(
+      getThreadRunStateSnapshot('thread-1', { now: () => now, config }),
+    ).resolves.toEqual({
+      latestRun: {
+        status: 'queued',
+        ownerInstance: 'worker-a',
+        updatedAt: timestamp(30_000),
+        timeoutAt: timestamp(-60 * 60_000),
+      },
+      shouldChargeWorkBudget: false,
+      isAlive: true,
+      canFailGeneration: false,
+    });
+    expect(mockFindMany).toHaveBeenCalledTimes(1);
+    expect(mockChatThreadFindFirst).not.toHaveBeenCalled();
+  });
+
+  it('allows failure takeover after orphan grace without extra liveness queries', async () => {
+    mockFindMany.mockResolvedValue([{
+      id: 'run-terminal',
+      threadId: 'thread-1',
+      status: 'failed',
+      ownerInstance: 'worker-b',
+      createdAt: timestamp(4 * 60_000),
+      startedAt: timestamp(4 * 60_000),
+      heartbeatAt: timestamp(4 * 60_000),
+      progressAt: timestamp(4 * 60_000),
+      updatedAt: timestamp(4 * 60_000),
+      timeoutAt: null,
+      eventDriven: false,
+      lane: null,
+      dispatchMessageId: null,
+    }]);
+
+    await expect(
+      getThreadRunStateSnapshot('thread-1', { now: () => now, config }),
+    ).resolves.toEqual({
+      latestRun: {
+        status: 'failed',
+        ownerInstance: 'worker-b',
+        updatedAt: timestamp(4 * 60_000),
+        timeoutAt: null,
+      },
+      shouldChargeWorkBudget: true,
+      isAlive: false,
+      canFailGeneration: true,
+    });
+    expect(mockFindMany).toHaveBeenCalledTimes(1);
+    expect(mockChatThreadFindFirst).not.toHaveBeenCalled();
+  });
+
+  it('keeps a terminal V2 document waiting while its artifact harvest is pending', async () => {
+    mockIsDocumentHarvestPending.mockResolvedValueOnce(true);
+    mockFindMany.mockResolvedValue([{
+      id: 'run-v2-document',
+      threadId: 'thread-1',
+      status: 'completed',
+      ownerInstance: null,
+      createdAt: timestamp(60_000),
+      startedAt: timestamp(60_000),
+      heartbeatAt: timestamp(60_000),
+      progressAt: timestamp(60_000),
+      updatedAt: timestamp(60_000),
+      timeoutAt: null,
+      eventDriven: false,
+      lane: 'background',
+      dispatchMessageId: 'dispatch-v2',
+      transportVersion: 'servicebus-blob-v2',
+    }]);
+
+    await expect(
+      getThreadRunStateSnapshot('thread-1', { now: () => now, config }),
+    ).resolves.toMatchObject({
+      isAlive: false,
+      canFailGeneration: false,
+    });
+    expect(mockIsDocumentHarvestPending).toHaveBeenCalledWith(
+      'run-v2-document',
+    );
+  });
+
+  it('does not fall back to feature-flag lookups for event-driven classification', async () => {
+    mockFindMany.mockResolvedValue([{
+      id: 'run-dispatched',
+      threadId: 'thread-1',
+      status: 'dispatched',
+      ownerInstance: 'worker-a',
+      createdAt: timestamp(30_000),
+      startedAt: null,
+      heartbeatAt: null,
+      progressAt: null,
+      updatedAt: timestamp(30_000),
+      timeoutAt: timestamp(-60 * 60_000),
+      eventDriven: false,
+      lane: 'background',
+      dispatchMessageId: 'dispatch-1',
+    }]);
+
+    await expect(
+      getThreadRunStateSnapshot('thread-1', { now: () => now, config }),
+    ).resolves.toEqual({
+      latestRun: {
+        status: 'dispatched',
+        ownerInstance: 'worker-a',
+        updatedAt: timestamp(30_000),
+        timeoutAt: timestamp(-60 * 60_000),
+      },
+      shouldChargeWorkBudget: false,
+      isAlive: true,
+      canFailGeneration: false,
+    });
+    expect(mockFindMany).toHaveBeenCalledTimes(1);
+    expect(mockChatThreadFindFirst).not.toHaveBeenCalled();
+  });
+
+  it('preserves the live feature-flag fallback for legacy non-worker rows', async () => {
+    const eventDrivenTerminationEnabled = jest.fn().mockResolvedValue(true);
+    mockFindMany.mockResolvedValue([{
+      id: 'run-legacy',
+      threadId: 'thread-1',
+      status: 'running',
+      ownerInstance: 'worker-a',
+      createdAt: timestamp(30_000),
+      startedAt: timestamp(30_000),
+      heartbeatAt: timestamp(30_000),
+      progressAt: timestamp(30_000),
+      updatedAt: timestamp(30_000),
+      timeoutAt: timestamp(-60 * 60_000),
+      eventDriven: false,
+      lane: null,
+      dispatchMessageId: null,
+    }]);
+
+    await expect(
+      getThreadRunStateSnapshot('thread-1', {
+        now: () => now,
+        config,
+        eventDrivenTerminationEnabled,
+      }),
+    ).resolves.toEqual({
+      latestRun: {
+        status: 'running',
+        ownerInstance: 'worker-a',
+        updatedAt: timestamp(30_000),
+        timeoutAt: timestamp(-60 * 60_000),
+      },
+      shouldChargeWorkBudget: true,
+      isAlive: true,
+      canFailGeneration: false,
+    });
+    expect(eventDrivenTerminationEnabled).toHaveBeenCalledWith('thread-1');
+  });
+});
+
 describe('canThisInstanceFailGeneration', () => {
   beforeEach(() => jest.clearAllMocks());
 
@@ -1503,6 +2199,25 @@ describe('canThisInstanceFailGeneration', () => {
       updatedAt: timestamp(0),
     });
     await expect(canThisInstanceFailGeneration('thread-1')).resolves.toBe(true);
+  });
+
+  it('does not let a file watcher fail a terminal V2 document before harvest', async () => {
+    mockIsDocumentHarvestPending.mockResolvedValueOnce(true);
+    mockFindFirst.mockResolvedValue({
+      id: 'run-v2-document',
+      status: 'completed',
+      ownerInstance: null,
+      updatedAt: timestamp(0),
+      timeoutAt: null,
+      transportVersion: 'servicebus-blob-v2',
+    });
+
+    await expect(
+      canThisInstanceFailGeneration('thread-1'),
+    ).resolves.toBe(false);
+    expect(mockIsDocumentHarvestPending).toHaveBeenCalledWith(
+      'run-v2-document',
+    );
   });
 
   it('returns true when ownerInstance is null (legacy/reaped)', async () => {

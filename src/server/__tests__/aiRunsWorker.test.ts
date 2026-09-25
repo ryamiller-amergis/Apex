@@ -5,8 +5,12 @@ import { execFileSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
+import type {
+  AgentRunExecutionSnapshot,
+  ExecutionSnapshot,
+} from '../../shared/types/agentRunLifecycle';
 import type { AiRunIngestBody } from '../../shared/types/aiRunIngest';
+import type { DurableInteractiveTurnSpecification } from '../../shared/types/durableInteractiveTurn';
 import type { CursorExecutionRun } from '../services/cursorExecutionCore';
 import {
   AI_RUNS_DEFAULT_HEARTBEAT_MS,
@@ -29,6 +33,38 @@ const snapshot: Readonly<ExecutionSnapshot> = Object.freeze({
   projectId: 'project-1',
   threadId: 'thread-1',
 });
+
+const durableSnapshot: DurableInteractiveTurnSpecification = {
+  schemaVersion: 1,
+  kind: 'interactive-turn',
+  turnId: '10000000-0000-4000-8000-000000000001',
+  threadId: '10000000-0000-4000-8000-000000000002',
+  userId: '10000000-0000-4000-8000-000000000003',
+  projectId: 'project-1',
+  interactiveClass: 'fast',
+  workflowClass: 'home-chat',
+  model: 'model-a',
+  effort: 'low',
+  skill: null,
+  currentMessage: {
+    id: '10000000-0000-4000-8000-000000000001',
+    text: 'Hello',
+    hidden: false,
+    attachments: [],
+  },
+  transcript: [],
+  grounding: null,
+  mcpServers: [],
+  toolGrant: null,
+  currentPrompt: 'Hello',
+  recreationPrompt: 'Hello',
+  deadlines: {
+    absoluteTurnMs: 300_000,
+    repositoryPreparationMs: null,
+    firstEventMs: 30_000,
+    toolCallMs: 60_000,
+  },
+};
 
 const dispatch = {
   runId: 'run-1',
@@ -57,6 +93,7 @@ function createRun(options: {
 
 function setup(options: {
   run?: ReturnType<typeof createRun>;
+  executionSnapshot?: AgentRunExecutionSnapshot;
   postIngest?: (
     projectId: string,
     runId: string,
@@ -97,7 +134,7 @@ function setup(options: {
         lane: 'background',
         status: 'dispatched',
         dispatchMessageId: 'dispatch-current',
-        executionSnapshot: snapshot,
+        executionSnapshot: options.executionSnapshot ?? snapshot,
         cancelRequested: false,
       },
     }),
@@ -122,6 +159,18 @@ function setup(options: {
 }
 
 describe('aiRunsWorker host', () => {
+  it('rejects durable interactive snapshots before compatibility work starts', async () => {
+    const ctx = setup({ executionSnapshot: durableSnapshot });
+
+    await expect(ctx.worker.execute(dispatch)).rejects.toThrow(
+      'Background worker cannot execute a durable interactive turn'
+    );
+    expect(ctx.postIngest).not.toHaveBeenCalled();
+    expect(ctx.openCheckout).not.toHaveBeenCalled();
+    expect(ctx.createExecution).not.toHaveBeenCalled();
+    expect(ctx.flushArtifacts).not.toHaveBeenCalled();
+  });
+
   it('TBI-004 DoD-3 / BR-010 / AC-0 / VT-01: flushes after core success and before completed terminal', async () => {
     const ctx = setup();
 
@@ -415,6 +464,37 @@ describe('aiRunsWorker local checkout and heartbeat contracts', () => {
       expect(reader).toBeInstanceOf(LocalCheckoutReader);
     } finally {
       await fs.promises.rm(checkout, { recursive: true, force: true });
+    }
+  });
+
+  it('does not fall back to an App Service checkout for an isolated V2 worker', async () => {
+    const previous = process.env.REPO_READ_SERVICE_URL;
+    delete process.env.REPO_READ_SERVICE_URL;
+    const checkout = path.join(
+      process.cwd(),
+      `.v2-host-only-checkout-${Date.now()}`,
+    );
+    await fs.promises.mkdir(checkout, { recursive: true });
+    await fs.promises.writeFile(path.join(checkout, 'README.md'), 'host only');
+
+    try {
+      await expect(
+        openGroundedReader(
+          {
+            ...snapshot,
+            workspaceRef: checkout,
+            mirrorRef: path.join(checkout, 'missing.git'),
+            groundedSha: 'abc123',
+            repository: 'apex/ai-pilot',
+          },
+          { allowLocalCheckout: false },
+        ),
+      ).rejects.toThrow('worker-visible repository reader');
+    } finally {
+      await fs.promises.rm(checkout, { recursive: true, force: true });
+      if (previous !== undefined) {
+        process.env.REPO_READ_SERVICE_URL = previous;
+      }
     }
   });
 

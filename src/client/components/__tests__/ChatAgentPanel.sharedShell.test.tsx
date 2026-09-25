@@ -3,6 +3,7 @@ import type { ChatThread } from '../../../shared/types/chat';
 import { ChatAgentPanel } from '../ChatAgentPanel';
 
 const mockRetryLast = jest.fn();
+const mockRetryFailedRun = jest.fn();
 const mockSend = jest.fn();
 let mockSessionOverrides: Record<string, unknown> = {};
 
@@ -25,6 +26,8 @@ jest.mock('../../hooks/useAgentChatSession', () => ({
     send: mockSend,
     cancel: jest.fn(),
     retryLast: mockRetryLast,
+    retryFailedRun: mockRetryFailedRun,
+    retryableRunId: null,
     ...mockSessionOverrides,
   }),
 }));
@@ -695,5 +698,46 @@ describe('ChatAgentPanel shared Home shell', () => {
         attachments: [],
       });
     });
+  });
+
+  it('retries a failed durable run by identity without resending text', () => {
+    const failedThread: ChatThread = {
+      ...thread,
+      status: 'error',
+      messages: [
+        {
+          id: 'u1',
+          role: 'user',
+          text: 'Original question',
+          ts: '2026-09-23T12:00:00.000Z',
+        },
+        {
+          id: 'e1',
+          role: 'system',
+          text: 'Error: worker failed',
+          ts: '2026-09-23T12:00:01.000Z',
+        },
+      ],
+    };
+    mockSessionOverrides = {
+      messages: failedThread.messages,
+      status: 'error',
+      retryableRunId: '50000000-0000-4000-8000-000000000001',
+    };
+    mockRetryFailedRun.mockClear();
+    mockSend.mockClear();
+
+    render(
+      <ChatAgentPanel
+        thread={failedThread}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('chat-agent-message-retry-btn'));
+    expect(mockRetryFailedRun).toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
   });
 });

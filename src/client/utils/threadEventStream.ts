@@ -13,7 +13,10 @@
  * Both backends deliver the SAME `(data, lastEventId)` pair the SSE message
  * handler already expects — `data` is the serialized `SseEvent`, `lastEventId`
  * is the durable ordinal used for de-dupe/resume. Default is SSE, so existing
- * behavior is unchanged until the interactive transport is switched on.
+ * behavior is unchanged until the durable interactive transport flag
+ * (`ai-runs-v2-transport`) enables WebSocket preference at App bootstrap.
+ * After bounded WS failures, {@link openWsWithSseFallback} switches to SSE
+ * without sending or retrying a turn (transport-only).
  */
 
 export interface ThreadStreamHandlers {

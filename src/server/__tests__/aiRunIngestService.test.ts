@@ -12,6 +12,9 @@ const mockNotifyRunEvent = jest.fn();
 const mockConsumeCompletedArtifacts = jest.fn();
 const mockFailGeneratingTestCasesForThread = jest.fn();
 const mockWorkerColdStart = jest.fn();
+const mockSelect = jest.fn();
+const mockTransaction = jest.fn();
+const mockInsert = jest.fn();
 
 const executionSnapshot = {
   prompt: 'Frozen prompt',
@@ -31,6 +34,9 @@ jest.mock('../db/drizzle', () => ({
       },
     },
     update: (...args: unknown[]) => mockUpdate(...args),
+    select: (...args: unknown[]) => mockSelect(...args),
+    transaction: (...args: unknown[]) => mockTransaction(...args),
+    insert: (...args: unknown[]) => mockInsert(...args),
   },
 }));
 
@@ -377,6 +383,52 @@ describe('aiRunIngestService accepted events', () => {
       expect.objectContaining({ detail: 'reading file.bin' }),
       { persist: true },
     );
+  });
+
+  it('accepts a caller-supplied progress eventId for Redis↔Postgres identity', async () => {
+    mockFindFirst.mockResolvedValue(baseRow());
+    const eventId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+
+    await ingest('project-1', 'run-1', {
+      dispatchMessageId: 'dispatch-current',
+      kind: 'progress',
+      phase: 'implementation',
+      status: 'running',
+      eventId,
+      event: {
+        type: 'token',
+        text: 'hi',
+        streamOffset: 0,
+        streamEndOffset: 2,
+      },
+    });
+
+    expect(mockNotifyRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventId,
+        type: 'token',
+        event: expect.objectContaining({
+          type: 'token',
+          text: 'hi',
+          streamOffset: 0,
+          streamEndOffset: 2,
+        }),
+      }),
+      { persist: true },
+    );
+  });
+
+  it('rejects a non-UUID progress eventId', async () => {
+    mockFindFirst.mockResolvedValue(baseRow());
+
+    await expect(
+      ingest('project-1', 'run-1', {
+        dispatchMessageId: 'dispatch-current',
+        kind: 'progress',
+        eventId: 'not-a-uuid',
+        event: { type: 'token', text: 'x' },
+      }),
+    ).rejects.toMatchObject({ code: 'AI_RUN_VALIDATION' });
   });
 
   it('PBI-004 AC-2 / VT-04: next callback reports cancellation request', async () => {
@@ -830,5 +882,182 @@ describe('aiRunIngestService background usage recording', () => {
 
     expect(mockMarkTerminal).not.toHaveBeenCalled();
     expect(mockRecordUsage).not.toHaveBeenCalled();
+  });
+});
+
+describe('dapr-actor-v2 bootstrap + terminal remediation', () => {
+  const durableSpec = {
+    schemaVersion: 1,
+    kind: 'interactive-turn',
+    turnId: '10000000-0000-4000-8000-000000000001',
+    threadId: '10000000-0000-4000-8000-000000000002',
+    userId: '10000000-0000-4000-8000-000000000003',
+    projectId: 'project-1',
+    interactiveClass: 'fast',
+    workflowClass: 'home-chat',
+    model: 'model-a',
+    effort: 'low',
+    skill: null,
+    currentMessage: {
+      id: '10000000-0000-4000-8000-000000000001',
+      text: 'Hello',
+      hidden: false,
+      attachments: [],
+    },
+    transcript: [],
+    grounding: null,
+    mcpServers: [],
+    toolGrant: null,
+    currentPrompt: 'Hello',
+    recreationPrompt: 'Hello',
+    deadlines: {
+      absoluteTurnMs: 300_000,
+      repositoryPreparationMs: null,
+      firstEventMs: 30_000,
+      toolCallMs: 60_000,
+    },
+  };
+
+  function chainSelect(rows: unknown[]) {
+    const limit = jest.fn().mockResolvedValue(rows);
+    const where = jest.fn().mockReturnValue({ limit });
+    const from = jest.fn().mockReturnValue({ where, limit });
+    mockSelect.mockReturnValue({ from });
+    return { from, where, limit };
+  }
+
+  beforeEach(() => {
+    process.env.SESSION_SECRET = 'test-session-secret-for-proxy-tokens';
+    mockGetCursorAgentId.mockResolvedValue(null);
+    mockTransaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        select: mockSelect,
+        update: mockUpdate,
+        insert: mockInsert,
+        execute: jest.fn().mockResolvedValue(undefined),
+      };
+      return fn(tx);
+    });
+    mockInsert.mockReturnValue({
+      values: jest.fn().mockReturnValue({
+        onConflictDoNothing: jest.fn().mockResolvedValue(undefined),
+      }),
+    });
+  });
+
+  it('rejects interactive bootstrap when timeoutAt is missing (never synthesizes)', async () => {
+    mockFindFirst.mockResolvedValue(
+      baseRow({
+        transportVersion: 'dapr-actor-v2',
+        timeoutAt: null,
+        lane: 'ai-runs-interactive',
+        status: 'dispatched',
+      }),
+    );
+    chainSelect([
+      {
+        id: 'attempt-1',
+        runId: 'run-1',
+        attemptNumber: 1,
+        status: 'dispatched',
+        dispatchMessageId: 'dispatch-current',
+        specSnapshot: durableSpec,
+      },
+    ]);
+
+    await expect(
+      getBootstrap('run-1', 'dispatch-current'),
+    ).rejects.toMatchObject({
+      code: 'AI_RUN_ILLEGAL_TRANSITION',
+      message: expect.stringMatching(/timeoutAt/i),
+    });
+  });
+
+  it('runs dapr-actor-v2 terminal writes inside one db.transaction after fence', async () => {
+    mockFindFirst.mockResolvedValue(
+      baseRow({
+        transportVersion: 'dapr-actor-v2',
+        lane: 'ai-runs-interactive',
+        status: 'running',
+      }),
+    );
+
+    // assertAttemptFence + loadAttemptNumber + txn fence re-check
+    const attemptRow = {
+      id: 'attempt-1',
+      runId: 'run-1',
+      attemptNumber: 1,
+      status: 'running',
+      dispatchMessageId: 'dispatch-current',
+    };
+    let selectCall = 0;
+    mockSelect.mockImplementation(() => {
+      selectCall += 1;
+      const limit = jest.fn().mockImplementation(async () => {
+        if (selectCall <= 2) {
+          return [
+            {
+              ...attemptRow,
+              dispatchMessageId: 'dispatch-current',
+              status: 'running',
+            },
+          ];
+        }
+        // Inside txn: fence re-check
+        return [{ dispatchMessageId: 'dispatch-current', status: 'running' }];
+      });
+      const where = jest.fn().mockReturnValue({ limit });
+      const from = jest.fn().mockReturnValue({ where, limit });
+      return { from };
+    });
+
+    mockReturning.mockResolvedValue([
+      baseRow({
+        transportVersion: 'dapr-actor-v2',
+        lane: 'ai-runs-interactive',
+        status: 'failed',
+      }),
+    ]);
+
+    const result = await ingest('project-1', 'run-1', {
+      dispatchMessageId: 'dispatch-current',
+      attemptId: 'attempt-1',
+      kind: 'terminal',
+      status: 'failed',
+      artifactsFlushed: false,
+      failureCategory: 'tool_timeout',
+      detail: 'Interactive tool deadline exceeded',
+    });
+
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
+    expect(mockMarkTerminal).not.toHaveBeenCalled();
+    expect(result.run.status).toBe('failed');
+  });
+
+  it('returns 409 semantics before transactional writes on fence mismatch', async () => {
+    mockFindFirst.mockResolvedValue(
+      baseRow({
+        transportVersion: 'dapr-actor-v2',
+        lane: 'ai-runs-interactive',
+        status: 'running',
+        dispatchMessageId: 'dispatch-current',
+      }),
+    );
+    chainSelect([]); // attempt fence miss
+
+    await expect(
+      ingest('project-1', 'run-1', {
+        dispatchMessageId: 'dispatch-current',
+        attemptId: 'attempt-stale',
+        kind: 'terminal',
+        status: 'failed',
+        artifactsFlushed: false,
+      }),
+    ).rejects.toMatchObject({
+      code: 'AI_RUN_DISPATCH_MISMATCH',
+    });
+
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(mockMarkTerminal).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,8 @@
 import type { DispatchMessage } from '../../../shared/types/agentRunAdmission';
-import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
+import type {
+  AgentRunExecutionSnapshot,
+  ExecutionSnapshot,
+} from '../../../shared/types/agentRunLifecycle';
 import type {
   AiRunBootstrapResponse,
   AiRunIngestBody,
@@ -52,6 +55,15 @@ export type AiRunsWorker = {
   execute(dispatch: DispatchMessage): Promise<void>;
 };
 
+function isDurableInteractiveSnapshot(
+  snapshot: AgentRunExecutionSnapshot,
+): snapshot is Extract<
+  AgentRunExecutionSnapshot,
+  { kind: 'interactive-turn' }
+> {
+  return 'kind' in snapshot && snapshot.kind === 'interactive-turn';
+}
+
 function isSuccessfulWait(result: CursorExecutionResult): boolean {
   return result.waitResult.status === 'finished'
     || result.waitResult.status === 'completed'
@@ -101,7 +113,15 @@ export function createAiRunsWorker(
       // Bootstrap precedes every project-scoped callback or workspace access.
       const bootstrap = await dependencies.getBootstrap(dispatch);
       const { projectId, run: bootstrapRun } = bootstrap;
-      const snapshot = Object.freeze({ ...bootstrapRun.executionSnapshot });
+      const persistedSnapshot = bootstrapRun.executionSnapshot;
+      if (isDurableInteractiveSnapshot(persistedSnapshot)) {
+        throw new Error(
+          'Background worker cannot execute a durable interactive turn',
+        );
+      }
+      const snapshot: Readonly<ExecutionSnapshot> = Object.freeze({
+        ...persistedSnapshot,
+      });
 
       if (
         bootstrapRun.dispatchMessageId !== dispatch.dispatchMessageId

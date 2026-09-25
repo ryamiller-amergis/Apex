@@ -909,7 +909,7 @@ describe('POST /api/interviews/prds/:prdId/sync', () => {
     mockPrdService.getPrd.mockResolvedValue(prd);
     mockReadOutputPrd.mockReturnValue('# Generated PRD');
     mockReadOutputBacklog.mockReturnValue({ items: [] });
-    mockPrdService.syncPrdContent.mockResolvedValue(undefined);
+    mockPrdService.syncPrdContent.mockResolvedValue(true);
 
     const res = await request(buildApp()).post('/api/interviews/prds/prd-1/sync');
 

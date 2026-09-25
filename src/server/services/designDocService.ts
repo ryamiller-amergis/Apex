@@ -1,9 +1,9 @@
 import fs from 'fs';
 import path from 'path';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../db/drizzle';
-import { designDocs, appUsers, chatThreads, prds, interviews, designPrototypes, designPlans, agentRuns } from '../db/schema';
+import { designDocs, appUsers, chatThreads, prds, interviews, designPrototypes, designPlans, agentRuns, repoCacheLeases } from '../db/schema';
 
 const authorUser = alias(appUsers, 'author_user');
 const designDocOwnerUser = alias(appUsers, 'design_doc_owner_user');
@@ -14,7 +14,7 @@ import { stampGroundingProvenance } from '../../shared/utils/groundingProvenance
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
 import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, isOutputWorkspaceReadable, createThread as createChatThread, sendMessage, cancelRun, prepareBackgroundWorkflowTurn, hydrateThread } from './chatAgentService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
-import { isThreadRunAlive, canThisInstanceFailGeneration, getLatestThreadRun } from './agentRunReaperService';
+import { isThreadRunAlive, canThisInstanceFailGeneration, getThreadRunStateSnapshot } from './agentRunReaperService';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, propagateDesignDocApprovers, notifyApproversDocumentReady } from './documentApprovalService';
 import { getUnresolvedCount } from './reviewCommentService';
@@ -30,6 +30,7 @@ import {
   resolveRunGroundingSurface,
   runGroundingService,
 } from './runGroundingService';
+import { tryAcquireRepoCacheLease } from './repoCacheLeaseService';
 
 const VALID_STATUSES: DesignDocStatus[] = ['generating', 'generation_failed', 'validating', 'draft', 'pending_review', 'reviewer_approved', 'approved', 'revision_requested'];
 
@@ -633,6 +634,9 @@ export async function syncDesignDocContent(
 
 const WATCHER_INTERVAL_MS = 5_000;
 const WATCHER_MAX_ATTEMPTS = 360;
+const DOC_WATCHER_LEASE_MS = 30_000;
+const DOC_WATCHER_LEASE_HEARTBEAT_MS = 10_000;
+const DOC_WATCHER_BACKOFF_MS = [5_000, 10_000, 20_000, 30_000] as const;
 
 /**
  * How long the agent itself may take, excluding any wait for a worker.
@@ -643,12 +647,14 @@ const WATCHER_MAX_ATTEMPTS = 360;
  * still queued and expires on docs the agent never had a chance to write.
  */
 const WATCHER_WORK_BUDGET_MS = WATCHER_MAX_ATTEMPTS * WATCHER_INTERVAL_MS;
-
-/** Statuses meaning no worker has begun, so a tick must not be charged. */
-const PRE_START_RUN_STATUSES: readonly string[] = ['queued', 'dispatched'];
-
 const activeDocWatchers = new Map<string, ReturnType<typeof setInterval>>();
+const activeDocWatcherThreads = new Map<string, string>();
+const activeSingleFeatureDocWatcherReleases = new Map<string, () => Promise<void>>();
+const activeSingleFeatureDocWatcherTokens = new Map<string, number>();
+const latestSingleFeatureDocStartTokens = new Map<string, number>();
+const pendingSingleFeatureDocWatcherStarts = new Set<string>();
 const activeValidationWatchers = new Map<string, ReturnType<typeof setInterval>>();
+let nextSingleFeatureDocWatcherToken = 1;
 
 /**
  * Working time left per doc + thread.
@@ -672,23 +678,8 @@ function docWatcherDeadlineKey(designDocId: string, chatThreadId: string): strin
   return docThreadKey(designDocId, chatThreadId);
 }
 
-/**
- * Whether this tick counts against the work budget, given the latest run row.
- *
- * A missing row is charged: a doc whose run never materialized still has to
- * reach a terminal state rather than hold a watcher open forever.
- */
-async function isAgentWorking(chatThreadId: string): Promise<boolean> {
-  try {
-    const run = await getLatestThreadRun(chatThreadId);
-    return !run || !PRE_START_RUN_STATUSES.includes(run.status);
-  } catch (err) {
-    console.warn(
-      `[singleFeatureDocWatcher] run status lookup failed (threadId=${chatThreadId}):`,
-      (err as Error).message,
-    );
-    return true;
-  }
+function singleFeatureDocWatcherLeaseKey(designDocId: string, chatThreadId: string): string {
+  return `design-doc-generation-watcher:${designDocId}:${chatThreadId}`;
 }
 
 /**
@@ -727,11 +718,28 @@ function releaseDocWatcherDeadline(designDocId: string, chatThreadId: string): v
   docWatcherWorkBudgets.delete(docWatcherDeadlineKey(designDocId, chatThreadId));
 }
 
-function stopDocWatcher(designDocId: string): void {
+function clearDocWatcher(designDocId: string): boolean {
   const handle = activeDocWatchers.get(designDocId);
-  if (handle !== undefined) {
-    clearInterval(handle);
-    activeDocWatchers.delete(designDocId);
+  if (handle === undefined) {
+    return false;
+  }
+  clearTimeout(handle);
+  activeDocWatchers.delete(designDocId);
+  activeDocWatcherThreads.delete(designDocId);
+  return true;
+}
+
+function stopDocWatcher(designDocId: string): void {
+  const hadWatcher = clearDocWatcher(designDocId);
+  const releaseLease = activeSingleFeatureDocWatcherReleases.get(designDocId);
+  activeSingleFeatureDocWatcherTokens.delete(designDocId);
+  if (releaseLease) {
+    activeSingleFeatureDocWatcherReleases.delete(designDocId);
+    void releaseLease().catch((err: Error) => {
+      console.error(`[singleFeatureDocWatcher] lease release failed (designDocId=${designDocId}):`, err.message);
+    });
+  }
+  if (hadWatcher) {
     console.log(`[designDocWatcher] Cancelled — designDocId=${designDocId}`);
   }
 }
@@ -865,6 +873,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
     if (attempts > WATCHER_MAX_ATTEMPTS) {
       clearInterval(interval);
       activeDocWatchers.delete(seedDocId);
+      activeDocWatcherThreads.delete(seedDocId);
       console.warn(`[designDocWatcher] Timed out — resetting to draft (seedDocId=${seedDocId}, threadId=${chatThreadId})`);
       const timedOutDoc = await db.query.designDocs.findFirst({
         where: eq(designDocs.id, seedDocId),
@@ -894,6 +903,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
     if (!seedDoc || !seedDoc.chatThreadId || (seedDoc.status && seedDoc.status !== 'generating')) {
       clearInterval(interval);
       activeDocWatchers.delete(seedDocId);
+      activeDocWatcherThreads.delete(seedDocId);
       await cleanupWorkspace(chatThreadId);
       console.log(`[designDocWatcher] syncOutputToDb handled creation — workspace cleaned (seedDocId=${seedDocId})`);
       return;
@@ -935,6 +945,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
           if (!stillActive) {
             clearInterval(interval);
             activeDocWatchers.delete(seedDocId);
+            activeDocWatcherThreads.delete(seedDocId);
             return;
           }
           const [row] = await db
@@ -1010,12 +1021,14 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
       }
       clearInterval(interval);
       activeDocWatchers.delete(seedDocId);
+      activeDocWatcherThreads.delete(seedDocId);
       await cleanupWorkspace(chatThreadId);
       console.log(`[designDocWatcher] Done — ${createdSlugs.size} feature(s) created, workspace cleaned (seedDocId=${seedDocId})`);
     }
   }, WATCHER_INTERVAL_MS);
 
   activeDocWatchers.set(seedDocId, interval);
+  activeDocWatcherThreads.set(seedDocId, chatThreadId);
 }
 
 /**
@@ -1082,10 +1095,46 @@ async function explainMissingOutput(
   return `Missing output files: ${missing}`;
 }
 
+interface DesignDocLeaseFence {
+  cacheKey: string;
+  ownerId: string;
+  generation: number;
+}
+
+function buildLeaseFenceCondition(leaseFence?: DesignDocLeaseFence) {
+  if (!leaseFence) {
+    return undefined;
+  }
+  return sql`exists (
+    select 1
+    from ${repoCacheLeases}
+    where ${repoCacheLeases.cacheKey} = ${leaseFence.cacheKey}
+      and ${repoCacheLeases.ownerId} = ${leaseFence.ownerId}
+      and ${repoCacheLeases.generation} = ${leaseFence.generation}
+      and ${repoCacheLeases.expiresAt} > now()
+  )`;
+}
+
+async function deactivateTerminalGrounding(
+  chatThreadId: string,
+  project: string,
+): Promise<void> {
+  const result = await runGroundingService.persistThenMarkTerminalInactive(
+    { runType: 'chat', runId: chatThreadId, project },
+    async () => undefined,
+  );
+  void result.persisted;
+  void result.deactivatedCount;
+}
+
 export async function finalizeSingleFeatureDoc(
   designDocId: string,
   chatThreadId: string,
   project: string,
+  options?: {
+    assertOwned?: () => Promise<void>;
+    leaseFence?: DesignDocLeaseFence;
+  },
 ): Promise<boolean> {
   // Thread guard: skip if the row no longer owns this thread (already completed/retried).
   const guard = await db.query.designDocs.findFirst({
@@ -1097,6 +1146,7 @@ export async function finalizeSingleFeatureDoc(
     columns: { id: true, skillSettingsId: true },
   });
   if (!guard) {
+    releaseDocOutput(designDocId, chatThreadId);
     console.log(`[finalizeSingleFeatureDoc] Skipped — row already finalised or thread replaced (designDocId=${designDocId})`);
     return false;
   }
@@ -1119,18 +1169,29 @@ export async function finalizeSingleFeatureDoc(
     const missing = [!design && 'design', !techSpec && 'tech-spec', !assumptions && 'assumptions'].filter(Boolean).join(', ');
     const generationError = await explainMissingOutput(chatThreadId, missing);
     console.warn(`[finalizeSingleFeatureDoc] ${generationError} — marking generation_failed (designDocId=${designDocId})`);
-    await runGroundingService.persistThenMarkTerminalInactive(
-        { runType: 'chat', runId: chatThreadId, project },
-        () =>
-          db.update(designDocs)
-            .set({ status: 'generation_failed', generationError, updatedAt: new Date().toISOString() })
-            .where(and(
-              eq(designDocs.id, designDocId),
-              eq(designDocs.chatThreadId, chatThreadId),
-              eq(designDocs.status, 'generating'),
-            )),
-      );
+    await options?.assertOwned?.();
+    const leaseFenceCondition = buildLeaseFenceCondition(options?.leaseFence);
+    const conditions = [
+      eq(designDocs.id, designDocId),
+      eq(designDocs.chatThreadId, chatThreadId),
+      eq(designDocs.status, 'generating'),
+      ...(leaseFenceCondition ? [leaseFenceCondition] : []),
+    ];
+    const query = db.update(designDocs)
+      .set({ status: 'generation_failed', generationError, updatedAt: new Date().toISOString() })
+      .where(and(...conditions));
+    const updatedRows = await (typeof (query as { returning?: unknown }).returning === 'function'
+      ? (query as { returning(input: { id: typeof designDocs.id }): Promise<Array<{ id: string }>> })
+        .returning({ id: designDocs.id })
+      : Promise.resolve([{ id: designDocId }]));
+    if ((updatedRows?.length ?? 0) === 0) {
+      releaseDocOutput(designDocId, chatThreadId);
+      console.log(`[finalizeSingleFeatureDoc] Skipped failure finalize — guarded update lost (designDocId=${designDocId})`);
+      return false;
+    }
+    await deactivateTerminalGrounding(chatThreadId, project);
     releaseDocOutput(designDocId, chatThreadId);
+    await options?.assertOwned?.();
     await cleanupWorkspace(chatThreadId);
     return false;
   }
@@ -1138,25 +1199,36 @@ export async function finalizeSingleFeatureDoc(
   const skillConfig = await resolveSkillConfig({ project, settingsId: guard.skillSettingsId ?? undefined });
   const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
 
-  await runGroundingService.persistThenMarkTerminalInactive(
-      { runType: 'chat', runId: chatThreadId, project },
-      () =>
-        db.update(designDocs)
-          .set({
-            designContent: design,
-            techSpecContent: techSpec,
-            assumptionsContent: assumptions,
-            status: finalStatus,
-            generationError: null,
-            updatedAt: new Date().toISOString(),
-          })
-          .where(and(
-            eq(designDocs.id, designDocId),
-            eq(designDocs.chatThreadId, chatThreadId),
-            eq(designDocs.status, 'generating'),
-          )),
-    );
+  await options?.assertOwned?.();
+  const leaseFenceCondition = buildLeaseFenceCondition(options?.leaseFence);
+  const conditions = [
+    eq(designDocs.id, designDocId),
+    eq(designDocs.chatThreadId, chatThreadId),
+    eq(designDocs.status, 'generating'),
+    ...(leaseFenceCondition ? [leaseFenceCondition] : []),
+  ];
+  const query = db.update(designDocs)
+    .set({
+      designContent: design,
+      techSpecContent: techSpec,
+      assumptionsContent: assumptions,
+      status: finalStatus,
+      generationError: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(and(...conditions));
+  const updatedRows = await (typeof (query as { returning?: unknown }).returning === 'function'
+    ? (query as { returning(input: { id: typeof designDocs.id }): Promise<Array<{ id: string }>> })
+      .returning({ id: designDocs.id })
+    : Promise.resolve([{ id: designDocId }]));
+  if ((updatedRows?.length ?? 0) === 0) {
+    releaseDocOutput(designDocId, chatThreadId);
+    console.log(`[finalizeSingleFeatureDoc] Skipped success finalize — guarded update lost (designDocId=${designDocId})`);
+    return false;
+  }
 
+  await deactivateTerminalGrounding(chatThreadId, project);
+  await options?.assertOwned?.();
   await cleanupWorkspace(chatThreadId);
   console.log(`[finalizeSingleFeatureDoc] Done — status=${finalStatus} (designDocId=${designDocId})`);
 
@@ -1178,115 +1250,300 @@ export async function finalizeSingleFeatureDoc(
  * Unlike the multi-feature watcher, this updates the existing doc row directly
  * instead of spawning child rows.
  */
-export function startSingleFeatureDocWatcher(
+export async function tryStartSingleFeatureDocWatcher(
   designDocId: string,
   chatThreadId: string,
   prdId: string,
   project: string,
-): void {
-  stopDocWatcher(designDocId);
+): Promise<boolean> {
+  void prdId;
+  const pendingKey = docThreadKey(designDocId, chatThreadId);
+  if (pendingSingleFeatureDocWatcherStarts.has(pendingKey)) {
+    return false;
+  }
+  const startToken = nextSingleFeatureDocWatcherToken++;
+  latestSingleFeatureDocStartTokens.set(designDocId, startToken);
+
+  pendingSingleFeatureDocWatcherStarts.add(pendingKey);
+  let lease: Awaited<ReturnType<typeof tryAcquireRepoCacheLease>> | null = null;
+  try {
+    lease = await tryAcquireRepoCacheLease(
+      singleFeatureDocWatcherLeaseKey(designDocId, chatThreadId),
+      {
+        leaseMs: DOC_WATCHER_LEASE_MS,
+        heartbeatMs: DOC_WATCHER_LEASE_HEARTBEAT_MS,
+        waitMs: 0,
+      },
+    );
+  } finally {
+    pendingSingleFeatureDocWatcherStarts.delete(pendingKey);
+  }
+
+  if (!lease) {
+    return false;
+  }
+  const heldLease = lease;
+  if (latestSingleFeatureDocStartTokens.get(designDocId) !== startToken) {
+    await heldLease.release();
+    return false;
+  }
+
+  let watcherStopped = false;
+  let stopLocalWatcherImpl: ((reason: 'normal' | 'lease-lost') => void) | null = null;
+  const stopLocalWatcher = (reason: 'normal' | 'lease-lost'): void => {
+    stopLocalWatcherImpl?.(reason);
+  };
+  let startAborted = heldLease.signal.aborted;
+  const startAbortListener = (): void => {
+    startAborted = true;
+    stopLocalWatcher('lease-lost');
+  };
+  heldLease.signal.addEventListener('abort', startAbortListener);
+
+  let hydrated = false;
+  try {
+    hydrated = await hydrateThread(chatThreadId);
+  } catch (err) {
+    await heldLease.release();
+    console.warn(
+      `[singleFeatureDocWatcher] hydrate failed (threadId=${chatThreadId}):`,
+      (err as Error).message,
+    );
+    return false;
+  }
+  if (startAborted || !hydrated) {
+    await heldLease.release();
+    return false;
+  }
+  if (latestSingleFeatureDocStartTokens.get(designDocId) !== startToken) {
+    await heldLease.release();
+    return false;
+  }
+
+  const activeThreadId = activeDocWatcherThreads.get(designDocId);
+  if (activeThreadId === chatThreadId && isDocWatcherActive(designDocId)) {
+    await heldLease.release();
+    return false;
+  }
+  if (activeThreadId && activeThreadId !== chatThreadId) {
+    activeSingleFeatureDocWatcherTokens.set(designDocId, startToken);
+    const hadWatcher = clearDocWatcher(designDocId);
+    const releaseLease = activeSingleFeatureDocWatcherReleases.get(designDocId);
+    if (releaseLease) {
+      activeSingleFeatureDocWatcherReleases.delete(designDocId);
+      void releaseLease().catch((err: Error) => {
+        console.error(`[singleFeatureDocWatcher] lease release failed (designDocId=${designDocId}):`, err.message);
+      });
+    }
+    if (hadWatcher) {
+      console.log(`[designDocWatcher] Cancelled — designDocId=${designDocId}`);
+    }
+  } else {
+    activeSingleFeatureDocWatcherTokens.set(designDocId, startToken);
+  }
 
   const deadlineKey = docWatcherDeadlineKey(designDocId, chatThreadId);
   let budgetLeftMs = docWatcherWorkBudgets.get(deadlineKey) ?? WATCHER_WORK_BUDGET_MS;
   docWatcherWorkBudgets.set(deadlineKey, budgetLeftMs);
   let attempts = 0;
   let lastTickState = '';
+  let failureCount = 0;
+  const isCurrentWatcher = (): boolean =>
+    activeSingleFeatureDocWatcherTokens.get(designDocId) === startToken;
+
+  stopLocalWatcherImpl = (reason: 'normal' | 'lease-lost'): void => {
+    if (watcherStopped || !isCurrentWatcher()) return;
+    watcherStopped = true;
+    const hadWatcher = clearDocWatcher(designDocId);
+    const releaseLease = activeSingleFeatureDocWatcherReleases.get(designDocId);
+    activeSingleFeatureDocWatcherReleases.delete(designDocId);
+    activeSingleFeatureDocWatcherTokens.delete(designDocId);
+    if (reason === 'normal') {
+      void releaseLease?.().catch((err: Error) => {
+        console.error(`[singleFeatureDocWatcher] lease release failed (designDocId=${designDocId}):`, err.message);
+      });
+    }
+    if (hadWatcher) {
+      if (reason === 'lease-lost') {
+        console.warn(`[singleFeatureDocWatcher] Lease lost — stopping local timer (designDocId=${designDocId}, threadId=${chatThreadId})`);
+      } else {
+        console.log(`[designDocWatcher] Cancelled — designDocId=${designDocId}`);
+      }
+    }
+  };
 
   console.log(`[singleFeatureDocWatcher] Started — designDocId=${designDocId} threadId=${chatThreadId}`);
-  void hydrateThread(chatThreadId).catch((err) => {
-    console.warn(
-      `[singleFeatureDocWatcher] hydrate failed (threadId=${chatThreadId}):`,
-      (err as Error).message,
+  if (startAborted) {
+    stopLocalWatcher('lease-lost');
+    return false;
+  }
+
+  const scheduleNextTick = (delayMs: number): void => {
+    if (watcherStopped || heldLease.signal.aborted || !isCurrentWatcher()) {
+      return;
+    }
+    const timeout = setTimeout(() => {
+      void runTick();
+    }, delayMs);
+    timeout.unref?.();
+    activeDocWatchers.set(designDocId, timeout);
+    activeDocWatcherThreads.set(designDocId, chatThreadId);
+  };
+
+  const applyTickBackoff = (err: unknown): void => {
+    if (heldLease.signal.aborted || watcherStopped || !isCurrentWatcher()) {
+      return;
+    }
+    const backoffMs = DOC_WATCHER_BACKOFF_MS[Math.min(failureCount, DOC_WATCHER_BACKOFF_MS.length - 1)];
+    failureCount = Math.min(failureCount + 1, DOC_WATCHER_BACKOFF_MS.length);
+    console.error(
+      `[singleFeatureDocWatcher] Tick failed — backing off ${Math.round(backoffMs / 1000)}s (designDocId=${designDocId}, threadId=${chatThreadId})`,
+      err,
+    );
+    scheduleNextTick(backoffMs);
+  };
+
+  const runTick = async (): Promise<void> => {
+    if (watcherStopped || heldLease.signal.aborted || !isCurrentWatcher()) {
+      return;
+    }
+    try {
+        const design = readOutputDesignDoc(chatThreadId);
+        const techSpec = readOutputTechSpec(chatThreadId);
+        const assumptions = readOutputAssumptions(chatThreadId);
+        const filesReady = Boolean(design && techSpec && assumptions);
+        if (design && techSpec && assumptions) {
+          captureDocOutput(designDocId, chatThreadId, { design, techSpec, assumptions });
+        }
+
+        const runState = await getThreadRunStateSnapshot(chatThreadId);
+        if (watcherStopped || heldLease.signal.aborted || !isCurrentWatcher()) {
+          return;
+        }
+        attempts += 1;
+
+        if (runState.shouldChargeWorkBudget) {
+          budgetLeftMs -= WATCHER_INTERVAL_MS;
+          docWatcherWorkBudgets.set(deadlineKey, budgetLeftMs);
+        }
+
+        if (budgetLeftMs <= 0) {
+          if (heldLease.signal.aborted || !isCurrentWatcher()) {
+            return;
+          }
+          await heldLease.assertOwned();
+          const leaseFenceCondition = buildLeaseFenceCondition({
+            cacheKey: heldLease.cacheKey,
+            ownerId: heldLease.ownerId,
+            generation: heldLease.generation,
+          });
+          console.warn(`[singleFeatureDocWatcher] Timed out — marking generation_failed (designDocId=${designDocId}, threadId=${chatThreadId})`);
+          const conditions = [
+            eq(designDocs.id, designDocId),
+            eq(designDocs.chatThreadId, chatThreadId),
+            eq(designDocs.status, 'generating'),
+            ...(leaseFenceCondition ? [leaseFenceCondition] : []),
+          ];
+          const query = db.update(designDocs)
+            .set({ status: 'generation_failed', generationError: 'Generation timed out', updatedAt: new Date().toISOString() })
+            .where(and(...conditions));
+          const updatedRows = await (typeof (query as { returning?: unknown }).returning === 'function'
+            ? (query as { returning(input: { id: typeof designDocs.id }): Promise<Array<{ id: string }>> })
+              .returning({ id: designDocs.id })
+            : Promise.resolve([{ id: designDocId }]));
+          if ((updatedRows?.length ?? 0) === 0) {
+            stopLocalWatcher('normal');
+            return;
+          }
+          await deactivateTerminalGrounding(chatThreadId, project);
+          releaseDocWatcherDeadline(designDocId, chatThreadId);
+          releaseDocOutput(designDocId, chatThreadId);
+          stopLocalWatcher('normal');
+          return;
+        }
+        const agentFinished = isThreadIdle(chatThreadId) && !runState.isAlive;
+
+        const tickState = `${!!design}|${!!techSpec}|${!!assumptions}|${agentFinished}`;
+        if (tickState !== lastTickState || attempts % 12 === 0) {
+          lastTickState = tickState;
+          console.log(
+            `[singleFeatureDocWatcher] tick #${attempts} — design=${!!design} techSpec=${!!techSpec} assumptions=${!!assumptions} agentFinished=${agentFinished} (designDocId=${designDocId})`,
+          );
+        }
+
+        if (filesReady && agentFinished) {
+          if (heldLease.signal.aborted || !isCurrentWatcher()) {
+            return;
+          }
+          await finalizeSingleFeatureDoc(designDocId, chatThreadId, project, {
+            assertOwned: heldLease.assertOwned,
+            leaseFence: {
+              cacheKey: heldLease.cacheKey,
+              ownerId: heldLease.ownerId,
+              generation: heldLease.generation,
+            },
+          });
+          releaseDocWatcherDeadline(designDocId, chatThreadId);
+          stopLocalWatcher('normal');
+          return;
+        }
+
+        if (filesReady && !agentFinished) {
+          console.log(
+            `[singleFeatureDocWatcher] Output files present but run still alive — waiting (designDocId=${designDocId})`,
+          );
+          failureCount = 0;
+          scheduleNextTick(WATCHER_INTERVAL_MS);
+          return;
+        }
+
+        if (agentFinished) {
+          if (!runState.canFailGeneration) {
+            console.warn(`[singleFeatureDocWatcher] Waiting — not run owner or no terminal run yet (designDocId=${designDocId})`);
+            failureCount = 0;
+            scheduleNextTick(WATCHER_INTERVAL_MS);
+            return;
+          }
+          if (heldLease.signal.aborted || !isCurrentWatcher()) {
+            return;
+          }
+          console.warn(`[singleFeatureDocWatcher] Run terminal without complete output — marking generation_failed (designDocId=${designDocId})`);
+          await finalizeSingleFeatureDoc(designDocId, chatThreadId, project, {
+            assertOwned: heldLease.assertOwned,
+            leaseFence: {
+              cacheKey: heldLease.cacheKey,
+              ownerId: heldLease.ownerId,
+              generation: heldLease.generation,
+            },
+          });
+          releaseDocWatcherDeadline(designDocId, chatThreadId);
+          stopLocalWatcher('normal');
+          return;
+        }
+        failureCount = 0;
+        scheduleNextTick(WATCHER_INTERVAL_MS);
+    } catch (err) {
+      applyTickBackoff(err);
+    }
+  };
+
+  activeSingleFeatureDocWatcherReleases.set(designDocId, heldLease.release);
+  scheduleNextTick(WATCHER_INTERVAL_MS);
+  return true;
+}
+
+export function startSingleFeatureDocWatcher(
+  designDocId: string,
+  chatThreadId: string,
+  prdId: string,
+  project: string,
+): void {
+  void tryStartSingleFeatureDocWatcher(designDocId, chatThreadId, prdId, project).catch((err) => {
+    console.error(
+      `[singleFeatureDocWatcher] Failed to start (designDocId=${designDocId}, threadId=${chatThreadId})`,
+      err,
     );
   });
-
-  const interval = setInterval(async () => {
-    attempts += 1;
-
-    if (await isAgentWorking(chatThreadId)) {
-      budgetLeftMs -= WATCHER_INTERVAL_MS;
-      docWatcherWorkBudgets.set(deadlineKey, budgetLeftMs);
-    }
-
-    if (budgetLeftMs <= 0) {
-      clearInterval(interval);
-      activeDocWatchers.delete(designDocId);
-      releaseDocWatcherDeadline(designDocId, chatThreadId);
-      releaseDocOutput(designDocId, chatThreadId);
-      console.warn(`[singleFeatureDocWatcher] Timed out — marking generation_failed (designDocId=${designDocId}, threadId=${chatThreadId})`);
-      await runGroundingService.persistThenMarkTerminalInactive(
-        { runType: 'chat', runId: chatThreadId, project },
-        () =>
-          db.update(designDocs)
-            .set({ status: 'generation_failed', generationError: 'Generation timed out', updatedAt: new Date().toISOString() })
-            .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'generating'))),
-      );
-      return;
-    }
-
-    const design = readOutputDesignDoc(chatThreadId);
-    const techSpec = readOutputTechSpec(chatThreadId);
-    const assumptions = readOutputAssumptions(chatThreadId);
-    const filesReady = Boolean(design && techSpec && assumptions);
-    // Capture before deciding anything. The write may not be permitted for
-    // several more ticks, and the workspace does not always survive that long.
-    if (design && techSpec && assumptions) {
-      captureDocOutput(designDocId, chatThreadId, { design, techSpec, assumptions });
-    }
-    const agentFinished = isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId));
-
-    // A doc generates for up to 30 minutes, so an unconditional 5s tick log is
-    // hundreds of lines per doc. Report transitions, plus a minute heartbeat so
-    // a wedged watcher is still visible.
-    const tickState = `${!!design}|${!!techSpec}|${!!assumptions}|${agentFinished}`;
-    if (tickState !== lastTickState || attempts % 12 === 0) {
-      lastTickState = tickState;
-      console.log(
-        `[singleFeatureDocWatcher] tick #${attempts} — design=${!!design} techSpec=${!!techSpec} assumptions=${!!assumptions} agentFinished=${agentFinished} (designDocId=${designDocId})`,
-      );
-    }
-
-    // Success finalize only after the run is terminal — leftover workspace files
-    // must not promote the doc while generation is still in flight.
-    if (filesReady && agentFinished) {
-      clearInterval(interval);
-      activeDocWatchers.delete(designDocId);
-      releaseDocWatcherDeadline(designDocId, chatThreadId);
-      await finalizeSingleFeatureDoc(designDocId, chatThreadId, project);
-      return;
-    }
-
-    if (filesReady && !agentFinished) {
-      console.log(
-        `[singleFeatureDocWatcher] Output files present but run still alive — waiting (designDocId=${designDocId})`,
-      );
-      return;
-    }
-
-    // Fail only when the run is dead across instances — in-memory idle alone is
-    // unreliable after hydrateThread resets status on non-owner workers.
-    if (agentFinished) {
-      if (!(await canThisInstanceFailGeneration(chatThreadId))) {
-        // Keep polling — do NOT clear the interval. Clearing here permanently
-        // abandoned docs in `generating` when a non-owner recovery watcher saw a
-        // terminal run owned by a dead instance. Orphan grace eventually lets
-        // canThisInstanceFailGeneration return true, and the work budget above
-        // is the backstop when it never does.
-        console.warn(`[singleFeatureDocWatcher] Waiting — not run owner or no terminal run yet (designDocId=${designDocId})`);
-        return;
-      }
-      clearInterval(interval);
-      activeDocWatchers.delete(designDocId);
-      releaseDocWatcherDeadline(designDocId, chatThreadId);
-      // Says only what this tick observed: the run is terminal and the files are
-      // incomplete. finalizeSingleFeatureDoc names the cause, which may be a
-      // dispatch that never reached a worker rather than anything the agent did.
-      console.warn(`[singleFeatureDocWatcher] Run terminal without complete output — marking generation_failed (designDocId=${designDocId})`);
-      await finalizeSingleFeatureDoc(designDocId, chatThreadId, project);
-    }
-  }, WATCHER_INTERVAL_MS);
-
-  activeDocWatchers.set(designDocId, interval);
 }
 
 /**
@@ -1805,7 +2062,16 @@ export function startValidationWatcher(designDocId: string, validationThreadId: 
 
       const scorecard = parseAgentValidationScorecard(scorecardRaw);
       const reportMd = readOutputValidationScorecardMd(validationThreadId) ?? undefined;
-      await syncValidationResult(designDocId, scorecard, reportMd);
+      const applied = await syncValidationResult(
+        designDocId,
+        scorecard,
+        reportMd,
+        { expectedThreadId: validationThreadId },
+      );
+      if (!applied) {
+        cleanupWorkspace(validationThreadId);
+        return;
+      }
       console.log(`[validationWatcher] Scorecard synced — score=${scorecard.overall_score} is_ready=${scorecard.is_ready} (designDocId=${designDocId})`);
       cleanupWorkspace(validationThreadId);
     } catch (err) {
@@ -1877,7 +2143,8 @@ export async function syncValidationResult(
   designDocId: string,
   scorecard: ValidationScorecard,
   reportMd?: string,
-): Promise<void> {
+  completionGuard?: { expectedThreadId: string },
+): Promise<boolean> {
   const newStatus: DesignDocStatus = 'pending_review';
   const effectiveReportMd = reportMd ?? generateFallbackReport(scorecard);
   const updates: Partial<typeof designDocs.$inferInsert> = {
@@ -1889,7 +2156,24 @@ export async function syncValidationResult(
   };
   if (newStatus) updates.status = newStatus;
 
-  await db.update(designDocs).set(updates).where(eq(designDocs.id, designDocId));
+  const update = db.update(designDocs).set(updates);
+  if (completionGuard) {
+    const applied = await update
+      .where(
+        and(
+          eq(designDocs.id, designDocId),
+          eq(designDocs.status, 'validating'),
+          eq(
+            designDocs.validationThreadId,
+            completionGuard.expectedThreadId,
+          ),
+        ),
+      )
+      .returning({ id: designDocs.id });
+    if (applied.length === 0) return false;
+  } else {
+    await update.where(eq(designDocs.id, designDocId));
+  }
 
   notifyAiCompletion('design_doc_validation_complete', designDocId, {
     title: '',
@@ -1904,6 +2188,7 @@ export async function syncValidationResult(
       console.error(`[syncValidationResult] Failed to notify approvers (docId=${designDocId})`, err),
     );
   }
+  return true;
 }
 
 export async function cancelValidation(id: string, requestingUserId: string): Promise<void> {

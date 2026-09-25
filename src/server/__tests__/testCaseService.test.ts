@@ -3,11 +3,16 @@ import os from 'os';
 import path from 'path';
 
 jest.mock('../db/drizzle', () => {
-  const mockUpdateChains: Array<{ set: jest.Mock; where: jest.Mock }> = [];
+  const mockUpdateChains: Array<{
+    set: jest.Mock;
+    where: jest.Mock;
+    returning: jest.Mock;
+  }> = [];
   const makeUpdateChain = () => {
     const chain = {
       set: jest.fn().mockReturnThis(),
-      where: jest.fn().mockResolvedValue(undefined),
+      where: jest.fn().mockReturnThis(),
+      returning: jest.fn().mockResolvedValue([{ id: 'updated' }]),
     };
     mockUpdateChains.push(chain);
     return chain;
@@ -18,20 +23,24 @@ jest.mock('../db/drizzle', () => {
     returning: jest.fn().mockResolvedValue([{ id: 'tc-new' }]),
   });
 
+  const db: Record<string, unknown> = {
+    query: {
+      agentRuns: { findFirst: jest.fn().mockResolvedValue(null) },
+      chatThreads: { findFirst: jest.fn() },
+      interviews: { findFirst: jest.fn() },
+      prds: { findFirst: jest.fn() },
+      testCases: { findFirst: jest.fn() },
+    },
+    update: jest.fn().mockImplementation(makeUpdateChain),
+    insert: jest.fn().mockImplementation(makeInsertChain),
+    select: jest.fn(),
+  };
+  db.transaction = jest.fn(
+    async (work: (transaction: unknown) => Promise<unknown>) => work(db),
+  );
   return {
     __mockUpdateChains: mockUpdateChains,
-    db: {
-      query: {
-        agentRuns: { findFirst: jest.fn().mockResolvedValue(null) },
-        chatThreads: { findFirst: jest.fn() },
-        interviews: { findFirst: jest.fn() },
-        prds: { findFirst: jest.fn() },
-        testCases: { findFirst: jest.fn() },
-      },
-      update: jest.fn().mockImplementation(makeUpdateChain),
-      insert: jest.fn().mockImplementation(makeInsertChain),
-      select: jest.fn(),
-    },
+    db,
   };
 });
 
@@ -122,7 +131,11 @@ import {
 
 const { db: mockDb, __mockUpdateChains: mockUpdateChains } = jest.requireMock('../db/drizzle') as {
   db: any;
-  __mockUpdateChains: Array<{ set: jest.Mock; where: jest.Mock }>;
+  __mockUpdateChains: Array<{
+    set: jest.Mock;
+    where: jest.Mock;
+    returning: jest.Mock;
+  }>;
 };
 
 const {
@@ -697,6 +710,88 @@ describe('testCaseService', () => {
         }),
       );
       expect(fs.existsSync(workspaceDir)).toBe(false);
+    });
+
+    it('does not reapply a harvested suite after another writer made it ready', async () => {
+      const workspaceDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'ai-pilot-test-cases-replay-'),
+      );
+      const outputDir = path.join(workspaceDir, '.ai-pilot', 'output');
+      fs.mkdirSync(outputDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(outputDir, 'feature.test-cases.json'),
+        JSON.stringify({ suites: [] }),
+        'utf8',
+      );
+      mockDb.query.testCases.findFirst.mockResolvedValue({
+        chatThreadId: 'thread-tc',
+        status: 'ready',
+      });
+      mockDb.query.prds.findFirst.mockResolvedValue({
+        title: 'Feature',
+        chatThreadId: 'source-thread',
+        backlogJson: { items: [] },
+      });
+
+      try {
+        await expect(
+          syncTestCaseOutput(
+            'tc-1',
+            'prd-1',
+            'thread-tc',
+            workspaceDir,
+          ),
+        ).resolves.toBe(false);
+        expect(mockUpdateChains).toHaveLength(0);
+      } finally {
+        fs.rmSync(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it('commits suite readiness and PRD counts in one transaction', async () => {
+      const workspaceDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'ai-pilot-test-cases-atomic-'),
+      );
+      const outputDir = path.join(workspaceDir, '.ai-pilot', 'output');
+      fs.mkdirSync(outputDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(outputDir, 'feature.test-cases.json'),
+        JSON.stringify({
+          suites: [
+            {
+              pbiId: 'PBI-1',
+              testCases: [{ id: 'TC-1' }],
+            },
+          ],
+        }),
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(outputDir, 'feature.backlog.json'),
+        JSON.stringify({ items: [{ id: 'PBI-1' }] }),
+        'utf8',
+      );
+      mockDb.query.testCases.findFirst.mockResolvedValue({
+        chatThreadId: 'thread-tc',
+        status: 'generating',
+      });
+      mockDb.query.prds.findFirst.mockResolvedValue({
+        title: 'Feature',
+        chatThreadId: 'source-thread',
+        backlogJson: { items: [{ id: 'PBI-1' }] },
+      });
+
+      try {
+        await syncTestCaseOutput(
+          'tc-1',
+          'prd-1',
+          'thread-tc',
+          workspaceDir,
+        );
+        expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+      } finally {
+        fs.rmSync(workspaceDir, { recursive: true, force: true });
+      }
     });
   });
 

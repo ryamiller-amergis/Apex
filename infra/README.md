@@ -180,10 +180,37 @@ Dev and prod **must not share state**. See [Workspaces and environments](#worksp
 | `ado_project` | Azure DevOps project | (required) |
 | `github_org` | GitHub org for checkout (`GITHUB_ORG`; not the Apex product name) | `""` |
 | `github_token` | GitHub PAT for clone/fetch (`GITHUB_TOKEN`; same as App Service) | `null` |
+| `postgresql_location` | PostgreSQL Flexible Server region (keep equal to `app_service_location`) | `Central US` |
+| `postgresql_server_name` | PostgreSQL Flexible Server name | `psql-hub-dev` |
+| `postgresql_sku_name` | PostgreSQL compute SKU | `B_Standard_B1ms` |
+| `postgresql_storage_mb` | Provisioned storage in MiB; cannot be reduced after growth | `32768` |
+| `postgresql_backup_retention_days` | Point-in-time backup retention | `7` |
+| `postgresql_azure_services_firewall_rule_name` | Name of the `0.0.0.0` Azure-services firewall rule | `allow-azure-services` |
+| `postgresql_pg_stat_statements_track` | `pg_stat_statements` capture mode (`none` / `top` / `all`) | `top` |
+| `postgresql_log_min_duration_statement_ms` | Log statements slower than this many ms (`-1` disables) | `5000` |
 
 The App Service plan uses the fixed `app_service_worker_count`. Production
 autoscaling is intentionally deferred until Interview and other long-running AI
 flows have a multi-instance ownership, cleanup, and scale-in recovery design.
+
+### Importing an existing PostgreSQL server
+
+Before importing a Flexible Server, set its exact name, region, SKU, storage,
+backup retention, availability zone, and managed firewall-rule name in the
+environment's tfvars. Storage cannot shrink, and a mismatched region or name
+produces a replacement plan.
+
+Never change `postgresql_server_name` or `postgresql_location` and apply while
+Terraform state still owns a different server. Back up state, remove the old
+addresses from state without destroying Azure resources, import the active
+server and child resources, then require a refreshed plan with no PostgreSQL
+create, replacement, resize, or destroy. See the approved production
+reconciliation runbook before changing production state. Terraform ignores
+imported administrator credentials after server creation because Azure cannot
+return them with matching state metadata; rotate the password through the
+approved secret process. This credential-ownership rule applies to all
+environments: after a server is created, administrator credentials are managed
+outside Terraform rather than changed through tfvars.
 
 ### Shared async + PDF processing settings
 
@@ -730,6 +757,48 @@ Because of that, repo-read reports its own exits instead: see
 (probe or scale), `uncaughtException` means it died on its own, and a
 `RepoReadServiceStarted` with no preceding exit means SIGKILL — OOM or an expired
 shutdown grace period, neither of which a handler can catch.
+
+---
+
+## AI Platform V2 foundation (additive Central US)
+
+Task 4 adds an **opt-in** V2 control-plane stack beside the existing V1 AI runs
+resources. It is gated by `enable_ai_platform_v2` (default `false`).
+
+### Locked decisions
+
+- New **Central US** Standard Service Bus namespace (`sbns-apex-ai-v2-*`).
+- New **Central US** StorageV2 account with private `ai-run-artifacts`.
+- Existing East US `sbns-apex-ai-*` and shared async storage (**remain in
+  service** for live traffic). Do not stop or delete them in this task.
+- After V2 is proven in production, a later approved runbook stops old
+  resources for an observation window, then deletes them.
+
+### Enable checklist (plan only until apply is approved)
+
+1. Set `enable_ai_platform_v2 = true` in the target workspace tfvars.
+2. Provide networking: `ai_platform_v2_create_network = true` **or**
+   `ai_platform_v2_infrastructure_subnet_id` (delegated `/25` for ZR CAE).
+3. Provide logging: existing `ai_platform_v2_log_analytics_workspace_id` **or**
+   `ai_platform_v2_create_log_analytics_workspace = true`.
+4. Keep `ai_platform_v2_internal_load_balancer = false` for the first public
+   smoke. Private endpoints are a later reversible phase.
+5. Run `terraform plan` and obtain an explicit apply approval. **Do not apply
+   from this README alone.**
+
+Immutable queue and CAE contracts are checked into
+`infra/ai-platform-v2-contracts.json` and asserted by
+`src/server/__tests__/aiPlatformV2Infrastructure.test.ts`.
+
+### Files
+
+| File | Owns |
+|------|------|
+| `ai-platform-v2.tf` | RG, SB, queues, artifact storage/lifecycle, ZR CAE + profiles |
+| `ai-platform-v2-networking.tf` | Optional VNet + CAE/App/PE subnets |
+| `ai-platform-v2-identities.tf` | Five UAMIs + entity-scoped RBAC |
+| `ai-platform-v2-monitoring.tf` | Log Analytics wiring |
+| `ai-platform-v2-contracts.json` | Duplicate-detection matrix and CAE expectations |
 
 ---
 

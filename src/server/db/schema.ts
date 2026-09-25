@@ -1,4 +1,4 @@
-import { bigserial, boolean, check, date, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigint, bigserial, boolean, check, date, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type { RepoProvider, RepoRole, RunType } from '../../shared/types/runGrounding';
@@ -29,11 +29,23 @@ import type {
 } from '../../shared/types/chat';
 import type {
   AgentRunCancelState,
+  AgentRunExecutionSnapshot,
   AgentRunLane,
   AgentRunStatus,
   AgentRunTerminalReason,
-  ExecutionSnapshot,
 } from '../../shared/types/agentRunLifecycle';
+import type {
+  DurableInteractiveTurnSpecification,
+  InteractiveClass,
+} from '../../shared/types/durableInteractiveTurn';
+import type {
+  AiControlPlaneLeaseKey,
+  AiRunArtifactStatus,
+  AiRunBlobRef,
+  AiRunTransportVersion,
+  AiRunV2AttemptStatus,
+  AiRunV2FailureCategory,
+} from '../../shared/types/aiRunV2';
 import type { ContentSnapshot, DesignDocValidationOverride, PrdReadinessOverride, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
 import type { UiLabHistoryEntry } from '../../shared/types/uiLab';
@@ -121,7 +133,14 @@ export const chatMessageAttachments = pgTable('chat_message_attachments', {
   type: text('type').notNull().default('text/plain'),
   size: integer('size').notNull(),
   path: text('path'),
-});
+  blobRef: jsonb('blob_ref').$type<AiRunBlobRef>(),
+  sha256: text('sha256'),
+}, (t) => ({
+  sha256Check: check(
+    'chat_message_attachments_sha256_check',
+    sql`${t.sha256} IS NULL OR ${t.sha256} ~ '^[0-9a-f]{64}$'`,
+  ),
+}));
 
 // ── Relations (enable db.query.* relational API) ──────────────────────────────
 
@@ -610,6 +629,9 @@ export const designDocs = pgTable('design_docs', {
   directFeatureUq: uniqueIndex('uq_design_docs_prd_direct_feature')
     .on(t.prdId, t.featureIndex)
     .where(sql`${t.designPrototypeId} IS NULL AND ${t.featureIndex} IS NOT NULL`),
+  transientUpdatedIdx: index('idx_design_docs_transient_updated')
+    .on(t.status, t.updatedAt, t.id)
+    .where(sql`${t.status} IN ('generating', 'validating')`),
 }));
 
 // ── Interview Relations ────────────────────────────────────────────────────────
@@ -1660,16 +1682,38 @@ export const agentRuns = pgTable('agent_runs', {
   queuedAt: timestamp('queued_at', { withTimezone: true, mode: 'string' }),
   dispatchedAt: timestamp('dispatched_at', { withTimezone: true, mode: 'string' }),
   dispatchMessageId: text('dispatch_message_id'),
-  executionSnapshot: jsonb('execution_snapshot').$type<ExecutionSnapshot>(),
+  executionSnapshot: jsonb('execution_snapshot').$type<AgentRunExecutionSnapshot>(),
   cancelRequested: boolean('cancel_requested').notNull().default(false),
   cancelState: text('cancel_state').$type<AgentRunCancelState>(),
   terminalReason: text('terminal_reason').$type<AgentRunTerminalReason>(),
+  // Durable protocol: V1 default; background and interactive V2 write explicit transports.
+  transportVersion: text('transport_version').$type<AiRunTransportVersion>().notNull().default('http-files-v1'),
+  requestedByUserId: text('requested_by_user_id'),
+  interactiveClass: text('interactive_class').$type<InteractiveClass>(),
+  clientTurnId: uuid('client_turn_id'),
+  clientTurnHash: text('client_turn_hash'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   statusHeartbeatIdx: index('idx_agent_runs_status_heartbeat').on(t.status, t.heartbeatAt),
   statusLaneIdx: index('idx_agent_runs_status_lane').on(t.status, t.lane),
   projectStatusIdx: index('idx_agent_runs_project_status').on(t.projectId, t.status),
+  threadCreatedIdx: index('idx_agent_runs_thread_created').on(t.threadId, t.createdAt),
+  threadActiveIdx: index('idx_agent_runs_thread_active')
+    .on(t.threadId, t.createdAt)
+    .where(sql`${t.status} IN ('queued', 'dispatched', 'running')`),
+  v2ActiveThreadIdx: uniqueIndex('uq_agent_runs_v2_active_thread')
+    .on(t.threadId)
+    .where(sql`${t.transportVersion} = 'servicebus-blob-v2' AND ${t.status} IN ('queued', 'dispatched', 'running')`),
+  clientTurnUniq: uniqueIndex('uq_agent_runs_client_turn')
+    .on(t.threadId, t.clientTurnId)
+    .where(sql`${t.clientTurnId} IS NOT NULL`),
+  interactiveActiveThreadUniq: uniqueIndex('uq_agent_runs_interactive_active_thread')
+    .on(t.threadId)
+    .where(sql`${t.lane} = 'ai-runs-interactive' AND ${t.status} IN ('queued', 'dispatched', 'running')`),
+  interactiveUserActiveIdx: index('idx_agent_runs_interactive_user_active')
+    .on(t.requestedByUserId, t.interactiveClass, t.createdAt)
+    .where(sql`${t.lane} = 'ai-runs-interactive' AND ${t.status} IN ('queued', 'dispatched', 'running')`),
   queuedWorkerIdx: index('idx_agent_runs_queued_at_worker')
     .on(t.queuedAt)
     .where(sql`${t.lane} = 'background'`),
@@ -1692,6 +1736,26 @@ export const agentRuns = pgTable('agent_runs', {
   terminalReasonCheck: check(
     'agent_runs_terminal_reason_check',
     sql`${t.terminalReason} IS NULL OR ${t.terminalReason} IN ('worker_lost', 'progress_timeout', 'queue_ttl', 'forced_cancel', 'dispatch_ttl')`,
+  ),
+  transportVersionCheck: check(
+    'agent_runs_transport_version_check',
+    sql`${t.transportVersion} IN ('http-files-v1', 'servicebus-blob-v2', 'dapr-actor-v2')`,
+  ),
+  interactiveClassCheck: check(
+    'agent_runs_interactive_class_check',
+    sql`${t.interactiveClass} IS NULL OR ${t.interactiveClass} IN ('fast', 'agentic')`,
+  ),
+  clientTurnHashCheck: check(
+    'agent_runs_client_turn_hash_check',
+    sql`${t.clientTurnHash} IS NULL OR ${t.clientTurnHash} ~ '^[0-9a-f]{64}$'`,
+  ),
+  requestedByUserIdCheck: check(
+    'agent_runs_requested_by_user_id_check',
+    sql`${t.requestedByUserId} IS NULL OR (${t.requestedByUserId} = btrim(${t.requestedByUserId}) AND char_length(${t.requestedByUserId}) BETWEEN 1 AND 256)`,
+  ),
+  daprActorRequiredFieldsCheck: check(
+    'agent_runs_dapr_actor_v2_required_fields_check',
+    sql`${t.transportVersion} <> 'dapr-actor-v2' OR (${t.requestedByUserId} IS NOT NULL AND ${t.interactiveClass} IS NOT NULL AND ${t.clientTurnId} IS NOT NULL AND ${t.clientTurnHash} IS NOT NULL)`,
   ),
   nonTerminalTimeoutCheck: check(
     'agent_runs_non_terminal_timeout_at_check',
@@ -1717,6 +1781,125 @@ export const agentRunEvents = pgTable('agent_run_events', {
   sourceSequenceUniq: unique('agent_run_events_source_sequence_key').on(t.runId, t.sourceInstance, t.sequence),
   threadOrdinalIdx: index('idx_agent_run_events_thread_ordinal').on(t.threadId, t.ordinal),
   runSequenceIdx: index('idx_agent_run_events_run_sequence').on(t.runId, t.sequence),
+}));
+
+// ── AI Run V2 control plane (Task 3 persistence contracts) ─────────────────────
+
+export const aiRunAttempts = pgTable('ai_run_attempts', {
+  id: text('id').primaryKey().default(sql`gen_random_uuid()::text`),
+  runId: text('run_id').notNull().references(() => agentRuns.id, { onDelete: 'cascade' }),
+  attemptNumber: integer('attempt_number').notNull(),
+  dispatchMessageId: text('dispatch_message_id').notNull(),
+  status: text('status').$type<AiRunV2AttemptStatus>().notNull().default('queued'),
+  artifactStatus: text('artifact_status').$type<AiRunArtifactStatus>().notNull().default('pending'),
+  lastCheckpointSequence: integer('last_checkpoint_sequence').notNull().default(0),
+  lastCheckpointAt: timestamp('last_checkpoint_at', { withTimezone: true, mode: 'string' }),
+  specRef: jsonb('spec_ref').$type<AiRunBlobRef>(),
+  specSnapshot: jsonb('spec_snapshot').$type<DurableInteractiveTurnSpecification>(),
+  manifestRef: jsonb('manifest_ref').$type<AiRunBlobRef>(),
+  failureCategory: text('failure_category').$type<AiRunV2FailureCategory>(),
+  failureDetail: text('failure_detail'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  runAttemptUniq: unique('uq_ai_run_attempts_run_number').on(t.runId, t.attemptNumber),
+  dispatchMessageUniq: unique('uq_ai_run_attempts_dispatch_message_id').on(t.dispatchMessageId),
+  activeAttemptUniq: uniqueIndex('uq_ai_run_attempts_active_run')
+    .on(t.runId)
+    .where(sql`${t.status} IN ('queued', 'dispatched', 'running', 'checking_worker', 'finalizing')`),
+  runCreatedIdx: index('idx_ai_run_attempts_run_created').on(t.runId, t.createdAt),
+  statusCheck: check(
+    'ai_run_attempts_status_check',
+    sql`${t.status} IN ('queued', 'dispatched', 'running', 'checking_worker', 'finalizing', 'completed', 'failed', 'cancelled')`,
+  ),
+  artifactStatusCheck: check(
+    'ai_run_attempts_artifact_status_check',
+    sql`${t.artifactStatus} IN ('pending', 'uploading', 'manifest_written', 'verified', 'failed')`,
+  ),
+  failureCategoryCheck: check(
+    'ai_run_attempts_failure_category_check',
+    sql`${t.failureCategory} IS NULL OR ${t.failureCategory} IN ('worker_lost', 'progress_timeout', 'queue_ttl', 'dispatch_ttl', 'forced_cancel', 'poison_message', 'artifact_verification_failed', 'lease_lost', 'internal_error', 'hard_timeout', 'tool_timeout', 'worker_start_failed', 'validation_failed')`,
+  ),
+  attemptNumberCheck: check(
+    'ai_run_attempts_attempt_number_check',
+    sql`${t.attemptNumber} > 0`,
+  ),
+  checkpointSequenceCheck: check(
+    'ai_run_attempts_checkpoint_sequence_check',
+    sql`${t.lastCheckpointSequence} >= 0`,
+  ),
+}));
+
+export const aiRunOutbox = pgTable('ai_run_outbox', {
+  id: text('id').primaryKey().default(sql`gen_random_uuid()::text`),
+  idempotencyKey: text('idempotency_key').notNull(),
+  kind: text('kind').notNull(),
+  runId: text('run_id').notNull(),
+  attemptId: text('attempt_id'),
+  payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+  availableAt: timestamp('available_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  claimedBy: text('claimed_by'),
+  claimedAt: timestamp('claimed_at', { withTimezone: true, mode: 'string' }),
+  claimExpiresAt: timestamp('claim_expires_at', { withTimezone: true, mode: 'string' }),
+  publishAttempts: integer('publish_attempts').notNull().default(0),
+  lastError: text('last_error'),
+  publishedAt: timestamp('published_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  idempotencyUniq: unique('uq_ai_run_outbox_idempotency_key').on(t.idempotencyKey),
+  dueIdx: index('idx_ai_run_outbox_due')
+    .on(t.availableAt, t.createdAt)
+    .where(sql`${t.publishedAt} IS NULL`),
+  interactiveDueIdx: index('idx_ai_run_outbox_interactive_due')
+    .on(t.createdAt, t.id)
+    .where(sql`${t.kind} = 'interactive_dispatch' AND ${t.publishedAt} IS NULL`),
+  interactiveClassDueIdx: index('idx_ai_run_outbox_interactive_class_due')
+    .on(sql`(${t.payload}->>'interactiveClass')`, t.createdAt, t.id)
+    .where(sql`${t.kind} = 'interactive_dispatch' AND ${t.publishedAt} IS NULL`),
+  publishAttemptsCheck: check(
+    'ai_run_outbox_publish_attempts_check',
+    sql`${t.publishAttempts} >= 0`,
+  ),
+}));
+
+export const aiRunInbox = pgTable('ai_run_inbox', {
+  eventId: text('event_id').primaryKey(),
+  kind: text('kind').notNull(),
+  runId: text('run_id').notNull(),
+  attemptId: text('attempt_id').notNull(),
+  dispatchMessageId: text('dispatch_message_id').notNull(),
+  checkpointSequence: integer('checkpoint_sequence'),
+  payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+  receivedAt: timestamp('received_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  processedAt: timestamp('processed_at', { withTimezone: true, mode: 'string' }),
+}, (t) => ({
+  attemptCheckpointUniq: uniqueIndex('uq_ai_run_inbox_attempt_checkpoint')
+    .on(t.attemptId, t.checkpointSequence)
+    .where(sql`${t.checkpointSequence} IS NOT NULL`),
+  unprocessedIdx: index('idx_ai_run_inbox_unprocessed')
+    .on(t.receivedAt)
+    .where(sql`${t.processedAt} IS NULL`),
+  checkpointSequenceCheck: check(
+    'ai_run_inbox_checkpoint_sequence_check',
+    sql`${t.checkpointSequence} IS NULL OR ${t.checkpointSequence} > 0`,
+  ),
+}));
+
+export const aiControlPlaneLeases = pgTable('ai_control_plane_leases', {
+  leaseKey: text('lease_key').$type<AiControlPlaneLeaseKey>().primaryKey(),
+  holderId: text('holder_id'),
+  fencingToken: bigint('fencing_token', { mode: 'bigint' }).notNull().default(sql`0`),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull().default(sql`'epoch'`),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  leaseKeyCheck: check(
+    'ai_control_plane_leases_key_check',
+    sql`${t.leaseKey} IN ('admission', 'recovery', 'reaper', 'outbox')`,
+  ),
+  fencingTokenCheck: check(
+    'ai_control_plane_leases_fencing_token_check',
+    sql`${t.fencingToken} >= 0`,
+  ),
 }));
 
 // ── AI Cost Analytics ─────────────────────────────────────────────────────────

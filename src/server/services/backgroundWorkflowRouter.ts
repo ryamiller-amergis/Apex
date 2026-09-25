@@ -5,11 +5,21 @@ import type {
   BackgroundWorkflowClass,
   WorkflowRouteDecision,
 } from '../../shared/types/backgroundWorkflow';
+import {
+  isAllowedDocumentScratchInputPath,
+  isAiRunV2DocumentSpecification,
+  type AiRunV2DocumentScratchInput,
+  type AiRunV2DocumentSpecification,
+} from '../../shared/types/aiRunV2DocumentSpec';
 import type { SkillProvider } from '../../shared/types/projectSettings';
 import type { EffortLevel } from '../../shared/types/effort';
 import type { RunGrounding, RunRef } from '../../shared/types/runGrounding';
 import { resolveAgentRunHardLimitMs } from './agentRunReaperService';
 import { enqueue } from './agentRunLifecycleService';
+import {
+  createV2AdmissionService,
+  type V2AdmissionService,
+} from './aiRunV2/v2AdmissionService';
 import { isFeatureEnabled } from './featureFlagService';
 import { getRepoCacheDir, type RepoCacheOptions } from './repoCacheService';
 import {
@@ -35,6 +45,10 @@ import {
 } from './repositoryPreparationService';
 
 const BACKGROUND_WORKFLOW_FLAG = 'ai-runs-background';
+const V2_TRANSPORT_FLAG = 'ai-runs-v2-transport';
+
+/** Every class this router handles is document work; visual has its own path. */
+const V2_WORKLOAD_LANE = 'document' as const;
 
 /** Generation workflows that reuse the interview's shared SHA checkout (no full clone). */
 const SHARED_READ_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new Set([
@@ -67,6 +81,8 @@ export interface PreparedBackgroundWorkflowWorker {
   model: string;
   effort?: EffortLevel;
   skillPath: string;
+  skillContent?: string;
+  skillSha256?: string;
   projectId: string;
 }
 
@@ -102,6 +118,7 @@ type EnqueueRun = typeof enqueue;
 
 export interface BackgroundWorkflowRouterDependencies {
   isFeatureEnabled?: FeatureFlagEvaluator;
+  admitV2Run?: V2AdmissionService['admit'];
   materializeRunGroundingWithPath?: MaterializeGrounding;
   prepareWorkspace?: typeof prepareBackgroundWorkflowWorkspace;
   enqueue?: EnqueueRun;
@@ -114,6 +131,7 @@ export interface BackgroundWorkflowRouterDependencies {
     'getReady' | 'retain'
   >;
   clearGenerationOutput?: (threadWorkspacePath: string) => Promise<void>;
+  readDocumentScratchInputs?: typeof readDocumentScratchInputs;
   getRepoCacheDir?: (options: RepoCacheOptions) => string;
   isUsableBareMirror?: (path: string | undefined) => boolean;
   /**
@@ -128,6 +146,86 @@ export { workerCanReadWithoutWorkingTree } from './repoRead/workerReadVisibility
 
 export interface BackgroundWorkflowRouter {
   route(input: BackgroundWorkflowRouteInput): Promise<WorkflowRouteDecision>;
+}
+
+async function readOptionalScratchFile(
+  workspaceRoot: string,
+  relativePath: string,
+): Promise<AiRunV2DocumentScratchInput | null> {
+  const target = path.join(workspaceRoot, ...relativePath.split('/'));
+  try {
+    const metadata = await fs.lstat(target);
+    if (metadata.isSymbolicLink() || !metadata.isFile()) {
+      throw new Error(`Document scratch input is not a regular file: ${relativePath}`);
+    }
+    return {
+      path: relativePath,
+      content: await fs.readFile(target, 'utf8'),
+    };
+  } catch (error) {
+    if (
+      error
+      && typeof error === 'object'
+      && 'code' in error
+      && error.code === 'ENOENT'
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Read only the workflow inputs the document worker is allowed to materialize.
+ * Repository files, secrets, stale outputs, and the host workspace path never
+ * become scratch-file content in the immutable specification.
+ */
+export async function readDocumentScratchInputs(
+  threadWorkspacePath: string,
+  workflowClass: BackgroundWorkflowClass,
+): Promise<AiRunV2DocumentScratchInput[]> {
+  const workspaceRoot = path.resolve(threadWorkspacePath);
+  const inputs: AiRunV2DocumentScratchInput[] = [];
+  for (const relativePath of [
+    '.ai-pilot/kickoff-context.md',
+    '.ai-pilot/kickoff-transcript.md',
+    '.ai-pilot/session.json',
+  ]) {
+    if (!isAllowedDocumentScratchInputPath(workflowClass, relativePath)) {
+      continue;
+    }
+    const input = await readOptionalScratchFile(workspaceRoot, relativePath);
+    if (input) inputs.push(input);
+  }
+
+  if (workflowClass === 'test-cases') {
+    const outputDirectory = path.join(workspaceRoot, '.ai-pilot', 'output');
+    let names: string[] = [];
+    try {
+      names = await fs.readdir(outputDirectory);
+    } catch (error) {
+      if (
+        !error
+        || typeof error !== 'object'
+        || !('code' in error)
+        || error.code !== 'ENOENT'
+      ) {
+        throw error;
+      }
+    }
+    for (const name of names.sort()) {
+      if (!/\.prd\.md$/i.test(name) && !/\.backlog\.json$/i.test(name)) {
+        continue;
+      }
+      const input = await readOptionalScratchFile(
+        workspaceRoot,
+        `.ai-pilot/output/${name}`,
+      );
+      if (input) inputs.push(input);
+    }
+  }
+
+  return inputs.sort((left, right) => left.path.localeCompare(right.path));
 }
 
 async function copyDirectoryContentsSafely(
@@ -227,7 +325,11 @@ export function createBackgroundWorkflowRouter(
     dependencies.prepareWorkspace ?? prepareBackgroundWorkflowWorkspace;
   const clearGenerationOutput =
     dependencies.clearGenerationOutput ?? clearBackgroundGenerationOutput;
+  const readScratchInputs =
+    dependencies.readDocumentScratchInputs ?? readDocumentScratchInputs;
   const enqueueRun = dependencies.enqueue ?? enqueue;
+  const admitV2Run =
+    dependencies.admitV2Run ?? ((input) => createV2AdmissionService().admit(input));
   const hardLimitMs = dependencies.resolveHardLimitMs ?? resolveAgentRunHardLimitMs;
   const emitEvent = dependencies.trackEvent ?? trackEvent;
   const now = dependencies.now ?? Date.now;
@@ -332,6 +434,7 @@ export function createBackgroundWorkflowRouter(
 
   const routeWorker = async (
     input: BackgroundWorkflowRouteInput,
+    useV2Transport: boolean,
   ): Promise<WorkflowRouteDecision> => {
     const preparationStartedAt = now();
     let prepared: PreparedBackgroundWorkflowWorker;
@@ -344,6 +447,89 @@ export function createBackgroundWorkflowRouter(
         preparationStartedAt,
       );
     }
+
+    let documentScratchInputs: AiRunV2DocumentScratchInput[] = [];
+    if (useV2Transport) {
+      try {
+        documentScratchInputs = await readScratchInputs(
+          prepared.threadWorkspacePath,
+          input.workflowClass,
+        );
+      } catch {
+        return recoverPreparation(
+          input,
+          'workspace-preparation-failed',
+          preparationStartedAt,
+        );
+      }
+    }
+
+    const dispatch = async (
+      snapshot: ExecutionSnapshot,
+      targetGrounding?: RunGrounding,
+    ): Promise<string> => {
+      const deadlineMs = hardLimitMs();
+      const timeoutAt = new Date(now() + deadlineMs).toISOString();
+      // Retain enabled once V2 carries production document traffic.
+      // @feature-flag:ai-runs-v2-transport start winner=enabled
+      if (useV2Transport) {
+        // @feature-flag:ai-runs-v2-transport enabled-start
+        const specificationCandidate: Record<string, unknown> = {
+          workloadLane: V2_WORKLOAD_LANE,
+          prompt: snapshot.prompt,
+          model: snapshot.model,
+          effort: snapshot.effort ?? null,
+          skillPath: prepared.skillPath,
+          skillContent: prepared.skillContent,
+          skillSha256: prepared.skillSha256,
+          workflowClass: input.workflowClass,
+          projectId: prepared.projectId,
+          threadId: input.threadId,
+          deadlineMs,
+          scratchInputs: documentScratchInputs,
+          ...(targetGrounding
+            ? {
+                groundedSha: targetGrounding.groundedSha,
+                repository: targetGrounding.repository,
+                provider: targetGrounding.provider,
+              }
+            : {}),
+        };
+        if (!isAiRunV2DocumentSpecification(specificationCandidate)) {
+          throw new Error('Document execution specification is incomplete');
+        }
+        const specification: AiRunV2DocumentSpecification =
+          specificationCandidate;
+        const admitted = await admitV2Run({
+          runId: input.destinationRun.runId,
+          threadId: input.threadId,
+          projectId: prepared.projectId,
+          workloadLane: V2_WORKLOAD_LANE,
+          capacityClass: 'batch',
+          timeoutAt,
+          specification: specification as unknown as Record<string, unknown>,
+          executionSnapshot:
+            specification as unknown as Record<string, unknown>,
+        });
+        if (admitted.status !== 'dispatched') {
+          throw new Error('V2 admission refused the document run');
+        }
+        return admitted.runId;
+        // @feature-flag:ai-runs-v2-transport enabled-end
+      }
+
+      // @feature-flag:ai-runs-v2-transport disabled-start
+      const enqueued = await enqueueRun({
+        threadId: input.threadId,
+        projectId: prepared.projectId,
+        snapshot,
+        timeoutAt,
+        runId: input.destinationRun.runId,
+      });
+      return enqueued.runId;
+      // @feature-flag:ai-runs-v2-transport disabled-end
+      // @feature-flag:ai-runs-v2-transport end
+    };
 
     // PRD / design-doc validation: score content from kickoff-context only.
     // No grounding, shared checkout, or MaxView clone.
@@ -381,16 +567,9 @@ export function createBackgroundWorkflowRouter(
         projectId: prepared.projectId,
         threadId: input.threadId,
       };
-      const timeoutAt = new Date(now() + hardLimitMs()).toISOString();
-      let enqueued: Awaited<ReturnType<EnqueueRun>>;
+      let dispatchedRunId: string;
       try {
-        enqueued = await enqueueRun({
-          threadId: input.threadId,
-          projectId: prepared.projectId,
-          snapshot,
-          timeoutAt,
-          runId: input.destinationRun.runId,
-        });
+        dispatchedRunId = await dispatch(snapshot);
       } catch {
         return recoverPreparation(
           input,
@@ -402,7 +581,7 @@ export function createBackgroundWorkflowRouter(
       return {
         route: 'worker',
         workspacePath: workspaceRef,
-        runId: enqueued.runId,
+        runId: dispatchedRunId,
       };
     }
 
@@ -550,16 +729,9 @@ export function createBackgroundWorkflowRouter(
       projectId: prepared.projectId,
       threadId: input.threadId,
     };
-    const timeoutAt = new Date(now() + hardLimitMs()).toISOString();
-    let enqueued: Awaited<ReturnType<EnqueueRun>>;
+    let dispatchedRunId: string;
     try {
-      enqueued = await enqueueRun({
-        threadId: input.threadId,
-        projectId: prepared.projectId,
-        snapshot,
-        timeoutAt,
-        runId: input.destinationRun.runId,
-      });
+      dispatchedRunId = await dispatch(snapshot, prepared.targetGrounding);
     } catch {
       return recoverPreparation(
         input,
@@ -571,57 +743,88 @@ export function createBackgroundWorkflowRouter(
     return {
       route: 'worker',
       workspacePath: workspaceRef,
-      runId: enqueued.runId,
+      runId: dispatchedRunId,
     };
+  };
+
+  const routeLegacyOrInProcess = async (
+    input: BackgroundWorkflowRouteInput,
+  ): Promise<WorkflowRouteDecision> => {
+    let enabled = false;
+    let evaluationReason = 'flag-disabled';
+    try {
+      enabled = await evaluateFlag(BACKGROUND_WORKFLOW_FLAG, {
+        userId: input.userId,
+        project: input.destinationRun.project,
+        caller: input.workflowClass,
+      });
+    } catch {
+      evaluationReason = 'flag-evaluation-error';
+    }
+
+    // Retain enabled after two stable sprints at full rollout.
+    // @feature-flag:ai-runs-background start winner=enabled
+    if (!enabled) {
+      // @feature-flag:ai-runs-background disabled-start
+      routeDecision(input, 'in-process', evaluationReason);
+      let execution: Promise<void>;
+      try {
+        execution = Promise.resolve(input.runInProcess());
+      } catch {
+        execution = Promise.reject(new Error('In-process workflow failed'));
+      }
+      void execution.catch(async () => {
+        await Promise.resolve(
+          input.reportRecoverablePreparationFailure({
+            reason: 'materialization-unavailable',
+            workflowClass: input.workflowClass,
+            project: input.destinationRun.project,
+            runId: input.destinationRun.runId,
+          }),
+        ).catch(() => undefined);
+      });
+      const decision: WorkflowRouteDecision = {
+        route: 'in-process',
+        reason: 'flag-disabled',
+      };
+      // @feature-flag:ai-runs-background disabled-end
+      return decision;
+    }
+
+    // @feature-flag:ai-runs-background enabled-start
+    const decision = await routeWorker(input, false);
+    // @feature-flag:ai-runs-background enabled-end
+    // @feature-flag:ai-runs-background end
+    return decision;
   };
 
   return {
     async route(input) {
-      let enabled = false;
-      let evaluationReason = 'flag-disabled';
+      let useV2Transport = false;
       try {
-        enabled = await evaluateFlag(BACKGROUND_WORKFLOW_FLAG, {
+        useV2Transport = await evaluateFlag(V2_TRANSPORT_FLAG, {
           userId: input.userId,
           project: input.destinationRun.project,
           caller: input.workflowClass,
         });
       } catch {
-        evaluationReason = 'flag-evaluation-error';
+        // An unreadable V2 flag keeps the proven V1 or in-process path.
+        useV2Transport = false;
       }
 
-      // Retain enabled after two stable sprints at full rollout.
-      // @feature-flag:ai-runs-background start winner=enabled
-      if (!enabled) {
-        // @feature-flag:ai-runs-background disabled-start
-        routeDecision(input, 'in-process', evaluationReason);
-        let execution: Promise<void>;
-        try {
-          execution = Promise.resolve(input.runInProcess());
-        } catch {
-          execution = Promise.reject(new Error('In-process workflow failed'));
-        }
-        void execution.catch(async () => {
-          await Promise.resolve(
-            input.reportRecoverablePreparationFailure({
-              reason: 'materialization-unavailable',
-              workflowClass: input.workflowClass,
-              project: input.destinationRun.project,
-              runId: input.destinationRun.runId,
-            }),
-          ).catch(() => undefined);
-        });
-        const decision: WorkflowRouteDecision = {
-          route: 'in-process',
-          reason: 'flag-disabled',
-        };
-        // @feature-flag:ai-runs-background disabled-end
-        return decision;
+      let decision: WorkflowRouteDecision;
+      // Retain enabled once V2 carries production document traffic.
+      // @feature-flag:ai-runs-v2-transport start winner=enabled
+      if (useV2Transport) {
+        // @feature-flag:ai-runs-v2-transport enabled-start
+        decision = await routeWorker(input, true);
+        // @feature-flag:ai-runs-v2-transport enabled-end
+      } else {
+        // @feature-flag:ai-runs-v2-transport disabled-start
+        decision = await routeLegacyOrInProcess(input);
+        // @feature-flag:ai-runs-v2-transport disabled-end
       }
-
-      // @feature-flag:ai-runs-background enabled-start
-      const decision = await routeWorker(input);
-      // @feature-flag:ai-runs-background enabled-end
-      // @feature-flag:ai-runs-background end
+      // @feature-flag:ai-runs-v2-transport end
       return decision;
     },
   };

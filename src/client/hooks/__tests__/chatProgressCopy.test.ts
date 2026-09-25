@@ -1,4 +1,4 @@
-import { friendlyChatProgressLabel } from '../../../shared/utils/chatProgressCopy';
+import { friendlyChatProgressLabel, friendlyDurableInteractiveLimitError } from '../../../shared/utils/chatProgressCopy';
 
 describe('friendlyChatProgressLabel', () => {
   it('maps native/MCP file reads to Reading', () => {
@@ -25,9 +25,9 @@ describe('friendlyChatProgressLabel', () => {
   it('maps actor and mirror stage labels', () => {
     expect(
       friendlyChatProgressLabel('Queued — waiting for available worker', 'queued')
-    ).toBe('Waiting…');
+    ).toBe('Queued');
     expect(friendlyChatProgressLabel('Starting…', 'dispatched')).toBe(
-      'Starting…'
+      'Dispatched'
     );
     expect(friendlyChatProgressLabel('Preparing project repository…')).toBe(
       'Loading…'
@@ -35,6 +35,16 @@ describe('friendlyChatProgressLabel', () => {
     expect(friendlyChatProgressLabel('Refreshing the repository mirror…')).toBe(
       'Loading…'
     );
+  });
+
+  it('maps durable per-user limit codes to exact copy', () => {
+    expect(friendlyDurableInteractiveLimitError('USER_INTERACTIVE_LIMIT')).toBe(
+      'You already have two active AI turns. Finish or stop one before starting another.',
+    );
+    expect(friendlyDurableInteractiveLimitError('USER_AGENTIC_LIMIT')).toBe(
+      'You already have an agentic AI turn running. Finish or stop it before starting another.',
+    );
+    expect(friendlyDurableInteractiveLimitError('OTHER')).toBeNull();
   });
 
   it('is idempotent on already-friendly copy', () => {

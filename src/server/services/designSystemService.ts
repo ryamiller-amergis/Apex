@@ -12,12 +12,23 @@
 
 import https from 'https';
 import type { ScreenInventoryRoute } from '../../shared/types/designSystem';
+import type { RepoReader } from '../../shared/types/repoReader';
+import {
+  applyDesignContextBudget,
+  DEFAULT_DESIGN_CONTEXT_BUDGET_BYTES,
+} from './designContext/designContextBudget';
+import {
+  createRepoDesignContextReader,
+  type DesignSourceFile,
+} from './designContext/repoDesignContextReader';
+import { rankSourcePaths } from './designContext/sourceRelevance';
 
 /* ── Config ───────────────────────────────────────────────── */
 
 const DS_REPO    = process.env.MAXVIEW_DS_REPO    ?? 'MaxView';
 const DS_PROJECT = process.env.MAXVIEW_DS_PROJECT ?? 'MaxView';
 const CATALOG_TTL_MS = 10 * 60 * 1000; // 10 minutes
+export const DESIGN_SYSTEM_CATALOG_CACHE_MAX_ENTRIES = 64;
 
 /** Optional override so inventory/page fetch uses a project's own ADO repo instead of MaxView. */
 export interface DesignSystemAdoTarget {
@@ -106,13 +117,21 @@ const TOKEN_PATHS = [
 ];
 
 /** Folders searched (in order) to locate a component by name. Includes the ClientApp root when set. */
-function componentIndexPaths(target?: DesignSystemAdoTarget): string[] {
+export function componentIndexPaths(target?: DesignSystemAdoTarget): string[] {
   const root = isMaxViewTarget(target) ? clientAppRoot() : '';
   return [
     ...(root ? [`${root}/components`] : []),
     '/src/client/components',
     '/src/components',
   ];
+}
+
+/**
+ * A component source file worth reading for design context. Tests and CSS
+ * modules sit alongside components in the same folders and describe nothing.
+ */
+export function isComponentSourcePath(path: string): boolean {
+  return path.endsWith('.tsx') && !path.includes('__tests__') && !path.includes('.module.');
 }
 
 /* ── Types ────────────────────────────────────────────────── */
@@ -132,12 +151,81 @@ export interface DesignSystemCatalog {
   componentDescriptions: Record<string, string>;
   /** Heuristic layout pattern per route, e.g. { "/shift-scheduler": "calendar", "/timecards": "table" } */
   routeLayoutHints: Record<string, string>;
+  /** What component source was and was not read for descriptions/layout hints. */
+  componentDetailCoverage: ComponentDetailCoverage;
   fetchedAt: number;
 }
 
 /* ── Cache ────────────────────────────────────────────────── */
 
-let catalogCache: DesignSystemCatalog | null = null;
+export interface ComponentDetailCoverage {
+  source: 'repo-reader' | 'ado-api' | 'unavailable';
+  includedPaths: string[];
+  omittedPaths: string[];
+  usedBytes: number;
+  budgetBytes: number;
+}
+
+export interface DesignSystemCatalogOptions {
+  /** Pinned repository read, preferred over live API calls when available. */
+  componentReader?: RepoReader;
+  /** Feature/PBI text used to put the most relevant files first. */
+  relevanceText?: string;
+  /** Explicit source budget for descriptions and layout inference. */
+  componentDetailBudgetBytes?: number;
+}
+
+const ADO_COMPONENT_DETAIL_CONCURRENCY = 4;
+
+const catalogCache = new Map<string, DesignSystemCatalog>();
+
+function pruneCatalogCache(now: number): void {
+  for (const [key, catalog] of catalogCache) {
+    if (now - catalog.fetchedAt >= CATALOG_TTL_MS) {
+      catalogCache.delete(key);
+    }
+  }
+}
+
+function cacheCatalog(key: string, catalog: DesignSystemCatalog): void {
+  // Refreshing a key moves it to the newest position in insertion order.
+  catalogCache.delete(key);
+  catalogCache.set(key, catalog);
+  while (catalogCache.size > DESIGN_SYSTEM_CATALOG_CACHE_MAX_ENTRIES) {
+    const oldest = catalogCache.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    catalogCache.delete(oldest);
+  }
+}
+
+function catalogCacheKey(options: DesignSystemCatalogOptions): string {
+  const reader = options.componentReader;
+  const source = reader
+    ? [
+        reader.identity.provider,
+        reader.identity.project,
+        reader.identity.repo,
+        reader.identity.sha,
+      ].join(':')
+    : 'ado-api';
+  const relevance = (options.relevanceText ?? '').trim().toLowerCase();
+  const budget =
+    options.componentDetailBudgetBytes
+    ?? DEFAULT_DESIGN_CONTEXT_BUDGET_BYTES;
+  return `${source}:${budget}:${relevance}`;
+}
+
+function emptyComponentDetailCoverage(
+  budgetBytes: number,
+): ComponentDetailCoverage {
+  return {
+    source: 'unavailable',
+    includedPaths: [],
+    omittedPaths: [],
+    usedBytes: 0,
+    budgetBytes,
+  };
+}
 
 /* ── ADO file fetch helper ────────────────────────────────── */
 
@@ -359,6 +447,33 @@ async function fetchUiKnowledgeBase(orgUrl: string, pat: string): Promise<string
   return sections.join('\n');
 }
 
+async function fetchUiKnowledgeBaseFromReader(
+  reader: RepoReader,
+): Promise<string> {
+  let root = '';
+  try {
+    root = await reader.readFile(UI_KNOWLEDGE_BASE_PATH);
+  } catch {
+    return '';
+  }
+  const sections = [root];
+  for (const ref of parseMarkdownFileRefs(root)) {
+    const path = resolveAdoPath(UI_KNOWLEDGE_BASE_PATH, ref);
+    if (!path) continue;
+    try {
+      const content = await reader.readFile(path);
+      if (content.trim()) {
+        const name = path.split('/').pop() ?? path;
+        sections.push(`\n---\n<!-- ${name} -->\n\n${content.trim()}`);
+      }
+    } catch {
+      // Coverage here is prose references, not component source. Missing
+      // references retain the existing best-effort knowledge-base behavior.
+    }
+  }
+  return sections.join('\n');
+}
+
 /**
  * Convert ADO file paths under /src/client/components to component names.
  * e.g. "/src/client/components/BacklogView.tsx" → "BacklogView"
@@ -402,42 +517,111 @@ function inferLayoutPattern(src: string): string {
   return '';
 }
 
-/**
- * Fetch component source files in parallel and extract descriptions + layout hints.
- * At most 20 files are fetched to stay within the ADO rate limit.
- */
-async function fetchComponentDetails(
-  orgUrl: string,
-  pat: string,
-  componentPaths: string[]
-): Promise<{ descriptions: Record<string, string>; layoutHints: Record<string, string> }> {
+type ComponentDetails = Readonly<{
+  descriptions: Record<string, string>;
+  layoutHints: Record<string, string>;
+  coverage: ComponentDetailCoverage;
+}>;
+
+function extractComponentDetails(
+  files: ReadonlyArray<DesignSourceFile>,
+): Pick<ComponentDetails, 'descriptions' | 'layoutHints'> {
   const descriptions: Record<string, string> = {};
   const layoutHints: Record<string, string> = {};
 
-  // Filter to component .tsx files only and cap at 20
-  const targets = componentPaths
-    .filter(p => p.endsWith('.tsx') && !p.includes('__tests__') && !p.includes('.module.'))
-    .slice(0, 20);
-
-  const results = await Promise.allSettled(
-    targets.map(p => fetchAdoFile(orgUrl, pat, p).then(src => ({ path: p, src })))
-  );
-
-  for (const result of results) {
-    if (result.status !== 'fulfilled') continue;
-    const { path, src } = result.value;
+  for (const { path, content } of files) {
     const base = path.split('/').pop() ?? path;
     const name = base.replace(/\.tsx?$/, '');
     if (!name || !/^[A-Z]/.test(name)) continue;
 
-    const desc = extractLeadingJsDoc(src);
-    if (desc) descriptions[name] = desc;
+    const description = extractLeadingJsDoc(content);
+    if (description) descriptions[name] = description;
 
-    const layout = inferLayoutPattern(src);
+    const layout = inferLayoutPattern(content);
     if (layout) layoutHints[name] = layout;
   }
-
   return { descriptions, layoutHints };
+}
+
+async function fetchAdoComponentSources(
+  orgUrl: string,
+  pat: string,
+  paths: ReadonlyArray<string>,
+): Promise<DesignSourceFile[]> {
+  const results: Array<DesignSourceFile | null> = Array(paths.length).fill(null);
+  let nextIndex = 0;
+
+  const worker = async (): Promise<void> => {
+    while (nextIndex < paths.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const path = paths[index];
+      try {
+        results[index] = {
+          path,
+          content: await fetchAdoFile(orgUrl, pat, path),
+        };
+      } catch {
+        // The coverage result names unreadable candidates as omitted.
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(ADO_COMPONENT_DETAIL_CONCURRENCY, paths.length) },
+      () => worker(),
+    ),
+  );
+  return results.flatMap((file) => (file ? [file] : []));
+}
+
+/**
+ * Read component source in relevance order and apply an explicit byte budget.
+ *
+ * Every ranked candidate competes for the byte budget. Repository and live
+ * ADO reads both preserve that order; ADO bounds concurrent calls rather than
+ * silently dropping everything after an arbitrary file count.
+ */
+async function fetchComponentDetails(
+  orgUrl: string,
+  pat: string,
+  componentPaths: string[],
+  options: DesignSystemCatalogOptions,
+): Promise<ComponentDetails> {
+  const budgetBytes =
+    options.componentDetailBudgetBytes
+    ?? DEFAULT_DESIGN_CONTEXT_BUDGET_BYTES;
+  const ranked = rankSourcePaths(
+    componentPaths.filter(isComponentSourcePath),
+    options.relevanceText ?? '',
+  );
+
+  let read: DesignSourceFile[];
+  let source: ComponentDetailCoverage['source'];
+  if (options.componentReader) {
+    source = 'repo-reader';
+    read = await createRepoDesignContextReader({
+      reader: options.componentReader,
+    }).readComponents(ranked);
+  } else {
+    source = 'ado-api';
+    read = await fetchAdoComponentSources(orgUrl, pat, ranked);
+  }
+
+  const budgeted = applyDesignContextBudget(read, budgetBytes);
+  const included = new Set(budgeted.included.map((file) => file.path));
+  const details = extractComponentDetails(budgeted.included);
+  return {
+    ...details,
+    coverage: {
+      source,
+      includedPaths: ranked.filter((path) => included.has(path)),
+      omittedPaths: ranked.filter((path) => !included.has(path)),
+      usedBytes: budgeted.usedBytes,
+      budgetBytes,
+    },
+  };
 }
 
 /**
@@ -467,25 +651,44 @@ function buildRouteLayoutHints(
 
 /* ── Main export ──────────────────────────────────────────── */
 
-export async function getDesignSystemCatalog(): Promise<DesignSystemCatalog> {
+export async function getDesignSystemCatalog(
+  options: DesignSystemCatalogOptions = {},
+): Promise<DesignSystemCatalog> {
   const now = Date.now();
-  if (catalogCache && now - catalogCache.fetchedAt < CATALOG_TTL_MS) {
-    return catalogCache;
+  const cacheKey = catalogCacheKey(options);
+  pruneCatalogCache(now);
+  const cached = catalogCache.get(cacheKey);
+  if (cached && now - cached.fetchedAt < CATALOG_TTL_MS) {
+    return cached;
   }
 
   const orgUrl = process.env.ADO_ORG;
   const pat    = process.env.ADO_PAT;
+  const budgetBytes =
+    options.componentDetailBudgetBytes
+    ?? DEFAULT_DESIGN_CONTEXT_BUDGET_BYTES;
 
-  if (!orgUrl || !pat) {
+  if ((!orgUrl || !pat) && !options.componentReader) {
     console.warn('[designSystemService] ADO_ORG or ADO_PAT not set — returning empty catalog');
-    return { routes: [], tokensCss: '', componentNames: [], uiKnowledgeBase: '', componentDescriptions: {}, routeLayoutHints: {}, fetchedAt: now };
+    return {
+      routes: [],
+      tokensCss: '',
+      componentNames: [],
+      uiKnowledgeBase: '',
+      componentDescriptions: {},
+      routeLayoutHints: {},
+      componentDetailCoverage: emptyComponentDetailCoverage(budgetBytes),
+      fetchedAt: now,
+    };
   }
 
   /* ── Routes ── */
   let routes: PageRoute[] = [];
   for (const p of ROUTE_PATHS) {
     try {
-      const src = await fetchAdoFile(orgUrl, pat, p);
+      const src = options.componentReader
+        ? await options.componentReader.readFile(p)
+        : await fetchAdoFile(orgUrl!, pat!, p);
       if (src.trim()) { routes = parseRoutes(src); break; }
     } catch (e: any) {
       console.warn(`[designSystemService] routes: skipping ${p} — ${e.message}`);
@@ -496,7 +699,9 @@ export async function getDesignSystemCatalog(): Promise<DesignSystemCatalog> {
   let tokensCss = '';
   for (const p of TOKEN_PATHS) {
     try {
-      const css = await fetchAdoFile(orgUrl, pat, p);
+      const css = options.componentReader
+        ? await options.componentReader.readFile(p)
+        : await fetchAdoFile(orgUrl!, pat!, p);
       if (css.trim()) { tokensCss = parseTokens(css); break; }
     } catch (e: any) {
       console.warn(`[designSystemService] tokens: skipping ${p} — ${e.message}`);
@@ -507,22 +712,38 @@ export async function getDesignSystemCatalog(): Promise<DesignSystemCatalog> {
   let componentNames: string[] = [];
   let componentDescriptions: Record<string, string> = {};
   let componentLayoutHints: Record<string, string> = {};
+  let componentDetailCoverage = emptyComponentDetailCoverage(budgetBytes);
 
   for (const folder of componentIndexPaths()) {
     try {
-      const paths = await fetchAdoTree(orgUrl, pat, folder);
+      const paths = options.componentReader
+        ? (await options.componentReader.listDir(folder))
+            .filter((entry) => !entry.isFolder)
+            .map((entry) => entry.path)
+        : await fetchAdoTree(orgUrl!, pat!, folder);
       componentNames = pathsToComponentNames(paths);
       if (componentNames.length > 0) {
-        // Fetch source for component details (non-fatal)
         try {
-          const componentFilePaths = paths.filter(
-            p => p.endsWith('.tsx') && !p.includes('__tests__') && !p.includes('.module.')
+          const componentFilePaths = paths.filter(isComponentSourcePath);
+          const details = await fetchComponentDetails(
+            orgUrl ?? '',
+            pat ?? '',
+            componentFilePaths,
+            options,
           );
-          const details = await fetchComponentDetails(orgUrl, pat, componentFilePaths);
           componentDescriptions = details.descriptions;
           componentLayoutHints = details.layoutHints;
+          componentDetailCoverage = details.coverage;
         } catch (e: any) {
           console.warn(`[designSystemService] component details: skipping — ${e.message}`);
+          componentDetailCoverage = {
+            ...emptyComponentDetailCoverage(budgetBytes),
+            source: options.componentReader ? 'repo-reader' : 'ado-api',
+            omittedPaths: rankSourcePaths(
+              paths.filter(isComponentSourcePath),
+              options.relevanceText ?? '',
+            ),
+          };
         }
         break;
       }
@@ -535,7 +756,9 @@ export async function getDesignSystemCatalog(): Promise<DesignSystemCatalog> {
   const routeLayoutHints = buildRouteLayoutHints(routes, componentLayoutHints);
 
   /* ── UI Knowledge Base (SKILL.md + any referenced .md files) ── */
-  const uiKnowledgeBase = await fetchUiKnowledgeBase(orgUrl, pat);
+  const uiKnowledgeBase = options.componentReader
+    ? await fetchUiKnowledgeBaseFromReader(options.componentReader)
+    : await fetchUiKnowledgeBase(orgUrl!, pat!);
 
   const catalog: DesignSystemCatalog = {
     routes,
@@ -544,13 +767,15 @@ export async function getDesignSystemCatalog(): Promise<DesignSystemCatalog> {
     uiKnowledgeBase,
     componentDescriptions,
     routeLayoutHints,
+    componentDetailCoverage,
     fetchedAt: now,
   };
-  catalogCache = catalog;
+  cacheCatalog(cacheKey, catalog);
 
   console.log(
     `[designSystemService] Catalog loaded — ${routes.length} routes, ${componentNames.length} components, ` +
     `${Object.keys(componentDescriptions).length} descriptions, ${Object.keys(routeLayoutHints).length} layout hints, ` +
+    `${componentDetailCoverage.omittedPaths.length} component source omission(s), ` +
     `${tokensCss.length} chars of tokens, ui-kb: ${uiKnowledgeBase.length} chars`
   );
 
@@ -1239,7 +1464,7 @@ export async function inferRoutesForBacklog(
 
 /** Force-clear the catalog cache (useful in tests). */
 export function clearDesignSystemCache(): void {
-  catalogCache = null;
+  catalogCache.clear();
   pageContextCache.clear();
   screenInventoryCache.clear();
 }

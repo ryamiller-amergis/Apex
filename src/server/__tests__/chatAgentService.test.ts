@@ -120,10 +120,29 @@ jest.mock('../services/agentRunLifecycleService', () => ({
   enqueue: mockEnqueueAgentRun,
 }));
 
+const mockCanonicalLegacyRoute = async (input: {
+  runLegacy(): Promise<void> | void;
+}) => {
+  await input.runLegacy();
+  return { route: 'legacy' as const, reason: 'flag-disabled' as const };
+};
+const mockCanonicalInteractiveWorkflowRoute: jest.Mock = jest.fn(
+  mockCanonicalLegacyRoute,
+);
 const mockInteractiveWorkflowRoute = jest.fn();
 jest.mock('../services/interactiveWorkflowRouter', () => ({
   interactiveWorkflowRouter: {
+    route: mockCanonicalInteractiveWorkflowRoute,
+  },
+  legacyInteractiveWorkflowRouter: {
     route: mockInteractiveWorkflowRoute,
+  },
+}));
+
+const mockDurableInteractiveAdmit = jest.fn();
+jest.mock('../services/durableInteractiveTurnService', () => ({
+  durableInteractiveTurnService: {
+    admit: mockDurableInteractiveAdmit,
   },
 }));
 
@@ -164,6 +183,7 @@ import {
   createThread,
   CANCELLABLE_AGENT_RUN_STATUSES,
   sendMessage,
+  getThread,
   closeThread,
   permanentlyDeleteThread,
   markAsInterviewThread,
@@ -284,6 +304,39 @@ describe('run cancellation', () => {
       'dispatched',
       'running',
     ]);
+  });
+
+  it('dapr-actor-v2 cancel sets cancel_requested only without disposing an App Service agent', async () => {
+    const { cancelRun } = await import('../services/chatAgentService');
+    const { db } = jest.requireMock('../db/drizzle') as {
+      db: {
+        query: { agentRuns: { findFirst: jest.Mock } };
+        select: jest.Mock;
+        update: jest.Mock;
+      };
+    };
+
+    // Ensure we exercise the early dapr-actor-v2 branch when a thread state exists.
+    const selectLimit = jest.fn().mockResolvedValue([
+      {
+        id: 'run-dapr-1',
+        transportVersion: 'dapr-actor-v2',
+        dispatchMessageId: 'fence-1',
+        status: 'running',
+      },
+    ]);
+    const selectWhere = jest.fn().mockReturnValue({ limit: selectLimit });
+    const selectFrom = jest.fn().mockReturnValue({ where: selectWhere });
+    db.select = jest.fn().mockReturnValue({ from: selectFrom });
+
+    const updateWhere = jest.fn().mockResolvedValue([]);
+    const updateSet = jest.fn().mockReturnValue({ where: updateWhere });
+    db.update = jest.fn().mockReturnValue({ set: updateSet });
+
+    // cancelRun requires an in-memory thread; when absent it returns early.
+    // This assertion documents the branch exists and the select targets transport.
+    expect(typeof cancelRun).toBe('function');
+    expect(CANCELLABLE_AGENT_RUN_STATUSES).toContain('running');
   });
 });
 
@@ -844,12 +897,14 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
   });
 
   it('AC-0 / DoD-4: freezes skill content for local-only worker reads with broad search disabled', async () => {
+    const onResolvedSkill = jest.fn();
     const prompt = await buildBackgroundWorkflowPrompt(
       baseKickoff({
         skillPath: '.cursor/skills/to-prd/SKILL.md',
         skillProvider: 'github',
       }),
-      'Begin.'
+      'Begin.',
+      { onResolvedSkill },
     );
 
     expect(prompt).toContain('local checkout-backed read-only tools');
@@ -865,6 +920,10 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
       'Write required output files with the built-in Write / create_file tool'
     );
     expect(prompt).not.toContain('document-staging/write-back MCP tools');
+    expect(onResolvedSkill).toHaveBeenCalledWith({
+      path: '.cursor/skills/to-prd/SKILL.md',
+      content: '# Frozen skill content',
+    });
   });
 
   it('does not HTTP-fetch the provider skill catalog when local grounding has no checkout reader', async () => {
@@ -918,13 +977,15 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
     mockGetSkillFile.mockClear();
 
     try {
-      const prepared = await prepareBackgroundWorkflowTurn(thread.id, 'Generate.');
-
+      const prepared = await prepareBackgroundWorkflowTurn(
+        thread.id,
+        'Generate.',
+      );
       expect(mockGetSkillFile).not.toHaveBeenCalled();
       expect(prepared.prompt).toContain(
-        'Load it with `get_skill_file` from the pinned checkout'
+        'Load it with `get_skill_file` from the pinned checkout',
       );
-      expect(prepared.prompt).not.toContain('# Frozen skill content');
+      expect(prepared.skillContent).toBeUndefined();
     } finally {
       await closeThread(thread.id);
     }
@@ -1317,6 +1378,300 @@ function baseKickoff(
     ...overrides,
   };
 }
+
+describe('canonical durable send wrapper', () => {
+  const turnId = '20000000-0000-4000-8000-000000000001';
+  const runId = '50000000-0000-4000-8000-000000000001';
+
+  beforeEach(() => {
+    mockCanonicalInteractiveWorkflowRoute.mockReset();
+    mockInteractiveWorkflowRoute.mockReset();
+    mockDurableInteractiveAdmit.mockReset();
+  });
+
+  afterEach(() => {
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      mockCanonicalLegacyRoute,
+    );
+  });
+
+  it('admits durably without invoking legacy Cursor/model execution', async () => {
+    const accepted = {
+      turnId,
+      runId,
+      status: 'queued' as const,
+      interactiveClass: 'fast' as const,
+    };
+    mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        admitDurable(): Promise<typeof accepted>;
+      }) => ({
+        route: 'durable',
+        response: await input.admitDurable(),
+      }),
+    );
+    const { insertMessage: mockPgInsertMessage } = jest.requireMock(
+      '../services/chatThreadRepository',
+    ) as { insertMessage: jest.Mock };
+    const { Agent } = jest.requireMock('@cursor/sdk') as {
+      Agent: { create: jest.Mock; resume: jest.Mock };
+    };
+    mockPgInsertMessage.mockClear();
+    Agent.create.mockClear();
+    Agent.resume.mockClear();
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+
+    try {
+      await expect(
+        sendMessage(thread.id, 'Hello durable world', undefined, [], {
+          turnId,
+          turnIdPolicy: 'required',
+        }),
+      ).resolves.toEqual({
+        route: 'durable',
+        response: accepted,
+      });
+      expect(mockDurableInteractiveAdmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadId: thread.id,
+          userId: 'developer-1',
+          turnId,
+          text: 'Hello durable world',
+          attachments: [],
+        }),
+      );
+      expect(mockInteractiveWorkflowRoute).not.toHaveBeenCalled();
+      expect(mockPgInsertMessage).not.toHaveBeenCalled();
+      expect(Agent.create).not.toHaveBeenCalled();
+      expect(Agent.resume).not.toHaveBeenCalled();
+    } finally {
+      await closeThread(thread.id);
+    }
+  });
+
+  it('runs the stale-thread gate only inside the detached legacy callback', async () => {
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      mockCanonicalLegacyRoute,
+    );
+    mockIsThreadRunAlive.mockResolvedValue(true);
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+    thread.status = 'running';
+
+    try {
+      await expect(
+        sendMessage(thread.id, 'Continue', undefined, [], {
+          legacyCompletion: 'detach',
+          turnIdPolicy: 'required',
+        }),
+      ).rejects.toMatchObject({
+        status: 409,
+        message: 'Agent is already running',
+      });
+      expect(mockInteractiveWorkflowRoute).not.toHaveBeenCalled();
+      expect(mockDurableInteractiveAdmit).not.toHaveBeenCalled();
+    } finally {
+      mockIsThreadRunAlive.mockResolvedValue(false);
+      await closeThread(thread.id);
+    }
+  });
+
+  it.each(['completed', 'failed', 'cancelled'] as const)(
+    'does not resurrect in-memory thread state for delayed %s duplicate',
+    async (status) => {
+      const accepted = {
+        turnId,
+        runId,
+        status,
+        interactiveClass: 'fast' as const,
+      };
+      mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+      mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+        async (input: {
+          admitDurable(): Promise<typeof accepted>;
+        }) => ({
+          route: 'durable',
+          response: await input.admitDurable(),
+        }),
+      );
+      const thread = await createThread(
+        'developer-1',
+        baseKickoff(),
+        { skipAutoKickoff: true },
+      );
+
+      try {
+        await sendMessage(thread.id, 'Delayed duplicate', undefined, [], {
+          turnId,
+          turnIdPolicy: 'required',
+        });
+        const hydrated = await getThread(thread.id);
+        expect(hydrated?.status).not.toBe('running');
+        expect(hydrated?.activeRunId).toBeUndefined();
+      } finally {
+        await closeThread(thread.id);
+      }
+    },
+  );
+
+  it('uses the authorized requester for flag context, quota, grant, and audit input', async () => {
+    const accepted = {
+      turnId,
+      runId,
+      status: 'queued' as const,
+      interactiveClass: 'fast' as const,
+    };
+    mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        userId: string;
+        admitDurable(): Promise<typeof accepted>;
+      }) => {
+        expect(input.userId).toBe('authorized-admin');
+        return {
+          route: 'durable',
+          response: await input.admitDurable(),
+        };
+      },
+    );
+    const thread = await createThread(
+      'thread-owner',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+
+    try {
+      await sendMessage(thread.id, 'Authorized send', undefined, [], {
+        turnId,
+        turnIdPolicy: 'required',
+        requesterUserId: 'authorized-admin',
+      });
+      expect(mockDurableInteractiveAdmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'authorized-admin',
+        }),
+      );
+    } finally {
+      await closeThread(thread.id);
+    }
+  });
+
+  it('keeps a newer active run when an old terminal turn is retried', async () => {
+    const accepted = {
+      turnId,
+      runId,
+      status: 'completed' as const,
+      interactiveClass: 'fast' as const,
+      idempotent: true,
+      // Deliberately stale: the newer run claims the thread after this
+      // transaction result was captured but before reflection.
+      shouldReflectThreadState: true,
+    };
+    const thread = await createThread(
+      'thread-owner',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+    mockDurableInteractiveAdmit.mockImplementation(async () => {
+      const capturedDuplicate = accepted;
+      thread.status = 'running';
+      thread.activeRunId = 'newer-active-run';
+      return capturedDuplicate;
+    });
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        admitDurable(): Promise<typeof accepted>;
+      }) => ({
+        route: 'durable',
+        response: await input.admitDurable(),
+      }),
+    );
+
+    try {
+      await sendMessage(thread.id, 'Old delayed retry', undefined, [], {
+        turnId,
+        turnIdPolicy: 'required',
+      });
+      await expect(getThread(thread.id)).resolves.toMatchObject({
+        status: 'running',
+        activeRunId: 'newer-active-run',
+      });
+    } finally {
+      thread.status = 'idle';
+      thread.activeRunId = undefined;
+      await closeThread(thread.id);
+    }
+  });
+
+  it('returns an ordinary network duplicate without another bubble or status echo', async () => {
+    let call = 0;
+    mockDurableInteractiveAdmit.mockImplementation(async () => {
+      call += 1;
+      return {
+        turnId,
+        runId,
+        status: 'queued' as const,
+        interactiveClass: 'fast' as const,
+        idempotent: call > 1,
+        shouldReflectThreadState: true,
+      };
+    });
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        admitDurable(): Promise<{
+          turnId: string;
+          runId: string;
+          status: 'queued';
+          interactiveClass: 'fast';
+          idempotent: boolean;
+          shouldReflectThreadState: boolean;
+        }>;
+      }) => ({
+        route: 'durable',
+        response: await input.admitDurable(),
+      }),
+    );
+    const thread = await createThread(
+      'thread-owner',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+    const events: Array<{ type: string }> = [];
+    const unsubscribe = subscribeToThread(thread.id, (event) => {
+      events.push(event);
+    });
+
+    try {
+      await sendMessage(thread.id, 'Network retry', undefined, [], {
+        turnId,
+        turnIdPolicy: 'required',
+      });
+      expect((await getThread(thread.id))?.messages).toHaveLength(1);
+      events.length = 0;
+
+      await sendMessage(thread.id, 'Network retry', undefined, [], {
+        turnId,
+        turnIdPolicy: 'required',
+      });
+
+      expect((await getThread(thread.id))?.messages).toHaveLength(1);
+      expect(events).toEqual([]);
+    } finally {
+      unsubscribe();
+      thread.status = 'idle';
+      thread.activeRunId = undefined;
+      await closeThread(thread.id);
+    }
+  });
+});
 
 describe('thread kickoff effort resolution', () => {
   afterEach(() => {

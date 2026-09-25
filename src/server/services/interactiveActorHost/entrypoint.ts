@@ -22,19 +22,35 @@ import {
   HttpMethod,
   type DaprInvokerCallbackContent,
 } from '@dapr/dapr';
+import { promises as fs } from 'fs';
 // Side-effect: initialize Application Insights when the connection string is set.
 import '../telemetry';
 import { exitAfterFlush } from '../../utils/processExit';
+import {
+  isInteractiveActorBootstrap,
+  type InteractiveActorBootstrap,
+} from '../../../shared/types/aiRunIngest';
+import type { RepoReader, RepositoryIdentity } from '../../../shared/types/repoReader';
 import { getAiRunnerCallbackToken } from '../aiRunsCallbackToken';
 import { createAiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
-import { openGroundedReader } from '../aiRunsWorker/workspace';
+import {
+  artifactContainerName,
+  resolveArtifactContainerClient,
+} from '../aiRunV2/artifactContainer';
+import { createArtifactUploader } from '../aiRunsV2Worker/artifactUploader';
 import { interactiveLiveBus } from '../interactiveLiveBus';
-import type { RepoReader } from '../../../shared/types/repoReader';
+import { LocalCheckoutReader } from '../localCheckoutReader';
+import {
+  RepoServiceReader,
+  resolveRepoReadServiceUrl,
+} from '../repoRead/repoServiceReader';
 import { acquireInteractiveCursorAgent } from './interactiveCursorExecution';
 import {
   createInteractiveSessionActor,
   type WarmThreadCheckout,
 } from './interactiveSessionActor';
+import { collectInteractiveArtifacts } from './interactiveArtifactCollector';
+import { materializeInteractiveWorkspace } from './interactiveWorkspaceMaterializer';
 import {
   InteractiveSessionActorImpl,
   setInteractiveActorRuntime,
@@ -43,6 +59,34 @@ import {
 
 /** Warm checkout carrying the reader the execution factory needs. */
 type ReaderCheckout = WarmThreadCheckout & { reader: RepoReader };
+
+async function openPinnedReaderForBootstrap(
+  bootstrap: InteractiveActorBootstrap,
+): Promise<RepoReader | null> {
+  const grounding = bootstrap.specification.grounding;
+  if (!grounding) return null;
+  const identity: RepositoryIdentity = {
+    provider: grounding.provider,
+    project: grounding.project,
+    repo: grounding.repository,
+    sha: grounding.sha,
+  };
+  const serviceUrl = resolveRepoReadServiceUrl();
+  if (!serviceUrl) {
+    throw new Error(
+      'Pinned grounding repository is unavailable: repo-read service URL is not configured',
+    );
+  }
+  try {
+    const reader = new RepoServiceReader({ identity, baseUrl: serviceUrl });
+    await reader.listDir('');
+    return reader;
+  } catch (error) {
+    const reason =
+      error instanceof Error ? error.message : 'pinned repo-read open failed';
+    throw new Error(`Pinned grounding repository is unavailable: ${reason}`);
+  }
+}
 
 export interface InteractiveDispatchRequest {
   threadId: string;
@@ -235,6 +279,9 @@ export async function main(): Promise<void> {
   // Single shared logic core: thread-keyed warm checkout + live Agent cache.
   const logic = createInteractiveSessionActor({
     openWarmCheckout: async (_threadId, snapshot) => {
+      // Dynamic import keeps the actor-host static graph free of App Service
+      // workspace helpers that transitively import PostgreSQL.
+      const { openGroundedReader } = await import('../aiRunsWorker/workspace');
       const reader = await openGroundedReader(snapshot);
       const checkout: ReaderCheckout = {
         workspacePath: snapshot.workspaceRef,
@@ -244,10 +291,81 @@ export async function main(): Promise<void> {
     },
     acquireAgent: (snapshot, checkout, options) =>
       acquireInteractiveCursorAgent(
-        snapshot,
+        {
+          model: snapshot.model,
+          effort: snapshot.effort ?? null,
+          workspaceRef: snapshot.workspaceRef,
+        },
         (checkout as ReaderCheckout).reader,
-        options
+        {
+          resumeAgentId: options.resumeAgentId,
+          mcpServers: options.mcpServers ?? {},
+        },
+      ).then((acquired) => acquired.handle),
+    acquireDurableAgent: async (bootstrap, checkout, options) =>
+      acquireInteractiveCursorAgent(
+        {
+          model: bootstrap.specification.model,
+          effort: bootstrap.specification.effort,
+          workspaceRef: checkout.workspacePath,
+        },
+        (checkout as ReaderCheckout).reader,
+        {
+          resumeAgentId: options.resumeAgentId,
+          mcpServers: bootstrap.mcpServers,
+        },
       ),
+    materializeWorkspace: async (bootstrap, destination, signal) => {
+      const reader = await openPinnedReaderForBootstrap(bootstrap);
+      await materializeInteractiveWorkspace({
+        reader,
+        destination,
+        attachments: bootstrap.specification.currentMessage.attachments,
+        readAttachment: async (attachment) => {
+          const client = resolveArtifactContainerClient(
+            attachment.blobRef.container,
+          );
+          return client
+            .getBlockBlobClient(attachment.blobRef.key)
+            .downloadToBuffer();
+        },
+        signal,
+      });
+      return {
+        workspacePath: destination,
+        reader: reader ?? new LocalCheckoutReader({
+          checkoutPath: destination,
+          identity: {
+            provider: 'ado',
+            project: bootstrap.specification.projectId,
+            repo: 'empty',
+            sha: 'none',
+          },
+        }),
+        dispose: async () => {
+          await fs.rm(destination, { recursive: true, force: true }).catch(() => {});
+        },
+      } as ReaderCheckout;
+    },
+    uploadAttemptArtifacts: async (bootstrap, workspacePath, signal) => {
+      const collected = await collectInteractiveArtifacts(workspacePath);
+      const container = artifactContainerName();
+      const uploader = createArtifactUploader({
+        target: {
+          runId: bootstrap.runId,
+          attemptId: bootstrap.attemptId,
+          attemptNumber: bootstrap.attemptNumber,
+          container,
+        },
+      });
+      return uploader.uploadAll(
+        collected.map((file) => ({
+          path: file.relativePath,
+          content: file.content,
+        })),
+        signal,
+      );
+    },
     postIngest: (projectId, runId, body) =>
       callback.postIngest(projectId, runId, body),
     // Live token/tool/phase fan-out over Redis (ephemeral). No-op when Redis
@@ -293,12 +411,18 @@ export async function main(): Promise<void> {
         runId: payload.runId,
         dispatchMessageId: payload.dispatchMessageId,
       });
-      await callback.postIngest(bootstrap.projectId, payload.runId, {
+      const projectId = isInteractiveActorBootstrap(bootstrap)
+        ? bootstrap.projectId
+        : bootstrap.projectId;
+      await callback.postIngest(projectId, payload.runId, {
         dispatchMessageId: payload.dispatchMessageId,
         kind: 'terminal',
         status: 'failed',
         phase: 'completion',
         detail: 'Interactive agent could not start. Please retry.',
+        ...(isInteractiveActorBootstrap(bootstrap)
+          ? { attemptId: bootstrap.attemptId }
+          : {}),
       });
     }
   );

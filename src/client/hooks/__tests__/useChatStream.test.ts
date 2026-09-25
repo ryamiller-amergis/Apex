@@ -1,5 +1,6 @@
 import { renderHook, act } from '@testing-library/react';
-import { useChatStream } from '../useChatStream';
+import { durableTokenKey, useChatStream } from '../useChatStream';
+import type { SseTokenEvent } from '../../../shared/types/chat';
 
 // ── EventSource mock ───────────────────────────────────────────────────────────
 
@@ -139,6 +140,74 @@ describe('useChatStream', () => {
       lastES!.emit('message', { type: 'token', text: ', world' });
     });
     expect(result.current.streamingText).toBe('Hello, world');
+  });
+
+  it('merges durable offset tokens with dedupe, overlap, and pending gaps', () => {
+    expect(
+      durableTokenKey('e1', {
+        type: 'token',
+        text: 'hi',
+        streamOffset: 0,
+      } satisfies SseTokenEvent)
+    ).toBe('e1:0');
+    expect(
+      durableTokenKey('e1', { type: 'token', text: 'hi' } satisfies SseTokenEvent)
+    ).toBe('e1:legacy');
+
+    const { result } = renderHook(() => useChatStream('t1'));
+    act(() => {
+      lastES!.emit(
+        'message',
+        { type: 'token', text: 'Hello', streamOffset: 0, streamEndOffset: 5 },
+        'evt-a'
+      );
+      // Duplicate key ignored.
+      lastES!.emit(
+        'message',
+        { type: 'token', text: 'Hello', streamOffset: 0, streamEndOffset: 5 },
+        'evt-a'
+      );
+      // Gap held until the missing offset arrives.
+      lastES!.emit(
+        'message',
+        { type: 'token', text: '!', streamOffset: 11, streamEndOffset: 12 },
+        'evt-c'
+      );
+      lastES!.emit(
+        'message',
+        { type: 'token', text: ' world', streamOffset: 5, streamEndOffset: 11 },
+        'evt-b'
+      );
+    });
+    expect(result.current.streamingText).toBe('Hello world!');
+
+    act(() => {
+      // Equal overlapping prefix: append only the unseen suffix.
+      lastES!.emit(
+        'message',
+        {
+          type: 'token',
+          text: ' world!!',
+          streamOffset: 5,
+          streamEndOffset: 13,
+        },
+        'evt-d'
+      );
+    });
+    expect(result.current.streamingText).toBe('Hello world!!');
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'message',
+        message: {
+          id: 'final-1',
+          role: 'agent',
+          text: 'Hello world!!',
+          ts: '2026-01-01T00:00:00Z',
+        },
+      });
+    });
+    expect(result.current.streamingText).toBe('');
   });
 
   it('commits message event and clears streaming buffer', () => {
@@ -312,7 +381,7 @@ describe('useChatStream', () => {
         },
         'event-0'
       );
-      for (let i = 1; i <= 512; i++) {
+      for (let i = 1; i <= 2048; i++) {
         lastES!.emit(
           'message',
           {
@@ -448,11 +517,11 @@ describe('useChatStream', () => {
       }),
     ]);
     expect(result.current.progressPhase).toBe('queued');
-    expect(result.current.progressLabel).toBe('Waiting…');
+    expect(result.current.progressLabel).toBe('Queued');
     expect(result.current.status).toBe('running');
   });
 
-  it('PBI-006 AC-0 / VT-02 maps dispatched to Starting… before later running and terminal behavior', () => {
+  it('PBI-006 AC-0 / VT-02 maps dispatched to Dispatched before later running and terminal behavior', () => {
     const { result } = renderHook(() => useChatStream('t1'));
 
     act(() => {
@@ -478,7 +547,7 @@ describe('useChatStream', () => {
     });
 
     expect(result.current.progressPhase).toBe('dispatched');
-    expect(result.current.progressLabel).toBe('Starting…');
+    expect(result.current.progressLabel).toBe('Dispatched');
     expect(result.current.status).toBe('running');
 
     act(() => {
@@ -1008,6 +1077,54 @@ describe('useChatStream', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it('keeps retryableRunId when clean done follows an error', () => {
+    const runId = '50000000-0000-4000-8000-000000000001';
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'error',
+        error: 'Worker failed',
+        runId,
+      });
+    });
+    expect(result.current.retryableRunId).toBe(runId);
+    expect(result.current.status).toBe('error');
+
+    act(() => {
+      lastES!.emit('message', { type: 'done' });
+    });
+    expect(result.current.retryableRunId).toBe(runId);
+    expect(result.current.status).toBe('idle');
+  });
+
+  it('clears retryableRunId on a successful committed message event', () => {
+    const runId = '50000000-0000-4000-8000-000000000001';
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'error',
+        error: 'Worker failed',
+        runId,
+      });
+    });
+    expect(result.current.retryableRunId).toBe(runId);
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'message',
+        message: {
+          id: 'a1',
+          role: 'agent',
+          text: 'Recovered answer',
+          ts: '2026-01-01T00:00:01Z',
+        },
+      });
+    });
+    expect(result.current.retryableRunId).toBeNull();
   });
 
   it('resets isRetrying when threadId changes', () => {

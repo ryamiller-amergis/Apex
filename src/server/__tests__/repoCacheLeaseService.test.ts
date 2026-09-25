@@ -1,5 +1,8 @@
 import {
+  NonblockingRepoCacheLeaseUnavailableError,
+  RepoCacheLeaseLostError,
   type RepoCacheLeaseStore,
+  tryAcquireRepoCacheLease,
   withRepoCacheLease,
 } from '../services/repoCacheLeaseService';
 
@@ -75,6 +78,25 @@ describe('withRepoCacheLease', () => {
     expect(store.release).not.toHaveBeenCalled();
   });
 
+  it('throws a typed nonholder error for a nonblocking scheduler miss', async () => {
+    const store = createStore([false]);
+
+    const result = withRepoCacheLease('startup-recovery:sweep', async () => 'never', {
+      ownerId: 'instance-3',
+      leaseMs: 1_000,
+      heartbeatMs: 500,
+      waitMs: 0,
+      store,
+    });
+
+    await expect(result).rejects.toBeInstanceOf(NonblockingRepoCacheLeaseUnavailableError);
+    await expect(result).rejects.toMatchObject({
+      message: 'Timed out waiting for repository cache lease: startup-recovery:sweep',
+    });
+
+    expect(store.release).not.toHaveBeenCalled();
+  });
+
   it('releases the lease when the protected operation fails', async () => {
     const store = createStore();
 
@@ -119,6 +141,7 @@ describe('withRepoCacheLease', () => {
     await jest.advanceTimersByTimeAsync(11);
 
     await rejection;
+    await expect(protectedWork).rejects.toBeInstanceOf(RepoCacheLeaseLostError);
     jest.useRealTimers();
   });
   it('can preserve a scheduler lease until expiry after work completes', async () => {
@@ -141,5 +164,108 @@ describe('withRepoCacheLease', () => {
       295_000,
     );
     expect(store.release).not.toHaveBeenCalled();
+  });
+});
+
+describe('tryAcquireRepoCacheLease', () => {
+  it('returns null immediately for a non-blocking loser', async () => {
+    const store = createStore([false]);
+
+    await expect(tryAcquireRepoCacheLease('watcher:doc-1:thread-1', {
+      ownerId: 'instance-1',
+      leaseMs: 30_000,
+      heartbeatMs: 10_000,
+      waitMs: 0,
+      store,
+    })).resolves.toBeNull();
+
+    expect(store.tryAcquire).toHaveBeenCalledTimes(1);
+    expect(store.renew).not.toHaveBeenCalled();
+    expect(store.release).not.toHaveBeenCalled();
+  });
+
+  it('renews until released after a successful non-blocking acquire', async () => {
+    jest.useFakeTimers();
+    const store = createStore([true]);
+
+    const lease = await tryAcquireRepoCacheLease('watcher:doc-2:thread-2', {
+      ownerId: 'instance-2',
+      leaseMs: 30,
+      heartbeatMs: 10,
+      waitMs: 0,
+      store,
+    });
+
+    expect(lease).not.toBeNull();
+    await jest.advanceTimersByTimeAsync(11);
+    expect(store.renew).toHaveBeenCalledTimes(1);
+
+    await lease!.release();
+    expect(store.release).toHaveBeenCalledWith('watcher:doc-2:thread-2', 'instance-2', 1);
+    jest.useRealTimers();
+  });
+
+  it('stops the heartbeat immediately after renewal loses ownership', async () => {
+    jest.useFakeTimers();
+    const store = createStore([true]);
+    (store.renew as jest.Mock).mockResolvedValue(false);
+
+    const lease = await tryAcquireRepoCacheLease('watcher:doc-3:thread-3', {
+      ownerId: 'instance-3',
+      leaseMs: 30,
+      heartbeatMs: 10,
+      renewTimeoutMs: 10,
+      waitMs: 0,
+      store,
+    });
+
+    expect(lease).not.toBeNull();
+    await jest.advanceTimersByTimeAsync(11);
+    await expect(lease!.assertOwned()).rejects.toThrow('Repository cache lease was lost');
+
+    await jest.advanceTimersByTimeAsync(50);
+    expect(store.renew).toHaveBeenCalledTimes(1);
+    jest.useRealTimers();
+  });
+
+  it('bounds a hung renewal so ownership checks cannot outlive the lease', async () => {
+    jest.useFakeTimers();
+    const store = createStore([true]);
+    (store.renew as jest.Mock).mockImplementation(
+      () => new Promise<boolean>(() => undefined),
+    );
+
+    const lease = await tryAcquireRepoCacheLease('watcher:doc-4:thread-4', {
+      ownerId: 'instance-4',
+      leaseMs: 30,
+      heartbeatMs: 10,
+      renewTimeoutMs: 10,
+      waitMs: 0,
+      store,
+    });
+
+    expect(lease).not.toBeNull();
+    const assertOwned = lease!.assertOwned();
+    const rejection = expect(assertOwned).rejects.toThrow(
+      'Repository cache lease was lost: Repository cache lease renewal timed out',
+    );
+    await jest.advanceTimersByTimeAsync(11);
+    await rejection;
+    jest.useRealTimers();
+  });
+
+  it('throws from assertOwned after the lease has been released', async () => {
+    const store = createStore([true]);
+    const lease = await tryAcquireRepoCacheLease('watcher:doc-5:thread-5', {
+      ownerId: 'instance-5',
+      leaseMs: 30_000,
+      heartbeatMs: 10_000,
+      waitMs: 0,
+      store,
+    });
+
+    expect(lease).not.toBeNull();
+    await lease!.release();
+    await expect(lease!.assertOwned()).rejects.toThrow('Repository cache lease is no longer held');
   });
 });
