@@ -1,5 +1,6 @@
 import {
   PlaybookBindingError,
+  configHasBindings,
   resolvePlaybookBindings,
 } from '../services/playbookBindingResolver';
 
@@ -41,5 +42,15 @@ describe('FEAT-014 Playbook binding resolver', () => {
     expect(() => resolvePlaybookBindings('${steps.score}', context)).toThrow(
       PlaybookBindingError,
     );
+  });
+
+  it('leaves leftover ${ in agent text alone and does not treat it as a binding', () => {
+    expect(configHasBindings({ reportMd: 'Use ${HOME}' })).toBe(false);
+    expect(configHasBindings({ documentId: '${input.documentId}' })).toBe(true);
+    expect(resolvePlaybookBindings({
+      reportMd: 'Use ${HOME} and keep ${input.documentId}',
+    }, context)).toEqual({
+      reportMd: 'Use ${HOME} and keep doc-1',
+    });
   });
 });

@@ -20,13 +20,13 @@ export interface PlaybookBindingContext {
   steps: Record<string, Record<string, unknown>>;
 }
 
-const FULL_PLACEHOLDER = /^\$\{(input|steps)\.([^}]+)\}$/;
+const DOCUMENTED_PLACEHOLDER = /\$\{(?:input\.[A-Za-z][A-Za-z0-9_]*|steps\.[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_]*)\}/;
 const EMBEDDED_PLACEHOLDER = /\$\{([^}]+)\}/g;
 const INPUT_PATH = /^[A-Za-z][A-Za-z0-9_]*$/;
 const STEP_PATH = /^[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_]*$/;
 
 export function configHasBindings(config: unknown): boolean {
-  return JSON.stringify(config).includes('${');
+  return DOCUMENTED_PLACEHOLDER.test(JSON.stringify(config));
 }
 
 export function resolvePlaybookBindings<T>(value: T, context: PlaybookBindingContext): T {
@@ -48,15 +48,26 @@ function resolveUnknown(value: unknown, context: PlaybookBindingContext): unknow
 
 function resolveString(value: string, context: PlaybookBindingContext): unknown {
   const trimmed = value.trim();
-  const full = trimmed.match(FULL_PLACEHOLDER);
+  const full = trimmed.match(/^\$\{([^}]+)\}$/);
   if (full && full[0] === trimmed) {
-    return lookup(full[1], full[2], full[0], context);
+    const [namespace, ...rest] = full[1].split('.');
+    return lookup(namespace, rest.join('.'), full[0], context);
   }
 
   return value.replace(EMBEDDED_PLACEHOLDER, (match, body: string) => {
     const [namespace, ...rest] = body.split('.');
-    const bound = lookup(namespace, rest.join('.'), match, context);
-    return bound == null ? '' : String(bound);
+    const path = rest.join('.');
+    if (namespace === 'input' && INPUT_PATH.test(path)) {
+      const bound = context.input[path];
+      return bound == null ? '' : String(bound);
+    }
+    if (namespace === 'steps' && STEP_PATH.test(path)) {
+      const [stepId, field] = path.split('.');
+      const bound = context.steps[stepId]?.[field];
+      return bound == null ? '' : String(bound);
+    }
+    // Leftover `${` in agent text is not a Playbook binding.
+    return match;
   });
 }
 

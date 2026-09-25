@@ -1,4 +1,3 @@
-const resolveRunStepConfig = jest.fn();
 const getApproverUserIdsForProject = jest.fn();
 const getAssignmentsForProject = jest.fn();
 
@@ -24,10 +23,6 @@ jest.mock('../db/drizzle', () => ({
   },
 }));
 
-jest.mock('../services/playbookStepBindings', () => ({
-  resolveRunStepConfig: (...args: unknown[]) => resolveRunStepConfig(...args),
-}));
-
 jest.mock('../services/projectSettingsService', () => ({
   getApproverUserIdsForProject: (...args: unknown[]) => getApproverUserIdsForProject(...args),
   getApprovalModeForProject: jest.fn(),
@@ -46,17 +41,9 @@ describe('getGateDetail binding display', () => {
     queryResults.length = 0;
     getApproverUserIdsForProject.mockResolvedValue(['user-1']);
     getAssignmentsForProject.mockResolvedValue([{ userId: 'user-1' }]);
-    resolveRunStepConfig.mockImplementation(async (_runId: string, config: Record<string, unknown>) => ({
-      ...config,
-      documentType: 'design_doc',
-      documentId: 'doc-1',
-      validationThreadId: 'thread-1',
-      scorecard: { is_ready: true },
-      reportMd: '# report',
-    }));
   });
 
-  it('renders resolved document values instead of stored ${...} placeholders', async () => {
+  it('renders the stored resolved input, including leftover ${ in agent text', async () => {
     queryResults.push(
       [{
         runId: 'run-1',
@@ -73,10 +60,10 @@ describe('getGateDetail binding display', () => {
         stepType: 'ingest-artifact',
         input: {
           documentType: 'design_doc',
-          documentId: '${input.documentId}',
-          validationThreadId: '${steps.score.threadId}',
-          scorecard: '${steps.score.scorecard}',
-          reportMd: 'report',
+          documentId: 'doc-1',
+          validationThreadId: 'thread-1',
+          scorecard: { is_ready: true },
+          reportMd: 'Keep ${HOME} in the report',
         },
       }],
       [{ userId: 'user-1', decision: null }],
@@ -89,13 +76,9 @@ describe('getGateDetail binding display', () => {
       userId: 'user-1',
     });
 
-    expect(resolveRunStepConfig).toHaveBeenCalledWith(
-      'run-1',
-      expect.objectContaining({ documentId: '${input.documentId}' }),
-    );
     expect(detail.fields).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: 'documentId', value: 'doc-1' }),
+      expect.objectContaining({ path: 'reportMd', value: 'Keep ${HOME} in the report' }),
     ]));
-    expect(detail.fields.some((field) => String(field.value).includes('${'))).toBe(false);
   });
 });

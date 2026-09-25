@@ -26,6 +26,7 @@ import {
   PlaybookGuardViolationError,
 } from '../playbookGuardService';
 import { isBranchStepType } from '../playbookSteps/registry';
+import { resolveRunStepConfig } from '../playbookStepBindings';
 import type { PlaybookGraph, PlaybookGraphNode } from '../../../shared/types/playbook';
 
 /**
@@ -313,11 +314,12 @@ export function translate(
          * put that transition in two places and make one of them wrong eventually.
          */
         if (resumeData) return { stepId: node.id };
+        const boundConfig = await resolveRunStepConfig(context.runId, node.config ?? {});
         const stepRun = await beginStepRun({
           runId: context.runId,
           stepId: node.id,
           stepType: node.stepType,
-          inputInline: node.config ?? {},
+          inputInline: boundConfig,
         });
 
         try {
@@ -352,7 +354,7 @@ export function translate(
             stepType: node.stepType,
             project: context.project,
             initiatorUserId: context.initiatorUserId,
-            config: node.config ?? {},
+            config: boundConfig,
             graph,
           });
         } catch (error) {

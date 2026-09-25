@@ -24,6 +24,10 @@ jest.mock('../services/playbookSteps', () => ({
   failStepRunForHuman: (...args: unknown[]) => failStepRunForHuman(...args),
 }));
 
+jest.mock('../services/playbookStepBindings', () => ({
+  resolveRunStepConfig: jest.fn(async (_runId: string, config: Record<string, unknown>) => config),
+}));
+
 // The gate rule is real and reads the production registry; only its unused database dependency is
 // replaced. This is what makes VT-17 a current-classification conformance scenario.
 jest.mock('../db/drizzle', () => ({ db: {} }));
