@@ -18,6 +18,8 @@
 const createThread = jest.fn();
 jest.mock('../../src/server/services/chatAgentService', () => ({
   createThread: (...a: unknown[]) => createThread(...a),
+  readOutputValidationScorecard: () => null,
+  readOutputValidationScorecardMd: () => null,
 }));
 
 import pg from 'pg';
@@ -387,6 +389,7 @@ describe('an agent step completing advances the run, through the real terminal-e
     await terminalEvents.handleTerminalAgentRunEvent({
       runId: agentStep.agent_run_id!,
       threadId: 'thread-whatever',
+      type: 'done',
       status: 'completed',
       timestamp: new Date().toISOString(),
       sequence: 1,

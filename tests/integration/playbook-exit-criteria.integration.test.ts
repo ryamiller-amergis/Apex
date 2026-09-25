@@ -27,6 +27,8 @@ const createThread = jest.fn(async () => ({
 }));
 jest.mock('../../src/server/services/chatAgentService', () => ({
   createThread: (...a: unknown[]) => createThread(...(a as [])),
+  readOutputValidationScorecard: () => null,
+  readOutputValidationScorecardMd: () => null,
 }));
 
 import pg from 'pg';
@@ -393,6 +395,7 @@ describe('VT-19 — E3: definition B runs end to end with zero lines of code cha
     await terminalEvents.handleTerminalAgentRunEvent({
       runId: agentStep.agent_run_id!,
       threadId: 'thread-e3',
+      type: 'done',
       status: 'completed',
       timestamp: new Date().toISOString(),
       sequence: 1,

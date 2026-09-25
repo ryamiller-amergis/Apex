@@ -71,6 +71,7 @@ export const DEFINITION_A: DemoDefinition = {
         stepType: 'cursor-agent',
         config: {
           skillPath: DEMO_SKILL_PATH,
+          mcpProfile: 'repository-read-only',
           prompt:
             'Summarise what the Playbook orchestration feature does, in three sentences, for ' +
             'someone who has not seen it before.',
@@ -116,6 +117,7 @@ export const DEFINITION_B: DemoDefinition = {
         stepType: 'cursor-agent',
         config: {
           skillPath: DEMO_SKILL_PATH,
+          mcpProfile: 'repository-read-only',
           prompt: 'Which Apex features depend on the notification service? List them.',
         },
       },

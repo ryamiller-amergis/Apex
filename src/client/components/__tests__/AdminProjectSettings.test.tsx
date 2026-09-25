@@ -41,6 +41,12 @@ jest.mock('../../hooks/useFeatureFlags', () => ({
   useFeatureFlag: jest.fn().mockReturnValue(false),
 }));
 
+// The card imports useAppShell → useWorkItems → config/env, and env.ts reads
+// import.meta.env, which ts-jest's CommonJS transform cannot parse.
+jest.mock('../PlaybookSpendPolicyCard', () => ({
+  PlaybookSpendPolicyCard: () => null,
+}));
+
 jest.mock('../GroupAwarePeoplePicker', () => ({
   GroupAwarePeoplePicker: ({
     groups,
