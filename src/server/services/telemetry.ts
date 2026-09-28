@@ -9,7 +9,10 @@ if (connectionString) {
     .setAutoCollectPerformance(true, true)
     .setAutoCollectExceptions(true)
     .setAutoCollectDependencies(true)
-    .setAutoCollectConsole(true)
+    // The second argument is what captures plain `console.*`. With only the
+    // first, the SDK collects third-party loggers (winston/bunyan) and this
+    // app's console output never reaches the `traces` table.
+    .setAutoCollectConsole(true, true)
     .setDistributedTracingMode(appInsights.DistributedTracingModes.AI_AND_W3C)
     .start();
 }

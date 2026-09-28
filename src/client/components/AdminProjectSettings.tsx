@@ -2990,6 +2990,34 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                           disabled={upsert.isPending} {...{ 'data-testid': `ps-skill-pill-bypass-scope-${idx}` }} />
                         Bypass scope guardrail (allows this skill to research public/external topics)
                       </label>
+                      <div
+                        className={styles.approverSubSection}
+                        {...{ 'data-testid': `ps-skill-pill-allowlist-${idx}` }}
+                      >
+                        <p className={styles.approverSubTitle}>
+                          Visible to — leave empty for everyone with Home access
+                        </p>
+                        <GroupAwarePeoplePicker
+                          groups={groupsWithMembers}
+                          availableUsers={allUsers}
+                          selectedUserIds={pill.allowedUserIds ?? []}
+                          selectedGroupIds={pill.allowedGroupIds ?? []}
+                          onUserIdsChange={(ids) => setEdit((prev) => {
+                            if (!prev) return prev;
+                            const pills = [...prev.quickSkillPills];
+                            pills[idx] = { ...pills[idx], allowedUserIds: ids };
+                            return { ...prev, quickSkillPills: pills };
+                          })}
+                          onGroupIdsChange={(ids) => setEdit((prev) => {
+                            if (!prev) return prev;
+                            const pills = [...prev.quickSkillPills];
+                            pills[idx] = { ...pills[idx], allowedGroupIds: ids };
+                            return { ...prev, quickSkillPills: pills };
+                          })}
+                          disabled={upsert.isPending}
+                          placeholder="Search groups or people to add…"
+                        />
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -3163,6 +3191,34 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                           setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
                         }}
                         disabled={upsert.isPending} {...{ 'data-testid': `ps-mcp-pill-description-${idx}` }} />
+                      <div
+                        className={styles.approverSubSection}
+                        {...{ 'data-testid': `ps-mcp-pill-allowlist-${idx}` }}
+                      >
+                        <p className={styles.approverSubTitle}>
+                          Visible to — leave empty for everyone with Home access
+                        </p>
+                        <GroupAwarePeoplePicker
+                          groups={groupsWithMembers}
+                          availableUsers={allUsers}
+                          selectedUserIds={pill.allowedUserIds ?? []}
+                          selectedGroupIds={pill.allowedGroupIds ?? []}
+                          onUserIdsChange={(ids) => setEdit((prev) => {
+                            if (!prev) return prev;
+                            const pills = [...prev.quickMcpPills];
+                            pills[idx] = { ...pills[idx], allowedUserIds: ids };
+                            return { ...prev, quickMcpPills: pills };
+                          })}
+                          onGroupIdsChange={(ids) => setEdit((prev) => {
+                            if (!prev) return prev;
+                            const pills = [...prev.quickMcpPills];
+                            pills[idx] = { ...pills[idx], allowedGroupIds: ids };
+                            return { ...prev, quickMcpPills: pills };
+                          })}
+                          disabled={upsert.isPending}
+                          placeholder="Search groups or people to add…"
+                        />
+                      </div>
                     </div>
                   ))}
                 </div>

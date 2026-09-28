@@ -18,11 +18,13 @@
   to { transform: translateX(0); }
 }
 
+/* Sits fully inside the panel so `overflow: hidden` cannot clip it when the
+   panel is opened at the full viewport width. */
 .resize-handle {
   position: absolute;
-  inset: 0 auto 0 -4px;
+  inset: 0 auto 0 0;
   z-index: 10;
-  width: 8px;
+  width: 10px;
   cursor: ew-resize;
 }
 
@@ -40,6 +42,31 @@
   padding: 8px 12px 8px 16px;
   border-bottom: 1px solid var(--border-color);
   background: var(--bg-secondary);
+}
+
+/* Page-layout surfaces own the page heading, so the panel keeps only its
+   actions and drops the bar chrome. */
+.header-bare {
+  min-height: 0;
+  padding: 8px 12px 0;
+  justify-content: flex-end;
+  border-bottom: 0;
+  background: transparent;
+}
+
+/* Overlays the content instead of reserving a row. Reserved for the centered
+   hold screen, where nothing sits under the top-right corner. */
+.header-float {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* Only the controls take clicks, so the actions row cannot block the
+   content underneath it. */
+.header-float > * {
+  pointer-events: auto;
 }
 
 .title {

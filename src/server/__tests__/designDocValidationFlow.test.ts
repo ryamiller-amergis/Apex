@@ -41,6 +41,7 @@ jest.mock('../services/chatAgentService', () => ({
   }),
   cancelRun: jest.fn().mockResolvedValue(undefined),
   isThreadIdle: jest.fn().mockReturnValue(false),
+  isOutputWorkspaceReadable: jest.fn().mockReturnValue(true),
   readOutputValidationScorecard: jest.fn().mockReturnValue(null),
   readOutputValidationScorecardMd: jest.fn().mockReturnValue(null),
   readOutputDesignDoc: jest.fn().mockReturnValue(null),

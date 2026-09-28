@@ -389,6 +389,36 @@ function readRepairMarker(cacheDir: string): string | null {
   }
 }
 
+/**
+ * A fetch that dies mid-transfer leaves its `tmp_pack_*` behind — one file the
+ * size of the pack it was receiving. Git never reclaims them, so on the
+ * fixed-size Azure Files share they pile up until writes fail and deploys are
+ * rejected for lack of space. Only sweep temps older than the longest a fetch
+ * may run; a younger one can still belong to a fetch in flight.
+ */
+function pruneAbandonedPackTemps(cacheDir: string): void {
+  const packDir = path.join(cacheDir, 'objects', 'pack');
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(packDir);
+  } catch {
+    return;
+  }
+
+  const cutoff = Date.now() - COLD_CACHE_TIMEOUT_MS;
+  for (const entry of entries) {
+    if (!entry.startsWith('tmp_pack_')) continue;
+    const file = path.join(packDir, entry);
+    try {
+      if (fs.statSync(file).mtimeMs > cutoff) continue;
+      fs.rmSync(file, { force: true });
+      console.warn(`[repo-cache] removed abandoned pack temp ${entry} in ${cacheDir}`);
+    } catch {
+      // Another instance may have swept it first; nothing left to do.
+    }
+  }
+}
+
 async function refetchAndVerifyCache(
   cacheDir: string,
   options: RepoCacheOptions,
@@ -396,6 +426,7 @@ async function refetchAndVerifyCache(
   abortSignal: AbortSignal,
   assertOwned: () => Promise<void>,
 ): Promise<string> {
+  pruneAbandonedPackTemps(cacheDir);
   await git(
     safeArgs(cacheDir, [
       'fetch',
@@ -503,6 +534,7 @@ async function refreshWarmCache(
   remote: GitRemote,
   abortSignal: AbortSignal,
 ): Promise<void> {
+  pruneAbandonedPackTemps(cacheDir);
   await git(
     safeArgs(cacheDir, [
       'fetch',
@@ -756,6 +788,7 @@ export async function fetchPinnedCommit(
         } catch {
           // Fetch below uses remote.url regardless of origin.
         }
+        pruneAbandonedPackTemps(cacheDir);
         await git(
           safeArgs(cacheDir, ['fetch', '--no-tags', remote.url, normalized]),
           {

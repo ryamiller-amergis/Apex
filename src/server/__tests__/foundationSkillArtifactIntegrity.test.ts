@@ -19,6 +19,10 @@ import type {
   FoundationSkillRelease,
   FoundationSkillArtifactManifest,
 } from '../../shared/types/foundationSkills';
+import {
+  getProjectReleaseNotes,
+  toProjectReleaseView,
+} from '../../shared/types/foundationSkills';
 
 function tarball(entries: Record<string, string>): Buffer {
   const blocks: Buffer[] = [];
@@ -88,6 +92,7 @@ function release(overrides: Partial<FoundationSkillRelease> = {}): FoundationSki
     skillTargets: {},
     manifestSnapshot: null,
     releaseNotes: null,
+    projectNotes: {},
     breakingChanges: null,
     publishedBy: null,
     publishedAt: null,
@@ -440,16 +445,136 @@ describe('validateReleaseUpdate', () => {
     ).not.toThrow();
   });
 
-  it('rejects audience, skill, and artifact edits after publication', () => {
+  it('rejects skill and artifact edits after publication', () => {
     const published = release({ status: 'published' });
     expect(() =>
       validateReleaseUpdate(published, { selectedSkills: ['to-prd'] }),
     ).toThrow(/immutable/i);
     expect(() =>
-      validateReleaseUpdate(published, { targetProjects: ['MaxView'] }),
-    ).toThrow(/immutable/i);
-    expect(() =>
       validateReleaseUpdate(published, { artifactVersion: '2.0.1' }),
     ).toThrow(/immutable/i);
+  });
+
+  it('allows a published release to be retargeted at another project', () => {
+    const published = release({
+      status: 'published',
+      manifestSnapshot: manifest,
+      selectedSkills: ['to-prd', 'post-skill-bootstrap'],
+      targetProjects: ['MatterWorx'],
+    });
+
+    expect(() =>
+      validateReleaseUpdate(published, {
+        targetProjects: ['MatterWorx', 'MaxView'],
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects a retarget that leaves a dependency behind', () => {
+    const published = release({
+      status: 'published',
+      manifestSnapshot: manifest,
+      selectedSkills: ['to-prd', 'post-skill-bootstrap'],
+      targetProjects: ['MatterWorx', 'MaxView'],
+    });
+
+    expect(() =>
+      validateReleaseUpdate(published, {
+        skillTargets: { 'to-prd': ['MatterWorx'] },
+      }),
+    ).toThrow(FoundationSkillReleaseValidationError);
+  });
+
+  it('rejects per-skill targets outside the release skills or audience', () => {
+    const published = release({
+      status: 'published',
+      manifestSnapshot: manifest,
+      selectedSkills: ['to-prd', 'post-skill-bootstrap'],
+      targetProjects: ['MatterWorx'],
+    });
+
+    expect(() =>
+      validateReleaseUpdate(published, {
+        skillTargets: { 'internal-only': ['MatterWorx'] },
+      }),
+    ).toThrow(/not part of release/i);
+    expect(() =>
+      validateReleaseUpdate(published, {
+        skillTargets: { 'to-prd': ['MaxView'] },
+      }),
+    ).toThrow(/outside the release audience/i);
+  });
+
+  it('keeps a deprecated release notes-only', () => {
+    expect(() =>
+      validateReleaseUpdate(release({ status: 'deprecated' }), {
+        targetProjects: ['MaxView'],
+      }),
+    ).toThrow(/immutable/i);
+  });
+
+  it('accepts per-project notes at any status', () => {
+    const projectNotes = {
+      MaxView: { releaseNotes: 'ADR skills only.', breakingChanges: null },
+    };
+    for (const status of ['draft', 'published', 'deprecated'] as const) {
+      expect(() =>
+        validateReleaseUpdate(
+          release({ status, targetProjects: ['MaxView'] }),
+          { projectNotes },
+        ),
+      ).not.toThrow();
+    }
+  });
+
+  it('rejects notes for a project the release does not target', () => {
+    expect(() =>
+      validateReleaseUpdate(
+        release({ status: 'published', targetProjects: ['MatterWorx'] }),
+        { projectNotes: { MaxView: { releaseNotes: 'Hi', breakingChanges: null } } },
+      ),
+    ).toThrow(/outside the release audience/i);
+  });
+
+  it('rejects malformed per-project notes', () => {
+    expect(() =>
+      validateReleaseUpdate(release({ status: 'published' }), {
+        projectNotes: { MaxView: { releaseNotes: 42, breakingChanges: null } },
+      } as unknown as Record<string, unknown>),
+    ).toThrow(/must be text or null/i);
+  });
+});
+
+describe('getProjectReleaseNotes', () => {
+  const published = release({
+    status: 'published',
+    releaseNotes: 'Admin-facing summary',
+    breakingChanges: 'Admin-facing breaking note',
+    targetProjects: ['MaxView', 'MatterWorx'],
+    projectNotes: {
+      MaxView: { releaseNotes: 'ADR skills for MaxView.', breakingChanges: null },
+    },
+  });
+
+  it('returns the notes written for that project', () => {
+    expect(getProjectReleaseNotes(published, 'MaxView')).toEqual({
+      releaseNotes: 'ADR skills for MaxView.',
+      breakingChanges: null,
+    });
+  });
+
+  it('never falls back to the admin-facing notes', () => {
+    expect(getProjectReleaseNotes(published, 'MatterWorx')).toEqual({
+      releaseNotes: null,
+      breakingChanges: null,
+    });
+  });
+
+  it('hides other projects notes from the project view', () => {
+    const view = toProjectReleaseView(published, 'MatterWorx');
+    expect(view.projectNotes).toEqual({});
+    expect(view.releaseNotes).toBeNull();
+    expect(view.breakingChanges).toBeNull();
+    expect(view.version).toBe(published.version);
   });
 });

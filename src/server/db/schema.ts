@@ -1516,6 +1516,8 @@ export const featureRequests = pgTable('feature_requests', {
   interviewId: uuid('interview_id').references(() => interviews.id, { onDelete: 'set null' }),
   submittedBy: text('submitted_by').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
   sourceProject: text('source_project').notNull(),
+  assignedToOid: text('assigned_to_oid').references(() => appUsers.oid, { onDelete: 'set null' }),
+  assignedToApex: boolean('assigned_to_apex').notNull().default(false),
   status: text('status').notNull().default('new'),
   aiStatus: text('ai_status').notNull().default('pending'),
   aiPriority: text('ai_priority'),
@@ -1533,6 +1535,13 @@ export const featureRequests = pgTable('feature_requests', {
   typeStatusCreatedIdx: index('idx_feature_requests_type_status_created').on(t.type, t.status, t.createdAt),
   submittedByIdx: index('idx_feature_requests_submitted_by').on(t.submittedBy),
   sourceProjectIdx: index('idx_feature_requests_source_project').on(t.sourceProject),
+  assignedToOidIdx: index('idx_feature_requests_assigned_to_oid')
+    .on(t.assignedToOid)
+    .where(sql`${t.assignedToOid} IS NOT NULL`),
+  exclusiveAssigneeCheck: check(
+    'feature_requests_exclusive_assignee_check',
+    sql`(${t.assignedToOid} IS NOT NULL)::integer + (${t.assignedToApex} = TRUE)::integer <= 1`,
+  ),
 }));
 
 export const featureRequestAdrs = pgTable('feature_request_adrs', {
@@ -1553,6 +1562,10 @@ export const featureRequestsRelations = relations(featureRequests, ({ one, many 
   }),
   submitter: one(appUsers, {
     fields: [featureRequests.submittedBy],
+    references: [appUsers.oid],
+  }),
+  assignee: one(appUsers, {
+    fields: [featureRequests.assignedToOid],
     references: [appUsers.oid],
   }),
   adrLinks: many(featureRequestAdrs),
@@ -1709,7 +1722,7 @@ export const agentRuns = pgTable('agent_runs', {
   ),
   terminalReasonCheck: check(
     'agent_runs_terminal_reason_check',
-    sql`${t.terminalReason} IS NULL OR ${t.terminalReason} IN ('worker_lost', 'progress_timeout', 'queue_ttl', 'forced_cancel', 'cloud_agent_timeout')`,
+    sql`${t.terminalReason} IS NULL OR ${t.terminalReason} IN ('worker_lost', 'progress_timeout', 'queue_ttl', 'forced_cancel', 'dispatch_ttl', 'cloud_agent_timeout')`,
   ),
   workflowClassCheck: check(
     'agent_runs_workflow_class_check',
@@ -1929,6 +1942,7 @@ import type {
   ApexWorkItemStatus,
   ApexWorkItemType,
   ApexWorkItemSourceType,
+  ApexWorkItemPriority,
   ApexWorkItemEventAction,
   ApexReleaseStatus,
   ApexWorkItemLinkType,
@@ -1958,7 +1972,12 @@ export const apexWorkItems = pgTable('apex_work_items', {
   outcome: text('outcome').notNull().default(''),
   type: text('type').$type<ApexWorkItemType>().notNull(),
   status: text('status').$type<ApexWorkItemStatus>().notNull().default('idea'),
-  ownerOid: text('owner_oid').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  ownerOid: text('owner_oid').references(() => appUsers.oid, { onDelete: 'restrict' }),
+  assignedToApex: boolean('assigned_to_apex').notNull().default(false),
+  priority: text('priority').$type<ApexWorkItemPriority>(),
+  priorityRank: integer('priority_rank'),
+  aiPriorityRationale: text('ai_priority_rationale'),
+  aiRankedAt: timestamp('ai_ranked_at', { withTimezone: true, mode: 'string' }),
   acceptanceCriteria: jsonb('acceptance_criteria').$type<AcceptanceCriterion[]>().notNull().default([]),
   branch: text('branch'),
   prUrl: text('pr_url'),
@@ -1988,6 +2007,7 @@ export const apexWorkItems = pgTable('apex_work_items', {
   statusPosIdx: index('idx_apex_work_items_status_pos').on(t.status, t.position),
   projectStatusPosIdx: index('idx_apex_work_items_project_status_pos').on(t.project, t.status, t.position),
   projectOwnerIdx: index('idx_apex_work_items_project_owner').on(t.project, t.ownerOid),
+  projectPriorityRankIdx: index('idx_apex_work_items_project_priority_rank').on(t.project, t.priorityRank),
   projectItemNumberIdx: uniqueIndex('idx_apex_work_items_project_item_number').on(t.project, t.itemNumber),
   projectAdoIdx: uniqueIndex('idx_apex_work_items_project_ado')
     .on(t.project, t.adoWorkItemId)
@@ -2543,6 +2563,7 @@ import type {
   FoundationSkillAuditAction,
   FoundationSkillCompatibilityStatus,
   FoundationSkillArtifactManifest,
+  FoundationSkillProjectNotes,
 } from '../../shared/types/foundationSkills';
 
 export const foundationSkillReleases = pgTable('foundation_skill_releases', {
@@ -2560,6 +2581,7 @@ export const foundationSkillReleases = pgTable('foundation_skill_releases', {
   manifestSnapshot:    jsonb('manifest_snapshot').$type<FoundationSkillArtifactManifest>(),
   releaseNotes:        text('release_notes'),
   breakingChanges:     text('breaking_changes'),
+  projectNotes:        jsonb('project_notes').$type<Record<string, FoundationSkillProjectNotes>>().notNull().default({}),
   publishedBy:         text('published_by'),
   publishedAt:         timestamp('published_at', { withTimezone: true, mode: 'string' }),
   deprecatedBy:        text('deprecated_by'),

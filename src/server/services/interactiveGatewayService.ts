@@ -66,6 +66,7 @@ export interface InteractiveThreadSnapshot {
   messages: ChatMessage[];
   status: ChatThreadStatus;
   eventDrivenTermination: boolean;
+  activeRunId?: string;
 }
 
 export interface AttachInteractiveThreadOptions {
@@ -84,7 +85,9 @@ export interface InteractiveGatewayDependencies {
   ) => Promise<InteractiveThreadSnapshot | null>;
   replayRunEvents: (
     threadId: string,
-    lastEventId?: string
+    lastEventId?: string,
+    limit?: number,
+    runId?: string,
   ) => Promise<AgentRunEventEnvelope[]>;
   /**
    * Subscribe to durable run events as they are committed. This closes the
@@ -128,6 +131,7 @@ const defaultDependencies: InteractiveGatewayDependencies = {
       messages: thread.messages,
       status: thread.status,
       eventDrivenTermination,
+      activeRunId: thread.activeRunId,
     };
   },
   replayRunEvents: defaultReplayRunEvents,
@@ -235,8 +239,9 @@ export async function attachInteractiveThreadStream(
   // send still receives the persisted user message and current running state.
   // Subscriptions are already active, so the snapshot/live overlap is closed
   // by message-id and durable-event-id de-duplication.
+  let snapshot: InteractiveThreadSnapshot | null = null;
   try {
-    const snapshot = await dependencies.loadThreadSnapshot(threadId);
+    snapshot = await dependencies.loadThreadSnapshot(threadId);
     if (snapshot) {
       for (const message of snapshot.messages) {
         sendEvent({ type: 'message', message });
@@ -253,13 +258,19 @@ export async function attachInteractiveThreadStream(
   }
 
   let replayEvents: AgentRunEventEnvelope[] = [];
-  try {
-    replayEvents = await dependencies.replayRunEvents(
-      threadId,
-      options.lastEventId
-    );
-  } catch {
-    replayEvents = [];
+  const shouldReplayEvents =
+    Boolean(options.lastEventId) || !snapshot || snapshot.status === 'running';
+  if (shouldReplayEvents) {
+    try {
+      replayEvents = await dependencies.replayRunEvents(
+        threadId,
+        options.lastEventId,
+        500,
+        snapshot?.activeRunId,
+      );
+    } catch {
+      replayEvents = [];
+    }
   }
   for (const envelope of replayEvents) sendEnvelope(envelope);
 

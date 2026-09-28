@@ -35,6 +35,8 @@ export type AgentRunTerminalReason =
   | 'worker_lost'
   | 'progress_timeout'
   | 'queue_ttl'
+  /** Dispatch accepted but the worker never reported; see the reaper dispatch TTL. */
+  | 'dispatch_ttl'
   | 'forced_cancel'
   | 'cloud_agent_timeout';
 
@@ -119,6 +121,7 @@ export const AGENT_RUN_TERMINAL_REASONS: ReadonlySet<AgentRunTerminalReason> = n
   'worker_lost',
   'progress_timeout',
   'queue_ttl',
+  'dispatch_ttl',
   'forced_cancel',
   'cloud_agent_timeout',
 ]);

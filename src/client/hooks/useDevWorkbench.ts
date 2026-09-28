@@ -18,6 +18,7 @@ import type {
 } from '../../shared/types/devWorkbench';
 import type { AgentRunStatus } from '../../shared/types/agentRunLifecycle';
 import { isAgentRunTerminalStatus } from '../../shared/types/agentRunLifecycle';
+import type { FeatureRequest } from '../../shared/types/featureRequest';
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...options });
@@ -175,6 +176,16 @@ export function useCancelCloudAgentRun() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['dev-workbench'] });
     },
+  });
+}
+
+export function useAssignedBacklog(project: string | null) {
+  return useQuery<FeatureRequest[]>({
+    queryKey: ['dev-workbench', 'assigned-backlog', project],
+    queryFn: () =>
+      apiFetch(`/api/dev-workbench/assigned-backlog?project=${encodeURIComponent(project!)}`),
+    enabled: !!project,
+    staleTime: 60_000,
   });
 }
 

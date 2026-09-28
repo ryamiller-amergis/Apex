@@ -25,7 +25,7 @@ import {
   cleanupWorkspace,
 } from '../services/repoCheckoutService';
 import { db } from '../db/drizzle';
-import { devSessions, prds, designDocs, testCases } from '../db/schema';
+import { devSessions, interviews, prds, designDocs, testCases } from '../db/schema';
 import { eq, and, inArray, desc } from 'drizzle-orm';
 import { injectDevContextFiles } from '../services/devContextService';
 import {
@@ -67,6 +67,7 @@ import {
 } from '../services/cloudAgentService';
 import { MY_WORK_CLOUD_AGENT_FLAG } from '../../shared/types/featureFlags';
 import { startSseHeartbeat, writeSseEvent } from '../utils/sseResponse';
+import { listAssignedToUser } from '../services/featureRequestService';
 
 /** ADO System.AssignedTo may be an identity object or a plain display-name string. */
 function assignedToDisplayName(raw: unknown): string | null {
@@ -131,6 +132,23 @@ router.get('/workitems', async (req: Request, res: Response) => {
   }
 });
 
+// GET /assigned-backlog?project=<project> — Apex Backlog items assigned to the caller
+router.get('/assigned-backlog', async (req: Request, res: Response) => {
+  try {
+    const project = req.query.project as string;
+    if (!project) {
+      res.status(400).json({ error: 'project query parameter is required' });
+      return;
+    }
+
+    const items = await listAssignedToUser(project, getUserId(req));
+    res.json(items);
+  } catch (err) {
+    console.error('[dev-workbench] getAssignedBacklog failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to fetch assigned backlog' });
+  }
+});
+
 // GET /backlog-features?project=<project> — app-native PRD-sourced feature backlog
 router.get('/backlog-features', async (req: Request, res: Response) => {
   try {
@@ -144,10 +162,42 @@ router.get('/backlog-features', async (req: Request, res: Response) => {
       return;
     }
 
+    // Features belong to whoever owns the design doc on the interview that
+    // produced the PRD. The inner join drops PRDs with no interview, and the
+    // owner predicate drops PRDs owned by nobody or by someone else — for
+    // every caller, super admins included.
     const approvedPrds = await db
-      .select()
+      .select({
+        id: prds.id,
+        title: prds.title,
+        backlogJson: prds.backlogJson,
+        reviewedAt: prds.reviewedAt,
+        updatedAt: prds.updatedAt,
+        createdAt: prds.createdAt,
+      })
       .from(prds)
-      .where(and(eq(prds.project, project), eq(prds.status, 'approved')));
+      .innerJoin(interviews, eq(prds.interviewId, interviews.id))
+      .where(and(
+        eq(prds.project, project),
+        eq(prds.status, 'approved'),
+        eq(interviews.designDocOwnerId, getUserId(req)),
+      ));
+
+    const prdIds = approvedPrds.map((prd) => prd.id);
+    const docRows = prdIds.length
+      ? await db
+          .select({
+            prdId: designDocs.prdId,
+            id: designDocs.id,
+            featureIndex: designDocs.featureIndex,
+            status: designDocs.status,
+          })
+          .from(designDocs)
+          .where(inArray(designDocs.prdId, prdIds))
+      : [];
+    const docByPrdFeature = new Map(
+      docRows.map((doc) => [`${doc.prdId}:${doc.featureIndex}`, doc]),
+    );
 
     const result: ApexBacklogGroup[] = [];
 
@@ -158,13 +208,6 @@ router.get('/backlog-features', async (req: Request, res: Response) => {
       // Features enter My Work as Ready when the PRD is approved.
       const readyAt = prd.reviewedAt ?? prd.updatedAt ?? prd.createdAt ?? null;
 
-      const docs = await db
-        .select({ id: designDocs.id, featureIndex: designDocs.featureIndex, status: designDocs.status })
-        .from(designDocs)
-        .where(eq(designDocs.prdId, prd.id));
-
-      const docByFeatureIndex = new Map(docs.map(d => [d.featureIndex, d]));
-
       let globalFeatureIdx = 0;
       const epics: ApexBacklogGroup['epics'] = [];
 
@@ -172,7 +215,7 @@ router.get('/backlog-features', async (req: Request, res: Response) => {
         const features: BacklogFeatureItem[] = [];
 
         for (const feat of epic.features ?? []) {
-          const doc = docByFeatureIndex.get(globalFeatureIdx);
+          const doc = docByPrdFeature.get(`${prd.id}:${globalFeatureIdx}`);
           const items = feat.items ?? [];
           const pbiCount = items.filter((i: any) => i.type === 'PBI' || i.type === 'Product Backlog Item').length;
           const tbiCount = items.filter((i: any) => i.type === 'TBI' || i.type === 'Technical Backlog Item').length;

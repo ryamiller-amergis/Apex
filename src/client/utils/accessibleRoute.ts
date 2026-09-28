@@ -1,3 +1,5 @@
+import { canAccessMyWork } from './canAccessMyWork';
+
 /**
  * Resolves the best landing route for a user based on Home access, RBAC
  * permissions, and project menu configuration.
@@ -69,10 +71,7 @@ const MODULE_ORDER: ReadonlyArray<{
     view: 'my-work',
     route: '/my-work',
     isAccessible: ({ can, isSuperAdmin, enabledViews, isInAnyGroup }) =>
-      isSuperAdmin ||
-      (enabledViews.includes('my-work') &&
-        can('dev-workbench:view') &&
-        isInAnyGroup(['Developer'])),
+      canAccessMyWork({ can, isSuperAdmin, enabledViews, isInAnyGroup }),
   },
   {
     view: 'standup',

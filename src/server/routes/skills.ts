@@ -239,17 +239,19 @@ import {
   getLatestPublishedRelease,
   listReleases,
 } from '../services/foundationSkillReleaseService';
+import { toProjectReleaseView } from '../../shared/types/foundationSkills';
 import { getRepoStatus } from '../services/foundationSkillCompatibilityService';
 
 /**
  * GET /api/skills/foundation-releases
  * List all published foundation skill releases (teams use this to check for updates).
  */
-router.get('/foundation-releases', async (_req: Request, res: Response) => {
+router.get('/foundation-releases', async (req: Request, res: Response) => {
   try {
-    const releases = (await listReleases()).filter(
-      (r) => r.status === 'published'
-    );
+    const apexProject = (req.query.project as string | undefined) ?? null;
+    const releases = (await listReleases())
+      .filter((r) => r.status === 'published')
+      .map((r) => toProjectReleaseView(r, apexProject));
     res.json({ releases });
   } catch (err: any) {
     res
@@ -269,7 +271,9 @@ router.get(
     try {
       const apexProject = (req.query.project as string | undefined) ?? null;
       const release = await getLatestPublishedRelease(apexProject);
-      res.json({ release: release ?? null });
+      res.json({
+        release: release ? toProjectReleaseView(release, apexProject) : null,
+      });
     } catch (err: any) {
       res
         .status(500)

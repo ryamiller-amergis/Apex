@@ -22,10 +22,12 @@ describe('FEAT-001 shared agent-run lifecycle contract', () => {
       'worker_lost',
       'progress_timeout',
       'queue_ttl',
+      'dispatch_ttl',
       'forced_cancel',
       'cloud_agent_timeout',
     ]);
     expect(isAgentRunTerminalReason('worker_lost')).toBe(true);
+    expect(isAgentRunTerminalReason('dispatch_ttl')).toBe(true);
     expect(isAgentRunTerminalReason('worker-lost')).toBe(false);
   });
 

@@ -35,9 +35,32 @@ import type {
 import type { RepoReader } from '../../../shared/types/repoReader';
 import { raceWithTimeout, resolveMcpToolTimeoutMs } from '../mcpTimeout';
 import { registerBoardMcpTools } from '../board/tools';
+import {
+  adoServiceForChatOrStandupWrite,
+  isChatAdoWriteAuthError,
+} from '../../services/chatAdoWriteAuth';
+import { isAdoUserAuthError } from '../../services/adoFactory';
 
 function toolErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function adoWriteErrorResult(err: unknown): {
+  content: Array<{ type: 'text'; text: string }>;
+  isError: true;
+} {
+  const message =
+    isChatAdoWriteAuthError(err) || isAdoUserAuthError(err)
+      ? err.message
+      : err instanceof Error &&
+          (err.message.includes('cannot specify both parentId and parentTitle') ||
+            err.message.includes('is not earlier in this batch'))
+        ? err.message
+        : 'Azure DevOps work item operation failed';
+  return {
+    content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
+    isError: true,
+  };
 }
 
 function isActiveFixThread(
@@ -749,11 +772,19 @@ export function createAdoMcpServer(options?: {
       .string()
       .optional()
       .describe('HTML or plain-text description'),
+    parentId: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        'ADO work item ID of an existing parent. Use query_work_items first when the requested parent was not created in this batch'
+      ),
     parentTitle: z
       .string()
       .optional()
       .describe(
-        'Title of a previously created item in this batch to use as parent'
+        'Exact title of a parent that appears earlier in this same batch'
       ),
     tags: z.array(z.string()).optional().describe('Tags to apply'),
   });
@@ -885,10 +916,12 @@ export function createAdoMcpServer(options?: {
 
   server.tool(
     'create_work_items',
-    'Create one or more Azure DevOps work items from a PRD-generated list. ' +
-      'Items are created in order so parents must appear before their children. ' +
+    'Create one or more Azure DevOps work items. ' +
+      'To link a new item to an existing Feature or Epic, query for that work item first and pass its ID as parentId. ' +
+      'For parents created in the same call, list the parent first and reference its exact title with parentTitle. ' +
       'Returns the created item IDs and URLs.',
     {
+      threadId: z.string().describe('The current chat thread ID'),
       project: z.string().describe('ADO project name'),
       areaPath: z
         .string()
@@ -913,41 +946,66 @@ export function createAdoMcpServer(options?: {
         .min(1)
         .describe('Work items to create, in dependency order'),
     },
-    async ({ project, areaPath, wikiId, wikiPagePath, items }) => {
-      // Resolve PRD wiki URL for hyperlinking (non-fatal if unavailable)
-      let prdUrl: string | undefined;
-      if (wikiId && wikiPagePath) {
-        try {
-          const page = await getWikiPage(project, wikiId, wikiPagePath, false);
-          prdUrl = page.remoteUrl ?? page.url;
-        } catch {
-          // proceed without the link
+    async ({ threadId, project, areaPath, wikiId, wikiPagePath, items }) => {
+      try {
+        const adoService = await adoServiceForChatOrStandupWrite(
+          threadId,
+          project,
+          areaPath,
+        );
+
+        // Resolve PRD wiki URL for hyperlinking (non-fatal if unavailable)
+        let prdUrl: string | undefined;
+        if (wikiId && wikiPagePath) {
+          try {
+            const page = await getWikiPage(project, wikiId, wikiPagePath, false);
+            prdUrl = page.remoteUrl ?? page.url;
+          } catch {
+            // proceed without the link
+          }
         }
+
+        const created: { title: string; id: number; url: string }[] = [];
+        const titleToId = new Map<string, number>();
+        const priorBatchTitles = new Set<string>();
+
+        for (const spec of items) {
+          if (spec.parentId && spec.parentTitle) {
+            throw new Error(
+              `Work item "${spec.title}" cannot specify both parentId and parentTitle`
+            );
+          }
+          if (spec.parentTitle && !priorBatchTitles.has(spec.parentTitle)) {
+            throw new Error(
+              `Parent "${spec.parentTitle}" for "${spec.title}" is not earlier in this batch; query the existing parent and pass its ADO ID as parentId`
+            );
+          }
+          priorBatchTitles.add(spec.title);
+        }
+
+        for (const spec of items) {
+          const parentId = spec.parentId ?? (
+            spec.parentTitle ? titleToId.get(spec.parentTitle) : undefined
+          );
+          const wi = await adoService.createWorkItemForPrd({
+            type: spec.type,
+            title: spec.title,
+            description: spec.description,
+            parentId,
+            prdUrl,
+            tags: spec.tags,
+          });
+          titleToId.set(spec.title, wi.id);
+          created.push({ title: spec.title, id: wi.id, url: wi.url });
+        }
+
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ created }, null, 2) }],
+        };
+      } catch (err) {
+        console.error('[MCP] create_work_items failed');
+        return adoWriteErrorResult(err);
       }
-
-      const adoService = new AzureDevOpsService(project, areaPath);
-      const created: { title: string; id: number; url: string }[] = [];
-      const titleToId = new Map<string, number>();
-
-      for (const spec of items) {
-        const parentId = spec.parentTitle
-          ? titleToId.get(spec.parentTitle)
-          : undefined;
-        const wi = await adoService.createWorkItemForPrd({
-          type: spec.type,
-          title: spec.title,
-          description: spec.description,
-          parentId,
-          prdUrl,
-          tags: spec.tags,
-        });
-        titleToId.set(spec.title, wi.id);
-        created.push({ title: spec.title, id: wi.id, url: wi.url });
-      }
-
-      return {
-        content: [{ type: 'text', text: JSON.stringify({ created }, null, 2) }],
-      };
     }
   );
 
@@ -973,9 +1031,7 @@ export function createAdoMcpServer(options?: {
     },
     async ({ threadId, project, areaPath, workItemId, fields }) => {
       try {
-        const { adoServiceForStandupThread } =
-          await import('../../services/standupTokenResolver');
-        const adoService = await adoServiceForStandupThread(
+        const adoService = await adoServiceForChatOrStandupWrite(
           threadId,
           project,
           areaPath
@@ -999,13 +1055,8 @@ export function createAdoMcpServer(options?: {
           ],
         };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(
-          `[MCP] update_work_item: FAILED #${workItemId} — ${message}`
-        );
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
-        };
+        console.error(`[MCP] update_work_item: FAILED #${workItemId}`);
+        return adoWriteErrorResult(err);
       }
     }
   );
@@ -1021,9 +1072,10 @@ export function createAdoMcpServer(options?: {
     },
     async ({ threadId, project, workItemId, comment }) => {
       try {
-        const { adoServiceForStandupThread } =
-          await import('../../services/standupTokenResolver');
-        const adoService = await adoServiceForStandupThread(threadId, project);
+        const adoService = await adoServiceForChatOrStandupWrite(
+          threadId,
+          project,
+        );
         const result = await adoService.addWorkItemComment(workItemId, comment);
         console.log(
           `[MCP] add_work_item_comment: added comment ${result.id} to #${workItemId}`
@@ -1041,13 +1093,8 @@ export function createAdoMcpServer(options?: {
           ],
         };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(
-          `[MCP] add_work_item_comment: FAILED #${workItemId} — ${message}`
-        );
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
-        };
+        console.error(`[MCP] add_work_item_comment: FAILED #${workItemId}`);
+        return adoWriteErrorResult(err);
       }
     }
   );

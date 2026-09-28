@@ -64,6 +64,11 @@ resource "azurerm_linux_web_app" "main" {
   site_config {
     always_on = true
 
+    # The plan runs multiple instances, so without this a wedged instance keeps
+    # serving traffic instead of being pulled from rotation. Set live but never
+    # declared here, which meant a full apply would quietly remove it.
+    health_check_path = "/api/health"
+
     # Required for the FEAT-007 interactive WebSocket gateway (client ↔ gateway
     # upgrade). Declared explicitly so a full apply never reverts the runtime
     # enablement to the azurerm default (false), which would silently break
@@ -151,15 +156,30 @@ resource "azurerm_linux_web_app" "main" {
   }
 
   # Keep environment-specific values with their deployment slot during swaps.
+  # Anything not listed here travels with the code when the slots swap, so a
+  # value tuned for production lands on staging and staging's lands on
+  # production. Order mirrors the order Azure returns these so the plan stays
+  # free of list-ordering churn.
   sticky_settings {
     app_setting_names = compact([
-      "AZURE_REDIRECT_URL",
-      "APPLICATIONINSIGHTS_CONNECTION_STRING",
-      var.enable_staging_slot ? "LT_APEX_CALLBACK_BASE_URL" : null,
-      # Environment-specific app base URL must stay pinned to its slot across
-      # swaps. Appended last to mirror the order Azure returns so the plan stays
-      # free of list-ordering churn.
       "APEX_URL",
+      "APPLICATIONINSIGHTS_CONNECTION_STRING",
+      "AZURE_REDIRECT_URL",
+      # Each slot carries its own connection string and its own pool ceiling.
+      # A swap that traded these would point production at staging's database
+      # and shrink its pool to staging's size.
+      "DATABASE_URL",
+      var.enable_staging_slot ? "LT_APEX_CALLBACK_BASE_URL" : null,
+      "DB_POOL_MAX",
+      # How long a background run may wait for a worker before it is failed as
+      # queue_ttl. Approving a PRD submits one run per feature against a lane
+      # that runs ten at a time, so the legitimate wait scales with the feature
+      # count and the default 30m expires runs no worker had reached yet.
+      "AI_RUNS_BACKGROUND_QUEUE_TTL_MS",
+      # Temporary v1 safety bound: production observed a healthy worker finish
+      # shortly after the former 90s reaper threshold. Keep this with each slot
+      # until V2 confirms worker loss through checkpoints plus platform status.
+      "AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS",
     ])
   }
 
@@ -225,6 +245,11 @@ resource "azurerm_linux_web_app_slot" "staging" {
   site_config {
     always_on = true
 
+    # Azure takes an unhealthy instance out of rotation only when it has a path
+    # to probe. Without this a full apply strips the probe from the slot that
+    # pre-swap validation runs against.
+    health_check_path = "/api/health"
+
     # Same as production: keep the WebSocket upgrade enabled so a post-swap
     # staging slot serves the interactive gateway identically (and a full apply
     # never flips it off).
@@ -264,6 +289,11 @@ resource "azurerm_linux_web_app_slot" "staging" {
       site_config[0].application_stack,
       client_affinity_enabled,
       tags,
+      # Filesystem application logging is a short-lived debugging toggle that
+      # gets switched on by hand and that Azure disables again on its own.
+      # Pinning a value here would just trade one direction of drift for the
+      # other, so leave whatever is set alone.
+      logs[0].application_logs,
     ]
   }
 }
@@ -277,8 +307,8 @@ resource "azurerm_postgresql_flexible_server" "main" {
   administrator_login    = var.postgresql_admin_username
   administrator_password = var.postgresql_admin_password
   sku_name               = var.postgresql_sku_name
-  storage_mb             = 32768
-  backup_retention_days  = 7
+  storage_mb             = var.postgresql_storage_mb
+  backup_retention_days  = var.postgresql_backup_retention_days
   zone                   = var.postgresql_availability_zone
   tags                   = merge(var.tags, { Environment = var.environment })
 
@@ -304,9 +334,25 @@ resource "azurerm_postgresql_flexible_server_database" "main" {
   charset   = "utf8"
 }
 
+# Query diagnostics. Both are dynamic parameters, so changing them does not
+# restart the server. Without these the only signal for a pool-exhaustion
+# incident is the client-side "Connection terminated due to connection timeout",
+# which never names the statement holding the connection.
+resource "azurerm_postgresql_flexible_server_configuration" "pg_stat_statements_track" {
+  name      = "pg_stat_statements.track"
+  server_id = azurerm_postgresql_flexible_server.main.id
+  value     = var.postgresql_pg_stat_statements_track
+}
+
+resource "azurerm_postgresql_flexible_server_configuration" "log_min_duration_statement" {
+  name      = "log_min_duration_statement"
+  server_id = azurerm_postgresql_flexible_server.main.id
+  value     = tostring(var.postgresql_log_min_duration_statement_ms)
+}
+
 # Allow Azure services to connect to the PostgreSQL server
 resource "azurerm_postgresql_flexible_server_firewall_rule" "azure_services" {
-  name             = "allow-azure-services"
+  name             = var.postgresql_azure_services_firewall_rule_name
   server_id        = azurerm_postgresql_flexible_server.main.id
   start_ip_address = "0.0.0.0"
   end_ip_address   = "0.0.0.0"

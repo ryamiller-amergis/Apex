@@ -362,7 +362,7 @@ describe('BugToPbiRatioTile', () => {
 });
 
 describe('HomeDashboardSection', () => {
-  it('composes all independently authorized payload slices', () => {
+  it('composes only pipeline and cycle-time payload slices', () => {
     const payload: HomeDashboardPayload = {
       incompletePipeline: ok(pipelineData),
       artifactCycleTime: ok(cycleData),
@@ -374,11 +374,15 @@ describe('HomeDashboardSection', () => {
     render(<HomeDashboardSection payload={payload} onRetry={retry} />);
     expect(screen.getByTestId('home-dashboard-root')).toBeInTheDocument();
     expect(screen.getByText('Project Status')).toBeInTheDocument();
-    expect(screen.getAllByTestId(/home-dashboard-(pipeline|cycle-time|my-work|bugs|bug-ratio|devprod)-card/)).toHaveLength(6);
+    expect(screen.getByTestId('home-dashboard-pipeline-card')).toBeInTheDocument();
+    expect(screen.getByTestId('home-dashboard-cycle-time-card')).toBeInTheDocument();
+    expect(screen.queryByTestId('home-dashboard-my-work-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('home-dashboard-bugs-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('home-dashboard-bug-ratio-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('home-dashboard-devprod-card')).not.toBeInTheDocument();
   });
 
-  it('renders Mine and Team scope buttons and reports scope changes', () => {
-    const onScopeChange = jest.fn();
+  it('does not render the removed Mine and Team scope controls', () => {
     const payload: HomeDashboardPayload = {
       incompletePipeline: null,
       artifactCycleTime: null,
@@ -387,17 +391,9 @@ describe('HomeDashboardSection', () => {
       bugToPbiRatio: null,
       devToProduction: null,
     };
-    render(
-      <HomeDashboardSection
-        payload={payload}
-        scope="mine"
-        onScopeChange={onScopeChange}
-        onRetry={retry}
-      />,
-    );
-    expect(screen.getByRole('button', { name: 'Mine' })).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(screen.getByRole('button', { name: 'Team' }));
-    expect(onScopeChange).toHaveBeenCalledWith('team');
+    render(<HomeDashboardSection payload={payload} onRetry={retry} />);
+    expect(screen.queryByRole('button', { name: 'Mine' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Team' })).not.toBeInTheDocument();
   });
 
   it('omits each tile whose server permission slice is null', () => {
@@ -422,10 +418,10 @@ describe('HomeDashboardSection', () => {
     expect(screen.getByText('Project Status')).toBeInTheDocument();
     expect(screen.getByTestId('home-dashboard-pipeline-card')).toBeInTheDocument();
     expect(screen.getByTestId('home-dashboard-cycle-time-card')).toBeInTheDocument();
-    expect(screen.getByTestId('home-dashboard-my-work-card')).toBeInTheDocument();
-    expect(screen.getByTestId('home-dashboard-bugs-card')).toBeInTheDocument();
-    expect(screen.getByTestId('home-dashboard-bug-ratio-card')).toBeInTheDocument();
-    expect(screen.getByTestId('home-dashboard-devprod-card')).toBeInTheDocument();
+    expect(screen.queryByTestId('home-dashboard-my-work-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('home-dashboard-bugs-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('home-dashboard-bug-ratio-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('home-dashboard-devprod-card')).not.toBeInTheDocument();
     expect(screen.queryByText('Incomplete Pipeline')).not.toBeInTheDocument();
   });
 });

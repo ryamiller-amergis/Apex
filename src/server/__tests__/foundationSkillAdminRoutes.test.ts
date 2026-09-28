@@ -149,7 +149,7 @@ const sampleRelease: FoundationSkillRelease = {
   artifactPackage: '@apex/skills', artifactVersion: '1.0.0',
   artifactFeed: null, integritySha256: 'abc123', contractApiVersion: 1,
   selectedSkills: ['ui-lab', 'to-prd'], targetProjects: [], skillTargets: {}, manifestSnapshot: null,
-  releaseNotes: 'Initial release', breakingChanges: null,
+  releaseNotes: 'Initial release', breakingChanges: null, projectNotes: {},
   publishedBy: 'admin-1', publishedAt: '2026-07-28T00:00:00.000Z',
   deprecatedBy: null, deprecatedAt: null,
   createdBy: 'admin-1', createdAt: '2026-07-28T00:00:00.000Z', updatedAt: '2026-07-28T00:00:00.000Z',

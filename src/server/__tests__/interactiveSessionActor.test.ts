@@ -68,7 +68,8 @@ interface FakeAgentOptions {
 
 function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgentHandle {
   const run: WorkerCursorExecutionRun = {
-    supports: (capability: string) => capability === 'stream',
+    supports: (capability: string) =>
+      capability === 'stream' || capability === 'cancel',
     async *stream(): AsyncIterable<CursorStreamEvent> {
       if (options.toolCall) {
         yield { type: 'tool_call', name: 'ReadFile', status: 'running' };
@@ -89,8 +90,14 @@ function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgent
     agentId: options.agentId ?? null,
     model: options.model ?? 'auto',
     workspaceRef: options.workspaceRef ?? '/warm/checkout',
-    send: async () => {
+    send: async (_prompt, sendOptions) => {
       options.onSend?.();
+      for (const text of options.tokens ?? []) {
+        await sendOptions?.onDelta?.({ type: 'text-delta', text });
+      }
+      if ((options.tokens?.length ?? 0) > 0) {
+        await sendOptions?.onDelta?.({ type: 'turn-ended' });
+      }
       return run;
     },
     dispose: async () => {},

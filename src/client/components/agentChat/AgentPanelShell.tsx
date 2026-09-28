@@ -15,6 +15,14 @@ interface AgentPanelShellProps {
   width?: number;
   onResizeMouseDown?: (event: React.MouseEvent<HTMLDivElement>) => void;
   className?: string;
+  pageLayout?: boolean;
+  /** Drops the header bar chrome and title, leaving only `actions`. */
+  bareHeader?: boolean;
+  /**
+   * Lifts the bare header out of the layout flow so it does not reserve a row.
+   * Only safe when the content below it is centered with room to spare.
+   */
+  floatHeader?: boolean;
 }
 
 export const AgentPanelShell: React.FC<AgentPanelShellProps> = ({
@@ -31,10 +39,13 @@ export const AgentPanelShell: React.FC<AgentPanelShellProps> = ({
   width = 420,
   onResizeMouseDown,
   className,
+  pageLayout = false,
+  bareHeader = false,
+  floatHeader = false,
 }) => (
   <aside
     className={`${styles.shell} ${className ?? ''}`.trim()}
-    style={{ width }}
+    style={pageLayout ? undefined : { width }}
     aria-label={ariaLabel}
     {...{ 'data-testid': 'agent-slideout-shell' }}
   >
@@ -43,7 +54,7 @@ export const AgentPanelShell: React.FC<AgentPanelShellProps> = ({
       aria-hidden="true"
       {...{ 'data-testid': 'agent-slideout-overlay-mode' }}
     />
-    {onResizeMouseDown && (
+    {!pageLayout && onResizeMouseDown && (
       <div
         className={styles['resize-handle']}
         onMouseDown={onResizeMouseDown}
@@ -52,19 +63,27 @@ export const AgentPanelShell: React.FC<AgentPanelShellProps> = ({
         aria-orientation="vertical"
       />
     )}
-    <header className={styles.header}>
-      <h2 className={styles.title}>{title}</h2>
+    <header
+      className={[
+        styles.header,
+        bareHeader ? styles['header-bare'] : '',
+        bareHeader && floatHeader ? styles['header-float'] : '',
+      ].filter(Boolean).join(' ')}
+    >
+      {!bareHeader && <h2 className={styles.title}>{title}</h2>}
       <div className={styles.actions}>
         {actions}
-        <button
-          type="button"
-          className={styles.close}
-          onClick={onClose}
-          aria-label={closeAriaLabel ?? `Close ${title}`}
-          {...{ 'data-testid': closeTestId }}
-        >
-          <span aria-hidden="true">✕</span>
-        </button>
+        {!pageLayout && (
+          <button
+            type="button"
+            className={styles.close}
+            onClick={onClose}
+            aria-label={closeAriaLabel ?? `Close ${title}`}
+            {...{ 'data-testid': closeTestId }}
+          >
+            <span aria-hidden="true">✕</span>
+          </button>
+        )}
       </div>
     </header>
     {status}

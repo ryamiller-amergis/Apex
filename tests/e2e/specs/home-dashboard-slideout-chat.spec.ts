@@ -49,10 +49,12 @@ async function openHome(
   await stubAdoProjects(page);
   await loginAsPersona('developer');
   await page.goto('/home');
+  await expect(page.getByTestId('agent-slideout-shell')).toBeVisible();
+  await page.getByTestId('home-view-status').click();
   await expect(page.getByTestId('home-dashboard-root')).toBeVisible();
 }
 
-test.describe('Home dashboard and slide-out chat', () => {
+test.describe('Home Chat and Project status tabs', () => {
   test('FEAT-001 renders full data and navigates from a pipeline row', async ({ page, loginAsPersona }) => {
     await page.route('**/api/home-dashboard?project=*', async (route) => {
       await route.fulfill({
@@ -110,25 +112,27 @@ test.describe('Home dashboard and slide-out chat', () => {
     await expect(page.getByTestId('home-dashboard-devprod-card')).toHaveCount(0);
   });
 
-  test('FEAT-002 toggles a keyboard-accessible full-height narrow slide-out and returns to the dashboard', async ({ page, loginAsPersona }) => {
+  test('FEAT-002 switches between page-layout chat and Project status', async ({ page, loginAsPersona }) => {
     await page.route('**/api/home-dashboard?project=*', async (route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyPayload) });
     });
     await page.setViewportSize({ width: 720, height: 900 });
     await openHome(page, loginAsPersona);
 
-    const toggle = page.getByTestId('home-chat-toggle-btn');
-    await toggle.focus();
+    const chatTab = page.getByTestId('home-view-chat');
+    await chatTab.focus();
     await page.keyboard.press('Enter');
     const shell = page.getByTestId('agent-slideout-shell');
     await expect(shell).toBeVisible();
     await expect(shell).toHaveCSS('width', '720px');
-    await page.getByTestId('chat-agent-close-btn').click();
+    await expect(page.getByTestId('chat-agent-close-btn')).toHaveCount(0);
+    await expect(page.getByTestId('chat-agent-width-toggle-btn')).toHaveCount(0);
+    await page.getByTestId('home-view-status').click();
     await expect(shell).toHaveCount(0);
     await expect(page.getByTestId('home-dashboard-root')).toBeVisible();
   });
 
-  test('FEAT-002 hides the chat toggle when chat permissions are absent', async ({ page, loginAsPersona }) => {
+  test('FEAT-002 keeps the Chat tab when chat permissions are absent', async ({ page, loginAsPersona }) => {
     await page.route('**/api/me/permissions**', async (route) => {
       await route.fulfill({
         status: 200,
@@ -141,5 +145,8 @@ test.describe('Home dashboard and slide-out chat', () => {
     });
     await openHome(page, loginAsPersona);
     await expect(page.getByTestId('home-chat-toggle-btn')).toHaveCount(0);
+    await expect(page.getByTestId('home-view-chat')).toBeVisible();
+    await expect(page.getByTestId('home-dashboard-my-work-card')).toHaveCount(0);
+    await expect(page.getByTestId('home-dashboard-bugs-card')).toHaveCount(0);
   });
 });

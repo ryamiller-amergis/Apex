@@ -1,4 +1,4 @@
-# Local Development Context — Provide ability to select effort per agent module within project settings — Effort Data Model & Shared Allow-List Foundations
+# Local Development Context — Permission by skill — Configure Home Pill Allow-Lists
 
 These files belong under your **repository root** at:
 
