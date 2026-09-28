@@ -42,7 +42,11 @@ detect ai_runs_worker \
 detect ai_runs_interactive \
   runners/ai-runs-interactive/ \
   scripts/ci/publish-ai-runs-interactive.sh \
-  src/server/services/interactiveActorHost/
+  src/server/ \
+  src/shared/ \
+  package.json \
+  package-lock.json \
+  tsconfig.server.json
 
 # The orchestrator image copies all compiled server/shared output and installs
 # production dependencies. Rebuild whenever any of those image inputs change;

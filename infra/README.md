@@ -760,45 +760,69 @@ shutdown grace period, neither of which a handler can catch.
 
 ---
 
-## AI Platform V2 foundation (additive Central US)
+## AI Platform V2 (additive onto existing host)
 
-Task 4 adds an **opt-in** V2 control-plane stack beside the existing V1 AI runs
-resources. It is gated by `enable_ai_platform_v2` (default `false`).
+V2 does **not** create a parallel resource group, Service Bus namespace, storage
+account, or Container Apps Environment. It adds queues, an artifact container,
+and managed identities onto the environment you already run:
 
-### Locked decisions
+| Env | Region | Typical host |
+|-----|--------|----------------|
+| DEV | East US | `rg-scrum-dev` / `sbns-apex-ai-dev` / `stapexdevasync` / `cae-apex-ai-dev` |
+| PROD | Central US | existing prod AI RG / `sbns-apex-ai-prd` / shared async / CAE |
 
-- New **Central US** Standard Service Bus namespace (`sbns-apex-ai-v2-*`).
-- New **Central US** StorageV2 account with private `ai-run-artifacts`.
-- Existing East US `sbns-apex-ai-*` and shared async storage (**remain in
-  service** for live traffic). Do not stop or delete them in this task.
-- After V2 is proven in production, a later approved runbook stops old
-  resources for an observation window, then deletes them.
+### Enable checklist
 
-### Enable checklist (plan only until apply is approved)
+1. Set `enable_ai_platform_v2 = true`.
+2. Set existing host names: `ai_platform_v2_resource_group_name`,
+   `ai_platform_v2_servicebus_namespace_name`,
+   `ai_platform_v2_storage_account_name`,
+   `ai_platform_v2_container_app_env_name`.
+3. Optional: `ai_platform_v2_location` (defaults from contracts:
+   `dev`→`eastus`, `prd`→`centralus`).
+4. `terraform plan` / `apply` (requires permission to create role assignments
+   for the new identities).
+5. Keep `ai-runs-v2-transport` off until apps are wired.
 
-1. Set `enable_ai_platform_v2 = true` in the target workspace tfvars.
-2. Provide networking: `ai_platform_v2_create_network = true` **or**
-   `ai_platform_v2_infrastructure_subnet_id` (delegated `/25` for ZR CAE).
-3. Provide logging: existing `ai_platform_v2_log_analytics_workspace_id` **or**
-   `ai_platform_v2_create_log_analytics_workspace = true`.
-4. Keep `ai_platform_v2_internal_load_balancer = false` for the first public
-   smoke. Private endpoints are a later reversible phase.
-5. Run `terraform plan` and obtain an explicit apply approval. **Do not apply
-   from this README alone.**
+**DEV runtime smoke test (after foundation apply):** from repo root, run
+`./scripts/dev/complete-v2-dev-setup.sh` (uses `az acr build` — no local Docker).
+It sets App Service V2 settings, blob + AcrPull RBAC, builds runner images, rolls
+`ca-apex-ai-orchestrator-dev`, `ca-apex-ai-runs-documents-v2-dev`, and the split
+interactive hosts (`ca-apex-ai-fast-interactive-dev`, `ca-apex-ai-agentic-dev`).
+Orchestrator dispatch URLs come from those apps (not the legacy shared host).
+Then enable `ai-runs-v2-transport` in Platform Admin for your user/project.
 
-Immutable queue and CAE contracts are checked into
-`infra/ai-platform-v2-contracts.json` and asserted by
-`src/server/__tests__/aiPlatformV2Infrastructure.test.ts`.
+Optional Terraform: `enable_ai_platform_v2_runtime = true` **and**
+`enable_ai_platform_v2_split_interactive = true` with image URLs,
+`ai_platform_v2_database_url`, and the existing Redis/workspace/secret inputs
+— see `ai-platform-v2-runtime.tf`, `ai-platform-v2-interactive-runtime.tf`, and
+`terraform.tfvars.example`.
+
+**Split interactive cutover (DEV/PROD):**
+
+1. Drain `ai-runs-v2-fast` and `ai-runs-v2-agentic` queues (must be empty active + DLQ).
+2. `terraform plan` and confirm queue/RBAC deletions match contracts (only those two queues).
+3. Apply — creates `ca-apex-ai-fast-interactive-{env}` and `ca-apex-ai-agentic-{env}` with
+   internal ingress, `/health` probes, class UAMIs, and orchestrator env for distinct
+   dispatch URLs + DEV caps (`interactiveCap=4`, lane floors `1+1`; PROD `16` / `2+2`).
+4. Publish one `apex-ai-runs-interactive` SHA via `scripts/ci/publish-ai-runs-interactive.sh`
+   (legacy + fast + agentic targets).
+5. Soak with legacy `ca-apex-ai-interactive-{env}` still present for canonical-flag-off traffic.
+
+Contracts: `infra/ai-platform-v2-contracts.json` (asserted by
+`aiPlatformV2Infrastructure.test.ts`).
 
 ### Files
 
 | File | Owns |
 |------|------|
-| `ai-platform-v2.tf` | RG, SB, queues, artifact storage/lifecycle, ZR CAE + profiles |
-| `ai-platform-v2-networking.tf` | Optional VNet + CAE/App/PE subnets |
-| `ai-platform-v2-identities.tf` | Five UAMIs + entity-scoped RBAC |
-| `ai-platform-v2-monitoring.tf` | Log Analytics wiring |
-| `ai-platform-v2-contracts.json` | Duplicate-detection matrix and CAE expectations |
+| `ai-platform-v2.tf` | Host data sources, V2 queues, artifact container |
+| `ai-platform-v2-identities.tf` | UAMIs + entity-scoped RBAC |
+| `ai-platform-v2-contracts.json` | Queue matrix + host-reuse cutover |
+| `ai-platform-v2-networking.tf` | Stub (no new VNet/CAE) |
+| `ai-platform-v2-monitoring.tf` | Stub (no dedicated LA) |
+| `ai-platform-v2-runtime.tf` | Orchestrator + document worker Container Apps (optional) |
+| `ai-platform-v2-interactive-runtime.tf` | Fast + agentic actor hosts, orchestrator dispatch URLs (optional) |
 
 ---
 

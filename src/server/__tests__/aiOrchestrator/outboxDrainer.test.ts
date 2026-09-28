@@ -199,8 +199,6 @@ describe('outboxDrainer', () => {
             workloadLane: 'visual',
             capacityClass: 'batch',
           }),
-          row('msg-fast', { workloadLane: 'fast' }),
-          row('msg-agent', { workloadLane: 'agentic' }),
         ],
         markPublished: async (ids) => ids.length,
         markFailed: async () => true,
@@ -211,9 +209,49 @@ describe('outboxDrainer', () => {
     expect(queues).toEqual([
       'ai-runs-v2-document',
       'ai-runs-v2-visual',
-      'ai-runs-v2-fast',
-      'ai-runs-v2-agentic',
     ]);
+  });
+
+  it('does not publish interactive workload lanes to Service Bus queues', async () => {
+    const failed: string[] = [];
+    const published: string[] = [];
+    const fakeLease = {
+      leaseKey: 'outbox' as const,
+      holderId: 'test',
+      fencingToken: 1n,
+      signal: new AbortController().signal,
+      assertOwned: async () => undefined,
+      release: async () => undefined,
+    } satisfies HeldDistributedLease;
+
+    const drainer = createOutboxDrainer({
+      ...noInteractiveDeps(),
+      executor: { execute: async () => [] },
+      publisher: {
+        publish: async (req) => {
+          published.push(req.queueName);
+        },
+      },
+      getUtilization: async () => emptyUtilization(),
+      getUncertainWorkerCount: async () => 0,
+      enableNotify: false,
+      acquireOutboxLease: async (work) => work(fakeLease),
+      outbox: fakeOutbox({
+        claimBatch: async () => [
+          row('msg-fast', { workloadLane: 'fast' }),
+          row('msg-agent', { workloadLane: 'agentic' }),
+        ],
+        markPublished: async () => 0,
+        markFailed: async (id, _holder, reason) => {
+          failed.push(`${id}:${reason}`);
+          return true;
+        },
+      }),
+    });
+
+    await drainer.drainOnce();
+    expect(published).toEqual([]);
+    expect(failed.every((entry) => entry.endsWith(':unknown_lane'))).toBe(true);
   });
 
   it('refuses to guess a queue when the command carries no workload lane', async () => {

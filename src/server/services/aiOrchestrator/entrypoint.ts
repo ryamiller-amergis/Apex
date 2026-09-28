@@ -16,6 +16,7 @@ import {
   createServiceBusRestQueueConsumer,
 } from './serviceBusRestClient';
 import { createInteractiveActorDispatchClient } from './interactiveActorDispatchClient';
+import { resolveProviderCapacityFromEnvironment } from './capacityConfig';
 import type { ExecutionProbe } from './ports';
 
 const executor = { execute: (query: unknown) => db.execute(query as never) };
@@ -100,6 +101,7 @@ async function main(): Promise<void> {
 
   const metrics = createOrchestratorMetrics();
   const abort = new AbortController();
+  const capacityConfig = resolveProviderCapacityFromEnvironment();
 
   const reconciler = createReconciler({
     executor,
@@ -119,6 +121,7 @@ async function main(): Promise<void> {
     getUncertainWorkerCount: () => reconciler.countUncertainWorkers(),
     metrics,
     enableNotify: process.env.NODE_ENV !== 'test',
+    config: capacityConfig,
   });
 
   const checkpointConsumer = createCheckpointConsumer({

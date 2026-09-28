@@ -22,6 +22,7 @@ jobs:
     environment: prd
     outputs:
       ai_orchestrator: ${{ steps.image_publish.outputs.ai_orchestrator }}
+      ai_runs_interactive: ${{ steps.image_publish.outputs.ai_runs_interactive }}
 
     steps:
       - name: Checkout code
@@ -473,9 +474,12 @@ jobs:
         env:
           AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
           AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME }}
+          AI_PLATFORM_V2_FAST_INTERACTIVE_CONTAINER_APP_NAME: ${{ vars.AI_PLATFORM_V2_FAST_INTERACTIVE_CONTAINER_APP_NAME || 'ca-apex-ai-fast-interactive-prd' }}
+          AI_PLATFORM_V2_AGENTIC_CONTAINER_APP_NAME: ${{ vars.AI_PLATFORM_V2_AGENTIC_CONTAINER_APP_NAME || 'ca-apex-ai-agentic-prd' }}
           AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
           AI_RUNS_INTERACTIVE_IMAGE_REPO: ${{ vars.AI_RUNS_INTERACTIVE_IMAGE_REPO }}
           IMAGE_TAG: ${{ github.sha }}
+          SKIP_APP_UPDATE: true
         run: bash scripts/ci/publish-ai-runs-interactive.sh
 
       - name: Publish AI orchestrator image to staging
@@ -563,6 +567,19 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
           SKIP_IMAGE_PUBLISH: true
         run: bash scripts/ci/publish-ai-orchestrator.sh
+
+      - name: Promote interactive image to production
+        if: needs.deploy-staging.outputs.ai_runs_interactive == 'true'
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME }}
+          AI_PLATFORM_V2_FAST_INTERACTIVE_CONTAINER_APP_NAME: ${{ vars.AI_PLATFORM_V2_FAST_INTERACTIVE_CONTAINER_APP_NAME || 'ca-apex-ai-fast-interactive-prd' }}
+          AI_PLATFORM_V2_AGENTIC_CONTAINER_APP_NAME: ${{ vars.AI_PLATFORM_V2_AGENTIC_CONTAINER_APP_NAME || 'ca-apex-ai-agentic-prd' }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
+          AI_RUNS_INTERACTIVE_IMAGE_REPO: ${{ vars.AI_RUNS_INTERACTIVE_IMAGE_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+          SKIP_IMAGE_PUBLISH: true
+        run: bash scripts/ci/publish-ai-runs-interactive.sh
 
       - name: Smoke test production
         id: smoke

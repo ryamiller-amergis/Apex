@@ -6,7 +6,7 @@
  */
 import {
   AI_RUN_V2_LANE_QUEUES,
-  type AiRunV2WorkloadLane,
+  type AiRunV2ServiceBusWorkloadLane,
 } from '../../../shared/types/aiRunV2';
 
 export type WorkerEnvironment = Readonly<{
@@ -20,7 +20,7 @@ export type WorkerEnvironment = Readonly<{
 }>;
 
 export function resolveWorkerEnvironment(
-  lane: AiRunV2WorkloadLane,
+  lane: AiRunV2ServiceBusWorkloadLane,
   env: NodeJS.ProcessEnv = process.env,
 ): WorkerEnvironment {
   const namespace =

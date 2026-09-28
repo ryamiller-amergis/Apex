@@ -251,17 +251,39 @@ pdf_blob_container_name = "pdf-artifacts"
 # repo_read_service_target_port = 8080
 
 # ---------------------------------------------------------------------------
-# AI Platform V2 foundation (additive Central US). Keep false until an
-# explicit apply approval. Does NOT stop or delete V1 East US Service Bus
-# (sbns-apex-ai-*) or shared async storage — those stay live for traffic until
-# V2 is proven in production, then a later runbook stops and deletes them.
-# Contracts: infra/ai-platform-v2-contracts.json
+# AI Platform V2 — additive onto the EXISTING host platform (no new RG/SB/CAE).
+# DEV = East US host; PROD = Central US host. Adds V2 queues + artifact
+# container + UAMIs only. Contracts: infra/ai-platform-v2-contracts.json
 # ---------------------------------------------------------------------------
 # enable_ai_platform_v2 = false
-# ai_platform_v2_location = "centralus"
-# ai_platform_v2_create_network = true   # or supply ai_platform_v2_infrastructure_subnet_id
-# ai_platform_v2_create_log_analytics_workspace = true  # or supply workspace id
-# ai_platform_v2_log_analytics_workspace_id = null
-# ai_platform_v2_grant_app_service_sender = false
-# ai_platform_v2_internal_load_balancer = false  # public endpoints for first smoke
+# # DEV example (East US):
+# ai_platform_v2_resource_group_name         = "rg-scrum-dev"
+# ai_platform_v2_servicebus_namespace_name   = "sbns-apex-ai-dev"
+# ai_platform_v2_storage_account_name        = "stapexdevasync"
+# ai_platform_v2_container_app_env_name      = "cae-apex-ai-dev"
+# ai_platform_v2_location                    = "eastus"   # optional; contracts map dev→eastus
+# ai_platform_v2_grant_app_service_sender    = false
+# # Runtime (or use scripts/dev/complete-v2-dev-setup.sh on DEV):
+# enable_ai_platform_v2_runtime = true
+# enable_ai_platform_v2_split_interactive = true
+# ai_platform_v2_acr_name = "acrapexltdev"
+# ai_platform_v2_acr_resource_group_name = "rg-scrum-dev"
+# ai_platform_v2_orchestrator_image = "acrapexltdev.azurecr.io/apex-ai-orchestrator:latest"
+# ai_platform_v2_documents_v2_image = "acrapexltdev.azurecr.io/apex-ai-runs-documents-v2:latest"
+# ai_platform_v2_interactive_image = "acrapexltdev.azurecr.io/apex-ai-runs-interactive:latest"
+# ai_platform_v2_database_url = "<same as App Service DATABASE_URL>"
+# ai_platform_v2_application_insights_connection_string = "<existing App Insights connection string>"
+# ai_platform_v2_interactive_callback_base_url = "https://app-scrum-dev.azurewebsites.net"
+# ai_platform_v2_interactive_callback_token = "<same static callback token as the legacy actor host>"
+# ai_platform_v2_interactive_callback_token_audience = "api://<existing callback app>"
+# ai_platform_v2_interactive_key_vault_id = "/subscriptions/.../vaults/<existing-ai-runs-vault>"
+# ai_platform_v2_interactive_cursor_api_key_secret_id = "https://<vault>.vault.azure.net/secrets/<secret>"
+# ai_platform_v2_interactive_redis_host = "redis-apex-ai-dev.redis.cache.windows.net"
+# ai_platform_v2_interactive_redis_key = "<existing Redis access key>"
+# ai_platform_v2_interactive_workspace_storage_name = "ai-runs-workspace"
+# ai_platform_v2_interactive_repo_read_service_url = "https://ca-apex-repo-read-dev.<cae-domain>"
+# ai_platform_v2_interactive_repo_read_service_token = "<existing repo-read token>"
+# Fallback when split interactive apps are not applied (legacy shared host):
+# ai_platform_v2_interactive_dispatch_base_url = "https://ca-apex-ai-interactive-dev.<cae-domain>"
+# # PROD example (Central US): point the same vars at the existing prod AI host.
 

@@ -25,6 +25,14 @@ export const AI_RUN_V2_WORKLOAD_LANES = [
 ] as const;
 export type AiRunV2WorkloadLane = (typeof AI_RUN_V2_WORKLOAD_LANES)[number];
 
+/** Lanes that receive Service Bus dispatch commands (not direct actor dispatch). */
+export const AI_RUN_V2_SERVICE_BUS_WORKLOAD_LANES = [
+  'document',
+  'visual',
+] as const;
+export type AiRunV2ServiceBusWorkloadLane =
+  (typeof AI_RUN_V2_SERVICE_BUS_WORKLOAD_LANES)[number];
+
 export const AI_RUN_V2_CAPACITY_CLASSES = [
   'interactive',
   'batch',
@@ -33,12 +41,10 @@ export type AiRunV2CapacityClass =
   (typeof AI_RUN_V2_CAPACITY_CLASSES)[number];
 
 export const AI_RUN_V2_LANE_QUEUES: Readonly<
-  Record<AiRunV2WorkloadLane, string>
+  Record<AiRunV2ServiceBusWorkloadLane, string>
 > = {
   document: 'ai-runs-v2-document',
   visual: 'ai-runs-v2-visual',
-  fast: 'ai-runs-v2-fast',
-  agentic: 'ai-runs-v2-agentic',
 };
 
 /** Attempt-local execution statuses. Header `agent_runs.status` stays V1 until Task 5. */
@@ -318,6 +324,17 @@ export function isAiRunV2WorkloadLane(
   return (
     typeof value === 'string' &&
     (AI_RUN_V2_WORKLOAD_LANES as readonly string[]).includes(value)
+  );
+}
+
+export function isAiRunV2ServiceBusWorkloadLane(
+  value: unknown,
+): value is AiRunV2ServiceBusWorkloadLane {
+  return (
+    typeof value === 'string'
+    && (AI_RUN_V2_SERVICE_BUS_WORKLOAD_LANES as readonly string[]).includes(
+      value,
+    )
   );
 }
 

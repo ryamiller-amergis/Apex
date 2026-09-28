@@ -407,32 +407,33 @@ output "github_app_setting_names" {
 
 # ---------------------------------------------------------------------------
 # AI Platform V2 (null while enable_ai_platform_v2 is false)
+# Host-reuse: existing RG / SB / storage / CAE; additive queues + container + UAMIs
 # ---------------------------------------------------------------------------
 
 output "ai_platform_v2_enabled" {
-  description = "Whether the additive Central US V2 foundation is enabled in this workspace"
+  description = "Whether additive V2 host-reuse resources are enabled in this workspace"
   value       = var.enable_ai_platform_v2
 }
 
 output "ai_platform_v2_resource_group_name" {
-  description = "V2 resource group name"
-  value       = try(azurerm_resource_group.ai_platform_v2[0].name, null)
+  description = "Existing host resource group used for V2 identities and lookups"
+  value       = try(data.azurerm_resource_group.ai_platform_v2_host[0].name, null)
 }
 
 output "ai_platform_v2_location" {
-  description = "V2 foundation Azure region"
+  description = "Host region for V2 (dev=eastus, prd=centralus via contracts or override)"
   value       = var.enable_ai_platform_v2 ? local.ai_platform_v2_location : null
 }
 
 output "ai_platform_v2_servicebus_namespace_name" {
-  description = "V2 Service Bus namespace (Central US). V1 East US namespace remains separate."
-  value       = try(azurerm_servicebus_namespace.ai_platform_v2[0].name, null)
+  description = "Existing Service Bus namespace hosting V2 queues"
+  value       = try(data.azurerm_servicebus_namespace.ai_platform_v2_host[0].name, null)
 }
 
 output "ai_platform_v2_servicebus_namespace_fqdn" {
-  description = "V2 Service Bus fully-qualified namespace hostname"
+  description = "Service Bus fully-qualified namespace hostname for V2 queues"
   value = try(
-    "${azurerm_servicebus_namespace.ai_platform_v2[0].name}.servicebus.windows.net",
+    "${data.azurerm_servicebus_namespace.ai_platform_v2_host[0].name}.servicebus.windows.net",
     null
   )
 }
@@ -445,8 +446,8 @@ output "ai_platform_v2_queue_names" {
 }
 
 output "ai_platform_v2_storage_account_name" {
-  description = "V2 AI artifact storage account (Central US). V1 shared async stays East US."
-  value       = try(azurerm_storage_account.ai_platform_v2_artifacts[0].name, null)
+  description = "Existing shared async storage account hosting the V2 artifact container"
+  value       = try(data.azurerm_storage_account.ai_platform_v2_host[0].name, null)
 }
 
 output "ai_platform_v2_artifact_container_name" {
@@ -455,13 +456,13 @@ output "ai_platform_v2_artifact_container_name" {
 }
 
 output "ai_platform_v2_container_app_environment_name" {
-  description = "Zone-redundant V2 Container Apps Environment name"
-  value       = try(azapi_resource.ai_platform_v2_cae[0].name, null)
+  description = "Existing Container Apps Environment used for V2 apps"
+  value       = try(data.azurerm_container_app_environment.ai_platform_v2_host[0].name, null)
 }
 
 output "ai_platform_v2_container_app_environment_id" {
-  description = "V2 Container Apps Environment resource ID"
-  value       = try(azapi_resource.ai_platform_v2_cae[0].id, null)
+  description = "Existing Container Apps Environment resource ID"
+  value       = try(data.azurerm_container_app_environment.ai_platform_v2_host[0].id, null)
 }
 
 output "ai_platform_v2_identity_client_ids" {
@@ -479,11 +480,36 @@ output "ai_platform_v2_identity_principal_ids" {
 }
 
 output "ai_platform_v2_app_setting_names" {
-  description = "Non-secret app setting key contract for future V2 wiring (Task 5+)"
+  description = "Non-secret app setting key contract for future V2 wiring"
   value = {
     servicebus_namespace = "AI_PLATFORM_V2_SERVICEBUS_NAMESPACE"
-    artifact_account     = "AI_PLATFORM_V2_ARTIFACT_ACCOUNT_NAME"
+    blob_account         = "AI_PLATFORM_V2_BLOB_ACCOUNT_NAME"
     artifact_container   = "AI_PLATFORM_V2_ARTIFACT_CONTAINER"
     cae_name             = "AI_PLATFORM_V2_CONTAINER_APP_ENV_NAME"
   }
+}
+
+output "ai_platform_v2_orchestrator_container_app_name" {
+  description = "V2 orchestrator Container App name when runtime is enabled"
+  value       = try(azurerm_container_app.ai_platform_v2_orchestrator[0].name, null)
+}
+
+output "ai_platform_v2_documents_container_app_name" {
+  description = "V2 document lane worker Container App name when runtime is enabled"
+  value       = try(azurerm_container_app.ai_platform_v2_documents[0].name, null)
+}
+
+output "ai_platform_v2_fast_interactive_container_app_name" {
+  description = "V2 fast interactive actor host when split runtime is enabled"
+  value       = try(azurerm_container_app.ai_platform_v2_interactive_class["fast-interactive"].name, null)
+}
+
+output "ai_platform_v2_agentic_container_app_name" {
+  description = "V2 agentic interactive actor host when split runtime is enabled"
+  value       = try(azurerm_container_app.ai_platform_v2_interactive_class["agentic"].name, null)
+}
+
+output "ai_platform_v2_interactive_dispatch_urls" {
+  description = "Orchestrator dispatch base URLs (no /dispatch suffix) for fast and agentic classes"
+  value       = local.ai_platform_v2_interactive_dispatch_urls
 }

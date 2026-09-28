@@ -1,21 +1,10 @@
 {
-  "location": "centralus",
+  "hostReuse": true,
+  "locationsByEnvironment": {
+    "dev": "eastus",
+    "prd": "centralus"
+  },
   "sku": "Standard",
-  "zoneRedundant": true,
-  "publicEndpointsForFirstSmoke": true,
-  "privateEndpointsDeferred": true,
-  "workloadProfiles": [
-    {
-      "name": "Consumption",
-      "workloadProfileType": "Consumption"
-    },
-    {
-      "name": "repo-read",
-      "workloadProfileType": "D4",
-      "minimumCount": 1,
-      "maximumCount": 2
-    }
-  ],
   "artifactContainer": "ai-run-artifacts",
   "artifactLifecycleDays": 90,
   "identities": [
@@ -32,16 +21,6 @@
       "requiresSession": false
     },
     "ai-runs-v2-visual": {
-      "kind": "command",
-      "requiresDuplicateDetection": true,
-      "requiresSession": false
-    },
-    "ai-runs-v2-fast": {
-      "kind": "command",
-      "requiresDuplicateDetection": true,
-      "requiresSession": false
-    },
-    "ai-runs-v2-agentic": {
       "kind": "command",
       "requiresDuplicateDetection": true,
       "requiresSession": false
@@ -65,8 +44,9 @@
   },
   "cutover": {
     "additiveOnly": true,
-    "retainEastUsV1ServiceBus": true,
-    "retainEastUsSharedStorage": true,
-    "stopAndDeleteOldOnlyAfterProdProof": true
+    "reuseExistingResourceGroup": true,
+    "reuseExistingServiceBusNamespace": true,
+    "reuseExistingSharedStorage": true,
+    "reuseExistingContainerAppEnvironment": true
   }
 }

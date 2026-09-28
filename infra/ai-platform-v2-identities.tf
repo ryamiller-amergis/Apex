@@ -1,5 +1,6 @@
 # AI Platform V2 identities — entity-scoped RBAC (queues + artifact container)
 #
+# Identities live in the existing host resource group (same region as that RG).
 # Does not grant namespace- or account-wide data-plane roles when a queue/container
 # scope exists. V1 runner MI and App Service roles are left unchanged.
 
@@ -15,8 +16,8 @@ resource "azurerm_user_assigned_identity" "ai_platform_v2" {
   for_each = local.ai_platform_v2_identity_keys
 
   name                = "${local.ai_platform_v2_identity_name_prefix}-${each.key}-${var.environment}"
-  location            = azurerm_resource_group.ai_platform_v2[0].location
-  resource_group_name = azurerm_resource_group.ai_platform_v2[0].name
+  location            = data.azurerm_resource_group.ai_platform_v2_host[0].location
+  resource_group_name = data.azurerm_resource_group.ai_platform_v2_host[0].name
   tags                = local.ai_platform_v2_tags
 }
 
@@ -56,10 +57,8 @@ resource "azurerm_role_assignment" "ai_platform_v2_orchestrator_blob_contributor
 # Lane workers: receive their command queue; write artifacts.
 locals {
   ai_platform_v2_worker_queue_by_identity = {
-    document           = "ai-runs-v2-document"
-    visual             = "ai-runs-v2-visual"
-    "fast-interactive" = "ai-runs-v2-fast"
-    agentic            = "ai-runs-v2-agentic"
+    document = "ai-runs-v2-document"
+    visual   = "ai-runs-v2-visual"
   }
 }
 

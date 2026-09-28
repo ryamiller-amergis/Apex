@@ -8,17 +8,9 @@ type QueueContract = {
 };
 
 type AiPlatformV2Contracts = {
-  location: string;
+  hostReuse: boolean;
+  locationsByEnvironment: Record<string, string>;
   sku: string;
-  zoneRedundant: boolean;
-  publicEndpointsForFirstSmoke: boolean;
-  privateEndpointsDeferred: boolean;
-  workloadProfiles: Array<{
-    name: string;
-    workloadProfileType: string;
-    minimumCount?: number;
-    maximumCount?: number;
-  }>;
   artifactContainer: string;
   artifactLifecycleDays: number;
   identities: string[];
@@ -31,9 +23,10 @@ type AiPlatformV2Contracts = {
   };
   cutover: {
     additiveOnly: boolean;
-    retainEastUsV1ServiceBus: boolean;
-    retainEastUsSharedStorage: boolean;
-    stopAndDeleteOldOnlyAfterProdProof: boolean;
+    reuseExistingResourceGroup: boolean;
+    reuseExistingServiceBusNamespace: boolean;
+    reuseExistingSharedStorage: boolean;
+    reuseExistingContainerAppEnvironment: boolean;
   };
 };
 
@@ -55,35 +48,32 @@ describe('AI Platform V2 infrastructure contracts', () => {
     'utf8',
   );
 
-  it('targets Central US with Standard SKU and CAE zone redundancy at creation', () => {
-    expect(contracts.location).toBe('centralus');
-    expect(contracts.sku).toBe('Standard');
-    expect(contracts.zoneRedundant).toBe(true);
-    // zoneRedundant is CAE-only under Standard SB (Premium would be required
-    // for Service Bus ZR). The CAE AzAPI body must apply it; SB must not.
-    expect(platformTf).toMatch(
-      /zoneRedundant\s*=\s*local\.ai_platform_v2_contracts\.zoneRedundant/,
-    );
-    const sbBlock = platformTf.slice(
-      platformTf.indexOf('resource "azurerm_servicebus_namespace" "ai_platform_v2"'),
-      platformTf.indexOf('resource "azurerm_servicebus_queue" "ai_platform_v2"'),
-    );
-    expect(sbBlock).not.toMatch(/zone_redundant\s*=\s*true/);
-  });
-
-  it('declares Consumption and repo-read workload profiles', () => {
-    expect(contracts.workloadProfiles.map((profile) => profile.name)).toEqual([
-      'Consumption',
-      'repo-read',
-    ]);
-    expect(contracts.workloadProfiles[0].workloadProfileType).toBe(
-      'Consumption'
-    );
-    expect(contracts.workloadProfiles[1]).toMatchObject({
-      workloadProfileType: 'D4',
-      minimumCount: 1,
-      maximumCount: 2,
+  it('reuses the existing host platform (DEV East US, PROD Central US)', () => {
+    expect(contracts.hostReuse).toBe(true);
+    expect(contracts.locationsByEnvironment).toEqual({
+      dev: 'eastus',
+      prd: 'centralus',
     });
+    expect(contracts.sku).toBe('Standard');
+    expect(platformTf).toMatch(
+      /data "azurerm_servicebus_namespace" "ai_platform_v2_host"/,
+    );
+    expect(platformTf).toMatch(
+      /data "azurerm_storage_account" "ai_platform_v2_host"/,
+    );
+    expect(platformTf).toMatch(
+      /data "azurerm_container_app_environment" "ai_platform_v2_host"/,
+    );
+    expect(platformTf).not.toMatch(
+      /resource "azurerm_resource_group" "ai_platform_v2"/,
+    );
+    expect(platformTf).not.toMatch(
+      /resource "azurerm_servicebus_namespace" "ai_platform_v2"/,
+    );
+    expect(platformTf).not.toMatch(
+      /resource "azurerm_storage_account" "ai_platform_v2/,
+    );
+    expect(platformTf).not.toMatch(/resource "azapi_resource" "ai_platform_v2_cae"/);
   });
 
   it('enables duplicate detection on command and result queues only', () => {
@@ -94,7 +84,7 @@ describe('AI Platform V2 infrastructure contracts', () => {
       ([, cfg]) => cfg.kind === 'checkpoint'
     );
 
-    expect(commandAndResult.length).toBeGreaterThanOrEqual(5);
+    expect(commandAndResult.length).toBeGreaterThanOrEqual(3);
     for (const [name, cfg] of commandAndResult) {
       expect(cfg.requiresDuplicateDetection).toBe(true);
       expect(cfg.requiresSession).toBe(false);
@@ -127,15 +117,14 @@ describe('AI Platform V2 infrastructure contracts', () => {
     ]);
   });
 
-  it('records additive cutover: retain East US V1 until prod proof', () => {
+  it('records host-reuse cutover (no parallel V2 RG/SB/storage/CAE)', () => {
     expect(contracts.cutover).toEqual({
       additiveOnly: true,
-      retainEastUsV1ServiceBus: true,
-      retainEastUsSharedStorage: true,
-      stopAndDeleteOldOnlyAfterProdProof: true,
+      reuseExistingResourceGroup: true,
+      reuseExistingServiceBusNamespace: true,
+      reuseExistingSharedStorage: true,
+      reuseExistingContainerAppEnvironment: true,
     });
-    expect(contracts.publicEndpointsForFirstSmoke).toBe(true);
-    expect(contracts.privateEndpointsDeferred).toBe(true);
   });
 
   it('uses V1-compatible queue lock and DLQ defaults', () => {
@@ -145,5 +134,22 @@ describe('AI Platform V2 infrastructure contracts', () => {
       lockDuration: 'PT5M',
       duplicateDetectionHistoryTimeWindow: 'PT30M',
     });
+  });
+
+  it('does not provision Service Bus command queues for interactive classes', () => {
+    expect(contracts.queues['ai-runs-v2-fast']).toBeUndefined();
+    expect(contracts.queues['ai-runs-v2-agentic']).toBeUndefined();
+    expect(Object.keys(contracts.queues)).toEqual([
+      'ai-runs-v2-document',
+      'ai-runs-v2-visual',
+      'ai-runs-v2-checkpoint',
+      'ai-runs-v2-result',
+    ]);
+  });
+
+  it('creates V2 queues on the host namespace data source', () => {
+    expect(platformTf).toMatch(
+      /namespace_id\s*=\s*data\.azurerm_servicebus_namespace\.ai_platform_v2_host\[0\]\.id/,
+    );
   });
 });

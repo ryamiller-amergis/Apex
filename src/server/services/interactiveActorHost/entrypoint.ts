@@ -171,6 +171,16 @@ export function parseInteractiveDispatchRequest(
   };
 }
 
+export async function registerInteractiveHealthHandler(
+  invoker: InteractiveDispatchInvoker,
+): Promise<void> {
+  await invoker.listen(
+    'health',
+    async () => ({ status: 'ok' }),
+    { method: HttpMethod.GET },
+  );
+}
+
 export async function registerInteractiveDispatchHandler(
   invoker: InteractiveDispatchInvoker,
   resolveActor: (threadId: string) => IInteractiveSessionActor,
@@ -390,6 +400,8 @@ export async function main(): Promise<void> {
 
   await server.actor.init();
   await server.actor.registerActor(InteractiveSessionActorImpl);
+
+  await registerInteractiveHealthHandler(server.invoker);
 
   const proxyBuilder = new ActorProxyBuilder<IInteractiveSessionActor>(
     InteractiveSessionActorImpl,

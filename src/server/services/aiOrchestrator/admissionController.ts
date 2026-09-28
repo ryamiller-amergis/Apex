@@ -4,6 +4,7 @@
 import {
   AI_RUN_V2_LANE_QUEUES,
   isAiRunV2CapacityClass,
+  isAiRunV2ServiceBusWorkloadLane,
   isAiRunV2WorkloadLane,
   type AiRunV2CapacityClass,
 } from '../../../shared/types/aiRunV2';
@@ -162,11 +163,11 @@ export function planAdmissionBatch(input: {
   for (const row of input.rows) {
     if (row.kind !== 'dispatch_command') continue;
     const lane = resolveLaneFromOutbox(row);
-    if (!lane) {
+    if (!lane || !isAiRunV2ServiceBusWorkloadLane(lane)) {
       planned.push({
         outbox: row,
         queueName: null,
-        lane: null,
+        lane,
         capacityClass: null,
         decision: { status: 'deny', reason: 'unknown_lane' },
       });
