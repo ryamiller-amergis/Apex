@@ -64,6 +64,8 @@ interface FakeAgentOptions {
   onSend?: () => void;
   model?: string;
   workspaceRef?: string;
+  waitStatus?: string;
+  waitResult?: string;
 }
 
 function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgentHandle {
@@ -80,7 +82,10 @@ function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgent
     },
     async wait() {
       if (options.waitGate) await options.waitGate;
-      return { status: 'finished' };
+      return {
+        status: options.waitStatus ?? 'finished',
+        result: options.waitResult,
+      };
     },
     cancel: async () => {
       options.onCancel?.();
@@ -668,9 +673,10 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
       openWarmCheckout: jest.fn(),
       acquireAgent: jest.fn(async (_s, checkout) =>
         makeAgentHandle({
-          tokens: ['done'],
+          tokens: [],
           agentId: 'agent-1',
           workspaceRef: checkout.workspacePath,
+          waitStatus: 'FINISHED',
         }),
       ),
       materializeWorkspace: async (_b, destination) => ({

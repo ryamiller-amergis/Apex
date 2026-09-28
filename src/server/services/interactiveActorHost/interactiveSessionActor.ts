@@ -280,11 +280,17 @@ interface CachedAgentEntry {
 
 function isSuccessfulWait(result: CursorExecutionResult): boolean {
   if (result.completedOnTurnEnd) return true;
-  return (
-    result.waitResult.status === 'finished' ||
-    result.waitResult.status === 'completed' ||
-    result.waitResult.status === 'success'
-  );
+  const status = result.waitResult.status.trim().toLowerCase();
+  return status === 'finished' || status === 'completed' || status === 'success';
+}
+
+function unsuccessfulWaitDetail(result: CursorExecutionResult): string {
+  const status = result.waitResult.status
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '')
+    || 'unknown';
+  return `Interactive turn ended with status: ${status}`;
 }
 
 export function createInteractiveSessionActor(
@@ -595,7 +601,7 @@ export function createInteractiveSessionActor(
 
       if (cancellationRequested) throw new InteractiveCancellationObservedError();
       if (!isSuccessfulWait(result)) {
-        throw new Error('Interactive turn did not finish successfully');
+        throw new Error(unsuccessfulWaitDetail(result));
       }
 
       // Durable FINAL assistant message so a refresh/replay always shows the
@@ -1159,7 +1165,7 @@ export function createInteractiveSessionActor(
           throw new InteractiveCancellationObservedError();
         }
         if (!isSuccessfulWait(result)) {
-          throw new Error('Interactive turn did not finish successfully');
+          throw new Error(unsuccessfulWaitDetail(result));
         }
 
         const finalText = result.text;
