@@ -293,13 +293,14 @@ export function createOutboxRepository(executor: SqlExecutor) {
 
     async markPublished(ids: string[], holderId: string): Promise<number> {
       if (ids.length === 0) return 0;
+      const idList = sql.join(ids.map((id) => sql`${id}`), sql`, `);
       const result = await executor.execute(sql`
         UPDATE ai_run_outbox
         SET
           published_at = now(),
           last_error = NULL,
           claim_expires_at = NULL
-        WHERE id = ANY(${ids}::text[])
+        WHERE id IN (${idList})
           AND claimed_by = ${holderId}
           AND published_at IS NULL
         RETURNING id

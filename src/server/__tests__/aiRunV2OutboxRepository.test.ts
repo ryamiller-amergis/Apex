@@ -92,6 +92,12 @@ describe('AI-run V2 outbox repository', () => {
 
     const published = await repo.markPublished(['outbox-1'], 'drainer-a');
     expect(published).toBe(1);
+    const compiled = new PgDialect().sqlToQuery(
+      execute.mock.calls[1][0] as SQL,
+    );
+    expect(compiled.sql).toContain('WHERE id IN ($1)');
+    expect(compiled.sql).not.toContain('ANY(');
+    expect(compiled.params).toEqual(['outbox-1', 'drainer-a']);
   });
 
   it('rejects invalid claim limits and clears claims on failure', async () => {
