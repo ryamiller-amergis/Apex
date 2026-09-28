@@ -41,6 +41,32 @@ describe('DesignDocPlaybookStartAction', () => {
     expect(screen.getByTestId('dd-playbook-start-btn')).toBeInTheDocument();
   });
 
+  it('opens the run through the existing Playbook list route', () => {
+    mockStart.mockReturnValue({
+      mutateAsync: jest.fn(),
+      isPending: false,
+      isError: false,
+      error: null,
+      data: { runId: 'run-9', definitionVersionId: 'version-1', outcome: 'started' },
+    } as unknown as ReturnType<typeof useStartDesignDocValidationPlaybook>);
+
+    render(
+      <MemoryRouter>
+        <DesignDocPlaybookStartAction
+          designDocId="doc-1"
+          project="Apex"
+          isOwner
+          canRun
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByTestId('dd-playbook-start-run-link')).toHaveAttribute(
+      'href',
+      '/playbooks?project=Apex&run=run-9',
+    );
+  });
+
   it('hides the control from a non-owner', () => {
     render(
       <MemoryRouter>

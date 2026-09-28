@@ -30,7 +30,7 @@ const DesignDocPlaybookStartActionEnabled: React.FC<Omit<DesignDocPlaybookStartA
       )}
       {start.data && (
         <Link
-          to={`/playbooks/runs/${start.data.runId}?project=${encodeURIComponent(project)}`}
+          to={`/playbooks?project=${encodeURIComponent(project)}&run=${encodeURIComponent(start.data.runId)}`}
           data-testid="dd-playbook-start-run-link"
         >
           Open run

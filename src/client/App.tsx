@@ -208,7 +208,7 @@ function App() {
                     ? 'ai-cost'
                     : location.pathname === '/design-module'
                     ? 'design-module'
-                    : location.pathname === '/playbooks'
+                    : location.pathname === '/playbooks' || location.pathname.startsWith('/playbooks/')
                     ? 'playbooks'
                     : location.pathname.startsWith('/work-board')
                     ? 'work-board'
