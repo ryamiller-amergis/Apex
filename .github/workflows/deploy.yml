@@ -20,6 +20,8 @@ jobs:
   deploy-staging:
     runs-on: ubuntu-latest
     environment: prd
+    outputs:
+      ai_orchestrator: ${{ steps.image_publish.outputs.ai_orchestrator }}
 
     steps:
       - name: Checkout code
@@ -476,6 +478,18 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: bash scripts/ci/publish-ai-runs-interactive.sh
 
+      - name: Publish AI orchestrator image to staging
+        if: >-
+          steps.image_publish.outputs.ai_orchestrator == 'true' &&
+          hashFiles('runners/ai-orchestrator/Dockerfile') != ''
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_ORCHESTRATOR_CONTAINER_APP_NAME: ${{ vars.AI_ORCHESTRATOR_STAGING_CONTAINER_APP_NAME }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
+          AI_ORCHESTRATOR_IMAGE_REPO: ${{ vars.AI_ORCHESTRATOR_IMAGE_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: bash scripts/ci/publish-ai-orchestrator.sh
+
       # Stage 3 repo-read service. The script exits cleanly when the Container
       # App name is unset or Terraform has not applied enable_repo_read_service,
       # so this stays green until the service is provisioned.
@@ -522,6 +536,9 @@ jobs:
     environment: prd-production
 
     steps:
+      - name: Checkout deployment scripts
+        uses: actions/checkout@v4
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -535,6 +552,17 @@ jobs:
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot ${{ env.SLOT_NAME }} \
             --target-slot production
+
+      - name: Promote AI orchestrator image to production
+        if: needs.deploy-staging.outputs.ai_orchestrator == 'true'
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_ORCHESTRATOR_CONTAINER_APP_NAME: ${{ vars.AI_ORCHESTRATOR_CONTAINER_APP_NAME || 'ca-apex-ai-orchestrator-prd' }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
+          AI_ORCHESTRATOR_IMAGE_REPO: ${{ vars.AI_ORCHESTRATOR_IMAGE_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+          SKIP_IMAGE_PUBLISH: true
+        run: bash scripts/ci/publish-ai-orchestrator.sh
 
       - name: Smoke test production
         id: smoke

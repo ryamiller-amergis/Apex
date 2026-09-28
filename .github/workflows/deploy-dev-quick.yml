@@ -134,6 +134,7 @@ jobs:
       load_test_runner: ${{ steps.detect.outputs.load_test_runner }}
       ai_runs_worker: ${{ steps.detect.outputs.ai_runs_worker }}
       ai_runs_interactive: ${{ steps.detect.outputs.ai_runs_interactive }}
+      ai_orchestrator: ${{ steps.detect.outputs.ai_orchestrator }}
       repo_read_service: ${{ steps.detect.outputs.repo_read_service }}
     steps:
       - name: Checkout code
@@ -470,6 +471,18 @@ jobs:
           AI_RUNS_INTERACTIVE_IMAGE_REPO: ${{ vars.AI_RUNS_INTERACTIVE_IMAGE_REPO }}
           IMAGE_TAG: ${{ steps.deployed.outputs.sha }}
         run: bash scripts/ci/publish-ai-runs-interactive.sh
+
+      - name: Publish AI orchestrator image
+        if: >-
+          needs.detect-runner-changes.outputs.ai_orchestrator == 'true' &&
+          hashFiles('runners/ai-orchestrator/Dockerfile') != ''
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_ORCHESTRATOR_CONTAINER_APP_NAME: ${{ vars.AI_ORCHESTRATOR_CONTAINER_APP_NAME || 'ca-apex-ai-orchestrator-dev' }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || 'rg-scrum-dev' }}
+          AI_ORCHESTRATOR_IMAGE_REPO: ${{ vars.AI_ORCHESTRATOR_IMAGE_REPO }}
+          IMAGE_TAG: ${{ steps.deployed.outputs.sha }}
+        run: bash scripts/ci/publish-ai-orchestrator.sh
 
       # Stage 3 repo-read service. The script exits cleanly when the Container
       # App name is unset or Terraform has not applied enable_repo_read_service,
