@@ -255,10 +255,7 @@ function activityTitle(event: CloudAgentActivityEvent): string {
   return `${event.title} · ${event.detail}`;
 }
 
-function emptyActivityCopy(
-  run: CloudAgentRunSummary,
-  isConnected: boolean,
-): { title: string; detail: string } {
+function emptyActivityCopy(run: CloudAgentRunSummary): { title: string; detail: string } {
   switch (run.status) {
     case 'queued':
       return run.queuePosition
@@ -271,9 +268,7 @@ function emptyActivityCopy(
     case 'running':
       return {
         title: cloudRunStatusText(run),
-        detail: isConnected
-          ? 'Waiting for the agent’s first activity update…'
-          : 'Connecting to the cloud agent activity stream…',
+        detail: 'Updates will appear here when available.',
       };
     case 'completed':
       return {
@@ -313,7 +308,7 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
     run.runId,
     run.status !== 'queued',
   );
-  const emptyActivity = emptyActivityCopy(run, activity.isConnected);
+  const emptyActivity = emptyActivityCopy(run);
   const history = useCloudAgentRunHistory(sessionId, true);
 
   const handleResizeMouseDown = (event: React.MouseEvent) => {
@@ -539,16 +534,14 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
                 <h3 id={`cloud-run-activity-${item.id}`}>Activity</h3>
                 <p>
                   {isLive
-                    ? 'Live agent updates and tool activity.'
+                    ? 'Agent activity appears here when available.'
                     : activity.events.length > 0
-                      ? 'Recorded agent updates and tool activity.'
+                      ? 'Activity captured during this run.'
                       : 'No step-by-step activity for this run.'}
                 </p>
               </div>
-              {isLive ? (
-                <span className={styles['live-indicator']}>
-                  {activity.isConnected ? 'Live' : 'Connecting'}
-                </span>
+              {isLive && activity.isConnected ? (
+                <span className={styles['live-indicator']}>Live</span>
               ) : null}
             </div>
             <div
@@ -608,7 +601,11 @@ const CloudAgentEnabledRowAction: React.FC<{
   item: AssignedWorkItem;
   project: string;
   activeSession?: ActiveDevSession;
-}> = ({ item, project, activeSession }) => {
+  /** True until the first active-sessions response arrives. */
+  cloudStatusPending: boolean;
+  /** True when that response failed and there is no session data to trust. */
+  cloudStatusUnavailable: boolean;
+}> = ({ item, project, activeSession, cloudStatusPending, cloudStatusUnavailable }) => {
   const startCloud = useStartCloudAgentRun();
   const cancelCloud = useCancelCloudAgentRun();
   const [startedSessionId, setStartedSessionId] = useState<string | null>(null);
@@ -660,6 +657,24 @@ const CloudAgentEnabledRowAction: React.FC<{
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [reasonPinned]);
+
+  // Work items often arrive before sessions. Without this hold the row paints
+  // "Start cloud agent" for a run that is already saved.
+  if (!sessionId && (cloudStatusPending || cloudStatusUnavailable)) {
+    const loading = cloudStatusPending;
+    return (
+      <div className={styles['cloud-slot']} aria-busy={loading ? 'true' : undefined}>
+        <span
+          className={styles['cloud-status-pending']}
+          role="status"
+          {...{ 'data-testid': `my-work-cloud-status-${loading ? 'loading' : 'unavailable'}-${item.id}` }}
+        >
+          <span className={styles['cloud-status-dot']} aria-hidden="true" />
+          {loading ? 'Loading cloud status…' : 'Cloud status unavailable'}
+        </span>
+      </div>
+    );
+  }
 
   const handleStartOrResume = async () => {
     setActionError(null);
@@ -871,7 +886,9 @@ const CloudAgentRowAction: React.FC<{
   item: AssignedWorkItem;
   project: string;
   activeSession?: ActiveDevSession;
-}> = ({ item, project, activeSession }) => {
+  cloudStatusPending: boolean;
+  cloudStatusUnavailable: boolean;
+}> = ({ item, project, activeSession, cloudStatusPending, cloudStatusUnavailable }) => {
   const flagOn = useFeatureFlag(MY_WORK_CLOUD_AGENT_FLAG, project);
 
   // @feature-flag:my-work-cloud-agent start winner=enabled
@@ -882,6 +899,8 @@ const CloudAgentRowAction: React.FC<{
         item={item}
         project={project}
         activeSession={activeSession}
+        cloudStatusPending={cloudStatusPending}
+        cloudStatusUnavailable={cloudStatusUnavailable}
       />
     </>
     // @feature-flag:my-work-cloud-agent enabled-end
@@ -1469,7 +1488,13 @@ export const DevWorkbenchView: React.FC = () => {
   const { data: workItems, isLoading, error } = useAssignedWorkItems(
     usesAppNativeRequirements || showBoardAssigned ? null : (selectedProject || null),
   );
-  const { data: activeSessions } = useActiveSessions(selectedProject || null);
+  const {
+    data: activeSessions,
+    isLoading: sessionsLoading,
+    isError: sessionsError,
+  } = useActiveSessions(selectedProject || null);
+  const cloudStatusPending = sessionsLoading && !activeSessions;
+  const cloudStatusUnavailable = sessionsError && !activeSessions;
   const [localDevTarget, setLocalDevTarget] = useState<StartLocalDevTarget | null>(null);
   const [adoStatusFilter, setAdoStatusFilter] = useState<AdoStatusFilter>('all');
   const [adoCloudFilter, setAdoCloudFilter] = useState<AdoCloudFilter>('all');
@@ -1715,6 +1740,8 @@ export const DevWorkbenchView: React.FC = () => {
                     item={item}
                     project={selectedProject!}
                     activeSession={cloudSession}
+                    cloudStatusPending={cloudStatusPending}
+                    cloudStatusUnavailable={cloudStatusUnavailable}
                   />
                 </div>
               </div>

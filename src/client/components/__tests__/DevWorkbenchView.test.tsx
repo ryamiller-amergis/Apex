@@ -365,6 +365,38 @@ describe('DevWorkbenchView', () => {
     expect(screen.getByText('Implement login')).toBeInTheDocument();
   });
 
+  it('holds cloud controls until active sessions load', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    (useActiveSessions as jest.Mock).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+    });
+
+    renderView();
+
+    expect(screen.queryByRole('button', { name: /^Start cloud agent$/i })).not.toBeInTheDocument();
+    expect(screen.getByTestId('my-work-cloud-status-loading-42')).toHaveTextContent('Loading cloud status…');
+    expect(screen.getByTestId('my-work-cloud-status-loading-99')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /^Start Local Development$/i })).toHaveLength(2);
+  });
+
+  it('does not offer Start cloud agent when active sessions fail to load', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    (useActiveSessions as jest.Mock).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+    });
+
+    renderView();
+
+    expect(screen.queryByRole('button', { name: /^Start cloud agent$/i })).not.toBeInTheDocument();
+    expect(screen.getByTestId('my-work-cloud-status-unavailable-42')).toHaveTextContent(
+      'Cloud status unavailable',
+    );
+  });
+
   it('PBI-002 VT flag-off: hides cloud controls and keeps local development available', () => {
     renderView();
     expect(screen.queryByRole('button', { name: /^Start cloud agent$/i })).not.toBeInTheDocument();
@@ -480,7 +512,9 @@ describe('DevWorkbenchView', () => {
 
     expect(screen.getByTestId('my-work-cloud-run-drawer-42')).toBeInTheDocument();
     expect(screen.getByText('Activity')).toBeInTheDocument();
-    expect(screen.getByText(/live agent updates and tool activity/i)).toBeInTheDocument();
+    expect(screen.getByText(/agent activity appears here when available/i)).toBeInTheDocument();
+    expect(screen.getByText('Updates will appear here when available.')).toBeInTheDocument();
+    expect(screen.queryByText('Connecting')).not.toBeInTheDocument();
     expect(screen.getByText('apex-cursor-worker')).toBeInTheDocument();
     expect(screen.getAllByText('apex-cursor-worker-abc123').length).toBeGreaterThan(0);
     expect(screen.getByText('Run history')).toBeInTheDocument();
@@ -533,11 +567,9 @@ describe('DevWorkbenchView', () => {
     }));
 
     expect(screen.getByText('No step-by-step activity for this run.')).toBeInTheDocument();
-    expect(within(screen.getByTestId('my-work-cloud-run-activity-42')).getByText('No activity recorded'))
-      .toBeInTheDocument();
-    expect(within(activity).queryByText(
-      /connecting to the cloud agent activity stream/i,
-    )).not.toBeInTheDocument();
+    const activity = screen.getByTestId('my-work-cloud-run-activity-42');
+    expect(within(activity).getByText('No activity recorded')).toBeInTheDocument();
+    expect(within(activity).queryByText('Updates will appear here when available.')).not.toBeInTheDocument();
   });
 
   it('TBI-004 DoD-3: keeps an actual legacy session beside a live cloud run', () => {
