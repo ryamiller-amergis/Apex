@@ -453,8 +453,8 @@ export function createRunAttemptRepository(options?: {
         SELECT pg_notify(
           'agent_run_events',
           json_build_object(
-            'threadId', ${row.thread_id},
-            'eventId', ${errorEventId}
+              'threadId', ${row.thread_id}::text,
+              'eventId', ${errorEventId}::text
           )::text
         )
       `);
@@ -462,8 +462,8 @@ export function createRunAttemptRepository(options?: {
         SELECT pg_notify(
           'agent_run_events',
           json_build_object(
-            'threadId', ${row.thread_id},
-            'eventId', ${doneEventId}
+              'threadId', ${row.thread_id}::text,
+              'eventId', ${doneEventId}::text
           )::text
         )
       `);
@@ -603,8 +603,8 @@ export function createRunAttemptRepository(options?: {
           SELECT pg_notify(
             'agent_run_events',
             json_build_object(
-              'threadId', ${row.thread_id},
-              'eventId', ${eventId}
+              'threadId', ${row.thread_id}::text,
+              'eventId', ${eventId}::text
             )::text
           )
         `);
@@ -1161,8 +1161,8 @@ export function createRunAttemptRepository(options?: {
               SELECT pg_notify(
                 'agent_run_events',
                 json_build_object(
-                  'threadId', ${attempt.thread_id},
-                  'eventId', ${checkpoint.eventId}
+                  'threadId', ${attempt.thread_id}::text,
+                  'eventId', ${checkpoint.eventId}::text
                 )::text
               )
             `);

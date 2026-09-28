@@ -602,6 +602,8 @@ describe('AI-run V2 run attempt repository', () => {
     expect(statements).toContain("'dispatched'");
     expect(statements).toContain('interactive-orchestrator:attempt-1');
     expect(statements).toContain('pg_notify');
+    expect(statements).toMatch(/'threadId',[\s\S]*thread-1\s*::text/);
+    expect(statements).toMatch(/'eventId',[\s\S]*::text/);
   });
 
   it('reuses an already-dispatched attempt after a lost response', async () => {
@@ -667,6 +669,8 @@ describe('AI-run V2 run attempt repository', () => {
       'interactive-orchestrator-timeout:attempt-1',
     );
     expect(statements).toContain('pg_notify');
+    expect(statements).toMatch(/'threadId',[\s\S]*thread-1\s*::text/);
+    expect(statements).toMatch(/'eventId',[\s\S]*::text/);
   });
 
   it('fencedly terminalizes a safely identified malformed dispatch as validation_failed', async () => {
