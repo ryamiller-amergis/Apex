@@ -249,6 +249,36 @@ describe('interactiveLiveBus', () => {
     expect(received[0].eventId).toBe('durable-event-1');
     expect(received[0].event).toEqual(token);
   });
+
+  it('pings both connections before the Redis idle timeout and stops on shutdown', async () => {
+    jest.useFakeTimers();
+    try {
+      const pings: string[] = [];
+      const hub = new FakeRedisHub();
+      const bus = createInteractiveLiveBus({
+        config: { host: 'h', port: 6380, password: 'k', tls: true },
+        createClient: (role) =>
+          Object.assign(new FakeRedis(hub, role), {
+            ping: async () => {
+              pings.push(role);
+              return 'PONG';
+            },
+          }),
+        logger: () => {},
+        keepAliveMs: 1_000,
+      });
+      await bus.init();
+
+      jest.advanceTimersByTime(1_000);
+      expect(pings.sort()).toEqual(['pub', 'sub']);
+
+      await bus.shutdown();
+      jest.advanceTimersByTime(5_000);
+      expect(pings).toHaveLength(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });
 
 describe('resolveRedisConfig', () => {

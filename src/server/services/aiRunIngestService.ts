@@ -68,6 +68,11 @@ import {
 } from './interactiveArtifactApplier';
 import { resolveArtifactContainerClient } from './aiRunV2/artifactContainer';
 
+// Ingest persists worker events without emitting them to this instance's
+// in-memory thread subscribers, so they must not carry this instance's id or
+// the SSE route drops the PostgreSQL echo as already delivered.
+export const AI_RUN_INGEST_SOURCE_INSTANCE = `${RUN_EVENT_SOURCE_INSTANCE}:ai-run-ingest`;
+
 const MAX_DETAIL_LENGTH = 500;
 const AGENT_RUN_PHASES: ReadonlySet<string> = new Set([
   'queued',
@@ -700,7 +705,7 @@ function buildProgressEnvelope(
     eventId: body.eventId ?? randomUUID(),
     threadId: row.threadId,
     runId: row.id,
-    sourceInstance: RUN_EVENT_SOURCE_INSTANCE,
+    sourceInstance: AI_RUN_INGEST_SOURCE_INSTANCE,
     sequence: nextRunEventSequence(row.id),
     timestamp,
     type: eventTypeFor(event),
@@ -747,7 +752,7 @@ function buildTerminalEnvelope(
     eventId: randomUUID(),
     threadId: row.threadId,
     runId: row.id,
-    sourceInstance: RUN_EVENT_SOURCE_INSTANCE,
+    sourceInstance: AI_RUN_INGEST_SOURCE_INSTANCE,
     sequence: nextRunEventSequence(row.id),
     timestamp,
     type: status === 'cancelled' ? 'cancel' : eventTypeFor(event),
@@ -768,7 +773,7 @@ function buildDoneEnvelope(
     eventId: randomUUID(),
     threadId: row.threadId,
     runId: row.id,
-    sourceInstance: RUN_EVENT_SOURCE_INSTANCE,
+    sourceInstance: AI_RUN_INGEST_SOURCE_INSTANCE,
     sequence: nextRunEventSequence(row.id),
     timestamp,
     type: 'done',

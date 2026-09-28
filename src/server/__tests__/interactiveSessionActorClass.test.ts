@@ -3,6 +3,7 @@ import type { DurableInteractiveTurnSpecification } from '../../shared/types/dur
 import type { AiRunsCallbackClient } from '../services/aiRunsWorker/callbackClient';
 import {
   InteractiveSessionActorImpl,
+  interactiveSessionActorClassFor,
   setInteractiveActorRuntime,
 } from '../services/interactiveActorHost/interactiveSessionActorClass';
 import type {
@@ -136,5 +137,19 @@ describe('interactive compatibility actor class', () => {
       }),
     ).resolves.toEqual({ status: 'completed', cursorAgentId: null });
     expect(handleDurableTurn).not.toHaveBeenCalled();
+  });
+});
+
+describe('interactive actor type per Dapr app', () => {
+  it('gives each warm class its own actor type and keeps the legacy name', () => {
+    const fast = interactiveSessionActorClassFor('apex-ai-fast-interactive');
+    const agentic = interactiveSessionActorClassFor('apex-ai-agentic');
+    const legacy = interactiveSessionActorClassFor('apex-ai-interactive');
+
+    expect(new Set([fast.name, agentic.name, legacy.name]).size).toBe(3);
+    expect(legacy).toBe(InteractiveSessionActorImpl);
+    expect(interactiveSessionActorClassFor(undefined)).toBe(InteractiveSessionActorImpl);
+    expect(fast.prototype).toBeInstanceOf(InteractiveSessionActorImpl);
+    expect(agentic.prototype).toBeInstanceOf(InteractiveSessionActorImpl);
   });
 });

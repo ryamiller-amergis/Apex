@@ -210,3 +210,24 @@ export class InteractiveSessionActorImpl
     });
   }
 }
+
+/**
+ * Dapr places an actor type on every replica in the environment that registers
+ * it, so hosts sharing a type share turns. Each warm class registers its own
+ * type; the legacy host keeps the original name.
+ */
+export class InteractiveSessionActorFast extends InteractiveSessionActorImpl {}
+export class InteractiveSessionActorAgentic extends InteractiveSessionActorImpl {}
+
+export function interactiveSessionActorClassFor(
+  daprAppId: string | undefined,
+): typeof InteractiveSessionActorImpl {
+  switch (daprAppId?.trim()) {
+    case 'apex-ai-fast-interactive':
+      return InteractiveSessionActorFast;
+    case 'apex-ai-agentic':
+      return InteractiveSessionActorAgentic;
+    default:
+      return InteractiveSessionActorImpl;
+  }
+}

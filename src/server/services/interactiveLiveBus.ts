@@ -40,7 +40,11 @@ export interface RedisLike {
   on(event: string, listener: (...args: any[]) => void): unknown;
   quit(): Promise<unknown>;
   disconnect?(): void;
+  ping?(): Promise<unknown>;
 }
+
+/** Azure Redis closes connections idle for 10 minutes; ping well inside that. */
+const DEFAULT_KEEP_ALIVE_MS = 60_000;
 
 export interface ResolvedRedisConfig {
   url?: string;
@@ -72,6 +76,8 @@ export interface InteractiveLiveBusOptions {
   createClient?: (role: 'pub' | 'sub', config: ResolvedRedisConfig) => RedisLike;
   /** Structured logger for connection lifecycle (never receives payloads). */
   logger?: (event: Record<string, unknown>) => void;
+  /** Interval between PINGs on each open connection; 0 disables. */
+  keepAliveMs?: number;
 }
 
 /** Resolve Redis connection config from env; null → bus disabled (no-op). */
@@ -139,6 +145,20 @@ export function createInteractiveLiveBus(
 
   let publisher: RedisLike | null = null;
   let subscriber: RedisLike | null = null;
+  let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+  const keepAliveMs = options.keepAliveMs ?? DEFAULT_KEEP_ALIVE_MS;
+
+  // Pub/sub does not buffer: frames published while the subscriber reconnects
+  // are lost, so keep both connections from hitting the idle timeout.
+  const ensureKeepAlive = (): void => {
+    if (keepAliveTimer || keepAliveMs <= 0) return;
+    keepAliveTimer = setInterval(() => {
+      for (const client of [publisher, subscriber]) {
+        client?.ping?.().catch(() => {});
+      }
+    }, keepAliveMs);
+    keepAliveTimer.unref?.();
+  };
 
   const ensurePublisher = (): RedisLike | null => {
     if (!enabled || !config) return null;
@@ -153,6 +173,7 @@ export function createInteractiveLiveBus(
       publisher.on('reconnecting', () =>
         log({ event: 'InteractiveLiveBusPublisherReconnecting' }),
       );
+      ensureKeepAlive();
     }
     return publisher;
   };
@@ -187,6 +208,7 @@ export function createInteractiveLiveBus(
           }
         }
       });
+      ensureKeepAlive();
     }
     return subscriber;
   };
@@ -240,6 +262,10 @@ export function createInteractiveLiveBus(
     },
 
     async shutdown(): Promise<void> {
+      if (keepAliveTimer) {
+        clearInterval(keepAliveTimer);
+        keepAliveTimer = null;
+      }
       const closing: Array<Promise<unknown>> = [];
       if (publisher) closing.push(publisher.quit().catch(() => {}));
       if (subscriber) closing.push(subscriber.quit().catch(() => {}));

@@ -295,6 +295,29 @@ function isSuccessfulWait(result: CursorExecutionResult): boolean {
   return status === 'finished' || status === 'completed' || status === 'success';
 }
 
+/**
+ * Rejects with the signal's reason once it aborts, even if `work` never
+ * settles; a hung Cursor stream or wait must not outlive the turn deadline.
+ */
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  work.catch(() => {});
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 function unsuccessfulWaitDetail(result: CursorExecutionResult): string {
   const status = result.waitResult.status
     .trim()
@@ -827,6 +850,13 @@ export function createInteractiveSessionActor(
     const stopRun = async (): Promise<void> => {
       if (activeRunRef?.cancel) await activeRunRef.cancel().catch(() => {});
     };
+    absoluteAbort.signal.addEventListener(
+      'abort',
+      () => {
+        void stopRun();
+      },
+      { once: true },
+    );
 
     const clearToolTimer = (): void => {
       if (toolTimer !== undefined) {
@@ -1092,17 +1122,20 @@ export function createInteractiveSessionActor(
 
       try {
         const turnEndMonitor = createCursorTurnEndMonitor();
-        activeRunRef = await agentHandle.send(prompt, {
-          onDelta: (update) => {
-            if (!firstEventSeen) {
-              firstEventSeen = true;
-              clearTimeout(firstEventTimer);
-            }
-            turnEndMonitor.observe(update);
-          },
-        });
+        activeRunRef = await untilAborted(
+          agentHandle.send(prompt, {
+            onDelta: (update) => {
+              if (!firstEventSeen) {
+                firstEventSeen = true;
+                clearTimeout(firstEventTimer);
+              }
+              turnEndMonitor.observe(update);
+            },
+          }),
+          absoluteAbort.signal,
+        );
 
-        const result = await executeCursorExecutionCore({
+        const result = await untilAborted(executeCursorExecutionCore({
           snapshot: {
             prompt,
             model: specification.model,
@@ -1168,7 +1201,7 @@ export function createInteractiveSessionActor(
           },
           nextSequence: () => 1,
           turnEnd: turnEndMonitor.completion,
-        });
+        }), absoluteAbort.signal);
 
         const liveTail = liveBatcher.flush();
         if (liveTail) {

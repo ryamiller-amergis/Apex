@@ -2,8 +2,8 @@
  * FEAT-007 / TBI-010 — long-running Azure Container Apps host for the
  * interactive AI-runs lane.
  *
- * Boots a Dapr server that registers {@link InteractiveSessionActorImpl} (one
- * activation per `threadId`) and exposes a single `dispatch` service-invocation
+ * Boots a Dapr server that registers the interactive session actor type for
+ * this host's Dapr app ID (one activation per `threadId`) and exposes a single `dispatch` service-invocation
  * method. The Apex API (App Service, no Dapr sidecar) posts turn dispatches to
  * this host's ingress; the handler resolves the thread's actor proxy through
  * the local Dapr sidecar and invokes `handleTurn`. The actor then fetches the
@@ -53,7 +53,7 @@ import {
 import { collectInteractiveArtifacts } from './interactiveArtifactCollector';
 import { materializeInteractiveWorkspace } from './interactiveWorkspaceMaterializer';
 import {
-  InteractiveSessionActorImpl,
+  interactiveSessionActorClassFor,
   setInteractiveActorRuntime,
   type IInteractiveSessionActor,
 } from './interactiveSessionActorClass';
@@ -413,13 +413,16 @@ export async function main(): Promise<void> {
     communicationProtocol: CommunicationProtocolEnum.HTTP,
   });
 
+  const actorClass = interactiveSessionActorClassFor(
+    process.env.AI_RUNS_INTERACTIVE_DAPR_APP_ID,
+  );
   await server.actor.init();
-  await server.actor.registerActor(InteractiveSessionActorImpl);
+  await server.actor.registerActor(actorClass);
 
   await registerInteractiveHealthHandler(server.invoker);
 
   const proxyBuilder = new ActorProxyBuilder<IInteractiveSessionActor>(
-    InteractiveSessionActorImpl,
+    actorClass,
     server.client
   );
 
@@ -466,6 +469,7 @@ export async function main(): Promise<void> {
     JSON.stringify({
       event: 'InteractiveActorHostStarted',
       serverPort,
+      actorType: actorClass.name,
     })
   );
 }

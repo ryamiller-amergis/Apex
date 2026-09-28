@@ -332,6 +332,21 @@ describe('aiRunIngestService accepted events', () => {
     );
   });
 
+  it('stamps ingested events with an ingest source so the SSE route forwards the PostgreSQL echo', async () => {
+    mockFindFirst.mockResolvedValue(baseRow());
+
+    await ingest('project-1', 'run-1', {
+      dispatchMessageId: 'dispatch-current',
+      kind: 'progress',
+      phase: 'testing',
+      status: 'running',
+    });
+
+    const [envelope] = mockNotifyRunEvent.mock.calls[0];
+    expect(envelope.sourceInstance).toBe('test-instance:ai-run-ingest');
+    expect(envelope.sourceInstance).not.toBe('test-instance');
+  });
+
   it('TBI-005 DoD-2 / VT-10: progress updates clocks and durably fans out sanitized detail', async () => {
     mockFindFirst.mockResolvedValue(baseRow());
     const unsafeDetail = `  Running\nfocused\t tests ${'x'.repeat(600)}  `;
@@ -356,7 +371,7 @@ describe('aiRunIngestService accepted events', () => {
       expect.objectContaining({
         threadId: 'thread-1',
         runId: 'run-1',
-        sourceInstance: 'test-instance',
+        sourceInstance: 'test-instance:ai-run-ingest',
         sequence: 7,
         type: 'phase',
         phase: 'testing',

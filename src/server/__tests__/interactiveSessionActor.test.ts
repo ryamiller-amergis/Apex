@@ -895,6 +895,48 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     setTimeoutSpy.mockRestore();
   }, 15_000);
 
+  it('fails with hard_timeout when the Cursor run never settles past the absolute deadline', async () => {
+    const posted: AiRunIngestBody[] = [];
+    let cancelCalled = false;
+    const neverSettles = new Promise<void>(() => {});
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          tokens: ['pong'],
+          waitGate: neverSettles,
+          workspaceRef: checkout.workspacePath,
+          onCancel: () => {
+            cancelCalled = true;
+          },
+        }),
+      ),
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+      }),
+      uploadAttemptArtifacts: jest.fn(),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+    });
+
+    const outcome = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        absoluteDeadlineAt: new Date(Date.now() + 100).toISOString(),
+      }),
+    });
+
+    expect(outcome).toEqual({ status: 'failed', failureCategory: 'hard_timeout' });
+    expect(cancelCalled).toBe(true);
+    expect(posted.find((b) => b.kind === 'terminal')).toMatchObject({
+      status: 'failed',
+      failureCategory: 'hard_timeout',
+      artifactsFlushed: false,
+    });
+  }, 15_000);
+
   it('dual-publishes Redis live + durable progress with shared offsets; flush before message/terminal', async () => {
     const posted: AiRunIngestBody[] = [];
     const { publishLive, live } = captureLive();
