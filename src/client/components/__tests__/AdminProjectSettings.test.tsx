@@ -41,10 +41,10 @@ jest.mock('../../hooks/useFeatureFlags', () => ({
   useFeatureFlag: jest.fn().mockReturnValue(false),
 }));
 
-// The card imports useAppShell → useWorkItems → config/env, and env.ts reads
-// import.meta.env, which ts-jest's CommonJS transform cannot parse.
-jest.mock('../PlaybookSpendPolicyCard', () => ({
-  PlaybookSpendPolicyCard: () => null,
+// Keep the real spend-policy card in this parent integration suite while
+// isolating the unrelated application shell (which reaches Vite import.meta.env).
+jest.mock('../../hooks/useAppShell', () => ({
+  useAppShell: () => ({ can: () => false }),
 }));
 
 jest.mock('../GroupAwarePeoplePicker', () => ({

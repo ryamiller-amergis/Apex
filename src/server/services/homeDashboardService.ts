@@ -283,7 +283,7 @@ export class HomeDashboardService {
       openBugsOnPbis: defectsResult,
       bugToPbiRatio: bugRatioResult,
       devToProduction: deliveryResult,
-      ...(this.dependencies.getAssignedToMe ? { assignedToMe: assignedToMeResult } : {}),
+      ...(productionAdaptersEnabled ? { assignedToMe: assignedToMeResult } : {}),
     };
   }
 

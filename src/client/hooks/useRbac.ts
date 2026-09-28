@@ -4,7 +4,6 @@ import type {
   AssignProjectRoleRequest,
   CreateRoleRequest,
   MyPermissionsResponse,
-  RbacMutationResponse,
   RemoveProjectRoleRequest,
   RoleWithPermissions,
   UpdateRolePermissionsRequest,
@@ -107,18 +106,14 @@ export function useDeleteRole() {
 
 export function useUpdateRolePermissions() {
   const qc = useQueryClient();
-  return useMutation<RbacMutationResponse, Error, { id: string } & UpdateRolePermissionsRequest>({
+  return useMutation<void, Error, { id: string } & UpdateRolePermissionsRequest>({
     mutationFn: ({ id, ...body }) =>
-      apiFetch<RbacMutationResponse>(`/api/admin/roles/${id}/permissions`, {
+      apiFetch<void>(`/api/admin/roles/${id}/permissions`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       }),
-    onSuccess: () => Promise.all([
-      qc.invalidateQueries({ queryKey: ['admin', 'roles'] }),
-      qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
-      qc.invalidateQueries({ queryKey: ['me', 'permissions'] }),
-    ]),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'roles'] }),
   });
 }
 
@@ -146,18 +141,14 @@ export function useRemoveRole() {
 
 export function useAssignProjectRole() {
   const qc = useQueryClient();
-  return useMutation<RbacMutationResponse, Error, { oid: string } & AssignProjectRoleRequest>({
+  return useMutation<{ ok: true }, Error, { oid: string } & AssignProjectRoleRequest>({
     mutationFn: ({ oid, project, roleId }) =>
-      apiFetch<RbacMutationResponse>(`/api/admin/users/${oid}/project-roles`, {
+      apiFetch<{ ok: true }>(`/api/admin/users/${oid}/project-roles`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ project, roleId }),
       }),
-    onSuccess: () => Promise.all([
-      qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
-      qc.invalidateQueries({ queryKey: ['admin', 'roles'] }),
-      qc.invalidateQueries({ queryKey: ['me', 'permissions'] }),
-    ]),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
   });
 }
 

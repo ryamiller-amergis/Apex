@@ -61,29 +61,31 @@ export class AiCostSchedulerService {
       const isMorning = hour === 8;
       const isAfternoon = hour === 14;
 
-      const productionAdaptersEnabled = await isFeatureOperational('playbooks-production-adapters');
-      // @feature-flag:playbooks-production-adapters start winner=enabled
-      if (productionAdaptersEnabled) {
-        // @feature-flag:playbooks-production-adapters enabled-start
-        const utcDate = now.toISOString().slice(0, 10);
-        if (this.lastUndercountReportDate !== utcDate) {
-          try {
+      // Playbook reporting is isolated from the established billing allocation
+      // and brief schedule: flag/report failures must not skip existing jobs.
+      try {
+        const productionAdaptersEnabled = await isFeatureOperational('playbooks-production-adapters');
+        // @feature-flag:playbooks-production-adapters start winner=enabled
+        if (productionAdaptersEnabled) {
+          // @feature-flag:playbooks-production-adapters enabled-start
+          const utcDate = now.toISOString().slice(0, 10);
+          if (this.lastUndercountReportDate !== utcDate) {
             await aiCostUndercountReportService.run();
             this.lastUndercountReportDate = utcDate;
-          } catch (err) {
-            console.error(
-              '[AiCostScheduler] Playbook spend undercount report failed:',
-              (err as Error).message,
-            );
           }
+          // @feature-flag:playbooks-production-adapters enabled-end
+        } else {
+          // @feature-flag:playbooks-production-adapters disabled-start
+          // Preserve the existing scheduler: no Playbook spend report reads or writes.
+          // @feature-flag:playbooks-production-adapters disabled-end
         }
-        // @feature-flag:playbooks-production-adapters enabled-end
-      } else {
-        // @feature-flag:playbooks-production-adapters disabled-start
-        // Preserve the existing scheduler: no Playbook spend report reads or writes.
-        // @feature-flag:playbooks-production-adapters disabled-end
+        // @feature-flag:playbooks-production-adapters end
+      } catch (err) {
+        console.error(
+          '[AiCostScheduler] Playbook spend undercount report failed:',
+          (err as Error).message,
+        );
       }
-      // @feature-flag:playbooks-production-adapters end
 
       if (isMorning && (!this.lastBriefRun || now.getDate() !== this.lastBriefRun.getDate())) {
         try {

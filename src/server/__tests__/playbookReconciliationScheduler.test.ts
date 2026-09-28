@@ -11,11 +11,30 @@
  */
 jest.mock('../db', () => ({ __esModule: true, default: { end: jest.fn(), on: jest.fn() } }));
 jest.mock('../db/drizzle', () => ({ db: {} }));
+jest.mock('../services/featureFlagService', () => ({
+  isFeatureOperational: jest.fn(),
+}));
+jest.mock('../services/playbookTerminalEventService', () => ({
+  startPlaybookTerminalEventListener: jest.fn(),
+  stopPlaybookTerminalEventListener: jest.fn(),
+}));
 
 import {
   computeReconciliationDelayMs,
   createPlaybookReconciliationScheduler,
+  startPlaybookReconciliation,
+  stopPlaybookReconciliation,
 } from '../services/playbookReconciliationScheduler';
+import { isFeatureOperational } from '../services/featureFlagService';
+import { startPlaybookTerminalEventListener } from '../services/playbookTerminalEventService';
+
+const mockIsFeatureOperational = isFeatureOperational as jest.MockedFunction<
+  typeof isFeatureOperational
+>;
+const mockStartTerminalEventListener =
+  startPlaybookTerminalEventListener as jest.MockedFunction<
+    typeof startPlaybookTerminalEventListener
+  >;
 
 describe('VT-07 — the sweep interval is jittered downward from 60 seconds', () => {
   it('never exceeds the 60s ceiling and never collapses below 48s', () => {
@@ -100,5 +119,43 @@ describe('start and stop are idempotent', () => {
       setInterval.mockRestore();
       clearInterval.mockRestore();
     }
+  });
+});
+
+describe('application startup feature isolation', () => {
+  afterEach(() => {
+    stopPlaybookReconciliation();
+    jest.restoreAllMocks();
+  });
+
+  it('does not install the listener or timer while Playbooks are disabled', async () => {
+    mockIsFeatureOperational.mockResolvedValue(false);
+    const setInterval = jest.spyOn(global, 'setInterval');
+
+    await startPlaybookReconciliation();
+
+    expect(mockStartTerminalEventListener).not.toHaveBeenCalled();
+    expect(setInterval).not.toHaveBeenCalled();
+  });
+
+  it('leaves the application running without a listener or timer when the flag lookup fails', async () => {
+    mockIsFeatureOperational.mockRejectedValue(new Error('database unavailable'));
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const setInterval = jest.spyOn(global, 'setInterval');
+
+    await expect(startPlaybookReconciliation()).resolves.toBeUndefined();
+
+    expect(mockStartTerminalEventListener).not.toHaveBeenCalled();
+    expect(setInterval).not.toHaveBeenCalled();
+  });
+
+  it('installs the listener and timer while Playbooks are operational', async () => {
+    mockIsFeatureOperational.mockResolvedValue(true);
+    const setInterval = jest.spyOn(global, 'setInterval');
+
+    await startPlaybookReconciliation();
+
+    expect(mockStartTerminalEventListener).toHaveBeenCalledTimes(1);
+    expect(setInterval).toHaveBeenCalledTimes(1);
   });
 });

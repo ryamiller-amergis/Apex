@@ -117,8 +117,11 @@ jobs:
           cd ..
           (cd deploy && zip -r ../deploy.zip .)
 
-      - name: Verify packaged native dependencies
-        run: node -e "require('./deploy/node_modules/sqlite3'); console.log('sqlite3 binding loaded')"
+      - name: Verify packaged runtime dependencies
+        working-directory: deploy
+        run: |
+          node -e "require('sqlite3'); console.log('sqlite3 binding loaded')"
+          node -e "Promise.all([import('@mastra/core'), import('@mastra/core/workflows'), import('@mastra/pg')]).then(() => console.log('Playbook engine dependencies loaded'))"
 
       - name: Login to Azure
         uses: azure/login@v2

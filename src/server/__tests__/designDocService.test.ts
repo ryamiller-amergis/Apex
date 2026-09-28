@@ -1802,10 +1802,14 @@ describe('startValidationWatcher', () => {
     const whereMock = jest.fn().mockResolvedValue(undefined);
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
+    mockDb.query.designDocs.findFirst.mockResolvedValue({
+      validationThreadId: 'thread-unreadable',
+    });
 
     startValidationWatcher('doc-unreadable', 'thread-unreadable');
     await jest.advanceTimersByTimeAsync(60_000);
 
+    expect(mockReadable).toHaveBeenCalledWith('thread-unreadable');
     expect(setMock).not.toHaveBeenCalled();
   });
 

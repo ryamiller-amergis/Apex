@@ -8,7 +8,6 @@ import styles from './HomeDashboardSection.module.css';
 const SKELETON_CARDS = [
   { testId: 'home-dashboard-pipeline-card', label: 'Incomplete Pipeline loading' },
   { testId: 'home-dashboard-cycle-time-card', label: 'Artifact Cycle Time loading' },
-  { testId: 'home-dashboard-assigned-to-me-card', label: 'Assigned to me loading' },
 ] as const;
 
 interface HomeDashboardSectionProps {
@@ -31,21 +30,7 @@ const DashboardSkeleton: React.FC = () => (
       Project Status
     </h2>
     <div className={styles['primary-row']}>
-      {SKELETON_CARDS.slice(0, 2).map((card) => (
-        <article
-          key={card.testId}
-          className={styles['skeleton-card']}
-          aria-label={card.label}
-          {...{ 'data-testid': card.testId }}
-        >
-          <div className={`${styles['skeleton-line']} ${styles['skeleton-line-wide']}`} />
-          <div className={`${styles['skeleton-line']} ${styles['skeleton-line-medium']}`} />
-          <div className={`${styles['skeleton-line']} ${styles['skeleton-line-short']}`} />
-        </article>
-      ))}
-    </div>
-    <div className={styles['secondary-row']}>
-      {SKELETON_CARDS.slice(2).map((card) => (
+      {SKELETON_CARDS.map((card) => (
         <article
           key={card.testId}
           className={styles['skeleton-card']}
@@ -83,9 +68,11 @@ export const HomeDashboardSection: React.FC<HomeDashboardSectionProps> = ({
         <IncompletePipelineTile result={payload.incompletePipeline} onRetry={onRetry} />
         <ArtifactCycleTimeTile result={payload.artifactCycleTime} onRetry={onRetry} />
       </div>
-      <div className={styles['secondary-row']}>
-        <AssignedToMeTile result={payload.assignedToMe ?? null} onRetry={onRetry} />
-      </div>
+      {payload.assignedToMe ? (
+        <div className={styles['secondary-row']}>
+          <AssignedToMeTile result={payload.assignedToMe} onRetry={onRetry} />
+        </div>
+      ) : null}
     </section>
   );
 };

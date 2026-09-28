@@ -70,12 +70,6 @@ const allPermissions = [
   { id: 'p-admin', key: 'playbooks:admin', description: 'Administer Playbooks', category: 'playbooks' },
 ];
 
-const authorWithoutRunWarning = {
-  code: 'PLAYBOOK_AUTHOR_WITHOUT_RUN' as const,
-  message: 'This role can author Playbooks but cannot run what it authors.',
-  permissionKeys: ['playbooks:author', 'playbooks:run'] as const,
-};
-
 function setupDefaultMocks() {
   const mutateAsync = jest.fn();
   const mutate = jest.fn();
@@ -402,10 +396,7 @@ describe('AdminRoles — permissions modal', () => {
   });
 
   it('PBI-008 AC-0 / TBI-037 DoD-0 / VT-19 announces the saved warning and waits for acknowledgement', async () => {
-    const mutateAsync = jest.fn().mockResolvedValue({
-      ok: true,
-      warnings: [authorWithoutRunWarning],
-    });
+    const mutateAsync = jest.fn().mockResolvedValue(undefined);
     (useUpdateRolePermissions as jest.Mock).mockReturnValue({
       mutateAsync,
       isPending: false,
@@ -507,12 +498,16 @@ describe('AdminRoles — members modal', () => {
 
   it('PBI-008 AC-0 / TBI-037 DoD-0 shows the project assignment warning', () => {
     const mutate = jest.fn((_variables, options) => {
-      options.onSuccess({ ok: true, warnings: [authorWithoutRunWarning] });
+      options.onSuccess({ ok: true });
     });
     (useAssignProjectRole as jest.Mock).mockReturnValue({
       mutate,
       isPending: false,
       error: null,
+    });
+    (useRoles as jest.Mock).mockReturnValue({
+      data: [{ ...adminRole, permissions: ['playbooks:author'] }, memberRole],
+      isLoading: false,
     });
     render(<AdminRoles selectedProject="Apex" />);
 

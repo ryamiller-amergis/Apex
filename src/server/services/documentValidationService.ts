@@ -4,7 +4,7 @@ import { db } from '../db/drizzle';
 import { chatThreads } from '../db/schema';
 import type { ValidationScorecard } from '../../shared/types/interview';
 import { buildPassingValidationReasonsMarkdown, collectValidationGaps, buildUnusableValidationScorecard, parseAgentValidationScorecard, NO_SCORECARD_REASON, VALIDATION_TIMEOUT_REASON, normalizeCrossCuttingCheck } from '../../shared/utils/validationReport';
-import { readOutputValidationScorecard, readOutputValidationScorecardMd, isThreadIdle, createThread as createChatThread, cancelRun, sendMessage, prepareBackgroundWorkflowTurn, hydrateThread } from './chatAgentService';
+import { readOutputValidationScorecard, readOutputValidationScorecardMd, isThreadIdle, isOutputWorkspaceReadable, createThread as createChatThread, cancelRun, sendMessage, prepareBackgroundWorkflowTurn, hydrateThread } from './chatAgentService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
 import { isThreadRunAlive, canThisInstanceFailGeneration } from './agentRunReaperService';
 import { getSkillConfig, resolveSkillConfig } from './projectSettingsService';
@@ -288,6 +288,18 @@ export function startDocumentValidationWatcher(
     const scorecardRaw = readOutputValidationScorecard(validationThreadId);
 
     if (!scorecardRaw) {
+      // Preserve the established Design Doc behavior: a missing workspace cannot
+      // distinguish "the agent wrote no scorecard" from "this instance has not
+      // hydrated the workspace yet." Recovery will retry hydration, so wait.
+      if (!isOutputWorkspaceReadable(validationThreadId)) {
+        if (attempts % 12 === 0) {
+          console.warn(
+            `[documentValidationWatcher] Workspace not readable yet — waiting ` +
+              `(documentId=${documentId} threadId=${validationThreadId})`,
+          );
+        }
+        return;
+      }
       if (
         isThreadIdle(validationThreadId)
         && (await canThisInstanceFailGeneration(validationThreadId))

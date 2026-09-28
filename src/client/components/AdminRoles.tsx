@@ -17,12 +17,17 @@ import {
 } from '../hooks/useRbac';
 import type {
   AppPermission,
-  RbacConfigurationWarning,
   RoleWithPermissions,
 } from '../../shared/types/rbac';
 import styles from './AdminRoles.module.css';
 
 // ── Schemas ───────────────────────────────────────────────────────────────
+
+interface RbacConfigurationWarning {
+  code: 'PLAYBOOK_AUTHOR_WITHOUT_RUN';
+  message: string;
+  permissionKeys: ['playbooks:author', 'playbooks:run'];
+}
 
 const roleSchema = z.object({
   name: z.string().min(1, 'Name is required').max(64, 'Name must be 64 characters or less'),
@@ -31,6 +36,19 @@ const roleSchema = z.object({
 });
 
 type RoleFormValues = z.infer<typeof roleSchema>;
+
+function playbookAuthorWithoutRunWarning(
+  permissionKeys: Iterable<string>,
+): RbacConfigurationWarning | null {
+  const keys = new Set(permissionKeys);
+  if (!keys.has('playbooks:author') || keys.has('playbooks:run')) return null;
+  return {
+    code: 'PLAYBOOK_AUTHOR_WITHOUT_RUN',
+    message:
+      'Playbook author permission is present without run permission; the member can author but cannot run what they author.',
+    permissionKeys: ['playbooks:author', 'playbooks:run'],
+  };
+}
 
 // ── CreateEditRoleModal ───────────────────────────────────────────────────
 
@@ -262,13 +280,11 @@ const PermissionsModal: React.FC<PermissionsModalProps> = ({ role, allPermission
 
   const handleSave = async () => {
     try {
-      const result = await updatePerms.mutateAsync({
+      await updatePerms.mutateAsync({
         id: role.id,
         permissionIds: Array.from(selected),
       });
-      const warning = result.warnings.find(
-        (item) => item.code === 'PLAYBOOK_AUTHOR_WITHOUT_RUN',
-      ) ?? null;
+      const warning = playbookAuthorWithoutRunWarning(selectedKeys);
       if (warning) {
         setSavedWarning(warning);
       } else {
@@ -436,13 +452,9 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, project, onCl
       assignProjectRole.mutate(
         { oid: selectedOid, project, roleId: role.id },
         {
-          onSuccess: (result) => {
+          onSuccess: () => {
             setSelectedOid('');
-            setAssignmentWarning(
-              result.warnings.find(
-                (warning) => warning.code === 'PLAYBOOK_AUTHOR_WITHOUT_RUN',
-              ) ?? null,
-            );
+            setAssignmentWarning(playbookAuthorWithoutRunWarning(role.permissions));
           },
         },
       );

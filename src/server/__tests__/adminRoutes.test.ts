@@ -228,25 +228,15 @@ describe('PUT /api/admin/roles/:id', () => {
 describe('PUT /api/admin/roles/:id/permissions', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('PBI-008 AC-0 / TBI-037 DoD-0 / VT-06 returns 200 with role-save warnings', async () => {
-    mockService.updateRolePermissions.mockResolvedValue({
-      ok: true,
-      warnings: [{
-        code: 'PLAYBOOK_AUTHOR_WITHOUT_RUN',
-        message: 'This role can author Playbooks but cannot run what it authors.',
-        permissionKeys: ['playbooks:author', 'playbooks:run'],
-      }],
-    });
+  it('preserves the established 204 contract when permissions are saved', async () => {
+    mockService.updateRolePermissions.mockResolvedValue(undefined);
 
     const res = await request(buildApp())
       .put('/api/admin/roles/role-admin/permissions')
       .send({ permissionIds: ['perm-1', 'perm-2'] });
 
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
-      ok: true,
-      warnings: [{ code: 'PLAYBOOK_AUTHOR_WITHOUT_RUN' }],
-    });
+    expect(res.status).toBe(204);
+    expect(res.body).toEqual({});
     expect(mockService.updateRolePermissions).toHaveBeenCalledWith('role-admin', ['perm-1', 'perm-2']);
   });
 
@@ -259,15 +249,15 @@ describe('PUT /api/admin/roles/:id/permissions', () => {
     expect(mockService.updateRolePermissions).not.toHaveBeenCalled();
   });
 
-  it('PBI-008 AC-0 / VT-07 returns 200 without warnings when clearing permissions', async () => {
-    mockService.updateRolePermissions.mockResolvedValue({ ok: true, warnings: [] });
+  it('returns 204 when clearing permissions', async () => {
+    mockService.updateRolePermissions.mockResolvedValue(undefined);
 
     const res = await request(buildApp())
       .put('/api/admin/roles/role-member/permissions')
       .send({ permissionIds: [] });
 
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true, warnings: [] });
+    expect(res.status).toBe(204);
+    expect(res.body).toEqual({});
   });
 
   it('returns 500 when updateRolePermissions throws', async () => {
@@ -1451,25 +1441,15 @@ describe('POST /api/admin/groups/seed/:project', () => {
 describe('POST /api/admin/users/:oid/project-roles', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('PBI-008 AC-0 / TBI-037 DoD-0 / VT-09 returns assignment warnings', async () => {
-    mockService.assignProjectRole.mockResolvedValue({
-      ok: true,
-      warnings: [{
-        code: 'PLAYBOOK_AUTHOR_WITHOUT_RUN',
-        message: 'This member can author Playbooks but cannot run what they author.',
-        permissionKeys: ['playbooks:author', 'playbooks:run'],
-      }],
-    });
+  it('preserves the established assignment response', async () => {
+    mockService.assignProjectRole.mockResolvedValue(undefined);
 
     const res = await request(buildApp('admin-oid'))
       .post('/api/admin/users/user-1/project-roles')
       .send({ project: 'MyProject', roleId: 'role-admin' });
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
-      ok: true,
-      warnings: [{ code: 'PLAYBOOK_AUTHOR_WITHOUT_RUN' }],
-    });
+    expect(res.body).toEqual({ ok: true });
     expect(mockService.assignProjectRole).toHaveBeenCalledWith(
       'user-1',
       'MyProject',
@@ -1497,7 +1477,7 @@ describe('POST /api/admin/users/:oid/project-roles', () => {
   });
 
   it('uses "unknown" as assignedBy when no user is authenticated', async () => {
-    mockService.assignProjectRole.mockResolvedValue({ ok: true, warnings: [] });
+    mockService.assignProjectRole.mockResolvedValue(undefined);
 
     await request(buildApp())
       .post('/api/admin/users/user-1/project-roles')
@@ -1519,19 +1499,6 @@ describe('POST /api/admin/users/:oid/project-roles', () => {
       .send({ project: 'MyProject', roleId: 'role-admin' });
 
     expect(res.status).toBe(500);
-  });
-
-  it('PBI-008 AC-1 / TBI-037 DoD-0 / VT-08 maps a project scope mismatch to 400', async () => {
-    const scopeError = new rbacService.ProjectRoleScopeError('outside-user', 'MyProject');
-    scopeError.message = 'User outside-user is not assigned to project MyProject';
-    mockService.assignProjectRole.mockRejectedValue(scopeError);
-
-    const res = await request(buildApp('admin-oid'))
-      .post('/api/admin/users/outside-user/project-roles')
-      .send({ project: 'MyProject', roleId: 'role-author' });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/outside-user.*MyProject|MyProject.*outside-user/i);
   });
 
   it('PBI-008 AC-3 / VT-11 rejects project-role grants without admin:roles', async () => {

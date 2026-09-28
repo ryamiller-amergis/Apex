@@ -14,6 +14,7 @@
  * but they would all queue on that lock at the same moment, every minute, forever.
  */
 import { getAppEnvironment } from '../utils/superAdmin';
+import { isFeatureOperational } from './featureFlagService';
 import {
   runReconciliationPassLocked,
   type Clock,
@@ -110,6 +111,20 @@ const defaultScheduler = createPlaybookReconciliationScheduler();
 
 /** Starts the sweep and the terminal-event listener. */
 export async function startPlaybookReconciliation(): Promise<void> {
+  let enabled = false;
+  try {
+    enabled = await isFeatureOperational('playbooks-production-adapters');
+  } catch (error) {
+    console.error(
+      '[playbook-reconciliation] feature check failed; scheduler remains stopped',
+      error instanceof Error ? error.message : String(error),
+    );
+    return;
+  }
+  if (!enabled) {
+    console.log('[playbook-reconciliation] disabled by playbooks-production-adapters flag');
+    return;
+  }
   startPlaybookTerminalEventListener();
   defaultScheduler.start();
   console.log(

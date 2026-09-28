@@ -2185,7 +2185,16 @@ router.post('/design-docs/:id/validation/refresh', requirePermission('interviews
         { kind: 'success', scorecardRaw, reportMd },
       );
       if (result.disposition === 'discarded_stale') {
-        res.status(409).json({ error: 'Validation result is stale' });
+        const current = await getDesignDoc(req.params.id);
+        if (current?.validationScorecard && current.status !== 'validating') {
+          res.json({
+            ok: true,
+            score: current.validationScorecard.overall_score,
+            is_ready: current.validationScorecard.is_ready,
+          });
+          return;
+        }
+        res.status(404).json({ error: 'Scorecard not yet available' });
         return;
       }
       res.json({
@@ -2207,7 +2216,16 @@ router.post('/design-docs/:id/validation/refresh', requirePermission('interviews
         },
       );
       if (result.disposition === 'discarded_stale') {
-        res.status(409).json({ error: 'Validation result is stale' });
+        const current = await getDesignDoc(req.params.id);
+        if (current?.validationScorecard && current.status !== 'validating') {
+          res.json({
+            ok: true,
+            score: current.validationScorecard.overall_score,
+            is_ready: current.validationScorecard.is_ready,
+          });
+          return;
+        }
+        res.status(404).json({ error: 'Scorecard not yet available' });
         return;
       }
       res.json({

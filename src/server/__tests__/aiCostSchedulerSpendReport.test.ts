@@ -24,6 +24,7 @@ describe('TBI-050 scheduler cadence and flag', () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-09-22T16:00:00.000Z'));
     runCostAllocation.mockResolvedValue(undefined);
     runUndercountReport.mockResolvedValue(undefined);
+    generateBriefForAllProjects.mockResolvedValue(undefined);
     isFeatureOperational.mockResolvedValue(true);
   });
 
@@ -47,5 +48,15 @@ describe('TBI-050 scheduler cadence and flag', () => {
     await (scheduler as unknown as { run(): Promise<void> }).run();
 
     expect(runUndercountReport).not.toHaveBeenCalled();
+  });
+
+  it('keeps the established daily brief running when the Playbook flag lookup fails', async () => {
+    jest.setSystemTime(new Date(2026, 8, 22, 8, 0, 0));
+    isFeatureOperational.mockRejectedValue(new Error('flag service unavailable'));
+    const scheduler = new AiCostSchedulerService();
+
+    await (scheduler as unknown as { run(): Promise<void> }).run();
+
+    expect(generateBriefForAllProjects).toHaveBeenCalledWith('morning');
   });
 });

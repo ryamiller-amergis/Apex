@@ -316,6 +316,10 @@ function App() {
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
   const interactiveWsEnabled = homeFlags['ai-runs-interactive'] === true;
+  const canAccessPlaybooks =
+    !homeFlagsLoading &&
+    homeFlags['playbooks-production-adapters'] === true &&
+    (isSuperAdmin || can('playbooks:view'));
 
   // @feature-flag:ai-runs-interactive start winner=disabled
   // FEAT-007: flip the chat stream transport to the WebSocket agent gateway when
@@ -769,7 +773,11 @@ function App() {
     );
   }
 
-  if (currentView === 'not-found') {
+  if (currentView === 'playbooks' && homeFlagsLoading) {
+    return <ViewSkeleton />;
+  }
+
+  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks)) {
     return (
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <div role="status" aria-live="polite" {...{ 'data-testid': 'route-not-found' }}>
