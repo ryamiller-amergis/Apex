@@ -17,6 +17,17 @@ locals {
     agentic            = "apex-ai-agentic"
   }
 
+  ai_platform_v2_interactive_dapr_components = {
+    "interactive-pubsub" = {
+      component_type = "pubsub.redis"
+      actor_store    = false
+    }
+    "interactive-actor-state" = {
+      component_type = "state.redis"
+      actor_store    = true
+    }
+  }
+
   ai_platform_v2_interactive_app_names = {
     "fast-interactive" = coalesce(
       var.ai_platform_v2_fast_interactive_container_app_name,
@@ -92,6 +103,16 @@ resource "azurerm_role_assignment" "ai_platform_v2_interactive_blob_contributor"
   principal_id         = azurerm_user_assigned_identity.ai_platform_v2[each.key].principal_id
 }
 
+moved {
+  from = azurerm_role_assignment.ai_platform_v2_worker_blob_contributor["fast-interactive"]
+  to   = azurerm_role_assignment.ai_platform_v2_interactive_blob_contributor["fast-interactive"]
+}
+
+moved {
+  from = azurerm_role_assignment.ai_platform_v2_worker_blob_contributor["agentic"]
+  to   = azurerm_role_assignment.ai_platform_v2_interactive_blob_contributor["agentic"]
+}
+
 resource "azuread_app_role_assignment" "ai_platform_v2_interactive_runner_ingest" {
   for_each = (
     local.ai_platform_v2_split_interactive_enabled
@@ -105,20 +126,49 @@ resource "azuread_app_role_assignment" "ai_platform_v2_interactive_runner_ingest
 }
 
 resource "azapi_update_resource" "ai_platform_v2_interactive_dapr_scopes" {
-  for_each = local.ai_platform_v2_split_interactive_enabled ? toset([
-    "interactive-pubsub",
-    "interactive-actor-state",
-  ]) : toset([])
+  for_each = local.ai_platform_v2_split_interactive_enabled ? local.ai_platform_v2_interactive_dapr_components : {}
 
   type        = "Microsoft.App/managedEnvironments/daprComponents@2024-03-01"
   resource_id = "${data.azurerm_container_app_environment.ai_platform_v2_host[0].id}/daprComponents/${each.key}"
 
   body = {
     properties = {
+      componentType = each.value.component_type
+      version       = "v1"
+      ignoreErrors  = false
+      initTimeout   = "5s"
+      metadata = concat(
+        [
+          {
+            name  = "redisHost"
+            value = "${var.ai_platform_v2_interactive_redis_host}:${var.ai_platform_v2_interactive_redis_port}"
+          },
+          {
+            name      = "redisPassword"
+            secretRef = "redis-password"
+          },
+          {
+            name  = "enableTLS"
+            value = "true"
+          },
+        ],
+        each.value.actor_store ? [
+          {
+            name  = "actorStateStore"
+            value = "true"
+          },
+        ] : [],
+      )
       scopes = [
         "apex-ai-interactive",
         local.ai_platform_v2_interactive_dapr_app_ids["fast-interactive"],
         local.ai_platform_v2_interactive_dapr_app_ids["agentic"],
+      ]
+      secrets = [
+        {
+          name  = "redis-password"
+          value = var.ai_platform_v2_interactive_redis_key
+        },
       ]
     }
   }
