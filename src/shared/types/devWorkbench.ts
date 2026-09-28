@@ -142,6 +142,8 @@ export interface CloudAgentRunSummary {
   failingChecks: import('./agentRunLifecycle').RunCheckKind[];
   /** Launch or terminal failure detail when status is failed; null otherwise. */
   lastError: string | null;
+  /** 1-based place among cloud-agent runs still waiting for a container. */
+  queuePosition: number | null;
 }
 
 export type CloudAgentActivityKind = 'assistant' | 'thinking' | 'tool' | 'status' | 'task';
@@ -189,6 +191,8 @@ export interface StartCloudAgentRunRequest {
 export interface StartCloudAgentRunResponse {
   sessionId: string;
   runId: string;
+  /** Place in line when the run is still waiting for a container. */
+  queuePosition: number | null;
 }
 
 export interface BacklogFeatureItem {

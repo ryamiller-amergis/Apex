@@ -29,6 +29,7 @@ import type {
   CloudAgentRunSummary,
 } from '../../shared/types/devWorkbench';
 import { isAppNativeRequirementsProject } from '../../shared/types/devWorkbench';
+import { queuePlaceLabel } from '../../shared/utils/queuePlace';
 import {
   computeFeatureWorkStatus,
   formatMyWorkStatusLabel,
@@ -99,7 +100,7 @@ const TIMED_OUT_REASONS = new Set(['queue_ttl', 'cloud_agent_timeout']);
 function cloudRunStatusText(run: CloudAgentRunSummary): string {
   switch (run.status) {
     case 'queued':
-      return 'Queued';
+      return run.queuePosition ? queuePlaceLabel(run.queuePosition) : 'Queued';
     case 'dispatched':
       return 'Starting';
     case 'running':
@@ -260,7 +261,12 @@ function emptyActivityCopy(
 ): { title: string; detail: string } {
   switch (run.status) {
     case 'queued':
-      return { title: 'Queued', detail: 'Waiting for the cloud agent to start.' };
+      return run.queuePosition
+        ? {
+            title: queuePlaceLabel(run.queuePosition),
+            detail: 'This run starts when a container is free.',
+          }
+        : { title: 'Queued', detail: 'Waiting for the cloud agent to start.' };
     case 'dispatched':
     case 'running':
       return {
@@ -269,25 +275,20 @@ function emptyActivityCopy(
           ? 'Waiting for the agent’s first activity update…'
           : 'Connecting to the cloud agent activity stream…',
       };
-    case 'completed': {
-      const prOutcome = run.prUrl
-        ? ` The pull request is ${prStatusText(run)?.toLowerCase() ?? 'available'}.`
-        : '';
+    case 'completed':
       return {
-        title: run.finishedWithoutPr ? 'Run finished without a pull request' : 'Run completed',
-        detail: `Detailed agent activity was not recorded for this execution.${prOutcome}`,
+        title: 'No activity recorded',
+        detail: run.finishedWithoutPr ? 'Run finished without a pull request.' : '',
       };
-    }
     case 'failed':
       return {
         title: cloudRunStatusText(run),
-        detail: run.lastError
-          ?? 'The run ended before detailed agent activity could be recorded.',
+        detail: run.lastError ?? 'No activity recorded.',
       };
     case 'cancelled':
       return {
         title: 'Run cancelled',
-        detail: 'The run was cancelled before more agent activity was recorded.',
+        detail: 'No activity recorded.',
       };
   }
 }
@@ -510,7 +511,12 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
                       </span>
                     </div>
                     {historyRun.prUrl ? (
-                      <a href={historyRun.prUrl} target="_blank" rel="noreferrer">
+                      <a
+                        href={historyRun.prUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        {...{ 'data-testid': `my-work-cloud-run-history-pr-${historyRun.runId}` }}
+                      >
                         {prStatusText(historyRun) ?? 'PR'} ↗
                       </a>
                     ) : (
@@ -522,14 +528,21 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
             )}
           </section>
 
-          <section className={styles['run-activity']} aria-labelledby={`cloud-run-activity-${item.id}`}>
+          <section
+            className={`${styles['run-activity']}${
+              !isLive && activity.events.length === 0 ? ` ${styles['run-activity-compact']}` : ''
+            }`}
+            aria-labelledby={`cloud-run-activity-${item.id}`}
+          >
             <div className={styles['run-activity-heading']}>
               <div>
                 <h3 id={`cloud-run-activity-${item.id}`}>Activity</h3>
                 <p>
                   {isLive
                     ? 'Live agent updates and tool activity.'
-                    : 'Recorded agent updates and tool activity.'}
+                    : activity.events.length > 0
+                      ? 'Recorded agent updates and tool activity.'
+                      : 'No step-by-step activity for this run.'}
                 </p>
               </div>
               {isLive ? (
@@ -562,7 +575,7 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
                   <i aria-hidden="true" />
                   <div>
                     <strong>{emptyActivity.title}</strong>
-                    <span>{emptyActivity.detail}</span>
+                    {emptyActivity.detail ? <span>{emptyActivity.detail}</span> : null}
                   </div>
                 </div>
               )}
@@ -668,6 +681,7 @@ const CloudAgentEnabledRowAction: React.FC<{
         checkResults: null,
         failingChecks: [],
         lastError: null,
+        queuePosition: result.queuePosition,
       });
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Unable to start Cloud Development.');
@@ -1461,53 +1475,34 @@ export const DevWorkbenchView: React.FC = () => {
   const [adoCloudFilter, setAdoCloudFilter] = useState<AdoCloudFilter>('all');
   const [adoSearch, setAdoSearch] = useState('');
 
-  const { legacySessionByWorkItem, cloudSessionByWorkItem } = useMemo(() => {
-    const legacy = new Map<number, ActiveDevSession>();
+  const cloudSessionByWorkItem = useMemo(() => {
     const cloud = new Map<number, ActiveDevSession>();
     if (activeSessions) {
       for (const s of activeSessions) {
         if (s.status !== 'closed' && s.workItemId) {
           if (s.cloudAgentRun && !cloud.has(s.workItemId)) cloud.set(s.workItemId, s);
-          if (
-            s.status !== 'failed'
-            &&
-            (!s.cloudAgentRun || s.chatThreadId || s.branchName)
-            && !legacy.has(s.workItemId)
-          ) {
-            legacy.set(s.workItemId, s);
-          }
         }
       }
     }
-    return {
-      legacySessionByWorkItem: legacy,
-      cloudSessionByWorkItem: cloud,
-    };
+    return cloud;
   }, [activeSessions]);
 
-  const sortedWorkItems = useMemo(() => {
-    if (!workItems) return [];
-    return [...workItems].sort((a, b) => {
-      const aActive =
-        legacySessionByWorkItem.has(a.id) || cloudSessionByWorkItem.has(a.id) ? 0 : 1;
-      const bActive =
-        legacySessionByWorkItem.has(b.id) || cloudSessionByWorkItem.has(b.id) ? 0 : 1;
-      return aActive - bActive;
-    });
-  }, [workItems, legacySessionByWorkItem, cloudSessionByWorkItem]);
+  // Keep the API order stable. Starting a run must not move the row away from
+  // the pointer; users can separate run states with the Cloud agent filter.
+  const stableWorkItems = workItems ?? [];
 
   const visibleWorkItems = useMemo(() => {
     const cloudRunByWorkItemId = new Map<number, CloudAgentRunSummary | null | undefined>();
     cloudSessionByWorkItem.forEach((session, id) => {
       cloudRunByWorkItemId.set(id, session.cloudAgentRun);
     });
-    return filterAssignedWorkItems(sortedWorkItems, {
+    return filterAssignedWorkItems(stableWorkItems, {
       status: adoStatusFilter,
       cloud: adoCloudFilter,
       search: adoSearch,
       cloudRunByWorkItemId,
     });
-  }, [sortedWorkItems, adoStatusFilter, adoCloudFilter, adoSearch, cloudSessionByWorkItem]);
+  }, [stableWorkItems, adoStatusFilter, adoCloudFilter, adoSearch, cloudSessionByWorkItem]);
 
   useEffect(() => {
     setAdoStatusFilter('all');

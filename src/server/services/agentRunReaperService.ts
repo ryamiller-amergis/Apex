@@ -1007,6 +1007,11 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
  */
 export function startReaper(): void {
   lastRetireReapAt = Date.now();
+  void import('./cloudAgentQueueScheduler')
+    .then((scheduler) => scheduler.startCloudAgentQueueScheduler())
+    .catch((err) => {
+      console.error('[cloud-agent] queue scheduler failed to start:', err instanceof Error ? err.message : err);
+    });
   reapOrphanedRuns({ retireReconcileDue: true }).catch((err) => {
     console.error('[reaper] Initial reap failed:', err);
   });
@@ -1029,4 +1034,7 @@ export function stopReaper(): void {
     clearInterval(reaperTimer);
     reaperTimer = null;
   }
+  void import('./cloudAgentQueueScheduler')
+    .then((scheduler) => scheduler.stopCloudAgentQueueScheduler())
+    .catch(() => undefined);
 }

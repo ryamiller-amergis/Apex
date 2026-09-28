@@ -138,6 +138,7 @@ function cloudRun(
     checkResults: null,
     failingChecks: [],
     lastError: null,
+    queuePosition: null,
     ...overrides,
     jobName: overrides.jobName ?? 'apex-cursor-worker',
     executionName: overrides.executionName ?? 'apex-cursor-worker-abc123',
@@ -421,6 +422,15 @@ describe('DevWorkbenchView', () => {
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
+  it('shows a queued cloud agent run by its place in line', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(cloudRun('queued', { queuePosition: 3, executionName: null }));
+
+    renderView();
+
+    expect(screen.getByTestId('my-work-cloud-run-status-42')).toHaveTextContent('3rd in line');
+  });
+
   it.each([
     ['queued', 'Queued'],
     ['dispatched', 'Starting'],
@@ -522,11 +532,9 @@ describe('DevWorkbenchView', () => {
       name: /view cloud agent run details: completed/i,
     }));
 
-    const activity = screen.getByTestId('my-work-cloud-run-activity-42');
-    expect(within(activity).getByText('Run completed')).toBeInTheDocument();
-    expect(within(activity).getByText(
-      'Detailed agent activity was not recorded for this execution. The pull request is abandoned.',
-    )).toBeInTheDocument();
+    expect(screen.getByText('No step-by-step activity for this run.')).toBeInTheDocument();
+    expect(within(screen.getByTestId('my-work-cloud-run-activity-42')).getByText('No activity recorded'))
+      .toBeInTheDocument();
     expect(within(activity).queryByText(
       /connecting to the cloud agent activity stream/i,
     )).not.toBeInTheDocument();

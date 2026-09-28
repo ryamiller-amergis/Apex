@@ -74,6 +74,7 @@ import {
   evaluateCloudAgentEligibility,
   getCloudAgentActivityStream,
   getCloudAgentRunStatus,
+  reconcileRunningCloudAgentRuns,
   startCloudAgentRun,
   type CloudAgentServiceDeps,
 } from '../services/cloudAgentService';
@@ -318,6 +319,9 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
     mockedDb.select.mockReturnValueOnce({
       from: () => ({ where: jest.fn().mockResolvedValue([]) }),
     });
+    mockedDb.select.mockReturnValueOnce({
+      from: () => ({ where: jest.fn().mockResolvedValue([{ position: 4 }]) }),
+    });
     mockedDb.transaction.mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
       const tx = {
         execute: jest.fn().mockResolvedValue(undefined),
@@ -363,7 +367,7 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
       buildPrompt: jest.fn().mockResolvedValue('base execution prompt'),
     }));
 
-    expect(result).toEqual({ sessionId: SESSION_ID, runId: 'run-resume' });
+    expect(result).toEqual({ sessionId: SESSION_ID, runId: 'run-resume', queuePosition: 4 });
     expect(mockEnqueue).toHaveBeenCalledWith(expect.objectContaining({
       snapshot: expect.objectContaining({
         prompt: expect.stringMatching(
@@ -741,6 +745,7 @@ describe('getCloudAgentRunStatus check projection (TBI-005 DoD-0/DoD-1/DoD-2; PB
       checkResults,
       failingChecks: [],
       lastError: null,
+      queuePosition: null,
     });
     expect(shouldClaimAllChecksPassed(summary!.checkResults, summary!.finishedWithoutPr)).toBe(true);
   });
@@ -1244,5 +1249,178 @@ describe('applyCloudAgentCompletion check forwarding (TBI-005 DoD-0; TBI-005 NFR
 
     expect(mockPersistLeftoverWork).toHaveBeenCalledTimes(2);
     expect(mockWriteLeftoverWorkToAdo).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('reconcileRunningCloudAgentRuns', () => {
+  const PR_URL = 'https://dev.azure.com/amergis/MaxView/_git/MaxView/pullrequest/9';
+  let setImmediateSpy: jest.SpyInstance;
+
+  function mockLiveRows(rows: unknown[]) {
+    const { db: mockedDb } = jest.requireMock('../db/drizzle') as {
+      db: { select: jest.Mock };
+    };
+    mockedDb.select.mockReturnValue({
+      from: () => ({
+        where: jest.fn().mockResolvedValue(rows),
+      }),
+    });
+  }
+
+  function liveExecution(overrides: Record<string, unknown> = {}) {
+    return {
+      id: RUN_ID,
+      projectId: 'MaxView',
+      threadId: SESSION_ID,
+      devSessionId: SESSION_ID,
+      cloudAgentIdentity: 'container-agent-exec-1',
+      dispatchMessageId: 'cursor-run-1',
+      ...overrides,
+    };
+  }
+
+  function observation(overrides: Record<string, unknown> = {}) {
+    return {
+      status: 'running',
+      prUrl: null,
+      resultText: null,
+      branchName: 'feature/apex-42-abc123',
+      baseBranch: 'main',
+      summary: null,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    const { db: mockedDb } = jest.requireMock('../db/drizzle') as {
+      db: { select: jest.Mock };
+    };
+    mockedDb.select.mockReset();
+    setImmediateSpy = jest.spyOn(global, 'setImmediate').mockImplementation(
+      (() => ({})) as unknown as typeof setImmediate,
+    );
+    mockMarkTerminal.mockResolvedValue({
+      ok: true,
+      run: run({
+        status: 'completed',
+        devSessionId: SESSION_ID,
+        executionSnapshot: { provider: 'ado', repository: 'MaxView' },
+      }),
+    });
+    mockDevSessionFindFirst.mockResolvedValue(session({ workItemId: 123 }));
+    mockPersistLeftoverWork.mockResolvedValue({ firstWrite: true });
+    mockLinkWorkItemToPullRequest.mockResolvedValue({ mechanism: 'native-link', verified: true });
+    mockTransitionWorkItemForPullRequest.mockResolvedValue(undefined);
+    mockGetAdoPullRequestStatus.mockResolvedValue('open');
+  });
+
+  afterEach(() => {
+    setImmediateSpy.mockRestore();
+  });
+
+  it('completes a finished execution from its log line and frees the slot', async () => {
+    mockLiveRows([liveExecution()]);
+    const getCloudAgentRun = jest.fn().mockResolvedValue(observation({
+      status: 'finished',
+      prUrl: PR_URL,
+    }));
+    const openCloudAgentPullRequest = jest.fn();
+
+    await reconcileRunningCloudAgentRuns(makeDeps({
+      getCloudAgentRun,
+      openCloudAgentPullRequest,
+    }));
+
+    expect(getCloudAgentRun).toHaveBeenCalledWith({
+      project: 'MaxView',
+      cloudAgentId: 'container-agent-exec-1',
+      cursorRunId: 'cursor-run-1',
+    });
+    expect(openCloudAgentPullRequest).not.toHaveBeenCalled();
+    expect(mockMarkTerminal).toHaveBeenCalledWith(RUN_ID, expect.objectContaining({
+      status: 'completed',
+      dispatchMessageId: 'cursor-run-1',
+    }));
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      cloudPrUrl: PR_URL,
+    }));
+    expect(setImmediateSpy).toHaveBeenCalled();
+  });
+
+  it('leaves a still-running execution alone', async () => {
+    mockLiveRows([liveExecution()]);
+    const getCloudAgentRun = jest.fn().mockResolvedValue(observation());
+    const openCloudAgentPullRequest = jest.fn();
+
+    await reconcileRunningCloudAgentRuns(makeDeps({
+      getCloudAgentRun,
+      openCloudAgentPullRequest,
+    }));
+
+    expect(getCloudAgentRun).toHaveBeenCalledTimes(1);
+    expect(mockMarkTerminal).not.toHaveBeenCalled();
+    expect(openCloudAgentPullRequest).not.toHaveBeenCalled();
+    expect(mockPersistLeftoverWork).not.toHaveBeenCalled();
+    expect(setImmediateSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not write a run again after it has left the live set', async () => {
+    const getCloudAgentRun = jest.fn().mockResolvedValue(observation({
+      status: 'finished',
+      prUrl: PR_URL,
+    }));
+    const deps = makeDeps({ getCloudAgentRun });
+
+    mockLiveRows([liveExecution()]);
+    await reconcileRunningCloudAgentRuns(deps);
+    mockLiveRows([]);
+    await reconcileRunningCloudAgentRuns(deps);
+
+    expect(mockMarkTerminal).toHaveBeenCalledTimes(1);
+    expect(mockPersistLeftoverWork).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not write side effects when completion loses the terminal race', async () => {
+    mockLiveRows([liveExecution()]);
+    mockMarkTerminal.mockResolvedValue({
+      ok: false,
+      conflict: true,
+      run: run({ status: 'completed', devSessionId: SESSION_ID }),
+      reason: 'already_terminal:completed',
+    });
+
+    await reconcileRunningCloudAgentRuns(makeDeps({
+      getCloudAgentRun: jest.fn().mockResolvedValue(observation({
+        status: 'finished',
+        prUrl: PR_URL,
+      })),
+    }));
+
+    expect(mockMarkTerminal).toHaveBeenCalledTimes(1);
+    expect(mockPersistLeftoverWork).not.toHaveBeenCalled();
+    expect(mockUpdateSet).not.toHaveBeenCalled();
+    expect(setImmediateSpy).not.toHaveBeenCalled();
+  });
+
+  it('continues with the next execution when one Azure read fails', async () => {
+    mockLiveRows([
+      liveExecution(),
+      liveExecution({ id: 'run-2', dispatchMessageId: 'cursor-run-2' }),
+    ]);
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const getCloudAgentRun = jest.fn()
+      .mockRejectedValueOnce(new Error('execution logs unavailable'))
+      .mockResolvedValueOnce(observation({ status: 'failed', resultText: 'Container CLI run failed.' }));
+
+    await reconcileRunningCloudAgentRuns(makeDeps({ getCloudAgentRun }));
+
+    expect(mockMarkTerminal).toHaveBeenCalledTimes(1);
+    expect(mockMarkTerminal).toHaveBeenCalledWith('run-2', expect.objectContaining({
+      status: 'failed',
+      detail: 'Container CLI run failed.',
+      dispatchMessageId: 'cursor-run-2',
+    }));
+    warn.mockRestore();
   });
 });

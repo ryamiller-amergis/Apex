@@ -4,7 +4,7 @@
  * agentRunLifecycleService.
  */
 import { v4 as uuidv4 } from 'uuid';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { agentRuns, devSessions } from '../db/schema';
 import { MY_WORK_CLOUD_AGENT_FLAG } from '../../shared/types/featureFlags';
@@ -16,6 +16,7 @@ import {
   type CloudAgentEligibility,
   type CloudAgentRunSummary,
   type HostAgnosticPrStatus,
+  type StartCloudAgentRunResponse,
 } from '../../shared/types/devWorkbench';
 import { isAgentRunTerminalStatus } from '../../shared/types/agentRunLifecycle';
 import type {
@@ -68,8 +69,17 @@ import {
   openCloudAgentPullRequest,
   type OpenCloudAgentPullRequestInput,
 } from './cloudAgentPullRequest';
+import {
+  CLOUD_AGENT_QUEUE_WAIT_MS,
+  cloudAgentLaunchSlots,
+  resolveCloudAgentMaxConcurrent,
+} from './cloudAgentQueue';
 
 export const CLOUD_AGENT_PRE_IDENTITY_TTL_MS = 2 * 60_000;
+const CLOUD_AGENT_DISPATCH_LOCK = 'cloud-agent-dispatch';
+const pendingCloudAgentUserTokens = new Map<string, string>();
+let cloudAgentQueuePumpRunning = false;
+let cloudAgentReconcileRunning = false;
 export const LIVE_CLOUD_AGENT_STATUSES = ['queued', 'dispatched', 'running'] as const;
 
 export class CloudAgentEligibilityError extends Error {
@@ -164,6 +174,7 @@ function toRunSummary(
   prUrl: string | null,
   prStatus: HostAgnosticPrStatus,
   expectsPullRequest = true,
+  queuePosition: number | null = null,
 ): CloudAgentRunSummary {
   const status = run.status as AgentRunStatus;
   return {
@@ -180,6 +191,7 @@ function toRunSummary(
     checkResults: run.checkResults,
     failingChecks: deriveFailingChecks(run.checkResults),
     lastError: status === 'failed' ? (run.lastError ?? null) : null,
+    queuePosition,
   };
 }
 
@@ -357,7 +369,7 @@ export interface StartCloudAgentRunInput {
 export async function startCloudAgentRun(
   input: StartCloudAgentRunInput,
   deps: CloudAgentServiceDeps = defaultDeps,
-): Promise<{ sessionId: string; runId: string }> {
+): Promise<StartCloudAgentRunResponse> {
   const flagEnabled = await deps.isFeatureEnabled(MY_WORK_CLOUD_AGENT_FLAG, {
     userId: input.userId,
     project: input.project,
@@ -385,7 +397,9 @@ export async function startCloudAgentRun(
   }
 
   const started = await persistQueuedRun(input, skillConfig, deps);
-  scheduleLaunch(started, input, skillConfig, deps);
+  if (input.adoUserToken) pendingCloudAgentUserTokens.set(started.runId, input.adoUserToken);
+  const queuePosition = await lookupCloudAgentQueuePosition(started.runId);
+  scheduleCloudAgentDispatch();
   trackEvent('cloud_agent_run.started', {
     project: input.project,
     sessionId: started.sessionId,
@@ -397,7 +411,7 @@ export async function startCloudAgentRun(
     workItemId: input.workItemId,
     status: 'queued',
   });
-  return { sessionId: started.sessionId, runId: started.runId };
+  return { sessionId: started.sessionId, runId: started.runId, queuePosition };
 }
 
 interface PersistedCloudAgentRun {
@@ -413,7 +427,7 @@ async function persistQueuedRun(
 ): Promise<PersistedCloudAgentRun> {
   const lockKey = `cloud-agent:${input.project}:${input.workItemId}:${input.userId}`;
   const nowIso = new Date().toISOString();
-  const timeoutAt = new Date(Date.now() + CLOUD_AGENT_PRE_IDENTITY_TTL_MS).toISOString();
+  const timeoutAt = new Date(Date.now() + CLOUD_AGENT_QUEUE_WAIT_MS).toISOString();
   const basePrompt = await deps.buildPrompt({
     project: input.project,
     workItemId: input.workItemId,
@@ -514,72 +528,184 @@ async function persistQueuedRun(
   }
 }
 
-function scheduleLaunch(
-  started: PersistedCloudAgentRun,
-  input: StartCloudAgentRunInput,
-  skillConfig: ProjectSkillConfig,
-  deps: CloudAgentServiceDeps,
-): void {
+function scheduleCloudAgentDispatch(): void {
   setImmediate(() => {
-    void dispatchLaunch(started, input, skillConfig, deps).catch((err) => {
-      console.error('[cloud-agent] launch failed', JSON.stringify({
-        runId: started.runId,
-        sessionId: started.sessionId,
-        error: err instanceof Error ? err.message : String(err),
-      }));
+    void pumpCloudAgentQueue().catch((err) => {
+      console.error('[cloud-agent] queue dispatch failed', err instanceof Error ? err.message : err);
     });
   });
 }
 
-async function dispatchLaunch(
-  started: PersistedCloudAgentRun,
-  input: StartCloudAgentRunInput,
-  skillConfig: ProjectSkillConfig,
+function takeCloudAgentUserToken(runId: string): string | null {
+  const token = pendingCloudAgentUserTokens.get(runId) ?? null;
+  pendingCloudAgentUserTokens.delete(runId);
+  return token;
+}
+
+/** 1-based place among cloud-agent runs still waiting for a container. */
+export async function lookupCloudAgentQueuePosition(runId: string): Promise<number | null> {
+  const [row] = await db
+    .select({
+      position: sql<number>`count(*)::int`,
+    })
+    .from(agentRuns)
+    .where(and(
+      eq(agentRuns.lane, 'cloud-agent'),
+      eq(agentRuns.status, 'queued'),
+      sql`${agentRuns.cloudAgentIdentity} IS NULL`,
+      eq(agentRuns.cancelRequested, false),
+      sql`(${agentRuns.queuedAt}, ${agentRuns.id}) <= (
+        (SELECT queued_at FROM agent_runs WHERE id = ${runId}),
+        ${runId}
+      )`,
+    ));
+  const position = Number(row?.position ?? 0);
+  return position > 0 ? position : null;
+}
+
+async function claimCloudAgentRunIds(cap: number): Promise<string[]> {
+  const claimed = await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${CLOUD_AGENT_DISPATCH_LOCK}))`);
+    const active = await tx
+      .select({ id: agentRuns.id })
+      .from(agentRuns)
+      .where(and(
+        eq(agentRuns.lane, 'cloud-agent'),
+        inArray(agentRuns.status, ['dispatched', 'running']),
+      ));
+    const starting = await tx
+      .select({ id: agentRuns.id })
+      .from(agentRuns)
+      .where(and(
+        eq(agentRuns.lane, 'cloud-agent'),
+        eq(agentRuns.status, 'queued'),
+        sql`${agentRuns.ownerInstance} IS NOT NULL`,
+        sql`${agentRuns.cloudAgentIdentity} IS NULL`,
+      ));
+    const slots = cloudAgentLaunchSlots(active.length + starting.length, cap);
+    if (slots <= 0) return [];
+
+    const waiting = await tx
+      .select({ id: agentRuns.id })
+      .from(agentRuns)
+      .where(and(
+        eq(agentRuns.lane, 'cloud-agent'),
+        eq(agentRuns.status, 'queued'),
+        eq(agentRuns.cancelRequested, false),
+        sql`${agentRuns.ownerInstance} IS NULL`,
+        sql`${agentRuns.cloudAgentIdentity} IS NULL`,
+      ))
+      .orderBy(asc(agentRuns.queuedAt), asc(agentRuns.id))
+      .limit(slots);
+
+    const nowIso = new Date().toISOString();
+    const claimUntil = new Date(Date.now() + CLOUD_AGENT_PRE_IDENTITY_TTL_MS).toISOString();
+    const instance = process.env.WEBSITE_INSTANCE_ID?.trim() || 'apex-cloud-agent';
+    const ids: string[] = [];
+    for (const candidate of waiting) {
+      const updated = await tx
+        .update(agentRuns)
+        .set({
+          ownerInstance: instance,
+          timeoutAt: claimUntil,
+          updatedAt: nowIso,
+        })
+        .where(and(
+          eq(agentRuns.id, candidate.id),
+          eq(agentRuns.status, 'queued'),
+          sql`${agentRuns.ownerInstance} IS NULL`,
+        ))
+        .returning({ id: agentRuns.id });
+      if (updated[0]) ids.push(updated[0].id);
+    }
+    return ids;
+  });
+  return Array.isArray(claimed) ? claimed : [];
+}
+
+async function launchClaimedCloudAgentRun(
+  runId: string,
   deps: CloudAgentServiceDeps,
 ): Promise<void> {
-  const { model } = resolveDevelopmentSettings(skillConfig);
+  const run = await db.query.agentRuns.findFirst({
+    where: eq(agentRuns.id, runId),
+  });
+  const snapshot = run?.executionSnapshot;
+  const cloud = snapshot?.cloudAgent;
+  const sessionId = run?.devSessionId ?? snapshot?.threadId ?? null;
+  if (!run || run.status !== 'queued' || run.cloudAgentIdentity) {
+    pendingCloudAgentUserTokens.delete(runId);
+    return;
+  }
+  if (
+    !sessionId
+    || !snapshot?.prompt
+    || !snapshot.model
+    || !snapshot.projectId
+    || !snapshot.repository
+    || !cloud?.baseBranch
+    || !cloud.workItemId
+  ) {
+    pendingCloudAgentUserTokens.delete(runId);
+    const detail = 'Cloud Agent run is missing its saved repository settings.';
+    await markTerminal(runId, { status: 'failed', detail });
+    if (sessionId && snapshot?.projectId) {
+      emitTerminal({ sessionId, runId }, snapshot.projectId, 'failed', null);
+    }
+    scheduleCloudAgentDispatch();
+    return;
+  }
+
+  const adoUserToken = takeCloudAgentUserToken(runId);
+  if (!adoUserToken) {
+    console.warn('[cloud-agent] queued run has no developer token; the pull request will be opened by the service account', JSON.stringify({
+      runId,
+    }));
+  }
+
   let launched: LaunchCloudAgentResult;
   try {
     launched = await deps.launchCloudAgent({
-      project: input.project,
-      prompt: started.executionPrompt,
-      model,
-      skillProvider: (skillConfig.skillProvider ?? 'ado') as SkillProvider,
-      skillRepo: skillConfig.skillRepo,
-      skillBranch: skillConfig.skillBranch,
-      workItemId: input.workItemId,
-      workItemTitle: input.workItemTitle ?? `Work item ${input.workItemId}`,
-      initiatorName: input.initiatorName,
-      initiatorEmail: input.initiatorEmail,
-      adoUserToken: input.adoUserToken,
+      project: snapshot.projectId,
+      prompt: snapshot.prompt,
+      model: snapshot.model,
+      skillProvider: (snapshot.provider ?? 'ado') as SkillProvider,
+      skillRepo: snapshot.repository,
+      skillBranch: cloud.baseBranch,
+      workItemId: cloud.workItemId,
+      workItemTitle: cloud.workItemTitle ?? `Work item ${cloud.workItemId}`,
+      initiatorName: cloud.initiatorName,
+      initiatorEmail: cloud.initiatorEmail,
+      adoUserToken,
     });
   } catch (err) {
     const detail = err instanceof Error ? err.message : 'Cloud Agent launch failed';
     console.error('[cloud-agent] launch failed', JSON.stringify({
-      runId: started.runId,
-      sessionId: started.sessionId,
-      project: input.project,
-      workItemId: input.workItemId,
-      model,
-      skillProvider: skillConfig.skillProvider ?? 'ado',
-      skillRepo: skillConfig.skillRepo,
-      skillBranch: skillConfig.skillBranch,
+      runId,
+      sessionId,
+      project: snapshot.projectId,
+      workItemId: cloud.workItemId,
+      model: snapshot.model,
+      skillProvider: snapshot.provider ?? 'ado',
+      skillRepo: snapshot.repository,
+      skillBranch: cloud.baseBranch,
       error: detail,
     }));
-    const terminal = await markTerminal(started.runId, { status: 'failed', detail });
+    const terminal = await markTerminal(runId, { status: 'failed', detail });
     if (!terminal.ok) {
       console.error('[cloud-agent] could not record launch failure', JSON.stringify({
-        runId: started.runId,
+        runId,
         reason: terminal.reason,
         status: terminal.run?.status ?? null,
       }));
     }
-    emitTerminal(started, input.project, 'failed', null);
+    emitTerminal({ sessionId, runId }, snapshot.projectId, 'failed', null);
+    scheduleCloudAgentDispatch();
     return;
   }
 
   const timeoutAt = new Date(Date.now() + resolveAgentRunHardLimitMs()).toISOString();
-  await captureCloudAgentIdentity(started.runId, {
+  await captureCloudAgentIdentity(runId, {
     cloudAgentIdentity: launched.cloudAgentId,
     cursorRunId: launched.cursorRunId,
     jobName: launched.jobName,
@@ -593,7 +719,94 @@ async function dispatchLaunch(
         branchName: launched.branchName,
         updatedAt: new Date().toISOString(),
       })
-      .where(eq(devSessions.id, started.sessionId));
+      .where(eq(devSessions.id, sessionId));
+  }
+}
+
+/**
+ * Marks container executions that have already finished, failed, or been
+ * cancelled. The My Work page poll does this too; this sweep covers a run
+ * whose page is closed. It reads the execution status and the pull-request
+ * line the container already wrote. It does not open a pull request.
+ */
+export async function reconcileRunningCloudAgentRuns(
+  deps: CloudAgentServiceDeps = defaultDeps,
+): Promise<void> {
+  if (cloudAgentReconcileRunning) return;
+  cloudAgentReconcileRunning = true;
+  try {
+    const rows = await db
+      .select({
+        id: agentRuns.id,
+        projectId: agentRuns.projectId,
+        threadId: agentRuns.threadId,
+        devSessionId: agentRuns.devSessionId,
+        cloudAgentIdentity: agentRuns.cloudAgentIdentity,
+        dispatchMessageId: agentRuns.dispatchMessageId,
+      })
+      .from(agentRuns)
+      .where(and(
+        eq(agentRuns.lane, 'cloud-agent'),
+        eq(agentRuns.cloudAgentManaged, true),
+        inArray(agentRuns.status, ['dispatched', 'running']),
+        sql`${agentRuns.cloudAgentIdentity} IS NOT NULL`,
+        sql`${agentRuns.dispatchMessageId} IS NOT NULL`,
+      ));
+
+    for (const row of rows) {
+      const sessionId = row.devSessionId ?? row.threadId;
+      if (!row.projectId || !row.cloudAgentIdentity || !row.dispatchMessageId || !sessionId) {
+        console.warn('[cloud-agent] skipped reconciliation for an incomplete execution row', JSON.stringify({
+          runId: row.id,
+        }));
+        continue;
+      }
+      try {
+        const observed = await deps.getCloudAgentRun({
+          project: row.projectId,
+          cloudAgentId: row.cloudAgentIdentity,
+          cursorRunId: row.dispatchMessageId,
+        });
+        const mapped = mapObservedStatus(observed.status);
+        if (!mapped || !isAgentRunTerminalStatus(mapped)) continue;
+        await applyCloudAgentCompletion({
+          runId: row.id,
+          sessionId,
+          project: row.projectId,
+          status: mapped,
+          prUrl: observed.prUrl,
+          dispatchMessageId: row.dispatchMessageId,
+          detail: mapped === 'failed' ? (observed.resultText ?? undefined) : undefined,
+        }, deps);
+      } catch (err) {
+        console.warn('[cloud-agent] execution reconciliation failed', JSON.stringify({
+          runId: row.id,
+          error: err instanceof Error ? err.message : String(err),
+        }));
+      }
+    }
+  } catch (err) {
+    console.error('[cloud-agent] execution reconciliation failed', err instanceof Error ? err.message : err);
+  } finally {
+    cloudAgentReconcileRunning = false;
+  }
+}
+
+/** Starts queued cloud-agent runs until the container cap is full. */
+export async function pumpCloudAgentQueue(
+  deps: CloudAgentServiceDeps = defaultDeps,
+): Promise<void> {
+  if (cloudAgentQueuePumpRunning) return;
+  cloudAgentQueuePumpRunning = true;
+  try {
+    const claimed = await claimCloudAgentRunIds(resolveCloudAgentMaxConcurrent());
+    for (const runId of claimed) {
+      await launchClaimedCloudAgentRun(runId, deps);
+    }
+  } catch (err) {
+    console.error('[cloud-agent] queue dispatch failed', err instanceof Error ? err.message : err);
+  } finally {
+    cloudAgentQueuePumpRunning = false;
   }
 }
 
@@ -716,6 +929,7 @@ export async function applyCloudAgentCompletion(input: {
     ...(input.checkResults ? { checkResults: input.checkResults } : {}),
   });
   if (!terminal.ok) return;
+  scheduleCloudAgentDispatch();
 
   if (terminal.run.devSessionId && terminal.run.devSessionId !== input.sessionId) {
     console.warn('[cloud-agent] completion session mismatch', JSON.stringify({
@@ -998,6 +1212,9 @@ export async function getCloudAgentRunStatus(
     }
   }
 
+  const queuePosition = run.status === 'queued' && !run.cloudAgentIdentity
+    ? await lookupCloudAgentQueuePosition(run.id)
+    : null;
   return toRunSummary(
     {
       id: run.id,
@@ -1005,10 +1222,15 @@ export async function getCloudAgentRunStatus(
       terminalReason: run.terminalReason as AgentRunTerminalReason | null,
       checkResults: run.checkResults ?? null,
       lastError: run.lastError,
+      cloudJobName: run.cloudJobName,
+      cloudJobExecutionName: run.cloudJobExecutionName,
+      cloudBranchName: run.cloudBranchName,
+      createdAt: run.createdAt,
     },
     prUrl,
     prStatus,
     true,
+    queuePosition,
   );
 }
 
@@ -1077,7 +1299,10 @@ export async function getCloudAgentRunHistory(
       }
     }
 
-    return toRunSummary(run, prUrl, prStatus, true);
+    const queuePosition = run.status === 'queued' && !run.cloudAgentIdentity
+      ? await lookupCloudAgentQueuePosition(run.id)
+      : null;
+    return toRunSummary(run, prUrl, prStatus, true, queuePosition);
   }));
 }
 
@@ -1188,6 +1413,7 @@ export async function cancelCloudAgentRun(
       'cancelled',
       requested.run.terminalReason,
     );
+    scheduleCloudAgentDispatch();
     return { ok: true, status: 'cancelled' };
   }
 
@@ -1230,5 +1456,6 @@ export async function cancelCloudAgentRun(
     terminal.run.status,
     terminal.run.terminalReason,
   );
+  scheduleCloudAgentDispatch();
   return { ok: true, status: 'cancelled' };
 }

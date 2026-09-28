@@ -8,6 +8,13 @@ const summaryPath = process.argv[2];
 let assistantCount = 0;
 let summary = '';
 
+// stdout is a pipe inside the job, so Node holds writes until the buffer fills
+// or the agent exits. Flush each line or the activity panel stays on "Connecting".
+const stdoutHandle = process.stdout._handle;
+if (stdoutHandle && typeof stdoutHandle.setBlocking === 'function') {
+  stdoutHandle.setBlocking(true);
+}
+
 const TITLES = {
   readToolCall: 'Read file',
   writeToolCall: 'Write file',

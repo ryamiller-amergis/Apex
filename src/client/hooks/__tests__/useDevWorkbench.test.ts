@@ -84,6 +84,7 @@ function cloudAgentRun(overrides: Partial<CloudAgentRunSummary> = {}): CloudAgen
     checkResults: null,
     failingChecks: [],
     lastError: null,
+    queuePosition: null,
     ...overrides,
     jobName: overrides.jobName ?? 'apex-cursor-worker',
     executionName: overrides.executionName ?? 'apex-cursor-worker-abc123',

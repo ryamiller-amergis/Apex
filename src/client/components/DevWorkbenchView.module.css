@@ -1261,6 +1261,11 @@
   background: var(--bg-secondary);
 }
 
+.run-activity-compact {
+  min-height: 0;
+  flex: 0 0 auto;
+}
+
 .run-activity-heading {
   display: flex;
   align-items: flex-start;

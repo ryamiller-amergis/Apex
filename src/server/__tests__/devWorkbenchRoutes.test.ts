@@ -210,6 +210,7 @@ function cloudRunWithOpenPr(): CloudAgentRunSummary {
     checkResults: null,
     failingChecks: [],
     lastError: null,
+    queuePosition: null,
   };
 }
 
