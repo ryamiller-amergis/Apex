@@ -125,6 +125,12 @@ describe('isSuperAdminEmail', () => {
     expect(devList).not.toContain(notInDev);
     expect(isSuperAdminEmail(notInDev, 'dev')).toBe(false);
   });
+
+  it('grants the local mock developer persona platform-admin only on local', () => {
+    expect(isSuperAdminEmail('dev@localhost', 'local')).toBe(true);
+    expect(isSuperAdminEmail('dev@localhost', 'dev')).toBe(false);
+    expect(isSuperAdminEmail('dev@localhost', 'prod')).toBe(false);
+  });
 });
 
 // ── isSuperAdminRequest ────────────────────────────────────────────────────────
