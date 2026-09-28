@@ -115,9 +115,11 @@ export async function acquireInteractiveCursorAgent(
   if (!apiKey) throw new Error('CURSOR_API_KEY is required');
 
   const resumeAgentId = options.resumeAgentId?.trim() || undefined;
+  // The workspace can be a real checkout whose committed `.cursor` config
+  // (hooks, MCP servers) must not run inside a chat turn.
   const local = {
     cwd: input.workspaceRef,
-    settingSources: ['project'],
+    settingSources: [],
     customTools: createNativeReadTools(checkout),
   } satisfies LocalAgentOptions;
   const agentOptions = {

@@ -56,7 +56,7 @@ describe('interactive Cursor execution repository tools', () => {
         expect.objectContaining({
           local: {
             cwd: '/shared/grounding/checkout',
-            settingSources: ['project'],
+            settingSources: [],
             customTools,
           },
           mcpServers,

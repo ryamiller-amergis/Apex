@@ -1137,6 +1137,12 @@ variable "ai_platform_v2_interactive_workspace_mount_path" {
   default     = "/home/data/ai-pilot"
 }
 
+variable "ai_platform_v2_interactive_grounding_container_name" {
+  description = "Blob container in the V2 host storage account holding grounding bundles the interactive hosts restore checkouts from."
+  type        = string
+  default     = "repo-grounding"
+}
+
 variable "ai_platform_v2_interactive_target_port" {
   description = "HTTP port exposed by the actor host and Dapr sidecar."
   type        = number

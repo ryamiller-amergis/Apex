@@ -46,6 +46,7 @@ import {
   resolveRepoReadServiceUrl,
 } from '../repoRead/repoServiceReader';
 import { acquireInteractiveCursorAgent } from './interactiveCursorExecution';
+import { createGroundedRepositoryCheckout } from './groundedRepositoryCheckout';
 import {
   createInteractiveSessionActor,
   type WarmThreadCheckout,
@@ -287,6 +288,8 @@ export async function main(): Promise<void> {
     getToken: getAiRunnerCallbackToken,
   });
 
+  const repositoryCheckout = createGroundedRepositoryCheckout();
+
   // Single shared logic core: thread-keyed warm checkout + live Agent cache.
   const logic = createInteractiveSessionActor({
     openWarmCheckout: async (_threadId, snapshot) => {
@@ -327,7 +330,28 @@ export async function main(): Promise<void> {
         },
       ),
     materializeWorkspace: async (bootstrap, destination, signal) => {
-      const reader = await openPinnedReaderForBootstrap(bootstrap);
+      const grounding = bootstrap.specification.grounding;
+      const checkout = grounding
+        ? await repositoryCheckout.checkout(grounding, destination, signal)
+        : null;
+      if (checkout) {
+        console.log(
+          JSON.stringify({
+            event: 'InteractiveRepositoryCheckout',
+            runId: bootstrap.runId,
+            status: checkout.status,
+            detail: checkout.status === 'ready' ? checkout.source : checkout.reason,
+            durationMs: checkout.durationMs,
+          }),
+        );
+      }
+      const reader =
+        checkout?.status === 'ready'
+          ? new LocalCheckoutReader({
+              checkoutPath: destination,
+              identity: checkout.identity,
+            })
+          : await openPinnedReaderForBootstrap(bootstrap);
       // Turn outputs from a prior turn on this thread must not be re-uploaded.
       await fs
         .rm(path.join(destination, '.ai-pilot', 'output'), {
@@ -340,8 +364,20 @@ export async function main(): Promise<void> {
           force: true,
         })
         .catch(() => {});
-      // Repository reads go through the pinned `reader` (native read tools),
-      // so only attachments are written to disk.
+      // A retried turn rewrites its own attachments, which are created exclusively.
+      await fs
+        .rm(
+          path.join(
+            destination,
+            '.ai-pilot',
+            'attachments',
+            bootstrap.specification.turnId,
+          ),
+          { recursive: true, force: true },
+        )
+        .catch(() => {});
+      // The repository is already on disk (worktree) or read remotely through
+      // `reader`; only attachments are written here.
       await materializeInteractiveWorkspace({
         reader: null,
         destination,

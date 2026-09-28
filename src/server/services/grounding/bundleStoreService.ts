@@ -1,4 +1,3 @@
-import { execFile } from 'child_process';
 import {
   mkdtemp,
   readFile,
@@ -9,14 +8,12 @@ import {
 } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { promisify } from 'util';
 import { BlobServiceClient, type ContainerClient } from '@azure/storage-blob';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
 } from '@azure/identity';
 import type {
-  BundleKey,
   BundleRef,
   MaterializeResult,
   RepositoryIdentity,
@@ -25,23 +22,34 @@ import { isFeatureEnabled as evaluateFeatureFlag } from '../featureFlagService';
 import { createGroundingTelemetry } from '../groundingTelemetry';
 import { resolveGitRemote } from '../repoCacheService';
 import { trackEvent } from '../telemetry';
+import {
+  bundleKey,
+  checkoutBundleAtSha,
+  defaultRunGit,
+  GROUNDING_WORKSPACE_READY_MARKER,
+  isReadyWorkspace,
+  markWorkspaceReady,
+  prepareEmptyDestination,
+  safeSha,
+  verifyHead,
+  type GitRunner,
+} from './bundleCheckout';
 
-const execFileAsync = promisify(execFile);
+export {
+  bundleKey,
+  GROUNDING_BUNDLE_GIT_TIMEOUT_MS,
+  GROUNDING_WORKSPACE_READY_MARKER,
+  type GitRunner,
+} from './bundleCheckout';
+
 const FEATURE_FLAG = 'repo-grounding-workspace-profile';
 const DEFAULT_CONTAINER = 'repo-grounding';
-export const GROUNDING_BUNDLE_GIT_TIMEOUT_MS = 5 * 60 * 1000;
-export const GROUNDING_WORKSPACE_READY_MARKER = 'apex-grounding-ready';
 
 export type BundleStoreTelemetry = (
   name: string,
   properties?: Record<string, string>,
   measurements?: Record<string, number>
 ) => void;
-
-export type GitRunner = (
-  args: string[],
-  options?: { cwd?: string }
-) => Promise<string>;
 
 export interface RepairAndMaterializeInput {
   identity: RepositoryIdentity;
@@ -91,40 +99,12 @@ export class GroundingBundleAuthorizationError extends Error {
   }
 }
 
-function safeSegment(value: string, label: string): string {
-  const segment = value
-    .normalize('NFKC')
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/^[._-]+|[._-]+$/g, '');
-  if (!segment || segment === '.' || segment === '..') {
-    throw new Error(`Invalid repository ${label}`);
-  }
-  return segment;
-}
-
-function safeSha(value: string): string {
-  const sha = value.trim().toLowerCase();
-  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sha)) {
-    throw new Error('Invalid repository SHA');
-  }
-  return sha;
-}
-
 export function groundingCredentialMode(
   environment: NodeJS.ProcessEnv = process.env
 ): 'system-assigned-managed-identity' | 'default-azure-credential' {
   return environment.WEBSITE_SITE_NAME || environment.WEBSITE_INSTANCE_ID
     ? 'system-assigned-managed-identity'
     : 'default-azure-credential';
-}
-
-export function bundleKey(identity: RepositoryIdentity): BundleKey {
-  const provider = safeSegment(String(identity.provider), 'provider');
-  const project = safeSegment(identity.project, 'project');
-  const repo = safeSegment(identity.repo, 'repo');
-  const sha = safeSha(identity.sha);
-  return `${provider}/${project}/${repo}/${sha}.bundle` as BundleKey;
 }
 
 function resolveContainerClient(containerName: string): ContainerClient {
@@ -147,17 +127,6 @@ function resolveContainerClient(containerName: string): ContainerClient {
   );
   return service.getContainerClient(containerName);
 }
-
-const defaultRunGit: GitRunner = async (args, options) => {
-  const { stdout } = await execFileAsync('git', args, {
-    cwd: options?.cwd,
-    windowsHide: true,
-    maxBuffer: 10 * 1024 * 1024,
-    timeout: GROUNDING_BUNDLE_GIT_TIMEOUT_MS,
-    killSignal: 'SIGKILL',
-  });
-  return stdout;
-};
 
 function errorStatus(error: unknown): number | undefined {
   if (!error || typeof error !== 'object') return undefined;
@@ -187,59 +156,6 @@ function isConcurrentWinner(error: unknown): boolean {
 
 function isMissingBlob(error: unknown): boolean {
   return errorStatus(error) === 404 || errorCode(error) === 'BlobNotFound';
-}
-
-async function prepareEmptyDestination(destination: string): Promise<void> {
-  try {
-    const existing = await stat(destination);
-    if (!existing.isDirectory()) {
-      throw new Error('Grounding destination must be a directory');
-    }
-    await rm(destination, { recursive: true, force: true });
-  } catch (error) {
-    if (errorCode(error) !== 'ENOENT') throw error;
-  }
-}
-
-async function verifyHead(
-  runGit: GitRunner,
-  destination: string,
-  expectedSha: string
-): Promise<boolean> {
-  const head = (await runGit(['-C', destination, 'rev-parse', 'HEAD']))
-    .trim()
-    .toLowerCase();
-  return head === expectedSha;
-}
-
-function readyMarkerPath(destination: string): string {
-  return join(destination, '.git', GROUNDING_WORKSPACE_READY_MARKER);
-}
-
-async function isReadyWorkspace(
-  runGit: GitRunner,
-  destination: string,
-  expectedSha: string
-): Promise<boolean> {
-  try {
-    const markedSha = (await readFile(readyMarkerPath(destination), 'utf8'))
-      .trim()
-      .toLowerCase();
-    return markedSha === expectedSha && await verifyHead(
-      runGit,
-      destination,
-      expectedSha
-    );
-  } catch {
-    return false;
-  }
-}
-
-async function markWorkspaceReady(
-  destination: string,
-  expectedSha: string
-): Promise<void> {
-  await writeFile(readyMarkerPath(destination), `${expectedSha}\n`, 'utf8');
 }
 
 // A bare repository has no `.git` subdirectory — its root is the git dir.
@@ -385,33 +301,13 @@ export function createGroundingBundleStore(
             true
           );
 
-          const verificationRepo = join(scratchDirectory, 'verify.git');
-          await runGit(['init', '--bare', verificationRepo]);
-          await runGit([
-            '-C',
-            verificationRepo,
-            'bundle',
-            'verify',
-            downloadedBundle,
-          ]);
-
-          await runGit([
-            'clone',
-            '--no-checkout',
-            downloadedBundle,
+          await checkoutBundleAtSha({
+            runGit,
+            bundlePath: downloadedBundle,
+            scratchDirectory,
             destination,
-          ]);
-          await runGit([
-            '-C',
-            destination,
-            'checkout',
-            '--detach',
             expectedSha,
-          ]);
-          if (!(await verifyHead(runGit, destination, expectedSha))) {
-            throw new Error('Grounding bundle SHA verification failed');
-          }
-          await markWorkspaceReady(destination, expectedSha);
+          });
 
           telemetry(
             'grounding.bundle.materialization.duration',

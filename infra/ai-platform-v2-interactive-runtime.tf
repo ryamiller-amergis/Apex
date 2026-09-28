@@ -103,6 +103,16 @@ resource "azurerm_role_assignment" "ai_platform_v2_interactive_blob_contributor"
   principal_id         = azurerm_user_assigned_identity.ai_platform_v2[each.key].principal_id
 }
 
+# Grounded turns restore a repository checkout from the grounding bundles that
+# App Service publishes into the same storage account.
+resource "azurerm_role_assignment" "ai_platform_v2_interactive_grounding_reader" {
+  for_each = local.ai_platform_v2_split_interactive_enabled ? local.ai_platform_v2_interactive_class_keys : toset([])
+
+  scope                = "${data.azurerm_storage_account.ai_platform_v2_host[0].id}/blobServices/default/containers/${var.ai_platform_v2_interactive_grounding_container_name}"
+  role_definition_name = "Storage Blob Data Reader"
+  principal_id         = azurerm_user_assigned_identity.ai_platform_v2[each.key].principal_id
+}
+
 moved {
   from = azurerm_role_assignment.ai_platform_v2_worker_blob_contributor["fast-interactive"]
   to   = azurerm_role_assignment.ai_platform_v2_interactive_blob_contributor["fast-interactive"]
@@ -307,6 +317,14 @@ resource "azurerm_container_app" "ai_platform_v2_interactive_class" {
       env {
         name  = "AI_PLATFORM_V2_ARTIFACT_CONTAINER"
         value = local.ai_platform_v2_artifact_container
+      }
+      env {
+        name  = "GROUNDING_BLOB_ACCOUNT_NAME"
+        value = data.azurerm_storage_account.ai_platform_v2_host[0].name
+      }
+      env {
+        name  = "GROUNDING_BLOB_CONTAINER_NAME"
+        value = var.ai_platform_v2_interactive_grounding_container_name
       }
       env {
         name  = "AI_PILOT_DATA_DIR"

@@ -79,6 +79,7 @@ export function buildRepositoryContextPack(input: RepositoryContextPackInput): s
       ? [
           'Answer from this pack when it is sufficient. Read only the specific files you need,',
           'and use `search_repo_code` only when no known path applies.',
+          'Do not start subagents (the Task tool); search and read directly, then answer.',
         ]
       : [
           '`search_repo_code` is intentionally unavailable in interview sessions; if no known path applies,',
