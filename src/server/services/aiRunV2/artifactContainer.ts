@@ -6,8 +6,9 @@
  */
 import { BlobServiceClient, type ContainerClient } from '@azure/storage-blob';
 import {
-  DefaultAzureCredential,
+  AzureCliCredential,
   ManagedIdentityCredential,
+  type TokenCredential,
 } from '@azure/identity';
 
 export const DEFAULT_ARTIFACT_CONTAINER = 'ai-run-artifacts';
@@ -29,15 +30,24 @@ export function resolveArtifactContainerClient(
       'AI_PLATFORM_V2_BLOB_ACCOUNT_NAME is required for V2 artifact storage',
     );
   }
-  // AZURE_CLIENT_ID belongs to Apex application auth, not the V2 identities
-  // Terraform grants blob access to.
-  const clientId = process.env.AI_PLATFORM_V2_IDENTITY_CLIENT_ID?.trim();
-  const credential = clientId
-    ? new ManagedIdentityCredential({ clientId })
-    : new DefaultAzureCredential();
   const service = new BlobServiceClient(
     `https://${account}.blob.core.windows.net`,
-    credential,
+    resolveArtifactCredential(),
   );
   return service.getContainerClient(containerName);
+}
+
+/**
+ * AZURE_CLIENT_* belongs to Apex application auth, not Blob access, so the
+ * App Service must not fall through to an environment credential. Workers use
+ * their V2 identity; App Service uses its system identity.
+ */
+export function resolveArtifactCredential(
+  env: NodeJS.ProcessEnv = process.env,
+): TokenCredential {
+  const clientId = env.AI_PLATFORM_V2_IDENTITY_CLIENT_ID?.trim();
+  if (clientId) return new ManagedIdentityCredential({ clientId });
+  return env.NODE_ENV === 'production'
+    ? new ManagedIdentityCredential()
+    : new AzureCliCredential();
 }
