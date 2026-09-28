@@ -33,7 +33,7 @@ Resolve `chat_thread_id` from `interviews` before inspecting runs.
 Local `.env` points at localhost. For production:
 
 1. Confirm Azure CLI auth: `az account show`
-2. Open a **temporary** firewall rule on `psql-apex-eus2` / `rg-apex-prd-data` for the current public IP (name it `temp-interview-debug-<you>`).
+2. Open a **temporary** firewall rule on `psql-apex-cus` / `rg-apex-prd-data` for the current public IP (name it `temp-interview-debug-<you>`).
 3. Fetch `DATABASE_URL` from `app-apex-prd` / `rg-apex-prd-app` app settings into `PROD_DATABASE_URL`.
 4. Prefer `node` + `pg` (see `scripts/diagnose-interview.js`) over `psql` when PATH is incomplete.
 5. **Always delete the temp firewall rule** when finished.

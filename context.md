@@ -10,6 +10,30 @@ Apex (formerly AI-Pilot) is an internal product-building and project-management 
 
 - **Diagram** — a freeform, human-drawn, saveable and shareable whiteboard canvas used for ideation. Use Diagram for artifacts managed through the `/diagrams` module and `diagram:*` permissions. A Diagram is not a Design Prototype (approved-feature interactive HTML), a Mermaid diagram generated inside documentation, or a UI Lab mock generated from a prompt. The v1 term does not imply real-time collaboration or embedding in ADRs, PRDs, or design documents.
 
+### Apex Backlog item
+
+- **Definition:** A Feature Request on the shared Apex Backlog, typed as Feature, Issue, or Technical, that a person can be assigned to interview or triage.
+- **Use when:** Talking about intake work assigned from Apex Backlog (`/feature-requests`), including the Assigned Backlog section on My Work.
+- **Don't confuse with:** A Work Board item (execution board, not Apex Backlog), or an Approved PRD feature (implementation work after a PRD is approved).
+
+### Assigned Backlog
+
+- **Definition:** The My Work section that lists Apex Backlog items assigned to the signed-in user in the current project.
+- **Use when:** A developer, Project Admin, or Platform Admin is looking at their personal intake assignments, not the full triage queue.
+- **Don't confuse with:** Feature Backlog on My Work (approved PRD features), or the Apex Backlog review page used by triage managers.
+
+### View Context
+
+- **Definition:** The My Work details viewer for a work item. Its tabs and actions follow the **view mode**: intake (Assigned Backlog) shows the request itself; development (Feature Backlog) shows PRD, design, and implementation artifacts.
+- **Use when:** Opening details from My Work without leaving the page.
+- **Don't confuse with:** The Apex Backlog detail drawer on `/feature-requests`, or a live development session.
+
+### Design Doc Owner
+
+- **Definition:** The person named as owner of the design document for an interview (the design-doc owner assigned at interview kickoff).
+- **Use when:** Deciding which Approved PRD features appear on My Work Feature Backlog — only features whose design-doc owner is the signed-in user.
+- **Don't confuse with:** PRD reviewers, prototype reviewers, or the Apex Backlog assignee.
+
 ## Key Features
 
 ### 0. Agent Home
@@ -110,7 +134,8 @@ A global submission system where any authenticated user can request product feat
 
 - **Global submit** — a floating action button lets any user submit a feature request with title, description, and expected advantage
 - **AI analysis** — each request is automatically analyzed by an AI skill that suggests priority (low/medium/high/critical), risk (low/medium/high), and rationale
-- **Team triage** — Apex admins review requests with AI suggestions, override priority/risk, change status, and manually re-rank
+- **Team triage** — Apex admins review requests with AI suggestions, override priority/risk, change status, assign an owner, and manually re-rank
+- **Assignment notifications** — when an Apex Backlog item is assigned to someone else, they receive an in-app (and Teams) notification that opens My Work on that item
 - **Notifications** — Apex reviewers receive in-app and Teams notifications when new requests are submitted
 
 ### 10. In-App Notification Center
@@ -134,9 +159,11 @@ Platform admins can create and manage feature flags for targeted rollout.
 
 ### 12. My Work (Developer Workbench)
 
-A developer-focused view for managing personal work items and development sessions (visible to users in the Developer group).
+A personal work view for managing assigned intake items, approved features, and development sessions (visible to users in the Developer group, plus Project Admin and Platform Admin).
 
-- **Apex and Amego PRD features** appear as PRD → Epic → Feature rows from approved in-app PRDs. Each feature offers **View Context** (read-only PRD, backlog, design doc, tech spec, assumptions, and sandboxed prototype), **Start Local Development**, **Mark Complete**, and **Clear Progress** when in progress. Their requirements remain in Apex and are not loaded from Azure DevOps.
+- **Assigned Backlog** lists Apex Backlog items (Feature, Issue, or Technical) assigned to the signed-in user in the current project. **View Context** opens in intake mode: type, title, request, advantage, status, and linked ADRs — not PRD or design-doc tabs. Feature and Technical items can start or resume a design interview from this page when the user may start interviews; Issues show details only.
+- **Apex and Amego Feature Backlog** appears as PRD → Epic → Feature rows from approved in-app PRDs, **only when the signed-in user is the Design Doc Owner** for that work. Each feature offers **View Context** in development mode (read-only PRD, backlog, design doc, tech spec, assumptions, and sandboxed prototype), **Start Local Development**, **Mark Complete**, and **Clear Progress** when in progress. Their requirements remain in Apex and are not loaded from Azure DevOps.
+- **Work Board assignments** remain a separate section from Assigned Backlog.
 - **Other projects** continue to list ADO assigned work items with Start Development / Resume Session / local development actions unchanged.
 
 ### 13. What's New / Changelog
@@ -254,8 +281,9 @@ Per-user settings accessible from the header user menu.
 
 1. Notifications appear automatically via the **bell icon** in the header
 2. Toast popups appear for real-time events (assignment, approval, standup reminders)
-3. Configure preferences in the **Notifications** page — toggle per-type notifications and toast alerts
-4. Teams notifications are delivered automatically if the Teams bot is configured
+3. An Apex Backlog assignment notification opens **My Work** on that Assigned Backlog item
+4. Configure preferences in the **Notifications** page — toggle per-type notifications and toast alerts
+5. Teams notifications are delivered automatically if the Teams bot is configured
 
 ### How do I manage work items on the calendar?
 
@@ -346,7 +374,7 @@ Per-user settings accessible from the header user menu.
 | Cloud Cost | `/cloud-cost` | `cost:view` + menu enabled | Azure cloud cost visualization |
 | Interview | `/backlog` | `interviews:view` + menu enabled | Interview dashboard, PRD review, design docs, prototypes |
 | ADR | `/adr` | `adr:view` + menu enabled | Architecture decision interviews and MADR records |
-| My Work | `/my-work` | `dev-workbench:view` + Developer group + menu enabled | Developer workbench and sessions |
+| My Work | `/my-work` | `dev-workbench:view` + (Developer group or Project Admin or Platform Admin) + menu enabled | Assigned Backlog, Feature Backlog, work board/ADO items, and sessions |
 | Standup | `/standup` | `standup:participate` + menu enabled | Daily standup ceremony participation |
 | UI Lab | `/ui-lab` | `ui-lab:view` + UI/UX group + menu enabled | AI-assisted UI mockup generation |
 | Apex Backlog | `/feature-requests` | `feature-requests:view` + menu enabled | Shared feature request review and triage; availability is configured per project |

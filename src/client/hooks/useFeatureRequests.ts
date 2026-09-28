@@ -3,14 +3,18 @@ import type {
   FeatureRequest,
   CreateFeatureRequestDTO,
   LinkedAdrSummary,
+  RankFeatureRequestsResult,
   UpdateFeatureRequestDTO,
 } from '../../shared/types/featureRequest';
+import type { WorkItemOwnerSummary } from '../../shared/types/apexWorkItem';
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...init });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error((body as any).error ?? `Request failed: ${res.status}`);
+    throw new Error(
+      (body as { error?: string }).error ?? `Request failed: ${res.status}`,
+    );
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -27,6 +31,21 @@ export function useFeatureRequests(project: string | null | undefined) {
       query.state.data?.some((fr) => fr.aiStatus === 'analyzing' || fr.aiStatus === 'pending')
         ? 5_000
         : false,
+  });
+}
+
+export function useFeatureRequestAssignees(
+  project: string | null | undefined,
+  enabled = true,
+) {
+  return useQuery<WorkItemOwnerSummary[]>({
+    queryKey: ['feature-request-assignees', project],
+    queryFn: () =>
+      apiFetch(
+        `/api/feature-requests/assignees?project=${encodeURIComponent(project!)}`,
+      ),
+    enabled: enabled && !!project,
+    staleTime: 60_000,
   });
 }
 
@@ -143,6 +162,26 @@ export function useReanalyzeFeatureRequest() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['feature-requests'] });
+    },
+  });
+}
+
+export function useRankFeatureRequests(
+  project: string | null | undefined,
+) {
+  const qc = useQueryClient();
+  return useMutation<RankFeatureRequestsResult, Error, { ids: string[] }>({
+    mutationFn: (body) =>
+      apiFetch(
+        `/api/feature-requests/rank?project=${encodeURIComponent(project!)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['feature-requests', project] });
     },
   });
 }

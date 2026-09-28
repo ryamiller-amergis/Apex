@@ -5,7 +5,10 @@ import type { FeatureRequest, WorkItemType } from '../../../shared/types/feature
 import { FeatureRequestsView } from '../FeatureRequestsView';
 
 const reorderMutateMock = jest.fn();
+const rankMutateMock = jest.fn();
+const updateMutateMock = jest.fn();
 const navigateMock = jest.fn();
+let canManageMock = true;
 
 jest.mock('react-router-dom', () => ({
   ...jest.requireActual('react-router-dom'),
@@ -15,8 +18,19 @@ jest.mock('react-router-dom', () => ({
 jest.mock('../../hooks/useFeatureRequests', () => ({
   useFeatureRequests: jest.fn(),
   useUpdateFeatureRequest: () => ({
-    mutate: jest.fn(),
+    mutate: updateMutateMock,
     isPending: false,
+  }),
+  useFeatureRequestAssignees: () => ({
+    data: [
+      { oid: 'apex', displayName: 'Apex', email: '', isApex: true },
+      { oid: 'user-2', displayName: 'Bob', email: 'bob@example.com' },
+    ],
+  }),
+  useRankFeatureRequests: () => ({
+    mutate: rankMutateMock,
+    isPending: false,
+    isError: false,
   }),
   useReorderFeatureRequests: () => ({
     mutate: reorderMutateMock,
@@ -43,7 +57,7 @@ import { useFeatureRequests } from '../../hooks/useFeatureRequests';
 jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: () => ({
     can: (permission: string) =>
-      permission === 'feature-requests:manage' ||
+      (permission === 'feature-requests:manage' && canManageMock) ||
       permission === 'feature-requests:submit' ||
       permission === 'interviews:manage',
     isInAnyGroup: () => true,
@@ -68,6 +82,8 @@ function makeRequest(
     interviewId,
     submittedBy: 'user-1',
     sourceProject: 'Apex',
+    assignedTo: null,
+    assignedToApex: false,
     linkedAdrs: [],
     status: 'new',
     aiStatus: 'complete',
@@ -107,6 +123,7 @@ function renderView(requests: FeatureRequest[], initialEntry = '/feature-request
 describe('FeatureRequestsView rank reordering', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    canManageMock = true;
   });
 
   it('shows list position in the rank column, not gapped stored ranks', () => {
@@ -258,5 +275,85 @@ describe('FeatureRequestsView work item type filter', () => {
         },
       },
     });
+  });
+});
+
+describe('FeatureRequestsView assignment, ranking, and pagination', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    canManageMock = true;
+  });
+
+  it.each([
+    ['feature', '/feature-requests', 'f'],
+    ['technical', '/feature-requests?tab=technical', 't'],
+    ['issue', '/feature-requests?tab=issue', 'i'],
+  ])('renders an inline assignee control for %s items', (_type, route, id) => {
+    renderView([
+      makeRequest('f', 'Feature Alpha', 1),
+      makeRequest('t', 'Technical Beta', 2, null, 'technical'),
+      makeRequest('i', 'Issue Gamma', 3, null, 'issue'),
+    ], route);
+
+    fireEvent.change(screen.getByTestId(`feature-request-assignee-${id}`), {
+      target: { value: 'user-2' },
+    });
+    expect(updateMutateMock).toHaveBeenCalledWith({
+      id,
+      assigneeId: 'user-2',
+    });
+  });
+
+  it('AI ranks every filtered row, including rows outside the current page', () => {
+    const requests = Array.from({ length: 30 }, (_, index) =>
+      makeRequest(`fr-${index}`, `Request ${index}`, index + 1),
+    );
+    renderView(requests);
+
+    fireEvent.click(screen.getByTestId('feature-requests-ai-rank'));
+    expect(rankMutateMock).toHaveBeenCalledWith({
+      ids: requests.map((request) => request.id),
+    });
+  });
+
+  it('paginates at 25 rows and resets after a search change', () => {
+    const requests = Array.from({ length: 30 }, (_, index) =>
+      makeRequest(`fr-${index}`, `Request ${index}`, index + 1),
+    );
+    renderView(requests);
+
+    expect(screen.getByTestId('feature-requests-pagination')).toHaveTextContent(
+      '1–25 of 30',
+    );
+    fireEvent.click(screen.getByTestId('feature-requests-page-next'));
+    expect(screen.getByTestId('feature-requests-pagination')).toHaveTextContent(
+      '26–30 of 30',
+    );
+    fireEvent.change(screen.getByTestId('feature-requests-search'), {
+      target: { value: 'Request 2' },
+    });
+    expect(screen.getByTestId('feature-requests-pagination')).toHaveTextContent(
+      '1–11 of 11',
+    );
+  });
+
+  it('renders a read-only assignee label without manage permission', () => {
+    canManageMock = false;
+    const request = {
+      ...makeRequest('f', 'Feature Alpha', 1),
+      assignedTo: {
+        oid: 'user-2',
+        displayName: 'Bob',
+        email: 'bob@example.com',
+      },
+    };
+    renderView([request]);
+
+    expect(
+      screen.getByTestId('feature-request-assignee-label-f'),
+    ).toHaveTextContent('Bob');
+    expect(
+      screen.queryByTestId('feature-request-assignee-f'),
+    ).not.toBeInTheDocument();
   });
 });

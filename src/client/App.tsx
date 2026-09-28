@@ -17,6 +17,7 @@ import { PlanningTabs, type PlanningTab } from './components/PlanningTabs';
 import { ApexLoader } from './components/ApexLoader';
 import { ProjectSelector } from './components/ProjectSelector';
 import { AgentHome } from './components/AgentHome';
+import { FoundationSkillUpdateBanner } from './components/FoundationSkillUpdateBanner';
 import { ChatAgentPanel, type StartPanelChatOptions } from './components/ChatAgentPanel';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { ToastContainer } from './components/ToastContainer';
@@ -34,6 +35,7 @@ import { PdfToolsRouteGuard } from './components/PdfToolsRouteGuard';
 import { DesktopOnlyGate } from './components/DesktopOnlyGate';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
+import { canAccessMyWork } from './utils/canAccessMyWork';
 import { setInteractiveWsEnabled } from './utils/threadEventStream';
 import { IS_BETA_RELEASE } from './config/release';
 import { RESTRICTED_ACCESS_PROJECT } from '../shared/types/restrictedAccess';
@@ -456,7 +458,15 @@ function App() {
     if (currentView === 'backlog'       && !isSuperAdmin && (!effectiveEnabledViews.includes('backlog')   || !can('interviews:view'))) navigate(fallback);
     if (currentView === 'adr'           && !isSuperAdmin && (!effectiveEnabledViews.includes('adr')       || !can('adr:view'))) navigate(fallback);
     if (currentView === 'notifications' && !can('notifications:view'))  navigate(fallback);
-    if (currentView === 'my-work'       && !isSuperAdmin && (!effectiveEnabledViews.includes('my-work') || !can('dev-workbench:view'))) navigate(fallback);
+    if (
+      currentView === 'my-work'
+      && !canAccessMyWork({
+        can,
+        isSuperAdmin,
+        isInAnyGroup,
+        enabledViews: effectiveEnabledViews,
+      })
+    ) navigate(fallback);
     if (currentView === 'standup'        && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
     if (currentView === 'standup-manage' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:manage')))      navigate(fallback);
     if (currentView === 'standup-summary' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
@@ -868,6 +878,25 @@ function App() {
                 onOpenChangelog={() => setShowChangelog(true)}
                 onMarkAsRead={handleDismissWhatsNewBanner}
                 onToggleShowOnLogin={handleToggleShowChangelogOnLogin}
+              />
+            </div>
+          )}
+
+          {/*
+            Sits outside agent-home-keepalive on purpose: the Home chat panel is an
+            absolute overlay pinned below the tab strip, so a banner inside that
+            container would be covered by it.
+          */}
+          {canAccessHome && currentView === 'home'
+            && isInAnyGroup(['Manager', 'Product-Owner'])
+            && activeSkillConfig?.skillRepo && (
+            <div className="foundation-skill-banner-row">
+              <FoundationSkillUpdateBanner
+                project={selectedProject || null}
+                repo={activeSkillConfig.skillRepo}
+                provider={activeSkillConfig.skillProvider ?? 'ado'}
+                branch={activeSkillConfig.skillBranch ?? 'main'}
+                {...{ 'data-testid': 'agent-home-foundation-skill-banner' }}
               />
             </div>
           )}

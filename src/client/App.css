@@ -916,6 +916,13 @@ body {
 
 /* Keep AgentHome mounted off-route without breaking compose vertical centering.
    A plain wrapper (no flex/height) left Home stuck in the top half of the viewport. */
+/* Expanded install steps can run long — scroll them rather than squeezing Home. */
+.foundation-skill-banner-row {
+  flex-shrink: 0;
+  max-height: 55vh;
+  overflow-y: auto;
+}
+
 .agent-home-keepalive {
   position: relative;
   flex: 1;

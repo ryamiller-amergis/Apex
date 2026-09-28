@@ -49,6 +49,8 @@ const featureRequest = {
   advantage: 'Reduced eye strain',
   submittedBy: 'user-1',
   sourceProject: 'Apex',
+  assignedTo: null,
+  assignedToApex: false,
   status: 'new',
   aiStatus: 'pending',
   aiPriority: null,

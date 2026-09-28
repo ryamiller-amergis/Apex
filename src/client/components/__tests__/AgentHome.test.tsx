@@ -27,6 +27,7 @@ jest.mock('../../hooks/useHomeDashboard', () => ({
   }),
 }));
 
+
 const wrapper = ({ children }: { children: ReactNode }) => (
   <QueryClientProvider client={new QueryClient()}>
     <MemoryRouter>{children}</MemoryRouter>
@@ -65,6 +66,12 @@ describe('AgentHome tabs', () => {
     expect(screen.queryByTestId('home-dashboard-bugs-card')).not.toBeInTheDocument();
     expect(onHomeViewChange).toHaveBeenLastCalledWith('status');
     expect(localStorage.getItem('apex-home-view:Apex')).toBe('status');
+  });
+
+  it('leaves the foundation skills banner to the page shell, clear of the chat overlay', () => {
+    render(<AgentHome selectedProject="MaxView" />, { wrapper });
+    expect(screen.queryByTestId('agent-home-foundation-skill-banner')).not.toBeInTheDocument();
+    expect(screen.getByTestId('home-view-chat')).toBeInTheDocument();
   });
 
   it('does not render the removed edge Chat toggle', () => {

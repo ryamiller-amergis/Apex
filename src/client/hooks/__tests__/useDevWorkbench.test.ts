@@ -2,6 +2,7 @@ import React from 'react';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  useAssignedBacklog,
   useAssignedWorkItems,
   useStartDevSession,
   useActiveSessions,
@@ -11,6 +12,7 @@ import {
   usePushBranch,
   useCreatePr,
 } from '../useDevWorkbench';
+import type { FeatureRequest } from '../../../shared/types/featureRequest';
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -50,6 +52,62 @@ const assignedItems = [
     project: 'MaxView',
   },
 ];
+
+const assignedBacklog: FeatureRequest[] = [
+  {
+    id: 'fr-1',
+    type: 'feature',
+    title: 'Assigned request',
+    request: 'Build the assigned request.',
+    advantage: 'Faster delivery',
+    interviewId: null,
+    submittedBy: 'user-1',
+    sourceProject: 'Apex',
+    assignedTo: null,
+    assignedToApex: false,
+    status: 'new',
+    aiStatus: 'complete',
+    aiPriority: 'high',
+    aiRisk: 'low',
+    aiRationale: null,
+    aiThreadId: null,
+    teamPriority: 'critical',
+    teamRisk: null,
+    rank: null,
+    reviewedBy: null,
+    createdAt: '2026-09-01T00:00:00Z',
+    updatedAt: '2026-09-01T00:00:00Z',
+    linkedAdrs: [],
+  },
+];
+
+describe('useAssignedBacklog', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('fetches assigned Apex Backlog items for the encoded project', async () => {
+    mockFetchOk(assignedBacklog);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useAssignedBacklog('Apex Platform'), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual(assignedBacklog);
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/dev-workbench/assigned-backlog?project=Apex%20Platform',
+      expect.objectContaining({ credentials: 'include' }),
+    );
+  });
+
+  it('does not fetch assigned backlog without a project', () => {
+    global.fetch = jest.fn() as jest.Mock;
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useAssignedBacklog(null), { wrapper });
+
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
 
 describe('useAssignedWorkItems', () => {
   beforeEach(() => jest.clearAllMocks());

@@ -1047,7 +1047,7 @@ const MenuVisibilitySection: React.FC<MenuVisibilitySectionProps> = ({
         <div>
           <h2 id="menu-visibility-title" className={styles.sectionTitle}>Menu Visibility</h2>
           <p className={styles.sectionHint}>
-            Choose which app views appear in navigation for each project. Users still need the matching role permission (and Developer group for My Work).
+            Choose which app views appear in navigation for each project. Users still need the matching role permission (My Work also needs Developer group membership or Project Admin).
           </p>
         </div>
       </div>
