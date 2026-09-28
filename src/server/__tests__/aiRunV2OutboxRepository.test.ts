@@ -1,13 +1,14 @@
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { createOutboxRepository } from '../services/aiRunV2/outboxRepository';
 
 function sqlText(query: unknown): string {
+  if (Array.isArray(query)) return query.map(sqlText).join(' ');
+  if (!query || typeof query !== 'object') return '';
+  const value = (query as { value?: unknown }).value;
+  if (Array.isArray(value)) return value.join('');
   const chunks = (query as { queryChunks?: unknown[] }).queryChunks ?? [];
-  return chunks
-    .map((chunk) => {
-      const value = (chunk as { value?: unknown }).value;
-      return Array.isArray(value) ? value.join('') : '';
-    })
-    .join(' ');
+  return chunks.map(sqlText).join(' ');
 }
 
 describe('AI-run V2 outbox repository', () => {
@@ -137,12 +138,18 @@ describe('AI-run V2 outbox repository', () => {
     await repo.claimInteractiveCandidates(16, 2, 'drainer-a', 60_000);
 
     const query = sqlText(execute.mock.calls[0][0]);
+    const compiled = new PgDialect().sqlToQuery(
+      execute.mock.calls[0][0] as SQL,
+    );
     expect(query).toContain("kind = 'interactive_dispatch'");
     expect(query).toContain("payload->>'interactiveClass' AS interactive_class");
     expect(query).toContain("interactive_class = 'fast'");
     expect(query).toContain("interactive_class = 'agentic'");
     expect(query).toContain('FOR UPDATE OF outbox SKIP LOCKED');
     expect(query).toContain('ORDER BY created_at ASC, id ASC');
+    expect(query).not.toContain('NOT (id = ANY(');
+    expect(compiled.sql).not.toContain('ANY(())');
+    expect(compiled.sql).not.toContain('NOT IN ()');
     expect(query).not.toContain('ORDER BY available_at');
     expect(query).not.toContain('model');
   });
@@ -157,10 +164,15 @@ describe('AI-run V2 outbox repository', () => {
     ]);
 
     const query = sqlText(execute.mock.calls[0][0]);
-    expect(query).toContain('NOT (id = ANY(');
-    expect(query).toContain('::text[]');
-    expect(JSON.stringify(execute.mock.calls[0][0])).toContain('seen-a');
-    expect(JSON.stringify(execute.mock.calls[0][0])).toContain('seen-b');
+    const compiled = new PgDialect().sqlToQuery(
+      execute.mock.calls[0][0] as SQL,
+    );
+    expect(query).toContain('id NOT IN (');
+    expect(query).not.toContain('ANY(');
+    expect(compiled.sql).toContain('id NOT IN ($1, $2)');
+    expect(compiled.params).toEqual(
+      expect.arrayContaining(['seen-a', 'seen-b']),
+    );
   });
 
   it('releases an expected capacity deferral without publishing it', async () => {

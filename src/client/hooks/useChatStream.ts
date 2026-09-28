@@ -28,6 +28,8 @@ import {
   type ThreadStreamHandle,
 } from '../utils/threadEventStream';
 
+const CONNECTION_ERROR_GRACE_MS = 2_000;
+
 /** Chronological order for chat history (SSE replay + REST merge). */
 export function sortChatMessagesByTs(messages: ChatMessage[]): ChatMessage[] {
   return [...messages].sort((a, b) => {
@@ -254,7 +256,7 @@ export function useChatStream(
   const [groundingPreparation, setGroundingPreparation] =
     useState<GroundingPreparationProgress | null>(null);
   const [eventDrivenTermination, setEventDrivenTermination] = useState(false);
-  // Re-open the stream when ai-runs-interactive flips — otherwise a chat that
+  // Re-open the stream when ai-runs-v2-transport flips — otherwise a chat that
   // connected as SSE while flags were still loading stays on SSE forever.
   const [interactiveWsEnabled, setInteractiveWsEnabledState] = useState(
     isInteractiveWsEnabled
@@ -267,6 +269,7 @@ export function useChatStream(
     Map<number, { text: string; key: string }>
   >(new Map());
   const retryTimeoutRef = useRef<number | null>(null);
+  const connectionErrorTimeoutRef = useRef<number | null>(null);
   const pollTimerRef = useRef<number | null>(null);
   const seenEventIdsRef = useRef<Set<string>>(new Set());
   const seenEventIdOrderRef = useRef<string[]>([]);
@@ -309,6 +312,13 @@ export function useChatStream(
     }
   }, []);
 
+  const clearConnectionErrorTimeout = useCallback(() => {
+    if (connectionErrorTimeoutRef.current !== null) {
+      window.clearTimeout(connectionErrorTimeoutRef.current);
+      connectionErrorTimeoutRef.current = null;
+    }
+  }, []);
+
   const clearPollTimer = useCallback(() => {
     if (pollTimerRef.current !== null) {
       window.clearInterval(pollTimerRef.current);
@@ -341,9 +351,10 @@ export function useChatStream(
     pendingOffsetTokensRef.current.clear();
     seenEventIdsRef.current.clear();
     seenEventIdOrderRef.current = [];
+    clearConnectionErrorTimeout();
     clearRetryTimeout();
     clearPollTimer();
-  }, [clearRetryTimeout, clearPollTimer]);
+  }, [clearConnectionErrorTimeout, clearRetryTimeout, clearPollTimer]);
 
   // Merge REST thread snapshots into live state without reconnecting SSE.
   // Covers the common case where useChatThread loads after EventSource opens,
@@ -726,13 +737,18 @@ export function useChatStream(
 
     const stream = openThreadEventStream(threadId, {
       onOpen: () => {
+        clearConnectionErrorTimeout();
         setIsConnected(true);
         setHasConnectionError(false);
       },
       onError: () => {
         // SSE auto-reconnects; the WS backend reconnects with ordinal resume.
         setIsConnected(false);
-        setHasConnectionError(true);
+        clearConnectionErrorTimeout();
+        connectionErrorTimeoutRef.current = window.setTimeout(() => {
+          connectionErrorTimeoutRef.current = null;
+          setHasConnectionError(true);
+        }, CONNECTION_ERROR_GRACE_MS);
       },
       onMessage: handleMessage,
     });
@@ -743,6 +759,7 @@ export function useChatStream(
       stream.close();
       streamRef.current = null;
       setIsConnected(false);
+      clearConnectionErrorTimeout();
       clearRetryTimeout();
       clearPollTimer();
     };

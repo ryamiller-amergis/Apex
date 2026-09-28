@@ -85,16 +85,27 @@ describe('useChatStream', () => {
     expect(result.current.hasConnectionError).toBe(false);
   });
 
-  it('sets isConnected=false on error event', () => {
+  it('shows a connection error only when reconnecting lasts beyond the grace period', () => {
+    jest.useFakeTimers();
     const { result } = renderHook(() => useChatStream('t1'));
     act(() => lastES!.emitOpen());
     expect(result.current.isConnected).toBe(true);
     act(() => lastES!.emitError());
     expect(result.current.isConnected).toBe(false);
-    expect(result.current.hasConnectionError).toBe(true);
+    expect(result.current.hasConnectionError).toBe(false);
+    act(() => {
+      jest.advanceTimersByTime(1_999);
+    });
+    expect(result.current.hasConnectionError).toBe(false);
     act(() => lastES!.emitOpen());
     expect(result.current.isConnected).toBe(true);
     expect(result.current.hasConnectionError).toBe(false);
+
+    act(() => {
+      lastES!.emitError();
+      jest.advanceTimersByTime(2_000);
+    });
+    expect(result.current.hasConnectionError).toBe(true);
   });
 
   it('PBI-002 AC-0 does not poll run status after event-driven stream disconnect', () => {

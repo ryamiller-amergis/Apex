@@ -207,6 +207,12 @@ export function createOutboxRepository(executor: SqlExecutor) {
         throw new Error('claimMs must be a positive integer');
       }
       const excludedIds = [...excludeIds];
+      const exclusionPredicate = excludedIds.length > 0
+        ? sql`AND id NOT IN (${sql.join(
+          excludedIds.map((id) => sql`${id}`),
+          sql`, `,
+        )})`
+        : sql``;
       const result = await executor.execute(sql`
         WITH eligible AS MATERIALIZED (
           SELECT
@@ -217,7 +223,7 @@ export function createOutboxRepository(executor: SqlExecutor) {
           WHERE kind = 'interactive_dispatch'
             AND published_at IS NULL
             AND available_at <= now()
-            AND NOT (id = ANY(${excludedIds}::text[]))
+            ${exclusionPredicate}
             AND (
               claimed_by IS NULL
               OR claim_expires_at IS NULL

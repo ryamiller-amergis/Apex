@@ -523,12 +523,30 @@ function App() {
     [activeSkillConfig, skillRepos, selectedProject],
   );
 
+  const syncHomeThreadUrl = useCallback((threadId: string | null) => {
+    const searchParams = new URLSearchParams(location.search);
+    if (threadId) {
+      searchParams.set('thread', threadId);
+    } else {
+      searchParams.delete('thread');
+    }
+    const search = searchParams.toString();
+    navigate(
+      {
+        pathname: '/home',
+        search: search ? `?${search}` : '',
+      },
+      { replace: true },
+    );
+  }, [location.search, navigate]);
+
   const handleStartPanelChat = useCallback(async (options?: StartPanelChatOptions) => {
     if (!can('chat:view') || !can('chat:create')) return;
     setChatOpen(true);
     if (!options) {
       setActiveThreadId(null);
       setActiveThreadProject(null);
+      syncHomeThreadUrl(null);
       return;
     }
     if (!panelRepo || startChat.isPending) return;
@@ -551,6 +569,7 @@ function App() {
       });
       setActiveThreadId(result.threadId);
       setActiveThreadProject(selectedProject);
+      syncHomeThreadUrl(result.threadId);
       if (options?.initialMessage) {
         await fetch(`/api/chat/threads/${result.threadId}/messages`, {
           method: 'POST',
@@ -567,7 +586,7 @@ function App() {
     } catch {
       // Error shown inside the panel
     }
-  }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig]);
+  }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig, syncHomeThreadUrl]);
 
   useEffect(() => {
     if (
@@ -921,6 +940,7 @@ function App() {
                   onRestoreThread={(id) => {
                     setActiveThreadId(id);
                     setActiveThreadProject(selectedProject);
+                    syncHomeThreadUrl(id);
                   }}
                 />
                 {/* data-testid-exempt — ChatAgentPanel API has no data-testid prop */}
@@ -938,6 +958,7 @@ function App() {
                   onSelectThread={(id) => {
                     setActiveThreadId(id || null);
                     setActiveThreadProject(id ? selectedProject : null);
+                    syncHomeThreadUrl(id || null);
                   }}
                   selectedProject={selectedProject}
                   canStartNewChat={!!panelRepo && !isLoadingSkillRepos && !startChat.isPending}
