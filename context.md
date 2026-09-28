@@ -97,7 +97,7 @@ A suite of planning tools for delivery teams:
 - **QA Metrics** — QA team performance and testing throughput
 - **AI Analysis** — AI-powered analysis of work item patterns and delivery health
 - **Roadmap** — visual timeline with sticky work item columns and horizontal scrolling for 12+ months
-- **Releases** — release epic management with progress tracking, delete functionality, and child item counts
+- **Releases** — release epic management with progress tracking, delete functionality, child item counts, and a flagged Create CAB request action that confirms dry-run vs prod snow then streams the project `cab-release` skill on the same page
 - **Cycle Time** — analytics for measuring how long work items take through the pipeline
 
 ### 8. Cloud Cost Tracking
