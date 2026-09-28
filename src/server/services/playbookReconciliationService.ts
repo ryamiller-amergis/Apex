@@ -95,14 +95,18 @@ async function resumeMissedTerminalEvents(): Promise<number> {
     if (row.agentRunStatus === 'completed') {
       // Same output and conditional update the event path uses, so a missed NOTIFY still
       // hands ingest-artifact a scorecard instead of an empty payload.
+      const output = await cursorAgentCompletionOutput({
+        stepType: row.stepType,
+        agentRunId: row.agentRunId,
+        completedAt: row.completedAt,
+        threadId: row.threadId,
+      });
+      // Unreadable here means this instance does not have the workspace. Leave the row
+      // suspended so the instance that does, or a later pass, can record the scorecard.
+      if (!output) continue;
       if (await resumeStepRun({
         stepRunId: row.stepRunId,
-        output: cursorAgentCompletionOutput({
-          stepType: row.stepType,
-          agentRunId: row.agentRunId,
-          completedAt: row.completedAt,
-          threadId: row.threadId,
-        }),
+        output,
       })) moved += 1;
     } else {
       await failStepRun({
@@ -271,8 +275,8 @@ export async function runReconciliationPass(
 export async function runReconciliationPassLocked(
   options: { clock?: Clock } = {}
 ): Promise<PlaybookSweepOutcome> {
-  return db.transaction(async () => {
-    await db.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${RECONCILIATION_LOCK_KEY}))`);
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${RECONCILIATION_LOCK_KEY}))`);
     return runReconciliationPass(options);
   });
 }

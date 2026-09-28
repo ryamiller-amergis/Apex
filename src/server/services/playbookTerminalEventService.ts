@@ -56,6 +56,8 @@ export type TerminalEventOutcome =
   | { handled: 'failed'; stepRunId: string }
   /** A step was found but had already moved — a duplicate delivery, which is ordinary. */
   | { handled: 'already-moved'; stepRunId: string }
+  /** The scorecard workspace is not on this instance yet. The sweep retries it. */
+  | { handled: 'deferred'; stepRunId: string }
   /** No Playbook step is waiting on this agent run. Most events are this: ordinary chat traffic. */
   | { handled: 'not-correlated' };
 
@@ -97,12 +99,13 @@ export async function handleTerminalAgentRunEvent(
   if (!step) return { handled: 'not-correlated' };
 
   if (event.status === 'completed') {
-    const output = cursorAgentCompletionOutput({
+    const output = await cursorAgentCompletionOutput({
       stepType: step.stepType,
       agentRunId: event.runId,
       completedAt: event.timestamp,
       threadId: event.threadId,
     });
+    if (!output) return { handled: 'deferred', stepRunId: step.id };
     const moved = await resumeStepRun({
       stepRunId: step.id,
       // DoD-2: the next step must be able to read what this one produced.

@@ -450,7 +450,7 @@ const server = app.listen(PORT, () => {
   startReaper();
   startAdmissionGovernorScheduler();
   server.once('close', stopAdmissionGovernorScheduler);
-  // The scheduler gates itself on playbooks-production-adapters.
+  // Phase 0/1 runs are not behind playbooks-production-adapters, so recovery always starts.
   void startPlaybookReconciliation();
   server.once('close', stopPlaybookReconciliation);
   startLoadTestRunReaper();

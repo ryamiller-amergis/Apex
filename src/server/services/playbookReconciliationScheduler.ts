@@ -14,7 +14,6 @@
  * but they would all queue on that lock at the same moment, every minute, forever.
  */
 import { getAppEnvironment } from '../utils/superAdmin';
-import { isFeatureOperational } from './featureFlagService';
 import {
   runReconciliationPassLocked,
   type Clock,
@@ -109,22 +108,14 @@ export function createPlaybookReconciliationScheduler(
 
 const defaultScheduler = createPlaybookReconciliationScheduler();
 
-/** Starts the sweep and the terminal-event listener. */
+/**
+ * Starts the sweep and the terminal-event listener.
+ *
+ * This is not behind `playbooks-production-adapters`. That flag covers Phase 2 adapters, while
+ * definition runs remain reachable after `playbooks-spike` was archived. Gating recovery on the
+ * Phase 2 flag leaves those runs suspended with no resume and no expiry.
+ */
 export async function startPlaybookReconciliation(): Promise<void> {
-  let enabled = false;
-  try {
-    enabled = await isFeatureOperational('playbooks-production-adapters');
-  } catch (error) {
-    console.error(
-      '[playbook-reconciliation] feature check failed; scheduler remains stopped',
-      error instanceof Error ? error.message : String(error),
-    );
-    return;
-  }
-  if (!enabled) {
-    console.log('[playbook-reconciliation] disabled by playbooks-production-adapters flag');
-    return;
-  }
   startPlaybookTerminalEventListener();
   defaultScheduler.start();
   console.log(

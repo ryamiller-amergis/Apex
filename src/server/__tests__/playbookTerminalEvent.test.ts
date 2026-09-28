@@ -41,6 +41,8 @@ jest.mock('../services/playbookAdvanceService', () => ({
 }));
 
 jest.mock('../services/chatAgentService', () => ({
+  hydrateThread: jest.fn().mockResolvedValue(true),
+  isOutputWorkspaceReadable: jest.fn().mockReturnValue(true),
   readOutputValidationScorecard: jest.fn().mockReturnValue(null),
   readOutputValidationScorecardMd: jest.fn().mockReturnValue(null),
 }));
@@ -55,6 +57,7 @@ import {
   isTerminalRunEvent,
 } from '../services/playbookTerminalEventService';
 import {
+  isOutputWorkspaceReadable,
   readOutputValidationScorecard,
   readOutputValidationScorecardMd,
 } from '../services/chatAgentService';
@@ -171,6 +174,17 @@ describe('VT-01 — a terminal success event resumes the correlated step', () =>
       stepRunId: STEP_RUN_ID,
       output: { agentRunId: AGENT_RUN_ID, completedAt: '2026-09-19T12:00:00.000Z', threadId: 'thread-1' },
     });
+  });
+
+  it('leaves the step suspended when this instance cannot read the workspace', async () => {
+    (isOutputWorkspaceReadable as jest.Mock).mockReturnValueOnce(false);
+
+    await expect(handleTerminalAgentRunEvent(event('completed'))).resolves.toEqual({
+      handled: 'deferred',
+      stepRunId: STEP_RUN_ID,
+    });
+    expect(resumeStepRun).not.toHaveBeenCalled();
+    expect(advanceRun).not.toHaveBeenCalled();
   });
 
   it('includes the validation scorecard when the finished thread wrote one', async () => {
