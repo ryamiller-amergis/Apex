@@ -11,6 +11,7 @@ import {
   resolveRequestProject,
 } from '../middleware/rbac';
 import { DiagramServiceError } from '../../shared/types/diagram';
+import * as diagramAiService from '../services/diagramAiService';
 import * as diagramService from '../services/diagramService';
 
 const router = Router({ mergeParams: true });
@@ -78,6 +79,19 @@ router.post(
 );
 
 // Register static collection routes before /:id.
+router.post(
+  '/generate',
+  requirePermission('diagram:create'),
+  route(async (req, res) => {
+    const result = await diagramAiService.generateDiagramFromPrompt(
+      req.params.projectId,
+      req.body?.prompt,
+      actorUserId(req),
+    );
+    res.json(result);
+  }),
+);
+
 router.get(
   '/:id/share-targets',
   requirePermission('diagram:share'),

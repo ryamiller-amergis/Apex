@@ -65,6 +65,15 @@ export interface UpdateDiagramInput {
   thumbnail: string;
 }
 
+export interface GenerateDiagramInput {
+  prompt: string;
+}
+
+export interface GenerateDiagramResponse {
+  title: string;
+  scene: ExcalidrawScene;
+}
+
 export interface UpsertDiagramShareInput {
   granteeId: string;
   access: DiagramShareAccess;
@@ -129,6 +138,13 @@ export class DiagramVersionConflictError extends DiagramServiceError {
   constructor(message = 'Diagram was updated by another editor') {
     super(message, 'DIAGRAM_VERSION_CONFLICT', 409);
     this.name = 'DiagramVersionConflictError';
+  }
+}
+
+export class DiagramAiGenerationError extends DiagramServiceError {
+  constructor(message = 'Apex could not build that Diagram') {
+    super(message, 'DIAGRAM_AI_GENERATION_FAILED', 502);
+    this.name = 'DiagramAiGenerationError';
   }
 }
 
