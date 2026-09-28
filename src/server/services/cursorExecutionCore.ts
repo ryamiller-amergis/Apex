@@ -93,6 +93,7 @@ function addTokenUsage(
 export interface CursorExecutionWaitResult {
   status: string;
   result?: string;
+  error?: unknown;
   /** Cumulative usage across turns; absent when the runtime reported none. */
   usage?: unknown;
 }
@@ -480,6 +481,7 @@ export interface CursorExecutionResult {
   text: string;
   waitResult: CursorExecutionWaitResult;
   completedOnTurnEnd?: boolean;
+  terminalStatusMessage?: string;
   /**
    * Real token counts from the runtime, covering the full prompt the model saw
    * (system prompt, skill, grounding, history, tool output). Absent when the
@@ -515,6 +517,7 @@ export async function executeCursorExecutionCore(
   let anonymousToolUseCount = 0;
   let streamedUsage: CursorTokenUsage | undefined;
   let completedOnTurnEnd = false;
+  let terminalStatusMessage: string | undefined;
   const identicalToolCallCounts = new Map<string, number>();
 
   const publish = async (event: SseEvent, phase?: AgentRunPhase): Promise<void> => {
@@ -630,10 +633,16 @@ export async function executeCursorExecutionCore(
           }
         }
       } else if (event.type === 'status') {
-        const status = String(
-          (event as { status?: unknown }).status ?? '',
-        ).toUpperCase();
+        const statusEvent = event as {
+          status?: unknown;
+          message?: unknown;
+        };
+        const status = String(statusEvent.status ?? '').toUpperCase();
         if (['FINISHED', 'ERROR', 'CANCELLED', 'EXPIRED'].includes(status)) {
+          terminalStatusMessage =
+            typeof statusEvent.message === 'string'
+              ? statusEvent.message
+              : undefined;
           break;
         }
       } else if (event.type === 'thinking') {
@@ -710,6 +719,7 @@ export async function executeCursorExecutionCore(
     text: textBuffer,
     waitResult,
     completedOnTurnEnd,
+    terminalStatusMessage,
     // `wait()` reports cumulative usage for the whole run; the summed stream
     // events are the fallback for runtimes that only emit per-turn events.
     usage: readTokenUsage(waitResult.usage) ?? streamedUsage,

@@ -290,7 +290,19 @@ function unsuccessfulWaitDetail(result: CursorExecutionResult): string {
     .toLowerCase()
     .replace(/[^a-z0-9_-]/g, '')
     || 'unknown';
-  return `Interactive turn ended with status: ${status}`;
+  const waitError =
+    result.waitResult.error
+    && typeof result.waitResult.error === 'object'
+    && typeof (result.waitResult.error as { message?: unknown }).message ===
+      'string'
+      ? (result.waitResult.error as { message: string }).message
+      : '';
+  const detail = redactFailureMessage(
+    result.terminalStatusMessage || waitError,
+  );
+  return detail
+    ? `Interactive turn ended with status: ${status}: ${detail}`
+    : `Interactive turn ended with status: ${status}`;
 }
 
 export function createInteractiveSessionActor(

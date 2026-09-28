@@ -66,6 +66,8 @@ interface FakeAgentOptions {
   workspaceRef?: string;
   waitStatus?: string;
   waitResult?: string;
+  waitError?: { message: string };
+  terminalStatusMessage?: string;
 }
 
 function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgentHandle {
@@ -79,12 +81,20 @@ function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgent
       for (const text of options.tokens ?? []) {
         yield { type: 'assistant', message: { content: [{ type: 'text', text }] } };
       }
+      if (options.terminalStatusMessage) {
+        yield {
+          type: 'status',
+          status: options.waitStatus ?? 'ERROR',
+          message: options.terminalStatusMessage,
+        };
+      }
     },
     async wait() {
       if (options.waitGate) await options.waitGate;
       return {
         status: options.waitStatus ?? 'finished',
         result: options.waitResult,
+        error: options.waitError,
       };
     },
     cancel: async () => {
@@ -740,6 +750,46 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
       (b) => b.kind === 'terminal' && b.status === 'failed',
     );
     expect(failed).toMatchObject({ artifactsFlushed: false });
+  });
+
+  it('persists the safe Cursor terminal error instead of an opaque status', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          tokens: [],
+          waitStatus: 'ERROR',
+          terminalStatusMessage: 'Custom tool schema is invalid',
+          waitError: { message: 'less useful wait error' },
+          workspaceRef: checkout.workspacePath,
+        }),
+      ),
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+      }),
+      uploadAttemptArtifacts: jest.fn(),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+    });
+
+    await expect(
+      actor.handleDurableTurn({
+        threadId: THREAD_ID,
+        bootstrap: makeDurableBootstrap(),
+      }),
+    ).rejects.toThrow(
+      'Interactive turn ended with status: error: Custom tool schema is invalid',
+    );
+
+    expect(posted.find((body) => body.kind === 'terminal')).toMatchObject({
+      kind: 'terminal',
+      status: 'failed',
+      detail:
+        'Interactive turn failed: Error: Interactive turn ended with status: error: Custom tool schema is invalid',
+    });
   });
 
   it('arms the tool deadline timer and fails with tool_timeout (not cancelled)', async () => {
