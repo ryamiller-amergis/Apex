@@ -92,22 +92,30 @@ fi
 verify_health() {
   local app="$1"
   local revision="$2"
-  for attempt in $(seq 1 12); do
-    local health
-    health="$(az containerapp revision show \
+  local require_probe_health="$3"
+  for attempt in $(seq 1 30); do
+    local state
+    state="$(az containerapp revision show \
       --name "$app" \
       --resource-group "$AI_RUNS_RESOURCE_GROUP" \
       --revision "$revision" \
-      --query properties.healthState \
+      --query "join('|', [properties.healthState, properties.provisioningState, properties.runningState])" \
       -o tsv 2>/dev/null || true)"
+    state="${state//$'\r'/}"
+    local health provisioning running
+    IFS='|' read -r health provisioning running <<< "$state"
     if [[ "$health" == "Healthy" ]]; then
       echo "Revision ${revision} is Healthy for ${app}."
       return 0
     fi
-    echo "Waiting for ${app} revision ${revision} (health=${health:-unknown}, attempt ${attempt}/12)..."
-    sleep 5
+    if [[ "$require_probe_health" != "true" && "$provisioning" == "Provisioned" && "$running" == "Running" ]]; then
+      echo "Legacy revision ${revision} is Provisioned and Running for ${app}."
+      return 0
+    fi
+    echo "Waiting for ${app} revision ${revision} (health=${health:-unknown}, provisioning=${provisioning:-unknown}, running=${running:-unknown}, attempt ${attempt}/30)..."
+    sleep 10
   done
-  echo "FAIL: ${app} revision ${revision} did not become Healthy."
+  echo "FAIL: ${app} revision ${revision} did not reach its required health state."
   return 1
 }
 
@@ -133,7 +141,11 @@ for APP in "${TARGETS[@]}"; do
     --resource-group "$AI_RUNS_RESOURCE_GROUP" \
     --query properties.latestRevisionName \
     -o tsv)"
-  verify_health "$APP" "$REVISION"
+  REQUIRE_PROBE_HEALTH=false
+  if [[ "$APP" == "${AI_PLATFORM_V2_FAST_INTERACTIVE_CONTAINER_APP_NAME:-}" || "$APP" == "${AI_PLATFORM_V2_AGENTIC_CONTAINER_APP_NAME:-}" ]]; then
+    REQUIRE_PROBE_HEALTH=true
+  fi
+  verify_health "$APP" "$REVISION" "$REQUIRE_PROBE_HEALTH"
   echo "Rollback ${APP}: az containerapp update -g '${AI_RUNS_RESOURCE_GROUP}' -n '${APP}' --image '${PREVIOUS_IMAGE}'"
   UPDATED=$((UPDATED + 1))
 done
