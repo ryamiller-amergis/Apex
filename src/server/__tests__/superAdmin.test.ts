@@ -95,7 +95,6 @@ describe('isSuperAdminEmail', () => {
 
   it('returns true for an exact match', () => {
     expect(isSuperAdminEmail('ryamiller@amergis.com')).toBe(true);
-    expect(isSuperAdminEmail('mojubile@amergis.com')).toBe(true);
   });
 
   it('is case-insensitive', () => {

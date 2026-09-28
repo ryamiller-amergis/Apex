@@ -7,7 +7,7 @@ import session from 'express-session';
 import passport from 'passport';
 
 // Load environment variables BEFORE importing routes
-dotenv.config({ override:  true });
+dotenv.config();
 
 import apiRoutes from './routes/api';
 import authRoutes from './routes/auth';
