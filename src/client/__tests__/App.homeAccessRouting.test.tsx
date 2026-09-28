@@ -305,18 +305,18 @@ describe('App — Home access with permission + flag both enabled (default)', ()
       fireEvent.click(await screen.findByRole('button', { name: 'Start message' }));
 
       await waitFor(() => {
-        expect(screen.getByTestId('location')).toHaveTextContent(
+        expect(screen.getByTestId('location').textContent).toBe(
           '/home?help=walkthroughs&thread=created-thread',
         );
       });
 
       fireEvent.click(screen.getByRole('button', { name: 'Select history' }));
-      expect(screen.getByTestId('location')).toHaveTextContent(
+      expect(screen.getByTestId('location').textContent).toBe(
         '/home?help=walkthroughs&thread=history-thread',
       );
 
       fireEvent.click(screen.getByRole('button', { name: 'Panel new' }));
-      expect(screen.getByTestId('location')).toHaveTextContent(
+      expect(screen.getByTestId('location').textContent).toBe(
         '/home?help=walkthroughs',
       );
     } finally {
@@ -349,7 +349,7 @@ describe('App — Home access with permission + flag both enabled (default)', ()
         : null,
       isFetching: false,
     }));
-    const view = renderApp('/home');
+    const view = renderApp('/home?thread=max-thread');
 
     await screen.findByTestId('agent-home');
     act(() => mockAgentHomeProps.onRestoreThread?.('max-thread'));
@@ -359,11 +359,15 @@ describe('App — Home access with permission + flag both enabled (default)', ()
     view.rerender(
       <MemoryRouter initialEntries={['/home']}>
         <App />
+        <LocationProbe />
       </MemoryRouter>,
     );
 
     expect(mockChatPanelProps.thread).toBeNull();
     expect(mockChatPanelProps.activeThreadId).toBeNull();
+    await waitFor(() => {
+      expect(screen.getByTestId('location').textContent).toBe('/home');
+    });
   });
 });
 

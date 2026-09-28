@@ -525,6 +525,12 @@ function App() {
 
   const syncHomeThreadUrl = useCallback((threadId: string | null) => {
     const searchParams = new URLSearchParams(location.search);
+    if (
+      location.pathname === '/home'
+      && searchParams.get('thread') === threadId
+    ) {
+      return;
+    }
     if (threadId) {
       searchParams.set('thread', threadId);
     } else {
@@ -538,7 +544,16 @@ function App() {
       },
       { replace: true },
     );
-  }, [location.search, navigate]);
+  }, [location.pathname, location.search, navigate]);
+
+  const previousHomeProjectRef = useRef(selectedProject);
+  useEffect(() => {
+    const projectChanged = previousHomeProjectRef.current !== selectedProject;
+    previousHomeProjectRef.current = selectedProject;
+    if (projectChanged && currentView === 'home') {
+      syncHomeThreadUrl(null);
+    }
+  }, [currentView, selectedProject, syncHomeThreadUrl]);
 
   const handleStartPanelChat = useCallback(async (options?: StartPanelChatOptions) => {
     if (!can('chat:view') || !can('chat:create')) return;
