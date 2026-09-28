@@ -31,6 +31,7 @@ import type { GroundingProfileId } from '../../shared/types/repoReader';
 import type { RepoReader } from '../../shared/types/repoReader';
 import { callerGroundingService } from './callerGroundingService';
 import { groundingProfileResolver } from './groundingProfileResolver';
+import { buildRepositoryContextPack } from './repositoryContextPack';
 import type { ThreadAccessResult } from './threadAccessService';
 import { resolveThreadAccess } from './threadAccessService';
 import { resolveSkillConfig } from './projectSettingsService';
@@ -58,7 +59,7 @@ import {
 import { db } from '../db/drizzle';
 import { sql } from 'drizzle-orm';
 
-const DEFAULT_MODEL = 'composer-2';
+const DEFAULT_MODEL = 'composer-2.5';
 const MAX_TRANSCRIPT_CHARS = 120_000;
 const CHAT_WRITE_POLICY_LINES = [
   '# Repository and Azure DevOps write policy',
@@ -149,6 +150,9 @@ type ServiceDependencies = Readonly<{
   resolveGrounding: (
     input: ResolveGroundingInput,
   ) => Promise<FrozenGrounding>;
+  loadRepositoryContext?: (
+    grounding: NonNullable<FrozenGrounding>,
+  ) => Promise<RepositoryContextDocuments | null>;
   resolveMaxviewCapability: (
     input: Readonly<{ userId: string; project: string }>,
   ) => Promise<'disabled' | 'enabled' | 'unavailable'>;
@@ -568,6 +572,7 @@ function recreationPrompt(input: {
   thread: ChatThread;
   transcript: DurableInteractiveTurnSpecification['transcript'];
   currentPrompt: string;
+  repositoryContextPack: string | null;
 }): string {
   const transcript = input.transcript.flatMap((entry, index) => [
     `--- message ${index + 1} | role=${entry.role} | timestamp=${entry.timestamp} ---`,
@@ -581,12 +586,33 @@ function recreationPrompt(input: {
     ...(input.thread.kickoff.freeformContext
       ? ['', '# Thread context', input.thread.kickoff.freeformContext]
       : []),
+    ...(input.repositoryContextPack ? ['', input.repositoryContextPack] : []),
     '',
     '# Durable visible conversation',
     ...transcript,
     '# Current turn',
     input.currentPrompt,
   ].join('\n');
+}
+
+type RepositoryContextDocuments = Readonly<{
+  contextContent: string | null;
+  agentsContent: string | null;
+}>;
+
+async function defaultLoadRepositoryContext(
+  grounding: NonNullable<FrozenGrounding>,
+): Promise<RepositoryContextDocuments | null> {
+  const reader = await groundingProfileResolver.resolveConnectionProfile(
+    grounding.profileId as GroundingProfileId,
+  );
+  const read = (filePath: string) =>
+    reader.readFile(filePath).catch(() => null);
+  const [contextContent, agentsContent] = await Promise.all([
+    read('context.md'),
+    read('AGENTS.md'),
+  ]);
+  return { contextContent, agentsContent };
 }
 
 function frozenMcpDescriptors(
@@ -781,6 +807,7 @@ function defaultDependencies(): ServiceDependencies {
     loadSkill: defaultLoadSkill,
     builtInSkillRoots: DEFAULT_BUILT_IN_SKILL_ROOTS,
     resolveGrounding: defaultResolveGrounding,
+    loadRepositoryContext: defaultLoadRepositoryContext,
     resolveMaxviewCapability: resolveDurableMaxviewCapability,
     resolveDeadlines: resolveInteractiveDeadlinePolicy,
     encryptToolGrant: encryptInteractiveToolGrant,
@@ -907,6 +934,28 @@ export function createDurableInteractiveTurnService(
           422,
         );
       }
+      // Plain chat still reads the thread's repository when it is available;
+      // without a pinned SHA the agent's read tools see an empty workspace.
+      if (!requiresRepositoryPreparation && thread.kickoff.repo) {
+        grounding = await deps
+          .resolveGrounding({ thread, userId: input.userId })
+          .catch(() => null);
+      }
+      const repositoryContext =
+        grounding && deps.loadRepositoryContext
+          ? await deps.loadRepositoryContext(grounding).catch(() => null)
+          : null;
+      const repositoryContextPack = repositoryContext
+        ? buildRepositoryContextPack({
+            project: thread.kickoff.project,
+            repo: thread.kickoff.repo,
+            branch: thread.kickoff.branch ?? 'main',
+            provider: grounding?.provider ?? 'ado',
+            contextContent: repositoryContext.contextContent,
+            agentsContent: repositoryContext.agentsContent,
+            searchAvailable: true,
+          })
+        : null;
 
       const model =
         input.modelOverride?.trim() ||
@@ -1000,6 +1049,7 @@ export function createDurableInteractiveTurnService(
           thread,
           transcript,
           currentPrompt: preparedCurrentPrompt,
+          repositoryContextPack,
         }),
         deadlines,
       };

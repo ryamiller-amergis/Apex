@@ -837,6 +837,7 @@ function durableServiceHarness(options?: {
   grounding?: DurableInteractiveTurnSpecification['grounding'];
   groundingError?: Error;
   maxviewCapability?: 'disabled' | 'enabled' | 'unavailable';
+  repositoryContext?: { contextContent: string | null; agentsContent: string | null };
 }) {
   const admitted: PreparedDurableInteractiveTurn[] = [];
   const order: string[] = [];
@@ -905,6 +906,13 @@ function durableServiceHarness(options?: {
                 profileId: 'profile-1',
               },
         ),
+    ...(options?.repositoryContext
+      ? {
+          loadRepositoryContext: jest
+            .fn()
+            .mockResolvedValue(options.repositoryContext),
+        }
+      : {}),
     resolveMaxviewCapability: jest
       .fn()
       .mockResolvedValue(options?.maxviewCapability ?? 'disabled'),
@@ -1116,6 +1124,58 @@ describe('durable interactive turn service', () => {
       code: 'INTERACTIVE_V2_GROUNDING_UNAVAILABLE',
     });
     expect(repository.admit).not.toHaveBeenCalled();
+  });
+
+  it('grounds plain Home chat and preloads the repository context pack', async () => {
+    const { service, admitted } = durableServiceHarness({
+      thread: authoritativeThread({
+        kickoff: { project: 'project-1', repo: 'repo-1', skillProvider: 'github' },
+      }),
+      repositoryContext: {
+        contextContent: '# Apex product guide',
+        agentsContent: 'See `src/client/components/AgentHome.tsx`.',
+      },
+    });
+
+    await service.admit({
+      threadId: THREAD_ID,
+      userId: USER_ID,
+      workflowClass: 'home-chat',
+      turnId: TURN_ID,
+      text: 'What does the Home page show?',
+      attachments: [],
+    });
+
+    const frozen = admitted[0].specification;
+    expect(frozen.interactiveClass).toBe('fast');
+    expect(frozen.grounding).toMatchObject({ sha: 'abc123' });
+    expect(frozen.recreationPrompt).toContain('# Pre-loaded repository context pack');
+    expect(frozen.recreationPrompt).toContain('# Apex product guide');
+    expect(frozen.recreationPrompt).toContain('`src/client/components/AgentHome.tsx`');
+    expect(frozen.currentPrompt).not.toContain('# Pre-loaded repository context pack');
+  });
+
+  it('admits plain Home chat without grounding when the repository is unavailable', async () => {
+    const { service, admitted } = durableServiceHarness({
+      thread: authoritativeThread({
+        kickoff: { project: 'project-1', repo: 'repo-1', skillProvider: 'github' },
+      }),
+      groundingError: new Error('grounding resolver unavailable'),
+    });
+
+    await service.admit({
+      threadId: THREAD_ID,
+      userId: USER_ID,
+      workflowClass: 'home-chat',
+      turnId: TURN_ID,
+      text: 'Rewrite this sentence more clearly.',
+      attachments: [],
+    });
+
+    expect(admitted[0].specification.grounding).toBeNull();
+    expect(admitted[0].specification.recreationPrompt).not.toContain(
+      '# Pre-loaded repository context pack',
+    );
   });
 
   it('freezes enabled registered MaxView as an agentic internal proxy capability', async () => {

@@ -74,17 +74,24 @@ export const INTERACTIVE_AGENT_CACHE_MAX = 32;
 export const INTERACTIVE_STARTING_DETAIL = 'Starting agent…';
 
 /**
- * Attempt-local workspace root. Hosts may override with
- * `AI_RUNS_INTERACTIVE_ATTEMPT_ROOT`; otherwise `os.tmpdir()`.
+ * Thread-scoped durable workspace keyed by the pinned grounding SHA. A stable
+ * path lets consecutive turns on one thread reuse the warm Cursor Agent, while
+ * a SHA change yields a new path and therefore a fresh Agent. Hosts may
+ * override the root with `AI_RUNS_INTERACTIVE_ATTEMPT_ROOT`.
  */
-export function resolveInteractiveAttemptWorkspacePath(
-  attemptId: string,
+export function resolveInteractiveThreadWorkspacePath(
+  threadId: string,
+  groundingSha: string | null,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   const configured = env.AI_RUNS_INTERACTIVE_ATTEMPT_ROOT?.trim();
   const root = configured && configured.length > 0 ? configured : os.tmpdir();
-  return path.join(root, 'apex-interactive-attempt', attemptId);
+  const revision = groundingSha?.replace(/[^0-9a-zA-Z]/g, '') || 'ungrounded';
+  return path.join(root, 'apex-interactive-thread', threadId, revision);
 }
+
+/** Attempts remembered per process so a repeated dispatch never reruns a turn. */
+const STARTED_ATTEMPTS_MAX = 1_000;
 
 /** Publish a live (ephemeral) run-event envelope to the Redis backplane. */
 export type LiveEnvelopePublisher = (
@@ -189,6 +196,8 @@ export interface InteractiveTurnRequest {
 
 export type InteractiveTurnOutcome =
   | { status: 'completed'; cursorAgentId?: string | null }
+  | { status: 'accepted' }
+  | { status: 'duplicate' }
   | { status: 'cancelled' }
   | { status: 'failed'; failureCategory?: 'hard_timeout' | 'tool_timeout' }
   | { status: 'fence-conflict' };
@@ -276,6 +285,8 @@ export interface InteractiveSessionActor {
 interface CachedAgentEntry {
   handle: InteractiveCursorAgentHandle;
   lastUsedAt: number;
+  /** Removes the thread workspace the cached Agent runs in. */
+  releaseWorkspace?: () => Promise<void>;
 }
 
 function isSuccessfulWait(result: CursorExecutionResult): boolean {
@@ -351,6 +362,18 @@ export function createInteractiveSessionActor(
     if (!entry) return;
     agentCache.delete(threadId);
     await entry.handle.dispose().catch(() => {});
+    await entry.releaseWorkspace?.().catch(() => {});
+  };
+
+  const startedAttempts = new Set<string>();
+  const claimAttempt = (attemptId: string): boolean => {
+    if (startedAttempts.has(attemptId)) return false;
+    startedAttempts.add(attemptId);
+    if (startedAttempts.size > STARTED_ATTEMPTS_MAX) {
+      const oldest = startedAttempts.values().next().value;
+      if (oldest !== undefined) startedAttempts.delete(oldest);
+    }
+    return true;
   };
 
   const disposeCheckout = async (threadId: string): Promise<void> => {
@@ -731,6 +754,9 @@ export function createInteractiveSessionActor(
       threadId: string;
       bootstrap: InteractiveActorBootstrap;
     }): Promise<InteractiveTurnOutcome> {
+      if (!claimAttempt(request.bootstrap.attemptId)) {
+        return Promise.resolve({ status: 'duplicate' });
+      }
       return turnQueue.submit(request.threadId, () =>
         runDurableTurn(request.threadId, request.bootstrap),
       );
@@ -865,9 +891,10 @@ export function createInteractiveSessionActor(
         },
       })).catch(() => {});
 
-      // Durable turns always rematerialize a fresh attempt-local directory.
-      // Never reuse a warm checkout from a prior durable attempt.
-      const destination = resolveInteractiveAttemptWorkspacePath(attemptId);
+      const destination = resolveInteractiveThreadWorkspacePath(
+        threadId,
+        specification.grounding?.sha ?? null,
+      );
 
       if (!dependencies.materializeWorkspace) {
         throw new Error(
@@ -1223,8 +1250,13 @@ export function createInteractiveSessionActor(
           cursorAgentId: agentHandle.agentId ?? null,
         });
 
-        agentCache.set(threadId, { handle: agentHandle, lastUsedAt: now() });
+        agentCache.set(threadId, {
+          handle: agentHandle,
+          lastUsedAt: now(),
+          releaseWorkspace: checkout.dispose,
+        });
         retainAgent = true;
+        await evictOverflowAgents(threadId);
         return {
           status: 'completed',
           cursorAgentId: agentHandle.agentId ?? null,
@@ -1281,11 +1313,19 @@ export function createInteractiveSessionActor(
       if (code) {
         return { status: 'failed', failureCategory: code };
       }
-      throw error;
+      console.error(
+        JSON.stringify({
+          event: 'InteractiveDurableTurnFailed',
+          runId,
+          attemptId,
+          reason: detail,
+        }),
+      );
+      return { status: 'failed' };
     } finally {
       clearTimeout(absoluteTimer);
       clearToolTimer();
-      if (attemptCheckout?.dispose) {
+      if (!retainAgent && attemptCheckout?.dispose) {
         await attemptCheckout.dispose().catch(() => {});
       }
       if (!retainAgent && agentHandle && !agentCache.has(threadId)) {

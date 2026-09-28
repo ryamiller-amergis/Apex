@@ -614,7 +614,7 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     };
   }
 
-  it('rematerializes a fresh attempt-local workspace per durable attempt', async () => {
+  it('reuses one thread workspace and the warm Agent across durable turns', async () => {
     const destinations: string[] = [];
     const dispose = jest.fn(async () => {});
     const materializeWorkspace = jest.fn(
@@ -631,16 +631,17 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
       key: 'runs/r/attempts/1/manifest.json',
     }));
     const posted: AiRunIngestBody[] = [];
+    const acquireAgent = jest.fn(async (_s, checkout) =>
+      makeAgentHandle({
+        tokens: ['ok'],
+        agentId: 'agent-1',
+        workspaceRef: checkout.workspacePath,
+      }),
+    );
 
     const actor = createInteractiveSessionActor({
       openWarmCheckout: jest.fn(),
-      acquireAgent: jest.fn(async (_s, checkout) =>
-        makeAgentHandle({
-          tokens: ['ok'],
-          agentId: 'agent-1',
-          workspaceRef: checkout.workspacePath,
-        }),
-      ),
+      acquireAgent,
       materializeWorkspace,
       uploadAttemptArtifacts,
       postIngest: async (_p, _r, body) => {
@@ -662,13 +663,41 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     await actor.handleDurableTurn({ threadId: THREAD_ID, bootstrap: second });
 
     expect(materializeWorkspace).toHaveBeenCalledTimes(2);
-    expect(destinations[0]).not.toEqual(destinations[1]);
-    expect(destinations[0]).toContain('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
-    expect(destinations[1]).toContain('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
-    expect(destinations.every((d) => d.includes('apex-interactive-attempt'))).toBe(
-      true,
+    expect(destinations[0]).toEqual(destinations[1]);
+    expect(destinations[0]).toContain('apex-interactive-thread');
+    expect(destinations[0]).toContain(THREAD_ID);
+    expect(acquireAgent).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
+  });
+
+  it('ignores a repeated dispatch for an attempt that already started', async () => {
+    const materializeWorkspace = jest.fn(async (_bootstrap, destination: string) => ({
+      workspacePath: destination,
+    }));
+    const acquireAgent = jest.fn(async (_s, checkout) =>
+      makeAgentHandle({ tokens: ['ok'], workspaceRef: checkout.workspacePath }),
     );
-    expect(dispose).toHaveBeenCalledTimes(2);
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent,
+      materializeWorkspace,
+      uploadAttemptArtifacts: jest.fn(async () => ({
+        container: 'artifacts',
+        key: 'runs/r/attempts/1/manifest.json',
+      })),
+      postIngest: async () => ({ ok: true, cancelRequested: false }),
+    });
+    const bootstrap = makeDurableBootstrap();
+
+    const [first, second] = await Promise.all([
+      actor.handleDurableTurn({ threadId: THREAD_ID, bootstrap }),
+      actor.handleDurableTurn({ threadId: THREAD_ID, bootstrap }),
+    ]);
+
+    expect(first.status).toBe('completed');
+    expect(second).toEqual({ status: 'duplicate' });
+    expect(materializeWorkspace).toHaveBeenCalledTimes(1);
+    expect(acquireAgent).toHaveBeenCalledTimes(1);
   });
 
   it('posts completed terminal with artifactManifestRef only after upload succeeds', async () => {
@@ -735,12 +764,13 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
       },
     });
 
+    jest.spyOn(console, 'error').mockImplementation(() => {});
     await expect(
       actor.handleDurableTurn({
         threadId: THREAD_ID,
         bootstrap: makeDurableBootstrap(),
       }),
-    ).rejects.toThrow(/artifact collect\/upload/i);
+    ).resolves.toEqual({ status: 'failed' });
 
     const completed = posted.find(
       (b) => b.kind === 'terminal' && b.status === 'completed',
@@ -775,14 +805,13 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
       },
     });
 
+    jest.spyOn(console, 'error').mockImplementation(() => {});
     await expect(
       actor.handleDurableTurn({
         threadId: THREAD_ID,
         bootstrap: makeDurableBootstrap(),
       }),
-    ).rejects.toThrow(
-      'Interactive turn ended with status: error: Custom tool schema is invalid',
-    );
+    ).resolves.toEqual({ status: 'failed' });
 
     expect(posted.find((body) => body.kind === 'terminal')).toMatchObject({
       kind: 'terminal',

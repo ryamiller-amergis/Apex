@@ -135,6 +135,14 @@ export function resolveEffort(input: {
     : undefined;
 }
 
+/**
+ * Cursor team policy blocks Composer variants selected through the `effort`
+ * parameter, so Composer models are sent as the plain model id.
+ */
+function acceptsEffortParameter(model: string): boolean {
+  return !model.trim().toLowerCase().startsWith('composer-');
+}
+
 export function buildCursorModelSelection(
   model: string,
   effort?: EffortLevel
@@ -142,7 +150,7 @@ export function buildCursorModelSelection(
   id: string;
   params?: Array<{ id: 'effort'; value: EffortLevel }>;
 } {
-  return effort
+  return effort && acceptsEffortParameter(model)
     ? { id: model, params: [{ id: 'effort', value: effort }] }
     : { id: model };
 }

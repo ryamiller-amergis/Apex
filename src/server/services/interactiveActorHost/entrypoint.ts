@@ -23,6 +23,7 @@ import {
   type DaprInvokerCallbackContent,
 } from '@dapr/dapr';
 import { promises as fs } from 'fs';
+import path from 'path';
 // Side-effect: initialize Application Insights when the connection string is set.
 import '../telemetry';
 import { exitAfterFlush } from '../../utils/processExit';
@@ -327,8 +328,22 @@ export async function main(): Promise<void> {
       ),
     materializeWorkspace: async (bootstrap, destination, signal) => {
       const reader = await openPinnedReaderForBootstrap(bootstrap);
+      // Turn outputs from a prior turn on this thread must not be re-uploaded.
+      await fs
+        .rm(path.join(destination, '.ai-pilot', 'output'), {
+          recursive: true,
+          force: true,
+        })
+        .catch(() => {});
+      await fs
+        .rm(path.join(destination, '.ai-pilot', 'kickoff-transcript.md'), {
+          force: true,
+        })
+        .catch(() => {});
+      // Repository reads go through the pinned `reader` (native read tools),
+      // so only attachments are written to disk.
       await materializeInteractiveWorkspace({
-        reader,
+        reader: null,
         destination,
         attachments: bootstrap.specification.currentMessage.attachments,
         readAttachment: async (attachment) => {
@@ -423,9 +438,16 @@ export async function main(): Promise<void> {
         runId: payload.runId,
         dispatchMessageId: payload.dispatchMessageId,
       });
-      const projectId = isInteractiveActorBootstrap(bootstrap)
-        ? bootstrap.projectId
-        : bootstrap.projectId;
+      // Only an attempt that never started gets the start-failure terminal; a
+      // running or finished attempt owns its own outcome.
+      if (
+        isInteractiveActorBootstrap(bootstrap) &&
+        bootstrap.attemptStatus !== 'queued' &&
+        bootstrap.attemptStatus !== 'dispatched'
+      ) {
+        return;
+      }
+      const projectId = bootstrap.projectId;
       await callback.postIngest(projectId, payload.runId, {
         dispatchMessageId: payload.dispatchMessageId,
         kind: 'terminal',

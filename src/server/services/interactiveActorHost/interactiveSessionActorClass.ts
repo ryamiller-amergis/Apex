@@ -148,11 +148,36 @@ export class InteractiveSessionActorImpl
         return { status: 'fence-conflict' };
       }
 
+      // Return as soon as the fence is verified. The Dapr actor invocation
+      // cancels long calls, so the turn runs detached; the per-thread turn
+      // queue still serializes turns and the turn reports its own terminal.
       const threadId = this.getActorId().getId();
-      return active.logic.handleDurableTurn({
-        threadId,
-        bootstrap,
-      });
+      void active.logic
+        .handleDurableTurn({ threadId, bootstrap })
+        .then((outcome) => {
+          console.log(
+            JSON.stringify({
+              event: 'InteractiveDurableTurnSettled',
+              threadId,
+              runId: payload.runId,
+              dispatchMessageId: payload.dispatchMessageId,
+              status: outcome.status,
+            }),
+          );
+        })
+        .catch((error: unknown) => {
+          console.error(
+            JSON.stringify({
+              event: 'InteractiveDurableTurnCrashed',
+              threadId,
+              runId: payload.runId,
+              dispatchMessageId: payload.dispatchMessageId,
+              errorType: error instanceof Error ? error.name : 'UnknownError',
+              errorMessage: error instanceof Error ? error.message : String(error),
+            }),
+          );
+        });
+      return { status: 'accepted' };
     }
 
     const persistedSnapshot = bootstrap.run.executionSnapshot;

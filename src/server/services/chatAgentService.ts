@@ -3160,7 +3160,7 @@ export function subscribeToThread(
   return () => state.subscribers.delete(callback);
 }
 
-const DEFAULT_MODEL = 'composer-2';
+const DEFAULT_MODEL = 'composer-2.5';
 
 function resolveModelId(model?: string): string {
   return model?.trim() || DEFAULT_MODEL;

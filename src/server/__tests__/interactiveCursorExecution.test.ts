@@ -60,10 +60,7 @@ describe('interactive Cursor execution repository tools', () => {
             customTools,
           },
           mcpServers,
-          model: {
-            id: 'composer-2.5',
-            params: [{ id: 'effort', value: 'high' }],
-          },
+          model: { id: 'composer-2.5' },
         }),
       );
       expect(execution.agentId).toBe('agent-1');

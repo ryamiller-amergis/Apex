@@ -5,14 +5,14 @@ export interface AgentModel {
 }
 
 export const AGENT_MODELS: AgentModel[] = [
-  { id: 'composer-2',        label: 'Composer 2',     badge: 'Composer' },
+  { id: 'composer-2.5',      label: 'Composer 2.5',   badge: 'Composer' },
   { id: 'claude-opus-4-6',   label: 'Opus 4.6',       badge: 'Opus'     },
   { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6',     badge: 'Sonnet'   },
   { id: 'gpt-5.5',           label: 'GPT-5.5',        badge: 'GPT'      },
   { id: 'gemini-3.1-pro',    label: 'Gemini 3.1 Pro', badge: 'Gemini'   },
 ];
 
-export const DEFAULT_MODEL_ID = 'composer-2';
+export const DEFAULT_MODEL_ID = 'composer-2.5';
 
 /** Return the model ID declared in a skill's frontmatter, or the default. */
 export function getDefaultModelForSkill(frontmatter?: Record<string, unknown>): string {

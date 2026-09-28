@@ -5,7 +5,10 @@ import {
   InteractiveSessionActorImpl,
   setInteractiveActorRuntime,
 } from '../services/interactiveActorHost/interactiveSessionActorClass';
-import type { InteractiveSessionActor } from '../services/interactiveActorHost/interactiveSessionActor';
+import type {
+  InteractiveSessionActor,
+  InteractiveTurnOutcome,
+} from '../services/interactiveActorHost/interactiveSessionActor';
 
 const TURN_ID = '10000000-0000-4000-8000-000000000001';
 const THREAD_ID = '10000000-0000-4000-8000-000000000002';
@@ -71,11 +74,12 @@ function makeBootstrap(
 }
 
 describe('interactive compatibility actor class', () => {
-  it('routes InteractiveActorBootstrap to handleDurableTurn', async () => {
-    const handleDurableTurn = jest.fn().mockResolvedValue({
-      status: 'completed',
-      cursorAgentId: 'agent-1',
-    });
+  it('acknowledges a durable dispatch before the detached turn settles', async () => {
+    let settle!: (value: { status: 'completed'; cursorAgentId: string }) => void;
+    const handleDurableTurn = jest.fn(
+      () => new Promise<InteractiveTurnOutcome>((resolve) => { settle = resolve; }),
+    );
+    jest.spyOn(console, 'log').mockImplementation(() => {});
     const handleTurn = jest.fn();
     const logic: InteractiveSessionActor = {
       handleTurn,
@@ -97,12 +101,13 @@ describe('interactive compatibility actor class', () => {
         runId: RUN_ID,
         dispatchMessageId: DISPATCH_MESSAGE_ID,
       }),
-    ).resolves.toEqual({ status: 'completed', cursorAgentId: 'agent-1' });
+    ).resolves.toEqual({ status: 'accepted' });
     expect(handleDurableTurn).toHaveBeenCalledWith({
       threadId: THREAD_ID,
       bootstrap: expect.objectContaining({ kind: 'interactive-actor-v2' }),
     });
     expect(handleTurn).not.toHaveBeenCalled();
+    settle({ status: 'completed', cursorAgentId: 'agent-1' });
   });
 
   it('returns prior outcome for a terminal attempt without calling Cursor', async () => {
