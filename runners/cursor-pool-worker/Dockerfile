@@ -1,6 +1,5 @@
-# Cursor Team Pool worker for My Work cloud development.
-# Runtime env: CURSOR_API_KEY, ADO_PAT, REPO_URL.
-# Pool name and idle timeout come from the Job (CURSOR_WORKER_*).
+# My Work cloud-agent image. The Job overrides the command to cursor-run-cli.
+# Runtime env: CURSOR_API_KEY, ADO_PAT, REPO_URL, AGENT_*.
 #
 # Build from repo root:
 #   docker build -f runners/cursor-pool-worker/Dockerfile -t apex-cursor-worker:local .
@@ -56,7 +55,11 @@ RUN curl -fsSL https://cursor.com/install | bash \
 WORKDIR /workspace
 
 COPY runners/cursor-pool-worker/git-credential.sh /usr/local/bin/cursor-git-credential
-COPY runners/cursor-pool-worker/entrypoint.sh /usr/local/bin/cursor-worker-entrypoint
-RUN chmod +x /usr/local/bin/cursor-git-credential /usr/local/bin/cursor-worker-entrypoint
+COPY runners/cursor-pool-worker/run-cli.sh /usr/local/bin/cursor-run-cli
+COPY runners/cursor-pool-worker/activity-log.mjs /usr/local/bin/cursor-activity-log
+COPY runners/cursor-pool-worker/pr-description.md /usr/local/share/apex/pr-description.md
+# Windows checkouts add CRLF, which breaks the bash shebang inside Linux.
+RUN sed -i 's/\r$//' /usr/local/bin/cursor-git-credential /usr/local/bin/cursor-run-cli /usr/local/bin/cursor-activity-log \
+ && chmod +x /usr/local/bin/cursor-git-credential /usr/local/bin/cursor-run-cli /usr/local/bin/cursor-activity-log
 
-ENTRYPOINT ["/usr/local/bin/cursor-worker-entrypoint"]
+ENTRYPOINT ["/usr/local/bin/cursor-run-cli"]

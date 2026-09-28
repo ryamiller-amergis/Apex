@@ -8,6 +8,7 @@ import {
   useCompleteFeature,
   useCloudAgentActivityStream,
   useCloudAgentRun,
+  useCloudAgentRunHistory,
   useDevSession,
   useCancelCloudAgentRun,
   useStartCloudAgentRun,
@@ -125,6 +126,8 @@ function prStatusText(run: CloudAgentRunSummary): string | null {
   switch (run.prStatus) {
     case 'open':
       return 'Open';
+    case 'abandoned':
+      return 'Abandoned';
     case 'merged':
       return 'Merged';
     case 'none':
@@ -251,6 +254,44 @@ function activityTitle(event: CloudAgentActivityEvent): string {
   return `${event.title} · ${event.detail}`;
 }
 
+function emptyActivityCopy(
+  run: CloudAgentRunSummary,
+  isConnected: boolean,
+): { title: string; detail: string } {
+  switch (run.status) {
+    case 'queued':
+      return { title: 'Queued', detail: 'Waiting for the cloud agent to start.' };
+    case 'dispatched':
+    case 'running':
+      return {
+        title: cloudRunStatusText(run),
+        detail: isConnected
+          ? 'Waiting for the agent’s first activity update…'
+          : 'Connecting to the cloud agent activity stream…',
+      };
+    case 'completed': {
+      const prOutcome = run.prUrl
+        ? ` The pull request is ${prStatusText(run)?.toLowerCase() ?? 'available'}.`
+        : '';
+      return {
+        title: run.finishedWithoutPr ? 'Run finished without a pull request' : 'Run completed',
+        detail: `Detailed agent activity was not recorded for this execution.${prOutcome}`,
+      };
+    }
+    case 'failed':
+      return {
+        title: cloudRunStatusText(run),
+        detail: run.lastError
+          ?? 'The run ended before detailed agent activity could be recorded.',
+      };
+    case 'cancelled':
+      return {
+        title: 'Run cancelled',
+        detail: 'The run was cancelled before more agent activity was recorded.',
+      };
+  }
+}
+
 const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
   item,
   run,
@@ -271,6 +312,8 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
     run.runId,
     run.status !== 'queued',
   );
+  const emptyActivity = emptyActivityCopy(run, activity.isConnected);
+  const history = useCloudAgentRunHistory(sessionId, true);
 
   const handleResizeMouseDown = (event: React.MouseEvent) => {
     event.preventDefault();
@@ -396,25 +439,98 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
                 </p>
               ) : null}
             </div>
-            <CopyableId
-              label="Run ID"
-              value={run.runId}
-              testId={`my-work-copy-run-id-${item.id}`}
-            />
-            {sessionId ? (
+            {run.jobName ? (
               <CopyableId
-                label="Session"
-                value={sessionId}
-                testId={`my-work-copy-session-id-${item.id}`}
+                label="Container job"
+                value={run.jobName}
+                testId={`my-work-copy-job-name-${item.id}`}
               />
-            ) : null}
+            ) : (
+              <div>
+                <span>Container job</span>
+                <code>Not recorded</code>
+              </div>
+            )}
+            {run.executionName ? (
+              <CopyableId
+                label="Execution"
+                value={run.executionName}
+                testId={`my-work-copy-execution-name-${item.id}`}
+              />
+            ) : (
+              <div>
+                <span>Execution</span>
+                <code>Not recorded</code>
+              </div>
+            )}
+          </section>
+
+          <details className={styles['run-technical-details']}>
+            <summary>Technical details</summary>
+            <div>
+              <CopyableId
+                label="Apex run ID"
+                value={run.runId}
+                testId={`my-work-copy-run-id-${item.id}`}
+              />
+              {sessionId ? (
+                <CopyableId
+                  label="Apex session ID"
+                  value={sessionId}
+                  testId={`my-work-copy-session-id-${item.id}`}
+                />
+              ) : null}
+            </div>
+          </details>
+
+          <section className={styles['run-history']} aria-labelledby={`cloud-run-history-${item.id}`}>
+            <div className={styles['run-history-heading']}>
+              <h3 id={`cloud-run-history-${item.id}`}>Run history</h3>
+              <p>Cloud executions and their pull-request outcomes.</p>
+            </div>
+            {history.isLoading ? (
+              <p className={styles['run-history-message']}>Loading run history…</p>
+            ) : history.error ? (
+              <p className={styles['run-history-message']}>Run history is unavailable.</p>
+            ) : (
+              <div className={styles['run-history-list']}>
+                {(history.data?.length ? history.data : [run]).map((historyRun) => (
+                  <div
+                    key={historyRun.runId}
+                    className={styles['run-history-item']}
+                    data-status={historyRun.status}
+                  >
+                    <div>
+                      <strong>{cloudRunStatusText(historyRun)}</strong>
+                      <span>
+                        {historyRun.executionName ?? 'Execution not recorded'}
+                        {historyRun.createdAt && historyRun.createdAt !== new Date(0).toISOString()
+                          ? ` · ${new Date(historyRun.createdAt).toLocaleString()}`
+                          : ''}
+                      </span>
+                    </div>
+                    {historyRun.prUrl ? (
+                      <a href={historyRun.prUrl} target="_blank" rel="noreferrer">
+                        {prStatusText(historyRun) ?? 'PR'} ↗
+                      </a>
+                    ) : (
+                      <span>No PR</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
 
           <section className={styles['run-activity']} aria-labelledby={`cloud-run-activity-${item.id}`}>
             <div className={styles['run-activity-heading']}>
               <div>
                 <h3 id={`cloud-run-activity-${item.id}`}>Activity</h3>
-                <p>Live agent updates and tool activity.</p>
+                <p>
+                  {isLive
+                    ? 'Live agent updates and tool activity.'
+                    : 'Recorded agent updates and tool activity.'}
+                </p>
               </div>
               {isLive ? (
                 <span className={styles['live-indicator']}>
@@ -445,14 +561,8 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
                 <div className={styles['run-activity-event']}>
                   <i aria-hidden="true" />
                   <div>
-                    <strong>{cloudRunStatusText(run)}</strong>
-                    <span>
-                      {run.status === 'failed' && run.lastError
-                        ? run.lastError
-                        : run.status === 'queued'
-                          ? 'Waiting for the cloud agent to start.'
-                          : 'Connecting to the cloud agent activity stream…'}
-                    </span>
+                    <strong>{emptyActivity.title}</strong>
+                    <span>{emptyActivity.detail}</span>
                   </div>
                 </div>
               )}
@@ -547,6 +657,10 @@ const CloudAgentEnabledRowAction: React.FC<{
       setOptimisticRun({
         runId: result.runId,
         status: 'queued',
+        jobName: null,
+        executionName: null,
+        branchName: null,
+        createdAt: new Date().toISOString(),
         prUrl: null,
         prStatus: 'none',
         finishedWithoutPr: false,
@@ -840,6 +954,79 @@ export function filterApexBacklogBySearch(
       return { ...group, epics };
     })
     .filter((group) => group.epics.length > 0);
+}
+
+export type AdoStatusFilter = 'all' | 'new' | 'in_progress' | 'in_pr';
+export type AdoCloudFilter = 'all' | 'running' | 'completed' | 'failed';
+
+export const ADO_STATUS_FILTERS: { id: AdoStatusFilter; label: string; title: string }[] = [
+  { id: 'all', label: 'All', title: 'Show every assigned work item' },
+  { id: 'new', label: 'New', title: 'State is New' },
+  { id: 'in_progress', label: 'In Progress', title: 'State is In Progress or Active' },
+  { id: 'in_pr', label: 'In PR', title: 'In Pull Request, or a cloud run with an open pull request' },
+];
+
+export const ADO_CLOUD_FILTERS: { id: AdoCloudFilter; label: string; title: string }[] = [
+  { id: 'all', label: 'Any', title: 'Any cloud agent run, including items with no run' },
+  { id: 'running', label: 'Running', title: 'Queued, starting, or running' },
+  { id: 'completed', label: 'Completed', title: 'Cloud agent run finished' },
+  { id: 'failed', label: 'Failed', title: 'Cloud agent run failed or timed out' },
+];
+
+const LIVE_CLOUD_STATUSES = new Set<CloudAgentRunSummary['status']>([
+  'queued',
+  'dispatched',
+  'running',
+]);
+
+function matchesAdoStatus(
+  item: AssignedWorkItem,
+  run: CloudAgentRunSummary | null | undefined,
+  status: AdoStatusFilter,
+): boolean {
+  if (status === 'all') return true;
+  const state = item.state.trim().toLowerCase();
+  if (status === 'new') return state === 'new';
+  if (status === 'in_progress') return state === 'in progress' || state === 'active';
+  return state === 'in pull request' || run?.prStatus === 'open';
+}
+
+function matchesCloudRun(
+  run: CloudAgentRunSummary | null | undefined,
+  cloud: AdoCloudFilter,
+): boolean {
+  if (cloud === 'all') return true;
+  if (!run) return false;
+  if (cloud === 'running') return LIVE_CLOUD_STATUSES.has(run.status);
+  if (cloud === 'completed') return run.status === 'completed';
+  return run.status === 'failed';
+}
+
+/**
+ * Client-side filter for ADO assigned work items. Search matches the title
+ * or the work item id (`55031` and `#55031`). Status and cloud filters combine.
+ */
+export function filterAssignedWorkItems(
+  items: AssignedWorkItem[],
+  options: {
+    status: AdoStatusFilter;
+    cloud: AdoCloudFilter;
+    search: string;
+    cloudRunByWorkItemId?: ReadonlyMap<number, CloudAgentRunSummary | null | undefined>;
+  },
+): AssignedWorkItem[] {
+  const query = options.search.trim().toLowerCase();
+  const idQuery = query.startsWith('#') ? query.slice(1) : query;
+
+  return items.filter((item) => {
+    if (query) {
+      const idText = String(item.id);
+      const searchHit = item.title.toLowerCase().includes(query) || idText.includes(idQuery);
+      if (!searchHit) return false;
+    }
+    const run = options.cloudRunByWorkItemId?.get(item.id);
+    return matchesAdoStatus(item, run, options.status) && matchesCloudRun(run, options.cloud);
+  });
 }
 
 function featureCompleteKey(prdId: string, featureId: string): string {
@@ -1269,20 +1456,21 @@ export const DevWorkbenchView: React.FC = () => {
     usesAppNativeRequirements || showBoardAssigned ? null : (selectedProject || null),
   );
   const { data: activeSessions } = useActiveSessions(selectedProject || null);
-  const closeSession = useCloseDevSession();
-  const [closingId, setClosingId] = useState<string | null>(null);
   const [localDevTarget, setLocalDevTarget] = useState<StartLocalDevTarget | null>(null);
+  const [adoStatusFilter, setAdoStatusFilter] = useState<AdoStatusFilter>('all');
+  const [adoCloudFilter, setAdoCloudFilter] = useState<AdoCloudFilter>('all');
+  const [adoSearch, setAdoSearch] = useState('');
 
   const { legacySessionByWorkItem, cloudSessionByWorkItem } = useMemo(() => {
     const legacy = new Map<number, ActiveDevSession>();
     const cloud = new Map<number, ActiveDevSession>();
     if (activeSessions) {
       for (const s of activeSessions) {
-        if (s.status !== 'closed' && s.status !== 'failed' && s.workItemId) {
-          if (s.cloudAgentRun && !cloud.has(s.workItemId)) {
-            cloud.set(s.workItemId, s);
-          }
+        if (s.status !== 'closed' && s.workItemId) {
+          if (s.cloudAgentRun && !cloud.has(s.workItemId)) cloud.set(s.workItemId, s);
           if (
+            s.status !== 'failed'
+            &&
             (!s.cloudAgentRun || s.chatThreadId || s.branchName)
             && !legacy.has(s.workItemId)
           ) {
@@ -1308,13 +1496,32 @@ export const DevWorkbenchView: React.FC = () => {
     });
   }, [workItems, legacySessionByWorkItem, cloudSessionByWorkItem]);
 
-  const handleClearProgress = async (sessionId: string) => {
-    setClosingId(sessionId);
-    try {
-      await closeSession.mutateAsync(sessionId);
-    } finally {
-      setClosingId(null);
-    }
+  const visibleWorkItems = useMemo(() => {
+    const cloudRunByWorkItemId = new Map<number, CloudAgentRunSummary | null | undefined>();
+    cloudSessionByWorkItem.forEach((session, id) => {
+      cloudRunByWorkItemId.set(id, session.cloudAgentRun);
+    });
+    return filterAssignedWorkItems(sortedWorkItems, {
+      status: adoStatusFilter,
+      cloud: adoCloudFilter,
+      search: adoSearch,
+      cloudRunByWorkItemId,
+    });
+  }, [sortedWorkItems, adoStatusFilter, adoCloudFilter, adoSearch, cloudSessionByWorkItem]);
+
+  useEffect(() => {
+    setAdoStatusFilter('all');
+    setAdoCloudFilter('all');
+    setAdoSearch('');
+  }, [selectedProject]);
+
+  const adoFiltersActive =
+    adoStatusFilter !== 'all' || adoCloudFilter !== 'all' || adoSearch.trim() !== '';
+
+  const clearAdoFilters = () => {
+    setAdoStatusFilter('all');
+    setAdoCloudFilter('all');
+    setAdoSearch('');
   };
 
   if ((usesAppNativeRequirements || showBoardAssigned) && selectedProject) {
@@ -1374,9 +1581,107 @@ export const DevWorkbenchView: React.FC = () => {
           No active work items assigned to you.
         </div>
       ) : (
+        <>
+          <div className={`${styles['filters-row']} ${styles['ado-filters-row']}`}>
+            <div
+              className={styles.filters}
+              role="toolbar"
+              aria-label="Filter assigned work items"
+              {...{ 'data-testid': 'my-work-ado-filters' }}
+            >
+              <div
+                className={styles['filter-group']}
+                role="group"
+                aria-label="Filter by work item state"
+                {...{ 'data-testid': 'my-work-ado-status-filters' }}
+              >
+                {ADO_STATUS_FILTERS.map(({ id, label, title }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`${styles['filter-pill']}${adoStatusFilter === id ? ` ${styles['filter-pill-active']}` : ''}`}
+                    aria-pressed={adoStatusFilter === id}
+                    title={title}
+                    onClick={() => setAdoStatusFilter(id)}
+                    {...{ 'data-testid': `my-work-ado-status-filter-${id}` }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <span className={styles['filter-divider']} aria-hidden="true" />
+              <div
+                className={styles['filter-group']}
+                role="group"
+                aria-label="Filter by cloud agent run"
+                {...{ 'data-testid': 'my-work-ado-cloud-filters' }}
+              >
+                <span className={styles['filter-group-label']}>Cloud agent</span>
+                {ADO_CLOUD_FILTERS.map(({ id, label, title }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`${styles['filter-pill']}${adoCloudFilter === id ? ` ${styles['filter-pill-active']}` : ''}`}
+                    aria-pressed={adoCloudFilter === id}
+                    title={title}
+                    onClick={() => setAdoCloudFilter(id)}
+                    {...{ 'data-testid': `my-work-ado-cloud-filter-${id}` }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {adoFiltersActive ? (
+                <button
+                  type="button"
+                  className={styles['clear-filters-btn']}
+                  onClick={clearAdoFilters}
+                  {...{ 'data-testid': 'my-work-ado-clear-filters' }}
+                >
+                  Clear
+                </button>
+              ) : null}
+            </div>
+            <div className={styles['search-wrap']}>
+              <svg
+                className={styles['search-icon']}
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="6.5" cy="6.5" r="4.5" />
+                <line x1="10" y1="10" x2="14" y2="14" />
+              </svg>
+              <input
+                className={styles['search-input']}
+                type="search"
+                placeholder="Search title or ID…"
+                value={adoSearch}
+                onChange={(event) => setAdoSearch(event.target.value)}
+                aria-label="Search work items by title or ID"
+                {...{ 'data-testid': 'my-work-ado-search-input' }}
+              />
+            </div>
+          </div>
+          {visibleWorkItems.length === 0 ? (
+            <div className={styles.empty} {...{ 'data-testid': 'my-work-ado-no-matches' }}>
+              <p className={styles['empty-copy']}>No work items match your search or filters.</p>
+              <button
+                type="button"
+                className={styles['clear-filters-btn']}
+                onClick={clearAdoFilters}
+                {...{ 'data-testid': 'my-work-ado-empty-clear' }}
+              >
+                Clear filters
+              </button>
+            </div>
+          ) : (
         <div className={styles.list} {...{ 'data-testid': 'my-work-work-items-list' }}>
-          {sortedWorkItems.map((item) => {
-            const active = legacySessionByWorkItem.get(item.id);
+          {visibleWorkItems.map((item) => {
             const cloudSession = cloudSessionByWorkItem.get(item.id);
             return (
               <div key={item.id} className={styles.item}>
@@ -1386,22 +1691,9 @@ export const DevWorkbenchView: React.FC = () => {
                     <span className={styles['item-id']}>#{item.id}</span>
                     <span className={styles.badge}>{item.workItemType}</span>
                     <span className={styles.badge}>{item.state}</span>
-                    {active && <span className={styles['active-badge']}>In Progress</span>}
                   </div>
                 </div>
                 <div className={styles['item-actions']}>
-                  {active ? (
-                    <button
-                      className={styles['close-btn']}
-                      onClick={() => handleClearProgress(active.id)}
-                      disabled={closingId === active.id}
-                      type="button"
-                      title="Clear in-progress status for this work item"
-                      {...{ 'data-testid': `my-work-clear-progress-${item.id}` }}
-                    >
-                      {closingId === active.id ? 'Closing...' : 'Clear Progress'}
-                    </button>
-                  ) : null}
                   <button
                     className={styles['local-dev-btn']}
                     onClick={() =>
@@ -1433,7 +1725,9 @@ export const DevWorkbenchView: React.FC = () => {
               </div>
             );
           })}
-        </div>
+            </div>
+          )}
+        </>
       )}
 
       {localDevTarget && (

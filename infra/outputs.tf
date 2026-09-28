@@ -333,36 +333,26 @@ output "ai_runs_api_app_setting_names" {
 }
 
 # ---------------------------------------------------------------------------
-# Cursor self-hosted Team Pool (null outside enabled dev environments)
+# My Work Cursor worker Job (null outside enabled dev environments)
 # ---------------------------------------------------------------------------
 
 output "cursor_pool_name" {
-  description = "Cursor Team Pool routing name used by My Work cloud agents."
+  description = "Idle template pool name. Apex overrides the command per execution."
   value       = local.cursor_pool_enabled ? local.cursor_pool_name : null
 }
 
-output "cursor_pool_controller_app_name" {
-  description = "Always-on Container App that watches and claims Cursor pool requests."
-  value       = try(azurerm_container_app.cursor_pool_controller[0].name, null)
-}
-
 output "cursor_pool_worker_job_name" {
-  description = "Manual Container Apps Job started once per claimed Cursor pool request."
+  description = "Manual Container Apps Job Apex starts for each My Work cloud-agent run."
   value       = try(azurerm_container_app_job.cursor_pool_worker[0].name, null)
 }
 
 output "cursor_pool_worker_job_id" {
-  description = "Resource ID consumed by the controller spawn hook."
+  description = "Resource ID of the My Work Cursor worker Job."
   value       = try(azurerm_container_app_job.cursor_pool_worker[0].id, null)
 }
 
-output "cursor_pool_controller_identity_client_id" {
-  description = "Managed identity client ID used by the Cursor pool controller."
-  value       = try(azurerm_user_assigned_identity.cursor_pool_controller[0].client_id, null)
-}
-
 output "cursor_pool_worker_identity_client_id" {
-  description = "Managed identity client ID used by Cursor pool worker executions."
+  description = "Managed identity client ID used by Cursor worker executions."
   value       = try(azurerm_user_assigned_identity.cursor_pool_worker[0].client_id, null)
 }
 

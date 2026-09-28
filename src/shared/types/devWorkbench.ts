@@ -120,12 +120,18 @@ export interface CloudAgentEligibility {
   reason?: string;
 }
 
-/** Host-agnostic PR lifecycle for My Work; closed-unmerged maps to open. */
-export type HostAgnosticPrStatus = 'none' | 'open' | 'merged';
+/** Host-agnostic PR lifecycle for My Work. */
+export type HostAgnosticPrStatus = 'none' | 'open' | 'abandoned' | 'merged';
 
 export interface CloudAgentRunSummary {
   runId: string;
   status: import('./agentRunLifecycle').AgentRunStatus;
+  /** Azure Container Apps job resource that owns the execution. */
+  jobName: string | null;
+  /** Azure Container Apps execution name used to inspect logs and status. */
+  executionName: string | null;
+  branchName: string | null;
+  createdAt: string;
   prUrl: string | null;
   prStatus: HostAgnosticPrStatus;
   finishedWithoutPr: boolean;

@@ -7,6 +7,7 @@ const mockUpdateSet = jest.fn();
 const mockUpdateWhere = jest.fn();
 const mockLinkWorkItemToPullRequest = jest.fn();
 const mockAddAdoWorkItemHyperlink = jest.fn();
+const mockTransitionWorkItemForPullRequest = jest.fn();
 const mockGetAdoPullRequestStatus = jest.fn();
 const mockGetGithubPullRequestStatus = jest.fn();
 const mockTrackEvent = jest.fn();
@@ -201,10 +202,16 @@ function run(overrides: Record<string, unknown> = {}) {
     dispatchMessageId: 'cursor-run-1',
     cloudAgentIdentity: 'bc-agent-1',
     cloudAgentManaged: true,
+    cloudJobName: 'apex-cursor-worker',
+    cloudJobExecutionName: 'cursor-run-1',
+    cloudBranchName: 'feature/apex-42-abc123',
+    cloudPrUrl: null,
+    cloudPrStatus: 'none',
     cancelRequested: false,
     cancelState: null,
     terminalReason: null,
     checkResults: null,
+    createdAt: '2026-09-28T14:00:00.000Z',
     ...overrides,
   };
 }
@@ -219,12 +226,14 @@ function makeDeps(overrides: Partial<CloudAgentServiceDeps> = {}): CloudAgentSer
     cancelCursorCloudAgentRun: mockVendorCancel,
     linkWorkItemToPullRequest: mockLinkWorkItemToPullRequest,
     addAdoWorkItemHyperlink: mockAddAdoWorkItemHyperlink,
+    transitionWorkItemForPullRequest: mockTransitionWorkItemForPullRequest,
     getAdoPullRequestStatus: mockGetAdoPullRequestStatus,
     getGithubPullRequestStatus: mockGetGithubPullRequestStatus,
     retryWithBackoff: async <T>(fn: () => Promise<T>) => fn(),
     buildPrompt: jest.fn().mockResolvedValue('prompt'),
     persistLeftoverWork: mockPersistLeftoverWork,
     writeLeftoverWorkToAdo: mockWriteLeftoverWorkToAdo,
+    openCloudAgentPullRequest: jest.fn(),
     ...overrides,
   } as unknown as CloudAgentServiceDeps;
 }
@@ -445,6 +454,7 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
       currentRunPrUrl: null,
     }));
     expect(mockLinkWorkItemToPullRequest).not.toHaveBeenCalled();
+    expect(mockTransitionWorkItemForPullRequest).not.toHaveBeenCalled();
   });
 
   it('uses the frozen run repository context to link a reported PR', async () => {
@@ -477,6 +487,7 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
       runId: RUN_ID,
       sessionId: SESSION_ID,
     });
+    expect(mockTransitionWorkItemForPullRequest).toHaveBeenCalledWith('MaxView', 123);
   });
 
   it('does not roll back terminal persistence when external linking fails', async () => {
@@ -719,6 +730,10 @@ describe('getCloudAgentRunStatus check projection (TBI-005 DoD-0/DoD-1/DoD-2; PB
     expect(summary).toEqual({
       runId: RUN_ID,
       status: 'completed',
+      jobName: 'apex-cursor-worker',
+      executionName: 'cursor-run-1',
+      branchName: 'feature/apex-42-abc123',
+      createdAt: '2026-09-28T14:00:00.000Z',
       prUrl: 'https://pr/1',
       prStatus: 'open',
       finishedWithoutPr: false,
@@ -814,6 +829,57 @@ describe('getCloudAgentRunStatus check projection (TBI-005 DoD-0/DoD-1/DoD-2; PB
     }));
     expect(mockMarkTerminal).toHaveBeenCalledWith(RUN_ID, expect.not.objectContaining({
       checkResults: expect.anything(),
+    }));
+  });
+
+  it('opens the pull request as the developer who started the run once the branch is pushed', async () => {
+    mockDevSessionFindFirst.mockResolvedValue(linkableSession({ currentRunPrUrl: null }));
+    mockAgentRunFindFirst.mockResolvedValue(linkableRun({
+      status: 'running',
+      executionSnapshot: {
+        provider: 'ado',
+        repository: 'MaxView',
+        cloudAgent: {
+          workItemId: 42,
+          workItemTitle: 'Implement login',
+          baseBranch: 'development',
+          initiatorName: 'Jane Developer',
+          initiatorEmail: 'jane@example.com',
+        },
+      },
+    }));
+    mockGetAdoPullRequestStatus.mockResolvedValue('open');
+    const opened = 'https://dev.azure.com/amergis/MaxView/_git/MaxView/pullrequest/9';
+    const openCloudAgentPullRequest = jest.fn().mockResolvedValue(opened);
+    const deps = makeDeps({
+      getCloudAgentRun: jest.fn().mockResolvedValue({
+        status: 'running',
+        prUrl: null,
+        resultText: null,
+        branchName: 'feature/apex-42-abc',
+        summary: 'Added the login form.',
+      }),
+      openCloudAgentPullRequest,
+    });
+
+    const summary = await getCloudAgentRunStatus(SESSION_ID, USER_ID, deps, 'user-token');
+
+    expect(openCloudAgentPullRequest).toHaveBeenCalledWith({
+      project: 'MaxView',
+      repo: 'MaxView',
+      sourceBranch: 'feature/apex-42-abc',
+      targetBranch: 'development',
+      workItemId: 42,
+      workItemTitle: 'Implement login',
+      authorName: 'Jane Developer',
+      authorEmail: 'jane@example.com',
+      summary: 'Added the login form.',
+      adoUserToken: 'user-token',
+    });
+    expect(summary).toEqual(expect.objectContaining({
+      status: 'completed',
+      prUrl: opened,
+      finishedWithoutPr: false,
     }));
   });
 });
@@ -942,6 +1008,7 @@ describe('Cloud Agent PR write-back and host status (PBI-007 / TBI-006)', () => 
 
   it.each([
     ['open', 'open'],
+    ['abandoned', 'abandoned'],
     ['merged', 'merged'],
   ] as const)('PBI-007 AC-0 / TBI-006 DoD-1: GitHub %s maps through the injected lookup', async (hostStatus, expected) => {
     mockDevSessionFindFirst.mockResolvedValue(linkableSession({

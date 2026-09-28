@@ -82,6 +82,17 @@ export interface ExecutionSnapshot {
   repository?: string;
   /** Provider for BareRepoReader / HTTP identity (`ado` | `github`). */
   provider?: SkillProvider;
+  /**
+   * Frozen when a developer starts a cloud-agent run. Used to open the pull
+   * request as that developer once the container has pushed a branch.
+   */
+  cloudAgent?: {
+    workItemId: number;
+    workItemTitle?: string;
+    baseBranch: string;
+    initiatorName?: string;
+    initiatorEmail?: string;
+  };
   workflowClass: string;
   skillPath: string;
   projectId: string;

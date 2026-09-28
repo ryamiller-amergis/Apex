@@ -3,6 +3,7 @@ import {
   buildWorkItemReferenceText,
   linkWorkItemToPullRequest,
   parsePullRequestNumber,
+  transitionWorkItemForPullRequest,
   verifyGithubReference,
 } from '../services/workItemPrLinkService';
 
@@ -117,6 +118,57 @@ describe('workItemPrLinkService (PBI-009 / TBI-008)', () => {
       'https://dev.azure.com/amergis/MaxView/_git/Api/pullrequest/7/',
       'ado',
     )).toBe(7);
+  });
+
+  it('moves a leaf work item to In Pull Request', async () => {
+    const ado = {
+      queryWorkItemsByWiql: jest.fn().mockResolvedValue({
+        items: [{ fields: { 'System.WorkItemType': 'Product Backlog Item' } }],
+      }),
+      getFeatureChildren: jest.fn(),
+      setWorkItemState: jest.fn().mockResolvedValue(undefined),
+    };
+
+    await transitionWorkItemForPullRequest(ado, 123);
+
+    expect(ado.setWorkItemState).toHaveBeenCalledWith(123, 'In Pull Request');
+    expect(ado.getFeatureChildren).not.toHaveBeenCalled();
+  });
+
+  it('moves a Feature to In Progress and its active children to In Pull Request', async () => {
+    const ado = {
+      queryWorkItemsByWiql: jest.fn().mockResolvedValue({
+        items: [{ fields: { 'System.WorkItemType': 'Feature' } }],
+      }),
+      getFeatureChildren: jest.fn().mockResolvedValue([
+        { id: 201, state: 'In Progress' },
+        { id: 202, state: 'Committed' },
+        { id: 203, state: 'Done' },
+      ]),
+      setWorkItemState: jest.fn().mockResolvedValue(undefined),
+    };
+
+    await transitionWorkItemForPullRequest(ado, 100);
+
+    expect(ado.setWorkItemState).toHaveBeenCalledWith(100, 'In Progress');
+    expect(ado.setWorkItemState).toHaveBeenCalledWith(201, 'In Pull Request');
+    expect(ado.setWorkItemState).toHaveBeenCalledWith(202, 'In Pull Request');
+    expect(ado.setWorkItemState).not.toHaveBeenCalledWith(203, 'In Pull Request');
+    expect(ado.setWorkItemState).not.toHaveBeenCalledWith(100, 'In Pull Request');
+  });
+
+  it('treats a failed type lookup as a leaf work item', async () => {
+    const warning = jest.spyOn(console, 'warn').mockImplementation();
+    const ado = {
+      queryWorkItemsByWiql: jest.fn().mockRejectedValue(new Error('wiql down')),
+      getFeatureChildren: jest.fn(),
+      setWorkItemState: jest.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(transitionWorkItemForPullRequest(ado, 123)).resolves.toBeUndefined();
+    expect(ado.setWorkItemState).toHaveBeenCalledWith(123, 'In Pull Request');
+    expect(warning).toHaveBeenCalled();
+    warning.mockRestore();
   });
 
   it('S3 / TBI-006 DoD-1: rejects malformed PR URLs for both hosts', () => {

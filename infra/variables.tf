@@ -639,31 +639,19 @@ variable "ai_runs_runner_callback_token" {
 # ---------------------------------------------------------------------------
 
 variable "enable_cursor_pool_workers" {
-  description = "Provision the Cursor Team Pool controller and worker Job in cae-apex-ai. Effective only when environment is dev."
+  description = "Provision the My Work Cursor worker Job in cae-apex-ai. Effective only when environment is dev."
   type        = bool
   default     = false
 }
 
 variable "cursor_pool_name" {
-  description = "Cursor Team Pool routing name. Null uses apex-my-work."
-  type        = string
-  default     = null
-}
-
-variable "cursor_pool_controller_app_name" {
-  description = "Always-on Cursor pool controller Container App name. Null derives ca-apex-cursor-controller-{environment}."
+  description = "Idle template pool name. Apex overrides the command per execution, so this is not used to claim work."
   type        = string
   default     = null
 }
 
 variable "cursor_pool_worker_job_name" {
-  description = "Manual Cursor pool worker Container Apps Job name. Null derives caj-apex-cursor-worker-{environment}."
-  type        = string
-  default     = null
-}
-
-variable "cursor_pool_controller_identity_name" {
-  description = "User-assigned identity name for the Cursor pool controller. Null derives mi-apex-cursor-controller-{environment}."
+  description = "Manual Cursor worker Container Apps Job name. Null derives caj-apex-cursor-worker-{environment}."
   type        = string
   default     = null
 }
@@ -674,28 +662,10 @@ variable "cursor_pool_worker_identity_name" {
   default     = null
 }
 
-variable "cursor_pool_controller_image" {
-  description = "Controller image containing Cursor agent CLI, Azure CLI, and /opt/cursor/spawn-aca-job.sh."
-  type        = string
-  default     = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
-}
-
 variable "cursor_pool_worker_image" {
   description = "Worker image containing Cursor agent CLI, git, and Apex build tools."
   type        = string
   default     = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
-}
-
-variable "cursor_pool_controller_cpu" {
-  description = "CPU cores allocated to the always-on Cursor pool controller."
-  type        = number
-  default     = 0.5
-}
-
-variable "cursor_pool_controller_memory" {
-  description = "Memory allocated to the always-on Cursor pool controller."
-  type        = string
-  default     = "1Gi"
 }
 
 variable "cursor_pool_worker_cpu" {

@@ -52,14 +52,14 @@ describe('skillCatalogGitHub.getPullRequestStatus (VT-02 / TBI-006 DoD-1)', () =
     );
   });
 
-  it('VT-02 / TBI-006 DoD-1: maps a closed but unmerged GitHub PR to open', async () => {
+  it('VT-02 / TBI-006 DoD-1: maps a closed but unmerged GitHub PR to abandoned', async () => {
     mockPullRequest({ state: 'closed', merged: false });
     const { getPullRequestStatus } = await import(
       '../services/skillCatalogGitHub'
     );
 
     await expect(getPullRequestStatus('amergis/Apex', 42)).resolves.toBe(
-      'open'
+      'abandoned'
     );
   });
 

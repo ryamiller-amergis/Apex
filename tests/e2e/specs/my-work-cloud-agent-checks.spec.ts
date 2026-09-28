@@ -58,6 +58,10 @@ const WORK_ITEM: AssignedWorkItem = {
 const RUN_WITH_PR_AND_FAILING_E2E: CloudAgentRunSummary = {
   runId: 'e2e-feat003-run-1',
   status: 'completed',
+  jobName: 'apex-cursor-worker',
+  executionName: 'apex-cursor-worker-e2e-checks',
+  branchName: 'feature/apex-checks-e2e',
+  createdAt: '2026-09-02T12:00:00.000Z',
   prUrl: PR_URL,
   prStatus: 'open',
   finishedWithoutPr: false,
@@ -75,6 +79,10 @@ const RUN_WITH_PR_AND_FAILING_E2E: CloudAgentRunSummary = {
 const RUN_WITHOUT_PR: CloudAgentRunSummary = {
   runId: 'e2e-feat003-run-2',
   status: 'completed',
+  jobName: 'apex-cursor-worker',
+  executionName: 'apex-cursor-worker-e2e-no-pr',
+  branchName: 'feature/apex-no-pr-e2e',
+  createdAt: '2026-09-02T12:10:00.000Z',
   prUrl: null,
   prStatus: 'none',
   finishedWithoutPr: true,

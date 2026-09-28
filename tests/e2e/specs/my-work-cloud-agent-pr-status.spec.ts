@@ -65,6 +65,10 @@ const WORK_ITEM: AssignedWorkItem = {
 const RUN_PR_OPEN: CloudAgentRunSummary = {
   runId: 'e2e-feat004-run-1',
   status: 'completed',
+  jobName: 'apex-cursor-worker',
+  executionName: 'apex-cursor-worker-e2e-pr',
+  branchName: 'feature/apex-4211-e2e',
+  createdAt: '2026-09-02T12:00:00.000Z',
   prUrl: PR_URL,
   prStatus: 'open',
   finishedWithoutPr: false,

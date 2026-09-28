@@ -85,6 +85,16 @@ export function useCloudAgentRun(sessionId: string | null) {
   });
 }
 
+export function useCloudAgentRunHistory(sessionId: string | null, enabled: boolean) {
+  return useQuery<CloudAgentRunSummary[]>({
+    queryKey: ['dev-workbench', 'session', sessionId, 'cloud-agent-runs'],
+    queryFn: () =>
+      apiFetch(`/api/dev-workbench/sessions/${encodeURIComponent(sessionId!)}/cloud-agent/runs`),
+    enabled: !!sessionId && enabled,
+    staleTime: 30_000,
+  });
+}
+
 export function useCloudAgentActivityStream(
   sessionId: string | null,
   runId: string | null,

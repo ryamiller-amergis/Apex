@@ -8,7 +8,7 @@ import { getSkillConfig } from '../services/projectSettingsService';
 import { adoWriteForRequest, isAdoUserAuthError } from '../services/adoFactory';
 import { createThread } from '../services/chatAgentService';
 import * as githubCatalog from '../services/skillCatalogGitHub';
-import { buildWorkItemReferenceText } from '../services/workItemPrLinkService';
+import { buildWorkItemReferenceText, transitionWorkItemForPullRequest } from '../services/workItemPrLinkService';
 import {
   checkoutDefaultBranch,
   checkoutFeatureBranch,
@@ -39,7 +39,8 @@ import {
   activateDevSession,
   touchDevSessionSetup,
 } from '../services/devSessionSetupService';
-import { getUserId } from '../utils/requestUser';
+import { getUserEmail, getUserId } from '../utils/requestUser';
+import { getAdoTokenForUser } from '../services/adoUserToken';
 import type {
   StartDevSessionRequest,
   ApexBacklogGroup,
@@ -60,6 +61,7 @@ import {
   CloudAgentConflictError,
   CloudAgentEligibilityError,
   getCloudAgentActivityStream,
+  getCloudAgentRunHistory,
   getCloudAgentRunStatus,
   startCloudAgentRun,
 } from '../services/cloudAgentService';
@@ -842,11 +844,18 @@ router.post('/cloud-agent/start', async (req: Request, res: Response) => {
       return;
     }
 
+    const adoUserToken = await getAdoTokenForUser(req);
+    if (!adoUserToken) {
+      console.warn('[cloud-agent] no developer Azure DevOps token; the pull request will be opened by the service account');
+    }
     const result = await startCloudAgentRun({
       userId,
       project,
       workItemId,
       workItemTitle: (fields['System.Title'] ?? `Work item ${workItemId}`) as string,
+      initiatorName: displayName,
+      initiatorEmail: getUserEmail(req),
+      adoUserToken,
       isSuperAdmin: isSuperAdminRequest(req),
       item: {
         state: (fields['System.State'] ?? '') as string,
@@ -1011,9 +1020,10 @@ router.get('/sessions', async (req: Request, res: Response) => {
       .where(and(...conditions))
       .orderBy(desc(devSessions.createdAt));
 
+    const adoUserToken = await getAdoTokenForUser(req);
     const withRuns = await Promise.all(rows.map(async (row) => ({
       ...row,
-      cloudAgentRun: await getCloudAgentRunStatus(row.id, userId),
+      cloudAgentRun: await getCloudAgentRunStatus(row.id, userId, undefined, adoUserToken),
     })));
 
     res.json(withRuns);
@@ -1053,12 +1063,33 @@ router.get('/sessions/:id', async (req: Request, res: Response) => {
       createdAt: session.createdAt,
       prdId: session.prdId,
       featureId: session.featureId,
-      cloudAgentRun: await getCloudAgentRunStatus(session.id, userId),
+      cloudAgentRun: await getCloudAgentRunStatus(
+        session.id,
+        userId,
+        undefined,
+        await getAdoTokenForUser(req),
+      ),
       leftoverWork: session.leftoverWork ?? null,
     });
   } catch (err) {
     console.error('[dev-workbench] getSession failed:', (err as Error).message);
     res.status(500).json({ error: 'Failed to fetch session' });
+  }
+});
+
+// GET /sessions/:id/cloud-agent/runs — durable run and PR history for the drawer
+router.get('/sessions/:id/cloud-agent/runs', async (req: Request, res: Response) => {
+  try {
+    const runs = await getCloudAgentRunHistory(req.params.id, getUserId(req));
+    res.json(runs);
+  } catch (err) {
+    const status = (err as Error & { status?: number }).status;
+    if (status === 404) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    console.error('[dev-workbench] cloud-agent run history failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to fetch Cloud Agent run history' });
   }
 });
 
@@ -1673,10 +1704,12 @@ async function pushFeatureBranch(
 }
 
 /**
- * Creates a PR from an already-pushed branch, transitions the work item
- * to "In Pull Request" (ADO only), attaches the PR hyperlink, and persists
- * the PR URL on the session record. Used by both the /pr endpoint and the
- * remote-only fallback (workspace gone but branch already pushed).
+ * Creates a PR from an already-pushed branch, moves the Azure DevOps work
+ * item for that PR (a Feature moves to "In Progress" and its active children
+ * move to "In Pull Request"; any other work item moves itself), attaches the
+ * PR hyperlink, and persists the PR URL on the session record. Used by both
+ * the /pr endpoint and the remote-only fallback (workspace gone but branch
+ * already pushed).
  */
 async function createSessionPr(
   sessionId: string,
@@ -1715,24 +1748,7 @@ async function createSessionPr(
       });
 
       if (workItemId) {
-        let workItemType = '';
-        try {
-          const wiResult = await adoService.queryWorkItemsByWiql({
-            wiql: `SELECT [System.Id],[System.WorkItemType] FROM WorkItems WHERE [System.Id] = ${workItemId}`,
-            fields: ['System.Id', 'System.WorkItemType'],
-          });
-          workItemType = (wiResult.items[0]?.fields?.['System.WorkItemType'] as string) ?? '';
-        } catch {
-          // Non-fatal — fall back to treating it as a leaf work item.
-        }
-
-        if (workItemType === 'Feature') {
-          // Features have no "In Pull Request" state. Keep the Feature "In Progress"
-          // and move the children currently "In Progress" to "In Pull Request".
-          await cascadeChildStates(adoService, workItemId, ['In Progress'], 'In Pull Request');
-        } else {
-          await adoService.setWorkItemState(workItemId, 'In Pull Request');
-        }
+        await transitionWorkItemForPullRequest(adoService, workItemId);
         await adoService.addWorkItemHyperlink(workItemId, prUrl, 'Implementation PR');
       }
     }

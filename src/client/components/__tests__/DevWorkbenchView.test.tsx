@@ -30,6 +30,7 @@ jest.mock('../../hooks/useDevWorkbench', () => ({
   useStartCloudAgentRun: jest.fn(),
   useCloudAgentActivityStream: jest.fn(),
   useCloudAgentRun: jest.fn(),
+  useCloudAgentRunHistory: jest.fn(),
   useDevSession: jest.fn(),
   useCancelCloudAgentRun: jest.fn(),
 }));
@@ -81,6 +82,7 @@ import {
   useStartCloudAgentRun,
   useCloudAgentActivityStream,
   useCloudAgentRun,
+  useCloudAgentRunHistory,
   useDevSession,
   useCancelCloudAgentRun,
 } from '../../hooks/useDevWorkbench';
@@ -137,6 +139,10 @@ function cloudRun(
     failingChecks: [],
     lastError: null,
     ...overrides,
+    jobName: overrides.jobName ?? 'apex-cursor-worker',
+    executionName: overrides.executionName ?? 'apex-cursor-worker-abc123',
+    branchName: overrides.branchName ?? 'feature/apex-42-abc123',
+    createdAt: overrides.createdAt ?? '2026-09-28T14:00:00.000Z',
   };
 }
 
@@ -217,6 +223,11 @@ describe('DevWorkbenchView', () => {
       data: null,
       error: null,
     });
+    (useCloudAgentRunHistory as jest.Mock).mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+    });
     (useCloudAgentActivityStream as jest.Mock).mockReturnValue({
       events: [],
       isConnected: false,
@@ -290,6 +301,67 @@ describe('DevWorkbenchView', () => {
     renderView();
 
     expect(screen.getByText(/no active work items assigned to you/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('my-work-ado-search-input')).not.toBeInTheDocument();
+  });
+
+  it('filters assigned work items by title, id, state, and cloud run', () => {
+    (useAssignedWorkItems as jest.Mock).mockReturnValue({
+      data: [
+        ...workItems,
+        {
+          id: 77,
+          title: 'Review comments',
+          workItemType: 'Product Backlog Item',
+          state: 'In Pull Request',
+          assignedTo: 'jane@example.com',
+          project: 'MaxView',
+        },
+      ],
+      isLoading: false,
+      error: null,
+    });
+    (useActiveSessions as jest.Mock).mockReturnValue({
+      data: [{
+        id: 'cloud-session',
+        workItemId: 42,
+        status: 'in_progress',
+        chatThreadId: null,
+        branchName: null,
+        prUrl: null,
+        createdAt: '2026-09-01T00:00:00Z',
+        cloudAgentRun: cloudRun('running'),
+      }],
+    });
+
+    renderView();
+
+    fireEvent.change(screen.getByTestId('my-work-ado-search-input'), {
+      target: { value: '#99' },
+    });
+    expect(screen.getByText('Fix crash')).toBeInTheDocument();
+    expect(screen.queryByText('Implement login')).not.toBeInTheDocument();
+    expect(screen.queryByText('Review comments')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('my-work-ado-clear-filters'));
+    expect(screen.getByText('Implement login')).toBeInTheDocument();
+    expect(screen.getByText('Review comments')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('my-work-ado-status-filter-in_pr'));
+    expect(screen.getByText('Review comments')).toBeInTheDocument();
+    expect(screen.queryByText('Implement login')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('my-work-ado-status-filter-all'));
+    fireEvent.click(screen.getByTestId('my-work-ado-cloud-filter-running'));
+    expect(screen.getByText('Implement login')).toBeInTheDocument();
+    expect(screen.queryByText('Fix crash')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('my-work-ado-cloud-filter-failed'));
+    expect(screen.getByTestId('my-work-ado-no-matches')).toHaveTextContent(
+      /no work items match your search or filters/i,
+    );
+    fireEvent.click(screen.getByTestId('my-work-ado-empty-clear'));
+    expect(screen.getByText('Fix crash')).toBeInTheDocument();
+    expect(screen.getByText('Implement login')).toBeInTheDocument();
   });
 
   it('PBI-002 VT flag-off: hides cloud controls and keeps local development available', () => {
@@ -399,6 +471,10 @@ describe('DevWorkbenchView', () => {
     expect(screen.getByTestId('my-work-cloud-run-drawer-42')).toBeInTheDocument();
     expect(screen.getByText('Activity')).toBeInTheDocument();
     expect(screen.getByText(/live agent updates and tool activity/i)).toBeInTheDocument();
+    expect(screen.getByText('apex-cursor-worker')).toBeInTheDocument();
+    expect(screen.getAllByText('apex-cursor-worker-abc123').length).toBeGreaterThan(0);
+    expect(screen.getByText('Run history')).toBeInTheDocument();
+    expect(screen.getByText('Technical details')).toBeInTheDocument();
   });
 
   it('streams agent updates and tool activity into the cloud run drawer', () => {
@@ -434,6 +510,28 @@ describe('DevWorkbenchView', () => {
     expect(screen.getByText('Live')).toBeInTheDocument();
   });
 
+  it('shows a terminal summary instead of connecting when no activity was recorded', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(cloudRun('completed', {
+      prUrl: 'https://github.com/example/apex/pull/42',
+      prStatus: 'abandoned',
+    }));
+
+    renderView();
+    fireEvent.click(screen.getByRole('button', {
+      name: /view cloud agent run details: completed/i,
+    }));
+
+    const activity = screen.getByTestId('my-work-cloud-run-activity-42');
+    expect(within(activity).getByText('Run completed')).toBeInTheDocument();
+    expect(within(activity).getByText(
+      'Detailed agent activity was not recorded for this execution. The pull request is abandoned.',
+    )).toBeInTheDocument();
+    expect(within(activity).queryByText(
+      /connecting to the cloud agent activity stream/i,
+    )).not.toBeInTheDocument();
+  });
+
   it('TBI-004 DoD-3: keeps an actual legacy session beside a live cloud run', () => {
     mockUseFeatureFlag.mockReturnValue(true);
     const running = cloudRun('running');
@@ -464,7 +562,7 @@ describe('DevWorkbenchView', () => {
 
     renderView();
 
-    expect(screen.getByTestId('my-work-clear-progress-42')).toBeInTheDocument();
+    expect(screen.queryByTestId('my-work-clear-progress-42')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Resume Session' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Close Session' })).not.toBeInTheDocument();
     expect(screen.getByTestId('my-work-cancel-cloud-run-42')).toBeInTheDocument();
@@ -501,6 +599,7 @@ describe('DevWorkbenchView', () => {
 
   it.each([
     ['open', 'Open'],
+    ['abandoned', 'Abandoned'],
     ['merged', 'Merged'],
   ] as const)(
     'PBI-007 AC-0 / accessibility: shows %s PR status as text beside the PR link',
@@ -737,6 +836,29 @@ describe('DevWorkbenchView', () => {
     expect(screen.getByTestId('my-work-resume-cloud-run-42')).toBeInTheDocument();
   });
 
+  it('keeps a failed Cloud Agent session attached instead of showing Start again', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    const failedRun = cloudRun('failed', { lastError: 'Container job failed.' });
+    (useActiveSessions as jest.Mock).mockReturnValue({
+      data: [{
+        id: 'cloud-session',
+        workItemId: 42,
+        status: 'failed',
+        chatThreadId: null,
+        branchName: failedRun.branchName,
+        prUrl: null,
+        createdAt: failedRun.createdAt,
+        cloudAgentRun: failedRun,
+      }],
+    });
+    (useCloudAgentRun as jest.Mock).mockReturnValue({ data: failedRun, error: null });
+
+    renderView();
+
+    expect(screen.getByTestId('my-work-cloud-run-status-42')).toHaveTextContent('Failed');
+    expect(screen.queryByRole('button', { name: /^Start cloud agent$/i })).not.toBeInTheDocument();
+  });
+
   it('PBI-004 AC-0: renders Cancelled and offers Resume', () => {
     mockUseFeatureFlag.mockReturnValue(true);
     mockCloudSession(cloudRun('cancelled'));
@@ -826,7 +948,7 @@ describe('DevWorkbenchView', () => {
     expect(screen.queryByRole('button', { name: /^Start cloud agent$/i })).not.toBeInTheDocument();
   });
 
-  it('shows Clear Progress and no legacy session actions for work items with an active session', () => {
+  it('does not add a session In Progress label beside the work item state', () => {
     (useActiveSessions as jest.Mock).mockReturnValue({
       data: [
         {
@@ -842,33 +964,11 @@ describe('DevWorkbenchView', () => {
 
     renderView();
 
-    expect(screen.getByText('In Progress')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /clear progress/i })).toBeInTheDocument();
+    const row = screen.getByText('Implement login').parentElement!.parentElement!;
+    expect(within(row).getAllByText('In Progress')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: /clear progress/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /resume session/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /close session/i })).not.toBeInTheDocument();
-  });
-
-  it('closes an active session when Clear Progress is clicked', async () => {
-    (useActiveSessions as jest.Mock).mockReturnValue({
-      data: [
-        {
-          id: 'session-1',
-          workItemId: 42,
-          status: 'in_progress',
-          chatThreadId: 'thread-1',
-          branchName: 'feature/42',
-          createdAt: '2026-06-01T00:00:00Z',
-        },
-      ],
-    });
-    mockCloseMutateAsync.mockResolvedValue({ ok: true });
-
-    renderView();
-    fireEvent.click(screen.getByRole('button', { name: /clear progress/i }));
-
-    await waitFor(() => {
-      expect(mockCloseMutateAsync).toHaveBeenCalledWith('session-1');
-    });
   });
 });
 
@@ -1049,6 +1149,116 @@ describe('filterApexBacklogByStatus', () => {
     it('returns an empty list when nothing matches', () => {
       expect(filterApexBacklogBySearch(apexBacklogGroups, 'zzzz-no-match')).toEqual([]);
     });
+  });
+});
+
+describe('filterAssignedWorkItems', () => {
+  const { filterAssignedWorkItems } = jest.requireActual('../DevWorkbenchView') as typeof import('../DevWorkbenchView');
+
+  const items = [
+    {
+      id: 42,
+      title: 'Implement login',
+      workItemType: 'Feature',
+      state: 'New',
+      assignedTo: 'jane@example.com',
+      project: 'MaxView',
+    },
+    {
+      id: 99,
+      title: 'Fix crash',
+      workItemType: 'Bug',
+      state: 'Active',
+      assignedTo: 'jane@example.com',
+      project: 'MaxView',
+    },
+    {
+      id: 77,
+      title: 'Review comments',
+      workItemType: 'Product Backlog Item',
+      state: 'In Pull Request',
+      assignedTo: 'jane@example.com',
+      project: 'MaxView',
+    },
+    {
+      id: 12,
+      title: 'Ship badge',
+      workItemType: 'Product Backlog Item',
+      state: 'In Progress',
+      assignedTo: 'jane@example.com',
+      project: 'MaxView',
+    },
+    {
+      id: 55,
+      title: 'Open pull request still New',
+      workItemType: 'Feature',
+      state: 'New',
+      assignedTo: 'jane@example.com',
+      project: 'MaxView',
+    },
+  ];
+
+  const runs = new Map([
+    [42, cloudRun('running')],
+    [77, cloudRun('completed', { prStatus: 'open' as const, prUrl: 'https://example.test/pr/77' })],
+    [12, cloudRun('failed', { runId: 'run-fail', terminalReason: 'cloud_agent_timeout' })],
+    [55, cloudRun('completed', { runId: 'run-55', prStatus: 'open' as const, prUrl: 'https://example.test/pr/55' })],
+    [99, cloudRun('cancelled', { runId: 'run-cancel' })],
+  ]);
+
+  function filter(options: {
+    status?: 'all' | 'new' | 'in_progress' | 'in_pr';
+    cloud?: 'all' | 'running' | 'completed' | 'failed';
+    search?: string;
+  }) {
+    return filterAssignedWorkItems(items, {
+      status: options.status ?? 'all',
+      cloud: options.cloud ?? 'all',
+      search: options.search ?? '',
+      cloudRunByWorkItemId: runs,
+    }).map((item) => item.id);
+  }
+
+  it('returns every item when search and filters are clear', () => {
+    expect(filter({})).toEqual([42, 99, 77, 12, 55]);
+  });
+
+  it('matches title and id, including a leading hash', () => {
+    expect(filter({ search: 'LOGIN' })).toEqual([42]);
+    expect(filter({ search: '#99' })).toEqual([99]);
+    expect(filter({ search: '77' })).toEqual([77]);
+    expect(filter({ search: '   ' })).toEqual([42, 99, 77, 12, 55]);
+    expect(filter({ search: 'missing' })).toEqual([]);
+  });
+
+  it('filters by New, In Progress or Active, and In Pull Request', () => {
+    expect(filter({ status: 'new' })).toEqual([42, 55]);
+    expect(filter({ status: 'in_progress' })).toEqual([99, 12]);
+    expect(filter({ status: 'in_pr' })).toEqual([77, 55]);
+  });
+
+  it('filters cloud runs and keeps live, finished, and failed together', () => {
+    expect(filter({ cloud: 'running' })).toEqual([42]);
+    expect(filter({ cloud: 'completed' })).toEqual([77, 55]);
+    expect(filter({ cloud: 'failed' })).toEqual([12]);
+  });
+
+  it('treats queued and dispatched runs as running', () => {
+    const queued = new Map(runs);
+    queued.set(42, cloudRun('queued'));
+    queued.set(99, cloudRun('dispatched', { runId: 'run-start' }));
+    const ids = filterAssignedWorkItems(items, {
+      status: 'all',
+      cloud: 'running',
+      search: '',
+      cloudRunByWorkItemId: queued,
+    }).map((item) => item.id);
+    expect(ids).toEqual([42, 99]);
+  });
+
+  it('combines search with a status filter', () => {
+    expect(filter({ search: 'badge', status: 'in_progress' })).toEqual([12]);
+    expect(filter({ search: 'badge', status: 'new' })).toEqual([]);
   });
 });
 

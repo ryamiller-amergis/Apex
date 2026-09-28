@@ -377,6 +377,23 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
     ...(input.snapshot.provider
       ? { provider: input.snapshot.provider }
       : {}),
+    ...(input.snapshot.cloudAgent
+      ? {
+          cloudAgent: {
+            workItemId: input.snapshot.cloudAgent.workItemId,
+            ...(input.snapshot.cloudAgent.workItemTitle
+              ? { workItemTitle: input.snapshot.cloudAgent.workItemTitle }
+              : {}),
+            baseBranch: input.snapshot.cloudAgent.baseBranch,
+            ...(input.snapshot.cloudAgent.initiatorName
+              ? { initiatorName: input.snapshot.cloudAgent.initiatorName }
+              : {}),
+            ...(input.snapshot.cloudAgent.initiatorEmail
+              ? { initiatorEmail: input.snapshot.cloudAgent.initiatorEmail }
+              : {}),
+          },
+        }
+      : {}),
     workflowClass: input.snapshot.workflowClass,
     skillPath: input.snapshot.skillPath,
     projectId: input.snapshot.projectId,
@@ -429,6 +446,8 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
 export interface CaptureCloudAgentIdentityInput {
   cloudAgentIdentity: string;
   cursorRunId: string;
+  jobName: string;
+  branchName?: string;
   timeoutAt: string;
 }
 
@@ -453,6 +472,9 @@ export async function captureCloudAgentIdentity(
         cloudAgentIdentity: input.cloudAgentIdentity,
         cloudAgentManaged: true,
         dispatchMessageId: input.cursorRunId,
+        cloudJobName: input.jobName,
+        cloudJobExecutionName: input.cursorRunId,
+        cloudBranchName: input.branchName ?? null,
         timeoutAt: input.timeoutAt,
         updatedAt: nowIso,
       })

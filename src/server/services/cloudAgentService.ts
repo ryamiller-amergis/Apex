@@ -48,6 +48,7 @@ import {
   buildWorkItemReferenceText,
   linkWorkItemToPullRequest,
   parsePullRequestNumber,
+  transitionWorkItemForPullRequest,
 } from './workItemPrLinkService';
 import { AzureDevOpsService } from './azureDevOps';
 import { getPullRequestStatus as getGithubPullRequestStatus } from './skillCatalogGitHub';
@@ -62,6 +63,11 @@ import {
   buildCloudDevelopmentKickoffSection,
   resolveDevelopmentSettings,
 } from '../../shared/utils/developmentKickoff';
+import {
+  CloudAgentPullRequestDeferred,
+  openCloudAgentPullRequest,
+  type OpenCloudAgentPullRequestInput,
+} from './cloudAgentPullRequest';
 
 export const CLOUD_AGENT_PRE_IDENTITY_TTL_MS = 2 * 60_000;
 export const LIVE_CLOUD_AGENT_STATUSES = ['queued', 'dispatched', 'running'] as const;
@@ -150,6 +156,10 @@ function toRunSummary(
     terminalReason: AgentRunTerminalReason | null;
     checkResults: RunCheckResult[] | null;
     lastError?: string | null;
+    cloudJobName?: string | null;
+    cloudJobExecutionName?: string | null;
+    cloudBranchName?: string | null;
+    createdAt?: string;
   },
   prUrl: string | null,
   prStatus: HostAgnosticPrStatus,
@@ -159,6 +169,10 @@ function toRunSummary(
   return {
     runId: run.id,
     status,
+    jobName: run.cloudJobName ?? process.env.CURSOR_CONTAINER_JOB_NAME?.trim() ?? null,
+    executionName: run.cloudJobExecutionName ?? null,
+    branchName: run.cloudBranchName ?? null,
+    createdAt: run.createdAt ?? new Date(0).toISOString(),
     prUrl,
     prStatus,
     finishedWithoutPr: expectsPullRequest && status === 'completed' && !prUrl,
@@ -193,16 +207,21 @@ export interface CloudAgentServiceDeps {
     prUrl: string,
     comment: string,
   ) => Promise<void>;
+  transitionWorkItemForPullRequest: (
+    project: string,
+    workItemId: number,
+  ) => Promise<void>;
   getAdoPullRequestStatus: (
     repo: string,
     project: string,
     pullRequestId: number,
-  ) => Promise<'open' | 'merged'>;
+  ) => Promise<'open' | 'abandoned' | 'merged'>;
   getGithubPullRequestStatus: typeof getGithubPullRequestStatus;
   retryWithBackoff: typeof retryWithBackoff;
   buildPrompt: (input: { project: string; workItemId: number }) => Promise<string>;
   persistLeftoverWork: typeof persistLeftoverWork;
   writeLeftoverWorkToAdo: typeof writeLeftoverWorkToAdo;
+  openCloudAgentPullRequest: (input: OpenCloudAgentPullRequestInput) => Promise<string>;
 }
 
 const defaultDeps: CloudAgentServiceDeps = {
@@ -216,6 +235,9 @@ const defaultDeps: CloudAgentServiceDeps = {
   addAdoWorkItemHyperlink: async (project, workItemId, prUrl, comment) => {
     await new AzureDevOpsService(project).addWorkItemHyperlink(workItemId, prUrl, comment);
   },
+  transitionWorkItemForPullRequest: async (project, workItemId) => {
+    await transitionWorkItemForPullRequest(new AzureDevOpsService(project), workItemId);
+  },
   getAdoPullRequestStatus: async (repo, project, pullRequestId) =>
     new AzureDevOpsService(project).getPullRequestStatus(repo, project, pullRequestId),
   getGithubPullRequestStatus,
@@ -223,6 +245,7 @@ const defaultDeps: CloudAgentServiceDeps = {
   buildPrompt: buildCloudAgentPrompt,
   persistLeftoverWork,
   writeLeftoverWorkToAdo,
+  openCloudAgentPullRequest,
 };
 
 export async function buildCloudAgentPrompt(input: {
@@ -324,6 +347,9 @@ export interface StartCloudAgentRunInput {
   project: string;
   workItemId: number;
   workItemTitle?: string;
+  initiatorName?: string;
+  initiatorEmail?: string;
+  adoUserToken?: string | null;
   isSuperAdmin: boolean;
   item: Pick<AssignedWorkItem, 'workItemType' | 'state' | 'tags'>;
 }
@@ -457,6 +483,13 @@ async function persistQueuedRun(
           threadId: sessionId,
           provider: (skillConfig.skillProvider ?? 'ado') as SkillProvider,
           repository: skillConfig.skillRepo,
+          cloudAgent: {
+            workItemId: input.workItemId,
+            workItemTitle: input.workItemTitle,
+            baseBranch: skillConfig.skillBranch,
+            initiatorName: input.initiatorName,
+            initiatorEmail: input.initiatorEmail,
+          },
         },
       });
 
@@ -464,6 +497,9 @@ async function persistQueuedRun(
         .update(devSessions)
         .set({
           currentRunId: runId,
+          currentRunPrUrl: null,
+          currentRunPrStatus: 'none',
+          status: 'in_progress',
           leftoverWork: null,
           updatedAt: nowIso,
         })
@@ -513,6 +549,9 @@ async function dispatchLaunch(
       skillBranch: skillConfig.skillBranch,
       workItemId: input.workItemId,
       workItemTitle: input.workItemTitle ?? `Work item ${input.workItemId}`,
+      initiatorName: input.initiatorName,
+      initiatorEmail: input.initiatorEmail,
+      adoUserToken: input.adoUserToken,
     });
   } catch (err) {
     const detail = err instanceof Error ? err.message : 'Cloud Agent launch failed';
@@ -543,6 +582,8 @@ async function dispatchLaunch(
   await captureCloudAgentIdentity(started.runId, {
     cloudAgentIdentity: launched.cloudAgentId,
     cursorRunId: launched.cursorRunId,
+    jobName: launched.jobName,
+    branchName: launched.branchName,
     timeoutAt,
   });
   if (launched.branchName) {
@@ -579,7 +620,7 @@ async function lookupPullRequestStatus(
     project: string;
   },
   deps: CloudAgentServiceDeps,
-): Promise<'open' | 'merged'> {
+): Promise<'open' | 'abandoned' | 'merged'> {
   const pullRequestId = parsePullRequestNumber(input.prUrl, input.provider);
   if (input.provider === 'github') {
     return deps.getGithubPullRequestStatus(input.repository, pullRequestId);
@@ -593,7 +634,8 @@ function cachedPullRequestStatus(
   storedStatus: HostAgnosticPrStatus | null | undefined,
 ): HostAgnosticPrStatus {
   if (!prUrl) return 'none';
-  return storedStatus === 'merged' ? 'merged' : 'open';
+  if (storedStatus === 'merged' || storedStatus === 'abandoned') return storedStatus;
+  return 'open';
 }
 
 async function writeWorkItemPullRequest(
@@ -618,32 +660,35 @@ async function writeWorkItemPullRequest(
     sessionId: input.sessionId,
   };
 
-  if (input.provider === 'github') {
-    try {
-      await deps.linkWorkItemToPullRequest(linkInput);
-    } catch (err) {
-      console.warn('[cloud-agent] GitHub AB# verification failed', JSON.stringify({
-        runId: input.runId,
-        sessionId: input.sessionId,
-        error: err instanceof Error ? err.message : String(err),
-      }));
+  try {
+    if (input.provider === 'github') {
+      try {
+        await deps.linkWorkItemToPullRequest(linkInput);
+      } catch (err) {
+        console.warn('[cloud-agent] GitHub AB# verification failed', JSON.stringify({
+          runId: input.runId,
+          sessionId: input.sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        }));
+      }
+      await deps.retryWithBackoff(
+        () => deps.addAdoWorkItemHyperlink(
+          input.project,
+          input.workItemId,
+          input.prUrl,
+          'Implementation PR',
+        ),
+        { maxRetries: 3, initialDelay: 250, shouldRetry: () => true, jitter: true },
+      );
+    } else {
+      await deps.retryWithBackoff(
+        () => deps.linkWorkItemToPullRequest(linkInput),
+        { maxRetries: 3, initialDelay: 250, shouldRetry: () => true, jitter: true },
+      );
     }
-    await deps.retryWithBackoff(
-      () => deps.addAdoWorkItemHyperlink(
-        input.project,
-        input.workItemId,
-        input.prUrl,
-        'Implementation PR',
-      ),
-      { maxRetries: 3, initialDelay: 250, shouldRetry: () => true, jitter: true },
-    );
-    return;
+  } finally {
+    await deps.transitionWorkItemForPullRequest(input.project, input.workItemId);
   }
-
-  await deps.retryWithBackoff(
-    () => deps.linkWorkItemToPullRequest(linkInput),
-    { maxRetries: 3, initialDelay: 250, shouldRetry: () => true, jitter: true },
-  );
 }
 
 export async function applyCloudAgentCompletion(input: {
@@ -712,6 +757,15 @@ export async function applyCloudAgentCompletion(input: {
   }
 
   const nowIso = new Date().toISOString();
+  await db
+    .update(agentRuns)
+    .set({
+      cloudPrUrl: input.prUrl,
+      cloudPrStatus: prStatus,
+      updatedAt: nowIso,
+    })
+    .where(eq(agentRuns.id, input.runId));
+
   await db
     .update(devSessions)
     .set({
@@ -796,6 +850,7 @@ export async function getCloudAgentRunStatus(
   sessionId: string,
   userId: string,
   deps: CloudAgentServiceDeps = defaultDeps,
+  adoUserToken: string | null = null,
 ): Promise<CloudAgentRunSummary | null> {
   const session = await db.query.devSessions.findFirst({
     where: and(eq(devSessions.id, sessionId), eq(devSessions.authorId, userId)),
@@ -820,14 +875,48 @@ export async function getCloudAgentRunStatus(
         cloudAgentId: run.cloudAgentIdentity,
         cursorRunId: run.dispatchMessageId,
       });
-      const mapped = mapObservedStatus(observed.status);
+      let mapped = mapObservedStatus(observed.status);
+      let prUrl = observed.prUrl;
+      const sourceBranch = observed.branchName ?? run.cloudBranchName;
+      if (!prUrl && sourceBranch && mapped !== 'failed' && mapped !== 'cancelled') {
+        if (!adoUserToken && process.env.NODE_ENV === 'production') {
+          mapped = 'running';
+        } else {
+          const meta = run.executionSnapshot?.cloudAgent;
+          const repository = run.executionSnapshot?.repository;
+          let targetBranch = meta?.baseBranch || observed.baseBranch || null;
+          if (!targetBranch) {
+            const skill = await deps.getSkillConfig(session.project);
+            targetBranch = skill?.skillBranch ?? null;
+          }
+          const workItemId = session.workItemId ?? meta?.workItemId;
+          if (!repository || !targetBranch || !workItemId) {
+            throw new Error('Cloud Agent run is missing pull request context');
+          }
+          if (run.executionSnapshot?.provider !== 'github') {
+            prUrl = await deps.openCloudAgentPullRequest({
+              project: session.project,
+              repo: repository,
+              sourceBranch,
+              targetBranch,
+              workItemId,
+              workItemTitle: meta?.workItemTitle,
+              authorName: meta?.initiatorName,
+              authorEmail: meta?.initiatorEmail,
+              summary: observed.summary,
+              adoUserToken,
+            });
+            mapped = 'completed';
+          }
+        }
+      }
       if (mapped && isAgentRunTerminalStatus(mapped)) {
         await applyCloudAgentCompletion({
           runId: run.id,
           sessionId,
           project: session.project,
           status: mapped,
-          prUrl: observed.prUrl,
+          prUrl,
           dispatchMessageId: run.dispatchMessageId,
           detail: mapped === 'failed' ? (observed.resultText ?? undefined) : undefined,
         }, deps);
@@ -838,13 +927,31 @@ export async function getCloudAgentRunStatus(
             terminalReason: run.terminalReason as AgentRunTerminalReason | null,
             checkResults: run.checkResults ?? null,
             lastError: mapped === 'failed' ? observed.resultText : run.lastError,
+            cloudJobName: run.cloudJobName,
+            cloudJobExecutionName: run.cloudJobExecutionName,
+            cloudBranchName: run.cloudBranchName,
+            createdAt: run.createdAt,
           },
-          observed.prUrl,
-          cachedPullRequestStatus(observed.prUrl, null),
+          prUrl,
+          cachedPullRequestStatus(prUrl, null),
           true,
         );
       }
     } catch (err) {
+      if (err instanceof CloudAgentPullRequestDeferred) {
+        return toRunSummary(
+          {
+            id: run.id,
+            status: 'running',
+            terminalReason: null,
+            checkResults: run.checkResults ?? null,
+            lastError: null,
+          },
+          null,
+          'none',
+          true,
+        );
+      }
       console.warn('[cloud-agent] status refresh failed', JSON.stringify({
         runId: run.id,
         error: err instanceof Error ? err.message : String(err),
@@ -852,8 +959,11 @@ export async function getCloudAgentRunStatus(
     }
   }
 
-  const prUrl = session.currentRunPrUrl ?? null;
-  let prStatus = cachedPullRequestStatus(prUrl, session.currentRunPrStatus);
+  const prUrl = run.cloudPrUrl ?? session.currentRunPrUrl ?? null;
+  let prStatus = cachedPullRequestStatus(
+    prUrl,
+    run.cloudPrStatus ?? session.currentRunPrStatus,
+  );
   if (prUrl && prStatus !== 'merged') {
     try {
       const provider = run.executionSnapshot?.provider;
@@ -869,12 +979,14 @@ export async function getCloudAgentRunStatus(
       }, deps);
       if (refreshedStatus !== prStatus) {
         prStatus = refreshedStatus;
+        const updatedAt = new Date().toISOString();
+        await db
+          .update(agentRuns)
+          .set({ cloudPrStatus: refreshedStatus, updatedAt })
+          .where(eq(agentRuns.id, run.id));
         await db
           .update(devSessions)
-          .set({
-            currentRunPrStatus: refreshedStatus,
-            updatedAt: new Date().toISOString(),
-          })
+          .set({ currentRunPrStatus: refreshedStatus, updatedAt })
           .where(eq(devSessions.id, sessionId));
       }
     } catch (err) {
@@ -898,6 +1010,75 @@ export async function getCloudAgentRunStatus(
     prStatus,
     true,
   );
+}
+
+export async function getCloudAgentRunHistory(
+  sessionId: string,
+  userId: string,
+  deps: CloudAgentServiceDeps = defaultDeps,
+): Promise<CloudAgentRunSummary[]> {
+  const session = await db.query.devSessions.findFirst({
+    where: and(eq(devSessions.id, sessionId), eq(devSessions.authorId, userId)),
+  });
+  if (!session) {
+    throw Object.assign(new Error('Session not found'), { status: 404 });
+  }
+
+  const runs = await db
+    .select()
+    .from(agentRuns)
+    .where(and(
+      eq(agentRuns.devSessionId, sessionId),
+      eq(agentRuns.workflowClass, 'implementation'),
+    ))
+    .orderBy(desc(agentRuns.createdAt));
+
+  return Promise.all(runs.map(async (run) => {
+    const isCurrent = session.currentRunId === run.id;
+    const prUrl = run.cloudPrUrl ?? (isCurrent ? session.currentRunPrUrl : null) ?? null;
+    let prStatus = cachedPullRequestStatus(
+      prUrl,
+      run.cloudPrStatus ?? (isCurrent ? session.currentRunPrStatus : null),
+    );
+
+    if (prUrl && prStatus !== 'merged') {
+      try {
+        const provider = run.executionSnapshot?.provider;
+        const repository = run.executionSnapshot?.repository;
+        if (!provider || !repository) {
+          throw new Error('Cloud Agent run is missing repository context for PR status');
+        }
+        const refreshedStatus = await lookupPullRequestStatus({
+          prUrl,
+          provider,
+          repository,
+          project: session.project,
+        }, deps);
+        if (refreshedStatus !== prStatus) {
+          prStatus = refreshedStatus;
+          const updatedAt = new Date().toISOString();
+          await db
+            .update(agentRuns)
+            .set({ cloudPrStatus: refreshedStatus, updatedAt })
+            .where(eq(agentRuns.id, run.id));
+          if (isCurrent) {
+            await db
+              .update(devSessions)
+              .set({ currentRunPrStatus: refreshedStatus, updatedAt })
+              .where(eq(devSessions.id, sessionId));
+          }
+        }
+      } catch (err) {
+        console.warn('[cloud-agent] history PR status refresh failed', JSON.stringify({
+          runId: run.id,
+          sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        }));
+      }
+    }
+
+    return toRunSummary(run, prUrl, prStatus, true);
+  }));
 }
 
 export async function getCloudAgentActivityStream(

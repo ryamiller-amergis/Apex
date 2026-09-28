@@ -116,6 +116,7 @@ jest.mock('../services/devWorkbenchFeatureContextService', () => ({
 
 const mockAttachCloudAgentEligibility = jest.fn(async (items: unknown[]) => items);
 const mockGetCloudAgentRunStatus = jest.fn().mockResolvedValue(null);
+const mockGetCloudAgentRunHistory = jest.fn().mockResolvedValue([]);
 const mockGetCloudAgentActivityStream = jest.fn();
 const mockStartCloudAgentRun = jest.fn();
 const mockCancelCloudAgentRun = jest.fn();
@@ -139,6 +140,8 @@ jest.mock('../services/cloudAgentService', () => {
     attachCloudAgentEligibility: (items: unknown[]) => mockAttachCloudAgentEligibility(items),
     getCloudAgentRunStatus: (sessionId: string, userId: string) =>
       mockGetCloudAgentRunStatus(sessionId, userId),
+    getCloudAgentRunHistory: (sessionId: string, userId: string) =>
+      mockGetCloudAgentRunHistory(sessionId, userId),
     getCloudAgentActivityStream: (...args: unknown[]) =>
       mockGetCloudAgentActivityStream(...args),
     startCloudAgentRun: (input: unknown) => mockStartCloudAgentRun(input),
@@ -196,6 +199,10 @@ function cloudRunWithOpenPr(): CloudAgentRunSummary {
   return {
     runId: 'run-pr-open',
     status: 'completed',
+    jobName: 'apex-cursor-worker',
+    executionName: 'apex-cursor-worker-abc123',
+    branchName: 'feature/apex-42-abc123',
+    createdAt: '2026-09-28T14:00:00.000Z',
     prUrl: CLOUD_PR_URL,
     prStatus: 'open',
     finishedWithoutPr: false,
@@ -854,6 +861,24 @@ describe('GET /api/dev-workbench/sessions', () => {
       branchName: 'feature/apex-55033',
       cloudAgentRun: { status: 'failed', terminalReason: 'queue_ttl' },
     });
+  });
+
+  it('returns durable Cloud Agent run history for the session drawer', async () => {
+    mockGetCloudAgentRunHistory.mockResolvedValueOnce([cloudRunWithOpenPr()]);
+
+    const res = await request(buildApp())
+      .get('/api/dev-workbench/sessions/session-1/cloud-agent/runs');
+
+    expect(res.status).toBe(200);
+    expect(mockGetCloudAgentRunHistory).toHaveBeenCalledWith('session-1', 'user-1');
+    expect(res.body).toEqual([
+      expect.objectContaining({
+        runId: 'run-pr-open',
+        jobName: 'apex-cursor-worker',
+        executionName: 'apex-cursor-worker-abc123',
+        prStatus: 'open',
+      }),
+    ]);
   });
 
   it('returns 500 when the query fails', async () => {

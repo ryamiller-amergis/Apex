@@ -319,11 +319,12 @@ export async function getPullRequestStatus(
   repo: string,
   prNumber: number,
   org?: string,
-): Promise<'open' | 'merged'> {
+): Promise<'open' | 'abandoned' | 'merged'> {
   const pr = await ghFetch<{ state?: string | null; merged?: boolean | null }>(
     resolvePullRequestPath(repo, prNumber, org),
   );
-  return pr.merged === true ? 'merged' : 'open';
+  if (pr.merged === true) return 'merged';
+  return pr.state?.toLowerCase() === 'closed' ? 'abandoned' : 'open';
 }
 
 export async function listBranches(

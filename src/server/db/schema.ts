@@ -177,12 +177,12 @@ export const devSessions = pgTable('dev_sessions', {
   // with agent_runs.dev_session_id.
   currentRunId: text('current_run_id'),
   currentRunPrUrl: text('current_run_pr_url'),
-  currentRunPrStatus: text('current_run_pr_status').$type<'none' | 'open' | 'merged'>().default('none'),
+  currentRunPrStatus: text('current_run_pr_status').$type<'none' | 'open' | 'abandoned' | 'merged'>().default('none'),
   leftoverWork: jsonb('leftover_work').$type<LeftoverWorkSummary>(),
 }, (t) => ({
   currentRunPrStatusCheck: check(
     'dev_sessions_current_run_pr_status_check',
-    sql`${t.currentRunPrStatus} IS NULL OR ${t.currentRunPrStatus} IN ('none', 'open', 'merged')`,
+    sql`${t.currentRunPrStatus} IS NULL OR ${t.currentRunPrStatus} IN ('none', 'open', 'abandoned', 'merged')`,
   ),
 }));
 
@@ -1668,6 +1668,13 @@ export const agentRuns = pgTable('agent_runs', {
   workflowClass: text('workflow_class').$type<AgentRunWorkflowClass>(),
   cloudAgentIdentity: text('cloud_agent_identity'),
   cloudAgentManaged: boolean('cloud_agent_managed').notNull().default(false),
+  cloudJobName: text('cloud_job_name'),
+  cloudJobExecutionName: text('cloud_job_execution_name'),
+  cloudBranchName: text('cloud_branch_name'),
+  cloudPrUrl: text('cloud_pr_url'),
+  cloudPrStatus: text('cloud_pr_status')
+    .$type<'none' | 'open' | 'abandoned' | 'merged'>()
+    .default('none'),
   // FEAT-003 TBI-005: suite-level unit/e2e/WCAG outcomes reported at terminal write time.
   // NULL means the run reported nothing; never gates PR creation or run completion.
   checkResults: jsonb('check_results').$type<RunCheckResult[]>(),
@@ -1677,6 +1684,10 @@ export const agentRuns = pgTable('agent_runs', {
   statusHeartbeatIdx: index('idx_agent_runs_status_heartbeat').on(t.status, t.heartbeatAt),
   statusLaneIdx: index('idx_agent_runs_status_lane').on(t.status, t.lane),
   projectStatusIdx: index('idx_agent_runs_project_status').on(t.projectId, t.status),
+  cloudPrStatusCheck: check(
+    'agent_runs_cloud_pr_status_check',
+    sql`${t.cloudPrStatus} IS NULL OR ${t.cloudPrStatus} IN ('none', 'open', 'abandoned', 'merged')`,
+  ),
   queuedWorkerIdx: index('idx_agent_runs_queued_at_worker')
     .on(t.queuedAt)
     .where(sql`${t.lane} = 'background'`),

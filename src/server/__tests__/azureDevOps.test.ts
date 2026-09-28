@@ -36,7 +36,6 @@ describe('AzureDevOpsService', () => {
       getWorkItems: jest.fn(),
       getWorkItem: jest.fn(),
       getRevisions: jest.fn(),
-      getWorkItem: jest.fn(),
       updateWorkItem: jest.fn(),
       createWorkItem: jest.fn(),
     };
@@ -941,7 +940,7 @@ describe('AzureDevOpsService', () => {
       expect(status).toBe('open');
     });
 
-    it('maps an abandoned (closed without merge) Azure Repos PR to open', async () => {
+    it('maps an abandoned Azure Repos PR to abandoned', async () => {
       // Arrange
       const service = new AzureDevOpsService('MaxView');
       mockGitApi.getPullRequest.mockResolvedValue({ status: 'abandoned' });
@@ -950,7 +949,7 @@ describe('AzureDevOpsService', () => {
       const status = await service.getPullRequestStatus('MaxView', 'MaxView', 42);
 
       // Assert
-      expect(status).toBe('open');
+      expect(status).toBe('abandoned');
     });
 
     it('maps the numeric PullRequestStatus enum the SDK returns at runtime', async () => {
@@ -969,7 +968,7 @@ describe('AzureDevOpsService', () => {
       // Assert
       expect(completed).toBe('merged');
       expect(active).toBe('open');
-      expect(abandoned).toBe('open');
+      expect(abandoned).toBe('abandoned');
     });
 
     it('maps an unknown or missing status to open', async () => {

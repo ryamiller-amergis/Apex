@@ -6047,6 +6047,32 @@ export class AzureDevOpsService {
   }
 
   /**
+   * Active pull request already opened from this source branch, if one exists.
+   * Cloud-agent completion can be observed more than once.
+   */
+  async findPullRequestUrlBySourceBranch(
+    repo: string,
+    project: string,
+    sourceBranch: string,
+  ): Promise<string | null> {
+    const gitApi = await this.connection.getGitApi();
+    const matches = await gitApi.getPullRequests(
+      repo,
+      {
+        sourceRefName: `refs/heads/${sourceBranch}`,
+        status: PullRequestStatus.Active,
+      },
+      project,
+      undefined,
+      undefined,
+      1,
+    );
+    const pullRequestId = matches?.[0]?.pullRequestId;
+    if (!pullRequestId) return null;
+    return `${this.organization}/${project}/_git/${repo}/pullrequest/${pullRequestId}`;
+  }
+
+  /**
    * Transitions an ADO work item to the given state.
    */
   async setWorkItemState(workItemId: number, state: string): Promise<void> {
@@ -6140,23 +6166,31 @@ export class AzureDevOpsService {
 
   /**
    * Reads an Azure Repos pull request and reduces it to the host-agnostic PR
-   * status shared with the GitHub path. Only a completed PR counts as merged;
-   * an abandoned PR (closed without merge) stays 'open' so a developer can
-   * still see the run's PR on their My Work row.
+   * status shared with the GitHub path.
    */
   async getPullRequestStatus(
     repo: string,
     project: string,
     pullRequestId: number,
-  ): Promise<'open' | 'merged'> {
+  ): Promise<'open' | 'abandoned' | 'merged'> {
     const gitApi = await this.connection.getGitApi();
     const pr = await gitApi.getPullRequest(repo, pullRequestId, project);
     // The SDK deserializes status into the PullRequestStatus enum, but raw REST
     // payloads carry the string form.
     const status: unknown = pr?.status;
-    const completed = status === PullRequestStatus.Completed
-      || (typeof status === 'string' && status.toLowerCase() === 'completed');
-    return completed ? 'merged' : 'open';
+    if (
+      status === PullRequestStatus.Completed
+      || (typeof status === 'string' && status.toLowerCase() === 'completed')
+    ) {
+      return 'merged';
+    }
+    if (
+      status === PullRequestStatus.Abandoned
+      || (typeof status === 'string' && status.toLowerCase() === 'abandoned')
+    ) {
+      return 'abandoned';
+    }
+    return 'open';
   }
 
   /**

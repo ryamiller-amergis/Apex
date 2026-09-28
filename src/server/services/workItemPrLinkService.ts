@@ -3,6 +3,11 @@ import { AzureDevOpsService } from './azureDevOps';
 import { getPullRequest } from './skillCatalogGitHub';
 import { trackEvent } from './telemetry';
 
+const IN_PROGRESS = 'In Progress';
+const IN_PULL_REQUEST = 'In Pull Request';
+/** Children the local start path would already have moved to In Progress. */
+const ACTIVE_CHILD_STATES = ['New', 'Approved', 'Committed', IN_PROGRESS];
+
 export type WorkItemReferenceOutcome = {
   mechanism: 'ab-mention' | 'native-link';
   verified: boolean;
@@ -75,6 +80,81 @@ export async function verifyGithubReference(
   }
 
   return { present };
+}
+
+export interface PullRequestWorkItemStateClient {
+  queryWorkItemsByWiql: AzureDevOpsService['queryWorkItemsByWiql'];
+  getFeatureChildren: (featureId: number) => Promise<Array<{ id: number; state: string }>>;
+  setWorkItemState: (workItemId: number, state: string) => Promise<void>;
+}
+
+/**
+ * Moves the work item that a pull request belongs to.
+ * A Feature moves to In Progress. Its children that are still New, Approved,
+ * Committed, or In Progress move to In Pull Request. Every other work item
+ * moves to In Pull Request itself.
+ * Failures are logged and swallowed so they never undo a created pull request.
+ */
+export async function transitionWorkItemForPullRequest(
+  adoService: PullRequestWorkItemStateClient,
+  workItemId: number,
+): Promise<void> {
+  if (!Number.isSafeInteger(workItemId) || workItemId <= 0) return;
+
+  let workItemType = '';
+  try {
+    const wiResult = await adoService.queryWorkItemsByWiql({
+      wiql: `SELECT [System.Id],[System.WorkItemType] FROM WorkItems WHERE [System.Id] = ${workItemId}`,
+      fields: ['System.Id', 'System.WorkItemType'],
+    });
+    workItemType = (wiResult.items[0]?.fields?.['System.WorkItemType'] as string) ?? '';
+  } catch (err) {
+    console.warn(
+      '[work-item-pr] work item type lookup failed; treating it as a leaf work item:',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+
+  if (workItemType === 'Feature') {
+    await setWorkItemState(adoService, workItemId, IN_PROGRESS);
+    await moveActiveChildrenToPullRequest(adoService, workItemId);
+    return;
+  }
+
+  await setWorkItemState(adoService, workItemId, IN_PULL_REQUEST);
+}
+
+async function setWorkItemState(
+  adoService: PullRequestWorkItemStateClient,
+  workItemId: number,
+  state: string,
+): Promise<void> {
+  try {
+    await adoService.setWorkItemState(workItemId, state);
+  } catch (err) {
+    console.warn(
+      `[work-item-pr] setWorkItemState(${workItemId} -> ${state}) failed (non-fatal):`,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+async function moveActiveChildrenToPullRequest(
+  adoService: PullRequestWorkItemStateClient,
+  featureId: number,
+): Promise<void> {
+  try {
+    const children = await adoService.getFeatureChildren(featureId);
+    for (const child of children) {
+      if (!ACTIVE_CHILD_STATES.includes(child.state)) continue;
+      await setWorkItemState(adoService, child.id, IN_PULL_REQUEST);
+    }
+  } catch (err) {
+    console.warn(
+      `[work-item-pr] child lookup for feature ${featureId} failed (non-fatal):`,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 }
 
 export async function linkWorkItemToPullRequest(
