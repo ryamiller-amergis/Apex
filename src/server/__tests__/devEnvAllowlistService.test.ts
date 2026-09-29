@@ -11,6 +11,7 @@ import {
   addDevEnvAllowlistEntry,
   clearDevEnvAllowlistCache,
   getDevEnvAllowlistView,
+  isDevAccessAllowlisted,
   isDevEnvironmentAllowed,
   removeDevEnvAllowlistEntry,
 } from '../services/devEnvAllowlistService';
@@ -43,6 +44,25 @@ describe('devEnvAllowlistService', () => {
   afterEach(() => {
     if (originalAppEnv === undefined) delete process.env.APP_ENV;
     else process.env.APP_ENV = originalAppEnv;
+  });
+
+  describe('isDevAccessAllowlisted', () => {
+    it('is true only for an email on the list', async () => {
+      mockList([entry]);
+      await expect(isDevAccessAllowlisted('Person@Example.com')).resolves.toBe(true);
+      clearDevEnvAllowlistCache();
+      mockList([entry]);
+      await expect(isDevAccessAllowlisted('other@example.com')).resolves.toBe(false);
+    });
+
+    it('stays false when the list cannot be read', async () => {
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      mockDb.select.mockImplementation(() => {
+        throw new Error('db down');
+      });
+      await expect(isDevAccessAllowlisted('person@example.com')).resolves.toBe(false);
+      errorSpy.mockRestore();
+    });
   });
 
   describe('isDevEnvironmentAllowed', () => {

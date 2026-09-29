@@ -86,6 +86,23 @@ async function cachedAllowedEmails(): Promise<Set<string>> {
  * Platform admins are admitted before the list is read, so they can still sign in
  * when the list cannot be loaded. Everyone else is denied if the list cannot be read.
  */
+/**
+ * True when this email is on the dev access list.
+ * Platform admins are not stored on the list. A missing list counts as not listed,
+ * so the production popup stays up when the list cannot be read.
+ */
+export async function isDevAccessAllowlisted(email: string | undefined | null): Promise<boolean> {
+  const normalized = normalizeEmail(email ?? '');
+  if (!normalized) return false;
+  try {
+    const emails = await cachedAllowedEmails();
+    return emails.has(normalized);
+  } catch (err) {
+    console.error('[dev-env-allowlist] Could not read the allowlist', err);
+    return false;
+  }
+}
+
 export async function isDevEnvironmentAllowed(email: string | undefined | null): Promise<boolean> {
   if (getAppEnvironment() !== 'dev') return true;
   const normalized = normalizeEmail(email ?? '');
