@@ -81,6 +81,18 @@ resource "azurerm_role_assignment" "ai_platform_v2_document_acr_pull" {
   principal_id         = azurerm_user_assigned_identity.ai_platform_v2["document"].principal_id
 }
 
+# The document worker runs Cursor agents and reads the API key from Key Vault.
+resource "azurerm_role_assignment" "ai_platform_v2_document_kv_secrets_user" {
+  count = (
+    local.ai_platform_v2_runtime_enabled
+    && var.ai_platform_v2_interactive_key_vault_id != null
+  ) ? 1 : 0
+
+  scope                = var.ai_platform_v2_interactive_key_vault_id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = azurerm_user_assigned_identity.ai_platform_v2["document"].principal_id
+}
+
 resource "azurerm_role_assignment" "ai_platform_v2_api_blob_contributor" {
   count = local.ai_platform_v2_runtime_enabled && var.ai_platform_v2_grant_app_service_blob ? 1 : 0
 
@@ -223,6 +235,15 @@ resource "azurerm_container_app" "ai_platform_v2_documents" {
     identity = azurerm_user_assigned_identity.ai_platform_v2["document"].id
   }
 
+  dynamic "secret" {
+    for_each = var.ai_platform_v2_interactive_cursor_api_key_secret_id != null ? [1] : []
+    content {
+      name                = "cursor-api-key"
+      key_vault_secret_id = var.ai_platform_v2_interactive_cursor_api_key_secret_id
+      identity            = azurerm_user_assigned_identity.ai_platform_v2["document"].id
+    }
+  }
+
   # The document worker reads the pinned repository only through the repo-read service.
   dynamic "secret" {
     for_each = var.ai_platform_v2_interactive_repo_read_service_token != null ? [1] : []
@@ -282,6 +303,14 @@ resource "azurerm_container_app" "ai_platform_v2_documents" {
           secret_name = "repo-read-service-token"
         }
       }
+
+      dynamic "env" {
+        for_each = var.ai_platform_v2_interactive_cursor_api_key_secret_id != null ? [1] : []
+        content {
+          name        = "CURSOR_API_KEY"
+          secret_name = "cursor-api-key"
+        }
+      }
     }
   }
 
@@ -293,5 +322,6 @@ resource "azurerm_container_app" "ai_platform_v2_documents" {
 
   depends_on = [
     azurerm_role_assignment.ai_platform_v2_document_acr_pull,
+    azurerm_role_assignment.ai_platform_v2_document_kv_secrets_user,
   ]
 }
