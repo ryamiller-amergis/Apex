@@ -36,6 +36,17 @@ describe('resolveArtifactCredential', () => {
     expect(mockAzureCliCredential).not.toHaveBeenCalled();
   });
 
+  it('uses the worker user-assigned identity named by AZURE_CLIENT_ID when no secret is set', () => {
+    resolveArtifactCredential({
+      NODE_ENV: 'production',
+      AZURE_CLIENT_ID: 'document-worker-uami',
+    });
+
+    expect(mockManagedIdentityCredential).toHaveBeenCalledWith({
+      clientId: 'document-worker-uami',
+    });
+  });
+
   it('uses the Azure CLI login locally', () => {
     resolveArtifactCredential({ NODE_ENV: 'development' });
 

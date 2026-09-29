@@ -38,16 +38,21 @@ export function resolveArtifactContainerClient(
 }
 
 /**
- * AZURE_CLIENT_* belongs to Apex application auth, not Blob access, so the
- * App Service must not fall through to an environment credential. Workers use
- * their V2 identity; App Service uses its system identity.
+ * On App Service, AZURE_CLIENT_ID + AZURE_CLIENT_SECRET are the Apex app
+ * registration, which has no Blob access, so it uses its system identity.
+ * Workers name their user-assigned identity with AI_PLATFORM_V2_IDENTITY_CLIENT_ID
+ * or, without a client secret, AZURE_CLIENT_ID.
  */
 export function resolveArtifactCredential(
   env: NodeJS.ProcessEnv = process.env,
 ): TokenCredential {
-  const clientId = env.AI_PLATFORM_V2_IDENTITY_CLIENT_ID?.trim();
-  if (clientId) return new ManagedIdentityCredential({ clientId });
-  return env.NODE_ENV === 'production'
-    ? new ManagedIdentityCredential()
-    : new AzureCliCredential();
+  const v2ClientId = env.AI_PLATFORM_V2_IDENTITY_CLIENT_ID?.trim();
+  if (v2ClientId) return new ManagedIdentityCredential({ clientId: v2ClientId });
+  if (env.NODE_ENV !== 'production') return new AzureCliCredential();
+  const workerClientId = env.AZURE_CLIENT_SECRET?.trim()
+    ? undefined
+    : env.AZURE_CLIENT_ID?.trim();
+  return workerClientId
+    ? new ManagedIdentityCredential({ clientId: workerClientId })
+    : new ManagedIdentityCredential();
 }

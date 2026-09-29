@@ -486,6 +486,28 @@ jobs:
           IMAGE_TAG: ${{ steps.deployed.outputs.sha }}
         run: bash scripts/ci/publish-ai-orchestrator.sh
 
+      - name: Publish AI-runs V2 document worker image
+        if: >-
+          needs.detect-runner-changes.outputs.ai_runs_interactive == 'true' &&
+          hashFiles('runners/ai-runs-documents-v2/Dockerfile') != ''
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_RUNS_DOCUMENTS_V2_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_DOCUMENTS_V2_CONTAINER_APP_NAME || 'ca-apex-ai-runs-documents-v2-dev' }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || 'rg-scrum-dev' }}
+          IMAGE_TAG: ${{ steps.deployed.outputs.sha }}
+        run: bash scripts/ci/publish-ai-runs-documents-v2.sh
+
+      - name: Publish AI-runs V2 visual worker image
+        if: >-
+          needs.detect-runner-changes.outputs.ai_runs_interactive == 'true' &&
+          hashFiles('runners/ai-runs-visual/Dockerfile') != ''
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_RUNS_VISUAL_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_VISUAL_CONTAINER_APP_NAME || 'ca-apex-ai-runs-visual-v2-dev' }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || 'rg-scrum-dev' }}
+          IMAGE_TAG: ${{ steps.deployed.outputs.sha }}
+        run: bash scripts/ci/publish-ai-runs-visual.sh
+
       # Stage 3 repo-read service. The script exits cleanly when the Container
       # App name is unset or Terraform has not applied enable_repo_read_service,
       # so this stays green until the service is provisioned.

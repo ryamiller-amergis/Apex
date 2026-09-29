@@ -1039,6 +1039,52 @@ variable "ai_platform_v2_documents_memory" {
   default = "1Gi"
 }
 
+variable "ai_platform_v2_visual_image" {
+  description = "Visual lane worker image. The visual Container App is created only when set."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_visual_container_app_name" {
+  description = "Visual lane worker Container App name. Default ca-apex-ai-runs-visual-v2-{environment}."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_visual_aws_access_key_id" {
+  description = "AWS access key id the visual worker uses for Bedrock."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+variable "ai_platform_v2_visual_aws_secret_access_key" {
+  description = "AWS secret access key the visual worker uses for Bedrock."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+variable "ai_platform_v2_visual_min_replicas" {
+  type    = number
+  default = 1
+}
+
+variable "ai_platform_v2_visual_max_replicas" {
+  type    = number
+  default = 2
+}
+
+variable "ai_platform_v2_visual_cpu" {
+  type    = number
+  default = 0.5
+}
+
+variable "ai_platform_v2_visual_memory" {
+  type    = string
+  default = "1Gi"
+}
+
 variable "ai_platform_v2_fast_interactive_container_app_name" {
   description = "Fast interactive actor host Container App name. Default ca-apex-ai-fast-interactive-{environment}."
   type        = string
