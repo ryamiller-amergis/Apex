@@ -1,4 +1,8 @@
-import { friendlyChatProgressLabel, friendlyDurableInteractiveLimitError } from '../../../shared/utils/chatProgressCopy';
+import {
+  friendlyChatProgressLabel,
+  friendlyDurableInteractiveLimitError,
+  friendlyToolActivityLabel,
+} from '../../../shared/utils/chatProgressCopy';
 
 describe('friendlyChatProgressLabel', () => {
   it('maps native/MCP file reads to Reading', () => {
@@ -69,5 +73,27 @@ describe('friendlyChatProgressLabel', () => {
         'setup'
       )
     ).toBe('Repository preparation timed out. Please retry.');
+  });
+});
+
+describe('friendlyToolActivityLabel', () => {
+  it('names the kind of work for native tools', () => {
+    expect(friendlyToolActivityLabel('grep')).toBe('Searching the codebase');
+    expect(friendlyToolActivityLabel('glob')).toBe('Browsing folders');
+    expect(friendlyToolActivityLabel('read')).toBe('Reading files');
+    expect(friendlyToolActivityLabel('shell')).toBe('Running a command');
+  });
+
+  it('uses the underlying tool name for MCP calls', () => {
+    expect(
+      friendlyToolActivityLabel('mcp', { toolName: 'search_repo_code', keys: ['query'] }),
+    ).toBe('Searching the codebase');
+    expect(friendlyToolActivityLabel('mcp', { toolName: 'create_work_item' })).toBe(
+      'Using a connected tool',
+    );
+  });
+
+  it('falls back for unknown tools', () => {
+    expect(friendlyToolActivityLabel('something_new')).toBe('Working…');
   });
 });

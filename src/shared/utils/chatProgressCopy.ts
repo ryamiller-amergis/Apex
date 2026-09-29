@@ -91,6 +91,46 @@ export function friendlyChatProgressLabel(
   return 'Thinking…';
 }
 
+const TOOL_ACTIVITY: Record<string, string> = {
+  grep: 'Searching the codebase',
+  search_repo_code: 'Searching the codebase',
+  codebase_search: 'Searching the codebase',
+  semantic_search: 'Searching the codebase',
+  glob: 'Browsing folders',
+  ls: 'Browsing folders',
+  list_dir: 'Browsing folders',
+  list_repo_dir: 'Browsing folders',
+  read: 'Reading files',
+  read_file: 'Reading files',
+  get_skill_file: 'Reading files',
+  shell: 'Running a command',
+  edit: 'Editing files',
+  write: 'Editing files',
+  delete: 'Editing files',
+  task: 'Working on a subtask',
+  web_search: 'Searching the web',
+  web_fetch: 'Reading a web page',
+};
+
+/**
+ * Chat copy for the tool an agent is running. Tool arguments arrive redacted to
+ * their keys, so the label names the kind of work, not the file or query. MCP
+ * calls carry the underlying tool name in `args.toolName`.
+ */
+export function friendlyToolActivityLabel(toolName: string, args?: unknown): string {
+  const name = toolName.trim().toLowerCase();
+  if (name === 'mcp') {
+    const inner =
+      args && typeof args === 'object'
+        ? (args as { toolName?: unknown }).toolName
+        : undefined;
+    const innerLabel =
+      typeof inner === 'string' ? TOOL_ACTIVITY[inner.trim().toLowerCase()] : undefined;
+    return innerLabel ?? 'Using a connected tool';
+  }
+  return TOOL_ACTIVITY[name] ?? 'Working…';
+}
+
 /** Exact client copy for durable per-user cap errors (stable API codes). */
 export function friendlyDurableInteractiveLimitError(
   code: string | null | undefined,

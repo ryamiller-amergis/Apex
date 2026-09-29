@@ -21,6 +21,7 @@ jest.mock('../../hooks/useAgentChatSession', () => ({
     isInteractionBusy: false,
     status: 'idle',
     progressLabel: null,
+    toolProgress: [],
     showTypingIndicator: false,
     sendError: null,
     send: mockSend,

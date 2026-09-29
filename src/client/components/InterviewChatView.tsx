@@ -29,6 +29,7 @@ import {
   useDeleteInterview,
 } from '../hooks/useInterviews';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
+import { ChatRunProgressLabel } from './ChatRunProgressLabel';
 import { SectionOwnerModal } from './SectionOwnerModal';
 import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
 import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
@@ -1050,6 +1051,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     retryReason,
     progressLabel,
     progressPhase,
+    toolProgress,
     isPreparing: isPreparingInterview,
     hasPreparationError,
     isInteractionBusy,
@@ -1679,7 +1681,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               <span className={styles.typingDot} />
               <span className={styles.typingDot} />
               <span className={styles.typingProgressLabel} {...{ 'data-testid': 'interview-progress-label' }}>
-                {friendlyChatProgressLabel(progressLabel, progressPhase)}
+                <ChatRunProgressLabel
+                  fallbackLabel={friendlyChatProgressLabel(progressLabel, progressPhase)}
+                  progressPhase={progressPhase}
+                  toolProgress={toolProgress}
+                />
               </span>
             </div>
           )}

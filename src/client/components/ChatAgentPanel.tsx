@@ -17,6 +17,7 @@ import type {
 } from '../../shared/types/chat';
 import type { QuickMcpPill, QuickSkillPill } from '../../shared/types/projectSettings';
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
+import { ChatRunProgressLabel } from './ChatRunProgressLabel';
 import { ThreadHistorySidebar } from './ThreadHistorySidebar';
 import { AgentComposer, AgentPanelShell } from './agentChat';
 import { BrandLogo } from './BrandLogo';
@@ -406,6 +407,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     status,
     progressLabel,
     progressPhase,
+    toolProgress,
     showTypingIndicator,
     sendError,
   } = session;
@@ -1238,7 +1240,11 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                           Dispatched
                         </span>
                       ) : (
-                        progressLabel ?? 'Starting skill…'
+                        <ChatRunProgressLabel
+                          fallbackLabel={progressLabel ?? 'Starting skill…'}
+                          progressPhase={progressPhase}
+                          toolProgress={toolProgress}
+                        />
                       )}
                     </p>
                   )}

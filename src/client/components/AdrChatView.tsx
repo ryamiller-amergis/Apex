@@ -34,6 +34,7 @@ import { DEFAULT_MODEL_ID } from '../config/models';
 import { InterviewAgentMessage } from './InterviewChatView';
 import { AgentComposer } from './agentChat';
 import { AdrAssistantPanel } from './AdrAssistantPanel';
+import { ChatRunProgressLabel } from './ChatRunProgressLabel';
 import { ProposedAdrChangesReview } from './ProposedAdrChangesReview';
 import { AdrReviewerModal } from './AdrReviewerModal';
 import { AnnotationLayer } from './AnnotationLayer';
@@ -410,6 +411,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     streamingText,
     progressLabel,
     progressPhase,
+    toolProgress,
     isPreparing,
     hasPreparationError,
     showTypingIndicator,
@@ -995,7 +997,11 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                 <span className={styles.typingDot} />
                 <span className={styles.typingDot} />
                 <span className={styles.typingProgressLabel} {...{ 'data-testid': 'adr-progress-label' }}>
-                  {friendlyChatProgressLabel(progressLabel, progressPhase)}
+                  <ChatRunProgressLabel
+                    fallbackLabel={friendlyChatProgressLabel(progressLabel, progressPhase)}
+                    progressPhase={progressPhase}
+                    toolProgress={toolProgress}
+                  />
                 </span>
               </div>
             )}
