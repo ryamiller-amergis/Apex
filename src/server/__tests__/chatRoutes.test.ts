@@ -634,6 +634,25 @@ describe('POST /api/chat/threads — happy path', () => {
     );
   });
 
+  it('fills a missing provider from project settings, then from an owner/repo name', async () => {
+    mockChatService.createThread.mockResolvedValue({ id: 'new-thread-id' } as ChatThread);
+
+    mockResolveSkillConfig.mockResolvedValueOnce({ project: 'MaxView', skillProvider: 'ado' });
+    await request(buildApp())
+      .post('/api/chat/threads')
+      .send({ kickoff: { project: 'MaxView', repo: 'MaxView' }, skipAutoKickoff: true });
+
+    mockResolveSkillConfig.mockResolvedValueOnce(null);
+    await request(buildApp())
+      .post('/api/chat/threads')
+      .send({ kickoff: { project: 'Apex', repo: 'owner/Apex' }, skipAutoKickoff: true });
+
+    expect(mockChatService.createThread.mock.calls.map(([, kickoff]) => kickoff.skillProvider)).toEqual([
+      'ado',
+      'github',
+    ]);
+  });
+
   it('AC-1 / VT-04: discards client effort and module before deriving Interview', async () => {
     mockResolveSkillConfig.mockResolvedValue({
       id: 'settings-1',

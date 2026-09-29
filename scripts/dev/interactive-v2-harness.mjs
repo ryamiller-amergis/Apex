@@ -15,6 +15,8 @@
 //   HARNESS_REPO          repo name (default: repo of your most recent thread)
 //   HARNESS_BRANCH        branch (default: from recent thread or main)
 //   HARNESS_MODEL         model id sent with kickoff and turn (default: server default)
+//   HARNESS_SKILL_PATH    skill pill path, e.g. /.cursor/skills/app-knowledge/SKILL.md;
+//                         enables the home-skill scenario (HARNESS_PILL_LABEL names it)
 
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -30,6 +32,7 @@ const argValue = (flag) => {
 };
 const ONLY = argValue('--only');
 const MODEL = argValue('--model') || process.env.HARNESS_MODEL || undefined;
+const SKILL_PATH = process.env.HARNESS_SKILL_PATH || undefined;
 
 const SCENARIOS = [
   {
@@ -48,6 +51,16 @@ const SCENARIOS = [
       'In two sentences, what does the Apex Agent Home page show? '
       + 'Name one client component file that renders it.',
     expectText: /\.tsx/i,
+    firstActivityTargetMs: 10_000,
+    completionTargetMs: 90_000,
+    timeoutMs: 360_000,
+  },
+  {
+    name: 'home-skill',
+    requiresSkill: true,
+    expectClass: undefined,
+    text: 'In two sentences, what does this skill help with in this project?',
+    expectText: /\S/,
     firstActivityTargetMs: 10_000,
     completionTargetMs: 90_000,
     timeoutMs: 360_000,
@@ -152,7 +165,14 @@ function parseSse(buffer, onEvent) {
   return rest;
 }
 
-async function runScenario(kickoff, scenario) {
+async function runScenario(baseKickoff, scenario) {
+  const kickoff = scenario.requiresSkill
+    ? {
+        ...baseKickoff,
+        skillPath: SKILL_PATH,
+        ...(process.env.HARNESS_PILL_LABEL ? { pillLabel: process.env.HARNESS_PILL_LABEL } : {}),
+      }
+    : baseKickoff;
   const result = {
     name: scenario.name,
     interactiveClass: null,
@@ -289,6 +309,7 @@ async function main() {
   let failures = 0;
   for (const scenario of SCENARIOS) {
     if (ONLY && scenario.name !== ONLY) continue;
+    if (scenario.requiresSkill && !SKILL_PATH) continue;
     const result = await runScenario(kickoff, scenario);
     const problems = evaluate(result, scenario);
     const status = problems.length === 0 ? 'PASS' : 'FAIL';

@@ -426,8 +426,15 @@ router.post('/threads', async (req: Request, res: Response) => {
       }
     }
 
+    // Consumers treat a missing provider as Azure DevOps, which loses grounding
+    // for GitHub repositories. Azure DevOps repository names cannot contain '/'.
+    const skillProvider =
+      clientKickoff.skillProvider ??
+      skillConfig?.skillProvider ??
+      (clientKickoff.repo.includes('/') ? 'github' : undefined);
     const kickoff = {
       ...clientKickoff,
+      ...(skillProvider ? { skillProvider } : {}),
       ...(agentModule ? { agentModule } : {}),
     };
     const thread = await createThread(userId, kickoff, {

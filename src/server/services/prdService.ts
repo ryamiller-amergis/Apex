@@ -313,7 +313,11 @@ export async function routePrdGenerationKickoff(opts: {
         ),
       reportRecoverablePreparationFailure: reportPreparationFailure,
     });
-  } catch {
+  } catch (err: unknown) {
+    console.error(
+      `[prd] PRD generation kickoff failed (prdId=${opts.prdId}, threadId=${opts.threadId}):`,
+      err instanceof Error ? err.message : String(err),
+    );
     await reportPreparationFailure();
   }
 }
