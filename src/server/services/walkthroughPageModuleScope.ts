@@ -174,6 +174,20 @@ const PAGE_MODULE_BY_MENU_KEY: Record<
       },
     ],
   },
+  'qa-lab': {
+    pageEntries: [
+      {
+        component: 'src/client/components/QaLabView.tsx',
+        routePattern: '/qa-lab',
+        suggestedRoute: '/qa-lab',
+      },
+      {
+        component: 'src/client/components/QaLabAssistantPanel.tsx',
+        routePattern: '/qa-lab',
+        suggestedRoute: '/qa-lab',
+      },
+    ],
+  },
   'feature-requests': {
     pageEntries: [
       {

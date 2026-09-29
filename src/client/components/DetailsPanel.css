@@ -656,6 +656,69 @@
   font-style: italic;
 }
 
+/* Generated test cases section */
+
+.test-case-source {
+  padding: 8px 20px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color-light);
+}
+
+.test-case-suite {
+  padding: 4px 0;
+}
+
+.test-case-suite-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 20px 4px;
+}
+
+.test-case-suite-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.test-case-detail {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color-light);
+}
+
+.test-case-detail-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.test-case-detail-list {
+  margin: 0 0 10px;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.test-case-detail-text {
+  font-size: 12px;
+  color: var(--text-primary);
+  line-height: 1.6;
+  margin-bottom: 10px;
+}
+
+.test-case-expected {
+  display: block;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
 /* Dark mode adjustments for related item states */
 @media (prefers-color-scheme: dark) {
   .related-item-state.state-new {

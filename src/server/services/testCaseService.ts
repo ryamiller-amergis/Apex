@@ -9,6 +9,7 @@ import type {
   TestCaseSummary,
   TestCaseStatus,
 } from '../../shared/types/interview';
+import type { EffortLevel } from '../../shared/types/effort';
 import { getDefaultModel } from './appSettingsService';
 import {
   createThread,
@@ -786,6 +787,8 @@ export async function triggerTestCaseGeneration(
   prdId: string,
   sourceThreadId: string,
   actorUserId?: string,
+  /** Per-run overrides from the QA Lab model picker; fall back to project skill config. */
+  overrides?: { model?: string; effort?: EffortLevel },
 ): Promise<boolean> {
   const prdRow = await db.query.prds.findFirst({
     where: eq(prds.id, prdId),
@@ -825,7 +828,8 @@ export async function triggerTestCaseGeneration(
   }
 
   const defaultModel = await getDefaultModel();
-  const model = skillConfig.testCaseModel ?? defaultModel;
+  const model = overrides?.model ?? skillConfig.testCaseModel ?? defaultModel;
+  const effort = overrides?.effort ?? skillConfig.testCaseEffort ?? undefined;
   const slug = sanitizeSlug(prdRow.title);
   const backlogJson = prdRow.backlogJson ?? {};
   const context = [
@@ -866,6 +870,7 @@ export async function triggerTestCaseGeneration(
       skillPath: skillConfig.testCaseSkillPath,
       freeformContext: context,
       model,
+      effort,
     },
     { skipAutoKickoff: true }
   );
