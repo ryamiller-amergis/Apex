@@ -34,6 +34,33 @@ export function isContainerAgentId(id: string): boolean {
   return id.startsWith(CONTAINER_AGENT_PREFIX);
 }
 
+/**
+ * Turns a job status plus the markers in its logs into the status Apex stores.
+ * A CLI failure is recorded only once publish has happened, or the job itself
+ * has stopped. A marker seen while the job is still running, before a pull
+ * request or a no-change line, is not a finished run.
+ */
+export function resolveContainerObservation(input: {
+  jobStatus: string;
+  prUrl: string | null;
+  noChanges: boolean;
+  agentExitCode: number | null;
+}): { status: string; resultText: string | null } {
+  let status = mapContainerJobStatus(input.jobStatus);
+  let resultText: string | null = null;
+  if (status === 'failed') resultText = 'Container CLI run failed. See the job execution logs.';
+  if (input.noChanges) resultText = 'The agent finished without changing files.';
+  const published = Boolean(input.prUrl) || input.noChanges;
+  if (status === 'running' && published) status = 'finished';
+  if (input.agentExitCode && status !== 'cancelled' && (published || status !== 'running')) {
+    status = 'failed';
+    resultText = input.prUrl
+      ? `The Cursor CLI exited with code ${input.agentExitCode}. Its partial changes are in the pull request.`
+      : `The Cursor CLI exited with code ${input.agentExitCode}.`;
+  }
+  return { status, resultText };
+}
+
 /** Job status values become the same words the cloud-agent poller already understands. */
 export function mapContainerJobStatus(status: string): string {
   switch (status.trim().toLowerCase()) {
@@ -318,14 +345,12 @@ export async function getCursorContainerCliRun(executionName: string): Promise<{
     '--query', 'properties.status',
     '-o', 'tsv',
   ])).trim();
-  let mapped = mapContainerJobStatus(status);
   let prUrl: string | null = null;
-  let resultText: string | null = null;
   let branchName: string | null = null;
   let baseBranch: string | null = null;
   let summary: string | null = null;
   let noChanges = false;
-  if (mapped === 'failed') resultText = 'Container CLI run failed. See the job execution logs.';
+  let agentExitCode: number | null = null;
   try {
     const logs = await executionLogs(executionName, '200');
     const parsed = parseContainerCliLogs(logs);
@@ -334,18 +359,25 @@ export async function getCursorContainerCliRun(executionName: string): Promise<{
     baseBranch = parsed.baseBranch;
     summary = parsed.summary;
     noChanges = parsed.noChanges;
-    if (parsed.noChanges) resultText = 'The agent finished without changing files.';
-    if (mapped === 'running' && (parsed.prUrl || parsed.noChanges)) mapped = 'finished';
-    if (parsed.agentExitCode && mapped !== 'cancelled') {
-      mapped = 'failed';
-      resultText = parsed.prUrl
-        ? `The Cursor CLI exited with code ${parsed.agentExitCode}. Its partial changes are in the pull request.`
-        : `The Cursor CLI exited with code ${parsed.agentExitCode}.`;
-    }
+    agentExitCode = parsed.agentExitCode;
   } catch (err) {
     console.warn('[container-cli] could not read job logs', err instanceof Error ? err.message : err);
   }
-  return { status: mapped, prUrl, resultText, branchName, baseBranch, summary, noChanges };
+  const observed = resolveContainerObservation({
+    jobStatus: status,
+    prUrl,
+    noChanges,
+    agentExitCode,
+  });
+  return {
+    status: observed.status,
+    prUrl,
+    resultText: observed.resultText,
+    branchName,
+    baseBranch,
+    summary,
+    noChanges,
+  };
 }
 
 function isTerminalContainerStatus(status: string): boolean {

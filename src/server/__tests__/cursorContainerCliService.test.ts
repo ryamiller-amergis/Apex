@@ -3,6 +3,7 @@ import {
   mapContainerJobStatus,
   parseContainerActivityLogs,
   parseContainerCliLogs,
+  resolveContainerObservation,
 } from '../services/cursorContainerCliService';
 
 describe('cursor container CLI', () => {
@@ -32,6 +33,27 @@ describe('cursor container CLI', () => {
   it('ignores a PR line with no pull request id', () => {
     const logs = '{"Log":"APEX_PR_URL=https://dev.azure.com/Amergis/MaxView/_git/MaxView/pullrequest/"}';
     expect(parseContainerCliLogs(logs).prUrl).toBeNull();
+  });
+
+  it('keeps a run live when the CLI exit marker appears before anything is published', () => {
+    expect(resolveContainerObservation({
+      jobStatus: 'Running',
+      prUrl: null,
+      noChanges: false,
+      agentExitCode: 1,
+    })).toEqual({ status: 'running', resultText: null });
+  });
+
+  it('fails a published run when the CLI exited non-zero, and keeps the pull request', () => {
+    expect(resolveContainerObservation({
+      jobStatus: 'Running',
+      prUrl: 'https://dev.azure.com/Amergis/MaxView/_git/MaxView/pullrequest/4821',
+      noChanges: false,
+      agentExitCode: 1,
+    })).toEqual({
+      status: 'failed',
+      resultText: 'The Cursor CLI exited with code 1. Its partial changes are in the pull request.',
+    });
   });
 
   it('maps a finished job execution onto the cloud-agent status words', () => {
