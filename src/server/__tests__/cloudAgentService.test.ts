@@ -363,6 +363,7 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
         skillProvider: 'ado',
         skillRepo: 'MaxView',
         skillBranch: 'main',
+        developmentSkillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
       }),
       buildPrompt: jest.fn().mockResolvedValue('base execution prompt'),
     }));
@@ -373,6 +374,10 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
         prompt: expect.stringMatching(
           /base execution prompt[\s\S]*Failing check: e2e[\s\S]*No pull request was opened[\s\S]*AC-9/,
         ),
+        skillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
+        cloudAgent: expect.objectContaining({
+          skillName: 'dev-orchestrator',
+        }),
       }),
     }));
     expect(txSet).toHaveBeenCalledWith(expect.objectContaining({
@@ -418,6 +423,7 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
       project: 'MaxView',
       workItemId: 123,
     });
+    expect(prompt.startsWith('/dev-orchestrator\n')).toBe(true);
     expect(prompt).toContain('This project is configured to use the **dev-orchestrator**');
     expect(prompt).toContain('`.cursor/skills/dev-orchestrator/SKILL.md`');
     expect(prompt).toContain('Default model: `composer-2.5`');
@@ -429,6 +435,7 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
       project: 'MaxView',
       workItemId: 123,
     });
+    expect(prompt.startsWith('/')).toBe(false);
     expect(prompt).toContain('No development skill is configured for this project.');
     expect(prompt).not.toContain('This project is configured to use');
   });

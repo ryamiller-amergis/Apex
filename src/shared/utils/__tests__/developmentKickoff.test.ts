@@ -2,6 +2,8 @@ import {
   buildCloudDevelopmentKickoffSection,
   DEFAULT_DEVELOPMENT_MODEL,
   DEFAULT_DEVELOPMENT_SKILL_PATH,
+  developmentCliSkillName,
+  prefixDevelopmentSkillInvocation,
   resolveDevelopmentSettings,
 } from '../developmentKickoff';
 
@@ -59,5 +61,33 @@ describe('buildCloudDevelopmentKickoffSection', () => {
   it('tells the agent to fall back when the default skill is absent from the repo', () => {
     const section = buildCloudDevelopmentKickoffSection(resolveDevelopmentSettings(null));
     expect(section).toContain('If it does not, implement from the design artifacts below');
+  });
+});
+
+describe('development CLI skill invocation', () => {
+  it('names the configured skill for the agent CLI', () => {
+    const settings = resolveDevelopmentSettings({
+      developmentSkillPath: '.cursor/skills/custom-dev/SKILL.md',
+      developmentModel: null,
+    });
+    expect(developmentCliSkillName(settings)).toBe('custom-dev');
+    expect(prefixDevelopmentSkillInvocation('Implement the work item.', settings))
+      .toBe('/custom-dev\n\nImplement the work item.');
+  });
+
+  it('does not invent a slash command when no development skill is configured', () => {
+    const settings = resolveDevelopmentSettings(null);
+    expect(developmentCliSkillName(settings)).toBeNull();
+    expect(prefixDevelopmentSkillInvocation('Implement the work item.', settings))
+      .toBe('Implement the work item.');
+  });
+
+  it('does not prefix a prompt that already invokes the skill', () => {
+    const settings = resolveDevelopmentSettings({
+      developmentSkillPath: '.agents/skills/custom-dev/SKILL.md',
+      developmentModel: null,
+    });
+    const prompt = '/custom-dev\n\nImplement the work item.';
+    expect(prefixDevelopmentSkillInvocation(prompt, settings)).toBe(prompt);
   });
 });

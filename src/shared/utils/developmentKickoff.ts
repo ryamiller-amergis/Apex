@@ -27,6 +27,30 @@ export function resolveDevelopmentSettings(
   };
 }
 
+const CLI_SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** Skill name safe to pass as a `/name` invocation on the Cursor CLI. */
+export function developmentCliSkillName(
+  settings: Pick<ResolvedDevelopmentSettings, 'configuredSkillPath' | 'skillName'>,
+): string | null {
+  if (!settings.configuredSkillPath) return null;
+  const name = settings.skillName?.trim() || null;
+  if (!name || !CLI_SKILL_NAME_RE.test(name)) return null;
+  return name;
+}
+
+/** Puts `/skill-name` at the start of the prompt the CLI receives. */
+export function prefixDevelopmentSkillInvocation(
+  prompt: string,
+  settings: Pick<ResolvedDevelopmentSettings, 'configuredSkillPath' | 'skillName'>,
+): string {
+  const name = developmentCliSkillName(settings);
+  if (!name) return prompt;
+  const invocation = `/${name}`;
+  if (prompt.startsWith(`${invocation}\n`) || prompt === invocation) return prompt;
+  return `${invocation}\n\n${prompt}`;
+}
+
 export function buildCloudDevelopmentKickoffSection(
   settings: ResolvedDevelopmentSettings,
 ): string {

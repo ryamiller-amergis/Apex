@@ -391,6 +391,9 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
             ...(input.snapshot.cloudAgent.initiatorEmail
               ? { initiatorEmail: input.snapshot.cloudAgent.initiatorEmail }
               : {}),
+            ...(input.snapshot.cloudAgent.skillName
+              ? { skillName: input.snapshot.cloudAgent.skillName }
+              : {}),
           },
         }
       : {}),

@@ -62,6 +62,8 @@ import {
 } from './cloudAgentLeftoverWorkService';
 import {
   buildCloudDevelopmentKickoffSection,
+  developmentCliSkillName,
+  prefixDevelopmentSkillInvocation,
   resolveDevelopmentSettings,
 } from '../../shared/utils/developmentKickoff';
 import {
@@ -275,7 +277,7 @@ export async function buildCloudAgentPrompt(input: {
   const files = pack.files
     .map((file) => `### ${file.name}\n\n${file.content}`)
     .join('\n\n');
-  return [
+  const body = [
     `Implement this Azure DevOps work item in the project's configured repository.`,
     `Work item id: ${input.workItemId}.`,
     buildCloudDevelopmentKickoffSection(development),
@@ -283,6 +285,7 @@ export async function buildCloudAgentPrompt(input: {
     `When the repository is hosted on GitHub, include ${buildWorkItemReferenceText(input.workItemId)} in the pull request title or body. Azure Repos work-item linking is handled by Apex.`,
     files,
   ].join('\n\n');
+  return prefixDevelopmentSkillInvocation(body, development);
 }
 
 export async function attachCloudAgentEligibility(
@@ -432,7 +435,9 @@ async function persistQueuedRun(
     project: input.project,
     workItemId: input.workItemId,
   });
-  const { model, skillPath } = resolveDevelopmentSettings(skillConfig);
+  const development = resolveDevelopmentSettings(skillConfig);
+  const { model, skillPath } = development;
+  const skillName = developmentCliSkillName(development);
 
   try {
     return await db.transaction(async (tx) => {
@@ -503,6 +508,7 @@ async function persistQueuedRun(
             baseBranch: skillConfig.skillBranch,
             initiatorName: input.initiatorName,
             initiatorEmail: input.initiatorEmail,
+            ...(skillName ? { skillName } : {}),
           },
         },
       });
@@ -676,6 +682,7 @@ async function launchClaimedCloudAgentRun(
       workItemTitle: cloud.workItemTitle ?? `Work item ${cloud.workItemId}`,
       initiatorName: cloud.initiatorName,
       initiatorEmail: cloud.initiatorEmail,
+      skillName: cloud.skillName,
       adoUserToken,
     });
   } catch (err) {

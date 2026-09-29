@@ -24,6 +24,8 @@ export interface LaunchCloudAgentInput {
   workItemTitle?: string;
   initiatorName?: string;
   initiatorEmail?: string;
+  /** Configured development skill. The container CLI invokes it as `/name`. */
+  skillName?: string;
   /** Azure DevOps token for the developer who started the run. Used only to open the pull request. */
   adoUserToken?: string | null;
 }
@@ -86,6 +88,7 @@ export async function launchCloudAgent(
     workItemTitle: input.workItemTitle,
     authorName: input.initiatorName,
     authorEmail: input.initiatorEmail,
+    skillName: input.skillName,
     adoUserToken: input.adoUserToken,
     repoUrl,
   });

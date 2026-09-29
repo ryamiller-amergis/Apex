@@ -53,6 +53,14 @@ Read .apex-pr-description.example.md in the repo root. It is a filled example. N
 fi
 
 summary_file="$(mktemp)"
+skill_prefix=""
+if [[ "${AGENT_SKILL:-}" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+  emit_activity "skill" "status" "Using /${AGENT_SKILL}" "" "completed"
+  case "${AGENT_PROMPT}" in
+    "/${AGENT_SKILL}"*) ;;
+    *) skill_prefix="/${AGENT_SKILL}"$'\n\n' ;;
+  esac
+fi
 emit_activity "agent" "status" "Agent running" "" "running"
 agent -p \
   --workspace "${dest}" \
@@ -60,7 +68,7 @@ agent -p \
   --approve-mcps \
   --output-format stream-json \
   --model "${AGENT_MODEL}" \
-  "${AGENT_PROMPT}
+  "${skill_prefix}${AGENT_PROMPT}
 ${pr_hint}
 Do not commit, push, or open a pull request. The container pushes the branch and opens the pull request after you finish." \
   | node /usr/local/bin/cursor-activity-log "${summary_file}"

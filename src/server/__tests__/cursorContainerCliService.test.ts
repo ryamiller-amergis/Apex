@@ -67,6 +67,26 @@ describe('cursor container CLI', () => {
       { name: 'AGENT_AUTHOR_EMAIL', value: 'jane@example.com' },
       { name: 'ADO_USER_TOKEN', value: 'developer-token' },
     ]));
+    expect(container?.env?.some((entry) => entry.name === 'AGENT_SKILL')).toBe(false);
+  });
+
+  it('passes the project development skill to the CLI run', () => {
+    const template = buildContainerExecutionTemplate({
+      containers: [{ name: 'cursor-pool-worker', env: [] }],
+    }, {
+      image: 'example.azurecr.io/apex-cursor-worker:cli-run',
+      repoUrl: 'https://dev.azure.com/Amergis/MaxView/_git/MaxView',
+      baseBranch: 'development',
+      branchName: 'feature/apex-1-abcdef',
+      model: 'composer-2.5',
+      prompt: 'Implement the work item',
+      adoPat: 'secret-pat',
+      skillName: 'dev-orchestrator',
+    });
+
+    expect(template.containers?.[0]?.env).toEqual(expect.arrayContaining([
+      { name: 'AGENT_SKILL', value: 'dev-orchestrator' },
+    ]));
   });
 
   it('reads agent and tool activity out of container log lines', () => {

@@ -94,6 +94,8 @@ export interface ExecutionSnapshot {
     baseBranch: string;
     initiatorName?: string;
     initiatorEmail?: string;
+    /** Configured development skill, invoked as `/name` by the container CLI. */
+    skillName?: string;
   };
   workflowClass: string;
   skillPath: string;

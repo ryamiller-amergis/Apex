@@ -147,6 +147,7 @@ export function buildContainerExecutionTemplate(
     workItemTitle?: string;
     authorName?: string;
     authorEmail?: string;
+    skillName?: string;
     adoUserToken?: string | null;
   },
 ): JobTemplate {
@@ -163,6 +164,7 @@ export function buildContainerExecutionTemplate(
     'AGENT_WORK_ITEM_TITLE',
     'AGENT_AUTHOR_NAME',
     'AGENT_AUTHOR_EMAIL',
+    'AGENT_SKILL',
     'ADO_USER_TOKEN',
   ]);
   const env = (container.env ?? []).filter((entry) => !entry.name || !replaced.has(entry.name));
@@ -183,6 +185,7 @@ export function buildContainerExecutionTemplate(
   if (workItemTitle) env.push({ name: 'AGENT_WORK_ITEM_TITLE', value: workItemTitle });
   if (authorName) env.push({ name: 'AGENT_AUTHOR_NAME', value: authorName });
   if (authorEmail) env.push({ name: 'AGENT_AUTHOR_EMAIL', value: authorEmail });
+  if (input.skillName) env.push({ name: 'AGENT_SKILL', value: input.skillName });
   if (input.adoUserToken) env.push({ name: 'ADO_USER_TOKEN', value: input.adoUserToken });
   return {
     ...template,
@@ -237,6 +240,7 @@ export async function launchCursorContainerCli(input: {
   workItemTitle?: string;
   authorName?: string;
   authorEmail?: string;
+  skillName?: string;
   adoUserToken?: string | null;
   repoUrl: string;
 }): Promise<{ cloudAgentId: string; cursorRunId: string; jobName: string; branchName: string }> {
@@ -265,6 +269,7 @@ export async function launchCursorContainerCli(input: {
     workItemTitle: input.workItemTitle,
     authorName: input.authorName,
     authorEmail: input.authorEmail,
+    skillName: input.skillName,
     adoUserToken: input.adoUserToken,
   });
 
