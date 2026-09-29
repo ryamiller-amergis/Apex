@@ -52,6 +52,21 @@ describe('devEnvAllowlistService', () => {
       expect(mockDb.select).not.toHaveBeenCalled();
     });
 
+    it('allows the automated test account on the dev site without reading the list', async () => {
+      const originalTestUser = process.env.E2E_TEST_USER;
+      process.env.E2E_TEST_USER = 'apex-e2e-test@amergis.com';
+      mockDb.select.mockImplementation(() => {
+        throw new Error('db down');
+      });
+      try {
+        await expect(isDevEnvironmentAllowed('Apex-E2E-Test@amergis.com')).resolves.toBe(true);
+        expect(mockDb.select).not.toHaveBeenCalled();
+      } finally {
+        if (originalTestUser === undefined) delete process.env.E2E_TEST_USER;
+        else process.env.E2E_TEST_USER = originalTestUser;
+      }
+    });
+
     it('allows platform admins on the dev site without reading the list', async () => {
       mockDb.select.mockImplementation(() => {
         throw new Error('db down');

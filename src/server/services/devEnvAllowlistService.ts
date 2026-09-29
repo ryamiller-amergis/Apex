@@ -91,6 +91,10 @@ export async function isDevEnvironmentAllowed(email: string | undefined | null):
   const normalized = normalizeEmail(email ?? '');
   if (!normalized) return false;
   if (isSuperAdminEmail(normalized)) return true;
+  // The deployed smoke test signs in with this account. It is configured on the
+  // dev site from the CI secret and is not a platform admin.
+  const automatedTestUser = normalizeEmail(process.env.E2E_TEST_USER ?? '');
+  if (automatedTestUser && normalized === automatedTestUser) return true;
   try {
     const emails = await cachedAllowedEmails();
     return emails.has(normalized);
