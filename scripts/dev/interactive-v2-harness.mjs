@@ -56,6 +56,16 @@ const SCENARIOS = [
     timeoutMs: 360_000,
   },
   {
+    name: 'home-reconnect',
+    expectClass: undefined,
+    text: 'In about 150 words, explain how the Apex Agent Home page works for a new user.',
+    expectText: /\S/,
+    reconnectAfterTokens: 2,
+    firstActivityTargetMs: 10_000,
+    completionTargetMs: 90_000,
+    timeoutMs: 360_000,
+  },
+  {
     name: 'home-skill',
     requiresSkill: true,
     expectClass: undefined,
@@ -148,14 +158,15 @@ function parseSse(buffer, onEvent) {
   while (boundary >= 0) {
     const chunk = rest.slice(0, boundary);
     rest = rest.slice(boundary + 2);
-    const data = chunk
-      .split('\n')
+    const lines = chunk.split('\n');
+    const id = lines.find((line) => line.startsWith('id:'))?.slice(3).trim();
+    const data = lines
       .filter((line) => line.startsWith('data:'))
       .map((line) => line.slice(5).trim())
       .join('\n');
     if (data) {
       try {
-        onEvent(JSON.parse(data));
+        onEvent(JSON.parse(data), id);
       } catch {
         // Ignore keep-alive or non-JSON frames.
       }
@@ -163,6 +174,43 @@ function parseSse(buffer, onEvent) {
     boundary = rest.indexOf('\n\n');
   }
   return rest;
+}
+
+/** Rebuilds streamed text by offset, as the client does, counting anomalies. */
+function createTokenAssembler() {
+  const state = { text: '', pending: new Map(), duplicates: 0, conflicts: 0, withoutOffset: 0 };
+  const drain = () => {
+    for (let next = state.pending.get(state.text.length); next !== undefined; next = state.pending.get(state.text.length)) {
+      state.pending.delete(state.text.length);
+      state.text += next;
+    }
+  };
+  return {
+    state,
+    add(event) {
+      const offset = event.streamOffset;
+      if (typeof offset !== 'number') {
+        state.withoutOffset += 1;
+        state.text += event.text;
+        return;
+      }
+      if (offset === state.text.length) {
+        state.text += event.text;
+      } else if (offset < state.text.length) {
+        const overlap = state.text.slice(offset, offset + event.text.length);
+        if (event.text.startsWith(overlap)) {
+          state.duplicates += 1;
+          state.text += event.text.slice(overlap.length);
+        } else {
+          state.conflicts += 1;
+          state.text = state.text.slice(0, offset) + event.text;
+        }
+      } else {
+        state.pending.set(offset, event.text);
+      }
+      drain();
+    },
+  };
 }
 
 async function runScenario(baseKickoff, scenario) {
@@ -192,11 +240,16 @@ async function runScenario(baseKickoff, scenario) {
   const { threadId } = await create.json();
   result.threadId = threadId;
 
-  const controller = new AbortController();
-  const stream = await api(`/api/chat/threads/${threadId}/stream`, {
-    headers: { accept: 'text/event-stream' },
-    signal: controller.signal,
-  });
+  let controller = new AbortController();
+  const openStream = (lastEventId) =>
+    api(`/api/chat/threads/${threadId}/stream`, {
+      headers: {
+        accept: 'text/event-stream',
+        ...(lastEventId ? { 'Last-Event-ID': lastEventId } : {}),
+      },
+      signal: controller.signal,
+    });
+  let stream = await openStream();
   if (!stream.ok || !stream.body) {
     result.error = `stream ${stream.status}`;
     return result;
@@ -225,14 +278,25 @@ async function runScenario(baseKickoff, scenario) {
   result.interactiveClass = accepted.interactiveClass ?? 'legacy';
   result.runId = accepted.runId;
 
-  const timeout = setTimeout(() => controller.abort(), scenario.timeoutMs);
-  const decoder = new TextDecoder();
-  let buffer = '';
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, scenario.timeoutMs);
+  const tokens = createTokenAssembler();
+  let tokenCount = 0;
+  let lastEventId;
+  let reconnectPending = false;
+  result.reconnects = 0;
   let finished = false;
   try {
-    for await (const chunk of stream.body) {
+    for (;;) {
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for await (const chunk of stream.body) {
       buffer += decoder.decode(chunk, { stream: true });
-      buffer = parseSse(buffer, (event) => {
+      buffer = parseSse(buffer, (event, id) => {
+        if (id) lastEventId = id;
         if (event.runId && result.runId && event.runId !== result.runId) return;
         switch (event.type) {
           case 'phase':
@@ -248,6 +312,15 @@ async function runScenario(baseKickoff, scenario) {
           case 'token':
             mark('firstToken');
             mark('firstActivity');
+            tokens.add(event);
+            tokenCount += 1;
+            if (
+              scenario.reconnectAfterTokens
+              && result.reconnects === 0
+              && tokenCount >= scenario.reconnectAfterTokens
+            ) {
+              reconnectPending = true;
+            }
             break;
           case 'message':
             if (event.message?.role === 'agent') {
@@ -267,11 +340,24 @@ async function runScenario(baseKickoff, scenario) {
             break;
         }
       });
-      if (finished) break;
+      if (finished || reconnectPending) break;
+      }
+      if (!reconnectPending || finished) break;
+      // Simulate a dropped browser connection and resume from the last event id.
+      reconnectPending = false;
+      result.reconnects += 1;
+      result.resumedFrom = lastEventId ? 'last-event-id' : 'none';
+      controller.abort();
+      controller = new AbortController();
+      stream = await openStream(lastEventId);
+      if (!stream.ok || !stream.body) {
+        result.error = `reconnect stream ${stream.status}`;
+        break;
+      }
     }
   } catch (err) {
     if (!finished && !result.error) {
-      result.error = controller.signal.aborted
+      result.error = timedOut
         ? `timed out after ${scenario.timeoutMs} ms`
         : `stream failed: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -280,6 +366,14 @@ async function runScenario(baseKickoff, scenario) {
     controller.abort();
   }
   if (!finished && !result.error) result.error = 'stream ended without done';
+  result.tokens = {
+    received: tokenCount,
+    duplicates: tokens.state.duplicates,
+    conflicts: tokens.state.conflicts,
+    withoutOffset: tokens.state.withoutOffset,
+    pending: tokens.state.pending.size,
+    matchesFinalMessage: tokens.state.text.trim() === result.finalText.trim(),
+  };
   return result;
 }
 
@@ -299,6 +393,14 @@ function evaluate(result, scenario) {
   const done = result.timings.done;
   if (done === undefined || done > scenario.completionTargetMs) {
     problems.push(`completion ${done ?? 'never'} ms > ${scenario.completionTargetMs} ms`);
+  }
+  if (scenario.reconnectAfterTokens) {
+    if (result.reconnects !== 1) problems.push('stream was not reconnected mid-answer');
+    if (result.tokens.conflicts > 0) problems.push(`${result.tokens.conflicts} conflicting token chunks`);
+    if (result.tokens.pending > 0) problems.push(`${result.tokens.pending} token chunks never filled a gap`);
+    if (!result.error && !result.tokens.matchesFinalMessage) {
+      problems.push('streamed text does not match the final message');
+    }
   }
   return problems;
 }
@@ -323,6 +425,9 @@ async function main() {
       toolCalls: result.toolCalls,
       timingsMs: result.timings,
       problems,
+      ...(scenario.reconnectAfterTokens
+        ? { reconnects: result.reconnects, resumedFrom: result.resumedFrom, tokens: result.tokens }
+        : {}),
       answerPreview: result.finalText.slice(0, 160),
     }, null, 2));
   }
