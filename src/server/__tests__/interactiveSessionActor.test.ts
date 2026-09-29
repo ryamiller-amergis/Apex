@@ -895,6 +895,51 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     setTimeoutSpy.mockRestore();
   }, 15_000);
 
+  it('heartbeats from the start of a durable turn until it ends', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const waitGate = deferred();
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          tokens: ['ok'],
+          waitGate: waitGate.promise,
+          workspaceRef: checkout.workspacePath,
+        }),
+      ),
+      materializeWorkspace: async (_b, destination) => ({ workspacePath: destination }),
+      uploadAttemptArtifacts: jest.fn(async () => ({
+        container: 'artifacts',
+        key: 'runs/r/attempts/1/manifest.json',
+      })),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+      durableHeartbeatMs: 20,
+    });
+
+    const turn = actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap(),
+    });
+    try {
+      for (let i = 0; i < 100 && posted.length === 0; i += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      expect(posted[0]).toMatchObject({ kind: 'heartbeat', attemptId: expect.any(String) });
+      await new Promise((resolve) => setTimeout(resolve, 90));
+    } finally {
+      waitGate.resolve();
+      await turn;
+    }
+
+    const beats = posted.filter((body) => body.kind === 'heartbeat').length;
+    expect(beats).toBeGreaterThanOrEqual(3);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(posted.filter((body) => body.kind === 'heartbeat')).toHaveLength(beats);
+  });
+
   it('fails with hard_timeout when the Cursor run never settles past the absolute deadline', async () => {
     const posted: AiRunIngestBody[] = [];
     let cancelCalled = false;

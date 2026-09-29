@@ -53,6 +53,9 @@ const RETIRE_RECONCILER_SWEEP_LEASE_KEY = 'agent-run-retire-reconciler:sweep';
 const RETIRE_RECONCILER_SWEEP_LEASE_MS = RETIRE_REAP_INTERVAL_MS - 5_000;
 const DEFAULT_WORKER_HEARTBEAT_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_DISPATCH_COLD_START_MS = 5 * 60_000;
+// The durable actor heartbeats every 15s from the moment a turn starts.
+const DEFAULT_DURABLE_INTERACTIVE_START_TIMEOUT_MS = 60_000;
+const DEFAULT_DURABLE_INTERACTIVE_HEARTBEAT_TIMEOUT_MS = 60_000;
 const DEFAULT_WORKER_PROGRESS_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_CANCEL_GRACE_MS = 60_000;
 
@@ -139,6 +142,10 @@ export interface AgentRunHealthConfig {
   workerHeartbeatTimeoutMs?: number;
   /** Admit-to-worker-start clock before the current fenced dispatch is republished. */
   dispatchColdStartMs?: number;
+  /** Durable (dapr-actor-v2) interactive turns: dispatch-to-first-heartbeat budget. */
+  durableInteractiveStartTimeoutMs?: number;
+  /** Durable (dapr-actor-v2) interactive turns: maximum heartbeat silence while running. */
+  durableInteractiveHeartbeatTimeoutMs?: number;
   /**
    * Backstop for a dispatch the worker never picks up or never reports on.
    * Beyond this the run is failed, which is the only exit from `dispatched` —
@@ -224,6 +231,14 @@ export function resolveAgentRunHealthConfig(): AgentRunHealthConfig {
     dispatchColdStartMs: positiveDuration(
       process.env.AI_RUN_DISPATCH_COLDSTART_MS,
       DEFAULT_DISPATCH_COLD_START_MS,
+    ),
+    durableInteractiveStartTimeoutMs: positiveDuration(
+      process.env.AI_RUNS_INTERACTIVE_START_TIMEOUT_MS,
+      DEFAULT_DURABLE_INTERACTIVE_START_TIMEOUT_MS,
+    ),
+    durableInteractiveHeartbeatTimeoutMs: positiveDuration(
+      process.env.AI_RUNS_INTERACTIVE_HEARTBEAT_TIMEOUT_MS,
+      DEFAULT_DURABLE_INTERACTIVE_HEARTBEAT_TIMEOUT_MS,
     ),
     dispatchTtlMs: resolveBackgroundDispatchTtlMs(),
     workerProgressTimeoutMs: positiveDuration(
@@ -838,13 +853,30 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
       // finishes. A process crash can therefore bypass the host's rejection
       // handler and leave the fenced row dispatched forever. Unlike background
       // work, this lane has nothing to republish, so terminate it after the
-      // cold-start budget and let the user retry.
-      if (row.lane === INTERACTIVE_LANE && row.status === 'dispatched') {
-        if (
-          row.dispatchMessageId
-          && ageMs(row.dispatchedAt, nowMs) >= dispatchColdStartMs
+      // cold-start budget and let the user retry. Durable turns heartbeat on a
+      // timer, so a replica that dies mid-turn is detected within a minute.
+      const durableInteractive =
+        row.lane === INTERACTIVE_LANE && row.transportVersion === 'dapr-actor-v2';
+      if (
+        row.lane === INTERACTIVE_LANE
+        && (row.status === 'dispatched' || (durableInteractive && row.status === 'running'))
+      ) {
+        let detail: string | null = null;
+        if (row.status === 'dispatched') {
+          const startBudgetMs = durableInteractive
+            ? config.durableInteractiveStartTimeoutMs ?? DEFAULT_DURABLE_INTERACTIVE_START_TIMEOUT_MS
+            : dispatchColdStartMs;
+          if (ageMs(row.dispatchedAt, nowMs) >= startBudgetMs) {
+            detail = 'Interactive agent did not start. Please retry.';
+          }
+        } else if (
+          ageMs(row.heartbeatAt ?? row.startedAt ?? row.dispatchedAt, nowMs)
+            >= (config.durableInteractiveHeartbeatTimeoutMs
+              ?? DEFAULT_DURABLE_INTERACTIVE_HEARTBEAT_TIMEOUT_MS)
         ) {
-          const detail = 'Interactive agent did not start. Please retry.';
+          detail = 'Interactive agent stopped responding. Please retry.';
+        }
+        if (row.dispatchMessageId && detail) {
           throwIfAborted(signal);
           const terminal = await markTerminal(row.id, {
             status: 'failed',
@@ -862,7 +894,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
           });
           throwIfAborted(signal);
           console.log(
-            `[reaper] Reaped interactive dispatch (id=${row.id}, threadId=${row.threadId}) — actor did not start`,
+            `[reaper] Reaped interactive run (id=${row.id}, threadId=${row.threadId}, status=${row.status}) — ${detail}`,
           );
           if (terminal.ok) {
             emitWorkerTelemetry(() => {

@@ -64,6 +64,13 @@ import { createPerThreadTurnQueue, type PerThreadTurnQueue } from './perThreadTu
 /** Default cadence for durable progress heartbeats (clocks + cancel signal). */
 const DEFAULT_HEARTBEAT_MS = 4_000;
 
+/**
+ * Durable interactive turns heartbeat on a timer from the moment they start,
+ * so App Service can tell a slow turn (checkout, agent start) from a dead one.
+ * Must stay well inside the reaper's durable heartbeat timeout.
+ */
+const DEFAULT_DURABLE_HEARTBEAT_MS = 15_000;
+
 /** Idle TTL for the live per-thread Agent cache. */
 export const INTERACTIVE_AGENT_CACHE_IDLE_MS = 10 * 60_000;
 
@@ -265,6 +272,8 @@ export interface InteractiveActorDependencies {
   sourceInstance?: string;
   /** Durable progress heartbeat cadence in ms (default 4000). */
   heartbeatMs?: number;
+  /** Timer heartbeat cadence for durable V2 turns in ms (default 15000). */
+  durableHeartbeatMs?: number;
   now?: () => number;
   /** Idle TTL for cached Agents (default 10 minutes). */
   agentCacheIdleMs?: number;
@@ -349,6 +358,8 @@ export function createInteractiveSessionActor(
   const sourceInstance =
     dependencies.sourceInstance ?? 'ai-runs-interactive-actor';
   const heartbeatMs = dependencies.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
+  const durableHeartbeatMs =
+    dependencies.durableHeartbeatMs ?? DEFAULT_DURABLE_HEARTBEAT_MS;
   const publishLive: LiveEnvelopePublisher =
     dependencies.publishLive ?? (async () => {});
   const now = dependencies.now ?? Date.now;
@@ -906,6 +917,12 @@ export function createInteractiveSessionActor(
       }
     };
 
+    const heartbeat = (): void => {
+      void post({ kind: 'heartbeat', dispatchMessageId, attemptId }).catch(() => {});
+    };
+    heartbeat();
+    const heartbeatTimer = setInterval(heartbeat, durableHeartbeatMs);
+
     try {
       await publishLive(threadId, createCursorRunEventEnvelope({
         threadId,
@@ -1356,6 +1373,7 @@ export function createInteractiveSessionActor(
       );
       return { status: 'failed' };
     } finally {
+      clearInterval(heartbeatTimer);
       clearTimeout(absoluteTimer);
       clearToolTimer();
       if (!retainAgent && attemptCheckout?.dispose) {

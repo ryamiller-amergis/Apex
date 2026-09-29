@@ -1061,6 +1061,71 @@ describe('reapOrphanedRuns', () => {
     expect(mockRecoverStaleDispatchedRuns).not.toHaveBeenCalled();
   });
 
+  describe('durable (dapr-actor-v2) interactive turns', () => {
+    const durableRow = (overrides: Record<string, unknown>) => ({
+      id: 'run-durable',
+      threadId: 'thread-durable',
+      lane: 'ai-runs-interactive',
+      transportVersion: 'dapr-actor-v2',
+      dispatchMessageId: 'dispatch-durable',
+      progressPhase: 'implementation',
+      cancelRequested: false,
+      eventDriven: true,
+      ...overrides,
+    });
+
+    it('fails a dispatch with no heartbeat after the durable start budget', async () => {
+      mockFindMany.mockResolvedValue([durableRow({
+        status: 'dispatched',
+        dispatchedAt: timestamp(60_001),
+      })]);
+
+      await reapOrphanedRuns({ now: () => now, config });
+
+      expect(mockMarkTerminal).toHaveBeenCalledWith(
+        'run-durable',
+        expect.objectContaining({
+          status: 'failed',
+          terminalReason: 'worker_lost',
+          detail: 'Interactive agent did not start. Please retry.',
+        }),
+      );
+    });
+
+    it('fails a running turn whose heartbeat went silent', async () => {
+      mockFindMany.mockResolvedValue([durableRow({
+        status: 'running',
+        dispatchedAt: timestamp(5 * 60_000),
+        startedAt: timestamp(5 * 60_000),
+        heartbeatAt: timestamp(60_001),
+      })]);
+
+      await reapOrphanedRuns({ now: () => now, config });
+
+      expect(mockMarkTerminal).toHaveBeenCalledWith(
+        'run-durable',
+        expect.objectContaining({
+          status: 'failed',
+          terminalReason: 'worker_lost',
+          detail: 'Interactive agent stopped responding. Please retry.',
+        }),
+      );
+    });
+
+    it('leaves a running turn with a recent heartbeat alone', async () => {
+      mockFindMany.mockResolvedValue([durableRow({
+        status: 'running',
+        dispatchedAt: timestamp(30 * 60_000),
+        startedAt: timestamp(30 * 60_000),
+        heartbeatAt: timestamp(15_000),
+      })]);
+
+      await reapOrphanedRuns({ now: () => now, config });
+
+      expect(mockMarkTerminal).not.toHaveBeenCalled();
+    });
+  });
+
   it('TBI-005 DoD-3 leaves dispatched rows under the cold-start clock untouched', async () => {
     mockFindMany.mockResolvedValue([{
       id: 'run-starting',
