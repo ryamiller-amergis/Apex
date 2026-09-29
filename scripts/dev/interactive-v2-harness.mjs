@@ -115,10 +115,15 @@ async function resolveKickoff() {
     }
   }
   if (!repo) fail('could not infer repo; set HARNESS_REPO');
+  // The UI always sends the project's provider; without it the server treats
+  // the repository as Azure DevOps and grounding fails for GitHub repos.
+  const skillProvider = process.env.HARNESS_SKILL_PROVIDER
+    || (repo.includes('/') ? 'github' : 'ado');
   return {
     project: PROJECT,
     repo,
     branch: branch || 'main',
+    skillProvider,
     ...(skillSettingsId ? { skillSettingsId } : {}),
     ...(MODEL ? { model: MODEL } : {}),
   };

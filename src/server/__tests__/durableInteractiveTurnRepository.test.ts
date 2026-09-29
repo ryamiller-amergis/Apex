@@ -1066,6 +1066,32 @@ describe('durable interactive turn service', () => {
     expect(repository.admit).not.toHaveBeenCalled();
   });
 
+  it('admits a skill stored repository-root relative with a leading slash', async () => {
+    const { service, admitted } = durableServiceHarness({
+      thread: authoritativeThread({
+        kickoff: {
+          project: 'project-1',
+          repo: 'repo-1',
+          skillProvider: 'github',
+          skillPath: '/.cursor/skills/app-knowledge/SKILL.md',
+        },
+      }),
+    });
+
+    await service.admit({
+      threadId: THREAD_ID,
+      userId: USER_ID,
+      workflowClass: 'interview',
+      turnId: TURN_ID,
+      text: 'Start the interview.',
+      attachments: [],
+    });
+
+    expect(admitted[0].specification.skill).toMatchObject({
+      path: '.cursor/skills/app-knowledge/SKILL.md',
+    });
+  });
+
   it('requires pinned grounding for a registered workspace skill', async () => {
     const thread = authoritativeThread({
       kickoff: {

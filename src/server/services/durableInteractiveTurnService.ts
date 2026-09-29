@@ -372,7 +372,9 @@ function selectedSkill(
 ): ChatTurnSkill | null {
   const selectedPath = turnSkill?.path ?? thread.kickoff.skillPath;
   if (!selectedPath?.trim()) return null;
-  const normalizedPath = strictPortableSkillPath(selectedPath);
+  // Skill paths are stored repository-root relative with a leading slash
+  // (`/.cursor/skills/...`).
+  const normalizedPath = strictPortableSkillPath(normalizePath(selectedPath.trim()));
   const fallbackName =
     normalizedPath.split('/').filter(Boolean).slice(-2, -1)[0] ??
     normalizedPath;
