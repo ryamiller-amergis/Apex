@@ -92,6 +92,7 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
   const [whatsNewBootstrap, setWhatsNewBootstrap] = useState<WhatsNewState | null>(null);
   const whatsNewCapturedRef = useRef(false);
   const [betaAnnouncementDismissed, setBetaAnnouncementDismissed] = useState(false);
+  const [devAccessAllowlisted, setDevAccessAllowlisted] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [pendingDueDateChange, setPendingDueDateChange] = useState<DueDateChange | null>(null);
   const [isChangingTeam, setIsChangingTeam] = useState(false);
@@ -179,6 +180,7 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
           setUserId(d.userId ?? '');
           setIsSuperAdmin(d.isSuperAdmin ?? false);
           setBetaAnnouncementDismissed(d.betaAnnouncementDismissed);
+          setDevAccessAllowlisted(d.devAccessAllowlisted === true);
           const restricted = d.restrictedAccess ?? null;
           setIsRestricted(Boolean(restricted));
           setRestrictedModules(restricted?.modules ?? []);
@@ -415,6 +417,7 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
     whatsNewAutomaticOverlaySettled,
     whatsNewBlocksAutomaticWalkthrough,
     betaAnnouncementDismissed,
+    devAccessAllowlisted,
     handleDismissBetaAnnouncement,
     handleLogout,
     selectedProject,

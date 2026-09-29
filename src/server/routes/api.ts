@@ -35,6 +35,7 @@ import {
 import { getUserProjects } from '../services/adoMembershipService';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 import { getUserEmail } from '../utils/requestUser';
+import { isDevAccessAllowlisted } from '../services/devEnvAllowlistService';
 import type { CreateProjectAccessRequestsRequest } from '../../shared/types/platformAdmin';
 import { requireGroupMembership, requirePermission, requireProjectAccess } from '../middleware/rbac';
 import {
@@ -4105,12 +4106,13 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       ? req.query.project
       : (restrictedActive ? RESTRICTED_ACCESS_PROJECT : undefined);
 
-    const [permSet, roles, userGroups, whatsNew, changelogPrefs] = await Promise.all([
+    const [permSet, roles, userGroups, whatsNew, changelogPrefs, devAccessAllowlisted] = await Promise.all([
       getUserPermissions(userId, project),
       getUserRoleNames(userId),
       getUserGroupNames(userId),
       evaluateWhatsNewState(userId),
       getChangelogPrefs(userId),
+      email ? isDevAccessAllowlisted(email) : Promise.resolve(false),
     ]);
     if (superAdmin && !roles.includes('admin')) {
       roles.push('admin');
@@ -4127,6 +4129,7 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       groups: userGroups,
       userId,
       isSuperAdmin: superAdmin,
+      devAccessAllowlisted,
       // Legacy compatibility fields — sourced from the same WhatsNewState
       changelogUnread: whatsNew.unread,
       currentChangelogVersion: whatsNew.currentVersion ?? '',

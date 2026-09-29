@@ -289,6 +289,7 @@ function App() {
     handleCancelDueDateChange,
     handleFieldUpdate,
     betaAnnouncementDismissed,
+    devAccessAllowlisted,
     handleDismissBetaAnnouncement,
   } = useAppShell({ workItemsEnabled: needsWorkItems });
 
@@ -1477,7 +1478,7 @@ function App() {
           whatsNewSettled={whatsNewAutomaticOverlaySettled}
           whatsNewBlocksWalkthrough={whatsNewBlocksAutomaticWalkthrough}
         />
-        {showBetaAnnouncement && !(isSuperAdmin && betaAnnouncementDismissed) && (
+        {permissionsLoaded && showBetaAnnouncement && !devAccessAllowlisted && !(isSuperAdmin && betaAnnouncementDismissed) && (
           // data-testid-exempt — BetaAnnouncementModal API has no data-testid prop
           <BetaAnnouncementModal
             isSuperAdmin={isSuperAdmin}
