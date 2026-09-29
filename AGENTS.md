@@ -28,7 +28,7 @@ Apex is an internal product-building and project-management platform. It central
 | AI Cost Analytics | — | — | `aiCostAnalyticsService.ts`, `aiUsageService.ts`, `aiCostScheduler.ts` | `AiCostAnalytics.tsx`, `AiCostComparison.tsx` |
 | Design Module | — | `.cursor/skills/design-module-scoping/SKILL.md`, `.cursor/skills/design-module-doc/SKILL.md` | `designModuleScopingService.ts` | `DesignModuleView.tsx`, `DesignModuleFormModal.tsx`, `DesignModuleFileTree.tsx` |
 | Load Testing | — | `.cursor/skills/k6-load-test-generation/SKILL.md` | `loadTestService.ts`, `loadTestAiGenerationService.ts` | `LoadTestsListPage.tsx`, `LoadTestDefinitionBuilderView.tsx`, `LoadTestRunDetailView.tsx` |
-| Planning & Analytics | — | — | `cursorAnalyticsService.ts` | `DevStats.tsx`, `QAMetrics.tsx`, `AIAnalysis.tsx`, `RoadmapView.tsx`, `ReleaseView.tsx` |
+| Planning & Analytics | — | — | `cursorAnalyticsService.ts` | `DevStats.tsx`, `QAMetrics.tsx`, `AIAnalysis.tsx`, `RoadmapView.tsx`, `ReleaseView.tsx`, `CreateCabRequestModal.tsx`, `CabReleaseAssistantPanel.tsx` |
 | Cloud Cost | — | — | `azureCost.ts` | `CloudCost.tsx` |
 | My Work (Dev Workbench) | `design-docs/my-work-feature-context-viewer.md` | — | `devWorkbenchFeatureContextService.ts`, `localDevContextService.ts` | `DevWorkbenchView.tsx`, `DevSessionView.tsx`, `FeatureContextModal.tsx`, `StartLocalDevModal.tsx` |
 | Document Approvals | `design-docs/document-approver-assignments.md`, `design-docs/interview-section-owners.md` | — | `documentApprovalService.ts`, `ownerApprovalService.ts` | `ApproverSelectModal.tsx`, `SectionOwnerModal.tsx` |
@@ -66,6 +66,7 @@ Apex is an internal product-building and project-management platform. It central
 | **Smart tags** | AI-suggested classification metadata (tags, route, confidence) applied only to newly discovered pending anchors during sync review; placements always allow all sides — preferred side is chosen per walkthrough step |
 | **Design Module** | A project-scoped slice of the repository (source globs + docs) used to ground AI agents on a specific area of the codebase |
 | **Load Test Definition** | A k6 script and threshold profile stored per project; runs are executed against allowlisted targets with prod-safety guards |
+| **CAB request** | ServiceNow change request drafted by the MaxView `cab-release` skill from an Apex release epic; Operators can start it from Planning → Releases Actions when flag `release-cab-request` is on |
 
 ## Directory Structure
 

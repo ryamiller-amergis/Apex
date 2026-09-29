@@ -4,8 +4,15 @@ import { useDeploymentOutcomes } from '../hooks/useDeploymentOutcomes';
 import type { DeploymentResult } from '../../shared/types/deploymentOutcome';
 import { DeploymentOutcomeModal } from './DeploymentOutcomeModal';
 import { DeploymentOutcomeReport } from './DeploymentOutcomeReport';
+import { CreateCabRequestModal } from './CreateCabRequestModal';
+import { CabReleaseAssistantPanel } from './CabReleaseAssistantPanel';
+import { ReleaseCabRequestAction } from './ReleaseCabRequestAction';
 import { useAppShell } from '../hooks/useAppShell';
 import { reorderReleases } from '../utils/releaseOrder';
+import {
+  defaultPreviousReleaseBranch,
+  type CreateCabRequestFormValues,
+} from '../utils/cabReleaseKickoff';
 import './ReleaseView.css';
 
 const RENAMABLE_STATUSES = ['New', 'In Design', 'In Progress'] as const;
@@ -20,7 +27,8 @@ const OutcomeBadge: React.FC<{
   releaseVersion: string;
   deployedAt?: string;
   onManage: (releaseVersion: string, deployedAt?: string) => void;
-}> = ({ releaseVersion, deployedAt, onManage }) => {
+  'data-testid'?: string;
+}> = ({ releaseVersion, deployedAt, onManage, 'data-testid': dataTestId }) => {
   const { data: outcomes } = useDeploymentOutcomes(releaseVersion);
   const [showDetails, setShowDetails] = useState(false);
 
@@ -31,6 +39,7 @@ const OutcomeBadge: React.FC<{
         className="result-badge result-none result-badge-button"
         onClick={(e) => { e.stopPropagation(); onManage(releaseVersion, deployedAt); }}
         title="Add deployment outcome"
+        {...{ 'data-testid': dataTestId ?? `release-outcome-add-${releaseVersion}` }}
       >
         + Add
       </button>
@@ -41,17 +50,22 @@ const OutcomeBadge: React.FC<{
   const config = RESULT_CONFIG[latest.result];
 
   return (
-    <span style={{ position: 'relative' }}>
+    <span style={{ position: 'relative' }} {...(dataTestId ? { 'data-testid': dataTestId } : {})}>
       <button
         type="button"
         className={`result-badge result-badge-button ${config.className}`}
         onClick={(e) => { e.stopPropagation(); setShowDetails(!showDetails); }}
         title={`${config.label} – click for details`}
+        {...{ 'data-testid': `release-outcome-badge-${releaseVersion}` }}
       >
         {config.icon} {config.label}
       </button>
       {showDetails && (
-        <div className="result-details-popover" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="result-details-popover"
+          onClick={(e) => e.stopPropagation()}
+          {...{ 'data-testid': `release-outcome-details-${releaseVersion}` }}
+        >
           <div style={{ fontWeight: 600, marginBottom: 8 }}>Deployment Outcome</div>
           <div style={{ marginBottom: 4 }}>
             <strong>Result:</strong> {config.icon} {config.label}
@@ -73,6 +87,7 @@ const OutcomeBadge: React.FC<{
             type="button"
             className="result-manage-btn"
             onClick={(e) => { e.stopPropagation(); onManage(releaseVersion, deployedAt); }}
+            {...{ 'data-testid': `release-outcome-manage-${releaseVersion}` }}
           >
             Manage outcome
           </button>
@@ -148,6 +163,15 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
   const [outcomeReleaseVersion, setOutcomeReleaseVersion] = useState<string>('');
   const [outcomeDeployedAt, setOutcomeDeployedAt] = useState<string | undefined>(undefined);
   const [showReport, setShowReport] = useState(false);
+  const [cabModalEpic, setCabModalEpic] = useState<{ id: number; version: string } | null>(null);
+  const [cabPanel, setCabPanel] = useState<{
+    epicId: number;
+    version: string;
+    relatedWorkItemIds: number[];
+    previousReleaseBranch: string;
+    snowMode: CreateCabRequestFormValues['snowMode'];
+    cutReleaseBranch: boolean;
+  } | null>(null);
 
   // Inline rename state
   const [inlineEditEpicId, setInlineEditEpicId] = useState<number | null>(null);
@@ -826,6 +850,36 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
     });
   }, [releaseEpics, sortColumn, sortDirection]);
 
+  const handleConfirmCabRequest = useCallback(async (
+    epic: { id: number; version: string },
+    values: CreateCabRequestFormValues,
+  ) => {
+    let relatedIds = (childItems.get(epic.id) ?? []).map((item) => item.id);
+    if (relatedIds.length === 0) {
+      try {
+        const response = await fetch(
+          `/api/releases/${epic.id}/related-items?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`,
+        );
+        if (response.ok) {
+          const children = await response.json() as WorkItem[];
+          relatedIds = children.map((item) => item.id);
+        }
+      } catch {
+        relatedIds = [];
+      }
+    }
+
+    setCabPanel({
+      epicId: epic.id,
+      version: epic.version,
+      relatedWorkItemIds: relatedIds,
+      previousReleaseBranch: values.previousReleaseBranch,
+      snowMode: values.snowMode,
+      cutReleaseBranch: values.cutReleaseBranch,
+    });
+    setCabModalEpic(null);
+  }, [areaPath, childItems, project]);
+
   const healthStatus = getHealthStatus();
   const completionPercentage = calculateCompletionPercentage();
 
@@ -839,6 +893,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
               <div
                 className="info-icon"
                 onClick={() => setShowProgressInfo(!showProgressInfo)}
+                {...{ 'data-testid': 'release-progress-info' }}
               >
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                   <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
@@ -849,9 +904,10 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                 <div className="progress-info-tooltip">
                   <div className="tooltip-header">
                     <h4>Progress Calculation</h4>
-                    <button 
+                    <button
                       className="btn-close-tooltip"
                       onClick={() => setShowProgressInfo(false)}
+                      {...{ 'data-testid': 'release-progress-info-close' }}
                     >
                       ✕
                     </button>
@@ -885,12 +941,14 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
             <button
               className="btn-view-report"
               onClick={() => setShowReport(!showReport)}
+              {...{ 'data-testid': 'release-view-report' }}
             >
               {showReport ? '← Back to Releases' : 'View Report'}
             </button>
-            <button 
+            <button
               className="btn-create-release"
               onClick={() => setShowNewReleaseModal(true)}
+              {...{ 'data-testid': 'release-create' }}
             >
               + New Release
             </button>
@@ -914,22 +972,22 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
               <tr>
                 {canManageReleases && <th style={{width: '32px'}} title="Drag to reorder"></th>}
                 <th style={{width: '40px'}}></th>
-                <th className="sortable-th" onClick={() => handleSort('version')}>
+                <th className="sortable-th" onClick={() => handleSort('version')} {...{ 'data-testid': 'release-sort-version' }}>
                   Version <span className="sort-indicator">{sortColumn === 'version' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</span>
                 </th>
-                <th className="sortable-th" onClick={() => handleSort('status')}>
+                <th className="sortable-th" onClick={() => handleSort('status')} {...{ 'data-testid': 'release-sort-status' }}>
                   Status <span className="sort-indicator">{sortColumn === 'status' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</span>
                 </th>
-                <th className="sortable-th" onClick={() => handleSort('progress')}>
+                <th className="sortable-th" onClick={() => handleSort('progress')} {...{ 'data-testid': 'release-sort-progress' }}>
                   Progress <span className="sort-indicator">{sortColumn === 'progress' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</span>
                 </th>
-                <th className="sortable-th" onClick={() => handleSort('startDate')}>
+                <th className="sortable-th" onClick={() => handleSort('startDate')} {...{ 'data-testid': 'release-sort-start-date' }}>
                   Start Date <span className="sort-indicator">{sortColumn === 'startDate' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</span>
                 </th>
-                <th className="sortable-th" onClick={() => handleSort('targetDate')}>
+                <th className="sortable-th" onClick={() => handleSort('targetDate')} {...{ 'data-testid': 'release-sort-target-date' }}>
                   Target Date <span className="sort-indicator">{sortColumn === 'targetDate' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</span>
                 </th>
-                <th className="sortable-th" onClick={() => handleSort('description')}>
+                <th className="sortable-th" onClick={() => handleSort('description')} {...{ 'data-testid': 'release-sort-description' }}>
                   Description <span className="sort-indicator">{sortColumn === 'description' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</span>
                 </th>
                 <th>Result</th>
@@ -986,6 +1044,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                         className="btn-expand"
                         onClick={() => toggleRowExpansion(epic.id)}
                         title={expandedRows.has(epic.id) ? 'Collapse' : 'Expand'}
+                        {...{ 'data-testid': `release-expand-${epic.id}` }}
                       >
                         {expandedRows.has(epic.id) ? '▼' : '▶'}
                       </button>
@@ -1004,6 +1063,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                             }}
                             onBlur={() => { void commitRename(epic.id); }}
                             disabled={isSavingRename}
+                            {...{ 'data-testid': `release-rename-${epic.id}` }}
                           />
                           {renameError && <span className="rename-error">{renameError}</span>}
                         </span>
@@ -1012,6 +1072,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                           className={canManageReleases && (RENAMABLE_STATUSES as readonly string[]).includes(epic.status) ? 'version-editable' : undefined}
                           title={canManageReleases && (RENAMABLE_STATUSES as readonly string[]).includes(epic.status) ? 'Click to rename' : undefined}
                           onClick={canManageReleases && (RENAMABLE_STATUSES as readonly string[]).includes(epic.status) ? () => startInlineEdit(epic) : undefined}
+                          {...{ 'data-testid': `release-version-${epic.id}` }}
                         >
                           {epic.version}
                           {canManageReleases && (RENAMABLE_STATUSES as readonly string[]).includes(epic.status) && (
@@ -1061,34 +1122,42 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                     </div>
                   </td>
                   <td>
-                    <OutcomeBadge releaseVersion={epic.version} deployedAt={epic.targetDate || undefined} onManage={handleOpenOutcomeModal} />
+                    <OutcomeBadge
+                      releaseVersion={epic.version}
+                      deployedAt={epic.targetDate || undefined}
+                      onManage={handleOpenOutcomeModal}
+                      {...{ 'data-testid': `release-outcome-${epic.id}` }}
+                    />
                   </td>
                   <td>
                     <div className="actions-cell">
-                      <button 
-                        className="btn-action-menu" 
+                      <button
+                        className="btn-action-menu"
                         onClick={() => setOpenActionMenuId(openActionMenuId === epic.id ? null : epic.id)}
                         title="Actions"
+                        {...{ 'data-testid': `release-actions-${epic.id}` }}
                       >
                         ⋯
                       </button>
                       {openActionMenuId === epic.id && (
                         <div className="action-dropdown">
-                          <button 
+                          <button
                             className="action-menu-item"
                             onClick={() => {
                               handleOpenEditModal(epic);
                               setOpenActionMenuId(null);
                             }}
+                            {...{ 'data-testid': `release-edit-${epic.id}` }}
                           >
                             ✏️ Edit
                           </button>
-                          <button 
+                          <button
                             className="action-menu-item"
                             onClick={() => {
                               handleOpenLinkItemsModal(epic.id);
                               setOpenActionMenuId(null);
                             }}
+                            {...{ 'data-testid': `release-link-items-${epic.id}` }}
                           >
                             🔗 Link Items
                           </button>
@@ -1098,25 +1167,36 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                               handleOpenOutcomeModal(epic.version, epic.targetDate || undefined);
                               setOpenActionMenuId(null);
                             }}
+                            {...{ 'data-testid': `release-deployment-outcome-${epic.id}` }}
                           >
                             📊 Deployment Outcome
                           </button>
-                          <button 
+                          <ReleaseCabRequestAction
+                            project={project}
+                            onClick={() => {
+                              setCabModalEpic({ id: epic.id, version: epic.version });
+                              setOpenActionMenuId(null);
+                            }}
+                            {...{ 'data-testid': `release-create-cab-${epic.id}` }}
+                          />
+                          <button
                             className="action-menu-item"
                             onClick={() => {
                               console.log('Create changelog for:', epic.id);
                               setOpenActionMenuId(null);
                             }}
+                            {...{ 'data-testid': `release-changelog-${epic.id}` }}
                           >
                             📝 Create Changelog
                           </button>
-                          <button 
+                          <button
                             className="action-menu-item"
                             onClick={() => {
                               setDeletingEpicId(epic.id);
                               setShowDeleteConfirmModal(true);
                               setOpenActionMenuId(null);
                             }}
+                            {...{ 'data-testid': `release-delete-${epic.id}` }}
                           >
                             🗑️ Delete
                           </button>
@@ -1176,6 +1256,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                                             toggleNestedItemExpansion(item.id, item.workItemType);
                                           }}
                                           title={isExpanded ? "Collapse children" : "Expand to view children"}
+                                          {...{ 'data-testid': `release-nested-expand-${item.id}` }}
                                         >
                                           <svg 
                                             width="20" 
@@ -1194,10 +1275,11 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                                           </svg>
                                         </button>
                                       )}
-                                      <div 
+                                      <div
                                         className="child-item-content"
                                         onClick={() => onSelectItem && onSelectItem(item)}
                                         title="Click to view details"
+                                        {...{ 'data-testid': `release-child-item-${item.id}` }}
                                       >
                                         <div className="child-item-header">
                                           <span className="child-item-id">#{item.id}</span>
@@ -1244,6 +1326,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                                             handleUnlinkItem(epic.id, item.id);
                                           }}
                                           title="Unlink from release"
+                                          {...{ 'data-testid': `release-unlink-${item.id}` }}
                                         >
                                           ✕
                                         </button>
@@ -1269,11 +1352,12 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                                               const nestedTypeClass = nestedItem.workItemType.toLowerCase().replace(/\s+/g, '-');
                                               
                                               return (
-                                                <div 
-                                                  key={nestedItem.id} 
+                                                <div
+                                                  key={nestedItem.id}
                                                   className={`nested-item type-${nestedTypeClass}`}
                                                   onClick={() => onSelectItem && onSelectItem(nestedItem)}
                                                   title="Click to view details"
+                                                  {...{ 'data-testid': `release-nested-item-${nestedItem.id}` }}
                                                 >
                                                   <div className="nested-item-main">
                                                     <div className="nested-item-id">#{nestedItem.id}</div>
@@ -1430,9 +1514,10 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
               </div>
             </div>
             <div style={{ display: 'flex', gap: 10 }}>
-              <button 
+              <button
                 className="btn-deploy"
                 onClick={() => setShowDeploymentModal(true)}
+                {...{ 'data-testid': 'release-record-deployment' }}
               >
                 Record Deployment
               </button>
@@ -1443,10 +1528,10 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
           <div className="release-notes-section">
             <h3>Release Notes</h3>
             <div className="release-notes-actions">
-              <button onClick={() => downloadReleaseNotes('markdown')}>
+              <button onClick={() => downloadReleaseNotes('markdown')} {...{ 'data-testid': 'release-notes-markdown' }}>
                 Download Markdown
               </button>
-              <button onClick={() => downloadReleaseNotes('json')}>
+              <button onClick={() => downloadReleaseNotes('json')} {...{ 'data-testid': 'release-notes-json' }}>
                 Download JSON
               </button>
             </div>
@@ -1469,10 +1554,11 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                 </thead>
                 <tbody>
                   {releaseWorkItems.map((wi) => (
-                    <tr 
+                    <tr
                       key={wi.id}
                       onClick={() => onSelectItem && onSelectItem(wi)}
                       className="clickable-row"
+                      {...{ 'data-testid': `release-work-item-${wi.id}` }}
                     >
                       <td>{wi.id}</td>
                       <td>{wi.workItemType}</td>
@@ -1501,8 +1587,8 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
 
       {/* Deployment Modal */}
       {showDeploymentModal && (
-        <div className="modal-overlay" onClick={() => setShowDeploymentModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={() => setShowDeploymentModal(false)} {...{ 'data-testid': 'release-deployment-overlay' }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} {...{ 'data-testid': 'release-deployment-dialog' }}>
             <h3>Record Deployment</h3>
             <div className="form-group">
               <label>Environment:</label>
@@ -1512,6 +1598,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                   ...deploymentForm,
                   environment: e.target.value as DeploymentEnvironment
                 })}
+                {...{ 'data-testid': 'release-deployment-environment' }}
               >
                 <option value="dev">Development</option>
                 <option value="staging">Staging</option>
@@ -1528,13 +1615,14 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                 })}
                 placeholder="Deployment notes..."
                 rows={4}
+                {...{ 'data-testid': 'release-deployment-notes' }}
               />
             </div>
             <div className="modal-actions">
-              <button onClick={handleCreateDeployment} className="btn-primary">
+              <button onClick={handleCreateDeployment} className="btn-primary" {...{ 'data-testid': 'release-deployment-submit' }}>
                 Create Deployment
               </button>
-              <button onClick={() => setShowDeploymentModal(false)} className="btn-secondary">
+              <button onClick={() => setShowDeploymentModal(false)} className="btn-secondary" {...{ 'data-testid': 'release-deployment-cancel' }}>
                 Cancel
               </button>
             </div>
@@ -1544,8 +1632,8 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
 
       {/* New/Edit Release Modal */}
       {showNewReleaseModal && (
-        <div className="modal-overlay" onClick={handleCloseModal}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={handleCloseModal} {...{ 'data-testid': 'release-form-overlay' }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} {...{ 'data-testid': 'release-form-dialog' }}>
             <h3>{isEditMode ? 'Edit Release' : 'Create New Release'}</h3>
             {isEditMode && (
               <div className="form-group">
@@ -1554,6 +1642,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                   value={newReleaseStatus}
                   onChange={(e) => setNewReleaseStatus(e.target.value)}
                   className="status-select"
+                  {...{ 'data-testid': 'release-form-status' }}
                 >
                   <option value="New">New</option>
                   <option value="In Progress">In Progress</option>
@@ -1572,6 +1661,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                 placeholder="e.g., v1.0.0, 2024-Q1"
                 required
                 disabled={isEditMode}
+                {...{ 'data-testid': 'release-form-version' }}
               />
             </div>
             <div className="form-group">
@@ -1581,6 +1671,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                 value={newReleaseStartDate}
                 onChange={(e) => setNewReleaseStartDate(e.target.value)}
                 required
+                {...{ 'data-testid': 'release-form-start-date' }}
               />
             </div>
             <div className="form-group">
@@ -1590,6 +1681,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                 value={newReleaseTargetDate}
                 onChange={(e) => setNewReleaseTargetDate(e.target.value)}
                 required
+                {...{ 'data-testid': 'release-form-target-date' }}
               />
             </div>
             <div className="form-group">
@@ -1600,17 +1692,19 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                 placeholder="Release description..."
                 rows={4}
                 required
+                {...{ 'data-testid': 'release-form-description' }}
               />
             </div>
             <div className="modal-actions">
-              <button 
-                onClick={isEditMode ? handleUpdateRelease : handleCreateRelease} 
+              <button
+                onClick={isEditMode ? handleUpdateRelease : handleCreateRelease}
                 className="btn-primary"
                 disabled={!newReleaseVersion || !newReleaseStartDate || !newReleaseTargetDate || !newReleaseDescription}
+                {...{ 'data-testid': 'release-form-submit' }}
               >
                 {isEditMode ? 'Update Release' : 'Create Release'}
               </button>
-              <button onClick={handleCloseModal} className="btn-secondary">
+              <button onClick={handleCloseModal} className="btn-secondary" {...{ 'data-testid': 'release-form-cancel' }}>
                 Cancel
               </button>
             </div>
@@ -1619,8 +1713,8 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
       )}
       {/* Link Items Modal */}
       {showLinkItemsModal && (
-        <div className="modal-overlay" onClick={handleCloseLinkItemsModal}>
-          <div className="modal-content modal-large" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={handleCloseLinkItemsModal} {...{ 'data-testid': 'release-link-overlay' }}>
+          <div className="modal-content modal-large" onClick={(e) => e.stopPropagation()} {...{ 'data-testid': 'release-link-dialog' }}>
             <h3>Link Items to Release</h3>
             
             <div className="search-section">
@@ -1633,6 +1727,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Search by ID, title, or keyword..."
                     className="search-input"
+                    {...{ 'data-testid': 'release-link-search' }}
                   />
                 </div>
                 <div className="form-group">
@@ -1641,6 +1736,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                     value={workItemTypeFilter}
                     onChange={(e) => setWorkItemTypeFilter(e.target.value)}
                     className="filter-select"
+                    {...{ 'data-testid': 'release-link-type-filter' }}
                   >
                     <option value="All">All Types</option>
                     <option value="Epic">Epic</option>
@@ -1672,6 +1768,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                             setSelectedItemsToLink(searchResults.map(wi => wi.id));
                           }
                         }}
+                        {...{ 'data-testid': 'release-link-select-all' }}
                       >
                         {selectedItemsToLink.length === searchResults.length ? 'Deselect All' : 'Select All'}
                       </button>
@@ -1688,6 +1785,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                               setSelectedItemsToLink(selectedItemsToLink.filter(id => id !== item.id));
                             }
                           }}
+                          {...{ 'data-testid': `release-link-item-${item.id}` }}
                         />
                         <div className="result-item-details">
                           <div className="result-item-header">
@@ -1710,14 +1808,15 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
             </div>
 
             <div className="modal-actions">
-              <button 
-                onClick={handleLinkItems} 
+              <button
+                onClick={handleLinkItems}
                 className="btn-primary"
                 disabled={selectedItemsToLink.length === 0}
+                {...{ 'data-testid': 'release-link-submit' }}
               >
                 Link {selectedItemsToLink.length} Item{selectedItemsToLink.length !== 1 ? 's' : ''}
               </button>
-              <button onClick={handleCloseLinkItemsModal} className="btn-secondary">
+              <button onClick={handleCloseLinkItemsModal} className="btn-secondary" {...{ 'data-testid': 'release-link-cancel' }}>
                 Cancel
               </button>
             </div>
@@ -1726,21 +1825,24 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
       )}
       {/* Outcome Modal */}
       {showOutcomeModal && outcomeReleaseVersion && (
-        <DeploymentOutcomeModal
-          isOpen={showOutcomeModal}
-          onClose={handleCloseOutcomeModal}
-          releaseVersion={outcomeReleaseVersion}
-          deployedAt={outcomeDeployedAt}
-        />
+        <>
+          {/* data-testid-exempt */}
+          <DeploymentOutcomeModal
+            isOpen={showOutcomeModal}
+            onClose={handleCloseOutcomeModal}
+            releaseVersion={outcomeReleaseVersion}
+            deployedAt={outcomeDeployedAt}
+          />
+        </>
       )}
 
       {/* Delete Confirmation Modal */}
       {showDeleteConfirmModal && deletingEpicId && (
-        <div className="modal-overlay" onClick={() => !isDeleting && setShowDeleteConfirmModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={() => !isDeleting && setShowDeleteConfirmModal(false)} {...{ 'data-testid': 'release-delete-overlay' }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} {...{ 'data-testid': 'release-delete-dialog' }}>
             <div className="modal-header">
               <h3>Confirm Delete Release Epic</h3>
-              <button className="modal-close" onClick={() => setShowDeleteConfirmModal(false)} disabled={isDeleting}>✕</button>
+              <button className="modal-close" onClick={() => setShowDeleteConfirmModal(false)} disabled={isDeleting} {...{ 'data-testid': 'release-delete-close' }}>✕</button>
             </div>
             <div className="modal-body">
               <div className="modal-icon-danger">🗑️</div>
@@ -1763,23 +1865,53 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
               </div>
             </div>
             <div className="modal-footer">
-              <button 
-                className="modal-btn modal-btn-cancel" 
+              <button
+                className="modal-btn modal-btn-cancel"
                 onClick={() => setShowDeleteConfirmModal(false)}
                 disabled={isDeleting}
+                {...{ 'data-testid': 'release-delete-cancel' }}
               >
                 Cancel
               </button>
-              <button 
-                className="modal-btn modal-btn-danger" 
+              <button
+                className="modal-btn modal-btn-danger"
                 onClick={handleDeleteReleaseEpic}
                 disabled={isDeleting}
+                {...{ 'data-testid': 'release-delete-confirm' }}
               >
                 {isDeleting ? 'Deleting...' : 'Delete Epic'}
               </button>
             </div>
           </div>
         </div>
+      )}
+
+      {cabModalEpic && (
+        <CreateCabRequestModal
+          {...{ 'data-testid': 'create-cab-request-modal' }}
+          targetVersion={cabModalEpic.version}
+          defaultPreviousBranch={defaultPreviousReleaseBranch(
+            sortedEpics.map((epic) => epic.version as string),
+            cabModalEpic.version,
+          )}
+          onCancel={() => setCabModalEpic(null)}
+          onConfirm={(values) => { void handleConfirmCabRequest(cabModalEpic, values); }}
+        />
+      )}
+
+      {cabPanel && (
+        <CabReleaseAssistantPanel
+          {...{ 'data-testid': 'cab-release-assistant-panel' }}
+          open
+          onClose={() => setCabPanel(null)}
+          project={project}
+          targetVersion={cabPanel.version}
+          apexReleaseEpicId={cabPanel.epicId}
+          relatedWorkItemIds={cabPanel.relatedWorkItemIds}
+          previousReleaseBranch={cabPanel.previousReleaseBranch}
+          snowMode={cabPanel.snowMode}
+          cutReleaseBranch={cabPanel.cutReleaseBranch}
+        />
       )}
     </div>
   );
