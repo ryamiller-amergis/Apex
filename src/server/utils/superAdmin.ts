@@ -1,7 +1,8 @@
 import type { Request } from 'express';
+import type { AppEnvironment } from '../../shared/types/appEnvironment';
 import { getUserEmail } from './requestUser';
 
-export type AppEnvironment = 'local' | 'dev' | 'prod';
+export type { AppEnvironment };
 
 /**
  * Resolve the current application environment used to scope platform-admin

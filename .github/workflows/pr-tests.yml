@@ -378,6 +378,7 @@ jobs:
         env:
           APP_NAME: app-scrum-dev
           RG_NAME: rg-scrum-dev
+          E2E_TEST_USER: ${{ secrets.E2E_TEST_USER }}
         run: |
           # Resolve the interactive live-bus (Redis) connection at deploy time so
           # the WS gateway subscribes to the same pub/sub the actor host publishes
@@ -489,6 +490,7 @@ jobs:
               AZURE_ARTIFACTS_ORG="${{ secrets.AZURE_ARTIFACTS_ORG }}" \
               AZURE_ARTIFACTS_FEED="${{ secrets.AZURE_ARTIFACTS_FEED }}" \
               AZURE_ARTIFACTS_PAT="${{ secrets.AZURE_ARTIFACTS_PAT }}" \
+              E2E_TEST_USER="$E2E_TEST_USER" \
               APEX_URL="https://app-scrum-dev.azurewebsites.net"
 
           # The Azure Node/Linux image ships without git, and the Dev Workbench
