@@ -1,6 +1,7 @@
 import { Router, type Request, type Response, type NextFunction, type RequestHandler } from 'express';
 import { requirePermission, requireGroupMembership } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
+import { startSseHeartbeat } from '../utils/sseResponse';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 import { getMenuConfig } from '../services/menuSettingsService';
 import {
@@ -246,6 +247,8 @@ router.get('/:id/stream', projectFromDesignId, requirePermission('ui-lab:manage'
     if (eventId) res.write(`id: ${eventId}\n`);
     res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
   };
+  // App Service drops a response idle for 230s; V2 generation can be silent that long.
+  const stopHeartbeat = startSseHeartbeat(res);
 
   try {
     await runGeneration(
@@ -266,6 +269,7 @@ router.get('/:id/stream', projectFromDesignId, requirePermission('ui-lab:manage'
     const message = err instanceof Error ? err.message : String(err);
     send('error', { error: message });
   } finally {
+    stopHeartbeat();
     res.end();
   }
 });
@@ -301,6 +305,7 @@ router.post('/:id/regenerate', projectFromDesignId, requirePermission('ui-lab:ma
   const send = (type: string, data: Record<string, unknown>) => {
     res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
   };
+  const stopHeartbeat = startSseHeartbeat(res);
 
   try {
     await runRegeneration(id, body, (chunk) => {
@@ -311,6 +316,7 @@ router.post('/:id/regenerate', projectFromDesignId, requirePermission('ui-lab:ma
     const message = err instanceof Error ? err.message : String(err);
     send('error', { error: message });
   } finally {
+    stopHeartbeat();
     res.end();
   }
 });
