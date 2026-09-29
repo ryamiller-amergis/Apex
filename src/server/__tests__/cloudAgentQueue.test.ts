@@ -1,4 +1,9 @@
-import { cloudAgentLaunchSlots, resolveCloudAgentMaxConcurrent } from '../services/cloudAgentQueue';
+import {
+  cloudAgentLaunchSlots,
+  DEFAULT_CLOUD_AGENT_RUN_LIMIT_MS,
+  resolveCloudAgentMaxConcurrent,
+  resolveCloudAgentRunLimitMs,
+} from '../services/cloudAgentQueue';
 import { queuePlaceLabel } from '../../shared/utils/queuePlace';
 
 describe('cloud agent queue', () => {
@@ -7,6 +12,13 @@ describe('cloud agent queue', () => {
     expect(resolveCloudAgentMaxConcurrent('5')).toBe(5);
     expect(resolveCloudAgentMaxConcurrent('0')).toBe(8);
     expect(resolveCloudAgentMaxConcurrent('80')).toBe(50);
+  });
+
+  it('times out dispatched runs after the six-hour job timeout unless the environment overrides it', () => {
+    expect(DEFAULT_CLOUD_AGENT_RUN_LIMIT_MS).toBeGreaterThan(6 * 60 * 60_000);
+    expect(resolveCloudAgentRunLimitMs(undefined)).toBe(DEFAULT_CLOUD_AGENT_RUN_LIMIT_MS);
+    expect(resolveCloudAgentRunLimitMs('0')).toBe(DEFAULT_CLOUD_AGENT_RUN_LIMIT_MS);
+    expect(resolveCloudAgentRunLimitMs('3600000')).toBe(3_600_000);
   });
 
   it('admits only the open slots when more runs are waiting', () => {

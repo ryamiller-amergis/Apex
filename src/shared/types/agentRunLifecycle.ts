@@ -96,6 +96,12 @@ export interface ExecutionSnapshot {
     initiatorEmail?: string;
     /** Configured development skill, invoked as `/name` by the container CLI. */
     skillName?: string;
+    /**
+     * App Service instance that holds the developer's ADO token in memory.
+     * Other instances wait before claiming the run so the pull request opens
+     * as the developer.
+     */
+    userTokenInstance?: string;
   };
   workflowClass: string;
   skillPath: string;

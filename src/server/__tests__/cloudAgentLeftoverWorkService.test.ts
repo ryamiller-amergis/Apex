@@ -31,6 +31,20 @@ import {
   writeLeftoverWorkToAdo,
 } from '../services/cloudAgentLeftoverWorkService';
 
+/** Flatten a Drizzle SQL node (columns render as their names) so filter shape can be asserted. */
+function sqlToText(node: unknown): string {
+  if (node == null) return '';
+  if (typeof node === 'string') return node;
+  if (Array.isArray(node)) return node.map(sqlToText).join(' ');
+
+  const chunk = node as { value?: unknown; queryChunks?: unknown; name?: unknown; columnType?: unknown };
+  if (typeof chunk.columnType === 'string' && typeof chunk.name === 'string') return chunk.name;
+  if (Array.isArray(chunk.value)) return chunk.value.join(' ');
+  if (typeof chunk.value === 'string') return chunk.value;
+  if (chunk.queryChunks) return sqlToText(chunk.queryChunks);
+  return '';
+}
+
 const passed = (kind: RunCheckResult['kind']): RunCheckResult => ({
   kind,
   outcome: 'passed',
@@ -194,7 +208,7 @@ describe('cloudAgentLeftoverWorkService (PBI-008 / TBI-007)', () => {
     expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ leftoverWork: summary }));
     expect(mockUpdateWhere).toHaveBeenCalled();
     expect(mockReturning).toHaveBeenCalled();
-    const whereSql = JSON.stringify(mockUpdateWhere.mock.calls[0]);
+    const whereSql = sqlToText(mockUpdateWhere.mock.calls[0]);
     expect(whereSql).toMatch(/leftover_work/i);
     expect(whereSql).toMatch(/IS NULL/i);
   });

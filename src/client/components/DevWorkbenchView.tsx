@@ -963,7 +963,7 @@ const CloudAgentEnabledRowAction: React.FC<{
             </span>
             <span className={styles['cloud-details-chevron']} aria-hidden="true">›</span>
           </button>
-          <div className={styles['cloud-run-actions']}>
+          <div className={styles['cloud-run-actions']} aria-live="polite">
             {currentRun.status === 'completed' && currentRun.prUrl ? (
               <a
                 className={styles['cloud-pr-link']}

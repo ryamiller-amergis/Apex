@@ -30,7 +30,6 @@ import { getSkillConfig } from './projectSettingsService';
 import { buildLocalDevContext } from './localDevContextService';
 import { logMyWorkSession } from './myWorkSessionLogger';
 import { trackEvent } from './telemetry';
-import { resolveAgentRunHardLimitMs } from './agentRunReaperService';
 import {
   captureCloudAgentIdentity,
   enqueue,
@@ -73,8 +72,10 @@ import {
 } from './cloudAgentPullRequest';
 import {
   CLOUD_AGENT_QUEUE_WAIT_MS,
+  CLOUD_AGENT_USER_TOKEN_CLAIM_MS,
   cloudAgentLaunchSlots,
   resolveCloudAgentMaxConcurrent,
+  resolveCloudAgentRunLimitMs,
 } from './cloudAgentQueue';
 
 export const CLOUD_AGENT_PRE_IDENTITY_TTL_MS = 2 * 60_000;
@@ -83,6 +84,10 @@ const pendingCloudAgentUserTokens = new Map<string, string>();
 let cloudAgentQueuePumpRunning = false;
 let cloudAgentReconcileRunning = false;
 export const LIVE_CLOUD_AGENT_STATUSES = ['queued', 'dispatched', 'running'] as const;
+
+function cloudAgentInstanceId(): string {
+  return process.env.WEBSITE_INSTANCE_ID?.trim() || 'apex-cloud-agent';
+}
 
 export class CloudAgentEligibilityError extends Error {
   readonly statusCode = 403;
@@ -140,6 +145,12 @@ export function evaluateCloudAgentEligibility(
     return {
       allowed: false,
       reason: 'A Cloud Agent run is already in progress on this work item.',
+    };
+  }
+  if (input.skillProvider?.trim() === 'github') {
+    return {
+      allowed: false,
+      reason: 'Cloud Development supports Azure Repos only. GitHub repositories are not supported yet.',
     };
   }
   return { allowed: true };
@@ -509,6 +520,7 @@ async function persistQueuedRun(
             initiatorName: input.initiatorName,
             initiatorEmail: input.initiatorEmail,
             ...(skillName ? { skillName } : {}),
+            ...(input.adoUserToken ? { userTokenInstance: cloudAgentInstanceId() } : {}),
           },
         },
       });
@@ -591,6 +603,9 @@ async function claimCloudAgentRunIds(cap: number): Promise<string[]> {
     const slots = cloudAgentLaunchSlots(active.length + starting.length, cap);
     if (slots <= 0) return [];
 
+    const instance = cloudAgentInstanceId();
+    const tokenClaimCutoff = new Date(Date.now() - CLOUD_AGENT_USER_TOKEN_CLAIM_MS).toISOString();
+    const tokenInstance = sql`${agentRuns.executionSnapshot}->'cloudAgent'->>'userTokenInstance'`;
     const waiting = await tx
       .select({ id: agentRuns.id })
       .from(agentRuns)
@@ -600,13 +615,13 @@ async function claimCloudAgentRunIds(cap: number): Promise<string[]> {
         eq(agentRuns.cancelRequested, false),
         sql`${agentRuns.ownerInstance} IS NULL`,
         sql`${agentRuns.cloudAgentIdentity} IS NULL`,
+        sql`(${tokenInstance} IS NULL OR ${tokenInstance} = ${instance} OR ${agentRuns.queuedAt} <= ${tokenClaimCutoff})`,
       ))
       .orderBy(asc(agentRuns.queuedAt), asc(agentRuns.id))
       .limit(slots);
 
     const nowIso = new Date().toISOString();
     const claimUntil = new Date(Date.now() + CLOUD_AGENT_PRE_IDENTITY_TTL_MS).toISOString();
-    const instance = process.env.WEBSITE_INSTANCE_ID?.trim() || 'apex-cloud-agent';
     const ids: string[] = [];
     for (const candidate of waiting) {
       const updated = await tx
@@ -711,14 +726,35 @@ async function launchClaimedCloudAgentRun(
     return;
   }
 
-  const timeoutAt = new Date(Date.now() + resolveAgentRunHardLimitMs()).toISOString();
-  await captureCloudAgentIdentity(runId, {
+  const timeoutAt = new Date(Date.now() + resolveCloudAgentRunLimitMs()).toISOString();
+  const captured = await captureCloudAgentIdentity(runId, {
     cloudAgentIdentity: launched.cloudAgentId,
     cursorRunId: launched.cursorRunId,
     jobName: launched.jobName,
     branchName: launched.branchName,
     timeoutAt,
   });
+  if (!captured.ok && captured.reason === 'run_cancelled') {
+    console.warn('[cloud-agent] run was cancelled while its job was starting; stopping the job', JSON.stringify({
+      runId,
+      jobExecution: launched.cursorRunId,
+    }));
+    try {
+      await deps.cancelCursorCloudAgentRun({
+        project: snapshot.projectId,
+        cloudAgentId: launched.cloudAgentId,
+        cursorRunId: launched.cursorRunId,
+      });
+    } catch (err) {
+      console.error('[cloud-agent] could not stop the job for a cancelled run', JSON.stringify({
+        runId,
+        jobExecution: launched.cursorRunId,
+        error: err instanceof Error ? err.message : String(err),
+      }));
+    }
+    scheduleCloudAgentDispatch();
+    return;
+  }
   if (launched.branchName) {
     await db
       .update(devSessions)
@@ -1098,7 +1134,9 @@ export async function getCloudAgentRunStatus(
       });
       let mapped = mapObservedStatus(observed.status);
       let prUrl = observed.prUrl;
-      const sourceBranch = observed.branchName ?? run.cloudBranchName;
+      const sourceBranch = observed.noChanges
+        ? null
+        : observed.branchName ?? run.cloudBranchName;
       if (!prUrl && sourceBranch && mapped !== 'failed' && mapped !== 'cancelled') {
         if (!adoUserToken && process.env.NODE_ENV === 'production') {
           mapped = 'running';

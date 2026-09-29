@@ -58,6 +58,7 @@ jest.mock('../services/workerTierTelemetry', () => ({
 }));
 
 import {
+  captureCloudAgentIdentity,
   enqueue,
   transition,
   markTerminal,
@@ -951,5 +952,38 @@ describe('check result capture (TBI-005 DoD-0; PBI-006 AC-0/AC-1; TBI-005 NFR)',
       expect(result.run.status).toBe('completed');
       expect(result.run.checkResults).toEqual(allPassed);
     }
+  });
+});
+
+describe('captureCloudAgentIdentity', () => {
+  const identity = {
+    cloudAgentIdentity: 'container-agent-exec-1',
+    cursorRunId: 'exec-1',
+    jobName: 'apex-cursor-worker',
+    branchName: 'feature/apex-42-abc',
+    timeoutAt: '2026-08-05T20:00:00.000Z',
+  };
+
+  it('does not write the identity onto a run cancelled while its job was starting', async () => {
+    mockFindFirst
+      .mockResolvedValueOnce(baseRow({ lane: 'cloud-agent', status: 'queued', cloudAgentIdentity: null }))
+      .mockResolvedValueOnce(baseRow({ lane: 'cloud-agent', status: 'cancelled', cloudAgentIdentity: null }));
+    mockUpdateReturning.mockResolvedValueOnce([]);
+
+    const result = await captureCloudAgentIdentity('run-1', identity);
+
+    expect(result).toEqual(expect.objectContaining({ ok: false, reason: 'run_cancelled' }));
+    expect(mockUpdateSet).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a lost identity race when the run is still live', async () => {
+    mockFindFirst
+      .mockResolvedValueOnce(baseRow({ lane: 'cloud-agent', status: 'queued', cloudAgentIdentity: null }))
+      .mockResolvedValueOnce(baseRow({ lane: 'cloud-agent', status: 'queued', cloudAgentIdentity: 'other' }));
+    mockUpdateReturning.mockResolvedValueOnce([]);
+
+    const result = await captureCloudAgentIdentity('run-1', identity);
+
+    expect(result).toEqual(expect.objectContaining({ ok: false, reason: 'identity_already_set' }));
   });
 });

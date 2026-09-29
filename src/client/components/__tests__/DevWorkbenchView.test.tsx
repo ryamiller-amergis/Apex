@@ -231,9 +231,14 @@ function workItemRow(itemId: number): HTMLElement {
 
 /** The cloud run controls for one row, so row-scoped nodes are queried per row. */
 function cloudRunControls(itemId: number): HTMLElement {
-  const controls = screen.getByTestId(`my-work-cloud-run-status-${itemId}`).parentElement;
-  if (!controls) throw new Error(`No cloud run controls for item ${itemId}`);
+  const controls = screen.getByTestId(`my-work-cloud-run-status-${itemId}`).closest('[data-status]');
+  if (!(controls instanceof HTMLElement)) throw new Error(`No cloud run controls for item ${itemId}`);
   return controls;
+}
+
+/** Row-scoped: every row with a cloud session renders its own summary button. */
+function openRunDetails(itemId: number, status: RegExp): void {
+  fireEvent.click(within(workItemRow(itemId)).getByRole('button', { name: status }));
 }
 
 describe('DevWorkbenchView', () => {
@@ -567,7 +572,7 @@ describe('DevWorkbenchView', () => {
     mockCloudSession(cloudRun('running'));
 
     renderView();
-    fireEvent.click(screen.getByRole('button', { name: /view cloud agent run details: running/i }));
+    openRunDetails(42, /view cloud agent run details: running/i);
 
     expect(screen.getByTestId('my-work-cloud-run-drawer-42')).toBeInTheDocument();
     expect(screen.getByText('Activity')).toBeInTheDocument();
@@ -604,7 +609,7 @@ describe('DevWorkbenchView', () => {
     });
 
     renderView();
-    fireEvent.click(screen.getByRole('button', { name: /view cloud agent run details: running/i }));
+    openRunDetails(42, /view cloud agent run details: running/i);
 
     const activity = screen.getByTestId('my-work-cloud-run-activity-42');
     expect(within(activity).getByText('I found the affected route and am updating it.'))
@@ -621,9 +626,7 @@ describe('DevWorkbenchView', () => {
     }));
 
     renderView();
-    fireEvent.click(screen.getByRole('button', {
-      name: /view cloud agent run details: completed/i,
-    }));
+    openRunDetails(42, /view cloud agent run details: completed/i);
 
     expect(screen.getByText('No step-by-step activity for this run.')).toBeInTheDocument();
     const activity = screen.getByTestId('my-work-cloud-run-activity-42');
@@ -667,7 +670,7 @@ describe('DevWorkbenchView', () => {
     expect(screen.getByTestId('my-work-cancel-cloud-run-42')).toBeInTheDocument();
   });
 
-  it('PBI-004 AC-0: disables Cancel and labels it Cancelling... while pending', () => {
+  it('PBI-004 AC-0: disables Cancel and labels it Cancelling… while pending', () => {
     mockUseFeatureFlag.mockReturnValue(true);
     mockCloudSession(cloudRun('running'));
     (useCancelCloudAgentRun as jest.Mock).mockReturnValue({
@@ -680,7 +683,7 @@ describe('DevWorkbenchView', () => {
 
     const cancel = screen.getByTestId('my-work-cancel-cloud-run-42');
     expect(cancel).toBeDisabled();
-    expect(cancel).toHaveTextContent('Cancelling...');
+    expect(cancel).toHaveTextContent('Cancelling…');
   });
 
   it('PBI-005 AC-0: renders a stable accessible PR link and Resume for completion', () => {
@@ -760,7 +763,7 @@ describe('DevWorkbenchView', () => {
 
     renderView();
 
-    const liveRegion = screen.getByTestId('my-work-cloud-run-status-42').parentElement!;
+    const liveRegion = screen.getByTestId('my-work-cloud-run-pr-42').parentElement!;
     expect(liveRegion).toHaveAttribute('aria-live', 'polite');
     expect(within(liveRegion).getByRole('link', { name: 'View PR' })).toHaveAttribute('href', prUrl);
     expect(within(liveRegion).getByTestId('my-work-leftover-work-cloud-session'))

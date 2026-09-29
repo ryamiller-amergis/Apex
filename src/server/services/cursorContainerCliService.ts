@@ -57,17 +57,20 @@ export function parseContainerCliLogs(logs: string): {
   branchName: string | null;
   baseBranch: string | null;
   summary: string | null;
+  agentExitCode: number | null;
 } {
   const pr = logs.match(/APEX_PR_URL=(https:\/\/[^\s"\\]+\/pullrequest\/\d+)/);
   const branch = logs.match(/APEX_BRANCH_PUSHED=([^\s"\\]+)/);
   const base = logs.match(/APEX_BASE_BRANCH=([^\s"\\]+)/);
   const summary = logs.match(/APEX_SUMMARY=([^"\\]*)/);
+  const exit = logs.match(/APEX_AGENT_EXIT=(\d+)/);
   return {
     prUrl: pr?.[1] ?? null,
     noChanges: logs.includes('APEX_RESULT no file changes'),
     branchName: branch?.[1] ?? null,
     baseBranch: base?.[1] ?? null,
     summary: summary?.[1]?.trim() || null,
+    agentExitCode: exit ? Number(exit[1]) : null,
   };
 }
 
@@ -303,6 +306,7 @@ export async function getCursorContainerCliRun(executionName: string): Promise<{
   branchName: string | null;
   baseBranch: string | null;
   summary: string | null;
+  noChanges: boolean;
 }> {
   const jobName = requireEnv('CURSOR_CONTAINER_JOB_NAME');
   const resourceGroup = requireEnv('CURSOR_CONTAINER_JOB_RESOURCE_GROUP');
@@ -320,6 +324,7 @@ export async function getCursorContainerCliRun(executionName: string): Promise<{
   let branchName: string | null = null;
   let baseBranch: string | null = null;
   let summary: string | null = null;
+  let noChanges = false;
   if (mapped === 'failed') resultText = 'Container CLI run failed. See the job execution logs.';
   try {
     const logs = await executionLogs(executionName, '200');
@@ -328,12 +333,19 @@ export async function getCursorContainerCliRun(executionName: string): Promise<{
     branchName = parsed.branchName;
     baseBranch = parsed.baseBranch;
     summary = parsed.summary;
+    noChanges = parsed.noChanges;
     if (parsed.noChanges) resultText = 'The agent finished without changing files.';
     if (mapped === 'running' && (parsed.prUrl || parsed.noChanges)) mapped = 'finished';
+    if (parsed.agentExitCode && mapped !== 'cancelled') {
+      mapped = 'failed';
+      resultText = parsed.prUrl
+        ? `The Cursor CLI exited with code ${parsed.agentExitCode}. Its partial changes are in the pull request.`
+        : `The Cursor CLI exited with code ${parsed.agentExitCode}.`;
+    }
   } catch (err) {
     console.warn('[container-cli] could not read job logs', err instanceof Error ? err.message : err);
   }
-  return { status: mapped, prUrl, resultText, branchName, baseBranch, summary };
+  return { status: mapped, prUrl, resultText, branchName, baseBranch, summary, noChanges };
 }
 
 function isTerminalContainerStatus(status: string): boolean {

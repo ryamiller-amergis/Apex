@@ -62,6 +62,9 @@ if [[ "${AGENT_SKILL:-}" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
   esac
 fi
 emit_activity "agent" "status" "Agent running" "" "running"
+# A non-zero CLI exit must not skip publishing: files the agent already wrote
+# exist only in this checkout. Push them, then exit with the CLI's code.
+agent_exit=0
 agent -p \
   --workspace "${dest}" \
   --trust \
@@ -71,7 +74,11 @@ agent -p \
   "${skill_prefix}${AGENT_PROMPT}
 ${pr_hint}
 Do not commit, push, or open a pull request. The container pushes the branch and opens the pull request after you finish." \
-  | node /usr/local/bin/cursor-activity-log "${summary_file}"
+  | node /usr/local/bin/cursor-activity-log "${summary_file}" || agent_exit=$?
+if [ "${agent_exit}" -ne 0 ]; then
+  emit_activity "agent:exit" "status" "Agent exited with code ${agent_exit}" "Publishing any changes it made" "failed"
+  echo "APEX_AGENT_EXIT=${agent_exit}"
+fi
 
 pr_description=""
 if [ -s "${written_copy}" ]; then
@@ -83,7 +90,7 @@ if git diff --quiet && git diff --cached --quiet && [ -z "$(git ls-files --other
   echo "APEX_RESULT no file changes"
   rm -f "${summary_file}"
   sleep 120
-  exit 0
+  exit "${agent_exit}"
 fi
 
 commit_title="${AGENT_WORK_ITEM_TITLE:-${AGENT_BRANCH}}"
@@ -163,3 +170,4 @@ echo "APEX_BASE_BRANCH=${AGENT_BASE_BRANCH}"
 echo "APEX_SUMMARY=${summary_line}"
 # Job logs disappear with the replica. Stay up long enough for Apex to read the PR URL.
 sleep 120
+exit "${agent_exit}"

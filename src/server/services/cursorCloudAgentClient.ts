@@ -44,6 +44,8 @@ export interface CloudAgentRunObservation {
   branchName?: string | null;
   baseBranch?: string | null;
   summary?: string | null;
+  /** The agent changed no files, so no branch was pushed. */
+  noChanges?: boolean;
 }
 
 export function toCloudRepoUrl(remoteUrl: string): string {

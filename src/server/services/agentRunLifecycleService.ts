@@ -394,6 +394,9 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
             ...(input.snapshot.cloudAgent.skillName
               ? { skillName: input.snapshot.cloudAgent.skillName }
               : {}),
+            ...(input.snapshot.cloudAgent.userTokenInstance
+              ? { userTokenInstance: input.snapshot.cloudAgent.userTokenInstance }
+              : {}),
           },
         }
       : {}),
@@ -481,11 +484,24 @@ export async function captureCloudAgentIdentity(
         timeoutAt: input.timeoutAt,
         updatedAt: nowIso,
       })
-      .where(and(eq(agentRuns.id, runId), sql`${agentRuns.cloudAgentIdentity} IS NULL`))
+      .where(and(
+        eq(agentRuns.id, runId),
+        sql`${agentRuns.cloudAgentIdentity} IS NULL`,
+        sql`${agentRuns.status} IN ('queued', 'dispatched', 'running')`,
+        eq(agentRuns.cancelRequested, false),
+      ))
       .returning();
     if (updated.length === 0) {
       const latest = await loadRun(runId);
-      return { ok: false, conflict: true, run: latest, reason: 'identity_already_set' };
+      const cancelled = !latest
+        || isAgentRunTerminalStatus(latest.status)
+        || latest.cancelRequested;
+      return {
+        ok: false,
+        conflict: true,
+        run: latest,
+        reason: cancelled ? 'run_cancelled' : 'identity_already_set',
+      };
     }
   }
 

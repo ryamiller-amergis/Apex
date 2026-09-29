@@ -175,6 +175,22 @@ describe('evaluateCloudAgentEligibility (VT-01 / VT-02 / VT-05 / VT-11)', () => 
       reason: 'A Cloud Agent run is already in progress on this work item.',
     });
   });
+
+  it('rejects GitHub-backed projects because the worker only publishes to Azure Repos', () => {
+    expect(evaluateCloudAgentEligibility({
+      flagEnabled: true,
+      project: 'MaxView',
+      item: eligibleItem,
+      isSuperAdmin: false,
+      skillProvider: 'github',
+      skillRepo: 'org/repo',
+      skillBranch: 'main',
+      hasLiveRun: false,
+    })).toEqual({
+      allowed: false,
+      reason: 'Cloud Development supports Azure Repos only. GitHub repositories are not supported yet.',
+    });
+  });
 });
 
 const SESSION_ID = 'session-1';
@@ -894,6 +910,34 @@ describe('getCloudAgentRunStatus check projection (TBI-005 DoD-0/DoD-1/DoD-2; PB
       finishedWithoutPr: false,
     }));
   });
+
+  it('completes without a pull request when the agent changed no files', async () => {
+    mockDevSessionFindFirst.mockResolvedValue(linkableSession({ currentRunPrUrl: null }));
+    mockAgentRunFindFirst.mockResolvedValue(linkableRun({
+      status: 'running',
+      cloudBranchName: 'feature/apex-42-abc',
+    }));
+    const openCloudAgentPullRequest = jest.fn();
+    const deps = makeDeps({
+      getCloudAgentRun: jest.fn().mockResolvedValue({
+        status: 'finished',
+        prUrl: null,
+        resultText: 'The agent finished without changing files.',
+        branchName: null,
+        noChanges: true,
+      }),
+      openCloudAgentPullRequest,
+    });
+
+    const summary = await getCloudAgentRunStatus(SESSION_ID, USER_ID, deps, 'user-token');
+
+    expect(openCloudAgentPullRequest).not.toHaveBeenCalled();
+    expect(summary).toEqual(expect.objectContaining({
+      status: 'completed',
+      prUrl: null,
+      finishedWithoutPr: true,
+    }));
+  });
 });
 
 describe('Cloud Agent PR write-back and host status (PBI-007 / TBI-006)', () => {
@@ -1050,6 +1094,8 @@ describe('Cloud Agent PR write-back and host status (PBI-007 / TBI-006)', () => 
     }));
     mockAgentRunFindFirst.mockResolvedValue(linkableRun({
       status: 'completed',
+      cloudPrUrl: githubPrUrl,
+      cloudPrStatus: 'merged',
       executionSnapshot: { provider: 'github', repository: 'amergis/MaxView' },
     }));
 

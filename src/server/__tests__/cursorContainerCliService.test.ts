@@ -14,7 +14,19 @@ describe('cursor container CLI', () => {
       branchName: null,
       baseBranch: null,
       summary: null,
+      agentExitCode: null,
     });
+  });
+
+  it('reads a non-zero Cursor CLI exit code', () => {
+    const logs = [
+      '{"Log":"APEX_AGENT_EXIT=1"}',
+      '{"Log":"APEX_PR_URL=https://dev.azure.com/Amergis/MaxView/_git/MaxView/pullrequest/4821"}',
+    ].join('\n');
+    expect(parseContainerCliLogs(logs)).toEqual(expect.objectContaining({
+      agentExitCode: 1,
+      prUrl: 'https://dev.azure.com/Amergis/MaxView/_git/MaxView/pullrequest/4821',
+    }));
   });
 
   it('ignores a PR line with no pull request id', () => {

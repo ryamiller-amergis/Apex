@@ -664,7 +664,7 @@
   transition: all 0.2s ease;
   white-space: nowrap;
   background: var(--accent-color);
-  color: var(--bg-primary);
+  color: var(--on-accent);
   box-shadow: var(--glow-accent);
 }
 
@@ -962,7 +962,7 @@
 
 .cloud-resume-btn:hover:not(:disabled) {
   background: var(--accent-color);
-  color: var(--bg-primary);
+  color: var(--on-accent);
   box-shadow: var(--glow-accent);
 }
 
@@ -1457,7 +1457,7 @@
   padding: 10px 14px;
   border-radius: 6px;
   background: var(--accent-color);
-  color: var(--bg-primary);
+  color: var(--on-accent);
   font-size: 0.8125rem;
   font-weight: 600;
   text-decoration: none;
