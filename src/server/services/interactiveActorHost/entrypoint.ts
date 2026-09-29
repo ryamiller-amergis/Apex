@@ -403,9 +403,7 @@ export async function main(): Promise<void> {
             sha: 'none',
           },
         }),
-        dispose: async () => {
-          await fs.rm(destination, { recursive: true, force: true }).catch(() => {});
-        },
+        dispose: () => repositoryCheckout.release(destination),
       } as ReaderCheckout;
     },
     uploadAttemptArtifacts: async (bootstrap, workspacePath, signal) => {

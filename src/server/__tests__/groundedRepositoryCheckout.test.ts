@@ -1,5 +1,5 @@
 import { execFileSync } from 'child_process';
-import { copyFile, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { copyFile, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import type { ContainerClient } from '@azure/storage-blob';
@@ -50,6 +50,12 @@ describe('grounded repository checkout for durable interactive turns', () => {
     const downloads: string[] = [];
     const container = {
       getBlockBlobClient: (key: string) => ({
+        getProperties: async () => {
+          if (!keys.includes(key)) {
+            throw Object.assign(new Error('missing'), { statusCode: 404 });
+          }
+          return { contentLength: (await stat(bundlePath)).size };
+        },
         downloadToFile: async (target: string) => {
           downloads.push(key);
           if (!keys.includes(key)) {
@@ -106,6 +112,49 @@ describe('grounded repository checkout for durable interactive turns', () => {
     await expect(
       checkout.checkout(grounding(), path.join(root, 'threads', 'c'), new AbortController().signal),
     ).resolves.toMatchObject({ status: 'unavailable', reason: 'bundle-missing' });
+  });
+
+  it('skips a bundle larger than the limit without downloading it', async () => {
+    const identity = bundleIdentityForGrounding(grounding());
+    const { container, downloads } = containerServing([bundleKey(identity)]);
+    const checkout = createGroundedRepositoryCheckout({
+      getContainerClient: () => container,
+      cacheRoot: path.join(root, 'cache-large'),
+      maxBundleBytes: 1,
+    });
+
+    await expect(
+      checkout.checkout(grounding(), path.join(root, 'threads', 'large'), new AbortController().signal),
+    ).resolves.toMatchObject({ status: 'unavailable', reason: 'bundle-too-large' });
+    expect(downloads).toHaveLength(0);
+  });
+
+  it('refuses worktrees past the disk budget until one is released', async () => {
+    const identity = bundleIdentityForGrounding(grounding());
+    const { container } = containerServing([bundleKey(identity)]);
+    const size = (await stat(bundlePath)).size;
+    const checkout = createGroundedRepositoryCheckout({
+      getContainerClient: () => container,
+      cacheRoot: path.join(root, 'cache-budget'),
+      diskBudgetBytes: 2 * size,
+    });
+    const signal = new AbortController().signal;
+    const first = path.join(root, 'threads', 'budget-1');
+    const second = path.join(root, 'threads', 'budget-2');
+
+    await expect(checkout.checkout(grounding(), first, signal)).resolves.toMatchObject({
+      status: 'ready',
+    });
+    await expect(checkout.checkout(grounding(), second, signal)).resolves.toMatchObject({
+      status: 'unavailable',
+      reason: 'disk-budget',
+    });
+
+    await checkout.release(first);
+    await expect(checkout.checkout(grounding(), second, signal)).resolves.toMatchObject({
+      status: 'ready',
+      source: 'base',
+    });
   });
 
   it('reports not-configured when no grounding storage is set', async () => {

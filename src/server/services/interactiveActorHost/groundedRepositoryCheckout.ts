@@ -3,11 +3,16 @@
  *
  * Cursor's own tools (grep, glob, shell) read the local disk, so a grounded
  * turn needs the repository on disk at the pinned SHA. Each replica restores
- * one base checkout per SHA from the grounding bundle, then gives each thread
- * its own git worktree of that base. A missing bundle or any git failure
- * returns `unavailable` so the caller keeps the remote reader.
+ * one object-only base per SHA from the grounding bundle, then gives each
+ * thread its own git worktree of that base. A missing or oversized bundle, a
+ * full disk budget, or any git failure returns `unavailable` so the caller
+ * keeps the remote reader.
+ *
+ * Container Apps evicts a replica whose ephemeral storage exceeds its limit,
+ * which kills every turn on it, so disk use is capped by an estimate rather
+ * than discovered.
  */
-import { mkdir, mkdtemp, rm, stat } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { BlobServiceClient, type ContainerClient } from '@azure/storage-blob';
@@ -17,9 +22,8 @@ import { resolveArtifactCredential } from '../aiRunV2/artifactContainer';
 import {
   bundleKey,
   bundleRepositoryName,
-  checkoutBundleAtSha,
   defaultRunGit,
-  isReadyWorkspace,
+  GROUNDING_WORKSPACE_READY_MARKER,
   prepareEmptyDestination,
   safeSha,
   verifyHead,
@@ -27,6 +31,16 @@ import {
 } from '../grounding/bundleCheckout';
 
 const DEFAULT_GROUNDING_CONTAINER = 'repo-grounding';
+const GIB = 1024 * 1024 * 1024;
+const DEFAULT_MAX_BUNDLE_BYTES = 1 * GIB;
+const DEFAULT_DISK_BUDGET_BYTES = 2.5 * GIB;
+
+export type GroundedCheckoutUnavailableReason =
+  | 'not-configured'
+  | 'bundle-missing'
+  | 'bundle-too-large'
+  | 'disk-budget'
+  | 'failed';
 
 export type GroundedCheckoutResult =
   | Readonly<{
@@ -37,7 +51,7 @@ export type GroundedCheckoutResult =
     }>
   | Readonly<{
       status: 'unavailable';
-      reason: 'not-configured' | 'bundle-missing' | 'failed';
+      reason: GroundedCheckoutUnavailableReason;
       durationMs: number;
     }>;
 
@@ -46,7 +60,13 @@ export interface GroundedCheckoutDependencies {
   runGit?: GitRunner;
   cacheRoot?: string;
   now?: () => number;
+  maxBundleBytes?: number;
+  diskBudgetBytes?: number;
 }
+
+type BaseOutcome =
+  | Readonly<{ status: 'ready'; source: 'base' | 'bundle' }>
+  | Readonly<{ status: 'unavailable'; reason: 'bundle-missing' | 'bundle-too-large' | 'disk-budget' }>;
 
 export function bundleIdentityForGrounding(
   grounding: NonNullable<DurableInteractiveTurnSpecification['grounding']>,
@@ -71,6 +91,11 @@ function defaultGroundingContainerClient(): ContainerClient | null {
   ).getContainerClient(container);
 }
 
+function positiveNumberFromEnv(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]?.trim());
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function isMissingBlob(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const { statusCode, code } = error as { statusCode?: unknown; code?: unknown };
@@ -90,6 +115,24 @@ async function isWorktreeAt(
   }
 }
 
+// A bare repository has no `.git` subdirectory; its root is the git dir.
+async function isReadyBase(
+  runGit: GitRunner,
+  basePath: string,
+  sha: string,
+): Promise<boolean> {
+  try {
+    const marked = (await readFile(path.join(basePath, GROUNDING_WORKSPACE_READY_MARKER), 'utf8'))
+      .trim()
+      .toLowerCase();
+    if (marked !== sha) return false;
+    await runGit(['-C', basePath, 'cat-file', '-e', `${sha}^{commit}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function createGroundedRepositoryCheckout(
   dependencies: GroundedCheckoutDependencies = {},
 ) {
@@ -100,13 +143,26 @@ export function createGroundedRepositoryCheckout(
     dependencies.cacheRoot ??
     (process.env.AI_RUNS_INTERACTIVE_ATTEMPT_ROOT?.trim() || os.tmpdir());
   const now = dependencies.now ?? Date.now;
-  const baseRestores = new Map<string, Promise<'base' | 'bundle' | 'missing'>>();
+  const maxBundleBytes =
+    dependencies.maxBundleBytes ??
+    positiveNumberFromEnv('AI_RUNS_INTERACTIVE_CHECKOUT_MAX_BUNDLE_BYTES', DEFAULT_MAX_BUNDLE_BYTES);
+  const diskBudgetBytes =
+    dependencies.diskBudgetBytes ??
+    positiveNumberFromEnv('AI_RUNS_INTERACTIVE_CHECKOUT_DISK_BUDGET_BYTES', DEFAULT_DISK_BUDGET_BYTES);
+
+  const baseRestores = new Map<string, Promise<BaseOutcome>>();
+  // Estimated bytes on disk: a base holds the bundle's objects; a worktree's
+  // files are estimated at the same size.
+  const baseBytes = new Map<string, number>();
+  const worktreeBytes = new Map<string, number>();
+  const estimatedBytes = (): number =>
+    [...baseBytes.values(), ...worktreeBytes.values()].reduce((sum, bytes) => sum + bytes, 0);
 
   const basePathFor = (identity: RepositoryIdentity): string =>
     path.join(
       cacheRoot,
       'apex-interactive-repo',
-      bundleKey(identity).replace(/\.bundle$/, ''),
+      `${bundleKey(identity).replace(/\.bundle$/, '')}.git`,
     );
 
   async function restoreBase(
@@ -114,34 +170,50 @@ export function createGroundedRepositoryCheckout(
     identity: RepositoryIdentity,
     basePath: string,
     signal: AbortSignal,
-  ): Promise<'base' | 'bundle' | 'missing'> {
-    if (await isReadyWorkspace(runGit, basePath, identity.sha)) return 'base';
+  ): Promise<BaseOutcome> {
+    if (baseBytes.has(basePath) && (await isReadyBase(runGit, basePath, identity.sha))) {
+      return { status: 'ready', source: 'base' };
+    }
+    const blob = container.getBlockBlobClient(bundleKey(identity));
+    let size: number;
+    try {
+      size = (await blob.getProperties({ abortSignal: signal })).contentLength ?? 0;
+    } catch (error) {
+      if (isMissingBlob(error)) return { status: 'unavailable', reason: 'bundle-missing' };
+      throw error;
+    }
+    if (size > maxBundleBytes) return { status: 'unavailable', reason: 'bundle-too-large' };
+    // Peak while restoring: the downloaded bundle plus the cloned objects.
+    if (estimatedBytes() + 2 * size > diskBudgetBytes) {
+      return { status: 'unavailable', reason: 'disk-budget' };
+    }
+
     await mkdir(path.dirname(basePath), { recursive: true });
     const scratch = await mkdtemp(path.join(os.tmpdir(), 'apex-interactive-bundle-'));
     try {
       const bundlePath = path.join(scratch, 'snapshot.bundle');
       try {
-        await container
-          .getBlockBlobClient(bundleKey(identity))
-          .downloadToFile(bundlePath, undefined, undefined, { abortSignal: signal });
+        await blob.downloadToFile(bundlePath, undefined, undefined, { abortSignal: signal });
       } catch (error) {
-        if (isMissingBlob(error)) return 'missing';
+        if (isMissingBlob(error)) return { status: 'unavailable', reason: 'bundle-missing' };
         throw error;
       }
       await prepareEmptyDestination(basePath);
       try {
-        await checkoutBundleAtSha({
-          runGit,
-          bundlePath,
-          scratchDirectory: scratch,
-          destination: basePath,
-          expectedSha: identity.sha,
-        });
+        await runGit(['clone', '--bare', bundlePath, basePath]);
+        await rm(scratch, { recursive: true, force: true });
+        await runGit(['-C', basePath, 'cat-file', '-e', `${identity.sha}^{commit}`]);
+        await writeFile(
+          path.join(basePath, GROUNDING_WORKSPACE_READY_MARKER),
+          `${identity.sha}\n`,
+          'utf8',
+        );
       } catch (error) {
         await rm(basePath, { recursive: true, force: true }).catch(() => {});
         throw error;
       }
-      return 'bundle';
+      baseBytes.set(basePath, size);
+      return { status: 'ready', source: 'bundle' };
     } finally {
       await rm(scratch, { recursive: true, force: true }).catch(() => {});
     }
@@ -160,13 +232,16 @@ export function createGroundedRepositoryCheckout(
     ): Promise<GroundedCheckoutResult> {
       const startedAt = now();
       const elapsed = () => now() - startedAt;
+      const unavailable = (reason: GroundedCheckoutUnavailableReason): GroundedCheckoutResult => ({
+        status: 'unavailable',
+        reason,
+        durationMs: elapsed(),
+      });
       const container = getContainerClient();
-      if (!container) {
-        return { status: 'unavailable', reason: 'not-configured', durationMs: elapsed() };
-      }
+      if (!container) return unavailable('not-configured');
       try {
         const identity = bundleIdentityForGrounding(grounding);
-        if (await isWorktreeAt(runGit, destination, identity.sha)) {
+        if (worktreeBytes.has(destination) && (await isWorktreeAt(runGit, destination, identity.sha))) {
           return { status: 'ready', identity, source: 'worktree', durationMs: elapsed() };
         }
 
@@ -178,15 +253,16 @@ export function createGroundedRepositoryCheckout(
           baseRestores.set(basePath, restore);
           void restore.then(
             (outcome) => {
-              if (outcome === 'missing') baseRestores.delete(basePath);
+              if (outcome.status !== 'ready') baseRestores.delete(basePath);
             },
             () => baseRestores.delete(basePath),
           );
         }
         const outcome = await restore;
-        if (outcome === 'missing') {
-          return { status: 'unavailable', reason: 'bundle-missing', durationMs: elapsed() };
-        }
+        if (outcome.status !== 'ready') return unavailable(outcome.reason);
+
+        const worktreeSize = baseBytes.get(basePath) ?? 0;
+        if (estimatedBytes() + worktreeSize > diskBudgetBytes) return unavailable('disk-budget');
 
         await prepareEmptyDestination(destination);
         await mkdir(path.dirname(destination), { recursive: true });
@@ -203,15 +279,22 @@ export function createGroundedRepositoryCheckout(
         if (!(await verifyHead(runGit, destination, identity.sha))) {
           throw new Error('Grounded worktree SHA verification failed');
         }
+        worktreeBytes.set(destination, worktreeSize);
         return {
           status: 'ready',
           identity,
-          source: ownsRestore ? outcome : 'base',
+          source: ownsRestore ? outcome.source : 'base',
           durationMs: elapsed(),
         };
       } catch {
-        return { status: 'unavailable', reason: 'failed', durationMs: elapsed() };
+        return unavailable('failed');
       }
+    },
+
+    /** Removes a thread worktree and returns its share of the disk budget. */
+    async release(destination: string): Promise<void> {
+      worktreeBytes.delete(destination);
+      await rm(destination, { recursive: true, force: true }).catch(() => {});
     },
   };
 }
