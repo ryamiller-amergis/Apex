@@ -389,11 +389,19 @@ router.post('/cycle-time', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/health - Health check endpoint
+// GET /api/health - ADO connectivity check.
+// Production App Service still probes this path. The ADO client default socket
+// timeout is 120s, which is longer than the health-check ping, so a stalled
+// /_apis/Location call is recorded as HTTP 499 and the worker is marked
+// unhealthy. Bound this call so the probe gets a response either way.
+const HEALTH_CHECK_SOCKET_TIMEOUT_MS = 8_000;
+
 router.get('/health', async (req: Request, res: Response) => {
   try {
     // Health check uses default project from env
-    const adoService = new AzureDevOpsService();
+    const adoService = new AzureDevOpsService(undefined, undefined, {
+      socketTimeout: HEALTH_CHECK_SOCKET_TIMEOUT_MS,
+    });
     const healthy = await adoService.healthCheck();
     res.json({ healthy, timestamp: new Date().toISOString() });
   } catch (error: any) {
