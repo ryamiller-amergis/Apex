@@ -16,6 +16,7 @@ describe('cursor container CLI', () => {
       baseBranch: null,
       summary: null,
       agentExitCode: null,
+      settled: false,
     });
   });
 
@@ -41,19 +42,41 @@ describe('cursor container CLI', () => {
       prUrl: null,
       noChanges: false,
       agentExitCode: 1,
+      settled: false,
     })).toEqual({ status: 'running', resultText: null });
   });
 
-  it('fails a published run when the CLI exited non-zero, and keeps the pull request', () => {
+  it('keeps a run live when the pull request is logged before the run has settled', () => {
+    expect(resolveContainerObservation({
+      jobStatus: 'Running',
+      prUrl: 'https://dev.azure.com/Amergis/MaxView/_git/MaxView/pullrequest/4821',
+      noChanges: false,
+      agentExitCode: null,
+      settled: false,
+    })).toEqual({ status: 'running', resultText: null });
+  });
+
+  it('fails a settled run when the CLI exited non-zero, and keeps the pull request', () => {
     expect(resolveContainerObservation({
       jobStatus: 'Running',
       prUrl: 'https://dev.azure.com/Amergis/MaxView/_git/MaxView/pullrequest/4821',
       noChanges: false,
       agentExitCode: 1,
+      settled: true,
     })).toEqual({
       status: 'failed',
       resultText: 'The Cursor CLI exited with code 1. Its partial changes are in the pull request.',
     });
+  });
+
+  it('completes a settled run that published a pull request and exited cleanly', () => {
+    expect(resolveContainerObservation({
+      jobStatus: 'Running',
+      prUrl: 'https://dev.azure.com/Amergis/MaxView/_git/MaxView/pullrequest/4821',
+      noChanges: false,
+      agentExitCode: null,
+      settled: true,
+    })).toEqual({ status: 'finished', resultText: null });
   });
 
   it('maps a finished job execution onto the cloud-agent status words', () => {

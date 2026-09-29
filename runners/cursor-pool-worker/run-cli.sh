@@ -84,6 +84,9 @@ finish_run() {
   if [ "${agent_exit}" -ne 0 ]; then
     echo "APEX_AGENT_EXIT=${agent_exit}"
   fi
+  # Printed last. Apex waits for this before it treats the run as finished,
+  # so a poll cannot record success in the gap before APEX_AGENT_EXIT.
+  echo "APEX_RUN_SETTLED"
   # Job logs disappear with the replica. Stay up long enough for Apex to read them.
   sleep 120
   exit 0

@@ -36,23 +36,27 @@ export function isContainerAgentId(id: string): boolean {
 
 /**
  * Turns a job status plus the markers in its logs into the status Apex stores.
- * A CLI failure is recorded only once publish has happened, or the job itself
- * has stopped. A marker seen while the job is still running, before a pull
- * request or a no-change line, is not a finished run.
+ * While the job is still running, publish lines are not a finished run until
+ * `APEX_RUN_SETTLED` — that line is printed after the pull request and the
+ * CLI exit code, so a poll cannot record success and then miss the failure.
  */
 export function resolveContainerObservation(input: {
   jobStatus: string;
   prUrl: string | null;
   noChanges: boolean;
   agentExitCode: number | null;
+  settled: boolean;
 }): { status: string; resultText: string | null } {
   let status = mapContainerJobStatus(input.jobStatus);
   let resultText: string | null = null;
   if (status === 'failed') resultText = 'Container CLI run failed. See the job execution logs.';
-  if (input.noChanges) resultText = 'The agent finished without changing files.';
   const published = Boolean(input.prUrl) || input.noChanges;
-  if (status === 'running' && published) status = 'finished';
-  if (input.agentExitCode && status !== 'cancelled' && (published || status !== 'running')) {
+  const outcomeReady = input.settled || status !== 'running';
+  if (status === 'running' && published && input.settled) status = 'finished';
+  if (input.noChanges && status !== 'running' && status !== 'cancelled') {
+    resultText = 'The agent finished without changing files.';
+  }
+  if (input.agentExitCode && status !== 'cancelled' && outcomeReady && (published || status !== 'running')) {
     status = 'failed';
     resultText = input.prUrl
       ? `The Cursor CLI exited with code ${input.agentExitCode}. Its partial changes are in the pull request.`
@@ -85,6 +89,7 @@ export function parseContainerCliLogs(logs: string): {
   baseBranch: string | null;
   summary: string | null;
   agentExitCode: number | null;
+  settled: boolean;
 } {
   const pr = logs.match(/APEX_PR_URL=(https:\/\/[^\s"\\]+\/pullrequest\/\d+)/);
   const branch = logs.match(/APEX_BRANCH_PUSHED=([^\s"\\]+)/);
@@ -98,6 +103,7 @@ export function parseContainerCliLogs(logs: string): {
     baseBranch: base?.[1] ?? null,
     summary: summary?.[1]?.trim() || null,
     agentExitCode: exit ? Number(exit[1]) : null,
+    settled: logs.includes('APEX_RUN_SETTLED'),
   };
 }
 
@@ -351,6 +357,7 @@ export async function getCursorContainerCliRun(executionName: string): Promise<{
   let summary: string | null = null;
   let noChanges = false;
   let agentExitCode: number | null = null;
+  let settled = false;
   try {
     const logs = await executionLogs(executionName, '200');
     const parsed = parseContainerCliLogs(logs);
@@ -360,6 +367,7 @@ export async function getCursorContainerCliRun(executionName: string): Promise<{
     summary = parsed.summary;
     noChanges = parsed.noChanges;
     agentExitCode = parsed.agentExitCode;
+    settled = parsed.settled;
   } catch (err) {
     console.warn('[container-cli] could not read job logs', err instanceof Error ? err.message : err);
   }
@@ -368,6 +376,7 @@ export async function getCursorContainerCliRun(executionName: string): Promise<{
     prUrl,
     noChanges,
     agentExitCode,
+    settled,
   });
   return {
     status: observed.status,
