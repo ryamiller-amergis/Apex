@@ -223,6 +223,15 @@ resource "azurerm_container_app" "ai_platform_v2_documents" {
     identity = azurerm_user_assigned_identity.ai_platform_v2["document"].id
   }
 
+  # The document worker reads the pinned repository only through the repo-read service.
+  dynamic "secret" {
+    for_each = var.ai_platform_v2_interactive_repo_read_service_token != null ? [1] : []
+    content {
+      name  = "repo-read-service-token"
+      value = var.ai_platform_v2_interactive_repo_read_service_token
+    }
+  }
+
   template {
     min_replicas = var.ai_platform_v2_documents_min_replicas
     max_replicas = var.ai_platform_v2_documents_max_replicas
@@ -256,6 +265,22 @@ resource "azurerm_container_app" "ai_platform_v2_documents" {
       env {
         name  = "AI_PLATFORM_V2_ARTIFACT_CONTAINER"
         value = local.ai_platform_v2_artifact_container
+      }
+
+      dynamic "env" {
+        for_each = var.ai_platform_v2_interactive_repo_read_service_url != null ? [1] : []
+        content {
+          name  = "REPO_READ_SERVICE_URL"
+          value = var.ai_platform_v2_interactive_repo_read_service_url
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.ai_platform_v2_interactive_repo_read_service_token != null ? [1] : []
+        content {
+          name        = "REPO_READ_SERVICE_TOKEN"
+          secret_name = "repo-read-service-token"
+        }
       }
     }
   }

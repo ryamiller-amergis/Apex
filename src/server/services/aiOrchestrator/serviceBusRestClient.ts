@@ -125,6 +125,14 @@ export function createServiceBusRestQueueConsumer(
     return response;
   }
 
+  // Settlement is /messages/{messageId|sequenceNumber}/{lockToken}; Service Bus
+  // also accepts the lock token in the first segment, as the worker client does.
+  // A single-segment path is rejected with 400.
+  function lockPath(lockToken: string): string {
+    const token = encodeURIComponent(lockToken);
+    return `messages/${token}/${token}`;
+  }
+
   return {
     async receive(receiveOptions): Promise<PeekLockedMessage | null> {
       if (options.noop || process.env.NODE_ENV === 'test') {
@@ -158,10 +166,9 @@ export function createServiceBusRestQueueConsumer(
 
     async complete(lockToken: string): Promise<void> {
       if (options.noop || process.env.NODE_ENV === 'test') return;
-      const response = await authorized(
-        `messages/${encodeURIComponent(lockToken)}`,
-        { method: 'DELETE' },
-      );
+      const response = await authorized(lockPath(lockToken), {
+        method: 'DELETE',
+      });
       if (!response.ok && response.status !== 404) {
         throw new Error(`Service Bus complete failed (${response.status})`);
       }
@@ -169,14 +176,11 @@ export function createServiceBusRestQueueConsumer(
 
     async abandon(lockToken: string): Promise<void> {
       if (options.noop || process.env.NODE_ENV === 'test') return;
-      const response = await authorized(
-        `messages/${encodeURIComponent(lockToken)}`,
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
-        },
-      );
+      const response = await authorized(lockPath(lockToken), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
       if (!response.ok && response.status !== 404) {
         throw new Error(`Service Bus abandon failed (${response.status})`);
       }
@@ -188,20 +192,17 @@ export function createServiceBusRestQueueConsumer(
       description?: string,
     ): Promise<void> {
       if (options.noop || process.env.NODE_ENV === 'test') return;
-      const response = await authorized(
-        `messages/${encodeURIComponent(lockToken)}`,
-        {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            BrokerProperties: JSON.stringify({
-              DeadLetterReason: reason,
-              DeadLetterErrorDescription: description ?? reason,
-            }),
-          },
-          body: JSON.stringify({}),
+      const response = await authorized(lockPath(lockToken), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          BrokerProperties: JSON.stringify({
+            DeadLetterReason: reason,
+            DeadLetterErrorDescription: description ?? reason,
+          }),
         },
-      );
+        body: JSON.stringify({}),
+      });
       if (!response.ok && response.status !== 404) {
         throw new Error(`Service Bus dead-letter failed (${response.status})`);
       }
