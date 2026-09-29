@@ -1,4 +1,3 @@
-import React from 'react';
 import { act, render, screen } from '@testing-library/react';
 import { ChatRunProgressLabel } from '../ChatRunProgressLabel';
 import type { ToolProgress } from '../../hooks/useChatStream';
