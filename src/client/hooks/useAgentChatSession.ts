@@ -12,11 +12,11 @@ import type {
   RunPhaseProgress,
   RunHealthProgress,
 } from './useChatStream';
-import { friendlyChatProgressLabel, friendlyDurableInteractiveLimitError } from '../../shared/utils/chatProgressCopy';
+import { friendlyChatErrorMessage, friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 import { createChatTurnId } from '../utils/chatTurnId';
 
 function mapSendErrorMessage(raw: string): string {
-  return friendlyDurableInteractiveLimitError(raw) ?? raw;
+  return friendlyChatErrorMessage(raw);
 }
 
 // ---------------------------------------------------------------------------

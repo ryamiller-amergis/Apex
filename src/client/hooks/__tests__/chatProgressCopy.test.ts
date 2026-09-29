@@ -1,5 +1,6 @@
 import {
   friendlyChatProgressLabel,
+  friendlyChatErrorMessage,
   friendlyDurableInteractiveLimitError,
   friendlyToolActivityLabel,
 } from '../../../shared/utils/chatProgressCopy';
@@ -95,5 +96,38 @@ describe('friendlyToolActivityLabel', () => {
 
   it('falls back for unknown tools', () => {
     expect(friendlyToolActivityLabel('something_new')).toBe('Working…');
+  });
+});
+
+describe('friendlyChatErrorMessage', () => {
+  it('turns durable admission codes into guidance', () => {
+    expect(friendlyChatErrorMessage('INTERACTIVE_V2_SKILL_UNAVAILABLE')).toMatch(/Project Settings/);
+    expect(friendlyChatErrorMessage('INTERACTIVE_V2_GROUNDING_UNAVAILABLE')).toMatch(/repository/);
+    expect(friendlyChatErrorMessage('Agent is already running')).toMatch(/already in progress/);
+  });
+
+  it('keeps the existing per-user limit copy', () => {
+    expect(friendlyChatErrorMessage('USER_AGENTIC_LIMIT')).toBe(
+      friendlyDurableInteractiveLimitError('USER_AGENTIC_LIMIT'),
+    );
+  });
+
+  it('explains deadlines, blocked models, and raw turn failures', () => {
+    expect(friendlyChatErrorMessage('Interactive absolute deadline exceeded')).toMatch(/too long/);
+    expect(
+      friendlyChatErrorMessage(
+        'Interactive turn failed: Error: Interactive turn ended with status: error: Model Blocked for team',
+      ),
+    ).toMatch(/model isn't allowed/);
+    expect(
+      friendlyChatErrorMessage('Interactive turn failed: AiRunCallbackError: AI run callback failed (500)'),
+    ).toBe('Something went wrong while answering. Please retry.');
+  });
+
+  it('passes readable messages through', () => {
+    expect(friendlyChatErrorMessage('Interactive agent did not start. Please retry.')).toBe(
+      'Interactive agent did not start. Please retry.',
+    );
+    expect(friendlyChatErrorMessage('')).toBe('Something went wrong. Please retry.');
   });
 });

@@ -20,7 +20,10 @@ import type {
   SseToolStatusEvent,
 } from '../../shared/types/chat';
 import { v4 as uuidv4 } from 'uuid';
-import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
+import {
+  friendlyChatErrorMessage,
+  friendlyChatProgressLabel,
+} from '../../shared/utils/chatProgressCopy';
 import {
   INTERACTIVE_WS_CHANGED_EVENT,
   isInteractiveWsEnabled,
@@ -660,7 +663,7 @@ export function useChatStream(
               const fallbackMsg: ChatMessage = {
                 id: uuidv4(),
                 role: 'system',
-                text: `Error: ${errorText}`,
+                text: `Error: ${friendlyChatErrorMessage(errorText)}`,
                 ts: new Date().toISOString(),
               };
               setMessages((prev) => [...prev, fallbackMsg]);
@@ -690,7 +693,7 @@ export function useChatStream(
           const errMsg: ChatMessage = {
             id: uuidv4(),
             role: 'system',
-            text: `Error: ${event.error}`,
+            text: `Error: ${friendlyChatErrorMessage(event.error)}`,
             ts: new Date().toISOString(),
           };
           setMessages((prev) => [...prev, errMsg]);

@@ -131,6 +131,50 @@ export function friendlyToolActivityLabel(toolName: string, args?: unknown): str
   return TOOL_ACTIVITY[name] ?? 'Working…';
 }
 
+const CHAT_ERROR_BY_CODE: Record<string, string> = {
+  INTERACTIVE_V2_GROUNDING_UNAVAILABLE:
+    "Apex couldn't load this project's repository for the chat. Try again in a minute.",
+  INTERACTIVE_V2_SKILL_UNAVAILABLE:
+    "This skill couldn't be loaded from the project's repository. Check the skill in Project Settings, or try again.",
+  INTERACTIVE_V2_STDIO_MCP_UNSUPPORTED:
+    "This tool connection runs locally and isn't supported in chat. Choose a different tool.",
+  INTERACTIVE_V2_MAXVIEW_UNAVAILABLE:
+    "MaxView tools aren't available right now. Try again later.",
+  THREAD_ACTIVE_TURN:
+    'A reply is already in progress in this chat. Wait for it to finish or stop it first.',
+  TURN_ID_CONFLICT: 'That message was already sent. Refresh the page and try again.',
+  INVALID_TURN_ID: 'That message was already sent. Refresh the page and try again.',
+};
+
+const DEADLINE_ERRORS: Record<string, string> = {
+  'Interactive absolute deadline exceeded':
+    'The answer took too long and was stopped. Try a narrower question, or retry.',
+  'Interactive tool deadline exceeded':
+    "One of the agent's steps took too long and was stopped. Please retry.",
+};
+
+/**
+ * User-facing copy for a refused send or a failed turn. Server codes and raw
+ * turn failures become plain guidance; anything already readable passes
+ * through. The raw detail stays in server logs and the thread's last error.
+ */
+export function friendlyChatErrorMessage(raw: string | null | undefined): string {
+  const text = (raw ?? '').trim();
+  if (!text) return 'Something went wrong. Please retry.';
+  const limit = friendlyDurableInteractiveLimitError(text);
+  if (limit) return limit;
+  if (CHAT_ERROR_BY_CODE[text]) return CHAT_ERROR_BY_CODE[text];
+  if (text === 'Agent is already running') return CHAT_ERROR_BY_CODE.THREAD_ACTIVE_TURN;
+  if (DEADLINE_ERRORS[text]) return DEADLINE_ERRORS[text];
+  if (/model[^a-z]*blocked|model is not allowed/i.test(text)) {
+    return "The selected model isn't allowed for your team. Pick a different model and retry.";
+  }
+  if (text.startsWith('Interactive turn failed:')) {
+    return 'Something went wrong while answering. Please retry.';
+  }
+  return text;
+}
+
 /** Exact client copy for durable per-user cap errors (stable API codes). */
 export function friendlyDurableInteractiveLimitError(
   code: string | null | undefined,
