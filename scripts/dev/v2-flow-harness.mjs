@@ -456,11 +456,13 @@ async function main() {
   await api(`/api/chat/threads/${probeThread}`, { method: 'DELETE' }).catch(() => {});
   console.log(`V2 flow harness → ${BASE_URL} project=${kickoff.project} repo=${kickoff.repo} stamp=${STAMP}`);
 
-  await Promise.all([
-    enabled('interview') ? runInterviewChain(kickoff, userId) : null,
-    enabled('adr') ? runAdr(kickoff) : null,
-    enabled('uilab') ? runUiLab(kickoff) : null,
-  ]);
+  // One agentic turn per user at a time (USER_AGENTIC_LIMIT), so the ADR turn
+  // runs before the interview chain; UI Lab uses the visual lane in parallel.
+  const agentic = (async () => {
+    if (enabled('adr')) await runAdr(kickoff);
+    if (enabled('interview')) await runInterviewChain(kickoff, userId);
+  })();
+  await Promise.all([agentic, enabled('uilab') ? runUiLab(kickoff) : null]);
 
   console.log('\nSummary:');
   for (const entry of report) console.log(`  ${entry.result.padEnd(7)} ${entry.flow}`);
