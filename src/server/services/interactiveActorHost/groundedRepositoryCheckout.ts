@@ -155,8 +155,26 @@ export function createGroundedRepositoryCheckout(
   // files are estimated at the same size.
   const baseBytes = new Map<string, number>();
   const worktreeBytes = new Map<string, number>();
+  const worktreeBase = new Map<string, string>();
+  const baseLastUsed = new Map<string, number>();
   const estimatedBytes = (): number =>
     [...baseBytes.values(), ...worktreeBytes.values()].reduce((sum, bytes) => sum + bytes, 0);
+
+  // A worktree breaks if its base is deleted, so only bases no thread uses are
+  // removed, least recently used first.
+  async function evictIdleBases(neededBytes: number, keep: string): Promise<void> {
+    const inUse = new Set(worktreeBase.values());
+    const idle = [...baseBytes.keys()]
+      .filter((basePath) => basePath !== keep && !inUse.has(basePath))
+      .sort((left, right) => (baseLastUsed.get(left) ?? 0) - (baseLastUsed.get(right) ?? 0));
+    for (const basePath of idle) {
+      if (estimatedBytes() + neededBytes <= diskBudgetBytes) return;
+      baseBytes.delete(basePath);
+      baseLastUsed.delete(basePath);
+      baseRestores.delete(basePath);
+      await rm(basePath, { recursive: true, force: true }).catch(() => {});
+    }
+  }
 
   const basePathFor = (identity: RepositoryIdentity): string =>
     path.join(
@@ -184,6 +202,7 @@ export function createGroundedRepositoryCheckout(
     }
     if (size > maxBundleBytes) return { status: 'unavailable', reason: 'bundle-too-large' };
     // Peak while restoring: the downloaded bundle plus the cloned objects.
+    await evictIdleBases(2 * size, basePath);
     if (estimatedBytes() + 2 * size > diskBudgetBytes) {
       return { status: 'unavailable', reason: 'disk-budget' };
     }
@@ -241,11 +260,15 @@ export function createGroundedRepositoryCheckout(
       if (!container) return unavailable('not-configured');
       try {
         const identity = bundleIdentityForGrounding(grounding);
+        const basePath = basePathFor(identity);
         if (worktreeBytes.has(destination) && (await isWorktreeAt(runGit, destination, identity.sha))) {
+          baseLastUsed.set(basePath, now());
           return { status: 'ready', identity, source: 'worktree', durationMs: elapsed() };
         }
+        // The thread moved to another commit; its old worktree is replaced below.
+        worktreeBytes.delete(destination);
+        worktreeBase.delete(destination);
 
-        const basePath = basePathFor(identity);
         let restore = baseRestores.get(basePath);
         const ownsRestore = !restore;
         if (!restore) {
@@ -262,6 +285,7 @@ export function createGroundedRepositoryCheckout(
         if (outcome.status !== 'ready') return unavailable(outcome.reason);
 
         const worktreeSize = baseBytes.get(basePath) ?? 0;
+        await evictIdleBases(worktreeSize, basePath);
         if (estimatedBytes() + worktreeSize > diskBudgetBytes) return unavailable('disk-budget');
 
         await prepareEmptyDestination(destination);
@@ -280,6 +304,8 @@ export function createGroundedRepositoryCheckout(
           throw new Error('Grounded worktree SHA verification failed');
         }
         worktreeBytes.set(destination, worktreeSize);
+        worktreeBase.set(destination, basePath);
+        baseLastUsed.set(basePath, now());
         return {
           status: 'ready',
           identity,
@@ -294,6 +320,7 @@ export function createGroundedRepositoryCheckout(
     /** Removes a thread worktree and returns its share of the disk budget. */
     async release(destination: string): Promise<void> {
       worktreeBytes.delete(destination);
+      worktreeBase.delete(destination);
       await rm(destination, { recursive: true, force: true }).catch(() => {});
     },
   };

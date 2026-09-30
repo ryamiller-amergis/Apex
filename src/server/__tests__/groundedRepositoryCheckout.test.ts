@@ -17,11 +17,13 @@ describe('grounded repository checkout for durable interactive turns', () => {
   let root: string;
   let sha: string;
   let bundlePath: string;
-  const grounding = () => ({
+  let nextSha: string;
+  let nextBundlePath: string;
+  const grounding = (pinned: string = sha) => ({
     provider: 'github' as const,
     project: 'Apex',
     repository: 'owner/Apex',
-    sha,
+    sha: pinned,
     profileId: 'profile-1',
   });
 
@@ -37,13 +39,22 @@ describe('grounded repository checkout for durable interactive turns', () => {
     sha = git(source, 'rev-parse', 'HEAD');
     bundlePath = path.join(root, 'snapshot.bundle');
     git(source, 'bundle', 'create', bundlePath, 'HEAD');
+    await writeFile(path.join(source, 'Next.tsx'), 'export {};\n');
+    git(source, 'add', '.');
+    git(source, 'commit', '-q', '-m', 'next');
+    nextSha = git(source, 'rev-parse', 'HEAD');
+    nextBundlePath = path.join(root, 'next.bundle');
+    git(source, 'bundle', 'create', nextBundlePath, 'HEAD');
   });
 
   afterAll(async () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  function containerServing(keys: string[]): {
+  function containerServing(
+    keys: string[],
+    bundleFor: (key: string) => string = () => bundlePath,
+  ): {
     container: ContainerClient;
     downloads: string[];
   } {
@@ -54,18 +65,42 @@ describe('grounded repository checkout for durable interactive turns', () => {
           if (!keys.includes(key)) {
             throw Object.assign(new Error('missing'), { statusCode: 404 });
           }
-          return { contentLength: (await stat(bundlePath)).size };
+          return { contentLength: (await stat(bundleFor(key))).size };
         },
         downloadToFile: async (target: string) => {
           downloads.push(key);
           if (!keys.includes(key)) {
             throw Object.assign(new Error('missing'), { statusCode: 404 });
           }
-          await copyFile(bundlePath, target);
+          await copyFile(bundleFor(key), target);
         },
       }),
     } as unknown as ContainerClient;
     return { container, downloads };
+  }
+
+  async function twoCommitSetup(cacheName: string) {
+    const firstKey = bundleKey(bundleIdentityForGrounding(grounding()));
+    const nextKey = bundleKey(bundleIdentityForGrounding(grounding(nextSha)));
+    const { container } = containerServing(
+      [firstKey, nextKey],
+      (key) => (key === nextKey ? nextBundlePath : bundlePath),
+    );
+    const firstSize = (await stat(bundlePath)).size;
+    const nextSize = (await stat(nextBundlePath)).size;
+    const cacheRoot = path.join(root, cacheName);
+    const checkout = createGroundedRepositoryCheckout({
+      getContainerClient: () => container,
+      cacheRoot,
+      // Room for the next commit's restore, but not while the first base is kept.
+      diskBudgetBytes: firstSize + 2 * nextSize - 1,
+    });
+    const firstBase = path.join(
+      cacheRoot,
+      'apex-interactive-repo',
+      `${firstKey.replace(/\.bundle$/, '')}.git`,
+    );
+    return { checkout, firstBase };
   }
 
   it('keys GitHub bundles by repository name without the owner', () => {
@@ -155,6 +190,41 @@ describe('grounded repository checkout for durable interactive turns', () => {
       status: 'ready',
       source: 'base',
     });
+  });
+
+  it('removes an unused older commit to make room for a new one', async () => {
+    const { checkout, firstBase } = await twoCommitSetup('cache-evict');
+    const signal = new AbortController().signal;
+    const threadA = path.join(root, 'threads', 'evict-a');
+    const threadB = path.join(root, 'threads', 'evict-b');
+
+    await expect(checkout.checkout(grounding(), threadA, signal)).resolves.toMatchObject({
+      status: 'ready',
+    });
+    await checkout.release(threadA);
+
+    await expect(checkout.checkout(grounding(nextSha), threadB, signal)).resolves.toMatchObject({
+      status: 'ready',
+      source: 'bundle',
+    });
+    await expect(stat(firstBase)).rejects.toThrow();
+    expect(git(threadB, 'rev-parse', 'HEAD')).toBe(nextSha);
+  });
+
+  it('keeps an older commit that a thread still uses', async () => {
+    const { checkout, firstBase } = await twoCommitSetup('cache-in-use');
+    const signal = new AbortController().signal;
+    const threadA = path.join(root, 'threads', 'in-use-a');
+
+    await expect(checkout.checkout(grounding(), threadA, signal)).resolves.toMatchObject({
+      status: 'ready',
+    });
+
+    await expect(
+      checkout.checkout(grounding(nextSha), path.join(root, 'threads', 'in-use-b'), signal),
+    ).resolves.toMatchObject({ status: 'unavailable', reason: 'disk-budget' });
+    await expect(stat(firstBase)).resolves.toBeTruthy();
+    expect(git(threadA, 'rev-parse', 'HEAD')).toBe(sha);
   });
 
   it('reports not-configured when no grounding storage is set', async () => {

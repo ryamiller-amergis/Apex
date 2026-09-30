@@ -48,9 +48,9 @@ const SCENARIOS = [
     name: 'home-repo',
     expectClass: undefined,
     text:
-      'In two sentences, what does the Apex Agent Home page show? '
-      + 'Name one client component file that renders it.',
-    expectText: /\.tsx/i,
+      'In two sentences, what does this repository do? '
+      + 'Name one source file (with its extension) that shows it.',
+    expectText: /\.[a-z]{1,5}\b/i,
     firstActivityTargetMs: 10_000,
     completionTargetMs: 90_000,
     timeoutMs: 360_000,
@@ -59,8 +59,8 @@ const SCENARIOS = [
     name: 'home-reconnect',
     expectClass: undefined,
     text:
-      'In about 400 words, explain how the Apex Agent Home page works for a new user, '
-      + 'with a short section per feature.',
+      'In about 400 words, give a new developer an overview of this repository, '
+      + 'with a short section per main part.',
     expectText: /\S/,
     reconnectAfterTokens: 5,
     firstActivityTargetMs: 10_000,
