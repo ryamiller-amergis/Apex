@@ -420,6 +420,25 @@ describe('recoverStaleDevSessionSetups', () => {
     expect(recovered).toBe(0);
     expect(mockUpdateSet).not.toHaveBeenCalled();
   });
+
+  it('does not fail a Cloud Agent session that owns a run', async () => {
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'cloud-session',
+        status: 'setting_up',
+        currentRunId: 'cloud-run-1',
+        updatedAt: '2026-07-14T13:00:00.000Z',
+      },
+    ]);
+
+    const recovered = await recoverStaleDevSessionSetups({
+      now: () => Date.parse('2026-07-14T14:00:00.000Z'),
+      setupTimeoutMs: 15 * 60_000,
+    });
+
+    expect(recovered).toBe(0);
+    expect(mockUpdateSet).not.toHaveBeenCalled();
+  });
 });
 
 describe('TBI-001 DoD-2 / VT-05 graceful owner finalization', () => {

@@ -680,6 +680,80 @@ variable "ai_runs_runner_callback_token" {
 }
 
 # ---------------------------------------------------------------------------
+# Cursor worker Job — My Work cloud development (dev and production)
+# ---------------------------------------------------------------------------
+
+variable "enable_cursor_pool_workers" {
+  description = "Provision the My Work Cursor worker Job in cae-apex-ai. Off until set in that environment's tfvars."
+  type        = bool
+  default     = false
+}
+
+variable "cursor_pool_name" {
+  description = "Idle template pool name. Apex overrides the command per execution, so this is not used to claim work."
+  type        = string
+  default     = null
+}
+
+variable "cursor_pool_worker_job_name" {
+  description = "Manual Cursor worker Container Apps Job name. Null derives caj-apex-cursor-worker-{environment}."
+  type        = string
+  default     = null
+}
+
+variable "cursor_pool_worker_identity_name" {
+  description = "User-assigned identity name for Cursor pool worker executions. Null derives mi-apex-cursor-worker-{environment}."
+  type        = string
+  default     = null
+}
+
+variable "cursor_pool_worker_image" {
+  description = "Worker image containing Cursor agent CLI, git, and Apex build tools."
+  type        = string
+  default     = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+}
+
+variable "cursor_pool_worker_cpu" {
+  description = "CPU cores allocated to each Cursor pool worker execution."
+  type        = number
+  default     = 2.0
+}
+
+variable "cursor_pool_worker_memory" {
+  description = "Memory allocated to each Cursor pool worker execution."
+  type        = string
+  default     = "4Gi"
+}
+
+variable "cursor_pool_worker_timeout_seconds" {
+  description = "Maximum wall-clock duration of one Cursor pool worker Job execution."
+  type        = number
+  default     = 21600
+
+  validation {
+    condition     = var.cursor_pool_worker_timeout_seconds >= 600 && var.cursor_pool_worker_timeout_seconds <= 86400
+    error_message = "cursor_pool_worker_timeout_seconds must be between 600 and 86400."
+  }
+}
+
+variable "cursor_pool_worker_idle_release_seconds" {
+  description = "Seconds a Cursor worker remains connected after a session ends to accept follow-up turns."
+  type        = number
+  default     = 600
+
+  validation {
+    condition     = var.cursor_pool_worker_idle_release_seconds >= 0 && var.cursor_pool_worker_idle_release_seconds <= 86400
+    error_message = "cursor_pool_worker_idle_release_seconds must be between 0 and 86400."
+  }
+}
+
+variable "cursor_pool_clone_git_repos" {
+  description = "Pass --clone-git-repos to any-repo pool workers. Requires Cursor team GitHub token minting to be enabled."
+  type        = bool
+  default     = true
+}
+
+# ---------------------------------------------------------------------------
 # FEAT-007 — Real-Time Interactive Agent Transport (WebSocket + Dapr actors)
 # ---------------------------------------------------------------------------
 
