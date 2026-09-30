@@ -32,6 +32,7 @@ import {
   useOverrideDesignDocValidation,
 } from '../hooks/useInterviews';
 import { ProposedDesignDocChangesReview } from './ProposedDesignDocChangesReview';
+import { DesignDocPlaybookStartAction } from './DesignDocPlaybookStartAction';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { AgentComposer, AgentPanelShell } from './agentChat';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
@@ -2271,6 +2272,13 @@ export const DesignDocReviewView: React.FC = () => {
               {cancelValidation.isPending ? 'Cancelling…' : 'Cancel Validation'}
             </button>
           )}
+
+          <DesignDocPlaybookStartAction
+            designDocId={doc.id}
+            project={doc.project}
+            isOwner={isOwner}
+            canRun={can('playbooks:run')}
+          />
 
           {canManageAuthorActions && (doc.status === 'draft' || doc.status === 'revision_requested') && (
             <button

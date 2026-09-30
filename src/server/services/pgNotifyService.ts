@@ -62,6 +62,8 @@ interface ChannelPayload {
 type EventCallback = (event: AgentRunEventEnvelope) => void;
 
 const subscribers = new Map<string, Set<EventCallback>>();
+/** Readers that want every thread's events. See `subscribeAllRunEvents`. */
+const globalSubscribers = new Set<EventCallback>();
 const deliveredEventIds = new Set<string>();
 const deliveredEventIdOrder: string[] = [];
 const runEventSequences = new Map<string, number>();
@@ -476,9 +478,31 @@ export function subscribeRunEvents(threadId: string, callback: EventCallback): (
   };
 }
 
+/**
+ * Subscribe to run events for every thread. Returns an unsubscribe function.
+ *
+ * Thread-scoped subscription is the right shape for streaming a conversation to the browser that
+ * opened it. It is the wrong shape for a background reader that does not know, and should not have
+ * to know, which threads exist — the Playbook runtime correlates a terminal event by agent-run id
+ * against a row it wrote, on whichever instance happens to receive the NOTIFY. Registering one
+ * listener per suspended step would also mean re-registering all of them after a restart, which is
+ * the fragility the reconciliation sweep exists to cover rather than something to build on.
+ */
+export function subscribeAllRunEvents(callback: EventCallback): () => void {
+  globalSubscribers.add(callback);
+  return () => {
+    globalSubscribers.delete(callback);
+  };
+}
+
 /** Shared dispatch path, exported to keep LISTEN deduplication unit-testable. */
 export function dispatchRunEventForTest(event: AgentRunEventEnvelope): void {
   if (!rememberDeliveredEventId(event.eventId)) return;
+
+  for (const callback of globalSubscribers) {
+    try { callback(event); } catch { /* subscriber error */ }
+  }
+
   const subs = subscribers.get(event.threadId);
   if (!subs) return;
   for (const callback of subs) {
