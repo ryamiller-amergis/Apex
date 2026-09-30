@@ -88,7 +88,10 @@ export interface GroundingBundleStoreOptions {
   runGit?: GitRunner;
   telemetry?: BundleStoreTelemetry;
   now?: () => number;
+  downloadTimeoutMs?: number;
 }
+
+export const GROUNDING_BUNDLE_DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 
 export class GroundingBundleAuthorizationError extends Error {
   readonly code = 'GROUNDING_BUNDLE_AUTHORIZATION_FAILED';
@@ -216,6 +219,14 @@ export function createGroundingBundleStore(
   const telemetry = options.telemetry ?? trackEvent;
   const groundingOperations = createGroundingTelemetry(telemetry);
   const now = options.now ?? Date.now;
+  const downloadTimeoutMs =
+    options.downloadTimeoutMs ?? GROUNDING_BUNDLE_DOWNLOAD_TIMEOUT_MS;
+  const downloadBundle = (key: string, path: string) =>
+    getContainerClient()
+      .getBlockBlobClient(key)
+      .downloadToFile(path, 0, undefined, {
+        abortSignal: AbortSignal.timeout(downloadTimeoutMs),
+      });
 
   return {
     async bundleExists(identity) {
@@ -293,8 +304,7 @@ export function createGroundingBundleStore(
         destinationOwned = true;
 
         try {
-          const blob = getContainerClient().getBlockBlobClient(key);
-          await blob.downloadToFile(downloadedBundle);
+          await downloadBundle(key, downloadedBundle);
           telemetry('grounding.bundle.lookup', { outcome: 'hit' });
           groundingOperations.bundle(
             { caller: 'bundle-store', project: 'system' },
@@ -404,8 +414,7 @@ export function createGroundingBundleStore(
         await prepareEmptyDestination(destination);
 
         try {
-          const blob = getContainerClient().getBlockBlobClient(key);
-          await blob.downloadToFile(downloadedBundle);
+          await downloadBundle(key, downloadedBundle);
           telemetry('grounding.bundle.lookup', {
             outcome: 'hit',
             shape: 'bare',

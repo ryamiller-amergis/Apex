@@ -150,6 +150,7 @@ type ServiceDependencies = Readonly<{
   resolveGrounding: (
     input: ResolveGroundingInput,
   ) => Promise<FrozenGrounding>;
+  optionalGroundingWaitMs: number;
   loadRepositoryContext?: (
     grounding: NonNullable<FrozenGrounding>,
   ) => Promise<RepositoryContextDocuments | null>;
@@ -170,6 +171,23 @@ type ServiceDependencies = Readonly<{
   ) => Promise<DurableInteractiveRetrySource | null>;
   now: () => Date;
 }>;
+
+export const DEFAULT_OPTIONAL_GROUNDING_WAIT_MS = 3_000;
+
+async function resolveWithin<T>(
+  work: Promise<T | null>,
+  waitMs: number,
+): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), waitMs);
+  });
+  try {
+    return await Promise.race([work.catch(() => null), expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function resultRows<T>(result: unknown): T[] {
   if (Array.isArray(result)) return result as T[];
@@ -809,6 +827,7 @@ function defaultDependencies(): ServiceDependencies {
     loadSkill: defaultLoadSkill,
     builtInSkillRoots: DEFAULT_BUILT_IN_SKILL_ROOTS,
     resolveGrounding: defaultResolveGrounding,
+    optionalGroundingWaitMs: DEFAULT_OPTIONAL_GROUNDING_WAIT_MS,
     loadRepositoryContext: defaultLoadRepositoryContext,
     resolveMaxviewCapability: resolveDurableMaxviewCapability,
     resolveDeadlines: resolveInteractiveDeadlinePolicy,
@@ -938,10 +957,13 @@ export function createDurableInteractiveTurnService(
       }
       // Plain chat still reads the thread's repository when it is available;
       // without a pinned SHA the agent's read tools see an empty workspace.
+      // Preparation keeps running after the wait expires, so a later turn
+      // on the same thread finds the repository ready.
       if (!requiresRepositoryPreparation && thread.kickoff.repo) {
-        grounding = await deps
-          .resolveGrounding({ thread, userId: input.userId })
-          .catch(() => null);
+        grounding = await resolveWithin(
+          deps.resolveGrounding({ thread, userId: input.userId }),
+          deps.optionalGroundingWaitMs,
+        );
       }
       const repositoryContext =
         grounding && deps.loadRepositoryContext

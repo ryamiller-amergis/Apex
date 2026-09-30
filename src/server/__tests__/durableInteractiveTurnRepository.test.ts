@@ -836,6 +836,7 @@ function durableServiceHarness(options?: {
   >;
   grounding?: DurableInteractiveTurnSpecification['grounding'];
   groundingError?: Error;
+  groundingNeverSettles?: boolean;
   maxviewCapability?: 'disabled' | 'enabled' | 'unavailable';
   repositoryContext?: { contextContent: string | null; agentsContent: string | null };
 }) {
@@ -893,7 +894,10 @@ function durableServiceHarness(options?: {
       path: '.cursor/skills/app-knowledge/SKILL.md',
       content: '# App Knowledge\nAnswer from the repository.',
     }),
-    resolveGrounding: options?.groundingError
+    optionalGroundingWaitMs: 20,
+    resolveGrounding: options?.groundingNeverSettles
+      ? jest.fn(() => new Promise<never>(() => undefined))
+      : options?.groundingError
       ? jest.fn().mockRejectedValue(options.groundingError)
       : jest.fn().mockResolvedValue(
           options && 'grounding' in options
@@ -1202,6 +1206,26 @@ describe('durable interactive turn service', () => {
     expect(admitted[0].specification.recreationPrompt).not.toContain(
       '# Pre-loaded repository context pack',
     );
+  });
+
+  it('admits plain Home chat without grounding when preparation outlasts the wait', async () => {
+    const { service, admitted } = durableServiceHarness({
+      thread: authoritativeThread({
+        kickoff: { project: 'project-1', repo: 'repo-1', skillProvider: 'github' },
+      }),
+      groundingNeverSettles: true,
+    });
+
+    await service.admit({
+      threadId: THREAD_ID,
+      userId: USER_ID,
+      workflowClass: 'home-chat',
+      turnId: TURN_ID,
+      text: 'Rewrite this sentence more clearly.',
+      attachments: [],
+    });
+
+    expect(admitted[0].specification.grounding).toBeNull();
   });
 
   it('freezes enabled registered MaxView as an agentic internal proxy capability', async () => {
