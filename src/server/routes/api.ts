@@ -35,6 +35,7 @@ import {
 import { getUserProjects } from '../services/adoMembershipService';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 import { getUserEmail } from '../utils/requestUser';
+import { isDevAccessAllowlisted } from '../services/devEnvAllowlistService';
 import type { CreateProjectAccessRequestsRequest } from '../../shared/types/platformAdmin';
 import { requireGroupMembership, requirePermission, requireProjectAccess } from '../middleware/rbac';
 import {
@@ -389,11 +390,19 @@ router.post('/cycle-time', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/health - Health check endpoint
+// GET /api/health - ADO connectivity check.
+// Production App Service still probes this path. The ADO client default socket
+// timeout is 120s, which is longer than the health-check ping, so a stalled
+// /_apis/Location call is recorded as HTTP 499 and the worker is marked
+// unhealthy. Bound this call so the probe gets a response either way.
+const HEALTH_CHECK_SOCKET_TIMEOUT_MS = 8_000;
+
 router.get('/health', async (req: Request, res: Response) => {
   try {
     // Health check uses default project from env
-    const adoService = new AzureDevOpsService();
+    const adoService = new AzureDevOpsService(undefined, undefined, {
+      socketTimeout: HEALTH_CHECK_SOCKET_TIMEOUT_MS,
+    });
     const healthy = await adoService.healthCheck();
     res.json({ healthy, timestamp: new Date().toISOString() });
   } catch (error: any) {
@@ -4105,12 +4114,13 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       ? req.query.project
       : (restrictedActive ? RESTRICTED_ACCESS_PROJECT : undefined);
 
-    const [permSet, roles, userGroups, whatsNew, changelogPrefs] = await Promise.all([
+    const [permSet, roles, userGroups, whatsNew, changelogPrefs, devAccessAllowlisted] = await Promise.all([
       getUserPermissions(userId, project),
       getUserRoleNames(userId),
       getUserGroupNames(userId),
       evaluateWhatsNewState(userId),
       getChangelogPrefs(userId),
+      email ? isDevAccessAllowlisted(email) : Promise.resolve(false),
     ]);
     if (superAdmin && !roles.includes('admin')) {
       roles.push('admin');
@@ -4127,6 +4137,7 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       groups: userGroups,
       userId,
       isSuperAdmin: superAdmin,
+      devAccessAllowlisted,
       // Legacy compatibility fields — sourced from the same WhatsNewState
       changelogUnread: whatsNew.unread,
       currentChangelogVersion: whatsNew.currentVersion ?? '',
