@@ -48,7 +48,12 @@ TF_VAR_ai_platform_v2_interactive_repo_read_service_token=$(app_secret "$FAST_AP
 TF_VAR_ai_platform_v2_visual_aws_access_key_id=$(app_secret "$VISUAL_APP" aws-access-key-id)
 TF_VAR_ai_platform_v2_visual_aws_secret_access_key=$(app_secret "$VISUAL_APP" aws-secret-access-key)
 TF_VAR_ai_platform_v2_database_url=$(app_secret "$ORCHESTRATOR_APP" database-url)
+TF_VAR_ai_platform_v2_application_insights_connection_string=$(
+  az monitor app-insights component show -g "$RG" -a appi-app-scrum-dev \
+    --query connectionString -o tsv
+)
 export TF_VAR_ai_platform_v2_database_url \
+  TF_VAR_ai_platform_v2_application_insights_connection_string \
   TF_VAR_ai_platform_v2_interactive_redis_key \
   TF_VAR_ai_platform_v2_interactive_callback_token \
   TF_VAR_ai_platform_v2_interactive_repo_read_service_token \

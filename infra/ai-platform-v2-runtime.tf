@@ -311,6 +311,14 @@ resource "azurerm_container_app" "ai_platform_v2_documents" {
           secret_name = "cursor-api-key"
         }
       }
+
+      dynamic "env" {
+        for_each = var.ai_platform_v2_application_insights_connection_string != null && var.ai_platform_v2_application_insights_connection_string != "" ? [1] : []
+        content {
+          name  = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+          value = var.ai_platform_v2_application_insights_connection_string
+        }
+      }
     }
   }
 

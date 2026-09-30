@@ -2,6 +2,8 @@
  * Long-running V2 AI orchestrator process entrypoint.
  * Do not import/start from App Service index.ts — separate Container App only.
  */
+// Initializes Application Insights; load before modules it instruments.
+import { trackEvent } from '../telemetry';
 import { db } from '../../db/drizzle';
 import { runAttemptRepository } from '../aiRunV2/runAttemptRepository';
 import { createUtilizationReader } from './utilizationReader';
@@ -48,27 +50,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  try {
-    // Optional App Insights hook when the host provides trackEvent globally.
-    const insights = (globalThis as { appInsights?: { trackEvent?: unknown } })
-      .appInsights;
-    if (insights && typeof insights.trackEvent === 'function') {
-      const trackEvent = insights.trackEvent as (event: {
-        name: string;
-        properties?: Record<string, string>;
-        measurements?: Record<string, number>;
-      }) => void;
-      setOrchestratorTrackEvent((name, properties, measurements) => {
-        trackEvent({
-          name,
-          properties,
-          measurements,
-        });
-      });
-    }
-  } catch {
-    /* ignore */
-  }
+  setOrchestratorTrackEvent(trackEvent);
 
   const namespace = resolveNamespace();
   const noopBus =

@@ -2,6 +2,8 @@
  * Visual lane worker process (Task 6).
  * Started only as its own container — never from App Service index.ts.
  */
+// Side-effect: initialize Application Insights when the connection string is set.
+import '../telemetry';
 import {
   isAiRunV2VisualSpecification,
   VISUAL_USAGE_FILE_NAME,

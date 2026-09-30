@@ -2,6 +2,8 @@
  * Document lane worker process (Task 6).
  * Started only as its own container — never from App Service index.ts.
  */
+// Side-effect: initialize Application Insights when the connection string is set.
+import '../telemetry';
 import { createWorkerServiceBusClient } from './serviceBusClient';
 import { resolveWorkerEnvironment } from './entrypointSupport';
 import { isAiRunV2DocumentSpecification } from '../../../shared/types/aiRunV2DocumentSpec';
