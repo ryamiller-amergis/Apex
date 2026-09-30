@@ -175,9 +175,10 @@ pdf_blob_container_name = "pdf-artifacts"
 # ai_runs_apex_callback_base_url    = "https://app-scrum-dev.azurewebsites.net"
 
 # ---------------------------------------------------------------------------
-# My Work Cursor worker Job (dev only)
-# Reuses cae-apex-ai-dev, the load-test ACR, and kv-apex-ai-dev. Production is
-# inert even if this switch is copied into a production tfvars file.
+# My Work Cursor worker Job (dev and production)
+# Reuses cae-apex-ai-{environment}, the load-test ACR, and the AI-runs Key
+# Vault. Set the same switch in terraform.prd.tfvars to provision
+# caj-apex-cursor-worker-prd. Left unset, the job is not created.
 #
 # Apex starts one execution and overrides the command to cursor-run-cli.
 # The worker image must contain `agent`, git, and that script.

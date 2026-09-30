@@ -1,14 +1,16 @@
 # Container Apps Job for My Work cloud-agent runs.
 #
-# Dev only. Apex starts one execution per Start cloud agent click and overrides
-# the command to /usr/local/bin/cursor-run-cli. There is no pool controller.
+# Apex starts one execution per Start cloud agent click and overrides the
+# command to /usr/local/bin/cursor-run-cli. There is no pool controller. The
+# job is created only when enable_cursor_pool_workers is true. Resource names
+# still include the environment.
 #
 # The worker image contains the Cursor `agent` CLI and git. The Key Vault
 # secret referenced by local.ai_runs_cursor_api_key_secret_id must contain a
 # Cursor API key the CLI can use.
 
 locals {
-  cursor_pool_enabled         = var.enable_cursor_pool_workers && var.environment == "dev"
+  cursor_pool_enabled         = var.enable_cursor_pool_workers
   cursor_pool_name            = coalesce(var.cursor_pool_name, "apex-my-work")
   cursor_pool_worker_job_name = coalesce(var.cursor_pool_worker_job_name, "caj-apex-cursor-worker-${var.environment}")
   cursor_pool_worker_mi       = coalesce(var.cursor_pool_worker_identity_name, "mi-apex-cursor-worker-${var.environment}")

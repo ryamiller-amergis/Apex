@@ -333,7 +333,7 @@ output "ai_runs_api_app_setting_names" {
 }
 
 # ---------------------------------------------------------------------------
-# My Work Cursor worker Job (null outside enabled dev environments)
+# My Work Cursor worker Job (null while enable_cursor_pool_workers is false)
 # ---------------------------------------------------------------------------
 
 output "cursor_pool_name" {

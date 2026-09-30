@@ -680,11 +680,11 @@ variable "ai_runs_runner_callback_token" {
 }
 
 # ---------------------------------------------------------------------------
-# Cursor self-hosted Team Pool — My Work cloud development (dev only)
+# Cursor worker Job — My Work cloud development (dev and production)
 # ---------------------------------------------------------------------------
 
 variable "enable_cursor_pool_workers" {
-  description = "Provision the My Work Cursor worker Job in cae-apex-ai. Effective only when environment is dev."
+  description = "Provision the My Work Cursor worker Job in cae-apex-ai. Off until set in that environment's tfvars."
   type        = bool
   default     = false
 }
