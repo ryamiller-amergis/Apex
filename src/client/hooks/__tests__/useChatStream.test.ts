@@ -153,6 +153,36 @@ describe('useChatStream', () => {
     expect(result.current.streamingText).toBe('Hello, world');
   });
 
+  it('drains pending live chunks when a durable batch with other boundaries fills the gap', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    act(() => {
+      // Replay after a reconnect delivers one durable batch.
+      lastES!.emit(
+        'message',
+        { type: 'token', text: 'Hello ', streamOffset: 0, streamEndOffset: 6 },
+        'durable-1'
+      );
+      // Live chunks arrive ahead of the buffer.
+      lastES!.emit(
+        'message',
+        { type: 'token', text: 'ld, ', streamOffset: 9, streamEndOffset: 13 },
+        'live-1'
+      );
+      lastES!.emit(
+        'message',
+        { type: 'token', text: 'there', streamOffset: 13, streamEndOffset: 18 },
+        'live-2'
+      );
+      // The next durable batch covers the gap but ends inside a live chunk.
+      lastES!.emit(
+        'message',
+        { type: 'token', text: 'world', streamOffset: 6, streamEndOffset: 11 },
+        'durable-2'
+      );
+    });
+    expect(result.current.streamingText).toBe('Hello world, there');
+  });
+
   it('merges durable offset tokens with dedupe, overlap, and pending gaps', () => {
     expect(
       durableTokenKey('e1', {

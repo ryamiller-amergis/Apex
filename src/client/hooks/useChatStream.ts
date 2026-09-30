@@ -493,16 +493,24 @@ export function useChatStream(
               });
             }
 
-            // Drain any pending chunks that now abut the buffer.
-            for (;;) {
-              const next = pendingOffsetTokensRef.current.get(
-                streamBufferRef.current.length,
-              );
-              if (!next) break;
-              pendingOffsetTokensRef.current.delete(
-                streamBufferRef.current.length,
-              );
-              streamBufferRef.current += next.text;
+            // Drain pending chunks the buffer has reached. Durable batches and
+            // live chunks are cut at different boundaries, so a pending chunk
+            // may start inside text that arrived since; append only its unseen
+            // suffix, and drop chunks the buffer already covers.
+            let drained = true;
+            while (drained) {
+              drained = false;
+              for (const [pendingOffset, pending] of pendingOffsetTokensRef.current) {
+                const bufferLength = streamBufferRef.current.length;
+                if (pendingOffset > bufferLength) continue;
+                pendingOffsetTokensRef.current.delete(pendingOffset);
+                if (pendingOffset + pending.text.length > bufferLength) {
+                  streamBufferRef.current += pending.text.slice(
+                    bufferLength - pendingOffset,
+                  );
+                }
+                drained = true;
+              }
             }
             setStreamingText(streamBufferRef.current);
           }
