@@ -1870,7 +1870,7 @@ export function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter 
             .set({ status: 'draft', updatedAt: new Date().toISOString() })
             .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')));
         }
-        return;
+        return true;
       }
       // Persist score/status only while still validating so a later 0%
       // placeholder cannot clobber a completed post-run result. A usable
@@ -1910,7 +1910,7 @@ export function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter 
         .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')))
         .returning({ id: prds.id });
       if (written.length === 0) {
-        if (isUnusablePlaceholder) return;
+        if (isUnusablePlaceholder) return true;
         await db.update(prds)
           .set({
             validationScorecard: stamped,
@@ -1936,6 +1936,7 @@ export function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter 
           console.error(`[prdValidation] Failed to notify approvers (prdId=${prd.id})`, err),
         );
       }
+      return true;
     },
     updateDbForValidationTimeout: async () => undefined,
     updateDbForValidationError: async () => undefined,

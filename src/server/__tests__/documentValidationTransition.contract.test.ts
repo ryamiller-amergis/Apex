@@ -106,6 +106,7 @@ function createHarness(kind: DocumentKind, currentThreadId = 'thread-current') {
           : 'pending_review';
       snapshot.score = Math.round(scorecard.overall_score);
       snapshot.eventState.push(`${kind}:persisted`);
+      return true;
     },
     updateDbForValidationTimeout: async () => undefined,
     updateDbForValidationError: async () => undefined,

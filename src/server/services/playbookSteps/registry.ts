@@ -126,6 +126,7 @@ const NOTIFY_INPUT_SCHEMA = z.object({
   body: z.string().optional(),
   link: z.string().optional(),
   recipientUserId: z.string().optional(),
+  recordNotification: z.boolean().optional(),
 });
 
 const NOTIFY_OUTPUT_SCHEMA = z.object({

@@ -1825,7 +1825,7 @@ async function applyDesignDocValidationResult(
   scorecard: ValidationScorecard,
   reportMd?: string,
   validationThreadId?: string,
-): Promise<void> {
+): Promise<boolean> {
   const newStatus: DesignDocStatus = 'pending_review';
   const effectiveReportMd = reportMd ?? generateFallbackReport(scorecard);
   const updates: Partial<typeof designDocs.$inferInsert> = {
@@ -1841,15 +1841,16 @@ async function applyDesignDocValidationResult(
   // validating, including one an author cancelled. Cancel keeps the thread id
   // and sets status back to draft, so both predicates belong on the write.
   if (scorecard.slug === 'validation-unusable') {
-    if (!validationThreadId) return;
-    await db.update(designDocs)
+    if (!validationThreadId) return false;
+    const written = await db.update(designDocs)
       .set(updates)
       .where(and(
         eq(designDocs.id, designDocId),
         eq(designDocs.status, 'validating'),
         eq(designDocs.validationThreadId, validationThreadId),
-      ));
-    return;
+      ))
+      .returning({ id: designDocs.id });
+    return written.length > 0;
   }
 
   await db.update(designDocs).set(updates).where(eq(designDocs.id, designDocId));
@@ -1867,6 +1868,7 @@ async function applyDesignDocValidationResult(
       console.error(`[syncValidationResult] Failed to notify approvers (docId=${designDocId})`, err),
     );
   }
+  return true;
 }
 
 /**

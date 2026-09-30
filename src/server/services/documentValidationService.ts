@@ -38,7 +38,7 @@ export interface DocumentValidationAdapter {
     scorecard: ValidationScorecard,
     reportMd: string,
     validationThreadId: string,
-  ): Promise<void>;
+  ): Promise<boolean>;
   updateDbForValidationTimeout(): Promise<void>;
   updateDbForValidationError(): Promise<void>;
   isCurrentValidationThread(threadId: string): Promise<boolean>;
@@ -113,11 +113,18 @@ export async function ingestValidationScorecard(
     scorecard = buildUnusableValidationScorecard(outcome.reason);
   }
 
-  await adapter.updateDbForValidationResult(
+  const recorded = await adapter.updateDbForValidationResult(
     scorecard,
     reportMd ?? generateFallbackReport(scorecard),
     validationThreadId,
   );
+  if (!recorded) {
+    console.log(
+      `[validationTransition] Not recorded — documentId=${adapter.getDocumentId()} ` +
+      `threadId=${validationThreadId} outcome=${outcome.kind}`,
+    );
+    return { disposition: 'discarded_stale' };
+  }
   if (adapter.onValidationComplete) {
     await adapter.onValidationComplete(scorecard);
   }

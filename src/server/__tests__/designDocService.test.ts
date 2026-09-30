@@ -1157,15 +1157,17 @@ describe('syncValidationResult', () => {
 describe('unusable design doc validation results', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  function mockUpdate() {
-    const whereMock = jest.fn().mockResolvedValue(undefined);
+  function mockUpdate(writtenIds: Array<{ id: string }>) {
+    const whereMock = jest.fn().mockReturnValue({
+      returning: jest.fn().mockResolvedValue(writtenIds),
+    });
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
     return { setMock, whereMock };
   }
 
   it('writes a timeout only while that validation thread is still validating', async () => {
-    const { setMock, whereMock } = mockUpdate();
+    const { setMock, whereMock } = mockUpdate([{ id: 'doc-1' }]);
     mockDb.query.designDocs.findFirst.mockResolvedValue({ validationThreadId: 'thread-9' });
 
     const result = await ingestValidationScorecard(
@@ -1187,16 +1189,17 @@ describe('unusable design doc validation results', () => {
     expect(mockNotifyApproversDocumentReady).not.toHaveBeenCalled();
   });
 
-  it('does not rewrite a cancelled design doc when the same thread finishes late', async () => {
-    const { whereMock } = mockUpdate();
+  it('does not report a cancelled design doc as applied when the same thread finishes late', async () => {
+    const { whereMock } = mockUpdate([]);
     mockDb.query.designDocs.findFirst.mockResolvedValue({ validationThreadId: 'thread-9' });
 
-    await ingestValidationScorecard(
+    const result = await ingestValidationScorecard(
       createDesignDocValidationAdapter('doc-1'),
       'thread-9',
       { kind: 'unusable', reason: 'No scorecard' },
     );
 
+    expect(result.disposition).toBe('discarded_stale');
     expect(whereMock).toHaveBeenCalledWith(and(
       eq(designDocs.id, 'doc-1'),
       eq(designDocs.status, 'validating'),

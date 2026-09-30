@@ -79,6 +79,20 @@ export function buildDesignDocValidationPlaybookGraph(
         },
       },
       {
+        id: 'route-landed',
+        stepType: 'branch',
+        config: {
+          condition: {
+            sourceStepId: 'ingest',
+            field: 'outcome',
+            operator: 'eq',
+            value: 'applied',
+          },
+          whenTrue: 'landed',
+          whenFalse: 'skipped',
+        },
+      },
+      {
         id: 'route',
         stepType: 'branch',
         config: {
@@ -111,10 +125,21 @@ export function buildDesignDocValidationPlaybookGraph(
           recipientUserId: '${input.ownerUserId}',
         },
       },
+      {
+        id: 'not-recorded',
+        stepType: 'notify',
+        config: {
+          recordNotification: false,
+          title: 'Validation result was not recorded',
+          body: 'The design doc was no longer validating, so this run did not change it.',
+        },
+      },
     ],
     edges: [
       { from: 'score', to: 'ingest' },
-      { from: 'ingest', to: 'route' },
+      { from: 'ingest', to: 'route-landed' },
+      { from: 'route-landed', to: 'route', condition: 'landed' },
+      { from: 'route-landed', to: 'not-recorded', condition: 'skipped' },
       { from: 'route', to: 'approve-ready', condition: 'ready' },
       { from: 'route', to: 'notify-revision', condition: 'revision' },
     ],
