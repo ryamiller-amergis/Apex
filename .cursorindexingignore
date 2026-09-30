@@ -1,0 +1,5 @@
+# Not indexed or searched by default, but the agent can still open these if you ask.
+package-lock.json
+design-docs/
+.cursor/plans/
+context.md

@@ -402,6 +402,15 @@ export const restrictedUserAccessRelations = relations(restrictedUserAccess, ({ 
   }),
 }));
 
+// Emails a platform admin has approved to sign in on the dev site.
+// Platform admins themselves are admitted from the super-admin list and are not stored here.
+export const devEnvAllowlist = pgTable('dev_env_allowlist', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email').notNull().unique(),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
 export const projectAccessRequests = pgTable('project_access_requests', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),

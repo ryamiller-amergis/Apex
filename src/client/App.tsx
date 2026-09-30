@@ -9,6 +9,7 @@ import { Changelog } from './components/Changelog';
 import { GuidedWalkthroughHost } from './components/GuidedWalkthroughHost';
 import { WhatsNewBanner } from './components/WhatsNewBanner';
 import { Login } from './components/Login';
+import { DevEnvAccessDenied } from './components/DevEnvAccessDenied';
 import { ViewErrorFallback } from './components/ViewErrorFallback';
 import { ViewSkeleton } from './components/ViewSkeleton';
 import { AppHeader } from './components/AppHeader';
@@ -247,6 +248,7 @@ function App() {
     isInAnyGroup,
     userId,
     isSuperAdmin,
+    devAccessDenied,
     isRestricted,
     restrictedModules,
     permissionsLoaded,
@@ -290,6 +292,7 @@ function App() {
     handleCancelDueDateChange,
     handleFieldUpdate,
     betaAnnouncementDismissed,
+    devAccessAllowlisted,
     handleDismissBetaAnnouncement,
   } = useAppShell({ workItemsEnabled: needsWorkItems });
 
@@ -615,6 +618,7 @@ function App() {
 
   if (isAuthenticated === null) return <div className="app-loading"><ApexLoader size={80} /></div>;
   if (!isAuthenticated) return <Login />;
+  if (devAccessDenied) return <DevEnvAccessDenied onLogout={() => { void handleLogout(); }} />;
 
   if (currentView === 'project-selector') {
     // Restricted users never see the project picker — show a brief loader while redirecting.
@@ -1492,7 +1496,7 @@ function App() {
           whatsNewSettled={whatsNewAutomaticOverlaySettled}
           whatsNewBlocksWalkthrough={whatsNewBlocksAutomaticWalkthrough}
         />
-        {showBetaAnnouncement && !(isSuperAdmin && betaAnnouncementDismissed) && (
+        {permissionsLoaded && showBetaAnnouncement && !devAccessAllowlisted && !(isSuperAdmin && betaAnnouncementDismissed) && (
           // data-testid-exempt — BetaAnnouncementModal API has no data-testid prop
           <BetaAnnouncementModal
             isSuperAdmin={isSuperAdmin}
