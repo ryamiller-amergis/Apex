@@ -91,20 +91,6 @@ describe('VT-17 — the durable row is the step\u2019s artifact', () => {
 
     expect(sendTeamsNotification).toHaveBeenCalledWith('someone-else', expect.anything());
   });
-
-  it('completes without a notification row when recording is off', async () => {
-    const outcome = await executeNotifyStep(contextWith({
-      title: 'Validation result was not recorded',
-      recordNotification: false,
-    }));
-
-    expect(outcome).toMatchObject({
-      kind: 'completed',
-      output: { notificationId: 'not-recorded', recipientUserId: INITIATOR },
-    });
-    expect(insertReturning).not.toHaveBeenCalled();
-    expect(sendTeamsNotification).not.toHaveBeenCalled();
-  });
 });
 
 describe('VT-18 — delivery failure is not step failure', () => {

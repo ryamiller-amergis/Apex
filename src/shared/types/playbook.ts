@@ -412,11 +412,6 @@ export interface NotifyStepConfig {
   link?: string;
   /** Defaults to the run initiator, who is the only identity Phase 0 can resolve (BR-003). */
   recipientUserId?: string;
-  /**
-   * False completes the step without writing a notification. Used when a branch
-   * needs a terminal arm that must not tell anyone the document changed.
-   */
-  recordNotification?: boolean;
 }
 
 export interface IngestArtifactStepConfig {

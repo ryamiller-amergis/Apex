@@ -55,17 +55,13 @@ describe('FEAT-014 design-doc validation Playbook', () => {
     expect(graph.nodes.map(({ id, stepType }) => ({ id, stepType }))).toEqual([
       { id: 'score', stepType: 'cursor-agent' },
       { id: 'ingest', stepType: 'ingest-artifact' },
-      { id: 'route-landed', stepType: 'branch' },
       { id: 'route', stepType: 'branch' },
       { id: 'approve-ready', stepType: 'approval-gate' },
       { id: 'notify-revision', stepType: 'notify' },
-      { id: 'not-recorded', stepType: 'notify' },
     ]);
     expect(graph.edges).toEqual([
       { from: 'score', to: 'ingest' },
-      { from: 'ingest', to: 'route-landed' },
-      { from: 'route-landed', to: 'route', condition: 'landed' },
-      { from: 'route-landed', to: 'not-recorded', condition: 'skipped' },
+      { from: 'ingest', to: 'route' },
       { from: 'route', to: 'approve-ready', condition: 'ready' },
       { from: 'route', to: 'notify-revision', condition: 'revision' },
     ]);
@@ -77,19 +73,9 @@ describe('FEAT-014 design-doc validation Playbook', () => {
     expect(graph.nodes[2].config).toEqual(expect.objectContaining({
       condition: expect.objectContaining({
         sourceStepId: 'ingest',
-        field: 'outcome',
-        value: 'applied',
-      }),
-    }));
-    expect(graph.nodes[3].config).toEqual(expect.objectContaining({
-      condition: expect.objectContaining({
-        sourceStepId: 'ingest',
         field: 'isReady',
         value: true,
       }),
-    }));
-    expect(graph.nodes[6].config).toEqual(expect.objectContaining({
-      recordNotification: false,
     }));
     expect(() => assertGraphWithinGuards(graph)).not.toThrow();
   });

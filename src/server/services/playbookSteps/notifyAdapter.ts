@@ -34,15 +34,6 @@ export async function executeNotifyStep(
    */
   const recipientUserId = config.recipientUserId ?? context.initiatorUserId;
 
-  if (config.recordNotification === false) {
-    const output = parseStepOutput(STEP_TYPE, {
-      notificationId: 'not-recorded',
-      recipientUserId,
-    });
-    await completeStepRun({ stepRunId: context.stepRunId, output });
-    return { kind: 'completed', output };
-  }
-
   const notification = await createNotification(recipientUserId, {
     // 'background' rather than 'system': this row is produced by background workflow execution,
     // which is what the existing type means, and it inherits the user's preference for that class.

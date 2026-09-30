@@ -1209,7 +1209,7 @@ describe('unusable design doc validation results', () => {
   });
 
   it('drops a late result once another validation thread is current', async () => {
-    mockUpdate();
+    mockUpdate([]);
     mockDb.query.designDocs.findFirst.mockResolvedValue({ validationThreadId: 'thread-new' });
 
     const result = await ingestValidationScorecard(
@@ -1888,7 +1888,9 @@ describe('startValidationWatcher', () => {
   });
 
   it('records the missing scorecard once the workspace is readable', async () => {
-    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const whereMock = jest.fn().mockReturnValue({
+      returning: jest.fn().mockResolvedValue([{ id: 'doc-noscorecard' }]),
+    });
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
     // Ingest discards a scorecard when this thread is no longer the document's

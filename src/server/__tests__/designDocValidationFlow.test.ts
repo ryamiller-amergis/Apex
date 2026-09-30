@@ -231,7 +231,11 @@ function makeSelectChain(rows: any[] = []) {
 function makeUpdateChain() {
   const chain: any = {};
   chain.set = jest.fn().mockReturnValue(chain);
-  chain.where = jest.fn().mockResolvedValue(undefined);
+  chain.where = jest.fn().mockImplementation(() => {
+    const result: any = Promise.resolve(undefined);
+    result.returning = jest.fn().mockResolvedValue([{ id: 'row-1' }]);
+    return result;
+  });
   return chain;
 }
 
