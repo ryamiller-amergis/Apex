@@ -143,6 +143,9 @@ jest.mock('../services/reviewCommentService', () => ({
   getUnresolvedCount: jest.fn().mockResolvedValue(0),
 }));
 
+import { and, eq } from 'drizzle-orm';
+import { designDocs } from '../db/schema';
+import { ingestValidationScorecard } from '../services/documentValidationService';
 import {
   createDesignDoc,
   listDesignDocs,
@@ -155,6 +158,7 @@ import {
   deleteDesignDoc,
   syncDesignDocContent,
   syncValidationResult,
+  createDesignDocValidationAdapter,
   markValidationReady,
   overrideDesignDocValidation,
   startDesignDocWatcher,
@@ -1147,6 +1151,73 @@ describe('syncValidationResult', () => {
     const callArg = setMock.mock.calls[0][0];
     expect(typeof callArg.validationReportMd).toBe('string');
     expect(callArg.validationReportMd).toContain('Validation Report');
+  });
+});
+
+describe('unusable design doc validation results', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  function mockUpdate() {
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+    return { setMock, whereMock };
+  }
+
+  it('writes a timeout only while that validation thread is still validating', async () => {
+    const { setMock, whereMock } = mockUpdate();
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ validationThreadId: 'thread-9' });
+
+    const result = await ingestValidationScorecard(
+      createDesignDocValidationAdapter('doc-1'),
+      'thread-9',
+      { kind: 'timeout', reason: 'Validation timed out' },
+    );
+
+    expect(result.disposition).toBe('applied');
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'pending_review',
+      validationScore: 0,
+    }));
+    expect(whereMock).toHaveBeenCalledWith(and(
+      eq(designDocs.id, 'doc-1'),
+      eq(designDocs.status, 'validating'),
+      eq(designDocs.validationThreadId, 'thread-9'),
+    ));
+    expect(mockNotifyApproversDocumentReady).not.toHaveBeenCalled();
+  });
+
+  it('does not rewrite a cancelled design doc when the same thread finishes late', async () => {
+    const { whereMock } = mockUpdate();
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ validationThreadId: 'thread-9' });
+
+    await ingestValidationScorecard(
+      createDesignDocValidationAdapter('doc-1'),
+      'thread-9',
+      { kind: 'unusable', reason: 'No scorecard' },
+    );
+
+    expect(whereMock).toHaveBeenCalledWith(and(
+      eq(designDocs.id, 'doc-1'),
+      eq(designDocs.status, 'validating'),
+      eq(designDocs.validationThreadId, 'thread-9'),
+    ));
+    expect(mockNotifyApproversDocumentReady).not.toHaveBeenCalled();
+  });
+
+  it('drops a late result once another validation thread is current', async () => {
+    mockUpdate();
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ validationThreadId: 'thread-new' });
+
+    const result = await ingestValidationScorecard(
+      createDesignDocValidationAdapter('doc-1'),
+      'thread-9',
+      { kind: 'timeout', reason: 'Validation timed out' },
+    );
+
+    expect(result.disposition).toBe('discarded_stale');
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(mockNotifyApproversDocumentReady).not.toHaveBeenCalled();
   });
 });
 

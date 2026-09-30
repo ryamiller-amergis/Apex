@@ -34,7 +34,11 @@ export interface DocumentValidationAdapter {
   getSkillPath(skillConfig: NonNullable<Awaited<ReturnType<typeof getSkillConfig>>>): string | null | undefined;
   getModel(skillConfig: NonNullable<Awaited<ReturnType<typeof getSkillConfig>>>, globalModel: string): string;
   updateDbForValidationStart(threadId: string): Promise<void>;
-  updateDbForValidationResult(scorecard: ValidationScorecard, reportMd: string): Promise<void>;
+  updateDbForValidationResult(
+    scorecard: ValidationScorecard,
+    reportMd: string,
+    validationThreadId: string,
+  ): Promise<void>;
   updateDbForValidationTimeout(): Promise<void>;
   updateDbForValidationError(): Promise<void>;
   isCurrentValidationThread(threadId: string): Promise<boolean>;
@@ -112,6 +116,7 @@ export async function ingestValidationScorecard(
   await adapter.updateDbForValidationResult(
     scorecard,
     reportMd ?? generateFallbackReport(scorecard),
+    validationThreadId,
   );
   if (adapter.onValidationComplete) {
     await adapter.onValidationComplete(scorecard);

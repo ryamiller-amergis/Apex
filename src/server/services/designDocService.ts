@@ -1594,8 +1594,8 @@ export function createDesignDocValidationAdapter(
         })
         .where(eq(designDocs.id, designDocId));
     },
-    updateDbForValidationResult: (scorecard, reportMd) =>
-      applyDesignDocValidationResult(designDocId, scorecard, reportMd),
+    updateDbForValidationResult: (scorecard, reportMd, validationThreadId) =>
+      applyDesignDocValidationResult(designDocId, scorecard, reportMd, validationThreadId),
     updateDbForValidationTimeout: async () => undefined,
     updateDbForValidationError: async () => undefined,
     isCurrentValidationThread: async (threadId: string) => {
@@ -1824,6 +1824,7 @@ async function applyDesignDocValidationResult(
   designDocId: string,
   scorecard: ValidationScorecard,
   reportMd?: string,
+  validationThreadId?: string,
 ): Promise<void> {
   const newStatus: DesignDocStatus = 'pending_review';
   const effectiveReportMd = reportMd ?? generateFallbackReport(scorecard);
@@ -1835,6 +1836,21 @@ async function applyDesignDocValidationResult(
     updatedAt: new Date().toISOString(),
   };
   if (newStatus) updates.status = newStatus;
+
+  // A timeout or missing scorecard must not reopen a document that left
+  // validating, including one an author cancelled. Cancel keeps the thread id
+  // and sets status back to draft, so both predicates belong on the write.
+  if (scorecard.slug === 'validation-unusable') {
+    if (!validationThreadId) return;
+    await db.update(designDocs)
+      .set(updates)
+      .where(and(
+        eq(designDocs.id, designDocId),
+        eq(designDocs.status, 'validating'),
+        eq(designDocs.validationThreadId, validationThreadId),
+      ));
+    return;
+  }
 
   await db.update(designDocs).set(updates).where(eq(designDocs.id, designDocId));
 
