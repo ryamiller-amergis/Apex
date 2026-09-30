@@ -16,6 +16,35 @@ describe('createInteractiveDurableStreamBatcher', () => {
     jest.useRealTimers();
   });
 
+  it('keeps text pushed while a persist is in flight', async () => {
+    const persisted: Array<{ text: string; streamOffset: number; streamEndOffset: number }> = [];
+    let releaseFirst!: () => void;
+    const persist = jest.fn(async ({ event }) => {
+      persisted.push(event);
+      if (persisted.length === 1) {
+        await new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+      }
+    });
+    const batcher = createInteractiveDurableStreamBatcher({ persist });
+
+    void batcher.push('hello');
+    await jest.advanceTimersByTimeAsync(INTERACTIVE_DURABLE_STREAM_INTERVAL_MS);
+    expect(persist).toHaveBeenCalledTimes(1);
+
+    const lateParts = [batcher.push(' wide'), batcher.push(' world')];
+    releaseFirst();
+    await Promise.all(lateParts);
+    const flushed = batcher.flush();
+    await jest.advanceTimersByTimeAsync(2 * INTERACTIVE_DURABLE_STREAM_INTERVAL_MS);
+    await flushed;
+
+    expect(persisted.map((event) => event.text).join('')).toBe('hello wide world');
+    expect(persisted[1]).toMatchObject({ streamOffset: 5, streamEndOffset: 16 });
+    expect(batcher.nextOffset).toBe(16);
+  });
+
   it('does not persist four pushes inside 249 ms', async () => {
     const persist = jest.fn().mockResolvedValue(undefined);
     const batcher = createInteractiveDurableStreamBatcher({

@@ -97,7 +97,7 @@ export function createInteractiveDurableStreamBatcher(
 
   const emitOneChunk = async (): Promise<boolean> => {
     if (!buffer) return false;
-    const { chunk, rest } = takeUtf8Prefix(buffer, maxBytes);
+    const { chunk } = takeUtf8Prefix(buffer, maxBytes);
     if (!chunk) return false;
     const streamOffset = nextOffset;
     const streamEndOffset = streamOffset + chunk.length;
@@ -112,8 +112,9 @@ export function createInteractiveDurableStreamBatcher(
       },
     });
     // Advance only after a successful persist so failures neither drop text
-    // nor create offset holes.
-    buffer = rest;
+    // nor create offset holes. Text pushed while the persist was in flight is
+    // already appended to `buffer`, so remove only the persisted chunk.
+    buffer = buffer.slice(chunk.length);
     nextOffset = streamEndOffset;
     lastWriteAt = now();
     return true;
