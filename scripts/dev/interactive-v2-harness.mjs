@@ -58,9 +58,11 @@ const SCENARIOS = [
   {
     name: 'home-reconnect',
     expectClass: undefined,
-    text: 'In about 150 words, explain how the Apex Agent Home page works for a new user.',
+    text:
+      'In about 400 words, explain how the Apex Agent Home page works for a new user, '
+      + 'with a short section per feature.',
     expectText: /\S/,
-    reconnectAfterTokens: 2,
+    reconnectAfterTokens: 5,
     firstActivityTargetMs: 10_000,
     completionTargetMs: 90_000,
     timeoutMs: 360_000,
@@ -179,10 +181,20 @@ function parseSse(buffer, onEvent) {
 /** Rebuilds streamed text by offset, as the client does, counting anomalies. */
 function createTokenAssembler() {
   const state = { text: '', pending: new Map(), duplicates: 0, conflicts: 0, withoutOffset: 0 };
+  // Mirrors useChatStream: a pending chunk the buffer has reached contributes
+  // only its unseen suffix, since durable and live chunks use different boundaries.
   const drain = () => {
-    for (let next = state.pending.get(state.text.length); next !== undefined; next = state.pending.get(state.text.length)) {
-      state.pending.delete(state.text.length);
-      state.text += next;
+    let drained = true;
+    while (drained) {
+      drained = false;
+      for (const [offset, text] of state.pending) {
+        if (offset > state.text.length) continue;
+        state.pending.delete(offset);
+        if (offset + text.length > state.text.length) {
+          state.text += text.slice(state.text.length - offset);
+        }
+        drained = true;
+      }
     }
   };
   return {
@@ -312,6 +324,16 @@ async function runScenario(baseKickoff, scenario) {
           case 'token':
             mark('firstToken');
             mark('firstActivity');
+            if (process.env.HARNESS_TRACE_TOKENS) {
+              (result.tokenTrace ??= []).push({
+                connection: result.reconnects,
+                offset: event.streamOffset,
+                end: event.streamEndOffset,
+                length: event.text.length,
+                hasId: Boolean(id),
+                text: event.text,
+              });
+            }
             tokens.add(event);
             tokenCount += 1;
             if (
@@ -372,7 +394,8 @@ async function runScenario(baseKickoff, scenario) {
     conflicts: tokens.state.conflicts,
     withoutOffset: tokens.state.withoutOffset,
     pending: tokens.state.pending.size,
-    matchesFinalMessage: tokens.state.text.trim() === result.finalText.trim(),
+    // The saved answer omits narration streamed before the last tool call.
+    endsWithFinalMessage: tokens.state.text.trim().endsWith(result.finalText.trim()),
   };
   return result;
 }
@@ -398,8 +421,8 @@ function evaluate(result, scenario) {
     if (result.reconnects !== 1) problems.push('stream was not reconnected mid-answer');
     if (result.tokens.conflicts > 0) problems.push(`${result.tokens.conflicts} conflicting token chunks`);
     if (result.tokens.pending > 0) problems.push(`${result.tokens.pending} token chunks never filled a gap`);
-    if (!result.error && !result.tokens.matchesFinalMessage) {
-      problems.push('streamed text does not match the final message');
+    if (!result.error && !result.tokens.endsWithFinalMessage) {
+      problems.push('streamed text does not end with the final message');
     }
   }
   return problems;
@@ -428,6 +451,7 @@ async function main() {
       ...(scenario.reconnectAfterTokens
         ? { reconnects: result.reconnects, resumedFrom: result.resumedFrom, tokens: result.tokens }
         : {}),
+      ...(result.tokenTrace ? { tokenTrace: result.tokenTrace, finalText: result.finalText } : {}),
       answerPreview: result.finalText.slice(0, 160),
     }, null, 2));
   }
