@@ -17,9 +17,13 @@ jest.mock('../db/drizzle', () => ({
       rfpRequests: { findFirst: jest.fn() },
       rfpEvaluations: { findFirst: jest.fn(), findMany: jest.fn() },
       rfpProposalJobs: { findFirst: jest.fn() },
+      rfpAttachments: { findMany: jest.fn(), findFirst: jest.fn() },
     },
     insert: jest.fn(() => ({
       values: mockInsertValues,
+    })),
+    delete: jest.fn(() => ({
+      where: jest.fn().mockResolvedValue(undefined),
     })),
     update: jest.fn(() => ({
       set: mockUpdateSet,
@@ -141,6 +145,8 @@ beforeEach(() => {
   thenableInsert([REQUEST_ROW]);
   mockedDb.query.rfpRequests.findFirst.mockResolvedValue(REQUEST_ROW);
   mockedDb.query.rfpEvaluations.findFirst.mockResolvedValue(null);
+  mockedDb.query.rfpAttachments.findMany.mockResolvedValue([]);
+  mockedDb.delete.mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) });
   mockedGetUserPermissions.mockResolvedValue(new Set(['rfp-intake:manage']));
 });
 
@@ -189,6 +195,23 @@ describe('createRequest', () => {
     expect(created.architecture).toBeNull();
     expect(created.proposal).toBeNull();
     expect(created.approval).toBeNull();
+  });
+
+  it('deletes the request and skips evaluation when attachment persist fails', async () => {
+    mockedDb.query.rfpAttachments.findMany.mockRejectedValue(new Error('ENOSPC'));
+    const mockDeleteWhere = jest.fn().mockResolvedValue(undefined);
+    mockedDb.delete.mockReturnValue({ where: mockDeleteWhere });
+
+    await expect(createRequest('owner-1', INTAKE, [{
+      filename: 'spec.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 4,
+      buffer: Buffer.from('%PDF'),
+    }])).rejects.toThrow('ENOSPC');
+
+    expect(mockedAutoStart).not.toHaveBeenCalled();
+    expect(mockedDb.delete).toHaveBeenCalled();
+    expect(mockDeleteWhere).toHaveBeenCalled();
   });
 });
 

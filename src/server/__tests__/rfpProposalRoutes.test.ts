@@ -125,7 +125,7 @@ describe('POST /requests new intake fields', () => {
       stakeholder: 'Benefits Administration',
       expectedUsers: 'medium',
       aiInApp: 'yes',
-    }));
+    }), []);
   });
 });
 
