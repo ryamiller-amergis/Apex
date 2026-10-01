@@ -151,9 +151,11 @@ export function createGroundedRepositoryCheckout(
     positiveNumberFromEnv('AI_RUNS_INTERACTIVE_CHECKOUT_DISK_BUDGET_BYTES', DEFAULT_DISK_BUDGET_BYTES);
 
   const baseRestores = new Map<string, Promise<BaseOutcome>>();
-  // Estimated bytes on disk: a base holds the bundle's objects; a worktree's
-  // files are estimated at the same size.
+  // Estimated bytes on disk: a base holds the bundle's objects; a worktree
+  // holds the commit's uncompressed files, which for a large repository can be
+  // many times the bundle size.
   const baseBytes = new Map<string, number>();
+  const worktreeSizeByBase = new Map<string, number>();
   const worktreeBytes = new Map<string, number>();
   const worktreeBase = new Map<string, string>();
   const baseLastUsed = new Map<string, number>();
@@ -172,6 +174,7 @@ export function createGroundedRepositoryCheckout(
       baseBytes.delete(basePath);
       baseLastUsed.delete(basePath);
       baseRestores.delete(basePath);
+      worktreeSizeByBase.delete(basePath);
       await rm(basePath, { recursive: true, force: true }).catch(() => {});
     }
   }
@@ -182,6 +185,21 @@ export function createGroundedRepositoryCheckout(
       'apex-interactive-repo',
       `${bundleKey(identity).replace(/\.bundle$/, '')}.git`,
     );
+
+  async function worktreeBytesFor(basePath: string, sha: string): Promise<number> {
+    const known = worktreeSizeByBase.get(basePath);
+    if (known !== undefined) return known;
+    const listing = await runGit(['-C', basePath, 'ls-tree', '-r', '-l', '--full-tree', sha]);
+    let fileBytes = 0;
+    for (const line of listing.split('\n')) {
+      // "<mode> <type> <object> <size>\t<path>"; submodules report "-".
+      const size = Number(line.split(/\s+/)[3]);
+      if (Number.isFinite(size)) fileBytes += size;
+    }
+    const bytes = Math.max(fileBytes, baseBytes.get(basePath) ?? 0);
+    worktreeSizeByBase.set(basePath, bytes);
+    return bytes;
+  }
 
   async function restoreBase(
     container: ContainerClient,
@@ -284,7 +302,7 @@ export function createGroundedRepositoryCheckout(
         const outcome = await restore;
         if (outcome.status !== 'ready') return unavailable(outcome.reason);
 
-        const worktreeSize = baseBytes.get(basePath) ?? 0;
+        const worktreeSize = await worktreeBytesFor(basePath, identity.sha);
         await evictIdleBases(worktreeSize, basePath);
         if (estimatedBytes() + worktreeSize > diskBudgetBytes) return unavailable('disk-budget');
 

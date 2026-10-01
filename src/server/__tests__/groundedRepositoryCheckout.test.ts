@@ -227,6 +227,36 @@ describe('grounded repository checkout for durable interactive turns', () => {
     expect(git(threadA, 'rev-parse', 'HEAD')).toBe(sha);
   });
 
+  it('budgets a working copy at its real file size, not the compressed bundle size', async () => {
+    const source = path.join(root, 'compressible-source');
+    execFileSync('git', ['init', '-q', source]);
+    git(source, 'config', 'user.email', 'test@example.com');
+    git(source, 'config', 'user.name', 'Test');
+    await writeFile(path.join(source, 'large.txt'), 'a'.repeat(1024 * 1024));
+    git(source, 'add', '.');
+    git(source, 'commit', '-q', '-m', 'large');
+    const largeSha = git(source, 'rev-parse', 'HEAD');
+    const largeBundle = path.join(root, 'compressible.bundle');
+    git(source, 'bundle', 'create', largeBundle, 'HEAD');
+    const bundleSize = (await stat(largeBundle)).size;
+    const key = bundleKey(bundleIdentityForGrounding(grounding(largeSha)));
+    const { container } = containerServing([key], () => largeBundle);
+    const checkout = createGroundedRepositoryCheckout({
+      getContainerClient: () => container,
+      cacheRoot: path.join(root, 'cache-real-size'),
+      // Enough for the restore and a worktree estimated at the bundle size.
+      diskBudgetBytes: 4 * bundleSize,
+    });
+
+    await expect(
+      checkout.checkout(
+        grounding(largeSha),
+        path.join(root, 'threads', 'real-size'),
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ status: 'unavailable', reason: 'disk-budget' });
+  }, 30_000);
+
   it('reports not-configured when no grounding storage is set', async () => {
     const checkout = createGroundedRepositoryCheckout({
       getContainerClient: () => null,
