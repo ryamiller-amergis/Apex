@@ -33,6 +33,7 @@ import {
   listRequestableProjectsForUser,
 } from '../services/projectAccessRequestService';
 import { getUserProjects } from '../services/adoMembershipService';
+import { listArchivedIntakeProjectNames } from '../services/rfpProposalService';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 import { getUserEmail } from '../utils/requestUser';
 import type { CreateProjectAccessRequestsRequest } from '../../shared/types/platformAdmin';
@@ -110,8 +111,14 @@ function isStringArrayOfNonEmptyItems(value: unknown): value is string[] {
 //   2. ADO team membership (auto-detected via Teams/Members API)
 router.get('/projects', async (req: Request, res: Response) => {
   try {
+    const archived = new Set(
+      (await listArchivedIntakeProjectNames()).map((name) => name.toLowerCase()),
+    );
+    const visible = <T extends { name: string }>(projects: T[]): T[] =>
+      projects.filter((project) => !archived.has(project.name.toLowerCase()));
+
     if (isSuperAdminRequest(req)) {
-      res.json(await listProjectCatalog());
+      res.json(visible(await listProjectCatalog()));
       return;
     }
 
@@ -135,7 +142,7 @@ router.get('/projects', async (req: Request, res: Response) => {
     }
 
     const catalog = await listProjectCatalog();
-    res.json(filterProjectCatalogByNames(catalog, merged));
+    res.json(visible(filterProjectCatalogByNames(catalog, merged)));
   } catch (error: any) {
     console.error('Error fetching ADO projects:', error);
     res.status(500).json({ error: 'Failed to fetch projects' });
@@ -4024,7 +4031,7 @@ router.post('/ai-capability-baseline/auto-capture', async (req: Request, res: Re
 // ensureAuthenticated is applied upstream in index.ts for all /api routes.
 
 import { attachPermissions } from '../middleware/rbac';
-import { getUserPermissions, getUserRoleNames, getChangelogPrefs, updateChangelogPrefs } from '../services/rbacService';
+import { getUserPermissions, getUserRoleNames } from '../services/rbacService';
 import { getUserGroupNames } from '../services/groupService';
 import { getMenuConfig } from '../services/menuSettingsService';
 import { DEFAULT_ENABLED_MENU_VIEWS } from '../../shared/types/menuSettings';
@@ -4076,12 +4083,11 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       ? req.query.project
       : (restrictedActive ? RESTRICTED_ACCESS_PROJECT : undefined);
 
-    const [permSet, roles, userGroups, whatsNew, changelogPrefs] = await Promise.all([
+    const [permSet, roles, userGroups, whatsNew] = await Promise.all([
       getUserPermissions(userId, project),
       getUserRoleNames(userId),
       getUserGroupNames(userId),
       evaluateWhatsNewState(userId),
-      getChangelogPrefs(userId),
     ]);
     if (superAdmin && !roles.includes('admin')) {
       roles.push('admin');
@@ -4097,7 +4103,6 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       currentChangelogVersion: whatsNew.currentVersion ?? '',
       lastSeenChangelogVersion: whatsNew.lastSeenVersion,
       showChangelogOnLogin: whatsNew.showOnLogin,
-      betaAnnouncementDismissed: changelogPrefs.dismissedBetaProdAnnouncement,
       whatsNew,
       restrictedAccess: restrictedActive && restricted
         ? { modules: restricted.modules, project: RESTRICTED_ACCESS_PROJECT }
@@ -4110,7 +4115,7 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
 
 // ── PATCH /api/me/preferences ─────────────────────────────────────────────────
 // Updates the authenticated user's preferences.
-// Body: { markChangelogRead?: boolean; lastSeenVersion?: string; showChangelogOnLogin?: boolean; dismissBetaAnnouncement?: boolean }
+// Body: { markChangelogRead?: boolean; lastSeenVersion?: string; showChangelogOnLogin?: boolean }
 
 router.patch('/me/preferences', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -4119,11 +4124,10 @@ router.patch('/me/preferences', async (req: Request, res: Response): Promise<voi
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    const { markChangelogRead, lastSeenVersion, showChangelogOnLogin, dismissBetaAnnouncement } = req.body as {
+    const { markChangelogRead, lastSeenVersion, showChangelogOnLogin } = req.body as {
       markChangelogRead?: boolean;
       lastSeenVersion?: string;
       showChangelogOnLogin?: boolean;
-      dismissBetaAnnouncement?: boolean;
     };
 
     let whatsNew = await evaluateWhatsNewState(userId);
@@ -4148,10 +4152,6 @@ router.patch('/me/preferences', async (req: Request, res: Response): Promise<voi
 
     if (typeof showChangelogOnLogin === 'boolean') {
       whatsNew = await updateWhatsNewPreference(userId, showChangelogOnLogin);
-    }
-
-    if (dismissBetaAnnouncement === true) {
-      await updateChangelogPrefs(userId, { dismissedBetaProdAnnouncement: true });
     }
 
     res.json({ ok: true, whatsNew });

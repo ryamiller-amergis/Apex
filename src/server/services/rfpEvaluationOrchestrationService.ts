@@ -85,6 +85,8 @@ function buildIntakeContext(request: NonNullable<Awaited<ReturnType<typeof getRe
     constraints: request.constraints,
     requestType: request.requestType,
     existingSystemStack: request.existingSystemStack,
+    expectedUsers: request.expectedUsers,
+    aiInApp: request.aiInApp,
     reviewerDecision: request.reviewerDecision
       ? {
           verdict: request.reviewerDecision.verdict,

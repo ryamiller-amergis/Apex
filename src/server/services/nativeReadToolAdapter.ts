@@ -1,5 +1,54 @@
 import type { SDKCustomTool, SDKJsonValue } from '@cursor/sdk';
 import type { RepoReader } from '../../shared/types/repoReader';
+import { RepoReaderError } from './repoReader';
+
+function toolErrorResult(error: unknown) {
+  return {
+    content: [{
+      type: 'text' as const,
+      text: error instanceof Error
+        ? error.message
+        : 'Repository content is unavailable',
+    }],
+    isError: true,
+  };
+}
+
+function missingFileResult(path: string) {
+  return {
+    content: [{
+      type: 'text' as const,
+      text: `File not found in repository: ${path}`,
+    }],
+  };
+}
+
+async function executeRepoRead<T>(
+  operation: () => Promise<T>,
+  missingPath?: string,
+): Promise<T | ReturnType<typeof toolErrorResult> | ReturnType<typeof missingFileResult>> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (
+      missingPath !== undefined &&
+      error instanceof RepoReaderError &&
+      error.code === 'LOCAL_READ_UNAVAILABLE'
+    ) {
+      // A missing optional file is repository state, not a failed tool call.
+      // This matters for first-run skills such as Product Foundation, where
+      // PRODUCT.md is expected not to exist yet.
+      return missingFileResult(missingPath);
+    }
+    if (error instanceof RepoReaderError && !error.fallbackEligible) {
+      throw error;
+    }
+    // Resolve with an MCP error result instead of rejecting the custom-tool
+    // callback. The Cursor SDK can then emit the terminal tool event and avoid
+    // leaving Apex's owner-deadline tracker with a stale in-flight call.
+    return toolErrorResult(error);
+  }
+}
 
 const pathInputSchema: Record<string, SDKJsonValue> = {
   type: 'object',
@@ -43,39 +92,46 @@ export function createNativeReadTools(
       inputSchema: pathInputSchema,
       // Ignore any root-widening keys (root, checkoutPath, command, …); confinement
       // is owned by the constructed RepoReader, not caller-supplied roots.
-      execute: ({ path: requestedPath }) =>
-        repoReader.readFile(String(requestedPath ?? '')),
+      execute: ({ path: requestedPath }) => {
+        const path = String(requestedPath ?? '');
+        return executeRepoRead(
+          () => repoReader.readFile(path),
+          path,
+        );
+      },
     },
     list_repo_dir: {
       description: 'List a directory in the authorized pinned repository checkout.',
       inputSchema: pathInputSchema,
-      execute: async ({ path: requestedPath }) => ({
-        content: [{
-          type: 'text',
-          text: JSON.stringify(
-            await repoReader.listDir(String(requestedPath ?? '')),
-            null,
-            2,
-          ),
-        }],
-      }),
+      execute: ({ path: requestedPath }) =>
+        executeRepoRead(async () => ({
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify(
+              await repoReader.listDir(String(requestedPath ?? '')),
+              null,
+              2,
+            ),
+          }],
+        })),
     },
     search_repo_code: {
       description: 'Search code in the authorized pinned repository checkout.',
       inputSchema: searchInputSchema,
-      execute: async ({ query, limit }) => ({
-        content: [{
-          type: 'text',
-          text: JSON.stringify(
-            await repoReader.searchCode(
-              String(query ?? ''),
-              typeof limit === 'number' ? limit : undefined,
+      execute: ({ query, limit }) =>
+        executeRepoRead(async () => ({
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify(
+              await repoReader.searchCode(
+                String(query ?? ''),
+                typeof limit === 'number' ? limit : undefined,
+              ),
+              null,
+              2,
             ),
-            null,
-            2,
-          ),
-        }],
-      }),
+          }],
+        })),
     },
   };
 }

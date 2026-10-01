@@ -84,6 +84,8 @@ const BASE_REQUEST: RfpRequest = {
   constraints: null,
   requestType: null,
   existingSystemStack: null,
+  expectedUsers: null,
+  aiInApp: null,
   status: 'evaluated',
   aiStatus: 'complete',
   aiThreadId: null,
@@ -94,6 +96,13 @@ const BASE_REQUEST: RfpRequest = {
   updatedAt: NOW,
   currentEvaluation: null,
   reviewerDecision: null,
+  architecture: null,
+  reviewSubmittedAt: null,
+  reviewSubmittedBy: null,
+  proposalGeneration: null,
+  proposalDraft: null,
+  proposal: null,
+  approval: null,
 };
 
 function thenableInsert(rows: unknown[]) {

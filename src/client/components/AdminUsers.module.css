@@ -34,6 +34,17 @@
   color: var(--text-muted);
 }
 
+.add-teammate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.add-teammate-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
 /* ── Toolbar ────────────────────────────────────────────────────────────────── */
 
 .toolbar {

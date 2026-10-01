@@ -59,7 +59,6 @@ function mockPermissionsResponse(overrides?: Partial<Record<string, unknown>>) {
     isSuperAdmin: false,
     changelogUnread: false,
     showChangelogOnLogin: false,
-    betaAnnouncementDismissed: true,
     ...overrides,
   };
 }

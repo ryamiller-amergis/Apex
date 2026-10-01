@@ -98,6 +98,7 @@ import foundationSkillsAuthorizeRoutes from './routes/foundationSkillsAuthorize'
 import profileRoutes from './routes/profile';
 import walkthroughsRoutes from './routes/walkthroughs';
 import { startPdfProcessingPoller } from './services/pdfAssemblyService';
+import { startRfpProposalWorker, stopRfpProposalWorker } from './services/rfpProposalGenerationWorker';
 import { startLoadTestRunReaper } from './services/loadTestRunService';
 import { LIVENESS_PATH, sendLiveness } from './liveness';
 
@@ -440,6 +441,9 @@ const server = app.listen(PORT, () => {
   console.log('Work board due-soon scheduler started');
 
   startPdfProcessingPoller();
+
+  startRfpProposalWorker();
+  server.once('close', stopRfpProposalWorker);
 
   bootstrapAdmin();
 

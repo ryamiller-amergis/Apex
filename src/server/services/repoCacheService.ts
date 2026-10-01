@@ -10,6 +10,7 @@ import {
   withRepoCacheLease,
   type RepoCacheLeaseContext,
 } from './repoCacheLeaseService';
+import { resolveAdoRepository } from './adoRepositoryTarget';
 import {
   CACHE_FETCH_IDLE_TIMEOUT_MS,
   CACHE_FETCH_TIMEOUT_MS,
@@ -123,8 +124,9 @@ export function resolveGitRemote(
   if (!orgUrl || !secret) {
     throw new Error('ADO_ORG and ADO_PAT must be set for repo checkout');
   }
+  const ado = resolveAdoRepository(project, repo);
   return {
-    url: `${orgUrl}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repo)}`,
+    url: `${orgUrl}/${encodeURIComponent(ado.project)}/_git/${encodeURIComponent(ado.repo)}`,
     env: authEnvironment('pat', secret),
     secret,
   };

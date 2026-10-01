@@ -33,6 +33,7 @@ export const RFP_HUMAN_STATUSES = [
   'accepted',
   'declined',
   'on-hold',
+  'archived',
 ] as const;
 export type RfpHumanStatus = (typeof RFP_HUMAN_STATUSES)[number];
 
@@ -81,6 +82,95 @@ export const RFP_REQUEST_TYPES = [
 ] as const;
 export type RfpRequestType = (typeof RFP_REQUEST_TYPES)[number];
 
+export const RFP_EXPECTED_USER_SCALES = ['small', 'medium', 'large'] as const;
+export type RfpExpectedUserScale = (typeof RFP_EXPECTED_USER_SCALES)[number];
+
+export const RFP_EXPECTED_USER_SCALE_LABELS: Record<RfpExpectedUserScale, string> = {
+  small: 'Small (1–100)',
+  medium: 'Medium (101–500)',
+  large: 'Large (501+)',
+};
+
+export const RFP_AI_INTENTS = ['yes', 'no', 'not-sure'] as const;
+export type RfpAiIntent = (typeof RFP_AI_INTENTS)[number];
+
+export const RFP_AI_INTENT_LABELS: Record<RfpAiIntent, string> = {
+  yes: 'Yes',
+  no: 'No',
+  'not-sure': 'Not sure',
+};
+
+export const RFP_APP_TYPES = ['web', 'console', 'copilot-workflow'] as const;
+export type RfpAppType = (typeof RFP_APP_TYPES)[number];
+
+export const RFP_APP_TYPE_LABELS: Record<RfpAppType, string> = {
+  web: 'Web',
+  console: 'Console',
+  'copilot-workflow': 'Copilot Workflow',
+};
+
+export const RFP_CLOUD_RESOURCES = ['service-bus', 'rds', 'ecs', 'monitoring', 'pagerduty'] as const;
+export type RfpCloudResource = (typeof RFP_CLOUD_RESOURCES)[number];
+
+export const RFP_CLOUD_RESOURCE_LABELS: Record<RfpCloudResource, string> = {
+  'service-bus': 'Amazon SQS',
+  rds: 'RDS',
+  ecs: 'ECS',
+  monitoring: 'Amazon CloudWatch',
+  pagerduty: 'PagerDuty',
+};
+
+export const RFP_DEPLOYMENT_REGIONS = ['us-east', 'us-central', 'us-west'] as const;
+export type RfpDeploymentRegion = (typeof RFP_DEPLOYMENT_REGIONS)[number];
+
+export const RFP_DEPLOYMENT_REGION_LABELS: Record<RfpDeploymentRegion, string> = {
+  'us-east': 'US East (Virginia)',
+  'us-central': 'US Central (Ohio / Iowa)',
+  'us-west': 'US West (Oregon / Washington)',
+};
+
+export const RFP_SIZING_PROFILES = ['small', 'medium', 'large'] as const;
+export type RfpSizingProfile = (typeof RFP_SIZING_PROFILES)[number];
+
+export const RFP_SIZING_PROFILE_LABELS: Record<RfpSizingProfile, string> = {
+  small: 'Small — light traffic, one app instance',
+  medium: 'Medium — steady traffic, redundant instances',
+  large: 'Large — heavy traffic, high availability',
+};
+
+export const RFP_UPTIME_PATTERNS = ['business-hours', 'always-on'] as const;
+export type RfpUptimePattern = (typeof RFP_UPTIME_PATTERNS)[number];
+
+export const RFP_UPTIME_PATTERN_LABELS: Record<RfpUptimePattern, string> = {
+  'business-hours': 'Business hours (about 12 hours a day, weekdays)',
+  'always-on': 'Always on (24/7)',
+};
+
+export const RFP_AI_USAGE_LEVELS = ['light', 'moderate', 'heavy'] as const;
+export type RfpAiUsage = (typeof RFP_AI_USAGE_LEVELS)[number];
+
+export const RFP_AI_USAGE_LABELS: Record<RfpAiUsage, string> = {
+  light: 'Light (about 5M tokens a month)',
+  moderate: 'Moderate (about 25M tokens a month)',
+  heavy: 'Heavy (about 100M tokens a month)',
+};
+
+export const RFP_MAX_ENVIRONMENTS = 4;
+export const RFP_MAX_STORAGE_GB = 10_000;
+
+/** Assumptions the pricing research needs; prefilled from expected users and confirmed by an admin. */
+export interface RfpArchitectureSizing {
+  region: RfpDeploymentRegion;
+  sizingProfile: RfpSizingProfile;
+  environmentCount: number;
+  uptimePattern: RfpUptimePattern;
+  storageGb: number;
+  aiUsage: RfpAiUsage | null;
+}
+
+/** Azure DevOps project that holds repos created from approved proposals. */
+export const RFP_APPS_ADO_PROJECT = 'Apex - Apps';
+
 export const RFP_PRIORITIES = ['low', 'medium', 'high', 'critical'] as const;
 export type RfpPriority = (typeof RFP_PRIORITIES)[number];
 
@@ -127,6 +217,17 @@ export const RFP_REQUEST_EVENT_TYPES = [
   'comment-added',
   'attachment-added',
   'reviewer-decision-applied',
+  'architecture-saved',
+  'review-submitted',
+  'proposal-generation-started',
+  'proposal-generation-completed',
+  'proposal-generation-failed',
+  'decision-summary-generated',
+  'proposal-draft-edited',
+  'proposal-published',
+  'proposal-approved',
+  'proposal-rejected',
+  'proposal-project-deleted',
 ] as const;
 export type RfpRequestEventType = (typeof RFP_REQUEST_EVENT_TYPES)[number];
 
@@ -145,6 +246,212 @@ export interface RfpIntakePayload {
   constraints?: string | null;
   requestType?: RfpRequestType | null;
   existingSystemStack?: string | null;
+  /** Required on new submissions; null on requests submitted before the field existed. */
+  expectedUsers?: RfpExpectedUserScale | null;
+  /** Required on new submissions; null on requests submitted before the field existed. */
+  aiInApp?: RfpAiIntent | null;
+}
+
+export interface RfpArchitectureInput {
+  appType: RfpAppType;
+  resources: RfpCloudResource[];
+  requiresAi: boolean;
+  domainName?: string | null;
+  sizing: RfpArchitectureSizing;
+}
+
+export interface RfpArchitecture extends Omit<RfpArchitectureInput, 'domainName' | 'sizing'> {
+  domainName: string | null;
+  /** Null only on architectures saved before sizing existed. */
+  sizing: RfpArchitectureSizing | null;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+export interface SubmitRfpReviewInput {
+  /** Optional for Decline; required for every other verdict. */
+  architecture: RfpArchitectureInput | null;
+}
+
+export const RFP_PROPOSAL_JOB_STATUSES = [
+  'queued',
+  'researching-prices',
+  'writing',
+  'ready',
+  'failed',
+  'superseded',
+] as const;
+export type RfpProposalJobStatus = (typeof RFP_PROPOSAL_JOB_STATUSES)[number];
+
+export const RFP_PROPOSAL_JOB_ACTIVE_STATUSES = ['queued', 'researching-prices', 'writing'] as const;
+
+export const RFP_PROPOSAL_JOB_STATUS_LABELS: Record<RfpProposalJobStatus, string> = {
+  queued: 'Queued',
+  'researching-prices': 'Researching prices',
+  writing: 'Writing proposal',
+  ready: 'Ready',
+  failed: 'Failed',
+  superseded: 'Superseded',
+};
+
+export function isRfpProposalJobActive(status: RfpProposalJobStatus): boolean {
+  return (RFP_PROPOSAL_JOB_ACTIVE_STATUSES as readonly string[]).includes(status);
+}
+
+export const RFP_DRAFT_KINDS = ['proposal', 'decision-summary'] as const;
+export type RfpDraftKind = (typeof RFP_DRAFT_KINDS)[number];
+
+/** Admin-only view of the current generation job. */
+export interface RfpProposalGeneration {
+  jobId: string;
+  kind: RfpDraftKind;
+  status: RfpProposalJobStatus;
+  attempts: number;
+  maxAttempts: number;
+  errorMessage: string | null;
+  queuedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export const RFP_COST_SOURCE_TYPES = [
+  'aws-price-list',
+  'azure-retail-prices',
+  'vendor-page',
+  'internal-estimate',
+] as const;
+export type RfpCostSourceType = (typeof RFP_COST_SOURCE_TYPES)[number];
+
+export const RFP_COST_SOURCE_TYPE_LABELS: Record<RfpCostSourceType, string> = {
+  'aws-price-list': 'AWS Price List',
+  'azure-retail-prices': 'Azure Retail Prices',
+  'vendor-page': 'Vendor pricing page',
+  'internal-estimate': 'Apex estimate',
+};
+
+export const RFP_PRICE_STATUSES = ['verified', 'unavailable', 'estimate'] as const;
+export type RfpPriceStatus = (typeof RFP_PRICE_STATUSES)[number];
+
+export const RFP_COST_CATEGORIES = ['implementation', 'operating'] as const;
+export type RfpCostCategory = (typeof RFP_COST_CATEGORIES)[number];
+
+export const RFP_COST_CADENCES = ['one-time', 'monthly'] as const;
+export type RfpCostCadence = (typeof RFP_COST_CADENCES)[number];
+
+export interface RfpCostAmounts {
+  low: number;
+  expected: number;
+  high: number;
+}
+
+/** One priced line. `amounts` is null when no official price could be verified. */
+export interface RfpCostLine {
+  id: string;
+  label: string;
+  category: RfpCostCategory;
+  cadence: RfpCostCadence;
+  quantity: number;
+  unit: string;
+  unitPrice: number | null;
+  amounts: RfpCostAmounts | null;
+  currency: 'USD';
+  priceStatus: RfpPriceStatus;
+  sourceType: RfpCostSourceType;
+  sourceUrl: string | null;
+  sourceTitle: string | null;
+  retrievedAt: string | null;
+  confidence: RfpConfidence;
+  assumptions: string[];
+  adminConfirmed: boolean;
+}
+
+export interface RfpCostTotals {
+  oneTime: RfpCostAmounts;
+  monthly: RfpCostAmounts;
+  annual: RfpCostAmounts;
+  unpricedLineCount: number;
+}
+
+export interface RfpDeliveryPhase {
+  name: string;
+  duration: string;
+  outcomes: string[];
+}
+
+export interface RfpProposalRisk {
+  risk: string;
+  mitigation: string;
+}
+
+export interface RfpProposalSections {
+  executiveSummary: string;
+  recommendedSolution: string;
+  scope: string[];
+  deliveryPhases: RfpDeliveryPhase[];
+  timeline: string;
+  assumptions: string[];
+  exclusions: string[];
+  risks: RfpProposalRisk[];
+  securityAndData: string;
+  ownership: string;
+  nextSteps: string[];
+}
+
+export const RFP_DRAFT_VERSION = 1 as const;
+
+interface RfpDraftBase {
+  version: typeof RFP_DRAFT_VERSION;
+  jobId: string;
+  inputFingerprint: string;
+  verdict: RfpVerdict;
+  generatedAt: string;
+  editedBy: string | null;
+  editedAt: string | null;
+}
+
+export interface RfpProposalDraft extends RfpDraftBase {
+  kind: 'proposal';
+  sections: RfpProposalSections;
+  costLines: RfpCostLine[];
+  totals: RfpCostTotals;
+}
+
+export interface RfpDecisionSummaryDraft extends RfpDraftBase {
+  kind: 'decision-summary';
+  summary: string;
+  reasons: string[];
+  alternatives: string[];
+  nextSteps: string[];
+}
+
+export type RfpGeneratedDraft = RfpProposalDraft | RfpDecisionSummaryDraft;
+
+export interface RfpPublishProposalInput {
+  /** Required when the draft is a proposal; ignored for a decision summary. */
+  productOwnerId?: string | null;
+}
+
+/** The admin-confirmed draft as the requester sees it. */
+export interface RfpProposalRejection {
+  rejectedAt: string;
+  rejectedBy: string;
+  reason: string;
+}
+
+export interface RfpProposal {
+  document: RfpGeneratedDraft;
+  productOwnerId: string | null;
+  productOwnerName: string | null;
+  publishedBy: string;
+  publishedAt: string;
+  rejection?: RfpProposalRejection | null;
+}
+
+export interface RfpApproval {
+  approvedAt: string;
+  repoName: string;
+  repoUrl: string;
+  apexProject: string;
 }
 
 export type RfpClarificationInput = Partial<RfpIntakePayload> & {
@@ -168,6 +475,7 @@ export const RFP_STATUS_TRANSITIONS: Record<RfpHumanStatus, readonly RfpHumanSta
   accepted: [],
   declined: [],
   'on-hold': ['in-review'],
+  archived: [],
 };
 
 export function canTransitionRfpStatus(from: RfpHumanStatus, to: RfpHumanStatus): boolean {
@@ -344,6 +652,8 @@ export interface RfpRequest {
   constraints: string | null;
   requestType: RfpRequestType | null;
   existingSystemStack: string | null;
+  expectedUsers: RfpExpectedUserScale | null;
+  aiInApp: RfpAiIntent | null;
   status: RfpHumanStatus;
   aiStatus: RfpAiStatus;
   aiThreadId: string | null;
@@ -354,12 +664,22 @@ export interface RfpRequest {
   updatedAt: string;
   currentEvaluation?: RfpEvaluation | null;
   reviewerDecision: RfpReviewerDecision | null;
+  architecture: RfpArchitecture | null;
+  reviewSubmittedAt: string | null;
+  reviewSubmittedBy: string | null;
+  /** Admin only; always null in requester responses. */
+  proposalGeneration: RfpProposalGeneration | null;
+  /** Admin only; always null in requester responses. */
+  proposalDraft: RfpGeneratedDraft | null;
+  proposal: RfpProposal | null;
+  approval: RfpApproval | null;
 }
 
 export interface RfpComment {
   id: string;
   rfpRequestId: string;
   authorId: string;
+  authorName?: string;
   body: string;
   mentionedUserIds: string[];
   createdAt: string;
@@ -423,6 +743,7 @@ export interface RfpRequestEvent {
   rfpRequestId: string;
   eventType: RfpRequestEventType;
   actorId: string | null;
+  actorName?: string;
   payload: Record<string, unknown> | null;
   createdAt: string;
 }
@@ -518,13 +839,26 @@ const REQUIRED_INTAKE_KEYS: Array<keyof RfpIntakePayload> = [
   'existingSolution',
 ];
 
-export function validateRfpIntakePayload(payload: RfpIntakePayload): string[] {
+export function validateRfpIntakePayload(
+  payload: RfpIntakePayload,
+  options: { requireScaleAndAi?: boolean } = {},
+): string[] {
   const errors: string[] = [];
   for (const key of REQUIRED_INTAKE_KEYS) {
     const value = payload[key];
     if (typeof value !== 'string' || value.trim() === '') {
       errors.push(`${key} is required`);
     }
+  }
+  if (payload.expectedUsers == null) {
+    if (options.requireScaleAndAi) errors.push('expectedUsers is required');
+  } else if (!isOneOf(payload.expectedUsers, RFP_EXPECTED_USER_SCALES)) {
+    errors.push('expectedUsers is invalid');
+  }
+  if (payload.aiInApp == null) {
+    if (options.requireScaleAndAi) errors.push('aiInApp is required');
+  } else if (!isOneOf(payload.aiInApp, RFP_AI_INTENTS)) {
+    errors.push('aiInApp is invalid');
   }
   if (payload.audience && !isOneOf(payload.audience, RFP_AUDIENCES)) {
     errors.push('audience is invalid');
@@ -543,4 +877,289 @@ export function validateRfpIntakePayload(payload: RfpIntakePayload): string[] {
     }
   }
   return errors;
+}
+
+export function validateRfpArchitecture(input: RfpArchitectureInput): string[] {
+  const errors: string[] = [];
+  if (!isOneOf(input.appType, RFP_APP_TYPES)) errors.push('appType is invalid');
+  if (!Array.isArray(input.resources)) {
+    errors.push('resources is required');
+  } else if (!input.resources.every((resource) => isOneOf(resource, RFP_CLOUD_RESOURCES))) {
+    errors.push('resources contains an invalid value');
+  }
+  if (typeof input.requiresAi !== 'boolean') errors.push('requiresAi is required');
+  if (input.appType === 'web' && !input.domainName?.trim()) {
+    errors.push('domainName is required for web apps');
+  }
+  errors.push(...validateRfpArchitectureSizing(input.sizing, input.requiresAi === true));
+  return errors;
+}
+
+function validateRfpArchitectureSizing(sizing: RfpArchitectureSizing | undefined, requiresAi: boolean): string[] {
+  if (!sizing || typeof sizing !== 'object') return ['sizing is required'];
+  const errors: string[] = [];
+  if (!isOneOf(sizing.region, RFP_DEPLOYMENT_REGIONS)) errors.push('sizing.region is invalid');
+  if (!isOneOf(sizing.sizingProfile, RFP_SIZING_PROFILES)) errors.push('sizing.sizingProfile is invalid');
+  if (!Number.isInteger(sizing.environmentCount)
+    || sizing.environmentCount < 1
+    || sizing.environmentCount > RFP_MAX_ENVIRONMENTS) {
+    errors.push(`sizing.environmentCount must be between 1 and ${RFP_MAX_ENVIRONMENTS}`);
+  }
+  if (!isOneOf(sizing.uptimePattern, RFP_UPTIME_PATTERNS)) errors.push('sizing.uptimePattern is invalid');
+  if (!isNonNegativeNumber(sizing.storageGb) || sizing.storageGb > RFP_MAX_STORAGE_GB) {
+    errors.push(`sizing.storageGb must be between 0 and ${RFP_MAX_STORAGE_GB}`);
+  }
+  if (requiresAi) {
+    if (sizing.aiUsage == null) errors.push('sizing.aiUsage is required when the app requires AI');
+    else if (!isOneOf(sizing.aiUsage, RFP_AI_USAGE_LEVELS)) errors.push('sizing.aiUsage is invalid');
+  }
+  return errors;
+}
+
+const SIZING_BY_SCALE: Record<RfpExpectedUserScale, Omit<RfpArchitectureSizing, 'region' | 'aiUsage'> & { aiUsage: RfpAiUsage }> = {
+  small: { sizingProfile: 'small', environmentCount: 2, uptimePattern: 'business-hours', storageGb: 20, aiUsage: 'light' },
+  medium: { sizingProfile: 'medium', environmentCount: 2, uptimePattern: 'always-on', storageGb: 100, aiUsage: 'moderate' },
+  large: { sizingProfile: 'large', environmentCount: 3, uptimePattern: 'always-on', storageGb: 500, aiUsage: 'heavy' },
+};
+
+/** Starting assumptions an admin confirms before pricing. */
+export function defaultRfpArchitectureSizing(
+  expectedUsers: RfpExpectedUserScale | null | undefined,
+  requiresAi: boolean,
+): RfpArchitectureSizing {
+  const preset = SIZING_BY_SCALE[expectedUsers ?? 'medium'];
+  return {
+    region: 'us-east',
+    sizingProfile: preset.sizingProfile,
+    environmentCount: preset.environmentCount,
+    uptimePattern: preset.uptimePattern,
+    storageGb: preset.storageGb,
+    aiUsage: requiresAi ? preset.aiUsage : null,
+  };
+}
+
+function isNonNegativeNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+/** Reviewer override first, then the current AI verdict. */
+export function effectiveRfpVerdict(
+  request: Pick<RfpRequest, 'reviewerDecision' | 'currentEvaluation'>,
+): RfpVerdict | null {
+  return request.reviewerDecision?.verdict ?? request.currentEvaluation?.verdict ?? null;
+}
+
+export function rfpDraftKindForVerdict(verdict: RfpVerdict): RfpDraftKind | null {
+  if (verdict === 'needs-clarification') return null;
+  return verdict === 'decline' ? 'decision-summary' : 'proposal';
+}
+
+export function rfpReviewSubmitLabel(verdict: RfpVerdict): string {
+  const kind = rfpDraftKindForVerdict(verdict);
+  if (kind === 'proposal') return 'Submit for proposal';
+  if (kind === 'decision-summary') return 'Submit decision summary';
+  return 'Save review';
+}
+
+/** Admins unlock Proposal by submitting the review; everyone else waits for publication. */
+export function rfpProposalUnlocked(
+  request: Pick<RfpRequest, 'reviewSubmittedAt' | 'proposal' | 'approval' | 'reviewerDecision' | 'currentEvaluation'>,
+  canManage: boolean,
+): boolean {
+  if (request.proposal || request.approval) return true;
+  if (!canManage || !request.reviewSubmittedAt) return false;
+  const verdict = effectiveRfpVerdict(request);
+  return verdict !== null && rfpDraftKindForVerdict(verdict) !== null;
+}
+
+function roundCents(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function sumAmounts(lines: RfpCostLine[]): RfpCostAmounts {
+  const total = { low: 0, expected: 0, high: 0 };
+  for (const line of lines) {
+    if (!line.amounts) continue;
+    total.low += line.amounts.low;
+    total.expected += line.amounts.expected;
+    total.high += line.amounts.high;
+  }
+  return { low: roundCents(total.low), expected: roundCents(total.expected), high: roundCents(total.high) };
+}
+
+export function computeRfpCostTotals(lines: RfpCostLine[]): RfpCostTotals {
+  const monthly = sumAmounts(lines.filter((line) => line.cadence === 'monthly'));
+  return {
+    oneTime: sumAmounts(lines.filter((line) => line.cadence === 'one-time')),
+    monthly,
+    annual: {
+      low: roundCents(monthly.low * 12),
+      expected: roundCents(monthly.expected * 12),
+      high: roundCents(monthly.high * 12),
+    },
+    unpricedLineCount: lines.filter((line) => !line.amounts).length,
+  };
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+function isHttpsUrl(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function parseCostAmounts(raw: unknown): RfpCostAmounts | null | undefined {
+  if (raw === null) return null;
+  if (!raw || typeof raw !== 'object') return undefined;
+  const { low, expected, high } = raw as Record<string, unknown>;
+  if (!isNonNegativeNumber(low) || !isNonNegativeNumber(expected) || !isNonNegativeNumber(high)) return undefined;
+  if (low > expected || expected > high) return undefined;
+  return { low, expected, high };
+}
+
+function parseCostLine(raw: unknown): RfpCostLine | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  if (!isNonEmptyString(obj.id) || !isNonEmptyString(obj.label)) return null;
+  if (!isOneOf(obj.category, RFP_COST_CATEGORIES) || !isOneOf(obj.cadence, RFP_COST_CADENCES)) return null;
+  if (!isNonNegativeNumber(obj.quantity) || typeof obj.unit !== 'string') return null;
+  if (obj.unitPrice !== null && !isNonNegativeNumber(obj.unitPrice)) return null;
+  const amounts = parseCostAmounts(obj.amounts);
+  if (amounts === undefined) return null;
+  if (obj.currency !== 'USD') return null;
+  if (!isOneOf(obj.priceStatus, RFP_PRICE_STATUSES) || !isOneOf(obj.sourceType, RFP_COST_SOURCE_TYPES)) return null;
+  if (obj.sourceUrl !== null && !isHttpsUrl(obj.sourceUrl)) return null;
+  if (obj.priceStatus === 'verified' && (!isHttpsUrl(obj.sourceUrl) || !isNonEmptyString(obj.retrievedAt))) return null;
+  if (obj.sourceTitle !== null && typeof obj.sourceTitle !== 'string') return null;
+  if (obj.retrievedAt !== null && typeof obj.retrievedAt !== 'string') return null;
+  if (!isOneOf(obj.confidence, RFP_CONFIDENCE_LEVELS) || !isStringArray(obj.assumptions)) return null;
+  if (typeof obj.adminConfirmed !== 'boolean') return null;
+  return {
+    id: obj.id,
+    label: obj.label,
+    category: obj.category,
+    cadence: obj.cadence,
+    quantity: obj.quantity,
+    unit: obj.unit,
+    unitPrice: obj.unitPrice as number | null,
+    amounts,
+    currency: 'USD',
+    priceStatus: obj.priceStatus,
+    sourceType: obj.sourceType,
+    sourceUrl: obj.sourceUrl as string | null,
+    sourceTitle: obj.sourceTitle as string | null,
+    retrievedAt: obj.retrievedAt as string | null,
+    confidence: obj.confidence,
+    assumptions: obj.assumptions,
+    adminConfirmed: obj.adminConfirmed,
+  };
+}
+
+function parseSections(raw: unknown): RfpProposalSections | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  const text = ['executiveSummary', 'recommendedSolution', 'timeline', 'securityAndData', 'ownership'] as const;
+  if (!text.every((key) => typeof obj[key] === 'string')) return null;
+  const lists = ['scope', 'assumptions', 'exclusions', 'nextSteps'] as const;
+  if (!lists.every((key) => isStringArray(obj[key]))) return null;
+  if (!Array.isArray(obj.deliveryPhases) || !obj.deliveryPhases.every((phase) =>
+    phase && typeof phase === 'object'
+    && typeof (phase as RfpDeliveryPhase).name === 'string'
+    && typeof (phase as RfpDeliveryPhase).duration === 'string'
+    && isStringArray((phase as RfpDeliveryPhase).outcomes))) return null;
+  if (!Array.isArray(obj.risks) || !obj.risks.every((risk) =>
+    risk && typeof risk === 'object'
+    && typeof (risk as RfpProposalRisk).risk === 'string'
+    && typeof (risk as RfpProposalRisk).mitigation === 'string')) return null;
+  return {
+    executiveSummary: obj.executiveSummary as string,
+    recommendedSolution: obj.recommendedSolution as string,
+    scope: obj.scope as string[],
+    deliveryPhases: (obj.deliveryPhases as RfpDeliveryPhase[]).map(({ name, duration, outcomes }) => ({ name, duration, outcomes })),
+    timeline: obj.timeline as string,
+    assumptions: obj.assumptions as string[],
+    exclusions: obj.exclusions as string[],
+    risks: (obj.risks as RfpProposalRisk[]).map(({ risk, mitigation }) => ({ risk, mitigation })),
+    securityAndData: obj.securityAndData as string,
+    ownership: obj.ownership as string,
+    nextSteps: obj.nextSteps as string[],
+  };
+}
+
+/** Validates a stored or admin-edited draft. Totals are always recomputed from the lines. */
+export function parseRfpGeneratedDraft(raw: unknown): RfpGeneratedDraft | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const obj = raw as Record<string, unknown>;
+  if (obj.version !== RFP_DRAFT_VERSION) return null;
+  if (!isNonEmptyString(obj.jobId) || !isNonEmptyString(obj.inputFingerprint)) return null;
+  if (!isOneOf(obj.verdict, RFP_VERDICTS) || !isNonEmptyString(obj.generatedAt)) return null;
+  if (obj.editedBy !== null && typeof obj.editedBy !== 'string') return null;
+  if (obj.editedAt !== null && typeof obj.editedAt !== 'string') return null;
+  const base = {
+    version: RFP_DRAFT_VERSION,
+    jobId: obj.jobId,
+    inputFingerprint: obj.inputFingerprint,
+    verdict: obj.verdict,
+    generatedAt: obj.generatedAt,
+    editedBy: obj.editedBy as string | null,
+    editedAt: obj.editedAt as string | null,
+  };
+
+  if (obj.kind === 'decision-summary') {
+    if (typeof obj.summary !== 'string') return null;
+    if (!isStringArray(obj.reasons) || !isStringArray(obj.alternatives) || !isStringArray(obj.nextSteps)) return null;
+    return {
+      ...base,
+      kind: 'decision-summary',
+      summary: obj.summary,
+      reasons: obj.reasons,
+      alternatives: obj.alternatives,
+      nextSteps: obj.nextSteps,
+    };
+  }
+
+  if (obj.kind !== 'proposal') return null;
+  const sections = parseSections(obj.sections);
+  if (!sections || !Array.isArray(obj.costLines)) return null;
+  const costLines = obj.costLines.map(parseCostLine);
+  if (costLines.some((line) => line === null)) return null;
+  const lines = costLines as RfpCostLine[];
+  if (new Set(lines.map((line) => line.id)).size !== lines.length) return null;
+  return { ...base, kind: 'proposal', sections, costLines: lines, totals: computeRfpCostTotals(lines) };
+}
+
+/** Publishing a proposal needs every cost priced and confirmed by an admin. */
+export function validateRfpDraftForPublish(draft: RfpGeneratedDraft): string[] {
+  if (draft.kind !== 'proposal') return [];
+  const errors: string[] = [];
+  for (const line of draft.costLines) {
+    if (!line.amounts) errors.push(`${line.label} needs an amount`);
+    if (!line.adminConfirmed) errors.push(`${line.label} needs admin confirmation`);
+  }
+  return errors;
+}
+
+const RFP_REPO_NAME_MAX = 64;
+
+export function rfpRepoNameFromTitle(title: string): string {
+  const slug = title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, RFP_REPO_NAME_MAX)
+    .replace(/-+$/g, '');
+  return slug || 'apex-app';
+}
+
+export type RfpWizardStep = 1 | 2 | 3;
+
+export function rfpWizardInitialStep(request: Pick<RfpRequest, 'proposal' | 'approval'>): RfpWizardStep {
+  return request.proposal || request.approval ? 3 : 1;
 }

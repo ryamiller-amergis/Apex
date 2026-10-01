@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, ne } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import {
   appPermissions,
@@ -7,11 +7,28 @@ import {
   appUserProjectRoles,
   appUserRoles,
   appUsers,
+  rfpRequests,
   userProjectAssignments,
 } from '../db/schema';
 import type { AppPermission, AppRole, RoleWithPermissions, UserWithRoles } from '../../shared/types/rbac';
 import type { ActiveUser } from '../../shared/types/interview';
 import { resolveCurrentChangelogVersion } from './changelogService';
+
+/** Apex Backlog stays on the admin role everywhere. Projects created in Apex also open it for the people on that project. */
+const APEX_CREATED_PROJECT_MENU_PERMISSION = 'feature-requests:view';
+
+async function withApexCreatedProjectMenu(project: string | undefined, keys: Set<string>): Promise<Set<string>> {
+  if (!project) return keys;
+  const createdInApex = await db.query.rfpRequests.findFirst({
+    where: and(
+      eq(rfpRequests.apexProject, project),
+      isNotNull(rfpRequests.approvedAt),
+      ne(rfpRequests.status, 'archived'),
+    ),
+  });
+  if (createdInApex) keys.add(APEX_CREATED_PROJECT_MENU_PERMISSION);
+  return keys;
+}
 
 // ── getUserPermissions ─────────────────────────────────────────────────────────
 
@@ -38,7 +55,7 @@ export async function getUserPermissions(userId: string, project?: string): Prom
           keys.add(rp.permission.key);
         }
       }
-      return keys;
+      return withApexCreatedProjectMenu(project, keys);
     }
   }
 
@@ -63,7 +80,7 @@ export async function getUserPermissions(userId: string, project?: string): Prom
         keys.add(rp.permission.key);
       }
     }
-    return keys;
+    return withApexCreatedProjectMenu(project, keys);
   }
 
   // Fall back to the default role when the user has no explicit assignments
@@ -82,7 +99,7 @@ export async function getUserPermissions(userId: string, project?: string): Prom
       keys.add(rp.permission.key);
     }
   }
-  return keys;
+  return withApexCreatedProjectMenu(project, keys);
 }
 
 // ── listRoles ─────────────────────────────────────────────────────────────────

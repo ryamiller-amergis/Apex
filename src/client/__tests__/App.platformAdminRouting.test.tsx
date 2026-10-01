@@ -1,4 +1,5 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
+import { clearPlatformProjectListing, markPlatformProjectListing } from '../utils/platformLanding';
 import { MemoryRouter } from 'react-router-dom';
 import App from '../App';
 import { useAppShell } from '../hooks/useAppShell';
@@ -27,10 +28,6 @@ jest.mock('../hooks/useFeatureFlags', () => ({
   }),
 }));
 
-jest.mock('../components/BetaAnnouncementModal', () => ({
-  BetaAnnouncementModal: () => null,
-}));
-
 jest.mock('../components/GuidedWalkthroughHost', () => ({
   GuidedWalkthroughHost: () => null,
 }));
@@ -45,6 +42,14 @@ jest.mock('../hooks/useProjectSkillConfig', () => ({
 
 jest.mock('../components/AppHeader', () => ({
   AppHeader: () => <div data-testid="app-header" />,
+}));
+
+jest.mock('../components/PlatformAdmin', () => ({
+  PlatformAdmin: () => <div>Platform Admin Content</div>,
+}));
+
+jest.mock('../components/ProjectSelector', () => ({
+  ProjectSelector: () => <div>Project Selector Content</div>,
 }));
 
 jest.mock('../components/AgentHome', () => ({
@@ -116,8 +121,6 @@ function setupAppShell() {
     whatsNewCurrentVersion: '1.0.0',
     whatsNewAutomaticOverlaySettled: true,
     whatsNewBlocksAutomaticWalkthrough: false,
-    betaAnnouncementDismissed: false,
-    handleDismissBetaAnnouncement: jest.fn(),
     handleLogout: jest.fn(),
     selectedProject: 'MaxView',
     selectedAreaPath: 'MaxView',
@@ -154,6 +157,7 @@ function renderApp(path: string) {
 describe('App platform admin routing changes', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    clearPlatformProjectListing();
     setupAppShell();
   });
 
@@ -162,6 +166,23 @@ describe('App platform admin routing changes', () => {
 
     expect(await screen.findByText('Roles Admin Content')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /menu visibility/i })).not.toBeInTheDocument();
+  });
+
+  it('opens platform admin first for a super admin', async () => {
+    renderApp('/');
+
+    expect(await screen.findByText('Platform Admin Content')).toBeInTheDocument();
+    expect(screen.queryByText('Project Selector Content')).not.toBeInTheDocument();
+  });
+
+  it('keeps a super admin on the project listing after they choose it', async () => {
+    markPlatformProjectListing();
+    renderApp('/');
+
+    expect(await screen.findByText('Project Selector Content')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByText('Platform Admin Content')).not.toBeInTheDocument();
+    });
   });
 
   it('does not render AdminMenuSettings from /admin/menu-settings', async () => {

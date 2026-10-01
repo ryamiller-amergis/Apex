@@ -50,6 +50,10 @@ jest.mock('../UserMenu', () => ({
   UserMenu: () => <div data-testid="user-menu" />,
 }));
 
+jest.mock('../NotificationBell', () => ({
+  NotificationBell: () => <div data-testid="notification-bell" />,
+}));
+
 jest.mock('../../hooks/usePlatformAdmin', () => ({
   useCreateProjectAccessRequests: jest.fn(),
   useMyProjectAccessRequests: jest.fn(),
@@ -129,6 +133,21 @@ describe('ProjectSelector platform admin action', () => {
     );
 
     expect(screen.getByRole('button', { name: /platform admin/i })).toBeInTheDocument();
+    expect(screen.queryByTestId('notification-bell')).not.toBeInTheDocument();
+  });
+
+  it('shows the notification bell on the landing page when notifications are available', () => {
+    render(
+      <ProjectSelector
+        selectedProject="MaxView"
+        isSuperAdmin
+        showNotifications
+        onSelect={jest.fn()}
+        onOpenPlatformAdmin={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('notification-bell')).toBeInTheDocument();
   });
 
   it('hides the Platform Admin action for regular users', () => {
@@ -169,6 +188,7 @@ describe('ProjectSelector platform admin action', () => {
       />,
     );
 
+    fireEvent.click(screen.getByTestId('project-selector-nav-new'));
     fireEvent.click(screen.getByRole('button', { name: /request access/i }));
     expect(screen.getByRole('dialog', { name: /request project access/i })).toBeInTheDocument();
 
@@ -222,8 +242,9 @@ describe('ProjectSelector platform admin action', () => {
     expect(screen.queryByTestId('project-selector-request-menu')).not.toBeInTheDocument();
     expect(screen.queryByTestId('rfp-request-product-item')).not.toBeInTheDocument();
     expect(screen.queryByTestId('rfp-your-requests-list')).not.toBeInTheDocument();
+    expect(screen.getByText(/open a project you already have/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('project-selector-nav-new'));
     expect(screen.getByRole('button', { name: /request access/i })).toBeInTheDocument();
-    expect(screen.getByText(/select a project to start planning/i)).toBeInTheDocument();
   });
 
   it('TBI-004 DoD-0 does not show a landing triage card when Apex view is granted', () => {
@@ -250,7 +271,7 @@ describe('ProjectSelector platform admin action', () => {
       />,
     );
     expect(screen.queryByRole('button', { name: /request access/i })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('project-selector-request-menu'));
+    fireEvent.click(screen.getByTestId('project-selector-nav-new'));
     expect(screen.getByTestId('project-selector-request-project-access')).toBeInTheDocument();
     expect(screen.getByTestId('rfp-submit-access-request-item')).toBeInTheDocument();
     expect(screen.queryByTestId('rfp-request-product-item')).not.toBeInTheDocument();
@@ -273,7 +294,7 @@ describe('ProjectSelector platform admin action', () => {
         onSelect={jest.fn()}
       />,
     );
-    fireEvent.click(screen.getByTestId('project-selector-request-menu'));
+    fireEvent.click(screen.getByTestId('project-selector-nav-new'));
     expect(screen.getByTestId('rfp-submit-access-pending-item')).toBeDisabled();
     expect(screen.queryByTestId('rfp-submit-access-request-item')).not.toBeInTheDocument();
     expect(screen.getByTestId('rfp-submit-access-pending-banner')).toHaveTextContent(/intake access requested/i);
@@ -295,7 +316,7 @@ describe('ProjectSelector platform admin action', () => {
         onSelect={jest.fn()}
       />,
     );
-    fireEvent.click(screen.getByTestId('project-selector-request-menu'));
+    fireEvent.click(screen.getByTestId('project-selector-nav-new'));
     fireEvent.click(screen.getByTestId('rfp-submit-access-request-item'));
     await waitFor(() => {
       expect(mutateAsync).toHaveBeenCalled();
@@ -314,7 +335,7 @@ describe('ProjectSelector platform admin action', () => {
         onSelect={jest.fn()}
       />,
     );
-    fireEvent.click(screen.getByTestId('project-selector-request-menu'));
+    fireEvent.click(screen.getByTestId('project-selector-nav-new'));
     expect(screen.getByTestId('project-selector-request-project-access')).toBeInTheDocument();
     expect(screen.getByTestId('rfp-request-product-item')).toBeInTheDocument();
     expect(screen.queryByTestId('rfp-your-requests-list')).not.toBeInTheDocument();
@@ -349,6 +370,7 @@ describe('ProjectSelector platform admin action', () => {
         onSelect={jest.fn()}
       />,
     );
+    fireEvent.click(screen.getByTestId('project-selector-nav-requests'));
     expect(screen.getByTestId('rfp-your-requests-list')).toBeInTheDocument();
     expect(screen.getByTestId('rfp-request-row-rfp-1')).toHaveTextContent(/test/i);
     expect(screen.getByTestId('rfp-request-row-rfp-1')).toHaveTextContent(/evaluating/i);
@@ -363,7 +385,7 @@ describe('ProjectSelector platform admin action', () => {
         onSelect={jest.fn()}
       />,
     );
-    fireEvent.click(screen.getByTestId('project-selector-request-menu'));
+    fireEvent.click(screen.getByTestId('project-selector-nav-new'));
     fireEvent.click(screen.getByTestId('project-selector-request-project-access'));
     expect(screen.getByRole('dialog', { name: /request project access/i })).toBeInTheDocument();
   });

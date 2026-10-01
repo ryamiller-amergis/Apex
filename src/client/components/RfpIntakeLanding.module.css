@@ -229,6 +229,45 @@
   color: var(--text-secondary);
 }
 
+.labelRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.hint {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.micButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.micButton:hover,
+.micButton:focus-visible {
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+}
+
+.micButtonActive {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  box-shadow: var(--glow-accent);
+}
+
 .input,
 .select,
 .textarea {
@@ -335,4 +374,43 @@
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+.confirmOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--text-primary) 55%, transparent);
+}
+
+.confirmDialog {
+  width: min(440px, 100%);
+  padding: 20px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-md);
+}
+
+.confirmTitle {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+}
+
+.confirmBody {
+  margin: 0 0 16px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.confirmActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }

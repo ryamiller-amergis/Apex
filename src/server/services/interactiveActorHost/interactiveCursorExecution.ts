@@ -8,7 +8,7 @@
  * `Agent.resume` by the previously persisted agent id. The grounded checkout
  * is opened by the caller and reused; this module owns only the Agent handle.
  */
-import { Agent } from '@cursor/sdk';
+import { Agent, JsonlLocalAgentStore } from '@cursor/sdk';
 import type { LocalAgentOptions } from '@cursor/sdk/dist/cjs/options.js';
 import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
 import type {
@@ -17,6 +17,19 @@ import type {
 } from '../aiRunsWorker/cursorExecution';
 import type { LocalCheckoutReader } from '../localCheckoutReader';
 import { createNativeReadTools } from '../nativeReadToolAdapter';
+
+let actorStore: JsonlLocalAgentStore | null = null;
+let actorStoreDir: string | null = null;
+
+function resolveActorStore(): JsonlLocalAgentStore | undefined {
+  const storeDir = process.env.AI_RUNS_INTERACTIVE_SDK_STORE_DIR?.trim();
+  if (!storeDir) return undefined;
+  if (!actorStore || actorStoreDir !== storeDir) {
+    actorStore = new JsonlLocalAgentStore(storeDir);
+    actorStoreDir = storeDir;
+  }
+  return actorStore;
+}
 
 /** Live Cursor Agent handle that can serve multiple serialized `send` calls. */
 export interface InteractiveCursorAgentHandle {
@@ -38,10 +51,18 @@ export async function acquireInteractiveCursorAgent(
   if (!apiKey) throw new Error('CURSOR_API_KEY is required');
 
   const resumeAgentId = options.resumeAgentId?.trim() || undefined;
+  const store = resolveActorStore();
   const local = {
     cwd: snapshot.workspaceRef,
     settingSources: ['project'],
     customTools: createNativeReadTools(checkout),
+    // Cloud keeps the SDK default. The local actor launcher disables retries so
+    // transport or stall failures surface immediately instead of looking like
+    // a multi-minute interview loop.
+    enableAgentRetries:
+      process.env.AI_RUNS_INTERACTIVE_AGENT_RETRIES?.trim().toLowerCase() !==
+      'false',
+    ...(store ? { store } : {}),
   } satisfies LocalAgentOptions;
   // The interactive host uses only checkout-backed read tools and never
   // resolves live repository MCP servers.

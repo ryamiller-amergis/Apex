@@ -97,6 +97,8 @@ const VALID_INTAKE = {
   audience: 'internal',
   dataSensitivity: 'internal-only',
   existingSolution: 'none known',
+  expectedUsers: 'small',
+  aiInApp: 'no',
 };
 
 const CREATED = {
@@ -199,6 +201,8 @@ describe('RFP intake self-scoped routes', () => {
         .field('audience', VALID_INTAKE.audience)
         .field('dataSensitivity', VALID_INTAKE.dataSensitivity)
         .field('existingSolution', VALID_INTAKE.existingSolution)
+        .field('expectedUsers', VALID_INTAKE.expectedUsers)
+        .field('aiInApp', VALID_INTAKE.aiInApp)
         .attach('attachments', Buffer.from('MZ'), { filename: 'malware.exe', contentType: 'application/x-msdownload' });
 
       expect(response.status).toBe(400);

@@ -33,6 +33,27 @@ describe('AgentComposer', () => {
 
     fireEvent.click(screen.getByTestId('demo-stop-btn'));
     expect(onCancel).toHaveBeenCalled();
+    expect(screen.getByTestId('demo-stop-btn')).toHaveAccessibleName('Stopping agent');
+    expect(screen.getByTestId('demo-stop-btn')).toBeDisabled();
+    expect(screen.getByTestId('demo-stopping-status')).toHaveTextContent('Stopping the agent…');
+    expect(screen.getByPlaceholderText('Stopping the agent…')).toBeInTheDocument();
+  });
+
+  it('keeps the stopping state when the session reports cancelling', () => {
+    render(
+      <AgentComposer
+        value=""
+        onChange={jest.fn()}
+        onSend={jest.fn()}
+        onCancel={jest.fn()}
+        isRunning
+        isCancelling
+        testIdPrefix="demo"
+      />,
+    );
+
+    expect(screen.getByTestId('demo-stop-btn')).toHaveAccessibleName('Stopping agent');
+    expect(screen.getByTestId('demo-stopping-status')).toHaveTextContent('Stopping the agent…');
   });
 
   it('renders attach, mic, and model controls when provided', () => {

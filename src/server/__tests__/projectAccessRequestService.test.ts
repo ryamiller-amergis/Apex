@@ -18,6 +18,10 @@ jest.mock('../services/notificationService', () => ({
   createNotification: jest.fn().mockResolvedValue({ id: 'notif-1' }),
 }));
 
+jest.mock('../services/rfpProposalService', () => ({
+  listIntakePrivateProjectNames: jest.fn().mockResolvedValue([]),
+}));
+
 import {
   approveProjectAccessRequest,
   createProjectAccessRequests,
@@ -27,7 +31,9 @@ import {
 import { getAssignmentsForUser } from '../services/userProjectAssignmentService';
 import { listProjectCatalog } from '../services/projectCatalogService';
 import { createNotification } from '../services/notificationService';
+import { listIntakePrivateProjectNames } from '../services/rfpProposalService';
 
+const mockListIntakePrivate = listIntakePrivateProjectNames as jest.Mock;
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
 const mockGetAssignmentsForUser = getAssignmentsForUser as jest.Mock;
 const mockListProjectCatalog = listProjectCatalog as jest.Mock;
@@ -151,6 +157,34 @@ describe('projectAccessRequestService', () => {
     const result = await listRequestableProjectsForUser('user-1');
 
     expect(result.map((project) => project.name)).toEqual(['MaxView']);
+  });
+
+  it('AR-6 omits intake-private projects from the requestable catalog', async () => {
+    mockListProjectCatalog.mockResolvedValue([
+      { id: '1', name: 'MaxView', description: '' },
+      { id: '2', name: 'Benefits Tracker', description: '' },
+    ]);
+    mockListIntakePrivate.mockResolvedValueOnce(['benefits tracker']);
+    mockGetAssignmentsForUser.mockResolvedValue([]);
+    const orderByMock = jest.fn().mockResolvedValue([]);
+    const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
+    mockDb.select.mockReturnValue({ from: jest.fn().mockReturnValue({ where: whereMock }) });
+
+    const result = await listRequestableProjectsForUser('user-1');
+
+    expect(result.map((project) => project.name)).toEqual(['MaxView']);
+  });
+
+  it('AR-6 refuses access requests for intake-private projects', async () => {
+    mockListProjectCatalog.mockResolvedValue([{ id: '2', name: 'Benefits Tracker', description: '' }]);
+    mockListIntakePrivate.mockResolvedValueOnce(['Benefits Tracker']);
+    mockGetAssignmentsForUser.mockResolvedValue([]);
+    mockSelectWhere([]);
+
+    const result = await createProjectAccessRequests('user-1', ['Benefits Tracker']);
+
+    expect(result).toEqual([]);
+    expect(mockDb.insert).not.toHaveBeenCalled();
   });
 
   it('approves a pending request and creates a project assignment', async () => {

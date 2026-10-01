@@ -7,9 +7,12 @@ import {
   isRfpVerdict,
   validateRfpAttachments,
   validateRfpIntakePayload,
+  type RfpArchitectureInput,
+  type RfpArchitectureSizing,
   type RfpHumanStatus,
   type RfpIntakePayload,
   type RfpVerdict,
+  type SubmitRfpReviewInput,
 } from '../../shared/types/rfpIntake';
 import { getUserId } from '../utils/requestUser';
 import { isSuperAdminRequest } from '../utils/superAdmin';
@@ -43,6 +46,15 @@ import {
   transitionStatus,
 } from '../services/rfpIntakeService';
 import { askEvaluationChat, listEvaluationChat } from '../services/rfpEvaluationChatService';
+import {
+  approveProposal,
+  deleteIntakeProject,
+  rejectProposal,
+  publishProposal,
+  regenerateProposal,
+  saveProposalDraft,
+  submitReview,
+} from '../services/rfpProposalService';
 import { createNotification } from '../services/notificationService';
 
 const router = Router();
@@ -100,6 +112,45 @@ function parseIntakeBody(body: Record<string, unknown>): RfpIntakePayload {
     constraints: emptyToNull(body.constraints),
     requestType: requestType as RfpIntakePayload['requestType'],
     existingSystemStack: requestType === 'change-existing' ? emptyToNull(body.existingSystemStack) : null,
+    expectedUsers: emptyToNull(body.expectedUsers) as RfpIntakePayload['expectedUsers'],
+    aiInApp: emptyToNull(body.aiInApp) as RfpIntakePayload['aiInApp'],
+  };
+}
+
+function parseArchitectureBody(body: Record<string, unknown>): RfpArchitectureInput {
+  return {
+    appType: (typeof body.appType === 'string' ? body.appType : '') as RfpArchitectureInput['appType'],
+    resources: (Array.isArray(body.resources)
+      ? body.resources.filter((item): item is string => typeof item === 'string')
+      : []) as RfpArchitectureInput['resources'],
+    requiresAi: body.requiresAi as boolean,
+    domainName: emptyToNull(body.domainName),
+    sizing: parseSizingBody(body.sizing),
+  };
+}
+
+function toNumber(value: unknown): number {
+  return typeof value === 'number' ? value : Number.NaN;
+}
+
+function parseSizingBody(value: unknown): RfpArchitectureSizing {
+  const body = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>;
+  return {
+    region: String(body.region ?? '') as RfpArchitectureSizing['region'],
+    sizingProfile: String(body.sizingProfile ?? '') as RfpArchitectureSizing['sizingProfile'],
+    environmentCount: toNumber(body.environmentCount),
+    uptimePattern: String(body.uptimePattern ?? '') as RfpArchitectureSizing['uptimePattern'],
+    storageGb: toNumber(body.storageGb),
+    aiUsage: (typeof body.aiUsage === 'string' ? body.aiUsage : null) as RfpArchitectureSizing['aiUsage'],
+  };
+}
+
+function parseSubmitReviewBody(body: Record<string, unknown>): SubmitRfpReviewInput {
+  const architecture = body.architecture;
+  return {
+    architecture: architecture && typeof architecture === 'object'
+      ? parseArchitectureBody(architecture as Record<string, unknown>)
+      : null,
   };
 }
 
@@ -154,12 +205,17 @@ async function persistUploadedFiles(
 async function notifySubmission(created: { id: string; title: string }): Promise<void> {
   const recipients = await resolveRfpSubmissionRecipients();
   for (const userId of recipients) {
-    await createNotification(userId, {
-      type: 'user-action',
-      title: 'New request for product',
-      body: created.title,
-      link: `/rfp-intake/${created.id}`,
-    });
+    if (!userId) continue;
+    try {
+      await createNotification(userId, {
+        type: 'user-action',
+        title: 'New request for product',
+        body: created.title,
+        link: `/rfp-intake/${created.id}`,
+      });
+    } catch {
+      // One recipient failing must not hide the request from the other platform admins.
+    }
   }
 }
 
@@ -233,7 +289,7 @@ router.post('/requests', ...ownerSubmit, acceptAttachments, async (req, res, nex
   try {
     const userId = getUserId(req);
     const payload = parseIntakeBody((req.body ?? {}) as Record<string, unknown>);
-    const intakeErrors = validateRfpIntakePayload(payload);
+    const intakeErrors = validateRfpIntakePayload(payload, { requireScaleAndAi: true });
     if (intakeErrors.length > 0) {
       return res.status(400).json({
         error: intakeErrors.join('; '),
@@ -292,6 +348,25 @@ router.post('/requests/:id/clarify', ...ownerSubmit, upload.none(), async (req, 
   try {
     const payload = parseIntakeBody((req.body ?? {}) as Record<string, unknown>);
     const updated = await answerClarification(req.params.id, getUserId(req), payload);
+    return res.json(updated);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.post('/requests/:id/approve', ...ownerSubmit, async (req, res, next) => {
+  try {
+    const updated = await approveProposal(req.params.id, getUserId(req));
+    return res.json(updated);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.post('/requests/:id/reject', ...ownerSubmit, async (req, res, next) => {
+  try {
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason : '';
+    const updated = await rejectProposal(req.params.id, getUserId(req), reason);
     return res.json(updated);
   } catch (err) {
     handleRfpError(err, res, next);
@@ -480,6 +555,69 @@ router.post('/triage/requests/:id/reviewer-decision', ...triageManage, async (re
       sourceMessageIds: Array.isArray(body.sourceMessageIds) ? body.sourceMessageIds : [],
       reevaluate: body.reevaluate !== false,
     }, { isSuperAdmin: isSuperAdminRequest(req) });
+    return res.json(updated);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.post('/triage/requests/:id/submit-review', ...triageManage, async (req, res, next) => {
+  try {
+    const updated = await submitReview(
+      req.params.id,
+      getUserId(req),
+      parseSubmitReviewBody((req.body ?? {}) as Record<string, unknown>),
+      { isSuperAdmin: isSuperAdminRequest(req) },
+    );
+    return res.json(updated);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.post('/triage/requests/:id/proposal/regenerate', ...triageManage, async (req, res, next) => {
+  try {
+    const updated = await regenerateProposal(req.params.id, getUserId(req), {
+      isSuperAdmin: isSuperAdminRequest(req),
+    });
+    return res.json(updated);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.put('/triage/requests/:id/proposal-draft', ...triageManage, async (req, res, next) => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const updated = await saveProposalDraft(req.params.id, getUserId(req), body.draft, {
+      isSuperAdmin: isSuperAdminRequest(req),
+    });
+    return res.json(updated);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.delete('/triage/requests/:id/project', ...triageManage, async (req, res, next) => {
+  try {
+    const updated = await deleteIntakeProject(req.params.id, getUserId(req), {
+      isSuperAdmin: isSuperAdminRequest(req),
+    });
+    return res.json(updated);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.post('/triage/requests/:id/proposal-draft/publish', ...triageManage, async (req, res, next) => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const updated = await publishProposal(
+      req.params.id,
+      getUserId(req),
+      { productOwnerId: typeof body.productOwnerId === 'string' ? body.productOwnerId : undefined },
+      { isSuperAdmin: isSuperAdminRequest(req) },
+    );
     return res.json(updated);
   } catch (err) {
     handleRfpError(err, res, next);

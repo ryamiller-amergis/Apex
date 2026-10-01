@@ -30,12 +30,14 @@ interface RfpEvaluationChatProps {
   requestId: string;
   canManage?: boolean;
   reviewerDecision?: RfpReviewerDecision | null;
+  evaluationInProgress?: boolean;
 }
 
 interface RfpReviewerDecisionFormProps {
   requestId: string;
   suggestion: (SuggestedReviewerDecision & { messageId: string }) | null;
   recorded: RfpReviewerDecision | null;
+  evaluationInProgress?: boolean;
   'data-testid'?: string;
 }
 
@@ -43,12 +45,15 @@ const RfpReviewerDecisionForm: React.FC<RfpReviewerDecisionFormProps> = ({
   requestId,
   suggestion,
   recorded,
+  evaluationInProgress = false,
 }) => {
   const apply = useApplyRfpReviewerDecision();
+  const [savedWithoutRerun, setSavedWithoutRerun] = useState(false);
   const {
     register,
     handleSubmit,
     reset,
+    getValues,
     formState: { errors, isSubmitting },
   } = useForm<ReviewerDecisionFormValues>({
     resolver: zodResolver(reviewerDecisionSchema),
@@ -60,16 +65,20 @@ const RfpReviewerDecisionForm: React.FC<RfpReviewerDecisionFormProps> = ({
     },
   });
 
+  const suggestionId = suggestion?.messageId ?? '';
+  const recordedAt = recorded?.decidedAt ?? '';
+
   useEffect(() => {
     reset({
       verdict: suggestion?.verdict ?? recorded?.verdict ?? 'build',
       rationale: suggestion?.rationale ?? recorded?.rationale ?? '',
       constraintsToAdd: suggestion?.constraintsToAdd ?? '',
-      reevaluate: true,
+      reevaluate: getValues('reevaluate'),
     });
-  }, [suggestion, recorded, reset]);
+  }, [suggestionId, recordedAt, suggestion, recorded, reset, getValues]);
 
   const onSubmit = async (values: ReviewerDecisionFormValues) => {
+    setSavedWithoutRerun(false);
     await apply.mutateAsync({
       id: requestId,
       verdict: values.verdict,
@@ -78,6 +87,7 @@ const RfpReviewerDecisionForm: React.FC<RfpReviewerDecisionFormProps> = ({
       sourceMessageIds: suggestion ? [suggestion.messageId] : [],
       reevaluate: values.reevaluate,
     });
+    setSavedWithoutRerun(!values.reevaluate);
   };
 
   return (
@@ -131,6 +141,16 @@ const RfpReviewerDecisionForm: React.FC<RfpReviewerDecisionFormProps> = ({
         />
         Re-run evaluation with these constraints
       </label>
+      {evaluationInProgress && (
+        <p className={styles.helper} role="status" {...{ 'data-testid': 'rfp-reviewer-decision-blocked' }}>
+          A re-evaluation is already running. Apply is available again when it finishes.
+        </p>
+      )}
+      {savedWithoutRerun && !evaluationInProgress && (
+        <p className={styles.helper} role="status" {...{ 'data-testid': 'rfp-reviewer-decision-saved' }}>
+          Reviewer decision saved. The current evaluation still stands.
+        </p>
+      )}
       {apply.isError && (
         <p className={styles.error} role="alert">
           {apply.error.message || 'Could not record the reviewer decision. Try again.'}
@@ -139,7 +159,7 @@ const RfpReviewerDecisionForm: React.FC<RfpReviewerDecisionFormProps> = ({
       <button
         type="submit"
         className={styles.primaryButton}
-        disabled={isSubmitting || apply.isPending}
+        disabled={isSubmitting || apply.isPending || evaluationInProgress}
         {...{ 'data-testid': 'rfp-reviewer-decision-submit' }}
       >
         {apply.isPending ? 'Applying…' : 'Apply reviewer decision'}
@@ -152,12 +172,15 @@ export const RfpEvaluationChat: React.FC<RfpEvaluationChatProps> = ({
   requestId,
   canManage = false,
   reviewerDecision = null,
+  evaluationInProgress = false,
 }) => {
   const [draft, setDraft] = useState('');
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const chatQuery = useRfpEvaluationChat(requestId, true);
   const ask = useAskRfpEvaluationChat();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- chat messages are replaced as a whole when the query updates; existing interaction stays as-is
   const messages = chatQuery.data ?? [];
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- suggestion scan stays memoized on the message list; existing interaction stays as-is
   const suggestion = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const item = messages[index];
@@ -259,6 +282,7 @@ export const RfpEvaluationChat: React.FC<RfpEvaluationChatProps> = ({
           requestId={requestId}
           suggestion={suggestion}
           recorded={reviewerDecision}
+          evaluationInProgress={evaluationInProgress}
           {...{ 'data-testid': 'rfp-reviewer-decision-apply' }}
         />
       )}

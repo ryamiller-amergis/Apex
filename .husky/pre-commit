@@ -1,2 +1,20 @@
-npx lint-staged
-node scripts/check-data-testid.mjs
+if ! npx lint-staged; then
+  echo
+  echo "ESLint pre-commit failed."
+  echo "In Cursor, run: /resolve-pre-commit-eslint"
+  exit 1
+fi
+
+if ! node scripts/check-data-testid.mjs; then
+  echo
+  echo "The data-testid pre-commit policy failed."
+  echo "In Cursor, run: /resolve-pre-commit-data-testid"
+  exit 1
+fi
+
+if ! node scripts/ci/check-theme-contrast.mjs; then
+  echo
+  echo "The theme-contrast pre-commit policy failed."
+  echo "In Cursor, run: /resolve-theme-contrast"
+  exit 1
+fi

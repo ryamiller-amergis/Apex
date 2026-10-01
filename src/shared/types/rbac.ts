@@ -103,7 +103,6 @@ export interface MyPermissionsResponse {
   lastSeenChangelogVersion: string | null;
   /** @deprecated Prefer `whatsNew.showOnLogin`. */
   showChangelogOnLogin: boolean;
-  betaAnnouncementDismissed: boolean;
   /** Unified What's New evaluation (FEAT-006). Optional during compatibility window. */
   whatsNew?: WhatsNewState;
   /**
@@ -122,5 +121,4 @@ export interface UpdatePreferencesRequest {
   /** Must equal the current valid bundled release when supplied. */
   lastSeenVersion?: string;
   showChangelogOnLogin?: boolean;
-  dismissBetaAnnouncement?: boolean;
 }

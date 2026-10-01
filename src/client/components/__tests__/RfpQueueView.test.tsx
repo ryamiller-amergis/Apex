@@ -27,12 +27,12 @@ const mockedShell = useAppShell as jest.MockedFunction<typeof useAppShell>;
 const mockedFlag = useFeatureFlag as jest.MockedFunction<typeof useFeatureFlag>;
 const mockedQueue = useRfpQueue as jest.MockedFunction<typeof useRfpQueue>;
 
-function renderQueue() {
+function renderQueue(embedded = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/rfp-intake']}>
-        <RfpQueueView />
+        <RfpQueueView embedded={embedded} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -84,5 +84,20 @@ describe('RfpQueueView', () => {
     } as never);
     renderQueue();
     expect(screen.queryByTestId('rfp-queue-view')).not.toBeInTheDocument();
+  });
+
+  it('WZ-3 shows accepted and declined outcome filters for Platform Admin outside an Apex project', () => {
+    mockedFlag.mockReturnValue(false);
+    mockedShell.mockReturnValue({
+      can: () => false,
+      selectedProject: 'MaxView',
+      isSuperAdmin: true,
+    } as never);
+
+    renderQueue(true);
+
+    expect(screen.getByTestId('rfp-queue-view')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Accepted' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Declined' })).toBeInTheDocument();
   });
 });

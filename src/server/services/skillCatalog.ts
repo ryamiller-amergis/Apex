@@ -1,5 +1,6 @@
 import * as azdev from 'azure-devops-node-api';
 import type { AdoProject, AdoRepo, SkillEntry, SkillDetail, SupportingFile, SkillFrontmatter } from '../../shared/types/skills';
+import { resolveAdoRepository } from './adoRepositoryTarget';
 
 const ORG_URL = process.env.ADO_ORG || '';
 const PAT = process.env.ADO_PAT || '';
@@ -131,6 +132,7 @@ export async function listRepos(project: string): Promise<AdoRepo[]> {
 }
 
 export async function listBranches(project: string, repo: string): Promise<string[]> {
+  ({ project, repo } = resolveAdoRepository(project, repo));
   const cacheKey = `branches:${project}:${repo}`;
   const cached = branchCache.get(cacheKey);
   if (cached) return cached;
@@ -160,6 +162,7 @@ export async function listSkills(
   repo: string,
   branch?: string,
 ): Promise<SkillEntry[]> {
+  ({ project, repo } = resolveAdoRepository(project, repo));
   const cacheKey = `skills:${project}:${repo}:${branch ?? 'default'}`;
   const cached = skillListCache.get(cacheKey);
   if (cached) return cached;
@@ -233,6 +236,7 @@ export async function getSkill(
   path: string,
   branch?: string,
 ): Promise<SkillDetail> {
+  ({ project, repo } = resolveAdoRepository(project, repo));
   const cacheKey = `detail:${project}:${repo}:${path}:${branch ?? 'default'}`;
   const cached = skillDetailCache.get(cacheKey);
   if (cached) return cached;
@@ -318,6 +322,7 @@ export async function getSkillFile(
   path: string,
   branch?: string,
 ): Promise<string> {
+  ({ project, repo } = resolveAdoRepository(project, repo));
   const cacheKey = `file:${project}:${repo}:${path}:${branch ?? 'default'}`;
   const cached = fileContentCache.get(cacheKey);
   if (cached) return cached;
@@ -365,6 +370,7 @@ export async function listRepoDir(
   dirPath: string,
   branch?: string,
 ): Promise<RepoFileEntry[]> {
+  ({ project, repo } = resolveAdoRepository(project, repo));
   const cacheKey = `dir:${project}:${repo}:${dirPath}:${branch ?? 'default'}`;
   const cached = dirListCache.get(cacheKey);
   if (cached) return cached;
@@ -413,6 +419,7 @@ export async function searchRepoCode(
   limit = 10,
 ): Promise<RepoCodeSearchResult[]> {
   if (!query.trim()) return [];
+  ({ project, repo } = resolveAdoRepository(project, repo));
 
   const cacheKey = `codesearch:${project}:${repo}:${branch ?? 'default'}:${query}:${limit}`;
   const cached = codeSearchCache.get(cacheKey);

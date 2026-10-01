@@ -115,6 +115,9 @@ describe('rfpEvaluationChatService', () => {
       expect.stringContaining(':::reviewer-decision'),
       expect.objectContaining({ feature: 'rfp-intake', entityId: 'rfp-1' }),
     );
+    const prompt = mockedBedrock.mock.calls[0][0] as string;
+    expect(prompt).toContain('everyday language');
+    expect(prompt).toContain('Do not mention JSON, field names, or stored codes');
     expect(created).toHaveLength(2);
     expect(created[0]?.role).toBe('user');
     expect(created[1]?.role).toBe('assistant');

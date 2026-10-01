@@ -24,6 +24,14 @@ import { useFocusChatMessage } from '../hooks/useFocusChatMessage';
 import { BrandLogo } from './BrandLogo';
 import { ReadAloudButton } from './ReadAloudButton';
 import { FoundationSkillUpdateBanner } from './FoundationSkillUpdateBanner';
+import { ProductSetup, type FoundationReview } from './ProductSetup';
+import {
+  draftProductFoundation,
+  reviseProductFoundation,
+  saveProductFoundation,
+  useProductSetup,
+} from '../hooks/useProductSetup';
+import { useAddProjectTeammate } from '../hooks/useRbac';
 import { AgentComposer } from './agentChat';
 import styles from './AgentHome.module.css';
 
@@ -493,6 +501,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
   const [seedMessages, setSeedMessages] = useState<ChatMessage[]>([]);
   const [focusMessageId, setFocusMessageId] = useState<string | undefined>();
   const [model, setModel] = useState(DEFAULT_MODEL_ID);
+  const [setupStep, setSetupStep] = useState<'people' | 'chat'>('people');
+  const [setupError, setSetupError] = useState<string | null>(null);
   const { data: globalDefaultModel } = useGlobalDefaultModel();
   const [isSending, setIsSending] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -517,6 +527,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
   const initialThreadIdRef = useRef(threadId); // captures URL param value at first render
   const speechRecognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const speechInputBaseRef = useRef('');
+  const foundationRetryRef = useRef<{ progress: string; task: () => Promise<string | null> } | null>(null);
 
   const {
     attachments,
@@ -529,6 +540,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
 
   const { data: skillConfig } = useProjectSkillConfig(selectedProject || null, selectedSkillSettingsId);
+  const setupQuery = useProductSetup(selectedProject || null);
+  const addTeammate = useAddProjectTeammate(selectedProject);
   const { data: repos = [] } = useSkillRepos(selectedProject || null, skillConfig?.skillProvider);
   const repoReadiness = useProjectRepositoryReadiness(skillConfig?.id, selectedProject || null);
 
@@ -563,7 +576,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
       }
     },
   });
-  const { streamingText, prdReady, isRunning, visibleMessages, progressLabel } = session;
+  const { streamingText, prdReady, isRunning, isCancelling, visibleMessages, progressLabel } = session;
 
   const visibleMessageIds = visibleMessages.map((m) => m.id);
   const highlightedMessageId = useFocusChatMessage(focusMessageId, visibleMessageIds);
@@ -786,8 +799,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
     await session.send(trimmed, { model });
   }, [threadId, isRunning, isSending, model, session]);
 
-  const handleSend = useCallback(async () => {
-    const text = input.trim();
+  const handleSend = useCallback(async (textOverride?: string) => {
+    const text = (textOverride ?? input).trim();
     if ((!text && attachments.length === 0) || isRunning || isSending) return;
     if (!threadId && !resolvedRepoName) return;
     if (!repoReadiness.isReady) return;
@@ -970,6 +983,46 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
   }, []);
 
   const isCompose = !threadId;
+  const setupOn = Boolean(setupQuery.data?.active);
+  const [foundationDraft, setFoundationDraft] = useState<string | null>(null);
+  const [foundationWorking, setFoundationWorking] = useState(false);
+  const [foundationError, setFoundationError] = useState<string | null>(null);
+  const [foundationSaved, setFoundationSaved] = useState(false);
+  const [foundationProgress, setFoundationProgress] = useState<string | null>(null);
+  const foundationReview = useMemo<FoundationReview>(() => ({
+    reply: foundationDraft,
+    error: foundationError,
+    progressLabel: foundationProgress,
+    saved: foundationSaved,
+  }), [foundationDraft, foundationError, foundationProgress, foundationSaved]);
+  const refetchSetup = setupQuery.refetch;
+
+  const runFoundation = useCallback(async (
+    progress: string,
+    task: () => Promise<string | null>,
+  ) => {
+    setFoundationProgress(progress);
+    setFoundationWorking(true);
+    setFoundationError(null);
+    try {
+      const markdown = await task();
+      if (markdown) setFoundationDraft(markdown);
+      return true;
+    } catch (err) {
+      setFoundationError(err instanceof Error ? err.message : 'The draft could not be created.');
+      return false;
+    } finally {
+      setFoundationWorking(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!setupOn || !threadId) return;
+    setThreadId(null);
+    setSeedMessages([]);
+  }, [setupOn, threadId]);
+
+  const setupHidesComposer = setupOn;
   const hasPills = quickSkillPills.length > 0 || quickMcpPills.length > 0;
   const needsSkillSelection = isCompose && hasPills && !selectedQuickSkill && !selectedMcpPill;
   const canSend = (input.trim().length > 0 || attachments.length > 0) && !isRunning && !isSending && !needsSkillSelection && (!!threadId || !!resolvedRepoName) && repoReadiness.isReady;
@@ -996,11 +1049,13 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
       onCancel={() => void handleStop()}
       disabled={needsSkillSelection || !repoReadiness.isReady}
       isRunning={isRunning}
+      isCancelling={isCancelling}
       isSending={isSending}
       isBusy={isSending || needsSkillSelection || !repoReadiness.isReady}
       shellDisabled={needsSkillSelection || !repoReadiness.isReady}
       canSend={canSend}
       allowEmptySend
+      // eslint-disable-next-line jsx-a11y/no-autofocus -- empty composer takes focus when the home is ready; existing interaction stays as-is
       autoFocus={isCompose && !needsSkillSelection && repoReadiness.isReady}
       rows={isCompose ? 3 : 1}
       placeholder={
@@ -1033,8 +1088,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
         speechError,
         onToggle: toggleSpeechRecognition,
       }}
-      model={isCompose ? undefined : model}
-      models={isCompose ? undefined : availableModels}
+      model={isCompose || setupOn ? undefined : model}
+      models={isCompose || setupOn ? undefined : availableModels}
       modelsLoading={modelsLoading}
       onModelChange={isCompose ? undefined : setModel}
       onKeyDown={handleKeyDown}
@@ -1078,9 +1133,63 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
     </div>
   );
 
+  const addSetupTeammate = (email: string) => {
+    setSetupError(null);
+    addTeammate.mutate(email, { onError: (err) => setSetupError(err.message) });
+  };
+
+  const productSetupPanel = (
+    <ProductSetup
+      step={setupStep}
+      candidates={setupQuery.data?.candidates ?? []}
+      adding={addTeammate.isPending}
+      error={setupError}
+      onAddEmail={addSetupTeammate}
+      onAddExisting={addSetupTeammate}
+      onSkip={() => setSetupStep('chat')}
+      onContinue={() => setSetupStep('chat')}
+      onChooseStep={setSetupStep}
+      initialFoundationAnswers={setupQuery.data?.foundationAnswers ?? []}
+      onCompleteFoundation={(answers) => {
+        const progress = 'Writing the draft from your answers';
+        const task = async () => (await draftProductFoundation(selectedProject, answers)).markdown;
+        foundationRetryRef.current = { progress, task };
+        void runFoundation(progress, task);
+      }}
+      creatingDraft={foundationWorking}
+      conversationStarted={foundationWorking || foundationDraft !== null || foundationError !== null || foundationSaved}
+      review={foundationReview}
+      onConfirmDraft={() => {
+        if (!foundationDraft) return;
+        const progress = 'Saving PRODUCT.md';
+        const markdown = foundationDraft;
+        const task = async () => {
+          await saveProductFoundation(selectedProject, markdown);
+          setFoundationSaved(true);
+          await refetchSetup();
+          return null;
+        };
+        foundationRetryRef.current = { progress, task };
+        void runFoundation(progress, task);
+      }}
+      onReviseDraft={(changes) => {
+        if (!foundationDraft) return;
+        const progress = 'Updating the draft';
+        const markdown = foundationDraft;
+        const task = async () => (await reviseProductFoundation(selectedProject, markdown, changes)).markdown;
+        foundationRetryRef.current = { progress, task };
+        void runFoundation(progress, task);
+      }}
+      onRetryDraft={() => {
+        const retry = foundationRetryRef.current;
+        if (retry) void runFoundation(retry.progress, retry.task);
+      }}
+    />
+  );
+
   return (
     <div className={styles.page}>
-      {showHistory && (
+      {showHistory && !setupOn && (
         <ThreadHistorySidebar
           activeThreadId={threadId}
           onSelectThread={handleSelectThread}
@@ -1100,24 +1209,30 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
             {...{ 'data-testid': 'agent-home-foundation-skill-banner' }}
           />
         )}
-        {isCompose ? (
-          <div className={styles.compose}>
-            <button
-              className={styles.historyToggleBtn}
-            onClick={() => setShowHistory((v) => !v)}
-            type="button"
-            {...{ 'data-testid': 'agent-home-compose-history-toggle' }}
-          >
-            {showHistory ? '← Hide History' : '⏱ History'}
-          </button>
+        {(isCompose || setupOn) ? (
+          <div className={`${styles.compose}${setupOn ? ` ${styles.setupCompose}` : ''}`}>
+            {!setupOn && (
+              <button
+                className={styles.historyToggleBtn}
+                onClick={() => setShowHistory((v) => !v)}
+                type="button"
+                {...{ 'data-testid': 'agent-home-compose-history-toggle' }}
+              >
+                {showHistory ? '← Hide History' : '⏱ History'}
+              </button>
+            )}
           <div className={styles.composeInner}>
-            <div className={styles.composeLogo}>
-              <BrandLogo />
-            </div>
+            {!setupOn && (
+              <div className={styles.composeLogo}>
+                <BrandLogo />
+              </div>
+            )}
 
-            <h1 className={styles.composeHeading}>What would you like to work on?</h1>
+            {setupOn ? productSetupPanel : (
+              <h1 className={styles.composeHeading}>What would you like to work on?</h1>
+            )}
 
-            <div className={styles.contextPills}>
+            {!setupOn && <div className={styles.contextPills}>
               {quickSkillPills.map((pill) => (
                 <button
                   key={pill.skillPath}
@@ -1162,7 +1277,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
                   {pill.label}
                 </button>
               ))}
-            </div>
+            </div>}
 
             {selectedQuickSkill && (
               <div className={styles.pillDescription}>
@@ -1177,9 +1292,9 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
               </div>
             )}
 
-            {inputArea}
+            {!setupHidesComposer && inputArea}
 
-            <p className={styles.hint}>Enter to send · Shift+Enter for new line</p>
+            {!setupHidesComposer && <p className={styles.hint}>Enter to send · Shift+Enter for new line</p>}
           </div>
         </div>
       ) : (
@@ -1253,20 +1368,18 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
                 className={styles.agentRow}
                 role="status"
                 aria-live="polite"
-                aria-label={progressLabel ?? 'Agent is processing'}
+                aria-label={isCancelling ? 'Stopping the agent' : (progressLabel ?? 'Agent is processing')}
                 {...{ 'data-testid': 'agent-home-typing' }}
               >
                 <div className={styles.agentAvatar}>AI</div>
                 <div className={`${styles.agentBubble} ${styles.typing}`}>
                   <span /><span /><span />
-                  {progressLabel && (
-                    <p
-                      className={styles.progressLabel}
-                      {...{ 'data-testid': 'agent-home-progress-label' }}
-                    >
-                      {progressLabel}
-                    </p>
-                  )}
+                  <p
+                    className={styles.progressLabel}
+                    {...{ 'data-testid': 'agent-home-progress-label' }}
+                  >
+                    {isCancelling ? 'Stopping the agent…' : (progressLabel ?? 'Agent is working…')}
+                  </p>
                 </div>
               </div>
             )}
@@ -1275,8 +1388,11 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
               <div className={styles.agentRow}>
                 <div className={styles.agentAvatar}>AI</div>
                 <div className={`${styles.agentBubble} ${styles.agentBubbleMd}`}>
+                  {isCancelling && (
+                    <p className={styles.progressLabel} role="status">Stopping the agent…</p>
+                  )}
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
-                  <span className={styles.cursor} />
+                  {!isCancelling && <span className={styles.cursor} />}
                 </div>
               </div>
             )}

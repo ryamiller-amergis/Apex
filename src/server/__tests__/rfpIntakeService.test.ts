@@ -16,6 +16,7 @@ jest.mock('../db/drizzle', () => ({
     query: {
       rfpRequests: { findFirst: jest.fn() },
       rfpEvaluations: { findFirst: jest.fn(), findMany: jest.fn() },
+      rfpProposalJobs: { findFirst: jest.fn() },
     },
     insert: jest.fn(() => ({
       values: mockInsertValues,
@@ -65,6 +66,8 @@ const INTAKE = {
   audience: 'internal' as const,
   dataSensitivity: 'internal-only' as const,
   existingSolution: 'none known',
+  expectedUsers: 'medium' as const,
+  aiInApp: 'yes' as const,
 };
 
 const REQUEST_ROW = {
@@ -156,6 +159,111 @@ describe('createRequest', () => {
     await expect(createRequest('owner-1', { ...INTAKE, title: '' }))
       .rejects.toMatchObject({ status: 400, code: 'VALIDATION' });
     expect(mockedAutoStart).not.toHaveBeenCalled();
+  });
+
+  it('FF-0 FF-1 rejects a new submission missing expected users or AI intent', async () => {
+    await expect(createRequest('owner-1', { ...INTAKE, expectedUsers: null, aiInApp: null }))
+      .rejects.toMatchObject({ status: 400, code: 'VALIDATION' });
+    expect(mockedAutoStart).not.toHaveBeenCalled();
+  });
+
+  it('FF-0 FF-1 persists expected users and AI intent', async () => {
+    await createRequest('owner-1', INTAKE);
+    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({
+      expectedUsers: 'medium',
+      aiInApp: 'yes',
+    }));
+  });
+
+  it('FF-5 maps legacy rows without the new columns to null', async () => {
+    mockedDb.query.rfpRequests.findFirst.mockResolvedValue({
+      ...REQUEST_ROW,
+      expectedUsers: null,
+      aiInApp: null,
+      architecture: null,
+      proposal: null,
+    });
+    const created = await createRequest('owner-1', INTAKE);
+    expect(created.expectedUsers).toBeNull();
+    expect(created.aiInApp).toBeNull();
+    expect(created.architecture).toBeNull();
+    expect(created.proposal).toBeNull();
+    expect(created.approval).toBeNull();
+  });
+});
+
+describe('proposal generation mapping', () => {
+  const JOB_ROW = {
+    id: 'job-1',
+    kind: 'proposal',
+    status: 'failed',
+    attempts: 3,
+    maxAttempts: 3,
+    errorMessage: 'Bedrock timed out',
+    createdAt: NOW,
+    startedAt: NOW,
+    completedAt: NOW,
+  };
+  const DRAFT = { kind: 'proposal', jobId: 'job-1' };
+
+  it('PG-0 maps the current job, review, and draft for admins', async () => {
+    mockedDb.query.rfpRequests.findFirst.mockResolvedValue({
+      ...REQUEST_ROW,
+      reviewSubmittedAt: NOW,
+      reviewSubmittedBy: 'admin-1',
+      currentProposalJobId: 'job-1',
+      proposalDraft: DRAFT,
+    });
+    mockedDb.query.rfpProposalJobs.findFirst.mockResolvedValue(JOB_ROW);
+    const created = await createRequest('owner-1', INTAKE);
+    expect(created.reviewSubmittedAt).toBe(NOW);
+    expect(created.proposalDraft).toEqual(DRAFT);
+    expect(created.proposalGeneration).toEqual({
+      jobId: 'job-1',
+      kind: 'proposal',
+      status: 'failed',
+      attempts: 3,
+      maxAttempts: 3,
+      errorMessage: 'Bedrock timed out',
+      queuedAt: NOW,
+      startedAt: NOW,
+      completedAt: NOW,
+    });
+  });
+
+  it('PG-1 drops a legacy proposal that has no generated document', async () => {
+    mockedDb.query.rfpRequests.findFirst.mockResolvedValue({
+      ...REQUEST_ROW,
+      proposal: { resourceCosts: [], productOwnerId: 'po-1' },
+    });
+    const created = await createRequest('owner-1', INTAKE);
+    expect(created.proposal).toBeNull();
+  });
+
+  it('PG-2 hides drafts and generation state from the requester', async () => {
+    mockedDb.query.rfpRequests.findFirst.mockResolvedValue({
+      ...REQUEST_ROW,
+      status: 'evaluated',
+      aiStatus: 'complete',
+      currentEvaluationId: 'eval-1',
+      currentProposalJobId: 'job-1',
+      proposalDraft: DRAFT,
+    });
+    mockedDb.query.rfpProposalJobs.findFirst.mockResolvedValue(JOB_ROW);
+    mockedDb.query.rfpEvaluations.findFirst.mockResolvedValue({
+      id: 'eval-1',
+      rfpRequestId: 'rfp-1',
+      version: 1,
+      ...VALID_OUTPUT,
+      rawOutput: VALID_OUTPUT,
+      createdAt: NOW,
+    });
+    const result = await answerClarification('rfp-1', 'owner-1', {
+      request: 'More detail',
+      clarifyingAnswers: ['Salesforce'],
+    });
+    expect(result.proposalDraft).toBeNull();
+    expect(result.proposalGeneration).toBeNull();
   });
 });
 

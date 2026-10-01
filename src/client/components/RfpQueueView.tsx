@@ -7,7 +7,7 @@ import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import { useRfpQueue } from '../hooks/useRfpTriage';
 import { DataGridFilterSelect, DataGridToolbar } from './DataGridToolbar';
 import gridStyles from './DataGrid.module.css';
-import { RfpTriageDetailPanel } from './RfpTriageDetailPanel';
+import { RfpRequestWizard } from './RfpRequestWizard';
 import { formatLabel } from './RfpStatusControl';
 import styles from './RfpQueueView.module.css';
 
@@ -16,7 +16,11 @@ function requestIdFromPath(pathname: string): string | undefined {
   return match?.[1];
 }
 
-const RfpQueueViewEnabled: React.FC = () => {
+interface RfpQueueViewEnabledProps {
+  embedded?: boolean;
+}
+
+const RfpQueueViewEnabled: React.FC<RfpQueueViewEnabledProps> = ({ embedded = false }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { can } = useAppShell();
@@ -24,9 +28,10 @@ const RfpQueueViewEnabled: React.FC = () => {
   const [verdict, setVerdict] = useState<RfpVerdict | ''>('');
   const [q, setQ] = useState('');
   const [page, setPage] = useState(0);
-  const requestId = requestIdFromPath(location.pathname);
+  const [embeddedRequestId, setEmbeddedRequestId] = useState<string | undefined>();
+  const requestId = embedded ? embeddedRequestId : requestIdFromPath(location.pathname);
   const queue = useRfpQueue({ status, verdict, q, page, enabled: true });
-  const canManage = can('rfp-intake:manage');
+  const canManage = embedded || can('rfp-intake:manage');
   const total = queue.data?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / 50));
 
@@ -44,8 +49,10 @@ const RfpQueueViewEnabled: React.FC = () => {
       <div className={styles.content}>
         <div className={gridStyles.section}>
           <div className={gridStyles.header}>
-            <h1 className={gridStyles.title}>RFP Intake</h1>
-            <p className={gridStyles.hint}>Search and review Requests for Product in the Apex project.</p>
+            <h1 className={gridStyles.title}>{embedded ? 'Product Requests' : 'RFP Intake'}</h1>
+            <p className={gridStyles.hint}>
+              Review submitted and in-progress requests, or filter Status to Accepted or Declined for completed outcomes.
+            </p>
           </div>
           <DataGridToolbar
             searchValue={q}
@@ -88,7 +95,7 @@ const RfpQueueViewEnabled: React.FC = () => {
 
           {queue.data && queue.data.items.length > 0 && (
             <div className={gridStyles.tableWrap}>
-              <table className={gridStyles.table}>
+              <table className={gridStyles.table} {...{ 'data-testid': 'rfp-queue-table' }}>
                 <thead>
                   <tr>
                     <th>Title</th>
@@ -119,7 +126,10 @@ const RfpQueueViewEnabled: React.FC = () => {
                           <button
                             type="button"
                             className={gridStyles.buttonGhost}
-                            onClick={() => navigate(`/rfp-intake/${item.id}`)}
+                            onClick={() => {
+                              if (embedded) setEmbeddedRequestId(item.id);
+                              else navigate(`/rfp-intake/${item.id}`);
+                            }}
                             {...{ 'data-testid': `rfp-queue-open-${item.id}` }}
                           >
                             Open
@@ -158,22 +168,34 @@ const RfpQueueViewEnabled: React.FC = () => {
       </div>
 
       {requestId && (
-        // data-testid-exempt — root dialog already has rfp-triage-detail
-        <RfpTriageDetailPanel
+        // data-testid-exempt — root dialog already has rfp-wizard
+        <RfpRequestWizard
+          mode="triage"
           requestId={requestId}
           canManage={canManage}
-          onClose={() => navigate('/rfp-intake')}
+          onClose={() => {
+            if (embedded) setEmbeddedRequestId(undefined);
+            else navigate('/rfp-intake');
+          }}
         />
       )}
     </div>
   );
 };
 
-export const RfpQueueView: React.FC = () => {
-  const { selectedProject, can } = useAppShell();
+interface RfpQueueViewProps {
+  embedded?: boolean;
+}
+
+export const RfpQueueView: React.FC<RfpQueueViewProps> = ({ embedded = false }) => {
+  const { selectedProject, can, isSuperAdmin } = useAppShell();
   const flagEnabled = useFeatureFlag('rfp-intake', 'Apex');
   const isApex = selectedProject.toLowerCase() === 'apex';
   const canView = can('rfp-intake:view') || can('rfp-intake:manage');
+
+  if (embedded && isSuperAdmin) {
+    return <RfpQueueViewEnabled embedded />;
+  }
 
   // @feature-flag:rfp-intake start winner=enabled
   return flagEnabled && isApex && canView ? (

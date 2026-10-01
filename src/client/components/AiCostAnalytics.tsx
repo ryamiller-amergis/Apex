@@ -59,6 +59,7 @@ const FEATURE_LABELS: Record<string, string> = {
   'home-chat': 'Home Chat (Ask Apex)',
   'ai-cost-insights': 'AI Cost Insights',
   'rfp-intake': 'RFP Intake',
+  'product-foundation': 'Product Foundation',
   other: 'Other',
 };
 
@@ -88,6 +89,7 @@ const FEATURE_COLORS: Record<string, string> = {
   'home-chat': '#3b82f6',
   'ai-cost-insights': '#64748b',
   'rfp-intake': '#14b8a6',
+  'product-foundation': '#10b981',
   other: '#94a3b8',
 };
 
@@ -181,6 +183,7 @@ const KpiCard: React.FC<KpiCardProps> = ({
   const fallbackId = `ai-cost-kpi-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
 
   return (
+    // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- optional KPI drill-down stays a click on the card; existing interaction stays as-is
     <div
       className={styles.kpiCard}
       onClick={onClick}
@@ -286,6 +289,7 @@ const FeatureBarChart: React.FC<{ data: Array<{ feature: string; costUsd: number
         data={chartData}
         layout="vertical"
         margin={{ top: 0, right: 40, left: 110, bottom: 0 }}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Recharts click payload is untyped; existing interaction stays as-is
         onClick={onFeatureClick ? (data: any) => { const f = data?.activePayload?.[0]?.payload?.feature; if (f) onFeatureClick(f); } : undefined}
         style={onFeatureClick ? { cursor: 'pointer' } : undefined}
         {...{ 'data-testid': 'ai-cost-feature-bar-chart' }}

@@ -229,6 +229,24 @@ function isSuccessfulWait(result: CursorExecutionResult): boolean {
   );
 }
 
+function unsuccessfulWaitError(result: CursorExecutionResult): Error {
+  const status = String(result.waitResult.status || 'unknown').slice(0, 64);
+  const rawDetail =
+    result.waitResult.error?.message ?? result.waitResult.result ?? '';
+  const detail = redactFailureMessage(rawDetail);
+  const error = new Error(
+    detail
+      ? `Cursor run ended with status "${status}": ${detail}`
+      : `Cursor run ended with status "${status}"`,
+  );
+  if (result.waitResult.error?.code) {
+    Object.assign(error, {
+      code: result.waitResult.error.code.slice(0, 64),
+    });
+  }
+  return error;
+}
+
 export function createInteractiveSessionActor(
   dependencies: InteractiveActorDependencies,
 ): InteractiveSessionActor {
@@ -533,7 +551,7 @@ export function createInteractiveSessionActor(
 
       if (cancellationRequested) throw new InteractiveCancellationObservedError();
       if (!isSuccessfulWait(result)) {
-        throw new Error('Interactive turn did not finish successfully');
+        throw unsuccessfulWaitError(result);
       }
 
       // Durable FINAL assistant message so a refresh/replay always shows the

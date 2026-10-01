@@ -8,6 +8,18 @@ Apex (formerly AI-Pilot) is an internal product-building and project-management 
 
 ## Key Terminology
 
+### Product foundation
+
+- **Definition:** The first maintained description of a new product: who it is for, what the first release includes and excludes, and the success criteria that say it worked.
+- **Use when:** A product owner, or a platform admin acting for that project, kicks off the product after the Apex project exists and before a design interview starts.
+- **Don't confuse with:** An Interview (the design conversation that becomes a PRD), a PRD, a Design Doc, or Apex's own `context.md`. The product foundation lives in `PRODUCT.md` at the root of that product's repository.
+
+### Product setup
+
+- **Definition:** The steps a project admin takes on Home, for a project created from an approved proposal, to add teammates and capture the product foundation.
+- **Use when:** Right after that project exists, until the product foundation is written.
+- **Don't confuse with:** An Interview, a guided walkthrough, or the product foundation itself. Product setup is the Home flow. The product foundation is the description that flow produces.
+
 - **Diagram** — a freeform, human-drawn, saveable and shareable whiteboard canvas used for ideation. Use Diagram for artifacts managed through the `/diagrams` module and `diagram:*` permissions. A Diagram is not a Design Prototype (approved-feature interactive HTML), a Mermaid diagram generated inside documentation, or a UI Lab mock generated from a prompt. The v1 term does not imply real-time collaboration or embedding in ADRs, PRDs, or design documents.
 
 ## Key Features

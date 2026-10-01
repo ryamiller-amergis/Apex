@@ -31,7 +31,7 @@ test.describe('RFP intake landing VT-05 VT-10', () => {
     await loginAsPersona('ba');
     await page.goto('/');
 
-    await expect(page.getByText(/select a project to start planning/i)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/open a project you already have/i)).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('rfp-request-product-item')).toHaveCount(0);
     await expect(page.getByTestId('project-selector-request-menu')).toHaveCount(0);
     await expect(page.getByTestId('rfp-your-requests-list')).toHaveCount(0);
@@ -93,8 +93,12 @@ test.describe('RFP intake landing VT-05 VT-10', () => {
     await loginAsPersona('ba');
     await page.goto('/');
 
-    await expect(page.getByTestId('project-selector-request-menu')).toBeVisible({ timeout: 15_000 });
-    await page.getByTestId('project-selector-request-menu').click();
+    await expect(page.getByTestId('project-selector-nav-requests')).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId('project-selector-nav-requests').click();
+    await expect(page.getByTestId('rfp-your-requests-list')).toBeVisible();
+    await expect(page.getByTestId('rfp-request-row-rfp-e2e-1')).toContainText(/evaluating/i);
+
+    await page.getByTestId('project-selector-nav-new').click();
     await page.getByTestId('rfp-request-product-item').click();
     await expect(page.getByTestId('rfp-submission-modal')).toBeVisible();
 
@@ -103,12 +107,13 @@ test.describe('RFP intake landing VT-05 VT-10', () => {
     await page.getByTestId('rfp-field-request').fill('Need a tracker');
     await page.getByTestId('rfp-field-problem').fill('Fragmented intake');
     await page.getByTestId('rfp-field-existingSolution').fill('none');
+    await page.getByTestId('rfp-field-expectedUsers').selectOption('small');
+    await page.getByTestId('rfp-field-aiInApp').selectOption('no');
     await page.getByTestId('rfp-submit-button').click();
 
-    await expect(page.getByTestId('rfp-your-requests-list')).toBeVisible();
-    await expect(page.getByTestId('rfp-request-row-rfp-e2e-1')).toContainText(/evaluating/i);
-    await page.getByTestId('rfp-request-row-rfp-e2e-1').click();
-    await expect(page.getByTestId('rfp-detail-drawer')).toBeVisible();
+    await expect(page.getByTestId('rfp-wizard')).toBeVisible();
+    await expect(page.getByTestId('rfp-wizard-intake')).toBeVisible();
+    await page.getByTestId('rfp-wizard-step-2').click();
     await expect(page.getByTestId('rfp-activity-list')).toBeVisible();
   });
 });

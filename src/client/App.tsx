@@ -4,7 +4,6 @@ import { ErrorBoundary } from 'react-error-boundary';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { DueDateReasonModal } from './components/DueDateReasonModal';
-import { BetaAnnouncementModal } from './components/BetaAnnouncementModal';
 import { Changelog } from './components/Changelog';
 import { GuidedWalkthroughHost } from './components/GuidedWalkthroughHost';
 import { WhatsNewBanner } from './components/WhatsNewBanner';
@@ -21,6 +20,7 @@ import { ChatAgentPanel } from './components/ChatAgentPanel';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { ToastContainer } from './components/ToastContainer';
 import { useAppShell } from './hooks/useAppShell';
+import { hasPlatformProjectListingChoice, markPlatformProjectListing } from './utils/platformLanding';
 import { useProjectMenuConfig } from './hooks/useProjectMenuConfig';
 import { useProjectRepoConfigs } from './hooks/useProjectRepoConfigs';
 import { useProjectSkillConfig } from './hooks/useProjectSkillConfig';
@@ -284,8 +284,6 @@ function App() {
     handleConfirmDueDateChange,
     handleCancelDueDateChange,
     handleFieldUpdate,
-    betaAnnouncementDismissed,
-    handleDismissBetaAnnouncement,
   } = useAppShell({ workItemsEnabled: needsWorkItems });
 
   // Deep-link from API key expiry notifications: /admin/api-keys?project=…
@@ -297,7 +295,6 @@ function App() {
     changeProject(project);
   }, [location.pathname, location.search, selectedProject, availableProjects, changeProject]);
 
-  const showBetaAnnouncement = useFeatureFlag('beta-to-prod-announcement', selectedProject);
   const rfpIntakeEnabled = useFeatureFlag('rfp-intake', 'Apex');
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
@@ -427,6 +424,15 @@ function App() {
     });
 
     if (currentView === 'platform-admin' && !isSuperAdmin) navigate('/');
+    if (
+      currentView === 'project-selector' &&
+      isSuperAdmin &&
+      !isRestricted &&
+      !hasPlatformProjectListingChoice()
+    ) {
+      navigate('/platform-admin', { replace: true });
+      return;
+    }
     if (currentView === 'home'           && !canAccessHome) navigate(fallback);
     if (currentView === 'admin'         && !can('admin:roles'))   navigate(fallback);
     if (currentView === 'calendar'      && !isSuperAdmin && (!effectiveEnabledViews.includes('calendar')  || !can('calendar:view')))  navigate(fallback);
@@ -442,7 +448,9 @@ function App() {
     if (currentView === 'feature-requests' && !isSuperAdmin && (!effectiveEnabledViews.includes('feature-requests') || !can('feature-requests:view'))) navigate(fallback);
     if (currentView === 'rfp-intake') {
       const isApex = selectedProject.toLowerCase() === 'apex';
-      const allowed = rfpIntakeEnabled && isApex && (isSuperAdmin || (effectiveEnabledViews.includes('rfp-intake') && can('rfp-intake:view')));
+      const allowed = rfpIntakeEnabled && (
+        isSuperAdmin || (isApex && effectiveEnabledViews.includes('rfp-intake') && can('rfp-intake:view'))
+      );
       if (!allowed) navigate(fallback);
     }
     if (currentView === 'ui-lab'        && !isSuperAdmin && (!effectiveEnabledViews.includes('ui-lab') || !can('ui-lab:view') || !isInAnyGroup(['UI/UX']))) navigate(fallback);
@@ -607,12 +615,14 @@ function App() {
     }
 
     return (
+      <NotificationWrapper can={can}>
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <ProjectSelector
           selectedProject={selectedProject}
           onSelect={(project) => {
             setPendingProject(project);
           }}
+          showNotifications={can('notifications:view')}
           isSuperAdmin={isSuperAdmin}
           onOpenPlatformAdmin={() => navigate('/platform-admin')}
           hasUnreadChangelog={hasUnreadChangelog}
@@ -644,16 +654,21 @@ function App() {
           whatsNewBlocksWalkthrough={whatsNewBlocksAutomaticWalkthrough}
         />
       </ErrorBoundary>
+      </NotificationWrapper>
     );
   }
 
   if (currentView === 'platform-admin') {
     if (!permissionsLoaded || !isSuperAdmin) return null;
     return (
+      <NotificationWrapper can={can}>
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <Suspense fallback={<ViewSkeleton />}>
           <PlatformAdmin
-            onBackToProjects={() => navigate('/')}
+            onBackToProjects={() => {
+              markPlatformProjectListing();
+              navigate('/');
+            }}
             user={authenticatedUser}
             theme={theme}
             hasUnreadChangelog={hasUnreadChangelog}
@@ -663,6 +678,7 @@ function App() {
           />
         </Suspense>
       </ErrorBoundary>
+      </NotificationWrapper>
     );
   }
 
@@ -748,7 +764,10 @@ function App() {
             selectedSkillSettingsId={selectedSkillSettingsId}
             onChangeSkillSettings={isRestricted ? undefined : changeSkillSettings}
             onNavigateHome={() => navigate('/home')}
-            onNavigateProjects={isRestricted ? undefined : () => navigate('/')}
+            onNavigateProjects={isRestricted ? undefined : () => {
+              if (isSuperAdmin) markPlatformProjectListing();
+              navigate('/');
+            }}
             onNavigateCalendar={() => navigate('/calendar')}
             onNavigatePlanning={() => navigate(`/planning/${planningTab}`)}
             onNavigateCloudCost={() => navigate('/cloud-cost')}
@@ -1310,14 +1329,6 @@ function App() {
           whatsNewSettled={whatsNewAutomaticOverlaySettled}
           whatsNewBlocksWalkthrough={whatsNewBlocksAutomaticWalkthrough}
         />
-        {showBetaAnnouncement && !(isSuperAdmin && betaAnnouncementDismissed) && (
-          // data-testid-exempt — BetaAnnouncementModal API has no data-testid prop
-          <BetaAnnouncementModal
-            isSuperAdmin={isSuperAdmin}
-            onDismiss={handleDismissBetaAnnouncement}
-          />
-        )}
-
         {/* data-testid-exempt — ChatAgentPanel API has no data-testid prop */}
         <ChatAgentPanel
           thread={activeThread}

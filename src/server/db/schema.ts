@@ -64,6 +64,13 @@ import type {
   RfpTechVelocity,
   RfpVerdict,
   RfpEvaluationChatRole,
+  RfpAiIntent,
+  RfpArchitecture,
+  RfpDraftKind,
+  RfpExpectedUserScale,
+  RfpGeneratedDraft,
+  RfpProposal,
+  RfpProposalJobStatus,
 } from '../../shared/types/rfpIntake';
 import type { DesignModuleIconKey } from '../../shared/types/designModule';
 import type {
@@ -2685,9 +2692,24 @@ export const rfpRequests = pgTable('rfp_requests', {
   reviewerId: text('reviewer_id').references(() => appUsers.oid, { onDelete: 'set null' }),
   reviewerDecidedAt: timestamp('reviewer_decided_at', { withTimezone: true, mode: 'string' }),
   reviewerSourceMessageIds: jsonb('reviewer_source_message_ids').$type<string[]>().notNull().default([]),
+  expectedUsers: text('expected_users').$type<RfpExpectedUserScale>(),
+  aiInApp: text('ai_in_app').$type<RfpAiIntent>(),
+  architecture: jsonb('architecture').$type<RfpArchitecture>(),
+  reviewSubmittedAt: timestamp('review_submitted_at', { withTimezone: true, mode: 'string' }),
+  reviewSubmittedBy: text('review_submitted_by').references(() => appUsers.oid, { onDelete: 'set null' }),
+  currentProposalJobId: uuid('current_proposal_job_id').references((): AnyPgColumn => rfpProposalJobs.id, { onDelete: 'set null' }),
+  proposalDraft: jsonb('proposal_draft').$type<RfpGeneratedDraft>(),
+  proposal: jsonb('proposal').$type<RfpProposal>(),
+  approvedRepoName: text('approved_repo_name'),
+  approvedRepoUrl: text('approved_repo_url'),
+  apexProject: text('apex_project'),
+  approvedAt: timestamp('approved_at', { withTimezone: true, mode: 'string' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
+  apexProjectUniq: uniqueIndex('idx_rfp_requests_apex_project')
+    .on(sql`lower(${t.apexProject})`)
+    .where(sql`${t.apexProject} IS NOT NULL`),
   ownerCreatedIdx: index('idx_rfp_requests_owner_created').on(t.ownerId, t.createdAt),
   statusCreatedIdx: index('idx_rfp_requests_status_created').on(t.status, t.createdAt),
   aiStatusIdx: index('idx_rfp_requests_ai_status').on(t.aiStatus),
@@ -2772,6 +2794,35 @@ export const rfpEvaluationMessages = pgTable('rfp_evaluation_messages', {
   requestCreatedIdx: index('idx_rfp_evaluation_messages_request_created').on(t.rfpRequestId, t.createdAt),
 }));
 
+export const rfpProposalJobs = pgTable('rfp_proposal_jobs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  rfpRequestId: uuid('rfp_request_id').notNull().references((): AnyPgColumn => rfpRequests.id, { onDelete: 'cascade' }),
+  kind: text('kind').$type<RfpDraftKind>().notNull(),
+  status: text('status').$type<RfpProposalJobStatus>().notNull().default('queued'),
+  verdict: text('verdict').$type<RfpVerdict>().notNull(),
+  inputFingerprint: text('input_fingerprint').notNull(),
+  requestedBy: text('requested_by').references(() => appUsers.oid, { onDelete: 'set null' }),
+  attempts: integer('attempts').notNull().default(0),
+  maxAttempts: integer('max_attempts').notNull().default(3),
+  availableAt: timestamp('available_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  ownerInstance: text('owner_instance'),
+  heartbeatAt: timestamp('heartbeat_at', { withTimezone: true, mode: 'string' }),
+  lockExpiresAt: timestamp('lock_expires_at', { withTimezone: true, mode: 'string' }),
+  draft: jsonb('draft').$type<RfpGeneratedDraft>(),
+  errorCode: text('error_code'),
+  errorMessage: text('error_message'),
+  startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
+  completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  oneActive: uniqueIndex('idx_rfp_proposal_jobs_one_active')
+    .on(t.rfpRequestId)
+    .where(sql`${t.status} IN ('queued', 'researching-prices', 'writing')`),
+  claimIdx: index('idx_rfp_proposal_jobs_claim').on(t.status, t.availableAt, t.createdAt),
+  requestCreatedIdx: index('idx_rfp_proposal_jobs_request_created').on(t.rfpRequestId, t.createdAt),
+}));
+
 export const rfpRequestsRelations = relations(rfpRequests, ({ one, many }) => ({
   owner: one(appUsers, {
     fields: [rfpRequests.ownerId],
@@ -2780,6 +2831,10 @@ export const rfpRequestsRelations = relations(rfpRequests, ({ one, many }) => ({
   currentEvaluation: one(rfpEvaluations, {
     fields: [rfpRequests.currentEvaluationId],
     references: [rfpEvaluations.id],
+  }),
+  currentProposalJob: one(rfpProposalJobs, {
+    fields: [rfpRequests.currentProposalJobId],
+    references: [rfpProposalJobs.id],
   }),
   evaluations: many(rfpEvaluations),
   comments: many(rfpComments),

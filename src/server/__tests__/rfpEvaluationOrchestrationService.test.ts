@@ -100,6 +100,8 @@ const FAKE_REQUEST: RfpRequest = {
   constraints: null,
   requestType: null,
   existingSystemStack: null,
+  expectedUsers: 'large',
+  aiInApp: 'not-sure',
   status: 'evaluating',
   aiStatus: 'evaluating',
   aiThreadId: null,
@@ -109,6 +111,13 @@ const FAKE_REQUEST: RfpRequest = {
   createdAt: '2026-08-19T12:00:00.000Z',
   updatedAt: '2026-08-19T12:00:00.000Z',
   reviewerDecision: null,
+  architecture: null,
+  reviewSubmittedAt: null,
+  reviewSubmittedBy: null,
+  proposalGeneration: null,
+  proposalDraft: null,
+  proposal: null,
+  approval: null,
 };
 
 const FAKE_SKILL_CONFIG = {
@@ -174,6 +183,18 @@ describe('autoStartEvaluation TBI-002', () => {
     }));
     expect(mockedSetThread).toHaveBeenCalledWith('rfp-1', 'thread-1');
     expect(isWatcherActive('rfp-1')).toBe(true);
+  });
+
+  it('FF-4 includes expected users and AI intent in the intake JSON', async () => {
+    mockedGetRequest.mockResolvedValue(FAKE_REQUEST);
+    mockedResolveSkillConfig.mockResolvedValue(FAKE_SKILL_CONFIG as any);
+    mockedCreateThread.mockResolvedValue(FAKE_THREAD as any);
+
+    await autoStartEvaluation('rfp-1');
+
+    const kickoff = mockedCreateThread.mock.calls[0]?.[1] as { freeformContext: string };
+    expect(kickoff.freeformContext).toContain('"expectedUsers": "large"');
+    expect(kickoff.freeformContext).toContain('"aiInApp": "not-sure"');
   });
 
   it('includes a binding reviewer decision in kickoff context', async () => {

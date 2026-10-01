@@ -22,6 +22,15 @@ export const RfpEvaluationCard: React.FC<RfpEvaluationCardProps> = ({
 
   return (
     <div className={styles.card} {...{ 'data-testid': 'rfp-current-evaluation' }}>
+      <div className={styles.aiDisclosure}>
+        <span className={styles.aiBadge} {...{ 'data-testid': 'rfp-ai-generated-badge' }}>
+          <span className={styles.sparkle} aria-hidden="true">✦</span>
+          AI-generated
+        </span>
+        <p className={styles.aiNotice} {...{ 'data-testid': 'rfp-ai-generated-notice' }}>
+          Review for accuracy before making a decision.
+        </p>
+      </div>
       {reviewerDecision && (
         <div className={styles.reviewerBanner} {...{ 'data-testid': 'rfp-reviewer-decision' }}>
           <p className={styles.headline}>

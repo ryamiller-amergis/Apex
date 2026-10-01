@@ -53,10 +53,22 @@ jest.mock('../UserMenu', () => ({
   UserMenu: () => <div data-testid="user-menu" />,
 }));
 
+jest.mock('../NotificationBell', () => ({
+  NotificationBell: () => <button type="button" aria-label="Notifications" data-testid="notification-bell" />,
+}));
+
 jest.mock('../WalkthroughsAdminPanel', () => ({
   WalkthroughsAdminPanel: () => (
     <div data-testid="walkthroughs-admin-panel">
       <div data-testid="walkthrough-catalog" />
+    </div>
+  ),
+}));
+
+jest.mock('../RfpQueueView', () => ({
+  RfpQueueView: ({ embedded }: { embedded?: boolean }) => (
+    <div data-testid="platform-admin-product-requests-view">
+      {embedded ? 'Embedded product requests' : 'Product requests'}
     </div>
   ),
 }));
@@ -400,6 +412,23 @@ describe('PlatformAdmin user-project access', () => {
       expect(approveRequest).toHaveBeenCalledWith({ requestId: 'request-1' });
       expect(rejectRequest).toHaveBeenCalledWith({ requestId: 'request-2' });
     });
+  });
+});
+
+describe('PlatformAdmin product requests tab', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUseAppShell.mockReturnValue({ selectedProject: 'MaxView', isSuperAdmin: true });
+  });
+
+  it('WZ-3 lets a platform admin open the product request queue', async () => {
+    const user = userEvent.setup();
+    setupPlatformAdmin();
+
+    await user.click(screen.getByTestId('platform-admin-tab-product-requests'));
+
+    expect(screen.getByTestId('platform-admin-panel-product-requests')).toBeInTheDocument();
+    expect(screen.getByTestId('platform-admin-product-requests-view')).toHaveTextContent('Embedded product requests');
   });
 });
 

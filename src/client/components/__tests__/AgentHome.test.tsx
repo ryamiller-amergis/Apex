@@ -29,12 +29,14 @@ const rerenderAgentHome = (
   props: { selectedProject: string },
 ) => rerender(agentHomeTree(props));
 import {
+  useChatThreadList,
   useSkillList,
   useSkillRepos,
   useStartChat,
 } from '../../hooks/useChatThreads';
 import { useChatAttachments } from '../../hooks/useChatAttachments';
 import { useProjectSkillConfig } from '../../hooks/useProjectSkillConfig';
+import { useProductSetup } from '../../hooks/useProductSetup';
 
 jest.mock('../../hooks/useChatThreads', () => ({
   useSkillRepos: jest.fn(),
@@ -91,6 +93,14 @@ jest.mock('../../hooks/useProjectRepositoryReadiness', () => ({
     'A project administrator must clone this repository before repository-dependent AI work can run.',
 }));
 
+jest.mock('../../hooks/useProductSetup', () => {
+  const actual = jest.requireActual('../../hooks/useProductSetup');
+  return {
+    ...actual,
+    useProductSetup: jest.fn(() => ({ data: { active: false, skillPath: '', model: 'auto-smart', candidates: [] } })),
+  };
+});
+
 jest.mock('../../hooks/useSpeechOutput', () => ({
   useSpeechOutput: jest.fn(() => ({
     speak: jest.fn(),
@@ -135,6 +145,10 @@ describe('AgentHome', () => {
       json: () => Promise.resolve({ ok: true }),
     }) as jest.Mock;
     mockUseChatStream.mockReturnValue(idleStream);
+    (useProductSetup as jest.Mock).mockReturnValue({
+      data: { active: false, skillPath: '', model: 'auto-smart', candidates: [] },
+    });
+    (useChatThreadList as jest.Mock).mockReturnValue({ data: [], isLoading: false, error: null });
 
     (useProjectSkillConfig as jest.Mock).mockReturnValue({ data: null });
     (useSkillRepos as jest.Mock).mockReturnValue({
@@ -610,6 +624,71 @@ describe('AgentHome', () => {
         const body = JSON.parse(messageCall![1].body);
         expect(body.model).toBe('claude-opus-4-6');
       });
+    });
+  });
+
+  describe('product setup', () => {
+    const setupSkillPath = '.cursor/skills/product-foundation/SKILL.md';
+
+    beforeEach(() => {
+      (useProductSetup as jest.Mock).mockReturnValue({
+        data: { active: true, skillPath: setupSkillPath, model: 'auto-smart', candidates: [] },
+      });
+    });
+
+    it('keeps setup on the form and does not reopen an old chat', async () => {
+      (useChatThreadList as jest.Mock).mockReturnValue({
+        data: [{
+          id: 'setup-thread',
+          lastActivityAt: '2026-09-30T12:00:00.000Z',
+          kickoff: { skillPath: setupSkillPath },
+        }],
+        isLoading: false,
+        error: null,
+      });
+
+      renderAgentHome({ selectedProject: 'To Do App' });
+
+      expect(await screen.findByTestId('product-setup')).toBeInTheDocument();
+      expect(screen.getByTestId('product-setup-people-form')).toBeInTheDocument();
+      expect(screen.queryByTestId('agent-home-setup-header')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('agent-home-composer-input')).not.toBeInTheDocument();
+      expect(mutateAsync).not.toHaveBeenCalled();
+    });
+
+    it('hides history in compose mode while setup is active', () => {
+      renderAgentHome({ selectedProject: 'To Do App' });
+      expect(screen.getByTestId('product-setup')).toBeInTheDocument();
+      expect(screen.queryByTestId('agent-home-compose-history-toggle')).not.toBeInTheDocument();
+    });
+
+    it('asks Bedrock for one draft after the four-part review', async () => {
+      renderAgentHome({ selectedProject: 'To Do App' });
+
+      fireEvent.click(screen.getByTestId('product-setup-step-2'));
+      for (let index = 0; index < 4; index += 1) {
+        fireEvent.change(screen.getByTestId('product-setup-foundation-answer'), {
+          target: { value: `Guided answer ${index + 1}` },
+        });
+        fireEvent.click(screen.getByTestId('product-setup-foundation-next'));
+      }
+
+      await waitFor(() => {
+        const draftCall = (global.fetch as jest.Mock).mock.calls.find((call) =>
+          String(call[0]).includes('/api/admin/product-setup/draft'),
+        );
+        expect(draftCall).toBeDefined();
+        const body = JSON.parse(draftCall![1].body);
+        expect(body.project).toBe('To Do App');
+        expect(body.answers).toEqual([
+          'Guided answer 1',
+          'Guided answer 2',
+          'Guided answer 3',
+          'Guided answer 4',
+        ]);
+      });
+      expect(mutateAsync).not.toHaveBeenCalled();
+      expect((global.fetch as jest.Mock).mock.calls.some((call) => String(call[0]).includes('/messages'))).toBe(false);
     });
   });
 

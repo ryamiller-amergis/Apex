@@ -10,6 +10,7 @@ jest.mock('../../hooks/useRbac', () => ({
   useRemoveRole: jest.fn(),
   useAssignProjectRole: jest.fn(),
   useRemoveProjectRole: jest.fn(),
+  useAddProjectTeammate: jest.fn(),
 }));
 
 import {
@@ -19,6 +20,7 @@ import {
   useRemoveRole,
   useAssignProjectRole,
   useRemoveProjectRole,
+  useAddProjectTeammate,
 } from '../../hooks/useRbac';
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -68,6 +70,7 @@ function setupDefaultMocks() {
   (useRemoveRole as jest.Mock).mockReturnValue(noop);
   (useAssignProjectRole as jest.Mock).mockReturnValue(noop);
   (useRemoveProjectRole as jest.Mock).mockReturnValue(noop);
+  (useAddProjectTeammate as jest.Mock).mockReturnValue(noop);
 
   return { mutate, mutateAsync };
 }
@@ -491,5 +494,28 @@ describe('AdminUsers — project roles', () => {
     const optionTexts = Array.from(select.querySelectorAll('option')).map(o => o.textContent);
     expect(optionTexts).not.toContain('member');
     expect(optionTexts).toContain('admin');
+  });
+});
+
+describe('AdminUsers — add by email', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setupDefaultMocks();
+  });
+
+  it('adds a person by email on the selected project', () => {
+    const mutate = jest.fn();
+    (useAddProjectTeammate as jest.Mock).mockReturnValue({ mutate, isPending: false, error: null });
+
+    render(<AdminUsers selectedProject="Benefits Tracker" />);
+    fireEvent.change(screen.getByTestId('admin-users-teammate-email'), { target: { value: 'ada@example.com' } });
+    fireEvent.click(screen.getByTestId('admin-users-add-teammate'));
+
+    expect(mutate).toHaveBeenCalledWith('ada@example.com', expect.any(Object));
+  });
+
+  it('hides the email field when no project is selected', () => {
+    render(<AdminUsers />);
+    expect(screen.queryByTestId('admin-users-teammate-email')).not.toBeInTheDocument();
   });
 });

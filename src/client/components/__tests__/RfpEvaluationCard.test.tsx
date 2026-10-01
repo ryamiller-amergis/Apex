@@ -36,6 +36,12 @@ const evaluation: RfpEvaluation = {
 };
 
 describe('RfpEvaluationCard', () => {
+  it('WZ-2 identifies the evaluation as AI-generated and asks for human review', () => {
+    render(<RfpEvaluationCard evaluation={evaluation} />);
+    expect(screen.getByTestId('rfp-ai-generated-badge')).toHaveTextContent('AI-generated');
+    expect(screen.getByTestId('rfp-ai-generated-notice')).toHaveTextContent(/review.*before making a decision/i);
+  });
+
   it('renders structured facts and splits a packed rationale', () => {
     render(<RfpEvaluationCard evaluation={evaluation} />);
     expect(screen.getByTestId('rfp-evaluation-facts')).toHaveTextContent(/SDLC product fit/i);

@@ -77,4 +77,44 @@ describe('RfpEvaluationChat', () => {
       reevaluate: true,
     })));
   });
+
+  it('keeps re-run unchecked after the saved decision comes back', async () => {
+    const mutateAsync = jest.fn().mockResolvedValue({});
+    mockChat.mockReturnValue({ data: [], isLoading: false, isError: false } as never);
+    mockAsk.mockReturnValue({ mutateAsync: jest.fn(), isPending: false, isError: false, error: null } as never);
+    mockApply.mockReturnValue({ mutateAsync, isPending: false, isError: false, error: null } as never);
+
+    const { rerender } = render(<RfpEvaluationChat requestId="rfp-1" canManage />);
+    fireEvent.click(screen.getByTestId('rfp-reviewer-decision-reevaluate'));
+    fireEvent.change(screen.getByTestId('rfp-reviewer-decision-rationale'), {
+      target: { value: 'Rent the Microsoft stack' },
+    });
+    rerender(
+      <RfpEvaluationChat
+        requestId="rfp-1"
+        canManage
+        reviewerDecision={{
+          verdict: 'rent-and-wrap',
+          rationale: 'Rent the Microsoft stack',
+          reviewerId: 'user-1',
+          decidedAt: '2026-09-28T18:41:19.252Z',
+          sourceMessageIds: [],
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId('rfp-reviewer-decision-reevaluate')).not.toBeChecked();
+    fireEvent.click(screen.getByTestId('rfp-reviewer-decision-submit'));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+      reevaluate: false,
+    })));
+  });
+
+  it('disables Apply while a re-evaluation is running', () => {
+    mockChat.mockReturnValue({ data: [], isLoading: false, isError: false } as never);
+    mockAsk.mockReturnValue({ mutateAsync: jest.fn(), isPending: false, isError: false, error: null } as never);
+    render(<RfpEvaluationChat requestId="rfp-1" canManage evaluationInProgress />);
+    expect(screen.getByTestId('rfp-reviewer-decision-submit')).toBeDisabled();
+    expect(screen.getByTestId('rfp-reviewer-decision-blocked')).toBeInTheDocument();
+  });
 });

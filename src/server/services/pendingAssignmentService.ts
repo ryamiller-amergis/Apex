@@ -1,6 +1,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { pendingProjectAssignments } from '../db/schema';
+import { ensureProjectMemberRole } from './projectMemberRole';
 import { assignUserToProject } from './userProjectAssignmentService';
 import type { PendingProjectAssignment } from '../../shared/types/platformAdmin';
 
@@ -44,6 +45,7 @@ export async function resolvePendingAssignments(
 
     for (const row of rows) {
       await assignUserToProject(oid, row.project, row.assignedBy);
+      await ensureProjectMemberRole(oid, row.project, row.assignedBy);
     }
 
     await tx

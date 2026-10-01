@@ -32,6 +32,10 @@ export type CursorStreamEvent =
 export interface CursorExecutionWaitResult {
   status: string;
   result?: string;
+  error?: {
+    message: string;
+    code?: string;
+  };
 }
 
 export class CursorExecutionWaitError extends Error {

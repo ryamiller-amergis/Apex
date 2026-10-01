@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { useUsers, useRoles, useAssignRole, useRemoveRole, useAssignProjectRole, useRemoveProjectRole } from '../hooks/useRbac';
+import { useUsers, useRoles, useAssignRole, useRemoveRole, useAssignProjectRole, useRemoveProjectRole, useAddProjectTeammate } from '../hooks/useRbac';
 import type { RoleWithPermissions } from '../../shared/types/rbac';
 import styles from './AdminUsers.module.css';
 
@@ -38,6 +38,8 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ selectedProject = '' }) 
   const removeRole = useRemoveRole();
   const assignProjectRole = useAssignProjectRole();
   const removeProjectRole = useRemoveProjectRole();
+  const addTeammate = useAddProjectTeammate(selectedProject);
+  const [teammateEmail, setTeammateEmail] = useState('');
 
   const hasProject = Boolean(selectedProject);
 
@@ -126,7 +128,41 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ selectedProject = '' }) 
             {users.length} user{users.length !== 1 ? 's' : ''} · assign and manage roles
           </p>
         </div>
+        {hasProject && (
+          <form
+            className={styles['add-teammate']}
+            onSubmit={(event) => {
+              event.preventDefault();
+              const email = teammateEmail.trim();
+              if (!email) return;
+              addTeammate.mutate(email, { onSuccess: () => setTeammateEmail('') });
+            }}
+            {...{ 'data-testid': 'admin-users-add-teammate-form' }}
+          >
+            <label className={styles['add-teammate-label']} htmlFor="admin-users-teammate-email">Add by email</label>
+            <input
+              id="admin-users-teammate-email"
+              className={styles['search-input']}
+              type="email"
+              value={teammateEmail}
+              onChange={(event) => setTeammateEmail(event.target.value)}
+              {...{ 'data-testid': 'admin-users-teammate-email' }}
+            />
+            <button
+              type="submit"
+              disabled={addTeammate.isPending || !teammateEmail.trim()}
+              {...{ 'data-testid': 'admin-users-add-teammate' }}
+            >
+              {addTeammate.isPending ? 'Adding…' : 'Add'}
+            </button>
+          </form>
+        )}
       </div>
+      {addTeammate.error && (
+        <p className={styles['error-banner']} {...{ 'data-testid': 'admin-users-add-teammate-error' }}>
+          {addTeammate.error.message}
+        </p>
+      )}
 
       <div className={styles.toolbar}>
         <div className={styles['search-wrap']}>
@@ -141,12 +177,14 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ selectedProject = '' }) 
             value={search}
             onChange={e => setSearch(e.target.value)}
             aria-label="Search users"
+            {...{ 'data-testid': 'admin-users-search' }}
           />
           {search && (
             <button
               className={styles['search-clear']}
               onClick={() => setSearch('')}
               aria-label="Clear search"
+              {...{ 'data-testid': 'admin-users-search-clear' }}
             >
               ×
             </button>
@@ -239,6 +277,7 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ selectedProject = '' }) 
                                 disabled={isRemoving || !rolesByName[roleName]}
                                 title={`Remove role "${roleName}"`}
                                 aria-label={`Remove role ${roleName} from ${user.displayName ?? user.email}`}
+                                {...{ 'data-testid': `admin-users-remove-role-${user.oid}-${roleName}` }}
                               >
                                 ×
                               </button>
@@ -258,6 +297,7 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ selectedProject = '' }) 
                           }
                           disabled={isAssigning || availableRoles.length === 0}
                           aria-label={`Select role to assign to ${user.displayName ?? user.email}`}
+                          {...{ 'data-testid': `admin-users-role-select-${user.oid}` }}
                         >
                           <option value="">
                             {availableRoles.length === 0 ? 'All roles assigned' : 'Select role…'}
@@ -271,6 +311,7 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ selectedProject = '' }) 
                           onClick={() => handleAssignRole(user.oid)}
                           disabled={!selectedRoleId || isAssigning}
                           aria-label={`Assign selected role to ${user.displayName ?? user.email}`}
+                          {...{ 'data-testid': `admin-users-assign-role-${user.oid}` }}
                         >
                           {isAssigning ? '…' : 'Assign'}
                         </button>
@@ -298,6 +339,7 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ selectedProject = '' }) 
                                   disabled={isRemovingProject || !rolesByName[roleName]}
                                   title={`Remove project role "${roleName}"`}
                                   aria-label={`Remove project role ${roleName} from ${user.displayName ?? user.email}`}
+                                  {...{ 'data-testid': `admin-users-remove-project-role-${user.oid}-${roleName}` }}
                                 >
                                   ×
                                 </button>
@@ -319,6 +361,7 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ selectedProject = '' }) 
                             }
                             disabled={isAssigningProject || availableProjectRoles.length === 0}
                             aria-label={`Select project role to assign to ${user.displayName ?? user.email}`}
+                            {...{ 'data-testid': `admin-users-project-role-select-${user.oid}` }}
                           >
                             <option value="">
                               {availableProjectRoles.length === 0 ? 'All roles assigned' : 'Select role…'}
@@ -332,6 +375,7 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ selectedProject = '' }) 
                             onClick={() => handleAssignProjectRole(user.oid)}
                             disabled={!selectedProjectRoleId || isAssigningProject}
                             aria-label={`Assign project role to ${user.displayName ?? user.email}`}
+                            {...{ 'data-testid': `admin-users-assign-project-role-${user.oid}` }}
                           >
                             {isAssigningProject ? '…' : 'Assign'}
                           </button>

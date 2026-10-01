@@ -4,7 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import type { RfpRequestDetail } from '../../shared/types/rfpIntake';
 import { useClarifyRfpRequest } from '../hooks/useRfpIntake';
 import {
-  rfpIntakeFormSchema,
+  rfpClarificationFormSchema,
   toRfpIntakePayload,
   type RfpIntakeFormValues,
 } from './rfpIntakeFormSchema';
@@ -21,7 +21,7 @@ export const RfpClarificationForm: React.FC<RfpClarificationFormProps> = ({ deta
     handleSubmit,
     formState: { errors, isSubmitting },
   } = useForm<RfpIntakeFormValues>({
-    resolver: zodResolver(rfpIntakeFormSchema),
+    resolver: zodResolver(rfpClarificationFormSchema),
     defaultValues: {
       title: detail.title,
       stakeholder: detail.stakeholder,
@@ -34,6 +34,8 @@ export const RfpClarificationForm: React.FC<RfpClarificationFormProps> = ({ deta
       constraints: detail.constraints ?? '',
       requestType: detail.requestType ?? '',
       existingSystemStack: detail.existingSystemStack ?? '',
+      expectedUsers: detail.expectedUsers ?? '',
+      aiInApp: detail.aiInApp ?? '',
     },
   });
 

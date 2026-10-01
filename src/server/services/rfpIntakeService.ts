@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, ilike, inArray, isNull, or } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
 import fs from 'fs/promises';
 import path from 'path';
 import { db } from '../db/drizzle';
@@ -10,10 +10,12 @@ import {
   rfpAttachments,
   rfpComments,
   rfpEvaluations,
+  rfpProposalJobs,
   rfpRequestEvents,
   rfpRequests,
   userProjectAssignments,
 } from '../db/schema';
+import { DEV_MOCK_USERS } from '../../shared/constants/devMockUsers';
 import {
   RFP_INTAKE_MANAGE,
   RFP_INTAKE_VIEW,
@@ -31,6 +33,7 @@ import {
   type ApplyRfpReviewerDecisionDTO,
   type CreateRfpCommentDTO,
   type ProductIntakeEvaluationOutput,
+  type RfpApproval,
   type RfpAttachment,
   type RfpAttachmentCandidate,
   type RfpClarificationInput,
@@ -41,6 +44,8 @@ import {
   type RfpMentionCandidate,
   type RfpNotifyKind,
   type RfpOwnerListResponse,
+  type RfpProposal,
+  type RfpProposalGeneration,
   type RfpRecipient,
   type RfpRequest,
   type RfpRequestDetail,
@@ -87,6 +92,7 @@ export function setRfpEvaluationNotificationHook(hook: RfpEvaluationNotification
 
 type RequestRow = typeof rfpRequests.$inferSelect;
 type EvaluationRow = typeof rfpEvaluations.$inferSelect;
+type ProposalJobRow = typeof rfpProposalJobs.$inferSelect;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -105,7 +111,46 @@ function mapReviewerDecision(row: RequestRow): RfpReviewerDecision | null {
   };
 }
 
-function mapRequest(row: RequestRow, currentEvaluation?: RfpEvaluation | null): RfpRequest {
+function mapApproval(row: RequestRow): RfpApproval | null {
+  if (!row.approvedAt || !row.approvedRepoName || !row.approvedRepoUrl || !row.apexProject) return null;
+  return {
+    approvedAt: row.approvedAt,
+    repoName: row.approvedRepoName,
+    repoUrl: row.approvedRepoUrl,
+    apexProject: row.apexProject,
+  };
+}
+
+function mapProposalGeneration(job: ProposalJobRow | null | undefined): RfpProposalGeneration | null {
+  if (!job) return null;
+  return {
+    jobId: job.id,
+    kind: job.kind,
+    status: job.status,
+    attempts: job.attempts,
+    maxAttempts: job.maxAttempts,
+    errorMessage: job.errorMessage ?? null,
+    queuedAt: job.createdAt,
+    startedAt: job.startedAt ?? null,
+    completedAt: job.completedAt ?? null,
+  };
+}
+
+/** Proposals published before generated drafts existed have no document and are no longer shown. */
+function mapProposal(row: RequestRow): RfpProposal | null {
+  return row.proposal && typeof row.proposal === 'object' && 'document' in row.proposal ? row.proposal : null;
+}
+
+/** Requesters never see drafts or generation state; only the published proposal. */
+export function toRequesterView<T extends RfpRequest>(request: T): T {
+  return { ...request, proposalDraft: null, proposalGeneration: null };
+}
+
+function mapRequest(
+  row: RequestRow,
+  currentEvaluation?: RfpEvaluation | null,
+  proposalJob?: ProposalJobRow | null,
+): RfpRequest {
   return {
     id: row.id,
     ownerId: row.ownerId,
@@ -120,6 +165,8 @@ function mapRequest(row: RequestRow, currentEvaluation?: RfpEvaluation | null): 
     constraints: row.constraints ?? null,
     requestType: row.requestType ?? null,
     existingSystemStack: row.existingSystemStack ?? null,
+    expectedUsers: row.expectedUsers ?? null,
+    aiInApp: row.aiInApp ?? null,
     status: row.status,
     aiStatus: row.aiStatus,
     aiThreadId: row.aiThreadId ?? null,
@@ -130,6 +177,13 @@ function mapRequest(row: RequestRow, currentEvaluation?: RfpEvaluation | null): 
     updatedAt: row.updatedAt,
     currentEvaluation: currentEvaluation ?? null,
     reviewerDecision: mapReviewerDecision(row),
+    architecture: row.architecture ?? null,
+    reviewSubmittedAt: row.reviewSubmittedAt ?? null,
+    reviewSubmittedBy: row.reviewSubmittedBy ?? null,
+    proposalGeneration: mapProposalGeneration(proposalJob),
+    proposalDraft: row.proposalDraft ?? null,
+    proposal: mapProposal(row),
+    approval: mapApproval(row),
   };
 }
 
@@ -183,6 +237,8 @@ function intakeValues(payload: RfpIntakePayload) {
       requestType === 'change-existing'
         ? (payload.existingSystemStack?.trim() || null)
         : null,
+    expectedUsers: payload.expectedUsers ?? null,
+    aiInApp: payload.aiInApp ?? null,
   };
 }
 
@@ -212,7 +268,10 @@ export async function getRequestById(rfpId: string): Promise<RfpRequest | null> 
     });
     current = evaluation ? mapEvaluation(evaluation) : null;
   }
-  return mapRequest(row, current);
+  const proposalJob = row.currentProposalJobId
+    ? await db.query.rfpProposalJobs.findFirst({ where: eq(rfpProposalJobs.id, row.currentProposalJobId) })
+    : null;
+  return mapRequest(row, current, proposalJob);
 }
 
 export async function listEvaluations(rfpId: string): Promise<RfpEvaluation[]> {
@@ -252,14 +311,15 @@ async function requireOwnedOrNotFound(rfpId: string, ownerId: string): Promise<R
   if (!request || request.ownerId !== ownerId) {
     throw new RfpIntakeError('RFP not found', 404, 'NOT_FOUND');
   }
-  return request;
+  return toRequesterView(request);
 }
 
-function mapComment(row: typeof rfpComments.$inferSelect): RfpComment {
+function mapComment(row: typeof rfpComments.$inferSelect, authorName?: string): RfpComment {
   return {
     id: row.id,
     rfpRequestId: row.rfpRequestId,
     authorId: row.authorId,
+    authorName,
     body: row.body,
     mentionedUserIds: row.mentionedUserIds ?? [],
     createdAt: row.createdAt,
@@ -279,15 +339,63 @@ function mapAttachment(row: typeof rfpAttachments.$inferSelect): RfpAttachment {
   };
 }
 
-function mapEvent(row: typeof rfpRequestEvents.$inferSelect): RfpRequestEvent {
+function mapEvent(row: typeof rfpRequestEvents.$inferSelect, actorName?: string): RfpRequestEvent {
   return {
     id: row.id,
     rfpRequestId: row.rfpRequestId,
     eventType: row.eventType,
     actorId: row.actorId ?? null,
+    actorName,
     payload: row.payload ?? null,
     createdAt: row.createdAt,
   };
+}
+
+const AI_EVENT_TYPES = new Set<RfpRequestEventType>([
+  'evaluation-started',
+  'evaluation-completed',
+  'evaluation-failed',
+]);
+
+const DEV_MOCK_NAMES = new Map(DEV_MOCK_USERS.map((user) => [user.oid, user.displayName]));
+
+function labelForActor(
+  oid: string,
+  row?: { displayName: string | null; email: string | null },
+): string {
+  const storedName = row?.displayName?.trim();
+  if (storedName && storedName.toLowerCase() !== 'user') return storedName;
+  const personaName = DEV_MOCK_NAMES.get(oid);
+  if (personaName) return personaName;
+  const emailName = row?.email?.trim();
+  if (emailName) return emailName;
+  return 'User';
+}
+
+async function loadRfpActorNames(
+  commentRows: Array<typeof rfpComments.$inferSelect>,
+  eventRows: Array<typeof rfpRequestEvents.$inferSelect>,
+): Promise<Map<string, string>> {
+  const ids = [...new Set([
+    ...commentRows.map((row) => row.authorId),
+    ...eventRows.flatMap((row) => row.actorId ? [row.actorId] : []),
+  ])];
+  if (ids.length === 0) return new Map();
+  const rows = await db
+    .select({ oid: appUsers.oid, displayName: appUsers.displayName, email: appUsers.email })
+    .from(appUsers)
+    .where(inArray(appUsers.oid, ids));
+  const byOid = new Map(rows.map((row) => [row.oid, row]));
+  return new Map(ids.map((id) => [id, labelForActor(id, byOid.get(id))]));
+}
+
+function eventActorName(
+  row: typeof rfpRequestEvents.$inferSelect,
+  actorNames: Map<string, string>,
+): string {
+  if (AI_EVENT_TYPES.has(row.eventType)) return 'Apex Bot';
+  if (!row.actorId) return 'Apex system';
+  return actorNames.get(row.actorId) ?? 'User';
 }
 
 function attachmentDir(rfpId: string): string {
@@ -300,7 +408,7 @@ async function startEvaluation(rfpId: string): Promise<void> {
 }
 
 export async function createRequest(ownerId: string, payload: RfpIntakePayload): Promise<RfpRequest> {
-  const errors = validateRfpIntakePayload(payload);
+  const errors = validateRfpIntakePayload(payload, { requireScaleAndAi: true });
   if (errors.length > 0) {
     throw new RfpIntakeError(errors.join('; '), 400, 'VALIDATION');
   }
@@ -355,6 +463,8 @@ export async function answerClarification(
       payload.existingSystemStack !== undefined
         ? payload.existingSystemStack
         : request.existingSystemStack,
+    expectedUsers: payload.expectedUsers ?? request.expectedUsers,
+    aiInApp: payload.aiInApp ?? request.aiInApp,
   };
   const errors = validateRfpIntakePayload(merged);
   if (errors.length > 0) {
@@ -379,7 +489,7 @@ export async function answerClarification(
   await startEvaluation(rfpId);
   const updated = await getRequestById(rfpId);
   if (!updated) throw new RfpIntakeError('RFP not found', 404, 'NOT_FOUND');
-  return updated;
+  return toRequesterView(updated);
 }
 
 export async function retryEvaluation(rfpId: string, actorId: string): Promise<RfpRequest> {
@@ -618,12 +728,12 @@ export async function resolveRfpSubmissionRecipients(): Promise<string[]> {
     );
 
   const userIds = new Set(permissionRows.map((row) => row.userId));
-  const superAdminEmails = getSuperAdminEmails();
+  const superAdminEmails = getSuperAdminEmails().map((email) => email.toLowerCase());
   if (superAdminEmails.length > 0) {
     const superAdminRows = await db
       .select({ oid: appUsers.oid })
       .from(appUsers)
-      .where(inArray(appUsers.email, superAdminEmails));
+      .where(or(...superAdminEmails.map((email) => sql`lower(${appUsers.email}) = ${email}`)));
     for (const row of superAdminRows) {
       userIds.add(row.oid);
     }
@@ -680,12 +790,13 @@ export async function getOwnerRequestDetail(rfpId: string, ownerId: string): Pro
       orderBy: [asc(rfpRequestEvents.createdAt)],
     }),
   ]);
+  const actorNames = await loadRfpActorNames(commentRows, eventRows);
 
   return {
     ...request,
-    comments: commentRows.map(mapComment),
+    comments: commentRows.map((row) => mapComment(row, actorNames.get(row.authorId) ?? 'User')),
     attachments: attachmentRows.map(mapAttachment),
-    activity: eventRows.map(mapEvent),
+    activity: eventRows.map((row) => mapEvent(row, eventActorName(row, actorNames))),
   };
 }
 
@@ -695,7 +806,7 @@ export async function listOwnerComments(rfpId: string, ownerId: string): Promise
     where: eq(rfpComments.rfpRequestId, rfpId),
     orderBy: [asc(rfpComments.createdAt)],
   });
-  return rows.map(mapComment);
+  return rows.map((row) => mapComment(row));
 }
 
 export async function addOwnerComment(
@@ -880,10 +991,11 @@ async function loadTriageCollections(rfpId: string): Promise<Pick<RfpTriageDetai
       orderBy: [asc(rfpEvaluations.version)],
     }),
   ]);
+  const actorNames = await loadRfpActorNames(commentRows, eventRows);
   return {
-    comments: commentRows.map(mapComment),
+    comments: commentRows.map((row) => mapComment(row, actorNames.get(row.authorId) ?? 'User')),
     attachments: attachmentRows.map(mapAttachment),
-    activity: eventRows.map(mapEvent),
+    activity: eventRows.map((row) => mapEvent(row, eventActorName(row, actorNames))),
     evaluations: evaluationRows.map(mapEvaluation),
   };
 }
@@ -1158,5 +1270,5 @@ export async function listComments(rfpId: string, actorId: string): Promise<RfpC
     where: eq(rfpComments.rfpRequestId, rfpId),
     orderBy: [asc(rfpComments.createdAt)],
   });
-  return rows.map(mapComment);
+  return rows.map((row) => mapComment(row));
 }

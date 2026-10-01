@@ -4,6 +4,41 @@
   gap: 12px;
 }
 
+.aiDisclosure {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+}
+
+.aiBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent-color) 55%, var(--border-color));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-color) 10%, var(--bg-secondary));
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.sparkle {
+  color: var(--accent-color);
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.aiNotice {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
 .reviewerBanner {
   padding: 10px 12px;
   border-radius: 8px;

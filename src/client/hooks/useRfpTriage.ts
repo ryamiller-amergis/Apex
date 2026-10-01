@@ -1,11 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type {
-  RfpHumanStatus,
-  RfpMentionCandidate,
-  RfpRequest,
-  RfpTriageDetail,
-  RfpTriageListResponse,
-  RfpVerdict,
+import {
+  isRfpProposalJobActive,
+  type RfpArchitectureInput,
+  type RfpGeneratedDraft,
+  type RfpHumanStatus,
+  type RfpMentionCandidate,
+  type RfpRequest,
+  type RfpTriageDetail,
+  type RfpTriageListResponse,
+  type RfpVerdict,
 } from '../../shared/types/rfpIntake';
 import { RFP_INTAKE_QUERY_KEY } from './useRfpIntake';
 
@@ -49,11 +52,19 @@ export function useRfpQueue(params: {
   });
 }
 
+const GENERATION_POLL_MS = 4_000;
+
 export function useRfpTriageDetail(id: string | null, enabled: boolean) {
   return useQuery<RfpTriageDetail>({
     queryKey: triageDetailKey(id ?? ''),
     queryFn: () => apiFetch(`/api/rfp-intake/triage/requests/${id}`),
     enabled: enabled && Boolean(id),
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (data?.aiStatus === 'evaluating' || data?.status === 'evaluating') return 5_000;
+      const status = data?.proposalGeneration?.status;
+      return status && isRfpProposalJobActive(status) ? GENERATION_POLL_MS : false;
+    },
   });
 }
 
@@ -69,6 +80,65 @@ export function useRfpStatusTransition() {
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: RFP_INTAKE_QUERY_KEY });
       qc.setQueryData(triageDetailKey(data.id), data);
+    },
+  });
+}
+
+function useTriageMutation<TVariables extends { id: string }>(
+  request: (variables: TVariables) => { path: string; method: string; body?: unknown },
+) {
+  const qc = useQueryClient();
+  return useMutation<RfpRequest, Error, TVariables>({
+    mutationFn: (variables) => {
+      const { path, method, body } = request(variables);
+      return apiFetch(`/api/rfp-intake/triage/requests/${variables.id}${path}`, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: RFP_INTAKE_QUERY_KEY });
+    },
+  });
+}
+
+export function useSubmitRfpReview() {
+  return useTriageMutation<{ id: string; architecture: RfpArchitectureInput | null }>(({ architecture }) => ({
+    path: '/submit-review',
+    method: 'POST',
+    body: { architecture },
+  }));
+}
+
+export function useRegenerateRfpProposal() {
+  return useTriageMutation<{ id: string }>(() => ({ path: '/proposal/regenerate', method: 'POST' }));
+}
+
+export function useSaveRfpProposalDraft() {
+  return useTriageMutation<{ id: string; draft: RfpGeneratedDraft }>(({ draft }) => ({
+    path: '/proposal-draft',
+    method: 'PUT',
+    body: { draft },
+  }));
+}
+
+export function usePublishRfpProposal() {
+  return useTriageMutation<{ id: string; productOwnerId?: string }>(({ productOwnerId }) => ({
+    path: '/proposal-draft/publish',
+    method: 'POST',
+    body: { productOwnerId },
+  }));
+}
+
+export function useDeleteIntakeProject() {
+  const qc = useQueryClient();
+  return useMutation<RfpRequest, Error, { id: string }>({
+    mutationFn: ({ id }) => apiFetch(`/api/rfp-intake/triage/requests/${id}/project`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: RFP_INTAKE_QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ['platform-admin', 'projects'] });
+      qc.invalidateQueries({ queryKey: ['ado-projects'] });
     },
   });
 }

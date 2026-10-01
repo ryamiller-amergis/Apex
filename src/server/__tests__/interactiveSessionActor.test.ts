@@ -64,6 +64,9 @@ interface FakeAgentOptions {
   onSend?: () => void;
   model?: string;
   workspaceRef?: string;
+  waitStatus?: string;
+  waitResult?: string;
+  waitError?: { message: string; code?: string };
 }
 
 function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgentHandle {
@@ -79,7 +82,11 @@ function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgent
     },
     async wait() {
       if (options.waitGate) await options.waitGate;
-      return { status: 'finished' };
+      return {
+        status: options.waitStatus ?? 'finished',
+        result: options.waitResult,
+        error: options.waitError,
+      };
     },
     cancel: async () => {
       options.onCancel?.();
@@ -371,6 +378,47 @@ describe('interactiveSessionActor', () => {
     );
     expect(terminal).toBeDefined();
     expect((terminal as { detail?: string }).detail).toContain('ENOENT');
+
+    errorSpy.mockRestore();
+  });
+
+  it('surfaces the Cursor wait status and safe result when a run is unsuccessful', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const posted: AiRunIngestBody[] = [];
+    const { publishLive, live } = captureLive();
+    const deps: InteractiveActorDependencies = {
+      openWarmCheckout: jest.fn(async () => ({ workspacePath: '/warm/checkout' })),
+      acquireAgent: jest.fn(async () =>
+        makeAgentHandle({
+          waitStatus: 'failed',
+          waitError: {
+            message: 'transport disconnected',
+            code: 'TRANSPORT_DISCONNECTED',
+          },
+        })
+      ),
+      publishLive,
+      postIngest: jest.fn(async (_p, _r, body): Promise<AiRunIngestResponse> => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      }),
+    };
+
+    const actor = createInteractiveSessionActor(deps);
+    await expect(actor.handleTurn(makeRequest())).rejects.toThrow();
+
+    const liveError = live.find((event) => event.event.type === 'error');
+    expect((liveError?.event as { error: string }).error).toContain(
+      'TRANSPORT_DISCONNECTED',
+    );
+    expect((liveError?.event as { error: string }).error).toContain(
+      'transport disconnected',
+    );
+    expect(posted).toContainEqual(expect.objectContaining({
+      kind: 'terminal',
+      status: 'failed',
+      detail: expect.stringContaining('status "failed"'),
+    }));
 
     errorSpy.mockRestore();
   });

@@ -49,9 +49,16 @@
   align-items: center;
   justify-content: center;
   flex: 1;
+  min-height: 0;
   min-width: 0;
   padding: 24px;
   position: relative;
+}
+
+.setupCompose {
+  align-items: flex-start;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .composeInner {
@@ -61,6 +68,10 @@
   gap: 20px;
   width: 100%;
   max-width: 680px;
+}
+
+.setupCompose .composeInner {
+  max-width: 880px;
 }
 
 .composeLogo {
@@ -517,6 +528,19 @@
   border-bottom: 1px solid var(--border-color);
   background: var(--bg-secondary);
   flex-shrink: 0;
+}
+
+.setupChatHeader {
+  flex-shrink: 0;
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 16px 24px 12px;
+}
+
+.setupChatHeaderFull {
+  flex: 1;
+  overflow-y: auto;
 }
 
 .chatTitle {

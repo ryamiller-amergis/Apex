@@ -97,6 +97,8 @@ export function useSubmitRfpRequest() {
         form.append('existingSolution', intake.existingSolution);
         if (intake.advantage) form.append('advantage', intake.advantage);
         if (intake.constraints) form.append('constraints', intake.constraints);
+        if (intake.expectedUsers) form.append('expectedUsers', intake.expectedUsers);
+        if (intake.aiInApp) form.append('aiInApp', intake.aiInApp);
         if (intake.requestType) form.append('requestType', intake.requestType);
         if (intake.requestType === 'change-existing' && intake.existingSystemStack) {
           form.append('existingSystemStack', intake.existingSystemStack);
@@ -150,6 +152,31 @@ export function useAddRfpComment() {
       }),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: detailKey(variables.id) });
+      qc.invalidateQueries({ queryKey: RFP_INTAKE_QUERY_KEY });
+    },
+  });
+}
+
+export function useApproveRfpProposal() {
+  const qc = useQueryClient();
+  return useMutation<RfpRequest, Error, { id: string }>({
+    mutationFn: ({ id }) => apiFetch(`/api/rfp-intake/requests/${id}/approve`, { method: 'POST' }),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: RFP_INTAKE_QUERY_KEY });
+    },
+  });
+}
+
+export function useRejectRfpProposal() {
+  const qc = useQueryClient();
+  return useMutation<RfpRequest, Error, { id: string; reason: string }>({
+    mutationFn: ({ id, reason }) =>
+      apiFetch(`/api/rfp-intake/requests/${id}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      }),
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: RFP_INTAKE_QUERY_KEY });
     },
   });

@@ -2,20 +2,35 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
+  RFP_AI_INTENTS,
+  RFP_AI_INTENT_LABELS,
   RFP_ATTACHMENT_MAX_BYTES,
   RFP_AUDIENCES,
   RFP_DATA_SENSITIVITIES,
+  RFP_EXPECTED_USER_SCALES,
+  RFP_EXPECTED_USER_SCALE_LABELS,
   RFP_REQUEST_TYPES,
   validateRfpAttachments,
 } from '../../shared/types/rfpIntake';
+import { useFieldDictation } from '../hooks/useFieldDictation';
 import { useSubmitRfpRequest } from '../hooks/useRfpIntake';
 import {
   RFP_INTAKE_FORM_DEFAULTS,
   rfpIntakeFormSchema,
   toRfpIntakePayload,
+  type RfpDictationField,
   type RfpIntakeFormValues,
 } from './rfpIntakeFormSchema';
 import styles from './RfpIntakeLanding.module.css';
+
+const MicIcon: React.FC = () => (
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="7" y="2.5" width="6" height="10" rx="3" />
+    <path d="M4.5 9.5v0.5a5.5 5.5 0 0 0 11 0v-0.5" />
+    <path d="M10 15.5v2.5" />
+    <path d="M7.5 18h5" />
+  </svg>
+);
 
 interface RfpSubmissionModalProps {
   onClose: () => void;
@@ -27,31 +42,87 @@ export const RfpSubmissionModal: React.FC<RfpSubmissionModalProps> = ({ onClose,
   const [files, setFiles] = useState<File[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState<{ id: string; title: string } | null>(null);
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
   const firstFieldRef = useRef<HTMLInputElement | null>(null);
+  const keepEditingRef = useRef<HTMLButtonElement | null>(null);
   const {
     register,
     handleSubmit,
     control,
-    formState: { errors, isSubmitting },
+    getValues,
+    setValue,
+    formState: { errors, isSubmitting, isDirty },
   } = useForm<RfpIntakeFormValues>({
     resolver: zodResolver(rfpIntakeFormSchema),
     defaultValues: RFP_INTAKE_FORM_DEFAULTS,
   });
+  const dictation = useFieldDictation({
+    getValue: (field: RfpDictationField) => getValues(field) ?? '',
+    setValue: (field: RfpDictationField, text: string) => setValue(field, text, { shouldDirty: true }),
+  });
   const requestType = useWatch({ control, name: 'requestType' });
   const showStack = requestType === 'change-existing';
   const pending = isSubmitting || submitRfp.isPending;
+  const isFormDirty = isDirty || files.length > 0;
+
+  const requestClose = () => {
+    // A submitted form has nothing to lose — close immediately.
+    if (submitted || !isFormDirty) {
+      onClose();
+      return;
+    }
+    setShowDiscardConfirm(true);
+  };
 
   useEffect(() => {
     firstFieldRef.current?.focus();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key !== 'Escape') return;
+      if (showDiscardConfirm) {
+        setShowDiscardConfirm(false);
+        return;
+      }
+      requestClose();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, showDiscardConfirm, submitted, isFormDirty]);
+
+  useEffect(() => {
+    if (showDiscardConfirm) keepEditingRef.current?.focus();
+  }, [showDiscardConfirm]);
 
   const titleReg = register('title');
   const summary = useMemo(() => Object.values(errors).map((err) => err?.message).filter(Boolean), [errors]);
+
+  const renderDictationField = (field: RfpDictationField, label: string, testId: string) => {
+    const inputId = `rfp-field-${field}-input`;
+    const listening = dictation.activeField === field;
+    const error = errors[field]?.message;
+    return (
+      <div className={styles.field}>
+        <div className={styles.labelRow}>
+          <label className={styles.label} htmlFor={inputId}>{label}</label>
+          {dictation.isSupported && (
+            <button
+              type="button"
+              className={`${styles.micButton}${listening ? ` ${styles.micButtonActive}` : ''}`}
+              onClick={() => dictation.toggleField(field)}
+              aria-pressed={listening}
+              aria-label={listening ? `Stop talk to text for ${label}` : `Talk to text for ${label}`}
+              title={listening ? 'Stop listening' : 'Talk to text'}
+              {...{ 'data-testid': `rfp-mic-${field}` }}
+            >
+              <MicIcon />
+              {listening && <span>Listening…</span>}
+            </button>
+          )}
+        </div>
+        <textarea id={inputId} className={styles.textarea} {...register(field)} {...{ 'data-testid': testId }} />
+        {error && <span className={styles.fieldError}>{error}</span>}
+      </div>
+    );
+  };
 
   const onSubmit = async (values: RfpIntakeFormValues) => {
     const attachmentErrors = validateRfpAttachments(
@@ -76,8 +147,6 @@ export const RfpSubmissionModal: React.FC<RfpSubmissionModalProps> = ({ onClose,
       role="dialog"
       aria-modal="true"
       aria-labelledby="rfp-submit-title"
-      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
-      onKeyDown={(event) => { if (event.key === 'Escape') onClose(); }}
       {...{ 'data-testid': 'rfp-submission-modal' }}
     >
       <div className={styles.modal}>
@@ -89,7 +158,7 @@ export const RfpSubmissionModal: React.FC<RfpSubmissionModalProps> = ({ onClose,
           <button
             type="button"
             className={styles.closeButton}
-            onClick={onClose}
+            onClick={requestClose}
             aria-label="Close request a product form"
             {...{ 'data-testid': 'rfp-submit-close' }}
           >
@@ -150,20 +219,41 @@ export const RfpSubmissionModal: React.FC<RfpSubmissionModalProps> = ({ onClose,
             {errors.title && <span id="rfp-title-error" className={styles.fieldError}>{errors.title.message}</span>}
           </label>
           <label className={styles.field}>
-            <span className={styles.label}>Stakeholder</span>
-            <input className={styles.input} {...register('stakeholder')} {...{ 'data-testid': 'rfp-field-stakeholder' }} />
+            <span className={styles.label}>Sponsoring team</span>
+            <input
+              className={styles.input}
+              placeholder="e.g. Benefits Administration"
+              aria-describedby="rfp-stakeholder-hint"
+              {...register('stakeholder')}
+              {...{ 'data-testid': 'rfp-field-stakeholder' }}
+            />
+            <span id="rfp-stakeholder-hint" className={styles.hint}>
+              The business group that owns the problem and will use the app.
+            </span>
             {errors.stakeholder && <span className={styles.fieldError}>{errors.stakeholder.message}</span>}
           </label>
           <label className={styles.field}>
-            <span className={styles.label}>Request</span>
-            <textarea className={styles.textarea} {...register('request')} {...{ 'data-testid': 'rfp-field-request' }} />
-            {errors.request && <span className={styles.fieldError}>{errors.request.message}</span>}
+            <span className={styles.label}>Expected users</span>
+            <select className={styles.select} {...register('expectedUsers')} {...{ 'data-testid': 'rfp-field-expectedUsers' }}>
+              <option value="">Select…</option>
+              {RFP_EXPECTED_USER_SCALES.map((value) => (
+                <option key={value} value={value}>{RFP_EXPECTED_USER_SCALE_LABELS[value]}</option>
+              ))}
+            </select>
+            {errors.expectedUsers && <span className={styles.fieldError}>{errors.expectedUsers.message}</span>}
           </label>
           <label className={styles.field}>
-            <span className={styles.label}>Problem</span>
-            <textarea className={styles.textarea} {...register('problem')} {...{ 'data-testid': 'rfp-field-problem' }} />
-            {errors.problem && <span className={styles.fieldError}>{errors.problem.message}</span>}
+            <span className={styles.label}>AI in the application</span>
+            <select className={styles.select} {...register('aiInApp')} {...{ 'data-testid': 'rfp-field-aiInApp' }}>
+              <option value="">Select…</option>
+              {RFP_AI_INTENTS.map((value) => (
+                <option key={value} value={value}>{RFP_AI_INTENT_LABELS[value]}</option>
+              ))}
+            </select>
+            {errors.aiInApp && <span className={styles.fieldError}>{errors.aiInApp.message}</span>}
           </label>
+          {renderDictationField('request', 'Request', 'rfp-field-request')}
+          {renderDictationField('problem', 'Problem', 'rfp-field-problem')}
           <label className={styles.field}>
             <span className={styles.label}>Audience</span>
             <select className={styles.select} {...register('audience')} {...{ 'data-testid': 'rfp-field-audience' }}>
@@ -176,19 +266,12 @@ export const RfpSubmissionModal: React.FC<RfpSubmissionModalProps> = ({ onClose,
               {RFP_DATA_SENSITIVITIES.map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
           </label>
-          <label className={styles.field}>
-            <span className={styles.label}>Existing solution</span>
-            <textarea className={styles.textarea} {...register('existingSolution')} {...{ 'data-testid': 'rfp-field-existingSolution' }} />
-            {errors.existingSolution && <span className={styles.fieldError}>{errors.existingSolution.message}</span>}
-          </label>
-          <label className={styles.field}>
-            <span className={styles.label}>Advantage (optional)</span>
-            <textarea className={styles.textarea} {...register('advantage')} {...{ 'data-testid': 'rfp-field-advantage' }} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.label}>Constraints (optional)</span>
-            <textarea className={styles.textarea} {...register('constraints')} {...{ 'data-testid': 'rfp-field-constraints' }} />
-          </label>
+          {renderDictationField('existingSolution', 'Existing solution', 'rfp-field-existingSolution')}
+          {renderDictationField('advantage', 'Advantage (optional)', 'rfp-field-advantage')}
+          {renderDictationField('constraints', 'Constraints (optional)', 'rfp-field-constraints')}
+          {dictation.error && (
+            <p className={styles.fieldError} role="alert" {...{ 'data-testid': 'rfp-dictation-error' }}>{dictation.error}</p>
+          )}
           <label className={styles.field}>
             <span className={styles.label}>Request type (optional)</span>
             <select className={styles.select} {...register('requestType')} {...{ 'data-testid': 'rfp-field-requestType' }}>
@@ -225,7 +308,7 @@ export const RfpSubmissionModal: React.FC<RfpSubmissionModalProps> = ({ onClose,
             {fileError && <span className={styles.fieldError}>{fileError}</span>}
           </label>
           <div className={styles.actions}>
-            <button type="button" className={styles.secondaryButton} onClick={onClose} disabled={pending} {...{ 'data-testid': 'rfp-submit-cancel' }}>
+            <button type="button" className={styles.secondaryButton} onClick={requestClose} disabled={pending} {...{ 'data-testid': 'rfp-submit-cancel' }}>
               Cancel
             </button>
             <button type="submit" className={styles.primaryButton} disabled={pending} {...{ 'data-testid': 'rfp-submit-button' }}>
@@ -235,6 +318,42 @@ export const RfpSubmissionModal: React.FC<RfpSubmissionModalProps> = ({ onClose,
         </form>
         )}
       </div>
+      {showDiscardConfirm && (
+        <div
+          className={styles.confirmOverlay}
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="rfp-discard-title"
+          aria-describedby="rfp-discard-body"
+          {...{ 'data-testid': 'rfp-discard-confirm' }}
+        >
+          <div className={styles.confirmDialog}>
+            <h3 id="rfp-discard-title" className={styles.confirmTitle}>Leave without submitting?</h3>
+            <p id="rfp-discard-body" className={styles.confirmBody}>
+              You have unsent changes. Leaving now discards what you entered.
+            </p>
+            <div className={styles.confirmActions}>
+              <button
+                type="button"
+                ref={keepEditingRef}
+                className={styles.secondaryButton}
+                onClick={() => setShowDiscardConfirm(false)}
+                {...{ 'data-testid': 'rfp-discard-keep' }}
+              >
+                Keep editing
+              </button>
+              <button
+                type="button"
+                className={styles.primaryButton}
+                onClick={onClose}
+                {...{ 'data-testid': 'rfp-discard-discard' }}
+              >
+                Discard changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

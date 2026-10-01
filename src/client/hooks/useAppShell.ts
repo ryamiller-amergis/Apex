@@ -14,6 +14,7 @@ import { WORK_BOARD_FLAG } from '../../shared/types/featureFlags';
 
 import { THEME_CYCLE, isThemeMode, type ThemeMode } from '../config/themes';
 import { notifySelectedProjectChanged } from '../utils/apiFetch';
+import { clearPlatformProjectListing } from '../utils/platformLanding';
 import { fetchAuthStatus } from '../utils/fetchAuthStatus';
 
 export type { ThemeMode };
@@ -91,7 +92,6 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
   });
   const [whatsNewBootstrap, setWhatsNewBootstrap] = useState<WhatsNewState | null>(null);
   const whatsNewCapturedRef = useRef(false);
-  const [betaAnnouncementDismissed, setBetaAnnouncementDismissed] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [pendingDueDateChange, setPendingDueDateChange] = useState<DueDateChange | null>(null);
   const [isChangingTeam, setIsChangingTeam] = useState(false);
@@ -171,7 +171,6 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
           setGroups(d.groups ?? []);
           setUserId(d.userId ?? '');
           setIsSuperAdmin(d.isSuperAdmin ?? false);
-          setBetaAnnouncementDismissed(d.betaAnnouncementDismissed);
           const restricted = d.restrictedAccess ?? null;
           setIsRestricted(Boolean(restricted));
           setRestrictedModules(restricted?.modules ?? []);
@@ -331,16 +330,6 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
     dismissWhatsNew('banner');
   }, [dismissWhatsNew]);
 
-  const handleDismissBetaAnnouncement = useCallback(() => {
-    setBetaAnnouncementDismissed(true);
-    void fetch('/api/me/preferences', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ dismissBetaAnnouncement: true }),
-    });
-  }, []);
-
   const handleToggleShowChangelogOnLogin = useCallback((show: boolean) => {
     setWhatsNewShowOnLogin(show);
   }, [setWhatsNewShowOnLogin]);
@@ -353,6 +342,7 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
 
   const handleLogout = useCallback(async () => {
     sessionStorage.removeItem('agentHomeThreadId');
+    clearPlatformProjectListing();
     try { await fetch('/auth/logout', { credentials: 'include' }); } catch { /* ignore */ }
     window.location.href = '/';
   }, []);
@@ -407,8 +397,6 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
     whatsNewCurrentVersion: whatsNew.currentVersion,
     whatsNewAutomaticOverlaySettled,
     whatsNewBlocksAutomaticWalkthrough,
-    betaAnnouncementDismissed,
-    handleDismissBetaAnnouncement,
     handleLogout,
     selectedProject,
     selectedAreaPath,

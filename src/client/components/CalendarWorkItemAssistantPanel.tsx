@@ -295,6 +295,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
   return (
     <>
       {showNewConvConfirm && (
+        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- backdrop click dismisses the confirm dialog; existing interaction stays as-is
         <div
           className={styles.overlay}
           role="dialog"
@@ -351,13 +352,19 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
         {...{ 'data-testid': 'calendar-assistant-panel' }}
       >
         {/* Edge and corner resize handles */}
+        {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- pointer-only resize or drag handle; existing interaction stays as-is */}
         <div className={`${styles.resizeHandle} ${styles.resizeLeft}  ${resizeDir === 'left'   ? styles.resizeActive : ''}`} onMouseDown={handleResizeMouseDown('left')}  />
+        {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- pointer-only resize or drag handle; existing interaction stays as-is */}
         <div className={`${styles.resizeHandle} ${styles.resizeRight} ${resizeDir === 'right'  ? styles.resizeActive : ''}`} onMouseDown={handleResizeMouseDown('right')} />
+        {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- pointer-only resize or drag handle; existing interaction stays as-is */}
         <div className={`${styles.resizeHandle} ${styles.resizeBottom}${resizeDir === 'bottom' ? styles.resizeActive : ''}`} onMouseDown={handleResizeMouseDown('bottom')}/>
+        {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- pointer-only resize or drag handle; existing interaction stays as-is */}
         <div className={`${styles.resizeHandle} ${styles.resizeBL}    ${resizeDir === 'bottom-left'  ? styles.resizeActive : ''}`} onMouseDown={handleResizeMouseDown('bottom-left')} />
+        {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- pointer-only resize or drag handle; existing interaction stays as-is */}
         <div className={`${styles.resizeHandle} ${styles.resizeBR}    ${resizeDir === 'bottom-right' ? styles.resizeActive : ''}`} onMouseDown={handleResizeMouseDown('bottom-right')} />
 
 
+        {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- pointer-only resize or drag handle; existing interaction stays as-is */}
         <div
           className={`${styles.header} ${styles.headerDraggable}`}
           onMouseDown={handleMoveMouseDown}
@@ -674,6 +681,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
               onCancel={isRunning ? () => void chat.cancelRun() : undefined}
               disabled={isRunning || isSending}
               isRunning={isRunning}
+              isCancelling={chat.isCancelling}
               isSending={isSending}
               placeholder="Message the assistant… (Enter to send)"
               testIdPrefix="calendar-assistant"

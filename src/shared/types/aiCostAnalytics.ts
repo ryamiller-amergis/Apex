@@ -24,6 +24,7 @@ export type AiFeature =
   | 'ai-cost-insights'
   | 'calendar-work-item-assistant'
   | 'rfp-intake'
+  | 'product-foundation'
   | 'other';
 
 export interface RecordUsageInput {

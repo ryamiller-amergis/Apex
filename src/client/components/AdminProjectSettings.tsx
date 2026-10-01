@@ -57,6 +57,7 @@ const BranchCombobox: React.FC<BranchComboboxProps> = ({ value, branches, isLoad
     if (open) {
       setTimeout(() => searchRef.current?.focus(), 0);
       const selectedIdx = branches.indexOf(value);
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- highlight the selected branch only when the menu opens; existing interaction stays as-is
       if (selectedIdx >= 0) setActiveIdx(selectedIdx);
     }
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -734,14 +735,17 @@ const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoad
       {/* Common fields */}
       <div className={styles.pillAddRow}>
         <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- label is paired with the control below; wrapping it would change the field layout */}
           <label className={styles.label}>Label</label>
           <input className={styles.input} placeholder="e.g. SendGrid" value={label} onChange={(e) => setLabel(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-mcp-add-label' }} />
         </div>
         <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- label is paired with the control below; wrapping it would change the field layout */}
           <label className={styles.label}>Server Name</label>
           <input className={styles.input} placeholder="e.g. sendgrid" value={mcpServerName} onChange={(e) => setMcpServerName(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-mcp-add-server-name' }} />
         </div>
         <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- label is paired with the control below; wrapping it would change the field layout */}
           <label className={styles.label}>Model override</label>
           <select className={styles.select} value={model} onChange={(e) => setModel(e.target.value)} disabled={isPending || isLoadingModels} {...{ 'data-testid': 'ps-mcp-add-model' }}>
             <option value="">Default model</option>
@@ -757,15 +761,18 @@ const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoad
         <>
           <div className={styles.pillAddRow}>
             <div className={styles.field} style={{ flex: '0 0 8rem' }}>
+              {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- label is paired with the control below; wrapping it would change the field layout */}
               <label className={styles.label}>Command</label>
               <input className={styles.input} placeholder="npx" value={command} onChange={(e) => setCommand(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-mcp-add-command' }} />
             </div>
             <div className={styles.field} style={{ flex: 1 }}>
+              {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- label is paired with the control below; wrapping it would change the field layout */}
               <label className={styles.label}>Args (space-separated)</label>
               <input className={styles.input} placeholder="-y sendgrid-mcp" value={args} onChange={(e) => setArgs(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-mcp-add-args' }} />
             </div>
           </div>
           <div className={styles.field}>
+            {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- label is paired with the control below; wrapping it would change the field layout */}
             <label className={styles.label}>Env vars (KEY=$&#123;ENV_VAR&#125;, comma-separated)</label>
             <input className={styles.input} placeholder="SENDGRID_API_KEY=${SENDGRID_API_KEY}" value={envStr} onChange={(e) => setEnvStr(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-mcp-add-env' }} />
             <span className={styles.skillDescription}>Values like {'${SENDGRID_API_KEY}'} are resolved from the server&apos;s environment at runtime — secrets stay out of the database.</span>
@@ -866,6 +873,7 @@ const InterviewWebMcpEditor: React.FC<InterviewWebMcpEditorProps> = ({ value, is
       </div>
 
       <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+        {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- label is paired with the control below; wrapping it would change the field layout */}
         <label className={styles.label}>Server Name</label>
         <input className={styles.input} placeholder="e.g. web" value={mcpServerName} onChange={(e) => setMcpServerName(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-web-mcp-server-name' }} />
       </div>
@@ -873,10 +881,12 @@ const InterviewWebMcpEditor: React.FC<InterviewWebMcpEditorProps> = ({ value, is
       {transport === 'http' ? (
         <>
           <div className={styles.field}>
+            {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- label is paired with the control below; wrapping it would change the field layout */}
             <label className={styles.label}>HTTP URL</label>
             <input className={styles.input} placeholder="https://mcp.tavily.com/mcp/" value={url} onChange={(e) => setUrl(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-web-mcp-url' }} />
           </div>
           <div className={styles.field}>
+            {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- label is paired with the control below; wrapping it would change the field layout */}
             <label className={styles.label}>Headers (KEY=$&#123;ENV_VAR&#125;, comma-separated)</label>
             <input className={styles.input} placeholder="Authorization=Bearer ${TAVILY_API_KEY}" value={headersStr} onChange={(e) => setHeadersStr(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-web-mcp-headers' }} />
             <span className={styles.skillDescription}>Values like {'${TAVILY_API_KEY}'} are resolved from the server&apos;s environment at runtime — secrets stay out of the database.</span>
@@ -886,15 +896,18 @@ const InterviewWebMcpEditor: React.FC<InterviewWebMcpEditorProps> = ({ value, is
         <>
           <div className={styles.pillAddRow}>
             <div className={styles.field} style={{ flex: '0 0 8rem' }}>
+              {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- label is paired with the control below; wrapping it would change the field layout */}
               <label className={styles.label}>Command</label>
               <input className={styles.input} placeholder="npx" value={command} onChange={(e) => setCommand(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-web-mcp-command' }} />
             </div>
             <div className={styles.field} style={{ flex: 1 }}>
+              {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- label is paired with the control below; wrapping it would change the field layout */}
               <label className={styles.label}>Args (space-separated)</label>
               <input className={styles.input} placeholder="-y tavily-mcp" value={args} onChange={(e) => setArgs(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-web-mcp-args' }} />
             </div>
           </div>
           <div className={styles.field}>
+            {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- label is paired with the control below; wrapping it would change the field layout */}
             <label className={styles.label}>Env vars (KEY=$&#123;ENV_VAR&#125;, comma-separated)</label>
             <input className={styles.input} placeholder="TAVILY_API_KEY=${TAVILY_API_KEY}" value={envStr} onChange={(e) => setEnvStr(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-web-mcp-env' }} />
             <span className={styles.skillDescription}>Values like {'${TAVILY_API_KEY}'} are resolved from the server&apos;s environment at runtime — secrets stay out of the database.</span>
@@ -903,6 +916,7 @@ const InterviewWebMcpEditor: React.FC<InterviewWebMcpEditorProps> = ({ value, is
       )}
 
       <div className={styles.field}>
+        {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- label is paired with the control below; wrapping it would change the field layout */}
         <label className={styles.label}>System prompt hint</label>
         <input className={styles.input} style={{ fontSize: '0.8rem' }} placeholder="Describe what the web MCP is for" value={systemPromptHint} onChange={(e) => setSystemPromptHint(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-web-mcp-system-prompt' }} />
       </div>
@@ -1794,6 +1808,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
               </div>
 
               <div className={styles.field} style={{ marginBottom: '8px' }}>
+                {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- label is paired with the control below; wrapping it would change the field layout */}
                 <label className={styles.label}>Provider</label>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   {(['ado', 'github'] as const).map((p) => (
@@ -1849,6 +1864,9 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                   disabled={upsert.isPending || isLoadingModels}
                  {...{ 'data-testid': 'ps-defaultModel' }}>
                   <option value="">Use system default (composer-2)</option>
+                  {!availableModels.some((m) => m.id === 'auto-smart') && (
+                    <option value="auto-smart">Auto</option>
+                  )}
                   {availableModels.map((m) => (
                     <option key={m.id} value={m.id}>{m.displayName}</option>
                   ))}

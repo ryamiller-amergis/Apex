@@ -1,4 +1,5 @@
 import {
+  rfpClarificationFormSchema,
   rfpIntakeFormSchema,
   toRfpIntakePayload,
   type RfpIntakeFormValues,
@@ -18,7 +19,38 @@ describe('rfpIntakeFormSchema VT-03 PBI-003 AC-2/AC-3', () => {
     constraints: '',
     requestType: '',
     existingSystemStack: '',
+    expectedUsers: 'small',
+    aiInApp: 'no',
   };
+
+  it('FF-0 FF-1 requires expected users and AI intent', () => {
+    const result = rfpIntakeFormSchema.safeParse({ ...required, expectedUsers: '', aiInApp: '' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const fields = result.error.flatten().fieldErrors;
+      expect(fields.expectedUsers?.[0]).toBe('Expected users is required');
+      expect(fields.aiInApp?.[0]).toBe('AI in the application is required');
+    }
+  });
+
+  it('FF-5 clarification accepts older requests that never answered scale or AI', () => {
+    const result = rfpClarificationFormSchema.safeParse({ ...required, expectedUsers: '', aiInApp: '' });
+    expect(result.success).toBe(true);
+  });
+
+  it('FF-0 FF-1 maps the new answers into the payload', () => {
+    const payload = toRfpIntakePayload({ ...required, expectedUsers: 'large', aiInApp: 'not-sure' });
+    expect(payload.expectedUsers).toBe('large');
+    expect(payload.aiInApp).toBe('not-sure');
+  });
+
+  it('FF-2 labels the stakeholder error as sponsoring team', () => {
+    const result = rfpIntakeFormSchema.safeParse({ ...required, stakeholder: ' ' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.flatten().fieldErrors.stakeholder?.[0]).toBe('Sponsoring team is required');
+    }
+  });
 
   it('VT-03 AC-2 requires existingSystemStack only for change-existing', () => {
     const missing = rfpIntakeFormSchema.safeParse({
