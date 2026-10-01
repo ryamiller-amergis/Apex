@@ -679,6 +679,49 @@ describe('background workflow routing', () => {
     expect(admission.specification).not.toHaveProperty('mirrorRef');
   });
 
+  it('admits an Azure DevOps grounded document with the skill provider name', async () => {
+    const admitV2Run = jest.fn().mockResolvedValue({
+      status: 'dispatched',
+      runId: 'run-1',
+      attemptId: 'attempt-1',
+      attemptNumber: 1,
+      dispatchMessageId: 'dispatch-1',
+      outboxId: 'outbox-1',
+    });
+    const dependencies = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      admitV2Run,
+      readDocumentScratchInputs: jest.fn().mockResolvedValue([
+        {
+          path: '.ai-pilot/kickoff-transcript.md',
+          content: '# Interview transcript',
+        },
+      ]),
+    } as Partial<BackgroundWorkflowRouterDependencies>);
+    const input = makeInput();
+    const prepared = await (input.prepareWorker as jest.Mock)();
+    input.prepareWorker = jest.fn().mockResolvedValue({
+      ...prepared,
+      targetGrounding: {
+        ...targetGrounding,
+        provider: 'azure_devops',
+        repository: 'MaxView/MaxView',
+      },
+    });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(input);
+
+    expect(decision.route).toBe('worker');
+    expect(admitV2Run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        specification: expect.objectContaining({
+          provider: 'ado',
+          repository: 'MaxView/MaxView',
+        }),
+      }),
+    );
+  });
+
   it('recovers in-process when V2 admission refuses or throws', async () => {
     const conflict = makeDependencies({
       isFeatureEnabled: jest.fn().mockResolvedValue(true),

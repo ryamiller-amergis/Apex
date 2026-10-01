@@ -505,7 +505,7 @@ export function createBackgroundWorkflowRouter(
             ? {
                 groundedSha: targetGrounding.groundedSha,
                 repository: targetGrounding.repository,
-                provider: targetGrounding.provider,
+                provider: targetGrounding.provider === 'azure_devops' ? 'ado' : 'github',
               }
             : {}),
         };
