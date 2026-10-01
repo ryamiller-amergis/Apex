@@ -258,7 +258,7 @@ const ALLOWED_ATTEMPT_TRANSITIONS: Record<
     'failed',
     'cancelled',
   ],
-  checking_worker: ['running', 'finalizing', 'failed', 'cancelled'],
+  checking_worker: ['running', 'finalizing', 'completed', 'failed', 'cancelled'],
   finalizing: ['completed', 'failed', 'cancelled'],
   completed: [],
   failed: [],
@@ -1184,7 +1184,7 @@ export function createRunAttemptRepository(options?: {
             last_checkpoint_at = now(),
             ${executionIdPatch}
             status = CASE
-              WHEN status = 'dispatched' THEN 'running'
+              WHEN status IN ('dispatched', 'checking_worker') THEN 'running'
               ELSE status
             END,
             updated_at = now()

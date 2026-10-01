@@ -332,6 +332,45 @@ describe('AI-run V2 run attempt repository', () => {
     expect(attemptUpdate).toContain('exec-42');
   });
 
+  it('returns a checking_worker attempt to running when its checkpoint arrives', async () => {
+    const execute = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          id: 'attempt-1',
+          dispatch_message_id: 'dispatch-1',
+          last_checkpoint_sequence: 4,
+          status: 'checking_worker',
+        },
+      ])
+      .mockResolvedValueOnce([{ event_id: 'evt-5' }])
+      .mockResolvedValue([]);
+    const repo = createRunAttemptRepository({
+      runInTransaction: async (work) => work({ execute }),
+    });
+
+    await expect(
+      repo.acceptCheckpoint({
+        schemaVersion: AI_RUN_V2_SCHEMA_VERSION,
+        eventId: 'evt-5',
+        runId: 'run-1',
+        attemptId: 'attempt-1',
+        attemptNumber: 1,
+        dispatchMessageId: 'dispatch-1',
+        timestamp: '2026-09-18T12:00:00.000Z',
+        kind: 'heartbeat',
+        checkpointSequence: 5,
+      }),
+    ).resolves.toEqual({ status: 'accepted', checkpointSequence: 5 });
+
+    const statements = execute.mock.calls
+      .flatMap(([query]) => boundStrings(query))
+      .join('\n');
+    expect(statements).toContain(
+      "WHEN status IN ('dispatched', 'checking_worker') THEN 'running'",
+    );
+  });
+
   it('rejects non-monotonic checkpoint sequences', async () => {
     const execute = jest.fn().mockResolvedValueOnce([
       {

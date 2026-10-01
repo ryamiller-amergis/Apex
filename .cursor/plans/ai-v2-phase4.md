@@ -51,6 +51,23 @@ Do not delete or remove from Terraform the legacy app `ca-apex-ai-interactive-de
 - Follow-ups (not requested): App Insights keeps only about an hour of data; the orchestrator
   logs almost nothing; the DEV interactive cap is 4.
 
+## Incident: MaxView prototype #2 lost, background V2 paused (2026-10-01)
+
+- Prototype run `visual-a833936a…` waited in the visual queue (one job at a time) longer than 90 s.
+  The reconciler counted `dispatched` attempts as stale and moved it to `checking_worker`. The
+  worker then finished, but `checking_worker → completed` was not allowed, and the result consumer
+  dropped the `illegal_transition` result as idempotent. The probe is a no-op (`unknown`), so the
+  attempt never left `checking_worker`.
+- With a stale 09-29 attempt also in `checking_worker`, the pause threshold (2) stopped all
+  background V2 dispatch (prototype #3 and design docs).
+- Fixes:
+  - Data fix: failed both attempts and runs as `worker_lost`.
+  - Code: `checking_worker` may complete, and a checkpoint returns it to `running`; the stale sweep
+    looks only at `running` attempts; a result for a still-live attempt is abandoned for retry
+    (dead-lettered at max delivery) instead of dropped; an unconfirmed `checking_worker` attempt is
+    failed as `worker_lost` after 15 min without a checkpoint.
+- User must regenerate prototype index 2.
+
 ## Left in Phase 4
 
 - Managed-identity callbacks: blocked until the user re-runs `az login` (Graph blocked by

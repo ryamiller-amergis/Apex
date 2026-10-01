@@ -117,6 +117,57 @@ describe('resultConsumer', () => {
     expect(completed).toEqual(['lock-r']);
   });
 
+  it('keeps a result it cannot yet apply to a live attempt instead of dropping it', async () => {
+    const outcomes: string[] = [];
+    let deliveryCount = 0;
+    const consumer: QueueConsumer = {
+      receive: async () => {
+        deliveryCount += 1;
+        return {
+          lockToken: `lock-${deliveryCount}`,
+          messageId: 'm',
+          deliveryCount,
+          body: {
+            schemaVersion: AI_RUN_V2_SCHEMA_VERSION,
+            eventId: 'evt-live',
+            runId: 'run-1',
+            attemptId: 'attempt-1',
+            attemptNumber: 1,
+            dispatchMessageId: 'dispatch-1',
+            timestamp: '2026-09-18T12:00:00.000Z',
+            kind: 'terminal',
+            status: 'completed',
+            artifactStatus: 'manifest_written',
+          },
+        };
+      },
+      complete: async (token) => {
+        outcomes.push(`complete:${token}`);
+      },
+      abandon: async (token) => {
+        outcomes.push(`abandon:${token}`);
+      },
+      deadLetter: async (token) => {
+        outcomes.push(`deadLetter:${token}`);
+      },
+    };
+    const handler = createResultConsumer({
+      consumer,
+      attempts: {
+        transitionAttempt: async () => ({
+          status: 'illegal_transition',
+          from: 'dispatched',
+          to: 'completed',
+        }),
+      } as never,
+      maxDeliveryCount: 2,
+    });
+
+    await expect(handler.processOnce()).resolves.toBe('processed');
+    await expect(handler.processOnce()).resolves.toBe('poison');
+    expect(outcomes).toEqual(['abandon:lock-1', 'deadLetter:lock-2']);
+  });
+
   it('records terminal usage only after the fenced transition wins', async () => {
     const resultBody = {
       schemaVersion: AI_RUN_V2_SCHEMA_VERSION,
@@ -383,6 +434,63 @@ describe('reconciler', () => {
 
     await expect(reconciler.sweepCheckingWorkers()).resolves.toBe(1);
     expect(transitions).toEqual(['failed:worker_lost']);
+  });
+
+  it('does not treat a job still waiting in the queue as stale', async () => {
+    const execute = jest.fn().mockResolvedValue([]);
+    const reconciler = createReconciler({
+      executor: { execute },
+      attempts: { transitionAttempt: jest.fn() } as never,
+      executionProbe: { probe: async () => ({ status: 'unknown' }) },
+      listCheckingWorkers: async () => [],
+      acquireRecoveryLease: async (work) => work({} as never),
+      acquireReaperLease: async (work) => work({} as never),
+    });
+
+    await reconciler.sweepStaleCheckpoints();
+
+    const query = JSON.stringify(execute.mock.calls[0]?.[0]);
+    expect(query).toContain("a.status = 'running'");
+    expect(query).not.toContain('dispatched');
+  });
+
+  it('fails an unconfirmed checking_worker attempt only after the silence limit', async () => {
+    const failed: string[] = [];
+    const checkingRow = (attemptId: string, lastCheckpointAt: string | null) => ({
+      attemptId,
+      runId: `run-${attemptId}`,
+      dispatchMessageId: `d-${attemptId}`,
+      status: 'checking_worker',
+      lastCheckpointAt,
+      containerAppsExecutionId: attemptId === 'no-exec' ? null : `exec-${attemptId}`,
+    });
+    const reconciler = createReconciler({
+      executor: { execute: async () => [] },
+      attempts: {
+        transitionAttempt: async (input: { attemptId: string; to: string }) => {
+          failed.push(input.attemptId);
+          return { status: 'ok', attemptId: input.attemptId, to: input.to };
+        },
+      } as never,
+      executionProbe: { probe: async () => ({ status: 'unknown' }) },
+      clock: {
+        now: () => new Date('2026-10-01T12:30:00.000Z'),
+        sleep: async () => undefined,
+      },
+      uncertainWorkerLimitMs: 15 * 60_000,
+      loadRetryContext: async () => null,
+      listStaleRunning: async () => [],
+      listCheckingWorkers: async () => [
+        checkingRow('recent', '2026-10-01T12:20:00.000Z'),
+        checkingRow('silent', '2026-10-01T12:10:00.000Z'),
+        checkingRow('no-exec', '2026-10-01T12:00:00.000Z'),
+      ],
+      acquireRecoveryLease: async (work) => work({} as never),
+      acquireReaperLease: async (work) => work({} as never),
+    });
+
+    await expect(reconciler.sweepCheckingWorkers()).resolves.toBe(2);
+    expect(failed).toEqual(['silent', 'no-exec']);
   });
 
   describe('retry after a confirmed loss', () => {

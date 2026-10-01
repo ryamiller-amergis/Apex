@@ -2,6 +2,7 @@
  * Terminal result consumer — fenced finalize + poison dead-letter.
  */
 import {
+  isAiRunV2ActiveAttemptStatus,
   isAiRunV2FailureCategory,
   isAiRunV2Result,
   type AiRunV2AttemptStatus,
@@ -97,7 +98,23 @@ export function createResultConsumer(deps: ResultConsumerDeps): ResultConsumer {
         return 'processed';
       }
       if (transition.status === 'illegal_transition') {
-        // Already terminal or racing — treat as idempotent success.
+        if (isAiRunV2ActiveAttemptStatus(transition.from)) {
+          // The attempt is still live (its checkpoint may not have landed
+          // yet), so acknowledging would lose the result.
+          if (message.deliveryCount >= maxDelivery) {
+            await deps.consumer.deadLetter(
+              message.lockToken,
+              'illegal_transition',
+              `Cannot apply ${transition.to} result to ${transition.from} attempt`,
+            );
+            metrics.increment('orchestrator.result.illegal_transition');
+            return 'poison';
+          }
+          await deps.consumer.abandon(message.lockToken);
+          metrics.increment('orchestrator.result.retry');
+          return 'processed';
+        }
+        // Already terminal — treat as idempotent success.
         await deps.consumer.complete(message.lockToken);
         metrics.increment('orchestrator.result.idempotent');
         return 'processed';

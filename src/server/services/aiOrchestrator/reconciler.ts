@@ -1,7 +1,8 @@
 /**
  * Recovery / reaper sweeps for stale checkpoints and worker_lost confirmation.
  * Missed checkpoints alone move to checking_worker; worker_lost requires a
- * negative Container Apps execution probe.
+ * negative Container Apps execution probe, or a long silence the probe cannot
+ * explain.
  */
 import { sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
@@ -63,6 +64,12 @@ export type ReconcilerDeps = Readonly<{
   checkpointStaleMs?: number;
   /** Initial dispatch must commit within this many ms (default 90s). */
   initialDispatchStaleMs?: number;
+  /**
+   * A checking_worker attempt the probe cannot confirm is failed as lost once
+   * it has gone this many ms without a checkpoint (default 15 min); until
+   * then it counts toward the uncertain-worker dispatch pause.
+   */
+  uncertainWorkerLimitMs?: number;
   holderId?: string;
   listStaleQueued?: () => Promise<QueuedAttemptRow[]>;
   listStaleRunning?: () => Promise<StaleAttemptRow[]>;
@@ -93,6 +100,7 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
   const clock = deps.clock ?? systemClock;
   const staleMs = deps.checkpointStaleMs ?? 90_000;
   const initialDispatchStaleMs = deps.initialDispatchStaleMs ?? 90_000;
+  const uncertainWorkerLimitMs = deps.uncertainWorkerLimitMs ?? 15 * 60_000;
   const holderId = deps.holderId ?? `reconciler-${randomUUID()}`;
 
   const acquireRecovery =
@@ -159,7 +167,7 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
       FROM ai_run_attempts a
       JOIN agent_runs r ON r.id = a.run_id
       WHERE r.transport_version = 'servicebus-blob-v2'
-        AND a.status IN ('dispatched', 'running')
+        AND a.status = 'running'
         AND (
           a.last_checkpoint_at IS NULL
           OR a.last_checkpoint_at < ${cutoff}::timestamptz
@@ -348,15 +356,13 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
   async function sweepCheckingWorkers(): Promise<number> {
     return acquireReaper(async () => {
       const checking = await listChecking();
+      const silentBefore = clock.now().getTime() - uncertainWorkerLimitMs;
       let failed = 0;
       for (const row of checking) {
-        if (!row.containerAppsExecutionId) {
-          // Without an execution id we cannot confirm loss — leave in checking_worker.
-          metrics.increment('orchestrator.reconciler.missing_execution_id');
-          continue;
-        }
-        const probe = await deps.executionProbe.probe(row.containerAppsExecutionId);
-        if (probe.status === 'running' || probe.status === 'succeeded') {
+        const probe = row.containerAppsExecutionId
+          ? await deps.executionProbe.probe(row.containerAppsExecutionId)
+          : null;
+        if (probe?.status === 'running' || probe?.status === 'succeeded') {
           // Worker healthy or finished — return to running so checkpoints can resume.
           await deps.attempts.transitionAttempt({
             attemptId: row.attemptId,
@@ -366,17 +372,28 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
           metrics.increment('orchestrator.reconciler.restored_running');
           continue;
         }
-        if (probe.status === 'unknown') {
-          metrics.increment('orchestrator.reconciler.probe_unknown');
-          continue;
+        let failureDetail: string;
+        if (probe === null || probe.status === 'unknown') {
+          metrics.increment(
+            probe === null
+              ? 'orchestrator.reconciler.missing_execution_id'
+              : 'orchestrator.reconciler.probe_unknown',
+          );
+          const lastSeen = row.lastCheckpointAt
+            ? Date.parse(row.lastCheckpointAt)
+            : Number.NEGATIVE_INFINITY;
+          if (lastSeen >= silentBefore) continue;
+          failureDetail =
+            `no checkpoint for ${Math.round(uncertainWorkerLimitMs / 60_000)} min and the execution probe could not confirm the worker`;
+        } else {
+          failureDetail = `execution probe: ${probe.status}`;
         }
-        // not_found or failed → worker_lost
         const transition = await deps.attempts.transitionAttempt({
           attemptId: row.attemptId,
           expectedDispatchMessageId: row.dispatchMessageId,
           to: 'failed',
           failureCategory: 'worker_lost',
-          failureDetail: `execution probe: ${probe.status}`,
+          failureDetail,
         });
         if (transition.status === 'ok') {
           failed += 1;
