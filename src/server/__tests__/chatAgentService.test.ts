@@ -212,8 +212,11 @@ import {
   prepareBackgroundWorkflowTurn,
   prepareRepositoryReadRuntime,
   subscribeToThread,
+  isThreadIdle,
 } from '../services/chatAgentService';
+import { dispatchRunEventForTest } from '../services/pgNotifyService';
 import type {
+  AgentRunEventEnvelope,
   ChatMessage,
   ChatThread,
   ChatThreadKickoff,
@@ -1521,6 +1524,64 @@ describe('canonical durable send wrapper', () => {
       }
     },
   );
+
+  it('clears the running thread when the durable run ends on another instance', async () => {
+    const accepted = {
+      turnId,
+      runId,
+      status: 'dispatched' as const,
+      interactiveClass: 'fast' as const,
+    };
+    mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        admitDurable(): Promise<typeof accepted>;
+      }) => ({
+        route: 'durable',
+        response: await input.admitDurable(),
+      }),
+    );
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+    const runEvent = (
+      eventRunId: string,
+      status: AgentRunEventEnvelope['status'],
+    ): AgentRunEventEnvelope => ({
+      eventId: `${eventRunId}-${status}-${Math.random()}`,
+      threadId: thread.id,
+      runId: eventRunId,
+      sourceInstance: 'ai-run-ingest',
+      sequence: 1,
+      timestamp: new Date().toISOString(),
+      type: status === 'running' ? 'status' : 'done',
+      phase: 'completion',
+      status,
+      event: status === 'running'
+        ? { type: 'status', status: 'running' }
+        : { type: 'done', runId: eventRunId },
+    });
+
+    try {
+      await sendMessage(thread.id, 'Write the PRD', undefined, [], {
+        turnId,
+        turnIdPolicy: 'required',
+      });
+      expect(isThreadIdle(thread.id)).toBe(false);
+
+      dispatchRunEventForTest(runEvent('some-other-run', 'completed'));
+      dispatchRunEventForTest(runEvent(runId, 'running'));
+      expect(isThreadIdle(thread.id)).toBe(false);
+
+      dispatchRunEventForTest(runEvent(runId, 'completed'));
+      expect(isThreadIdle(thread.id)).toBe(true);
+      expect((await getThread(thread.id))?.activeRunId).toBeUndefined();
+    } finally {
+      await closeThread(thread.id);
+    }
+  });
 
   it('uses the authorized requester for flag context, quota, grant, and audit input', async () => {
     const accepted = {

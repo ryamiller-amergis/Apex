@@ -42,6 +42,12 @@ Do not delete or remove from Terraform the legacy app `ca-apex-ai-interactive-de
   - Working-copy size: checkout now measures the commit's real file size (`git ls-tree -l`)
     instead of using the compressed bundle size, so a copy that doesn't fit the budget falls back
     to remote reads instead of filling the disk.
+- Retest (PRD `84366190…`, run `0403be9e`): the AI finished in 107 s and the output files reached
+  App Service, but the PRD watcher waited forever. The V2 terminal updates only the DB; the
+  App Service in-memory thread stayed `running`, and watchers (PRD, ADR, test cases, design docs)
+  require `isThreadIdle`. Saved that PRD by restarting App Service (startup recovery reloads the
+  thread from the DB). Fix: `chatAgentService` subscribes to the run's terminal event after a durable
+  admission and clears the in-memory thread.
 - Follow-ups (not requested): App Insights keeps only about an hour of data; the orchestrator
   logs almost nothing; the DEV interactive cap is 4.
 

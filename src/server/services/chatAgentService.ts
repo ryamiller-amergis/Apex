@@ -6370,6 +6370,49 @@ async function sendMessageLegacy(
   }
 }
 
+const durableTerminalWatches = new Map<string, () => void>();
+
+/**
+ * A durable run is finished by whichever instance receives the worker's
+ * terminal callback, and that write updates only the database. Output
+ * watchers on this instance read the in-memory thread, so clear it when the
+ * run's terminal event arrives.
+ */
+function watchDurableTerminal(state: ThreadState, runId: string): void {
+  const threadId = state.thread.id;
+  durableTerminalWatches.get(threadId)?.();
+  const stop = (): void => {
+    unsubscribe();
+    if (durableTerminalWatches.get(threadId) === stop) {
+      durableTerminalWatches.delete(threadId);
+    }
+  };
+  const unsubscribe = subscribeRunEvents(threadId, (envelope) => {
+    if (envelope.runId !== runId) return;
+    if (
+      envelope.status !== 'completed'
+      && envelope.status !== 'failed'
+      && envelope.status !== 'cancelled'
+    ) {
+      return;
+    }
+    stop();
+    if (threads.get(threadId) !== state || state.thread.activeRunId !== runId) {
+      return;
+    }
+    const status = envelope.status === 'failed' ? 'error' : 'idle';
+    state.thread.status = status;
+    state.thread.activeRunId = undefined;
+    broadcast(state, { type: 'status', status });
+  });
+  durableTerminalWatches.set(threadId, stop);
+}
+
+function forgetThread(threadId: string): void {
+  threads.delete(threadId);
+  durableTerminalWatches.get(threadId)?.();
+}
+
 function reflectDurableAdmission(
   state: ThreadState,
   text: string,
@@ -6414,6 +6457,7 @@ function reflectDurableAdmission(
       state.thread.status = 'running';
       state.thread.activeRunId = response.runId;
       broadcast(state, { type: 'status', status: 'running' });
+      watchDurableTerminal(state, response.runId);
       return;
     case 'completed':
     case 'cancelled':
@@ -6843,7 +6887,7 @@ export async function closeThread(threadId: string): Promise<void> {
         console.log(
           `[chat] Dev session thread ${threadId}: evicting from memory (idle timeout), keeping workspace and thread status intact (unpushed changes)`
         );
-        threads.delete(threadId);
+        forgetThread(threadId);
         return;
       }
     }
@@ -6853,7 +6897,7 @@ export async function closeThread(threadId: string): Promise<void> {
   state.thread.status = 'closed';
   await pgUpsertThread(state.thread);
 
-  threads.delete(threadId);
+  forgetThread(threadId);
 
   try {
     fs.rmSync(state.thread.workspaceDir, { recursive: true, force: true });
@@ -6882,7 +6926,7 @@ export async function permanentlyDeleteThread(threadId: string): Promise<void> {
     state.groundingWorkspaceDir = null;
     await grounding?.release().catch(() => undefined);
 
-    threads.delete(threadId);
+    forgetThread(threadId);
 
     try {
       fs.rmSync(state.thread.workspaceDir, { recursive: true, force: true });
