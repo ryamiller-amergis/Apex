@@ -21,6 +21,7 @@ export type UtilizationReaderDeps = Readonly<{
 type LaneCountRow = Readonly<{
   transport_version: unknown;
   attempt_status: unknown;
+  run_status?: unknown;
   published_at: unknown;
   workload_lane: unknown;
   capacity_class: unknown;
@@ -43,6 +44,7 @@ export function createUtilizationReader(deps: UtilizationReaderDeps) {
         SELECT
           r.transport_version,
           a.status AS attempt_status,
+          r.status AS run_status,
           o.published_at,
           o.payload->>'workloadLane' AS workload_lane,
           o.payload->>'capacityClass' AS capacity_class,
@@ -64,6 +66,7 @@ export function createUtilizationReader(deps: UtilizationReaderDeps) {
         ) OR (
           r.transport_version = 'dapr-actor-v2'
           AND a.status IN ('dispatched', 'running')
+          AND r.status IN ('queued', 'dispatched', 'running')
         )
       `);
 
@@ -82,9 +85,16 @@ export function createUtilizationReader(deps: UtilizationReaderDeps) {
 
       for (const row of resultRows<LaneCountRow>(result)) {
         if (row.transport_version === 'dapr-actor-v2') {
+          // A run reaped by App Service can leave its attempt active.
+          const runEnded =
+            row.run_status !== undefined &&
+            row.run_status !== 'queued' &&
+            row.run_status !== 'dispatched' &&
+            row.run_status !== 'running';
           if (
             (row.attempt_status !== 'dispatched' &&
               row.attempt_status !== 'running') ||
+            runEnded ||
             !isInteractiveClass(row.interactive_class)
           ) {
             continue;

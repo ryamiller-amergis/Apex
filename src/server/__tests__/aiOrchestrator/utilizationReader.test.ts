@@ -233,6 +233,40 @@ describe('utilizationReader', () => {
     });
   });
 
+  it('does not count a Dapr attempt whose run already ended', async () => {
+    const reader = createUtilizationReader({
+      executor: {
+        execute: async () => ({
+          rows: [
+            {
+              transport_version: 'dapr-actor-v2',
+              attempt_status: 'dispatched',
+              run_status: 'failed',
+              published_at: null,
+              workload_lane: null,
+              capacity_class: null,
+              interactive_class: 'agentic',
+            },
+            {
+              transport_version: 'dapr-actor-v2',
+              attempt_status: 'running',
+              run_status: 'running',
+              published_at: null,
+              workload_lane: null,
+              capacity_class: null,
+              interactive_class: 'agentic',
+            },
+          ],
+        }),
+      },
+    });
+
+    expect(await reader.read()).toMatchObject({
+      cursorInFlight: 1,
+      interactiveClassInFlight: { fast: 0, agentic: 1 },
+    });
+  });
+
   it('keeps Service Bus lanes separate from Dapr classes while sharing Cursor utilization', async () => {
     const reader = createUtilizationReader({
       executor: {

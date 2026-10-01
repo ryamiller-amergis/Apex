@@ -242,7 +242,7 @@ describe('pgNotifyService durable run events', () => {
 
     expect(clientQuery.mock.calls.map(([sql]) => String(sql).trim().split(/\s+/)[0])).toEqual([
       'BEGIN',
-      'UPDATE',
+      'WITH',
       'INSERT',
       'UPDATE',
       'COMMIT',
@@ -307,7 +307,10 @@ describe('pgNotifyService durable run events', () => {
     );
     expect(clientQuery.mock.calls[1][0]).not.toContain('owner_instance');
     expect(clientQuery.mock.calls.map(([sql]) => String(sql).trim().split(/\s+/)[0]))
-      .toEqual(['BEGIN', 'UPDATE', 'INSERT', 'UPDATE', 'COMMIT']);
+      .toEqual(['BEGIN', 'WITH', 'INSERT', 'UPDATE', 'COMMIT']);
+    // A durable interactive attempt left active would hold orchestrator capacity forever.
+    expect(clientQuery.mock.calls[1][0]).toContain('UPDATE ai_run_attempts');
+    expect(clientQuery.mock.calls[1][0]).toContain("transport_version = 'dapr-actor-v2'");
     expect(release).toHaveBeenCalledTimes(1);
   });
 

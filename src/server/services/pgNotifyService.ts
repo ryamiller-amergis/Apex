@@ -316,14 +316,28 @@ async function finalizeAgentRun(
       params.push(input.terminalReason);
       terminalReasonSet = `, terminal_reason = $${params.length}`;
     }
+    // A durable interactive run's attempt is not finalized by anything else
+    // once the run header is terminal, and active attempts hold orchestrator
+    // capacity, so it is closed in the same statement.
     const result = await client.query(
-      `UPDATE agent_runs
-          SET status = $1, last_error = $2${terminalReasonSet}, updated_at = CURRENT_TIMESTAMP
-        WHERE id = $3
-          ${ownerClause}
-          ${dispatchClause}
-          AND status IN ('queued', 'dispatched', 'running')
-      RETURNING id`,
+      `WITH finalized AS (
+         UPDATE agent_runs
+            SET status = $1, last_error = $2${terminalReasonSet}, updated_at = CURRENT_TIMESTAMP
+          WHERE id = $3
+            ${ownerClause}
+            ${dispatchClause}
+            AND status IN ('queued', 'dispatched', 'running')
+        RETURNING id, transport_version
+       ), closed_attempts AS (
+         UPDATE ai_run_attempts
+            SET status = $1, updated_at = CURRENT_TIMESTAMP
+          WHERE run_id IN (
+                  SELECT id FROM finalized
+                   WHERE transport_version = 'dapr-actor-v2'
+                )
+            AND status IN ('queued', 'dispatched', 'running')
+       )
+       SELECT id FROM finalized`,
       params,
     );
     if (result.rowCount !== 1) {
