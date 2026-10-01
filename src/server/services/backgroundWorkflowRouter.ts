@@ -148,6 +148,10 @@ export interface BackgroundWorkflowRouter {
   route(input: BackgroundWorkflowRouteInput): Promise<WorkflowRouteDecision>;
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function readOptionalScratchFile(
   workspaceRoot: string,
   relativePath: string,
@@ -379,7 +383,13 @@ export function createBackgroundWorkflowRouter(
     input: BackgroundWorkflowRouteInput,
     reason: string,
     startedAt: number,
+    error?: unknown,
   ): Promise<WorkflowRouteDecision> => {
+    if (error !== undefined) {
+      console.warn(
+        `[background-route] ${reason} (workflow=${input.workflowClass}, runId=${input.destinationRun.runId}): ${errorMessage(error)}`,
+      );
+    }
     safeTrack(
       'background.materialization.outcome',
       {
@@ -408,7 +418,10 @@ export function createBackgroundWorkflowRouter(
     } catch {
       execution = Promise.reject(new Error('In-process fallback failed'));
     }
-    void execution.catch(async () => {
+    void execution.catch(async (error: unknown) => {
+      console.warn(
+        `[background-route] in-process fallback failed (workflow=${input.workflowClass}, runId=${input.destinationRun.runId}): ${errorMessage(error)}`,
+      );
       safeTrack('background.route.fallback', {
         workflowClass: input.workflowClass,
         project: input.destinationRun.project,
@@ -440,11 +453,12 @@ export function createBackgroundWorkflowRouter(
     let prepared: PreparedBackgroundWorkflowWorker;
     try {
       prepared = await input.prepareWorker();
-    } catch {
+    } catch (error) {
       return recoverPreparation(
         input,
         'worker-preparation-failed',
         preparationStartedAt,
+        error,
       );
     }
 
@@ -496,7 +510,15 @@ export function createBackgroundWorkflowRouter(
             : {}),
         };
         if (!isAiRunV2DocumentSpecification(specificationCandidate)) {
-          throw new Error('Document execution specification is incomplete');
+          const present = (value: unknown): string =>
+            typeof value === 'string' && value.length > 0 ? 'yes' : 'no';
+          throw new Error(
+            'Document execution specification is incomplete'
+            + ` (model=${present(snapshot.model)}, skillPath=${present(prepared.skillPath)}`
+            + `, skillContent=${present(prepared.skillContent)}, skillSha256=${present(prepared.skillSha256)}`
+            + `, groundedSha=${present(targetGrounding?.groundedSha)}`
+            + `, scratchInputs=${documentScratchInputs.map((entry) => entry.path).join(',') || 'none'})`,
+          );
         }
         const specification: AiRunV2DocumentSpecification =
           specificationCandidate;
@@ -512,7 +534,9 @@ export function createBackgroundWorkflowRouter(
             specification as unknown as Record<string, unknown>,
         });
         if (admitted.status !== 'dispatched') {
-          throw new Error('V2 admission refused the document run');
+          throw new Error(
+          `V2 admission refused the document run: ${admitted.status} (existing run ${admitted.existingRunId}, ${admitted.existingStatus})`,
+        );
         }
         return admitted.runId;
         // @feature-flag:ai-runs-v2-transport enabled-end
@@ -570,11 +594,12 @@ export function createBackgroundWorkflowRouter(
       let dispatchedRunId: string;
       try {
         dispatchedRunId = await dispatch(snapshot);
-      } catch {
+      } catch (error) {
         return recoverPreparation(
           input,
           'worker-enqueue-failed',
           preparationStartedAt,
+          error,
         );
       }
       routeDecision(input, 'worker', materializationReason);
@@ -732,11 +757,12 @@ export function createBackgroundWorkflowRouter(
     let dispatchedRunId: string;
     try {
       dispatchedRunId = await dispatch(snapshot, prepared.targetGrounding);
-    } catch {
+    } catch (error) {
       return recoverPreparation(
         input,
         'worker-enqueue-failed',
         preparationStartedAt,
+        error,
       );
     }
     routeDecision(input, 'worker', materializationReason);

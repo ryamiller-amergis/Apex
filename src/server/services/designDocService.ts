@@ -307,7 +307,11 @@ export async function routeDesignDocGenerationKickoff(opts: {
         ),
       reportRecoverablePreparationFailure: reportPreparationFailure,
     });
-  } catch {
+  } catch (err) {
+    console.error(
+      `[designDoc] Generation routing failed (designDocId=${opts.designDocId}, threadId=${opts.threadId}):`,
+      err,
+    );
     await reportPreparationFailure();
   }
 }
