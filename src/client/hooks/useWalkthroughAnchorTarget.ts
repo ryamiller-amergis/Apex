@@ -64,6 +64,10 @@ function looksLikeSelectorSyntax(value: string): boolean {
   return /[#.[\]>+~*=]|^\s*\/\//.test(value) || value.includes(' ');
 }
 
+function routeMatchesLocation(route: string, pathname: string, search: string): boolean {
+  return route.includes('?') ? `${pathname}${search}` === route : pathname === route;
+}
+
 function catalogFallbackToMissReason(
   reason: WalkthroughAnchorCatalogFallbackReason,
 ): WalkthroughAnchorMissReason {
@@ -248,20 +252,28 @@ export function useWalkthroughAnchorTarget({
   useEffect(() => {
     if (!enabled || anchorKey || !effectiveStepRoute) return;
     if (!isValidInAppWalkthroughRoute(effectiveStepRoute)) return;
-    if (location.pathname === effectiveStepRoute) return;
+    if (routeMatchesLocation(effectiveStepRoute, location.pathname, location.search)) return;
     setStatus('navigating');
     navigate(effectiveStepRoute);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activationKey, enabled, anchorKey, effectiveStepRoute, navigate]);
+  }, [
+    activationKey,
+    enabled,
+    anchorKey,
+    effectiveStepRoute,
+    location.pathname,
+    location.search,
+    navigate,
+  ]);
 
   // Settle navigating → idle once the path matches for unanchored route-only steps.
   useEffect(() => {
     if (!enabled || anchorKey || !effectiveStepRoute) return;
     if (status !== 'navigating') return;
-    if (location.pathname === effectiveStepRoute) {
+    if (routeMatchesLocation(effectiveStepRoute, location.pathname, location.search)) {
       setStatus('idle');
     }
-  }, [enabled, anchorKey, effectiveStepRoute, status, location.pathname]);
+  }, [enabled, anchorKey, effectiveStepRoute, status, location.pathname, location.search]);
 
   useEffect(() => {
     const generation = ++generationRef.current;

@@ -10,8 +10,8 @@ import { useWalkthroughAnchorTarget } from '../useWalkthroughAnchorTarget';
 function LocationProbe({ onPath }: { onPath: (path: string) => void }) {
   const location = useLocation();
   React.useEffect(() => {
-    onPath(location.pathname);
-  }, [location.pathname, onPath]);
+    onPath(`${location.pathname}${location.search}`);
+  }, [location.pathname, location.search, onPath]);
   return null;
 }
 
@@ -33,6 +33,48 @@ function createWrapper(initialPath = '/other') {
 }
 
 describe('useWalkthroughAnchorTarget (TBI-004 / Phase 6)', () => {
+  it('navigates unanchored steps between curated query-string routes', async () => {
+    const { Wrapper, getPath } = createWrapper('/backlog?tab=interviews');
+    const { result } = renderHook(
+      () =>
+        useWalkthroughAnchorTarget({
+          walkthroughId: 'wt-1',
+          revision: 1,
+          stepId: 'prd-step',
+          activationKey: 'prd-step',
+          anchor: null,
+          stepRoute: '/backlog?tab=prds',
+        }),
+      { wrapper: Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(getPath()).toBe('/backlog?tab=prds');
+      expect(result.current.status).toBe('idle');
+    });
+  });
+
+  it('preserves search state when an unanchored route only specifies a pathname', async () => {
+    const { Wrapper, getPath } = createWrapper('/home?thread=thread-1');
+    const { result } = renderHook(
+      () =>
+        useWalkthroughAnchorTarget({
+          walkthroughId: 'wt-1',
+          revision: 1,
+          stepId: 'home-step',
+          activationKey: 'home-step',
+          anchor: null,
+          stepRoute: '/home',
+        }),
+      { wrapper: Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.status).toBe('idle');
+    });
+    expect(getPath()).toBe('/home?thread=thread-1');
+  });
+
   it('DoD-1 / VT-06: navigates using enriched testId and resolves mounted target', async () => {
     // Target is NOT present on the current route, so the hook must navigate to the
     // anchor's home route to bring it into view, then resolve once it mounts.
