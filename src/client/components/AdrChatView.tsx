@@ -34,6 +34,7 @@ import { DEFAULT_MODEL_ID } from '../config/models';
 import { InterviewAgentMessage } from './InterviewChatView';
 import { AgentComposer } from './agentChat';
 import { AdrAssistantPanel } from './AdrAssistantPanel';
+import { ChatRunProgressLabel } from './ChatRunProgressLabel';
 import { ProposedAdrChangesReview } from './ProposedAdrChangesReview';
 import { AdrReviewerModal } from './AdrReviewerModal';
 import { AnnotationLayer } from './AnnotationLayer';
@@ -49,6 +50,7 @@ import {
 import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
 import { useReviewerAvailability } from '../hooks/useReviewerAvailability';
 import { parseAgentMessage, type ChoiceBlock } from '../utils/parseAgentMessage';
+import { createChatTurnId } from '../utils/chatTurnId';
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './InterviewChatView.module.css';
 import { ApexLoader } from './ApexLoader';
@@ -145,6 +147,7 @@ const NewAdrCompose: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
+          turnId: createChatTurnId(),
           text: kickoffPrompt,
           attachments,
           model,
@@ -408,6 +411,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     streamingText,
     progressLabel,
     progressPhase,
+    toolProgress,
     isPreparing,
     hasPreparationError,
     showTypingIndicator,
@@ -909,6 +913,31 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               if (message.role === 'user') {
                 return <div key={message.id} className={`${styles.messageBubble} ${styles.messageBubbleUser}`}>{message.text}</div>;
               }
+              const isError = message.text.startsWith('Error:');
+              if (isError && !chatLocked) {
+                return (
+                  <div key={message.id} className={styles.systemErrorMsg}>
+                    <span
+                      className={styles.systemErrorText}
+                      role="alert"
+                      {...{ 'data-testid': 'chat-run-terminal' }}
+                    >
+                      {message.text}
+                    </span>
+                    <button
+                      className={styles.retryBtn}
+                      onClick={() => {
+                        void session.retryFailedRun();
+                      }}
+                      disabled={isInteractionBusy || !session.retryableRunId}
+                      type="button"
+                      {...{ 'data-testid': 'adr-retry-message' }}
+                    >
+                      ↺ Try again
+                    </button>
+                  </div>
+                );
+              }
               return <div key={message.id} className={styles.messageBubbleSystem}>{message.text}</div>;
             })}
 
@@ -931,11 +960,11 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                 >
                   {progressPhase === 'queued' ? (
                     <span {...{ 'data-testid': 'agent-run-status-queued' }}>
-                      {friendlyChatProgressLabel(progressLabel, 'queued')}
+                      Queued
                     </span>
                   ) : progressPhase === 'dispatched' ? (
                     <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
-                      {friendlyChatProgressLabel(progressLabel, 'dispatched')}
+                      Dispatched
                     </span>
                   ) : progressLabel ? (
                     friendlyChatProgressLabel(progressLabel, progressPhase)
@@ -968,7 +997,11 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                 <span className={styles.typingDot} />
                 <span className={styles.typingDot} />
                 <span className={styles.typingProgressLabel} {...{ 'data-testid': 'adr-progress-label' }}>
-                  {friendlyChatProgressLabel(progressLabel, progressPhase)}
+                  <ChatRunProgressLabel
+                    fallbackLabel={friendlyChatProgressLabel(progressLabel, progressPhase)}
+                    progressPhase={progressPhase}
+                    toolProgress={toolProgress}
+                  />
                 </span>
               </div>
             )}

@@ -148,13 +148,17 @@ function rowToEnvelope(row: Record<string, any>): AgentRunEventEnvelope {
   };
 }
 
-async function loadRunEvent(eventId: string): Promise<AgentRunEventEnvelope | null> {
+export async function loadRunEvent(
+  eventId: string,
+  threadId?: string,
+): Promise<AgentRunEventEnvelope | null> {
   const result = await pool.query(
     `SELECT event_id, thread_id, run_id, source_instance, sequence,
             event_timestamp, event_type, phase, status, detail, event
        FROM agent_run_events
-      WHERE event_id = $1`,
-    [eventId],
+      WHERE event_id = $1
+        AND ($2::text IS NULL OR thread_id = $2)`,
+    [eventId, threadId ?? null],
   );
   return result.rows[0] ? rowToEnvelope(result.rows[0]) : null;
 }
@@ -314,14 +318,28 @@ async function finalizeAgentRun(
       params.push(input.terminalReason);
       terminalReasonSet = `, terminal_reason = $${params.length}`;
     }
+    // A durable interactive run's attempt is not finalized by anything else
+    // once the run header is terminal, and active attempts hold orchestrator
+    // capacity, so it is closed in the same statement.
     const result = await client.query(
-      `UPDATE agent_runs
-          SET status = $1, last_error = $2${terminalReasonSet}, updated_at = CURRENT_TIMESTAMP
-        WHERE id = $3
-          ${ownerClause}
-          ${dispatchClause}
-          AND status IN ('queued', 'dispatched', 'running')
-      RETURNING id`,
+      `WITH finalized AS (
+         UPDATE agent_runs
+            SET status = $1, last_error = $2${terminalReasonSet}, updated_at = CURRENT_TIMESTAMP
+          WHERE id = $3
+            ${ownerClause}
+            ${dispatchClause}
+            AND status IN ('queued', 'dispatched', 'running')
+        RETURNING id, transport_version
+       ), closed_attempts AS (
+         UPDATE ai_run_attempts
+            SET status = $1, updated_at = CURRENT_TIMESTAMP
+          WHERE run_id IN (
+                  SELECT id FROM finalized
+                   WHERE transport_version = 'dapr-actor-v2'
+                )
+            AND status IN ('queued', 'dispatched', 'running')
+       )
+       SELECT id FROM finalized`,
       params,
     );
     if (result.rowCount !== 1) {
@@ -408,13 +426,40 @@ export async function finalizeReconciledAgentRun(
   return finalizeAgentRun(input);
 }
 
-export async function replayRunEvents(
+export type RunEventPage = Readonly<{
+  events: ReadonlyArray<AgentRunEventEnvelope>;
+  nextEventId: string | null;
+  hasMore: boolean;
+}>;
+
+export type ReplayRunEventPageOptions = Readonly<{
+  afterEventId?: string;
+  limit?: number;
+  runId?: string;
+  coldStart?: 'recent' | 'oldest';
+}>;
+
+/**
+ * Paginated durable replay. Queries LIMIT+1 to detect `hasMore`, returns at most
+ * `limit` events (capped at 500). Ascending ordinal order.
+ */
+export async function replayRunEventPage(
   threadId: string,
-  afterEventId?: string,
-  limit = 500,
-  runId?: string,
-): Promise<AgentRunEventEnvelope[]> {
-  const boundedLimit = Math.max(1, Math.min(limit, 500));
+  options: ReplayRunEventPageOptions = {},
+): Promise<RunEventPage> {
+  const afterEventId = options.afterEventId;
+  const runId = options.runId;
+  const coldStart = options.coldStart ?? 'recent';
+  const boundedLimit = Math.max(1, Math.min(options.limit ?? 500, 500));
+  const fetchLimit = boundedLimit + 1;
+
+  const toPage = (rows: AgentRunEventEnvelope[]): RunEventPage => {
+    const hasMore = rows.length > boundedLimit;
+    const events = hasMore ? rows.slice(0, boundedLimit) : rows;
+    const nextEventId =
+      events.length > 0 ? events[events.length - 1]!.eventId : null;
+    return { events, nextEventId, hasMore };
+  };
 
   if (afterEventId) {
     const cursor = await pool.query<{ ordinal: string | number }>(
@@ -431,13 +476,28 @@ export async function replayRunEvents(
            FROM agent_run_events
           WHERE thread_id = $1
             AND ordinal > $2
+            AND ($4::text IS NULL OR run_id = $4)
           ORDER BY ordinal ASC
           LIMIT $3`,
-        [threadId, cursor.rows[0].ordinal, boundedLimit],
+        [threadId, cursor.rows[0].ordinal, fetchLimit, runId ?? null],
       );
-      return result.rows.map(rowToEnvelope);
+      return toPage(result.rows.map(rowToEnvelope));
     }
     // Missing cursor: same newest-first window as a cold replay.
+  }
+
+  if (coldStart === 'oldest') {
+    const result = await pool.query(
+      `SELECT event_id, thread_id, run_id, source_instance, sequence,
+              event_timestamp, event_type, phase, status, detail, event
+         FROM agent_run_events
+        WHERE thread_id = $1
+          AND ($3::text IS NULL OR run_id = $3)
+        ORDER BY ordinal ASC
+        LIMIT $2`,
+      [threadId, fetchLimit, runId ?? null],
+    );
+    return toPage(result.rows.map(rowToEnvelope));
   }
 
   const result = await pool.query(
@@ -453,9 +513,26 @@ export async function replayRunEvents(
           LIMIT $2
        ) recent
       ORDER BY ordinal ASC`,
-    [threadId, boundedLimit, runId ?? null],
+    [threadId, fetchLimit, runId ?? null],
   );
-  return result.rows.map(rowToEnvelope);
+  return toPage(result.rows.map(rowToEnvelope));
+}
+
+/** One-page wrapper for callers that do not need `hasMore` pagination. */
+export async function replayRunEvents(
+  threadId: string,
+  afterEventId?: string,
+  limit = 500,
+  runId?: string,
+  coldStart: 'recent' | 'oldest' = 'recent',
+): Promise<AgentRunEventEnvelope[]> {
+  const page = await replayRunEventPage(threadId, {
+    afterEventId,
+    limit,
+    runId,
+    coldStart,
+  });
+  return [...page.events];
 }
 
 /**

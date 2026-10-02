@@ -8,6 +8,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash } from 'node:crypto';
 import { v4 as uuidv4 } from 'uuid';
 import type {
   ChatAttachment,
@@ -35,6 +36,7 @@ import {
   listThreadsByUser as pgListThreadsByUser,
   searchThreads as pgSearchThreads,
   loadFullThread as pgLoadFullThread,
+  listMessageIds as pgListMessageIds,
   deleteThread as pgDeleteThread,
   clearStaleRun,
 } from './chatThreadRepository';
@@ -61,7 +63,16 @@ import {
   INTERACTIVE_WORKFLOW_FLAG,
   type InteractiveWorkflowClass,
 } from '../../shared/types/interactiveWorkflow';
-import { interactiveWorkflowRouter } from './interactiveWorkflowRouter';
+import type { InteractiveTurnAcceptedResponse } from '../../shared/types/durableInteractiveTurn';
+import {
+  interactiveWorkflowRouter,
+  legacyInteractiveWorkflowRouter,
+} from './interactiveWorkflowRouter';
+import {
+  durableInteractiveTurnService,
+  type DurableInteractiveToolGrantInput,
+} from './durableInteractiveTurnService';
+import { resolveGroundingPreparationTimeoutMs } from './interactiveDeadlinePolicy';
 import { interactiveLiveBus } from './interactiveLiveBus';
 import { isExternalRunAbortEvent } from './agentRunAbort';
 import {
@@ -168,7 +179,6 @@ const WORKSPACE_BASE = process.env.AI_PILOT_WORKSPACE_DIR
     : path.join(os.tmpdir(), 'ai-pilot-workspaces');
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const INTERVIEW_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
-const GROUNDING_PREPARATION_TIMEOUT_MS = 2 * 60 * 1000;
 // After this much thread inactivity, a resumed SDK session is likely cold and
 // prone to emitting zero events. Proactively recreate the agent (with history)
 // instead of resuming a stale session. Overridable for tests/tuning.
@@ -1994,6 +2004,7 @@ async function buildNewAgentTurnPrompt(
     skipProviderCatalogFetch?: boolean;
     repoReader?: RepoReader;
     groundingProvenance?: GroundingProvenance;
+    onResolvedSkill?: (skill: { path: string; content: string }) => void;
   }
 ): Promise<string> {
   let initialPrompt = buildInitialPrompt(kickoff, {
@@ -2005,6 +2016,8 @@ async function buildNewAgentTurnPrompt(
   const provider = kickoff.skillProvider ?? 'ado';
   const resolvedBranch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
   let skillContent: string | null = null;
+  let resolvedSkillPath =
+    kickoff.skillPath?.replace(/^\//, '') ?? null;
   let skillSource: 'ado' | 'github' | 'local' | null = null;
   let contextContent: string | null = null;
   let agentsContent: string | null = null;
@@ -2060,6 +2073,7 @@ async function buildNewAgentTurnPrompt(
         }
         if (request.key === 'skill') {
           skillContent = result.value;
+          resolvedSkillPath = request.path.replace(/^\//, '');
           skillSource = options?.repoReader ? 'local' : provider;
         } else if (request.key === 'context') {
           contextContent = result.value;
@@ -2098,6 +2112,7 @@ async function buildNewAgentTurnPrompt(
               );
           if (content) {
             skillContent = content;
+            resolvedSkillPath = candidate;
             skillSource = options?.repoReader ? 'local' : provider;
             break;
           }
@@ -2116,6 +2131,7 @@ async function buildNewAgentTurnPrompt(
         if (!fs.existsSync(localPath)) continue;
         try {
           skillContent = fs.readFileSync(localPath, 'utf8');
+          resolvedSkillPath = candidate;
           skillSource = 'local';
           console.log('[chat] Using local skill fallback:', candidate);
           break;
@@ -2129,6 +2145,10 @@ async function buildNewAgentTurnPrompt(
     }
 
     if (skillContent) {
+      options?.onResolvedSkill?.({
+        path: resolvedSkillPath ?? skillPathNorm,
+        content: skillContent,
+      });
       initialPrompt +=
         `\n\n# Pre-loaded skill content (${skillPathNorm}; source: ${skillSource})` +
         `\n\n${skillContent}`;
@@ -2180,6 +2200,8 @@ export interface PreparedBackgroundWorkflowTurn {
   model: string;
   effort?: import('../../shared/types/effort').EffortLevel;
   skillPath: string;
+  skillContent?: string;
+  skillSha256?: string;
   projectId: string;
   threadWorkspacePath: string;
   repository: RepositoryPreparationTarget;
@@ -2192,6 +2214,7 @@ export function buildBackgroundWorkflowPrompt(
     repoReader?: RepoReader;
     skipProviderCatalogFetch?: boolean;
     groundingProvenance?: GroundingProvenance;
+    onResolvedSkill?: (skill: { path: string; content: string }) => void;
   }
 ): Promise<string> {
   return buildNewAgentTurnPrompt(kickoff, promptText, false, undefined, {
@@ -2200,6 +2223,7 @@ export function buildBackgroundWorkflowPrompt(
     repoReader: options?.repoReader,
     skipProviderCatalogFetch: options?.skipProviderCatalogFetch,
     groundingProvenance: options?.groundingProvenance,
+    onResolvedSkill: options?.onResolvedSkill,
   });
 }
 
@@ -2242,15 +2266,31 @@ export async function prepareBackgroundWorkflowTurn(
     groundingProvenance = groundingProvenanceFor(grounding, kickoff);
   }
 
-  return {
-    prompt: await buildBackgroundWorkflowPrompt(kickoff, promptText, {
+  let resolvedSkill: { path: string; content: string } | null = null;
+  const prompt = await buildBackgroundWorkflowPrompt(kickoff, promptText, {
       repoReader,
       skipProviderCatalogFetch,
       groundingProvenance,
-    }),
+      onResolvedSkill: (skill) => {
+        resolvedSkill = skill;
+      },
+    });
+  const frozenSkill = resolvedSkill as
+    | { path: string; content: string }
+    | null;
+  return {
+    prompt,
     model: resolveModelId(kickoff.model),
     effort: kickoff.effort,
-    skillPath: kickoff.skillPath ?? '',
+    skillPath: frozenSkill?.path ?? kickoff.skillPath ?? '',
+    ...(frozenSkill
+      ? {
+          skillContent: frozenSkill.content,
+          skillSha256: createHash('sha256')
+            .update(frozenSkill.content)
+            .digest('hex'),
+        }
+      : {}),
     projectId: kickoff.project,
     threadWorkspacePath: state.thread.workspaceDir,
     repository: {
@@ -2890,6 +2930,9 @@ async function ensureThreadState(
   };
   threads.set(threadId, state);
   resetIdleTimer(state);
+  if (thread.status === 'running' && thread.activeRunId) {
+    watchDurableTerminal(state, thread.activeRunId);
+  }
   return state;
 }
 
@@ -3092,7 +3135,44 @@ export function markAsInterviewThread(threadId: string): void {
 }
 
 export async function getThread(threadId: string): Promise<ChatThread | null> {
-  return (await ensureThreadState(threadId))?.thread ?? null;
+  const cached = threads.get(threadId);
+  if (!cached) return (await ensureThreadState(threadId))?.thread ?? null;
+  await mergePersistedMessages(cached);
+  return cached.thread;
+}
+
+/**
+ * Durable (V2) turns persist the agent's reply from the run-ingest callback,
+ * which may land on any instance and never touches this in-memory copy. Pull
+ * those rows in so reloads and transcript builders see both sides. Only ids
+ * are read on every call; full rows load only when one is missing.
+ */
+async function mergePersistedMessages(state: ThreadState): Promise<void> {
+  let persisted: ChatThread | null;
+  try {
+    const known = new Set(state.thread.messages.map((message) => message.id));
+    const persistedIds = await pgListMessageIds(state.thread.id);
+    if (persistedIds.every((id) => known.has(id))) return;
+    persisted = await loadThread(state.thread.id);
+  } catch (err) {
+    console.error(
+      '[chat] failed to merge persisted messages for thread',
+      state.thread.id,
+      ':',
+      (err as Error).message
+    );
+    return;
+  }
+  if (!persisted) return;
+  const known = new Set(state.thread.messages.map((message) => message.id));
+  const missing = persisted.messages.filter((message) => !known.has(message.id));
+  if (missing.length === 0) return;
+  state.thread.messages.push(...missing);
+  state.thread.messages.sort((a, b) => {
+    const byTs = a.ts.localeCompare(b.ts);
+    if (byTs !== 0) return byTs;
+    return a.id.localeCompare(b.id);
+  });
 }
 
 /** Alias kept for backward compatibility with callers that imported the explicitly async name. */
@@ -3137,7 +3217,7 @@ export function subscribeToThread(
   return () => state.subscribers.delete(callback);
 }
 
-const DEFAULT_MODEL = 'composer-2';
+const DEFAULT_MODEL = 'composer-2.5';
 
 function resolveModelId(model?: string): string {
   return model?.trim() || DEFAULT_MODEL;
@@ -3374,6 +3454,7 @@ async function syncOutputToDbFromWorkspace(
     where: eq(prds.chatThreadId, threadId),
   });
   if (prdRow) {
+    if (prdRow.status !== 'generating') return;
     const content = readOutputPrd(threadId);
     const backlog = readOutputBacklog(threadId);
     const { isPrdGenerationOutputComplete } = await import(
@@ -3381,7 +3462,17 @@ async function syncOutputToDbFromWorkspace(
     );
     const outputComplete = isPrdGenerationOutputComplete(content, backlog);
     if (outputComplete && content) {
-      await syncPrdContent(prdRow.id, content, backlog ?? undefined);
+      const applied = await syncPrdContent(
+        prdRow.id,
+        content,
+        backlog ?? undefined,
+        'draft',
+        {
+          expectedStatus: 'generating',
+          expectedThreadId: threadId,
+        },
+      );
+      if (!applied) return;
       console.log(
         `[chat] post-run: synced PRD output to DB (prdId=${prdRow.id})`
       );
@@ -3399,7 +3490,13 @@ async function syncOutputToDbFromWorkspace(
       await db
         .update(prds)
         .set({ status: 'draft', updatedAt: new Date().toISOString() })
-        .where(and(eq(prds.id, prdRow.id), eq(prds.status, 'generating')));
+        .where(
+          and(
+            eq(prds.id, prdRow.id),
+            eq(prds.status, 'generating'),
+            eq(prds.chatThreadId, threadId),
+          ),
+        );
       console.warn(
         `[chat] post-run: agent produced incomplete/stub PRD output — reset to draft (prdId=${prdRow.id})`
       );
@@ -3443,9 +3540,11 @@ async function syncOutputToDbFromWorkspace(
       authorId: true,
       designPrototypeId: true,
       featureIndex: true,
+      status: true,
     },
   });
   if (ddGenRow) {
+    if (ddGenRow.status !== 'generating') return;
     const { finalizeSingleFeatureDoc, isSingleFeatureDesignDocRow } =
       await import('./designDocService');
     // Single-feature docs finalize in place; legacy seeds fan out to child rows.
@@ -3506,6 +3605,7 @@ async function syncOutputToDbFromWorkspace(
     where: eq(designDocs.validationThreadId, threadId),
   });
   if (ddValRow) {
+    if (ddValRow.status !== 'validating') return;
     const scorecardRaw = readOutputValidationScorecard(threadId);
     const result = await ingestValidationScorecard(
       createDesignDocValidationAdapter(ddValRow.id),
@@ -3556,6 +3656,7 @@ async function syncOutputToDbFromWorkspace(
     where: eq(prds.validationThreadId, threadId),
   });
   if (prdValRow) {
+    if (prdValRow.status !== 'validating') return;
     const scorecardRaw = readOutputValidationScorecard(threadId);
     const result = await ingestValidationScorecard(
       createPrdValidationAdapter(prdValRow as unknown as Prd),
@@ -3812,7 +3913,7 @@ async function ensureThreadGrounding(
 async function waitForReadyThreadGrounding(
   state: ThreadState
 ): Promise<Exclude<CallerGroundingSelection, { mode: 'preparing' }>> {
-  const deadline = Date.now() + GROUNDING_PREPARATION_TIMEOUT_MS;
+  const deadline = Date.now() + resolveGroundingPreparationTimeoutMs();
   let announcedPreparing = false;
 
   while (true) {
@@ -3994,13 +4095,17 @@ async function postInteractiveActorDispatch(dispatch: {
 }
 
 /**
- * Fail-closed interactive routing seam (BR-017). Returns true only when the turn
- * was admitted and dispatched to the warm actor lane (the actor then streams
- * events back through the durable ingest + gateway). Any other outcome — no
- * dispatch URL, flag disabled/eval-error, over-capacity shed, lost race, or any
- * preparation/dispatch failure — returns false so the caller runs in-process.
- * On a non-actor decision the transient queued interactive row is discarded so
- * admission counts stay accurate and nothing is left dispatched without a runner.
+ * Legacy-only interactive routing seam (BR-017). Called only from the private
+ * legacy chat send path while `ai-runs-v2-transport` is off or unreadable.
+ * Returns true only when the turn was admitted and dispatched to the warm
+ * actor lane. Any other outcome — no dispatch URL, flag disabled/eval-error,
+ * attachments / workspace-bound skill / custom MCP / ADO bypasses,
+ * over-capacity shed, lost race, actor post failure, or any preparation
+ * failure — returns false so the legacy caller runs in-process.
+ *
+ * Canonical enabled traffic never enters this function: those bypasses are
+ * replaced by Tasks 2–4 durable paths or explicit validation errors
+ * (see durable interactive turns design). BR-017 is legacy-only.
  */
 interface InteractiveDispatchAttempt {
   dispatched: boolean;
@@ -4009,10 +4114,28 @@ interface InteractiveDispatchAttempt {
   bypassReason?: string;
 }
 
-interface ChatSendOptions {
+export type InteractiveMessageSubmission =
+  | Readonly<{ route: 'legacy' }>
+  | Readonly<{
+      route: 'durable';
+      response: InteractiveTurnAcceptedResponse;
+    }>;
+
+export type InteractiveSendOptions = Readonly<{
   hidden?: boolean;
   turnSkill?: ChatTurnSkill;
-}
+  turnId?: string;
+  turnIdPolicy?: 'required' | 'generate';
+  legacyCompletion?: 'await' | 'detach';
+  requesterUserId?: string;
+  toolGrant?: DurableInteractiveToolGrantInput;
+  onLegacySettled?: () => void;
+}>;
+
+type LegacyChatSendOptions = Pick<
+  InteractiveSendOptions,
+  'hidden' | 'turnSkill'
+>;
 
 const ADO_WRITE_TARGET =
   /\b(?:azure\s+devops|ado|work\s*items?|pbi|tbis?|epics?)\b|\b(?:bug|task|feature)\s*#?\d+\b|#\d+\b/i;
@@ -4076,7 +4199,7 @@ async function tryDispatchInteractiveTurn(
   text: string,
   modelOverride?: string,
   attachments: ChatAttachment[] = [],
-  options?: ChatSendOptions,
+  options?: LegacyChatSendOptions,
   expectedCancellationEpoch = 0
 ): Promise<InteractiveDispatchAttempt> {
   // Inert unless the actor host dispatch URL is configured (cloud only).
@@ -4318,7 +4441,7 @@ async function tryDispatchInteractiveTurn(
       }
 
       markStage('route');
-      const decision = await interactiveWorkflowRouter.route({
+      const decision = await legacyInteractiveWorkflowRouter.route({
         userId,
         project,
         workflowClass,
@@ -4477,12 +4600,12 @@ async function tryDispatchInteractiveTurn(
   }
 }
 
-export async function sendMessage(
+async function sendMessageLegacy(
   threadId: string,
   text: string,
   modelOverride?: string,
   attachments: ChatAttachment[] = [],
-  options?: ChatSendOptions
+  options?: LegacyChatSendOptions
 ): Promise<void> {
   const sendStartedAt = Date.now();
   console.log('[chat] sendMessage.start', {
@@ -4502,8 +4625,10 @@ export async function sendMessage(
     state.cancellationEpoch !== expectedCancellationEpoch;
 
   // @feature-flag:ai-runs-interactive start winner=disabled
-  // FEAT-007: offload the turn to the warm Dapr actor lane when enabled + admitted.
-  // Fail-closed: any other outcome falls through to the in-process path below.
+  // Legacy-only FEAT-007: offload the turn to the warm Dapr actor lane when the
+  // interim flag is enabled + admitted. Fail-closed: any other outcome falls
+  // through to the in-process path below. Canonical `ai-runs-v2-transport`
+  // never reaches this function.
   const interactiveAttempt = await tryDispatchInteractiveTurn(
     threadId,
     text,
@@ -6161,6 +6286,242 @@ export async function sendMessage(
   }
 }
 
+const durableTerminalWatches = new Map<string, () => void>();
+
+/**
+ * A durable run is finished by whichever instance receives the worker's
+ * terminal callback, and that write updates only the database. Output
+ * watchers on this instance read the in-memory thread, so clear it when the
+ * run's terminal event arrives.
+ */
+function watchDurableTerminal(state: ThreadState, runId: string): void {
+  const threadId = state.thread.id;
+  durableTerminalWatches.get(threadId)?.();
+  const stop = (): void => {
+    unsubscribe();
+    if (durableTerminalWatches.get(threadId) === stop) {
+      durableTerminalWatches.delete(threadId);
+    }
+  };
+  const unsubscribe = subscribeRunEvents(threadId, (envelope) => {
+    if (envelope.runId !== runId) return;
+    if (
+      envelope.status !== 'completed'
+      && envelope.status !== 'failed'
+      && envelope.status !== 'cancelled'
+    ) {
+      return;
+    }
+    stop();
+    if (threads.get(threadId) !== state || state.thread.activeRunId !== runId) {
+      return;
+    }
+    const status = envelope.status === 'failed' ? 'error' : 'idle';
+    state.thread.status = status;
+    state.thread.activeRunId = undefined;
+    broadcast(state, { type: 'status', status });
+  });
+  durableTerminalWatches.set(threadId, stop);
+}
+
+function forgetThread(threadId: string): void {
+  threads.delete(threadId);
+  durableTerminalWatches.get(threadId)?.();
+}
+
+function reflectDurableAdmission(
+  state: ThreadState,
+  text: string,
+  attachments: ChatAttachment[],
+  options: InteractiveSendOptions | undefined,
+  response: InteractiveTurnAcceptedResponse,
+): void {
+  if (response.idempotent === true) return;
+  if (response.shouldReflectThreadState === false) return;
+  let timestamp = new Date().toISOString();
+  const existingMessage = state.thread.messages.find(
+    (message) => message.id === response.turnId,
+  );
+  if (!existingMessage) {
+    const message: ChatMessage = {
+      id: response.turnId,
+      role: 'user',
+      text: text.trim() || 'Uploaded files for context.',
+      ts: timestamp,
+      ...(options?.hidden ? { hidden: true } : {}),
+      ...(attachments.length > 0
+        ? {
+            attachments: attachments.map((attachment) => ({
+              id: attachment.id,
+              name: attachment.name,
+              type: attachment.type,
+              size: attachment.size,
+            })),
+          }
+        : {}),
+    };
+    state.thread.messages.push(message);
+    broadcast(state, { type: 'message', message });
+  } else {
+    timestamp = existingMessage.ts;
+  }
+  state.thread.lastActivityAt = timestamp;
+  switch (response.status) {
+    case 'queued':
+    case 'dispatched':
+    case 'running':
+      state.thread.status = 'running';
+      state.thread.activeRunId = response.runId;
+      broadcast(state, { type: 'status', status: 'running' });
+      watchDurableTerminal(state, response.runId);
+      return;
+    case 'completed':
+    case 'cancelled':
+      state.thread.status = 'idle';
+      state.thread.activeRunId = undefined;
+      broadcast(state, { type: 'status', status: 'idle' });
+      return;
+    case 'failed':
+      state.thread.status = 'error';
+      state.thread.activeRunId = undefined;
+      broadcast(state, { type: 'status', status: 'error' });
+      return;
+    default: {
+      const unhandled: never = response.status;
+      throw new Error(
+        `Unsupported interactive response status: ${String(unhandled)}`,
+      );
+    }
+  }
+}
+
+function reportDetachedLegacyError(threadId: string, error: unknown): void {
+  console.error(
+    `[chat] sendMessage error for thread ${threadId}:`,
+    error instanceof Error ? error.message : 'Unexpected error',
+  );
+  trackEvent('chat.send.failed', {
+    threadId,
+    errorType: error instanceof Error ? error.name : 'UnknownError',
+    errorMessage:
+      error instanceof Error ? error.message.slice(0, 200) : 'Unexpected error',
+  });
+}
+
+export function sendMessage(
+  threadId: string,
+  text: string,
+  modelOverride: string | undefined,
+  attachments: ChatAttachment[] | undefined,
+  options: InteractiveSendOptions & Readonly<{ hidden: true }>,
+): Promise<void>;
+export function sendMessage(
+  threadId: string,
+  text: string,
+  modelOverride?: string,
+  attachments?: ChatAttachment[],
+  options?: InteractiveSendOptions,
+): Promise<InteractiveMessageSubmission>;
+export async function sendMessage(
+  threadId: string,
+  text: string,
+  modelOverride?: string,
+  attachments: ChatAttachment[] = [],
+  options?: InteractiveSendOptions,
+): Promise<InteractiveMessageSubmission | void> {
+  const state = await ensureThreadState(threadId);
+  if (!state) throw new Error(`Thread ${threadId} not found`);
+  const workflowClass = resolveInteractiveWorkflowClass(state);
+  const legacyCompletion = options?.legacyCompletion ?? 'await';
+  const requesterUserId = options?.requesterUserId ?? state.thread.userId;
+
+  const decision = await interactiveWorkflowRouter.route({
+    userId: requesterUserId,
+    project: state.thread.kickoff.project,
+    workflowClass,
+    threadId,
+    runLegacy: async () => {
+      if (
+        legacyCompletion === 'detach' &&
+        state.thread.status === 'running'
+      ) {
+        const gate = await recoverStaleRunningThread(threadId);
+        if (gate === 'running') {
+          throw Object.assign(new Error('Agent is already running'), {
+            status: 409,
+          });
+        }
+      }
+
+      const execution = sendMessageLegacy(
+        threadId,
+        text,
+        modelOverride,
+        attachments,
+        {
+          hidden: options?.hidden,
+          turnSkill: options?.turnSkill,
+        },
+      );
+      if (legacyCompletion === 'await') {
+        try {
+          await execution;
+        } finally {
+          options?.onLegacySettled?.();
+        }
+        return;
+      }
+      void execution
+        .catch((error: unknown) => {
+          reportDetachedLegacyError(threadId, error);
+        })
+        .finally(() => {
+          options?.onLegacySettled?.();
+        });
+    },
+    admitDurable: async () => {
+      const turnId =
+        options?.turnId ??
+        (options?.turnIdPolicy === 'required' ? '' : uuidv4());
+      return durableInteractiveTurnService.admit({
+        threadId,
+        userId: requesterUserId,
+        workflowClass,
+        turnId,
+        text,
+        modelOverride,
+        attachments,
+        hidden: options?.hidden,
+        turnSkill: options?.turnSkill,
+        toolGrant: options?.toolGrant,
+      });
+    },
+  });
+
+  switch (decision.route) {
+    case 'legacy':
+      return { route: 'legacy' };
+    case 'durable':
+      reflectDurableAdmission(
+        state,
+        text,
+        attachments,
+        options,
+        decision.response,
+      );
+      return {
+        route: 'durable',
+        response: decision.response,
+      };
+    default: {
+      const unhandled: never = decision;
+      throw new Error(
+        `Unsupported interactive route decision: ${String(unhandled)}`,
+      );
+    }
+  }
+}
+
 /**
  * If the thread is marked running but no live agent_runs row remains (or the
  * run is health-dead), force it idle so the user can send again. Returns the
@@ -6259,6 +6620,46 @@ export async function cancelRun(threadId: string): Promise<void> {
       project: state.thread.kickoff.project,
     }
   ).catch(() => false);
+
+  // dapr-actor-v2: Stop only persists cancel_requested on the active run/fence.
+  // The actor observes the flag on the next progress/heartbeat and acknowledges.
+  const [activeRunRow] = await db
+    .select({
+      id: agentRuns.id,
+      transportVersion: agentRuns.transportVersion,
+      dispatchMessageId: agentRuns.dispatchMessageId,
+      status: agentRuns.status,
+    })
+    .from(agentRuns)
+    .where(eq(agentRuns.id, activeRunId))
+    .limit(1)
+    .catch(() => []);
+
+  if (activeRunRow?.transportVersion === 'dapr-actor-v2') {
+    await db
+      .update(agentRuns)
+      .set({
+        cancelRequested: true,
+        cancelState: 'requested',
+        updatedAt: new Date().toISOString(),
+      })
+      .where(
+        and(
+          eq(agentRuns.id, activeRunId),
+          eq(
+            agentRuns.dispatchMessageId,
+            activeRunRow.dispatchMessageId ?? '',
+          ),
+          inArray(agentRuns.status, [...CANCELLABLE_AGENT_RUN_STATUSES]),
+        ),
+      )
+      .catch((e) => {
+        console.error('[chat] Failed to mark dapr-actor-v2 cancel requested:', e);
+      });
+    broadcast(state, { type: 'status', status: 'running' });
+    return;
+  }
+
   // @feature-flag:event-driven-run-termination start winner=enabled
   if (eventDrivenTerminationEnabled) {
     // @feature-flag:event-driven-run-termination enabled-start
@@ -6402,7 +6803,7 @@ export async function closeThread(threadId: string): Promise<void> {
         console.log(
           `[chat] Dev session thread ${threadId}: evicting from memory (idle timeout), keeping workspace and thread status intact (unpushed changes)`
         );
-        threads.delete(threadId);
+        forgetThread(threadId);
         return;
       }
     }
@@ -6412,7 +6813,7 @@ export async function closeThread(threadId: string): Promise<void> {
   state.thread.status = 'closed';
   await pgUpsertThread(state.thread);
 
-  threads.delete(threadId);
+  forgetThread(threadId);
 
   try {
     fs.rmSync(state.thread.workspaceDir, { recursive: true, force: true });
@@ -6441,7 +6842,7 @@ export async function permanentlyDeleteThread(threadId: string): Promise<void> {
     state.groundingWorkspaceDir = null;
     await grounding?.release().catch(() => undefined);
 
-    threads.delete(threadId);
+    forgetThread(threadId);
 
     try {
       fs.rmSync(state.thread.workspaceDir, { recursive: true, force: true });

@@ -118,19 +118,19 @@ data "azapi_resource_action" "ai_runs_interactive_redis_keys" {
 
 locals {
   ai_runs_interactive_redis_hostname = local.ai_runs_interactive_managed_redis ? (
-    azapi_resource.ai_runs_interactive_redis[0].output.properties.hostName
+    try(azapi_resource.ai_runs_interactive_redis[0].output.properties.hostName, null)
     ) : (
-    azurerm_redis_cache.ai_runs_interactive[0].hostname
+    try(azurerm_redis_cache.ai_runs_interactive[0].hostname, null)
   )
   ai_runs_interactive_redis_port = local.ai_runs_interactive_managed_redis ? (
     10000
     ) : (
-    azurerm_redis_cache.ai_runs_interactive[0].ssl_port
+    try(azurerm_redis_cache.ai_runs_interactive[0].ssl_port, null)
   )
   ai_runs_interactive_redis_key = local.ai_runs_interactive_managed_redis ? (
-    data.azapi_resource_action.ai_runs_interactive_redis_keys[0].output.primaryKey
+    try(data.azapi_resource_action.ai_runs_interactive_redis_keys[0].output.primaryKey, null)
     ) : (
-    azurerm_redis_cache.ai_runs_interactive[0].primary_access_key
+    try(azurerm_redis_cache.ai_runs_interactive[0].primary_access_key, null)
   )
 }
 
@@ -147,7 +147,13 @@ resource "azurerm_container_app_environment_dapr_component" "ai_runs_interactive
   container_app_environment_id = azurerm_container_app_environment.ai_runs.id
   component_type               = "pubsub.redis"
   version                      = "v1"
-  scopes                       = [local.ai_runs_interactive_dapr_app_id]
+  scopes = concat(
+    [local.ai_runs_interactive_dapr_app_id],
+    local.ai_platform_v2_split_interactive_enabled ? [
+      local.ai_platform_v2_interactive_dapr_app_ids["fast-interactive"],
+      local.ai_platform_v2_interactive_dapr_app_ids["agentic"],
+    ] : [],
+  )
 
   secret {
     name  = "redis-password"
@@ -175,7 +181,13 @@ resource "azurerm_container_app_environment_dapr_component" "ai_runs_interactive
   container_app_environment_id = azurerm_container_app_environment.ai_runs.id
   component_type               = "state.redis"
   version                      = "v1"
-  scopes                       = [local.ai_runs_interactive_dapr_app_id]
+  scopes = concat(
+    [local.ai_runs_interactive_dapr_app_id],
+    local.ai_platform_v2_split_interactive_enabled ? [
+      local.ai_platform_v2_interactive_dapr_app_ids["fast-interactive"],
+      local.ai_platform_v2_interactive_dapr_app_ids["agentic"],
+    ] : [],
+  )
 
   secret {
     name  = "redis-password"

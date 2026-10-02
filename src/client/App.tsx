@@ -38,6 +38,7 @@ import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
 import { canAccessMyWork } from './utils/canAccessMyWork';
 import { setInteractiveWsEnabled } from './utils/threadEventStream';
+import { createChatTurnId } from './utils/chatTurnId';
 import { IS_BETA_RELEASE } from './config/release';
 import { RESTRICTED_ACCESS_PROJECT } from '../shared/types/restrictedAccess';
 import './App.css';
@@ -318,22 +319,19 @@ function App() {
   const showBetaAnnouncement = useFeatureFlag('beta-to-prod-announcement', selectedProject);
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
-  const interactiveWsEnabled = homeFlags['ai-runs-interactive'] === true;
+  const interactiveWsEnabled = homeFlags['ai-runs-v2-transport'] === true;
   const canAccessPlaybooks =
     !homeFlagsLoading &&
     homeFlags['playbooks-production-adapters'] === true &&
     (isSuperAdmin || can('playbooks:view'));
-
-  // @feature-flag:ai-runs-interactive start winner=disabled
-  // FEAT-007: flip the chat stream transport to the WebSocket agent gateway when
-  // ai-runs-interactive is enabled for this project; falls back to SSE otherwise.
+  // Prefer the WebSocket agent gateway when the durable interactive transport
+  // flag is enabled; SSE remains the stream-transport fallback only.
   // Wait until flags resolve so we do not open SSE first, then leave it stuck
   // after the flag loads as true (useChatStream reopens on the change event).
   useEffect(() => {
     if (homeFlagsLoading) return;
     setInteractiveWsEnabled(interactiveWsEnabled);
   }, [homeFlagsLoading, interactiveWsEnabled]);
-  // @feature-flag:ai-runs-interactive end
 
   const canAccessHome =
     !isRestricted &&
@@ -534,12 +532,50 @@ function App() {
     [activeSkillConfig, skillRepos, selectedProject],
   );
 
+  const syncHomeThreadUrl = useCallback((threadId: string | null) => {
+    const searchParams = new URLSearchParams(location.search);
+    if (
+      location.pathname === '/home'
+      && searchParams.get('thread') === threadId
+    ) {
+      return;
+    }
+    if (threadId) {
+      searchParams.set('thread', threadId);
+    } else {
+      searchParams.delete('thread');
+    }
+    const search = searchParams.toString();
+    navigate(
+      {
+        pathname: '/home',
+        search: search ? `?${search}` : '',
+      },
+      { replace: true },
+    );
+  }, [location.pathname, location.search, navigate]);
+
+  const previousHomeProjectRef = useRef(selectedProject);
+  useEffect(() => {
+    const projectChanged = previousHomeProjectRef.current !== selectedProject;
+    previousHomeProjectRef.current = selectedProject;
+    if (projectChanged && currentView === 'home') {
+      // Runs after AgentHome's effect, which still saw the outgoing project's
+      // ?thread= and rebound it; replace that with the destination's last thread.
+      const storedThreadId = sessionStorage.getItem(`agentHomeThreadId:${selectedProject}`);
+      setActiveThreadId(storedThreadId);
+      setActiveThreadProject(storedThreadId ? selectedProject : null);
+      syncHomeThreadUrl(storedThreadId);
+    }
+  }, [currentView, selectedProject, syncHomeThreadUrl]);
+
   const handleStartPanelChat = useCallback(async (options?: StartPanelChatOptions) => {
     if (!can('chat:view') || !can('chat:create')) return;
     setChatOpen(true);
     if (!options) {
       setActiveThreadId(null);
       setActiveThreadProject(null);
+      syncHomeThreadUrl(null);
       return;
     }
     if (!panelRepo || startChat.isPending) return;
@@ -562,12 +598,14 @@ function App() {
       });
       setActiveThreadId(result.threadId);
       setActiveThreadProject(selectedProject);
+      syncHomeThreadUrl(result.threadId);
       if (options?.initialMessage) {
         await fetch(`/api/chat/threads/${result.threadId}/messages`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({
+            turnId: createChatTurnId(),
             text: options.initialMessage,
             model: options.model ?? DEFAULT_MODEL_ID,
             ...(options.attachments?.length ? { attachments: options.attachments } : {}),
@@ -577,7 +615,7 @@ function App() {
     } catch {
       // Error shown inside the panel
     }
-  }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig]);
+  }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig, syncHomeThreadUrl]);
 
   useEffect(() => {
     if (
@@ -936,6 +974,7 @@ function App() {
                   onRestoreThread={(id) => {
                     setActiveThreadId(id);
                     setActiveThreadProject(selectedProject);
+                    syncHomeThreadUrl(id);
                   }}
                 />
                 {/* data-testid-exempt — ChatAgentPanel API has no data-testid prop */}
@@ -953,6 +992,7 @@ function App() {
                   onSelectThread={(id) => {
                     setActiveThreadId(id || null);
                     setActiveThreadProject(id ? selectedProject : null);
+                    syncHomeThreadUrl(id || null);
                   }}
                   selectedProject={selectedProject}
                   canStartNewChat={!!panelRepo && !isLoadingSkillRepos && !startChat.isPending}

@@ -25,6 +25,47 @@ const pool = new Pool({
   connectionTimeoutMillis: 10_000,
 });
 
+export interface DbPoolStats {
+  max: number;
+  total: number;
+  idle: number;
+  active: number;
+  waiting: number;
+  saturation: number;
+}
+
+type DbPoolStatsSource = Pick<
+  Pool,
+  'totalCount' | 'idleCount' | 'waitingCount' | 'options'
+>;
+
+function safeCount(value: number | undefined): number {
+  return Number.isFinite(value) ? Math.max(0, value ?? 0) : 0;
+}
+
+function safeMax(value: number | undefined): number {
+  return Number.isFinite(value) && (value ?? 0) > 0 ? value ?? 0 : 0;
+}
+
+export function getDbPoolStats(
+  source: DbPoolStatsSource = pool,
+): DbPoolStats {
+  const max = safeMax(source.options?.max);
+  const total = safeCount(source.totalCount);
+  const idle = safeCount(source.idleCount);
+  const waiting = safeCount(source.waitingCount);
+  const active = Math.max(0, total - idle);
+
+  return {
+    max,
+    total,
+    idle,
+    active,
+    waiting,
+    saturation: max > 0 ? active / max : 0,
+  };
+}
+
 pool.on('error', (err) => {
   console.error('[db] Unexpected error on idle client', err);
 });

@@ -93,4 +93,5 @@ tests/e2e/.auth/
 
 # Local agent scratch state — per-machine, not shared
 .agents/
+.superpowers/
 .cursor/skills/interactive-chat-troubleshoot/scripts/__pycache__/_lib.cpython-314.pyc

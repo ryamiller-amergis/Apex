@@ -1,15 +1,86 @@
-import { eq, and, asc, count, desc, inArray, lt, type SQL } from 'drizzle-orm';
+import {
+  eq,
+  and,
+  asc,
+  count,
+  desc,
+  inArray,
+  lt,
+  notExists,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { designPrototypes, designPrototypeComments, designPlans, designDocs, prds, documentApproverAssignments } from '../db/schema';
+import {
+  agentRuns,
+  designPrototypes,
+  designPrototypeComments,
+  designPlans,
+  designDocs,
+  prds,
+  documentApproverAssignments,
+} from '../db/schema';
 import type { DesignPlanFeature } from '../../shared/types/designPlan';
-import type { DesignPrototypeInput } from './bedrockService';
+import { resolvePrototypeVisualModel, type DesignPrototypeInput } from './bedrockService';
 import { sanitizeMockHtml } from '../utils/htmlSanitizer';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { isAssignedApprover } from './documentApprovalService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { prototypeUsageCtx } from './artifactUsageContext';
+import { resolveAgentRunHardLimitMs } from './agentRunReaperService';
+import {
+  createPrototypeSpecificationAssembler,
+  resolvePrototypeSourceContext,
+  type PrototypeDesignContext,
+} from './aiRunV2/prototypeSpecificationAssembler';
+import {
+  createV2AdmissionService,
+  visualGenerationRunId,
+  visualRunThreadId,
+  visualRunThreadPrefix,
+  type V2AdmissionService,
+} from './aiRunV2/v2AdmissionService';
+import {
+  buildProjectPrototypeScopingSection,
+  buildPrototypePageScreenshotHint,
+  buildPrototypePbiSection,
+  buildPrototypePlanSection,
+  buildPrototypeScopingSection,
+  buildPrototypeTargetScreenHint,
+} from './designContext/prototypePromptSections';
+import {
+  componentIndexPaths,
+  fetchExistingPageContext,
+  getDesignSystemCatalog,
+  getScreenInventory,
+  isComponentSourcePath,
+  type DesignSystemCatalog,
+  type DesignSystemAdoTarget,
+} from './designSystemService';
+import { getMaxviewColorTokens } from './designTokensService';
+import { isFeatureEnabled } from './featureFlagService';
+import { getFigmaReference } from './figmaReferenceService';
+import { getScreenshotByRoute } from './pageScreenshotService';
+import {
+  resolvePrototypeExtendMode,
+  resolvePrototypeContext,
+  type PrototypeContext,
+} from './prototypeContextService';
+import { getRepoCacheDir } from './repoCacheService';
+import { BareRepoReader } from './repoRead/bareRepoReader';
+import { cacheOptionsFromGrounding, isUsableBareMirror } from './repoRead/mirrorStore';
+import { resolveRunGroundingSurface, runGroundingService } from './runGroundingService';
+import { getDesignReferences } from './webDesignReferenceService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
 import { resolveUserStoryIWant } from '../../shared/utils/userStory';
+import type { RepoReader } from '../../shared/types/repoReader';
+import type { ScreenInventoryRoute } from '../../shared/types/designSystem';
+import type {
+  AiRunV2VisualSpecification,
+  PrototypePromptSelection,
+  VisualImageBlock,
+  VisualUsageAttribution,
+} from '../../shared/types/aiRunV2VisualSpec';
 import type {
   DesignPrototypeSummary,
   DesignPrototype,
@@ -337,7 +408,725 @@ function buildSkippedPrototypeHtml(
 </html>`;
 }
 
-export async function generatePrototypesForPrd(prdId: string): Promise<string[]> {
+const V2_TRANSPORT_FLAG = 'ai-runs-v2-transport';
+
+/** A prototype is visual work: one model call producing one HTML artifact. */
+const VISUAL_WORKLOAD_LANE = 'visual' as const;
+
+type PendingPrototype = {
+  prototypeId: string;
+  feature: BacklogFeature;
+  planFeature?: DesignPlanFeature;
+  generationStartedAt: string;
+};
+
+type GenerateInProcess = typeof generateSinglePrototype;
+
+type FeatureFlagEvaluator = (
+  key: string,
+  context: { userId: string; project: string; caller?: string },
+) => Promise<boolean>;
+
+export type PrototypeV2AdmissionState =
+  | 'intended'
+  | 'absent'
+  | 'conflicting';
+
+export type ReconcilePrototypeV2Admission = (input: Readonly<{
+  runId: string;
+  threadId: string;
+  subjectId: string;
+  generationStartedAt: string;
+}>) => Promise<PrototypeV2AdmissionState>;
+
+export interface GeneratePrototypesDependencies {
+  isFeatureEnabled?: FeatureFlagEvaluator;
+  admitV2Run?: V2AdmissionService['admit'];
+  reconcileV2Admission?: ReconcilePrototypeV2Admission;
+  generateInProcess?: GenerateInProcess;
+}
+
+async function reconcilePrototypeV2Admission(
+  input: Parameters<ReconcilePrototypeV2Admission>[0],
+): Promise<PrototypeV2AdmissionState> {
+  const rows = await db
+    .select({
+      id: agentRuns.id,
+      threadId: agentRuns.threadId,
+      transportVersion: agentRuns.transportVersion,
+      executionSnapshot: agentRuns.executionSnapshot,
+    })
+    .from(agentRuns)
+    .where(eq(agentRuns.id, input.runId));
+  const run = rows[0];
+  if (!run) return 'absent';
+
+  const snapshot = run.executionSnapshot as Record<string, unknown> | null;
+  return (
+    run.threadId === input.threadId
+    && run.transportVersion === 'servicebus-blob-v2'
+    && snapshot?.workflowClass === 'design-prototype'
+    && snapshot.subjectKind === 'design-prototype'
+    && snapshot.subjectId === input.subjectId
+    && snapshot.generationStartedAt === input.generationStartedAt
+  )
+    ? 'intended'
+    : 'conflicting';
+}
+
+/**
+ * The route this feature extends, if any. The reviewed plan is authoritative:
+ * prefer its route decision over the raw backlog route.
+ */
+function resolvePrototypeTargetRoute(
+  feature: BacklogFeature,
+  planFeature?: DesignPlanFeature,
+): string | undefined {
+  const planRoute = planFeature?.decision === 'update-page'
+    ? planFeature.targetRoute?.trim()
+    : undefined;
+  return planRoute || feature.route?.trim() || undefined;
+}
+
+/**
+ * Design context a worker cannot read for itself: the catalog and screen
+ * inventory come from Azure DevOps, the palette and navigation from bundled
+ * assets. Resolved here and frozen into the specification.
+ *
+ * The reference screenshot travels the same way. `bedrockService` attaches it
+ * to the in-process call as a vision input and the prompt tells the model to
+ * read it, so a specification without it asks the model to match a screenshot
+ * it cannot see. The asset can be absent, in which case the fields stay unset
+ * and the worker sends text only, exactly as the in-process path does.
+ */
+async function loadPrototypeDesignContext(
+  componentReader?: RepoReader,
+  relevanceText = '',
+): Promise<PrototypeDesignContext> {
+  const [catalog, screenInventory] = await Promise.all([
+    getDesignSystemCatalog({
+      ...(componentReader ? { componentReader } : {}),
+      relevanceText,
+    }),
+    getScreenInventory(),
+  ]);
+  const figma = getFigmaReference();
+  return {
+    catalog,
+    screenInventory,
+    colorTokens: getMaxviewColorTokens(),
+    navItems: figma.navItems,
+    images: figma.tablePageBase64
+      ? [
+          {
+            kind: 'design-reference',
+            base64: figma.tablePageBase64,
+            mediaType: 'image/png',
+            ...(figma.tablePageWidth > 0 ? { width: figma.tablePageWidth } : {}),
+            ...(figma.tablePageHeight > 0 ? { height: figma.tablePageHeight } : {}),
+          },
+        ]
+      : [],
+  };
+}
+
+/**
+ * None of it, for a project that has its own design system.
+ *
+ * `generateDesignPrototypeHtml` skips the catalog, the inventory, the
+ * palette, and the Figma reference outright on that branch, and its prompt
+ * mentions none of them. The screenshot is the one that matters: carrying it
+ * anyway would put a vision input in front of the model that the in-process
+ * call never sends.
+ */
+async function loadProjectPrototypeDesignContext(): Promise<PrototypeDesignContext> {
+  return {
+    catalog: undefined,
+    screenInventory: undefined,
+    colorTokens: undefined,
+    navItems: [],
+    images: [],
+  };
+}
+
+/** The component files the design-system catalog already walks, uncapped. */
+async function resolveComponentSourcePaths(reader: RepoReader): Promise<string[]> {
+  for (const folder of componentIndexPaths()) {
+    try {
+      const paths = (await reader.listDir(folder))
+        .filter(entry => !entry.isFolder)
+        .map(entry => entry.path)
+        .filter(isComponentSourcePath);
+      if (paths.length > 0) return paths;
+    } catch {
+      // Component folder layouts differ per repo; try the next candidate.
+    }
+  }
+  return [];
+}
+
+/**
+ * Repository source for the specification, read from the same bare mirror a
+ * background worker would use. Best effort: with no active target grounding,
+ * or no mirror fetched on this instance, there is nothing to read. The
+ * specification is still complete — a new-page prompt has never carried
+ * component source — so this degrades context rather than blocking the run.
+ */
+async function resolvePrototypeRepoSource(
+  prdId: string,
+): Promise<{ reader: RepoReader; sourcePaths: string[] } | null> {
+  try {
+    const surface = await resolveRunGroundingSurface('prd', prdId);
+    if (!surface) return null;
+
+    const grounding = (await runGroundingService.getGroundings(surface.run))
+      .find(row => row.repoRole === 'target' && row.isActive);
+    if (!grounding?.groundedSha) return null;
+
+    const cacheOptions = cacheOptionsFromGrounding(grounding);
+    const mirrorPath = getRepoCacheDir(cacheOptions);
+    if (!isUsableBareMirror(mirrorPath)) return null;
+
+    const reader = new BareRepoReader({
+      identity: {
+        provider: cacheOptions.provider,
+        project: grounding.project,
+        repo: grounding.repository,
+        sha: grounding.groundedSha,
+      },
+      mirrorPath,
+    });
+    return { reader, sourcePaths: await resolveComponentSourcePaths(reader) };
+  } catch (err) {
+    console.warn(`[designPrototypeService] Repository source unavailable for PRD ${prdId}:`, err);
+    return null;
+  }
+}
+
+type ResolvedPrototypeExtendInputs = Readonly<{
+  targetRoute: string | undefined;
+  existingPageContext: string;
+  extendMode: boolean;
+  targetScreenHint: string;
+  pageScreenshotHint: string;
+  pageScreenshot?: { base64: string; mediaType: string };
+  images: ReadonlyArray<VisualImageBlock>;
+}>;
+
+function prototypeFeatureText(feature: BacklogFeature): string {
+  return [
+    feature.title,
+    feature.description,
+    ...extractPbiRequirements(feature).flatMap((pbi) => [
+      pbi.title,
+      pbi.description,
+      pbi.acceptanceCriteria,
+    ]),
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(' ');
+}
+
+function prototypeAdoTarget(
+  projectContext: PrototypeContext | null,
+): DesignSystemAdoTarget | undefined {
+  const extend = projectContext?.extend;
+  return extend
+    ? {
+        provider: extend.provider,
+        adoProject: extend.adoProject,
+        repo: extend.repo,
+        branch: extend.branch,
+        inventoryPath: extend.screenInventoryPath ?? undefined,
+      }
+    : undefined;
+}
+
+/**
+ * Resolve every route-specific EXTEND input before admission. A visual worker
+ * has neither database access for screenshots nor repository credentials for
+ * page source, so an immutable specification must carry the finished context.
+ */
+async function resolvePrototypeExtendInputs(params: {
+  feature: BacklogFeature;
+  planFeature?: DesignPlanFeature;
+  projectContext: PrototypeContext | null;
+}): Promise<ResolvedPrototypeExtendInputs> {
+  const targetRoute = resolvePrototypeTargetRoute(
+    params.feature,
+    params.planFeature,
+  );
+  if (!targetRoute) {
+    return {
+      targetRoute: undefined,
+      existingPageContext: '',
+      extendMode: false,
+      targetScreenHint: '',
+      pageScreenshotHint: '',
+      images: [],
+    };
+  }
+
+  let pageScreenshot:
+    | { base64: string; mediaType: string; width?: number; height?: number }
+    | undefined;
+  try {
+    const screenshot = await getScreenshotByRoute(targetRoute);
+    if (screenshot) {
+      pageScreenshot = {
+        base64: screenshot.imageBase64,
+        mediaType: screenshot.mediaType,
+        ...(screenshot.width != null && screenshot.width > 0
+          ? { width: screenshot.width }
+          : {}),
+        ...(screenshot.height != null && screenshot.height > 0
+          ? { height: screenshot.height }
+          : {}),
+      };
+    }
+  } catch (error) {
+    console.warn(
+      `[designPrototypeService] Page screenshot lookup failed for ${targetRoute}:`,
+      error,
+    );
+  }
+
+  const target = prototypeAdoTarget(params.projectContext);
+  let existingPageContext = '';
+  try {
+    existingPageContext = await fetchExistingPageContext(
+      targetRoute,
+      prototypeFeatureText(params.feature),
+      target,
+    );
+  } catch (error) {
+    console.warn(
+      `[designPrototypeService] Existing page context lookup failed for ${targetRoute}:`,
+      error,
+    );
+  }
+
+  let screenInventory: ScreenInventoryRoute[] = [];
+  try {
+    if (target?.inventoryPath) {
+      screenInventory = await getScreenInventory(target);
+    } else if (!params.projectContext) {
+      screenInventory = await getScreenInventory();
+    }
+  } catch (error) {
+    console.warn(
+      `[designPrototypeService] Screen inventory lookup failed for ${targetRoute}:`,
+      error,
+    );
+  }
+
+  const { extendMode, attachScreenshot } = resolvePrototypeExtendMode({
+    targetRoute,
+    existingPageContext,
+    pageScreenshot,
+  });
+  const targetScreenHint = buildPrototypeTargetScreenHint({
+    extendMode,
+    targetRoute,
+    screenInventory,
+  });
+  const pageScreenshotHint = buildPrototypePageScreenshotHint({
+    extendMode,
+    hasPageScreenshot: Boolean(pageScreenshot),
+  });
+  const images: VisualImageBlock[] =
+    attachScreenshot && pageScreenshot
+      ? [
+          {
+            kind: 'existing-page',
+            base64: pageScreenshot.base64,
+            mediaType:
+              pageScreenshot.mediaType === 'image/jpeg'
+                ? 'image/jpeg'
+                : 'image/png',
+            ...(pageScreenshot.width !== undefined
+              ? { width: pageScreenshot.width }
+              : {}),
+            ...(pageScreenshot.height !== undefined
+              ? { height: pageScreenshot.height }
+              : {}),
+          },
+        ]
+      : [];
+
+  return {
+    targetRoute,
+    existingPageContext,
+    extendMode,
+    targetScreenHint,
+    pageScreenshotHint,
+    ...(pageScreenshot
+      ? {
+          pageScreenshot: {
+            base64: pageScreenshot.base64,
+            mediaType: pageScreenshot.mediaType,
+          },
+        }
+      : {}),
+    images,
+  };
+}
+
+function buildPrototypePromptInputs(
+  feature: BacklogFeature,
+  planFeature: DesignPlanFeature | undefined,
+  projectContext: PrototypeContext | null,
+  extend: ResolvedPrototypeExtendInputs,
+): Record<string, unknown> {
+  return {
+    featureName: feature.title,
+    featureDescription: feature.description ?? '',
+    planSection: buildPrototypePlanSection({
+      plan: planFeatureToInput(planFeature),
+      extendMode: extend.extendMode,
+      targetRoute: extend.targetRoute,
+    }),
+    pbiSection: buildPrototypePbiSection(extractPbiRequirements(feature)),
+    scopingSection: projectContext
+      ? buildProjectPrototypeScopingSection({
+          extendMode: extend.extendMode,
+          featureName: feature.title,
+          targetRoute: extend.targetRoute,
+          pageScreenshot: extend.pageScreenshot,
+          existingPageContext: extend.existingPageContext,
+          targetScreenHint: extend.targetScreenHint,
+          pageScreenshotHint: extend.pageScreenshotHint,
+        })
+      : buildPrototypeScopingSection({
+          extendMode: extend.extendMode,
+          targetRoute: extend.targetRoute,
+          pageScreenshot: extend.pageScreenshot,
+          existingPageContext: extend.existingPageContext,
+          targetScreenHint: extend.targetScreenHint,
+          pageScreenshotHint: extend.pageScreenshotHint,
+        }),
+    extendMode: extend.extendMode,
+    targetRoute: extend.targetRoute ?? null,
+    existingPageContext: extend.existingPageContext,
+    targetScreenHint: extend.targetScreenHint,
+    pageScreenshotHint: extend.pageScreenshotHint,
+  };
+}
+
+/**
+ * The design system this project prototypes against, or null for the bundled
+ * MaxView one. A worker cannot answer this: the skill lives in the project's
+ * own repository behind credentials App Service holds.
+ */
+type PrototypeBranchResolution =
+  | Readonly<{ status: 'resolved'; projectContext: PrototypeContext | null }>
+  | Readonly<{ status: 'unresolved'; reason: string }>;
+
+async function resolvePrototypeBranch(params: {
+  project: string;
+  skillSettingsId: string | null;
+  skillRepoConfigured: boolean;
+}): Promise<PrototypeBranchResolution> {
+  try {
+    const projectContext = await resolvePrototypeContext(
+      params.project,
+      params.skillSettingsId,
+    );
+    if (projectContext) return { status: 'resolved', projectContext };
+
+    // A project that configured a skill repo and cannot be read is a
+    // configuration error the in-process path reports onto the prototype
+    // row. There is no design system to freeze into a specification, so let
+    // the path that can write that error take the run.
+    if (params.skillRepoConfigured) {
+      return { status: 'unresolved', reason: 'its design-system skill could not be read' };
+    }
+    return { status: 'resolved', projectContext: null };
+  } catch (err) {
+    return {
+      status: 'unresolved',
+      reason: `resolving its design system failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    };
+  }
+}
+
+/**
+ * Live web design references, which only the project branch carries and only
+ * where the project turned them on. The search needs an API key, so it is
+ * run here and the result travels on the specification. A failed search
+ * leaves the section out, exactly as it does in process.
+ */
+async function resolvePrototypeWebReferences(params: {
+  enabled: boolean;
+  feature: BacklogFeature;
+  appName: string;
+}): Promise<string | undefined> {
+  if (!params.enabled) return undefined;
+
+  try {
+    const references = await getDesignReferences({
+      featureName: params.feature.title,
+      featureDescription: params.feature.description,
+      designSystemName: params.appName,
+    });
+    return references || undefined;
+  } catch (err) {
+    console.warn(
+      `[designPrototypeService] Web design references failed for "${params.feature.title}":`,
+      err,
+    );
+    return undefined;
+  }
+}
+
+/**
+ * Which of the two prototype prompts this run is for, with everything that
+ * prompt reads. The MaxView branch needs nothing beyond its name; the
+ * project branch carries its design system and, per feature, its references.
+ */
+async function resolvePrototypePromptSelection(params: {
+  projectContext: PrototypeContext | null;
+  feature: BacklogFeature;
+  webReferencesEnabled: boolean;
+  extendMode: boolean;
+}): Promise<PrototypePromptSelection> {
+  const { projectContext } = params;
+  if (!projectContext) return { branch: 'maxview' };
+
+  const webReferences = await resolvePrototypeWebReferences({
+    enabled: params.webReferencesEnabled && !params.extendMode,
+    feature: params.feature,
+    appName: projectContext.appName,
+  });
+
+  return {
+    branch: 'project-design-system',
+    appName: projectContext.appName,
+    designSystemMarkdown: projectContext.designSystemMarkdown,
+    extendMode: params.extendMode,
+    ...(webReferences !== undefined ? { webReferences } : {}),
+  };
+}
+
+/**
+ * Admit each pending prototype onto the V2 visual lane, falling back to the
+ * in-process path per prototype so one refused admission cannot leave a row
+ * stuck in `generating`.
+ */
+async function admitPendingPrototypesToV2(params: {
+  prdId: string;
+  project: string;
+  userId: string;
+  skillSettingsId: string | null;
+  modelId: string;
+  maxTokens?: number;
+  timeoutMs?: number;
+  pending: PendingPrototype[];
+  skillRepoConfigured: boolean;
+  webReferencesEnabled: boolean;
+  admitV2Run: V2AdmissionService['admit'];
+  reconcileV2Admission: ReconcilePrototypeV2Admission;
+  generateInProcess: GenerateInProcess;
+}): Promise<void> {
+  const branch = await resolvePrototypeBranch({
+    project: params.project,
+    skillSettingsId: params.skillSettingsId,
+    skillRepoConfigured: params.skillRepoConfigured,
+  });
+  const projectContext = branch.status === 'resolved' ? branch.projectContext : null;
+
+  // The project prompt has no repository-source section to put a component
+  // read into, so the mirror is only worth reading for the MaxView branch.
+  const source =
+    branch.status === 'resolved' && !projectContext
+      ? await resolvePrototypeRepoSource(params.prdId)
+      : null;
+  const assembler = createPrototypeSpecificationAssembler({
+    reader: source?.reader,
+    loadDesignContext: projectContext
+      ? loadProjectPrototypeDesignContext
+      : (input) =>
+          loadPrototypeDesignContext(
+            source?.reader,
+            input.sourceRelevanceText,
+          ),
+  });
+  const timeoutAt = new Date(Date.now() + resolveAgentRunHardLimitMs()).toISOString();
+
+  // A worker holds no policy: it can read neither the project override nor
+  // the environment the app default is tuned by, so the effective values are
+  // resolved here and every specification carries a concrete number.
+  const model = resolvePrototypeVisualModel({
+    modelId: params.modelId,
+    maxTokens: params.maxTokens,
+    timeoutMs: params.timeoutMs,
+  });
+
+  await runWithConcurrency(
+    params.pending,
+    PROTOTYPE_GENERATION_CONCURRENCY,
+    async ({ prototypeId, feature, planFeature, generationStartedAt }) => {
+      const fallBackInProcess = (reason: string): void => {
+        console.warn(
+          `[designPrototypeService] Prototype ${prototypeId} stays in process — ${reason}`,
+        );
+        void params.generateInProcess(
+          prototypeId,
+          feature,
+          params.modelId,
+          params.maxTokens,
+          planFeature,
+          params.timeoutMs,
+          params.project,
+          params.skillSettingsId,
+          params.prdId,
+        ).catch(err => {
+          console.error(
+            `[designPrototypeService] Background generation failed for ${prototypeId}:`,
+            err,
+          );
+        });
+      };
+
+      if (branch.status === 'unresolved') {
+        fallBackInProcess(branch.reason);
+        return;
+      }
+
+      const usage: VisualUsageAttribution = {
+        feature: 'design-prototype',
+        project: params.project,
+        userId: params.userId,
+      };
+      const threadId = visualRunThreadId(
+        'design-prototype',
+        prototypeId,
+      );
+      const runId = visualGenerationRunId(
+        'design-prototype',
+        prototypeId,
+        generationStartedAt,
+      );
+      const admissionIdentity = {
+        runId,
+        threadId,
+        subjectId: prototypeId,
+        generationStartedAt,
+      };
+      let admissionAttempted = false;
+
+      try {
+        const extend = await resolvePrototypeExtendInputs({
+          feature,
+          planFeature,
+          projectContext,
+        });
+        const prototypePrompt = await resolvePrototypePromptSelection({
+          projectContext,
+          feature,
+          webReferencesEnabled: params.webReferencesEnabled,
+          extendMode: extend.extendMode,
+        });
+        const specification: AiRunV2VisualSpecification = await assembler.assemble({
+          prototypeId,
+          prototypePrompt,
+          promptInputs: buildPrototypePromptInputs(
+            feature,
+            planFeature,
+            projectContext,
+            extend,
+          ),
+          sourcePaths: source?.sourcePaths ?? [],
+          sourceRelevanceText: prototypeFeatureText(feature),
+          images: extend.images,
+          model,
+          usage,
+        });
+
+        admissionAttempted = true;
+        const admitted = await params.admitV2Run({
+          runId,
+          threadId,
+          projectId: params.project,
+          workloadLane: VISUAL_WORKLOAD_LANE,
+          capacityClass: 'batch',
+          timeoutAt,
+          specification: specification as unknown as Record<string, unknown>,
+          executionSnapshot: {
+            workflowClass: 'design-prototype',
+            subjectKind: 'design-prototype',
+            subjectId: prototypeId,
+            generationStartedAt,
+          },
+        });
+        if (!admitted) {
+          throw new Error('V2 admission returned no result');
+        }
+        switch (admitted.status) {
+          case 'dispatched':
+            return;
+          case 'active_run_conflict':
+            if (
+              admitted.existingRunId === runId
+              && admitted.existingTransportVersion === 'servicebus-blob-v2'
+            ) {
+              return;
+            }
+            fallBackInProcess(
+              `admission conflicted with unrelated run ${admitted.existingRunId}`,
+            );
+            return;
+          default: {
+            const unhandled: never = admitted;
+            throw new Error(
+              `Unsupported V2 admission result: ${String(unhandled)}`,
+            );
+          }
+        }
+      } catch (err) {
+        console.error(
+          `[designPrototypeService] V2 admission failed for ${prototypeId}:`,
+          err,
+        );
+        if (!admissionAttempted) {
+          fallBackInProcess('V2 preparation failed before admission');
+          return;
+        }
+        try {
+          const state = await params.reconcileV2Admission(admissionIdentity);
+          if (state === 'absent') {
+            fallBackInProcess('V2 admission rollback was confirmed');
+          } else {
+            console.warn(
+              `[designPrototypeService] Prototype ${prototypeId} will not start in process `
+                + `because V2 reconciliation returned ${state}`,
+            );
+          }
+        } catch (reconcileError) {
+          console.error(
+            `[designPrototypeService] Could not reconcile V2 admission for ${prototypeId}; `
+              + 'leaving it on the durable path to avoid duplicate generation:',
+            reconcileError,
+          );
+        }
+      }
+    },
+  );
+}
+
+export async function generatePrototypesForPrd(
+  prdId: string,
+  dependencies: GeneratePrototypesDependencies = {},
+): Promise<string[]> {
+  const evaluateFlag = dependencies.isFeatureEnabled ?? isFeatureEnabled;
+  const admitV2Run =
+    dependencies.admitV2Run ?? ((input) => createV2AdmissionService().admit(input));
+  const reconcileV2Admission =
+    dependencies.reconcileV2Admission ?? reconcilePrototypeV2Admission;
+  const generateInProcess = dependencies.generateInProcess ?? generateSinglePrototype;
+
   const prd = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
   if (!prd) throw new Error(`PRD ${prdId} not found`);
 
@@ -367,7 +1156,7 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
   const existingIndices = new Set(existingRows.map(r => r.featureIndex));
 
   const ids: string[] = [];
-  const pending: Array<{ prototypeId: string; feature: BacklogFeature; planFeature?: DesignPlanFeature }> = [];
+  const pending: PendingPrototype[] = [];
 
   for (let i = 0; i < features.length; i++) {
     if (existingIndices.has(i)) continue;
@@ -407,6 +1196,7 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
       continue;
     }
 
+    const generationStartedAt = new Date().toISOString();
     const [row] = await db
       .insert(designPrototypes)
       .values({
@@ -416,23 +1206,68 @@ export async function generatePrototypesForPrd(prdId: string): Promise<string[]>
         authorId: prd.authorId,
         model: prototypeModel,
         status: 'generating',
+        updatedAt: generationStartedAt,
       })
       .returning({ id: designPrototypes.id });
     ids.push(row.id);
-    pending.push({ prototypeId: row.id, feature, planFeature });
+    pending.push({
+      prototypeId: row.id,
+      feature,
+      planFeature,
+      generationStartedAt,
+    });
   }
 
-  // Generate with bounded concurrency so we don't fire every feature at Bedrock
-  // at once (which throttles large models and causes timeouts). Runs in the
-  // background — the route returns immediately and the UI polls per-prototype.
   if (pending.length > 0) {
-    runWithConcurrency(pending, PROTOTYPE_GENERATION_CONCURRENCY, async ({ prototypeId, feature, planFeature }) =>
-      generateSinglePrototype(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature, prototypeTimeoutMs, prd.project, prd.skillSettingsId ?? null).catch(err => {
-        console.error(`[designPrototypeService] Background generation failed for ${prototypeId}:`, err);
-      }),
-    ).catch(err => {
-      console.error(`[designPrototypeService] Prototype generation batch failed for PRD ${prdId}:`, err);
-    });
+    let useV2Transport = false;
+    try {
+      useV2Transport = await evaluateFlag(V2_TRANSPORT_FLAG, {
+        userId: prd.authorId,
+        project: prd.project,
+        caller: 'design-prototype',
+      });
+    } catch {
+      // An unreadable flag keeps the proven in-process path.
+      useV2Transport = false;
+    }
+
+    // Retain enabled once the visual lane carries production prototype traffic.
+    // @feature-flag:ai-runs-v2-transport start winner=enabled
+    if (useV2Transport) {
+      // @feature-flag:ai-runs-v2-transport enabled-start
+      // Admission is a blob write and two row writes, so it is awaited; the
+      // model call itself happens on the worker.
+      await admitPendingPrototypesToV2({
+        prdId,
+        project: prd.project,
+        userId: prd.authorId,
+        skillSettingsId: prd.skillSettingsId ?? null,
+        modelId: prototypeModel,
+        maxTokens: prototypeMaxTokens,
+        timeoutMs: prototypeTimeoutMs,
+        pending,
+        skillRepoConfigured: Boolean(skillConfig?.skillRepo?.trim()),
+        webReferencesEnabled: Boolean(skillConfig?.prototypeWebReferencesEnabled),
+        admitV2Run,
+        reconcileV2Admission,
+        generateInProcess,
+      });
+      // @feature-flag:ai-runs-v2-transport enabled-end
+    } else {
+      // @feature-flag:ai-runs-v2-transport disabled-start
+      // Generate with bounded concurrency so we don't fire every feature at Bedrock
+      // at once (which throttles large models and causes timeouts). Runs in the
+      // background — the route returns immediately and the UI polls per-prototype.
+      runWithConcurrency(pending, PROTOTYPE_GENERATION_CONCURRENCY, async ({ prototypeId, feature, planFeature }) =>
+        generateInProcess(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature, prototypeTimeoutMs, prd.project, prd.skillSettingsId ?? null, prdId).catch(err => {
+          console.error(`[designPrototypeService] Background generation failed for ${prototypeId}:`, err);
+        }),
+      ).catch(err => {
+        console.error(`[designPrototypeService] Prototype generation batch failed for PRD ${prdId}:`, err);
+      });
+      // @feature-flag:ai-runs-v2-transport disabled-end
+    }
+    // @feature-flag:ai-runs-v2-transport end
   }
 
   // Stamp all newly created prototype IDs into the backlog JSON features
@@ -492,20 +1327,18 @@ async function generateSinglePrototype(
   timeoutMs?: number,
   project?: string,
   skillSettingsId?: string | null,
+  prdId?: string,
 ): Promise<void> {
   try {
     const { generateDesignPrototypeHtml } = await import('./bedrockService');
 
     const pbis = extractPbiRequirements(feature);
-    // The reviewed plan is authoritative: prefer its route decision over the raw backlog route.
-    const planRoute = planFeature?.decision === 'update-page' ? planFeature.targetRoute?.trim() : undefined;
-    const targetRoute = planRoute || feature.route?.trim() || undefined;
+    const targetRoute = resolvePrototypeTargetRoute(feature, planFeature);
     const extendMode = Boolean(targetRoute);
 
     let pageScreenshot: { base64: string; mediaType: string } | undefined;
     if (targetRoute) {
       try {
-        const { getScreenshotByRoute } = await import('./pageScreenshotService');
         const ss = await getScreenshotByRoute(targetRoute);
         if (ss) pageScreenshot = { base64: ss.imageBase64, mediaType: ss.mediaType };
       } catch (err) {
@@ -559,6 +1392,25 @@ async function generateSinglePrototype(
       }
     }
 
+    let sourceContext:
+      | Awaited<ReturnType<typeof resolvePrototypeSourceContext>>
+      | undefined;
+    let maxViewDesignContext: PrototypeDesignContext | undefined;
+    if (!prototypeContext && prdId) {
+      const source = await resolvePrototypeRepoSource(prdId);
+      [sourceContext, maxViewDesignContext] = await Promise.all([
+        resolvePrototypeSourceContext({
+          reader: source?.reader,
+          sourcePaths: source?.sourcePaths ?? [],
+          sourceRelevanceText: prototypeFeatureText(feature),
+        }),
+        loadPrototypeDesignContext(
+          source?.reader,
+          prototypeFeatureText(feature),
+        ),
+      ]);
+    }
+
     const rawHtml = await generateDesignPrototypeHtml({
       featureName: feature.title,
       featureDescription: feature.description,
@@ -568,6 +1420,14 @@ async function generateSinglePrototype(
       plan: planFeatureToInput(planFeature),
       prototypeContext,
       webReferences,
+      sourceFiles: sourceContext?.sourceFiles,
+      omittedSourcePaths: sourceContext?.omittedSourcePaths,
+      designSystemCatalog: maxViewDesignContext?.catalog as
+        | DesignSystemCatalog
+        | undefined,
+      screenInventory: maxViewDesignContext?.screenInventory as
+        | ScreenInventoryRoute[]
+        | undefined,
     }, modelId, maxTokens, timeoutMs, prototypeUsageCtx(project, prototypeId));
 
     const html = sanitizeMockHtml(rawHtml);
@@ -707,7 +1567,6 @@ export async function regeneratePrototype(
     let regenScreenshot: { base64: string; mediaType: string } | undefined;
     if (targetRoute) {
       try {
-        const { getScreenshotByRoute } = await import('./pageScreenshotService');
         const ss = await getScreenshotByRoute(targetRoute);
         if (ss) regenScreenshot = { base64: ss.imageBase64, mediaType: ss.mediaType };
       } catch (err) {
@@ -816,7 +1675,7 @@ export async function retryPrototype(prototypeId: string): Promise<void> {
     })
     .where(eq(designPrototypes.id, prototypeId));
 
-  generateSinglePrototype(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature, prototypeTimeoutMs, prd.project, prd.skillSettingsId ?? null).catch(err => {
+  generateSinglePrototype(prototypeId, feature, prototypeModel, prototypeMaxTokens, planFeature, prototypeTimeoutMs, prd.project, prd.skillSettingsId ?? null, proto.prdId).catch(err => {
     console.error(`[designPrototypeService] Retry generation failed for ${prototypeId}:`, err);
   });
 }
@@ -834,7 +1693,17 @@ export async function retryPrototype(prototypeId: string): Promise<void> {
  * generation is never reset out from under itself. Returns the number reset.
  */
 export async function failStalePrototypes(thresholdMs: number): Promise<number> {
-  const cutoff = new Date(Date.now() - thresholdMs).toISOString();
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - thresholdMs).toISOString();
+  const activeV2RunBeforeDeadline = sql`
+    SELECT 1
+    FROM ${agentRuns}
+    WHERE ${agentRuns.transportVersion} = ${'servicebus-blob-v2'}
+      AND ${agentRuns.threadId} =
+        ${visualRunThreadPrefix('design-prototype')} || ${designPrototypes.id}::text
+      AND ${agentRuns.status} IN ('queued', 'dispatched', 'running')
+      AND ${agentRuns.timeoutAt} > ${now.toISOString()}::timestamptz
+  `;
   const reset = await db
     .update(designPrototypes)
     .set({
@@ -847,6 +1716,9 @@ export async function failStalePrototypes(thresholdMs: number): Promise<number> 
       and(
         inArray(designPrototypes.status, ['generating', 'regenerating']),
         lt(designPrototypes.updatedAt, cutoff),
+        // V2 owns this row until its persisted admission deadline. Terminal
+        // runs do not match, so the harvest above or this fallback settles it.
+        notExists(activeV2RunBeforeDeadline),
       ),
     )
     .returning({ id: designPrototypes.id, featureName: designPrototypes.featureName });

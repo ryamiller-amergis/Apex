@@ -17,6 +17,7 @@ import type {
 } from '../../shared/types/chat';
 import type { QuickMcpPill, QuickSkillPill } from '../../shared/types/projectSettings';
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
+import { ChatRunProgressLabel } from './ChatRunProgressLabel';
 import { ThreadHistorySidebar } from './ThreadHistorySidebar';
 import { AgentComposer, AgentPanelShell } from './agentChat';
 import { BrandLogo } from './BrandLogo';
@@ -405,6 +406,8 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     isInteractionBusy,
     status,
     progressLabel,
+    progressPhase,
+    toolProgress,
     showTypingIndicator,
     sendError,
   } = session;
@@ -1160,8 +1163,10 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                       </span>
                       <button
                         className={styles.retryBtn}
-                        onClick={() => doSend(lastUserText)}
-                        disabled={isRunning}
+                        onClick={() => {
+                          void session.retryFailedRun();
+                        }}
+                        disabled={isRunning || !session.retryableRunId}
                         type="button"
                         {...{ 'data-testid': 'chat-agent-message-retry-btn' }}
                       >
@@ -1202,7 +1207,13 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 className={styles.message}
                 role="status"
                 aria-live="polite"
-                aria-label={progressLabel ?? 'Agent is processing'}
+                aria-label={
+                  progressPhase === 'queued'
+                    ? 'Queued'
+                    : progressPhase === 'dispatched'
+                      ? 'Dispatched'
+                      : progressLabel ?? 'Agent is processing'
+                }
                 {...{ 'data-testid': 'chat-run-spinner' }}
               >
                 <div className={styles.agentHeader}>
@@ -1215,12 +1226,26 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                     <span className={styles.typingDot} />
                     <span className={styles.typingDot} />
                   </div>
-                  {(progressLabel || showStartupTyping) && (
+                  {(progressLabel || progressPhase || showStartupTyping) && (
                     <p
                       className={styles.progressLabel}
                       {...{ 'data-testid': 'chat-agent-progress-label' }}
                     >
-                      {progressLabel ?? 'Starting skill…'}
+                      {progressPhase === 'queued' ? (
+                        <span {...{ 'data-testid': 'agent-run-status-queued' }}>
+                          Queued
+                        </span>
+                      ) : progressPhase === 'dispatched' ? (
+                        <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
+                          Dispatched
+                        </span>
+                      ) : (
+                        <ChatRunProgressLabel
+                          fallbackLabel={progressLabel ?? 'Starting skill…'}
+                          progressPhase={progressPhase}
+                          toolProgress={toolProgress}
+                        />
+                      )}
                     </p>
                   )}
                 </div>

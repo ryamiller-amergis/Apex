@@ -1,4 +1,9 @@
-import { friendlyChatProgressLabel } from '../../../shared/utils/chatProgressCopy';
+import {
+  friendlyChatProgressLabel,
+  friendlyChatErrorMessage,
+  friendlyDurableInteractiveLimitError,
+  friendlyToolActivityLabel,
+} from '../../../shared/utils/chatProgressCopy';
 
 describe('friendlyChatProgressLabel', () => {
   it('maps native/MCP file reads to Reading', () => {
@@ -25,9 +30,9 @@ describe('friendlyChatProgressLabel', () => {
   it('maps actor and mirror stage labels', () => {
     expect(
       friendlyChatProgressLabel('Queued — waiting for available worker', 'queued')
-    ).toBe('Waiting…');
+    ).toBe('Queued');
     expect(friendlyChatProgressLabel('Starting…', 'dispatched')).toBe(
-      'Starting…'
+      'Dispatched'
     );
     expect(friendlyChatProgressLabel('Preparing project repository…')).toBe(
       'Loading…'
@@ -35,6 +40,16 @@ describe('friendlyChatProgressLabel', () => {
     expect(friendlyChatProgressLabel('Refreshing the repository mirror…')).toBe(
       'Loading…'
     );
+  });
+
+  it('maps durable per-user limit codes to exact copy', () => {
+    expect(friendlyDurableInteractiveLimitError('USER_INTERACTIVE_LIMIT')).toBe(
+      'You already have two active AI turns. Finish or stop one before starting another.',
+    );
+    expect(friendlyDurableInteractiveLimitError('USER_AGENTIC_LIMIT')).toBe(
+      'You already have an agentic AI turn running. Finish or stop it before starting another.',
+    );
+    expect(friendlyDurableInteractiveLimitError('OTHER')).toBeNull();
   });
 
   it('is idempotent on already-friendly copy', () => {
@@ -59,5 +74,63 @@ describe('friendlyChatProgressLabel', () => {
         'setup'
       )
     ).toBe('Repository preparation timed out. Please retry.');
+  });
+});
+
+describe('friendlyToolActivityLabel', () => {
+  it('names the kind of work for native tools', () => {
+    expect(friendlyToolActivityLabel('grep')).toBe('Searching the codebase');
+    expect(friendlyToolActivityLabel('glob')).toBe('Browsing folders');
+    expect(friendlyToolActivityLabel('read')).toBe('Reading files');
+    expect(friendlyToolActivityLabel('shell')).toBe('Running a command');
+  });
+
+  it('uses the underlying tool name for MCP calls', () => {
+    expect(
+      friendlyToolActivityLabel('mcp', { toolName: 'search_repo_code', keys: ['query'] }),
+    ).toBe('Searching the codebase');
+    expect(friendlyToolActivityLabel('mcp', { toolName: 'create_work_item' })).toBe(
+      'Using a connected tool',
+    );
+  });
+
+  it('falls back for unknown tools', () => {
+    expect(friendlyToolActivityLabel('something_new')).toBe('Working…');
+  });
+});
+
+describe('friendlyChatErrorMessage', () => {
+  it('turns durable admission codes into guidance', () => {
+    expect(friendlyChatErrorMessage('INTERACTIVE_V2_SKILL_UNAVAILABLE')).toMatch(/Project Settings/);
+    expect(friendlyChatErrorMessage('INTERACTIVE_V2_GROUNDING_UNAVAILABLE')).toMatch(/repository/);
+    expect(friendlyChatErrorMessage('Agent is already running')).toMatch(/already in progress/);
+  });
+
+  it('keeps the existing per-user limit copy', () => {
+    expect(friendlyChatErrorMessage('USER_AGENTIC_LIMIT')).toBe(
+      friendlyDurableInteractiveLimitError('USER_AGENTIC_LIMIT'),
+    );
+  });
+
+  it('explains deadlines, blocked models, and raw turn failures', () => {
+    expect(friendlyChatErrorMessage('Interactive absolute deadline exceeded')).toMatch(/too long/);
+    expect(
+      friendlyChatErrorMessage('Interactive turn exceeded its absolute deadline'),
+    ).toMatch(/too long/);
+    expect(
+      friendlyChatErrorMessage(
+        'Interactive turn failed: Error: Interactive turn ended with status: error: Model Blocked for team',
+      ),
+    ).toMatch(/model isn't allowed/);
+    expect(
+      friendlyChatErrorMessage('Interactive turn failed: AiRunCallbackError: AI run callback failed (500)'),
+    ).toBe('Something went wrong while answering. Please retry.');
+  });
+
+  it('passes readable messages through', () => {
+    expect(friendlyChatErrorMessage('Interactive agent did not start. Please retry.')).toBe(
+      'Interactive agent did not start. Please retry.',
+    );
+    expect(friendlyChatErrorMessage('')).toBe('Something went wrong. Please retry.');
   });
 });
