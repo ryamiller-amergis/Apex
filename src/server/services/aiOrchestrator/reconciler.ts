@@ -29,6 +29,8 @@ export type StaleAttemptRow = Readonly<{
   dispatchMessageId: string;
   status: string;
   lastCheckpointAt: string | null;
+  /** When the attempt entered checking_worker; set only for checking rows. */
+  checkingSince?: string | null;
   containerAppsExecutionId: string | null;
 }>;
 
@@ -66,7 +68,8 @@ export type ReconcilerDeps = Readonly<{
   initialDispatchStaleMs?: number;
   /**
    * A checking_worker attempt the probe cannot confirm is failed as lost once
-   * it has gone this many ms without a checkpoint (default 15 min); until
+   * it has gone this many ms without a checkpoint, counted from no earlier than
+   * entering checking_worker (default 15 min); until
    * then it counts toward the uncertain-worker dispatch pause.
    */
   uncertainWorkerLimitMs?: number;
@@ -201,6 +204,7 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
         a.dispatch_message_id,
         a.status,
         a.last_checkpoint_at,
+        a.updated_at,
         a.spec_ref->>'containerAppsExecutionId' AS container_apps_execution_id
       FROM ai_run_attempts a
       JOIN agent_runs r ON r.id = a.run_id
@@ -220,6 +224,12 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
           : row.last_checkpoint_at instanceof Date
             ? row.last_checkpoint_at.toISOString()
             : String(row.last_checkpoint_at),
+      checkingSince:
+        row.updated_at == null
+          ? null
+          : row.updated_at instanceof Date
+            ? row.updated_at.toISOString()
+            : String(row.updated_at),
       containerAppsExecutionId:
         row.container_apps_execution_id == null
           ? null
@@ -379,9 +389,13 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
               ? 'orchestrator.reconciler.missing_execution_id'
               : 'orchestrator.reconciler.probe_unknown',
           );
-          const lastSeen = row.lastCheckpointAt
-            ? Date.parse(row.lastCheckpointAt)
-            : Number.NEGATIVE_INFINITY;
+          // A stale running row moves to checking_worker and is checked in the
+          // same pass, so silence counts from no earlier than that move; queued
+          // heartbeats get a full window to drain after an orchestrator outage.
+          const lastSeen = Math.max(
+            row.lastCheckpointAt ? Date.parse(row.lastCheckpointAt) : Number.NEGATIVE_INFINITY,
+            row.checkingSince ? Date.parse(row.checkingSince) : Number.NEGATIVE_INFINITY,
+          );
           if (lastSeen >= silentBefore) continue;
           failureDetail =
             `no checkpoint for ${Math.round(uncertainWorkerLimitMs / 60_000)} min and the execution probe could not confirm the worker`;

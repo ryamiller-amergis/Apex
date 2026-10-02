@@ -369,6 +369,59 @@ describe('App — Home access with permission + flag both enabled (default)', ()
       expect(screen.getByTestId('location').textContent).toBe('/home');
     });
   });
+
+  it("restores the destination project's last thread after switching projects", async () => {
+    let selectedProject = 'MaxView';
+    (useAppShell as jest.Mock).mockImplementation(() => makeAppShell({
+      selectedProject,
+      selectedAreaPath: selectedProject,
+      availableProjects: ['MaxView', 'Apex'],
+      can: (key: string) =>
+        ['home:view', 'chat:view', 'chat:create'].includes(key),
+    }));
+    const threadFor = (id: string, project: string) => ({
+      id,
+      userId: 'user-1',
+      kickoff: { project, repo: project, branch: 'main' },
+      messages: [],
+      status: 'idle',
+      workspaceDir: '',
+      flagged: false,
+      createdAt: '2026-09-03T18:00:00.000Z',
+      lastActivityAt: '2026-09-03T18:00:00.000Z',
+    });
+    (useChatThread as jest.Mock).mockImplementation((threadId: string | null) => ({
+      data: threadId === 'max-thread'
+        ? threadFor('max-thread', 'MaxView')
+        : threadId === 'apex-thread'
+          ? threadFor('apex-thread', 'Apex')
+          : null,
+      isFetching: false,
+    }));
+    sessionStorage.setItem('agentHomeThreadId:Apex', 'apex-thread');
+    try {
+      const view = renderApp('/home?thread=max-thread');
+      await screen.findByTestId('agent-home');
+      act(() => mockAgentHomeProps.onRestoreThread?.('max-thread'));
+
+      selectedProject = 'Apex';
+      view.rerender(
+        <MemoryRouter initialEntries={['/home']}>
+          <App />
+          <LocationProbe />
+        </MemoryRouter>,
+      );
+
+      await waitFor(() => {
+        expect(mockChatPanelProps.activeThreadId).toBe('apex-thread');
+      });
+      await waitFor(() => {
+        expect(screen.getByTestId('location').textContent).toBe('/home?thread=apex-thread');
+      });
+    } finally {
+      sessionStorage.removeItem('agentHomeThreadId:Apex');
+    }
+  });
 });
 
 describe('App — Home access when flag is disabled', () => {

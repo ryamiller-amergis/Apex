@@ -102,6 +102,8 @@ export class CursorExecutionWaitError extends Error {
   constructor(
     public readonly cause: unknown,
     public readonly usage?: CursorTokenUsage,
+    /** Raw stream error text; sanitize before persisting or displaying. */
+    public readonly terminalStatusMessage?: string,
   ) {
     super(cause instanceof Error ? cause.message : 'Cursor run wait failed');
     this.name = 'CursorExecutionWaitError';
@@ -713,7 +715,7 @@ export async function executeCursorExecutionCore(
   try {
     waitResult = await run.wait();
   } catch (error) {
-    throw new CursorExecutionWaitError(error, streamedUsage);
+    throw new CursorExecutionWaitError(error, streamedUsage, terminalStatusMessage);
   }
   return {
     text: textBuffer,

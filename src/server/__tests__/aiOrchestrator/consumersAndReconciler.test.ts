@@ -493,6 +493,43 @@ describe('reconciler', () => {
     expect(failed).toEqual(['silent', 'no-exec']);
   });
 
+  it('counts the uncertain-worker window from entering checking_worker', async () => {
+    const failed: string[] = [];
+    const reconciler = createReconciler({
+      executor: { execute: async () => [] },
+      attempts: {
+        transitionAttempt: async (input: { attemptId: string; to: string }) => {
+          failed.push(input.attemptId);
+          return { status: 'ok', attemptId: input.attemptId, to: input.to };
+        },
+      } as never,
+      executionProbe: { probe: async () => ({ status: 'unknown' }) },
+      clock: {
+        now: () => new Date('2026-10-01T12:30:00.000Z'),
+        sleep: async () => undefined,
+      },
+      uncertainWorkerLimitMs: 15 * 60_000,
+      loadRetryContext: async () => null,
+      listStaleRunning: async () => [],
+      listCheckingWorkers: async () => [
+        {
+          attemptId: 'after-outage',
+          runId: 'run-after-outage',
+          dispatchMessageId: 'd-after-outage',
+          status: 'checking_worker',
+          lastCheckpointAt: '2026-10-01T11:00:00.000Z',
+          checkingSince: '2026-10-01T12:29:00.000Z',
+          containerAppsExecutionId: 'exec-after-outage',
+        },
+      ],
+      acquireRecoveryLease: async (work) => work({} as never),
+      acquireReaperLease: async (work) => work({} as never),
+    });
+
+    await expect(reconciler.sweepCheckingWorkers()).resolves.toBe(0);
+    expect(failed).toEqual([]);
+  });
+
   describe('retry after a confirmed loss', () => {
     const lostRow = {
       attemptId: 'a1',

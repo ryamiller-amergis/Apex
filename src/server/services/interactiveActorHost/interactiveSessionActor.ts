@@ -40,6 +40,7 @@ import type { InteractiveStageName } from '../../../shared/types/workerTierOpera
 import {
   createCursorTurnEndMonitor,
   createCursorRunEventEnvelope,
+  CursorExecutionWaitError,
   executeCursorExecutionCore,
   sanitizeCursorTerminalDetail,
   type CursorExecutionResult,
@@ -171,9 +172,10 @@ function describeInteractiveFailure(error: unknown): {
     typeof err?.code === 'string' && err.code.trim()
       ? err.code.trim().slice(0, 64)
       : null;
-  const redactedMessage = redactFailureMessage(
-    typeof err?.message === 'string' ? err.message : '',
-  );
+  const redactedMessage =
+    error instanceof CursorExecutionWaitError && error.terminalStatusMessage
+      ? redactFailureMessage(sanitizeCursorTerminalDetail(error.terminalStatusMessage))
+      : redactFailureMessage(typeof err?.message === 'string' ? err.message : '');
   const head = errorCode ? `${errorName} (${errorCode})` : errorName;
   const reason = redactedMessage
     ? `Interactive turn failed: ${head}: ${redactedMessage}`
@@ -826,17 +828,34 @@ export function createInteractiveSessionActor(
 
     const absoluteMs = Date.parse(absoluteDeadlineAt);
     const nowMs = now();
-    if (
+    const deadlinesInvalid =
       !Number.isFinite(absoluteMs) ||
-      absoluteMs <= nowMs ||
       !Number.isFinite(effectiveDeadlines.firstEventMs) ||
       effectiveDeadlines.firstEventMs <= 0 ||
       !Number.isFinite(effectiveDeadlines.toolCallMs) ||
       effectiveDeadlines.toolCallMs <= 0 ||
       (effectiveDeadlines.repositoryPreparationMs !== null &&
-        (!(effectiveDeadlines.repositoryPreparationMs > 0)))
-    ) {
-      throw new Error('Interactive effective deadlines are missing or expired');
+        (!(effectiveDeadlines.repositoryPreparationMs > 0)));
+    if (deadlinesInvalid || absoluteMs <= nowMs) {
+      // The attempt is already claimed, so a redelivery is a duplicate; this
+      // turn must report its own terminal or the run stays open until the reaper.
+      const expired = !deadlinesInvalid;
+      await dependencies
+        .postIngest(projectId, runId, {
+          kind: 'terminal',
+          status: 'failed',
+          detail: expired
+            ? 'Interactive absolute deadline exceeded'
+            : 'Interactive effective deadlines are missing or invalid',
+          artifactsFlushed: false,
+          ...(expired ? { failureCategory: 'hard_timeout' as const } : {}),
+          attemptId,
+          dispatchMessageId,
+        })
+        .catch(() => {});
+      return expired
+        ? { status: 'failed', failureCategory: 'hard_timeout' }
+        : { status: 'failed' };
     }
 
     const absoluteAbort = new AbortController();
@@ -974,6 +993,9 @@ export function createInteractiveSessionActor(
         if (prepTimer) clearTimeout(prepTimer);
         absoluteAbort.signal.removeEventListener('abort', onAbsoluteAbort);
       }
+      // A repository-preparation timeout falls back to the remote reader; an
+      // expired absolute deadline ends the turn.
+      if (absoluteAbort.signal.aborted) throw absoluteAbort.signal.reason;
 
       const checkout = attemptCheckout;
 

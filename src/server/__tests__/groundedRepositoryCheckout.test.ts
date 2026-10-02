@@ -137,6 +137,65 @@ describe('grounded repository checkout for durable interactive turns', () => {
     expect(git(threadA, 'rev-parse', 'HEAD')).toBe(sha);
   });
 
+  it('keeps a shared restore going when only the first waiting turn aborts', async () => {
+    let releaseDownload!: () => void;
+    const downloadGate = new Promise<void>((resolve) => {
+      releaseDownload = resolve;
+    });
+    const container = {
+      getBlockBlobClient: () => ({
+        getProperties: async () => ({ contentLength: (await stat(bundlePath)).size }),
+        downloadToFile: async (
+          target: string,
+          _offset?: number,
+          _count?: number,
+          options?: { abortSignal?: AbortSignal },
+        ) => {
+          await downloadGate;
+          if (options?.abortSignal?.aborted) throw new Error('download aborted');
+          await copyFile(bundlePath, target);
+        },
+      }),
+    } as unknown as ContainerClient;
+    const checkout = createGroundedRepositoryCheckout({
+      getContainerClient: () => container,
+      cacheRoot: path.join(root, 'cache-shared-abort'),
+    });
+    const firstTurn = new AbortController();
+
+    const first = checkout.checkout(grounding(), path.join(root, 'threads', 'abort-a'), firstTurn.signal);
+    const second = checkout.checkout(
+      grounding(),
+      path.join(root, 'threads', 'abort-b'),
+      new AbortController().signal,
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    firstTurn.abort(new Error('repository_preparation_timeout'));
+    await expect(first).resolves.toMatchObject({ status: 'unavailable', reason: 'failed' });
+    releaseDownload();
+
+    await expect(second).resolves.toMatchObject({ status: 'ready' });
+  });
+
+  it('adds concurrent worktrees of one commit without breaking either', async () => {
+    const { container } = containerServing([bundleKey(bundleIdentityForGrounding(grounding()))]);
+    const checkout = createGroundedRepositoryCheckout({
+      getContainerClient: () => container,
+      cacheRoot: path.join(root, 'cache-concurrent'),
+    });
+    const signal = new AbortController().signal;
+    const threads = ['c1', 'c2', 'c3'].map((name) => path.join(root, 'threads', name));
+
+    const results = await Promise.all(
+      threads.map((thread) => checkout.checkout(grounding(), thread, signal)),
+    );
+
+    expect(results.map((result) => result.status)).toEqual(['ready', 'ready', 'ready']);
+    for (const thread of threads) {
+      expect(git(thread, 'rev-parse', 'HEAD')).toBe(sha);
+    }
+  });
+
   it('reports a missing bundle so the turn keeps the remote reader', async () => {
     const { container } = containerServing([]);
     const checkout = createGroundedRepositoryCheckout({

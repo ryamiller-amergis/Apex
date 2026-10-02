@@ -20,14 +20,15 @@ export const GROUNDING_WORKSPACE_READY_MARKER = 'apex-grounding-ready';
 
 export type GitRunner = (
   args: string[],
-  options?: { cwd?: string }
+  options?: { cwd?: string; signal?: AbortSignal; maxBuffer?: number }
 ) => Promise<string>;
 
 export const defaultRunGit: GitRunner = async (args, options) => {
   const { stdout } = await execFileAsync('git', args, {
     cwd: options?.cwd,
+    signal: options?.signal,
     windowsHide: true,
-    maxBuffer: 10 * 1024 * 1024,
+    maxBuffer: options?.maxBuffer ?? 10 * 1024 * 1024,
     timeout: GROUNDING_BUNDLE_GIT_TIMEOUT_MS,
     killSignal: 'SIGKILL',
   });

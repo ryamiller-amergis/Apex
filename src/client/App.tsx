@@ -551,7 +551,12 @@ function App() {
     const projectChanged = previousHomeProjectRef.current !== selectedProject;
     previousHomeProjectRef.current = selectedProject;
     if (projectChanged && currentView === 'home') {
-      syncHomeThreadUrl(null);
+      // Runs after AgentHome's effect, which still saw the outgoing project's
+      // ?thread= and rebound it; replace that with the destination's last thread.
+      const storedThreadId = sessionStorage.getItem(`agentHomeThreadId:${selectedProject}`);
+      setActiveThreadId(storedThreadId);
+      setActiveThreadProject(storedThreadId ? selectedProject : null);
+      syncHomeThreadUrl(storedThreadId);
     }
   }, [currentView, selectedProject, syncHomeThreadUrl]);
 

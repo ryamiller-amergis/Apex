@@ -29,11 +29,14 @@ import {
   verifyHead,
   type GitRunner,
 } from '../grounding/bundleCheckout';
+import { createPerThreadTurnQueue } from './perThreadTurnQueue';
 
 const DEFAULT_GROUNDING_CONTAINER = 'repo-grounding';
 const GIB = 1024 * 1024 * 1024;
 const DEFAULT_MAX_BUNDLE_BYTES = 1 * GIB;
 const DEFAULT_DISK_BUDGET_BYTES = 2.5 * GIB;
+// A full `ls-tree -r -l` of a large repository runs well past git's default 10MB.
+const TREE_LISTING_MAX_BUFFER_BYTES = 256 * 1024 * 1024;
 
 export type GroundedCheckoutUnavailableReason =
   | 'not-configured'
@@ -67,6 +70,13 @@ export interface GroundedCheckoutDependencies {
 type BaseOutcome =
   | Readonly<{ status: 'ready'; source: 'base' | 'bundle' }>
   | Readonly<{ status: 'unavailable'; reason: 'bundle-missing' | 'bundle-too-large' | 'disk-budget' }>;
+
+/** One restore per base, shared by every turn waiting on it. */
+type SharedRestore = {
+  outcome: Promise<BaseOutcome>;
+  controller: AbortController;
+  waiters: number;
+};
 
 export function bundleIdentityForGrounding(
   grounding: NonNullable<DurableInteractiveTurnSpecification['grounding']>,
@@ -150,7 +160,12 @@ export function createGroundedRepositoryCheckout(
     dependencies.diskBudgetBytes ??
     positiveNumberFromEnv('AI_RUNS_INTERACTIVE_CHECKOUT_DISK_BUDGET_BYTES', DEFAULT_DISK_BUDGET_BYTES);
 
-  const baseRestores = new Map<string, Promise<BaseOutcome>>();
+  const baseRestores = new Map<string, SharedRestore>();
+  // Checkouts in progress per base, so eviction never removes a base between
+  // its restore and the worktree that will depend on it.
+  const basePins = new Map<string, number>();
+  // `git worktree prune`/`add` on one base must not interleave.
+  const worktreeQueue = createPerThreadTurnQueue();
   // Estimated bytes on disk: a base holds the bundle's objects; a worktree
   // holds the commit's uncompressed files, which for a large repository can be
   // many times the bundle size.
@@ -167,7 +182,7 @@ export function createGroundedRepositoryCheckout(
   async function evictIdleBases(neededBytes: number, keep: string): Promise<void> {
     const inUse = new Set(worktreeBase.values());
     const idle = [...baseBytes.keys()]
-      .filter((basePath) => basePath !== keep && !inUse.has(basePath))
+      .filter((basePath) => basePath !== keep && !inUse.has(basePath) && !basePins.has(basePath))
       .sort((left, right) => (baseLastUsed.get(left) ?? 0) - (baseLastUsed.get(right) ?? 0));
     for (const basePath of idle) {
       if (estimatedBytes() + neededBytes <= diskBudgetBytes) return;
@@ -186,10 +201,66 @@ export function createGroundedRepositoryCheckout(
       `${bundleKey(identity).replace(/\.bundle$/, '')}.git`,
     );
 
-  async function worktreeBytesFor(basePath: string, sha: string): Promise<number> {
+  const pinBase = (basePath: string): void => {
+    basePins.set(basePath, (basePins.get(basePath) ?? 0) + 1);
+  };
+  const unpinBase = (basePath: string): void => {
+    const remaining = (basePins.get(basePath) ?? 1) - 1;
+    if (remaining > 0) basePins.set(basePath, remaining);
+    else basePins.delete(basePath);
+  };
+
+  // Each waiter stops waiting on its own abort; the shared restore is aborted
+  // only once every waiter has left.
+  function awaitRestore(
+    basePath: string,
+    shared: SharedRestore,
+    signal: AbortSignal,
+  ): Promise<BaseOutcome> {
+    if (signal.aborted) return Promise.reject(signal.reason);
+    shared.waiters += 1;
+    return new Promise<BaseOutcome>((resolve, reject) => {
+      let waiting = true;
+      const leave = (): boolean => {
+        if (!waiting) return false;
+        waiting = false;
+        shared.waiters -= 1;
+        return true;
+      };
+      const onAbort = (): void => {
+        if (leave() && shared.waiters === 0) {
+          if (baseRestores.get(basePath) === shared) baseRestores.delete(basePath);
+          shared.controller.abort(signal.reason);
+        }
+        reject(signal.reason);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      shared.outcome.then(
+        (outcome) => {
+          signal.removeEventListener('abort', onAbort);
+          leave();
+          resolve(outcome);
+        },
+        (error: unknown) => {
+          signal.removeEventListener('abort', onAbort);
+          leave();
+          reject(error);
+        },
+      );
+    });
+  }
+
+  async function worktreeBytesFor(
+    basePath: string,
+    sha: string,
+    signal: AbortSignal,
+  ): Promise<number> {
     const known = worktreeSizeByBase.get(basePath);
     if (known !== undefined) return known;
-    const listing = await runGit(['-C', basePath, 'ls-tree', '-r', '-l', '--full-tree', sha]);
+    const listing = await runGit(['-C', basePath, 'ls-tree', '-r', '-l', '--full-tree', sha], {
+      signal,
+      maxBuffer: TREE_LISTING_MAX_BUFFER_BYTES,
+    });
     let fileBytes = 0;
     for (const line of listing.split('\n')) {
       // "<mode> <type> <object> <size>\t<path>"; submodules report "-".
@@ -237,7 +308,7 @@ export function createGroundedRepositoryCheckout(
       }
       await prepareEmptyDestination(basePath);
       try {
-        await runGit(['clone', '--bare', bundlePath, basePath]);
+        await runGit(['clone', '--bare', bundlePath, basePath], { signal });
         await rm(scratch, { recursive: true, force: true });
         await runGit(['-C', basePath, 'cat-file', '-e', `${identity.sha}^{commit}`]);
         await writeFile(
@@ -276,9 +347,12 @@ export function createGroundedRepositoryCheckout(
       });
       const container = getContainerClient();
       if (!container) return unavailable('not-configured');
+      let pinnedBase: string | undefined;
       try {
         const identity = bundleIdentityForGrounding(grounding);
         const basePath = basePathFor(identity);
+        pinBase(basePath);
+        pinnedBase = basePath;
         if (worktreeBytes.has(destination) && (await isWorktreeAt(runGit, destination, identity.sha))) {
           baseLastUsed.set(basePath, now());
           return { status: 'ready', identity, source: 'worktree', durationMs: elapsed() };
@@ -287,37 +361,44 @@ export function createGroundedRepositoryCheckout(
         worktreeBytes.delete(destination);
         worktreeBase.delete(destination);
 
-        let restore = baseRestores.get(basePath);
-        const ownsRestore = !restore;
-        if (!restore) {
-          restore = restoreBase(container, identity, basePath, signal);
-          baseRestores.set(basePath, restore);
-          void restore.then(
+        let shared = baseRestores.get(basePath);
+        const ownsRestore = !shared;
+        if (!shared) {
+          const controller = new AbortController();
+          const created: SharedRestore = {
+            outcome: restoreBase(container, identity, basePath, controller.signal),
+            controller,
+            waiters: 0,
+          };
+          shared = created;
+          baseRestores.set(basePath, created);
+          const forget = (): void => {
+            if (baseRestores.get(basePath) === created) baseRestores.delete(basePath);
+          };
+          void created.outcome.then(
             (outcome) => {
-              if (outcome.status !== 'ready') baseRestores.delete(basePath);
+              if (outcome.status !== 'ready') forget();
             },
-            () => baseRestores.delete(basePath),
+            forget,
           );
         }
-        const outcome = await restore;
+        const outcome = await awaitRestore(basePath, shared, signal);
         if (outcome.status !== 'ready') return unavailable(outcome.reason);
 
-        const worktreeSize = await worktreeBytesFor(basePath, identity.sha);
+        const worktreeSize = await worktreeBytesFor(basePath, identity.sha, signal);
         await evictIdleBases(worktreeSize, basePath);
         if (estimatedBytes() + worktreeSize > diskBudgetBytes) return unavailable('disk-budget');
 
-        await prepareEmptyDestination(destination);
-        await mkdir(path.dirname(destination), { recursive: true });
-        await runGit(['-C', basePath, 'worktree', 'prune']);
-        await runGit([
-          '-C',
-          basePath,
-          'worktree',
-          'add',
-          '--detach',
-          destination,
-          identity.sha,
-        ]);
+        await worktreeQueue.submit(basePath, async () => {
+          signal.throwIfAborted();
+          await prepareEmptyDestination(destination);
+          await mkdir(path.dirname(destination), { recursive: true });
+          await runGit(['-C', basePath, 'worktree', 'prune']);
+          await runGit(
+            ['-C', basePath, 'worktree', 'add', '--detach', destination, identity.sha],
+            { signal },
+          );
+        });
         if (!(await verifyHead(runGit, destination, identity.sha))) {
           throw new Error('Grounded worktree SHA verification failed');
         }
@@ -332,6 +413,8 @@ export function createGroundedRepositoryCheckout(
         };
       } catch {
         return unavailable('failed');
+      } finally {
+        if (pinnedBase) unpinBase(pinnedBase);
       }
     },
 

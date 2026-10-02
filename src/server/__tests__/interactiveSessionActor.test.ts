@@ -68,6 +68,7 @@ interface FakeAgentOptions {
   waitResult?: string;
   waitError?: { message: string };
   terminalStatusMessage?: string;
+  waitThrows?: Error;
 }
 
 function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgentHandle {
@@ -91,6 +92,7 @@ function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgent
     },
     async wait() {
       if (options.waitGate) await options.waitGate;
+      if (options.waitThrows) throw options.waitThrows;
       return {
         status: options.waitStatus ?? 'finished',
         result: options.waitResult,
@@ -700,6 +702,54 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     expect(acquireAgent).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    [
+      'an expired absolute deadline',
+      { absoluteDeadlineAt: '2000-01-01T00:00:00.000Z' },
+      { detail: 'Interactive absolute deadline exceeded', failureCategory: 'hard_timeout' },
+    ],
+    [
+      'invalid effective deadlines',
+      {
+        effectiveDeadlines: {
+          repositoryPreparationMs: null,
+          firstEventMs: 0,
+          toolCallMs: 60_000,
+        },
+      },
+      { detail: 'Interactive effective deadlines are missing or invalid' },
+    ],
+  ])('posts a failed terminal for %s instead of throwing', async (_label, overrides, expected) => {
+    const posted: AiRunIngestBody[] = [];
+    const materializeWorkspace = jest.fn();
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(),
+      materializeWorkspace,
+      uploadAttemptArtifacts: jest.fn(),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+    });
+
+    const outcome = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap(overrides),
+    });
+
+    expect(outcome.status).toBe('failed');
+    expect(posted).toEqual([
+      expect.objectContaining({
+        kind: 'terminal',
+        status: 'failed',
+        artifactsFlushed: false,
+        ...expected,
+      }),
+    ]);
+    expect(materializeWorkspace).not.toHaveBeenCalled();
+  });
+
   it('posts completed terminal with artifactManifestRef only after upload succeeds', async () => {
     const posted: AiRunIngestBody[] = [];
     const manifestRef = {
@@ -858,6 +908,41 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
       detail:
         'Interactive turn failed: Error: Interactive turn ended with status: error: Could not reach [redacted-connection-string]',
     });
+  });
+
+  it('reports the Cursor stream error when wait throws', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          tokens: [],
+          terminalStatusMessage: 'Could not reach postgres://apex:hunter2@db.internal:5432/apex',
+          waitThrows: new Error('socket hang up'),
+          workspaceRef: checkout.workspacePath,
+        }),
+      ),
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+      }),
+      uploadAttemptArtifacts: jest.fn(),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+    });
+
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap(),
+    });
+
+    const terminal = posted.find((body) => body.kind === 'terminal');
+    expect(terminal).toMatchObject({ kind: 'terminal', status: 'failed' });
+    expect((terminal as { detail: string }).detail).toContain(
+      'Could not reach [redacted-connection-string]',
+    );
   });
 
   it('arms the tool deadline timer and fails with tool_timeout (not cancelled)', async () => {
