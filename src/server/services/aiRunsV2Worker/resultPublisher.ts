@@ -51,12 +51,20 @@ export function createResultPublisher(deps: {
   const now = deps.now ?? (() => new Date());
   const newEventId = deps.newEventId ?? randomUUID;
   let published = false;
+  let attempted: AiRunV2TerminalResult | null = null;
 
   return {
     async publishTerminal(input) {
       // A second terminal for the same attempt would race the orchestrator's
       // fenced finalize, so the first one wins here too.
       if (published) return;
+      // A send that threw may still have reached Service Bus, so a retry
+      // resends the same message id for duplicate detection to collapse.
+      if (attempted) {
+        await deps.send(attempted.eventId, attempted);
+        published = true;
+        return;
+      }
       const result: AiRunV2TerminalResult = {
         schemaVersion: AI_RUN_V2_SCHEMA_VERSION,
         eventId: newEventId(),
@@ -91,6 +99,7 @@ export function createResultPublisher(deps: {
           ? {}
           : { cacheWriteTokens: input.cacheWriteTokens }),
       };
+      attempted = result;
       await deps.send(result.eventId, result);
       published = true;
     },

@@ -5,6 +5,7 @@ import type { RepoReader } from '../../shared/types/repoReader';
 import {
   loadDurableInteractiveSkill,
   resolveDurableMaxviewCapability,
+  workflowAllowsRepositorySearch,
   type BuiltInSkillRoot,
 } from '../services/durableInteractiveTurnService';
 
@@ -278,5 +279,17 @@ describe('durable MaxView capability resolution', () => {
       ),
     ).resolves.toBe('disabled');
     expect(configured).not.toHaveBeenCalled();
+  });
+});
+
+describe('durable repository search availability', () => {
+  it.each([
+    ['interview', false],
+    ['adr', false],
+    ['home-chat', true],
+    ['ask-apex', true],
+    ['assistant', true],
+  ] as const)('%s allows repository search: %s', (workflowClass, expected) => {
+    expect(workflowAllowsRepositorySearch(workflowClass)).toBe(expected);
   });
 });

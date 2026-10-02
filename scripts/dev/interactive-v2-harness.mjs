@@ -417,7 +417,8 @@ function evaluate(result, scenario) {
   if (done === undefined || done > scenario.completionTargetMs) {
     problems.push(`completion ${done ?? 'never'} ms > ${scenario.completionTargetMs} ms`);
   }
-  if (scenario.reconnectAfterTokens) {
+  // Early failures return before tokens are collected; the error is already reported.
+  if (scenario.reconnectAfterTokens && result.tokens) {
     if (result.reconnects !== 1) problems.push('stream was not reconnected mid-answer');
     if (result.tokens.conflicts > 0) problems.push(`${result.tokens.conflicts} conflicting token chunks`);
     if (result.tokens.pending > 0) problems.push(`${result.tokens.pending} token chunks never filled a gap`);

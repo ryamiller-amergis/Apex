@@ -1037,6 +1037,7 @@ export async function syncTestCaseOutput(
     return false;
   }
   if (currentRow.status !== 'generating') {
+    await cleanupWorkspace(chatThreadId);
     return false;
   }
 
@@ -1086,7 +1087,10 @@ export async function syncTestCaseOutput(
     }
     return true;
   });
-  if (!applied) return false;
+  if (!applied) {
+    await cleanupWorkspace(chatThreadId);
+    return false;
+  }
 
   // Frozen cycle-time end instant — insert-once, so a regeneration keeps the
   // first suite-ready timestamp (FEAT-001 / TBI-002).

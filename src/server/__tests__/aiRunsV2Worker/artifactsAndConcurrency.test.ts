@@ -118,6 +118,42 @@ describe('resultPublisher', () => {
     expect(sent).toHaveLength(1);
     expect(publisher.hasPublished()).toBe(true);
   });
+
+  it('resends the first terminal unchanged when its send threw', async () => {
+    const sent: Array<{ id: string; status: string }> = [];
+    let failNext = true;
+    const publisher = createResultPublisher({
+      target: {
+        runId: 'run-1',
+        attemptId: 'attempt-1',
+        attemptNumber: 1,
+        dispatchMessageId: 'dispatch-1',
+      },
+      send: async (id, body) => {
+        sent.push({ id, status: body.status });
+        if (failNext) {
+          failNext = false;
+          throw new Error('response lost');
+        }
+      },
+    });
+
+    await expect(
+      publisher.publishTerminal({
+        status: 'completed',
+        artifactStatus: 'manifest_written',
+      }),
+    ).rejects.toThrow('response lost');
+    await publisher.publishTerminal({
+      status: 'failed',
+      artifactStatus: 'failed',
+    });
+
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toEqual(sent[0]);
+    expect(sent[1].status).toBe('completed');
+    expect(publisher.hasPublished()).toBe(true);
+  });
 });
 
 describe('visual concurrency', () => {

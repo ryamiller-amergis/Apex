@@ -821,6 +821,45 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     });
   });
 
+  it('masks connection strings in a persisted Cursor terminal error', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          tokens: [],
+          waitStatus: 'ERROR',
+          terminalStatusMessage: 'Could not reach postgres://apex:hunter2@db.internal:5432/apex',
+          workspaceRef: checkout.workspacePath,
+        }),
+      ),
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+      }),
+      uploadAttemptArtifacts: jest.fn(),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+    });
+
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(
+      actor.handleDurableTurn({
+        threadId: THREAD_ID,
+        bootstrap: makeDurableBootstrap(),
+      }),
+    ).resolves.toEqual({ status: 'failed' });
+
+    const terminal = posted.find((body) => body.kind === 'terminal');
+    expect(terminal).toMatchObject({
+      kind: 'terminal',
+      status: 'failed',
+      detail:
+        'Interactive turn failed: Error: Interactive turn ended with status: error: Could not reach [redacted-connection-string]',
+    });
+  });
+
   it('arms the tool deadline timer and fails with tool_timeout (not cancelled)', async () => {
     const posted: AiRunIngestBody[] = [];
     let cancelCalled = false;

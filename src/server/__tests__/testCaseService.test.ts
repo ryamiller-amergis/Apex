@@ -723,6 +723,7 @@ describe('testCaseService', () => {
         JSON.stringify({ suites: [] }),
         'utf8',
       );
+      mockDb.query.chatThreads.findFirst.mockResolvedValue({ workspaceDir });
       mockDb.query.testCases.findFirst.mockResolvedValue({
         chatThreadId: 'thread-tc',
         status: 'ready',
@@ -743,6 +744,7 @@ describe('testCaseService', () => {
           ),
         ).resolves.toBe(false);
         expect(mockUpdateChains).toHaveLength(0);
+        expect(fs.existsSync(workspaceDir)).toBe(false);
       } finally {
         fs.rmSync(workspaceDir, { recursive: true, force: true });
       }

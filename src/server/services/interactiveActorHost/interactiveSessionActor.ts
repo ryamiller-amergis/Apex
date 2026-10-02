@@ -41,6 +41,7 @@ import {
   createCursorTurnEndMonitor,
   createCursorRunEventEnvelope,
   executeCursorExecutionCore,
+  sanitizeCursorTerminalDetail,
   type CursorExecutionResult,
 } from '../cursorExecutionCore';
 import type { WorkerCursorExecutionRun } from '../aiRunsWorker/cursorExecution';
@@ -341,7 +342,7 @@ function unsuccessfulWaitDetail(result: CursorExecutionResult): string {
       ? (result.waitResult.error as { message: string }).message
       : '';
   const detail = redactFailureMessage(
-    result.terminalStatusMessage || waitError,
+    sanitizeCursorTerminalDetail(result.terminalStatusMessage || waitError),
   );
   return detail
     ? `Interactive turn ended with status: ${status}: ${detail}`

@@ -13,24 +13,31 @@ export interface ChatRunProgressLabelProps {
 }
 
 /**
- * Progress line under a chat spinner: the current step, time since the spinner
- * appeared, and how many steps the agent has taken. Queued and dispatched keep
- * their single-word status.
+ * Progress line under a chat spinner: the current step, time since the agent
+ * started working, and how many steps it has taken. Queued and dispatched keep
+ * their single-word status, and their wait is not counted.
  */
 export const ChatRunProgressLabel: React.FC<ChatRunProgressLabelProps> = ({
   fallbackLabel,
   progressPhase,
   toolProgress,
 }) => {
-  const [startedAt] = useState(() => Date.now());
+  const waiting = progressPhase === 'queued' || progressPhase === 'dispatched';
+  const [startedAt, setStartedAt] = useState(() => Date.now());
   const [now, setNow] = useState(startedAt);
+  const [wasWaiting, setWasWaiting] = useState(waiting);
+
+  if (wasWaiting !== waiting) {
+    setWasWaiting(waiting);
+    if (!waiting) setStartedAt(now);
+  }
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(timer);
   }, []);
 
-  if (progressPhase === 'queued' || progressPhase === 'dispatched') {
+  if (waiting) {
     return <>{fallbackLabel}</>;
   }
 

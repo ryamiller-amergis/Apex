@@ -52,4 +52,19 @@ describe('ChatRunProgressLabel', () => {
 
     expect(screen.getByText('Thinking… · 4s')).toBeTruthy();
   });
+
+  it('starts counting when the run leaves the queue', () => {
+    const { rerender } = render(
+      <ChatRunProgressLabel fallbackLabel="Queued" progressPhase="queued" toolProgress={[]} />,
+    );
+    act(() => jest.advanceTimersByTime(30_000));
+
+    rerender(
+      <ChatRunProgressLabel fallbackLabel="Thinking…" progressPhase="analysis" toolProgress={[]} />,
+    );
+    expect(screen.getByText('Thinking…')).toBeTruthy();
+
+    act(() => jest.advanceTimersByTime(4_000));
+    expect(screen.getByText('Thinking… · 4s')).toBeTruthy();
+  });
 });

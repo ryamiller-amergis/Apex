@@ -173,6 +173,29 @@ describe('TBI-004 shared Cursor execution core', () => {
     expect(wait).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ['FINISHED', undefined],
+    ['ERROR', 'Custom tool schema is invalid'],
+  ] as const)('keeps the %s status message only for unsuccessful endings', async (status, expected) => {
+    const run: CursorExecutionRun = {
+      supports: (capability) => capability === 'stream',
+      stream: async function* () {
+        yield { type: 'status', status, message: 'Custom tool schema is invalid' };
+      },
+      wait: jest.fn().mockResolvedValue({ status: 'error' }),
+    };
+
+    const result = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-status-message', sourceInstance: 'status-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+    });
+
+    expect(result.terminalStatusMessage).toBe(expected);
+  });
+
   it('completes from the authoritative turn-ended delta with full text', async () => {
     const monitor = createCursorTurnEndMonitor();
     monitor.observe({ type: 'text-delta', text: '## Home' });

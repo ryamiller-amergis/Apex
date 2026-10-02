@@ -149,6 +149,8 @@ const CHAT_ERROR_BY_CODE: Record<string, string> = {
 const DEADLINE_ERRORS: Record<string, string> = {
   'Interactive absolute deadline exceeded':
     'The answer took too long and was stopped. Try a narrower question, or retry.',
+  'Interactive turn exceeded its absolute deadline':
+    'The answer took too long and was stopped. Try a narrower question, or retry.',
   'Interactive tool deadline exceeded':
     "One of the agent's steps took too long and was stopped. Please retry.",
 };

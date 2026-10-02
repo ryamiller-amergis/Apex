@@ -635,6 +635,25 @@ async function defaultLoadRepositoryContext(
   return { contextContent, agentsContent };
 }
 
+/** Interview and ADR sessions avoid broad repository search, matching the in-process path. */
+export function workflowAllowsRepositorySearch(
+  workflowClass: InteractiveWorkflowClass,
+): boolean {
+  switch (workflowClass) {
+    case 'interview':
+    case 'adr':
+      return false;
+    case 'home-chat':
+    case 'ask-apex':
+    case 'assistant':
+      return true;
+    default: {
+      const unhandled: never = workflowClass;
+      throw new Error(`Unhandled workflow class: ${String(unhandled)}`);
+    }
+  }
+}
+
 function frozenMcpDescriptors(
   thread: ChatThread,
   hasAdoCapability: boolean,
@@ -977,7 +996,7 @@ export function createDurableInteractiveTurnService(
             provider: grounding?.provider ?? 'ado',
             contextContent: repositoryContext.contextContent,
             agentsContent: repositoryContext.agentsContent,
-            searchAvailable: true,
+            searchAvailable: workflowAllowsRepositorySearch(input.workflowClass),
           })
         : null;
 

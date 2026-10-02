@@ -33,6 +33,7 @@ jest.mock('../db/drizzle', () => ({
   db: {
     query: {
       interviews: { findFirst: jest.fn().mockResolvedValue(null) },
+      adrs: { findFirst: jest.fn().mockResolvedValue(undefined) },
       prds: { findFirst: jest.fn().mockResolvedValue(null) },
       designDocs: { findFirst: jest.fn().mockResolvedValue(null) },
     },
@@ -58,6 +59,7 @@ jest.mock('drizzle-orm', () => ({
 
 jest.mock('../db/schema', () => ({
   interviews: {},
+  adrs: {},
   prds: {},
   designDocs: {},
   chatThreads: {},
@@ -69,6 +71,7 @@ jest.mock('../services/chatThreadRepository', () => ({
   insertMessage: jest.fn().mockResolvedValue(undefined),
   listThreadsByUser: jest.fn().mockResolvedValue([]),
   loadFullThread: jest.fn().mockResolvedValue(null),
+  listMessageIds: jest.fn().mockResolvedValue([]),
   deleteThread: jest.fn().mockResolvedValue(undefined),
 }));
 
@@ -347,10 +350,12 @@ const {
   deleteThread: mockPgDeleteThread,
   upsertThread: mockPgUpsertThread,
   loadFullThread: mockPgLoadFullThread,
+  listMessageIds: mockPgListMessageIds,
 } = jest.requireMock('../services/chatThreadRepository') as {
   deleteThread: jest.Mock;
   upsertThread: jest.Mock;
   loadFullThread: jest.Mock;
+  listMessageIds: jest.Mock;
 };
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as {
@@ -1587,6 +1592,46 @@ describe('canonical durable send wrapper', () => {
     }
   });
 
+  it('clears a hydrated running thread when its durable run ends', async () => {
+    const hydratedId = '70000000-0000-4000-8000-000000000001';
+    const now = new Date().toISOString();
+    mockPgLoadFullThread.mockResolvedValue({
+      id: hydratedId,
+      userId: 'developer-1',
+      status: 'running',
+      kickoff: baseKickoff(),
+      activeRunId: runId,
+      workspaceDir: '',
+      messages: [],
+      createdAt: now,
+      lastActivityAt: now,
+    });
+    mockIsThreadRunAlive.mockResolvedValue(true);
+
+    try {
+      await getThread(hydratedId);
+      expect(isThreadIdle(hydratedId)).toBe(false);
+
+      dispatchRunEventForTest({
+        eventId: `${runId}-completed-hydrated`,
+        threadId: hydratedId,
+        runId,
+        sourceInstance: 'ai-run-ingest',
+        sequence: 1,
+        timestamp: new Date().toISOString(),
+        type: 'done',
+        phase: 'completion',
+        status: 'completed',
+        event: { type: 'done', runId },
+      });
+      expect(isThreadIdle(hydratedId)).toBe(true);
+    } finally {
+      mockIsThreadRunAlive.mockResolvedValue(false);
+      mockPgLoadFullThread.mockResolvedValue(null);
+      await closeThread(hydratedId);
+    }
+  });
+
   it('returns durable agent replies persisted outside the in-memory thread', async () => {
     const thread = await createThread(
       'developer-1',
@@ -1603,6 +1648,7 @@ describe('canonical durable send wrapper', () => {
       ts: '2026-10-01T21:44:51.000Z',
     });
     thread.messages.push(question, answer);
+    mockPgListMessageIds.mockResolvedValue([question.id, reply.id, answer.id]);
     mockPgLoadFullThread.mockResolvedValue({
       ...thread,
       messages: [question, reply, answer],
@@ -1615,9 +1661,12 @@ describe('canonical durable send wrapper', () => {
         reply.id,
         answer.id,
       ]);
+      mockPgLoadFullThread.mockClear();
       const second = await getThread(thread.id);
       expect(second?.messages).toHaveLength(3);
+      expect(mockPgLoadFullThread).not.toHaveBeenCalled();
     } finally {
+      mockPgListMessageIds.mockResolvedValue([]);
       mockPgLoadFullThread.mockResolvedValue(null);
       await closeThread(thread.id);
     }

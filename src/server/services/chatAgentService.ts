@@ -36,6 +36,7 @@ import {
   listThreadsByUser as pgListThreadsByUser,
   searchThreads as pgSearchThreads,
   loadFullThread as pgLoadFullThread,
+  listMessageIds as pgListMessageIds,
   deleteThread as pgDeleteThread,
   clearStaleRun,
 } from './chatThreadRepository';
@@ -2913,6 +2914,9 @@ async function ensureThreadState(
   };
   threads.set(threadId, state);
   resetIdleTimer(state);
+  if (thread.status === 'running' && thread.activeRunId) {
+    watchDurableTerminal(state, thread.activeRunId);
+  }
   return state;
 }
 
@@ -3124,11 +3128,15 @@ export async function getThread(threadId: string): Promise<ChatThread | null> {
 /**
  * Durable (V2) turns persist the agent's reply from the run-ingest callback,
  * which may land on any instance and never touches this in-memory copy. Pull
- * those rows in so reloads and transcript builders see both sides.
+ * those rows in so reloads and transcript builders see both sides. Only ids
+ * are read on every call; full rows load only when one is missing.
  */
 async function mergePersistedMessages(state: ThreadState): Promise<void> {
   let persisted: ChatThread | null;
   try {
+    const known = new Set(state.thread.messages.map((message) => message.id));
+    const persistedIds = await pgListMessageIds(state.thread.id);
+    if (persistedIds.every((id) => known.has(id))) return;
     persisted = await loadThread(state.thread.id);
   } catch (err) {
     console.error(

@@ -640,7 +640,7 @@ export async function executeCursorExecutionCore(
         const status = String(statusEvent.status ?? '').toUpperCase();
         if (['FINISHED', 'ERROR', 'CANCELLED', 'EXPIRED'].includes(status)) {
           terminalStatusMessage =
-            typeof statusEvent.message === 'string'
+            status !== 'FINISHED' && typeof statusEvent.message === 'string'
               ? statusEvent.message
               : undefined;
           break;
