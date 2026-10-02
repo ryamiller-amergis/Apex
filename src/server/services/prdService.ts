@@ -1881,7 +1881,11 @@ export function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter 
         })
         .where(eq(prds.id, prd.id));
     },
-    updateDbForValidationResult: async (scorecard: ValidationScorecard, reportMd: string) => {
+    updateDbForValidationResult: async (
+      scorecard: ValidationScorecard,
+      reportMd: string,
+      validationThreadId?: string,
+    ) => {
       // Stale watchers must not flip validationScore mid Fix-with-Apex review.
       const current = await db.query.prds.findFirst({
         where: eq(prds.id, prd.id),
@@ -1903,6 +1907,11 @@ export function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter 
       // scorecard still applies kickoff approvers, contentHash, and
       // notifications even if post-run already left pending_review/draft.
       const isUnusablePlaceholder = scorecard.slug === 'validation-unusable';
+      // A newer validation can take over the PRD between the ingest's thread
+      // check and these writes; only the thread that still owns it may write.
+      const sameThread = validationThreadId
+        ? eq(prds.validationThreadId, validationThreadId)
+        : undefined;
       const newStatus: PrdStatus = scorecard.is_ready ? 'pending_review' : 'draft';
       const kickoff = !isUnusablePlaceholder && newStatus === 'pending_review'
         ? await applyKickoffApproversForReview(prd.id, prd.interviewId, prd.authorId)
@@ -1933,11 +1942,11 @@ export function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter 
             : {}),
           updatedAt: new Date().toISOString(),
         })
-        .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')))
+        .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating'), sameThread))
         .returning({ id: prds.id });
       if (written.length === 0) {
         if (isUnusablePlaceholder) return true;
-        await db.update(prds)
+        const backfilled = await db.update(prds)
           .set({
             validationScorecard: stamped,
             ...(kickoff?.designDocApproverIds
@@ -1948,7 +1957,9 @@ export function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter 
               : {}),
             updatedAt: new Date().toISOString(),
           })
-          .where(eq(prds.id, prd.id));
+          .where(and(eq(prds.id, prd.id), sameThread))
+          .returning({ id: prds.id });
+        if (backfilled.length === 0) return false;
       }
       notifyAiCompletion('prd_validation_complete', prd.id, {
         title: prd.title,
