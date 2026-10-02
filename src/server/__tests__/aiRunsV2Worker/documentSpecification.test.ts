@@ -85,6 +85,21 @@ describe('V2 document execution specification', () => {
     ).toBe(true);
   });
 
+  it('accepts a scratch-only Playbook step that carries its kickoff context', () => {
+    const playbookStep = (scratchInputs: unknown) => specification({
+      workflowClass: 'playbook-step',
+      groundedSha: undefined,
+      repository: undefined,
+      provider: undefined,
+      scratchInputs,
+    });
+
+    expect(isAiRunV2DocumentSpecification(playbookStep([
+      { path: '.ai-pilot/kickoff-context.md', content: '# Document' },
+    ]))).toBe(true);
+    expect(isAiRunV2DocumentSpecification(playbookStep([]))).toBe(false);
+  });
+
   it('rejects arbitrary scratch files and missing workflow inputs', () => {
     expect(
       isAiRunV2DocumentSpecification(

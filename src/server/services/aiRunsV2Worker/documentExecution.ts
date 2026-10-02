@@ -77,6 +77,7 @@ function isExpectedOutputPath(
         || /[-.]assumptions\.md$/i.test(name)
       );
     case 'validation':
+    case 'playbook-step':
       if (segments.length !== 1) return false;
       return (
         name === 'review-scorecard.json'
@@ -92,8 +93,6 @@ function isExpectedOutputPath(
     case 'walkthrough-smart-tagging':
       if (segments.length !== 1) return false;
       return name === 'walkthrough-anchor-smart-tagging.json';
-    case 'playbook-step':
-      throw new Error('Playbook steps are not a V2 document workflow');
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -185,7 +184,8 @@ function assertExpectedOutputSet(
       }
       return;
     case 'playbook-step':
-      throw new Error('Playbook steps are not a V2 document workflow');
+      // The Playbook's ingest step owns a missing scorecard, as on the V1 path.
+      return;
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);

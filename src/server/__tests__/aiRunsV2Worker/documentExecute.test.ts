@@ -635,6 +635,8 @@ describe('document artifact allowlists', () => {
       ],
     ],
     ['validation', ['review-scorecard.json', 'review-scorecard.md']],
+    ['playbook-step', ['review-scorecard.json', 'review-scorecard.md']],
+    ['playbook-step', []],
     [
       'test-cases',
       [

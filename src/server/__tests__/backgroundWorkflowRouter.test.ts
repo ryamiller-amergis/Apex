@@ -617,6 +617,29 @@ describe('background workflow routing', () => {
     );
   });
 
+  it('admits under the caller agent run id when one is given', async () => {
+    const admitV2Run = jest.fn().mockResolvedValue({
+      status: 'dispatched',
+      runId: 'fresh-run',
+      attemptId: 'attempt-1',
+      attemptNumber: 1,
+      dispatchMessageId: 'dispatch-1',
+      outboxId: 'outbox-1',
+    });
+    const dependencies = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      admitV2Run,
+    });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route({
+      ...makeInput(),
+      agentRunId: 'fresh-run',
+    });
+
+    expect(decision).toEqual(expect.objectContaining({ route: 'worker', runId: 'fresh-run' }));
+    expect(admitV2Run).toHaveBeenCalledWith(expect.objectContaining({ runId: 'fresh-run' }));
+  });
+
   it('freezes every worker input into the V2 document specification', async () => {
     const admitV2Run = jest.fn().mockResolvedValue({
       status: 'dispatched',

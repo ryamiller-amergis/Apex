@@ -64,6 +64,7 @@ const SHARED_READ_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new S
 const SCRATCH_ONLY_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new Set([
   'validation',
   'walkthrough-smart-tagging',
+  'playbook-step',
 ]);
 
 export interface RecoverableBackgroundWorkflowFailure {
@@ -91,6 +92,11 @@ export interface BackgroundWorkflowRouteInput {
   workflowClass: BackgroundWorkflowClass;
   /** Generation-thread run identity used for the pinned destination. */
   destinationRun: RunRef;
+  /**
+   * Agent run id for the dispatch. Defaults to `destinationRun.runId`; callers that reuse a
+   * thread across runs pass a fresh id so each run has its own row.
+   */
+  agentRunId?: string;
   threadId: string;
   /** Worker-only preparation, evaluated lazily after the feature flag enables routing. */
   prepareWorker(): Promise<PreparedBackgroundWorkflowWorker>;
@@ -523,7 +529,7 @@ export function createBackgroundWorkflowRouter(
         const specification: AiRunV2DocumentSpecification =
           specificationCandidate;
         const admitted = await admitV2Run({
-          runId: input.destinationRun.runId,
+          runId: input.agentRunId ?? input.destinationRun.runId,
           threadId: input.threadId,
           projectId: prepared.projectId,
           workloadLane: V2_WORKLOAD_LANE,
@@ -548,7 +554,7 @@ export function createBackgroundWorkflowRouter(
         projectId: prepared.projectId,
         snapshot,
         timeoutAt,
-        runId: input.destinationRun.runId,
+        runId: input.agentRunId ?? input.destinationRun.runId,
       });
       return enqueued.runId;
       // @feature-flag:ai-runs-v2-transport disabled-end

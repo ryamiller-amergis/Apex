@@ -164,6 +164,7 @@ describe('V2 document artifact harvest', () => {
     'design-doc',
     'validation',
     'test-cases',
+    'playbook-step',
   ] as const)('routes a failed %s attempt through the workspace completion contract', async (workflowClass) => {
     const currentAttempt = attempt({
       workflowClass,

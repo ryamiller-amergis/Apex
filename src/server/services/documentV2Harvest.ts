@@ -91,6 +91,7 @@ function isExpectedArtifactPath(
         || /[-.]assumptions\.md$/i.test(name)
       );
     case 'validation':
+    case 'playbook-step':
       if (segments.length !== 1) return false;
       return (
         name === 'review-scorecard.json'
@@ -106,8 +107,6 @@ function isExpectedArtifactPath(
     case 'walkthrough-smart-tagging':
       if (segments.length !== 1) return false;
       return name === 'walkthrough-anchor-smart-tagging.json';
-    case 'playbook-step':
-      throw new Error('Playbook steps are not a V2 document workflow');
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -212,6 +211,7 @@ async function applyAttempt(
     case 'design-doc':
     case 'validation':
     case 'test-cases':
+    case 'playbook-step':
       await applyWorkspace({
         attempt,
         workspacePath,
@@ -236,8 +236,6 @@ async function applyAttempt(
         );
       }
       return;
-    case 'playbook-step':
-      throw new Error('Playbook steps are not a V2 document workflow');
     default: {
       const unhandled: never = attempt.workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);

@@ -204,7 +204,8 @@ export function createFinishedAttemptReader(deps?: {
               'design-doc',
               'validation',
               'test-cases',
-              'walkthrough-smart-tagging'
+              'walkthrough-smart-tagging',
+              'playbook-step'
             )
             AND NOT EXISTS (
               SELECT 1
@@ -274,7 +275,8 @@ export function createFinishedAttemptReader(deps?: {
             'design-doc',
             'validation',
             'test-cases',
-            'walkthrough-smart-tagging'
+            'walkthrough-smart-tagging',
+            'playbook-step'
           )
           AND NOT EXISTS (
             SELECT 1

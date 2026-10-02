@@ -11,6 +11,7 @@ export const AI_RUN_V2_DOCUMENT_WORKFLOW_CLASSES = [
   'validation',
   'test-cases',
   'walkthrough-smart-tagging',
+  'playbook-step',
 ] as const satisfies readonly BackgroundWorkflowClass[];
 
 export type AiRunV2DocumentScratchInput = Readonly<{
@@ -65,9 +66,8 @@ export function documentWorkflowRequiresRepository(
       return true;
     case 'validation':
     case 'walkthrough-smart-tagging':
-      return false;
     case 'playbook-step':
-      throw new Error('Playbook steps are not a V2 document workflow');
+      return false;
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -106,9 +106,8 @@ export function isAllowedDocumentScratchInputPath(
     case 'design-doc':
     case 'validation':
     case 'walkthrough-smart-tagging':
-      return false;
     case 'playbook-step':
-      throw new Error('Playbook steps are not a V2 document workflow');
+      return false;
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -127,6 +126,7 @@ function hasRequiredScratchInputs(
     case 'design-doc':
     case 'validation':
     case 'walkthrough-smart-tagging':
+    case 'playbook-step':
       return paths.includes('.ai-pilot/kickoff-context.md');
     case 'test-cases':
       return (
@@ -134,8 +134,6 @@ function hasRequiredScratchInputs(
         && paths.some((value) => /\.prd\.md$/i.test(value))
         && paths.some((value) => /\.backlog\.json$/i.test(value))
       );
-    case 'playbook-step':
-      throw new Error('Playbook steps are not a V2 document workflow');
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
