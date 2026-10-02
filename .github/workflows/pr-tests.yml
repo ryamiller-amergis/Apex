@@ -232,6 +232,15 @@ jobs:
           TEST_DATABASE_URL: postgresql://test:test@localhost:5432/aipilot_e2e
         run: npm run test:integration
 
+      - name: Run Playbook lifecycle tests without worker recycling
+        env:
+          TEST_DATABASE_URL: postgresql://test:test@localhost:5432/aipilot_e2e
+          NODE_OPTIONS: --experimental-vm-modules
+        run: >-
+          npx jest --config jest.config.integration.js --runInBand
+          tests/integration/playbook-run-advance.integration.test.ts
+          tests/integration/playbook-exit-criteria.integration.test.ts
+
   # TEMP: pre-deploy local Playwright e2e (e2e-smoke / e2e-interview-flow) removed.
   # Vite/esbuild was panicking mid-suite on Linux CI and blocking deploy-dev.
   # Re-enable once the webServer/esbuild path is stabilized. Post-deploy
@@ -327,6 +336,9 @@ jobs:
         # scripts to install their Linux bindings. prepare tolerates omitted Husky.
         run: npm ci --omit=dev
 
+      - name: Verify Playbook runtime dependencies
+        run: node -e "Promise.all([import('@mastra/core'), import('@mastra/core/workflows'), import('@mastra/pg')]).then(() => console.log('Playbook engine dependencies loaded'))"
+
       - name: Download build output
         uses: actions/download-artifact@v4
         with:
@@ -379,6 +391,7 @@ jobs:
         env:
           APP_NAME: app-scrum-dev
           RG_NAME: rg-scrum-dev
+          E2E_TEST_USER: ${{ secrets.E2E_TEST_USER }}
         run: |
           # Resolve the interactive live-bus (Redis) connection at deploy time so
           # the WS gateway subscribes to the same pub/sub the actor host publishes
@@ -490,6 +503,7 @@ jobs:
               AZURE_ARTIFACTS_ORG="${{ secrets.AZURE_ARTIFACTS_ORG }}" \
               AZURE_ARTIFACTS_FEED="${{ secrets.AZURE_ARTIFACTS_FEED }}" \
               AZURE_ARTIFACTS_PAT="${{ secrets.AZURE_ARTIFACTS_PAT }}" \
+              E2E_TEST_USER="$E2E_TEST_USER" \
               APEX_URL="https://app-scrum-dev.azurewebsites.net"
 
           # The Azure Node/Linux image ships without git, and the Dev Workbench

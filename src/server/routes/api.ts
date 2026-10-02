@@ -36,6 +36,7 @@ import {
 import { getUserProjects } from '../services/adoMembershipService';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 import { getUserEmail } from '../utils/requestUser';
+import { isDevAccessAllowlisted } from '../services/devEnvAllowlistService';
 import type { CreateProjectAccessRequestsRequest } from '../../shared/types/platformAdmin';
 import { requireGroupMembership, requirePermission, requireProjectAccess } from '../middleware/rbac';
 import {
@@ -65,6 +66,7 @@ import {
 
 import runGroundingsRouter from './runGroundings';
 import diagramsRouter from './diagrams';
+import playbooksRouter from './playbooks';
 const router = express.Router();
 const publicHealthPaths = new Set([
   '/health',
@@ -81,6 +83,7 @@ export function isPublicHealthPath(path: string): boolean {
 
 router.use('/run-groundings', runGroundingsRouter);
 router.use('/projects/:projectId/diagrams', diagramsRouter);
+router.use('/playbooks', playbooksRouter);
 // GET /api/available-models — accessible to all authenticated users so that
 // non-admin roles (e.g. interviews:manage) can populate model dropdowns.
 router.get('/available-models', async (_req: Request, res: Response) => {
@@ -406,6 +409,10 @@ function sendProcessHealth(res: Response) {
   return res.json({ healthy: true, timestamp: new Date().toISOString() });
 }
 
+// The ADO client default socket timeout is 120s, longer than a health-check
+// ping, so a stalled /_apis/Location call would leave the probe hanging.
+const HEALTH_CHECK_SOCKET_TIMEOUT_MS = 8_000;
+
 async function sendDatabaseReadinessHealth(res: Response) {
   try {
     const result = await db.execute<{ now: string }>(sql`SELECT NOW() AS now`);
@@ -431,7 +438,9 @@ router.get('/health/db', (_req: Request, res: Response) => sendDatabaseReadiness
 // GET /api/health/dependencies - External dependency health
 router.get('/health/dependencies', async (_req: Request, res: Response) => {
   try {
-    const adoService = new AzureDevOpsService();
+    const adoService = new AzureDevOpsService(undefined, undefined, {
+      socketTimeout: HEALTH_CHECK_SOCKET_TIMEOUT_MS,
+    });
     const healthy = await adoService.healthCheck();
     if (!healthy) {
       return res.status(503).json({ healthy: false, error: 'Dependencies unavailable' });
@@ -4138,12 +4147,13 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       ? req.query.project
       : (restrictedActive ? RESTRICTED_ACCESS_PROJECT : undefined);
 
-    const [permSet, roles, userGroups, whatsNew, changelogPrefs] = await Promise.all([
+    const [permSet, roles, userGroups, whatsNew, changelogPrefs, devAccessAllowlisted] = await Promise.all([
       getUserPermissions(userId, project),
       getUserRoleNames(userId),
       getUserGroupNames(userId),
       evaluateWhatsNewState(userId),
       getChangelogPrefs(userId),
+      email ? isDevAccessAllowlisted(email) : Promise.resolve(false),
     ]);
     if (superAdmin && !roles.includes('admin')) {
       roles.push('admin');
@@ -4160,6 +4170,7 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       groups: userGroups,
       userId,
       isSuperAdmin: superAdmin,
+      devAccessAllowlisted,
       // Legacy compatibility fields — sourced from the same WhatsNewState
       changelogUnread: whatsNew.unread,
       currentChangelogVersion: whatsNew.currentVersion ?? '',

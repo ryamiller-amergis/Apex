@@ -106,6 +106,8 @@ function isExpectedArtifactPath(
     case 'walkthrough-smart-tagging':
       if (segments.length !== 1) return false;
       return name === 'walkthrough-anchor-smart-tagging.json';
+    case 'playbook-step':
+      throw new Error('Playbook steps are not a V2 document workflow');
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -234,6 +236,8 @@ async function applyAttempt(
         );
       }
       return;
+    case 'playbook-step':
+      throw new Error('Playbook steps are not a V2 document workflow');
     default: {
       const unhandled: never = attempt.workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);

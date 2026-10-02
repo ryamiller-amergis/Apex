@@ -41,7 +41,7 @@ export class AzureDevOpsService {
   private areaPath: string;
   private readonly WORK_ITEM_BATCH_SIZE = 200;
 
-  constructor(project?: string, areaPath?: string, opts?: { bearerToken?: string }) {
+  constructor(project?: string, areaPath?: string, opts?: { bearerToken?: string; socketTimeout?: number }) {
     const orgUrl = process.env.ADO_ORG;
     const pat = process.env.ADO_PAT;
     const defaultProject = process.env.ADO_PROJECT || '';
@@ -72,9 +72,11 @@ export class AzureDevOpsService {
       }
       authHandler = azdev.getPersonalAccessTokenHandler(pat);
     }
-    // Configure with longer timeout for revision queries (default is 30s, increase to 120s)
+    // Revision queries need a long socket timeout (the client default is 30s).
+    // Callers that must answer quickly, such as the App Service health probe,
+    // pass a shorter socketTimeout so a stalled ADO call cannot hold the request.
     const options = {
-      socketTimeout: 120000, // 120 seconds
+      socketTimeout: opts?.socketTimeout ?? 120_000,
     };
     this.connection = new azdev.WebApi(orgUrl, authHandler, options);
   }

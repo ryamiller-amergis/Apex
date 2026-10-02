@@ -156,6 +156,9 @@ jest.mock('../services/reviewCommentService', () => ({
   getUnresolvedCount: jest.fn().mockResolvedValue(0),
 }));
 
+import { and, eq } from 'drizzle-orm';
+import { designDocs } from '../db/schema';
+import { ingestValidationScorecard } from '../services/documentValidationService';
 import {
   createDesignDoc,
   listDesignDocs,
@@ -168,6 +171,7 @@ import {
   deleteDesignDoc,
   syncDesignDocContent,
   syncValidationResult,
+  createDesignDocValidationAdapter,
   markValidationReady,
   overrideDesignDocValidation,
   startDesignDocWatcher,
@@ -1241,6 +1245,76 @@ describe('syncValidationResult', () => {
       }),
     ).resolves.toBe(false);
 
+    expect(mockNotifyApproversDocumentReady).not.toHaveBeenCalled();
+  });
+});
+
+describe('unusable design doc validation results', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  function mockUpdate(writtenIds: Array<{ id: string }>) {
+    const whereMock = jest.fn().mockReturnValue({
+      returning: jest.fn().mockResolvedValue(writtenIds),
+    });
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+    return { setMock, whereMock };
+  }
+
+  it('writes a timeout only while that validation thread is still validating', async () => {
+    const { setMock, whereMock } = mockUpdate([{ id: 'doc-1' }]);
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ validationThreadId: 'thread-9' });
+
+    const result = await ingestValidationScorecard(
+      createDesignDocValidationAdapter('doc-1'),
+      'thread-9',
+      { kind: 'timeout', reason: 'Validation timed out' },
+    );
+
+    expect(result.disposition).toBe('applied');
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'pending_review',
+      validationScore: 0,
+    }));
+    expect(whereMock).toHaveBeenCalledWith(and(
+      eq(designDocs.id, 'doc-1'),
+      eq(designDocs.status, 'validating'),
+      eq(designDocs.validationThreadId, 'thread-9'),
+    ));
+    expect(mockNotifyApproversDocumentReady).not.toHaveBeenCalled();
+  });
+
+  it('does not report a cancelled design doc as applied when the same thread finishes late', async () => {
+    const { whereMock } = mockUpdate([]);
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ validationThreadId: 'thread-9' });
+
+    const result = await ingestValidationScorecard(
+      createDesignDocValidationAdapter('doc-1'),
+      'thread-9',
+      { kind: 'unusable', reason: 'No scorecard' },
+    );
+
+    expect(result.disposition).toBe('discarded_stale');
+    expect(whereMock).toHaveBeenCalledWith(and(
+      eq(designDocs.id, 'doc-1'),
+      eq(designDocs.status, 'validating'),
+      eq(designDocs.validationThreadId, 'thread-9'),
+    ));
+    expect(mockNotifyApproversDocumentReady).not.toHaveBeenCalled();
+  });
+
+  it('drops a late result once another validation thread is current', async () => {
+    mockUpdate([]);
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ validationThreadId: 'thread-new' });
+
+    const result = await ingestValidationScorecard(
+      createDesignDocValidationAdapter('doc-1'),
+      'thread-9',
+      { kind: 'timeout', reason: 'Validation timed out' },
+    );
+
+    expect(result.disposition).toBe('discarded_stale');
+    expect(mockDb.update).not.toHaveBeenCalled();
     expect(mockNotifyApproversDocumentReady).not.toHaveBeenCalled();
   });
 });
@@ -2351,17 +2425,28 @@ describe('startValidationWatcher', () => {
     const whereMock = jest.fn().mockResolvedValue(undefined);
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
+    mockDb.query.designDocs.findFirst.mockResolvedValue({
+      validationThreadId: 'thread-unreadable',
+    });
 
     startValidationWatcher('doc-unreadable', 'thread-unreadable');
     await jest.advanceTimersByTimeAsync(60_000);
 
+    expect(mockReadable).toHaveBeenCalledWith('thread-unreadable');
     expect(setMock).not.toHaveBeenCalled();
   });
 
   it('records the missing scorecard once the workspace is readable', async () => {
-    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const whereMock = jest.fn().mockReturnValue({
+      returning: jest.fn().mockResolvedValue([{ id: 'doc-noscorecard' }]),
+    });
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
+    // Ingest discards a scorecard when this thread is no longer the document's
+    // current validation thread. The row has to say it still is.
+    mockDb.query.designDocs.findFirst.mockResolvedValue({
+      validationThreadId: 'thread-noscorecard',
+    });
 
     startValidationWatcher('doc-noscorecard', 'thread-noscorecard');
     await jest.advanceTimersByTimeAsync(5_000);

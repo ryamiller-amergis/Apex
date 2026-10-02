@@ -365,6 +365,27 @@ describe('updateRolePermissions', () => {
     expect(txDeleteMock).toHaveBeenCalledTimes(1);
     expect(txInsertMock).not.toHaveBeenCalled();
   });
+
+  it('saves Playbook permissions without changing the established void return contract', async () => {
+    const savedValues: unknown[] = [];
+    mockDb.transaction.mockImplementation(async (fn: any) => fn({
+      delete: jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) }),
+      insert: jest.fn().mockReturnValue({
+        values: jest.fn().mockImplementation((values: unknown) => {
+          savedValues.push(values);
+          return Promise.resolve(undefined);
+        }),
+      }),
+    }));
+
+    await expect(
+      updateRolePermissions('role-author', ['perm-author']),
+    ).resolves.toBeUndefined();
+
+    expect(savedValues).toEqual([[
+      { roleId: 'role-author', permissionId: 'perm-author' },
+    ]]);
+  });
 });
 
 // ── deleteRole ─────────────────────────────────────────────────────────────────
@@ -600,23 +621,26 @@ describe('getUserProjectRoles', () => {
 describe('assignProjectRole', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('inserts a project-role record and ignores conflicts', async () => {
+  it('inserts a project-role record and ignores conflicts without adding a membership precondition', async () => {
     const onConflictMock = jest.fn().mockResolvedValue(undefined);
     const valuesMock = jest.fn().mockReturnValue({ onConflictDoNothing: onConflictMock });
     mockDb.insert.mockReturnValue({ values: valuesMock });
 
-    await assignProjectRole('user-1', 'ProjectX', 'role-admin', 'admin-user');
+    await expect(
+      assignProjectRole('outside-user', 'ProjectX', 'role-admin', 'admin-user'),
+    ).resolves.toBeUndefined();
 
     expect(mockDb.insert).toHaveBeenCalledTimes(1);
     expect(valuesMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        userId: 'user-1',
+        userId: 'outside-user',
         project: 'ProjectX',
         roleId: 'role-admin',
         assignedBy: 'admin-user',
       }),
     );
     expect(onConflictMock).toHaveBeenCalledTimes(1);
+    expect(mockDb.select).not.toHaveBeenCalled();
   });
 });
 

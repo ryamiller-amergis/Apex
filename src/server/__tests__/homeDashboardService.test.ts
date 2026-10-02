@@ -166,6 +166,27 @@ describe('HomeDashboardService', () => {
     expect(deps.getDeliveryCycleTime).not.toHaveBeenCalled();
   });
 
+  it('preserves the existing payload and skips Playbook queries while the feature is disabled', async () => {
+    const getAssignedToMe = jest.fn();
+    const deps = dependencies({
+      getUserPermissions: jest.fn().mockResolvedValue(new Set([
+        'interviews:view',
+        'playbooks:view',
+      ])),
+      getAssignedToMe,
+      isProductionAdaptersEnabled: jest.fn().mockResolvedValue(false),
+    });
+
+    const result = await createHomeDashboardService(deps).getDashboard({
+      userId: 'user-1',
+      project: 'Alpha',
+      isSuperAdmin: false,
+    });
+
+    expect(result).not.toHaveProperty('assignedToMe');
+    expect(getAssignedToMe).not.toHaveBeenCalled();
+  });
+
   it('PBI-001/002/003 AC-3 / VT-06 applies menu, group, and permission gates independently', async () => {
     const deps = dependencies({
       getMenuConfig: jest.fn().mockResolvedValue({ project: 'Alpha', enabledViews: [] }),

@@ -66,6 +66,8 @@ export function documentWorkflowRequiresRepository(
     case 'validation':
     case 'walkthrough-smart-tagging':
       return false;
+    case 'playbook-step':
+      throw new Error('Playbook steps are not a V2 document workflow');
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -105,6 +107,8 @@ export function isAllowedDocumentScratchInputPath(
     case 'validation':
     case 'walkthrough-smart-tagging':
       return false;
+    case 'playbook-step':
+      throw new Error('Playbook steps are not a V2 document workflow');
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -130,6 +134,8 @@ function hasRequiredScratchInputs(
         && paths.some((value) => /\.prd\.md$/i.test(value))
         && paths.some((value) => /\.backlog\.json$/i.test(value))
       );
+    case 'playbook-step':
+      throw new Error('Playbook steps are not a V2 document workflow');
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
