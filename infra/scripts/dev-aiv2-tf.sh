@@ -33,8 +33,19 @@ live_image() {
 }
 
 app_secret() {
-  az containerapp secret show -g "$RG" -n "$1" \
-    --secret-name "$2" --query value -o tsv
+  local value
+  value=$(az containerapp secret show -g "$RG" -n "$1" \
+    --secret-name "$2" --query value -o tsv)
+  require_value "$1/$2" "$value"
+  printf '%s' "$value"
+}
+
+# An empty TF_VAR_* would make Terraform clear that secret on the live app.
+require_value() {
+  if [ -z "$2" ]; then
+    echo "Empty value for $1; refusing to run Terraform" >&2
+    exit 1
+  fi
 }
 
 KEY_VAULT_ID=$(az keyvault show -n "$KEY_VAULT" --query id -o tsv)
@@ -52,6 +63,9 @@ TF_VAR_ai_platform_v2_application_insights_connection_string=$(
   az monitor app-insights component show -g "$RG" -a appi-app-scrum-dev \
     --query connectionString -o tsv
 )
+require_value "$REDIS primary key" "$TF_VAR_ai_platform_v2_interactive_redis_key"
+require_value "Application Insights connection string" \
+  "$TF_VAR_ai_platform_v2_application_insights_connection_string"
 export TF_VAR_ai_platform_v2_database_url \
   TF_VAR_ai_platform_v2_application_insights_connection_string \
   TF_VAR_ai_platform_v2_interactive_redis_key \

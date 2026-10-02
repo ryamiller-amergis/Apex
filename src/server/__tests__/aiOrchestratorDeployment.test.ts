@@ -27,6 +27,22 @@ describe('AI orchestrator image deployment', () => {
     );
   });
 
+  it.each([
+    ['ai_runs_documents_v2', 'ai-runs-documents-v2'],
+    ['ai_runs_visual', 'ai-runs-visual'],
+  ])('rebuilds the %s worker image on its own runner changes', (output, runner) => {
+    expect(detector).toMatch(
+      new RegExp(
+        `detect ${output}[\\s\\S]*runners/${runner}/[\\s\\S]*scripts/ci/publish-${runner}\\.sh[\\s\\S]*src/server/`,
+      ),
+    );
+    expect(workflows[0]).toMatch(
+      new RegExp(
+        `outputs\\.${output} == 'true' &&\\s*hashFiles\\('runners/${runner}/Dockerfile'\\)`,
+      ),
+    );
+  });
+
   it('publishes and updates the orchestrator in every application deploy workflow', () => {
     for (const workflow of workflows) {
       expect(workflow).toMatch(/ai_orchestrator/);

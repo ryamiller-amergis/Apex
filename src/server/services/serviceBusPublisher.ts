@@ -42,12 +42,19 @@ export function getServiceBusPublisher(): ServiceBusPublisher {
   return injectedPublisher ?? createDefaultServiceBusPublisher();
 }
 
-/** Production uses the queue-scoped managed identity; local development uses Azure CLI. */
+/**
+ * Production uses the queue-scoped managed identity; local development uses Azure CLI.
+ * On App Service, AZURE_CLIENT_ID + AZURE_CLIENT_SECRET are the Apex login app
+ * registration, not an attached identity, so it uses its system identity.
+ * Container Apps name their user-assigned identity with AZURE_CLIENT_ID alone.
+ */
 export function createServiceBusCredential(): TokenCredential {
   if (process.env.NODE_ENV !== 'production') {
     return new AzureCliCredential();
   }
-  const clientId = process.env.AZURE_CLIENT_ID?.trim();
+  const clientId = process.env.AZURE_CLIENT_SECRET?.trim()
+    ? undefined
+    : process.env.AZURE_CLIENT_ID?.trim();
   return clientId
     ? new ManagedIdentityCredential({ clientId })
     : new ManagedIdentityCredential();

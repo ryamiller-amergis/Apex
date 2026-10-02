@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Detect whether runner/image sources changed between BASE_SHA and HEAD_SHA.
 # Writes GitHub Actions outputs:
-#   load_test_runner, ai_runs_worker, ai_runs_interactive, ai_orchestrator,
-#   repo_read_service  (true|false)
+#   load_test_runner, ai_runs_worker, ai_runs_interactive, ai_runs_documents_v2,
+#   ai_runs_visual, ai_orchestrator, repo_read_service  (true|false)
 #
 # Required env:
 #   BASE_SHA
@@ -42,6 +42,24 @@ detect ai_runs_worker \
 detect ai_runs_interactive \
   runners/ai-runs-interactive/ \
   scripts/ci/publish-ai-runs-interactive.sh \
+  src/server/ \
+  src/shared/ \
+  package.json \
+  package-lock.json \
+  tsconfig.server.json
+
+detect ai_runs_documents_v2 \
+  runners/ai-runs-documents-v2/ \
+  scripts/ci/publish-ai-runs-documents-v2.sh \
+  src/server/ \
+  src/shared/ \
+  package.json \
+  package-lock.json \
+  tsconfig.server.json
+
+detect ai_runs_visual \
+  runners/ai-runs-visual/ \
+  scripts/ci/publish-ai-runs-visual.sh \
   src/server/ \
   src/shared/ \
   package.json \

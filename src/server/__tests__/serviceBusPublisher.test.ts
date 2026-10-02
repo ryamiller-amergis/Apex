@@ -30,6 +30,7 @@ describe('serviceBusPublisher', () => {
   const originalQueueName = process.env.AI_RUNS_BACKGROUND_QUEUE_NAME;
   const originalPublisher = process.env.AI_RUNS_DISPATCH_PUBLISHER;
   const originalAzureClientId = process.env.AZURE_CLIENT_ID;
+  const originalAzureClientSecret = process.env.AZURE_CLIENT_SECRET;
   const originalFetch = global.fetch;
 
   beforeEach(() => {
@@ -39,6 +40,7 @@ describe('serviceBusPublisher', () => {
     delete process.env.AI_RUNS_SERVICEBUS_NAMESPACE;
     delete process.env.AI_RUNS_BACKGROUND_QUEUE_NAME;
     delete process.env.AI_RUNS_DISPATCH_PUBLISHER;
+    delete process.env.AZURE_CLIENT_SECRET;
     mockGetToken.mockResolvedValue({
       token: 'test-token',
       expiresOnTimestamp: Date.now() + 60_000,
@@ -56,6 +58,7 @@ describe('serviceBusPublisher', () => {
     restoreEnv('AI_RUNS_BACKGROUND_QUEUE_NAME', originalQueueName);
     restoreEnv('AI_RUNS_DISPATCH_PUBLISHER', originalPublisher);
     restoreEnv('AZURE_CLIENT_ID', originalAzureClientId);
+    restoreEnv('AZURE_CLIENT_SECRET', originalAzureClientSecret);
     setServiceBusPublisher(null);
     global.fetch = originalFetch;
   });
@@ -130,6 +133,17 @@ describe('serviceBusPublisher', () => {
     expect(mockManagedIdentityCredential).toHaveBeenCalledWith({
       clientId: '9737cad5-cec1-48e8-b072-5888738e3700',
     });
+  });
+
+  test('uses the system identity when AZURE_CLIENT_ID is the login app on App Service', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.AZURE_CLIENT_ID = 'login-app-client-id';
+    process.env.AZURE_CLIENT_SECRET = 'login-app-secret';
+
+    createServiceBusCredential();
+
+    expect(mockManagedIdentityCredential).toHaveBeenCalledTimes(1);
+    expect(mockManagedIdentityCredential).toHaveBeenCalledWith();
   });
 
   test('BR-006/security: fails deterministically when namespace is missing', async () => {
