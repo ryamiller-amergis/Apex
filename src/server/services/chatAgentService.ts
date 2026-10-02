@@ -3115,7 +3115,40 @@ export function markAsInterviewThread(threadId: string): void {
 }
 
 export async function getThread(threadId: string): Promise<ChatThread | null> {
-  return (await ensureThreadState(threadId))?.thread ?? null;
+  const cached = threads.get(threadId);
+  if (!cached) return (await ensureThreadState(threadId))?.thread ?? null;
+  await mergePersistedMessages(cached);
+  return cached.thread;
+}
+
+/**
+ * Durable (V2) turns persist the agent's reply from the run-ingest callback,
+ * which may land on any instance and never touches this in-memory copy. Pull
+ * those rows in so reloads and transcript builders see both sides.
+ */
+async function mergePersistedMessages(state: ThreadState): Promise<void> {
+  let persisted: ChatThread | null;
+  try {
+    persisted = await loadThread(state.thread.id);
+  } catch (err) {
+    console.error(
+      '[chat] failed to merge persisted messages for thread',
+      state.thread.id,
+      ':',
+      (err as Error).message
+    );
+    return;
+  }
+  if (!persisted) return;
+  const known = new Set(state.thread.messages.map((message) => message.id));
+  const missing = persisted.messages.filter((message) => !known.has(message.id));
+  if (missing.length === 0) return;
+  state.thread.messages.push(...missing);
+  state.thread.messages.sort((a, b) => {
+    const byTs = a.ts.localeCompare(b.ts);
+    if (byTs !== 0) return byTs;
+    return a.id.localeCompare(b.id);
+  });
 }
 
 /** Alias kept for backward compatibility with callers that imported the explicitly async name. */

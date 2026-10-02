@@ -343,11 +343,15 @@ describe('run cancellation', () => {
   });
 });
 
-const { deleteThread: mockPgDeleteThread, upsertThread: mockPgUpsertThread } =
-  jest.requireMock('../services/chatThreadRepository') as {
-    deleteThread: jest.Mock;
-    upsertThread: jest.Mock;
-  };
+const {
+  deleteThread: mockPgDeleteThread,
+  upsertThread: mockPgUpsertThread,
+  loadFullThread: mockPgLoadFullThread,
+} = jest.requireMock('../services/chatThreadRepository') as {
+  deleteThread: jest.Mock;
+  upsertThread: jest.Mock;
+  loadFullThread: jest.Mock;
+};
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as {
   db: {
@@ -1579,6 +1583,42 @@ describe('canonical durable send wrapper', () => {
       expect(isThreadIdle(thread.id)).toBe(true);
       expect((await getThread(thread.id))?.activeRunId).toBeUndefined();
     } finally {
+      await closeThread(thread.id);
+    }
+  });
+
+  it('returns durable agent replies persisted outside the in-memory thread', async () => {
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+    const question = chatMessage('11111111-1111-4111-8111-111111111111', 'user', 'Plan a chatbot', {
+      ts: '2026-10-01T21:43:51.000Z',
+    });
+    const reply = chatMessage('22222222-2222-4222-8222-222222222222', 'agent', 'Q1: Which platform?', {
+      ts: '2026-10-01T21:44:02.000Z',
+    });
+    const answer = chatMessage('33333333-3333-4333-8333-333333333333', 'user', 'web app', {
+      ts: '2026-10-01T21:44:51.000Z',
+    });
+    thread.messages.push(question, answer);
+    mockPgLoadFullThread.mockResolvedValue({
+      ...thread,
+      messages: [question, reply, answer],
+    });
+
+    try {
+      const first = await getThread(thread.id);
+      expect(first?.messages.map((message) => message.id)).toEqual([
+        question.id,
+        reply.id,
+        answer.id,
+      ]);
+      const second = await getThread(thread.id);
+      expect(second?.messages).toHaveLength(3);
+    } finally {
+      mockPgLoadFullThread.mockResolvedValue(null);
       await closeThread(thread.id);
     }
   });
