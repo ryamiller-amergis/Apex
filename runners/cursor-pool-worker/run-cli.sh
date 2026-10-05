@@ -9,8 +9,33 @@ set -euo pipefail
 : "${REPO_URL:?REPO_URL is required}"
 : "${AGENT_BASE_BRANCH:?AGENT_BASE_BRANCH is required}"
 : "${AGENT_BRANCH:?AGENT_BRANCH is required}"
-: "${AGENT_PROMPT:?AGENT_PROMPT is required}"
 : "${AGENT_MODEL:?AGENT_MODEL is required}"
+
+# Apex writes the prompt to a private blob and passes only the URL. The
+# container environment cannot hold the full prompt.
+if [ -n "${AGENT_PROMPT_BLOB_URL:-}" ]; then
+  case "${AGENT_PROMPT_BLOB_URL}" in
+    https://*.blob.core.windows.net/*) ;;
+    *) echo "AGENT_PROMPT_BLOB_URL must be an Azure Blob URL" >&2; exit 1 ;;
+  esac
+  : "${IDENTITY_ENDPOINT:?IDENTITY_ENDPOINT is required to read the prompt blob}"
+  : "${IDENTITY_HEADER:?IDENTITY_HEADER is required to read the prompt blob}"
+  : "${AZURE_CLIENT_ID:?AZURE_CLIENT_ID is required to read the prompt blob}"
+  token_json="$(curl -fsS \
+    "${IDENTITY_ENDPOINT}?resource=https://storage.azure.com/&api-version=2019-08-01&client_id=${AZURE_CLIENT_ID}" \
+    -H "X-IDENTITY-HEADER: ${IDENTITY_HEADER}")"
+  token="$(printf '%s' "${token_json}" | jq -r '.access_token // empty')"
+  if [ -z "${token}" ]; then
+    echo "Could not get a blob token for the cloud-agent prompt" >&2
+    exit 1
+  fi
+  AGENT_PROMPT="$(curl -fsS \
+    -H "Authorization: Bearer ${token}" \
+    -H "x-ms-version: 2023-11-03" \
+    "${AGENT_PROMPT_BLOB_URL}")"
+  unset token token_json
+fi
+: "${AGENT_PROMPT:?AGENT_PROMPT is required}"
 
 git config --global --add safe.directory '*'
 git config --global credential.helper /usr/local/bin/cursor-git-credential

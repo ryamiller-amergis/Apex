@@ -617,7 +617,8 @@ ephemeral checkout.
 | Resource | Dev name | Production name | Purpose |
 |----------|----------|-----------------|---------|
 | Worker Container Apps Job | `caj-apex-cursor-worker-dev` | `caj-apex-cursor-worker-prd` | Manual Job; one execution per Start cloud agent click |
-| Worker identity | `mi-apex-cursor-worker-dev` | `mi-apex-cursor-worker-prd` | Pull image and read the Cursor API key |
+| Worker identity | `mi-apex-cursor-worker-dev` | `mi-apex-cursor-worker-prd` | Pull image, read the Cursor API key, and read prompt blobs |
+| Prompt container | `cursor-prompts` on the shared account | `cursor-prompts` on the shared account | Private text of the Apex-built prompt; deleted after one day |
 
 ### Image contract
 
@@ -628,11 +629,16 @@ Terraform provisions compute and identity but does not build the image:
 - The Key Vault `cursor-api-key` is the key the CLI uses inside the container.
 - `ADO_PAT` is passed on the execution only, for Azure DevOps remotes. It is
   not stored on the Job.
+- The execution receives `AGENT_PROMPT_BLOB_URL`, not the prompt text. Apex
+  uploads that text to the private `cursor-prompts` container before starting
+  the job. The worker identity reads it. The container is deleted after one day.
 
 ### RBAC and networking
 
-The worker identity can pull from ACR and read Key Vault secrets. It does not
-receive access to the AI-runs Service Bus queue or the shared workspace.
+The worker identity can pull from ACR, read Key Vault secrets, and read the
+`cursor-prompts` container. The Apex app identity can write that container.
+The worker does not receive access to the AI-runs Service Bus queue or the
+shared workspace.
 
 Workers require outbound HTTPS to Cursor, the source-control host, and the
 package registries used by the repository. No inbound port or public IP is

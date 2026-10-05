@@ -34,6 +34,30 @@ resource "azurerm_role_assignment" "cursor_pool_worker_acr_pull" {
   principal_id         = azurerm_user_assigned_identity.cursor_pool_worker[0].principal_id
 }
 
+# Apex uploads the generated prompt here. The worker identity can read that
+# container and nothing else on the shared account.
+resource "azurerm_role_assignment" "cursor_prompt_api_blob_contributor" {
+  scope                = azurerm_storage_container.shared["cursor-prompts"].resource_manager_id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azurerm_linux_web_app.main.identity[0].principal_id
+}
+
+resource "azurerm_role_assignment" "cursor_prompt_staging_blob_contributor" {
+  count = var.enable_staging_slot ? 1 : 0
+
+  scope                = azurerm_storage_container.shared["cursor-prompts"].resource_manager_id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azurerm_linux_web_app_slot.staging[0].identity[0].principal_id
+}
+
+resource "azurerm_role_assignment" "cursor_pool_worker_prompt_blob_reader" {
+  count = local.cursor_pool_enabled ? 1 : 0
+
+  scope                = azurerm_storage_container.shared["cursor-prompts"].resource_manager_id
+  role_definition_name = "Storage Blob Data Reader"
+  principal_id         = azurerm_user_assigned_identity.cursor_pool_worker[0].principal_id
+}
+
 resource "azurerm_role_assignment" "cursor_pool_worker_kv_secrets_user" {
   count = local.cursor_pool_enabled ? 1 : 0
 
@@ -107,6 +131,11 @@ resource "azurerm_container_app_job" "cursor_pool_worker" {
         name  = "APPLICATIONINSIGHTS_CONNECTION_STRING"
         value = azurerm_application_insights.main.connection_string
       }
+
+      env {
+        name  = "AZURE_CLIENT_ID"
+        value = azurerm_user_assigned_identity.cursor_pool_worker[0].client_id
+      }
     }
   }
 
@@ -126,5 +155,6 @@ resource "azurerm_container_app_job" "cursor_pool_worker" {
   depends_on = [
     azurerm_role_assignment.cursor_pool_worker_acr_pull,
     azurerm_role_assignment.cursor_pool_worker_kv_secrets_user,
+    azurerm_role_assignment.cursor_pool_worker_prompt_blob_reader,
   ]
 }

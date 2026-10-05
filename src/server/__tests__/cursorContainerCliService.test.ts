@@ -114,7 +114,7 @@ describe('cursor container CLI', () => {
       baseBranch: 'development',
       branchName: 'feature/apex-1-abcdef',
       model: 'composer-2.5',
-      prompt: 'Implement the work item',
+      promptBlobUrl: 'https://stapexdevasync.blob.core.windows.net/cursor-prompts/prompts/abc.txt',
       adoPat: 'secret-pat',
       workItemId: 42,
       workItemTitle: 'Implement login',
@@ -136,8 +136,9 @@ describe('cursor container CLI', () => {
       { name: 'AGENT_AUTHOR_NAME', value: 'Jane Developer' },
       { name: 'AGENT_AUTHOR_EMAIL', value: 'jane@example.com' },
       { name: 'ADO_USER_TOKEN', value: 'developer-token' },
+      { name: 'AGENT_PROMPT_BLOB_URL', value: 'https://stapexdevasync.blob.core.windows.net/cursor-prompts/prompts/abc.txt' },
     ]));
-    expect(container?.env?.some((entry) => entry.name === 'AGENT_SKILL')).toBe(false);
+    expect(container?.env?.some((entry) => entry.name === 'AGENT_PROMPT' || entry.name === 'AGENT_SKILL')).toBe(false);
   });
 
   it('passes the project development skill to the CLI run', () => {
@@ -149,7 +150,7 @@ describe('cursor container CLI', () => {
       baseBranch: 'development',
       branchName: 'feature/apex-1-abcdef',
       model: 'composer-2.5',
-      prompt: 'Implement the work item',
+      promptBlobUrl: 'https://stapexdevasync.blob.core.windows.net/cursor-prompts/prompts/abc.txt',
       adoPat: 'secret-pat',
       skillName: 'dev-orchestrator',
     });

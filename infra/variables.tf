@@ -372,6 +372,7 @@ variable "blob_containers" {
   default = {
     pdf-artifacts  = {}
     repo-grounding = {}
+    cursor-prompts = {}
   }
 }
 

@@ -5,6 +5,7 @@ import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
 import type { CloudAgentActivityEvent } from '../../shared/types/devWorkbench';
+import { uploadCursorPrompt } from './cursorPromptStore';
 
 const execFileAsync = promisify(execFile);
 
@@ -180,7 +181,7 @@ export function buildContainerExecutionTemplate(
     baseBranch: string;
     branchName: string;
     model: string;
-    prompt: string;
+    promptBlobUrl: string;
     adoPat: string;
     workItemId?: number;
     workItemTitle?: string;
@@ -199,6 +200,7 @@ export function buildContainerExecutionTemplate(
     'AGENT_BRANCH',
     'AGENT_MODEL',
     'AGENT_PROMPT',
+    'AGENT_PROMPT_BLOB_URL',
     'AGENT_WORK_ITEM_ID',
     'AGENT_WORK_ITEM_TITLE',
     'AGENT_AUTHOR_NAME',
@@ -212,7 +214,7 @@ export function buildContainerExecutionTemplate(
     { name: 'AGENT_BASE_BRANCH', value: input.baseBranch },
     { name: 'AGENT_BRANCH', value: input.branchName },
     { name: 'AGENT_MODEL', value: input.model },
-    { name: 'AGENT_PROMPT', value: input.prompt },
+    { name: 'AGENT_PROMPT_BLOB_URL', value: input.promptBlobUrl },
     { name: 'ADO_PAT', value: input.adoPat },
   );
   if (input.workItemId) {
@@ -288,6 +290,7 @@ export async function launchCursorContainerCli(input: {
   const image = requireEnv('CURSOR_CONTAINER_JOB_IMAGE');
   const adoPat = requireEnv('ADO_PAT');
   const branchName = branchNameFor(input.workItemId);
+  const promptBlobUrl = await uploadCursorPrompt(input.prompt);
 
   const shown = await az([
     'containerapp', 'job', 'show',
@@ -302,7 +305,7 @@ export async function launchCursorContainerCli(input: {
     baseBranch: input.skillBranch,
     branchName,
     model: input.model,
-    prompt: input.prompt,
+    promptBlobUrl,
     adoPat,
     workItemId: input.workItemId,
     workItemTitle: input.workItemTitle,
