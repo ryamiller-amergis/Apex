@@ -119,6 +119,14 @@ emit_activity "publish:done" "status" "Pushed ${AGENT_BRANCH}" "" "completed"
 
 summary_line="$(tr '\n' ' ' < "${summary_file}" | tr -d '"\\' | cut -c1-1500)"
 rm -f "${summary_file}"
+# Printed before the pull-request call. A failure there must not drop the
+# branch Apex uses to open the pull request itself.
+echo "APEX_BRANCH_PUSHED=${AGENT_BRANCH}"
+echo "APEX_BASE_BRANCH=${AGENT_BASE_BRANCH}"
+echo "APEX_SUMMARY=${summary_line}"
+# Any failure after the push settles the run and exits 0. A non-zero exit
+# would make Azure retry the replica and run the agent again.
+trap finish_run ERR
 
 pr_title="${AGENT_BRANCH}"
 if [ -n "${AGENT_WORK_ITEM_ID:-}" ]; then
@@ -167,16 +175,24 @@ else
   echo "APEX_ACTIVITY {\"id\":\"pr:auth\",\"kind\":\"status\",\"title\":\"No developer token\",\"detail\":\"Opening the pull request as the service account\",\"status\":\"running\"}"
   auth_header="Authorization: Basic $(printf ':%s' "${ADO_PAT}" | base64 -w 0)"
 fi
+# The branch is already on the remote. A failed pull-request call must not
+# exit non-zero: Azure would retry the replica and run the agent again.
+# finish_run prints the CLI exit and APEX_RUN_SETTLED, then exits 0.
+pr_exit=0
 pr="$(curl -fsS \
   -H "${auth_header}" \
   -H "Content-Type: application/json" \
   -d "${body}" \
-  "https://dev.azure.com/${org}/${project}/_apis/git/repositories/${repo}/pullrequests?api-version=7.1")"
-pr_id="$(printf '%s' "${pr}" | jq -r '.pullRequestId // empty')"
+  "https://dev.azure.com/${org}/${project}/_apis/git/repositories/${repo}/pullrequests?api-version=7.1")" || pr_exit=$?
+pr_id=""
+if [ "${pr_exit}" -eq 0 ]; then
+  pr_id="$(printf '%s' "${pr}" | jq -r '.pullRequestId // empty' || true)"
+fi
+if [ "${pr_exit}" -ne 0 ] || [ -z "${pr_id}" ]; then
+  emit_activity "pr:failed" "status" "Could not open the pull request" "Branch ${AGENT_BRANCH} was pushed" "failed"
+  finish_run
+fi
 pr_url="https://dev.azure.com/${org}/${project}/_git/${repo}/pullrequest/${pr_id}"
 emit_activity "pr:done" "status" "Pull request opened" "${pr_url}" "completed"
 echo "APEX_PR_URL=${pr_url}"
-echo "APEX_BRANCH_PUSHED=${AGENT_BRANCH}"
-echo "APEX_BASE_BRANCH=${AGENT_BASE_BRANCH}"
-echo "APEX_SUMMARY=${summary_line}"
 finish_run
