@@ -68,7 +68,10 @@ export type WorkerDeps = Readonly<{
   resolveDeadlineMs?: (specification: ExecutionSpecification) => number;
   maxDeliveryCount?: number;
   sleep?: (ms: number) => Promise<void>;
+  /** Stops the receive loop. Also aborts the run in flight unless `executionSignal` is set. */
   signal?: AbortSignal;
+  /** Aborts the run in flight; lets shutdown stop receiving while the current run finishes. */
+  executionSignal?: AbortSignal;
 }>;
 
 export type WorkerRunOutcome =
@@ -193,13 +196,14 @@ export function createV2Worker(deps: WorkerDeps): V2Worker {
         Math.max(1, remainingMs),
       );
     };
+    const shutdownSignal = deps.executionSignal ?? deps.signal;
     const abortForShutdown = (): void => {
-      deadline.abort(deps.signal?.reason);
+      deadline.abort(shutdownSignal?.reason);
     };
-    if (deps.signal?.aborted) {
+    if (shutdownSignal?.aborted) {
       abortForShutdown();
     } else {
-      deps.signal?.addEventListener('abort', abortForShutdown, { once: true });
+      shutdownSignal?.addEventListener('abort', abortForShutdown, { once: true });
     }
     scheduleDeadline(activeDeadlineMs);
     let heartbeatTimer: ReturnType<typeof setInterval> | null = setInterval(
@@ -286,7 +290,7 @@ export function createV2Worker(deps: WorkerDeps): V2Worker {
     } finally {
       stopHeartbeat();
       if (deadlineTimer) clearTimeout(deadlineTimer);
-      deps.signal?.removeEventListener('abort', abortForShutdown);
+      shutdownSignal?.removeEventListener('abort', abortForShutdown);
     }
   }
 

@@ -798,6 +798,20 @@ Optional Terraform: `enable_ai_platform_v2_runtime = true` **and**
 — see `ai-platform-v2-runtime.tf`, `ai-platform-v2-interactive-runtime.tf`, and
 `terraform.tfvars.example`.
 
+**Document worker scaling:** `ca-apex-ai-runs-documents-v2-{env}` scales from
+`min_replicas` to `ai_platform_v2_documents_max_replicas` on the documents queue
+length (KEDA rule `documents-v2-servicebus-keda`, secret `documents-keda-sb-connection`
+from the queue-scoped Manage SAS `ai-runs-v2-document-keda-manage`, which KEDA uses only
+to poll queue length). Each replica runs one document run at a time. The worker
+completes the queue message once the run starts, so KEDA can pick a busy replica to
+remove. On SIGTERM the worker stops taking messages and lets the current run finish
+for `AI_RUNS_V2_SHUTDOWN_DRAIN_MS` (grace period minus 30 s) before aborting it.
+`azapi_update_resource.ai_platform_v2_documents_scale_timing` sets the termination grace
+period (`ai_platform_v2_documents_termination_grace_seconds`, at most 600) and the
+cooldown (`ai_platform_v2_documents_scale_cooldown_seconds`), which azurerm 3.x cannot
+set. After apply, check that the Container App system logs have no `KEDAScalerFailed` and
+that `az containerapp show` reports both values.
+
 **Split interactive cutover (DEV/PROD):**
 
 1. Drain `ai-runs-v2-fast` and `ai-runs-v2-agentic` queues (must be empty active + DLQ).

@@ -9,12 +9,14 @@ import { resolveWorkerEnvironment } from './entrypointSupport';
 import { isAiRunV2DocumentSpecification } from '../../../shared/types/aiRunV2DocumentSpec';
 import { createDocumentExecute } from './documentExecution';
 import { createV2Worker } from './worker';
+import { createShutdownController, resolveShutdownDrainMs } from './shutdownDrain';
 
 export const executeDocumentWorkload = createDocumentExecute();
 
 export async function startDocumentWorker(): Promise<void> {
   const env = resolveWorkerEnvironment('document');
-  const abort = new AbortController();
+  const drainMs = resolveShutdownDrainMs(process.env.AI_RUNS_V2_SHUTDOWN_DRAIN_MS);
+  const shutdownController = createShutdownController(drainMs);
 
   const worker = createV2Worker({
     bus: createWorkerServiceBusClient({
@@ -43,12 +45,15 @@ export async function startDocumentWorker(): Promise<void> {
       }
       return specification.deadlineMs;
     },
-    signal: abort.signal,
+    signal: shutdownController.receiveSignal,
+    executionSignal: shutdownController.executionSignal,
   });
 
   const shutdown = (signal: string): void => {
-    console.log(`[aiRunsV2Worker/document] shutting down on ${signal}`);
-    abort.abort();
+    console.log(
+      `[aiRunsV2Worker/document] shutting down on ${signal} (drainMs=${drainMs})`,
+    );
+    shutdownController.shutdown();
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));

@@ -467,4 +467,63 @@ describe('V2 worker run loop', () => {
 
     await expect(worker.processOnce()).resolves.toBe('idle');
   });
+
+  describe('shutdown with a separate execution signal', () => {
+    const specification = {
+      read: async () => ({
+        runId: 'run-1',
+        attemptId: 'attempt-1',
+        attemptNumber: 1,
+        workloadLane: 'document',
+      }),
+    };
+
+    it('lets the run in flight finish when only receiving stops', async () => {
+      const { bus, calls } = fakeBus(command());
+      const stopReceiving = new AbortController();
+      const stopExecution = new AbortController();
+      let finish!: () => void;
+      const worker = createV2Worker({
+        bus,
+        execute: () =>
+          new Promise((resolve) => {
+            finish = () => resolve({ files: [] });
+            stopReceiving.abort();
+          }),
+        artifactContainer: 'ai-run-artifacts',
+        containerAppsExecutionId: 'exec-7',
+        specifications: specification,
+        signal: stopReceiving.signal,
+        executionSignal: stopExecution.signal,
+      });
+
+      const outcome = worker.processOnce();
+      await new Promise((resolve) => setImmediate(resolve));
+      finish();
+
+      await expect(outcome).resolves.toBe('completed');
+      expect(calls.results).toEqual([expect.objectContaining({ status: 'completed' })]);
+    });
+
+    it('aborts the run in flight when the execution signal fires', async () => {
+      const { bus, calls } = fakeBus(command());
+      const stopExecution = new AbortController();
+      const worker = createV2Worker({
+        bus,
+        execute: ({ signal }) =>
+          new Promise((_, reject) => {
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+            stopExecution.abort();
+          }),
+        artifactContainer: 'ai-run-artifacts',
+        containerAppsExecutionId: 'exec-7',
+        specifications: specification,
+        signal: new AbortController().signal,
+        executionSignal: stopExecution.signal,
+      });
+
+      await expect(worker.processOnce()).resolves.toBe('failed');
+      expect(calls.results).toEqual([expect.objectContaining({ status: 'failed' })]);
+    });
+  });
 });

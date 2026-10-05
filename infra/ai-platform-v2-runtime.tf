@@ -17,6 +17,12 @@ locals {
     "ca-apex-ai-runs-documents-v2-${var.environment}",
   )
 
+  # The run in flight is aborted 30 s before the platform kill, so it can still publish a
+  # terminal result.
+  ai_platform_v2_documents_shutdown_drain_ms = (
+    (var.ai_platform_v2_documents_termination_grace_seconds - 30) * 1000
+  )
+
   ai_platform_v2_orchestrator_interactive_fast_dispatch_url = (
     local.ai_platform_v2_split_interactive_enabled
     ? local.ai_platform_v2_interactive_dispatch_urls.fast
@@ -217,6 +223,20 @@ resource "azurerm_container_app" "ai_platform_v2_orchestrator" {
   ]
 }
 
+# KEDA reads the queue length through the management API, which needs Manage. azurerm 3.x has no
+# scale-rule identity, so this queue-scoped SAS is used for polling only; the worker still
+# receives with its managed identity. Same pattern as ai-runs-worker.tf and load-test.tf.
+resource "azurerm_servicebus_queue_authorization_rule" "ai_platform_v2_documents_keda" {
+  count = local.ai_platform_v2_runtime_enabled ? 1 : 0
+
+  name     = "ai-runs-v2-document-keda-manage"
+  queue_id = azurerm_servicebus_queue.ai_platform_v2[local.ai_platform_v2_worker_queue_by_identity.document].id
+
+  listen = true
+  send   = true
+  manage = true
+}
+
 resource "azurerm_container_app" "ai_platform_v2_documents" {
   count = local.ai_platform_v2_runtime_enabled ? 1 : 0
 
@@ -244,6 +264,11 @@ resource "azurerm_container_app" "ai_platform_v2_documents" {
     }
   }
 
+  secret {
+    name  = "documents-keda-sb-connection"
+    value = azurerm_servicebus_queue_authorization_rule.ai_platform_v2_documents_keda[0].primary_connection_string
+  }
+
   # The document worker reads the pinned repository only through the repo-read service.
   dynamic "secret" {
     for_each = var.ai_platform_v2_interactive_repo_read_service_token != null ? [1] : []
@@ -256,6 +281,22 @@ resource "azurerm_container_app" "ai_platform_v2_documents" {
   template {
     min_replicas = var.ai_platform_v2_documents_min_replicas
     max_replicas = var.ai_platform_v2_documents_max_replicas
+
+    custom_scale_rule {
+      name             = "documents-v2-servicebus-keda"
+      custom_rule_type = "azure-servicebus"
+
+      metadata = {
+        queueName    = local.ai_platform_v2_worker_queue_by_identity.document
+        namespace    = data.azurerm_servicebus_namespace.ai_platform_v2_host[0].name
+        messageCount = tostring(var.ai_platform_v2_documents_scale_message_count)
+      }
+
+      authentication {
+        secret_name       = "documents-keda-sb-connection"
+        trigger_parameter = "connection"
+      }
+    }
 
     container {
       name   = "ai-runs-documents-v2"
@@ -286,6 +327,10 @@ resource "azurerm_container_app" "ai_platform_v2_documents" {
       env {
         name  = "AI_PLATFORM_V2_ARTIFACT_CONTAINER"
         value = local.ai_platform_v2_artifact_container
+      }
+      env {
+        name  = "AI_RUNS_V2_SHUTDOWN_DRAIN_MS"
+        value = tostring(local.ai_platform_v2_documents_shutdown_drain_ms)
       }
 
       dynamic "env" {
@@ -332,4 +377,26 @@ resource "azurerm_container_app" "ai_platform_v2_documents" {
     azurerm_role_assignment.ai_platform_v2_document_acr_pull,
     azurerm_role_assignment.ai_platform_v2_document_kv_secrets_user,
   ]
+}
+
+# azurerm 3.x cannot set the termination grace period or the scale cooldown. Both matter
+# because a run claims its queue message at start: scale-in is decided on an empty queue
+# while replicas are still busy. An azurerm update that rewrites the template drops these,
+# and the next apply restores them.
+resource "azapi_update_resource" "ai_platform_v2_documents_scale_timing" {
+  count = local.ai_platform_v2_runtime_enabled ? 1 : 0
+
+  type        = "Microsoft.App/containerApps@2025-01-01"
+  resource_id = azurerm_container_app.ai_platform_v2_documents[0].id
+
+  body = {
+    properties = {
+      template = {
+        terminationGracePeriodSeconds = var.ai_platform_v2_documents_termination_grace_seconds
+        scale = {
+          cooldownPeriod = var.ai_platform_v2_documents_scale_cooldown_seconds
+        }
+      }
+    }
+  }
 }
