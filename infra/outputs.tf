@@ -332,6 +332,30 @@ output "ai_runs_api_app_setting_names" {
   }
 }
 
+# ---------------------------------------------------------------------------
+# My Work Cursor worker Job (null while enable_cursor_pool_workers is false)
+# ---------------------------------------------------------------------------
+
+output "cursor_pool_name" {
+  description = "Idle template pool name. Apex overrides the command per execution."
+  value       = local.cursor_pool_enabled ? local.cursor_pool_name : null
+}
+
+output "cursor_pool_worker_job_name" {
+  description = "Manual Container Apps Job Apex starts for each My Work cloud-agent run."
+  value       = try(azurerm_container_app_job.cursor_pool_worker[0].name, null)
+}
+
+output "cursor_pool_worker_job_id" {
+  description = "Resource ID of the My Work Cursor worker Job."
+  value       = try(azurerm_container_app_job.cursor_pool_worker[0].id, null)
+}
+
+output "cursor_pool_worker_identity_client_id" {
+  description = "Managed identity client ID used by Cursor worker executions."
+  value       = try(azurerm_user_assigned_identity.cursor_pool_worker[0].client_id, null)
+}
+
 output "ai_runs_callback_token_audience" {
   description = "AAD App ID URI for MI ingest JWTs when enable_ai_runs_entra_app is true"
   value       = var.enable_ai_runs_entra_app || var.ai_runs_callback_token_audience != null ? local.ai_runs_ingest_identifier_uri : null
