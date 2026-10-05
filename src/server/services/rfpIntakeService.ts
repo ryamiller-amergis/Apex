@@ -407,7 +407,20 @@ async function startEvaluation(rfpId: string): Promise<void> {
   await autoStartEvaluation(rfpId);
 }
 
-export async function createRequest(ownerId: string, payload: RfpIntakePayload): Promise<RfpRequest> {
+async function abandonCreatedRequest(rfpId: string): Promise<void> {
+  try {
+    await fs.rm(attachmentDir(rfpId), { recursive: true, force: true });
+  } catch {
+    // Directory may not exist if no bytes were written.
+  }
+  await db.delete(rfpRequests).where(eq(rfpRequests.id, rfpId));
+}
+
+export async function createRequest(
+  ownerId: string,
+  payload: RfpIntakePayload,
+  files: Array<RfpAttachmentCandidate & { buffer: Buffer }> = [],
+): Promise<RfpRequest> {
   const errors = validateRfpIntakePayload(payload, { requireScaleAndAi: true });
   if (errors.length > 0) {
     throw new RfpIntakeError(errors.join('; '), 400, 'VALIDATION');
@@ -427,6 +440,18 @@ export async function createRequest(ownerId: string, payload: RfpIntakePayload):
   }
 
   await appendEvent(row.id, 'submitted', ownerId, { title: row.title });
+  try {
+    for (const file of files) {
+      await addAttachment(row.id, ownerId, file);
+    }
+  } catch (err) {
+    try {
+      await abandonCreatedRequest(row.id);
+    } catch {
+      // Keep the original persist error; rollback is best-effort.
+    }
+    throw err;
+  }
   await startEvaluation(row.id);
   const created = await getRequestById(row.id);
   return created ?? mapRequest(row);

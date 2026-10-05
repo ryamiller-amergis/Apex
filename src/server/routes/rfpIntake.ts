@@ -187,21 +187,6 @@ function filesFromRequest(req: import('express').Request): Express.Multer.File[]
   return [];
 }
 
-async function persistUploadedFiles(
-  rfpId: string,
-  actorId: string,
-  files: Express.Multer.File[],
-): Promise<void> {
-  for (const file of files) {
-    await addAttachment(rfpId, actorId, {
-      filename: file.originalname,
-      contentType: file.mimetype,
-      sizeBytes: file.size,
-      buffer: file.buffer,
-    });
-  }
-}
-
 async function notifySubmission(created: { id: string; title: string }): Promise<void> {
   const recipients = await resolveRfpSubmissionRecipients();
   for (const userId of recipients) {
@@ -309,10 +294,16 @@ router.post('/requests', ...ownerSubmit, acceptAttachments, async (req, res, nex
       return res.status(400).json({ error: fileErrors.join('; '), fields: fieldErrors(fileErrors) });
     }
 
-    const created = await createRequest(userId, payload);
-    if (files.length > 0) {
-    await persistUploadedFiles(created.id, userId, files);
-    }
+    const created = await createRequest(
+      userId,
+      payload,
+      files.map((file) => ({
+        filename: file.originalname,
+        contentType: file.mimetype,
+        sizeBytes: file.size,
+        buffer: file.buffer,
+      })),
+    );
     await notifySubmission(created);
     return res.status(201).json(created);
   } catch (err) {

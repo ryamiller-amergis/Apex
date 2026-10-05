@@ -155,6 +155,7 @@ describe('RFP intake self-scoped routes', () => {
           title: VALID_INTAKE.title,
           audience: 'internal',
         }),
+        [],
       );
       const createArg = mockedCreate.mock.calls[0][1] as unknown as Record<string, unknown>;
       expect(createArg.ownerId).toBeUndefined();
@@ -189,6 +190,49 @@ describe('RFP intake self-scoped routes', () => {
       expect(response.status).toBe(400);
       expect(response.body.fields.dataSensitivity).toMatch(/invalid/i);
       expect(mockedCreate).not.toHaveBeenCalled();
+    });
+
+    it('passes valid attachments into createRequest', async () => {
+      const response = await request(buildApp())
+        .post('/api/rfp-intake/requests')
+        .field('title', VALID_INTAKE.title)
+        .field('stakeholder', VALID_INTAKE.stakeholder)
+        .field('request', VALID_INTAKE.request)
+        .field('problem', VALID_INTAKE.problem)
+        .field('audience', VALID_INTAKE.audience)
+        .field('dataSensitivity', VALID_INTAKE.dataSensitivity)
+        .field('existingSolution', VALID_INTAKE.existingSolution)
+        .field('expectedUsers', VALID_INTAKE.expectedUsers)
+        .field('aiInApp', VALID_INTAKE.aiInApp)
+        .attach('attachments', Buffer.from('%PDF'), { filename: 'spec.pdf', contentType: 'application/pdf' });
+
+      expect(response.status).toBe(201);
+      expect(mockedCreate).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({ title: VALID_INTAKE.title }),
+        [expect.objectContaining({ filename: 'spec.pdf', contentType: 'application/pdf', sizeBytes: 4 })],
+      );
+      expect(mockedAddAttachment).not.toHaveBeenCalled();
+    });
+
+    it('does not notify when createRequest fails while storing attachments', async () => {
+      mockedCreate.mockRejectedValue(new Error('ENOSPC'));
+
+      const response = await request(buildApp())
+        .post('/api/rfp-intake/requests')
+        .field('title', VALID_INTAKE.title)
+        .field('stakeholder', VALID_INTAKE.stakeholder)
+        .field('request', VALID_INTAKE.request)
+        .field('problem', VALID_INTAKE.problem)
+        .field('audience', VALID_INTAKE.audience)
+        .field('dataSensitivity', VALID_INTAKE.dataSensitivity)
+        .field('existingSolution', VALID_INTAKE.existingSolution)
+        .field('expectedUsers', VALID_INTAKE.expectedUsers)
+        .field('aiInApp', VALID_INTAKE.aiInApp)
+        .attach('attachments', Buffer.from('%PDF'), { filename: 'spec.pdf', contentType: 'application/pdf' });
+
+      expect(response.status).toBe(500);
+      expect(mockedNotify).not.toHaveBeenCalled();
     });
 
     it('VT-04 AC-3 rejects an unsupported attachment without creating an RFP', async () => {
