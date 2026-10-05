@@ -886,6 +886,7 @@ describe('getCloudAgentRunStatus check projection (TBI-005 DoD-0/DoD-1/DoD-2; PB
         resultText: null,
         branchName: 'feature/apex-42-abc',
         summary: 'Added the login form.',
+        settled: true,
       }),
       openCloudAgentPullRequest,
     });
@@ -909,6 +910,27 @@ describe('getCloudAgentRunStatus check projection (TBI-005 DoD-0/DoD-1/DoD-2; PB
       prUrl: opened,
       finishedWithoutPr: false,
     }));
+  });
+
+  it('leaves a pushed branch alone until the run has settled', async () => {
+    mockDevSessionFindFirst.mockResolvedValue(linkableSession({ currentRunPrUrl: null }));
+    mockAgentRunFindFirst.mockResolvedValue(linkableRun({ status: 'running' }));
+    const openCloudAgentPullRequest = jest.fn();
+    const deps = makeDeps({
+      getCloudAgentRun: jest.fn().mockResolvedValue({
+        status: 'running',
+        prUrl: null,
+        branchName: 'feature/apex-42-abc',
+        settled: false,
+      }),
+      openCloudAgentPullRequest,
+    });
+
+    const summary = await getCloudAgentRunStatus(SESSION_ID, USER_ID, deps, 'user-token');
+
+    expect(openCloudAgentPullRequest).not.toHaveBeenCalled();
+    expect(mockMarkTerminal).not.toHaveBeenCalled();
+    expect(summary).toEqual(expect.objectContaining({ status: 'running' }));
   });
 
   it('completes without a pull request when the agent changed no files', async () => {
@@ -1399,6 +1421,24 @@ describe('reconcileRunningCloudAgentRuns', () => {
       cloudPrUrl: PR_URL,
     }));
     expect(setImmediateSpy).toHaveBeenCalled();
+  });
+
+  it('leaves a succeeded execution alone when the branch was pushed and the pull request is missing', async () => {
+    mockLiveRows([liveExecution()]);
+    const getCloudAgentRun = jest.fn().mockResolvedValue(observation({
+      status: 'finished',
+      prUrl: null,
+      branchName: 'feature/apex-42-abc123',
+    }));
+    const openCloudAgentPullRequest = jest.fn();
+
+    await reconcileRunningCloudAgentRuns(makeDeps({
+      getCloudAgentRun,
+      openCloudAgentPullRequest,
+    }));
+
+    expect(mockMarkTerminal).not.toHaveBeenCalled();
+    expect(openCloudAgentPullRequest).not.toHaveBeenCalled();
   });
 
   it('leaves a still-running execution alone', async () => {

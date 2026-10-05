@@ -56,6 +56,19 @@ describe('cursor container CLI', () => {
     })).toEqual({ status: 'running', resultText: null });
   });
 
+  it('fails a settled run when the CLI exited non-zero before a pull request exists', () => {
+    expect(resolveContainerObservation({
+      jobStatus: 'Running',
+      prUrl: null,
+      noChanges: false,
+      agentExitCode: 1,
+      settled: true,
+    })).toEqual({
+      status: 'failed',
+      resultText: 'The Cursor CLI exited with code 1.',
+    });
+  });
+
   it('fails a settled run when the CLI exited non-zero, and keeps the pull request', () => {
     expect(resolveContainerObservation({
       jobStatus: 'Running',

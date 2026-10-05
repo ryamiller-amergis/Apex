@@ -56,7 +56,10 @@ export function resolveContainerObservation(input: {
   if (input.noChanges && status !== 'running' && status !== 'cancelled') {
     resultText = 'The agent finished without changing files.';
   }
-  if (input.agentExitCode && status !== 'cancelled' && outcomeReady && (published || status !== 'running')) {
+  // A settled non-zero CLI exit fails the run even while the job is still
+  // sleeping and no pull request exists yet. Otherwise a pushed branch is
+  // recorded as success and the later exit code can never change it.
+  if (input.agentExitCode && status !== 'cancelled' && outcomeReady) {
     status = 'failed';
     resultText = input.prUrl
       ? `The Cursor CLI exited with code ${input.agentExitCode}. Its partial changes are in the pull request.`
@@ -340,6 +343,7 @@ export async function getCursorContainerCliRun(executionName: string): Promise<{
   baseBranch: string | null;
   summary: string | null;
   noChanges: boolean;
+  settled: boolean;
 }> {
   const jobName = requireEnv('CURSOR_CONTAINER_JOB_NAME');
   const resourceGroup = requireEnv('CURSOR_CONTAINER_JOB_RESOURCE_GROUP');
@@ -386,6 +390,7 @@ export async function getCursorContainerCliRun(executionName: string): Promise<{
     baseBranch,
     summary,
     noChanges,
+    settled,
   };
 }
 

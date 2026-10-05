@@ -80,9 +80,19 @@ if [ "${agent_exit}" -ne 0 ]; then
   emit_activity "agent:exit" "status" "Agent exited with code ${agent_exit}" "Publishing any changes it made" "failed"
 fi
 
+# Set only after git push succeeds. finish_run prints the branch with the CLI
+# exit and the settled line, so a poll cannot treat the push as success first.
+branch_pushed=0
+summary_line=""
+
 finish_run() {
   if [ "${agent_exit}" -ne 0 ]; then
     echo "APEX_AGENT_EXIT=${agent_exit}"
+  fi
+  if [ "${branch_pushed}" -eq 1 ]; then
+    echo "APEX_BRANCH_PUSHED=${AGENT_BRANCH}"
+    echo "APEX_BASE_BRANCH=${AGENT_BASE_BRANCH}"
+    echo "APEX_SUMMARY=${summary_line}"
   fi
   # Printed last. Apex waits for this before it treats the run as finished,
   # so a poll cannot record success in the gap before APEX_AGENT_EXIT.
@@ -119,13 +129,10 @@ emit_activity "publish:done" "status" "Pushed ${AGENT_BRANCH}" "" "completed"
 
 summary_line="$(tr '\n' ' ' < "${summary_file}" | tr -d '"\\' | cut -c1-1500)"
 rm -f "${summary_file}"
-# Printed before the pull-request call. A failure there must not drop the
-# branch Apex uses to open the pull request itself.
-echo "APEX_BRANCH_PUSHED=${AGENT_BRANCH}"
-echo "APEX_BASE_BRANCH=${AGENT_BASE_BRANCH}"
-echo "APEX_SUMMARY=${summary_line}"
+branch_pushed=1
 # Any failure after the push settles the run and exits 0. A non-zero exit
-# would make Azure retry the replica and run the agent again.
+# would make Azure retry the replica and run the agent again. The branch
+# markers are printed inside finish_run, after the CLI exit.
 trap finish_run ERR
 
 pr_title="${AGENT_BRANCH}"

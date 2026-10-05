@@ -812,6 +812,18 @@ export async function reconcileRunningCloudAgentRuns(
         });
         const mapped = mapObservedStatus(observed.status);
         if (!mapped || !isAgentRunTerminalStatus(mapped)) continue;
+        // The worker pushed the branch and exited 0 after the pull-request
+        // call failed. Leave the run open so the page poll can open the pull
+        // request. Marking it completed here is final, and this sweep does
+        // not have the developer's token.
+        if (
+          mapped === 'completed'
+          && !observed.prUrl
+          && !observed.noChanges
+          && observed.branchName
+        ) {
+          continue;
+        }
         await applyCloudAgentCompletion({
           runId: row.id,
           sessionId,
@@ -1137,7 +1149,11 @@ export async function getCloudAgentRunStatus(
       const sourceBranch = observed.noChanges
         ? null
         : observed.branchName ?? run.cloudBranchName;
-      if (!prUrl && sourceBranch && mapped !== 'failed' && mapped !== 'cancelled') {
+      // While the job is still running, wait for APEX_RUN_SETTLED. That line
+      // follows the CLI exit, so a pushed branch cannot be recorded as success
+      // before a non-zero exit fails the run.
+      const readyForPullRequest = mapped !== 'running' || observed.settled === true;
+      if (!prUrl && sourceBranch && readyForPullRequest && mapped !== 'failed' && mapped !== 'cancelled') {
         if (!adoUserToken && process.env.NODE_ENV === 'production') {
           mapped = 'running';
         } else {

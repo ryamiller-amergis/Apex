@@ -46,6 +46,8 @@ export interface CloudAgentRunObservation {
   summary?: string | null;
   /** The agent changed no files, so no branch was pushed. */
   noChanges?: boolean;
+  /** `APEX_RUN_SETTLED` is in the logs, after the CLI exit and branch markers. */
+  settled?: boolean;
 }
 
 export function toCloudRepoUrl(remoteUrl: string): string {
