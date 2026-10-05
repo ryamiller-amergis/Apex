@@ -19,6 +19,31 @@ const DS_REPO    = process.env.MAXVIEW_DS_REPO    ?? 'MaxView';
 const DS_PROJECT = process.env.MAXVIEW_DS_PROJECT ?? 'MaxView';
 const CATALOG_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
+/** Optional override so inventory/page fetch uses a project's own ADO repo instead of MaxView. */
+export interface DesignSystemAdoTarget {
+  provider?: 'ado' | 'github';
+  adoProject: string;
+  repo: string;
+  branch?: string;
+  inventoryPath?: string;
+}
+
+function adoRepo(target?: DesignSystemAdoTarget): { adoProject: string; repo: string } {
+  return {
+    adoProject: target?.adoProject ?? DS_PROJECT,
+    repo: target?.repo ?? DS_REPO,
+  };
+}
+
+function isMaxViewTarget(target?: DesignSystemAdoTarget): boolean {
+  return !target || (target.repo === DS_REPO && target.adoProject === DS_PROJECT);
+}
+
+function adoItemPath(path: string): string {
+  const trimmed = path.trim().replace(/\\/g, '/');
+  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+}
+
 /**
  * Repo-relative root for the app's component tree. The screen inventory lists
  * "Component / File" paths relative to this root (e.g. MaxView lists `components/…`
@@ -81,8 +106,8 @@ const TOKEN_PATHS = [
 ];
 
 /** Folders searched (in order) to locate a component by name. Includes the ClientApp root when set. */
-function componentIndexPaths(): string[] {
-  const root = clientAppRoot();
+function componentIndexPaths(target?: DesignSystemAdoTarget): string[] {
+  const root = isMaxViewTarget(target) ? clientAppRoot() : '';
   return [
     ...(root ? [`${root}/components`] : []),
     '/src/client/components',
@@ -116,12 +141,18 @@ let catalogCache: DesignSystemCatalog | null = null;
 
 /* ── ADO file fetch helper ────────────────────────────────── */
 
-function fetchAdoFile(orgUrl: string, pat: string, path: string): Promise<string> {
+function fetchAdoFile(
+  orgUrl: string,
+  pat: string,
+  path: string,
+  target?: DesignSystemAdoTarget,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const token = Buffer.from(`:${pat}`).toString('base64');
     const encodedPath = encodeURIComponent(path);
+    const { adoProject, repo } = adoRepo(target);
     const apiUrl = new URL(
-      `${orgUrl}/${DS_PROJECT}/_apis/git/repositories/${DS_REPO}/items?path=${encodedPath}&api-version=7.1&$format=text`
+      `${orgUrl}/${adoProject}/_apis/git/repositories/${repo}/items?path=${encodedPath}&api-version=7.1&$format=text`
     );
     const options: https.RequestOptions = {
       hostname: apiUrl.hostname,
@@ -153,14 +184,16 @@ function fetchAdoTree(
   pat: string,
   folderPath: string,
   recursionLevel: 'OneLevel' | 'Full' = 'OneLevel',
+  target?: DesignSystemAdoTarget,
 ): Promise<string[]> {
   return new Promise((resolve, reject) => {
     const token = Buffer.from(`:${pat}`).toString('base64');
     const encodedPath = encodeURIComponent(folderPath);
+    const { adoProject, repo } = adoRepo(target);
     // ADO's items API rejects folder recursion via `path=` with a 400; folder listings
     // must use `scopePath=` for recursionLevel to take effect.
     const apiUrl = new URL(
-      `${orgUrl}/${DS_PROJECT}/_apis/git/repositories/${DS_REPO}/items?scopePath=${encodedPath}&recursionLevel=${recursionLevel}&api-version=7.1`
+      `${orgUrl}/${adoProject}/_apis/git/repositories/${repo}/items?scopePath=${encodedPath}&recursionLevel=${recursionLevel}&api-version=7.1`
     );
     const options: https.RequestOptions = {
       hostname: apiUrl.hostname,
@@ -662,10 +695,10 @@ function parseScreenInventory(markdown: string): ParsedScreenRow[] {
  * Root a (possibly relative) inventory "Component / File" token under CLIENTAPP_ROOT.
  * Absolute tokens (already starting with "/") are returned unchanged.
  */
-function rootClientAppPath(token: string): string {
+function rootClientAppPath(token: string, target?: DesignSystemAdoTarget): string {
   if (token.startsWith('/')) return token;
   const clean = token.replace(/^\.?\//, '');
-  const root = clientAppRoot();
+  const root = isMaxViewTarget(target) ? clientAppRoot() : '';
   return root ? `${root}/${clean}` : `/${clean}`;
 }
 
@@ -683,6 +716,7 @@ async function fetchSourceWithExtensions(
   orgUrl: string,
   pat: string,
   pathNoExt: string,
+  target?: DesignSystemAdoTarget,
 ): Promise<{ path: string; src: string } | null> {
   // Try .ts/.tsx first, then .js/.jsx so resolution works for both TypeScript apps
   // and JavaScript apps (e.g. MaxView's ClientApp is predominantly .js/.jsx).
@@ -695,7 +729,7 @@ async function fetchSourceWithExtensions(
 
   for (const candidate of candidates) {
     try {
-      const src = await fetchAdoFile(orgUrl, pat, candidate);
+      const src = await fetchAdoFile(orgUrl, pat, candidate, target);
       if (src.trim()) return { path: candidate, src };
     } catch {
       // try next candidate
@@ -705,16 +739,21 @@ async function fetchSourceWithExtensions(
 }
 
 /** Locate a component file by basename or component name across the component trees. */
-async function findComponentPath(orgUrl: string, pat: string, token: string): Promise<string | null> {
+async function findComponentPath(
+  orgUrl: string,
+  pat: string,
+  token: string,
+  target?: DesignSystemAdoTarget,
+): Promise<string | null> {
   // Match on the basename without extension so we resolve a component regardless of
   // whether it ships as .tsx/.ts/.jsx/.js (MaxView's ClientApp uses .js/.jsx).
   const rawBase = token.split('/').pop() ?? token;
   const wantStem = rawBase.replace(/\.(tsx?|jsx?)$/, '').toLowerCase();
   const exts = ['tsx', 'ts', 'jsx', 'js'];
 
-  for (const folder of componentIndexPaths()) {
+  for (const folder of componentIndexPaths(target)) {
     try {
-      const paths = await fetchAdoTree(orgUrl, pat, folder, 'Full');
+      const paths = await fetchAdoTree(orgUrl, pat, folder, 'Full', target);
       const hit = paths.find(p => exts.some(ext => p.toLowerCase().endsWith(`/${wantStem}.${ext}`)));
       if (hit) return hit;
     } catch (e: any) {
@@ -728,20 +767,30 @@ async function findComponentPath(orgUrl: string, pat: string, token: string): Pr
  * Resolve a route to a page component ADO path. Prefers the clientapp-screens.md
  * inventory (Route → Component/File); falls back to App.tsx routes / component folder.
  */
-async function resolvePageFilePath(orgUrl: string, pat: string, route: string): Promise<string | null> {
+async function resolvePageFilePath(
+  orgUrl: string,
+  pat: string,
+  route: string,
+  target?: DesignSystemAdoTarget,
+): Promise<string | null> {
   // 1) Inventory table lookup.
+  const inventoryPath = target?.inventoryPath?.trim()
+    ? adoItemPath(target.inventoryPath)
+    : (target ? null : SCREENS_INVENTORY_PATH);
   try {
-    const md = await fetchAdoFile(orgUrl, pat, SCREENS_INVENTORY_PATH);
-    const match = parseScreenInventory(md).find(r => routesEqual(r.route, route));
-    if (match?.file) {
-      const token = extractFileToken(match.file);
-      if (token) {
-        if (token.includes('/')) {
-          const direct = await fetchSourceWithExtensions(orgUrl, pat, rootClientAppPath(token));
-          if (direct) return direct.path;
+    if (inventoryPath) {
+      const md = await fetchAdoFile(orgUrl, pat, inventoryPath, target);
+      const match = parseScreenInventory(md).find(r => routesEqual(r.route, route));
+      if (match?.file) {
+        const token = extractFileToken(match.file);
+        if (token) {
+          if (token.includes('/')) {
+            const direct = await fetchSourceWithExtensions(orgUrl, pat, rootClientAppPath(token, target), target);
+            if (direct) return direct.path;
+          }
+          const located = await findComponentPath(orgUrl, pat, token, target);
+          if (located) return located;
         }
-        const located = await findComponentPath(orgUrl, pat, token);
-        if (located) return located;
       }
     }
   } catch (e: any) {
@@ -754,7 +803,7 @@ async function resolvePageFilePath(orgUrl: string, pat: string, route: string): 
     const camel = slug.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     const pascal = camel.charAt(0).toUpperCase() + camel.slice(1);
     for (const guess of [pascal, `${pascal}View`, `${pascal}Page`]) {
-      const located = await findComponentPath(orgUrl, pat, guess);
+      const located = await findComponentPath(orgUrl, pat, guess, target);
       if (located) return located;
     }
   }
@@ -815,12 +864,18 @@ function matchesKeywords(pathOrName: string, keywords: Set<string>): boolean {
  * keywords are also seeded. Returns a concatenated, delimited text block capped at
  * MAX_PAGE_CONTEXT_BYTES. Returns '' on any failure (non-fatal).
  */
-export async function fetchExistingPageContext(route: string, featureText?: string): Promise<string> {
+export async function fetchExistingPageContext(
+  route: string,
+  featureText?: string,
+  target?: DesignSystemAdoTarget,
+): Promise<string> {
   if (!route?.trim()) return '';
+  // GitHub EXTEND uses the screenshot + inventory; page-source tree walk is ADO-only.
+  if (target?.provider === 'github') return '';
 
   const keywords = featureText ? extractKeywords(featureText) : new Set<string>();
   const keywordSig = [...keywords].sort((a, b) => a.localeCompare(b)).join(',');
-  const cacheKey = `${normaliseRoute(route)}::${keywordSig}`;
+  const cacheKey = `${target?.repo ?? 'maxview'}::${normaliseRoute(route)}::${keywordSig}`;
   const cached = pageContextCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < PAGE_CONTEXT_TTL_MS) {
     return cached.context;
@@ -835,7 +890,7 @@ export async function fetchExistingPageContext(route: string, featureText?: stri
 
   let pagePath: string | null = null;
   try {
-    pagePath = await resolvePageFilePath(orgUrl, pat, route);
+    pagePath = await resolvePageFilePath(orgUrl, pat, route, target);
   } catch (e: any) {
     console.warn(`[designSystemService] fetchExistingPageContext: resolve failed for ${route} — ${e.message}`);
   }
@@ -844,7 +899,7 @@ export async function fetchExistingPageContext(route: string, featureText?: stri
     return '';
   }
 
-  const page = await fetchSourceWithExtensions(orgUrl, pat, pagePath);
+  const page = await fetchSourceWithExtensions(orgUrl, pat, pagePath, target);
   if (!page) {
     console.warn(`[designSystemService] fetchExistingPageContext: could not fetch source at ${pagePath}`);
     return '';
@@ -882,13 +937,13 @@ export async function fetchExistingPageContext(route: string, featureText?: stri
   // they are not a clean relative-import chain from the page file.
   if (keywords.size > 0) {
     try {
-      const inventory = await getScreenInventory();
+      const inventory = await getScreenInventory(target);
       const row = inventory.find(s => routesEqual(s.route, route));
       const seedNames = (row?.keyComponents ?? []).filter(kc => matchesKeywords(kc, keywords));
       const seeds = await Promise.allSettled(
         seedNames.map(async name => {
-          const located = await findComponentPath(orgUrl, pat, name);
-          return located ? fetchSourceWithExtensions(orgUrl, pat, located) : null;
+          const located = await findComponentPath(orgUrl, pat, name, target);
+          return located ? fetchSourceWithExtensions(orgUrl, pat, located, target) : null;
         }),
       );
       for (const result of seeds) {
@@ -927,7 +982,7 @@ export async function fetchExistingPageContext(route: string, featureText?: stri
 
     const fetched = await Promise.allSettled(
       entries.map(async ([ref, depth]) => {
-        const r = await fetchSourceWithExtensions(orgUrl, pat, ref);
+        const r = await fetchSourceWithExtensions(orgUrl, pat, ref, target);
         return r ? { path: r.path, src: r.src, depth } : null;
       }),
     );
@@ -965,7 +1020,7 @@ interface ScreenInventoryCacheEntry {
   fetchedAt: number;
 }
 
-let screenInventoryCache: ScreenInventoryCacheEntry | null = null;
+const screenInventoryCache = new Map<string, ScreenInventoryCacheEntry>();
 
 /** Map an internal parsed row to the shared, public ScreenInventoryRoute shape. */
 function toScreenInventoryRoute(r: ParsedScreenRow): ScreenInventoryRoute {
@@ -980,28 +1035,49 @@ function toScreenInventoryRoute(r: ParsedScreenRow): ScreenInventoryRoute {
 }
 
 /**
- * Fetch and parse the clientapp-screens.md inventory (Route → Component/File → Purpose).
+ * Fetch and parse a screen-inventory markdown table (Route → Component/File → Purpose).
+ * Pass `target` to read a project's own inventory; omit it to use the MaxView default.
  * Returns [] when ADO creds are missing or the inventory cannot be fetched (non-fatal).
  * Cached for CATALOG_TTL_MS.
  */
-export async function getScreenInventory(): Promise<ScreenInventoryRoute[]> {
-  const now = Date.now();
-  if (screenInventoryCache && now - screenInventoryCache.fetchedAt < CATALOG_TTL_MS) {
-    return screenInventoryCache.rows.map(toScreenInventoryRoute);
-  }
+export async function getScreenInventory(target?: DesignSystemAdoTarget): Promise<ScreenInventoryRoute[]> {
+  if (target && !target.inventoryPath?.trim()) return [];
 
-  const orgUrl = process.env.ADO_ORG;
-  const pat = process.env.ADO_PAT;
-  if (!orgUrl || !pat) {
-    console.warn('[designSystemService] getScreenInventory: ADO_ORG or ADO_PAT not set — returning empty inventory');
-    return [];
+  const now = Date.now();
+  const inventoryPath = target?.inventoryPath?.trim()
+    ? adoItemPath(target.inventoryPath)
+    : SCREENS_INVENTORY_PATH;
+  const cacheKey = target
+    ? `${target.provider ?? 'ado'}:${target.adoProject}/${target.repo}/${target.branch ?? ''}:${inventoryPath}`
+    : 'maxview-default';
+  const cached = screenInventoryCache.get(cacheKey);
+  if (cached && now - cached.fetchedAt < CATALOG_TTL_MS) {
+    return cached.rows.map(toScreenInventoryRoute);
   }
 
   try {
-    const md = await fetchAdoFile(orgUrl, pat, SCREENS_INVENTORY_PATH);
+    let md = '';
+    if (target?.provider === 'github') {
+      const { getSkillFile } = await import('./skillCatalogFacade');
+      md = await getSkillFile(
+        '',
+        target.repo,
+        inventoryPath.replace(/^\//, ''),
+        target.branch ?? 'main',
+        'github',
+      );
+    } else {
+      const orgUrl = process.env.ADO_ORG;
+      const pat = process.env.ADO_PAT;
+      if (!orgUrl || !pat) {
+        console.warn('[designSystemService] getScreenInventory: ADO_ORG or ADO_PAT not set — returning empty inventory');
+        return [];
+      }
+      md = await fetchAdoFile(orgUrl, pat, inventoryPath, target);
+    }
     const rows = parseScreenInventory(md);
-    screenInventoryCache = { rows, fetchedAt: now };
-    console.log(`[designSystemService] getScreenInventory: ${rows.length} screen(s) loaded`);
+    screenInventoryCache.set(cacheKey, { rows, fetchedAt: now });
+    console.log(`[designSystemService] getScreenInventory: ${rows.length} screen(s) loaded (${cacheKey})`);
     return rows.map(toScreenInventoryRoute);
   } catch (e: any) {
     console.warn(`[designSystemService] getScreenInventory: failed — ${e.message}`);
@@ -1165,5 +1241,5 @@ export async function inferRoutesForBacklog(
 export function clearDesignSystemCache(): void {
   catalogCache = null;
   pageContextCache.clear();
-  screenInventoryCache = null;
+  screenInventoryCache.clear();
 }

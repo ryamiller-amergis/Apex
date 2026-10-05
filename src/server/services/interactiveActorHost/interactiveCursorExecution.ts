@@ -15,8 +15,21 @@ import type {
   WorkerCursorExecution,
   WorkerCursorExecutionRun,
 } from '../aiRunsWorker/cursorExecution';
-import type { LocalCheckoutReader } from '../localCheckoutReader';
+import type { RepoReader } from '../../../shared/types/repoReader';
 import { createNativeReadTools } from '../nativeReadToolAdapter';
+import { buildCursorModelSelection } from '../agentEffortResolver';
+
+/**
+ * The remote agent is gone — reaped after an idle gap, or not visible under the
+ * resolved `cwd`. Matched structurally rather than with `instanceof` because the
+ * error crosses the actor-host transport boundary, where the class identity is
+ * lost but the stable `agent_not_found` code survives.
+ */
+function isAgentNotFound(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const { code, name } = error as { code?: unknown; name?: unknown };
+  return code === 'agent_not_found' || name === 'AgentNotFoundError';
+}
 
 let actorStore: JsonlLocalAgentStore | null = null;
 let actorStoreDir: string | null = null;
@@ -36,13 +49,16 @@ export interface InteractiveCursorAgentHandle {
   agentId: string | null;
   model: string;
   workspaceRef: string;
-  send(prompt: string): Promise<WorkerCursorExecutionRun>;
+  send(
+    prompt: string,
+    options?: { onDelta?(update: unknown): Promise<void> | void },
+  ): Promise<WorkerCursorExecutionRun>;
   dispose(): Promise<void>;
 }
 
 export async function acquireInteractiveCursorAgent(
   snapshot: Readonly<ExecutionSnapshot>,
-  checkout: LocalCheckoutReader,
+  checkout: RepoReader,
   options: { resumeAgentId?: string | null } = {},
 ): Promise<InteractiveCursorAgentHandle> {
   // The checkout must already be open; execution cannot begin otherwise.
@@ -64,35 +80,57 @@ export async function acquireInteractiveCursorAgent(
       'false',
     ...(store ? { store } : {}),
   } satisfies LocalAgentOptions;
-  // The interactive host uses only checkout-backed read tools and never
+  // The interactive host uses only RepoReader-backed read tools and never
   // resolves live repository MCP servers.
-  const agent = resumeAgentId
-    ? await Agent.resume(resumeAgentId, {
-        apiKey,
-        model: { id: snapshot.model },
-        local,
-        mcpServers: {},
-      })
-    : await Agent.create({
-        apiKey,
-        model: { id: snapshot.model },
-        local,
-        mcpServers: {},
-      });
+  const agentOptions = {
+    apiKey,
+    model: buildCursorModelSelection(snapshot.model, snapshot.effort),
+    local,
+    mcpServers: {},
+  };
+
+  // Tracks the id worth persisting. Cleared when a resume target turns out to be
+  // dead so the thread never pins itself to an agent that can no longer be run.
+  let resumedFrom = resumeAgentId;
+  let agent:
+    | Awaited<ReturnType<typeof Agent.create>>
+    | Awaited<ReturnType<typeof Agent.resume>>;
+  if (resumeAgentId) {
+    try {
+      agent = await Agent.resume(resumeAgentId, agentOptions);
+    } catch (error) {
+      if (!isAgentNotFound(error)) throw error;
+      // Cursor reaped the agent between turns, which a slow cold start makes
+      // likely. Starting fresh keeps the thread usable; resuming again never
+      // could, so every retry would fail identically.
+      resumedFrom = undefined;
+      agent = await Agent.create(agentOptions);
+    }
+  } else {
+    agent = await Agent.create(agentOptions);
+  }
 
   // Prefer the SDK-reported id (create returns a fresh id); fall back to the
   // resume id so the caller can persist it for the thread's next turn.
   const agentId =
-    (agent as unknown as { id?: string | null }).id ?? resumeAgentId ?? null;
+    (agent as unknown as { id?: string | null }).id ?? resumedFrom ?? null;
 
   let disposed = false;
   return {
     agentId,
     model: snapshot.model,
     workspaceRef: snapshot.workspaceRef,
-    async send(prompt: string): Promise<WorkerCursorExecutionRun> {
+    async send(
+      prompt: string,
+      options?: { onDelta?(update: unknown): Promise<void> | void },
+    ): Promise<WorkerCursorExecutionRun> {
       if (disposed) throw new Error('Interactive Cursor agent is disposed');
-      const run = await agent.send(prompt);
+      const onDelta = options?.onDelta;
+      const run = onDelta
+        ? await agent.send(prompt, {
+          onDelta: ({ update }) => onDelta(update),
+        })
+        : await agent.send(prompt);
       return run as unknown as WorkerCursorExecutionRun;
     },
     async dispose(): Promise<void> {
@@ -109,7 +147,7 @@ export async function acquireInteractiveCursorAgent(
  */
 export async function createInteractiveCursorExecution(
   snapshot: Readonly<ExecutionSnapshot>,
-  checkout: LocalCheckoutReader,
+  checkout: RepoReader,
   options: { resumeAgentId?: string | null } = {},
 ): Promise<WorkerCursorExecution & { agentId?: string | null }> {
   const handle = await acquireInteractiveCursorAgent(snapshot, checkout, options);

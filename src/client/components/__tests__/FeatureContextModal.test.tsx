@@ -1,8 +1,24 @@
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { FeatureContextModal } from '../FeatureContextModal';
 import type { ApexFeatureContextResponse, BacklogFeatureItem } from '../../../shared/types/devWorkbench';
+import type { FeatureRequest } from '../../../shared/types/featureRequest';
 
 const mockRefetch = jest.fn();
+const mockNavigate = jest.fn();
+
+jest.mock('react-router-dom', () => ({
+  ...jest.requireActual('react-router-dom'),
+  useNavigate: () => mockNavigate,
+}));
+
+jest.mock('../../hooks/useAppShell', () => ({
+  useAppShell: jest.fn(() => ({
+    permissionsLoaded: true,
+    can: (permission: string) => permission === 'interviews:manage',
+    isInAnyGroup: () => true,
+  })),
+}));
 
 jest.mock('../../hooks/useApexBacklog', () => ({
   useApexFeatureContext: jest.fn(),
@@ -102,7 +118,44 @@ function mockHook(value: Partial<ReturnType<typeof useApexFeatureContext>>) {
 
 function renderModal(onClose = jest.fn()) {
   return render(
-    <FeatureContextModal project="Apex" feature={feature} onClose={onClose} />,
+    <MemoryRouter>
+      <FeatureContextModal project="Apex" feature={feature} onClose={onClose} />
+    </MemoryRouter>,
+  );
+}
+
+const intakeItem: FeatureRequest = {
+  id: 'fr-1',
+  type: 'feature',
+  title: 'Assigned request',
+  request: 'Build this request for customers.',
+  advantage: 'Reduces manual work.',
+  interviewId: null,
+  submittedBy: 'user-1',
+  submitterName: 'Jamie Submitter',
+  sourceProject: 'Apex',
+  assignedTo: null,
+  assignedToApex: false,
+  status: 'under-review',
+  aiStatus: 'complete',
+  aiPriority: 'high',
+  aiRisk: 'low',
+  aiRationale: null,
+  aiThreadId: null,
+  teamPriority: 'critical',
+  teamRisk: null,
+  rank: null,
+  reviewedBy: null,
+  createdAt: '2026-09-01T00:00:00Z',
+  updatedAt: '2026-09-01T00:00:00Z',
+  linkedAdrs: [{ id: 'adr-1', title: 'Use queues', project: 'Apex', repo: 'AI-Pilot', slug: 'use-queues', status: 'accepted' }],
+};
+
+function renderIntake(item: FeatureRequest = intakeItem) {
+  return render(
+    <MemoryRouter>
+      <FeatureContextModal project="Apex" viewMode="intake" intakeItem={item} onClose={jest.fn()} />
+    </MemoryRouter>,
   );
 }
 
@@ -225,5 +278,39 @@ describe('FeatureContextModal', () => {
     await waitFor(() => {
       expect(screen.getByRole('tab', { name: /Backlog/i })).toHaveAttribute('aria-selected', 'true');
     });
+  });
+
+  it('renders only the Request tab in intake mode without fetching development context', () => {
+    (useApexFeatureContext as jest.Mock).mockClear();
+    renderIntake();
+
+    expect(screen.getAllByRole('tab')).toHaveLength(1);
+    expect(screen.getByTestId('feature-context-tab-request')).toHaveTextContent('Request');
+    expect(screen.getByText('Build this request for customers.')).toBeInTheDocument();
+    expect(screen.getByText('Reduces manual work.')).toBeInTheDocument();
+    expect(screen.getByText('Jamie Submitter')).toBeInTheDocument();
+    expect(screen.getByText('Use queues')).toBeInTheDocument();
+    expect(useApexFeatureContext).not.toHaveBeenCalled();
+  });
+
+  it('starts an eligible Feature interview with the existing prefill state', () => {
+    renderIntake();
+    fireEvent.click(screen.getByTestId('feature-context-start-interview-btn'));
+
+    expect(mockNavigate).toHaveBeenCalledWith('/backlog/interview/new', {
+      state: { featureRequest: expect.objectContaining({ id: 'fr-1', title: 'Assigned request' }) },
+    });
+  });
+
+  it('opens an existing interview', () => {
+    renderIntake({ ...intakeItem, interviewId: 'interview-1' });
+    fireEvent.click(screen.getByTestId('feature-context-open-interview-btn'));
+    expect(mockNavigate).toHaveBeenCalledWith('/backlog/interview/interview-1');
+  });
+
+  it('shows the Issue helper and no interview action', () => {
+    renderIntake({ ...intakeItem, type: 'issue' });
+    expect(screen.getByText('Issues are not interviewed from My Work.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /interview/i })).not.toBeInTheDocument();
   });
 });

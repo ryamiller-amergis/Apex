@@ -1,8 +1,13 @@
 import {
   buildPassingValidationReasonsMarkdown,
+  buildUnusableValidationScorecard,
   collectValidationGaps,
   designDocFeatureSectionScore,
+  normalizeCrossCuttingCheck,
   normalizeValidationGap,
+  normalizeValidationScorecard,
+  parseAgentValidationScorecard,
+  resolveScorecardOverallScore,
 } from '../../../shared/utils/validationReport';
 import type { ValidationScorecard } from '../../../shared/types/interview';
 
@@ -96,6 +101,29 @@ describe('buildPassingValidationReasonsMarkdown', () => {
     );
 
     expect(markdown).toBe('');
+  });
+
+  it('does not throw when cross-cutting checks are foundation-skill objects', () => {
+    const markdown = buildPassingValidationReasonsMarkdown(
+      makeScorecard({
+        cross_cutting_checks: {
+          template_tokens: {
+            label: 'Template token scan',
+            status: 'pass',
+            detail: 'None found',
+          },
+          tbd_markers: {
+            label: '[TBD] scan',
+            status: 'fail',
+            detail: '3 TBD markers remain',
+          },
+        },
+      }),
+    );
+
+    expect(markdown).toContain('## Passing Validation Reasons');
+    expect(markdown).toContain('**Template token scan**: pass — None found');
+    expect(markdown).not.toContain('3 TBD markers remain');
   });
 });
 
@@ -259,6 +287,40 @@ describe('normalizeValidationGap', () => {
   });
 });
 
+describe('normalizeCrossCuttingCheck', () => {
+  it('keeps the string scorecard shape', () => {
+    expect(normalizeCrossCuttingCheck('template_tokens', 'PASS')).toEqual({
+      key: 'template_tokens',
+      label: 'Template Tokens',
+      status: 'pass',
+      detail: '',
+      displayText: 'PASS',
+    });
+  });
+
+  it('reads the foundation-skill object shape', () => {
+    expect(
+      normalizeCrossCuttingCheck('tbd_markers', {
+        label: '[TBD] / TODO / FIXME scan',
+        status: 'pass',
+        detail: 'None found',
+      }),
+    ).toEqual({
+      key: 'tbd_markers',
+      label: '[TBD] / TODO / FIXME scan',
+      status: 'pass',
+      detail: 'None found',
+      displayText: 'pass — None found',
+    });
+  });
+
+  it('does not throw for non-string values', () => {
+    expect(normalizeCrossCuttingCheck('ok', true).displayText).toBe('true');
+    expect(normalizeCrossCuttingCheck('count', 2).displayText).toBe('2');
+    expect(normalizeCrossCuttingCheck('empty', null).displayText).toBe('');
+  });
+});
+
 describe('designDocFeatureSectionScore', () => {
   it('reads canonical design_score fields', () => {
     expect(
@@ -284,5 +346,94 @@ describe('designDocFeatureSectionScore', () => {
         'design_score',
       ),
     ).toBe(96);
+  });
+});
+
+describe('resolveScorecardOverallScore', () => {
+  it('prefers the canonical top-level overall_score', () => {
+    expect(resolveScorecardOverallScore({ overall_score: 94, scores: { overall: 12 } })).toBe(94);
+  });
+
+  it('falls back to scores.overall when overall_score is absent', () => {
+    expect(
+      resolveScorecardOverallScore({
+        scores: { prd: { percentage: 97.33 }, backlog: { percentage: 95 }, overall: 96.17 },
+      }),
+    ).toBeCloseTo(96.17);
+  });
+
+  it('averages per-file percentages when no overall is reported', () => {
+    expect(
+      resolveScorecardOverallScore({
+        scores: { prd: { percentage: 90 }, backlog: { percentage: 80 } },
+      }),
+    ).toBe(85);
+  });
+
+  it('averages files[].score when scores and overall_score are absent', () => {
+    expect(
+      resolveScorecardOverallScore({
+        files: [{ file: 'prd', score: 80 }, { file: 'backlog', score: 90 }],
+      }),
+    ).toBe(85);
+  });
+
+  it('returns null when no finite score is present', () => {
+    expect(resolveScorecardOverallScore({ verdict: 'ready' })).toBeNull();
+    expect(resolveScorecardOverallScore({ overall_score: 'n/a' })).toBeNull();
+    expect(resolveScorecardOverallScore({ scores: { overall: null } })).toBeNull();
+    expect(resolveScorecardOverallScore(null)).toBeNull();
+  });
+});
+
+describe('normalizeValidationScorecard', () => {
+  it('stamps a canonical overall_score onto the nested prd-spec-review shape', () => {
+    const normalized = normalizeValidationScorecard({
+      review_phase: 'initial',
+      is_ready: true,
+      verdict: 'Ready',
+      scores: { prd: { percentage: 97.33 }, backlog: { percentage: 95 }, overall: 96.17 },
+    });
+
+    expect(normalized?.overall_score).toBeCloseTo(96.17);
+    expect(Math.round(normalized!.overall_score)).toBe(96);
+    expect(normalized?.is_ready).toBe(true);
+  });
+
+  it('rejects a scorecard with no usable score rather than yielding NaN', () => {
+    const normalized = normalizeValidationScorecard({ review_phase: 'initial', is_ready: true });
+
+    expect(normalized).toBeNull();
+  });
+});
+
+describe('parseAgentValidationScorecard', () => {
+  it('returns a 0% system scorecard when JSON is unusable', () => {
+    const parsed = parseAgentValidationScorecard('{"verdict":"ready"}');
+    expect(parsed.overall_score).toBe(0);
+    expect(parsed.is_ready).toBe(false);
+    expect(parsed.slug).toBe('validation-unusable');
+  });
+
+  it('returns a 0% system scorecard when JSON is invalid', () => {
+    const parsed = parseAgentValidationScorecard('{not json');
+    expect(parsed.overall_score).toBe(0);
+    expect(parsed.verdict).toBe('significant_gaps');
+  });
+
+  it('preserves a usable files[].score average', () => {
+    const parsed = parseAgentValidationScorecard(
+      JSON.stringify({ files: [{ file: 'prd', score: 70 }, { file: 'backlog', score: 80 }] }),
+    );
+    expect(parsed.overall_score).toBe(75);
+  });
+});
+
+describe('buildUnusableValidationScorecard', () => {
+  it('always produces a persistable 0% card', () => {
+    const card = buildUnusableValidationScorecard('Re-run validation.');
+    expect(card.overall_score).toBe(0);
+    expect(card.is_ready).toBe(false);
+    expect(card.gaps?.[0]?.description).toContain('Re-run');
   });
 });

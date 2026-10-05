@@ -11,7 +11,7 @@ description: Project adapter for post-skill-bootstrap. Customize for your projec
 - Repo context file: {{slot:contextFile}}
 - Agents / glossary file: {{slot:agentsFile}}
 - Lockfile (scan only these skills): `apex-skills.lock.json`
-- Skill install root: `.cursor/skills/`
+- Skill install root: `{{slot:skillsDir}}`
 
 ## How to use here
 

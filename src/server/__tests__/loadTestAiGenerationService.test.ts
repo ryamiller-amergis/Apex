@@ -129,6 +129,7 @@ describe('startGeneration', () => {
     expect(result).toEqual({ threadId: THREAD_ID });
     expect(mockedCreateThread).toHaveBeenCalledWith(USER_ID, expect.objectContaining({
       project: PROJECT_ID,
+      agentModule: 'loadTestGeneration',
       repo: 'org/repo',
       branch: 'main',
       skillProvider: 'github',

@@ -38,6 +38,7 @@ Apex is an internal product-building and project-management platform. It central
 | ADO Export | — | — | `azureDevOps.ts` | `CreateAdoItemsModal.tsx` |
 | Ask Apex (this agent) | — | `.cursor/skills/app-knowledge/SKILL.md` | `askApexService.ts` | `AskApexChat.tsx` |
 | User Profile | — | — | `profileService.ts`, `avatarResolverService.ts` | `ProfilePage.tsx`, `AvatarEditor.tsx`, `UserMenu.tsx` |
+| Playbook Orchestration | `design-docs/playbook-epic-1-phase-0.plan.md`, `design-docs/playbook-demo-runbook.md` | — | `playbookRunService.ts`, `playbookSteps/`, `playbookTerminalEventService.ts`, `playbookReconciliationService.ts` | `PlaybookStatusView.tsx`, `PlaybookRunList.tsx`, `PlaybookGateReviewPanel.tsx` |
 
 ## Key Terminology
 
@@ -66,6 +67,9 @@ Apex is an internal product-building and project-management platform. It central
 | **Smart tags** | AI-suggested classification metadata (tags, route, confidence) applied only to newly discovered pending anchors during sync review; placements always allow all sides — preferred side is chosen per walkthrough step |
 | **Design Module** | A project-scoped slice of the repository (source globs + docs) used to ground AI agents on a specific area of the codebase |
 | **Load Test Definition** | A k6 script and threshold profile stored per project; runs are executed against allowlisted targets with prod-safety guards |
+| **Playbook** | A saved, versioned sequence of typed steps that Apex runs on a project's behalf. A step is a `cursor-agent` turn, an `approval-gate` that waits for a person, a `notify`, a `branch`, or an `ingest-artifact`. Steps that leave Apex sit behind a gate, so nothing reaches an external agent unapproved |
+| **Playbook definition / version** | A Playbook is edited as a retained draft and published as an immutable version. A run pins the version it started on, so editing a Playbook never changes a run already in flight |
+| **Playbook run** | One execution of a published version. It suspends at an approval gate or while waiting on an agent run, and resumes when the gate is decided or the agent finishes — a restart mid-run does not lose it, because the state is in Apex's own tables rather than in memory |
 
 ## Directory Structure
 

@@ -5,10 +5,18 @@ import type {
   BackgroundWorkflowClass,
   WorkflowRouteDecision,
 } from '../../shared/types/backgroundWorkflow';
+import type { SkillProvider } from '../../shared/types/projectSettings';
+import type { EffortLevel } from '../../shared/types/effort';
 import type { RunGrounding, RunRef } from '../../shared/types/runGrounding';
 import { resolveAgentRunHardLimitMs } from './agentRunReaperService';
 import { enqueue } from './agentRunLifecycleService';
 import { isFeatureEnabled } from './featureFlagService';
+import { getRepoCacheDir, type RepoCacheOptions } from './repoCacheService';
+import {
+  cacheOptionsFromGrounding,
+  isUsableBareMirror,
+} from './repoRead/mirrorStore';
+import { workerCanReadWithoutWorkingTree } from './repoRead/workerReadVisibility';
 import {
   sharedReadCheckoutIdentityFromGrounding,
   sharedReadCheckoutService,
@@ -41,6 +49,7 @@ const SHARED_READ_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new S
  */
 const SCRATCH_ONLY_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new Set([
   'validation',
+  'walkthrough-smart-tagging',
 ]);
 
 export interface RecoverableBackgroundWorkflowFailure {
@@ -56,6 +65,7 @@ export interface PreparedBackgroundWorkflowWorker {
   threadWorkspacePath: string;
   prompt: string;
   model: string;
+  effort?: EffortLevel;
   skillPath: string;
   projectId: string;
 }
@@ -104,7 +114,17 @@ export interface BackgroundWorkflowRouterDependencies {
     'getReady' | 'retain'
   >;
   clearGenerationOutput?: (threadWorkspacePath: string) => Promise<void>;
+  getRepoCacheDir?: (options: RepoCacheOptions) => string;
+  isUsableBareMirror?: (path: string | undefined) => boolean;
+  /**
+   * True when a background worker can read without a working-tree clone:
+   * HTTP repo-read is configured, or this host is not App Service (local/dev
+   * workers share the same disk as the router).
+   */
+  workerCanReadWithoutWorkingTree?: () => boolean;
 }
+
+export { workerCanReadWithoutWorkingTree } from './repoRead/workerReadVisibility';
 
 export interface BackgroundWorkflowRouter {
   route(input: BackgroundWorkflowRouteInput): Promise<WorkflowRouteDecision>;
@@ -222,6 +242,11 @@ export function createBackgroundWorkflowRouter(
           now,
         })
       : repositoryPreparationService);
+  const resolveMirrorPath = dependencies.getRepoCacheDir ?? getRepoCacheDir;
+  const mirrorUsable = dependencies.isUsableBareMirror ?? isUsableBareMirror;
+  const canSkipWorkingTree =
+    dependencies.workerCanReadWithoutWorkingTree
+    ?? (() => workerCanReadWithoutWorkingTree());
 
   const safeTrack = (
     name: string,
@@ -349,6 +374,7 @@ export function createBackgroundWorkflowRouter(
       const snapshot: ExecutionSnapshot = {
         prompt: prepared.prompt,
         model: prepared.model,
+        effort: prepared.effort,
         workspaceRef,
         workflowClass: input.workflowClass,
         skillPath: prepared.skillPath,
@@ -388,36 +414,69 @@ export function createBackgroundWorkflowRouter(
       );
     }
 
-    // PRD / design-doc / test-cases: reuse the interview's warm shared SHA tree.
-    // Thin writable cwd = thread workspace (.ai-pilot only). No MaxView clone.
+    // PRD / design-doc / test-cases: prefer the bare mirror when the worker
+    // can actually open it (same disk or HTTP). Else reuse the interview's
+    // warm shared SHA tree. Thin writable cwd = thread workspace.
     let workspaceRef: string | undefined;
     let checkoutRef: string | undefined;
+    let mirrorRef: string | undefined;
+    let groundedSha: string | undefined;
+    let repository: string | undefined;
+    let provider: SkillProvider | undefined;
     let materializationReason = 'materialized';
 
     if (SHARED_READ_WORKFLOW_CLASSES.has(input.workflowClass)) {
       try {
-        const sharedPath = resolveReadySharedCheckoutPath(
-          prepared.targetGrounding,
-          sharedReadCheckout,
-        );
-        if (sharedPath) {
+        const cacheOptions = cacheOptionsFromGrounding(prepared.targetGrounding);
+        const mirrorPath = resolveMirrorPath(cacheOptions);
+        if (mirrorUsable(mirrorPath) && canSkipWorkingTree()) {
           await clearGenerationOutput(prepared.threadWorkspacePath);
           workspaceRef = prepared.threadWorkspacePath;
-          checkoutRef = sharedPath;
-          materializationReason = 'shared-read-checkout';
+          mirrorRef = mirrorPath;
+          groundedSha = prepared.targetGrounding.groundedSha;
+          repository = prepared.targetGrounding.repository;
+          provider = cacheOptions.provider;
+          materializationReason = 'bare-mirror-read';
           safeTrack(
             'grounding.materialization.local-reuse',
             {
               workflowClass: input.workflowClass,
               project: input.destinationRun.project,
-              source: 'shared-read-checkout',
+              source: 'bare-mirror',
               outcome: 'thin-workspace',
             },
             { durationMs: Math.max(0, now() - preparationStartedAt) },
           );
         }
       } catch {
-        // Fall through to the legacy writable clone path.
+        // Fall through to shared checkout / writable clone.
+      }
+
+      if (!workspaceRef) {
+        try {
+          const sharedPath = resolveReadySharedCheckoutPath(
+            prepared.targetGrounding,
+            sharedReadCheckout,
+          );
+          if (sharedPath) {
+            await clearGenerationOutput(prepared.threadWorkspacePath);
+            workspaceRef = prepared.threadWorkspacePath;
+            checkoutRef = sharedPath;
+            materializationReason = 'shared-read-checkout';
+            safeTrack(
+              'grounding.materialization.local-reuse',
+              {
+                workflowClass: input.workflowClass,
+                project: input.destinationRun.project,
+                source: 'shared-read-checkout',
+                outcome: 'thin-workspace',
+              },
+              { durationMs: Math.max(0, now() - preparationStartedAt) },
+            );
+          }
+        } catch {
+          // Fall through to the legacy writable clone path.
+        }
       }
     }
 
@@ -479,8 +538,13 @@ export function createBackgroundWorkflowRouter(
     const snapshot: ExecutionSnapshot = {
       prompt: prepared.prompt,
       model: prepared.model,
+      effort: prepared.effort,
       workspaceRef,
       ...(checkoutRef ? { checkoutRef } : {}),
+      ...(mirrorRef ? { mirrorRef } : {}),
+      ...(groundedSha ? { groundedSha } : {}),
+      ...(repository ? { repository } : {}),
+      ...(provider ? { provider } : {}),
       workflowClass: input.workflowClass,
       skillPath: prepared.skillPath,
       projectId: prepared.projectId,

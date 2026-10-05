@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type {
   ChatThread,
   ChatThreadSummary,
@@ -72,7 +72,10 @@ export function useChatThreadList(
       apiFetch(buildThreadListUrl(limit, project, effectiveQ, flaggedOnly)),
     enabled: !!project,
     staleTime: 30_000,
-    placeholderData: keepPreviousData,
+    // Keep prior rows while searching within one project, but never render one
+    // project's history under another project's heading during a project switch.
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[2] === project ? previousData : undefined,
   });
 
   return {

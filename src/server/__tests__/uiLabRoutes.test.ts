@@ -10,7 +10,6 @@ let mockGroupMembershipGranted = true;
 jest.mock('../middleware/rbac', () => ({
   requirePermission: () => (_req: any, _res: any, next: any) => next(),
   requireGroupMembership: (...groups: string[]) => (req: any, res: any, next: any) => {
-    // Mirror the real middleware: super admins always bypass the group check.
     if (isSuperAdminRequest(req) || mockGroupMembershipGranted) {
       next();
     } else {
@@ -21,6 +20,7 @@ jest.mock('../middleware/rbac', () => ({
 
 jest.mock('../services/uiLabService', () => ({
   listDesigns: jest.fn(),
+  listSharedDesigns: jest.fn(),
   getDesign: jest.fn(),
   getDesignProject: jest.fn(),
   getCommentProject: jest.fn(),
@@ -33,6 +33,33 @@ jest.mock('../services/uiLabService', () => ({
   addComment: jest.fn(),
   resolveComment: jest.fn(),
   reopenComment: jest.fn(),
+  resolveDesignAccess: jest.fn(),
+  requireManageAccess: jest.fn(),
+  listDesignShares: jest.fn(),
+  listDesignShareTargets: jest.fn(),
+  createDesignShare: jest.fn(),
+  revokeDesignShare: jest.fn(),
+  UiLabForbiddenError: class UiLabForbiddenError extends Error {
+    status = 403;
+    constructor(message = 'Forbidden') {
+      super(message);
+      this.name = 'UiLabForbiddenError';
+    }
+  },
+  UiLabNotFoundError: class UiLabNotFoundError extends Error {
+    status = 404;
+    constructor(message = 'UI Lab design not found') {
+      super(message);
+      this.name = 'UiLabNotFoundError';
+    }
+  },
+  UiLabValidationError: class UiLabValidationError extends Error {
+    status = 400;
+    constructor(message: string) {
+      super(message);
+      this.name = 'UiLabValidationError';
+    }
+  },
 }));
 
 jest.mock('../services/menuSettingsService', () => ({
@@ -90,6 +117,18 @@ describe('uiLab routes — project ui-lab enablement enforcement', () => {
       expect(mockUiLab.listDesigns).not.toHaveBeenCalled();
     });
 
+    it('does not treat /shared-with-me as a design id', async () => {
+      mockMenuSettings.getMenuConfig.mockResolvedValue(menuConfig(['ui-lab']));
+      mockUiLab.listSharedDesigns.mockResolvedValue([]);
+
+      const res = await request(buildApp())
+        .get('/api/ui-lab/shared-with-me')
+        .query({ project: 'MaxView' });
+
+      expect(res.status).toBe(200);
+      expect(mockUiLab.resolveDesignAccess).not.toHaveBeenCalled();
+    });
+
     it('bypasses the enablement check for super admins', async () => {
       mockIsSuperAdmin.mockReturnValue(true);
       mockUiLab.listDesigns.mockResolvedValue([]);
@@ -103,16 +142,36 @@ describe('uiLab routes — project ui-lab enablement enforcement', () => {
   });
 
   describe('GET /api/ui-lab/:id', () => {
-    it('returns the design when its project has ui-lab enabled', async () => {
+    it('returns the design when access resolves and ui-lab is enabled', async () => {
       mockUiLab.getDesignProject.mockResolvedValue('MaxView');
       mockMenuSettings.getMenuConfig.mockResolvedValue(menuConfig(['ui-lab']));
-      mockUiLab.getDesign.mockResolvedValue({ id: 'd1', project: 'MaxView' } as any);
+      mockUiLab.resolveDesignAccess.mockResolvedValue({
+        design: { id: 'd1', project: 'MaxView', effectiveAccess: 'shared' } as any,
+        access: 'shared',
+      });
 
       const res = await request(buildApp()).get('/api/ui-lab/d1');
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ id: 'd1', project: 'MaxView' });
-      expect(mockUiLab.getDesignProject).toHaveBeenCalledWith('d1');
+      expect(res.body).toEqual({ id: 'd1', project: 'MaxView', effectiveAccess: 'shared' });
+      expect(mockUiLab.resolveDesignAccess).toHaveBeenCalledWith('d1', 'user-1', {
+        isSuperAdmin: false,
+      });
+    });
+
+    it('allows shared viewers without UI/UX group membership', async () => {
+      mockGroupMembershipGranted = false;
+      mockUiLab.getDesignProject.mockResolvedValue('MaxView');
+      mockMenuSettings.getMenuConfig.mockResolvedValue(menuConfig(['ui-lab']));
+      mockUiLab.resolveDesignAccess.mockResolvedValue({
+        design: { id: 'd1', project: 'MaxView', effectiveAccess: 'shared' } as any,
+        access: 'shared',
+      });
+
+      const res = await request(buildApp()).get('/api/ui-lab/d1');
+
+      expect(res.status).toBe(200);
+      expect(mockUiLab.resolveDesignAccess).toHaveBeenCalled();
     });
 
     it("returns 403 when the design's project does not have ui-lab enabled", async () => {
@@ -122,7 +181,75 @@ describe('uiLab routes — project ui-lab enablement enforcement', () => {
       const res = await request(buildApp()).get('/api/ui-lab/d1');
 
       expect(res.status).toBe(403);
-      expect(mockUiLab.getDesign).not.toHaveBeenCalled();
+      expect(mockUiLab.resolveDesignAccess).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 when resolveDesignAccess denies access', async () => {
+      mockUiLab.getDesignProject.mockResolvedValue('MaxView');
+      mockMenuSettings.getMenuConfig.mockResolvedValue(menuConfig(['ui-lab']));
+      mockUiLab.resolveDesignAccess.mockRejectedValue(new uiLabService.UiLabForbiddenError());
+
+      const res = await request(buildApp()).get('/api/ui-lab/d1');
+
+      expect(res.status).toBe(403);
+    });
+  });
+
+  describe('POST /api/ui-lab/:id/comments', () => {
+    it('lets shared viewers add comments without UI/UX membership', async () => {
+      mockGroupMembershipGranted = false;
+      mockUiLab.getDesignProject.mockResolvedValue('MaxView');
+      mockMenuSettings.getMenuConfig.mockResolvedValue(menuConfig(['ui-lab']));
+      mockUiLab.resolveDesignAccess.mockResolvedValue({
+        design: { id: 'd1', project: 'MaxView', effectiveAccess: 'shared' } as any,
+        access: 'shared',
+      });
+      mockUiLab.addComment.mockResolvedValue({ id: 'c1', text: 'hi' } as any);
+
+      const res = await request(buildApp())
+        .post('/api/ui-lab/d1/comments')
+        .send({ text: 'hi', version: 1 });
+
+      expect(res.status).toBe(201);
+      expect(mockUiLab.addComment).toHaveBeenCalledWith('d1', 'user-1', {
+        text: 'hi',
+        version: 1,
+      });
+    });
+  });
+
+  describe('share routes', () => {
+    it('creates a share for managers', async () => {
+      mockUiLab.getDesignProject.mockResolvedValue('MaxView');
+      mockMenuSettings.getMenuConfig.mockResolvedValue(menuConfig(['ui-lab']));
+      mockUiLab.createDesignShare.mockResolvedValue({
+        id: 's1',
+        designId: 'd1',
+        granteeId: 'dev-1',
+        link: '/ui-lab/d1?project=MaxView',
+      } as any);
+
+      const res = await request(buildApp())
+        .post('/api/ui-lab/d1/shares')
+        .send({ granteeId: 'dev-1' });
+
+      expect(res.status).toBe(201);
+      expect(mockUiLab.createDesignShare).toHaveBeenCalledWith('d1', 'dev-1', 'user-1', {
+        isSuperAdmin: false,
+      });
+    });
+
+    it('requires UI/UX for share management', async () => {
+      mockGroupMembershipGranted = false;
+      mockUiLab.getDesignProject.mockResolvedValue('MaxView');
+      mockMenuSettings.getMenuConfig.mockResolvedValue(menuConfig(['ui-lab']));
+
+      const res = await request(buildApp())
+        .post('/api/ui-lab/d1/shares')
+        .send({ granteeId: 'dev-1' });
+
+      expect(res.status).toBe(403);
+      expect(mockUiLab.createDesignShare).not.toHaveBeenCalled();
     });
   });
 
@@ -158,6 +285,42 @@ describe('uiLab routes — project ui-lab enablement enforcement', () => {
 
       expect(res.status).toBe(200);
       expect(mockUiLab.listDesigns).toHaveBeenCalledWith('MaxView');
+    });
+  });
+
+  describe('GET /api/ui-lab/shared-with-me', () => {
+    it('lists shared designs for a viewer outside the UI/UX group', async () => {
+      mockGroupMembershipGranted = false;
+      mockMenuSettings.getMenuConfig.mockResolvedValue(menuConfig(['ui-lab']));
+      mockUiLab.listSharedDesigns.mockResolvedValue([{ id: 'd1' } as any]);
+
+      const res = await request(buildApp())
+        .get('/api/ui-lab/shared-with-me')
+        .query({ project: 'MaxView' });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual([{ id: 'd1' }]);
+      expect(mockUiLab.listSharedDesigns).toHaveBeenCalledWith('MaxView', 'user-1');
+    });
+
+    it('returns 400 without a project', async () => {
+      mockMenuSettings.getMenuConfig.mockResolvedValue(menuConfig(['ui-lab']));
+
+      const res = await request(buildApp()).get('/api/ui-lab/shared-with-me');
+
+      expect(res.status).toBe(400);
+      expect(mockUiLab.listSharedDesigns).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 when ui-lab is not enabled for the project', async () => {
+      mockMenuSettings.getMenuConfig.mockResolvedValue(menuConfig(['calendar']));
+
+      const res = await request(buildApp())
+        .get('/api/ui-lab/shared-with-me')
+        .query({ project: 'MaxView' });
+
+      expect(res.status).toBe(403);
+      expect(mockUiLab.listSharedDesigns).not.toHaveBeenCalled();
     });
   });
 

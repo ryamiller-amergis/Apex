@@ -22,14 +22,14 @@ import {
   HttpMethod,
   type DaprInvokerCallbackContent,
 } from '@dapr/dapr';
-import { DefaultAzureCredential } from '@azure/identity';
 // Side-effect: initialize Application Insights when the connection string is set.
 import '../telemetry';
+import { exitAfterFlush } from '../../utils/processExit';
+import { getAiRunnerCallbackToken } from '../aiRunsCallbackToken';
 import { createAiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
-import { openLocalCheckout } from '../aiRunsWorker/workspace';
-import { resolveStaticAiRunnerCallbackToken } from '../aiRunnerCallbackAuthConfig';
+import { openGroundedReader } from '../aiRunsWorker/workspace';
 import { interactiveLiveBus } from '../interactiveLiveBus';
-import type { LocalCheckoutReader } from '../localCheckoutReader';
+import type { RepoReader } from '../../../shared/types/repoReader';
 import { acquireInteractiveCursorAgent } from './interactiveCursorExecution';
 import {
   createInteractiveSessionActor,
@@ -42,7 +42,7 @@ import {
 } from './interactiveSessionActorClass';
 
 /** Warm checkout carrying the reader the execution factory needs. */
-type ReaderCheckout = WarmThreadCheckout & { reader: LocalCheckoutReader };
+type ReaderCheckout = WarmThreadCheckout & { reader: RepoReader };
 
 export interface InteractiveDispatchRequest {
   threadId: string;
@@ -54,7 +54,7 @@ interface InteractiveDispatchInvoker {
   listen(
     methodName: string,
     callback: (data: DaprInvokerCallbackContent) => Promise<unknown>,
-    options: { method: HttpMethod },
+    options: { method: HttpMethod }
   ): Promise<unknown>;
 }
 
@@ -105,16 +105,20 @@ function describeError(error: unknown): {
 }
 
 export function parseInteractiveDispatchRequest(
-  content: DaprInvokerCallbackContent,
+  content: DaprInvokerCallbackContent
 ): InteractiveDispatchRequest {
-  const payload = parseDispatchBody(content.body) as Partial<InteractiveDispatchRequest> | null;
+  const payload = parseDispatchBody(
+    content.body
+  ) as Partial<InteractiveDispatchRequest> | null;
   if (
-    !payload
-    || typeof payload.threadId !== 'string'
-    || typeof payload.runId !== 'string'
-    || typeof payload.dispatchMessageId !== 'string'
+    !payload ||
+    typeof payload.threadId !== 'string' ||
+    typeof payload.runId !== 'string' ||
+    typeof payload.dispatchMessageId !== 'string'
   ) {
-    throw new Error('Interactive dispatch requires threadId, runId, and dispatchMessageId');
+    throw new Error(
+      'Interactive dispatch requires threadId, runId, and dispatchMessageId'
+    );
   }
   return {
     threadId: payload.threadId,
@@ -126,6 +130,10 @@ export function parseInteractiveDispatchRequest(
 export async function registerInteractiveDispatchHandler(
   invoker: InteractiveDispatchInvoker,
   resolveActor: (threadId: string) => IInteractiveSessionActor,
+  recoverActorFailure?: (
+    payload: InteractiveDispatchRequest,
+    error: unknown
+  ) => Promise<void>
 ): Promise<void> {
   await invoker.listen(
     'dispatch',
@@ -134,77 +142,75 @@ export async function registerInteractiveDispatchHandler(
       try {
         payload = parseInteractiveDispatchRequest(content);
       } catch (error) {
-        console.warn(JSON.stringify({
-          event: 'InteractiveDispatchRejected',
-          ...describeError(error),
-        }));
+        console.warn(
+          JSON.stringify({
+            event: 'InteractiveDispatchRejected',
+            ...describeError(error),
+          })
+        );
         return { accepted: false };
       }
-      console.log(JSON.stringify({
-        event: 'InteractiveDispatchAccepted',
-        threadId: payload.threadId,
-        runId: payload.runId,
-        dispatchMessageId: payload.dispatchMessageId,
-      }));
+      console.log(
+        JSON.stringify({
+          event: 'InteractiveDispatchAccepted',
+          threadId: payload.threadId,
+          runId: payload.runId,
+          dispatchMessageId: payload.dispatchMessageId,
+        })
+      );
       const actor = resolveActor(payload.threadId);
-      void actor.handleTurn({
-        runId: payload.runId,
-        dispatchMessageId: payload.dispatchMessageId,
-      }).then((outcome) => {
-        console.log(JSON.stringify({
-          event: 'InteractiveDispatchCompleted',
-          threadId: payload.threadId,
+      void actor
+        .handleTurn({
           runId: payload.runId,
           dispatchMessageId: payload.dispatchMessageId,
-          status: outcome.status,
-        }));
-      }).catch((error) => {
-        console.error(JSON.stringify({
-          event: 'InteractiveDispatchFailed',
-          threadId: payload.threadId,
-          runId: payload.runId,
-          dispatchMessageId: payload.dispatchMessageId,
-          ...describeError(error),
-        }));
-      });
+        })
+        .then((outcome) => {
+          console.log(
+            JSON.stringify({
+              event: 'InteractiveDispatchCompleted',
+              threadId: payload.threadId,
+              runId: payload.runId,
+              dispatchMessageId: payload.dispatchMessageId,
+              status: outcome.status,
+            })
+          );
+        })
+        .catch(async (error) => {
+          console.error(
+            JSON.stringify({
+              event: 'InteractiveDispatchFailed',
+              threadId: payload.threadId,
+              runId: payload.runId,
+              dispatchMessageId: payload.dispatchMessageId,
+              ...describeError(error),
+            })
+          );
+          if (!recoverActorFailure) return;
+          try {
+            await recoverActorFailure(payload, error);
+            console.log(
+              JSON.stringify({
+                event: 'InteractiveDispatchFailureRecovered',
+                threadId: payload.threadId,
+                runId: payload.runId,
+                dispatchMessageId: payload.dispatchMessageId,
+              })
+            );
+          } catch (recoveryError) {
+            console.error(
+              JSON.stringify({
+                event: 'InteractiveDispatchFailureRecoveryFailed',
+                threadId: payload.threadId,
+                runId: payload.runId,
+                dispatchMessageId: payload.dispatchMessageId,
+                ...describeError(recoveryError),
+              })
+            );
+          }
+        });
       return { accepted: true };
     },
-    { method: HttpMethod.POST },
-  );
-}
-
-async function getCallbackToken(): Promise<string> {
-  const staticToken = resolveStaticAiRunnerCallbackToken();
-  const audience = process.env.AI_RUNS_CALLBACK_TOKEN_AUDIENCE?.trim();
-
-  // Prefer managed identity whenever an audience is configured. The Apex App
-  // Service rejects static callback tokens in production (unless explicitly
-  // opted in via AI_RUNS_ALLOW_STATIC_CALLBACK_TOKEN), so a stale or
-  // re-provisioned AI_RUNS_RUNNER_CALLBACK_TOKEN must never take precedence
-  // over MI — otherwise the actor's first callback (getBootstrap) 401s and the
-  // turn silently fails. The static token remains a dev/local fallback (no
-  // audience configured, or MI unavailable in this environment).
-  if (audience) {
-    const scope = audience.endsWith('/.default')
-      ? audience
-      : `${audience}/.default`;
-    try {
-      const token = await new DefaultAzureCredential().getToken(scope);
-      if (token?.token) return token.token;
-      if (!staticToken) {
-        throw new Error('Failed to acquire AI runner callback token');
-      }
-      // Empty MI token but a static token exists — fall through to it.
-    } catch (error) {
-      if (!staticToken) throw error;
-      // MI unavailable but a static token exists — fall back to it (dev/local).
-    }
-  }
-
-  if (staticToken) return staticToken;
-
-  throw new Error(
-    'AI_RUNS_CALLBACK_TOKEN_AUDIENCE is required for managed-identity callbacks',
+    { method: HttpMethod.POST }
   );
 }
 
@@ -223,13 +229,13 @@ export async function main(): Promise<void> {
 
   const callback = createAiRunsCallbackClient({
     callbackBaseUrl,
-    getToken: getCallbackToken,
+    getToken: getAiRunnerCallbackToken,
   });
 
   // Single shared logic core: thread-keyed warm checkout + live Agent cache.
   const logic = createInteractiveSessionActor({
     openWarmCheckout: async (_threadId, snapshot) => {
-      const reader = await openLocalCheckout(snapshot);
+      const reader = await openGroundedReader(snapshot);
       const checkout: ReaderCheckout = {
         workspacePath: snapshot.workspaceRef,
         reader,
@@ -240,7 +246,7 @@ export async function main(): Promise<void> {
       acquireInteractiveCursorAgent(
         snapshot,
         (checkout as ReaderCheckout).reader,
-        options,
+        options
       ),
     postIngest: (projectId, runId, body) =>
       callback.postIngest(projectId, runId, body),
@@ -269,7 +275,7 @@ export async function main(): Promise<void> {
 
   const proxyBuilder = new ActorProxyBuilder<IInteractiveSessionActor>(
     InteractiveSessionActorImpl,
-    server.client,
+    server.client
   );
 
   // The API POSTs { threadId, runId, dispatchMessageId }; Dapr wraps the JSON
@@ -277,6 +283,24 @@ export async function main(): Promise<void> {
   await registerInteractiveDispatchHandler(
     server.invoker,
     (threadId) => proxyBuilder.build(new ActorId(threadId)),
+    async (payload) => {
+      // `/dispatch` returns before the long-running actor invocation finishes.
+      // If Dapr cannot deliver that invocation (for example, it routes to a
+      // restarting replica), no actor exists to write a terminal event. Resolve
+      // the fenced bootstrap here and finish the run through the same durable
+      // ingest path used by the actor so the client can retry immediately.
+      const bootstrap = await callback.getBootstrap({
+        runId: payload.runId,
+        dispatchMessageId: payload.dispatchMessageId,
+      });
+      await callback.postIngest(bootstrap.projectId, payload.runId, {
+        dispatchMessageId: payload.dispatchMessageId,
+        kind: 'terminal',
+        status: 'failed',
+        phase: 'completion',
+        detail: 'Interactive agent could not start. Please retry.',
+      });
+    }
   );
 
   await server.start();
@@ -284,18 +308,20 @@ export async function main(): Promise<void> {
     JSON.stringify({
       event: 'InteractiveActorHostStarted',
       serverPort,
-    }),
+    })
   );
 }
 
 if (require.main === module) {
+  // Resident service, so only the failure path exits: hanging here would leave
+  // a replica the platform still considers up but that serves nothing.
   main().catch((error) => {
     console.error(
       JSON.stringify({
         event: 'InteractiveActorHostFatal',
         ...describeError(error),
-      }),
+      })
     );
-    process.exitCode = 1;
+    return exitAfterFlush(1);
   });
 }

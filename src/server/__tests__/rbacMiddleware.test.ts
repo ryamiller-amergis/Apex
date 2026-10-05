@@ -62,6 +62,45 @@ function makeRes() {
 describe('requirePermission', () => {
   beforeEach(() => jest.clearAllMocks());
 
+  describe.each([
+    'playbooks:view',
+    'playbooks:run',
+    'playbooks:author',
+    'playbooks:admin',
+  ])('TBI-036 DoD-2 / VT-04 / VT-05 — %s', (permission) => {
+    it('allows an in-project grant and resolves against that project', async () => {
+      const req = makeReq(
+        { profile: { oid: 'playbook-user' } },
+        { body: { project: 'Apex' } },
+      );
+      const res = makeRes();
+      const next = jest.fn() as NextFunction;
+      mockGetUserPermissions.mockResolvedValue(new Set([permission]));
+
+      await requirePermission(permission)(req, res, next);
+
+      expect(mockGetUserPermissions).toHaveBeenCalledWith('playbook-user', 'Apex');
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(res.status).not.toHaveBeenCalled();
+    });
+
+    it('denies a missing in-project grant with the exact key', async () => {
+      const req = makeReq(
+        { profile: { oid: 'playbook-user' } },
+        { body: { project: 'Apex' } },
+      );
+      const res = makeRes();
+      const next = jest.fn() as NextFunction;
+      mockGetUserPermissions.mockResolvedValue(new Set());
+
+      await requirePermission(permission)(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith({ error: 'Forbidden', missing: [permission] });
+    });
+  });
+
   it('returns 401 when req.user is missing', async () => {
     const req = makeReq(undefined);
     const res = makeRes();
@@ -205,6 +244,60 @@ describe('requirePermission', () => {
     await requirePermission('chat:create')(req, res, next);
 
     expect(mockGetUserPermissions).toHaveBeenCalledWith('user-1', 'QueryProj');
+  });
+
+  // FEAT-001 PBI-001 AC-3 / PBI-002 AC-3 / VT-09
+  // The admin router mounts requirePermission('admin:roles') ahead of every
+  // project-settings handler, so a caller without that permission is answered
+  // with 403 and next() is never reached — the persistence handler cannot run.
+  it('PBI-001 AC-3 / PBI-002 AC-3 / VT-09 returns 403 and does not call next for an allow-list write without admin:roles', async () => {
+    const req = makeReq(
+      { profile: { oid: 'non-admin-1' } },
+      {
+        params: { id: 'settings-1' },
+        body: {
+          project: 'MaxView',
+          quickSkillPills: [
+            { label: 'Kick Off', skillPath: '.cursor/skills/kick-off/SKILL.md', allowedUserIds: ['user-alice'], allowedGroupIds: ['grp-designers'] },
+          ],
+          quickMcpPills: [
+            { label: 'Figma', transport: 'http', mcpServerName: 'figma', url: 'https://mcp.figma.com', allowedUserIds: ['user-bob'], allowedGroupIds: ['grp-platform-admins'] },
+          ],
+        },
+      },
+    );
+    const res = makeRes();
+    const next = jest.fn() as NextFunction;
+    mockGetUserPermissions.mockResolvedValue(new Set(['chat:create']));
+
+    await requirePermission('admin:roles')(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Forbidden', missing: ['admin:roles'] });
+  });
+
+  // FEAT-001 PBI-001 AC-3 / PBI-002 AC-3 / VT-09 — Security NFR
+  it('PBI-001 AC-3 / PBI-002 AC-3 / VT-09 calls next for an allow-list write when the caller holds admin:roles', async () => {
+    const req = makeReq(
+      { profile: { oid: 'admin-1' } },
+      {
+        params: { id: 'settings-1' },
+        body: {
+          project: 'MaxView',
+          quickSkillPills: [{ label: 'Kick Off', skillPath: '.cursor/skills/kick-off/SKILL.md', allowedUserIds: ['user-alice'] }],
+          quickMcpPills: [{ label: 'Figma', transport: 'http', mcpServerName: 'figma', url: 'https://mcp.figma.com', allowedGroupIds: ['grp-designers'] }],
+        },
+      },
+    );
+    const res = makeRes();
+    const next = jest.fn() as NextFunction;
+    mockGetUserPermissions.mockResolvedValue(new Set(['admin:roles']));
+
+    await requirePermission('admin:roles')(req, res, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.status).not.toHaveBeenCalled();
   });
 });
 

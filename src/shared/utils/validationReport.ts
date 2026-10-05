@@ -66,6 +66,110 @@ export function collectValidationGaps(
   return fromRoot;
 }
 
+/**
+ * Resolve the overall percentage from a scorecard, tolerating the alternate
+ * shape where the skill nests percentages under `scores` instead of writing a
+ * top-level `overall_score`. Returns null when no finite percentage is present.
+ */
+export function resolveScorecardOverallScore(raw: unknown): number | null {
+  const record = asRecord(raw);
+  if (!record) return null;
+
+  const direct = finiteNumber(record.overall_score);
+  if (direct !== null) return direct;
+
+  const scores = asRecord(record.scores);
+  if (scores) {
+    const overall = finiteNumber(scores.overall)
+      ?? finiteNumber(asRecord(scores.overall)?.percentage);
+    if (overall !== null) return overall;
+
+    const parts = Object.entries(scores)
+      .filter(([key]) => key !== 'overall')
+      .map(([, value]) => finiteNumber(value) ?? finiteNumber(asRecord(value)?.percentage))
+      .filter((value): value is number => value !== null);
+    if (parts.length > 0) {
+      return parts.reduce((sum, value) => sum + value, 0) / parts.length;
+    }
+  }
+
+  const files = Array.isArray(record.files) ? record.files : [];
+  const fileScores = files
+    .map((file) => finiteNumber(asRecord(file)?.score))
+    .filter((value): value is number => value !== null);
+  if (fileScores.length > 0) {
+    return fileScores.reduce((sum, value) => sum + value, 0) / fileScores.length;
+  }
+
+  return null;
+}
+
+/** Last-resort scorecard so a finished run always has something the UI can show. */
+export function buildUnusableValidationScorecard(description: string): ValidationScorecard {
+  return {
+    slug: 'validation-unusable',
+    generated_at: new Date().toISOString(),
+    review_phase: 'initial',
+    overall_score: 0,
+    ready_threshold: 90,
+    is_ready: false,
+    verdict: 'significant_gaps',
+    gaps: [
+      {
+        id: 'validation-unusable-scorecard',
+        file: 'review-scorecard.json',
+        section: 'Scorecard',
+        score: 0,
+        description,
+        what_3_looks_like:
+          'A scorecard with overall_score (or files[].score) so Apex can display a result.',
+        resolution: 'pending',
+      },
+    ],
+  };
+}
+
+/**
+ * Parse an agent-written scorecard file. Always returns a scorecard so callers
+ * can persist a result even when JSON is missing a usable overall score.
+ */
+export function parseAgentValidationScorecard(raw: string): ValidationScorecard {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    const normalized = normalizeValidationScorecard(parsed);
+    const record = asRecord(parsed);
+    if (normalized) return normalized;
+    const keys = record ? Object.keys(record).slice(0, 24).join(',') : typeof parsed;
+    console.warn(`[validation] Unusable scorecard shape keys=${keys}`);
+    return buildUnusableValidationScorecard(
+      `Validation finished but the scorecard had no usable overall score (keys: ${keys || 'none'}). Re-run validation.`,
+    );
+  } catch {
+    return buildUnusableValidationScorecard(
+      'Validation finished but the scorecard file was not valid JSON. Re-run validation.',
+    );
+  }
+}
+
+export const NO_SCORECARD_REASON =
+  'Validation finished without writing a scorecard. Re-run validation.';
+export const VALIDATION_TIMEOUT_REASON =
+  'Validation timed out before a scorecard was available. Re-run validation.';
+
+/**
+ * Parse-site guard for agent-written scorecards. Returns the scorecard with a
+ * canonical finite `overall_score`, or null when no usable score can be
+ * resolved — `validation_score` is an integer column, so an unresolved score
+ * must be rejected rather than rounded into NaN.
+ */
+export function normalizeValidationScorecard(raw: unknown): ValidationScorecard | null {
+  const record = asRecord(raw);
+  if (!record) return null;
+  const overallScore = resolveScorecardOverallScore(record);
+  if (overallScore === null) return null;
+  return { ...(record as unknown as ValidationScorecard), overall_score: overallScore };
+}
+
 /** Section % for design-doc scorecards (canonical fields or nested score_pct). */
 export function designDocFeatureSectionScore(
   feature: Record<string, unknown> | null | undefined,
@@ -102,6 +206,11 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function finiteNumber(value: unknown): number | null {
+  const num = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+  return typeof num === 'number' && Number.isFinite(num) ? num : null;
 }
 
 function cleanText(value: string): string {
@@ -164,6 +273,57 @@ function isPositiveCheckText(value: string): boolean {
   const clearlyNegative = /\b(fail|failed|missing|incomplete|insufficient|blocked|error|unmet|unclear|inconsistent|needs?)\b/.test(text)
     || (/\bgaps?\b/.test(text) && !noGaps);
   return clearlyPositive || !clearlyNegative;
+}
+
+export interface NormalizedCrossCuttingCheck {
+  key: string;
+  label: string;
+  /** Lowercased status token for CSS `data-status` (e.g. `pass`, `fail`). */
+  status: string;
+  detail: string;
+  displayText: string;
+}
+
+function textFromUnknown(value: unknown): string {
+  if (typeof value === 'string') return cleanText(value);
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return '';
+}
+
+/**
+ * Accept both the string shape (`"pass"`) and the foundation-skill object
+ * shape (`{ label, status, detail }`) so scorecard UI does not call
+ * `.toLowerCase()` on a non-string.
+ */
+export function normalizeCrossCuttingCheck(
+  key: string,
+  value: unknown,
+): NormalizedCrossCuttingCheck {
+  const record = asRecord(value);
+  if (record) {
+    const status = textFromUnknown(record.status);
+    const detail = textFromUnknown(record.detail)
+      || textFromUnknown(record.description)
+      || textFromUnknown(record.result);
+    const label = textFromUnknown(record.label) || humanizeLabel(key);
+    const displayText = [status, detail].filter(Boolean).join(' — ') || label;
+    return {
+      key,
+      label,
+      status: status.toLowerCase(),
+      detail,
+      displayText,
+    };
+  }
+
+  const text = textFromUnknown(value);
+  return {
+    key,
+    label: humanizeLabel(key),
+    status: text.toLowerCase(),
+    detail: '',
+    displayText: text,
+  };
 }
 
 function pushUnique(lines: string[], seen: Set<string>, line: string): void {
@@ -229,8 +389,10 @@ export function buildPassingValidationReasonsMarkdown(scorecard: ValidationScore
   }
 
   for (const [check, result] of Object.entries(scorecard.cross_cutting_checks ?? {})) {
-    if (isPositiveCheckText(result)) {
-      pushUnique(reasons, seen, `**${humanizeLabel(check)}**: ${result}`);
+    const normalized = normalizeCrossCuttingCheck(check, result);
+    if (!normalized.displayText) continue;
+    if (isPositiveCheckText(normalized.displayText) || isPositiveCheckText(normalized.status)) {
+      pushUnique(reasons, seen, `**${normalized.label}**: ${normalized.displayText}`);
     }
   }
 

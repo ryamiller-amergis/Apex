@@ -1,4 +1,27 @@
+import type { EffortLevel } from './effort';
+
 export type ChatMessageRole = 'user' | 'agent' | 'tool' | 'system';
+
+export type AgentModuleId =
+  | 'interview'
+  | 'prd'
+  | 'adr'
+  | 'designDoc'
+  | 'designDocAssistant'
+  | 'designPrototype'
+  | 'testCase'
+  | 'designDocValidation'
+  | 'prdAssistant'
+  | 'prdValidation'
+  | 'development'
+  | 'standup'
+  | 'featureRequest'
+  | 'technical'
+  | 'issue'
+  | 'calendarAssistant'
+  | 'loadTestGeneration'
+  | 'designModule'
+  | 'designModuleScoping';
 
 export interface ChatMessage {
   id: string;
@@ -45,12 +68,18 @@ export interface ChatThreadKickoff {
   skillPath?: string;
   /** Cursor SDK model ID to use for this thread (e.g. "claude-opus-4-6") */
   model?: string;
+  /** Server-set module identity. Client-supplied values are discarded by client-facing routes. */
+  agentModule?: AgentModuleId;
+  /** Server-resolved once at kickoff. Client-supplied values are discarded. */
+  effort?: EffortLevel;
   /** Raw transcript text pasted by the user */
   transcript?: string;
   /** Additional freeform context */
   freeformContext?: string;
   /** MCP pill selected on the home page — wires an external MCP server into this thread */
   mcpPill?: import('./projectSettings').QuickMcpPill;
+  /** Server-verified MCP profile applied to a Playbook cursor-agent thread. */
+  playbookMcpProfile?: string;
   /** Identifies the type of assistant thread — controls system prompt behavior */
   assistantType?: 'design-doc' | 'prd' | 'adr' | 'calendar-work-item';
   /** Calendar assistant: anchor work item ID */
@@ -429,6 +458,11 @@ export interface StartChatResponse {
   threadId: string;
 }
 
+export interface ChatTurnSkill {
+  name: string;
+  path: string;
+}
+
 export interface SendMessageRequest {
   text: string;
   /** Optional model override for this turn. If different from the thread's current model,
@@ -436,4 +470,6 @@ export interface SendMessageRequest {
   model?: string;
   /** Text file contents uploaded by the user as additional turn context. */
   attachments?: ChatAttachment[];
+  /** Skill selected for this turn. The visible user message remains unchanged. */
+  skill?: ChatTurnSkill;
 }

@@ -6,6 +6,10 @@
 
 import { validateRegisteredAnchor, type WalkthroughAnchorRegistryEntry } from '../walkthroughAnchors';
 import { isWalkthroughRoute } from '../walkthroughRoutes';
+import {
+  isSupportedAgentSkillPath,
+  normalizeRepoRelativePath,
+} from '../skillPaths';
 
 // ── Lifecycle & status ────────────────────────────────────────────────────────
 
@@ -585,8 +589,6 @@ export function validateTargetRules(rules: WalkthroughTargetRule[]): Walkthrough
   };
 }
 
-const WALKTHROUGH_SKILL_PATH_RE = /^\.cursor\/skills\/[^/]+\/SKILL\.md$/;
-
 export function validateGenerationProvenance(
   value: unknown,
 ): WalkthroughGenerationProvenance | null {
@@ -610,10 +612,17 @@ export function validateGenerationProvenance(
       'generationProvenance model is required',
     );
   }
-  if (typeof p.skillPath !== 'string' || !WALKTHROUGH_SKILL_PATH_RE.test(p.skillPath)) {
+  if (typeof p.skillPath !== 'string') {
     throw new WalkthroughDomainError(
       'VALIDATION_ERROR',
-      'generationProvenance skillPath must match .cursor/skills/*/SKILL.md',
+      'generationProvenance skillPath must use a supported Agent Skills root',
+    );
+  }
+  const skillPath = normalizeRepoRelativePath(p.skillPath);
+  if (!isSupportedAgentSkillPath(skillPath)) {
+    throw new WalkthroughDomainError(
+      'VALIDATION_ERROR',
+      'generationProvenance skillPath must use a supported Agent Skills root',
     );
   }
   if (
@@ -653,7 +662,7 @@ export function validateGenerationProvenance(
   return {
     provider: p.provider,
     model: p.model.trim(),
-    skillPath: p.skillPath,
+    skillPath,
     generatedAt: new Date(p.generatedAt).toISOString(),
     runId,
     threadId,

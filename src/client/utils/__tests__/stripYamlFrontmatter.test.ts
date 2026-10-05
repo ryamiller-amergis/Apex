@@ -48,4 +48,21 @@ describe('stripYamlFrontmatter', () => {
     const raw = '# Title\n\n---\n\nMore text.';
     expect(stripYamlFrontmatter(raw)).toBe(raw);
   });
+
+  it('hides the grounded-sha comment so BAs do not see machine markup', () => {
+    const sha = '0649183681bebe4f6570ebd63ec47d75303ca447';
+    const raw = [
+      `<!-- apex-grounded-sha:${sha} -->`,
+      `> Grounded on MaxView @ development at ${sha} (Aug 19, 2026).`,
+      '',
+      '# PRD',
+    ].join('\n');
+    expect(stripYamlFrontmatter(raw)).toBe(
+      [
+        '> Based on the **MaxView** project, **development** branch, as of Aug 19, 2026.',
+        '',
+        '# PRD',
+      ].join('\n'),
+    );
+  });
 });

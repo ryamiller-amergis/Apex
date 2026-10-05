@@ -1,5 +1,7 @@
 // ── AI Cost Analytics — shared types ────────────────────────────────────────
 
+import type { EffortLevel } from './effort';
+
 export type AiProvider = 'cursor' | 'bedrock';
 export type AiTokenSource = 'exact' | 'estimated';
 export type AiCostSource = 'computed' | 'estimated' | 'allocated';
@@ -25,11 +27,13 @@ export type AiFeature =
   | 'calendar-work-item-assistant'
   | 'rfp-intake'
   | 'product-foundation'
+  | 'adr'
   | 'other';
 
 export interface RecordUsageInput {
   provider: AiProvider;
   modelId: string;
+  effort?: EffortLevel;
   feature: AiFeature;
   project: string;
   skillPath?: string;
@@ -113,6 +117,7 @@ export interface AiCostEvent {
   id: string;
   provider: AiProvider;
   modelId: string;
+  effort: EffortLevel | null;
   feature: string;
   project: string;
   inputTokens: number;
@@ -239,4 +244,31 @@ export interface ProjectComparison {
   projects: ProjectComparisonProject[];
   featureRankings: ProjectComparisonFeatureRanking[];
   period: { from: string; to: string };
+}
+
+export interface EntityUsageRun {
+  label: string;
+  modelId: string;
+  effort: EffortLevel | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  durationMs: number | null;
+  costUsd: number;
+  createdAt: string;
+}
+
+export interface EntityUsageRollup {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  costSource: AiCostSource;
+  durationMs: number;
+  interactions: number;
+  models: string[];
+  incomplete: boolean;
+  pendingSteps: string[];
+  runs: EntityUsageRun[];
 }

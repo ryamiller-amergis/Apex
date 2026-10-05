@@ -196,6 +196,7 @@ describe('repoCheckoutService', () => {
           'clone',
           '--reference',
           '/data/repo-cache/maxview.git',
+          '--dissociate',
           '--no-local',
           '--no-hardlinks',
           '--single-branch',
@@ -209,7 +210,7 @@ describe('repoCheckoutService', () => {
       const cloneArgs = mockGit.mock.calls.find(([args]) =>
         (args as string[]).includes('clone'),
       )?.[0] as string[];
-      expect(cloneArgs).not.toContain('--dissociate');
+      expect(cloneArgs).toContain('--dissociate');
       expect(mockGit).toHaveBeenCalledWith(
         expect.arrayContaining(['remote', 'set-url', 'origin', mockRemote.url]),
         expect.objectContaining({ cwd: workspacePath('session-abc') }),

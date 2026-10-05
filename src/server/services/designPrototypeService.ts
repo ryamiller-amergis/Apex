@@ -1,4 +1,4 @@
-import { eq, and, asc, desc, inArray, lt, type SQL } from 'drizzle-orm';
+import { eq, and, asc, count, desc, inArray, lt, type SQL } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { designPrototypes, designPrototypeComments, designPlans, designDocs, prds, documentApproverAssignments } from '../db/schema';
 import type { DesignPlanFeature } from '../../shared/types/designPlan';
@@ -7,7 +7,9 @@ import { sanitizeMockHtml } from '../utils/htmlSanitizer';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { isAssignedApprover } from './documentApprovalService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
+import { prototypeUsageCtx } from './artifactUsageContext';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
+import { resolveUserStoryIWant } from '../../shared/utils/userStory';
 import type {
   DesignPrototypeSummary,
   DesignPrototype,
@@ -38,6 +40,7 @@ interface BacklogItem {
   userStory?: {
     persona?: string;
     iWant?: string;
+    want?: string;
     soThat?: string;
   };
   /** Apex persona names (e.g. Platform Admin, Developer) this item applies to. */
@@ -143,7 +146,7 @@ function mapBacklogItemToPbiRequirement(item: BacklogItem): PbiRequirement {
   let description = item.description?.trim();
   if (!description && item.userStory) {
     const us = item.userStory;
-    description = `As a ${us.persona ?? 'user'}, I want to ${us.iWant ?? '...'} so that ${us.soThat ?? '...'}`;
+    description = `As a ${us.persona ?? 'user'}, I want to ${resolveUserStoryIWant(us) || '...'} so that ${us.soThat ?? '...'}`;
   }
 
   return {
@@ -200,6 +203,7 @@ function toSummary(row: typeof designPrototypes.$inferSelect): DesignPrototypeSu
     authorId: row.authorId,
     authorName: resolveUserName(row.authorId),
     model: row.model ?? undefined,
+    effort: row.effort ?? undefined,
     status: row.status as DesignPrototypeSummary['status'],
     mockVersion: row.mockVersion,
     reviewerId: row.reviewerId ?? undefined,
@@ -520,8 +524,19 @@ async function generateSinglePrototype(
         if (resolved) {
           prototypeContext = resolved;
           console.log(`[designPrototypeService] Using project-specific design system for "${feature.title}" (${project}, isProjectSpecific=${resolved.isProjectSpecific})`);
+        } else {
+          const { resolveSkillConfig } = await import('./projectSettingsService');
+          const cfg = await resolveSkillConfig({ project, settingsId: skillSettingsId ?? undefined });
+          if (cfg?.skillRepo?.trim()) {
+            throw new Error(
+              `Could not load the design-system skill for project "${project}" from ${cfg.skillRepo}. Check Prototype Design System path and that the file exists on the skill branch.`,
+            );
+          }
         }
       } catch (err: any) {
+        if (typeof err?.message === 'string' && err.message.startsWith('Could not load the design-system skill')) {
+          throw err;
+        }
         console.warn(`[designPrototypeService] resolvePrototypeContext failed for "${project}": ${err.message}`);
       }
     }
@@ -553,7 +568,7 @@ async function generateSinglePrototype(
       plan: planFeatureToInput(planFeature),
       prototypeContext,
       webReferences,
-    }, modelId, maxTokens, timeoutMs);
+    }, modelId, maxTokens, timeoutMs, prototypeUsageCtx(project, prototypeId));
 
     const html = sanitizeMockHtml(rawHtml);
 
@@ -711,7 +726,7 @@ export async function regeneratePrototype(
       targetStates,
       prototypeTimeoutMs,
       regenScreenshot,
-      undefined,
+      prototypeUsageCtx(prd?.project, prototypeId),
       regenProtoContext,
       regenWebReferences,
     );
@@ -1126,6 +1141,20 @@ export async function listComments(prototypeId: string): Promise<DesignPrototype
     resolvedBy: r.resolvedBy,
     createdAt: r.createdAt,
   }));
+}
+
+export async function getUnresolvedCommentCount(prototypeId: string): Promise<number> {
+  const [result] = await db
+    .select({ value: count() })
+    .from(designPrototypeComments)
+    .where(
+      and(
+        eq(designPrototypeComments.prototypeId, prototypeId),
+        eq(designPrototypeComments.resolved, false),
+      ),
+    );
+
+  return Number(result?.value ?? 0);
 }
 
 export async function addComment(

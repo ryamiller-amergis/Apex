@@ -5,7 +5,11 @@ const mockReturning = jest.fn<Promise<unknown[]>, []>();
 const mockLimit = jest.fn<Promise<unknown[]>, []>(() => Promise.resolve([]));
 const mockWhere = jest.fn(() => ({ limit: mockLimit, returning: mockReturning }));
 const mockSet = jest.fn(() => ({ where: mockWhere }));
-const mockValues = jest.fn(() => ({ returning: mockReturning }));
+const mockOnConflictDoUpdate = jest.fn().mockResolvedValue(undefined);
+const mockValues = jest.fn(() => ({
+  returning: mockReturning,
+  onConflictDoUpdate: mockOnConflictDoUpdate,
+}));
 const mockInsert = jest.fn(() => ({ values: mockValues }));
 const mockUpdate = jest.fn(() => ({ set: mockSet }));
 const mockSelect = jest.fn(() => ({ from: () => ({ where: mockWhere }) }));

@@ -2,7 +2,10 @@ import { Router, type Request, type Response } from 'express';
 import { requirePermission } from '../middleware/rbac';
 import * as rbacService from '../services/rbacService';
 import * as projectSettingsService from '../services/projectSettingsService';
-import { normalizeConfiguredRepository, validateConfiguredRepository } from '../services/foundationSkillAuthorizeService';
+import {
+  normalizeConfiguredRepository,
+  validateConfiguredRepository,
+} from '../services/foundationSkillAuthorizeService';
 import * as groupService from '../services/groupService';
 import { getDefaultModel, getAppSetting, setAppSetting } from '../services/appSettingsService';
 import { getProductSetup, ProductFoundationError } from '../services/productSetupService';
@@ -23,10 +26,67 @@ import type {
   AssignProjectRoleRequest,
 } from '../../shared/types/rbac';
 import type { UpsertProjectSkillConfigRequest, SetApproversRequest } from '../../shared/types/projectSettings';
+import { isEffortLevel } from '../../shared/types/effort';
+import type { ApprovalMode, ModuleApprovalModes } from '../../shared/types/approvals';
 import type { CreateGroupRequest, UpdateGroupRequest, SetGroupMembersRequest } from '../../shared/types/groups';
 import type { NotificationType } from '../../shared/types/notification';
 
 const ALL_NOTIFICATION_TYPES: NotificationType[] = ['system', 'ai', 'user-action', 'background'];
+
+function validateApprovalModeRequest(body: UpsertProjectSkillConfigRequest): {
+  error?: string;
+  modes: Partial<ModuleApprovalModes>;
+} {
+  const modes: Partial<ModuleApprovalModes> = {};
+  const rawModes = body.approvalModes;
+  if (
+    rawModes !== undefined &&
+    (rawModes === null || typeof rawModes !== 'object' || Array.isArray(rawModes))
+  ) {
+    return { error: 'approvalModes must be an object', modes };
+  }
+
+  if (rawModes) {
+    for (const [documentType, mode] of Object.entries(rawModes)) {
+      if (!projectSettingsService.isReviewerDocumentType(documentType)) {
+        return { error: `Invalid approvalModes key: ${documentType}`, modes: {} };
+      }
+      if (!projectSettingsService.isApprovalMode(mode)) {
+        return {
+          error: `Invalid approval mode for ${documentType}`,
+          modes: {},
+        };
+      }
+      modes[documentType] = mode;
+    }
+  }
+
+  if (
+    body.approvalMode !== undefined &&
+    !projectSettingsService.isApprovalMode(body.approvalMode)
+  ) {
+    return { error: 'Invalid approvalMode', modes: {} };
+  }
+
+  // The per-module PRD value is authoritative when both contracts are sent.
+  if (modes.prd === undefined && body.approvalMode !== undefined) {
+    modes.prd = body.approvalMode as ApprovalMode;
+  }
+  return { modes };
+}
+
+/**
+ * Every settings key ending in `Effort` must be a shared EffortLevel or null
+ * (null means "inherit"). Returns the first offending key, if any.
+ */
+function validateEffortFields(body: UpsertProjectSkillConfigRequest): string | undefined {
+  for (const [key, value] of Object.entries(body)) {
+    if (!key.endsWith('Effort')) continue;
+    if (value === null || isEffortLevel(value)) continue;
+    return `Invalid ${key}: must be low, medium, high, or null`;
+  }
+  return undefined;
+}
 
 const router = Router();
 
@@ -314,20 +374,23 @@ router.get('/project-settings', async (_req: Request, res: Response): Promise<vo
       projectSettingsService.listApproversForAllProjects(),
       projectSettingsService.listApproverGroupsForAllProjects(),
     ]);
-    const enriched = configs.map((cfg) => {
+    const enriched = await Promise.all(configs.map(async (cfg) => {
       const approvers = approversBySettingsId[cfg.id] ?? [];
       const approverGroups = approverGroupsBySettingsId[cfg.id] ?? [];
+      const approvalModes = await projectSettingsService.getApprovalModes(cfg.id);
       const countByType = (documentType: string) =>
         approvers.filter((a) => a.documentType === documentType).length +
         approverGroups.filter((g) => g.documentType === documentType).length;
       return {
         ...cfg,
+        approvalModes,
         designDocApproverCount: countByType('design_doc'),
         prdApproverCount: countByType('prd'),
         designPrototypeApproverCount: countByType('design_prototype'),
         testCaseApproverCount: countByType('test_case'),
+        adrApproverCount: countByType('adr'),
       };
-    });
+    }));
     res.json(enriched);
   } catch {
     res.status(500).json({ error: 'Internal server error' });
@@ -341,15 +404,33 @@ router.post('/project-settings', async (req: Request, res: Response): Promise<vo
       res.status(400).json({ error: 'project, friendlyName, skillRepo, and skillBranch are required' });
       return;
     }
-    body.skillRepo = normalizeConfiguredRepository(body.skillProvider, body.skillRepo);
-    const repoError = validateConfiguredRepository(body.skillProvider, body.skillRepo);
+    const effortError = validateEffortFields(body);
+    if (effortError) {
+      res.status(400).json({ error: effortError });
+      return;
+    }
+    const approvalUpdate = validateApprovalModeRequest(body);
+    if (approvalUpdate.error) {
+      res.status(400).json({ error: approvalUpdate.error });
+      return;
+    }
+    const skillRepo = normalizeConfiguredRepository(body.skillProvider, body.skillRepo);
+    const repoError = validateConfiguredRepository(body.skillProvider, skillRepo);
     if (repoError) {
       res.status(400).json({ error: repoError });
       return;
     }
     const updatedBy = (req.user as any)?.profile?.displayName ?? (req.user as any)?.profile?.upn ?? undefined;
-    const config = await projectSettingsService.upsertSkillConfig({ ...body, updatedBy });
-    res.status(201).json(config);
+    const approvalMode = approvalUpdate.modes.prd ?? body.approvalMode;
+    const config = await projectSettingsService.upsertSkillConfig({
+      ...body,
+      approvalMode,
+      approvalModes: approvalUpdate.modes,
+      skillRepo,
+      updatedBy,
+    });
+    const approvalModes = await projectSettingsService.getApprovalModes(config.id);
+    res.status(201).json({ ...config, approvalModes });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -363,15 +444,37 @@ router.put('/project-settings/:id', async (req: Request, res: Response): Promise
       res.status(400).json({ error: 'skillRepo and skillBranch are required' });
       return;
     }
-    body.skillRepo = normalizeConfiguredRepository(body.skillProvider, body.skillRepo);
-    const repoError = validateConfiguredRepository(body.skillProvider, body.skillRepo);
+    const effortError = validateEffortFields(body);
+    if (effortError) {
+      res.status(400).json({ error: effortError });
+      return;
+    }
+    const approvalUpdate = validateApprovalModeRequest(body);
+    if (approvalUpdate.error) {
+      res.status(400).json({ error: approvalUpdate.error });
+      return;
+    }
+    const skillRepo = normalizeConfiguredRepository(body.skillProvider, body.skillRepo);
+    const repoError = validateConfiguredRepository(body.skillProvider, skillRepo);
     if (repoError) {
       res.status(400).json({ error: repoError });
       return;
     }
     const updatedBy = (req.user as any)?.profile?.displayName ?? (req.user as any)?.profile?.upn ?? undefined;
-    const config = await projectSettingsService.upsertSkillConfig({ id, ...body, updatedBy });
-    res.json(config);
+    const approvalMode =
+      approvalUpdate.modes.prd ??
+      body.approvalMode ??
+      await projectSettingsService.getApprovalMode(id, 'prd');
+    const config = await projectSettingsService.upsertSkillConfig({
+      id,
+      ...body,
+      approvalMode,
+      approvalModes: approvalUpdate.modes,
+      skillRepo,
+      updatedBy,
+    });
+    const approvalModes = await projectSettingsService.getApprovalModes(id);
+    res.json({ ...config, approvalModes });
   } catch (err) {
     const cause = (err as any)?.cause;
     console.error('[admin] PUT /project-settings error:', (err as Error).message, '| cause:', cause?.message ?? cause ?? '(none)');
@@ -411,27 +514,71 @@ router.get('/project-settings/:id/approvers', async (req: Request, res: Response
 router.put('/project-settings/:id/approvers', async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const { designDocApprovers, prdApprovers, designDocApproverGroups, prdApproverGroups, designPrototypeApprovers, designPrototypeApproverGroups, testCaseApprovers, testCaseApproverGroups } = req.body as SetApproversRequest;
+    const { designDocApprovers, prdApprovers, designDocApproverGroups, prdApproverGroups, designPrototypeApprovers, designPrototypeApproverGroups, testCaseApprovers, testCaseApproverGroups, adrApprovers, adrApproverGroups } = req.body as SetApproversRequest;
     if (!Array.isArray(designDocApprovers) || !Array.isArray(prdApprovers) || !Array.isArray(designPrototypeApprovers)) {
       res.status(400).json({ error: 'designDocApprovers, prdApprovers, and designPrototypeApprovers must be arrays' });
       return;
     }
+    const hasAdrUpdate = adrApprovers !== undefined || adrApproverGroups !== undefined;
+    if (hasAdrUpdate && (!Array.isArray(adrApprovers) || !Array.isArray(adrApproverGroups))) {
+      res.status(400).json({ error: 'adrApprovers and adrApproverGroups must both be arrays when either is provided' });
+      return;
+    }
     const assignedBy = (req.user as any)?.profile?.oid ?? undefined;
-    const [designDoc, prd, designPrototype, testCase] = await Promise.all([
-      projectSettingsService.setApprovers(id, 'design_doc', designDocApprovers, assignedBy),
-      projectSettingsService.setApprovers(id, 'prd', prdApprovers, assignedBy),
-      projectSettingsService.setApprovers(id, 'design_prototype', designPrototypeApprovers, assignedBy),
-      projectSettingsService.setApprovers(id, 'test_case', testCaseApprovers ?? [], assignedBy),
-    ]);
+    await projectSettingsService.replaceApproverPools(
+      id,
+      {
+        design_doc: {
+          individuals: designDocApprovers,
+          groups: designDocApproverGroups ?? [],
+        },
+        prd: {
+          individuals: prdApprovers,
+          groups: prdApproverGroups ?? [],
+        },
+        design_prototype: {
+          individuals: designPrototypeApprovers,
+          groups: designPrototypeApproverGroups ?? [],
+        },
+        test_case: {
+          individuals: testCaseApprovers ?? [],
+          groups: testCaseApproverGroups ?? [],
+        },
+        ...(hasAdrUpdate
+          ? {
+              adr: {
+                individuals: adrApprovers!,
+                groups: adrApproverGroups!,
+              },
+            }
+          : {}),
+      },
+      assignedBy,
+    );
 
-    await Promise.all([
-      projectSettingsService.setApproverGroups(id, 'design_doc', designDocApproverGroups ?? [], assignedBy),
-      projectSettingsService.setApproverGroups(id, 'prd', prdApproverGroups ?? [], assignedBy),
-      projectSettingsService.setApproverGroups(id, 'design_prototype', designPrototypeApproverGroups ?? [], assignedBy),
-      projectSettingsService.setApproverGroups(id, 'test_case', testCaseApproverGroups ?? [], assignedBy),
-    ]);
+    const documentTypes: Array<
+      (typeof projectSettingsService.REVIEWER_DOCUMENT_TYPES)[number]
+    > = [
+      'design_doc',
+      'prd',
+      'design_prototype',
+      'test_case',
+    ];
+    if (hasAdrUpdate) documentTypes.push('adr');
+    const approvers = await Promise.all(
+      documentTypes.map((documentType) =>
+        projectSettingsService.getApproversForDocument(id, documentType)
+      )
+    );
+    const [designDoc, prd, designPrototype, testCase, adr] = approvers;
 
-    res.json({ designDoc, prd, designPrototype, testCase });
+    res.json({
+      designDoc,
+      prd,
+      designPrototype,
+      testCase,
+      ...(hasAdrUpdate ? { adr } : {}),
+    });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -441,8 +588,8 @@ router.put('/project-settings/:id/approvers', async (req: Request, res: Response
 router.get('/project-settings/:id/approver-pool/:documentType', async (req: Request, res: Response): Promise<void> => {
   try {
     const { id, documentType } = req.params;
-    if (documentType !== 'prd' && documentType !== 'design_doc' && documentType !== 'design_prototype' && documentType !== 'test_case') {
-      res.status(400).json({ error: 'documentType must be prd, design_doc, design_prototype, or test_case' });
+    if (!projectSettingsService.isReviewerDocumentType(documentType)) {
+      res.status(400).json({ error: `documentType must be one of: ${projectSettingsService.REVIEWER_DOCUMENT_TYPES.join(', ')}` });
       return;
     }
     const excludeSelf = req.query.excludeSelf === 'true';

@@ -87,6 +87,19 @@ variable "ado_project" {
   type        = string
 }
 
+variable "github_org" {
+  description = "Default GitHub organization for repo checkout (GITHUB_ORG). Use the org that owns Apex, not the Apex product name. Same value as the App Service GITHUB_ORG setting."
+  type        = string
+  default     = ""
+}
+
+variable "github_token" {
+  description = "GitHub fine-grained or classic PAT for git clone/fetch and the skill catalog (GITHUB_TOKEN). Same value as the App Service GITHUB_TOKEN setting (deploy maps GH_SKILL_TOKEN). Null skips wiring on the repo-read Container App."
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)
@@ -223,9 +236,9 @@ variable "port" {
 }
 
 variable "postgresql_location" {
-  description = "Azure region for the PostgreSQL Flexible Server (may differ from main location if subscription quota requires it)"
+  description = "Azure region for the PostgreSQL Flexible Server (may differ from main location if subscription quota requires it). Keep this equal to app_service_location: a cross-region server adds ~30 ms to every query."
   type        = string
-  default     = "East US 2"
+  default     = "Central US"
 }
 
 variable "postgresql_resource_group_name" {
@@ -237,7 +250,7 @@ variable "postgresql_resource_group_name" {
 variable "postgresql_server_name" {
   description = "Name of the PostgreSQL Flexible Server (must be globally unique)"
   type        = string
-  default     = "psql-apex-eus2"
+  default     = "psql-apex-cus"
 }
 
 variable "postgresql_admin_username" {
@@ -263,6 +276,51 @@ variable "postgresql_sku_name" {
   description = "SKU name for the PostgreSQL Flexible Server"
   type        = string
   default     = "B_Standard_B1ms"
+}
+
+variable "postgresql_storage_mb" {
+  description = "Provisioned storage for the PostgreSQL Flexible Server. Azure can grow this but never shrink it, so lowering the value fails the apply."
+  type        = number
+  default     = 32768
+}
+
+variable "postgresql_backup_retention_days" {
+  description = "Point-in-time restore window (7-35 days). Backups are deleted with the server, so this is the only recovery window once a replaced server is removed."
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = var.postgresql_backup_retention_days >= 7 && var.postgresql_backup_retention_days <= 35
+    error_message = "postgresql_backup_retention_days must be between 7 and 35."
+  }
+}
+
+variable "postgresql_azure_services_firewall_rule_name" {
+  description = "Name of the 0.0.0.0 allow-Azure-services firewall rule. Rule names are ForceNew, so servers created through the portal keep their generated name here."
+  type        = string
+  default     = "allow-azure-services"
+}
+
+variable "postgresql_pg_stat_statements_track" {
+  description = "Which statements pg_stat_statements records: none, top, or all. 'top' covers statements issued directly by the app and is what identifies a query holding pool connections."
+  type        = string
+  default     = "top"
+
+  validation {
+    condition     = contains(["none", "top", "all"], var.postgresql_pg_stat_statements_track)
+    error_message = "postgresql_pg_stat_statements_track must be none, top, or all."
+  }
+}
+
+variable "postgresql_log_min_duration_statement_ms" {
+  description = "Log statements slower than this many milliseconds. -1 disables logging; 0 logs everything and will flood the log."
+  type        = number
+  default     = 5000
+
+  validation {
+    condition     = var.postgresql_log_min_duration_statement_ms >= -1
+    error_message = "postgresql_log_min_duration_statement_ms must be -1 (disabled) or a non-negative millisecond threshold."
+  }
 }
 
 variable "postgresql_high_availability_mode" {
@@ -314,6 +372,7 @@ variable "blob_containers" {
   default = {
     pdf-artifacts  = {}
     repo-grounding = {}
+    cursor-prompts = {}
   }
 }
 
@@ -622,6 +681,80 @@ variable "ai_runs_runner_callback_token" {
 }
 
 # ---------------------------------------------------------------------------
+# Cursor worker Job — My Work cloud development (dev and production)
+# ---------------------------------------------------------------------------
+
+variable "enable_cursor_pool_workers" {
+  description = "Provision the My Work Cursor worker Job in cae-apex-ai. Off until set in that environment's tfvars."
+  type        = bool
+  default     = false
+}
+
+variable "cursor_pool_name" {
+  description = "Idle template pool name. Apex overrides the command per execution, so this is not used to claim work."
+  type        = string
+  default     = null
+}
+
+variable "cursor_pool_worker_job_name" {
+  description = "Manual Cursor worker Container Apps Job name. Null derives caj-apex-cursor-worker-{environment}."
+  type        = string
+  default     = null
+}
+
+variable "cursor_pool_worker_identity_name" {
+  description = "User-assigned identity name for Cursor pool worker executions. Null derives mi-apex-cursor-worker-{environment}."
+  type        = string
+  default     = null
+}
+
+variable "cursor_pool_worker_image" {
+  description = "Worker image containing Cursor agent CLI, git, and Apex build tools."
+  type        = string
+  default     = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+}
+
+variable "cursor_pool_worker_cpu" {
+  description = "CPU cores allocated to each Cursor pool worker execution."
+  type        = number
+  default     = 2.0
+}
+
+variable "cursor_pool_worker_memory" {
+  description = "Memory allocated to each Cursor pool worker execution."
+  type        = string
+  default     = "4Gi"
+}
+
+variable "cursor_pool_worker_timeout_seconds" {
+  description = "Maximum wall-clock duration of one Cursor pool worker Job execution."
+  type        = number
+  default     = 21600
+
+  validation {
+    condition     = var.cursor_pool_worker_timeout_seconds >= 600 && var.cursor_pool_worker_timeout_seconds <= 86400
+    error_message = "cursor_pool_worker_timeout_seconds must be between 600 and 86400."
+  }
+}
+
+variable "cursor_pool_worker_idle_release_seconds" {
+  description = "Seconds a Cursor worker remains connected after a session ends to accept follow-up turns."
+  type        = number
+  default     = 600
+
+  validation {
+    condition     = var.cursor_pool_worker_idle_release_seconds >= 0 && var.cursor_pool_worker_idle_release_seconds <= 86400
+    error_message = "cursor_pool_worker_idle_release_seconds must be between 0 and 86400."
+  }
+}
+
+variable "cursor_pool_clone_git_repos" {
+  description = "Pass --clone-git-repos to any-repo pool workers. Requires Cursor team GitHub token minting to be enabled."
+  type        = bool
+  default     = true
+}
+
+# ---------------------------------------------------------------------------
 # FEAT-007 — Real-Time Interactive Agent Transport (WebSocket + Dapr actors)
 # ---------------------------------------------------------------------------
 
@@ -756,4 +889,56 @@ variable "ai_runs_interactive_first_token_slo_ms" {
   description = "First-token latency SLO (P95, ms) gating the interactive alert. Confirm with product before enforcing; default 1500."
   type        = number
   default     = 1500
+}
+
+# ---------------------------------------------------------------------------
+# Repo read service (Stage 3 — bare-mirror HTTP API)
+# ---------------------------------------------------------------------------
+
+variable "enable_repo_read_service" {
+  description = "Provision the repo-read Container App (HTTP git cat-file/ls-tree/grep API). Additive/inert; keep false until the repo-read-service flag rolls out."
+  type        = bool
+  default     = false
+}
+
+variable "repo_read_service_container_app_name" {
+  description = "Repo-read Container App name. Null derives 'ca-apex-repo-read-{environment}'."
+  type        = string
+  default     = null
+}
+
+variable "repo_read_service_image" {
+  description = "Fully-qualified repo-read service image. Placeholder until CI publishes; image updates are ignored by Terraform lifecycle."
+  type        = string
+  default     = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+}
+
+variable "repo_read_service_environment_id" {
+  description = "Container Apps Environment to host repo-read. Null reuses the ai-runs environment. Prod runs its own environment so repo-read can sit on a dedicated workload profile without giving one to every ai-runs app."
+  type        = string
+  default     = null
+}
+
+variable "repo_read_service_workload_profile_name" {
+  description = "Workload profile within the repo-read environment. Null uses Consumption. Must already exist on the target environment."
+  type        = string
+  default     = null
+}
+
+variable "repo_read_service_cpu" {
+  description = "CPU cores per repo-read replica. 2.0 keeps Consumption-plan ephemeral disk at 8 GiB."
+  type        = number
+  default     = 2.0
+}
+
+variable "repo_read_service_memory" {
+  description = "Memory (GiB string) per repo-read replica."
+  type        = string
+  default     = "4Gi"
+}
+
+variable "repo_read_service_target_port" {
+  description = "Container port the repo-read HTTP API listens on."
+  type        = number
+  default     = 8080
 }

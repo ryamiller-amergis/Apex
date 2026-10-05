@@ -1,0 +1,64 @@
+# Rolls the repo-read Container App on Dev.
+# Use this when Deploy Dev (Quick) was started from a PR label: that path
+# loads the workflow file from main, which has no repo-read publish step.
+#
+# Actions → Publish repo-read (Dev) → Run workflow
+# Use workflow from: tbi/troubleshoot (this branch), not main.
+name: Publish repo-read (Dev)
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: 'Branch/tag/SHA to publish (empty = the branch selected for this run)'
+        required: false
+        type: string
+        default: ''
+
+env:
+  NODE_VERSION: '24.x'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.sha }}
+          fetch-depth: 0
+
+      - name: Resolve SHA
+        id: deployed
+        run: |
+          SHA=$(git rev-parse HEAD)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Publishing repo-read @ $SHA"
+          git log -1 --oneline
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build server
+        run: npm run build:server
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Publish repo-read service image
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          REPO_READ_SERVICE_CONTAINER_APP_NAME: ${{ vars.REPO_READ_SERVICE_CONTAINER_APP_NAME }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || 'rg-scrum-dev' }}
+          REPO_READ_SERVICE_IMAGE_REPO: ${{ vars.REPO_READ_SERVICE_IMAGE_REPO }}
+          IMAGE_TAG: ${{ steps.deployed.outputs.sha }}
+        run: bash scripts/ci/publish-repo-read-service.sh

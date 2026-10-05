@@ -66,6 +66,17 @@ export interface SeededInterview {
   designPrototypeOwnerId: string | null;
 }
 
+export interface SeededAdr {
+  id: string;
+  chatThreadId: string;
+  authorId: string;
+  reviewerIds: string[];
+  title: string;
+  project: string;
+  status: string;
+  content: string;
+}
+
 export interface SeededPrd {
   id: string;
   title: string;
@@ -130,6 +141,20 @@ export interface SeededProjectSettings {
   designDocValidationSkillPath: string | null;
 }
 
+export interface SeededPlaybookLifecycle {
+  definition: {
+    id: string;
+    project: string;
+    name: string;
+  };
+  draft: {
+    id: string;
+    definitionId: string;
+    versionNumber: number;
+    status: string;
+  };
+}
+
 export const SeedApi = {
   /**
    * Delete all records created by E2E tests in this run.
@@ -161,6 +186,23 @@ export const SeedApi = {
     },
   ): Promise<SeededInterview> {
     return post<SeededInterview>(request, '/seed/interview', opts);
+  },
+
+  async seedAdr(
+    request: APIRequestContext,
+    opts: {
+      authorId: string;
+      project: string;
+      title: string;
+      status?: 'in_progress' | 'generating' | 'proposed' | 'accepted' | 'superseded';
+      repo?: string;
+      content?: string;
+      reviewerIds?: string[];
+      proposedContent?: string | null;
+      skillSettingsId?: string;
+    },
+  ): Promise<SeededAdr> {
+    return post<SeededAdr>(request, '/seed/adr', opts);
   },
 
   /**
@@ -321,9 +363,23 @@ export const SeedApi = {
       prdApprovers?: string[];
       designPrototypeApprovers?: string[];
       testCaseApprovers?: string[];
+      adrApprovers?: string[];
     },
   ): Promise<SeededProjectSettings> {
     return post<SeededProjectSettings>(request, '/seed/project-settings', opts);
+  },
+
+  async seedPlaybookLifecycle(
+    request: APIRequestContext,
+    opts: {
+      project: string;
+      authorId: string;
+      viewerId: string;
+      name: string;
+      published?: boolean;
+    },
+  ): Promise<SeededPlaybookLifecycle> {
+    return post<SeededPlaybookLifecycle>(request, '/seed/playbook-lifecycle', opts);
   },
 
   /**

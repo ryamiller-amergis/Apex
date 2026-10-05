@@ -22,6 +22,7 @@ import type {
   MaterializeResult,
   MoveApexWorkItemDTO,
   RecordApexDeploymentDTO,
+  RankApexWorkItemsResult,
   UpdateApexReleaseDTO,
   UpdateApexWorkItemDTO,
   WorkItemOwnerSummary,
@@ -223,6 +224,21 @@ export function useBulkUpdateApexWorkItems(project: string | null) {
   return useMutation<ApexWorkItem[], Error, BulkUpdateApexWorkItemsDTO>({
     mutationFn: (dto) =>
       apiFetch(withProject('/api/apex-work-items/bulk', project!), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dto),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['apex-work-items', project] });
+    },
+  });
+}
+
+export function useRankApexWorkItems(project: string | null) {
+  const qc = useQueryClient();
+  return useMutation<RankApexWorkItemsResult, Error, { ids: string[] }>({
+    mutationFn: (dto) =>
+      apiFetch(withProject('/api/apex-work-items/rank', project!), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(dto),

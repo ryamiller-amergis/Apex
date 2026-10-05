@@ -9,7 +9,9 @@ import {
   useSetProjectApprovers,
 } from '../hooks/useProjectSkillConfig';
 import type { ProjectSkillConfig, UpsertProjectSkillConfigRequest, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio, SkillProvider, InterviewSkillOption, PrototypeEngine, ProjectRepositoryReadiness } from '../../shared/types/projectSettings';
-import type { ApprovalMode } from '../../shared/types/approvals';
+import type { ApprovalMode, ModuleApprovalModes, ReviewerDocumentType } from '../../shared/types/approvals';
+import { EFFORT_LEVELS, type EffortLevel } from '../../shared/types/effort';
+import { effortLabel } from '../../shared/utils/effort';
 import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
 import { useUsers } from '../hooks/useRbac';
 import { useGroupsWithMembers } from '../hooks/useGroups';
@@ -22,6 +24,7 @@ import {
   useCloneProjectRepository,
 } from '../hooks/useProjectRepositoryReadiness';
 import styles from './AdminProjectSettings.module.css';
+import { PlaybookSpendPolicyCard } from './PlaybookSpendPolicyCard';
 
 // ── BranchCombobox ─────────────────────────────────────────────────────────────
 
@@ -297,6 +300,23 @@ type ModelKey =
   | 'designModuleScopingModel'
   | 'productIntakeEvaluationModel';
 
+type EffortKey =
+  | 'interviewEffort'
+  | 'prdEffort'
+  | 'designDocEffort'
+  | 'designDocAssistantEffort'
+  | 'testCaseEffort'
+  | 'designDocValidationEffort'
+  | 'prdValidationEffort'
+  | 'developmentEffort'
+  | 'standupEffort'
+  | 'featureRequestEffort'
+  | 'technicalEffort'
+  | 'issueEffort'
+  | 'loadTestGenerationEffort'
+  | 'designModuleEffort'
+  | 'designModuleScopingEffort';
+
 interface PipelineStageDef {
   id: string;
   label: string;
@@ -305,6 +325,8 @@ interface PipelineStageDef {
   emptyLabel: string;
   /** When set, stage card shows a model override next to the skill. */
   modelKey?: ModelKey;
+  /** When set, stage card shows an effort override next to the model. */
+  effortKey?: EffortKey;
   optional?: boolean;
   /** Nest the interview skill-options editor under this stage. */
   interviewOptions?: boolean;
@@ -322,6 +344,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'interviewSkillPath',
     emptyLabel: 'None (use default)',
     modelKey: 'interviewModel',
+    effortKey: 'interviewEffort',
     interviewOptions: true,
   },
   {
@@ -331,6 +354,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'prdSkillPath',
     emptyLabel: 'None (use default)',
     modelKey: 'prdModel',
+    effortKey: 'prdEffort',
   },
   {
     id: 'prd-validation',
@@ -339,6 +363,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'prdValidationSkillPath',
     emptyLabel: 'None (skip PRD validation)',
     modelKey: 'prdValidationModel',
+    effortKey: 'prdValidationEffort',
     optional: true,
     prdValidationThreshold: true,
   },
@@ -349,6 +374,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'designDocSkillPath',
     emptyLabel: 'None (use default)',
     modelKey: 'designDocModel',
+    effortKey: 'designDocEffort',
   },
   {
     id: 'design-assistant',
@@ -357,6 +383,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'designDocAssistantSkillPath',
     emptyLabel: 'None (use default model, no skill)',
     modelKey: 'designDocAssistantModel',
+    effortKey: 'designDocAssistantEffort',
     optional: true,
   },
   {
@@ -366,6 +393,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'designDocValidationSkillPath',
     emptyLabel: 'None (skip validation phase)',
     modelKey: 'designDocValidationModel',
+    effortKey: 'designDocValidationEffort',
     optional: true,
     designDocValidationThreshold: true,
   },
@@ -376,6 +404,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'testCaseSkillPath',
     emptyLabel: 'None (skip test-case generation)',
     modelKey: 'testCaseModel',
+    effortKey: 'testCaseEffort',
     optional: true,
   },
   {
@@ -385,6 +414,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'developmentSkillPath',
     emptyLabel: 'None (use default behavior)',
     modelKey: 'developmentModel',
+    effortKey: 'developmentEffort',
     optional: true,
   },
 ];
@@ -409,7 +439,7 @@ const ADR_PIPELINE_STAGES: PipelineStageDef[] = [
     label: 'ADR Assistant',
     desc: 'Guides repository-grounded refinement of proposed ADRs',
     skillKey: 'adrAssistantSkillPath',
-    emptyLabel: 'Default (.cursor/skills/adr-assistant/SKILL.md)',
+    emptyLabel: 'Default (.agents/skills/adr-assistant/SKILL.md)',
     optional: true,
   },
 ];
@@ -422,6 +452,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'standupSkillPath',
     emptyLabel: 'None (use built-in default)',
     modelKey: 'standupModel',
+    effortKey: 'standupEffort',
   },
   {
     id: 'feature-request',
@@ -430,6 +461,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'featureRequestSkillPath',
     emptyLabel: 'None (use default)',
     modelKey: 'featureRequestModel',
+    effortKey: 'featureRequestEffort',
   },
   {
     id: 'technical',
@@ -438,6 +470,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'technicalSkillPath',
     emptyLabel: 'None (analysis unavailable)',
     modelKey: 'technicalModel',
+    effortKey: 'technicalEffort',
   },
   {
     id: 'issue',
@@ -446,6 +479,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'issueSkillPath',
     emptyLabel: 'None (analysis unavailable)',
     modelKey: 'issueModel',
+    effortKey: 'issueEffort',
   },
   {
     id: 'load-test',
@@ -454,14 +488,16 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'loadTestGenerationSkillPath',
     emptyLabel: 'Default (.cursor/skills/k6-load-test-generation/SKILL.md)',
     modelKey: 'loadTestGenerationModel',
+    effortKey: 'loadTestGenerationEffort',
   },
   {
     id: 'design-module',
     label: 'Design Module',
     desc: 'Generates Architecture Explorer module documents from curated source globs',
     skillKey: 'designModuleSkillPath',
-    emptyLabel: 'Default (.cursor/skills/design-module-doc/SKILL.md)',
+    emptyLabel: 'Default (.agents/skills/design-module-doc/SKILL.md)',
     modelKey: 'designModuleModel',
+    effortKey: 'designModuleEffort',
   },
   {
     id: 'design-module-scoping',
@@ -470,6 +506,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'designModuleScopingSkillPath',
     emptyLabel: 'Default (.cursor/skills/design-module-scoping/SKILL.md)',
     modelKey: 'designModuleScopingModel',
+    effortKey: 'designModuleScopingEffort',
   },
   {
     id: 'product-intake-evaluation',
@@ -612,6 +649,17 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
               <option key={m.id} value={m.id}>{m.displayName}</option>
             ))}
           </select>
+          <EffortSelect
+            value={opt.effort ?? ''}
+            onChange={(effort) => {
+              const next = [...options];
+              next[idx] = { ...next[idx], effort };
+              onChange(next);
+            }}
+            disabled={disabled}
+            inheritLabel="Effort: use project default"
+            testId={`ps-interview-option-effort-${idx}`}
+           {...{ 'data-testid': `ps-interview-option-effort-${idx}` }} />
         </div>
         <div className={styles.interviewOptionFlags}>
           <label className={styles.interviewOptionFlag} htmlFor={`iso-proto-${idx}`}>
@@ -646,6 +694,192 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
   </div>
 );
 
+// ── EffortSelect ───────────────────────────────────────────────────────────────
+// Reasoning-effort override dropdown, shared by pipeline stages, quick skill
+// pills, quick MCP pills, and interview skill options so every surface offers
+// the same allow-list and the same "inherit" semantics.
+
+interface EffortSelectProps {
+  value: EffortLevel | '';
+  onChange: (effort: EffortLevel | null) => void;
+  disabled?: boolean;
+  inheritLabel?: string;
+  id?: string;
+  style?: React.CSSProperties;
+  testId: string;
+}
+
+const EffortSelect: React.FC<EffortSelectProps> = ({
+  value,
+  onChange,
+  disabled,
+  inheritLabel = 'Inherit (project default)',
+  id,
+  style,
+  testId,
+}) => (
+  <select
+    id={id}
+    className={styles.select}
+    style={style}
+    value={value}
+    onChange={(e) => onChange((e.target.value as EffortLevel | '') || null)}
+    disabled={disabled}
+   {...{ 'data-testid': testId }}>
+    <option value="">{inheritLabel}</option>
+    {EFFORT_LEVELS.map((level) => (
+      <option key={level} value={level}>{effortLabel(level)}</option>
+    ))}
+  </select>
+);
+
+/** Compact effort dropdown sized for an inline pill row. */
+const PILL_CONTROL_STYLE: React.CSSProperties = {
+  flex: '0 0 10rem',
+  height: '28px',
+  padding: '4px 8px',
+  fontSize: '12px',
+};
+
+// ── SkillPillAddForm ───────────────────────────────────────────────────────────
+
+interface SkillPillAddFormProps {
+  skillList: { id: string; path: string; name: string }[];
+  availableModels: { id: string; displayName: string }[];
+  isLoadingSkills: boolean;
+  isLoadingModels: boolean;
+  isPending: boolean;
+  hasSkillRepo: boolean;
+  onAdd: (pill: QuickSkillPill) => void;
+}
+
+const SkillPillAddForm: React.FC<SkillPillAddFormProps> = ({
+  skillList,
+  availableModels,
+  isLoadingSkills,
+  isLoadingModels,
+  isPending,
+  hasSkillRepo,
+  onAdd,
+}) => {
+  const [label, setLabel] = useState('');
+  const [skillPath, setSkillPath] = useState('');
+  const [model, setModel] = useState('');
+  const [effort, setEffort] = useState<EffortLevel | ''>('');
+  const [error, setError] = useState<string | null>(null);
+
+  const disabled = isPending || isLoadingSkills || !hasSkillRepo;
+
+  const handleAdd = () => {
+    const trimmedLabel = label.trim();
+    if (!trimmedLabel) {
+      setError('Enter a label for the pill.');
+      return;
+    }
+    if (!skillPath) {
+      setError('Select a skill for the pill.');
+      return;
+    }
+
+    onAdd({
+      label: trimmedLabel,
+      skillPath,
+      model: model || null,
+      effort: effort || null,
+    });
+    setLabel('');
+    setSkillPath('');
+    setModel('');
+    setEffort('');
+    setError(null);
+  };
+
+  return (
+    <>
+      <div className={styles.pillAddRow}>
+        <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          <label className={styles.label} htmlFor="ps-pill-label">Label</label>
+          <input
+            id="ps-pill-label"
+            className={styles.input}
+            placeholder="e.g. Production Support"
+            value={label}
+            onChange={(e) => {
+              setLabel(e.target.value);
+              setError(null);
+            }}
+            disabled={disabled} {...{ 'data-testid': 'ps-pill-label' }} />
+        </div>
+        <div className={styles.field} style={{ flex: 1 }}>
+          <label className={styles.label} htmlFor="ps-pill-skill">Skill</label>
+          <select
+            id="ps-pill-skill"
+            className={styles.select}
+            value={skillPath}
+            onChange={(e) => {
+              setSkillPath(e.target.value);
+              setError(null);
+            }}
+            disabled={disabled}
+           {...{ 'data-testid': 'ps-pill-skill' }}>
+            <option value="">— select a skill —</option>
+            {skillList.map((s) => (
+              <option key={s.id} value={s.path}>{s.name}</option>
+            ))}
+          </select>
+        </div>
+        <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          <label className={styles.label} htmlFor="ps-pill-model">Model</label>
+          <select
+            id="ps-pill-model"
+            className={styles.select}
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            disabled={isPending || isLoadingModels || !hasSkillRepo}
+           {...{ 'data-testid': 'ps-pill-model' }}>
+            <option value="">Use default</option>
+            {availableModels.map((m) => (
+              <option key={m.id} value={m.id}>{m.displayName}</option>
+            ))}
+          </select>
+        </div>
+        <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          <label className={styles.label} htmlFor="ps-pill-effort">Effort</label>
+          <EffortSelect
+            id="ps-pill-effort"
+            value={effort}
+            onChange={(next) => setEffort(next ?? '')}
+            disabled={isPending || !hasSkillRepo}
+            inheritLabel="Use default"
+            testId="ps-pill-effort"
+           {...{ 'data-testid': 'ps-pill-effort' }} />
+        </div>
+        <button
+          type="button"
+          className={styles.btnAction}
+          disabled={disabled}
+          onClick={handleAdd}
+         {...{ 'data-testid': 'ps-skill-pill-add' }}>
+          Add
+        </button>
+      </div>
+      {error && (
+        <p className={styles.formError} {...{ 'data-testid': 'ps-skill-pill-add-error' }}>{error}</p>
+      )}
+      {!hasSkillRepo && (
+        <span className={styles.skillDescription} {...{ 'data-testid': 'ps-skill-pill-add-no-repo' }}>
+          Select a skill repository above before adding pills.
+        </span>
+      )}
+      {hasSkillRepo && !isLoadingSkills && skillList.length === 0 && (
+        <span className={styles.skillDescription} {...{ 'data-testid': 'ps-skill-pill-add-no-skills' }}>
+          No skills were found in this repository and branch, so there is nothing to attach a pill to.
+        </span>
+      )}
+    </>
+  );
+};
+
 // ── McpPillAddForm ─────────────────────────────────────────────────────────────
 
 interface McpPillAddFormProps {
@@ -664,6 +898,7 @@ const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoad
   const [args, setArgs] = useState('-y sendgrid-mcp');
   const [envStr, setEnvStr] = useState('SENDGRID_API_KEY=${SENDGRID_API_KEY}');
   const [model, setModel] = useState('');
+  const [effort, setEffort] = useState<EffortLevel | ''>('');
   const [systemPromptHint, setSystemPromptHint] = useState('');
   const [description, setDescription] = useState('');
 
@@ -676,6 +911,7 @@ const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoad
       label: trimmedLabel,
       mcpServerName: trimmedName,
       model: model || null,
+      effort: effort || null,
       systemPromptHint: systemPromptHint.trim() || null,
       description: description.trim() || null,
     };
@@ -709,6 +945,7 @@ const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoad
     setArgs('-y sendgrid-mcp');
     setEnvStr('SENDGRID_API_KEY=${SENDGRID_API_KEY}');
     setModel('');
+    setEffort('');
     setSystemPromptHint('');
     setDescription('');
   };
@@ -751,6 +988,17 @@ const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoad
             <option value="">Default model</option>
             {availableModels.map((m) => <option key={m.id} value={m.id}>{m.displayName}</option>)}
           </select>
+        </div>
+        <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- label is paired with the control below; wrapping it would change the field layout */}
+          <label className={styles.label}>Effort override</label>
+          <EffortSelect
+            value={effort}
+            onChange={(next) => setEffort(next ?? '')}
+            disabled={isPending}
+            inheritLabel="Default effort"
+            testId="ps-mcp-add-effort"
+           {...{ 'data-testid': 'ps-mcp-add-effort' }} />
         </div>
       </div>
 
@@ -978,6 +1226,26 @@ interface EditState {
   designModuleScopingModel: string;
   productIntakeEvaluationModel: string;
   defaultModel: string;
+  interviewEffort: EffortLevel | '';
+  prdEffort: EffortLevel | '';
+  adrEffort: EffortLevel | '';
+  designDocEffort: EffortLevel | '';
+  designDocAssistantEffort: EffortLevel | '';
+  designPrototypeEffort: EffortLevel | '';
+  testCaseEffort: EffortLevel | '';
+  designDocValidationEffort: EffortLevel | '';
+  prdAssistantEffort: EffortLevel | '';
+  prdValidationEffort: EffortLevel | '';
+  developmentEffort: EffortLevel | '';
+  standupEffort: EffortLevel | '';
+  featureRequestEffort: EffortLevel | '';
+  technicalEffort: EffortLevel | '';
+  issueEffort: EffortLevel | '';
+  calendarAssistantEffort: EffortLevel | '';
+  loadTestGenerationEffort: EffortLevel | '';
+  designModuleEffort: EffortLevel | '';
+  designModuleScopingEffort: EffortLevel | '';
+  defaultEffort: EffortLevel | '';
   prdReviewBedrockModelId: string;
   prdReviewBedrockMaxTokens: number;
   designPrototypeBedrockModelId: string;
@@ -1006,6 +1274,7 @@ interface EditState {
   quickSkillPills: QuickSkillPill[];
   quickMcpPills: QuickMcpPill[];
   approvalMode: ApprovalMode;
+  approvalModes: ModuleApprovalModes;
   isNew: boolean;
 }
 
@@ -1025,6 +1294,13 @@ const emptyEdit = (): EditState => ({
   technicalModel: '', issueModel: '', loadTestGenerationModel: '', designModuleModel: '',
   designModuleScopingModel: '', productIntakeEvaluationModel: '',
   defaultModel: '',
+  interviewEffort: '', prdEffort: '', adrEffort: '', designDocEffort: '',
+  designDocAssistantEffort: '', designPrototypeEffort: '', testCaseEffort: '',
+  designDocValidationEffort: '', prdAssistantEffort: '', prdValidationEffort: '',
+  developmentEffort: '', standupEffort: '', featureRequestEffort: '',
+  technicalEffort: '', issueEffort: '', calendarAssistantEffort: '',
+  loadTestGenerationEffort: '', designModuleEffort: '', designModuleScopingEffort: '',
+  defaultEffort: '',
   prdReviewBedrockModelId: '',
   prdReviewBedrockMaxTokens: 16000,
   designPrototypeBedrockModelId: '',
@@ -1042,7 +1318,15 @@ const emptyEdit = (): EditState => ({
   uiLabRegenBedrockModelId: '',
   uiLabRegenBedrockMaxTokens: 16000,
   uiLabBedrockTemperature: 0,
-  quickSkillPills: [], quickMcpPills: [], approvalMode: 'any_one', isNew: true,
+  quickSkillPills: [], quickMcpPills: [], approvalMode: 'any_one',
+  approvalModes: {
+    prd: 'any_one',
+    design_doc: 'any_one',
+    design_prototype: 'any_one',
+    test_case: 'any_one',
+    adr: 'any_one',
+  },
+  isNew: true,
   interviewSkillOptions: [], prototypeStageEnabled: true,
   interviewWebResearchEnabled: false, interviewWebMcp: null, prototypeEngine: 'bedrock',
   prototypeDesignSystemPath: '', screenInventoryPath: '', prototypeWebReferencesEnabled: false,
@@ -1077,6 +1361,7 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
 }) => {
   const skillValue = edit[stage.skillKey];
   const modelValue = stage.modelKey ? edit[stage.modelKey] : '';
+  const effortValue = stage.effortKey ? edit[stage.effortKey] : '';
   const defaultModelLabel = edit.defaultModel
     ? availableModels.find((m) => m.id === edit.defaultModel)?.displayName ?? edit.defaultModel
     : 'system default (composer-2)';
@@ -1149,16 +1434,58 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
                   )}
                 </div>
               )}
+              {stage.effortKey && (
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor={`ps-${stage.effortKey}`}>Effort override</label>
+                  <select
+                    id={`ps-${stage.effortKey}`}
+                    className={styles.select}
+                    value={effortValue}
+                    onChange={(e) => onEditChange({
+                      [stage.effortKey!]: e.target.value as EffortLevel | '',
+                    })}
+                    disabled={disabled}
+                   {...{ 'data-testid': `ps-stage-effort-${stage.effortKey}` }}>
+                    <option value="">Inherit (project default)</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                </div>
+              )}
             </div>
           )}
           {stage.interviewOptions && (
-            <InterviewOptionsEditor
-              options={edit.interviewSkillOptions}
-              skillList={skillList}
-              availableModels={availableModels}
-              disabled={disabled}
-              skillsDisabled={skillsDisabled}
-              onChange={(options) => onEditChange({ interviewSkillOptions: options })} {...{ 'data-testid': 'ps-interview-options-editor' }} />
+            <>
+              {stage.effortKey && (
+                <div className={styles.stageFieldSingle}>
+                  <div className={styles.field}>
+                    <label className={styles.label} htmlFor={`ps-${stage.effortKey}`}>Effort override</label>
+                    <select
+                      id={`ps-${stage.effortKey}`}
+                      className={styles.select}
+                      value={effortValue}
+                      onChange={(e) => onEditChange({
+                        [stage.effortKey!]: e.target.value as EffortLevel | '',
+                      })}
+                      disabled={disabled}
+                     {...{ 'data-testid': `ps-stage-effort-${stage.effortKey}` }}>
+                      <option value="">Inherit (project default)</option>
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+              <InterviewOptionsEditor
+                options={edit.interviewSkillOptions}
+                skillList={skillList}
+                availableModels={availableModels}
+                disabled={disabled}
+                skillsDisabled={skillsDisabled}
+                onChange={(options) => onEditChange({ interviewSkillOptions: options })} {...{ 'data-testid': 'ps-interview-options-editor' }} />
+            </>
           )}
           {stage.prdValidationThreshold && (
             <div className={styles.field} style={{ marginTop: '12px' }}>
@@ -1355,6 +1682,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   const [designPrototypeApproverGroupIds, setDesignPrototypeApproverGroupIds] = useState<string[]>([]);
   const [testCaseApproverIds, setTestCaseApproverIds] = useState<string[]>([]);
   const [testCaseApproverGroupIds, setTestCaseApproverGroupIds] = useState<string[]>([]);
+  const [adrApproverIds, setAdrApproverIds] = useState<string[]>([]);
+  const [adrApproverGroupIds, setAdrApproverGroupIds] = useState<string[]>([]);
 
   // ── Data queries dependent on edit state ───────────────────────────────
   const { data: repos = [], isLoading: isLoadingRepos } = useSkillRepos(edit?.project || null, edit?.skillProvider);
@@ -1369,7 +1698,11 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     edit?.skillBranch || undefined,
     edit?.skillProvider,
   );
-  const { data: approversData } = useProjectApprovers(edit?.id || null);
+  const {
+    data: approversData,
+    isSuccess: approversLoadedSuccessfully,
+    isError: approversLoadFailed,
+  } = useProjectApprovers(edit?.id || null);
   const setApprovers = useSetProjectApprovers();
   const { data: allGroupsWithMembers = [] } = useGroupsWithMembers(selectedProject);
 
@@ -1411,6 +1744,12 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     );
     setTestCaseApproverGroupIds(
       approverGroups.filter((g) => g.documentType === 'test_case').map((g) => g.groupId),
+    );
+    setAdrApproverIds(
+      approvers.filter((a) => a.documentType === 'adr').map((a) => a.userId),
+    );
+    setAdrApproverGroupIds(
+      approverGroups.filter((g) => g.documentType === 'adr').map((g) => g.groupId),
     );
   }, [approversData, edit?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1504,6 +1843,26 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designModuleScopingModel: config.designModuleScopingModel ?? '',
       productIntakeEvaluationModel: config.productIntakeEvaluationModel ?? '',
       defaultModel: config.defaultModel ?? '',
+      interviewEffort: config.interviewEffort ?? '',
+      prdEffort: config.prdEffort ?? '',
+      adrEffort: config.adrEffort ?? '',
+      designDocEffort: config.designDocEffort ?? '',
+      designDocAssistantEffort: config.designDocAssistantEffort ?? '',
+      designPrototypeEffort: config.designPrototypeEffort ?? '',
+      testCaseEffort: config.testCaseEffort ?? '',
+      designDocValidationEffort: config.designDocValidationEffort ?? '',
+      prdAssistantEffort: config.prdAssistantEffort ?? '',
+      prdValidationEffort: config.prdValidationEffort ?? '',
+      developmentEffort: config.developmentEffort ?? '',
+      standupEffort: config.standupEffort ?? '',
+      featureRequestEffort: config.featureRequestEffort ?? '',
+      technicalEffort: config.technicalEffort ?? '',
+      issueEffort: config.issueEffort ?? '',
+      calendarAssistantEffort: config.calendarAssistantEffort ?? '',
+      loadTestGenerationEffort: config.loadTestGenerationEffort ?? '',
+      designModuleEffort: config.designModuleEffort ?? '',
+      designModuleScopingEffort: config.designModuleScopingEffort ?? '',
+      defaultEffort: config.defaultEffort ?? '',
       prdReviewBedrockModelId: config.prdReviewBedrockModelId ?? '',
       prdReviewBedrockMaxTokens: config.prdReviewBedrockMaxTokens ?? 16000,
       designPrototypeBedrockModelId: config.designPrototypeBedrockModelId ?? '',
@@ -1524,6 +1883,13 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       quickSkillPills: config.quickSkillPills ?? [],
       quickMcpPills: config.quickMcpPills ?? [],
       approvalMode: config.approvalMode ?? 'any_one',
+      approvalModes: config.approvalModes ?? {
+        prd: config.approvalMode ?? 'any_one',
+        design_doc: config.approvalMode ?? 'any_one',
+        design_prototype: config.approvalMode ?? 'any_one',
+        test_case: config.approvalMode ?? 'any_one',
+        adr: 'any_one',
+      },
       interviewSkillOptions: config.interviewSkillOptions ?? [],
       prototypeStageEnabled: config.prototypeStageEnabled !== false,
       interviewWebResearchEnabled: config.interviewWebResearchEnabled ?? false,
@@ -1604,6 +1970,26 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         designModuleScopingModel: edit.designModuleScopingModel || null,
         productIntakeEvaluationModel: edit.productIntakeEvaluationModel || null,
         defaultModel: edit.defaultModel || null,
+        interviewEffort: edit.interviewEffort || null,
+        prdEffort: edit.prdEffort || null,
+        adrEffort: edit.adrEffort || null,
+        designDocEffort: edit.designDocEffort || null,
+        designDocAssistantEffort: edit.designDocAssistantEffort || null,
+        designPrototypeEffort: edit.designPrototypeEffort || null,
+        testCaseEffort: edit.testCaseEffort || null,
+        designDocValidationEffort: edit.designDocValidationEffort || null,
+        prdAssistantEffort: edit.prdAssistantEffort || null,
+        prdValidationEffort: edit.prdValidationEffort || null,
+        developmentEffort: edit.developmentEffort || null,
+        standupEffort: edit.standupEffort || null,
+        featureRequestEffort: edit.featureRequestEffort || null,
+        technicalEffort: edit.technicalEffort || null,
+        issueEffort: edit.issueEffort || null,
+        calendarAssistantEffort: edit.calendarAssistantEffort || null,
+        loadTestGenerationEffort: edit.loadTestGenerationEffort || null,
+        designModuleEffort: edit.designModuleEffort || null,
+        designModuleScopingEffort: edit.designModuleScopingEffort || null,
+        defaultEffort: edit.defaultEffort || null,
         prdReviewBedrockModelId: edit.prdReviewBedrockModelId || null,
         prdReviewBedrockMaxTokens: edit.prdReviewBedrockMaxTokens || null,
         designPrototypeBedrockModelId: edit.designPrototypeBedrockModelId || null,
@@ -1634,7 +2020,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         prototypeDesignSystemPath: edit.prototypeDesignSystemPath || null,
         screenInventoryPath: edit.screenInventoryPath || null,
         prototypeWebReferencesEnabled: edit.prototypeWebReferencesEnabled,
-        approvalMode: edit.approvalMode,
+        approvalMode: edit.approvalModes.prd,
+        approvalModes: edit.approvalModes,
       };
 
       const savedConfig = await upsert.mutateAsync({
@@ -1648,9 +2035,11 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         designDocApproverIds.length > 0 ||
         prdApproverIds.length > 0 || designPrototypeApproverIds.length > 0 ||
         testCaseApproverIds.length > 0 ||
+        adrApproverIds.length > 0 ||
         designDocApproverGroupIds.length > 0 ||
         prdApproverGroupIds.length > 0 || designPrototypeApproverGroupIds.length > 0 ||
         testCaseApproverGroupIds.length > 0 ||
+        adrApproverGroupIds.length > 0 ||
         (approversData && (approversData.approvers.length > 0 || approversData.approverGroups.length > 0));
       if (hasApprovers) {
         try {
@@ -1664,10 +2053,11 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
             designPrototypeApproverGroups: designPrototypeApproverGroupIds,
             testCaseApprovers: testCaseApproverIds,
             testCaseApproverGroups: testCaseApproverGroupIds,
+            adrApprovers: adrApproverIds,
+            adrApproverGroups: adrApproverGroupIds,
           });
         } catch (approverErr) {
-          // Repo config already saved — close the form and surface a follow-up warning.
-          setEdit(null);
+          // Keep the editor and selections visible so the reviewer save can be retried.
           setFormError(
             approverErr instanceof Error
               ? `Repo config saved, but reviewers failed to save: ${approverErr.message}`
@@ -1702,7 +2092,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     const prdCount = config.prdApproverCount ?? 0;
     const dpCount = config.designPrototypeApproverCount ?? 0;
     const tcCount = config.testCaseApproverCount ?? 0;
-    if (ddCount === 0 && prdCount === 0 && dpCount === 0 && tcCount === 0) {
+    const adrCount = config.adrApproverCount ?? 0;
+    if (ddCount === 0 && prdCount === 0 && dpCount === 0 && tcCount === 0 && adrCount === 0) {
       return <span className={`${styles.approverBadge} ${styles.approverBadgeEmpty}`}>No reviewers</span>;
     }
     const parts: string[] = [];
@@ -1710,17 +2101,99 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     if (dpCount > 0) parts.push(`${dpCount} design prototype`);
     if (prdCount > 0) parts.push(`${prdCount} PRD`);
     if (tcCount > 0) parts.push(`${tcCount} QA`);
+    if (adrCount > 0) parts.push(`${adrCount} ADR`);
     return <span className={styles.approverBadge}>{parts.join(' · ')}</span>;
   };
 
+  const renderApprovalMode = (
+    module: ReviewerDocumentType,
+    label: string,
+    userIds: string[],
+    groupIds: string[],
+  ) => {
+    const poolIsConfigured = userIds.length > 0 || groupIds.length > 0;
+    const showNoReviewers = approversLoadedSuccessfully && !poolIsConfigured;
+    if (showNoReviewers) {
+      return (
+        <p
+          className={styles.accordionHelp}
+          aria-live="polite"
+          {...{ 'data-testid': `ps-no-reviewers-helper-${module}` }}
+        >
+          <strong className={styles.noReviewersLabel}>No Reviewers</strong>
+          {' — documents will be approved by their owner'}
+        </p>
+      );
+    }
+
+    const mode = edit?.approvalModes[module] ?? 'any_one';
+    const groupLabelId = `ps-approval-mode-${module}-label`;
+    return (
+      <div
+        className={styles.approvalModeSection}
+        role="radiogroup"
+        aria-labelledby={groupLabelId}
+        aria-describedby={approversLoadFailed ? `ps-approval-mode-${module}-load-note` : undefined}
+        {...{ 'data-testid': `ps-approval-mode-${module}` }}
+      >
+        <p id={groupLabelId} className={styles.approverSubTitle}>{label} Approval Mode</p>
+        {approversLoadFailed && (
+          <span id={`ps-approval-mode-${module}-load-note`} className={styles.accordionHelp}>
+            Reviewer configuration could not be refreshed. Showing the last-known approval mode.
+          </span>
+        )}
+        <div className={styles.approvalModeOptions}>
+          {(['any_one', 'all_required'] as const).map((option) => {
+            const optionId = `ps-approval-mode-${module}-${option.replace('_', '-')}`;
+            const optionLabel = option === 'any_one' ? 'Any One' : 'All Required';
+            return (
+              <label
+                key={option}
+                htmlFor={optionId}
+                className={`${styles.approvalModeOption} ${mode === option ? styles.approvalModeOptionSelected : ''}`}
+              >
+                <input
+                  id={optionId}
+                  type="radio"
+                  name={`approvalMode-${module}`}
+                  value={option}
+                  checked={mode === option}
+                  onChange={() => setEdit((prev) => prev ? {
+                    ...prev,
+                    approvalModes: { ...prev.approvalModes, [module]: option },
+                  } : prev)}
+                  disabled={upsert.isPending}
+                  className={styles.approvalModeRadio}
+                  {...{ 'data-testid': optionId }}
+                />
+                <div>
+                  <span className={styles.approvalModeLabel}>{optionLabel}</span>
+                  <span className={styles.approvalModeDesc}>
+                    {option === 'any_one'
+                      ? 'Document is approved when any assigned reviewer approves'
+                      : 'All assigned reviewers must approve the document'}
+                  </span>
+                </div>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   const renderApproverSection = (
+    module: ReviewerDocumentType,
     title: string,
     userIds: string[],
     setUserIds: React.Dispatch<React.SetStateAction<string[]>>,
     groupIds: string[],
     setGroupIds: React.Dispatch<React.SetStateAction<string[]>>,
   ) => (
-    <div className={styles.approverSubSection}>
+    <div
+      className={styles.approverSubSection}
+      {...{ 'data-testid': `ps-${module}-approver-pool` }}
+    >
       <p className={styles.approverSubTitle}>{title}</p>
       <GroupAwarePeoplePicker
         groups={groupsWithMembers}
@@ -1732,6 +2205,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         disabled={upsert.isPending}
         placeholder="Search groups or people to add…"
       />
+      {renderApprovalMode(module, title, userIds, groupIds)}
     </div>
   );
 
@@ -1756,14 +2230,19 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           )}
         </div>
 
+        <PlaybookSpendPolicyCard
+          project={selectedProject}
+          data-testid="playbook-spend-policy-card-entry"
+        />
+
         {/* ── Edit form (accordion layout) ────────────────────────────── */}
         {edit && (
           <div className={styles.formCard}>
             <p className={styles.formTitle}>{edit.isNew ? 'Add Repo Config' : `Edit: ${edit.friendlyName || edit.project}`}</p>
 
-            {/* Section 1: Repository & Branch */}
+            {/* Section 1: Repository & Defaults */}
             <AccordionSection
-              title="Repository & Branch"
+              title="Repository & Defaults"
               expanded={expandedSections.repo}
               onToggle={() => toggleSection('repo')}
             >
@@ -1854,24 +2333,44 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 </div>
               </div>
 
-              <div className={styles.field}>
-                <label className={styles.label} htmlFor="ps-defaultModel">Default Model</label>
-                <select
-                  id="ps-defaultModel"
-                  className={styles.select}
-                  value={edit.defaultModel}
-                  onChange={(e) => setEdit((prev) => prev ? { ...prev, defaultModel: e.target.value } : prev)}
-                  disabled={upsert.isPending || isLoadingModels}
-                 {...{ 'data-testid': 'ps-defaultModel' }}>
-                  <option value="">Use system default (composer-2)</option>
-                  {!availableModels.some((m) => m.id === 'auto-smart') && (
-                    <option value="auto-smart">Auto</option>
-                  )}
-                  {availableModels.map((m) => (
-                    <option key={m.id} value={m.id}>{m.displayName}</option>
-                  ))}
-                </select>
-                <span className={styles.modelDefault}>Fallback model for all pipeline stages without a specific override</span>
+              <div className={styles.formGrid}>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-defaultModel">Default Model</label>
+                  <select
+                    id="ps-defaultModel"
+                    className={styles.select}
+                    value={edit.defaultModel}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, defaultModel: e.target.value } : prev)}
+                    disabled={upsert.isPending || isLoadingModels}
+                   {...{ 'data-testid': 'ps-defaultModel' }}>
+                    <option value="">Use system default (composer-2)</option>
+                    {!availableModels.some((m) => m.id === 'auto-smart') && (
+                      <option value="auto-smart">Auto</option>
+                    )}
+                    {availableModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.displayName}</option>
+                    ))}
+                  </select>
+                  <span className={styles.modelDefault}>Fallback model for all pipeline stages without a specific override</span>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-defaultEffort">Default Effort</label>
+                  <select
+                    id="ps-defaultEffort"
+                    className={styles.select}
+                    value={edit.defaultEffort}
+                    onChange={(e) => patchEdit({
+                      defaultEffort: e.target.value as EffortLevel | '',
+                    })}
+                    disabled={upsert.isPending}
+                   {...{ 'data-testid': 'ps-defaultEffort' }}>
+                    <option value="">Use Cursor SDK default</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                  <span className={styles.modelDefault}>Fallback effort for stages without a specific override</span>
+                </div>
               </div>
 
               <div className={styles.field} style={{ marginTop: '12px' }}>
@@ -1975,6 +2474,23 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     </span>
                   )}
                 </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-adrEffort">ADR effort override</label>
+                  <select
+                    id="ps-adrEffort"
+                    className={styles.select}
+                    value={edit.adrEffort}
+                    onChange={(e) => patchEdit({
+                      adrEffort: e.target.value as EffortLevel | '',
+                    })}
+                    disabled={upsert.isPending}
+                   {...{ 'data-testid': 'ps-adrEffort' }}>
+                    <option value="">Inherit (project default)</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                </div>
               </div>
               <div className={styles.stageList}>
                 {ADR_PIPELINE_STAGES.map((stage) => (
@@ -2032,7 +2548,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 Each project supplies its own design system for Bedrock prototype generation.
                 The design-system skill file (from the project&apos;s repo) defines brand tokens,
                 components, and shell — no MaxView styles are injected. Leave the path blank to
-                use the convention path <code>.cursor/skills/design-system/SKILL.md</code>.
+                use the convention path <code>.agents/skills/design-system/SKILL.md</code>
+                (then <code>.cursor/skills/design-system/SKILL.md</code>).
               </p>
               <div className={styles.formGrid}>
                 <div className={styles.field}>
@@ -2044,7 +2561,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, prototypeDesignSystemPath: e.target.value } : prev)}
                     disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
                    {...{ 'data-testid': 'ps-protoDesignSystemPath' }}>
-                    <option value="">None (use convention path .cursor/skills/design-system/SKILL.md)</option>
+                    <option value="">None (convention: .agents/skills/design-system/SKILL.md, then .cursor/skills)</option>
                     {skillList.map((s) => (
                       <option key={s.id} value={s.path}>{s.name}</option>
                     ))}
@@ -2389,8 +2906,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
             <AccordionSection
               title="Reviewers"
               hint={
-                (designDocApproverIds.length + prdApproverIds.length + designDocApproverGroupIds.length + prdApproverGroupIds.length + designPrototypeApproverIds.length + testCaseApproverIds.length + testCaseApproverGroupIds.length) > 0
-                  ? `${designDocApproverIds.length + prdApproverIds.length + designPrototypeApproverIds.length + testCaseApproverIds.length} people, ${designDocApproverGroupIds.length + prdApproverGroupIds.length + designPrototypeApproverGroupIds.length + testCaseApproverGroupIds.length} groups`
+                (designDocApproverIds.length + prdApproverIds.length + designDocApproverGroupIds.length + prdApproverGroupIds.length + designPrototypeApproverIds.length + testCaseApproverIds.length + testCaseApproverGroupIds.length + adrApproverIds.length + adrApproverGroupIds.length) > 0
+                  ? `${designDocApproverIds.length + prdApproverIds.length + designPrototypeApproverIds.length + testCaseApproverIds.length + adrApproverIds.length} people, ${designDocApproverGroupIds.length + prdApproverGroupIds.length + designPrototypeApproverGroupIds.length + testCaseApproverGroupIds.length + adrApproverGroupIds.length} groups`
                   : undefined
               }
               expanded={expandedSections.approvers}
@@ -2400,48 +2917,11 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 Designate who can review documents for this project. Users must also have the appropriate review permission.
               </p>
 
-              <div className={styles.approvalModeSection} {...{ 'data-testid': 'ps-approval-mode' }}>
-                <p className={styles.approverSubTitle}>Approval Mode</p>
-                <div className={styles.approvalModeOptions}>
-                  <label className={`${styles.approvalModeOption} ${edit.approvalMode === 'any_one' ? styles.approvalModeOptionSelected : ''}`}>
-                    <input
-                      type="radio"
-                      name="approvalMode"
-                      value="any_one"
-                      checked={edit.approvalMode === 'any_one'}
-                      onChange={() => setEdit((prev) => prev ? { ...prev, approvalMode: 'any_one' } : prev)}
-                      disabled={upsert.isPending}
-                      className={styles.approvalModeRadio}
-                      {...{ 'data-testid': 'ps-approval-mode-any-one' }}
-                    />
-                    <div>
-                      <span className={styles.approvalModeLabel}>Any One</span>
-                      <span className={styles.approvalModeDesc}>Document is approved when any assigned reviewer approves</span>
-                    </div>
-                  </label>
-                  <label className={`${styles.approvalModeOption} ${edit.approvalMode === 'all_required' ? styles.approvalModeOptionSelected : ''}`}>
-                    <input
-                      type="radio"
-                      name="approvalMode"
-                      value="all_required"
-                      checked={edit.approvalMode === 'all_required'}
-                      onChange={() => setEdit((prev) => prev ? { ...prev, approvalMode: 'all_required' } : prev)}
-                      disabled={upsert.isPending}
-                      className={styles.approvalModeRadio}
-                      {...{ 'data-testid': 'ps-approval-mode-all-required' }}
-                    />
-                    <div>
-                      <span className={styles.approvalModeLabel}>All Required</span>
-                      <span className={styles.approvalModeDesc}>All assigned reviewers must approve the document</span>
-                    </div>
-                  </label>
-                </div>
-              </div>
-
-              {renderApproverSection('Design Doc Reviewers', designDocApproverIds, setDesignDocApproverIds, designDocApproverGroupIds, setDesignDocApproverGroupIds)}
-              {renderApproverSection('PRD Reviewers', prdApproverIds, setPrdApproverIds, prdApproverGroupIds, setPrdApproverGroupIds)}
-              {renderApproverSection('Design Prototype Reviewers', designPrototypeApproverIds, setDesignPrototypeApproverIds, designPrototypeApproverGroupIds, setDesignPrototypeApproverGroupIds)}
-              {renderApproverSection('QA Reviewers', testCaseApproverIds, setTestCaseApproverIds, testCaseApproverGroupIds, setTestCaseApproverGroupIds)}
+              {renderApproverSection('design_doc', 'Design Doc Reviewers', designDocApproverIds, setDesignDocApproverIds, designDocApproverGroupIds, setDesignDocApproverGroupIds)}
+              {renderApproverSection('prd', 'PRD Reviewers', prdApproverIds, setPrdApproverIds, prdApproverGroupIds, setPrdApproverGroupIds)}
+              {renderApproverSection('design_prototype', 'Design Prototype Reviewers', designPrototypeApproverIds, setDesignPrototypeApproverIds, designPrototypeApproverGroupIds, setDesignPrototypeApproverGroupIds)}
+              {renderApproverSection('test_case', 'QA Reviewers', testCaseApproverIds, setTestCaseApproverIds, testCaseApproverGroupIds, setTestCaseApproverGroupIds)}
+              {renderApproverSection('adr', 'Architecture Decision Record Reviewers', adrApproverIds, setAdrApproverIds, adrApproverGroupIds, setAdrApproverGroupIds)}
             </AccordionSection>
 
             {/* Section 6: Quick Skill Pills */}
@@ -2478,6 +2958,18 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                             <option key={m.id} value={m.id}>{m.displayName}</option>
                           ))}
                         </select>
+                        <EffortSelect
+                          style={PILL_CONTROL_STYLE}
+                          value={pill.effort ?? ''}
+                          onChange={(effort) => {
+                            const pills = [...edit.quickSkillPills];
+                            pills[idx] = { ...pills[idx], effort };
+                            setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
+                          }}
+                          disabled={upsert.isPending}
+                          inheritLabel="Default effort"
+                          testId={`ps-skill-pill-effort-${idx}`}
+                         {...{ 'data-testid': `ps-skill-pill-effort-${idx}` }} />
                         <button
                           type="button"
                           className={styles.btnAction}
@@ -2539,68 +3031,48 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                           disabled={upsert.isPending} {...{ 'data-testid': `ps-skill-pill-bypass-scope-${idx}` }} />
                         Bypass scope guardrail (allows this skill to research public/external topics)
                       </label>
+                      <div
+                        className={styles.approverSubSection}
+                        {...{ 'data-testid': `ps-skill-pill-allowlist-${idx}` }}
+                      >
+                        <p className={styles.approverSubTitle}>
+                          Visible to — leave empty for everyone with Home access
+                        </p>
+                        <GroupAwarePeoplePicker
+                          groups={groupsWithMembers}
+                          availableUsers={allUsers}
+                          selectedUserIds={pill.allowedUserIds ?? []}
+                          selectedGroupIds={pill.allowedGroupIds ?? []}
+                          onUserIdsChange={(ids) => setEdit((prev) => {
+                            if (!prev) return prev;
+                            const pills = [...prev.quickSkillPills];
+                            pills[idx] = { ...pills[idx], allowedUserIds: ids };
+                            return { ...prev, quickSkillPills: pills };
+                          })}
+                          onGroupIdsChange={(ids) => setEdit((prev) => {
+                            if (!prev) return prev;
+                            const pills = [...prev.quickSkillPills];
+                            pills[idx] = { ...pills[idx], allowedGroupIds: ids };
+                            return { ...prev, quickSkillPills: pills };
+                          })}
+                          disabled={upsert.isPending}
+                          placeholder="Search groups or people to add…"
+                        />
+                      </div>
                     </div>
                   ))}
                 </div>
               )}
 
-              <div className={styles.pillAddRow}>
-                <div className={styles.field} style={{ flex: '0 0 10rem' }}>
-                  <label className={styles.label} htmlFor="ps-pill-label">Label</label>
-                  <input
-                    id="ps-pill-label"
-                    className={styles.input}
-                    placeholder="e.g. Production Support"
-                    disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo} {...{ 'data-testid': 'ps-pill-label' }} />
-                </div>
-                <div className={styles.field} style={{ flex: 1 }}>
-                  <label className={styles.label} htmlFor="ps-pill-skill">Skill</label>
-                  <select
-                    id="ps-pill-skill"
-                    className={styles.select}
-                    disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                   {...{ 'data-testid': 'ps-pill-skill' }}>
-                    <option value="">— select a skill —</option>
-                    {skillList.map((s) => (
-                      <option key={s.id} value={s.path}>{s.name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className={styles.field} style={{ flex: '0 0 10rem' }}>
-                  <label className={styles.label} htmlFor="ps-pill-model">Model</label>
-                  <select
-                    id="ps-pill-model"
-                    className={styles.select}
-                    disabled={upsert.isPending || isLoadingModels || !edit.skillRepo}
-                   {...{ 'data-testid': 'ps-pill-model' }}>
-                    <option value="">Use default</option>
-                    {availableModels.map((m) => (
-                      <option key={m.id} value={m.id}>{m.displayName}</option>
-                    ))}
-                  </select>
-                </div>
-                <button
-                  type="button"
-                  className={styles.btnAction}
-                  disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                  onClick={() => {
-                    const labelEl = document.getElementById('ps-pill-label') as HTMLInputElement | null;
-                    const skillEl = document.getElementById('ps-pill-skill') as HTMLSelectElement | null;
-                    const modelEl = document.getElementById('ps-pill-model') as HTMLSelectElement | null;
-                    if (!labelEl || !skillEl) return;
-                    const label = labelEl.value.trim();
-                    const skillPath = skillEl.value;
-                    if (!label || !skillPath) return;
-                    const pillModel = modelEl?.value || null;
-                    setEdit((prev) => prev ? { ...prev, quickSkillPills: [...prev.quickSkillPills, { label, skillPath, model: pillModel }] } : prev);
-                    labelEl.value = '';
-                    skillEl.value = '';
-                    if (modelEl) modelEl.value = '';
-                  }}
-                 {...{ 'data-testid': 'ps-skill-pill-add' }}>
-                  Add
-                </button>
-              </div>
+              <SkillPillAddForm
+                skillList={skillList}
+                availableModels={availableModels}
+                isLoadingSkills={isLoadingSkills}
+                isLoadingModels={isLoadingModels}
+                isPending={upsert.isPending}
+                hasSkillRepo={Boolean(edit.skillRepo)}
+                onAdd={(pill) => setEdit((prev) => prev ? { ...prev, quickSkillPills: [...prev.quickSkillPills, pill] } : prev)}
+               {...{ 'data-testid': 'ps-skill-pill-add-form' }} />
             </AccordionSection>
 
             {/* Section 7: Quick MCP Pills */}
@@ -2639,6 +3111,18 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                             <option key={m.id} value={m.id}>{m.displayName}</option>
                           ))}
                         </select>
+                        <EffortSelect
+                          style={PILL_CONTROL_STYLE}
+                          value={pill.effort ?? ''}
+                          onChange={(effort) => {
+                            const pills = [...edit.quickMcpPills];
+                            pills[idx] = { ...pills[idx], effort };
+                            setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                          }}
+                          disabled={upsert.isPending}
+                          inheritLabel="Default effort"
+                          testId={`ps-mcp-pill-effort-${idx}`}
+                         {...{ 'data-testid': `ps-mcp-pill-effort-${idx}` }} />
                         <button
                           type="button"
                           className={styles.btnAction}
@@ -2748,6 +3232,34 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                           setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
                         }}
                         disabled={upsert.isPending} {...{ 'data-testid': `ps-mcp-pill-description-${idx}` }} />
+                      <div
+                        className={styles.approverSubSection}
+                        {...{ 'data-testid': `ps-mcp-pill-allowlist-${idx}` }}
+                      >
+                        <p className={styles.approverSubTitle}>
+                          Visible to — leave empty for everyone with Home access
+                        </p>
+                        <GroupAwarePeoplePicker
+                          groups={groupsWithMembers}
+                          availableUsers={allUsers}
+                          selectedUserIds={pill.allowedUserIds ?? []}
+                          selectedGroupIds={pill.allowedGroupIds ?? []}
+                          onUserIdsChange={(ids) => setEdit((prev) => {
+                            if (!prev) return prev;
+                            const pills = [...prev.quickMcpPills];
+                            pills[idx] = { ...pills[idx], allowedUserIds: ids };
+                            return { ...prev, quickMcpPills: pills };
+                          })}
+                          onGroupIdsChange={(ids) => setEdit((prev) => {
+                            if (!prev) return prev;
+                            const pills = [...prev.quickMcpPills];
+                            pills[idx] = { ...pills[idx], allowedGroupIds: ids };
+                            return { ...prev, quickMcpPills: pills };
+                          })}
+                          disabled={upsert.isPending}
+                          placeholder="Search groups or people to add…"
+                        />
+                      </div>
                     </div>
                   ))}
                 </div>

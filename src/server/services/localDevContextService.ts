@@ -7,6 +7,7 @@ import { sanitizeSlug, resolveFeatureIndex } from './devContextService';
 import { getSkillConfig } from './projectSettingsService';
 import type { LocalDevContextFile, LocalDevContextResponse } from '../../shared/types/devWorkbench';
 import { isAppNativeRequirementsProject } from '../../shared/types/devWorkbench';
+import { skillNameFromPath } from '../../shared/skillPaths';
 
 export interface BuildLocalDevContextInput {
   project: string;
@@ -122,16 +123,31 @@ function buildPrompt(args: {
 
   // If the project has a development skill configured, emit an explicit invocation
   // block so the agent knows to load the skill rather than improvise.
-  if (devSkillPath && featureId) {
-    const featMatch = featureId.match(/FEAT-\d+/i);
-    const featToken = featMatch ? featMatch[0].toUpperCase() : featureId;
+  if (devSkillPath) {
+    const skillName = skillNameFromPath(devSkillPath) ?? devSkillPath;
     lines.push(
       ``,
       `## Development skill`,
       ``,
-      `This project is configured to use the \`${devSkillPath}\` skill. Begin by invoking:`,
-      ``,
-      `  /${devSkillPath} feature ${slug} ${featToken}`,
+      `This project is configured to use the \`${devSkillPath}\` skill.`,
+    );
+    if (featureId) {
+      const featMatch = featureId.match(/FEAT-\d+/i);
+      const featToken = featMatch ? featMatch[0].toUpperCase() : featureId;
+      lines.push(
+        ``,
+        `Begin by invoking:`,
+        ``,
+        `  /${skillName} feature ${slug} ${featToken}`,
+      );
+    } else {
+      lines.push(
+        ``,
+        `Load \`${devSkillPath}\` from the repository and follow the **Local kickoff prompt** path`,
+        `(see \`local-dev.md\` in the skill folder).`,
+      );
+    }
+    lines.push(
       ``,
       `### Local execution policy (overrides Dev Workbench defaults)`,
       ``,
@@ -164,7 +180,7 @@ async function buildApexContext(project: string, prdId: string, featureId: strin
     }),
     getSkillConfig(project).catch(() => null),
   ]);
-  const devSkillPath = skillConfig?.developmentSkillPath ?? null;
+  const devSkillPath = skillConfig?.developmentSkillPath?.trim() || null;
   if (!prdRow) {
     throw Object.assign(new Error('PRD not found'), { status: 404 });
   }
@@ -263,6 +279,8 @@ async function buildAdoContext(
   project: string,
   workItemId: number,
 ): Promise<LocalDevContextResponse> {
+  const skillConfig = await getSkillConfig(project).catch(() => null);
+  const devSkillPath = skillConfig?.developmentSkillPath?.trim() || null;
   const adoService = new AzureDevOpsService(project);
 
   const wiResult = await adoService.queryWorkItemsByWiql({
@@ -390,6 +408,7 @@ async function buildAdoContext(
     typeLabel: workItemType || undefined,
     filePaths,
     prototypePath,
+    devSkillPath,
   });
 
   push(`${root}/KICKOFF-PROMPT.md`, prompt);

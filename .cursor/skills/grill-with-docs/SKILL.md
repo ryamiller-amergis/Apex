@@ -65,7 +65,7 @@ Ask which groups/roles can perform each action and what data scope applies. If t
 Ask whether any fields involved contain sensitive data (credentials, tokens, PII).
 
 - Options: `Yes — identify fields` | `No — none involved` | `Uncertain — needs data model review`
-- If "Yes": follow up asking which fields and what handling is required. Options: `Encrypt at rest` | `Mask in logs` | `Exclude from API responses` | `All three` | `Other — describe`
+- If "Yes": follow up asking which fields and what handling is required. Options: `Encrypt at rest` | `Mask in logs` | `Exclude from API responses` | `All three` (the UI provides Other / free-form — do not add an Other option in the lettered list)
 - If "Uncertain": flag it as a `⚠ Unresolved` item for the assumptions file.
 - If "No": move on.
 

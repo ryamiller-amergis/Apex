@@ -9,7 +9,10 @@ if (connectionString) {
     .setAutoCollectPerformance(true, true)
     .setAutoCollectExceptions(true)
     .setAutoCollectDependencies(true)
-    .setAutoCollectConsole(true)
+    // The second argument is what captures plain `console.*`. With only the
+    // first, the SDK collects third-party loggers (winston/bunyan) and this
+    // app's console output never reaches the `traces` table.
+    .setAutoCollectConsole(true, true)
     .setDistributedTracingMode(appInsights.DistributedTracingModes.AI_AND_W3C)
     .start();
 }
@@ -21,7 +24,7 @@ export const telemetryClient = connectionString
 export function trackAgentError(
   threadId: string,
   err: unknown,
-  props?: Record<string, string>,
+  props?: Record<string, string>
 ): void {
   if (!telemetryClient) return;
   telemetryClient.trackException({
@@ -33,8 +36,28 @@ export function trackAgentError(
 export function trackEvent(
   name: string,
   props?: Record<string, string>,
-  measurements?: Record<string, number>,
+  measurements?: Record<string, number>
 ): void {
   if (!telemetryClient) return;
   telemetryClient.trackEvent({ name, properties: props, measurements });
+}
+
+/**
+ * Events are batched, so a process that exits without flushing drops whatever
+ * it recorded on the way out — which is exactly the telemetry that explains an
+ * unexpected exit. The race bounds the wait: losing the event is better than
+ * hanging past the shutdown grace period and being killed outright.
+ */
+export async function flushTelemetry(timeoutMs = 2_000): Promise<void> {
+  if (!telemetryClient) return;
+  try {
+    await Promise.race([
+      telemetryClient.flush(),
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, timeoutMs).unref();
+      }),
+    ]);
+  } catch {
+    // A failed flush must not mask the reason the caller is shutting down.
+  }
 }

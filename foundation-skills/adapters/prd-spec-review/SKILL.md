@@ -10,7 +10,7 @@ description: Project adapter for prd-spec-review. Customize for your project.
 
 - Project: {{slot:projectName}}
 - Inputs: `{{slot:aiPilotDir}}output/{slug}.prd.md`, `{{slot:aiPilotDir}}output/{slug}.backlog.json`,
-  `{{slot:contextFile}}`, `{{slot:skillsDir}}to-prd/backlog-schema.json`, `{{slot:skillsDir}}to-prd/SKILL.md`
+  `{{slot:contextFile}}`, `../to-prd/backlog-schema.json`, `../to-prd/SKILL.md`
 - Outputs: `{{slot:aiPilotDir}}output/{slug}-prd-review-scorecard.json` and `{slug}-prd-review-scorecard.md`
 - Overall formula: `(prd_score × 0.50) + (backlog_score × 0.50)`
 

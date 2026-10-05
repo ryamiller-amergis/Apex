@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import type { DevMockPersonaId } from '../../shared/constants/devMockUsers';
 import { IS_BETA_RELEASE } from '../config/release';
 import { fetchAuthStatus } from '../utils/fetchAuthStatus';
+import { buildLoginUrl, sanitizeAuthReturnTo } from '../../shared/utils/authReturnTo';
 import { BrandLogo } from './BrandLogo';
 import styles from './Login.module.css';
 
@@ -11,6 +12,13 @@ interface DevLoginPersona {
   displayName: string;
 }
 
+function currentReturnTo(): string | null {
+  const path = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  // The root path is already the default post-login destination.
+  if (path === '/' || path === '') return null;
+  return sanitizeAuthReturnTo(path);
+}
+
 export const Login: React.FC = () => {
   const [checking, setChecking] = useState(true);
   const [devLoginAvailable, setDevLoginAvailable] = useState(false);
@@ -18,11 +26,12 @@ export const Login: React.FC = () => {
   const [devLoggingIn, setDevLoggingIn] = useState<DevMockPersonaId | null>(null);
 
   useEffect(() => {
+    const returnTo = currentReturnTo();
     const checkAuth = fetchAuthStatus()
       .then(res => res.json())
       .then(data => {
         if (data.authenticated) {
-          window.location.href = '/';
+          window.location.href = returnTo || '/';
           return;
         }
         setChecking(false);
@@ -44,19 +53,23 @@ export const Login: React.FC = () => {
     Promise.allSettled([checkAuth, checkDev]);
   }, []);
 
-  const handleLogin = () => { window.location.href = '/auth/login'; };
+  const handleLogin = () => {
+    window.location.href = buildLoginUrl(currentReturnTo());
+  };
 
   const handleDevLogin = async (persona: DevMockPersonaId) => {
     setDevLoggingIn(persona);
+    const returnTo = currentReturnTo();
     try {
       const res = await fetch('/auth/dev-login', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ persona }),
+        body: JSON.stringify(returnTo ? { persona, returnTo } : { persona }),
       });
       if (res.ok) {
-        window.location.href = '/';
+        const body = await res.json().catch(() => ({} as { redirectTo?: string }));
+        window.location.href = sanitizeAuthReturnTo(body.redirectTo) || returnTo || '/';
       } else {
         setDevLoggingIn(null);
       }

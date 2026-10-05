@@ -104,12 +104,32 @@ describe('ownerApprovalService', () => {
       expect(result).toBe('adr-owner');
     });
 
-    it('resolves PRD owner via prds → interviews', async () => {
-      mockDb.query.prds.findFirst.mockResolvedValue({ interviewId: 'int-1' });
+    it('TBI-005 DoD-0 resolves PRD owner via prds → interviews', async () => {
+      mockDb.query.prds.findFirst.mockResolvedValue({ interviewId: 'int-1', authorId: 'prd-author' });
       mockDb.query.interviews.findFirst.mockResolvedValue({ prdOwnerId: 'user-prd-owner' });
 
       const result = await resolveDocumentOwnerId('prd-1', 'prd');
       expect(result).toBe('user-prd-owner');
+    });
+
+    it('PBI-006 AC-2 falls back to the PRD author when no PRD owner is assigned', async () => {
+      mockDb.query.prds.findFirst.mockResolvedValue({ interviewId: 'int-1', authorId: 'prd-author' });
+      mockDb.query.interviews.findFirst.mockResolvedValue({ prdOwnerId: null });
+
+      const result = await resolveDocumentOwnerId('prd-1', 'prd');
+
+      expect(result).toBe('prd-author');
+    });
+
+    it('TBI-005 DoD-1 re-reads the current owner on every request', async () => {
+      mockDb.query.prds.findFirst.mockResolvedValue({ interviewId: 'int-1', authorId: 'prd-author' });
+      mockDb.query.interviews.findFirst
+        .mockResolvedValueOnce({ prdOwnerId: 'owner-before' })
+        .mockResolvedValueOnce({ prdOwnerId: 'owner-after' });
+
+      expect(await resolveDocumentOwnerId('prd-1', 'prd')).toBe('owner-before');
+      expect(await resolveDocumentOwnerId('prd-1', 'prd')).toBe('owner-after');
+      expect(mockDb.query.interviews.findFirst).toHaveBeenCalledTimes(2);
     });
 
     it('resolves test_case owner via prds → interviews', async () => {

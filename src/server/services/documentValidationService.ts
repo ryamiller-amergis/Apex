@@ -1,14 +1,15 @@
 import fs from 'fs';
-import { eq, and } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { chatThreads } from '../db/schema';
 import type { ValidationScorecard } from '../../shared/types/interview';
-import { buildPassingValidationReasonsMarkdown } from '../../shared/utils/validationReport';
-import { readOutputValidationScorecard, readOutputValidationScorecardMd, isThreadIdle, createThread as createChatThread, cancelRun, sendMessage, prepareBackgroundWorkflowTurn } from './chatAgentService';
+import { buildPassingValidationReasonsMarkdown, collectValidationGaps, buildUnusableValidationScorecard, parseAgentValidationScorecard, NO_SCORECARD_REASON, VALIDATION_TIMEOUT_REASON, normalizeCrossCuttingCheck } from '../../shared/utils/validationReport';
+import { readOutputValidationScorecard, readOutputValidationScorecardMd, isThreadIdle, isOutputWorkspaceReadable, createThread as createChatThread, cancelRun, sendMessage, prepareBackgroundWorkflowTurn, hydrateThread } from './chatAgentService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
 import { isThreadRunAlive, canThisInstanceFailGeneration } from './agentRunReaperService';
 import { getSkillConfig, resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
+import { deriveAgentModule } from './agentEffortResolver';
 import {
   propagatePipelineGrounding,
   runGroundingService,
@@ -16,6 +17,10 @@ import {
 
 const VALIDATION_WATCHER_INTERVAL_MS = 5_000;
 const VALIDATION_WATCHER_MAX_ATTEMPTS = 720;
+const VALIDATION_KICKOFF_MESSAGE =
+  'Score the document in `.ai-pilot/kickoff-context.md` using the validation skill. ' +
+  'This is a non-interactive task — do not ask questions. Write `review-scorecard.json` and ' +
+  '`review-scorecard.md` to `.ai-pilot/output/`.';
 
 export interface DocumentValidationAdapter {
   getDocumentId(): string;
@@ -29,12 +34,25 @@ export interface DocumentValidationAdapter {
   getSkillPath(skillConfig: NonNullable<Awaited<ReturnType<typeof getSkillConfig>>>): string | null | undefined;
   getModel(skillConfig: NonNullable<Awaited<ReturnType<typeof getSkillConfig>>>, globalModel: string): string;
   updateDbForValidationStart(threadId: string): Promise<void>;
-  updateDbForValidationResult(scorecard: ValidationScorecard, reportMd: string): Promise<void>;
+  updateDbForValidationResult(
+    scorecard: ValidationScorecard,
+    reportMd: string,
+    validationThreadId: string,
+  ): Promise<boolean>;
   updateDbForValidationTimeout(): Promise<void>;
   updateDbForValidationError(): Promise<void>;
   isCurrentValidationThread(threadId: string): Promise<boolean>;
   onValidationComplete?(scorecard: ValidationScorecard): Promise<void>;
 }
+
+export type ValidationIngestOutcome =
+  | { kind: 'success'; scorecardRaw: string | ValidationScorecard; reportMd?: string }
+  | { kind: 'timeout'; reason: string }
+  | { kind: 'unusable'; reason: string };
+
+export type ValidationIngestResult =
+  | { disposition: 'applied'; scorecard: ValidationScorecard }
+  | { disposition: 'discarded_stale' };
 
 const activeValidationWatchers = new Map<string, ReturnType<typeof setInterval>>();
 
@@ -63,6 +81,60 @@ async function cleanupWorkspace(threadId: string): Promise<void> {
   } catch { /* non-fatal */ }
 }
 
+/**
+ * The only validation-outcome transition. It arbitrates the active thread
+ * before persisting status/score state or running completion effects.
+ */
+export async function ingestValidationScorecard(
+  adapter: DocumentValidationAdapter,
+  validationThreadId: string,
+  outcome: ValidationIngestOutcome,
+): Promise<ValidationIngestResult> {
+  if (!(await adapter.isCurrentValidationThread(validationThreadId))) {
+    console.log(
+      `[validationTransition] Discarded stale result — thread ${validationThreadId} no longer active ` +
+      `(documentId=${adapter.getDocumentId()}, outcome=${outcome.kind})`,
+    );
+    return { disposition: 'discarded_stale' };
+  }
+
+  let scorecard: ValidationScorecard;
+  let reportMd: string | undefined;
+  if (outcome.kind === 'success') {
+    try {
+      scorecard = typeof outcome.scorecardRaw === 'string'
+        ? parseAgentValidationScorecard(outcome.scorecardRaw)
+        : outcome.scorecardRaw;
+      reportMd = outcome.reportMd;
+    } catch {
+      scorecard = buildUnusableValidationScorecard(NO_SCORECARD_REASON);
+    }
+  } else {
+    scorecard = buildUnusableValidationScorecard(outcome.reason);
+  }
+
+  const recorded = await adapter.updateDbForValidationResult(
+    scorecard,
+    reportMd ?? generateFallbackReport(scorecard),
+    validationThreadId,
+  );
+  if (!recorded) {
+    console.log(
+      `[validationTransition] Not recorded — documentId=${adapter.getDocumentId()} ` +
+      `threadId=${validationThreadId} outcome=${outcome.kind}`,
+    );
+    return { disposition: 'discarded_stale' };
+  }
+  if (adapter.onValidationComplete) {
+    await adapter.onValidationComplete(scorecard);
+  }
+  console.log(
+    `[validationTransition] Applied — documentId=${adapter.getDocumentId()} ` +
+    `threadId=${validationThreadId} outcome=${outcome.kind}`,
+  );
+  return { disposition: 'applied', scorecard };
+}
+
 export async function autoStartDocumentValidation(adapter: DocumentValidationAdapter): Promise<void> {
   const project = adapter.getProject();
   const settingsId = adapter.getSkillSettingsId?.() ?? undefined;
@@ -79,11 +151,20 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
     '',
     adapter.buildValidationContext(skillConfig),
   ].join('\n');
+  const agentModule = deriveAgentModule(
+    {
+      project,
+      repo: skillConfig.skillRepo,
+      skillPath,
+    },
+    skillConfig
+  );
 
   // skipAutoKickoff: attach validationThreadId + watcher BEFORE the agent starts
   // so post-run sync can find the owning document when the run completes.
   const thread = await createChatThread(adapter.getAuthorId(), {
     project,
+    ...(agentModule ? { agentModule } : {}),
     repo: skillConfig.skillRepo,
     branch: skillConfig.skillBranch ?? 'main',
     skillProvider: skillConfig.skillProvider ?? undefined,
@@ -97,47 +178,64 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
   await adapter.updateDbForValidationStart(thread.id);
   startDocumentValidationWatcher(adapter, thread.id);
 
-  const kickoffMessage =
-    'Score the document in `.ai-pilot/kickoff-context.md` using the validation skill. ' +
-    'This is a non-interactive task — do not ask questions. Write `review-scorecard.json` and ' +
-    '`review-scorecard.md` to `.ai-pilot/output/`.';
+  await routeDocumentValidationKickoff({
+    userId: adapter.getAuthorId(),
+    project,
+    threadId: thread.id,
+    documentId: adapter.getDocumentId(),
+    sourceThreadId: adapter.getSourceThreadId?.(),
+    onFailure: () => persistUnusableValidationResult(
+      adapter,
+      'Validation could not start. Re-run validation.',
+      thread.id,
+    ),
+  });
+}
+
+export async function routeDocumentValidationKickoff(opts: {
+  userId: string;
+  project: string;
+  threadId: string;
+  documentId: string;
+  sourceThreadId?: string | null;
+  onFailure: () => Promise<void>;
+}): Promise<void> {
   const destinationRun = {
     runType: 'chat' as const,
-    runId: thread.id,
-    project,
+    runId: opts.threadId,
+    project: opts.project,
   };
   const reportPreparationFailure = async (): Promise<void> => {
     await runGroundingService.persistThenMarkTerminalInactive(
       destinationRun,
-      () => adapter.updateDbForValidationError(),
+      () => opts.onFailure(),
     );
   };
 
   try {
     await routeBackgroundWorkflow({
-      userId: adapter.getAuthorId(),
+      userId: opts.userId,
       workflowClass: 'validation',
       destinationRun,
-      threadId: thread.id,
+      threadId: opts.threadId,
       prepareWorker: async () => {
-        const sourceThreadId = adapter.getSourceThreadId?.();
-        if (sourceThreadId) {
+        if (opts.sourceThreadId) {
           try {
             await propagatePipelineGrounding(
-              { runType: 'chat', runId: sourceThreadId, project },
+              { runType: 'chat', runId: opts.sourceThreadId, project: opts.project },
               destinationRun,
-              adapter.getAuthorId(),
+              opts.userId,
               { deferMaterialization: true },
             );
           } catch {
             console.warn(
-              `[run-grounding] Validation propagation unavailable (documentId=${adapter.getDocumentId()})`,
+              `[run-grounding] Validation propagation unavailable (documentId=${opts.documentId})`,
             );
           }
         }
         const prepared = await prepareBackgroundWorkflowTurn(
-          thread.id,
-          kickoffMessage,
+          opts.threadId,
+          VALIDATION_KICKOFF_MESSAGE,
         );
         const targetGrounding = (
           await runGroundingService.getGroundings(destinationRun)
@@ -146,8 +244,8 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
       },
       runInProcess: () =>
         sendMessage(
-          thread.id,
-          kickoffMessage,
+          opts.threadId,
+          VALIDATION_KICKOFF_MESSAGE,
           undefined,
           [],
           { hidden: true },
@@ -168,56 +266,83 @@ export function startDocumentValidationWatcher(
   let attempts = 0;
 
   console.log(`[documentValidationWatcher] Started — documentId=${documentId} threadId=${validationThreadId}`);
+  void hydrateThread(validationThreadId).catch((err) => {
+    console.warn(
+      `[documentValidationWatcher] hydrate failed (threadId=${validationThreadId}):`,
+      (err as Error).message,
+    );
+  });
+
+  const finish = (): void => {
+    clearInterval(interval);
+    activeValidationWatchers.delete(documentId);
+  };
 
   const interval = setInterval(async () => {
     attempts += 1;
 
     if (attempts > VALIDATION_WATCHER_MAX_ATTEMPTS) {
-      clearInterval(interval);
-      activeValidationWatchers.delete(documentId);
+      finish();
       console.warn(`[documentValidationWatcher] Timed out (documentId=${documentId})`);
-      await adapter.updateDbForValidationTimeout();
+      await ingestValidationScorecard(adapter, validationThreadId, {
+        kind: 'timeout',
+        reason: VALIDATION_TIMEOUT_REASON,
+      });
+      return;
+    }
+
+    // A scorecard file can appear while a later edit is still writing. Wait
+    // until the agent is idle before ingesting or deleting the workspace.
+    if (await isThreadRunAlive(validationThreadId)) {
       return;
     }
 
     const scorecardRaw = readOutputValidationScorecard(validationThreadId);
 
     if (!scorecardRaw) {
+      // Preserve the established Design Doc behavior: a missing workspace cannot
+      // distinguish "the agent wrote no scorecard" from "this instance has not
+      // hydrated the workspace yet." Recovery will retry hydration, so wait.
+      if (!isOutputWorkspaceReadable(validationThreadId)) {
+        if (attempts % 12 === 0) {
+          console.warn(
+            `[documentValidationWatcher] Workspace not readable yet — waiting ` +
+              `(documentId=${documentId} threadId=${validationThreadId})`,
+          );
+        }
+        return;
+      }
       if (
         isThreadIdle(validationThreadId)
-        && !(await isThreadRunAlive(validationThreadId))
         && (await canThisInstanceFailGeneration(validationThreadId))
       ) {
-        clearInterval(interval);
-        activeValidationWatchers.delete(documentId);
-        console.warn(`[documentValidationWatcher] Agent completed without scorecard — resetting (documentId=${documentId})`);
-        await adapter.updateDbForValidationError();
+        finish();
+        console.warn(`[documentValidationWatcher] Agent completed without scorecard (documentId=${documentId})`);
+        await ingestValidationScorecard(adapter, validationThreadId, {
+          kind: 'unusable',
+          reason: NO_SCORECARD_REASON,
+        });
       }
       return;
     }
 
-    clearInterval(interval);
-    activeValidationWatchers.delete(documentId);
+    finish();
 
     try {
-      const isCurrent = await adapter.isCurrentValidationThread(validationThreadId);
-      if (!isCurrent) {
-        console.log(`[documentValidationWatcher] Discarded stale result — thread ${validationThreadId} no longer active (documentId=${documentId})`);
-        cleanupWorkspace(validationThreadId);
-        return;
-      }
-
-      const scorecard = JSON.parse(scorecardRaw) as ValidationScorecard;
-      const reportMd = readOutputValidationScorecardMd(validationThreadId) ?? generateFallbackReport(scorecard);
-      await adapter.updateDbForValidationResult(scorecard, reportMd);
-      console.log(`[documentValidationWatcher] Scorecard synced — score=${scorecard.overall_score} is_ready=${scorecard.is_ready} (documentId=${documentId})`);
+      const result = await ingestValidationScorecard(adapter, validationThreadId, {
+        kind: 'success',
+        scorecardRaw,
+        reportMd: readOutputValidationScorecardMd(validationThreadId) ?? undefined,
+      });
       cleanupWorkspace(validationThreadId);
-
-      if (adapter.onValidationComplete) {
-        await adapter.onValidationComplete(scorecard);
+      if (result.disposition === 'applied') {
+        console.log(
+          `[documentValidationWatcher] Scorecard synced — score=${result.scorecard.overall_score} ` +
+          `is_ready=${result.scorecard.is_ready} (documentId=${documentId})`,
+        );
       }
     } catch (err) {
-      console.error(`[documentValidationWatcher] Failed to parse/sync scorecard (documentId=${documentId})`, err);
+      console.error(`[documentValidationWatcher] Failed to sync scorecard (documentId=${documentId})`, err);
     }
   }, VALIDATION_WATCHER_INTERVAL_MS);
 
@@ -234,6 +359,16 @@ export async function cancelDocumentValidation(
       console.warn(`[cancelDocumentValidation] Could not cancel agent run for thread ${validationThreadId}:`, err.message);
     });
   }
+}
+
+export async function persistUnusableValidationResult(
+  adapter: DocumentValidationAdapter,
+  reason: string,
+  validationThreadId?: string | null,
+): Promise<void> {
+  const threadId = validationThreadId ?? adapter.getValidationThreadId();
+  if (!threadId) return;
+  await ingestValidationScorecard(adapter, threadId, { kind: 'unusable', reason });
 }
 
 export function generateFallbackReport(scorecard: ValidationScorecard): string {
@@ -262,22 +397,24 @@ export function generateFallbackReport(scorecard: ValidationScorecard): string {
       lines.push(`| ${f.feature_title} | ${f.design_score}% | ${f.tech_spec_score}% | ${f.assumptions_score}% | ${f.overall_score}% | ${f.verdict} |`);
     }
     lines.push('');
+  }
 
-    const allGaps = scorecard.features!.flatMap((f) => (f.gaps ?? []).filter((g) => g.resolution === 'pending'));
-    if (allGaps.length > 0) {
-      lines.push('## Open Gaps', '');
-      for (const gap of allGaps) {
-        lines.push(`- **${gap.section}** (${gap.file}): ${gap.description} — Score: ${gap.score}/3`);
-      }
-      lines.push('');
+  const openGaps = collectValidationGaps(scorecard).filter((g) => g.resolution === 'pending');
+  if (openGaps.length > 0) {
+    lines.push('## Open Gaps', '');
+    for (const gap of openGaps) {
+      const where = gap.file ? ` (${gap.file})` : '';
+      lines.push(`- **${gap.section || 'PRD'}**${where}: ${gap.description}`);
     }
+    lines.push('');
   }
 
   const crossCuttingEntries = Object.entries(scorecard.cross_cutting_checks ?? {});
   if (crossCuttingEntries.length > 0) {
     lines.push('## Cross-Cutting Checks', '');
     for (const [check, result] of crossCuttingEntries) {
-      lines.push(`- **${check}**: ${result}`);
+      const normalized = normalizeCrossCuttingCheck(check, result);
+      lines.push(`- **${normalized.label}**: ${normalized.displayText}`);
     }
     lines.push('');
   }

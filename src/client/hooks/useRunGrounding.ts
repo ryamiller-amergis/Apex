@@ -15,7 +15,8 @@ async function readError(response: Response): Promise<Error> {
 
 export function useRunGrounding(
   surface: GroundingSurface,
-  domainRunId: string
+  domainRunId: string,
+  options: { enabled?: boolean } = {},
 ) {
   const queryClient = useQueryClient();
   const queryKey = ['run-grounding', surface, domainRunId] as const;
@@ -30,6 +31,7 @@ export function useRunGrounding(
       return response.json() as Promise<RunGroundingStatus[]>;
     },
     retry: false,
+    enabled: options.enabled !== false && Boolean(domainRunId),
   });
   const mutation = useMutation<ReGroundResponse, Error, RepoRole>({
     mutationFn: async (role) => {

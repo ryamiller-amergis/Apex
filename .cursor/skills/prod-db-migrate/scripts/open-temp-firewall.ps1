@@ -26,8 +26,8 @@ Write-Host "RULE_NAME=$RuleName"
 
 az postgres flexible-server firewall-rule create `
   --resource-group $script:ApexProd.DataResourceGroup `
-  --name $script:ApexProd.PostgresServer `
-  --rule-name $RuleName `
+  --server-name $script:ApexProd.PostgresServer `
+  --name $RuleName `
   --start-ip-address $ip `
   --end-ip-address $ip `
   -o none

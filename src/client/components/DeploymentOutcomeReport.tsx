@@ -5,11 +5,18 @@ import {
   useFilteredOutcomes,
   useExportOutcomeReport,
   useAvailableReleaseVersions,
+  useReleaseEpics,
 } from '../hooks/useDeploymentOutcomes';
+import type { ReleaseEpicSummary } from '../hooks/useDeploymentOutcomes';
+import { useAppShell } from '../hooks/useAppShell';
+import { OutcomeReportTableRow } from './OutcomeReportTableRow';
+import type { OutcomeReportRow } from './OutcomeReportTableRow';
 import styles from './DeploymentOutcomeReport.module.css';
 
 interface DeploymentOutcomeReportProps {
   onClose: () => void;
+  project?: string;
+  areaPath?: string;
 }
 
 const RESULTS: DeploymentResult[] = ['success', 'downtime', 'rollback'];
@@ -26,12 +33,63 @@ function formatDowntime(minutes: number): string {
   return `${minutes} min`;
 }
 
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  });
+  const opts: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'short', day: 'numeric' };
+
+  // Filter bounds and ADO target dates are calendar days, not instants. Parsing them
+  // as UTC and rendering local would show the previous day west of Greenwich.
+  if (DATE_ONLY.test(iso)) {
+    return new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, opts);
+  }
+
+  const date = new Date(iso);
+  const isMidnightUtc =
+    iso.endsWith('Z') &&
+    date.getUTCHours() === 0 &&
+    date.getUTCMinutes() === 0 &&
+    date.getUTCSeconds() === 0;
+  if (isMidnightUtc) {
+    return date.toLocaleDateString(undefined, { ...opts, timeZone: 'UTC' });
+  }
+
+  return date.toLocaleDateString(undefined, opts);
+}
+
+/**
+ * A release with no recorded outcome has no result or recorded date, so the outcome
+ * filters are applied against the Epic's own target date instead.
+ */
+function matchesFilters(epic: ReleaseEpicSummary, filters: OutcomeFilters): boolean {
+  if (filters.result) return false;
+
+  const versions = filters.releaseVersions ?? (filters.releaseVersion ? [filters.releaseVersion] : []);
+  if (versions.length > 0 && !versions.includes(epic.version)) return false;
+
+  const hasDateFilter = Boolean(filters.startDate || filters.endDate);
+  if (!hasDateFilter) return true;
+
+  const target = epic.targetDate?.slice(0, 10);
+  if (!target) return false;
+  if (filters.startDate && target < filters.startDate) return false;
+  if (filters.endDate && target > filters.endDate) return false;
+  return true;
+}
+
+function sortValue(row: OutcomeReportRow, col: string): string | number {
+  switch (col) {
+    case 'releaseVersion':
+      return row.releaseVersion;
+    case 'deployedAt':
+      return row.deployedAt ?? '';
+    case 'reportedAt':
+      return row.recordedAt ?? '';
+    default: {
+      const value = (row.outcome as unknown as Record<string, unknown> | undefined)?.[col];
+      return typeof value === 'number' ? value : ((value as string | undefined) ?? '');
+    }
+  }
 }
 
 function formatMonth(monthStr: string): string {
@@ -47,9 +105,10 @@ interface DatePickerInputProps {
   onChange: (date: string | undefined) => void;
   placeholder: string;
   id?: string;
+  testId: string;
 }
 
-const DatePickerInput: React.FC<DatePickerInputProps> = ({ value, onChange, placeholder, id }) => {
+const DatePickerInput: React.FC<DatePickerInputProps> = ({ value, onChange, placeholder, id, testId }) => {
   const today = new Date();
   const [open, setOpen] = useState(false);
   const [viewYear, setViewYear] = useState(() =>
@@ -108,6 +167,7 @@ const DatePickerInput: React.FC<DatePickerInputProps> = ({ value, onChange, plac
         type="button"
         className={`${styles.datePickerTrigger} ${value ? styles.datePickerTriggerFilled : ''} ${open ? styles.datePickerTriggerOpen : ''}`}
         onClick={() => setOpen(o => !o)}
+        {...{ 'data-testid': `${testId}-trigger` }}
       >
         <svg className={styles.datePickerIcon} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
           <rect x="1" y="2" width="14" height="13" rx="2" stroke="currentColor" strokeWidth="1.3"/>
@@ -123,6 +183,7 @@ const DatePickerInput: React.FC<DatePickerInputProps> = ({ value, onChange, plac
             onClick={(e) => { e.stopPropagation(); onChange(undefined); }}
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); onChange(undefined); } }}
             title="Clear date"
+            {...{ 'data-testid': `${testId}-clear` }}
           >
             ×
           </span>
@@ -132,9 +193,9 @@ const DatePickerInput: React.FC<DatePickerInputProps> = ({ value, onChange, plac
       {open && (
         <div className={styles.calPopover}>
           <div className={styles.calHeader}>
-            <button type="button" className={styles.calNavBtn} onClick={prevMonth} title="Previous month">‹</button>
+            <button type="button" className={styles.calNavBtn} onClick={prevMonth} title="Previous month" {...{ 'data-testid': `${testId}-prev-month` }}>‹</button>
             <span className={styles.calMonthLabel}>{MONTHS_SHORT[viewMonth]} {viewYear}</span>
-            <button type="button" className={styles.calNavBtn} onClick={nextMonth} title="Next month">›</button>
+            <button type="button" className={styles.calNavBtn} onClick={nextMonth} title="Next month" {...{ 'data-testid': `${testId}-next-month` }}>›</button>
           </div>
 
           <div className={styles.calDayNames}>
@@ -159,6 +220,7 @@ const DatePickerInput: React.FC<DatePickerInputProps> = ({ value, onChange, plac
                     isToday && !isSelected ? styles.calDayToday : '',
                   ].filter(Boolean).join(' ')}
                   onClick={() => handleDayClick(day)}
+                  {...{ 'data-testid': `${testId}-day-${day}` }}
                 >
                   {day}
                 </button>
@@ -234,6 +296,7 @@ const MultiSelectTypeahead: React.FC<MultiSelectTypeaheadProps> = ({
       <div
         className={`${styles.multiBox} ${open ? styles.multiBoxOpen : ''}`}
         onClick={() => { setOpen(true); inputRef.current?.focus(); }}
+        {...{ 'data-testid': 'outcome-report-version-multiselect' }}
       >
         {selected.map(v => (
           <span key={v} className={styles.multiChip}>
@@ -243,6 +306,7 @@ const MultiSelectTypeahead: React.FC<MultiSelectTypeaheadProps> = ({
               className={styles.multiChipRemove}
               onClick={(e) => { e.stopPropagation(); remove(v); }}
               title={`Remove ${v}`}
+              {...{ 'data-testid': `outcome-report-version-remove-${v}` }}
             >
               ×
             </button>
@@ -258,6 +322,7 @@ const MultiSelectTypeahead: React.FC<MultiSelectTypeaheadProps> = ({
           onKeyDown={handleKeyDown}
           aria-label={placeholder}
           autoComplete="off"
+          {...{ 'data-testid': 'outcome-report-version-search' }}
         />
       </div>
 
@@ -277,6 +342,7 @@ const MultiSelectTypeahead: React.FC<MultiSelectTypeaheadProps> = ({
               type="button"
               className={styles.multiOption}
               onMouseDown={(e) => { e.preventDefault(); add(v); }}
+              {...{ 'data-testid': `outcome-report-version-option-${v}` }}
             >
               {v}
             </button>
@@ -289,17 +355,33 @@ const MultiSelectTypeahead: React.FC<MultiSelectTypeaheadProps> = ({
 
 /* ── Main Report Component ────────────────────────────────────────────────────── */
 
-export const DeploymentOutcomeReport: React.FC<DeploymentOutcomeReportProps> = ({ onClose }) => {
+export const DeploymentOutcomeReport: React.FC<DeploymentOutcomeReportProps> = ({
+  onClose,
+  project: projectProp,
+  areaPath: areaPathProp,
+}) => {
   const [filters, setFilters] = useState<OutcomeFilters>({});
   const [draftFilters, setDraftFilters] = useState<OutcomeFilters>({});
   const [currentPage, setCurrentPage] = useState(0);
   const [sortCol, setSortCol] = useState<string>('reportedAt');
   const [sortAsc, setSortAsc] = useState(false);
+  const [expandedOutcomeId, setExpandedOutcomeId] = useState<string | null>(null);
+
+  const { selectedProject, selectedAreaPath } = useAppShell();
+  const project = projectProp ?? selectedProject;
+  const areaPath = areaPathProp ?? selectedAreaPath;
 
   const { data: summary, isLoading: summaryLoading, error } = useOutcomeReport(filters);
   const { data: outcomes, isLoading: outcomesLoading } = useFilteredOutcomes(filters);
   const { data: availableVersions = [], isLoading: versionsLoading } = useAvailableReleaseVersions();
+  const { data: releaseEpics = [] } = useReleaseEpics(project, areaPath);
   const exportReport = useExportOutcomeReport();
+
+  // Releases can be filtered even when nobody recorded an outcome for them.
+  const versionOptions = useMemo(() => {
+    const all = new Set([...availableVersions, ...releaseEpics.map((e) => e.version)]);
+    return [...all].sort().reverse();
+  }, [availableVersions, releaseEpics]);
 
   const isLoading = summaryLoading && outcomesLoading;
 
@@ -326,23 +408,51 @@ export const DeploymentOutcomeReport: React.FC<DeploymentOutcomeReportProps> = (
     else { setSortCol(col); setSortAsc(true); }
   }, [sortCol]);
 
-  const sortedOutcomes = useMemo(() => {
-    if (!outcomes) return [];
-    return [...outcomes].sort((a, b) => {
-      const aVal = (a as unknown as Record<string, unknown>)[sortCol] ?? '';
-      const bVal = (b as unknown as Record<string, unknown>)[sortCol] ?? '';
+  const rows = useMemo<OutcomeReportRow[]>(() => {
+    const epicByVersion = new Map(releaseEpics.map((e) => [e.version, e]));
+
+    const outcomeRows: OutcomeReportRow[] = (outcomes ?? []).map((outcome) => {
+      const epic = epicByVersion.get(outcome.releaseVersion);
+      return {
+        key: outcome.id,
+        releaseVersion: outcome.releaseVersion,
+        epicId: epic?.id,
+        outcome,
+        deployedAt: outcome.deployedAt ?? epic?.targetDate,
+        recordedAt: outcome.reportedAt,
+      };
+    });
+
+    const covered = new Set(outcomeRows.map((r) => r.releaseVersion));
+    const releaseOnlyRows: OutcomeReportRow[] = releaseEpics
+      .filter((epic) => !covered.has(epic.version) && matchesFilters(epic, filters))
+      .map((epic) => ({
+        key: `release:${epic.id}`,
+        releaseVersion: epic.version,
+        epicId: epic.id,
+        releaseStatus: epic.status,
+        deployedAt: epic.targetDate,
+      }));
+
+    return [...outcomeRows, ...releaseOnlyRows];
+  }, [outcomes, releaseEpics, filters]);
+
+  const sortedRows = useMemo(() => {
+    return [...rows].sort((a, b) => {
+      const aVal = sortValue(a, sortCol);
+      const bVal = sortValue(b, sortCol);
       if (aVal < bVal) return sortAsc ? -1 : 1;
       if (aVal > bVal) return sortAsc ? 1 : -1;
       return 0;
     });
-  }, [outcomes, sortCol, sortAsc]);
+  }, [rows, sortCol, sortAsc]);
 
-  const paginatedOutcomes = useMemo(() => {
+  const paginatedRows = useMemo(() => {
     const start = currentPage * PAGE_SIZE;
-    return sortedOutcomes.slice(start, start + PAGE_SIZE);
-  }, [sortedOutcomes, currentPage]);
+    return sortedRows.slice(start, start + PAGE_SIZE);
+  }, [sortedRows, currentPage]);
 
-  const totalPages = Math.ceil(sortedOutcomes.length / PAGE_SIZE);
+  const totalPages = Math.ceil(sortedRows.length / PAGE_SIZE);
 
   if (isLoading) {
     return (
@@ -390,13 +500,13 @@ export const DeploymentOutcomeReport: React.FC<DeploymentOutcomeReportProps> = (
             <h1 className={styles.title}>Deployment Outcome Report</h1>
           </div>
           <div className={styles.headerActions}>
-            <button className={styles.btnExport} onClick={handleExportCsv} aria-label="Export CSV">
+            <button className={styles.btnExport} onClick={handleExportCsv} aria-label="Export CSV" {...{ 'data-testid': 'outcome-report-export-csv' }}>
               CSV
             </button>
-            <button className={styles.btnExport} onClick={handlePrint} aria-label="Export PDF">
+            <button className={styles.btnExport} onClick={handlePrint} aria-label="Export PDF" {...{ 'data-testid': 'outcome-report-export-pdf' }}>
               PDF
             </button>
-            <button className={styles.btnClose} onClick={onClose} aria-label="Back to Releases">
+            <button className={styles.btnClose} onClick={onClose} aria-label="Back to Releases" {...{ 'data-testid': 'outcome-report-back' }}>
               Back to Releases
             </button>
           </div>
@@ -408,9 +518,11 @@ export const DeploymentOutcomeReport: React.FC<DeploymentOutcomeReportProps> = (
             <label htmlFor="filter-start-date">Start Date</label>
             <DatePickerInput
               id="filter-start-date"
+              testId="outcome-report-start-date"
               value={draftFilters.startDate}
               onChange={(d) => setDraftFilters(f => ({ ...f, startDate: d }))}
               placeholder="Pick start date"
+              {...{ 'data-testid': 'outcome-report-start-date' }}
             />
           </div>
 
@@ -418,9 +530,11 @@ export const DeploymentOutcomeReport: React.FC<DeploymentOutcomeReportProps> = (
             <label htmlFor="filter-end-date">End Date</label>
             <DatePickerInput
               id="filter-end-date"
+              testId="outcome-report-end-date"
               value={draftFilters.endDate}
               onChange={(d) => setDraftFilters(f => ({ ...f, endDate: d }))}
               placeholder="Pick end date"
+              {...{ 'data-testid': 'outcome-report-end-date' }}
             />
           </div>
 
@@ -428,10 +542,11 @@ export const DeploymentOutcomeReport: React.FC<DeploymentOutcomeReportProps> = (
             <label>Release Version</label>
             <MultiSelectTypeahead
               selected={draftFilters.releaseVersions ?? []}
-              options={availableVersions}
+              options={versionOptions}
               loading={versionsLoading}
               onChange={(vs) => setDraftFilters(f => ({ ...f, releaseVersions: vs.length ? vs : undefined }))}
               placeholder="Search releases…"
+              {...{ 'data-testid': 'outcome-report-version-filter' }}
             />
           </div>
 
@@ -446,6 +561,7 @@ export const DeploymentOutcomeReport: React.FC<DeploymentOutcomeReportProps> = (
                   result: (e.target.value as DeploymentResult) || undefined,
                 }))
               }
+              {...{ 'data-testid': 'outcome-report-result-filter' }}
             >
               <option value="">All</option>
               {RESULTS.map((r) => (
@@ -457,10 +573,10 @@ export const DeploymentOutcomeReport: React.FC<DeploymentOutcomeReportProps> = (
           </div>
 
           <div className={styles.filterActions}>
-            <button className={styles.btnApply} onClick={handleApply}>
+            <button className={styles.btnApply} onClick={handleApply} {...{ 'data-testid': 'outcome-report-apply' }}>
               Apply
             </button>
-            <button className={styles.btnClear} onClick={handleClear}>
+            <button className={styles.btnClear} onClick={handleClear} {...{ 'data-testid': 'outcome-report-clear' }}>
               Clear
             </button>
           </div>
@@ -481,25 +597,26 @@ export const DeploymentOutcomeReport: React.FC<DeploymentOutcomeReportProps> = (
                     setFilters(updated);
                     setDraftFilters(updated);
                   }}
+                  {...{ 'data-testid': `outcome-report-chip-remove-version-${v}` }}
                 >×</button>
               </span>
             ))}
             {filters.startDate && (
               <span className={styles.activeChip}>
                 From {formatDate(filters.startDate)}
-                <button className={styles.activeChipRemove} onClick={() => { const u = { ...filters, startDate: undefined }; setFilters(u); setDraftFilters(u); }}>×</button>
+                <button className={styles.activeChipRemove} onClick={() => { const u = { ...filters, startDate: undefined }; setFilters(u); setDraftFilters(u); }} {...{ 'data-testid': 'outcome-report-chip-remove-start' }}>×</button>
               </span>
             )}
             {filters.endDate && (
               <span className={styles.activeChip}>
                 To {formatDate(filters.endDate)}
-                <button className={styles.activeChipRemove} onClick={() => { const u = { ...filters, endDate: undefined }; setFilters(u); setDraftFilters(u); }}>×</button>
+                <button className={styles.activeChipRemove} onClick={() => { const u = { ...filters, endDate: undefined }; setFilters(u); setDraftFilters(u); }} {...{ 'data-testid': 'outcome-report-chip-remove-end' }}>×</button>
               </span>
             )}
             {filters.result && (
               <span className={styles.activeChip}>
                 {filters.result.charAt(0).toUpperCase() + filters.result.slice(1)}
-                <button className={styles.activeChipRemove} onClick={() => { const u = { ...filters, result: undefined }; setFilters(u); setDraftFilters(u); }}>×</button>
+                <button className={styles.activeChipRemove} onClick={() => { const u = { ...filters, result: undefined }; setFilters(u); setDraftFilters(u); }} {...{ 'data-testid': 'outcome-report-chip-remove-result' }}>×</button>
               </span>
             )}
           </div>
@@ -583,37 +700,37 @@ export const DeploymentOutcomeReport: React.FC<DeploymentOutcomeReportProps> = (
             <table className={styles.dataTable}>
               <thead>
                 <tr>
-                  <th onClick={() => handleSort('releaseVersion')}>Release Version{sortIcon('releaseVersion')}</th>
-                  <th onClick={() => handleSort('result')}>Result{sortIcon('result')}</th>
-                  <th onClick={() => handleSort('downtimeMinutes')}>Downtime{sortIcon('downtimeMinutes')}</th>
-                  <th onClick={() => handleSort('details')}>Details{sortIcon('details')}</th>
-                  <th onClick={() => handleSort('reportedBy')}>Reported By{sortIcon('reportedBy')}</th>
-                  <th onClick={() => handleSort('deployedAt')}>Deployed{sortIcon('deployedAt')}</th>
-                  <th onClick={() => handleSort('reportedAt')}>Recorded{sortIcon('reportedAt')}</th>
+                  <th />
+                  <th onClick={() => handleSort('releaseVersion')} {...{ 'data-testid': 'outcome-report-sort-releaseVersion' }}>Release Version{sortIcon('releaseVersion')}</th>
+                  <th onClick={() => handleSort('result')} {...{ 'data-testid': 'outcome-report-sort-result' }}>Result{sortIcon('result')}</th>
+                  <th onClick={() => handleSort('downtimeMinutes')} {...{ 'data-testid': 'outcome-report-sort-downtimeMinutes' }}>Downtime{sortIcon('downtimeMinutes')}</th>
+                  <th onClick={() => handleSort('details')} {...{ 'data-testid': 'outcome-report-sort-details' }}>Details{sortIcon('details')}</th>
+                  <th onClick={() => handleSort('reportedBy')} {...{ 'data-testid': 'outcome-report-sort-reportedBy' }}>Reported By{sortIcon('reportedBy')}</th>
+                  <th onClick={() => handleSort('deployedAt')} {...{ 'data-testid': 'outcome-report-sort-deployedAt' }}>Deployed{sortIcon('deployedAt')}</th>
+                  <th onClick={() => handleSort('reportedAt')} {...{ 'data-testid': 'outcome-report-sort-reportedAt' }}>Recorded{sortIcon('reportedAt')}</th>
+                  <th>Cycle Time</th>
                 </tr>
               </thead>
               <tbody>
-                {paginatedOutcomes.map((o) => (
-                  <tr key={o.id}>
-                    <td>{o.releaseVersion}</td>
-                    <td>
-                      <span className={`${styles.resultBadge} ${getBadgeClass(o.result)}`}>
-                        {o.result}
-                      </span>
-                    </td>
-                    <td>{o.downtimeMinutes != null ? formatDowntime(o.downtimeMinutes) : '—'}</td>
-                    <td className={styles.detailsCell} title={o.details ?? ''}>
-                      {o.details ?? '—'}
-                    </td>
-                    <td>{o.reportedBy}</td>
-                    <td>{o.deployedAt ? formatDate(o.deployedAt) : '—'}</td>
-                    <td>{formatDate(o.reportedAt)}</td>
-                  </tr>
+                {paginatedRows.map((row) => (
+                  <OutcomeReportTableRow
+                    key={row.key}
+                    row={row}
+                    project={project}
+                    areaPath={areaPath}
+                    expanded={expandedOutcomeId === row.key}
+                    onToggle={() =>
+                      setExpandedOutcomeId((current) => (current === row.key ? null : row.key))
+                    }
+                    formatDowntime={formatDowntime}
+                    formatDate={formatDate}
+                    getBadgeClass={getBadgeClass}
+                  />
                 ))}
-                {paginatedOutcomes.length === 0 && (
+                {paginatedRows.length === 0 && (
                   <tr>
-                    <td colSpan={7} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-muted)' }}>
-                      No outcomes match the current filters.
+                    <td colSpan={9} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-muted)' }}>
+                      No releases match the current filters.
                     </td>
                   </tr>
                 )}
@@ -627,6 +744,7 @@ export const DeploymentOutcomeReport: React.FC<DeploymentOutcomeReportProps> = (
                 className={styles.paginationBtn}
                 disabled={currentPage === 0}
                 onClick={() => setCurrentPage((p) => p - 1)}
+                {...{ 'data-testid': 'outcome-report-page-prev' }}
               >
                 Previous
               </button>
@@ -637,6 +755,7 @@ export const DeploymentOutcomeReport: React.FC<DeploymentOutcomeReportProps> = (
                 className={styles.paginationBtn}
                 disabled={currentPage >= totalPages - 1}
                 onClick={() => setCurrentPage((p) => p + 1)}
+                {...{ 'data-testid': 'outcome-report-page-next' }}
               >
                 Next
               </button>

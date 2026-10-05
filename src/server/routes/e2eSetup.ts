@@ -12,13 +12,21 @@ import express from 'express';
 import { and, eq, inArray, like, ne, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import {
+  adrs,
+  appPermissions,
+  appRolePermissions,
+  appRoles,
+  appUserProjectRoles,
   chatThreads,
   designDocs,
   designPrototypes,
   documentApproverAssignments,
   interviews,
   notifications,
+  playbookDefinitions,
+  playbookDefinitionVersions,
   prds,
+  projectApprovalModes,
   projectApprovers,
   projectMenuSettings,
   projectSkillSettings,
@@ -31,6 +39,10 @@ import type { ValidationScorecard } from '../../shared/types/interview';
 const router = express.Router();
 
 const E2E_PREFIX = '[E2E]';
+const E2E_ASSIGNED_BY = 'e2e-setup';
+
+/** Modules that inherit the legacy `approvalMode` payload; `adr` is always seeded as `any_one`. */
+const LEGACY_APPROVAL_MODE_MODULES = ['prd', 'design_doc', 'design_prototype', 'test_case'] as const;
 
 function e2eTitle(title: string): string {
   return title.startsWith(E2E_PREFIX) ? title : `${E2E_PREFIX} ${title}`;
@@ -76,6 +88,9 @@ function defaultScorecard(score: number, threshold = 90): ValidationScorecard {
 // DELETE all records created by E2E tests (idempotent, safe to call repeatedly).
 router.post('/reset', async (_req, res) => {
   try {
+    await db.delete(playbookDefinitions).where(like(playbookDefinitions.name, `${E2E_PREFIX}%`));
+    await db.delete(appRoles).where(like(appRoles.name, `${E2E_PREFIX}%`));
+
     await db.delete(reviewComments).where(like(reviewComments.body, `${E2E_PREFIX}%`));
     await db.delete(notifications).where(like(notifications.title, `${E2E_PREFIX}%`));
 
@@ -91,11 +106,16 @@ router.post('/reset', async (_req, res) => {
       .select({ id: designPrototypes.id })
       .from(designPrototypes)
       .where(like(designPrototypes.featureName, `${E2E_PREFIX}%`));
+    const e2eAdrs = await db
+      .select({ id: adrs.id, chatThreadId: adrs.chatThreadId })
+      .from(adrs)
+      .where(like(adrs.title, `${E2E_PREFIX}%`));
 
     const documentIds = [
       ...e2ePrds.map((r) => r.id),
       ...e2eDocs.map((r) => r.id),
       ...e2eProtos.map((r) => r.id),
+      ...e2eAdrs.map((r) => r.id),
     ];
     if (documentIds.length > 0) {
       await db
@@ -109,6 +129,7 @@ router.post('/reset', async (_req, res) => {
     // Orphan prototypes / docs not under an E2E PRD (defensive)
     await db.delete(designDocs).where(like(designDocs.title, `${E2E_PREFIX}%`));
     await db.delete(designPrototypes).where(like(designPrototypes.featureName, `${E2E_PREFIX}%`));
+    await db.delete(adrs).where(like(adrs.title, `${E2E_PREFIX}%`));
 
     const e2eInterviews = await db
       .select({ id: interviews.id, chatThreadId: interviews.chatThreadId })
@@ -116,7 +137,10 @@ router.post('/reset', async (_req, res) => {
       .where(like(interviews.title, `${E2E_PREFIX}%`));
     await db.delete(interviews).where(like(interviews.title, `${E2E_PREFIX}%`));
 
-    const threadIds = e2eInterviews.map((i) => i.chatThreadId);
+    const threadIds = [
+      ...e2eInterviews.map((i) => i.chatThreadId),
+      ...e2eAdrs.map((adr) => adr.chatThreadId),
+    ];
     const e2eThreads = await db
       .select({ id: chatThreads.id })
       .from(chatThreads)
@@ -134,6 +158,117 @@ router.post('/reset', async (_req, res) => {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: `E2E reset failed: ${message}` });
+  }
+});
+
+// Seed project-scoped lifecycle RBAC and a definition for the Playbook browser smoke.
+router.post('/seed/playbook-lifecycle', async (req, res) => {
+  try {
+    const {
+      project,
+      authorId,
+      viewerId,
+      name,
+      published = false,
+    } = req.body as {
+      project: string;
+      authorId: string;
+      viewerId: string;
+      name: string;
+      published?: boolean;
+    };
+
+    const result = await db.transaction(async (tx) => {
+      const permissions = await tx
+        .select({ id: appPermissions.id, key: appPermissions.key })
+        .from(appPermissions)
+        .where(inArray(appPermissions.key, ['playbooks:view', 'playbooks:author']));
+      const permissionByKey = new Map(permissions.map((permission) => [permission.key, permission.id]));
+      const viewPermissionId = permissionByKey.get('playbooks:view');
+      const authorPermissionId = permissionByKey.get('playbooks:author');
+      if (!viewPermissionId || !authorPermissionId) {
+        throw new Error('playbooks:view and playbooks:author permissions must exist');
+      }
+
+      const roleSpecs = [
+        {
+          name: `${E2E_PREFIX} Playbook Author`,
+          userId: authorId,
+          permissionIds: [viewPermissionId, authorPermissionId],
+        },
+        {
+          name: `${E2E_PREFIX} Playbook Viewer`,
+          userId: viewerId,
+          permissionIds: [viewPermissionId],
+        },
+      ];
+
+      for (const roleSpec of roleSpecs) {
+        const [role] = await tx
+          .insert(appRoles)
+          .values({ name: roleSpec.name, description: 'Playbook lifecycle E2E role' })
+          .onConflictDoUpdate({
+            target: appRoles.name,
+            set: { description: 'Playbook lifecycle E2E role' },
+          })
+          .returning();
+
+        await tx
+          .insert(appRolePermissions)
+          .values(roleSpec.permissionIds.map((permissionId) => ({ roleId: role.id, permissionId })))
+          .onConflictDoNothing();
+        await tx
+          .insert(appUserProjectRoles)
+          .values({
+            userId: roleSpec.userId,
+            project,
+            roleId: role.id,
+            assignedBy: E2E_ASSIGNED_BY,
+          })
+          .onConflictDoNothing();
+      }
+
+      const [definition] = await tx
+        .insert(playbookDefinitions)
+        .values({
+          project,
+          name: e2eTitle(name),
+          description: 'Playbook lifecycle browser smoke',
+          createdBy: authorId,
+        })
+        .returning();
+
+      const graph = {
+        nodes: [{ id: 'seeded', stepType: 'notify', config: { title: 'Seeded lifecycle' } }],
+        edges: [],
+      };
+      if (published) {
+        await tx.insert(playbookDefinitionVersions).values({
+          definitionId: definition.id,
+          versionNumber: 1,
+          graph,
+          status: 'published',
+          publishedBy: authorId,
+          publishedAt: new Date().toISOString(),
+        });
+      }
+      const [draft] = await tx
+        .insert(playbookDefinitionVersions)
+        .values({
+          definitionId: definition.id,
+          versionNumber: published ? 2 : 1,
+          graph,
+          status: 'draft',
+        })
+        .returning();
+
+      return { definition, draft };
+    });
+
+    res.json(result);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: `E2E seed/playbook-lifecycle failed: ${message}` });
   }
 });
 
@@ -219,6 +354,69 @@ router.post('/seed/interview', async (req, res) => {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: `E2E seed/interview failed: ${message}` });
+  }
+});
+
+// Create an ADR (+ backing chat thread) in a deterministic review state.
+router.post('/seed/adr', async (req, res) => {
+  try {
+    const {
+      authorId,
+      project,
+      title,
+      status = 'proposed',
+      repo = 'E2E/Repo',
+      content = '# E2E ADR\n\n## Decision\n\nUse the deterministic owner-only path.',
+      reviewerIds = [],
+      proposedContent,
+      skillSettingsId,
+    } = req.body as {
+      authorId: string;
+      project: string;
+      title: string;
+      status?: string;
+      repo?: string;
+      content?: string;
+      reviewerIds?: string[];
+      proposedContent?: string | null;
+      skillSettingsId?: string;
+    };
+
+    const threadId = randomUUID();
+    const prefixedTitle = e2eTitle(title);
+    await db.insert(chatThreads).values({
+      id: threadId,
+      userId: authorId,
+      status: 'idle',
+      title: prefixedTitle,
+      kickoff: {
+        project,
+        repo,
+        skillPath: '.cursor/skills/adr-interview/SKILL.md',
+        pillLabel: 'E2E ADR',
+      },
+    });
+
+    const [adr] = await db
+      .insert(adrs)
+      .values({
+        chatThreadId: threadId,
+        authorId,
+        reviewerIds,
+        title: prefixedTitle,
+        project,
+        repo,
+        status,
+        content,
+        proposedContent: proposedContent ?? null,
+        skillSettingsId: skillSettingsId ?? null,
+      })
+      .returning();
+
+    res.json(adr);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: `E2E seed/adr failed: ${message}` });
   }
 });
 
@@ -654,6 +852,7 @@ router.post('/seed/project-settings', async (req, res) => {
       prdApprovers,
       designPrototypeApprovers,
       testCaseApprovers,
+      adrApprovers,
     } = req.body as {
       project: string;
       friendlyName?: string;
@@ -676,6 +875,7 @@ router.post('/seed/project-settings', async (req, res) => {
       prdApprovers?: string[];
       designPrototypeApprovers?: string[];
       testCaseApprovers?: string[];
+      adrApprovers?: string[];
     };
 
     const prefixedName = e2eTitle(friendlyName);
@@ -750,14 +950,30 @@ router.post('/seed/project-settings', async (req, res) => {
       row = inserted;
     }
 
-    // isApprovalComplete() / resolveSkillConfig may read any settings row for the
-    // project. Propagate gating fields so UI matches seeded intent.
+    // resolveSkillConfig may read any settings row for the project, so propagate
+    // gating fields across all of them. Approval completion reads per-module rows
+    // from project_approval_modes, which only exist for the seeded row.
     if (approvalMode !== undefined) {
       await db
         .update(projectSkillSettings)
         .set({ approvalMode, updatedAt: sql`now()` })
         .where(eq(projectSkillSettings.project, project));
       row = { ...row, approvalMode };
+
+      await db
+        .insert(projectApprovalModes)
+        .values([
+          ...LEGACY_APPROVAL_MODE_MODULES.map((documentType) => ({
+            settingsId: row.id,
+            documentType,
+            mode: approvalMode,
+          })),
+          { settingsId: row.id, documentType: 'adr', mode: 'any_one' as const },
+        ])
+        .onConflictDoUpdate({
+          target: [projectApprovalModes.settingsId, projectApprovalModes.documentType],
+          set: { mode: sql`excluded.mode`, updatedAt: sql`now()` },
+        });
     }
     if (designDocValidationSkillPath !== undefined) {
       await db
@@ -785,6 +1001,7 @@ router.post('/seed/project-settings', async (req, res) => {
       { documentType: 'prd', userIds: prdApprovers ?? [] },
       { documentType: 'design_prototype', userIds: designPrototypeApprovers ?? [] },
       { documentType: 'test_case', userIds: testCaseApprovers ?? [] },
+      { documentType: 'adr', userIds: adrApprovers ?? [] },
     ];
 
     for (const { documentType, userIds } of poolEntries) {
@@ -810,6 +1027,7 @@ router.post('/seed/project-settings', async (req, res) => {
       prdApprovers?.length ||
       designPrototypeApprovers?.length ||
       testCaseApprovers?.length ||
+      adrApprovers?.length ||
       approvalMode !== undefined
     ) {
       await db

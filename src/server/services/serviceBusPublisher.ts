@@ -11,11 +11,31 @@ import type { DispatchMessage } from '../../shared/types/agentRunAdmission';
 const SERVICE_BUS_SCOPE = 'https://servicebus.azure.net/.default';
 const DEFAULT_QUEUE_NAME = 'ai-runs-background';
 
+const PUBLISH_MAX_ATTEMPTS = 3;
+const PUBLISH_RETRY_BASE_MS = 200;
+
+/**
+ * Statuses worth another attempt inside a single publish call.
+ *
+ * 401 and 403 are here on purpose. Replacing a queue re-creates the role
+ * assignments scoped to it, and Service Bus went on refusing a correctly
+ * assigned identity for roughly an hour afterwards. Treating authorization
+ * failures as permanent stranded every run dispatched during that window.
+ *
+ * Retrying is safe because the queue requires duplicate detection: a repeat
+ * carrying the same MessageId inside the history window is dropped by the
+ * broker rather than delivered twice.
+ */
+const RETRYABLE_PUBLISH_STATUSES = new Set([
+  401, 403, 408, 429, 500, 502, 503, 504,
+]);
+
 export type ServiceBusPublisher = {
   publish(message: DispatchMessage): Promise<void>;
 };
 
 let injectedPublisher: ServiceBusPublisher | null = null;
+let cachedCredential: TokenCredential | null = null;
 
 export function setServiceBusPublisher(
   publisher: ServiceBusPublisher | null
@@ -34,6 +54,30 @@ export function createServiceBusCredential(): TokenCredential {
     : new AzureCliCredential();
 }
 
+/**
+ * One credential for the process lifetime.
+ *
+ * `@azure/identity` caches tokens per credential instance, so building a new
+ * one per publish sends an IMDS request every time. The recovery sweep
+ * publishes once per cycle per stale run on every instance, which turned into
+ * 721 token requests in 48 minutes during the incident this guards against.
+ */
+function getCachedServiceBusCredential(): TokenCredential {
+  cachedCredential ??= createServiceBusCredential();
+  return cachedCredential;
+}
+
+/** Drops the cached credential so tests can assert construction. */
+export function resetServiceBusCredentialCache(): void {
+  cachedCredential = null;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function createDefaultServiceBusPublisher(): ServiceBusPublisher {
   return {
     async publish(message: DispatchMessage): Promise<void> {
@@ -50,7 +94,7 @@ function createDefaultServiceBusPublisher(): ServiceBusPublisher {
       }
 
       const token =
-        await createServiceBusCredential().getToken(SERVICE_BUS_SCOPE);
+        await getCachedServiceBusCredential().getToken(SERVICE_BUS_SCOPE);
       if (!token?.token) {
         throw new Error(
           'Failed to acquire Service Bus access token for AI run dispatch'
@@ -68,7 +112,7 @@ function createDefaultServiceBusPublisher(): ServiceBusPublisher {
         dispatchMessageId: message.dispatchMessageId,
       };
 
-      const response = await fetch(url, {
+      const request: RequestInit = {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token.token}`,
@@ -78,11 +122,26 @@ function createDefaultServiceBusPublisher(): ServiceBusPublisher {
           }),
         },
         body: JSON.stringify(body),
-      });
+      };
 
-      if (!response.ok) {
-        throw new Error(`Service Bus publish failed (${response.status})`);
+      let lastStatus = 0;
+      for (let attempt = 1; attempt <= PUBLISH_MAX_ATTEMPTS; attempt += 1) {
+        const response = await fetch(url, request);
+        if (response.ok) {
+          return;
+        }
+
+        lastStatus = response.status;
+        const worthRetrying =
+          RETRYABLE_PUBLISH_STATUSES.has(response.status)
+          && attempt < PUBLISH_MAX_ATTEMPTS;
+        if (!worthRetrying) {
+          break;
+        }
+        await delay(PUBLISH_RETRY_BASE_MS * attempt);
       }
+
+      throw new Error(`Service Bus publish failed (${lastStatus})`);
     },
   };
 }

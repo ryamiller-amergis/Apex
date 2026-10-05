@@ -67,7 +67,7 @@ export function createGitHubMcpServer(
       'Use this to discover file structure before reading specific files.',
       {
         repo: z.string().describe('Repository name'),
-        path: z.string().describe('Directory path (e.g. "/", "src/client/components", ".cursor/skills")'),
+        path: z.string().describe('Directory path (e.g. "/", "src/client/components", ".agents/skills")'),
         branch: z.string().optional().describe('Branch name (defaults to "main")'),
         org: z.string().optional().describe('GitHub org (defaults to GITHUB_ORG env)'),
       },
@@ -119,6 +119,7 @@ export function createGitHubMcpServer(
     );
   }
 
+  if (enableRepoBrowse) {
   server.tool(
     'list_skills',
     'List all available skills (SKILL.md files) in the repo.',
@@ -143,6 +144,7 @@ export function createGitHubMcpServer(
       }
     },
   );
+  }
 
   return server;
 }

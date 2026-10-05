@@ -344,9 +344,7 @@ describe('useAskApex', () => {
       });
 
       expect(result.current.status).toBe('preparing');
-      expect(result.current.preparationMessage).toBe(
-        'Preparing project repository…'
-      );
+      expect(result.current.preparationMessage).toBe('Loading…');
     });
 
     it('sets status to error on SSE error event', async () => {

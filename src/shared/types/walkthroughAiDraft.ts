@@ -157,7 +157,7 @@ export interface GenerateWalkthroughAiDraftRequest {
   policyPreset?: WalkthroughAiPolicyPresetId;
   /** Run-only Cursor override; never persisted as project configuration. */
   model?: string;
-  /** Run-only Cursor override constrained to one .cursor/skills directory. */
+  /** Run-only skill override constrained to one supported Agent Skills root. */
   skillPath?: string;
   existingDraft?: {
     internalName?: string;

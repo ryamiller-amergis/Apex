@@ -13,6 +13,7 @@ import type {
   FoundationSkillCatalogResponse,
   FoundationSkillReleaseValidationErrorResponse,
   FoundationSkillReleaseValidationIssue,
+  FoundationSkillProjectNotes,
 } from '../../shared/types/foundationSkills';
 
 // ── Fetch helper ──────────────────────────────────────────────────────────────
@@ -156,6 +157,8 @@ export interface UpdateReleasePayload {
   id: string;
   releaseNotes?:    string | null;
   breakingChanges?: string | null;
+  /** Per-project notes; replaces the whole map. */
+  projectNotes?:    Record<string, FoundationSkillProjectNotes>;
   targetProjects?:  string[];
   /** Per-skill project targeting overrides. */
   skillTargets?:    Record<string, string[]>;
@@ -222,6 +225,7 @@ export function useUpdateRepoWithFoundationSkills() {
       defaultBranch?: string;
       releaseId?: string;
       apexProject: string;
+      skillRoot?: string;
     }
   >({
     mutationFn: (body) =>

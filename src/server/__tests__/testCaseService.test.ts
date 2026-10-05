@@ -49,6 +49,11 @@ jest.mock('../services/chatAgentService', () => ({
   updateThreadKickoffContext: jest.fn(),
 }));
 
+jest.mock('../services/agentRunReaperService', () => ({
+  isThreadRunAlive: jest.fn().mockResolvedValue(false),
+  canThisInstanceFailGeneration: jest.fn().mockResolvedValue(true),
+}));
+
 jest.mock('../services/backgroundWorkflowRouter', () => ({
   routeBackgroundWorkflow: jest.fn().mockImplementation(async (input: { runInProcess(): void }) => {
     await input.runInProcess();
@@ -98,15 +103,21 @@ jest.mock('../services/prdService', () => ({
   autoStartPrdValidation: jest.fn().mockResolvedValue(undefined),
 }));
 
+jest.mock('../services/artifactDoneEventService', () => ({
+  recordArtifactDoneEvent: jest.fn().mockResolvedValue(undefined),
+}));
+
 import {
   getTestCases,
   isTestCaseWatcherActive,
   listLatestTestCaseSummariesForPrds,
   readOutputTestCases,
   readOutputTestCasesMd,
+  startTestCaseWatcher,
   syncTestCaseOutput,
   triggerTestCaseGeneration,
   extractUncoveredCoverageItems,
+  failGeneratingTestCasesForThread,
 } from '../services/testCaseService';
 
 const { db: mockDb, __mockUpdateChains: mockUpdateChains } = jest.requireMock('../db/drizzle') as {
@@ -119,11 +130,21 @@ const {
   sendMessage: mockSendMessage,
   prepareBackgroundWorkflowTurn: mockPrepareBackgroundWorkflowTurn,
   updateThreadKickoffContext: mockUpdateThreadKickoffContext,
+  isThreadIdle: mockIsThreadIdle,
 } = jest.requireMock('../services/chatAgentService') as {
   createThread: jest.Mock;
   sendMessage: jest.Mock;
   prepareBackgroundWorkflowTurn: jest.Mock;
   updateThreadKickoffContext: jest.Mock;
+  isThreadIdle: jest.Mock;
+};
+
+const {
+  isThreadRunAlive: mockIsThreadRunAlive,
+  canThisInstanceFailGeneration: mockCanThisInstanceFailGeneration,
+} = jest.requireMock('../services/agentRunReaperService') as {
+  isThreadRunAlive: jest.Mock;
+  canThisInstanceFailGeneration: jest.Mock;
 };
 
 const { routeBackgroundWorkflow: mockRouteBackgroundWorkflow } = jest.requireMock(
@@ -246,6 +267,86 @@ describe('testCaseService', () => {
 
       expect(result.size).toBe(0);
       expect(mockDb.select).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('failGeneratingTestCasesForThread', () => {
+    it('marks the generating row failed for that thread', async () => {
+      mockDb.query.testCases.findFirst.mockResolvedValue({
+        id: 'tc-1',
+        prdId: 'prd-1',
+        chatThreadId: 'thread-tc',
+      });
+      mockDb.query.prds.findFirst.mockResolvedValue({ chatThreadId: 'prd-thread' });
+      mockDb.query.chatThreads.findFirst.mockResolvedValue(null);
+
+      await failGeneratingTestCasesForThread('thread-tc');
+
+      expect(mockUpdateChains[0].set).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'failed' }),
+      );
+    });
+
+    it('is a no-op when no generating row exists', async () => {
+      mockDb.query.testCases.findFirst.mockResolvedValue(null);
+
+      await failGeneratingTestCasesForThread('thread-tc');
+
+      expect(mockUpdateChains).toHaveLength(0);
+    });
+  });
+
+  describe('startTestCaseWatcher', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+      mockDb.query.testCases.findFirst.mockResolvedValue({
+        id: 'tc-1',
+        prdId: 'prd-1',
+        chatThreadId: 'thread-tc',
+        status: 'generating',
+      });
+      // No workspace dir resolves, so no output file is ever found.
+      mockDb.query.chatThreads.findFirst.mockResolvedValue(null);
+      mockDb.query.prds.findFirst.mockResolvedValue(null);
+      mockIsThreadIdle.mockReturnValue(true);
+      mockIsThreadRunAlive.mockResolvedValue(false);
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    const tick = async (): Promise<void> => {
+      jest.advanceTimersByTime(5_000);
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+    };
+
+    it('keeps polling while the generation run has not been enqueued yet', async () => {
+      // The recovery sweep starts a watcher while triggerTestCaseGeneration is
+      // still routing: thread idle, no agent_runs row at all.
+      mockCanThisInstanceFailGeneration.mockResolvedValue(false);
+
+      startTestCaseWatcher('tc-1', 'thread-tc');
+      await tick();
+      await tick();
+
+      expect(mockUpdateChains).toHaveLength(0);
+      expect(isTestCaseWatcherActive('tc-1')).toBe(true);
+
+      mockDb.query.testCases.findFirst.mockResolvedValue(null);
+      await tick();
+    });
+
+    it('marks failed once a terminal run confirms the agent produced no output', async () => {
+      mockCanThisInstanceFailGeneration.mockResolvedValue(true);
+
+      startTestCaseWatcher('tc-1', 'thread-tc');
+      await tick();
+
+      expect(mockUpdateChains[0].set).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'failed' }),
+      );
+      expect(isTestCaseWatcherActive('tc-1')).toBe(false);
     });
   });
 

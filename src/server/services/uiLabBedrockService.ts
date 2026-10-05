@@ -46,8 +46,6 @@ const DEFAULT_UI_LAB_TIMEOUT_MS = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 10 * 60_000;
 })();
 
-const SKILL_PATH = path.join(process.cwd(), '.cursor', 'skills', 'ui-lab', 'SKILL.md');
-
 const APEX_COMPONENT_INDEX_PATH = path.join(
   __dirname, '..', 'assets', 'apex-component-index.md',
 );
@@ -87,7 +85,8 @@ function isThrottleError(err: unknown): boolean {
 function loadLocalSkill(): string {
   // Pure local APEX adapter fallback (used when no uiLabSkillPath is configured)
   try {
-    return fs.readFileSync(SKILL_PATH, 'utf-8');
+    const bundle = resolveLocalSkillBundle('ui-lab');
+    return bundle.notFound ? '' : bundle.content;
   } catch {
     return '';
   }

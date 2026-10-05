@@ -1,7 +1,8 @@
 export type RunType = 'chat' | 'one_shot' | 'service';
 export type RepoRole = 'target' | 'skill';
 export type RepoProvider = 'github' | 'azure_devops';
-export type GroundingSurface = 'interview' | 'prd' | 'design_doc';
+export type GroundingSurface = 'interview' | 'prd' | 'design_doc' | 'chat' | 'adr';
+export type PipelinePinPolicy = 'inherit' | 'latest';
 export type DriftState = 'grounded' | 'source-changed' | 'unavailable';
 export type GroundingStalenessState =
   | 'fresh'
@@ -60,7 +61,22 @@ export interface RunGroundingStatus {
   groundedAt: string;
   driftState: DriftState;
   stalenessState: GroundingStalenessState;
+  commitsBehind: number;
+  changedFileCount: number;
   canReGround: boolean;
+}
+
+export function isGroundingBehind(
+  status: Pick<
+    RunGroundingStatus,
+    'driftState' | 'stalenessState' | 'commitsBehind'
+  >,
+): boolean {
+  return (
+    status.driftState === 'source-changed' ||
+    status.stalenessState !== 'fresh' ||
+    status.commitsBehind > 0
+  );
 }
 
 export interface ReGroundRequest {

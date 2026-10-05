@@ -23,8 +23,10 @@ jest.mock('../services/skillCatalog', () => ({
   invalidateCache: jest.fn(),
 }));
 
+import * as githubCatalog from '../services/skillCatalogGitHub';
 import {
   getSkillFile,
+  listRepos,
   searchRepoCode,
 } from '../services/skillCatalogFacade';
 
@@ -73,5 +75,21 @@ describe('GitHub repository targeting in skillCatalogFacade', () => {
       'ryamiller-amergis',
       10,
     );
+  });
+
+  it('returns GitHub repos as organization/repo for project settings', async () => {
+    (githubCatalog.listRepos as jest.Mock).mockResolvedValue([
+      {
+        id: '42',
+        name: 'Apex',
+        fullName: 'amergis/Apex',
+        defaultBranch: 'main',
+        htmlUrl: 'https://github.com/amergis/Apex',
+      },
+    ]);
+
+    await expect(listRepos('Apex', 'github')).resolves.toEqual([
+      { id: '42', name: 'amergis/Apex', defaultBranch: 'main' },
+    ]);
   });
 });

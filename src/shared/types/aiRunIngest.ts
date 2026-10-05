@@ -60,6 +60,13 @@ export type AiRunTerminalIngest = AiRunIngestBase & {
    * Only applied on successful `completed` terminals for the interactive lane.
    */
   cursorAgentId?: string | null;
+  /** Wall-clock duration of the worker execution, when known. */
+  durationMs?: number;
+  /** Runtime-reported token counts. Omitted when the runtime reported none. */
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
 };
 
 export type AiRunIngestBody =

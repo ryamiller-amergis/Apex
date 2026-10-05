@@ -1,5 +1,78 @@
 [
   {
+    "version": "1.39.0",
+    "date": "2026-09-22",
+    "title": "First Real Playbook",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Design doc owners can start a validation Playbook that scores, ingests, and routes a ready result to review or a not-ready result to the owner"
+      },
+      {
+        "type": "feature",
+        "description": "Playbook authors cannot publish a cursor-agent step unless its MCP profile is read-only"
+      },
+      {
+        "type": "feature",
+        "description": "Project Admins can set a Playbook spend cap, warn at 75%, and override a blocked project so a run can start"
+      },
+      {
+        "type": "feature",
+        "description": "Home shows an assigned-to-me tile of pending Playbook gates ordered by deadline"
+      }
+    ]
+  },
+  {
+    "version": "1.38.0",
+    "date": "2026-09-22",
+    "title": "Playbook Definition and Governance",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Playbook authors can create project-scoped drafts, publish immutable numbered versions, deprecate versions, and inspect version history"
+      },
+      {
+        "type": "feature",
+        "description": "Playbook publishing and execution now validate step schemas, required permissions, and approval gates before actions can leave Apex"
+      },
+      {
+        "type": "feature",
+        "description": "Project Admins can grant Playbook author and administrator access with warnings when an author cannot run what they create"
+      },
+      {
+        "type": "feature",
+        "description": "Run initiators and Playbook administrators can cancel eligible runs or retry the current retryable step from the run view"
+      }
+    ]
+  },
+  {
+    "version": "1.37.0",
+    "date": "2026-08-13",
+    "title": "Canonical Agent Skills Roots",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Fresh @apex/skills installs can use .agents/skills as the canonical catalog root, with migrate-root to move an existing .cursor/skills install without rewriting project notes"
+      },
+      {
+        "type": "feature",
+        "description": "Platform Admin can choose .agents/skills or .cursor/skills when opening a first-install consumer skills PR"
+      },
+      {
+        "type": "improvement",
+        "description": "Skill discovery prefers .agents/skills, then .cursor/skills, then skills/, and collapses duplicate names to the highest-precedence root"
+      },
+      {
+        "type": "bugfix",
+        "description": "Walkthrough AI skill-path constraints accept .agents/skills, .cursor/skills, and skills/ without rewriting existing skill names, and rollback restores column defaults so it is reversible"
+      },
+      {
+        "type": "bugfix",
+        "description": "Runtime skill resolution no longer fails the request when the same skill exists in more than one catalog root"
+      }
+    ]
+  },
+  {
     "version": "1.36.0",
     "date": "2026-07-30",
     "title": "Smarter PDF Text Editing & SDK POCs",

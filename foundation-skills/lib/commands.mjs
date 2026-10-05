@@ -10,13 +10,14 @@ import { validatePackage } from './validatePackage.mjs';
 import {
   loadCatalog, findSkill, listAdapterRuntimeFiles, resolveSkillDependencyClosure,
 } from './catalog.mjs';
-import { readLockfile, serializeLockfile, LOCKFILE_VERSION } from './lockfile.mjs';
+import { readLockfile, serializeLockfile, applyLockfileRoot } from './lockfile.mjs';
 import {
   writeTextFile, assertWithin, toPosix, normalizeText, sha256, listFilesRel,
 } from './util.mjs';
-import { ADAPTER_DIR, pkgFoundationDir } from './layout.mjs';
+import { pkgFoundationDir } from './layout.mjs';
 import { composeAdapter, hashManaged } from './managedRegion.mjs';
 import { ensureAlwaysInstallSkills } from './alwaysInstall.mjs';
+import { findSkillRootCollisions, resolveRepoSkillRoot } from './skillRoot.mjs';
 
 /** The package root is two levels up from lib/commands.mjs. */
 export function defaultPackageRoot() {
@@ -88,6 +89,7 @@ export function cmdInstall(opts, log) {
       dryRun: opts.dryRun,
       enrich: opts.enrich,
       fill: opts.fill,
+      skillRoot: opts.skillRoot,
     });
     for (const w of result.warnings) log(`WARN  ${w}`);
     if (result.dryRun) {
@@ -111,9 +113,11 @@ export function cmdCheck(opts, log) {
     return 0;
   }
   log(`Installed suite ${result.installedSuite}; available ${result.available}.`);
+  log(`Canonical skill root: ${result.skillRoot}.`);
   for (const s of result.skills) {
     const flags = [
       s.compatible ? 'compatible' : 'INCOMPATIBLE',
+      s.rootCollision ? `ROOT-COLLISION(${s.collisionRoots.join(',')})` : null,
       s.missingFence ? 'MISSING-FENCE' : null,
       s.managedRegionDrift ? 'MANAGED-DRIFT' : null,
       s.companionDrift ? 'COMPANION-DRIFT' : null,
@@ -173,6 +177,17 @@ export function cmdBootstrap(opts, log) {
 
   const catalog = loadCatalog(pkgRoot);
   const lock = readLockfile(repoRoot);
+  const skillRoot = resolveRepoSkillRoot(repoRoot, { lock });
+  const collisions = findSkillRootCollisions(repoRoot, skills, skillRoot);
+  if (collisions.length) {
+    for (const collision of collisions) {
+      log(
+        `[apex-skills] ERROR: Skill "${collision.skill}" exists across ` +
+        `${collision.roots.join(', ')}; canonical root is ${skillRoot}.`,
+      );
+    }
+    return 1;
+  }
 
   for (const name of skills) {
     const skillDef = findSkill(catalog, name);
@@ -180,8 +195,18 @@ export function cmdBootstrap(opts, log) {
       log(`[apex-skills] ERROR: Unknown skill in catalog: ${name}`);
       return 1;
     }
-    const boot = bootstrapSkill(pkgRoot, repoRoot, name, { enrich: opts.enrich });
-    const wrote = writeBootstrapFiles(pkgRoot, repoRoot, skillDef, boot.files, catalog.suiteVersion);
+    const boot = bootstrapSkill(pkgRoot, repoRoot, name, {
+      enrich: opts.enrich,
+      skillRoot,
+    });
+    const wrote = writeBootstrapFiles(
+      pkgRoot,
+      repoRoot,
+      skillDef,
+      boot.files,
+      catalog.suiteVersion,
+      skillRoot,
+    );
     log(`Bootstrapped "${name}": ${boot.meta.filesScanned} files scanned, capHit=${boot.meta.capHit}, wrote ${wrote.length} file(s).`);
     for (const w of wrote.warnings ?? []) log(`WARN  ${w}`);
     if (opts.explain) {
@@ -195,7 +220,7 @@ export function cmdBootstrap(opts, log) {
   }
 
   // Refresh lockfile hashes for skills we touched.
-  refreshLockfileHashes(pkgRoot, repoRoot, skills);
+  refreshLockfileHashes(pkgRoot, repoRoot, skills, skillRoot);
 
   return 0;
 }
@@ -207,7 +232,14 @@ export function cmdBootstrap(opts, log) {
  *   - companion foundation files always overwritten
  *   - apex-skill.json written when produced by the template
  */
-function writeBootstrapFiles(pkgRoot, repoRoot, skillDef, files, suiteVersion) {
+function writeBootstrapFiles(
+  pkgRoot,
+  repoRoot,
+  skillDef,
+  files,
+  suiteVersion,
+  skillRoot,
+) {
   const wrote = [];
   const warnings = [];
   const skill = skillDef.name;
@@ -222,6 +254,7 @@ function writeBootstrapFiles(pkgRoot, repoRoot, skillDef, files, suiteVersion) {
   const result = applyAdapterSkillMd(repoRoot, skill, adapterRegion, {
     foundationText,
     version: suiteVersion,
+    skillRoot,
   });
   if (result.warning) warnings.push(result.warning);
   if (result.backedUp) wrote.push(result.backedUp);
@@ -229,7 +262,7 @@ function writeBootstrapFiles(pkgRoot, repoRoot, skillDef, files, suiteVersion) {
 
   for (const rel of listFilesRel(foundationDir)) {
     if (rel === 'SKILL.md') continue;
-    const destRel = toPosix(path.join(ADAPTER_DIR, skill, rel));
+    const destRel = toPosix(path.join(skillRoot, skill, rel));
     assertWithin(repoRoot, destRel);
     writeTextFile(path.join(repoRoot, destRel), fs.readFileSync(path.join(foundationDir, rel), 'utf8'));
     wrote.push(destRel);
@@ -239,7 +272,7 @@ function writeBootstrapFiles(pkgRoot, repoRoot, skillDef, files, suiteVersion) {
     if (typeof files[rel] !== 'string') {
       throw new Error(`Skill "${skill}" is missing declared adapter runtime companion "${rel}" during bootstrap`);
     }
-    const destRel = toPosix(path.join(ADAPTER_DIR, skill, rel));
+    const destRel = toPosix(path.join(skillRoot, skill, rel));
     assertWithin(repoRoot, destRel);
     writeTextFile(path.join(repoRoot, destRel), files[rel]);
     wrote.push(destRel);
@@ -249,16 +282,16 @@ function writeBootstrapFiles(pkgRoot, repoRoot, skillDef, files, suiteVersion) {
   return wrote;
 }
 
-function refreshLockfileHashes(pkgRoot, repoRoot, skills) {
+function refreshLockfileHashes(pkgRoot, repoRoot, skills, skillRoot) {
   const lock = readLockfile(repoRoot);
   if (!lock) return;
   const catalog = loadCatalog(pkgRoot);
-  lock.lockfileVersion = LOCKFILE_VERSION;
+  applyLockfileRoot(lock, skillRoot);
   for (const name of skills) {
     if (!lock.skills[name]) continue;
     const skillDef = findSkill(catalog, name);
     if (!skillDef) continue;
-    const skillMd = path.join(repoRoot, ADAPTER_DIR, name, 'SKILL.md');
+    const skillMd = path.join(repoRoot, skillRoot, name, 'SKILL.md');
     if (fs.existsSync(skillMd)) {
       lock.skills[name].managedRegionHash = hashManaged(fs.readFileSync(skillMd, 'utf8'));
     }
@@ -266,14 +299,14 @@ function refreshLockfileHashes(pkgRoot, repoRoot, skills) {
     const foundationDir = pkgFoundationDir(pkgRoot, name);
     for (const rel of listFilesRel(foundationDir)) {
       if (rel === 'SKILL.md') continue;
-      const destRel = toPosix(path.join(ADAPTER_DIR, name, rel));
+      const destRel = toPosix(path.join(skillRoot, name, rel));
       const abs = path.join(repoRoot, destRel);
       if (fs.existsSync(abs)) {
         managedFiles[destRel] = sha256(normalizeText(fs.readFileSync(abs, 'utf8')));
       }
     }
     for (const rel of listAdapterRuntimeFiles(skillDef)) {
-      const destRel = toPosix(path.join(ADAPTER_DIR, name, rel));
+      const destRel = toPosix(path.join(skillRoot, name, rel));
       const abs = path.join(repoRoot, destRel);
       if (fs.existsSync(abs)) {
         managedFiles[destRel] = sha256(normalizeText(fs.readFileSync(abs, 'utf8')));

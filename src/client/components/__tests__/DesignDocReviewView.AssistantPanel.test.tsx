@@ -49,6 +49,7 @@ jest.mock('../../hooks/useInterviews', () => ({
   useDesignDocsByPrd: jest.fn(() => ({ data: [] })),
   useFixValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useAcceptFixValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useDismissDesignDocFixSession: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useRevertDesignDocSection: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useOverrideDesignDocValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useFixDesignDocWithAi: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
@@ -159,6 +160,7 @@ describe('Branding — Ask Apex / Apex Assistant', () => {
     renderView();
     fireEvent.click(screen.getByRole('button', { name: /Ask Apex/i }));
     expect(screen.getByText('Apex Assistant')).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: 'Design document assistant panel' })).toBeInTheDocument();
   });
 
   it('does NOT show "AI Assistant" as the panel title', () => {

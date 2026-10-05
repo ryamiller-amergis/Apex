@@ -6,7 +6,11 @@ import {
   type SharedReadCheckoutResult,
   type SharedReadCheckoutService,
 } from './grounding/sharedReadCheckoutService';
-import { ensureRepoCache, readCachedOriginSha } from './repoCacheService';
+import {
+  USER_FACING_REPO_CACHE_LEASE_WAIT_MS,
+  ensureRepoCache,
+  readCachedOriginSha,
+} from './repoCacheService';
 import {
   materializeRunGroundingWithPath,
   type RunGroundingMaterializationResult,
@@ -61,7 +65,8 @@ type GroundingDependency = Pick<RunGroundingService, 'activateGroundings'>;
 export interface RepositoryPreparationDependencies {
   readCachedOriginSha?: typeof readCachedOriginSha;
   ensureRepoCache?: (
-    repository: RepositoryPreparationTarget
+    repository: RepositoryPreparationTarget,
+    leaseOptions?: { waitMs?: number },
   ) => Promise<{ baseSha: string }>;
   sharedReadCheckout?: Pick<
     SharedReadCheckoutService,
@@ -197,7 +202,9 @@ export function createRepositoryPreparationService(
     )?.trim();
     if (cached) return cached;
 
-    const cache = await ensureCache(repository);
+    const cache = await ensureCache(repository, {
+      waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS,
+    });
     const sha = cache.baseSha.trim();
     if (!sha) throw new Error('Repository mirror did not resolve a commit');
     return sha;

@@ -111,6 +111,22 @@ resource "azurerm_storage_management_policy" "lt_artifacts_lifecycle" {
   }
 
   rule {
+    name    = "cursor-prompts-1day"
+    enabled = true
+
+    filters {
+      prefix_match = ["cursor-prompts/"]
+      blob_types   = ["blockBlob"]
+    }
+
+    actions {
+      base_blob {
+        delete_after_days_since_creation_greater_than = 1
+      }
+    }
+  }
+
+  rule {
     name    = "lt-artifacts-90day"
     enabled = true
 

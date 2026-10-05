@@ -160,7 +160,7 @@ function primarySourcePath(
   return locations?.[0]?.filePath?.trim() ?? '';
 }
 
-function inferSuggestedRoute(
+export function inferSuggestedRoute(
   testId: string,
   sourcePath: string,
 ): string | null {
@@ -337,10 +337,20 @@ export function needsAiSmartTagging(row: {
 }): boolean {
   if (row.reviewStatus !== 'pending') return false;
   if (row.testId && !isPlausibleWalkthroughTestId(row.testId)) return false;
-  // Real AI already applied.
+  const model = row.aiProvenance?.model;
+  const confidence = row.aiProvenance?.confidence ?? 0;
   if (
-    row.aiProvenance?.model &&
-    row.aiProvenance.model !== SYNC_HEURISTIC_MODEL &&
+    model === 'anchor-classifier' &&
+    confidence >= 0.55 &&
+    row.smartTags.length > 0
+  ) {
+    return false;
+  }
+  // Real AI already applied (not the weaker sync heuristic or low-confidence classifier).
+  if (
+    model &&
+    model !== SYNC_HEURISTIC_MODEL &&
+    model !== 'anchor-classifier' &&
     row.smartTags.length > 0
   ) {
     return false;

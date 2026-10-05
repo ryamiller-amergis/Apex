@@ -1,8 +1,26 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useActiveUsers, useAvailableApproverPool, useInterviewGroupsWithMembers } from '../hooks/useInterviews';
+import { useReviewerAvailability } from '../hooks/useReviewerAvailability';
 import type { ActiveUser } from '../../shared/types/interview';
+import type { ReviewerDocumentType } from '../../shared/types/approvals';
 import type { ApproverPoolResponse } from '../../shared/types/projectSettings';
 import styles from './SectionOwnerModal.module.css';
+
+/** Reviewer modules a kickoff can assign. `adr` is out of scope here. */
+type KickoffModuleType = Exclude<ReviewerDocumentType, 'adr'>;
+
+/** Kebab-case suffix used for labels and test ids (QA reads better than test-case). */
+type KickoffModuleKey = 'prd' | 'design-doc' | 'design-prototype' | 'qa';
+
+interface ReviewerModule {
+  documentType: KickoffModuleType;
+  uiKey: KickoffModuleKey;
+  label: string;
+  pool: ApproverPoolResponse | undefined;
+  poolLoading: boolean;
+  selectedIds: string[];
+  onToggle: (id: string) => void;
+}
 
 interface UserComboboxProps {
   id: string;
@@ -287,6 +305,7 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
   const { data: ddPool, isLoading: ddPoolLoading } = useAvailableApproverPool(project, 'design_doc', false);
   const { data: protoPool, isLoading: protoPoolLoading } = useAvailableApproverPool(project, 'design_prototype', false);
   const { data: qaPool, isLoading: qaPoolLoading } = useAvailableApproverPool(project, 'test_case', false);
+  const availability = useReviewerAvailability(project, 'interviews');
 
   const OWNER_GROUP_MAP: Record<string, string[]> = useMemo(() => ({
     prd: ['BA', 'Product-Owner'],
@@ -332,6 +351,81 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
     setTestCaseApproverIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   }, []);
 
+  const allOwnersSelected =
+    !!prdOwnerId &&
+    !!designDocOwnerId &&
+    (!prototypeStageEnabled || !!designPrototypeOwnerId) &&
+    (!testCasesEnabled || !!testCaseOwnerId);
+
+  const enabledModules: ReviewerModule[] = useMemo(() => {
+    const modules: ReviewerModule[] = [
+      {
+        documentType: 'prd',
+        uiKey: 'prd',
+        label: 'PRD Reviewers',
+        pool: prdPool,
+        poolLoading: prdPoolLoading,
+        selectedIds: prdApproverIds,
+        onToggle: togglePrdApprover,
+      },
+      {
+        documentType: 'design_doc',
+        uiKey: 'design-doc',
+        label: 'Design Doc Reviewers',
+        pool: ddPool,
+        poolLoading: ddPoolLoading,
+        selectedIds: designDocApproverIds,
+        onToggle: toggleDdApprover,
+      },
+    ];
+    if (prototypeStageEnabled) {
+      modules.push({
+        documentType: 'design_prototype',
+        uiKey: 'design-prototype',
+        label: 'Design Prototype Reviewers',
+        pool: protoPool,
+        poolLoading: protoPoolLoading,
+        selectedIds: designPrototypeApproverIds,
+        onToggle: toggleProtoApprover,
+      });
+    }
+    if (testCasesEnabled) {
+      modules.push({
+        documentType: 'test_case',
+        uiKey: 'qa',
+        label: 'QA Reviewers',
+        pool: qaPool,
+        poolLoading: qaPoolLoading,
+        selectedIds: testCaseApproverIds,
+        onToggle: toggleQaApprover,
+      });
+    }
+    return modules;
+  }, [
+    prdPool, prdPoolLoading, prdApproverIds, togglePrdApprover,
+    ddPool, ddPoolLoading, designDocApproverIds, toggleDdApprover,
+    protoPool, protoPoolLoading, designPrototypeApproverIds, toggleProtoApprover,
+    qaPool, qaPoolLoading, testCaseApproverIds, toggleQaApprover,
+    prototypeStageEnabled, testCasesEnabled,
+  ]);
+
+  const availabilityFailed = availability.isError;
+  const availabilityLoaded = !availabilityFailed && !!availability.data;
+  const availabilityPending = !availabilityFailed && !availability.data;
+
+  // Availability is the sole has-reviewers signal; the pools only supply chips.
+  const availableModules = useMemo(() => {
+    if (!availabilityLoaded) return [];
+    const availableTypes = new Set(
+      (availability.data?.modules ?? []).filter((m) => m.available).map((m) => m.documentType),
+    );
+    return enabledModules.filter((m) => availableTypes.has(m.documentType));
+  }, [availabilityLoaded, availability.data, enabledModules]);
+
+  /** Only a successful load may collapse the wizard to a single owner step. */
+  const skipReviewerStep = availabilityLoaded && availableModules.length === 0;
+  const effectiveStep = skipReviewerStep ? 1 : step;
+
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onCancel();
@@ -340,29 +434,10 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
     return () => document.removeEventListener('keydown', handleKey);
   }, [onCancel]);
 
-  const allOwnersSelected =
-    !!prdOwnerId &&
-    !!designDocOwnerId &&
-    (!prototypeStageEnabled || !!designPrototypeOwnerId) &&
-    (!testCasesEnabled || !!testCaseOwnerId);
-
-  const hasPrdPool = prdPool && (prdPool.individuals.length > 0 || prdPool.groups.length > 0);
-  const hasDdPool = ddPool && (ddPool.individuals.length > 0 || ddPool.groups.length > 0);
-  const hasProtoPool =
-    prototypeStageEnabled &&
-    protoPool &&
-    (protoPool.individuals.length > 0 || protoPool.groups.length > 0);
-  const hasQaPool =
-    testCasesEnabled &&
-    qaPool &&
-    (qaPool.individuals.length > 0 || qaPool.groups.length > 0);
-
   const canConfirm =
     allOwnersSelected &&
-    (!hasPrdPool || prdApproverIds.length > 0) &&
-    (!hasDdPool || designDocApproverIds.length > 0) &&
-    (!hasProtoPool || designPrototypeApproverIds.length > 0) &&
-    (!hasQaPool || testCaseApproverIds.length > 0) &&
+    availabilityLoaded &&
+    availableModules.every((m) => m.selectedIds.length > 0) &&
     !isSubmitting;
 
   const handleConfirm = () => {
@@ -383,6 +458,21 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
     });
   };
 
+  /** No module has a live reviewer: owner-only start, every assignment list empty. */
+  const handleConfirmWithoutReviewers = () => {
+    if (!allOwnersSelected || isSubmitting) return;
+    onConfirm({
+      prdOwnerId,
+      designDocOwnerId,
+      designPrototypeOwnerId: prototypeStageEnabled ? designPrototypeOwnerId : undefined,
+      testCaseOwnerId: testCasesEnabled ? testCaseOwnerId : undefined,
+      prdApproverIds: [],
+      designDocApproverIds: [],
+      designPrototypeApproverIds: [],
+      testCaseApproverIds: [],
+    });
+  };
+
   return (
     <div
       className={styles.overlay}
@@ -399,7 +489,7 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
               Assign Owners &amp; Reviewers
             </h2>
             <p className={styles.subtitle}>
-              {step === 1
+              {effectiveStep === 1
                 ? 'Assign an owner for each document type.'
                 : 'Select reviewers from the configured pool for each document type.'}
             </p>
@@ -416,20 +506,28 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
         </div>
 
         <div className={styles.stepper}>
-          <div className={`${styles.stepDot} ${step >= 1 ? styles.stepActive : ''} ${step > 1 ? styles.stepComplete : ''}`}>
+          <div className={`${styles.stepDot} ${styles.stepActive} ${effectiveStep > 1 ? styles.stepComplete : ''}`}>
             <span>1</span>
           </div>
-          <div className={styles.stepLine} />
-          <div className={`${styles.stepDot} ${step >= 2 ? styles.stepActive : ''}`}>
-            <span>2</span>
-          </div>
+          {!skipReviewerStep && (
+            <>
+              <div className={styles.stepLine} />
+              <div className={`${styles.stepDot} ${effectiveStep >= 2 ? styles.stepActive : ''}`}>
+                <span>2</span>
+              </div>
+            </>
+          )}
         </div>
         <div className={styles.stepLabel}>
-          {step === 1 ? 'Step 1 of 2 — Select Owners' : 'Step 2 of 2 — Select Reviewers'}
+          {skipReviewerStep
+            ? 'Step 1 of 1 — Select Owners'
+            : effectiveStep === 1
+              ? 'Step 1 of 2 — Select Owners'
+              : 'Step 2 of 2 — Select Reviewers'}
         </div>
 
         <div className={styles.scrollBody}>
-          {step === 1 && (
+          {effectiveStep === 1 && (
             <div className={styles.fields}>
               <div className={styles.field}>
                 <label className={styles.label} htmlFor="so-prd-owner">
@@ -509,59 +607,64 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
             </div>
           )}
 
-          {step === 2 && (
+          {effectiveStep === 2 && (
             <div className={styles.fields}>
-              <div className={styles.field}>
-                <label className={styles.label}>PRD Reviewers *</label>
-                {prdPoolLoading ? (
-                  <span className={styles.loadingText}>Loading…</span>
-                ) : !prdPool || (prdPool.individuals.length === 0 && prdPool.groups.length === 0) ? (
-                  <span className={styles.noApprovers}>No approvers configured</span>
-                ) : (
-                  renderPoolChips(prdPool, prdApproverIds, togglePrdApprover, 'prd')
-                )}
-              </div>
+              {availabilityFailed &&
+                enabledModules.map((module) => (
+                  <div className={styles.field} key={module.uiKey}>
+                    <label className={styles.label}>{module.label} *</label>
+                    <div
+                      role="alert"
+                      className={styles.approverSection}
+                      {...{ 'data-testid': `reviewer-availability-error-${module.uiKey}` }}
+                    >
+                      <span className={styles.noApprovers}>
+                        Could not check reviewer availability.
+                      </span>
+                      <button
+                        type="button"
+                        className={styles.selectAllBtn}
+                        onClick={() => { void availability.refetch(); }}
+                        disabled={isSubmitting}
+                        {...{ 'data-testid': `section-owner-reviewer-retry-${module.uiKey}` }}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  </div>
+                ))}
 
-              <div className={styles.field}>
-                <label className={styles.label}>Design Doc Reviewers *</label>
-                {ddPoolLoading ? (
-                  <span className={styles.loadingText}>Loading…</span>
-                ) : !ddPool || (ddPool.individuals.length === 0 && ddPool.groups.length === 0) ? (
-                  <span className={styles.noApprovers}>No approvers configured</span>
-                ) : (
-                  renderPoolChips(ddPool, designDocApproverIds, toggleDdApprover, 'design-doc')
-                )}
-              </div>
-
-              {prototypeStageEnabled && (
-                <div className={styles.field}>
-                  <label className={styles.label}>Design Prototype Reviewers *</label>
-                  {protoPoolLoading ? (
-                    <span className={styles.loadingText}>Loading…</span>
-                  ) : !protoPool || (protoPool.individuals.length === 0 && protoPool.groups.length === 0) ? (
-                    <span className={styles.noApprovers}>No approvers configured</span>
-                  ) : (
-                    renderPoolChips(protoPool, designPrototypeApproverIds, toggleProtoApprover, 'design-prototype')
-                  )}
-                </div>
+              {availabilityPending && (
+                <span className={styles.loadingText}>Checking reviewer availability…</span>
               )}
 
-              {testCasesEnabled && (
-                <div className={styles.field}>
-                  <label className={styles.label}>QA Reviewers *</label>
-                  {qaPoolLoading ? (
-                    <span className={styles.loadingText}>Loading…</span>
-                  ) : !qaPool || (qaPool.individuals.length === 0 && qaPool.groups.length === 0) ? (
-                    <span className={styles.noApprovers}>No approvers configured</span>
-                  ) : (
-                    renderPoolChips(qaPool, testCaseApproverIds, toggleQaApprover, 'qa')
-                  )}
-                </div>
-              )}
+              {availabilityLoaded &&
+                availableModules.map((module) => (
+                  <div
+                    className={styles.field}
+                    key={module.uiKey}
+                    {...{ 'data-testid': `reviewer-picker-${module.uiKey}` }}
+                  >
+                    <label className={styles.label}>{module.label} *</label>
+                    {module.poolLoading ? (
+                      <span className={styles.loadingText}>Loading…</span>
+                    ) : !module.pool ||
+                      (module.pool.individuals.length === 0 && module.pool.groups.length === 0) ? (
+                      <span className={styles.noApprovers}>No approvers configured</span>
+                    ) : (
+                      renderPoolChips(
+                        module.pool,
+                        module.selectedIds,
+                        module.onToggle,
+                        module.uiKey,
+                      )
+                    )}
+                  </div>
+                ))}
             </div>
           )}
 
-          {step === 2 && !canConfirm && !isSubmitting && (
+          {effectiveStep === 2 && !canConfirm && !isSubmitting && (
             <p className={styles.validationHint}>
               Select at least one reviewer in each section
             </p>
@@ -569,7 +672,7 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
         </div>
 
         <div className={styles.navRow}>
-          {step === 1 ? (
+          {effectiveStep === 1 ? (
             <>
               <button
                 className={styles.btnSkip}
@@ -580,15 +683,27 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
               >
                 Cancel
               </button>
-              <button
-                className={styles.btnConfirm}
-                onClick={() => setStep(2)}
-                disabled={!allOwnersSelected || isSubmitting}
-                type="button"
-                {...{ 'data-testid': 'section-owner-next-btn' }}
-              >
-                Next →
-              </button>
+              {skipReviewerStep ? (
+                <button
+                  className={styles.btnConfirm}
+                  onClick={handleConfirmWithoutReviewers}
+                  disabled={!allOwnersSelected || isSubmitting}
+                  type="button"
+                  {...{ 'data-testid': 'confirm-start-interview-no-reviewers' }}
+                >
+                  {isSubmitting ? 'Creating…' : 'Confirm & Start Interview'}
+                </button>
+              ) : (
+                <button
+                  className={styles.btnConfirm}
+                  onClick={() => setStep(2)}
+                  disabled={!allOwnersSelected || isSubmitting}
+                  type="button"
+                  {...{ 'data-testid': 'section-owner-next-btn' }}
+                >
+                  Next →
+                </button>
+              )}
             </>
           ) : (
             <>

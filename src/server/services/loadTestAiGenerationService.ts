@@ -92,6 +92,7 @@ export async function startGeneration(
 
   const thread = await createChatThread(userId, {
     project: projectId,
+    agentModule: 'loadTestGeneration',
     repo: skillConfig.skillRepo,
     branch: skillConfig.skillBranch ?? 'main',
     skillProvider: skillConfig.skillProvider ?? 'ado',

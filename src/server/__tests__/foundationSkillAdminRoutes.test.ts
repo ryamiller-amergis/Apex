@@ -154,7 +154,7 @@ const sampleRelease: FoundationSkillRelease = {
   artifactPackage: '@apex/skills', artifactVersion: '1.0.0',
   artifactFeed: null, integritySha256: 'abc123', contractApiVersion: 1,
   selectedSkills: ['ui-lab', 'to-prd'], targetProjects: [], skillTargets: {}, manifestSnapshot: null,
-  releaseNotes: 'Initial release', breakingChanges: null,
+  releaseNotes: 'Initial release', breakingChanges: null, projectNotes: {},
   publishedBy: 'admin-1', publishedAt: '2026-07-28T00:00:00.000Z',
   deprecatedBy: null, deprecatedAt: null,
   createdBy: 'admin-1', createdAt: '2026-07-28T00:00:00.000Z', updatedAt: '2026-07-28T00:00:00.000Z',
@@ -557,6 +557,62 @@ describe('Foundation Skills Admin Routes', () => {
         .post('/api/platform-admin/foundation-skills/update-repo')
         .send({ project: 'MaxView' });
       expect(res.status).toBe(400);
+    });
+
+    it('forwards a validated canonical skill root', async () => {
+      mockUpdate.updateRepoWithFoundationSkills.mockResolvedValue({
+        status: 'no_changes',
+        prUrl: null,
+        branchName: null,
+        changedFiles: [],
+        report: 'Already current',
+        releaseVersion: '1.0.1',
+        errors: [],
+      });
+
+      const res = await request(buildAdminApp())
+        .post('/api/platform-admin/foundation-skills/update-repo')
+        .send({
+          project: 'MatterWorx',
+          repo: 'MatterWorx',
+          apexProject: 'MatterWorx',
+          skillRoot: '.agents/skills',
+        });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdate.updateRepoWithFoundationSkills).toHaveBeenCalledWith(
+        expect.objectContaining({ skillRoot: '.agents/skills' }),
+        null
+      );
+    });
+
+    it('rejects an unsafe canonical skill root', async () => {
+      const res = await request(buildAdminApp())
+        .post('/api/platform-admin/foundation-skills/update-repo')
+        .send({
+          project: 'MatterWorx',
+          repo: 'MatterWorx',
+          apexProject: 'MatterWorx',
+          skillRoot: '../skills',
+        });
+
+      expect(res.status).toBe(400);
+      expect(mockUpdate.updateRepoWithFoundationSkills).not.toHaveBeenCalled();
+    });
+
+    it('rejects a skill root outside the known catalog set', async () => {
+      const res = await request(buildAdminApp())
+        .post('/api/platform-admin/foundation-skills/update-repo')
+        .send({
+          project: 'MatterWorx',
+          repo: 'MatterWorx',
+          apexProject: 'MatterWorx',
+          skillRoot: 'build/skills',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/one of/i);
+      expect(mockUpdate.updateRepoWithFoundationSkills).not.toHaveBeenCalled();
     });
   });
 });

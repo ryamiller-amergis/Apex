@@ -540,6 +540,9 @@ describe('API Routes', () => {
         healthy: true,
         timestamp: expect.any(String),
       });
+      expect(AzureDevOpsService).toHaveBeenCalledWith(undefined, undefined, {
+        socketTimeout: 8_000,
+      });
     });
 
     it('should return unhealthy status', async () => {

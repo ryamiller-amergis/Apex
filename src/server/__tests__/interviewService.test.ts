@@ -14,6 +14,10 @@ jest.mock('../services/chatAgentService', () => ({
   cancelRun: jest.fn().mockResolvedValue(undefined),
 }));
 
+jest.mock('../services/artifactDoneEventService', () => ({
+  recordArtifactDoneEvent: jest.fn().mockResolvedValue(undefined),
+}));
+
 // ── DB mock ────────────────────────────────────────────────────────────────────
 
 jest.mock('../db/drizzle', () => {
@@ -77,6 +81,7 @@ const interviewRow = {
   project: 'proj-alpha',
   repo: 'org/repo-alpha',
   status: 'in_progress',
+  prototypeStageEnabled: true,
   createdAt: '2026-01-01T00:00:00Z',
   updatedAt: '2026-01-02T00:00:00Z',
 };
@@ -113,6 +118,7 @@ describe('createInterview', () => {
       repo: 'org/repo',
       title: 'Sprint Planning',
       chatThreadId: 'thread-abc',
+      effort: 'medium',
     });
 
     expect(result).toEqual({ interviewId: 'interview-new', threadId: 'thread-abc' });
@@ -124,6 +130,7 @@ describe('createInterview', () => {
         repo: 'org/repo',
         title: 'Sprint Planning',
         chatThreadId: 'thread-abc',
+        effort: 'medium',
         status: 'in_progress',
       }),
     );
@@ -234,6 +241,61 @@ describe('createInterview', () => {
     expect(mockCreateNotification).not.toHaveBeenCalled();
   });
 
+  it('TBI-006 DoD-0/DoD-1 creates owner-only modules with zero reviewer notifications', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'interview-owner-only' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      chatThreadId: 'thread-owner-only',
+      prdApproverIds: [],
+      designDocApproverIds: [],
+      designPrototypeApproverIds: [],
+      testCaseApproverIds: [],
+    });
+
+    expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining({
+      prdApproverIds: [],
+      designDocApproverIds: [],
+      designPrototypeApproverIds: [],
+      testCaseApproverIds: [],
+    }));
+    expect(mockCreateNotification).not.toHaveBeenCalled();
+  });
+
+  it('TBI-004 DoD-0/DoD-2 persists each explicitly supplied reviewer snapshot', async () => {
+    const returningMock = jest.fn()
+      .mockResolvedValueOnce([{ id: 'interview-before' }])
+      .mockResolvedValueOnce([{ id: 'interview-after' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      chatThreadId: 'thread-before',
+      prdApproverIds: ['reviewer-before'],
+    });
+    await createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      chatThreadId: 'thread-after',
+      prdApproverIds: ['reviewer-after'],
+    });
+
+    expect(valuesMock).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      prdApproverIds: ['reviewer-before'],
+    }));
+    expect(valuesMock).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      prdApproverIds: ['reviewer-after'],
+    }));
+  });
+
   it('sends reviewer notifications for each approver role', async () => {
     const returningMock = jest.fn().mockResolvedValue([{ id: 'interview-reviewers' }]);
     const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
@@ -301,6 +363,7 @@ describe('listInterviews', () => {
       project: 'proj-alpha',
       status: 'in_progress',
       prdCount: 2,
+      prototypeStageEnabled: true,
     });
   });
 

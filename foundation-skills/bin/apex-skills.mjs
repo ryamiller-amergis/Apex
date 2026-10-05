@@ -10,20 +10,22 @@
  *   npx @apex/skills update [<skill...>] [--skip-apex-check]
  *   npx @apex/skills validate
  *   npx @apex/skills bootstrap [<skill...>] [--explain]
+ *   npx @apex/skills migrate-root --to <repo-relative-root> [--dry-run]
  *
  * Must run identically on PowerShell, Git Bash, cmd, and POSIX shells with Node 18+.
  */
 
 import { parseArgs } from 'node:util';
-import { doctor }    from '../lib/commands/doctor.mjs';
+import { doctor } from '../lib/commands/doctor.mjs';
 import { initRegistryCommand } from '../lib/commands/init-registry.mjs';
-import { install }   from '../lib/commands/install.mjs';
-import { check }     from '../lib/commands/check.mjs';
-import { update }    from '../lib/commands/update.mjs';
-import { validate }  from '../lib/commands/validate.mjs';
+import { install } from '../lib/commands/install.mjs';
+import { check } from '../lib/commands/check.mjs';
+import { update } from '../lib/commands/update.mjs';
+import { validate } from '../lib/commands/validate.mjs';
 import { bootstrap } from '../lib/commands/bootstrap.mjs';
+import { migrateRoot } from '../lib/commands/migrate-root.mjs';
 
-const [,, command, ...rest] = process.argv;
+const [, , command, ...rest] = process.argv;
 
 const USAGE = `
 APEX Foundation Skills CLI
@@ -39,6 +41,7 @@ Commands:
     --dry-run              Preview without writing .npmrc
   install <skill...>       Install selected skill foundations + scaffold adapters
                            (refuses until doctor hard checks pass; skill names required)
+    --skill-root <path>    Canonical repository-relative root (e.g. .agents/skills)
     --all                  Install every skill your APEX release ships to this project
     --dry-run              Preview what would be written without writing anything
     --fill                 Re-run the bootstrap adapter pre-fill (for existing installs)
@@ -54,6 +57,9 @@ Commands:
     --explain              Print evidence + source file/line for each filled slot
     --enrich               Opt-in: AI-enriched prose within evidence bounds
     --skip-apex-check      Skip the APEX entitlement check (maintainers / air-gapped)
+  migrate-root             Move an installed catalog to another canonical root
+    --to <path>            Required repository-relative destination
+    --dry-run              Validate and preview without moving files
   help                     Print this message
 `.trim();
 
@@ -107,9 +113,10 @@ async function main() {
           args: rest,
           options: {
             'dry-run': { type: 'boolean', default: false },
-            fill:      { type: 'boolean', default: false },
-            enrich:    { type: 'boolean', default: false },
-            all:       { type: 'boolean', default: false },
+            fill: { type: 'boolean', default: false },
+            enrich: { type: 'boolean', default: false },
+            all: { type: 'boolean', default: false },
+            'skill-root': { type: 'string' },
             'skip-feed': { type: 'boolean', default: false },
             'skip-apex-check': { type: 'boolean', default: false },
           },
@@ -124,6 +131,7 @@ async function main() {
           enrich: values.enrich,
           skipFeed: values['skip-feed'],
           skipApexCheck: values['skip-apex-check'],
+          skillRoot: values['skill-root'],
         });
         break;
       }
@@ -167,6 +175,22 @@ async function main() {
           explain: values.explain,
           enrich: values.enrich,
           skipApexCheck: values['skip-apex-check'],
+        });
+        break;
+      }
+
+      case 'migrate-root': {
+        const { values } = parseArgs({
+          args: rest,
+          options: {
+            to: { type: 'string' },
+            'dry-run': { type: 'boolean', default: false },
+          },
+          allowPositionals: false,
+        });
+        await migrateRoot({
+          to: values.to,
+          dryRun: values['dry-run'],
         });
         break;
       }

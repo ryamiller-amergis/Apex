@@ -9,7 +9,6 @@
     "projectName": { "type": "value", "detector": "stack", "key": "projectName" },
     "contextFile": { "type": "value", "detector": "repo-docs", "key": "contextFile" },
     "agentsFile": { "type": "value", "detector": "repo-docs", "key": "agentsFile" },
-    "aiPilotDir": { "type": "value", "detector": "repo-docs", "key": "aiPilotDir" },
-    "skillsDir": { "type": "value", "detector": "repo-docs", "key": "skillsDir" }
+    "aiPilotDir": { "type": "value", "detector": "repo-docs", "key": "aiPilotDir" }
   }
 }

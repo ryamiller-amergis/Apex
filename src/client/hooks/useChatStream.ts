@@ -18,12 +18,22 @@ import type {
   SseToolStatusEvent,
 } from '../../shared/types/chat';
 import { v4 as uuidv4 } from 'uuid';
+import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 import {
   INTERACTIVE_WS_CHANGED_EVENT,
   isInteractiveWsEnabled,
   openThreadEventStream,
   type ThreadStreamHandle,
 } from '../utils/threadEventStream';
+
+/** Chronological order for chat history (SSE replay + REST merge). */
+export function sortChatMessagesByTs(messages: ChatMessage[]): ChatMessage[] {
+  return [...messages].sort((a, b) => {
+    const byTs = a.ts.localeCompare(b.ts);
+    if (byTs !== 0) return byTs;
+    return a.id.localeCompare(b.id);
+  });
+}
 
 export interface ToolProgress {
   callId: string;
@@ -64,6 +74,8 @@ interface ChatStreamState {
   toolProgress: ToolProgress[];
   status: ChatThreadStatus;
   isConnected: boolean;
+  /** True only after the current stream reports a connection failure. */
+  hasConnectionError: boolean;
   /** Client-observed timestamp of the latest semantic run progress event. */
   lastProgressAt: number | null;
   phaseEvents: RunPhaseProgress[];
@@ -149,9 +161,7 @@ function safeTimestamp(value: unknown, fallback = Date.now()): number {
 }
 
 function progressLabelForPhase(phase: AgentRunPhase, detail?: string): string {
-  if (phase === 'queued') return 'Queued — waiting for available worker';
-  if (phase === 'dispatched') return 'Starting…';
-  return detail ?? phase;
+  return friendlyChatProgressLabel(detail, phase);
 }
 
 function normalizePhaseEvent(
@@ -215,6 +225,7 @@ export function useChatStream(
     options.initialStatus ?? 'idle'
   );
   const [isConnected, setIsConnected] = useState(false);
+  const [hasConnectionError, setHasConnectionError] = useState(false);
   const [lastProgressAt, setLastProgressAt] = useState<number | null>(null);
   const [phaseEvents, setPhaseEvents] = useState<RunPhaseProgress[]>([]);
   const [runHealth, setRunHealth] = useState<RunHealthProgress | null>(null);
@@ -295,6 +306,7 @@ export function useChatStream(
     setToolProgress([]);
     setStatus(initialStatusRef.current ?? 'idle');
     setIsConnected(false);
+    setHasConnectionError(false);
     setLastProgressAt(null);
     setPhaseEvents([]);
     setRunHealth(null);
@@ -321,11 +333,11 @@ export function useChatStream(
     const snapshot = options.initialMessages;
     if (!snapshot || snapshot.length === 0) return;
     setMessages((prev) => {
-      if (prev.length === 0) return snapshot;
+      if (prev.length === 0) return sortChatMessagesByTs(snapshot);
       const known = new Set(prev.map((message) => message.id));
       const missing = snapshot.filter((message) => !known.has(message.id));
-      if (missing.length === 0) return prev;
-      return [...prev, ...missing].sort((a, b) => a.ts.localeCompare(b.ts));
+      if (missing.length === 0) return sortChatMessagesByTs(prev);
+      return sortChatMessagesByTs([...prev, ...missing]);
     });
   }, [options.initialMessages]);
 
@@ -423,7 +435,9 @@ export function useChatStream(
           clearRetryTimeout();
           setMessages((prev) => {
             const exists = prev.some((m) => m.id === messageEvent.message.id);
-            return exists ? prev : [...prev, messageEvent.message];
+            return exists
+              ? prev
+              : sortChatMessagesByTs([...prev, messageEvent.message]);
           });
           break;
         }
@@ -520,7 +534,7 @@ export function useChatStream(
                 }
               : {}),
           });
-          setProgressLabel(message);
+          setProgressLabel(friendlyChatProgressLabel(message, 'setup'));
           break;
         }
         case 'retrying': {
@@ -615,10 +629,14 @@ export function useChatStream(
     };
 
     const stream = openThreadEventStream(threadId, {
-      onOpen: () => setIsConnected(true),
+      onOpen: () => {
+        setIsConnected(true);
+        setHasConnectionError(false);
+      },
       onError: () => {
         // SSE auto-reconnects; the WS backend reconnects with ordinal resume.
         setIsConnected(false);
+        setHasConnectionError(true);
       },
       onMessage: handleMessage,
     });
@@ -783,6 +801,7 @@ export function useChatStream(
     toolProgress,
     status,
     isConnected,
+    hasConnectionError,
     lastProgressAt,
     phaseEvents,
     runHealth,

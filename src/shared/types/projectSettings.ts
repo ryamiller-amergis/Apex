@@ -1,4 +1,9 @@
-import type { ApprovalMode } from './approvals';
+import type {
+  ApprovalMode,
+  ModuleApprovalModes,
+  ReviewerDocumentType,
+} from './approvals';
+import type { EffortLevel } from './effort';
 import type { GroupWithMembers } from './groups';
 
 export type SkillProvider = 'ado' | 'github';
@@ -20,7 +25,8 @@ export type RepositoryReadinessStatus =
   | 'snapshot_unavailable';
 
 /** Stable public error when repository-dependent AI is blocked pending admin Clone. */
-export const PROJECT_REPOSITORY_NOT_READY = 'PROJECT_REPOSITORY_NOT_READY' as const;
+export const PROJECT_REPOSITORY_NOT_READY =
+  'PROJECT_REPOSITORY_NOT_READY' as const;
 export type ProjectRepositoryNotReadyCode = typeof PROJECT_REPOSITORY_NOT_READY;
 
 export interface ProjectRepositoryReadiness {
@@ -63,8 +69,16 @@ interface QuickMcpPillBase {
   /** Unique key used as the MCP server name in the Cursor SDK mcpServers map */
   mcpServerName: string;
   model?: string | null;
+  effort?: EffortLevel | null;
   /** Injected into the agent system prompt so the agent knows what the MCP is for */
   systemPromptHint?: string | null;
+  /**
+   * Users allowed to see and start this pill. Empty or omitted means everyone
+   * with Home access; no default is written when the field is absent.
+   */
+  allowedUserIds?: string[] | null;
+  /** Groups allowed to see and start this pill. Same empty/omitted semantics. */
+  allowedGroupIds?: string[] | null;
 }
 
 export interface QuickMcpPillHttp extends QuickMcpPillBase {
@@ -95,10 +109,18 @@ export interface QuickSkillPill {
   label: string;
   skillPath: string;
   model?: string | null;
+  effort?: EffortLevel | null;
   /** Plain-English description shown to users when the pill is selected */
   description?: string | null;
   /** When true, the scope guardrail is skipped for this skill's sessions */
   bypassScopePolicy?: boolean | null;
+  /**
+   * Users allowed to see and start this pill. Empty or omitted means everyone
+   * with Home access; no default is written when the field is absent.
+   */
+  allowedUserIds?: string[] | null;
+  /** Groups allowed to see and start this pill. Same empty/omitted semantics. */
+  allowedGroupIds?: string[] | null;
 }
 
 export interface InterviewSkillOption {
@@ -106,6 +128,7 @@ export interface InterviewSkillOption {
   friendlyName: string;
   /** Model override for this interview skill; null/undefined uses project default. */
   model?: string | null;
+  effort?: EffortLevel | null;
   /**
    * When unset, defaults to true (prototypes are generated) for that interview option.
    * Project-level prototypeStageEnabled is only used when no interview skill option is selected.
@@ -115,7 +138,30 @@ export interface InterviewSkillOption {
   wantsTestCases?: boolean;
 }
 
-export interface ProjectSkillConfig {
+export interface ProjectEffortSettings {
+  interviewEffort?: EffortLevel | null;
+  prdEffort?: EffortLevel | null;
+  adrEffort?: EffortLevel | null;
+  designDocEffort?: EffortLevel | null;
+  designDocAssistantEffort?: EffortLevel | null;
+  designPrototypeEffort?: EffortLevel | null;
+  testCaseEffort?: EffortLevel | null;
+  designDocValidationEffort?: EffortLevel | null;
+  prdAssistantEffort?: EffortLevel | null;
+  prdValidationEffort?: EffortLevel | null;
+  developmentEffort?: EffortLevel | null;
+  standupEffort?: EffortLevel | null;
+  featureRequestEffort?: EffortLevel | null;
+  technicalEffort?: EffortLevel | null;
+  issueEffort?: EffortLevel | null;
+  calendarAssistantEffort?: EffortLevel | null;
+  loadTestGenerationEffort?: EffortLevel | null;
+  designModuleEffort?: EffortLevel | null;
+  designModuleScopingEffort?: EffortLevel | null;
+  defaultEffort?: EffortLevel | null;
+}
+
+export interface ProjectSkillConfig extends ProjectEffortSettings {
   id: string;
   project: string;
   friendlyName: string;
@@ -180,7 +226,9 @@ export interface ProjectSkillConfig {
   prototypeEngine?: PrototypeEngine;
   /**
    * Path within the project's own repo to the design-system skill file used by Bedrock prototype
-   * generation. Defaults to `.cursor/skills/design-system/SKILL.md` when null.
+   * generation. Resolved across `.agents/skills`, `.cursor/skills`, and
+   * `skills/` when the stored path is unset or the file has moved with a
+   * catalog migration.
    */
   prototypeDesignSystemPath?: string | null;
   /**
@@ -195,11 +243,15 @@ export interface ProjectSkillConfig {
   prototypeWebReferencesEnabled?: boolean;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
+  /** Legacy project-wide mode. Retained for compatibility with the pre-per-module read path. */
   approvalMode?: ApprovalMode;
+  /** Per-module approval modes; takes precedence over `approvalMode` when present. */
+  approvalModes?: ModuleApprovalModes;
   designDocApproverCount?: number;
   prdApproverCount?: number;
   designPrototypeApproverCount?: number;
   testCaseApproverCount?: number;
+  adrApproverCount?: number;
   uiLabBedrockModelId?: string | null;
   uiLabBedrockMaxTokens?: number | null;
   uiLabBedrockTimeoutMs?: number | null;
@@ -233,7 +285,7 @@ export interface ProjectSkillConfig {
   updatedAt?: string;
 }
 
-export interface UpsertProjectSkillConfigRequest {
+export interface UpsertProjectSkillConfigRequest extends ProjectEffortSettings {
   friendlyName: string;
   isDefault?: boolean;
   skillProvider?: SkillProvider;
@@ -296,6 +348,8 @@ export interface UpsertProjectSkillConfigRequest {
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
+  /** Modes to write, keyed by module. Omitted modules keep their stored mode. */
+  approvalModes?: Partial<ModuleApprovalModes>;
   uiLabBedrockModelId?: string | null;
   uiLabBedrockMaxTokens?: number | null;
   uiLabBedrockTimeoutMs?: number | null;
@@ -321,7 +375,7 @@ export interface ProjectApprover {
   id: string;
   settingsId: string;
   userId: string;
-  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case';
+  documentType: ReviewerDocumentType;
   displayName: string | null;
   email: string | null;
   assignedBy: string | null;
@@ -340,14 +394,17 @@ export interface SetApproversRequest {
   designPrototypeApproverGroups?: string[];
   testCaseApprovers: string[];
   testCaseApproverGroups?: string[];
+  /** Optional for clients predating ADR pools; omit both ADR fields to leave the stored ADR pool unchanged. */
+  adrApprovers?: string[];
+  adrApproverGroups?: string[];
 }
 
 export interface ApproverPoolResponse {
   individuals: ProjectApprover[];
-  groups: Array<GroupWithMembers & { documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case' }>;
+  groups: Array<GroupWithMembers & { documentType: ReviewerDocumentType }>;
 }
 
-export interface ProjectSkillConfigResponse {
+export interface ProjectSkillConfigResponse extends ProjectEffortSettings {
   id: string;
   project: string;
   friendlyName: string;
@@ -396,7 +453,10 @@ export interface ProjectSkillConfigResponse {
   prototypeWebReferencesEnabled?: boolean;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
+  /** True when the project has any configured Home skill/MCP pills, before caller filtering. */
+  homePillsConfigured?: boolean;
   approvalMode?: ApprovalMode;
+  approvalModes?: ModuleApprovalModes;
   loadTestGenerationSkillPath?: string | null;
   loadTestGenerationModel?: string | null;
   designModuleSkillPath?: string | null;

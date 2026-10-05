@@ -23,6 +23,34 @@ const RECONNECT_DELAY_MS = 3_000;
 const PAYLOAD_MAX_BYTES = 7_500; // PG NOTIFY payload limit is ~8000 bytes
 const MAX_DELIVERED_EVENT_IDS = 2_000;
 
+/** PostgreSQL jsonb/text reject U+0000 (22P05 / 22021). Agent tool output can embed it. */
+function stripNullBytes(value: string): string {
+  return value.split('\u0000').join('');
+}
+
+export function sanitizePgJsonb(value: unknown): unknown {
+  if (typeof value === 'string') return stripNullBytes(value);
+  if (Array.isArray(value)) return value.map(sanitizePgJsonb);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = sanitizePgJsonb(nested);
+    }
+    return out;
+  }
+  return value;
+}
+
+export function sanitizeRunEventEnvelope(
+  event: AgentRunEventEnvelope,
+): AgentRunEventEnvelope {
+  return {
+    ...event,
+    detail: event.detail == null ? event.detail : stripNullBytes(event.detail),
+    event: sanitizePgJsonb(event.event) as AgentRunEventEnvelope['event'],
+  };
+}
+
 export const RUN_EVENT_SOURCE_INSTANCE = `${os.hostname()}:${process.pid}:${randomUUID()}`;
 
 interface ChannelPayload {
@@ -34,6 +62,8 @@ interface ChannelPayload {
 type EventCallback = (event: AgentRunEventEnvelope) => void;
 
 const subscribers = new Map<string, Set<EventCallback>>();
+/** Readers that want every thread's events. See `subscribeAllRunEvents`. */
+const globalSubscribers = new Set<EventCallback>();
 const deliveredEventIds = new Set<string>();
 const deliveredEventIdOrder: string[] = [];
 const runEventSequences = new Map<string, number>();
@@ -189,6 +219,7 @@ export async function notifyRunEvent(
   event: AgentRunEventEnvelope,
   options: { persist: boolean },
 ): Promise<void> {
+  const safe = sanitizeRunEventEnvelope(event);
   if (options.persist) {
     await pool.query(
       `INSERT INTO agent_run_events (
@@ -197,25 +228,25 @@ export async function notifyRunEvent(
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
        ON CONFLICT (event_id) DO NOTHING`,
       [
-        event.eventId,
-        event.threadId,
-        event.runId,
-        event.sourceInstance,
-        event.sequence,
-        event.timestamp,
-        event.type,
-        event.phase,
-        event.status,
-        event.detail ?? null,
-        JSON.stringify(event.event),
+        safe.eventId,
+        safe.threadId,
+        safe.runId,
+        safe.sourceInstance,
+        safe.sequence,
+        safe.timestamp,
+        safe.type,
+        safe.phase,
+        safe.status,
+        safe.detail ?? null,
+        JSON.stringify(safe.event),
       ],
     );
   }
 
   const fullPayload = {
-    threadId: event.threadId,
-    eventId: event.eventId,
-    event,
+    threadId: safe.threadId,
+    eventId: safe.eventId,
+    event: safe,
   } satisfies ChannelPayload;
   let payload = JSON.stringify(fullPayload);
   if (Buffer.byteLength(payload) > PAYLOAD_MAX_BYTES) {
@@ -262,9 +293,10 @@ async function finalizeAgentRun(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const terminalDetail = input.detail ? stripNullBytes(input.detail) : input.detail;
     const params: unknown[] = [
       input.status,
-      input.status === 'failed' ? input.detail : null,
+      input.status === 'failed' ? terminalDetail : null,
       input.runId,
     ];
     let ownerClause = '';
@@ -298,6 +330,7 @@ async function finalizeAgentRun(
     }
 
     for (const event of input.events) {
+      const safe = sanitizeRunEventEnvelope(event);
       await client.query(
         `INSERT INTO agent_run_events (
            event_id, thread_id, run_id, source_instance, sequence,
@@ -305,17 +338,17 @@ async function finalizeAgentRun(
          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
          ON CONFLICT (event_id) DO NOTHING`,
         [
-          event.eventId,
-          event.threadId,
-          event.runId,
-          event.sourceInstance,
-          event.sequence,
-          event.timestamp,
-          event.type,
-          event.phase,
-          event.status,
-          event.detail ?? null,
-          JSON.stringify(event.event),
+          safe.eventId,
+          safe.threadId,
+          safe.runId,
+          safe.sourceInstance,
+          safe.sequence,
+          safe.timestamp,
+          safe.type,
+          safe.phase,
+          safe.status,
+          safe.detail ?? null,
+          JSON.stringify(safe.event),
         ],
       );
     }
@@ -337,7 +370,7 @@ async function finalizeAgentRun(
               last_activity_at = CURRENT_TIMESTAMP
         WHERE id = $2
           AND (active_run_id = $3 OR active_run_id IS NULL)`,
-      [input.status === 'failed' ? input.detail : null, input.threadId, input.runId],
+      [input.status === 'failed' ? terminalDetail : null, input.threadId, input.runId],
     );
 
     await client.query('COMMIT');
@@ -379,22 +412,48 @@ export async function replayRunEvents(
   threadId: string,
   afterEventId?: string,
   limit = 500,
+  runId?: string,
 ): Promise<AgentRunEventEnvelope[]> {
   const boundedLimit = Math.max(1, Math.min(limit, 500));
-  const result = await pool.query(
-    `WITH cursor AS (
-       SELECT ordinal
+
+  if (afterEventId) {
+    const cursor = await pool.query<{ ordinal: string | number }>(
+      `SELECT ordinal
          FROM agent_run_events
-        WHERE event_id = $2::uuid
-     )
-     SELECT event_id, thread_id, run_id, source_instance, sequence,
+        WHERE event_id = $1::uuid
+          AND thread_id = $2`,
+      [afterEventId, threadId],
+    );
+    if (cursor.rows.length > 0) {
+      const result = await pool.query(
+        `SELECT event_id, thread_id, run_id, source_instance, sequence,
+                event_timestamp, event_type, phase, status, detail, event
+           FROM agent_run_events
+          WHERE thread_id = $1
+            AND ordinal > $2
+          ORDER BY ordinal ASC
+          LIMIT $3`,
+        [threadId, cursor.rows[0].ordinal, boundedLimit],
+      );
+      return result.rows.map(rowToEnvelope);
+    }
+    // Missing cursor: same newest-first window as a cold replay.
+  }
+
+  const result = await pool.query(
+    `SELECT event_id, thread_id, run_id, source_instance, sequence,
             event_timestamp, event_type, phase, status, detail, event
-       FROM agent_run_events
-      WHERE thread_id = $1
-        AND ordinal > COALESCE((SELECT cursor.ordinal FROM cursor), 0)
-      ORDER BY ordinal ASC
-      LIMIT $3`,
-    [threadId, afterEventId ?? null, boundedLimit],
+       FROM (
+         SELECT event_id, ordinal, thread_id, run_id, source_instance, sequence,
+                event_timestamp, event_type, phase, status, detail, event
+           FROM agent_run_events
+          WHERE thread_id = $1
+            AND ($3::text IS NULL OR run_id = $3)
+          ORDER BY ordinal DESC
+          LIMIT $2
+       ) recent
+      ORDER BY ordinal ASC`,
+    [threadId, boundedLimit, runId ?? null],
   );
   return result.rows.map(rowToEnvelope);
 }
@@ -419,9 +478,31 @@ export function subscribeRunEvents(threadId: string, callback: EventCallback): (
   };
 }
 
+/**
+ * Subscribe to run events for every thread. Returns an unsubscribe function.
+ *
+ * Thread-scoped subscription is the right shape for streaming a conversation to the browser that
+ * opened it. It is the wrong shape for a background reader that does not know, and should not have
+ * to know, which threads exist — the Playbook runtime correlates a terminal event by agent-run id
+ * against a row it wrote, on whichever instance happens to receive the NOTIFY. Registering one
+ * listener per suspended step would also mean re-registering all of them after a restart, which is
+ * the fragility the reconciliation sweep exists to cover rather than something to build on.
+ */
+export function subscribeAllRunEvents(callback: EventCallback): () => void {
+  globalSubscribers.add(callback);
+  return () => {
+    globalSubscribers.delete(callback);
+  };
+}
+
 /** Shared dispatch path, exported to keep LISTEN deduplication unit-testable. */
 export function dispatchRunEventForTest(event: AgentRunEventEnvelope): void {
   if (!rememberDeliveredEventId(event.eventId)) return;
+
+  for (const callback of globalSubscribers) {
+    try { callback(event); } catch { /* subscriber error */ }
+  }
+
   const subs = subscribers.get(event.threadId);
   if (!subs) return;
   for (const callback of subs) {

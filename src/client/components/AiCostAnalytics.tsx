@@ -39,11 +39,13 @@ import {
 } from '../hooks/useAiCostAnalytics';
 import { useAppShell } from '../hooks/useAppShell';
 import type { AiCostTimeseriesPoint, AiCostForecast } from '../../shared/types/aiCostAnalytics';
+import { effortLabel } from '../../shared/utils/effort';
 
 // ── Feature display names ─────────────────────────────────────────────────────
 
 const FEATURE_LABELS: Record<string, string> = {
   interview: 'Interview',
+  adr: 'ADR',
   prd: 'PRD Generation',
   'prd-review': 'PRD Review',
   'design-doc': 'Design Doc',
@@ -74,6 +76,7 @@ const PROVIDER_COLORS: Record<string, string> = {
 
 const FEATURE_COLORS: Record<string, string> = {
   interview: '#6366f1',
+  adr: '#14b8a6',
   prd: '#8b5cf6',
   'prd-review': '#a78bfa',
   'design-doc': '#ec4899',
@@ -168,19 +171,10 @@ interface KpiCardProps {
   'data-testid'?: string;
 }
 
-const KpiCard: React.FC<KpiCardProps> = ({
-  label,
-  value,
-  sub,
-  delta,
-  accent = 'default',
-  onClick,
-  'data-testid': testId,
-}) => {
+const KpiCard: React.FC<KpiCardProps> = ({ label, value, sub, delta, accent = 'default', onClick, 'data-testid': testId }) => {
   const accentClass = accent === 'green' ? styles.kpiCardAccentGreen : accent === 'blue' ? styles.kpiCardAccentBlue : accent === 'orange' ? styles.kpiCardAccentOrange : styles.kpiCardAccent;
   const deltaClass = delta === undefined ? '' : delta > 0 ? styles.kpiDeltaUp : delta < 0 ? styles.kpiDeltaDown : styles.kpiDeltaFlat;
   const deltaIcon = delta === undefined ? '' : delta > 0 ? '↑' : delta < 0 ? '↓' : '→';
-  const fallbackId = `ai-cost-kpi-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
 
   return (
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- optional KPI drill-down stays a click on the card; existing interaction stays as-is
@@ -189,7 +183,7 @@ const KpiCard: React.FC<KpiCardProps> = ({
       onClick={onClick}
       style={onClick ? { cursor: 'pointer' } : undefined}
       title={onClick ? `Click to drill down into ${label}` : undefined}
-      {...{ 'data-testid': testId ?? fallbackId }}
+      {...(testId ? { 'data-testid': testId } : {})}
     >
       <div className={accentClass} />
       <div className={styles.kpiLabel}>{label}{onClick && <span style={{ fontSize: 10, marginLeft: 4, opacity: 0.5 }}>↗</span>}</div>
@@ -263,7 +257,8 @@ const SpendChart: React.FC<SpendChartProps> = ({ timeseries, forecast, isLoading
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
         <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
         <YAxis tickFormatter={(v) => formatCost(v)} tick={{ fontSize: 11, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
-        <Tooltip content={<CustomTooltip />} {...{ 'data-testid': 'ai-cost-spend-tooltip' }} />
+        {/* data-testid-exempt — Recharts hover chrome; no host DOM we own */}
+        <Tooltip content={<CustomTooltip />} />
         <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12 }} />
         <ReferenceLine x={formatDate(today)} stroke="#64748b" strokeDasharray="4 2" label={{ value: 'Today', position: 'top', fontSize: 10, fill: 'var(--text-muted)' }} />
         <Area type="monotone" dataKey="cursor" name="Cursor" stroke={PROVIDER_COLORS.cursor} fill="url(#gradCursor)" strokeWidth={2} dot={false} />
@@ -297,7 +292,8 @@ const FeatureBarChart: React.FC<{ data: Array<{ feature: string; costUsd: number
         <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="var(--border-color)" />
         <XAxis type="number" tickFormatter={(v) => formatCost(v)} tick={{ fontSize: 11, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
         <YAxis type="category" dataKey="label" tick={{ fontSize: 11, fill: 'var(--text-secondary)' }} tickLine={false} axisLine={false} width={105} />
-        <Tooltip formatter={(v) => [formatCost(Number(v) || 0), 'Cost']} cursor={{ fill: 'rgba(99,102,241,0.05)' }} {...{ 'data-testid': 'ai-cost-feature-bar-tooltip' }} />
+        {/* data-testid-exempt — Recharts hover chrome; no host DOM we own */}
+        <Tooltip formatter={(v) => [formatCost(Number(v) || 0), 'Cost']} cursor={{ fill: 'rgba(99,102,241,0.05)' }} />
         <Bar dataKey="costUsd" radius={[0, 4, 4, 0]} name="Cost">
           {chartData.map((entry) => (
             <Cell key={entry.feature} fill={getFeatureColor(entry.feature)} />
@@ -330,7 +326,8 @@ const ModelDonut: React.FC<{ data: Array<{ modelId: string; costUsd: number }>; 
           <Pie data={pieData} cx="50%" cy="50%" innerRadius={40} outerRadius={65} dataKey="value" strokeWidth={2} stroke="var(--bg-secondary)">
             {pieData.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
           </Pie>
-          <Tooltip formatter={(v) => [formatCost(Number(v) || 0), 'Cost']} {...{ 'data-testid': 'ai-cost-model-donut-tooltip' }} />
+          {/* data-testid-exempt — Recharts hover chrome; no host DOM we own */}
+          <Tooltip formatter={(v) => [formatCost(Number(v) || 0), 'Cost']} />
         </PieChart>
       </ResponsiveContainer>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -368,7 +365,7 @@ interface EventsTableProps {
   filters: AiCostFilters;
 }
 
-const EventsTable: React.FC<EventsTableProps> = ({ filters }) => {
+export const EventsTable: React.FC<EventsTableProps> = ({ filters }) => {
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 20;
   const { data, isLoading } = useAiCostEvents(filters, page, PAGE_SIZE);
@@ -383,6 +380,7 @@ const EventsTable: React.FC<EventsTableProps> = ({ filters }) => {
           <tr>
             <th>Feature</th>
             <th>Model</th>
+            <th>Effort</th>
             <th>Provider</th>
             <th>Tokens (in/out)</th>
             <th>Cost</th>
@@ -395,6 +393,7 @@ const EventsTable: React.FC<EventsTableProps> = ({ filters }) => {
             <tr key={e.id}>
               <td><span className={styles.featureChip} style={{ background: `${getFeatureColor(e.feature)}18`, color: getFeatureColor(e.feature) }}>{featureLabel(e.feature)}</span></td>
               <td><span className={styles.modelChip} title={e.modelId}>{e.modelId.replace(/^us\.anthropic\./, '').replace(/-\d+v\d+:\d+$/, '')}</span></td>
+              <td>{e.effort ? effortLabel(e.effort) : null}</td>
               <td><span className={styles.modelChip}>{e.provider}</span></td>
               <td className={styles.tokenCell}>{formatTokens(e.inputTokens)} / {formatTokens(e.outputTokens)}</td>
               <td className={styles.costCell}>{formatCost(e.costUsd)}</td>
@@ -422,7 +421,7 @@ interface ExecutiveBriefBannerProps {
   'data-testid'?: string;
 }
 
-const ExecutiveBriefBanner: React.FC<ExecutiveBriefBannerProps> = ({ project, onDismiss }) => {
+const ExecutiveBriefBanner: React.FC<ExecutiveBriefBannerProps> = ({ project, onDismiss, 'data-testid': testId }) => {
   const { data: brief, isLoading } = useAiCostDailyBrief(project);
 
   if (isLoading) return null;
@@ -444,7 +443,7 @@ const ExecutiveBriefBanner: React.FC<ExecutiveBriefBannerProps> = ({ project, on
     : null;
 
   return (
-    <div className={styles.briefBanner}>
+    <div className={styles.briefBanner} {...(testId ? { 'data-testid': testId } : {})}>
       <div className={styles.briefBannerGlow} />
       <div className={styles.briefBannerHeader}>
         <div className={styles.briefBannerLeft}>
@@ -585,6 +584,7 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
                 className={styles.refreshBtn}
                 onClick={() => setShowComparison(true)}
                 title="Compare AI costs across all projects (Super Admin only)"
+                {...{ 'data-testid': 'ai-cost-project-comparison-btn' }}
               >
                 ⇄ Project Comparison
               </button>
@@ -602,6 +602,7 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
                 }}
                 disabled={sync.isPending}
                 title="Pull latest billing data from Cursor and AWS now"
+                {...{ 'data-testid': 'ai-cost-sync-btn' }}
               >
                 {sync.isPending ? '↻ Syncing…' : '↻ Sync Now'}
               </button>
@@ -614,6 +615,7 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
                   className={styles.projectSelect}
                   value={activeProject}
                   onChange={(e) => setActiveProject(e.target.value)}
+                  {...{ 'data-testid': 'ai-cost-project-select' }}
                 >
                   <option value="all">All Projects</option>
                   {byProject.map((p) => (
@@ -641,6 +643,7 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
               key={p}
               className={`${styles.presetBtn} ${preset === p ? styles.presetBtnActive : ''}`}
               onClick={() => setPreset(p)}
+              {...{ 'data-testid': `ai-cost-period-${p}` }}
             >
               {p}
             </button>
@@ -681,7 +684,7 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
           sub="Agentic workflows"
           accent="blue"
           onClick={() => setDrillDown({ type: 'provider', provider: 'cursor', label: 'Cursor SDK' })}
-          {...{ 'data-testid': 'ai-cost-kpi-cursor-sdk' }}
+          {...{ 'data-testid': 'ai-cost-kpi-cursor' }}
         />
         <KpiCard
           label="AWS Bedrock"
@@ -689,7 +692,7 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
           sub="Direct generation"
           accent="orange"
           onClick={() => setDrillDown({ type: 'provider', provider: 'bedrock', label: 'AWS Bedrock' })}
-          {...{ 'data-testid': 'ai-cost-kpi-aws-bedrock' }}
+          {...{ 'data-testid': 'ai-cost-kpi-bedrock' }}
         />
         {costOutcomes?.prd && (
           <KpiCard
@@ -698,7 +701,7 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
             sub={`${costOutcomes.prd.interactions} PRDs`}
             accent="green"
             onClick={() => setDrillDown({ type: 'outcome', feature: 'prd', label: 'PRD Generation', metricLabel: `${costOutcomes.prd!.interactions} PRDs · avg ${formatCost(costOutcomes.prd!.avgCostUsd)} each` })}
-            {...{ 'data-testid': 'ai-cost-kpi-cost-prd' }}
+            {...{ 'data-testid': 'ai-cost-kpi-prd' }}
           />
         )}
         {costOutcomes?.doc && (
@@ -708,7 +711,7 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
             sub={`${costOutcomes.doc.interactions} docs`}
             accent="green"
             onClick={() => setDrillDown({ type: 'outcome', feature: 'design-doc', label: 'Design Docs', metricLabel: `${costOutcomes.doc!.interactions} docs · avg ${formatCost(costOutcomes.doc!.avgCostUsd)} each` })}
-            {...{ 'data-testid': 'ai-cost-kpi-cost-design-doc' }}
+            {...{ 'data-testid': 'ai-cost-kpi-design-doc' }}
           />
         )}
         {costOutcomes?.proto && (
@@ -718,7 +721,7 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
             sub={`${costOutcomes.proto.interactions} prototypes`}
             accent="green"
             onClick={() => setDrillDown({ type: 'outcome', feature: 'design-prototype', label: 'Prototypes', metricLabel: `${costOutcomes.proto!.interactions} prototypes · avg ${formatCost(costOutcomes.proto!.avgCostUsd)} each` })}
-            {...{ 'data-testid': 'ai-cost-kpi-cost-prototype' }}
+            {...{ 'data-testid': 'ai-cost-kpi-prototype' }}
           />
         )}
       </div>

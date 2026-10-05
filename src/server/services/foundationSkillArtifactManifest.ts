@@ -5,6 +5,7 @@ import { posix as posixPath } from 'path';
 import type {
   FoundationSkillArtifactManifest,
   FoundationSkillArtifactManifestSkill,
+  FoundationSkillProjectNotes,
   FoundationSkillRelease,
 } from '../../shared/types/foundationSkills';
 import {
@@ -181,10 +182,7 @@ export function validateReleaseArtifactManifest(
 
   const byName = new Map(manifest.skills.map((skill) => [skill.name, skill]));
   validateManifestDependencyGraph(manifest.skills, byName);
-  const effective = new Set(release.selectedSkills);
-  for (const skill of manifest.skills) {
-    if (skill.alwaysInstall) effective.add(skill.name);
-  }
+  const effective = effectiveReleaseSkills(release, manifest);
 
   for (const name of effective) {
     const skill = byName.get(name);
@@ -207,22 +205,128 @@ export function validateReleaseArtifactManifest(
   }
 }
 
+/** Release selection plus the alwaysInstall skills the artifact forces into every install. */
+function effectiveReleaseSkills(
+  release: Pick<FoundationSkillRelease, 'selectedSkills'>,
+  manifest: FoundationSkillArtifactManifest,
+): Set<string> {
+  const effective = new Set(release.selectedSkills);
+  for (const skill of manifest.skills) {
+    if (skill.alwaysInstall) effective.add(skill.name);
+  }
+  return effective;
+}
+
+function rejectedUpdate(message: string): Error & { status: number } {
+  return Object.assign(new Error(message), { status: 400 });
+}
+
+/**
+ * Audience lives only in the database, so a published release can be retargeted
+ * without touching the artifact. The selection itself stays immutable: the new
+ * audience is checked against the release's own skills and its manifest snapshot.
+ */
+function validatePublishedAudience(
+  release: FoundationSkillRelease,
+  input: Record<string, unknown>,
+): void {
+  const targetProjects =
+    (input.targetProjects as string[] | undefined) ?? release.targetProjects;
+  const skillTargets =
+    (input.skillTargets as Record<string, string[]> | undefined) ?? release.skillTargets;
+
+  const releaseSkills = new Set(release.selectedSkills);
+  for (const [name, projects] of Object.entries(skillTargets)) {
+    if (!releaseSkills.has(name)) {
+      throw rejectedUpdate(
+        `Skill "${name}" is not part of release ${release.version} and cannot be targeted`,
+      );
+    }
+    if (!Array.isArray(projects) || projects.some((p) => typeof p !== 'string')) {
+      throw rejectedUpdate(`skillTargets["${name}"] must be an array of project names`);
+    }
+    const outside = targetProjects.length
+      ? projects.filter((p) => !targetProjects.includes(p))
+      : [];
+    if (outside.length) {
+      throw rejectedUpdate(
+        `skillTargets["${name}"] targets projects outside the release audience: ${outside.join(', ')}`,
+      );
+    }
+  }
+
+  if (!release.manifestSnapshot) return;
+  const issues = collectFoundationSkillValidationIssues({
+    skills: release.manifestSnapshot.skills,
+    selectedSkills: [...effectiveReleaseSkills(release, release.manifestSnapshot)],
+    targetProjects,
+    skillTargets,
+  });
+  if (issues.length > 0) {
+    throw new FoundationSkillReleaseValidationError(issues);
+  }
+}
+
+/**
+ * Per-project notes are only reachable by a project that the release targets,
+ * so an entry for any other project would never be shown to anyone.
+ */
+function validateProjectNotes(
+  release: FoundationSkillRelease,
+  input: Record<string, unknown>,
+): void {
+  const projectNotes = input.projectNotes as
+    | Record<string, FoundationSkillProjectNotes>
+    | undefined;
+  if (!projectNotes) return;
+
+  const targetProjects =
+    (input.targetProjects as string[] | undefined) ?? release.targetProjects;
+
+  for (const [project, notes] of Object.entries(projectNotes)) {
+    if (!notes || typeof notes !== 'object' || Array.isArray(notes)) {
+      throw rejectedUpdate(
+        `projectNotes["${project}"] must be an object with releaseNotes and breakingChanges`,
+      );
+    }
+    for (const field of ['releaseNotes', 'breakingChanges'] as const) {
+      const value = notes[field];
+      if (value !== null && value !== undefined && typeof value !== 'string') {
+        throw rejectedUpdate(`projectNotes["${project}"].${field} must be text or null`);
+      }
+    }
+    if (targetProjects.length > 0 && !targetProjects.includes(project)) {
+      throw rejectedUpdate(
+        `projectNotes["${project}"] targets a project outside the release audience`,
+      );
+    }
+  }
+}
+
 export function validateReleaseUpdate(
   release: FoundationSkillRelease,
   input: Record<string, unknown>,
 ): void {
+  validateProjectNotes(release, input);
   if (release.status === 'draft') return;
   if (release.status === 'publishing') {
     throw new Error('Release is publishing and cannot be edited');
   }
 
-  const mutable = new Set(['releaseNotes', 'breakingChanges']);
+  const mutable = new Set(['releaseNotes', 'breakingChanges', 'projectNotes']);
+  if (release.status === 'published') {
+    mutable.add('targetProjects');
+    mutable.add('skillTargets');
+  }
   const immutableFields = Object.keys(input).filter((key) => !mutable.has(key));
   if (immutableFields.length) {
     throw new Error(
-      `Published release fields are immutable: ${immutableFields.join(', ')}`,
+      `${release.status} release fields are immutable: ${immutableFields.join(', ')}`,
     );
   }
+
+  if (input.targetProjects === undefined && input.skillTargets === undefined) return;
+  validatePublishedAudience(release, input);
 }
 
 function normalizeManifest(value: unknown): FoundationSkillArtifactManifest {

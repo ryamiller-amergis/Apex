@@ -14,6 +14,7 @@ jest.mock('@azure/identity', () => ({
 import {
   createServiceBusCredential,
   getServiceBusPublisher,
+  resetServiceBusCredentialCache,
   setServiceBusPublisher,
 } from '../services/serviceBusPublisher';
 import type { DispatchMessage } from '../../shared/types/agentRunAdmission';
@@ -33,6 +34,7 @@ describe('serviceBusPublisher', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     setServiceBusPublisher(null);
+    resetServiceBusCredentialCache();
     delete process.env.AI_RUNS_SERVICEBUS_NAMESPACE;
     delete process.env.AI_RUNS_BACKGROUND_QUEUE_NAME;
     delete process.env.AI_RUNS_DISPATCH_PUBLISHER;
@@ -172,6 +174,65 @@ describe('serviceBusPublisher', () => {
     expect(thrown?.message).toBe('Service Bus publish failed (503)');
     expect(thrown?.message).not.toContain('sensitive broker detail');
     expect(readResponseBody).not.toHaveBeenCalled();
+  });
+
+  test('retries an authorization failure so a queue replacement does not strand the run', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.AI_RUNS_SERVICEBUS_NAMESPACE = 'sbns-apex-ai-dev';
+    global.fetch = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 401, statusText: 'Unauthorized' })
+      .mockResolvedValueOnce({ ok: true, status: 201, statusText: 'Created' }) as unknown as typeof fetch;
+
+    await expect(
+      getServiceBusPublisher().publish(sampleMessage)
+    ).resolves.toBeUndefined();
+
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  test('gives up after the attempt budget and reports the last status', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.AI_RUNS_SERVICEBUS_NAMESPACE = 'sbns-apex-ai-dev';
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+    }) as unknown as typeof fetch;
+
+    await expect(
+      getServiceBusPublisher().publish(sampleMessage)
+    ).rejects.toThrow('Service Bus publish failed (401)');
+
+    expect(global.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  test('does not retry a status the broker will keep rejecting', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.AI_RUNS_SERVICEBUS_NAMESPACE = 'sbns-apex-ai-dev';
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+    }) as unknown as typeof fetch;
+
+    await expect(
+      getServiceBusPublisher().publish(sampleMessage)
+    ).rejects.toThrow('Service Bus publish failed (400)');
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('reuses one credential across publishes so the token cache is used', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.AI_RUNS_SERVICEBUS_NAMESPACE = 'sbns-apex-ai-dev';
+
+    await getServiceBusPublisher().publish(sampleMessage);
+    await getServiceBusPublisher().publish(sampleMessage);
+    await getServiceBusPublisher().publish(sampleMessage);
+
+    expect(mockManagedIdentityCredential).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledTimes(3);
   });
 });
 

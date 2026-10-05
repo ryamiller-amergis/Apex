@@ -8,6 +8,7 @@ import { getSkillConfig } from '../services/projectSettingsService';
 import { adoWriteForRequest, isAdoUserAuthError } from '../services/adoFactory';
 import { createThread } from '../services/chatAgentService';
 import * as githubCatalog from '../services/skillCatalogGitHub';
+import { buildWorkItemReferenceText, transitionWorkItemForPullRequest } from '../services/workItemPrLinkService';
 import {
   checkoutDefaultBranch,
   checkoutFeatureBranch,
@@ -24,7 +25,7 @@ import {
   cleanupWorkspace,
 } from '../services/repoCheckoutService';
 import { db } from '../db/drizzle';
-import { devSessions, prds, designDocs, testCases } from '../db/schema';
+import { devSessions, interviews, prds, designDocs, testCases } from '../db/schema';
 import { eq, and, inArray, desc } from 'drizzle-orm';
 import { injectDevContextFiles } from '../services/devContextService';
 import {
@@ -38,7 +39,8 @@ import {
   activateDevSession,
   touchDevSessionSetup,
 } from '../services/devSessionSetupService';
-import { getUserId } from '../utils/requestUser';
+import { getUserEmail, getUserId } from '../utils/requestUser';
+import { getAdoTokenForUser } from '../services/adoUserToken';
 import type {
   StartDevSessionRequest,
   ApexBacklogGroup,
@@ -53,6 +55,42 @@ import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/proje
 import { logMyWorkSession } from '../services/myWorkSessionLogger';
 import { buildLocalDevContext } from '../services/localDevContextService';
 import { getApexFeatureContext } from '../services/devWorkbenchFeatureContextService';
+import {
+  attachCloudAgentEligibility,
+  cancelCloudAgentRun,
+  CloudAgentConflictError,
+  CloudAgentEligibilityError,
+  getCloudAgentActivityStream,
+  getCloudAgentRunHistory,
+  getCloudAgentRunStatus,
+  startCloudAgentRun,
+} from '../services/cloudAgentService';
+import { MY_WORK_CLOUD_AGENT_FLAG } from '../../shared/types/featureFlags';
+import { startSseHeartbeat, writeSseEvent } from '../utils/sseResponse';
+import { listAssignedToUser } from '../services/featureRequestService';
+
+/** ADO System.AssignedTo may be an identity object or a plain display-name string. */
+function assignedToDisplayName(raw: unknown): string | null {
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    return trimmed || null;
+  }
+  if (raw && typeof raw === 'object') {
+    const identity = raw as { displayName?: unknown; uniqueName?: unknown };
+    if (typeof identity.displayName === 'string' && identity.displayName.trim()) {
+      return identity.displayName.trim();
+    }
+    if (typeof identity.uniqueName === 'string' && identity.uniqueName.trim()) {
+      return identity.uniqueName.trim();
+    }
+  }
+  return null;
+}
+
+function sameAssignedToCaller(assignedTo: string | null, callerDisplayName: string): boolean {
+  if (!assignedTo) return false;
+  return assignedTo.toLowerCase() === callerDisplayName.trim().toLowerCase();
+}
 
 const router = Router();
 
@@ -80,11 +118,34 @@ router.get('/workitems', async (req: Request, res: Response) => {
 
     const adoService = new AzureDevOpsService(project);
     const items = await adoService.getWorkItemsAssignedToUser(displayName, project, { activeOnly: true });
+    const userId = getUserId(req);
+    const withEligibility = await attachCloudAgentEligibility(items, {
+      userId,
+      project,
+      isSuperAdmin: isSuperAdminRequest(req),
+    });
 
-    res.json(items);
+    res.json(withEligibility);
   } catch (err) {
     console.error('[dev-workbench] getWorkItems failed:', (err as Error).message);
     res.status(500).json({ error: 'Failed to fetch assigned work items' });
+  }
+});
+
+// GET /assigned-backlog?project=<project> — Apex Backlog items assigned to the caller
+router.get('/assigned-backlog', async (req: Request, res: Response) => {
+  try {
+    const project = req.query.project as string;
+    if (!project) {
+      res.status(400).json({ error: 'project query parameter is required' });
+      return;
+    }
+
+    const items = await listAssignedToUser(project, getUserId(req));
+    res.json(items);
+  } catch (err) {
+    console.error('[dev-workbench] getAssignedBacklog failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to fetch assigned backlog' });
   }
 });
 
@@ -101,10 +162,42 @@ router.get('/backlog-features', async (req: Request, res: Response) => {
       return;
     }
 
+    // Features belong to whoever owns the design doc on the interview that
+    // produced the PRD. The inner join drops PRDs with no interview, and the
+    // owner predicate drops PRDs owned by nobody or by someone else — for
+    // every caller, super admins included.
     const approvedPrds = await db
-      .select()
+      .select({
+        id: prds.id,
+        title: prds.title,
+        backlogJson: prds.backlogJson,
+        reviewedAt: prds.reviewedAt,
+        updatedAt: prds.updatedAt,
+        createdAt: prds.createdAt,
+      })
       .from(prds)
-      .where(and(eq(prds.project, project), eq(prds.status, 'approved')));
+      .innerJoin(interviews, eq(prds.interviewId, interviews.id))
+      .where(and(
+        eq(prds.project, project),
+        eq(prds.status, 'approved'),
+        eq(interviews.designDocOwnerId, getUserId(req)),
+      ));
+
+    const prdIds = approvedPrds.map((prd) => prd.id);
+    const docRows = prdIds.length
+      ? await db
+          .select({
+            prdId: designDocs.prdId,
+            id: designDocs.id,
+            featureIndex: designDocs.featureIndex,
+            status: designDocs.status,
+          })
+          .from(designDocs)
+          .where(inArray(designDocs.prdId, prdIds))
+      : [];
+    const docByPrdFeature = new Map(
+      docRows.map((doc) => [`${doc.prdId}:${doc.featureIndex}`, doc]),
+    );
 
     const result: ApexBacklogGroup[] = [];
 
@@ -115,13 +208,6 @@ router.get('/backlog-features', async (req: Request, res: Response) => {
       // Features enter My Work as Ready when the PRD is approved.
       const readyAt = prd.reviewedAt ?? prd.updatedAt ?? prd.createdAt ?? null;
 
-      const docs = await db
-        .select({ id: designDocs.id, featureIndex: designDocs.featureIndex, status: designDocs.status })
-        .from(designDocs)
-        .where(eq(designDocs.prdId, prd.id));
-
-      const docByFeatureIndex = new Map(docs.map(d => [d.featureIndex, d]));
-
       let globalFeatureIdx = 0;
       const epics: ApexBacklogGroup['epics'] = [];
 
@@ -129,7 +215,7 @@ router.get('/backlog-features', async (req: Request, res: Response) => {
         const features: BacklogFeatureItem[] = [];
 
         for (const feat of epic.features ?? []) {
-          const doc = docByFeatureIndex.get(globalFeatureIdx);
+          const doc = docByPrdFeature.get(`${prd.id}:${globalFeatureIdx}`);
           const items = feat.items ?? [];
           const pbiCount = items.filter((i: any) => i.type === 'PBI' || i.type === 'Product Backlog Item').length;
           const tbiCount = items.filter((i: any) => i.type === 'TBI' || i.type === 'Technical Backlog Item').length;
@@ -570,6 +656,7 @@ router.post('/start', async (req: Request, res: Response) => {
           }
           const thread = await createThread(userId, {
             project,
+            agentModule: 'development',
             repo,
             branch: branchName,
             skillBranch: baseBranch,
@@ -673,6 +760,7 @@ router.post('/start', async (req: Request, res: Response) => {
           }
           const thread = await createThread(userId, {
             project,
+            agentModule: 'development',
             repo,
             branch: branchName,
             skillBranch: baseBranch,
@@ -748,7 +836,204 @@ router.post('/start', async (req: Request, res: Response) => {
   }
 });
 
-// GET /sessions — active sessions for the current user
+// POST /cloud-agent/start — enqueue a Cloud Agent implementation run
+router.post('/cloud-agent/start', async (req: Request, res: Response) => {
+  try {
+    const { workItemId, project } = req.body as { workItemId?: number; project?: string };
+    if (!project || !workItemId) {
+      res.status(400).json({ error: 'workItemId and project are required' });
+      return;
+    }
+    const userId = getUserId(req);
+    const enabled = await isFeatureEnabled(MY_WORK_CLOUD_AGENT_FLAG, { userId, project });
+    // @feature-flag:my-work-cloud-agent start winner=enabled
+    if (!enabled) {
+      // @feature-flag:my-work-cloud-agent disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:my-work-cloud-agent disabled-end
+    }
+
+    // @feature-flag:my-work-cloud-agent enabled-start
+    if (isAppNativeRequirementsProject(project)) {
+      res.status(403).json({
+        error: 'Cloud Development is only available on Azure DevOps-configured projects.',
+      });
+      return;
+    }
+
+    const displayName = (req.user as any)?.profile?.displayName as string | undefined;
+    if (!displayName) {
+      res.status(400).json({ error: 'Could not determine user display name' });
+      return;
+    }
+
+    const stateService = new AzureDevOpsService(project);
+    const wiResult = await stateService.queryWorkItemsByWiql({
+      wiql: `SELECT [System.Id],[System.Title],[System.State],[System.WorkItemType],[System.Tags],[System.AssignedTo] FROM WorkItems WHERE [System.Id] = ${workItemId}`,
+      fields: ['System.Id', 'System.Title', 'System.State', 'System.WorkItemType', 'System.Tags', 'System.AssignedTo'],
+    });
+    const fields = wiResult.items[0]?.fields;
+    if (!fields) {
+      res.status(404).json({ error: 'Work item not found' });
+      return;
+    }
+
+    const assignedTo = assignedToDisplayName(fields['System.AssignedTo']);
+    if (!sameAssignedToCaller(assignedTo, displayName)) {
+      res.status(403).json({
+        error: 'You can only start Cloud Development on work items assigned to you.',
+      });
+      return;
+    }
+
+    const adoUserToken = await getAdoTokenForUser(req);
+    if (!adoUserToken) {
+      console.warn('[cloud-agent] no developer Azure DevOps token; the pull request will be opened by the service account');
+    }
+    const result = await startCloudAgentRun({
+      userId,
+      project,
+      workItemId,
+      workItemTitle: (fields['System.Title'] ?? `Work item ${workItemId}`) as string,
+      initiatorName: displayName,
+      initiatorEmail: getUserEmail(req),
+      adoUserToken,
+      isSuperAdmin: isSuperAdminRequest(req),
+      item: {
+        state: (fields['System.State'] ?? '') as string,
+        workItemType: (fields['System.WorkItemType'] ?? '') as string,
+        tags: (fields['System.Tags'] ?? '') as string,
+      },
+    });
+    res.json(result);
+    // @feature-flag:my-work-cloud-agent enabled-end
+    // @feature-flag:my-work-cloud-agent end
+  } catch (err) {
+    if (err instanceof CloudAgentEligibilityError) {
+      res.status(403).json({ error: err.reason });
+      return;
+    }
+    if (err instanceof CloudAgentConflictError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    console.error('[dev-workbench] cloud-agent start failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to start Cloud Development' });
+  }
+});
+
+// GET /sessions/:id/cloud-agent/stream — replay and follow the Cursor SDK run stream
+router.get('/sessions/:id/cloud-agent/stream', async (req: Request, res: Response) => {
+  let iterator: AsyncIterator<unknown> | null = null;
+  let stopHeartbeat: (() => void) | null = null;
+  let closed = false;
+
+  req.on('close', () => {
+    closed = true;
+    stopHeartbeat?.();
+    void iterator?.return?.();
+  });
+
+  try {
+    const expectedRunId = typeof req.query.runId === 'string' ? req.query.runId : undefined;
+    const stream = await getCloudAgentActivityStream(
+      req.params.id,
+      getUserId(req),
+      expectedRunId,
+    );
+    iterator = stream[Symbol.asyncIterator]();
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+    stopHeartbeat = startSseHeartbeat(res);
+
+    while (!closed) {
+      const next = await iterator.next();
+      if (next.done) break;
+      if (!writeSseEvent(res, { type: 'activity', event: next.value })) break;
+    }
+    if (!closed) {
+      writeSseEvent(res, { type: 'stream_end' });
+      res.end();
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Cloud Agent activity stream failed';
+    if (res.headersSent) {
+      writeSseEvent(res, { type: 'stream_error', error: message });
+      res.end();
+    } else {
+      const status = (err as Error & { status?: number }).status ?? 500;
+      res.status(status).json({
+        error: status === 500 ? 'Failed to stream Cloud Agent activity' : message,
+      });
+    }
+  } finally {
+    stopHeartbeat?.();
+  }
+});
+
+// POST /sessions/:id/cloud-agent/cancel
+router.post('/sessions/:id/cloud-agent/cancel', async (req: Request, res: Response) => {
+  try {
+    const sessionId = req.params.id;
+    const userId = getUserId(req);
+    const session = await db.query.devSessions.findFirst({
+      where: and(eq(devSessions.id, sessionId), eq(devSessions.authorId, userId)),
+    });
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    const enabled = await isFeatureEnabled(MY_WORK_CLOUD_AGENT_FLAG, {
+      userId,
+      project: session.project,
+    });
+    // @feature-flag:my-work-cloud-agent start winner=enabled
+    if (!enabled) {
+      // @feature-flag:my-work-cloud-agent disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:my-work-cloud-agent disabled-end
+    }
+    // @feature-flag:my-work-cloud-agent enabled-start
+    const result = await cancelCloudAgentRun(sessionId, userId);
+    res.json(result);
+    // @feature-flag:my-work-cloud-agent enabled-end
+    // @feature-flag:my-work-cloud-agent end
+  } catch (err) {
+    const status = (err as Error & { status?: number }).status;
+    if (status === 404) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    if (err instanceof CloudAgentConflictError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    console.error('[dev-workbench] cloud-agent cancel failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to cancel Cloud Development' });
+  }
+});
+
+/**
+ * Statuses the My Work board lists. 'failed' is included because the row reads
+ * its cloud run off this payload — omitting it resets the card to "Start cloud
+ * agent" and hides the branch, the error, and the run history.
+ */
+export const BOARD_SESSION_STATUSES = [
+  'setting_up',
+  'in_progress',
+  'conflict',
+  'closed',
+  'completed',
+  'failed',
+] as const;
+
+// GET /sessions — sessions the board can render for the current user
 router.get('/sessions', async (req: Request, res: Response) => {
   try {
     const userId = getUserId(req);
@@ -756,7 +1041,7 @@ router.get('/sessions', async (req: Request, res: Response) => {
 
     const conditions = [
       eq(devSessions.authorId, userId),
-      inArray(devSessions.status, ['setting_up', 'in_progress', 'conflict', 'closed', 'completed']),
+      inArray(devSessions.status, [...BOARD_SESSION_STATUSES]),
     ];
     if (project) conditions.push(eq(devSessions.project, project));
 
@@ -772,12 +1057,19 @@ router.get('/sessions', async (req: Request, res: Response) => {
         updatedAt: devSessions.updatedAt,
         prdId: devSessions.prdId,
         featureId: devSessions.featureId,
+        leftoverWork: devSessions.leftoverWork,
       })
       .from(devSessions)
       .where(and(...conditions))
       .orderBy(desc(devSessions.createdAt));
 
-    res.json(rows);
+    const adoUserToken = await getAdoTokenForUser(req);
+    const withRuns = await Promise.all(rows.map(async (row) => ({
+      ...row,
+      cloudAgentRun: await getCloudAgentRunStatus(row.id, userId, undefined, adoUserToken),
+    })));
+
+    res.json(withRuns);
   } catch (err) {
     console.error('[dev-workbench] getSessions failed:', (err as Error).message);
     res.status(500).json({ error: 'Failed to fetch sessions' });
@@ -814,10 +1106,33 @@ router.get('/sessions/:id', async (req: Request, res: Response) => {
       createdAt: session.createdAt,
       prdId: session.prdId,
       featureId: session.featureId,
+      cloudAgentRun: await getCloudAgentRunStatus(
+        session.id,
+        userId,
+        undefined,
+        await getAdoTokenForUser(req),
+      ),
+      leftoverWork: session.leftoverWork ?? null,
     });
   } catch (err) {
     console.error('[dev-workbench] getSession failed:', (err as Error).message);
     res.status(500).json({ error: 'Failed to fetch session' });
+  }
+});
+
+// GET /sessions/:id/cloud-agent/runs — durable run and PR history for the drawer
+router.get('/sessions/:id/cloud-agent/runs', async (req: Request, res: Response) => {
+  try {
+    const runs = await getCloudAgentRunHistory(req.params.id, getUserId(req));
+    res.json(runs);
+  } catch (err) {
+    const status = (err as Error & { status?: number }).status;
+    if (status === 404) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    console.error('[dev-workbench] cloud-agent run history failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to fetch Cloud Agent run history' });
   }
 });
 
@@ -1432,10 +1747,12 @@ async function pushFeatureBranch(
 }
 
 /**
- * Creates a PR from an already-pushed branch, transitions the work item
- * to "In Pull Request" (ADO only), attaches the PR hyperlink, and persists
- * the PR URL on the session record. Used by both the /pr endpoint and the
- * remote-only fallback (workspace gone but branch already pushed).
+ * Creates a PR from an already-pushed branch, moves the Azure DevOps work
+ * item for that PR (a Feature moves to "In Progress" and its active children
+ * move to "In Pull Request"; any other work item moves itself), attaches the
+ * PR hyperlink, and persists the PR URL on the session record. Used by both
+ * the /pr endpoint and the remote-only fallback (workspace gone but branch
+ * already pushed).
  */
 async function createSessionPr(
   sessionId: string,
@@ -1450,7 +1767,7 @@ async function createSessionPr(
   let prUrl: string | null = null;
   try {
     const description = workItemId
-      ? `Automated implementation via APEX dev workbench.\n\nWork item: AB#${workItemId}`
+      ? `Automated implementation via APEX dev workbench.\n\nWork item: ${buildWorkItemReferenceText(workItemId)}`
       : `Automated implementation via APEX dev workbench.`;
     const title = `[APEX] ${branchName.replace('feature/', '')}`;
 
@@ -1474,24 +1791,7 @@ async function createSessionPr(
       });
 
       if (workItemId) {
-        let workItemType = '';
-        try {
-          const wiResult = await adoService.queryWorkItemsByWiql({
-            wiql: `SELECT [System.Id],[System.WorkItemType] FROM WorkItems WHERE [System.Id] = ${workItemId}`,
-            fields: ['System.Id', 'System.WorkItemType'],
-          });
-          workItemType = (wiResult.items[0]?.fields?.['System.WorkItemType'] as string) ?? '';
-        } catch {
-          // Non-fatal — fall back to treating it as a leaf work item.
-        }
-
-        if (workItemType === 'Feature') {
-          // Features have no "In Pull Request" state. Keep the Feature "In Progress"
-          // and move the children currently "In Progress" to "In Pull Request".
-          await cascadeChildStates(adoService, workItemId, ['In Progress'], 'In Pull Request');
-        } else {
-          await adoService.setWorkItemState(workItemId, 'In Pull Request');
-        }
+        await transitionWorkItemForPullRequest(adoService, workItemId);
         await adoService.addWorkItemHyperlink(workItemId, prUrl, 'Implementation PR');
       }
     }

@@ -13,11 +13,16 @@ import { readJson, listFilesRel } from './util.mjs';
 import { loadCatalog, validateCatalog } from './catalog.mjs';
 import { validateContract } from './contract.mjs';
 import { DETECTORS } from './detectors.mjs';
+import { validateAgentSkillDocument } from './agentSkillValidation.mjs';
 
 // Foreign-project identifiers that must never appear in a generic foundation.
-const FOREIGN_TOKENS = [/maxview/i, /recruitcare/i, /timeclock/i, /\berecruit\b/i];
+const FOREIGN_TOKENS = [
+  /maxview/i,
+  /recruitcare/i,
+  /timeclock/i,
+  /\berecruit\b/i,
+];
 
-const KEBAB = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 const NON_RUNTIME_FILES = new Set(['recipe.json']);
 
 export function validatePackage(pkgRoot) {
@@ -60,18 +65,39 @@ export function validatePackage(pkgRoot) {
     const declaredDeps = [...new Set(skill.dependsOn ?? [])].sort();
     let contract = null;
 
-    // Foundation frontmatter + no-project-context lint.
+    // Agent Skills specification + no-project-context lint.
+    for (const [layer, skillPath] of [
+      ['foundation', path.join(fDir, 'SKILL.md')],
+      ['adapters', path.join(aDir, 'SKILL.md')],
+    ]) {
+      if (!fs.existsSync(skillPath)) {
+        errors.push(`${layer}/${skill.name}/SKILL.md is missing`);
+        continue;
+      }
+      const validation = validateAgentSkillDocument(
+        fs.readFileSync(skillPath, 'utf8'),
+        { expectedName: skill.name }
+      );
+      errors.push(
+        ...validation.errors.map(
+          (error) => `${layer}/${skill.name}/SKILL.md ${error}`
+        )
+      );
+      warnings.push(
+        ...validation.warnings.map(
+          (warning) => `${layer}/${skill.name}/SKILL.md ${warning}`
+        )
+      );
+    }
+
     for (const rel of listFilesRel(fDir)) {
       const abs = path.join(fDir, rel);
       const text = fs.readFileSync(abs, 'utf8');
-      if (rel === 'SKILL.md') {
-        const fm = parseFrontmatter(text);
-        if (!fm.name || !KEBAB.test(fm.name)) errors.push(`foundation/${skill.name}/SKILL.md name must be kebab-case`);
-        if (!fm.description) warnings.push(`foundation/${skill.name}/SKILL.md missing description`);
-      }
       for (const tok of FOREIGN_TOKENS) {
         if (tok.test(text)) {
-          errors.push(`foundation/${skill.name}/${rel} contains foreign-project reference matching ${tok}`);
+          errors.push(
+            `foundation/${skill.name}/${rel} contains foreign-project reference matching ${tok}`
+          );
           break;
         }
       }
@@ -135,6 +161,7 @@ export function validatePackage(pkgRoot) {
       aDir,
       knownRuntimeFiles,
       skillRuntimeFiles,
+      catalogNames,
     )) {
       if (ref.skill === skill.name) {
         if (!skillRuntimeFiles.has(ref.file)) {
@@ -224,20 +251,39 @@ function buildRuntimeFilesBySkill(catalog) {
   return bySkill;
 }
 
-function inspectSkillReferences(skillName, foundationDir, adapterDir, knownRuntimeFiles, localRuntimeFiles) {
+function inspectSkillReferences(
+  skillName,
+  foundationDir,
+  adapterDir,
+  knownRuntimeFiles,
+  localRuntimeFiles,
+  catalogNames,
+) {
   const refs = [];
   for (const [layer, dir] of [['foundation', foundationDir], ['adapters', adapterDir]]) {
     const skillPath = path.join(dir, 'SKILL.md');
     if (!fs.existsSync(skillPath)) continue;
     const text = fs.readFileSync(skillPath, 'utf8');
-    for (const ref of extractRuntimeRefs(text, skillName, knownRuntimeFiles, localRuntimeFiles)) {
+    for (const ref of extractRuntimeRefs(
+      text,
+      skillName,
+      knownRuntimeFiles,
+      localRuntimeFiles,
+      catalogNames,
+    )) {
       refs.push({ layer, ref });
     }
   }
   return refs;
 }
 
-function extractRuntimeRefs(text, skillName, knownRuntimeFiles, localRuntimeFiles) {
+function extractRuntimeRefs(
+  text,
+  skillName,
+  knownRuntimeFiles,
+  localRuntimeFiles,
+  catalogNames,
+) {
   if (!text || knownRuntimeFiles.size === 0) return [];
 
   const refs = [];
@@ -247,20 +293,45 @@ function extractRuntimeRefs(text, skillName, knownRuntimeFiles, localRuntimeFile
     .map(escapeRegExp)
     .join('|');
 
-  const addRef = (targetSkill, file, matchIndex, matchLength, { suppressible = false } = {}) => {
+  const addRef = (
+    targetSkill,
+    file,
+    matchIndex,
+    matchLength,
+    { suppressible = false } = {}
+  ) => {
     if (!targetSkill || !file || !knownRuntimeFiles.has(file)) return;
-    if (suppressible && typeof matchIndex === 'number' && isSuppressedBareRuntimeRef(text, matchIndex, matchLength ?? 0)) return;
+    if (
+      suppressible &&
+      typeof matchIndex === 'number' &&
+      isSuppressedBareRuntimeRef(text, matchIndex, matchLength ?? 0)
+    )
+      return;
     const key = `${targetSkill}::${file}`;
     if (seen.has(key)) return;
     seen.add(key);
     refs.push({ skill: targetSkill, file });
   };
 
-  for (const match of text.matchAll(/\.cursor\/skills\/([a-z][a-z0-9-]*)\/([A-Za-z0-9._-]+)/g)) {
+  for (const match of text.matchAll(
+    /\.(?:cursor|agents)\/skills\/([a-z][a-z0-9-]*)\/([A-Za-z0-9._-]+)/g
+  )) {
     addRef(match[1], match[2], match.index, match[0].length);
   }
 
-  for (const match of text.matchAll(/\{\{slot:skillsDir\}\}([a-z][a-z0-9-]*)\/([A-Za-z0-9._-]+)/g)) {
+  for (const match of text.matchAll(
+    /\{\{slot:skillsDir\}\}([a-z][a-z0-9-]*)\/([A-Za-z0-9._-]+)/g
+  )) {
+    addRef(match[1], match[2], match.index, match[0].length);
+  }
+
+  // Sibling hops (`../other-skill/file`) only count when `other-skill` is a
+  // catalog skill — prose like `../docs/readme.md` must not misfire. Cross-skill
+  // runtime files still require catalog `dependsOn` (or a duplicated companion).
+  for (const match of text.matchAll(
+    /\.\.\/([a-z][a-z0-9-]*)\/([A-Za-z0-9._-]+)/g
+  )) {
+    if (!catalogNames?.has(match[1])) continue;
     addRef(match[1], match[2], match.index, match[0].length);
   }
 

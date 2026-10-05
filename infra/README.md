@@ -19,6 +19,8 @@ This directory contains Terraform configuration for provisioning Azure resources
 - **Managed-identity access**: The cross-cutting Apex App Service identity is scoped to the shared Storage Account. PDF assembly stays in the Apex application; job delivery uses the Postgres queue (Service Bus deferred).
 - **Load Test infrastructure** (FEAT-002): Dedicated Service Bus namespace, Container Apps Job, and managed identities — see [Load Test module](#load-test-module-feat-002) below.
 - **AI Runs background worker** (FEAT-003): Shared AI-runs Service Bus namespace (`sbns-apex-ai-*`), `ai-runs-background` queue, KEDA Container Apps Job, runner MI, Azure Files workspace mount — see [AI Runs worker module](#ai-runs-background-worker-module-feat-003) below.
+- **My Work Cursor worker Job** (dev and production): Manual Container Apps Job in `cae-apex-ai-{environment}` that Apex starts for each cloud-agent run — see [My Work Cursor worker Job](#my-work-cursor-worker-job-dev-and-production).
+- **Repo read service** (optional): Container App serving git reads from ephemeral disk; gated by `enable_repo_read_service` — see [Repo read service](#repo-read-service) below.
 
 ## Shared async platform conventions
 
@@ -49,6 +51,7 @@ RBAC defaults to least-privilege per container (or queue). The shared Apex App S
    - Update Azure DevOps organization URL
    - Add your Personal Access Token (PAT)
    - Set project name
+   - Copy App Service `GITHUB_ORG` / `GITHUB_TOKEN` into `github_org` / `github_token` so GitHub projects (including Apex) can be cloned by the repo-read Container App
    - Customize resource names if needed
 
 4. **Initialize Terraform**:
@@ -176,6 +179,8 @@ Dev and prod **must not share state**. See [Workspaces and environments](#worksp
 | `ado_org` | Azure DevOps org URL | (required) |
 | `ado_pat` | Azure DevOps PAT | (required) |
 | `ado_project` | Azure DevOps project | (required) |
+| `github_org` | GitHub org for checkout (`GITHUB_ORG`; not the Apex product name) | `""` |
+| `github_token` | GitHub PAT for clone/fetch (`GITHUB_TOKEN`; same as App Service) | `null` |
 
 The App Service plan uses the fixed `app_service_worker_count`. Production
 autoscaling is intentionally deferred until Interview and other long-running AI
@@ -628,6 +633,69 @@ scales from zero until the governor publishes admitted work.
 
 ---
 
+## My Work Cursor worker Job (dev and production)
+
+`cursor-cloud-workers.tf` provisions the Container Apps Job that My Work starts
+for each cloud-agent run. Set `enable_cursor_pool_workers = true` in that
+environment's tfvars file (`terraform.tfvars` for dev, `terraform.prd.tfvars`
+for production). The job is created only when that flag is true. Resource
+names still include the environment.
+
+Apex starts one execution and overrides the command to
+`/usr/local/bin/cursor-run-cli`. The Job does not register a Cursor Team Pool
+and does not call the Cloud Agents SDK.
+
+The stack reuses `cae-apex-ai-{environment}`, the existing ACR, Application
+Insights, and the `cursor-api-key` secret in the AI-runs Key Vault. It does
+not mount the shared Azure Files workspace: each run gets an isolated
+ephemeral checkout.
+
+| Resource | Dev name | Production name | Purpose |
+|----------|----------|-----------------|---------|
+| Worker Container Apps Job | `caj-apex-cursor-worker-dev` | `caj-apex-cursor-worker-prd` | Manual Job; one execution per Start cloud agent click |
+| Worker identity | `mi-apex-cursor-worker-dev` | `mi-apex-cursor-worker-prd` | Pull image, read the Cursor API key, and read prompt blobs |
+| Prompt container | `cursor-prompts` on the shared account | `cursor-prompts` on the shared account | Private text of the Apex-built prompt; deleted after one day |
+
+### Image contract
+
+Terraform provisions compute and identity but does not build the image:
+
+- `cursor_pool_worker_image` must contain the Cursor `agent` CLI, `git`, and
+  `/usr/local/bin/cursor-run-cli` from `runners/cursor-pool-worker/`.
+- The Key Vault `cursor-api-key` is the key the CLI uses inside the container.
+- `ADO_PAT` is passed on the execution only, for Azure DevOps remotes. It is
+  not stored on the Job.
+- The execution receives `AGENT_PROMPT_BLOB_URL`, not the prompt text. Apex
+  uploads that text to the private `cursor-prompts` container before starting
+  the job. The worker identity reads it. The container is deleted after one day.
+
+### RBAC and networking
+
+The worker identity can pull from ACR, read Key Vault secrets, and read the
+`cursor-prompts` container. The Apex app identity can write that container.
+The worker does not receive access to the AI-runs Service Bus queue or the
+shared workspace.
+
+Workers require outbound HTTPS to Cursor, the source-control host, and the
+package registries used by the repository. No inbound port or public IP is
+required.
+
+### Activation
+
+Use the dev workspace and `terraform.tfvars`, or the production workspace and
+`terraform.prd.tfvars`:
+
+```hcl
+enable_cursor_pool_workers = true
+cursor_pool_worker_image   = "<acr>.azurecr.io/apex-cursor-worker:<tag>"
+```
+
+```bash
+terraform output cursor_pool_worker_job_name
+```
+
+---
+
 ## AI Runs interactive transport (FEAT-007)
 
 The optional interactive lane adds a warm Dapr-enabled Container App and a
@@ -698,6 +766,73 @@ replacement before removing the old instance, so the cutover has no downtime.
 
 ---
 
+## Repo read service
+
+Optional Container App that serves repository file/list/search from a bare git
+mirror on **ephemeral container disk** (no Azure Files mount). Durable restore
+uses the existing `repo-grounding` Blob container. The module is inert while
+`enable_repo_read_service` is false.
+
+After apply:
+
+1. Publish `runners/repo-read-service/Dockerfile` to ACR and point
+   `repo_read_service_image` at it (Terraform ignores subsequent image drift).
+2. Confirm `REPO_READ_SERVICE_URL` matches `repo_read_service_app_fqdn` on the
+   App Service, the interactive actor Container App, **and** the background
+   Container App Job (Terraform writes all three when the module is on). The
+   actor host and background job have no working tree and cannot see the App
+   Service mirror, so a missing URL there leaves turns/jobs reading a checkout
+   that was never materialized — a silent hang rather than an error.
+3. Confirm `REPO_READ_SERVICE_TOKEN` matches `ai_runs_runner_callback_token` on
+   those hosts.
+4. Confirm the Container App has `GITHUB_ORG` / `GITHUB_TOKEN` matching App
+   Service (copy from the live web app settings into tfvars). Without them,
+   Azure DevOps projects still clone; GitHub projects (Apex) fail on fetch
+   unless that SHA was already restored from Blob. Fine-grained `github_pat_`
+   tokens need Contents: Read and Metadata: Read on each GitHub skill repo.
+5. Target the `repo-read-service` feature flag in Platform Admin. Until then
+   Apex keeps in-process checkout reads even if the Container App exists.
+6. Smoke: `GET https://<fqdn>/healthz` returns `{ ok: true }`. An unauthenticated
+   `POST /v1/read` must return 401/503.
+
+Do not `terraform apply` this module until the in-process `BareRepoReader` path
+has been proven for a project behind the DB flag.
+
+### Probes are deliberately slack
+
+Reads are fast but a search legitimately pegs a core for several seconds, and a
+cold replica spends ten to twenty restoring its mirror before it can answer at
+all. Under the platform's default probes that reads as unhealthy, and the kill
+costs more than the work did: the replacement re-materializes the mirror before
+serving, so the caller sees a hang rather than an error. The declared probes
+allow roughly five minutes of slowness. Readiness is as tolerant as liveness
+because only one replica runs, so evicting it fails every caller instead of
+shifting load elsewhere.
+
+### Console log retention is not wired up, and enabling it has two traps
+
+`cae-apex-ai-dev` streams logs only — nothing is retained, so a crash can only be
+investigated live. Before changing that, know:
+
+- The workspace backing `appi-app-scrum-dev` **cannot** be reused as the
+  destination. It lives in an App Insights-managed resource group carrying a deny
+  assignment on `sharedKeys/action`, which is the credential Container Apps needs.
+  A separate workspace is required.
+- Setting `log_analytics_workspace_id` on `azurerm_container_app_environment`
+  historically forced replacement, and on provider 4.17+ its mere presence can
+  block every later update to the environment. Replacing this environment would
+  take both container apps, both Dapr components and the workspace storage mount
+  with it. Treat it as a change to validate against a plan first, not a one-liner.
+
+Because of that, repo-read reports its own exits instead: see
+`installLifecycleDiagnostics` in `src/server/services/repoRead/entrypoint.ts`. A
+`RepoReadServiceExit` event with reason `SIGTERM` means the platform stopped it
+(probe or scale), `uncaughtException` means it died on its own, and a
+`RepoReadServiceStarted` with no preceding exit means SIGKILL — OOM or an expired
+shutdown grace period, neither of which a handler can catch.
+
+---
+
 ## Deployment
 
 After infrastructure is provisioned, deploy the application:
@@ -731,6 +866,8 @@ The following environment variables are automatically configured in App Service:
 - `ADO_ORG` - Azure DevOps organization URL
 - `ADO_PAT` - Azure DevOps Personal Access Token
 - `ADO_PROJECT` - Azure DevOps project name
+- `GITHUB_ORG` - GitHub organization for skill-repo checkout
+- `GITHUB_TOKEN` - GitHub PAT (fine-grained `github_pat_…` or classic); same secret the repo-read Container App uses
 - `NODE_ENV` - Set to `production`
 - `VITE_ADO_ORG` - ADO org for client-side
 - `VITE_ADO_PROJECT` - ADO project for client-side

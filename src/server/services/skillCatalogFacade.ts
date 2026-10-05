@@ -36,11 +36,13 @@ export async function listRepos(
   provider: SkillProvider = 'ado',
 ): Promise<RepoInfo[]> {
   if (provider === 'github') {
-    // For GitHub, ignore the project name and use GITHUB_ORG env var
+    // For GitHub, ignore the project name and use GITHUB_ORG env var.
+    // Project settings persist GitHub skillRepo as organization/repo, so the
+    // picker value must be fullName (not the short repo name).
     const repos = await githubCatalog.listRepos();
     return repos.map((r) => ({
       id: r.id,
-      name: r.name,
+      name: r.fullName || r.name,
       defaultBranch: r.defaultBranch,
     }));
   }

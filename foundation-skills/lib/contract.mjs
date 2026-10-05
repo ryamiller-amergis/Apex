@@ -11,7 +11,7 @@
  *   "capabilities": ["design-tokens", "component-index"]
  * }
  *
- * `managedFiles` paths are relative to .cursor/skills/<skill>/ in the consumer
+ * `managedFiles` paths are relative to <skillRoot>/<skill>/ in the consumer
  * repo (and to foundation/<skill>/ + adapter extras in the package).
  *
  * Legacy `managedFoundationFiles` is still accepted and normalized.

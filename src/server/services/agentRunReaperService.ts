@@ -29,14 +29,18 @@ import {
   markTerminal,
   shouldApplyWorkerLifecycle,
 } from './agentRunLifecycleService';
-import { recoverStaleDispatchedRuns } from './admissionGovernorService';
+import {
+  recoverStaleDispatchedRuns,
+  resolveBackgroundDispatchTtlMs,
+} from './admissionGovernorService';
 import { workerTierTelemetry } from './workerTierTelemetry';
+import { INTERACTIVE_LANE } from '../../shared/types/interactiveWorkflow';
 
 const REAP_INTERVAL_MS = 60_000;
 export const RETIRE_REAP_INTERVAL_MS = 5 * 60_000;
 const LONG_RUNNING_PREFIX = 'Long-running agent run';
 const WATCHDOG_SOURCE_INSTANCE = `${RUN_EVENT_SOURCE_INSTANCE}:watchdog`;
-const DEFAULT_WORKER_HEARTBEAT_TIMEOUT_MS = 90_000;
+const DEFAULT_WORKER_HEARTBEAT_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_DISPATCH_COLD_START_MS = 5 * 60_000;
 const DEFAULT_WORKER_PROGRESS_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_CANCEL_GRACE_MS = 60_000;
@@ -53,6 +57,12 @@ export interface AgentRunHealthConfig {
   workerHeartbeatTimeoutMs?: number;
   /** Admit-to-worker-start clock before the current fenced dispatch is republished. */
   dispatchColdStartMs?: number;
+  /**
+   * Backstop for a dispatch the worker never picks up or never reports on.
+   * Beyond this the run is failed, which is the only exit from `dispatched` —
+   * republishing alone cannot reach a terminal state.
+   */
+  dispatchTtlMs?: number;
   /** Background-worker meaningful-progress clock. */
   workerProgressTimeoutMs?: number;
   /** Maximum cooperative-cancellation acknowledgement grace. */
@@ -132,6 +142,7 @@ export function resolveAgentRunHealthConfig(): AgentRunHealthConfig {
       process.env.AI_RUN_DISPATCH_COLDSTART_MS,
       DEFAULT_DISPATCH_COLD_START_MS,
     ),
+    dispatchTtlMs: resolveBackgroundDispatchTtlMs(),
     workerProgressTimeoutMs: positiveDuration(
       process.env.AI_RUN_PROGRESS_TIMEOUT_MS,
       DEFAULT_WORKER_PROGRESS_TIMEOUT_MS,
@@ -296,8 +307,14 @@ export async function isThreadRunAlive(
   const nowMs = options.now?.() ?? Date.now();
   const eventDrivenTerminationEnabled =
     options.eventDrivenTerminationEnabled ?? isEventDrivenTerminationEnabledForThread;
+  // `dispatched` must be listed here. The reaper's own scan covers it, and a
+  // status this query omits reads as neither alive nor terminal — waiters then
+  // conclude the agent finished while no terminal row will ever arrive.
   const rows = await db.query.agentRuns.findMany({
-    where: and(eq(agentRuns.threadId, threadId), inArray(agentRuns.status, ['queued', 'running'])),
+    where: and(
+      eq(agentRuns.threadId, threadId),
+      inArray(agentRuns.status, ['queued', 'running', 'dispatched']),
+    ),
   });
   // Prefer the persisted per-row marker (set at claim). Event-driven runs never
   // heartbeat, so a live flag miss must not route them through legacy liveness.
@@ -351,13 +368,29 @@ export async function getLatestThreadRun(threadId: string): Promise<{
   status: string;
   ownerInstance: string | null;
   updatedAt: string;
+  timeoutAt: string | null;
 } | null> {
   const row = await db.query.agentRuns.findFirst({
     where: eq(agentRuns.threadId, threadId),
     orderBy: desc(agentRuns.createdAt),
-    columns: { status: true, ownerInstance: true, updatedAt: true },
+    columns: {
+      status: true,
+      ownerInstance: true,
+      updatedAt: true,
+      timeoutAt: true,
+    },
   });
   return row ?? null;
+}
+
+/** A run past its own deadline can no longer succeed, whatever its status says. */
+function isRunPastDeadline(
+  run: { timeoutAt: string | null },
+  nowMs: number,
+): boolean {
+  if (!run.timeoutAt) return false;
+  const timeoutMs = Date.parse(run.timeoutAt);
+  return Number.isFinite(timeoutMs) && nowMs >= timeoutMs;
 }
 
 export interface CanFailGenerationOptions {
@@ -370,8 +403,9 @@ export interface CanFailGenerationOptions {
  * Decides whether *this* server instance is allowed to mark a design doc as
  * `generation_failed`. Returns false when:
  * - No agent_runs row exists yet (kickoff still starting — keep polling).
- * - The latest run is non-terminal (still alive — the liveness gate handles it).
- * - The latest run is terminal but owned by a different instance AND still
+ * - The latest run is non-terminal and still inside its deadline (the liveness
+ *   gate handles it).
+ * - The latest run is finished but owned by a different instance AND still
  *   within the orphan grace window (owner may still be finalizing).
  *
  * Returns true when this instance owned the terminal run, ownerInstance is
@@ -384,13 +418,21 @@ export async function canThisInstanceFailGeneration(
 ): Promise<boolean> {
   const latest = await getLatestThreadRun(threadId);
   if (!latest) return false;
-  if (!isTerminalAgentRunStatus(latest.status)) return false;
+  const nowMs = options.now?.() ?? Date.now();
+  // A non-terminal run is normally the liveness gate's problem, but a run past
+  // its own deadline is never coming back. Requiring a terminal status here is
+  // what let an abandoned dispatch pin a document in `generating` indefinitely.
+  if (
+    !isTerminalAgentRunStatus(latest.status)
+    && !isRunPastDeadline(latest, nowMs)
+  ) {
+    return false;
+  }
   if (!latest.ownerInstance || latest.ownerInstance === RUN_EVENT_SOURCE_INSTANCE) {
     return true;
   }
 
   const orphanGraceMs = options.orphanGraceMs ?? GENERATION_FAIL_ORPHAN_GRACE_MS;
-  const nowMs = options.now?.() ?? Date.now();
   const updatedMs = Date.parse(latest.updatedAt);
   if (Number.isFinite(updatedMs) && nowMs - updatedMs >= orphanGraceMs) {
     return true;
@@ -533,6 +575,8 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
       config.workerHeartbeatTimeoutMs ?? DEFAULT_WORKER_HEARTBEAT_TIMEOUT_MS;
     const dispatchColdStartMs =
       config.dispatchColdStartMs ?? DEFAULT_DISPATCH_COLD_START_MS;
+    const dispatchTtlMs =
+      config.dispatchTtlMs ?? resolveBackgroundDispatchTtlMs();
     const workerProgressTimeoutMs =
       config.workerProgressTimeoutMs ?? DEFAULT_WORKER_PROGRESS_TIMEOUT_MS;
     const cancelGraceMs = config.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
@@ -547,6 +591,83 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
     let recoverColdStarts = false;
 
     for (const row of rows) {
+      if (row.lane === 'cloud-agent') {
+        const expired = Boolean(row.timeoutAt && Date.parse(row.timeoutAt) <= nowMs);
+        if (!expired) continue;
+
+        const managed = Boolean(row.cloudAgentManaged);
+        const terminalReason = managed ? 'cloud_agent_timeout' : 'queue_ttl';
+        const detail = managed
+          ? 'Cloud Agent run exceeded configured hard limit'
+          : 'Cloud Agent start exceeded the pre-identity queue TTL';
+        const errorEvent = {
+          eventId: randomUUID(),
+          threadId: row.threadId,
+          runId: row.id,
+          sourceInstance: WATCHDOG_SOURCE_INSTANCE,
+          sequence: nextRunEventSequence(row.id, WATCHDOG_SOURCE_INSTANCE),
+          timestamp: updatedAt,
+          type: 'error' as const,
+          phase: 'completion' as const,
+          status: 'failed' as const,
+          detail,
+          event: { type: 'error' as const, error: detail },
+        };
+        const won = await finalizeReconciledAgentRun({
+          runId: row.id,
+          threadId: row.threadId,
+          status: 'failed',
+          terminalReason,
+          detail,
+          events: [errorEvent],
+        });
+        if (won) {
+          console.log(
+            `[reaper] Reaped cloud-agent run (id=${row.id}, managed=${managed}) — ${terminalReason}`,
+          );
+        }
+        continue;
+      }
+
+      // Interactive dispatch is acknowledged before the Dapr actor invocation
+      // finishes. A process crash can therefore bypass the host's rejection
+      // handler and leave the fenced row dispatched forever. Unlike background
+      // work, this lane has nothing to republish, so terminate it after the
+      // cold-start budget and let the user retry.
+      if (row.lane === INTERACTIVE_LANE && row.status === 'dispatched') {
+        if (
+          row.dispatchMessageId
+          && ageMs(row.dispatchedAt, nowMs) >= dispatchColdStartMs
+        ) {
+          const detail = 'Interactive agent did not start. Please retry.';
+          const terminal = await markTerminal(row.id, {
+            status: 'failed',
+            terminalReason: 'worker_lost',
+            dispatchMessageId: row.dispatchMessageId,
+            detail,
+            events: [workerHealthEvent({
+              runId: row.id,
+              threadId: row.threadId,
+              health: 'worker_lost',
+              detail,
+              timestamp: updatedAt,
+              phase: row.progressPhase,
+            })],
+          });
+          console.log(
+            `[reaper] Reaped interactive dispatch (id=${row.id}, threadId=${row.threadId}) — actor did not start`,
+          );
+          if (terminal.ok) {
+            emitWorkerTelemetry(() => {
+              workerTierTelemetry.reaperAction(
+                workerTelemetryContext(row),
+              );
+            });
+          }
+        }
+        continue;
+      }
+
       // Worker-lane rows are governed only by lifecycle/fence-aware clocks.
       // They must never fall through to the legacy AGENT_* watchdog behavior.
       if (shouldApplyWorkerLifecycle(row)) {
@@ -649,7 +770,49 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
         }
 
         if (row.status === 'dispatched') {
-          if (ageMs(row.dispatchedAt, nowMs) >= dispatchColdStartMs) {
+          const dispatchAgeMs = ageMs(row.dispatchedAt, nowMs);
+
+          // Republish is a recovery for a worker that has not started yet, not
+          // a terminal path. A worker that dies before its first callback never
+          // advances the row, so without this TTL the run stays `dispatched`
+          // forever: waiters block on a run that reads neither alive nor
+          // terminal, and every sweep re-enqueues it.
+          if (dispatchAgeMs >= dispatchTtlMs) {
+            const detail = 'Background worker never started. Please retry.';
+            const terminal = await markTerminal(row.id, {
+              status: 'failed',
+              terminalReason: 'dispatch_ttl',
+              dispatchMessageId: row.dispatchMessageId,
+              detail,
+              events: [workerHealthEvent({
+                runId: row.id,
+                threadId: row.threadId,
+                health: 'worker_lost',
+                detail,
+                timestamp: updatedAt,
+                phase: row.progressPhase,
+              })],
+            });
+            console.warn(
+              `[reaper] Reaped background run (id=${row.id}, threadId=${row.threadId}) — dispatch TTL expired`,
+            );
+            if (terminal.ok) {
+              emitWorkerTelemetry(() => {
+                workerTierTelemetry.reaperAction(
+                  workerTelemetryContext(row),
+                );
+              });
+              emitWorkerTelemetry(() => {
+                workerTierTelemetry.terminalReason(
+                  workerTelemetryContext(row),
+                  'dispatch_ttl',
+                );
+              });
+            }
+            continue;
+          }
+
+          if (dispatchAgeMs >= dispatchColdStartMs) {
             recoverColdStarts = true;
           }
           continue;
@@ -929,6 +1092,11 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
  */
 export function startReaper(): void {
   lastRetireReapAt = Date.now();
+  void import('./cloudAgentQueueScheduler')
+    .then((scheduler) => scheduler.startCloudAgentQueueScheduler())
+    .catch((err) => {
+      console.error('[cloud-agent] queue scheduler failed to start:', err instanceof Error ? err.message : err);
+    });
   reapOrphanedRuns({ retireReconcileDue: true }).catch((err) => {
     console.error('[reaper] Initial reap failed:', err);
   });
@@ -951,4 +1119,7 @@ export function stopReaper(): void {
     clearInterval(reaperTimer);
     reaperTimer = null;
   }
+  void import('./cloudAgentQueueScheduler')
+    .then((scheduler) => scheduler.stopCloudAgentQueueScheduler())
+    .catch(() => undefined);
 }

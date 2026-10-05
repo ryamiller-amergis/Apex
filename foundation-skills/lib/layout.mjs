@@ -8,13 +8,14 @@
  *   schemas/**                   JSON schemas
  *
  * In a consuming repo (after install):
- *   .cursor/skills/<skill>/**    fenced SKILL.md (managed region + project tail)
+ *   <skillRoot>/<skill>/**       fenced SKILL.md (managed region + project tail)
  *                                + companion files (fully managed)
  *   .apex/config.json            APEX authorization cache (unchanged)
  *   .apex/backups/<skill>/**     backups of in-fence edits before overwrite
  *   apex-skills.lock.json        version + integrity lockfile
  */
 import path from 'node:path';
+import { LEGACY_SKILL_ROOT, normalizeSkillRoot } from './skillRoot.mjs';
 
 export const LOCKFILE_NAME = 'apex-skills.lock.json';
 export const CONTRACT_NAME = 'apex-skill.json';
@@ -24,7 +25,8 @@ export const CATALOG_NAME = 'catalog.json';
 /** @deprecated v1 layout — kept for migration reads only */
 export const LEGACY_VENDOR_DIR = '.apex/foundation';
 
-export const ADAPTER_DIR = '.cursor/skills';
+/** @deprecated Use the root recorded in apex-skills.lock.json. */
+export const ADAPTER_DIR = LEGACY_SKILL_ROOT;
 export const BACKUP_DIR = '.apex/backups';
 export const APEX_DIR = '.apex';
 
@@ -36,8 +38,8 @@ export function pkgFoundationDir(pkgRoot, skill) {
 export function pkgAdapterDir(pkgRoot, skill) {
   return path.join(pkgRoot, 'adapters', skill);
 }
-export function repoAdapterDir(repoRoot, skill) {
-  return path.join(repoRoot, ADAPTER_DIR, skill);
+export function repoAdapterDir(repoRoot, skill, skillRoot = ADAPTER_DIR) {
+  return path.join(repoRoot, normalizeSkillRoot(skillRoot), skill);
 }
 export function repoBackupDir(repoRoot, skill) {
   return path.join(repoRoot, BACKUP_DIR, skill);

@@ -17,8 +17,9 @@ import {
   acquireInteractiveCursorAgent,
   createInteractiveCursorExecution,
 } from '../services/interactiveActorHost/interactiveCursorExecution';
+import { createLocalCursorExecution } from '../services/aiRunsWorker/cursorExecution';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
-import type { LocalCheckoutReader } from '../services/localCheckoutReader';
+import type { RepoReader } from '../../shared/types/repoReader';
 
 describe('interactive Cursor execution repository tools', () => {
   it('mounts checkout-backed read tools for a new actor session', async () => {
@@ -32,10 +33,11 @@ describe('interactive Cursor execution repository tools', () => {
     });
     const customTools = { get_skill_file: { execute: jest.fn() } };
     mockCreateNativeReadTools.mockReturnValue(customTools);
-    const checkout = {} as LocalCheckoutReader;
+    const checkout = {} as RepoReader;
     const snapshot: ExecutionSnapshot = {
       prompt: 'Run the pre-loaded interview skill.',
       model: 'composer-2.5',
+      effort: 'high',
       workspaceRef: '/shared/grounding/checkout',
       workflowClass: 'interview',
       skillPath: '/.cursor/skills/grill-with-docs/SKILL.md',
@@ -59,6 +61,10 @@ describe('interactive Cursor execution repository tools', () => {
             enableAgentRetries: true,
           },
           mcpServers: {},
+          model: {
+            id: 'composer-2.5',
+            params: [{ id: 'effort', value: 'high' }],
+          },
         }),
       );
       expect(execution.agentId).toBe('agent-1');
@@ -90,7 +96,7 @@ describe('interactive Cursor execution repository tools', () => {
     try {
       await acquireInteractiveCursorAgent(
         snapshot,
-        {} as LocalCheckoutReader,
+        {} as RepoReader,
       );
       expect(mockCreateAgent).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -100,6 +106,39 @@ describe('interactive Cursor execution repository tools', () => {
     } finally {
       delete process.env.CURSOR_API_KEY;
       delete process.env.AI_RUNS_INTERACTIVE_AGENT_RETRIES;
+      jest.clearAllMocks();
+    }
+  });
+
+  it('DoD-1: sends frozen effort through the background Cursor model params', async () => {
+    process.env.CURSOR_API_KEY = 'test-key';
+    const run = { supports: jest.fn(), stream: jest.fn(), wait: jest.fn() };
+    mockCreateAgent.mockResolvedValue({
+      send: jest.fn().mockResolvedValue(run),
+      [Symbol.asyncDispose]: jest.fn().mockResolvedValue(undefined),
+    });
+    mockCreateNativeReadTools.mockReturnValue({});
+    const snapshot: ExecutionSnapshot = {
+      prompt: 'Generate the PRD.',
+      model: 'claude-opus-4-6',
+      effort: 'medium',
+      workspaceRef: '/worker',
+      workflowClass: 'prd',
+      skillPath: '.cursor/skills/to-prd/SKILL.md',
+      projectId: 'Apex',
+      threadId: 'thread-worker',
+    };
+
+    try {
+      await createLocalCursorExecution(snapshot, {} as RepoReader);
+      expect(mockCreateAgent).toHaveBeenCalledWith(expect.objectContaining({
+        model: {
+          id: 'claude-opus-4-6',
+          params: [{ id: 'effort', value: 'medium' }],
+        },
+      }));
+    } finally {
+      delete process.env.CURSOR_API_KEY;
       jest.clearAllMocks();
     }
   });
@@ -128,7 +167,7 @@ describe('interactive Cursor execution repository tools', () => {
     try {
       const handle = await acquireInteractiveCursorAgent(
         snapshot,
-        {} as LocalCheckoutReader,
+        {} as RepoReader,
       );
       expect(send).not.toHaveBeenCalled();
       await handle.send('turn-1');
@@ -138,6 +177,82 @@ describe('interactive Cursor execution repository tools', () => {
       expect(send).toHaveBeenNthCalledWith(2, 'turn-2');
       await handle.dispose();
       expect(dispose).toHaveBeenCalled();
+    } finally {
+      delete process.env.CURSOR_API_KEY;
+      jest.clearAllMocks();
+    }
+  });
+
+  it('starts a fresh Agent when the resume target was reaped', async () => {
+    process.env.CURSOR_API_KEY = 'test-key';
+    const notFound = Object.assign(new Error('Agent agent-dead not found'), {
+      name: 'AgentNotFoundError',
+      code: 'agent_not_found',
+    });
+    mockResumeAgent.mockRejectedValue(notFound);
+    mockCreateAgent.mockResolvedValue({
+      id: 'agent-fresh',
+      send: jest.fn(),
+      [Symbol.asyncDispose]: jest.fn().mockResolvedValue(undefined),
+    });
+    mockCreateNativeReadTools.mockReturnValue({});
+    const snapshot: ExecutionSnapshot = {
+      prompt: 'second turn',
+      model: 'auto',
+      workspaceRef: '/warm',
+      workflowClass: 'agent_home_chat',
+      skillPath: 'skills/app-knowledge',
+      projectId: 'Apex',
+      threadId: 'thread-1',
+    };
+
+    try {
+      const handle = await acquireInteractiveCursorAgent(
+        snapshot,
+        {} as RepoReader,
+        { resumeAgentId: 'agent-dead' },
+      );
+
+      expect(mockResumeAgent).toHaveBeenCalledWith(
+        'agent-dead',
+        expect.anything(),
+      );
+      expect(mockCreateAgent).toHaveBeenCalledTimes(1);
+      // The dead id must not be persisted back onto the thread, or the next
+      // turn resumes it again and fails identically.
+      expect(handle.agentId).toBe('agent-fresh');
+    } finally {
+      delete process.env.CURSOR_API_KEY;
+      jest.clearAllMocks();
+    }
+  });
+
+  it('rethrows resume failures that are not a missing agent', async () => {
+    process.env.CURSOR_API_KEY = 'test-key';
+    const offline = Object.assign(new Error('service unavailable'), {
+      name: 'NetworkError',
+      code: 'unavailable',
+    });
+    mockResumeAgent.mockRejectedValue(offline);
+    mockCreateNativeReadTools.mockReturnValue({});
+    const snapshot: ExecutionSnapshot = {
+      prompt: 'second turn',
+      model: 'auto',
+      workspaceRef: '/warm',
+      workflowClass: 'agent_home_chat',
+      skillPath: 'skills/app-knowledge',
+      projectId: 'Apex',
+      threadId: 'thread-1',
+    };
+
+    try {
+      await expect(
+        acquireInteractiveCursorAgent(snapshot, {} as RepoReader, {
+          resumeAgentId: 'agent-live',
+        }),
+      ).rejects.toThrow('service unavailable');
+      // A transient failure must not silently abandon the thread's history.
+      expect(mockCreateAgent).not.toHaveBeenCalled();
     } finally {
       delete process.env.CURSOR_API_KEY;
       jest.clearAllMocks();

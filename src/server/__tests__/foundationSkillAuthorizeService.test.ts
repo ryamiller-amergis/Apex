@@ -19,8 +19,8 @@ jest.mock('../services/foundationSkillReleaseService', () => ({
 import {
   parseRepoFromRemote,
   parseRepositoryIdentity,
-  validateConfiguredRepository,
   normalizeConfiguredRepository,
+  validateConfiguredRepository,
   authorizeSkillInstall,
 } from '../services/foundationSkillAuthorizeService';
 import { listSkillConfigs } from '../services/projectSettingsService';
@@ -142,6 +142,26 @@ describe('validateConfiguredRepository', () => {
         'amergis/Workforce',
       ),
     ).toMatch(/unsupported/i);
+  });
+});
+
+describe('normalizeConfiguredRepository', () => {
+  it('prefixes GITHUB_ORG onto a bare GitHub repo name', () => {
+    expect(
+      normalizeConfiguredRepository('github', 'Apex', 'amergis'),
+    ).toBe('amergis/Apex');
+  });
+
+  it('leaves organization/repo GitHub values unchanged', () => {
+    expect(
+      normalizeConfiguredRepository('github', 'ryamiller-amergis/Apex', 'amergis'),
+    ).toBe('ryamiller-amergis/Apex');
+  });
+
+  it('leaves Azure DevOps repo names unchanged', () => {
+    expect(normalizeConfiguredRepository('ado', 'AI-Pilot', 'amergis')).toBe(
+      'AI-Pilot',
+    );
   });
 });
 

@@ -1,6 +1,8 @@
 /**
  * Auth route tests — dynamic OIDC redirect URL resolution per request Host.
  */
+import fs from 'fs';
+import path from 'path';
 import express from 'express';
 import request from 'supertest';
 
@@ -32,6 +34,10 @@ jest.mock('../services/rbacService', () => ({
 
 jest.mock('../services/pendingAssignmentService', () => ({
   resolvePendingAssignments: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock('../services/devEnvAllowlistService', () => ({
+  isDevEnvironmentAllowed: jest.fn().mockResolvedValue(true),
 }));
 
 const originalEnv = process.env;
@@ -161,5 +167,27 @@ describe('GET /auth/status', () => {
 
     const res = await request(app).get('/auth/status').expect(200);
     expect(res.body).toEqual({ authenticated: false });
+  });
+});
+
+describe('GET /auth/dev-access-denied', () => {
+  it('explains that a platform admin must approve the email', async () => {
+    process.env = { ...originalEnv, NODE_ENV: 'test' };
+    const authRouter = loadAuthRouter();
+    const app = express();
+    app.use('/auth', authRouter);
+
+    const res = await request(app).get('/auth/dev-access-denied').expect(403);
+    expect(res.text).toContain('Dev access required');
+    expect(res.text).toContain('platform admin');
+  });
+});
+
+describe('SSO returnTo session survival', () => {
+  it('keeps session fields across Passport 0.7 logIn', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../routes/auth.ts'), 'utf8');
+    expect(source).toContain('keepSessionInfo: true');
+    expect(source).toContain('session: true');
+    expect(source).toContain('pendingReturnTo');
   });
 });

@@ -3,6 +3,9 @@
  * Human-readable labels are rendered downstream in FEAT-006 (TBI-008).
  */
 
+import type { EffortLevel } from './effort';
+import type { SkillProvider } from './projectSettings';
+
 export type AgentRunStatus =
   | 'queued'
   | 'dispatched'
@@ -15,8 +18,14 @@ export type AgentRunStatus =
  * Run lane for dispatched runs; NULL = legacy in-process.
  * - `background`: bounded ephemeral worker lane on the ai-runs-background Service Bus queue.
  * - `ai-runs-interactive`: warm Dapr virtual-actor lane on ACA (FEAT-007); never Service Bus.
+ * - `cloud-agent`: vendor-executed Cloud Agent implementation run; never an Apex worker lane.
  */
-export type AgentRunLane = 'background' | 'ai-runs-interactive';
+export type AgentRunLane = 'background' | 'ai-runs-interactive' | 'cloud-agent';
+
+/**
+ * Closed workflow classification on agent_runs. NULL preserves legacy generation rows.
+ */
+export type AgentRunWorkflowClass = 'generation' | 'implementation';
 
 /**
  * Closed terminal-reason set stored alongside domain status
@@ -26,14 +35,33 @@ export type AgentRunTerminalReason =
   | 'worker_lost'
   | 'progress_timeout'
   | 'queue_ttl'
-  | 'forced_cancel';
+  /** Dispatch accepted but the worker never reported; see the reaper dispatch TTL. */
+  | 'dispatch_ttl'
+  | 'forced_cancel'
+  | 'cloud_agent_timeout';
 
 export type AgentRunCancelState = 'requested' | 'acknowledged' | 'completed';
+
+/** Pre-PR quality check reported by a Cloud Agent run (FEAT-003 TBI-005). */
+export type RunCheckKind = 'unit' | 'e2e' | 'wcag';
+
+export type RunCheckOutcome = 'passed' | 'failed';
+
+/**
+ * One suite-level check outcome captured when a run reaches a terminal state.
+ * Suite granularity only — no raw test output, stack traces, or log excerpts.
+ */
+export interface RunCheckResult {
+  kind: RunCheckKind;
+  outcome: RunCheckOutcome;
+}
 
 /** Frozen at enqueue; never mutated (PBI-001 AC-d). */
 export interface ExecutionSnapshot {
   prompt: string;
   model: string;
+  /** Reasoning effort frozen at thread kickoff; omitted to use the SDK/model default. */
+  effort?: EffortLevel;
   /**
    * Writable Agent cwd (`.ai-pilot` scratch/outputs). For PRD/design-doc this is
    * the thin thread workspace — not a full repo clone.
@@ -45,6 +73,36 @@ export interface ExecutionSnapshot {
    * the git tree. Omitted for legacy full-clone snapshots.
    */
   checkoutRef?: string;
+  /**
+   * Optional bare-mirror path for Stage 6 native reads. When set with
+   * `groundedSha`, the worker opens BareRepoReader instead of a working tree.
+   */
+  mirrorRef?: string;
+  /** SHA pinned for `mirrorRef` / BareRepoReader. */
+  groundedSha?: string;
+  /** Repository name for BareRepoReader / HTTP identity. */
+  repository?: string;
+  /** Provider for BareRepoReader / HTTP identity (`ado` | `github`). */
+  provider?: SkillProvider;
+  /**
+   * Frozen when a developer starts a cloud-agent run. Used to open the pull
+   * request as that developer once the container has pushed a branch.
+   */
+  cloudAgent?: {
+    workItemId: number;
+    workItemTitle?: string;
+    baseBranch: string;
+    initiatorName?: string;
+    initiatorEmail?: string;
+    /** Configured development skill, invoked as `/name` by the container CLI. */
+    skillName?: string;
+    /**
+     * App Service instance that holds the developer's ADO token in memory.
+     * Other instances wait before claiming the run so the pull request opens
+     * as the developer.
+     */
+    userTokenInstance?: string;
+  };
   workflowClass: string;
   skillPath: string;
   projectId: string;
@@ -71,7 +129,9 @@ export const AGENT_RUN_TERMINAL_REASONS: ReadonlySet<AgentRunTerminalReason> = n
   'worker_lost',
   'progress_timeout',
   'queue_ttl',
+  'dispatch_ttl',
   'forced_cancel',
+  'cloud_agent_timeout',
 ]);
 
 export function isAgentRunTerminalStatus(status: string): status is Extract<

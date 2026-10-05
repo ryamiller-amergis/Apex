@@ -12,8 +12,8 @@ import {
   isPrdReady,
   getThread,
   recoverStaleRunningThread,
-  isRepositoryReadingChatCaller,
-  resolveGroundingCallerKey,
+  isExplicitAdoWriteIntent,
+  skillRequiresAdoOperations,
 } from '../services/chatAgentService';
 import { db } from '../db/drizzle';
 import { eq, desc } from 'drizzle-orm';
@@ -26,7 +26,9 @@ import type {
   AgentRunStatusResponse,
   AgentRunPhase,
   ChatAttachment,
+  ChatTurnSkill,
   ChatThread,
+  ChatThreadKickoff,
   ChatThreadStatus,
   SseEvent,
   SseStatusEvent,
@@ -34,6 +36,7 @@ import type {
   SendMessageRequest,
 } from '../../shared/types/chat';
 import type { ThreadAccess } from '../services/threadAccessService';
+import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import { requirePermission } from '../middleware/rbac';
 import { writeSseEvent, startSseHeartbeat } from '../utils/sseResponse';
 import {
@@ -48,15 +51,18 @@ import {
   type AgentRunHealthSnapshot,
 } from '../services/agentRunReaperService';
 import { getMyWorkSessionContext, logMyWorkSession } from '../services/myWorkSessionLogger';
-import {
-  isFeatureEnabled,
-  isProjectRepositoryCheckoutReadinessEnabled,
-} from '../services/featureFlagService';
-import {
-  assertResolvedProjectRepositoryReady,
-  ProjectRepositoryNotReady,
-} from '../services/projectRepositoryReadinessService';
+import { isFeatureEnabled } from '../services/featureFlagService';
 import { trackEvent } from '../services/telemetry';
+import { deriveAgentModule } from '../services/agentEffortResolver';
+import { resolveSkillConfig } from '../services/projectSettingsService';
+import { getAdoTokenForUser } from '../services/adoUserToken';
+import { registerChatAdoWriteTurn } from '../services/chatAdoWriteAuth';
+import { isSuperAdminRequest } from '../utils/superAdmin';
+import { getUserGroupIds } from '../services/groupService';
+import {
+  resolveThreadCreationAdmission,
+  type ThreadCreationDenialReason,
+} from '../services/homePillAccessResolver';
 
 const router = Router();
 
@@ -65,6 +71,35 @@ const MAX_CHAT_ATTACHMENTS = 5;
 const MAX_CHAT_ATTACHMENT_BYTES = 1024 * 1024;
 const MAX_CHAT_ATTACHMENT_TOTAL_BYTES = 4 * 1024 * 1024;
 const MAX_STREAM_EVENT_IDS = 2_000;
+
+/** Stable, user-readable text for each Home pill admission denial (FEAT-002 / TBI-005). */
+const THREAD_CREATION_DENIAL_MESSAGES: Record<ThreadCreationDenialReason, string> = {
+  skill_pill_not_allowed:
+    'You are not allowed to start a chat with this Home skill. Ask a project admin for access.',
+  mcp_pill_not_allowed:
+    'You are not allowed to start a chat with this Home MCP server. Ask a project admin for access.',
+  pilless_chat_not_allowed:
+    'You have no available Home skills for this project, so you cannot start a chat here. Ask a project admin for access to a Home skill or MCP server.',
+};
+
+/**
+ * True when the kickoff exactly names one of the project's configured Home quick
+ * pills. Such a kickoff is a Home start and stays subject to pill admission even
+ * when its skill path also maps to a non-Home agent module.
+ */
+function namesHomePill(
+  kickoff: Partial<ChatThreadKickoff>,
+  skillConfig: ProjectSkillConfig | null,
+): boolean {
+  const { skillPath } = kickoff;
+  const mcpServerName = kickoff.mcpPill?.mcpServerName;
+  return Boolean(
+    (skillPath
+      && skillConfig?.quickSkillPills?.some((pill) => pill.skillPath === skillPath))
+    || (mcpServerName
+      && skillConfig?.quickMcpPills?.some((pill) => pill.mcpServerName === mcpServerName)),
+  );
+}
 
 export function eventForRunEnvelope(envelope: AgentRunEventEnvelope): SseEvent {
   const event: SseEvent = envelope.event.type === 'cancel'
@@ -270,6 +305,20 @@ function readAttachments(raw: unknown): ChatAttachment[] {
   });
 }
 
+function readTurnSkill(raw: unknown): ChatTurnSkill | undefined {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== 'object') {
+    throw new HttpError('skill must contain a name and path', 400);
+  }
+  const candidate = raw as Partial<ChatTurnSkill>;
+  const name = typeof candidate.name === 'string' ? candidate.name.trim() : '';
+  const path = typeof candidate.path === 'string' ? candidate.path.trim() : '';
+  if (!name || !path || name.length > 120 || path.length > 500 || path.includes('\0')) {
+    throw new HttpError('skill must contain a valid name and path', 400);
+  }
+  return { name, path };
+}
+
 /**
  * GET /api/chat/threads
  * List thread summaries for the current user.
@@ -308,7 +357,8 @@ router.get('/threads', async (req: Request, res: Response) => {
 
 /**
  * POST /api/chat/threads
- * Start a new chat thread (clones the repo, injects context).
+ * Start a new chat thread. Repository grounding resolves from the cached,
+ * SHA-pinned checkout when the first turn begins.
  * Body: StartChatRequest
  */
 router.post('/threads', async (req: Request, res: Response) => {
@@ -319,37 +369,44 @@ router.post('/threads', async (req: Request, res: Response) => {
 
   try {
     const userId = getUserId(req);
-    const kickoff = body.kickoff;
-    const isDevSession = kickoff.mode === 'development';
-    if (isRepositoryReadingChatCaller(kickoff, isDevSession)) {
-      const project = kickoff.project;
-      const surface = resolveGroundingCallerKey(kickoff);
-      const enabled = await isProjectRepositoryCheckoutReadinessEnabled({
-        userId,
-        project,
-        caller: surface,
+    const {
+      effort: _clientEffort,
+      agentModule: _clientAgentModule,
+      ...clientKickoff
+    } = body.kickoff;
+    const skillConfig = await resolveSkillConfig({
+      project: clientKickoff.project,
+      settingsId: clientKickoff.skillSettingsId ?? undefined,
+    });
+    const agentModule = deriveAgentModule(clientKickoff, skillConfig);
+
+    // Home pill admission (TBI-005) covers Home starts only: a kickoff that names
+    // a configured quick pill, or one the server cannot map to any module (Home
+    // free chat, or an unrecognized direct call). Configured Interview/ADR/PRD/
+    // assistant/development/standup workflows keep their own gates (BR-008).
+    // Runs before any persistence, so a denied kickoff leaves no thread row.
+    if (namesHomePill(clientKickoff, skillConfig) || agentModule === undefined) {
+      const isSuperAdmin = isSuperAdminRequest(req);
+      const admission = resolveThreadCreationAdmission({
+        skillPills: skillConfig?.quickSkillPills,
+        mcpPills: skillConfig?.quickMcpPills,
+        callerId: userId,
+        callerGroupIds: isSuperAdmin ? [] : await getUserGroupIds(userId),
+        isSuperAdmin,
+        skillPath: clientKickoff.skillPath,
+        mcpServerName: clientKickoff.mcpPill?.mcpServerName,
       });
-      // @feature-flag:project-repository-checkout-readiness start winner=enabled
-      if (enabled) {
-        // @feature-flag:project-repository-checkout-readiness enabled-start
-        try {
-          await assertResolvedProjectRepositoryReady({
-            project,
-            settingsId: kickoff.skillSettingsId,
-            surface,
-          });
-        } catch (e) {
-          if (e instanceof ProjectRepositoryNotReady) {
-            res.status(409).json(e.toJSON());
-            return;
-          }
-          throw e;
-        }
-        // @feature-flag:project-repository-checkout-readiness enabled-end
+      if (!admission.admitted) {
+        return res
+          .status(403)
+          .json({ error: THREAD_CREATION_DENIAL_MESSAGES[admission.reason] });
       }
-      // @feature-flag:project-repository-checkout-readiness end
     }
 
+    const kickoff = {
+      ...clientKickoff,
+      ...(agentModule ? { agentModule } : {}),
+    };
     const thread = await createThread(userId, kickoff, {
       skipAutoKickoff: Boolean(body.skipAutoKickoff),
     });
@@ -470,18 +527,16 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
   // the very first connect right after thread creation) never miss events.
   // Prefer the hydrated in-memory messages (may include writes not yet
   // flushed to Postgres) over the stale middleware snapshot.
-  const replayMessages = hydrated?.messages ?? thread.messages;
+  const replayMessages = [...(hydrated?.messages ?? thread.messages)].sort(
+    (a, b) => {
+      const byTs = a.ts.localeCompare(b.ts);
+      if (byTs !== 0) return byTs;
+      return a.id.localeCompare(b.id);
+    },
+  );
   for (const msg of replayMessages) {
     sendEvent({ type: 'message', message: msg });
   }
-
-  // Send current status after the message replay so the client can render
-  // the full history before seeing the running/idle indicator. Prefer the
-  // hydrated status since it reflects the normalized in-memory state.
-  sendEvent(buildStreamStatusEvent(
-    hydrated?.status ?? thread.status,
-    eventDrivenTermination,
-  ));
 
   unsubscribe = subscribeToThread(req.params.id, sendLocalEvent);
 
@@ -495,11 +550,32 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
   });
 
   const lastEventId = req.get('Last-Event-ID')?.trim() || undefined;
-  const replayEvents = await replayRunEvents(req.params.id, lastEventId).catch((err) => {
-    console.error(`[chat] run-event replay failed for thread ${req.params.id}:`, (err as Error).message);
-    return [];
-  });
+  // A cold page load already receives persisted messages and the authoritative
+  // thread status above. Replaying old tool/phase events for an idle thread
+  // makes completed work look like it started again. Only resume durable
+  // events when the browser supplied a cursor or a run is currently active.
+  const shouldReplayEvents =
+    Boolean(lastEventId) || hydrated?.status === 'running';
+  const replayEvents = shouldReplayEvents
+    ? await replayRunEvents(
+      req.params.id,
+      lastEventId,
+      500,
+      hydrated?.activeRunId,
+    ).catch((err) => {
+      console.error(`[chat] run-event replay failed for thread ${req.params.id}:`, (err as Error).message);
+      return [];
+    })
+    : [];
   for (const envelope of replayEvents) sendEnvelope(envelope);
+
+  // Historical phase/done events must not override the current thread state.
+  // Send the authoritative snapshot after replay, then drain events that
+  // arrived live while replay was in progress.
+  sendEvent(buildStreamStatusEvent(
+    hydrated?.status ?? thread.status,
+    eventDrivenTermination,
+  ));
   replaying = false;
   pendingLiveEvents
     .sort((left, right) => left.timestamp.localeCompare(right.timestamp) || left.sequence - right.sequence)
@@ -536,8 +612,10 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
 router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, res: Response) => {
   const body = req.body as Partial<SendMessageRequest>;
   let attachments: ChatAttachment[];
+  let turnSkill: ChatTurnSkill | undefined;
   try {
     attachments = readAttachments(body.attachments);
+    turnSkill = readTurnSkill(body.skill);
   } catch (err: unknown) {
     return res.status(errorStatus(err, 400)).json({ error: errorMessage(err) });
   }
@@ -554,35 +632,39 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
     // Dead run cleared — accept the message.
   }
 
-  const isDevSession = thread.kickoff?.mode === 'development';
-  if (thread.kickoff && isRepositoryReadingChatCaller(thread.kickoff, isDevSession)) {
-    const userId = getUserId(req);
-    const project = thread.kickoff.project;
-    const surface = resolveGroundingCallerKey(thread.kickoff);
-    const enabled = await isProjectRepositoryCheckoutReadinessEnabled({
-      userId,
-      project,
-      caller: surface,
-    });
-    // @feature-flag:project-repository-checkout-readiness start winner=enabled
-    if (enabled) {
-      // @feature-flag:project-repository-checkout-readiness enabled-start
-      try {
-        await assertResolvedProjectRepositoryReady({
-          project,
-          settingsId: thread.kickoff.skillSettingsId,
-          surface,
-        });
-      } catch (e) {
-        if (e instanceof ProjectRepositoryNotReady) {
-          res.status(409).json(e.toJSON());
-          return;
-        }
-        throw e;
+  let releaseAdoWriteTurn = () => {};
+  const calendarAssistant =
+    thread.kickoff.assistantType === 'calendar-work-item';
+  const explicitAdoWrite =
+    !calendarAssistant && isExplicitAdoWriteIntent(body.text ?? '');
+  const operationalAdoWrite =
+    !calendarAssistant &&
+    (skillRequiresAdoOperations(
+      turnSkill?.path ??
+        thread.kickoff.skillPath ??
+        thread.kickoff.standupSkillPath,
+      turnSkill?.name ?? thread.kickoff.pillLabel,
+    ) ||
+      Boolean(thread.kickoff.standupSessionId) ||
+      thread.kickoff.mode === 'standup-participant' ||
+      thread.kickoff.mode === 'standup-facilitator');
+  if (explicitAdoWrite || operationalAdoWrite) {
+    try {
+      const token = await getAdoTokenForUser(req);
+      releaseAdoWriteTurn = await registerChatAdoWriteTurn({
+        threadId: req.params.id,
+        userId: getUserId(req),
+        project: thread.kickoff.project,
+        token,
+        isSuperAdmin: isSuperAdminRequest(req),
+      });
+    } catch (err: unknown) {
+      if (explicitAdoWrite) {
+        return res
+          .status(errorStatus(err, 403))
+          .json({ error: errorMessage(err) });
       }
-      // @feature-flag:project-repository-checkout-readiness enabled-end
     }
-    // @feature-flag:project-repository-checkout-readiness end
   }
 
   // Fire-and-forget: response streams via SSE/WS; 202 returns immediately.
@@ -597,14 +679,18 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
     attachmentCount: String(attachments.length),
   });
   res.status(202).json({ ok: true });
-  sendMessage(threadId, body.text ?? '', body.model, attachments).catch((err: unknown) => {
-    console.error(`[chat] sendMessage error for thread ${threadId}:`, errorMessage(err));
-    trackEvent('chat.send.failed', {
-      threadId,
-      errorType: err instanceof Error ? err.name : 'UnknownError',
-      errorMessage: errorMessage(err).slice(0, 200),
+  sendMessage(threadId, body.text ?? '', body.model, attachments, {
+    turnSkill,
+  })
+    .finally(releaseAdoWriteTurn)
+    .catch((err: unknown) => {
+      console.error(`[chat] sendMessage error for thread ${threadId}:`, errorMessage(err));
+      trackEvent('chat.send.failed', {
+        threadId,
+        errorType: err instanceof Error ? err.name : 'UnknownError',
+        errorMessage: errorMessage(err).slice(0, 200),
+      });
     });
-  });
 });
 
 /**

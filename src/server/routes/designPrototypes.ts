@@ -17,6 +17,7 @@ import {
   addComment,
   resolveComment,
 } from '../services/designPrototypeService';
+import { getEntityUsageRollup } from '../services/aiCostAnalyticsService';
 import { getAssignments } from '../services/documentApprovalService';
 import type {
   ReviewDesignPrototypeRequest,
@@ -71,6 +72,24 @@ router.post('/prd/:prdId/generate', requirePermission('interviews:manage'), asyn
   try {
     const prototypeIds = await generatePrototypesForPrd(req.params.prdId);
     res.json({ ok: true, prototypeIds });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /:id/usage — per-prototype AI usage rollup
+router.get('/:id/usage', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const proto = await getPrototype(req.params.id);
+    if (!proto) {
+      res.status(404).json({ error: 'Prototype not found' });
+      return;
+    }
+    const rollup = await getEntityUsageRollup({
+      entityType: 'design-prototype',
+      entityId: proto.id,
+    });
+    res.json(rollup);
   } catch (err) {
     next(err);
   }
@@ -190,6 +209,15 @@ router.post('/:id/reopen', requirePermission('admin:roles'), async (req, res, ne
 router.post('/:id/review', requirePermission('design-prototypes:review'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
+    const prototype = await getPrototype(req.params.id);
+    if (!prototype) {
+      res.status(404).json({ error: 'Prototype not found' });
+      return;
+    }
+    if ((await getAssignments(prototype.prdId, 'design_prototype')).length === 0) {
+      res.status(409).json({ error: 'Reviewer actions are unavailable for owner-only documents' });
+      return;
+    }
     const body = req.body as ReviewDesignPrototypeRequest;
     await reviewPrototype(req.params.id, userId, body.action, body.comment);
     res.json({ ok: true });

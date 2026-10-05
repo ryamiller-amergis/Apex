@@ -450,6 +450,8 @@ describe('TBI-004 cached drift and explicit re-ground contracts', () => {
       groundedAt,
       driftState: 'source-changed',
       stalenessState: 'fresh',
+      commitsBehind: 0,
+      changedFileCount: 0,
       canReGround: true,
     });
     expect(readCachedOriginSha).toHaveBeenCalledWith(row);

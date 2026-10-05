@@ -7,6 +7,7 @@ import {
   evaluateBindingContinuity,
   type CallerGroundingDependencies,
 } from '../services/callerGroundingService';
+import { USER_FACING_REPO_CACHE_LEASE_WAIT_MS } from '../services/repoCacheLeaseService';
 
 const run: RunRef = {
   runType: 'chat',
@@ -40,6 +41,7 @@ function dependencies(
       proven: false,
       reason: 'harness-not-run',
     }),
+    isUsableBareMirror: jest.fn().mockReturnValue(false),
     sharedReadCheckout: {
       getReady: jest.fn().mockReturnValue(null),
       materialize: jest.fn().mockResolvedValue({
@@ -150,6 +152,25 @@ describe('PBI-005 shared caller grounding startup', () => {
     );
     expect(deps.profiles.revokeProfile).toHaveBeenCalledWith(profileId);
     expect(deps.impactContexts.unregister).toHaveBeenCalledWith(run);
+
+    const persistDeps = dependencies();
+    const persistService = createCallerGroundingService(persistDeps);
+    const persistSelected = await persistService.start({
+      caller: 'chat-agent',
+      userId: 'developer-1',
+      run,
+      repository: {
+        provider: 'github',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      reauthorize: async () => true,
+    });
+    if (persistSelected.mode !== 'local') {
+      throw new Error(`expected local grounding, got ${persistSelected.mode}`);
+    }
+    await persistSelected.release({ persistPin: true });
+    expect(persistDeps.groundingService.markTerminalInactive).not.toHaveBeenCalled();
   });
 
   it('AC-0 creates a run grounding when the caller has no existing pin', async () => {
@@ -173,12 +194,15 @@ describe('PBI-005 shared caller grounding startup', () => {
 
     // Assert
     expect(selected.mode).toBe('local');
-    expect(deps.ensureRepoCache).toHaveBeenCalledWith({
-      provider: 'github',
-      project: 'Apex',
-      repo: 'AI-Pilot',
-      branch: 'main',
-    });
+    expect(deps.ensureRepoCache).toHaveBeenCalledWith(
+      {
+        provider: 'github',
+        project: 'Apex',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      { waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS },
+    );
     expect(deps.groundingService.activateGroundings).toHaveBeenCalledWith({
       run,
       target: {
@@ -211,12 +235,15 @@ describe('PBI-005 shared caller grounding startup', () => {
 
     // Then the GitHub organization remains environment-owned and only the repo name flows downstream.
     expect(selected.mode).toBe('local');
-    expect(deps.ensureRepoCache).toHaveBeenCalledWith({
-      provider: 'github',
-      project: 'Apex',
-      repo: 'AI-Pilot',
-      branch: 'main',
-    });
+    expect(deps.ensureRepoCache).toHaveBeenCalledWith(
+      {
+        provider: 'github',
+        project: 'Apex',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      { waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS },
+    );
     expect(deps.groundingService.activateGroundings).toHaveBeenCalledWith({
       run,
       target: {
@@ -272,7 +299,8 @@ describe('PBI-005 shared caller grounding startup', () => {
       expect.objectContaining({
         provider: 'ado',
         repo: 'Platform/AI-Pilot',
-      })
+      }),
+      { waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS },
     );
     expect(deps.groundingService.activateGroundings).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1202,6 +1230,38 @@ describe('Bundle B fast shared grounding selection', () => {
     expect(deps.materialize).not.toHaveBeenCalled();
   });
 
+  it('does not auto-advance an existing pin to a ready latest SHA', async () => {
+    const latestSha = 'c'.repeat(40);
+    const deps = sharedDeps({
+      readCachedOriginSha: jest.fn().mockResolvedValue(latestSha),
+      sharedReadCheckout: {
+        getReady: jest.fn().mockImplementation((identity) =>
+          identity.sha === latestSha
+            ? { workspacePath: SHARED_PATH, outcome: 'hit' }
+            : null
+        ),
+        materialize: jest.fn().mockResolvedValue({
+          workspacePath: SHARED_PATH,
+          outcome: 'materialized',
+        }),
+        retain: jest.fn(),
+        releaseRef: jest.fn(),
+      },
+    });
+    const service = createCallerGroundingService(deps);
+
+    const selected = await service.start(startArgs);
+
+    expect(selected.mode).toBe('preparing');
+    expect(deps.groundingService.reground).not.toHaveBeenCalled();
+    if (selected.mode === 'preparing') {
+      await selected.waitUntilReady?.();
+    }
+    expect(deps.sharedReadCheckout.materialize).toHaveBeenCalledWith(
+      expect.objectContaining({ sha: grounding.groundedSha }),
+    );
+  });
+
   it('PLAN-S2-AC-1 Given exact cold and prior ready SHA, When starting, Then pins and selects the prior SHA', async () => {
     // Given
     const previousSha = 'b'.repeat(40);
@@ -1253,10 +1313,21 @@ describe('Bundle B fast shared grounding selection', () => {
     expect(deps.materialize).not.toHaveBeenCalled();
   });
 
-  it('PLAN-S2-AC-2 Given no ready checkout, When starting, Then starts shared materialization without pinning early', async () => {
-    // Given
+  it('PLAN-S2-AC-2 Given no ready checkout, When native reads can fetch a mirror, Then skips shared materialization', async () => {
+    const fetchedMirror = 'C:\\data\\repo-cache\\warm.git';
     const deps = sharedDeps({
       isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),
+      isUsableBareMirror: jest.fn().mockReturnValue(false),
+      getRepoCacheDir: jest.fn().mockReturnValue(fetchedMirror),
+      ensureRepoCache: jest.fn().mockResolvedValue({
+        baseSha: grounding.groundedSha,
+        cacheDir: fetchedMirror,
+        mirrorHit: false,
+      }),
+      evaluateNativeReadCapability: jest.fn().mockReturnValue({
+        proven: true,
+        reason: 'pinned-checkout-confined',
+      }),
       sharedReadCheckout: {
         getReady: jest.fn().mockReturnValue(null),
         materialize: jest.fn().mockResolvedValue({
@@ -1272,30 +1343,17 @@ describe('Bundle B fast shared grounding selection', () => {
       .mockResolvedValue([grounding]);
     const service = createCallerGroundingService(deps);
 
-    // When
     const selected = await service.start(startArgs);
 
-    // Then
     expect(selected).toMatchObject({
-      mode: 'preparing',
-      retryAfterMs: expect.any(Number),
-      waitUntilReady: expect.any(Function),
-      release: expect.any(Function),
+      mode: 'local',
+      resolvedSha: grounding.groundedSha,
+      nativeReads: true,
+      workingTree: false,
     });
-    if (selected.mode === 'preparing') {
-      await selected.waitUntilReady?.();
-    }
-    expect(selected.mode).not.toBe('remote');
-    expect(deps.ensureRepoCache).not.toHaveBeenCalled();
-    expect(deps.sharedReadCheckout.materialize).toHaveBeenCalledWith({
-      provider: 'github',
-      project: 'Apex',
-      repo: 'AI-Pilot',
-      branch: 'main',
-      sha: grounding.groundedSha,
-    });
+    expect(deps.ensureRepoCache).toHaveBeenCalledTimes(1);
+    expect(deps.sharedReadCheckout.materialize).not.toHaveBeenCalled();
     expect(deps.materialize).not.toHaveBeenCalled();
-    expect(deps.evaluateNativeReadCapability).not.toHaveBeenCalled();
   });
 
   it('Given no mirror or checkout, When Home starts, Then clones the mirror and materializes its SHA on demand', async () => {
@@ -1326,12 +1384,15 @@ describe('Bundle B fast shared grounding selection', () => {
     }
 
     // Then
-    expect(deps.ensureRepoCache).toHaveBeenCalledWith({
-      provider: 'github',
-      project: 'Apex',
-      repo: 'AI-Pilot',
-      branch: 'main',
-    });
+    expect(deps.ensureRepoCache).toHaveBeenCalledWith(
+      {
+        provider: 'github',
+        project: 'Apex',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      { waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS },
+    );
     expect(deps.sharedReadCheckout.materialize).toHaveBeenCalledWith({
       provider: 'github',
       project: 'Apex',
@@ -1378,5 +1439,275 @@ describe('Bundle B fast shared grounding selection', () => {
       mode: 'remote',
       sha: null,
     });
+  });
+});
+
+describe('Stage 6 bare-mirror skip of working-tree materialization', () => {
+  const mirrorPath = 'C:\\data\\repo-cache\\warm.git';
+  const sandbox = 'C:\\data\\threads\\thread-1';
+
+  it('skips shared and per-run checkouts when native reads and a usable mirror exist', async () => {
+    const deps = dependencies({
+      isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),
+      isSharedReadCheckoutEnabledForCaller: jest.fn().mockResolvedValue(true),
+      isUsableBareMirror: jest.fn().mockReturnValue(true),
+      getRepoCacheDir: jest.fn().mockReturnValue(mirrorPath),
+      evaluateNativeReadCapability: jest.fn().mockReturnValue({
+        proven: true,
+        reason: 'pinned-checkout-confined',
+      }),
+    });
+    const service = createCallerGroundingService(deps);
+
+    const selected = await service.start({
+      caller: 'chat-agent',
+      userId: 'developer-1',
+      run,
+      repository: {
+        provider: 'github',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      reauthorize: async () => true,
+      readOnlyShareable: true,
+      sandboxCwd: sandbox,
+    });
+
+    expect(selected).toMatchObject({
+      mode: 'local',
+      cwd: sandbox,
+      profileId,
+      resolvedSha: grounding.groundedSha,
+      nativeReads: true,
+      workingTree: false,
+      mirrorPath,
+    });
+    expect(deps.materialize).not.toHaveBeenCalled();
+    expect(deps.sharedReadCheckout.getReady).not.toHaveBeenCalled();
+    expect(deps.ensureRepoCache).not.toHaveBeenCalled();
+    expect(deps.profiles.registerConnectionProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sha: grounding.groundedSha,
+        checkoutPath: sandbox,
+        mirrorPath,
+      }),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('prefers the mirror over the readiness checkout when both could serve', async () => {
+    const pinProjectRepositoryRoot = jest.fn();
+    const deps = dependencies({
+      isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),
+      // Readiness is enabled in every deployed environment. Before the
+      // precedence fix it returned a working tree first, so the mirror branch
+      // below was unreachable and every turn paid for a full clone.
+      isProjectRepositoryCheckoutReadinessEnabled: jest
+        .fn()
+        .mockResolvedValue(true),
+      isUsableBareMirror: jest.fn().mockReturnValue(true),
+      getRepoCacheDir: jest.fn().mockReturnValue(mirrorPath),
+      pinProjectRepositoryRoot,
+      evaluateNativeReadCapability: jest.fn().mockReturnValue({
+        proven: true,
+        reason: 'pinned-checkout-confined',
+      }),
+    });
+    const service = createCallerGroundingService(deps);
+
+    const selected = await service.start({
+      caller: 'chat-agent',
+      userId: 'developer-1',
+      run,
+      repository: {
+        provider: 'github',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      reauthorize: async () => true,
+      readOnlyShareable: true,
+      sandboxCwd: sandbox,
+    });
+
+    expect(selected).toMatchObject({
+      mode: 'local',
+      nativeReads: true,
+      workingTree: false,
+      mirrorPath,
+    });
+    expect(pinProjectRepositoryRoot).not.toHaveBeenCalled();
+    expect(deps.materialize).not.toHaveBeenCalled();
+    expect(deps.sharedReadCheckout.materialize).not.toHaveBeenCalled();
+  });
+
+  it('still uses the readiness checkout when no mirror is available', async () => {
+    const workspacePath = 'C:\\data\\workspaces\\readiness';
+    const pinProjectRepositoryRoot = jest.fn().mockResolvedValue({
+      grounding,
+      workspacePath,
+      identity: { digest: 'readiness-digest' },
+      fetched: false,
+    });
+    const deps = dependencies({
+      isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),
+      isProjectRepositoryCheckoutReadinessEnabled: jest
+        .fn()
+        .mockResolvedValue(true),
+      isUsableBareMirror: jest.fn().mockReturnValue(false),
+      getRepoCacheDir: jest.fn().mockReturnValue(mirrorPath),
+      pinProjectRepositoryRoot,
+    });
+    const service = createCallerGroundingService(deps);
+
+    const selected = await service.start({
+      caller: 'chat-agent',
+      userId: 'developer-1',
+      run,
+      repository: {
+        provider: 'github',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      reauthorize: async () => true,
+      readOnlyShareable: true,
+      sandboxCwd: sandbox,
+    });
+
+    // The guard is conditional, not a blanket disable: with no mirror to read
+    // from, a working tree is still the only way to serve the turn.
+    expect(pinProjectRepositoryRoot).toHaveBeenCalled();
+    expect(selected).toMatchObject({
+      mode: 'local',
+      cwd: workspacePath,
+      workingTree: true,
+    });
+  });
+
+  it('uses the mirror path as cwd when no sandbox is provided', async () => {
+    const deps = dependencies({
+      isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),
+      isUsableBareMirror: jest.fn().mockReturnValue(true),
+      getRepoCacheDir: jest.fn().mockReturnValue(mirrorPath),
+      evaluateNativeReadCapability: jest.fn().mockReturnValue({
+        proven: true,
+        reason: 'pinned-checkout-confined',
+      }),
+    });
+    const service = createCallerGroundingService(deps);
+
+    const selected = await service.start({
+      caller: 'chat-agent',
+      userId: 'developer-1',
+      run,
+      repository: {
+        provider: 'github',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      reauthorize: async () => true,
+    });
+
+    expect(selected).toMatchObject({
+      mode: 'local',
+      cwd: mirrorPath,
+      workingTree: false,
+    });
+    expect(deps.materialize).not.toHaveBeenCalled();
+  });
+
+  it('fetches a missing mirror on cold start then skips the working-tree copy', async () => {
+    const deps = dependencies({
+      isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),
+      isSharedReadCheckoutEnabledForCaller: jest.fn().mockResolvedValue(true),
+      isUsableBareMirror: jest.fn().mockReturnValue(false),
+      getRepoCacheDir: jest.fn().mockReturnValue(mirrorPath),
+      ensureRepoCache: jest.fn().mockResolvedValue({
+        baseSha: grounding.groundedSha,
+        cacheDir: mirrorPath,
+        mirrorHit: false,
+      }),
+      evaluateNativeReadCapability: jest.fn().mockReturnValue({
+        proven: true,
+        reason: 'pinned-checkout-confined',
+      }),
+    });
+    jest.mocked(deps.groundingService.getGroundings).mockResolvedValue([]);
+    const service = createCallerGroundingService(deps);
+
+    const selected = await service.start({
+      caller: 'chat-agent',
+      userId: 'developer-1',
+      run,
+      repository: {
+        provider: 'github',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      reauthorize: async () => true,
+      readOnlyShareable: true,
+      sandboxCwd: sandbox,
+    });
+
+    expect(selected).toMatchObject({
+      mode: 'local',
+      cwd: sandbox,
+      resolvedSha: grounding.groundedSha,
+      nativeReads: true,
+      workingTree: false,
+    });
+    expect(deps.ensureRepoCache).toHaveBeenCalledTimes(1);
+    expect(deps.materialize).not.toHaveBeenCalled();
+    expect(deps.sharedReadCheckout.getReady).not.toHaveBeenCalled();
+    expect(deps.groundingService.activateGroundings).toHaveBeenCalledWith({
+      run,
+      target: {
+        provider: 'github',
+        repository: 'AI-Pilot',
+        branch: 'main',
+        groundedSha: grounding.groundedSha,
+      },
+    });
+  });
+
+  it('keeps an existing pin when fetching a missing mirror to skip the working tree', async () => {
+    const deps = dependencies({
+      isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),
+      isUsableBareMirror: jest.fn().mockReturnValue(false),
+      getRepoCacheDir: jest.fn().mockReturnValue(mirrorPath),
+      ensureRepoCache: jest.fn().mockResolvedValue({
+        baseSha: 'c'.repeat(40),
+        cacheDir: mirrorPath,
+        mirrorHit: false,
+      }),
+      evaluateNativeReadCapability: jest.fn().mockReturnValue({
+        proven: true,
+        reason: 'pinned-checkout-confined',
+      }),
+    });
+    const service = createCallerGroundingService(deps);
+
+    const selected = await service.start({
+      caller: 'chat-agent',
+      userId: 'developer-1',
+      run,
+      repository: {
+        provider: 'github',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      reauthorize: async () => true,
+      sandboxCwd: sandbox,
+    });
+
+    expect(selected).toMatchObject({
+      mode: 'local',
+      cwd: sandbox,
+      resolvedSha: grounding.groundedSha,
+      workingTree: false,
+    });
+    expect(deps.ensureRepoCache).toHaveBeenCalledTimes(1);
+    expect(deps.groundingService.activateGroundings).not.toHaveBeenCalled();
+    expect(deps.materialize).not.toHaveBeenCalled();
   });
 });

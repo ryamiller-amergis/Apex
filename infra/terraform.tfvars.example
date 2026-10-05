@@ -15,6 +15,13 @@ ado_org     = "https://dev.azure.com/your-org"
 ado_pat     = "your-pat-token-here"
 ado_project = "YourProject"
 
+# GitHub Configuration (Apex and other github skillProvider projects)
+# Copy the live App Service GITHUB_ORG / GITHUB_TOKEN into gitignored
+# terraform.tfvars — never put a real PAT in this example file.
+# Fine-grained github_pat_… tokens need Contents: Read + Metadata: Read.
+github_org   = "ryamiller-amergis"
+github_token = "github_pat_replace-me"
+
 # Optional: Override default tags
 # tags = {
 #   ManagedBy   = "Terraform"
@@ -54,11 +61,25 @@ poll_interval        = "30"
 port                 = "8080"
 
 # PostgreSQL Database Configuration
+# Keep postgresql_location equal to app_service_location. Prod ran cross-region
+# (East US 2 database, Central US app) until 2026-09-18 and paid ~30 ms on every
+# query for it.
 postgresql_server_name    = "psql-hub-dev"
+postgresql_location       = "Central US"
 postgresql_admin_username = "pgadmin"
 postgresql_admin_password = "ChangeMe123!"  # Must include upper, lower, number, min 8 chars
 postgresql_database_name  = "aipilot"
 postgresql_sku_name       = "B_Standard_B1ms"
+# Azure grows storage but never shrinks it — lowering this fails the apply.
+postgresql_storage_mb = 32768
+# 7-35 days. Backups die with the server, so this is the whole recovery window.
+postgresql_backup_retention_days = 7
+# Portal-created servers carry a generated rule name. Rule names are ForceNew,
+# so set this to the existing name rather than letting Terraform recreate it.
+# postgresql_azure_services_firewall_rule_name = "allow-azure-services"
+# Query diagnostics. Both are dynamic — changing them does not restart the server.
+# postgresql_pg_stat_statements_track      = "top"   # none | top | all
+# postgresql_log_min_duration_statement_ms = 5000    # -1 disables
 
 # Shared async Blob platform
 # One private storage account per environment. Add containers for new modules.
@@ -156,6 +177,21 @@ pdf_blob_container_name = "pdf-artifacts"
 # ai_runs_apex_callback_base_url    = "https://app-scrum-dev.azurewebsites.net"
 
 # ---------------------------------------------------------------------------
+# My Work Cursor worker Job (dev and production)
+# Reuses cae-apex-ai-{environment}, the load-test ACR, and the AI-runs Key
+# Vault. Set the same switch in terraform.prd.tfvars to provision
+# caj-apex-cursor-worker-prd. Left unset, the job is not created.
+#
+# Apex starts one execution and overrides the command to cursor-run-cli.
+# The worker image must contain `agent`, git, and that script.
+# ---------------------------------------------------------------------------
+# enable_cursor_pool_workers = true
+# cursor_pool_worker_image     = "<acr>.azurecr.io/apex-cursor-worker:<tag>"
+# cursor_pool_worker_cpu         = 2.0
+# cursor_pool_worker_memory      = "4Gi"
+# cursor_pool_worker_timeout_seconds      = 21600
+
+# ---------------------------------------------------------------------------
 # AI Runs interactive lane — FEAT-007 (WebSocket gateway + Dapr virtual actors)
 # Additive/inert while disabled. Reuses the FEAT-003 ai-runs Container Apps
 # Environment, runner managed identity, Azure Files workspace, LT ACR, and the
@@ -217,4 +253,17 @@ pdf_blob_container_name = "pdf-artifacts"
 # First-token P95 SLO (ms) gating the interactive latency alert. Confirm with
 # product before enforcing.
 # ai_runs_interactive_first_token_slo_ms = 1500
+
+# ---------------------------------------------------------------------------
+# Repo read service (bare-mirror HTTP API). Keep false until the
+# `repo-read-service` DB feature flag is targeted and the image is published.
+# Does not mount Azure Files — git objects live on ephemeral container disk
+# with Blob `repo-grounding` as the restore source.
+# ---------------------------------------------------------------------------
+# enable_repo_read_service = false
+# repo_read_service_container_app_name = null
+# repo_read_service_image  = "<acr>.azurecr.io/apex-repo-read:<tag>"
+# repo_read_service_cpu    = 2.0
+# repo_read_service_memory = "4Gi"
+# repo_read_service_target_port = 8080
 

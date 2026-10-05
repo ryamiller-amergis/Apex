@@ -1,7 +1,25 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
+import type { RepoReader, RepositoryIdentity } from '../../../shared/types/repoReader';
 import { LocalCheckoutReader } from '../localCheckoutReader';
+import { BareRepoReader } from '../repoRead/bareRepoReader';
+import { isUsableBareMirror } from '../repoRead/mirrorStore';
+import {
+  RepoServiceReader,
+  resolveRepoReadServiceUrl,
+} from '../repoRead/repoServiceReader';
+
+function identityFromSnapshot(
+  snapshot: Readonly<ExecutionSnapshot>,
+): RepositoryIdentity {
+  return {
+    provider: snapshot.provider ?? 'ado',
+    project: snapshot.projectId,
+    repo: snapshot.repository ?? 'local-checkout',
+    sha: snapshot.groundedSha?.trim() || 'frozen',
+  };
+}
 
 /**
  * Open and probe the frozen checkout. Prefer `checkoutRef` (shared read tree at
@@ -22,6 +40,46 @@ export async function openLocalCheckout(
   });
   await reader.listDir('');
   return reader;
+}
+
+/**
+ * Open a repo reader for a background worker. Prefer a usable bare mirror on
+ * this host, then the HTTP read service, then a working-tree checkout.
+ */
+export async function openGroundedReader(
+  snapshot: Readonly<ExecutionSnapshot>,
+): Promise<RepoReader> {
+  const sha = snapshot.groundedSha?.trim();
+  const identity = identityFromSnapshot(snapshot);
+
+  if (isUsableBareMirror(snapshot.mirrorRef) && sha) {
+    try {
+      const reader = new BareRepoReader({
+        identity,
+        mirrorPath: snapshot.mirrorRef,
+      });
+      await reader.listDir('');
+      return reader;
+    } catch {
+      // Path may be an App Service cache the ACA worker cannot open.
+    }
+  }
+
+  const serviceUrl = resolveRepoReadServiceUrl();
+  if (serviceUrl && sha) {
+    try {
+      const reader = new RepoServiceReader({
+        identity,
+        baseUrl: serviceUrl,
+      });
+      await reader.listDir('');
+      return reader;
+    } catch {
+      // Fall through to the working-tree reader.
+    }
+  }
+
+  return openLocalCheckout(snapshot);
 }
 
 async function syncFiles(directory: string): Promise<void> {

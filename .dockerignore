@@ -20,6 +20,14 @@ infra/.terraform
 infra/*.tfstate*
 infra/tfplan*
 **/*.md
+!runners/cursor-pool-worker/pr-description.md
+
+# Runtime state: repo mirrors and materialized checkouts. Absent in CI, but
+# locally this holds whole working trees and dwarfs the rest of the context.
+data
+**/.ai-pilot
+uploads
+logs
 
 # Tests and local env
 **/__tests__

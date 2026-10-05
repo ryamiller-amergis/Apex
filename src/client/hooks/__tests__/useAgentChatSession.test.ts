@@ -1,6 +1,6 @@
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useAgentChatSession } from '../useAgentChatSession';
-import type { ChatMessage, ChatThreadStatus } from '../../../shared/types/chat';
+import type { ChatMessage, ChatThreadStatus, AgentRunPhase } from '../../../shared/types/chat';
 import type {
   GroundingPreparationProgress,
   ToolProgress,
@@ -16,11 +16,12 @@ interface MockStreamReturn {
   toolProgress: ToolProgress[];
   status: ChatThreadStatus;
   isConnected: boolean;
+  hasConnectionError: boolean;
   lastProgressAt: number | null;
   phaseEvents: RunPhaseProgress[];
   runHealth: RunHealthProgress | null;
   progressLabel: string | null;
-  progressPhase: string | null;
+  progressPhase: AgentRunPhase | null;
   prdReady: boolean;
   backlogReady: boolean;
   isRetrying: boolean;
@@ -35,6 +36,7 @@ const mockStreamReturn: MockStreamReturn = {
   toolProgress: [],
   status: 'idle',
   isConnected: true,
+  hasConnectionError: false,
   lastProgressAt: null,
   phaseEvents: [],
   runHealth: null,
@@ -57,6 +59,7 @@ describe('useAgentChatSession', () => {
   beforeEach(() => {
     currentStreamReturn = { ...mockStreamReturn };
     global.fetch = jest.fn().mockResolvedValue({ ok: true }) as jest.Mock;
+    window.sessionStorage.clear();
   });
 
   afterEach(() => {
@@ -210,20 +213,47 @@ describe('useAgentChatSession', () => {
     );
   });
 
-  it('exposes a stopping state until the running stream becomes idle', async () => {
+  it('shows stopping immediately and unblocks when cancellation is confirmed', async () => {
+    let resolveCancel!: (value: { ok: boolean }) => void;
+    (global.fetch as jest.Mock).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCancel = resolve;
+        })
+    );
     currentStreamReturn = { ...mockStreamReturn, status: 'running' };
-    const { result, rerender } = renderHook(() =>
+    const { result } = renderHook(() =>
       useAgentChatSession('thread-1')
     );
+
+    act(() => {
+      void result.current.cancel();
+    });
+    expect(result.current.isCancelling).toBe(true);
+
+    await act(async () => {
+      resolveCancel({ ok: true });
+      await Promise.resolve();
+    });
+    expect(result.current.isCancelling).toBe(false);
+    expect(result.current.isRunning).toBe(false);
+    expect(result.current.isInteractionBusy).toBe(false);
+  });
+
+  it('surfaces a cancel request failure and leaves Stop retryable', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: false,
+      json: () => Promise.resolve({ error: 'Cancellation was not accepted' }),
+    });
+    currentStreamReturn = { ...mockStreamReturn, status: 'running' };
+    const { result } = renderHook(() => useAgentChatSession('thread-1'));
 
     await act(async () => {
       await result.current.cancel();
     });
-    expect(result.current.isCancelling).toBe(true);
 
-    currentStreamReturn = { ...mockStreamReturn, status: 'idle' };
-    rerender();
-    await waitFor(() => expect(result.current.isCancelling).toBe(false));
+    expect(result.current.isCancelling).toBe(false);
+    expect(result.current.sendError).toBe('Cancellation was not accepted');
   });
 
   it('sets sendError when fetch fails', async () => {
@@ -335,9 +365,7 @@ describe('useAgentChatSession', () => {
     );
 
     expect(result.current.isPreparing).toBe(true);
-    expect(result.current.preparationMessage).toBe(
-      'Preparing project repository…'
-    );
+    expect(result.current.preparationMessage).toBe('Loading…');
   });
 
   it('PLAN-S3-AC-3 surfaces bounded grounding failure as an actionable retry error', () => {
@@ -358,6 +386,118 @@ describe('useAgentChatSession', () => {
     expect(result.current.preparationMessage).toBe(
       'Repository preparation timed out. Please retry.'
     );
+  });
+
+  it('unlocks input once an agent reply is on screen while terminal status catches up', () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'running',
+      messages: [
+        { id: '1', role: 'user', text: 'Hi', ts: '2026-01-01T00:00:00Z' },
+        { id: '2', role: 'agent', text: 'Hello!', ts: '2026-01-01T00:00:01Z' },
+      ],
+    };
+    const { result } = renderHook(() => useAgentChatSession('thread-1'));
+    expect(result.current.isRunning).toBe(false);
+    expect(result.current.isInteractionBusy).toBe(false);
+    expect(result.current.showTypingIndicator).toBe(false);
+  });
+
+  it('shows typing while running before the agent reply lands', () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'running',
+      messages: [
+        { id: '1', role: 'user', text: 'Hi', ts: '2026-01-01T00:00:00Z' },
+      ],
+    };
+    const { result } = renderHook(() => useAgentChatSession('thread-1'));
+    expect(result.current.showTypingIndicator).toBe(true);
+  });
+
+  it('keeps restored idle history view-only when the last message is from the user', () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'running',
+      messages: [
+        { id: '1', role: 'user', text: 'My answer', ts: '2026-01-01T00:00:00Z' },
+      ],
+    };
+    const first = renderHook(() => useAgentChatSession('thread-1'));
+    expect(first.result.current.showTypingIndicator).toBe(true);
+    first.unmount();
+
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'idle',
+      messages: [
+        { id: '1', role: 'user', text: 'My answer', ts: '2026-01-01T00:00:00Z' },
+      ],
+    };
+    const second = renderHook(() => useAgentChatSession('thread-1'));
+    expect(second.result.current.showTypingIndicator).toBe(false);
+    expect(second.result.current.isAwaitingAgentResponse).toBe(false);
+  });
+
+  it('does not restore thinking after remount once an agent reply is saved', () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'running',
+      messages: [
+        { id: '1', role: 'user', text: 'My answer', ts: '2026-01-01T00:00:00Z' },
+      ],
+    };
+    const first = renderHook(() => useAgentChatSession('thread-1'));
+    expect(first.result.current.showTypingIndicator).toBe(true);
+    first.unmount();
+
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'idle',
+      messages: [
+        { id: '1', role: 'user', text: 'My answer', ts: '2026-01-01T00:00:00Z' },
+        { id: '2', role: 'agent', text: 'Next question', ts: '2026-01-01T00:00:02Z' },
+      ],
+    };
+    const second = renderHook(() => useAgentChatSession('thread-1'));
+    expect(second.result.current.showTypingIndicator).toBe(false);
+    expect(second.result.current.isAwaitingAgentResponse).toBe(false);
+  });
+
+  it('restores thinking only when status and active run id both show active work', () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'running',
+      messages: [
+        { id: '1', role: 'user', text: 'My answer', ts: '2026-01-01T00:00:00Z' },
+      ],
+    };
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', {
+        initialStatus: 'running',
+        initialActiveRunId: 'run-1',
+      }),
+    );
+    expect(result.current.showTypingIndicator).toBe(true);
+    expect(result.current.isAwaitingAgentResponse).toBe(true);
+  });
+
+  it('does not restore thinking from a stale active run id on idle history', () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'idle',
+      messages: [
+        { id: '1', role: 'user', text: 'My answer', ts: '2026-01-01T00:00:00Z' },
+      ],
+    };
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', {
+        initialStatus: 'idle',
+        initialActiveRunId: 'stale-run',
+      }),
+    );
+    expect(result.current.showTypingIndicator).toBe(false);
+    expect(result.current.isAwaitingAgentResponse).toBe(false);
   });
 
   it('filters visible messages with default filter', () => {

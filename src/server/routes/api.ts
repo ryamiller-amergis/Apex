@@ -36,6 +36,7 @@ import { getUserProjects } from '../services/adoMembershipService';
 import { listArchivedIntakeProjectNames } from '../services/rfpProposalService';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 import { getUserEmail } from '../utils/requestUser';
+import { isDevAccessAllowlisted } from '../services/devEnvAllowlistService';
 import type { CreateProjectAccessRequestsRequest } from '../../shared/types/platformAdmin';
 import { requireGroupMembership, requirePermission, requireProjectAccess } from '../middleware/rbac';
 import {
@@ -66,11 +67,13 @@ import {
 import runGroundingsRouter from './runGroundings';
 import diagramsRouter from './diagrams';
 import rfpIntakeRouter from './rfpIntake';
+import playbooksRouter from './playbooks';
 const router = express.Router();
 
 router.use('/run-groundings', runGroundingsRouter);
 router.use('/projects/:projectId/diagrams', diagramsRouter);
 router.use('/rfp-intake', rfpIntakeRouter);
+router.use('/playbooks', playbooksRouter);
 // GET /api/available-models — accessible to all authenticated users so that
 // non-admin roles (e.g. interviews:manage) can populate model dropdowns.
 router.get('/available-models', async (_req: Request, res: Response) => {
@@ -398,11 +401,19 @@ router.post('/cycle-time', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/health - Health check endpoint
+// GET /api/health - ADO connectivity check.
+// Production App Service still probes this path. The ADO client default socket
+// timeout is 120s, which is longer than the health-check ping, so a stalled
+// /_apis/Location call is recorded as HTTP 499 and the worker is marked
+// unhealthy. Bound this call so the probe gets a response either way.
+const HEALTH_CHECK_SOCKET_TIMEOUT_MS = 8_000;
+
 router.get('/health', async (req: Request, res: Response) => {
   try {
     // Health check uses default project from env
-    const adoService = new AzureDevOpsService();
+    const adoService = new AzureDevOpsService(undefined, undefined, {
+      socketTimeout: HEALTH_CHECK_SOCKET_TIMEOUT_MS,
+    });
     const healthy = await adoService.healthCheck();
     res.json({ healthy, timestamp: new Date().toISOString() });
   } catch (error: any) {
@@ -1409,6 +1420,25 @@ router.get('/releases/:epicId/related-items', async (req: Request, res: Response
   } catch (error: any) {
     console.error('Error fetching related items:', error);
     res.status(500).json({ error: 'Failed to fetch related items' });
+  }
+});
+
+// GET /api/releases/:epicId/cycle-time — last In Progress → last Done/Closed for related items
+router.get('/releases/:epicId/cycle-time', async (req: Request, res: Response) => {
+  try {
+    const epicId = parseInt(req.params.epicId, 10);
+    const { project, areaPath } = req.query as { project?: string; areaPath?: string };
+
+    if (isNaN(epicId)) {
+      return res.status(400).json({ error: 'Invalid epic ID' });
+    }
+
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const cycleTime = await adoService.getRelatedItemsCycleTime(epicId);
+    res.json(cycleTime);
+  } catch (error: any) {
+    console.error('Error fetching related items cycle time:', error);
+    res.status(500).json({ error: 'Failed to fetch related items cycle time' });
   }
 });
 
@@ -4031,8 +4061,15 @@ router.post('/ai-capability-baseline/auto-capture', async (req: Request, res: Re
 // ensureAuthenticated is applied upstream in index.ts for all /api routes.
 
 import { attachPermissions } from '../middleware/rbac';
-import { getUserPermissions, getUserRoleNames } from '../services/rbacService';
-import { getUserGroupNames } from '../services/groupService';
+import { getUserPermissions, getUserRoleNames, getChangelogPrefs, updateChangelogPrefs } from '../services/rbacService';
+import { getUserGroupNames, getUserGroupIds } from '../services/groupService';
+import { resolveHomePillAccess } from '../services/homePillAccessResolver';
+import type {
+  QuickMcpPill,
+  QuickMcpPillHttp,
+  QuickMcpPillStdio,
+  QuickSkillPill,
+} from '../../shared/types/projectSettings';
 import { getMenuConfig } from '../services/menuSettingsService';
 import { DEFAULT_ENABLED_MENU_VIEWS } from '../../shared/types/menuSettings';
 import {
@@ -4049,6 +4086,11 @@ import {
   getRestrictedAccessByEmail,
 } from '../services/restrictedAccessService';
 import { RESTRICTED_ACCESS_PROJECT } from '../../shared/types/restrictedAccess';
+import {
+  isGenerationSoundId,
+  normalizeGenerationSoundPreferences,
+} from '../../shared/types/notification';
+import type { UpdatePreferencesRequest } from '../../shared/types/rbac';
 
 router.get('/changelog', async (_req: Request, res: Response): Promise<void> => {
   try {
@@ -4083,26 +4125,38 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       ? req.query.project
       : (restrictedActive ? RESTRICTED_ACCESS_PROJECT : undefined);
 
-    const [permSet, roles, userGroups, whatsNew] = await Promise.all([
+    const [permSet, roles, userGroups, whatsNew, changelogPrefs, devAccessAllowlisted] = await Promise.all([
       getUserPermissions(userId, project),
       getUserRoleNames(userId),
       getUserGroupNames(userId),
       evaluateWhatsNewState(userId),
+      getChangelogPrefs(userId),
+      email ? isDevAccessAllowlisted(email) : Promise.resolve(false),
     ]);
     if (superAdmin && !roles.includes('admin')) {
       roles.push('admin');
     }
+    const soundPrefs = normalizeGenerationSoundPreferences({
+      generationSoundEnabled: changelogPrefs.generationSoundEnabled,
+      generationSoundId: isGenerationSoundId(changelogPrefs.generationSoundId)
+        ? changelogPrefs.generationSoundId
+        : undefined,
+    });
     res.json({
       permissions: [...permSet],
       roles,
       groups: userGroups,
       userId,
       isSuperAdmin: superAdmin,
+      devAccessAllowlisted,
       // Legacy compatibility fields — sourced from the same WhatsNewState
       changelogUnread: whatsNew.unread,
       currentChangelogVersion: whatsNew.currentVersion ?? '',
       lastSeenChangelogVersion: whatsNew.lastSeenVersion,
       showChangelogOnLogin: whatsNew.showOnLogin,
+      betaAnnouncementDismissed: changelogPrefs.dismissedBetaProdAnnouncement,
+      generationSoundEnabled: soundPrefs.generationSoundEnabled,
+      generationSoundId: soundPrefs.generationSoundId,
       whatsNew,
       restrictedAccess: restrictedActive && restricted
         ? { modules: restricted.modules, project: RESTRICTED_ACCESS_PROJECT }
@@ -4113,9 +4167,30 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
   }
 });
 
+// ── GET /api/me/preferences ───────────────────────────────────────────────────
+// Returns the authenticated user's UI preferences (generation sound, etc.).
+
+router.get('/me/preferences', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = (req.user as any)?.profile?.oid;
+    if (!userId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const prefs = await getChangelogPrefs(userId);
+    const soundPrefs = normalizeGenerationSoundPreferences({
+      generationSoundEnabled: prefs.generationSoundEnabled,
+      generationSoundId: prefs.generationSoundId,
+    });
+    res.json(soundPrefs);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // ── PATCH /api/me/preferences ─────────────────────────────────────────────────
 // Updates the authenticated user's preferences.
-// Body: { markChangelogRead?: boolean; lastSeenVersion?: string; showChangelogOnLogin?: boolean }
+// Body: { markChangelogRead?: boolean; lastSeenVersion?: string; showChangelogOnLogin?: boolean; dismissBetaAnnouncement?: boolean; generationSoundEnabled?: boolean; generationSoundId?: string }
 
 router.patch('/me/preferences', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -4124,11 +4199,14 @@ router.patch('/me/preferences', async (req: Request, res: Response): Promise<voi
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    const { markChangelogRead, lastSeenVersion, showChangelogOnLogin } = req.body as {
-      markChangelogRead?: boolean;
-      lastSeenVersion?: string;
-      showChangelogOnLogin?: boolean;
-    };
+    const {
+      markChangelogRead,
+      lastSeenVersion,
+      showChangelogOnLogin,
+      dismissBetaAnnouncement,
+      generationSoundEnabled,
+      generationSoundId,
+    } = req.body as UpdatePreferencesRequest;
 
     let whatsNew = await evaluateWhatsNewState(userId);
 
@@ -4154,7 +4232,35 @@ router.patch('/me/preferences', async (req: Request, res: Response): Promise<voi
       whatsNew = await updateWhatsNewPreference(userId, showChangelogOnLogin);
     }
 
-    res.json({ ok: true, whatsNew });
+    if (dismissBetaAnnouncement === true) {
+      await updateChangelogPrefs(userId, { dismissedBetaProdAnnouncement: true });
+    }
+
+    if (
+      typeof generationSoundEnabled === 'boolean'
+      || generationSoundId !== undefined
+    ) {
+      if (generationSoundId !== undefined && !isGenerationSoundId(generationSoundId)) {
+        res.status(400).json({ error: 'Invalid generationSoundId' });
+        return;
+      }
+      await updateChangelogPrefs(userId, {
+        ...(typeof generationSoundEnabled === 'boolean'
+          ? { generationSoundEnabled }
+          : {}),
+        ...(generationSoundId !== undefined
+          ? { generationSoundId }
+          : {}),
+      });
+    }
+
+    const prefs = await getChangelogPrefs(userId);
+    const soundPrefs = normalizeGenerationSoundPreferences({
+      generationSoundEnabled: prefs.generationSoundEnabled,
+      generationSoundId: prefs.generationSoundId,
+    });
+
+    res.json({ ok: true, whatsNew, ...soundPrefs });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -4202,6 +4308,60 @@ router.get('/skill-settings/:id/repository-readiness', async (req: Request, res:
   }
 });
 
+// ── Public Home pill shaping (FEAT-002 TBI-004) ──────────────────────────────
+//
+// The public skill-config response must never carry pill allow-lists, so each
+// pill is rebuilt field by field instead of spread. A field added to the stored
+// pill type stays out of the public payload until it is listed here.
+
+type PublicQuickSkillPill = Omit<QuickSkillPill, 'allowedUserIds' | 'allowedGroupIds'>;
+type PublicQuickMcpPill =
+  | Omit<QuickMcpPillHttp, 'allowedUserIds' | 'allowedGroupIds'>
+  | Omit<QuickMcpPillStdio, 'allowedUserIds' | 'allowedGroupIds'>;
+
+/** Drop keys the stored pill never set, so absent stays absent rather than becoming null. */
+function omitUndefined<T extends object>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, v]) => v !== undefined),
+  ) as T;
+}
+
+function toPublicSkillPill(pill: QuickSkillPill): PublicQuickSkillPill {
+  return omitUndefined({
+    label: pill.label,
+    skillPath: pill.skillPath,
+    model: pill.model,
+    effort: pill.effort,
+    description: pill.description,
+    bypassScopePolicy: pill.bypassScopePolicy,
+  });
+}
+
+function toPublicMcpPill(pill: QuickMcpPill): PublicQuickMcpPill {
+  const shared = {
+    label: pill.label,
+    description: pill.description,
+    mcpServerName: pill.mcpServerName,
+    model: pill.model,
+    effort: pill.effort,
+    systemPromptHint: pill.systemPromptHint,
+  };
+  return pill.transport === 'stdio'
+    ? omitUndefined({
+        ...shared,
+        transport: 'stdio' as const,
+        command: pill.command,
+        args: pill.args,
+        env: pill.env,
+      })
+    : omitUndefined({
+        ...shared,
+        transport: 'http' as const,
+        url: pill.url,
+        headers: pill.headers,
+      });
+}
+
 // GET /api/skill-config?project=<name>&settingsId=<uuid> — resolve project skill settings
 router.get('/skill-config', async (req: Request, res: Response) => {
   try {
@@ -4218,6 +4378,28 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       res.status(404).json({ error: 'No skill config found' });
       return;
     }
+
+    // Home pills are filtered to what this caller may see. The caller's live
+    // group IDs only change the outcome when some pill names a group, and a
+    // verified Platform Admin sees everything, so both cases skip the lookup.
+    const callerId = getUserId(req);
+    const isSuperAdmin = isSuperAdminRequest(req);
+    const anyPillNamesGroup = [
+      ...(config.quickSkillPills ?? []),
+      ...(config.quickMcpPills ?? []),
+    ].some((pill) => (pill.allowedGroupIds?.length ?? 0) > 0);
+    const callerGroupIds =
+      !isSuperAdmin && anyPillNamesGroup ? await getUserGroupIds(callerId) : [];
+    const { allowedSkillPills, allowedMcpPills } = resolveHomePillAccess({
+      skillPills: config.quickSkillPills,
+      mcpPills: config.quickMcpPills,
+      callerId,
+      callerGroupIds,
+      isSuperAdmin,
+    });
+    const configuredPillCount =
+      (config.quickSkillPills?.length ?? 0) + (config.quickMcpPills?.length ?? 0);
+
     res.json({
       id: config.id,
       project: config.project,
@@ -4252,8 +4434,29 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       prototypeDesignSystemPath: config.prototypeDesignSystemPath ?? null,
       screenInventoryPath: config.screenInventoryPath ?? null,
       prototypeWebReferencesEnabled: config.prototypeWebReferencesEnabled ?? false,
-      quickSkillPills: config.quickSkillPills ?? null,
-      quickMcpPills: config.quickMcpPills ?? null,
+      quickSkillPills: allowedSkillPills.map(toPublicSkillPill),
+      quickMcpPills: allowedMcpPills.map(toPublicMcpPill),
+      homePillsConfigured: configuredPillCount > 0,
+      interviewEffort: config.interviewEffort ?? null,
+      prdEffort: config.prdEffort ?? null,
+      adrEffort: config.adrEffort ?? null,
+      designDocEffort: config.designDocEffort ?? null,
+      designDocAssistantEffort: config.designDocAssistantEffort ?? null,
+      designPrototypeEffort: config.designPrototypeEffort ?? null,
+      testCaseEffort: config.testCaseEffort ?? null,
+      designDocValidationEffort: config.designDocValidationEffort ?? null,
+      prdAssistantEffort: config.prdAssistantEffort ?? null,
+      prdValidationEffort: config.prdValidationEffort ?? null,
+      developmentEffort: config.developmentEffort ?? null,
+      standupEffort: config.standupEffort ?? null,
+      featureRequestEffort: config.featureRequestEffort ?? null,
+      technicalEffort: config.technicalEffort ?? null,
+      issueEffort: config.issueEffort ?? null,
+      calendarAssistantEffort: config.calendarAssistantEffort ?? null,
+      loadTestGenerationEffort: config.loadTestGenerationEffort ?? null,
+      designModuleEffort: config.designModuleEffort ?? null,
+      designModuleScopingEffort: config.designModuleScopingEffort ?? null,
+      defaultEffort: config.defaultEffort ?? null,
     });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
@@ -4371,6 +4574,7 @@ router.post(
 
         const thread = await createThread(userId, {
           project,
+          agentModule: 'calendarAssistant',
           repo: skillConfig?.skillRepo ?? project,
           branch: skillConfig?.skillBranch ?? 'main',
           skillProvider: (skillConfig?.skillProvider as any) ?? 'ado',

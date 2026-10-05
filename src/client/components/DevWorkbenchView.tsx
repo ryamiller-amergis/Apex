@@ -1,23 +1,37 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppShell } from '../hooks/useAppShell';
 import {
   useActiveSessions,
+  useAssignedBacklog,
   useAssignedWorkItems,
   useCloseDevSession,
   useCompleteFeature,
-  useStartDevSession,
+  useCloudAgentActivityStream,
+  useCloudAgentRun,
+  useCloudAgentRunHistory,
+  useDevSession,
+  useCancelCloudAgentRun,
+  useStartCloudAgentRun,
   useStartLocalFeature,
 } from '../hooks/useDevWorkbench';
+import { useFeatureFlag } from '../hooks/useFeatureFlags';
+import { MY_WORK_CLOUD_AGENT_FLAG } from '../../shared/types/featureFlags';
 import { useApexBacklogFeatures } from '../hooks/useApexBacklog';
 import { useAssignedBoardItems } from '../hooks/useApexWorkItems';
 import type { ApexWorkItem } from '../../shared/types/apexWorkItem';
+import type { FeatureRequest } from '../../shared/types/featureRequest';
 import { STATUS_META } from '../../shared/types/apexWorkItem';
-import type { BacklogFeatureItem, ActiveDevSession, ApexBacklogGroup } from '../../shared/types/devWorkbench';
-import {
-  evaluateDevStartEligibility,
-  isAppNativeRequirementsProject,
+import type {
+  AssignedWorkItem,
+  BacklogFeatureItem,
+  ActiveDevSession,
+  ApexBacklogGroup,
+  CloudAgentActivityEvent,
+  CloudAgentRunSummary,
 } from '../../shared/types/devWorkbench';
+import { isAppNativeRequirementsProject } from '../../shared/types/devWorkbench';
+import { queuePlaceLabel } from '../../shared/utils/queuePlace';
 import {
   computeFeatureWorkStatus,
   formatMyWorkStatusLabel,
@@ -26,7 +40,165 @@ import {
 } from '../../shared/utils/myWorkStatus';
 import StartLocalDevModal, { type StartLocalDevTarget } from './StartLocalDevModal';
 import FeatureContextModal from './FeatureContextModal';
+import { LeftoverWorkList } from './LeftoverWorkList';
+import { CurrentRunChecksSummary } from './CurrentRunChecksSummary';
+import {
+  isInterviewableWorkItemType,
+  toFeatureRequestInterviewPrefill,
+} from '../utils/featureRequestInterview';
 import styles from './DevWorkbenchView.module.css';
+
+const formatBacklogLabel = (value: string) =>
+  value
+    .split('-')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+
+const AssignedBacklogSection: React.FC<{ project: string }> = ({ project }) => {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { can, isInAnyGroup, permissionsLoaded } = useAppShell();
+  const { data: items, isLoading, error } = useAssignedBacklog(project);
+  const [selectedItem, setSelectedItem] = useState<FeatureRequest | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  const handledDeepLinkRef = useRef<string | null>(null);
+  const deepLinkId =
+    searchParams.get('section') === 'backlog' ? searchParams.get('itemId') : null;
+  const canStartInterview =
+    permissionsLoaded
+    && can('interviews:manage')
+    && isInAnyGroup(['BA', 'Manager', 'Product-Owner']);
+
+  const openInterview = (item: FeatureRequest) => {
+    if (item.interviewId) {
+      navigate(`/backlog/interview/${item.interviewId}`);
+      return;
+    }
+    navigate('/backlog/interview/new', {
+      state: { featureRequest: toFeatureRequestInterviewPrefill(item) },
+    });
+  };
+
+  useEffect(() => {
+    if (!deepLinkId) {
+      handledDeepLinkRef.current = null;
+      return;
+    }
+    // Wait for a resolved list. Loading and query errors leave `items` undefined,
+    // and those must not be treated as "item no longer available."
+    if (items === undefined || handledDeepLinkRef.current === deepLinkId) return;
+    handledDeepLinkRef.current = deepLinkId;
+    const match = items.find((item) => item.id === deepLinkId);
+    if (match) {
+      sectionRef.current?.scrollIntoView({ block: 'start' });
+      setSelectedItem(match);
+    } else {
+      setToastMessage('This assigned backlog item is no longer available.');
+    }
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('section');
+      next.delete('itemId');
+      return next;
+    }, { replace: true });
+  }, [deepLinkId, items, setSearchParams]);
+
+  return (
+    <>
+      <section
+        ref={sectionRef}
+        className={styles.section}
+        aria-labelledby="assigned-backlog-heading"
+        {...{ 'data-testid': 'my-work-assigned-backlog-section' }}
+      >
+        <div className={styles['section-header']}>
+          <h2 id="assigned-backlog-heading">Assigned Backlog</h2>
+          <p>Apex Backlog items assigned to you</p>
+        </div>
+        {isLoading && <div className={styles.loading}>Loading assigned backlog…</div>}
+        {error && <div className={styles.error}>Failed to load assigned backlog: {error.message}</div>}
+        {!isLoading && !error && (!items || items.length === 0) && (
+          <div
+            className={styles['section-empty']}
+            {...{ 'data-testid': 'my-work-assigned-backlog-empty' }}
+          >
+            No Apex Backlog items assigned to you.
+          </div>
+        )}
+        {!!items?.length && (
+          <div className={styles.list} {...{ 'data-testid': 'my-work-assigned-backlog-list' }}>
+            {items.map((item) => {
+              const interviewable = isInterviewableWorkItemType(item.type);
+              const showInterview = interviewable && (!!item.interviewId || canStartInterview);
+              return (
+                <div
+                  key={item.id}
+                  className={styles.item}
+                  {...{ 'data-testid': `my-work-assigned-backlog-row-${item.id}` }}
+                >
+                  <div className={styles['item-info']}>
+                    <span className={styles['item-title']}>{item.title}</span>
+                    <div className={styles['item-meta']}>
+                      <span className={styles.badge}>{formatBacklogLabel(item.type)}</span>
+                      <span className={styles.badge}>{formatBacklogLabel(item.status)}</span>
+                      {item.teamPriority && (
+                        <span className={styles.badge}>
+                          Priority: {formatBacklogLabel(item.teamPriority)}
+                        </span>
+                      )}
+                    </div>
+                    <p className={styles['assigned-request']}>{item.request}</p>
+                  </div>
+                  <div className={styles['item-actions']}>
+                    <button
+                      type="button"
+                      className={styles['assigned-view-btn']}
+                      onClick={() => setSelectedItem(item)}
+                      {...{ 'data-testid': `my-work-assigned-backlog-view-context-${item.id}` }}
+                    >
+                      View Context
+                    </button>
+                    {showInterview && (
+                      <button
+                        type="button"
+                        className={styles['assigned-interview-btn']}
+                        onClick={() => openInterview(item)}
+                        {...{ 'data-testid': `my-work-assigned-backlog-interview-${item.id}` }}
+                      >
+                        {item.interviewId ? 'Open Interview' : 'Start Interview'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {toastMessage && (
+        <div
+          className={styles.toast}
+          role="alert"
+          {...{ 'data-testid': 'my-work-assigned-backlog-toast' }}
+        >
+          {toastMessage}
+        </div>
+      )}
+
+      {selectedItem && (
+        // data-testid-exempt — FeatureContextModal root already sets data-testid
+        <FeatureContextModal
+          project={project}
+          viewMode="intake"
+          intakeItem={selectedItem}
+          onClose={() => setSelectedItem(null)}
+        />
+      )}
+    </>
+  );
+};
 
 const BoardAssignedSection: React.FC<{ project: string }> = ({ project }) => {
   const navigate = useNavigate();
@@ -36,7 +208,7 @@ const BoardAssignedSection: React.FC<{ project: string }> = ({ project }) => {
     <section
       className={styles.section}
       aria-labelledby="board-assigned-heading"
-      data-testid="my-work-board-assigned-section"
+      {...{ 'data-testid': 'my-work-board-assigned-section' }}
     >
       <div className={styles['section-header']}>
         <h2 id="board-assigned-heading">Work Board assignments</h2>
@@ -45,12 +217,12 @@ const BoardAssignedSection: React.FC<{ project: string }> = ({ project }) => {
       {isLoading && <div className={styles.loading}>Loading board items…</div>}
       {error && <div className={styles.error}>Failed to load board items: {error.message}</div>}
       {!isLoading && !error && (!boardItems || boardItems.length === 0) && (
-        <div className={styles['section-empty']} data-testid="my-work-board-assigned-empty">
+        <div className={styles['section-empty']} {...{ 'data-testid': 'my-work-board-assigned-empty' }}>
           No Work Board items assigned to you.
         </div>
       )}
       {!!boardItems?.length && (
-        <div className={styles.list} data-testid="my-work-board-assigned-list">
+        <div className={styles.list} {...{ 'data-testid': 'my-work-board-assigned-list' }}>
           {boardItems.map((item: ApexWorkItem) => (
             <div key={item.id} className={styles.item}>
               <div className={styles['item-info']}>
@@ -68,7 +240,7 @@ const BoardAssignedSection: React.FC<{ project: string }> = ({ project }) => {
                   type="button"
                   className={styles['view-context-btn']}
                   onClick={() => navigate(`/work-board?item=${encodeURIComponent(item.id)}`)}
-                  data-testid={`my-work-board-item-link-${item.itemNumber}`}
+                  {...{ 'data-testid': `my-work-board-item-link-${item.itemNumber}` }}
                 >
                   Open on board
                 </button>
@@ -79,6 +251,823 @@ const BoardAssignedSection: React.FC<{ project: string }> = ({ project }) => {
       )}
     </section>
   );
+};
+
+const TIMED_OUT_REASONS = new Set(['queue_ttl', 'cloud_agent_timeout']);
+
+function cloudRunStatusText(run: CloudAgentRunSummary): string {
+  switch (run.status) {
+    case 'queued':
+      return run.queuePosition ? queuePlaceLabel(run.queuePosition) : 'Queued';
+    case 'dispatched':
+      return 'Starting';
+    case 'running':
+      return 'Running';
+    case 'completed':
+      // A run without a PR is still terminal; CurrentRunChecksSummary owns that copy.
+      return run.finishedWithoutPr ? 'Finished' : 'Completed';
+    case 'failed':
+      return run.terminalReason && TIMED_OUT_REASONS.has(run.terminalReason)
+        ? 'Timed out'
+        : 'Failed';
+    case 'cancelled':
+      return 'Cancelled';
+  }
+}
+
+/**
+ * Host-agnostic PR lifecycle label for the row (PBI-007 AC-0 / AC-2). Returns
+ * null when there is nothing to say, so `none` renders no text at all. The label
+ * carries the meaning on its own — no color-only status (accessibility NFR).
+ */
+function prStatusText(run: CloudAgentRunSummary): string | null {
+  if (!run.prUrl) return null;
+  switch (run.prStatus) {
+    case 'open':
+      return 'Open';
+    case 'abandoned':
+      return 'Abandoned';
+    case 'merged':
+      return 'Merged';
+    case 'none':
+      return null;
+  }
+}
+
+const DEFAULT_RUN_DRAWER_WIDTH = 440;
+const MIN_RUN_DRAWER_WIDTH = 360;
+const MAX_RUN_DRAWER_WIDTH = 1100;
+const RUN_DRAWER_WIDTH_KEY = 'my-work.cloud-run-drawer-width';
+
+function readStoredRunDrawerWidth(): number {
+  const stored = Number(window.localStorage.getItem(RUN_DRAWER_WIDTH_KEY));
+  if (!Number.isFinite(stored) || stored <= 0) return DEFAULT_RUN_DRAWER_WIDTH;
+  return Math.min(MAX_RUN_DRAWER_WIDTH, Math.max(MIN_RUN_DRAWER_WIDTH, stored));
+}
+
+interface CloudRunDrawerProps {
+  item: AssignedWorkItem;
+  run: CloudAgentRunSummary;
+  sessionId: string | null;
+  isLive: boolean;
+  onClose: () => void;
+  'data-testid'?: string;
+}
+
+/** Copies text without relying on clipboard permission being granted. */
+function copyToClipboard(value: string): void {
+  navigator.clipboard?.writeText(value).catch(() => {
+    const textarea = document.createElement('textarea');
+    textarea.value = value;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'absolute';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+  });
+}
+
+const CopyableId: React.FC<{
+  label: string;
+  value: string;
+  testId: string;
+}> = ({ label, value, testId }) => {
+  const [copied, setCopied] = useState(false);
+  const resetTimerRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (resetTimerRef.current !== null) window.clearTimeout(resetTimerRef.current);
+  }, []);
+
+  const handleCopy = () => {
+    copyToClipboard(value);
+    setCopied(true);
+    if (resetTimerRef.current !== null) window.clearTimeout(resetTimerRef.current);
+    resetTimerRef.current = window.setTimeout(() => {
+      setCopied(false);
+      resetTimerRef.current = null;
+    }, 2000);
+  };
+
+  return (
+    <div className={styles['copyable-cell']}>
+      <span>{label}</span>
+      {copied ? (
+        <span className={styles['copied-flag']} role="status">
+          Copied
+        </span>
+      ) : null}
+      <div className={styles['copyable-id']}>
+        <code title={value}>{value}</code>
+        <button
+          type="button"
+          className={styles['copy-id-btn']}
+          onClick={handleCopy}
+          aria-label={copied ? `${label} copied` : `Copy ${label}`}
+          title={copied ? 'Copied' : `Copy ${label}`}
+          data-copied={copied ? 'true' : undefined}
+          {...{ 'data-testid': testId }}
+        >
+          {copied ? (
+            <svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M20 6 9 17l-5-5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          ) : (
+            <svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true">
+              <rect
+                x="9"
+                y="9"
+                width="11"
+                height="11"
+                rx="2"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              />
+              <path
+                d="M5 15V5a2 2 0 0 1 2-2h8"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          )}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+function activityTitle(event: CloudAgentActivityEvent): string {
+  if (event.kind !== 'tool' || !event.detail) return event.title;
+  return `${event.title} · ${event.detail}`;
+}
+
+function emptyActivityCopy(run: CloudAgentRunSummary): { title: string; detail: string } {
+  switch (run.status) {
+    case 'queued':
+      return run.queuePosition
+        ? {
+            title: queuePlaceLabel(run.queuePosition),
+            detail: 'This run starts when a container is free.',
+          }
+        : { title: 'Queued', detail: 'Waiting for the cloud agent to start.' };
+    case 'dispatched':
+    case 'running':
+      return {
+        title: cloudRunStatusText(run),
+        detail: 'Updates will appear here when available.',
+      };
+    case 'completed':
+      return {
+        title: 'No activity recorded',
+        detail: run.finishedWithoutPr ? 'Run finished without a pull request.' : '',
+      };
+    case 'failed':
+      return {
+        title: cloudRunStatusText(run),
+        detail: run.lastError ?? 'No activity recorded.',
+      };
+    case 'cancelled':
+      return {
+        title: 'Run cancelled',
+        detail: 'No activity recorded.',
+      };
+  }
+}
+
+const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
+  item,
+  run,
+  sessionId,
+  isLive,
+  onClose,
+  'data-testid': testId,
+}) => {
+  const [drawerWidth, setDrawerWidth] = useState(readStoredRunDrawerWidth);
+  const [isResizing, setIsResizing] = useState(false);
+  const activityRef = useRef<HTMLDivElement | null>(null);
+  const dragStartXRef = useRef(0);
+  const dragStartWidthRef = useRef(DEFAULT_RUN_DRAWER_WIDTH);
+  const resizeJustEndedRef = useRef(false);
+
+  const activity = useCloudAgentActivityStream(
+    sessionId,
+    run.runId,
+    run.status !== 'queued',
+  );
+  const emptyActivity = emptyActivityCopy(run);
+  const history = useCloudAgentRunHistory(sessionId, true);
+
+  const handleResizeMouseDown = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dragStartXRef.current = event.clientX;
+    dragStartWidthRef.current = drawerWidth;
+    setIsResizing(true);
+  };
+
+  const handleBackdropClick = () => {
+    // A drag released over the backdrop synthesizes a click here; ignore that one.
+    if (resizeJustEndedRef.current) {
+      resizeJustEndedRef.current = false;
+      return;
+    }
+    onClose();
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!isResizing) return;
+    const onMouseMove = (event: MouseEvent) => {
+      const delta = dragStartXRef.current - event.clientX;
+      setDrawerWidth(
+        Math.min(
+          MAX_RUN_DRAWER_WIDTH,
+          Math.max(MIN_RUN_DRAWER_WIDTH, dragStartWidthRef.current + delta),
+        ),
+      );
+    };
+    const onMouseUp = () => {
+      resizeJustEndedRef.current = true;
+      setIsResizing(false);
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    return () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizing]);
+
+  useEffect(() => {
+    if (isResizing) return;
+    window.localStorage.setItem(RUN_DRAWER_WIDTH_KEY, String(drawerWidth));
+  }, [drawerWidth, isResizing]);
+
+  useEffect(() => {
+    const element = activityRef.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  }, [activity.events]);
+
+  return (
+    <>
+      <button
+        type="button"
+        className={styles['run-drawer-backdrop']}
+        aria-label="Close cloud run details"
+        onClick={handleBackdropClick}
+        {...{ 'data-testid': `my-work-cloud-run-drawer-backdrop-${item.id}` }}
+      />
+      <aside
+        className={`${styles['run-drawer']}${isResizing ? ` ${styles['run-drawer-resizing']}` : ''}`}
+        style={{ width: drawerWidth }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`cloud-run-drawer-title-${item.id}`}
+        {...{ 'data-testid': testId ?? `my-work-cloud-run-drawer-${item.id}` }}
+      >
+        <div
+          className={styles['run-drawer-resize-handle']}
+          onMouseDown={handleResizeMouseDown}
+          onDoubleClick={() => setDrawerWidth(DEFAULT_RUN_DRAWER_WIDTH)}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize cloud run details panel"
+          title="Drag to resize · double-click to reset"
+          {...{ 'data-testid': `my-work-cloud-run-drawer-resize-${item.id}` }}
+        />
+        <header className={styles['run-drawer-header']}>
+          <div>
+            <span className={styles['run-drawer-eyebrow']}>Cloud agent run</span>
+            <h2 id={`cloud-run-drawer-title-${item.id}`}>{item.title}</h2>
+            <span className={styles['run-drawer-work-item']}>Work item #{item.id}</span>
+          </div>
+          <button
+            type="button"
+            className={styles['run-drawer-close']}
+            aria-label="Close cloud run details"
+            onClick={onClose}
+            {...{ 'data-testid': `my-work-cloud-run-drawer-close-${item.id}` }}
+          >
+            ×
+          </button>
+        </header>
+
+        <div className={styles['run-drawer-body']}>
+          <section className={styles['run-overview']} aria-label="Run overview">
+            <div>
+              <span>Status</span>
+              <strong className={styles['run-overview-status']} data-status={run.status}>
+                <i aria-hidden="true" />
+                {cloudRunStatusText(run)}
+              </strong>
+              {run.status === 'failed' && run.lastError ? (
+                <p
+                  className={styles['run-failure-detail']}
+                  role="alert"
+                  {...{ 'data-testid': `my-work-cloud-run-error-${item.id}` }}
+                >
+                  {run.lastError}
+                </p>
+              ) : null}
+            </div>
+            {run.jobName ? (
+              <CopyableId
+                label="Container job"
+                value={run.jobName}
+                testId={`my-work-copy-job-name-${item.id}`}
+              />
+            ) : (
+              <div>
+                <span>Container job</span>
+                <code>Not recorded</code>
+              </div>
+            )}
+            {run.executionName ? (
+              <CopyableId
+                label="Execution"
+                value={run.executionName}
+                testId={`my-work-copy-execution-name-${item.id}`}
+              />
+            ) : (
+              <div>
+                <span>Execution</span>
+                <code>Not recorded</code>
+              </div>
+            )}
+          </section>
+
+          <details className={styles['run-technical-details']}>
+            <summary>Technical details</summary>
+            <div>
+              <CopyableId
+                label="Apex run ID"
+                value={run.runId}
+                testId={`my-work-copy-run-id-${item.id}`}
+              />
+              {sessionId ? (
+                <CopyableId
+                  label="Apex session ID"
+                  value={sessionId}
+                  testId={`my-work-copy-session-id-${item.id}`}
+                />
+              ) : null}
+            </div>
+          </details>
+
+          <section className={styles['run-history']} aria-labelledby={`cloud-run-history-${item.id}`}>
+            <div className={styles['run-history-heading']}>
+              <h3 id={`cloud-run-history-${item.id}`}>Run history</h3>
+              <p>Cloud executions and their pull-request outcomes.</p>
+            </div>
+            {history.isLoading ? (
+              <p className={styles['run-history-message']}>Loading run history…</p>
+            ) : history.error ? (
+              <p className={styles['run-history-message']}>Run history is unavailable.</p>
+            ) : (
+              <div className={styles['run-history-list']}>
+                {(history.data?.length ? history.data : [run]).map((historyRun) => (
+                  <div
+                    key={historyRun.runId}
+                    className={styles['run-history-item']}
+                    data-status={historyRun.status}
+                  >
+                    <div>
+                      <strong>{cloudRunStatusText(historyRun)}</strong>
+                      <span>
+                        {historyRun.executionName ?? 'Execution not recorded'}
+                        {historyRun.createdAt && historyRun.createdAt !== new Date(0).toISOString()
+                          ? ` · ${new Date(historyRun.createdAt).toLocaleString()}`
+                          : ''}
+                      </span>
+                    </div>
+                    {historyRun.prUrl ? (
+                      <a
+                        href={historyRun.prUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        {...{ 'data-testid': `my-work-cloud-run-history-pr-${historyRun.runId}` }}
+                      >
+                        {prStatusText(historyRun) ?? 'PR'} ↗
+                      </a>
+                    ) : (
+                      <span>No PR</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section
+            className={`${styles['run-activity']}${
+              !isLive && activity.events.length === 0 ? ` ${styles['run-activity-compact']}` : ''
+            }`}
+            aria-labelledby={`cloud-run-activity-${item.id}`}
+          >
+            <div className={styles['run-activity-heading']}>
+              <div>
+                <h3 id={`cloud-run-activity-${item.id}`}>Activity</h3>
+                <p>
+                  {isLive
+                    ? 'Agent activity appears here when available.'
+                    : activity.events.length > 0
+                      ? 'Activity captured during this run.'
+                      : 'No step-by-step activity for this run.'}
+                </p>
+              </div>
+              {isLive && activity.isConnected ? (
+                <span className={styles['live-indicator']}>Live</span>
+              ) : null}
+            </div>
+            <div
+              ref={activityRef}
+              className={styles['run-activity-stream']}
+              aria-live="polite"
+              {...{ 'data-testid': `my-work-cloud-run-activity-${item.id}` }}
+            >
+              {activity.events.length > 0 ? activity.events.map((event) => (
+                <div
+                  key={event.id}
+                  className={styles['run-activity-event']}
+                  data-kind={event.kind}
+                  data-status={event.status}
+                >
+                  <i aria-hidden="true" />
+                  <div>
+                    <strong>{activityTitle(event)}</strong>
+                    {event.kind !== 'tool' && event.detail ? <span>{event.detail}</span> : null}
+                  </div>
+                </div>
+              )) : (
+                <div className={styles['run-activity-event']}>
+                  <i aria-hidden="true" />
+                  <div>
+                    <strong>{emptyActivity.title}</strong>
+                    {emptyActivity.detail ? <span>{emptyActivity.detail}</span> : null}
+                  </div>
+                </div>
+              )}
+              {activity.error ? (
+                <p className={styles['run-activity-error']} role="status">
+                  {activity.error}
+                </p>
+              ) : null}
+            </div>
+          </section>
+
+          {run.prUrl ? (
+            <a
+              className={styles['run-drawer-pr']}
+              href={run.prUrl}
+              target="_blank"
+              rel="noreferrer"
+              {...{ 'data-testid': `my-work-cloud-run-drawer-pr-${item.id}` }}
+            >
+              Open pull request <span aria-hidden="true">↗</span>
+            </a>
+          ) : null}
+        </div>
+      </aside>
+    </>
+  );
+};
+
+const CloudAgentEnabledRowAction: React.FC<{
+  item: AssignedWorkItem;
+  project: string;
+  activeSession?: ActiveDevSession;
+  /** True until the first active-sessions response arrives. */
+  cloudStatusPending: boolean;
+  /** True when that response failed and there is no session data to trust. */
+  cloudStatusUnavailable: boolean;
+}> = ({ item, project, activeSession, cloudStatusPending, cloudStatusUnavailable }) => {
+  const startCloud = useStartCloudAgentRun();
+  const cancelCloud = useCancelCloudAgentRun();
+  const [startedSessionId, setStartedSessionId] = useState<string | null>(null);
+  const [optimisticRun, setOptimisticRun] = useState<CloudAgentRunSummary | null>(null);
+  const [cancelledRunId, setCancelledRunId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [reasonPinned, setReasonPinned] = useState(false);
+  const reasonRef = useRef<HTMLSpanElement | null>(null);
+  const sessionId = startedSessionId ?? activeSession?.id ?? null;
+  const { data: polledRun } = useCloudAgentRun(sessionId);
+  const { data: sessionDetail } = useDevSession(sessionId);
+  const serverRun = polledRun ?? activeSession?.cloudAgentRun ?? null;
+  const leftoverWork = sessionDetail
+    ? sessionDetail.leftoverWork
+    : sessionId === activeSession?.id
+      ? activeSession.leftoverWork
+      : null;
+  const latestRun =
+    optimisticRun && serverRun?.runId !== optimisticRun.runId
+      ? optimisticRun
+      : serverRun ?? optimisticRun;
+  const currentRun =
+    latestRun && cancelledRunId === latestRun.runId
+      ? { ...latestRun, status: 'cancelled' as const }
+      : latestRun;
+  const eligibility = item.cloudAgentEligibility ?? {
+    allowed: false,
+    reason: 'Cloud Development is not available.',
+  };
+  const reasonId = `my-work-start-cloud-dev-reason-${item.id}`;
+  const isLive =
+    currentRun?.status === 'queued' ||
+    currentRun?.status === 'dispatched' ||
+    currentRun?.status === 'running';
+
+  useEffect(() => {
+    if (!reasonPinned) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!reasonRef.current?.contains(event.target as Node)) setReasonPinned(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setReasonPinned(false);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [reasonPinned]);
+
+  // Work items often arrive before sessions. Without this hold the row paints
+  // "Start cloud agent" for a run that is already saved.
+  if (!sessionId && (cloudStatusPending || cloudStatusUnavailable)) {
+    const loading = cloudStatusPending;
+    return (
+      <div className={styles['cloud-slot']} aria-busy={loading ? 'true' : undefined}>
+        <span
+          className={styles['cloud-status-pending']}
+          role="status"
+          {...{ 'data-testid': `my-work-cloud-status-${loading ? 'loading' : 'unavailable'}-${item.id}` }}
+        >
+          <span className={styles['cloud-status-dot']} aria-hidden="true" />
+          {loading ? 'Loading cloud status…' : 'Cloud status unavailable'}
+        </span>
+      </div>
+    );
+  }
+
+  const handleStartOrResume = async () => {
+    setActionError(null);
+    try {
+      const result = await startCloud.mutateAsync({ workItemId: item.id, project });
+      setStartedSessionId(result.sessionId);
+      setCancelledRunId(null);
+      setOptimisticRun({
+        runId: result.runId,
+        status: 'queued',
+        jobName: null,
+        executionName: null,
+        branchName: null,
+        createdAt: new Date().toISOString(),
+        prUrl: null,
+        prStatus: 'none',
+        finishedWithoutPr: false,
+        terminalReason: null,
+        checkResults: null,
+        failingChecks: [],
+        lastError: null,
+        queuePosition: result.queuePosition,
+      });
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Unable to start Cloud Development.');
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!sessionId || !currentRun) return;
+    setActionError(null);
+    try {
+      await cancelCloud.mutateAsync(sessionId);
+      setCancelledRunId(currentRun.runId);
+      setOptimisticRun(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Unable to cancel Cloud Development.');
+    }
+  };
+
+  if (!currentRun) {
+    return (
+      <>
+        {!eligibility.allowed && eligibility.reason ? (
+          // Own line above the row's buttons so it never changes their height.
+          <div className={styles['cloud-reason-row']}>
+            <span
+              ref={reasonRef}
+              className={styles['cloud-reason']}
+              data-pinned={reasonPinned ? 'true' : undefined}
+            >
+              <button
+                type="button"
+                className={styles['cloud-reason-trigger']}
+                aria-expanded={reasonPinned}
+                aria-controls={reasonId}
+                onClick={() => setReasonPinned((pinned) => !pinned)}
+                {...{ 'data-testid': `my-work-cloud-reason-toggle-${item.id}` }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2" />
+                  <path
+                    d="M12 11v5M12 7.5v.5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  />
+                </svg>
+                Why can&apos;t I start this?
+              </button>
+              <span
+                id={reasonId}
+                role="tooltip"
+                className={styles['cloud-reason-popover']}
+                {...{ 'data-testid': reasonId }}
+              >
+                {eligibility.reason}
+              </span>
+            </span>
+          </div>
+        ) : null}
+        <div className={styles['cloud-slot']}>
+          <button
+            className={styles['cloud-dev-btn']}
+            type="button"
+            disabled={!eligibility.allowed || startCloud.isPending}
+            title={eligibility.allowed ? 'Start a Cloud Agent on this work item' : eligibility.reason}
+            aria-describedby={eligibility.allowed ? undefined : reasonId}
+            onClick={() => void handleStartOrResume()}
+            {...{ 'data-testid': 'my-work-start-cloud-dev-btn' }}
+          >
+            <span className={styles['cloud-button-icon']} aria-hidden="true">✦</span>
+            {startCloud.isPending ? 'Starting cloud agent…' : 'Start cloud agent'}
+          </button>
+          {actionError ? (
+            <span className={styles['cloud-run-error']} role="alert">
+              {actionError}
+            </span>
+          ) : null}
+        </div>
+      </>
+    );
+  }
+
+  const prStatusLabel = prStatusText(currentRun);
+
+  return (
+    <>
+      <div className={styles['cloud-slot']}>
+        <div className={styles['cloud-run-control']} data-status={currentRun.status}>
+          <button
+            type="button"
+            className={styles['cloud-run-summary']}
+            onClick={() => setDrawerOpen(true)}
+            aria-label={`View cloud agent run details: ${cloudRunStatusText(currentRun)}`}
+            {...{ 'data-testid': `my-work-cloud-run-summary-${item.id}` }}
+          >
+            <span className={styles['cloud-status-dot']} aria-hidden="true" />
+            <span className={styles['cloud-run-copy']} aria-live="polite">
+              <span className={styles['cloud-run-label']}>Cloud agent</span>
+              <strong
+                className={styles['cloud-run-status']}
+                {...{ 'data-testid': `my-work-cloud-run-status-${item.id}` }}
+              >
+                {cloudRunStatusText(currentRun)}
+              </strong>
+            </span>
+            <span className={styles['cloud-details-chevron']} aria-hidden="true">›</span>
+          </button>
+          <div className={styles['cloud-run-actions']} aria-live="polite">
+            {currentRun.status === 'completed' && currentRun.prUrl ? (
+              <a
+                className={styles['cloud-pr-link']}
+                href={currentRun.prUrl}
+                target="_blank"
+                rel="noreferrer"
+                {...{ 'data-testid': `my-work-cloud-run-pr-${item.id}` }}
+              >
+                View PR
+              </a>
+            ) : null}
+            {prStatusLabel ? (
+              <span className={styles['cloud-pr-status']} {...{ 'data-testid': 'my-work-row-pr-status' }}>
+                {prStatusLabel}
+              </span>
+            ) : null}
+            <CurrentRunChecksSummary
+              prUrl={currentRun.prUrl}
+              finishedWithoutPr={currentRun.finishedWithoutPr}
+              failingChecks={currentRun.failingChecks}
+            />
+            {sessionId ? <LeftoverWorkList sessionId={sessionId} summary={leftoverWork} /> : null}
+            {currentRun.status === 'failed' && currentRun.lastError ? (
+              <span
+                className={styles['cloud-run-failure-detail']}
+                role="alert"
+                title={currentRun.lastError}
+                {...{ 'data-testid': `my-work-cloud-run-error-${item.id}` }}
+              >
+                {currentRun.lastError}
+              </span>
+            ) : null}
+            {isLive ? (
+              <button
+                className={styles['cloud-cancel-btn']}
+                type="button"
+                disabled={cancelCloud.isPending}
+                onClick={() => void handleCancel()}
+                {...{ 'data-testid': `my-work-cancel-cloud-run-${item.id}` }}
+              >
+                {cancelCloud.isPending ? 'Cancelling…' : 'Cancel'}
+              </button>
+            ) : (
+              <button
+                className={styles['cloud-resume-btn']}
+                type="button"
+                disabled={startCloud.isPending}
+                onClick={() => void handleStartOrResume()}
+                {...{ 'data-testid': `my-work-resume-cloud-run-${item.id}` }}
+              >
+                <span aria-hidden="true">↻</span>
+                {startCloud.isPending ? 'Resuming…' : 'Resume run'}
+              </button>
+            )}
+          </div>
+        </div>
+        {actionError ? (
+          <span className={styles['cloud-run-error']} role="alert">
+            {actionError}
+          </span>
+        ) : null}
+      </div>
+      {drawerOpen ? (
+        <CloudRunDrawer
+          item={item}
+          run={currentRun}
+          sessionId={sessionId}
+          isLive={isLive}
+          onClose={() => setDrawerOpen(false)}
+          {...{ 'data-testid': `my-work-cloud-run-drawer-${item.id}` }}
+        />
+      ) : null}
+    </>
+  );
+};
+
+const CloudAgentRowAction: React.FC<{
+  item: AssignedWorkItem;
+  project: string;
+  activeSession?: ActiveDevSession;
+  cloudStatusPending: boolean;
+  cloudStatusUnavailable: boolean;
+}> = ({ item, project, activeSession, cloudStatusPending, cloudStatusUnavailable }) => {
+  const flagOn = useFeatureFlag(MY_WORK_CLOUD_AGENT_FLAG, project);
+
+  // @feature-flag:my-work-cloud-agent start winner=enabled
+  return flagOn ? (
+    // @feature-flag:my-work-cloud-agent enabled-start
+    <>
+      <CloudAgentEnabledRowAction
+        item={item}
+        project={project}
+        activeSession={activeSession}
+        cloudStatusPending={cloudStatusPending}
+        cloudStatusUnavailable={cloudStatusUnavailable}
+      />
+    </>
+    // @feature-flag:my-work-cloud-agent enabled-end
+  ) : (
+    // @feature-flag:my-work-cloud-agent disabled-start
+    null
+    // @feature-flag:my-work-cloud-agent disabled-end
+  );
+  // @feature-flag:my-work-cloud-agent end
 };
 
 export type ApexStatusFilter = 'all' | MyWorkStatus;
@@ -156,6 +1145,79 @@ export function filterApexBacklogBySearch(
       return { ...group, epics };
     })
     .filter((group) => group.epics.length > 0);
+}
+
+export type AdoStatusFilter = 'all' | 'new' | 'in_progress' | 'in_pr';
+export type AdoCloudFilter = 'all' | 'running' | 'completed' | 'failed';
+
+export const ADO_STATUS_FILTERS: { id: AdoStatusFilter; label: string; title: string }[] = [
+  { id: 'all', label: 'All', title: 'Show every assigned work item' },
+  { id: 'new', label: 'New', title: 'State is New' },
+  { id: 'in_progress', label: 'In Progress', title: 'State is In Progress or Active' },
+  { id: 'in_pr', label: 'In PR', title: 'State is In Pull Request' },
+];
+
+export const ADO_CLOUD_FILTERS: { id: AdoCloudFilter; label: string; title: string }[] = [
+  { id: 'all', label: 'Any', title: 'Any cloud agent run, including items with no run' },
+  { id: 'running', label: 'Running', title: 'Queued, starting, or running' },
+  { id: 'completed', label: 'Completed', title: 'Cloud agent run finished' },
+  { id: 'failed', label: 'Failed', title: 'Cloud agent run failed or timed out' },
+];
+
+const LIVE_CLOUD_STATUSES = new Set<CloudAgentRunSummary['status']>([
+  'queued',
+  'dispatched',
+  'running',
+]);
+
+function matchesAdoStatus(
+  item: AssignedWorkItem,
+  run: CloudAgentRunSummary | null | undefined,
+  status: AdoStatusFilter,
+): boolean {
+  if (status === 'all') return true;
+  const state = item.state.trim().toLowerCase();
+  if (status === 'new') return state === 'new';
+  if (status === 'in_progress') return state === 'in progress' || state === 'active';
+  return state === 'in pull request' || run?.prStatus === 'open';
+}
+
+function matchesCloudRun(
+  run: CloudAgentRunSummary | null | undefined,
+  cloud: AdoCloudFilter,
+): boolean {
+  if (cloud === 'all') return true;
+  if (!run) return false;
+  if (cloud === 'running') return LIVE_CLOUD_STATUSES.has(run.status);
+  if (cloud === 'completed') return run.status === 'completed';
+  return run.status === 'failed';
+}
+
+/**
+ * Client-side filter for ADO assigned work items. Search matches the title
+ * or the work item id (`55031` and `#55031`). Status and cloud filters combine.
+ */
+export function filterAssignedWorkItems(
+  items: AssignedWorkItem[],
+  options: {
+    status: AdoStatusFilter;
+    cloud: AdoCloudFilter;
+    search: string;
+    cloudRunByWorkItemId?: ReadonlyMap<number, CloudAgentRunSummary | null | undefined>;
+  },
+): AssignedWorkItem[] {
+  const query = options.search.trim().toLowerCase();
+  const idQuery = query.startsWith('#') ? query.slice(1) : query;
+
+  return items.filter((item) => {
+    if (query) {
+      const idText = String(item.id);
+      const searchHit = item.title.toLowerCase().includes(query) || idText.includes(idQuery);
+      if (!searchHit) return false;
+    }
+    const run = options.cloudRunByWorkItemId?.get(item.id);
+    return matchesAdoStatus(item, run, options.status) && matchesCloudRun(run, options.cloud);
+  });
 }
 
 function featureCompleteKey(prdId: string, featureId: string): string {
@@ -532,6 +1594,12 @@ const ApexBacklogView: React.FC<{
                                       title="Mark In Progress, download a context pack, and open Cursor or VS Code locally"
                                       {...{ 'data-testid': 'my-work-start-local-dev-btn' }}
                                     >
+                                      <span className={styles['cloud-button-icon']} aria-hidden="true">
+                                        <svg width="13" height="13" viewBox="0 0 24 24">
+                                          <rect x="3" y="4" width="18" height="13" rx="2" fill="none" stroke="currentColor" strokeWidth="2" />
+                                          <path d="M8 21h8M12 17v4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                        </svg>
+                                      </span>
                                       Start Local Development
                                     </button>
                                   </>
@@ -571,64 +1639,77 @@ const ApexBacklogView: React.FC<{
 };
 
 export const DevWorkbenchView: React.FC = () => {
-  const navigate = useNavigate();
-  const { selectedProject, isSuperAdmin, usesBoardWorkItems } = useAppShell();
+  const { selectedProject, usesBoardWorkItems } = useAppShell();
+  const cloudAgentEnabled = useFeatureFlag(MY_WORK_CLOUD_AGENT_FLAG, selectedProject);
   const usesAppNativeRequirements = isAppNativeRequirementsProject(selectedProject);
   const showBoardAssigned = usesBoardWorkItems;
 
   const { data: workItems, isLoading, error } = useAssignedWorkItems(
     usesAppNativeRequirements || showBoardAssigned ? null : (selectedProject || null),
   );
-  const { data: activeSessions } = useActiveSessions(selectedProject || null);
-  const startSession = useStartDevSession();
-  const closeSession = useCloseDevSession();
-  const [startingId, setStartingId] = useState<number | null>(null);
-  const [closingId, setClosingId] = useState<string | null>(null);
+  const {
+    data: activeSessions,
+    isLoading: sessionsLoading,
+    isError: sessionsError,
+  } = useActiveSessions(selectedProject || null);
+  const cloudStatusPending = sessionsLoading && !activeSessions;
+  const cloudStatusUnavailable = sessionsError && !activeSessions;
   const [localDevTarget, setLocalDevTarget] = useState<StartLocalDevTarget | null>(null);
+  const [adoStatusFilter, setAdoStatusFilter] = useState<AdoStatusFilter>('all');
+  const [adoCloudFilter, setAdoCloudFilter] = useState<AdoCloudFilter>('all');
+  const [adoSearch, setAdoSearch] = useState('');
 
-  const sessionByWorkItem = useMemo(() => {
-    const map = new Map<number, { sessionId: string }>();
+  const cloudSessionByWorkItem = useMemo(() => {
+    const cloud = new Map<number, ActiveDevSession>();
     if (activeSessions) {
       for (const s of activeSessions) {
-        if (s.status !== 'closed' && s.status !== 'failed' && s.workItemId) {
-          map.set(s.workItemId, { sessionId: s.id });
+        if (s.status !== 'closed' && s.workItemId) {
+          if (s.cloudAgentRun && !cloud.has(s.workItemId)) cloud.set(s.workItemId, s);
         }
       }
     }
-    return map;
+    return cloud;
   }, [activeSessions]);
 
-  const sortedWorkItems = useMemo(() => {
-    if (!workItems) return [];
-    return [...workItems].sort((a, b) => {
-      const aActive = sessionByWorkItem.has(a.id) ? 0 : 1;
-      const bActive = sessionByWorkItem.has(b.id) ? 0 : 1;
-      return aActive - bActive;
+  // Keep the API order stable. Starting a run must not move the row away from
+  // the pointer; users can separate run states with the Cloud agent filter.
+  const stableWorkItems = workItems ?? [];
+
+  const visibleWorkItems = useMemo(() => {
+    const cloudRunByWorkItemId = new Map<number, CloudAgentRunSummary | null | undefined>();
+    cloudSessionByWorkItem.forEach((session, id) => {
+      cloudRunByWorkItemId.set(id, session.cloudAgentRun);
     });
-  }, [workItems, sessionByWorkItem]);
+    return filterAssignedWorkItems(stableWorkItems, {
+      status: adoStatusFilter,
+      cloud: cloudAgentEnabled ? adoCloudFilter : 'all',
+      search: adoSearch,
+      cloudRunByWorkItemId: cloudAgentEnabled ? cloudRunByWorkItemId : undefined,
+    });
+  }, [
+    stableWorkItems,
+    adoStatusFilter,
+    adoCloudFilter,
+    adoSearch,
+    cloudSessionByWorkItem,
+    cloudAgentEnabled,
+  ]);
 
-  const handleStart = async (workItemId: number) => {
-    if (!selectedProject) return;
-    setStartingId(workItemId);
-    try {
-      const result = await startSession.mutateAsync({ workItemId, project: selectedProject });
-      navigate(`/my-work/session/${result.sessionId}`);
-    } finally {
-      setStartingId(null);
-    }
-  };
+  useEffect(() => {
+    setAdoStatusFilter('all');
+    setAdoCloudFilter('all');
+    setAdoSearch('');
+  }, [selectedProject]);
 
-  const handleResume = (sessionId: string) => {
-    navigate(`/my-work/session/${sessionId}`);
-  };
+  const adoFiltersActive =
+    adoStatusFilter !== 'all'
+    || (cloudAgentEnabled && adoCloudFilter !== 'all')
+    || adoSearch.trim() !== '';
 
-  const handleClose = async (sessionId: string) => {
-    setClosingId(sessionId);
-    try {
-      await closeSession.mutateAsync(sessionId);
-    } finally {
-      setClosingId(null);
-    }
+  const clearAdoFilters = () => {
+    setAdoStatusFilter('all');
+    setAdoCloudFilter('all');
+    setAdoSearch('');
   };
 
   if ((usesAppNativeRequirements || showBoardAssigned) && selectedProject) {
@@ -642,6 +1723,7 @@ export const DevWorkbenchView: React.FC = () => {
               : 'Work Board items assigned to you'}
           </p>
         </div>
+        <AssignedBacklogSection project={selectedProject} />
         {showBoardAssigned && <BoardAssignedSection project={selectedProject} />}
         {usesAppNativeRequirements && (
           <section
@@ -660,22 +1742,6 @@ export const DevWorkbenchView: React.FC = () => {
     );
   }
 
-  if (isLoading) {
-    return (
-      <div className={styles.container} {...{ 'data-testid': 'my-work-page' }}>
-        <div className={styles.loading}>Loading assigned work items...</div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className={styles.container} {...{ 'data-testid': 'my-work-page' }}>
-        <div className={styles.error}>Failed to load work items: {error.message}</div>
-      </div>
-    );
-  }
-
   return (
     <div className={styles.container} {...{ 'data-testid': 'my-work-page' }}>
       <div className={styles.header} {...{ 'data-testid': 'my-work-header' }}>
@@ -683,19 +1749,135 @@ export const DevWorkbenchView: React.FC = () => {
         <p className={styles.subtitle}>Work items assigned to you — start a development session to begin coding</p>
       </div>
 
-      {startSession.error && (
-        <div className={styles.error}>{startSession.error.message}</div>
-      )}
+      {selectedProject && <AssignedBacklogSection project={selectedProject} />}
 
-      {!workItems || workItems.length === 0 ? (
+      {isLoading && <div className={styles.loading}>Loading assigned work items...</div>}
+      {error && <div className={styles.error}>Failed to load work items: {error.message}</div>}
+      {!isLoading && !error && ((!workItems || workItems.length === 0) ? (
         <div className={styles.empty} {...{ 'data-testid': 'my-work-empty' }}>
           No active work items assigned to you.
         </div>
       ) : (
+        <>
+          <div className={`${styles['filters-row']} ${styles['ado-filters-row']}`}>
+            <div
+              className={styles.filters}
+              role="toolbar"
+              aria-label="Filter assigned work items"
+              {...{ 'data-testid': 'my-work-ado-filters' }}
+            >
+              <div
+                className={styles['filter-group']}
+                role="group"
+                aria-label="Filter by work item state"
+                {...{ 'data-testid': 'my-work-ado-status-filters' }}
+              >
+                {ADO_STATUS_FILTERS.map(({ id, label, title }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`${styles['filter-pill']}${adoStatusFilter === id ? ` ${styles['filter-pill-active']}` : ''}`}
+                    aria-pressed={adoStatusFilter === id}
+                    title={
+                      id === 'in_pr' && cloudAgentEnabled
+                        ? 'In Pull Request, or a cloud run with an open pull request'
+                        : title
+                    }
+                    onClick={() => setAdoStatusFilter(id)}
+                    {...{ 'data-testid': `my-work-ado-status-filter-${id}` }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {
+                // @feature-flag:my-work-cloud-agent start winner=enabled
+                cloudAgentEnabled ? (
+                  // @feature-flag:my-work-cloud-agent enabled-start
+                  <>
+                    <span className={styles['filter-divider']} aria-hidden="true" />
+                    <div
+                      className={styles['filter-group']}
+                      role="group"
+                      aria-label="Filter by cloud agent run"
+                      {...{ 'data-testid': 'my-work-ado-cloud-filters' }}
+                    >
+                      <span className={styles['filter-group-label']}>Cloud agent</span>
+                      {ADO_CLOUD_FILTERS.map(({ id, label, title }) => (
+                        <button
+                          key={id}
+                          type="button"
+                          className={`${styles['filter-pill']}${adoCloudFilter === id ? ` ${styles['filter-pill-active']}` : ''}`}
+                          aria-pressed={adoCloudFilter === id}
+                          title={title}
+                          onClick={() => setAdoCloudFilter(id)}
+                          {...{ 'data-testid': `my-work-ado-cloud-filter-${id}` }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                  // @feature-flag:my-work-cloud-agent enabled-end
+                ) : (
+                  // @feature-flag:my-work-cloud-agent disabled-start
+                  null
+                  // @feature-flag:my-work-cloud-agent disabled-end
+                )
+                // @feature-flag:my-work-cloud-agent end
+              }
+              {adoFiltersActive ? (
+                <button
+                  type="button"
+                  className={styles['clear-filters-btn']}
+                  onClick={clearAdoFilters}
+                  {...{ 'data-testid': 'my-work-ado-clear-filters' }}
+                >
+                  Clear
+                </button>
+              ) : null}
+            </div>
+            <div className={styles['search-wrap']}>
+              <svg
+                className={styles['search-icon']}
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="6.5" cy="6.5" r="4.5" />
+                <line x1="10" y1="10" x2="14" y2="14" />
+              </svg>
+              <input
+                className={styles['search-input']}
+                type="search"
+                placeholder="Search title or ID…"
+                value={adoSearch}
+                onChange={(event) => setAdoSearch(event.target.value)}
+                aria-label="Search work items by title or ID"
+                {...{ 'data-testid': 'my-work-ado-search-input' }}
+              />
+            </div>
+          </div>
+          {visibleWorkItems.length === 0 ? (
+            <div className={styles.empty} {...{ 'data-testid': 'my-work-ado-no-matches' }}>
+              <p className={styles['empty-copy']}>No work items match your search or filters.</p>
+              <button
+                type="button"
+                className={styles['clear-filters-btn']}
+                onClick={clearAdoFilters}
+                {...{ 'data-testid': 'my-work-ado-empty-clear' }}
+              >
+                Clear filters
+              </button>
+            </div>
+          ) : (
         <div className={styles.list} {...{ 'data-testid': 'my-work-work-items-list' }}>
-          {sortedWorkItems.map((item) => {
-            const active = sessionByWorkItem.get(item.id);
-            const eligibility = evaluateDevStartEligibility(item, { isSuperAdmin });
+          {visibleWorkItems.map((item) => {
+            const cloudSession = cloudSessionByWorkItem.get(item.id);
             return (
               <div key={item.id} className={styles.item}>
                 <div className={styles['item-info']}>
@@ -704,42 +1886,9 @@ export const DevWorkbenchView: React.FC = () => {
                     <span className={styles['item-id']}>#{item.id}</span>
                     <span className={styles.badge}>{item.workItemType}</span>
                     <span className={styles.badge}>{item.state}</span>
-                    {active && <span className={styles['active-badge']}>Active Session</span>}
                   </div>
                 </div>
                 <div className={styles['item-actions']}>
-                  {active ? (
-                    <>
-                      <button
-                        className={styles['resume-btn']}
-                        onClick={() => handleResume(active.sessionId)}
-                        type="button"
-                        {...{ 'data-testid': 'my-work-resume-session-btn' }}
-                      >
-                        Resume Session
-                      </button>
-                      <button
-                        className={styles['close-btn']}
-                        onClick={() => handleClose(active.sessionId)}
-                        disabled={closingId === active.sessionId}
-                        type="button"
-                        {...{ 'data-testid': `my-work-close-session-${item.id}` }}
-                      >
-                        {closingId === active.sessionId ? 'Closing...' : 'Close Session'}
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      className={styles['start-btn']}
-                      onClick={() => handleStart(item.id)}
-                      disabled={startingId !== null || !eligibility.allowed}
-                      title={eligibility.allowed ? undefined : eligibility.reason}
-                      type="button"
-                      {...{ 'data-testid': 'my-work-start-dev-btn' }}
-                    >
-                      {startingId === item.id ? 'Starting...' : 'Start Development'}
-                    </button>
-                  )}
                   <button
                     className={styles['local-dev-btn']}
                     onClick={() =>
@@ -754,14 +1903,29 @@ export const DevWorkbenchView: React.FC = () => {
                     title="Download a context pack and open Cursor or VS Code locally"
                     {...{ 'data-testid': 'my-work-start-local-dev-btn' }}
                   >
+                    <span className={styles['cloud-button-icon']} aria-hidden="true">
+                      <svg width="13" height="13" viewBox="0 0 24 24">
+                        <rect x="3" y="4" width="18" height="13" rx="2" fill="none" stroke="currentColor" strokeWidth="2" />
+                        <path d="M8 21h8M12 17v4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                      </svg>
+                    </span>
                     Start Local Development
                   </button>
+                  <CloudAgentRowAction
+                    item={item}
+                    project={selectedProject!}
+                    activeSession={cloudSession}
+                    cloudStatusPending={cloudStatusPending}
+                    cloudStatusUnavailable={cloudStatusUnavailable}
+                  />
                 </div>
               </div>
             );
           })}
-        </div>
-      )}
+            </div>
+          )}
+        </>
+      ))}
 
       {localDevTarget && (
         // data-testid-exempt — StartLocalDevModal root already sets data-testid

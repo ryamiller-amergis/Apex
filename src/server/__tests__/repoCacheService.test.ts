@@ -29,9 +29,12 @@ jest.mock('../services/repoCacheLeaseService', () => ({
 
 import {
   COLD_CACHE_TIMEOUT_MS,
+  USER_FACING_REPO_CACHE_LEASE_WAIT_MS,
   ensureRepoCache,
+  fetchPinnedCommit,
   fetchRepositoryTip,
   getRepoCacheDir,
+  readRemoteBranchTip,
   repairRepoCache,
   resolveGitRemote,
 } from '../services/repoCacheService';
@@ -51,6 +54,7 @@ describe('repoCacheService', () => {
       GITHUB_TOKEN: 'github-secret',
     };
     mockFs.existsSync.mockReturnValue(false);
+    mockFs.readdirSync.mockReturnValue([] as never);
     mockGit.mockImplementation(async (args: string[]) => {
       if (args.includes('rev-parse')) return 'abc123\n';
       return '';
@@ -61,7 +65,7 @@ describe('repoCacheService', () => {
     process.env = originalEnv;
   });
 
-  it('keys caches by provider, project, repository, and base branch', () => {
+  it('keys caches by provider, project, and repository — not branch', () => {
     const development = getRepoCacheDir({
       provider: 'ado',
       project: 'MaxView',
@@ -75,8 +79,24 @@ describe('repoCacheService', () => {
       branch: 'release',
     });
 
-    expect(development).toContain(path.join('repo-cache', 'ado-maxview-maxview-development-'));
-    expect(development).not.toBe(release);
+    expect(development).toContain(path.join('repo-cache', 'ado-maxview-maxview-'));
+    expect(development).not.toContain('development');
+    expect(development).toBe(release);
+  });
+
+  it('reuses a legacy per-branch mirror when the per-repo mirror is absent', () => {
+    mockFs.existsSync.mockImplementation((target) =>
+      String(target).includes('-development-') && String(target).endsWith(`${path.sep}HEAD`),
+    );
+
+    const dir = getRepoCacheDir({
+      provider: 'ado',
+      project: 'MaxView',
+      repo: 'MaxView',
+      branch: 'development',
+    });
+
+    expect(dir).toContain('development');
   });
 
   it('creates a credential-free remote with runtime-only authentication', () => {
@@ -126,7 +146,7 @@ describe('repoCacheService', () => {
     );
   });
 
-  it('populates a cold cache with the complete configured branch history', async () => {
+  it('populates a cold cache with the complete repository history', async () => {
     const result = await ensureRepoCache({
       provider: 'ado',
       project: 'MaxView',
@@ -138,11 +158,9 @@ describe('repoCacheService', () => {
     expect(cloneCall?.[0]).toEqual(expect.arrayContaining([
       'clone',
       '--bare',
-      '--single-branch',
-      '--branch',
-      'development',
       '--progress',
     ]));
+    expect(cloneCall?.[0]).not.toEqual(expect.arrayContaining(['--single-branch']));
     expect(JSON.stringify(cloneCall)).not.toContain('ado-secret');
     expect(cloneCall?.[1]).toEqual(expect.objectContaining({
       timeout: COLD_CACHE_TIMEOUT_MS,
@@ -173,8 +191,8 @@ describe('repoCacheService', () => {
       expect.arrayContaining([
         'fetch',
         '--prune',
-        'origin',
-        '+refs/heads/development:refs/heads/development',
+        'https://dev.azure.com/amergis/MaxView/_git/MaxView',
+        '+refs/heads/*:refs/heads/*',
       ]),
       expect.objectContaining({ env: expect.objectContaining({ GIT_CONFIG_COUNT: '1' }) }),
     );
@@ -203,7 +221,12 @@ describe('repoCacheService', () => {
     })).resolves.toEqual(expect.objectContaining({ baseSha: 'head123' }));
 
     expect(mockGit).toHaveBeenCalledWith(
-      expect.arrayContaining(['fetch', '--refetch', '--prune', 'origin']),
+      expect.arrayContaining([
+        'fetch',
+        '--refetch',
+        '--prune',
+        'https://dev.azure.com/amergis/MaxView/_git/MaxView',
+      ]),
       expect.any(Object),
     );
     expect(mockGit).toHaveBeenCalledWith(
@@ -316,7 +339,12 @@ describe('repoCacheService', () => {
     })).resolves.toEqual(expect.objectContaining({ baseSha: 'repaired123' }));
 
     expect(mockGit).toHaveBeenCalledWith(
-      expect.arrayContaining(['fetch', '--refetch', '--prune', 'origin']),
+      expect.arrayContaining([
+        'fetch',
+        '--refetch',
+        '--prune',
+        'https://dev.azure.com/amergis/MaxView/_git/MaxView',
+      ]),
       expect.any(Object),
     );
     expect(mockGit).toHaveBeenCalledWith(
@@ -406,5 +434,144 @@ describe('repoCacheService', () => {
 
     expect(mockGit.mock.calls.some(([args]) => (args as string[]).includes('clone'))).toBe(false);
     expect(mockWithLease).not.toHaveBeenCalled();
+  });
+
+  it('bounds user-facing tip-fetch lease waits below the chat preparation deadline', async () => {
+    mockFs.existsSync.mockReturnValue(true);
+
+    await fetchRepositoryTip({
+      provider: 'ado',
+      project: 'MaxView',
+      repo: 'MaxView',
+      branch: 'development',
+    });
+
+    expect(mockWithLease).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Function),
+      { waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS },
+    );
+  });
+
+  it('reads a remote branch tip with ls-remote and does not fetch objects', async () => {
+    const sha = 'b'.repeat(40);
+    mockGit.mockResolvedValue(`${sha}\trefs/heads/development\n`);
+
+    const tip = await readRemoteBranchTip({
+      provider: 'ado',
+      project: 'MaxView',
+      repo: 'MaxView',
+      branch: 'development',
+    });
+
+    expect(tip).toBe(sha);
+    const args = mockGit.mock.calls[0][0] as string[];
+    expect(args).toEqual(
+      expect.arrayContaining(['ls-remote', '--heads', 'refs/heads/development']),
+    );
+    expect(args).not.toContain('fetch');
+    expect(args).not.toContain('clone');
+  });
+
+  it('fetches only the pinned SHA into an existing mirror', async () => {
+    mockFs.existsSync.mockReturnValue(true);
+    const sha = 'c'.repeat(40);
+    let sawCommit = false;
+    mockGit.mockImplementation(async (args: string[]) => {
+      if (args.includes('cat-file')) {
+        if (!sawCommit) throw new Error('missing commit');
+        return '';
+      }
+      if (args.includes('fetch')) {
+        sawCommit = true;
+        return '';
+      }
+      return '';
+    });
+
+    await expect(fetchPinnedCommit({
+      provider: 'ado',
+      project: 'MaxView',
+      repo: 'MaxView',
+      branch: 'development',
+    }, sha)).resolves.toBe(true);
+
+    const fetchArgs = mockGit.mock.calls
+      .map(([args]) => args as string[])
+      .find((args) => args.includes('fetch'));
+    expect(fetchArgs).toEqual(
+      expect.arrayContaining([
+        'fetch',
+        '--no-tags',
+        'https://dev.azure.com/amergis/MaxView/_git/MaxView',
+        sha,
+      ]),
+    );
+    expect(fetchArgs).not.toContain('origin');
+    expect(fetchArgs?.some((arg) => arg.includes('refs/heads/*'))).toBe(false);
+  });
+
+  it('removes stale pack temps before fetching, and leaves in-flight ones alone', async () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockFs.readdirSync.mockReturnValue(
+      ['tmp_pack_abandoned', 'tmp_pack_inflight', 'pack-real.pack'] as never,
+    );
+    mockFs.statSync.mockImplementation((target) => ({
+      mtimeMs: String(target).endsWith('tmp_pack_abandoned')
+        ? Date.now() - COLD_CACHE_TIMEOUT_MS - 1_000
+        : Date.now(),
+    }) as fs.Stats);
+
+    try {
+      await fetchRepositoryTip({
+        provider: 'ado',
+        project: 'MaxView',
+        repo: 'MaxView',
+        branch: 'development',
+      });
+
+      const removed = mockFs.rmSync.mock.calls.map(([target]) => String(target));
+      expect(removed).toEqual([expect.stringContaining('tmp_pack_abandoned')]);
+    } finally {
+      mockFs.readdirSync.mockReset();
+      mockFs.statSync.mockReset();
+    }
+  });
+
+  it('writes pin-fetch identity only after taking the cache lease', async () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockGit.mockResolvedValue('');
+    const order: string[] = [];
+    const originalLease = mockWithLease.getMockImplementation();
+    mockWithLease.mockImplementation(
+      async (
+        _key: string,
+        operation: (lease: { signal: AbortSignal; assertOwned: () => Promise<void> }) => Promise<unknown>,
+      ) => {
+        order.push('lease');
+        return operation({
+          signal: new AbortController().signal,
+          assertOwned: jest.fn().mockResolvedValue(undefined),
+        });
+      },
+    );
+    mockFs.writeFileSync.mockImplementation((file: fs.PathOrFileDescriptor) => {
+      if (String(file).includes('apex-cache-identity.json')) order.push('identity');
+    });
+
+    try {
+      await expect(fetchPinnedCommit({
+        provider: 'ado',
+        project: 'MaxView',
+        repo: 'MaxView',
+        branch: 'development',
+      }, 'a'.repeat(40))).resolves.toBe(true);
+
+      expect(order[0]).toBe('lease');
+      expect(order).toContain('identity');
+    } finally {
+      if (originalLease) mockWithLease.mockImplementation(originalLease);
+      mockFs.writeFileSync.mockReset();
+    }
   });
 });

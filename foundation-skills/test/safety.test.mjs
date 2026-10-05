@@ -11,7 +11,8 @@ import { serializeLockfile } from '../lib/lockfile.mjs';
 import { PKG_ROOT, makeRepo, cleanup, SAMPLE_REPO } from './helpers.mjs';
 
 test('install transaction restores managed paths after a failure', async () => {
-  const { withInstallTransaction } = await import('../lib/installTransaction.mjs');
+  const { withInstallTransaction } =
+    await import('../lib/installTransaction.mjs');
   const repo = makeRepo({
     '.cursor/skills/ui-lab/SKILL.md': 'ORIGINAL_SKILL\n',
     'apex-skills.lock.json': 'ORIGINAL_LOCK\n',
@@ -22,29 +23,35 @@ test('install transaction restores managed paths after a failure', async () => {
         withInstallTransaction(repo, ['ui-lab'], () => {
           fs.writeFileSync(
             path.join(repo, '.cursor/skills/ui-lab/SKILL.md'),
-            'PARTIAL_SKILL\n',
+            'PARTIAL_SKILL\n'
           );
-          fs.writeFileSync(path.join(repo, 'apex-skills.lock.json'), 'PARTIAL_LOCK\n');
+          fs.writeFileSync(
+            path.join(repo, 'apex-skills.lock.json'),
+            'PARTIAL_LOCK\n'
+          );
           fs.writeFileSync(
             path.join(repo, '.cursor/skills/ui-lab/partial.json'),
-            '{}\n',
+            '{}\n'
           );
           throw new Error('injected write failure');
         }),
-      /injected write failure/,
+      /injected write failure/
     );
 
     assert.equal(
-      fs.readFileSync(path.join(repo, '.cursor/skills/ui-lab/SKILL.md'), 'utf8'),
-      'ORIGINAL_SKILL\n',
+      fs.readFileSync(
+        path.join(repo, '.cursor/skills/ui-lab/SKILL.md'),
+        'utf8'
+      ),
+      'ORIGINAL_SKILL\n'
     );
     assert.equal(
       fs.readFileSync(path.join(repo, 'apex-skills.lock.json'), 'utf8'),
-      'ORIGINAL_LOCK\n',
+      'ORIGINAL_LOCK\n'
     );
     assert.equal(
       fs.existsSync(path.join(repo, '.cursor/skills/ui-lab/partial.json')),
-      false,
+      false
     );
   } finally {
     cleanup(repo);
@@ -52,7 +59,8 @@ test('install transaction restores managed paths after a failure', async () => {
 });
 
 test('rollback continues restoring critical files after one target fails', async () => {
-  const { withInstallTransaction } = await import('../lib/installTransaction.mjs');
+  const { withInstallTransaction } =
+    await import('../lib/installTransaction.mjs');
   const repo = makeRepo({
     '.cursor/skills/ui-lab/SKILL.md': 'ORIGINAL_SKILL\n',
     '.apex/backups/ui-lab/original.md': 'ORIGINAL_BACKUP\n',
@@ -65,15 +73,22 @@ test('rollback continues restoring critical files after one target fails', async
       withInstallTransaction(repo, ['ui-lab'], () => {
         fs.writeFileSync(
           path.join(repo, '.cursor/skills/ui-lab/SKILL.md'),
-          'PARTIAL_SKILL\n',
+          'PARTIAL_SKILL\n'
         );
-        fs.writeFileSync(path.join(repo, 'apex-skills.lock.json'), 'PARTIAL_LOCK\n');
+        fs.writeFileSync(
+          path.join(repo, 'apex-skills.lock.json'),
+          'PARTIAL_LOCK\n'
+        );
         fs.writeFileSync(
           path.join(repo, '.apex/backups/ui-lab/original.md'),
-          'PARTIAL_BACKUP\n',
+          'PARTIAL_BACKUP\n'
         );
         fs.cpSync = (source, destination, options) => {
-          if (String(destination).includes(path.join('.apex', 'backups', 'ui-lab'))) {
+          if (
+            String(destination).includes(
+              path.join('.apex', 'backups', 'ui-lab')
+            )
+          ) {
             throw new Error('injected backup restore failure');
           }
           return originalCpSync(source, destination, options);
@@ -93,12 +108,15 @@ test('rollback continues restoring critical files after one target fails', async
     assert.ok(failure.recoverySnapshot);
     assert.equal(fs.existsSync(failure.recoverySnapshot), true);
     assert.equal(
-      fs.readFileSync(path.join(repo, '.cursor/skills/ui-lab/SKILL.md'), 'utf8'),
-      'ORIGINAL_SKILL\n',
+      fs.readFileSync(
+        path.join(repo, '.cursor/skills/ui-lab/SKILL.md'),
+        'utf8'
+      ),
+      'ORIGINAL_SKILL\n'
     );
     assert.equal(
       fs.readFileSync(path.join(repo, 'apex-skills.lock.json'), 'utf8'),
-      'ORIGINAL_LOCK\n',
+      'ORIGINAL_LOCK\n'
     );
   } finally {
     if (failure?.recoverySnapshot) cleanup(failure.recoverySnapshot);
@@ -107,15 +125,34 @@ test('rollback continues restoring critical files after one target fails', async
 });
 
 test('concurrent installs are rejected by the repository install lock', async () => {
-  const { withInstallTransaction } = await import('../lib/installTransaction.mjs');
+  const { withInstallTransaction } =
+    await import('../lib/installTransaction.mjs');
   const repo = makeRepo(SAMPLE_REPO);
   try {
     withInstallTransaction(repo, ['ui-lab'], () => {
       assert.throws(
         () => withInstallTransaction(repo, ['ui-lab'], () => undefined),
-        /install already in progress/i,
+        /install already in progress/i
       );
     });
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('skillRoots resolver runs after the install lock is acquired', async () => {
+  const { withInstallTransaction, INSTALL_LOCK_REL } =
+    await import('../lib/installTransaction.mjs');
+  const repo = makeRepo(SAMPLE_REPO);
+  try {
+    let sawLock = false;
+    withInstallTransaction(repo, ['ui-lab'], () => undefined, {
+      skillRoots: () => {
+        sawLock = fs.existsSync(path.join(repo, INSTALL_LOCK_REL));
+        return ['.cursor/skills'];
+      },
+    });
+    assert.equal(sawLock, true);
   } finally {
     cleanup(repo);
   }
@@ -129,11 +166,11 @@ test('executeInstall honors an existing repository install lock', () => {
   try {
     assert.throws(
       () => executeInstall(PKG_ROOT, repo, ['ui-lab']),
-      /install already in progress/i,
+      /install already in progress/i
     );
     assert.equal(
       fs.existsSync(path.join(repo, '.cursor/skills/ui-lab/SKILL.md')),
-      false,
+      false
     );
   } finally {
     cleanup(repo);
@@ -142,14 +179,22 @@ test('executeInstall honors an existing repository install lock', () => {
 
 test('assertWithin rejects a symlinked destination path', (t) => {
   const repo = makeRepo(SAMPLE_REPO);
-  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-skills-outside-'));
+  const outside = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'apex-skills-outside-')
+  );
   try {
     fs.mkdirSync(path.join(repo, '.cursor/skills'), { recursive: true });
     try {
-      fs.symlinkSync(outside, path.join(repo, '.cursor/skills/ui-lab'), 'junction');
+      fs.symlinkSync(
+        outside,
+        path.join(repo, '.cursor/skills/ui-lab'),
+        'junction'
+      );
     } catch (error) {
       if (error?.code === 'EPERM') {
-        t.skip('symlink creation requires elevated privileges on this Windows host');
+        t.skip(
+          'symlink creation requires elevated privileges on this Windows host'
+        );
         return;
       }
       throw error;
@@ -157,7 +202,7 @@ test('assertWithin rejects a symlinked destination path', (t) => {
 
     assert.throws(
       () => assertWithin(repo, '.cursor/skills/ui-lab/SKILL.md'),
-      /symbolic link|symlink/i,
+      /symbolic link|symlink/i
     );
   } finally {
     cleanup(repo);
@@ -167,18 +212,23 @@ test('assertWithin rejects a symlinked destination path', (t) => {
 
 test('assertWithin rejects a dangling symlink component', (t) => {
   const repo = makeRepo(SAMPLE_REPO);
-  const missingTarget = path.join(os.tmpdir(), `missing-apex-target-${Date.now()}`);
+  const missingTarget = path.join(
+    os.tmpdir(),
+    `missing-apex-target-${Date.now()}`
+  );
   try {
     fs.mkdirSync(path.join(repo, '.cursor/skills'), { recursive: true });
     try {
       fs.symlinkSync(
         missingTarget,
         path.join(repo, '.cursor/skills/ui-lab'),
-        'junction',
+        'junction'
       );
     } catch (error) {
       if (error?.code === 'EPERM') {
-        t.skip('symlink creation requires elevated privileges on this Windows host');
+        t.skip(
+          'symlink creation requires elevated privileges on this Windows host'
+        );
         return;
       }
       throw error;
@@ -186,15 +236,104 @@ test('assertWithin rejects a dangling symlink component', (t) => {
 
     assert.throws(
       () => assertWithin(repo, '.cursor/skills/ui-lab/SKILL.md'),
-      /symbolic link|symlink/i,
+      /symbolic link|symlink/i
     );
   } finally {
     cleanup(repo);
   }
 });
 
+test('lockfile v3 is current; v2 remains readable; newer versions fail closed', async () => {
+  const {
+    emptyLockfile,
+    verifyLockfileIntegrity,
+    serializeLockfile,
+    LOCKFILE_VERSION,
+    LOCKFILE_VERSION_V2,
+  } = await import('../lib/lockfile.mjs');
+
+  assert.equal(LOCKFILE_VERSION, 3);
+  assert.equal(LOCKFILE_VERSION_V2, 2);
+
+  const legacy = JSON.parse(
+    serializeLockfile(emptyLockfile('2.1.0', '@apex/skills'))
+  );
+  assert.equal(legacy.lockfileVersion, 2);
+  assert.equal(legacy.skillRoot, undefined);
+  assert.deepEqual(verifyLockfileIntegrity(legacy), {
+    valid: true,
+    error: null,
+  });
+
+  const current = JSON.parse(
+    serializeLockfile(emptyLockfile('2.1.0', '@apex/skills', '.agents/skills'))
+  );
+  assert.equal(current.lockfileVersion, 3);
+  assert.equal(current.skillRoot, '.agents/skills');
+  assert.deepEqual(verifyLockfileIntegrity(current), {
+    valid: true,
+    error: null,
+  });
+
+  const v2 = JSON.parse(
+    serializeLockfile({
+      lockfileVersion: 2,
+      suiteVersion: '2.0.0',
+      package: '@apex/skills',
+      skills: {},
+    })
+  );
+  assert.deepEqual(verifyLockfileIntegrity(v2), { valid: true, error: null });
+
+  const hashed = JSON.parse(
+    serializeLockfile({
+      lockfileVersion: 4,
+      suiteVersion: '2.1.0',
+      package: '@apex/skills',
+      skillRoot: '.cursor/skills',
+      skills: {},
+    })
+  );
+  const rejected = verifyLockfileIntegrity(hashed);
+  assert.equal(rejected.valid, false);
+  assert.match(rejected.error, /Unsupported lockfile version: 4/);
+
+  const v2WithRoot = verifyLockfileIntegrity({
+    lockfileVersion: 2,
+    suiteVersion: '2.0.3',
+    package: '@apex/skills',
+    skillRoot: '.agents/skills',
+    integrity: 'not-checked',
+    skills: {},
+  });
+  assert.equal(v2WithRoot.valid, false);
+  assert.match(v2WithRoot.error, /must omit skillRoot/);
+
+  const v3WithoutRoot = verifyLockfileIntegrity({
+    lockfileVersion: 3,
+    suiteVersion: '2.1.0',
+    package: '@apex/skills',
+    integrity: 'not-checked',
+    skills: {},
+  });
+  assert.equal(v3WithoutRoot.valid, false);
+  assert.match(v3WithoutRoot.error, /must include skillRoot/);
+
+  const v3LegacyRoot = verifyLockfileIntegrity({
+    lockfileVersion: 3,
+    suiteVersion: '2.1.0',
+    package: '@apex/skills',
+    skillRoot: '.cursor/skills',
+    integrity: 'not-checked',
+    skills: {},
+  });
+  assert.equal(v3LegacyRoot.valid, false);
+  assert.match(v3LegacyRoot.error, /legacy/);
+});
+
 test('lockfile integrity verification detects tampering', async () => {
-  const { verifyLockfileIntegrity } = await import('../lib/lockfile.mjs');
+  const { verifyLockfileIntegrity, serializeLockfile } =
+    await import('../lib/lockfile.mjs');
   assert.equal(typeof verifyLockfileIntegrity, 'function');
 
   const valid = JSON.parse(
@@ -203,9 +342,12 @@ test('lockfile integrity verification detects tampering', async () => {
       suiteVersion: '2.0.0',
       package: '@apex/skills',
       skills: {},
-    }),
+    })
   );
-  assert.deepEqual(verifyLockfileIntegrity(valid), { valid: true, error: null });
+  assert.deepEqual(verifyLockfileIntegrity(valid), {
+    valid: true,
+    error: null,
+  });
 
   valid.suiteVersion = '9.9.9';
   const tampered = verifyLockfileIntegrity(valid);
@@ -241,7 +383,10 @@ test('install validates lock integrity after acquiring the repository lock', () 
     const lockPath = path.join(repo, 'apex-skills.lock.json');
     let injected = false;
     fs.openSync = (target, flags, ...rest) => {
-      if (!injected && String(target).endsWith(path.join('.apex', 'install.lock'))) {
+      if (
+        !injected &&
+        String(target).endsWith(path.join('.apex', 'install.lock'))
+      ) {
         injected = true;
         const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
         lock.suiteVersion = '9.9.9';
@@ -256,9 +401,13 @@ test('install validates lock integrity after acquiring the repository lock', () 
 
     assert.throws(
       () => executeInstall(PKG_ROOT, repo, ['ui-lab']),
-      /lockfile integrity mismatch/i,
+      /lockfile integrity mismatch/i
     );
-    assert.equal(copyCalls, 0, 'invalid integrity must fail before transaction snapshots');
+    assert.equal(
+      copyCalls,
+      0,
+      'invalid integrity must fail before transaction snapshots'
+    );
   } finally {
     fs.openSync = originalOpenSync;
     fs.cpSync = originalCpSync;
@@ -267,9 +416,8 @@ test('install validates lock integrity after acquiring the repository lock', () 
 });
 
 test('transaction initialization failure does not leave a stale lock', async () => {
-  const { withInstallTransaction, INSTALL_LOCK_REL } = await import(
-    '../lib/installTransaction.mjs'
-  );
+  const { withInstallTransaction, INSTALL_LOCK_REL } =
+    await import('../lib/installTransaction.mjs');
   const repo = makeRepo(SAMPLE_REPO);
   const originalWriteFileSync = fs.writeFileSync;
   let openedFd = null;
@@ -283,7 +431,7 @@ test('transaction initialization failure does not leave a stale lock', async () 
     };
     assert.throws(
       () => withInstallTransaction(repo, ['ui-lab'], () => undefined),
-      /injected lock metadata failure/,
+      /injected lock metadata failure/
     );
   } finally {
     fs.writeFileSync = originalWriteFileSync;
@@ -310,22 +458,27 @@ test('v1 lockfile paths cannot escape the repository', () => {
   const repo = makeRepo({
     ...SAMPLE_REPO,
     '.apex/foundation/ui-lab/SKILL.md': 'LEGACY_FOUNDATION\n',
-    'apex-skills.lock.json': JSON.stringify({
-      lockfileVersion: 1,
-      suiteVersion: '0.2.0',
-      package: '@apex/skills',
-      skills: {
-        'ui-lab': {
-          vendored: { '../outside-secret.txt': 'deadbeef' },
-          adapterScaffolded: true,
+    'apex-skills.lock.json':
+      JSON.stringify(
+        {
+          lockfileVersion: 1,
+          suiteVersion: '0.2.0',
+          package: '@apex/skills',
+          skills: {
+            'ui-lab': {
+              vendored: { '../outside-secret.txt': 'deadbeef' },
+              adapterScaffolded: true,
+            },
+          },
         },
-      },
-    }, null, 2) + '\n',
+        null,
+        2
+      ) + '\n',
   });
   try {
     assert.throws(
       () => executeInstall(PKG_ROOT, repo, ['ui-lab']),
-      /escapes root|outside the legacy foundation directory/i,
+      /escapes root|outside the legacy foundation directory/i
     );
   } finally {
     cleanup(repo);
@@ -354,17 +507,17 @@ test('planInstall rejects rehashed v2 managed paths outside the skill directory'
             adapterScaffolded: true,
           },
         },
-      }),
+      })
     );
     fs.writeFileSync(
       path.join(repo, 'apex-skills.lock.json'),
-      JSON.stringify(malicious, null, 2) + '\n',
+      JSON.stringify(malicious, null, 2) + '\n'
     );
 
     const plan = planInstall(PKG_ROOT, repo, ['ui-lab']);
     assert.ok(
       plan.errors.some((error) => /outside.*ui-lab|escapes root/i.test(error)),
-      plan.errors.join('\n'),
+      plan.errors.join('\n')
     );
   } finally {
     cleanup(repo);
@@ -382,7 +535,7 @@ test('install refuses a tampered v2 lockfile', () => {
 
     assert.throws(
       () => executeInstall(PKG_ROOT, repo, ['ui-lab']),
-      /lockfile integrity mismatch/i,
+      /lockfile integrity mismatch/i
     );
   } finally {
     cleanup(repo);
@@ -438,9 +591,8 @@ test('check command exits nonzero for integrity or managed-file drift', () => {
     fs.rmSync(path.join(repo, '.cursor/skills/ui-lab/SKILL.md'));
 
     const logs = [];
-    const exitCode = cmdCheck(
-      { package: PKG_ROOT, cwd: repo },
-      (message) => logs.push(message),
+    const exitCode = cmdCheck({ package: PKG_ROOT, cwd: repo }, (message) =>
+      logs.push(message)
     );
 
     assert.equal(exitCode, 1);

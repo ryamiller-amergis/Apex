@@ -8,6 +8,12 @@ import * as projectAccessRequestService from '../services/projectAccessRequestSe
 import * as rfpSubmitAccessRequestService from '../services/rfpSubmitAccessRequestService';
 import * as groupService from '../services/groupService';
 import { requireSuperAdmin } from '../middleware/rbac';
+import {
+  addDevEnvAllowlistEntry,
+  DevEnvAllowlistError,
+  getDevEnvAllowlistView,
+  removeDevEnvAllowlistEntry,
+} from '../services/devEnvAllowlistService';
 
 jest.mock('../services/userProjectAssignmentService', () => ({
   bulkSetProjectAssignments: jest.fn(),
@@ -43,6 +49,21 @@ jest.mock('../services/groupService', () => ({
   listGroups: jest.fn(),
 }));
 
+jest.mock('../services/devEnvAllowlistService', () => {
+  class DevEnvAllowlistError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'DevEnvAllowlistError';
+    }
+  }
+  return {
+    DevEnvAllowlistError,
+    getDevEnvAllowlistView: jest.fn(),
+    addDevEnvAllowlistEntry: jest.fn(),
+    removeDevEnvAllowlistEntry: jest.fn(),
+  };
+});
+
 jest.mock('../services/featureFlagService', () => ({
   listFlags: jest.fn(),
   getFlag: jest.fn(),
@@ -65,6 +86,9 @@ const mockProjectAccessRequests = projectAccessRequestService as jest.Mocked<typ
 const mockRfpSubmitAccessRequests = rfpSubmitAccessRequestService as jest.Mocked<typeof rfpSubmitAccessRequestService>;
 const mockGroupService = groupService as jest.Mocked<typeof groupService>;
 const mockRequireSuperAdmin = requireSuperAdmin as jest.Mock;
+const mockGetDevEnvAllowlistView = getDevEnvAllowlistView as jest.MockedFunction<typeof getDevEnvAllowlistView>;
+const mockAddDevEnvAllowlistEntry = addDevEnvAllowlistEntry as jest.MockedFunction<typeof addDevEnvAllowlistEntry>;
+const mockRemoveDevEnvAllowlistEntry = removeDevEnvAllowlistEntry as jest.MockedFunction<typeof removeDevEnvAllowlistEntry>;
 
 function buildApp(userProfile: Record<string, unknown> = { oid: 'super-admin', displayName: 'Platform Admin' }) {
   const app = express();
@@ -521,6 +545,68 @@ describe('platformAdminRouter', () => {
 
       expect(res.status).toBeGreaterThanOrEqual(400);
       expect(mockMenuSettings.getMenuConfig).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('dev access list', () => {
+    it('returns the list for platform admins', async () => {
+      mockGetDevEnvAllowlistView.mockResolvedValue({
+        environment: 'dev',
+        managesDevAccess: true,
+        entries: [{
+          id: '11111111-1111-1111-1111-111111111111',
+          email: 'person@example.com',
+          createdBy: 'Ada',
+          createdAt: '2026-09-28T12:00:00.000Z',
+        }],
+      });
+
+      const res = await request(buildApp()).get('/api/platform-admin/dev-access');
+
+      expect(res.status).toBe(200);
+      expect(res.body.managesDevAccess).toBe(true);
+      expect(res.body.entries).toHaveLength(1);
+    });
+
+    it('adds an email and records who added it', async () => {
+      mockAddDevEnvAllowlistEntry.mockResolvedValue({
+        id: '11111111-1111-1111-1111-111111111111',
+        email: 'person@example.com',
+        createdBy: 'Platform Admin',
+        createdAt: '2026-09-28T12:00:00.000Z',
+      });
+
+      const res = await request(buildApp())
+        .post('/api/platform-admin/dev-access')
+        .send({ email: 'person@example.com' });
+
+      expect(res.status).toBe(201);
+      expect(mockAddDevEnvAllowlistEntry).toHaveBeenCalledWith('person@example.com', 'Platform Admin');
+    });
+
+    it('returns the service error when an email cannot be added', async () => {
+      mockAddDevEnvAllowlistEntry.mockRejectedValue(
+        new DevEnvAllowlistError('That email is already on the dev access list'),
+      );
+
+      const res = await request(buildApp())
+        .post('/api/platform-admin/dev-access')
+        .send({ email: 'person@example.com' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/already on the dev access list/);
+    });
+
+    it('removes an email', async () => {
+      mockRemoveDevEnvAllowlistEntry.mockResolvedValue(undefined);
+
+      const res = await request(buildApp())
+        .delete('/api/platform-admin/dev-access/11111111-1111-1111-1111-111111111111');
+
+      expect(res.status).toBe(204);
+      expect(mockRemoveDevEnvAllowlistEntry).toHaveBeenCalledWith(
+        '11111111-1111-1111-1111-111111111111',
+      );
     });
   });
 });

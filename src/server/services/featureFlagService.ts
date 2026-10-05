@@ -29,6 +29,7 @@ const NATIVE_READ_FLAG = 'native-read';
 const SHARED_READ_CHECKOUT_FLAG = 'shared-readonly-grounding-checkout';
 const PROJECT_REPOSITORY_CHECKOUT_READINESS_FLAG =
   'project-repository-checkout-readiness';
+const REPO_READ_SERVICE_FLAG = 'repo-read-service';
 
 // ── listFlags ────────────────────────────────────────────────────────────────
 
@@ -387,6 +388,13 @@ export async function isProjectRepositoryCheckoutReadinessEnabled(
     ctx,
     onEvaluationError,
   );
+}
+
+export async function isRepoReadServiceEnabledForCaller(
+  ctx: GroundingFlagContext,
+  onEvaluationError?: FlagEvaluationErrorHandler,
+): Promise<boolean> {
+  return evaluateGroundingFlag(REPO_READ_SERVICE_FLAG, ctx, onEvaluationError);
 }
 
 /**

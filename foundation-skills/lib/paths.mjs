@@ -7,6 +7,7 @@
 
 import { dirname, join, resolve, relative, sep, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { LEGACY_SKILL_ROOT } from './skillRoot.mjs';
 
 /** Absolute path to the root of the @apex/skills package (foundation-skills/) */
 export const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -22,7 +23,8 @@ export const FOUNDATION_DIR = join(PACKAGE_ROOT, 'foundation');
  * The repo root is the current working directory when `apex-skills install` runs.
  */
 export const LOCK_FILENAME   = 'apex-skills.lock.json';
-export const ADAPTER_DEST    = '.cursor/skills';     // fenced adapters + companions
+/** @deprecated Resolve the canonical root from apex-skills.lock.json. */
+export const ADAPTER_DEST    = LEGACY_SKILL_ROOT;
 export const BACKUP_DEST     = '.apex/backups';       // in-fence edit backups
 /** @deprecated v1 layout — migration only */
 export const FOUNDATION_DEST = '.apex/foundation';

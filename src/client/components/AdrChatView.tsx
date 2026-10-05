@@ -7,6 +7,8 @@ import { useAppShell } from '../hooks/useAppShell';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatThread, useSkillRepos, useStartChat } from '../hooks/useChatThreads';
 import type { ChatMessage } from '../../shared/types/chat';
+import { effortLabel } from '../../shared/utils/effort';
+import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 import { useAvailableModels, useGlobalDefaultModel, useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
 import {
   useAdr,
@@ -44,9 +46,13 @@ import {
   PROJECT_REPOSITORY_NOT_READY_MESSAGE,
   useProjectRepositoryReadiness,
 } from '../hooks/useProjectRepositoryReadiness';
+import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
+import { useReviewerAvailability } from '../hooks/useReviewerAvailability';
 import { parseAgentMessage, type ChoiceBlock } from '../utils/parseAgentMessage';
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './InterviewChatView.module.css';
+import { ApexLoader } from './ApexLoader';
+import { ArtifactUsageStrip } from './ArtifactUsageStrip';
 
 function formatElapsed(milliseconds: number): string {
   const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
@@ -76,6 +82,7 @@ const NewAdrCompose: React.FC = () => {
   const startChat = useStartChat();
   const createAdr = useCreateAdr();
   const repoReadiness = useProjectRepositoryReadiness(skillConfig?.id, selectedProject || null);
+  const reviewerAvailability = useReviewerAvailability(selectedProject || null, 'adr');
   const {
     attachments,
     attachmentError,
@@ -101,17 +108,6 @@ const NewAdrCompose: React.FC = () => {
   useEffect(() => {
     setModel(skillConfig?.adrModel ?? globalDefault?.value ?? DEFAULT_MODEL_ID);
   }, [skillConfig?.adrModel, globalDefault?.value]);
-
-  const handleStart = useCallback(() => {
-    if (!title.trim() || (!input.trim() && attachments.length === 0) || !repo || pending) return;
-    if (!repoReadiness.isReady) {
-      setError(repoReadiness.message ?? PROJECT_REPOSITORY_NOT_READY_MESSAGE);
-      return;
-    }
-    if (speech.isListening) speech.stop();
-    setError(null);
-    setShowReviewerModal(true);
-  }, [title, input, attachments.length, repo, pending, speech, repoReadiness.isReady, repoReadiness.message]);
 
   const handleCreateAdr = useCallback(async (reviewerIds: string[]) => {
     if (!title.trim() || (!input.trim() && attachments.length === 0) || !repo || pending) return;
@@ -165,6 +161,35 @@ const NewAdrCompose: React.FC = () => {
       setError(caught instanceof Error ? caught.message : 'Failed to start ADR');
     }
   }, [title, input, attachments, repo, pending, startChat, selectedProject, branch, skillConfig, model, createAdr, clearAttachments, navigate, queryClient, repoReadiness.isReady, repoReadiness.message]);
+
+  const handleStart = useCallback(() => {
+    if (!title.trim() || (!input.trim() && attachments.length === 0) || !repo || pending) return;
+    if (!repoReadiness.isReady) {
+      setError(repoReadiness.message ?? PROJECT_REPOSITORY_NOT_READY_MESSAGE);
+      return;
+    }
+    if (reviewerAvailability.isLoading || reviewerAvailability.isError || !reviewerAvailability.data) return;
+    if (speech.isListening) speech.stop();
+    setError(null);
+    if (reviewerAvailability.data.modules[0]?.available) {
+      setShowReviewerModal(true);
+      return;
+    }
+    void handleCreateAdr([]);
+  }, [
+    title,
+    input,
+    attachments.length,
+    repo,
+    pending,
+    repoReadiness.isReady,
+    repoReadiness.message,
+    reviewerAvailability.isLoading,
+    reviewerAvailability.isError,
+    reviewerAvailability.data,
+    speech,
+    handleCreateAdr,
+  ]);
 
   const handleAttachmentChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files) void addFiles(event.target.files);
@@ -241,6 +266,23 @@ const NewAdrCompose: React.FC = () => {
           )}
           {attachmentError && <div className={styles.attachmentError}>{attachmentError}</div>}
           {error && <div className={styles.composeError}>{error}</div>}
+          {reviewerAvailability.isError && (
+            <div
+              className={styles.composeError}
+              id="adr-reviewer-availability-error"
+              role="alert"
+              {...{ 'data-testid': 'adr-reviewer-availability-error' }}
+            >
+              <span>Unable to check ADR reviewer availability. Your draft has been preserved.</span>
+              <button
+                type="button"
+                onClick={() => void reviewerAvailability.refetch()}
+                {...{ 'data-testid': 'adr-reviewer-availability-retry' }}
+              >
+                Retry
+              </button>
+            </div>
+          )}
           {speech.speechError && <div className={styles.speechError}>{speech.speechError}</div>}
           <div className={styles.inputActions}>
             <button
@@ -286,9 +328,14 @@ const NewAdrCompose: React.FC = () => {
               className={styles.sendBtn}
               type="button"
               aria-label="Start ADR"
-              disabled={!title.trim() || (!input.trim() && attachments.length === 0) || !repo || pending || !repoReadiness.isReady}
+              aria-busy={reviewerAvailability.isLoading}
+              disabled={!title.trim() || (!input.trim() && attachments.length === 0) || !repo || pending || !repoReadiness.isReady || reviewerAvailability.isLoading || reviewerAvailability.isError || !reviewerAvailability.data}
               onClick={() => void handleStart()}
-              {...{ 'data-testid': 'adr-compose-start' }}
+              {...{
+                'data-testid': reviewerAvailability.data?.modules[0]?.available === false
+                  ? 'create-adr-no-reviewers'
+                  : 'adr-compose-start',
+              }}
             >
               {pending ? '…' : '→'}
             </button>
@@ -334,11 +381,15 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const location = useLocation();
   const kickoffFromNav = (location.state as AdrKickoffLocationState | null)?.kickoffPrompt?.trim() || null;
   const [seededKickoffPrompt, setSeededKickoffPrompt] = useState<string | null>(kickoffFromNav);
-  const { can, userId } = useAppShell();
+  const { can, userId, isSuperAdmin } = useAppShell();
   const { data: adr, isLoading, isError } = useAdr(id);
   const { data: reviewConfig } = useProjectSkillConfig(adr?.project);
   const { data: models = [], isLoading: modelsLoading } = useAvailableModels();
-  const { data: assignments = [] } = useAdrAssignments(id);
+  const {
+    data: assignments = [],
+    isLoading: assignmentsLoading,
+    isError: assignmentsError,
+  } = useAdrAssignments(id);
   const { data: reviewComments = [] } = useAdrComments(id);
   const { data: ownerApproval } = useAdrOwnerApproval(id);
   const {
@@ -359,6 +410,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     progressPhase,
     isPreparing,
     hasPreparationError,
+    showTypingIndicator,
   } = session;
   const {
     attachments,
@@ -383,6 +435,12 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const fixCommentWithAi = useFixAdrCommentWithAi(id);
   const isRunning = session.isRunning || thread?.status === 'running';
   const isInteractionBusy = session.isInteractionBusy || isRunning;
+  const resumeGate = useGroundingResumeGate(
+    'adr',
+    id,
+    adr?.project ?? null,
+    isRunning,
+  );
   const isAgentProcessing = isRunning || session.isSending || session.isAwaitingAgentResponse;
   const isAuthor = adr?.authorId === userId;
   const chatLocked = !isAuthor || adr?.status !== 'in_progress';
@@ -403,13 +461,18 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
 
   const handleSubmitComment = useCallback(async () => {
     if (!pendingSelector || !newCommentBody.trim()) return;
-    await createComment.mutateAsync({
-      sectionKey: pendingSelector.sectionKey,
-      selector: pendingSelector.selector,
-      body: newCommentBody.trim(),
-    });
-    setPendingSelector(null);
-    setNewCommentBody('');
+    setError(null);
+    try {
+      await createComment.mutateAsync({
+        sectionKey: pendingSelector.sectionKey,
+        selector: pendingSelector.selector,
+        body: newCommentBody.trim(),
+      });
+      setPendingSelector(null);
+      setNewCommentBody('');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Failed to post comment');
+    }
   }, [createComment, newCommentBody, pendingSelector]);
 
   const handleFixComment = useCallback(async (commentId: string) => {
@@ -443,7 +506,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   }, [adr?.status]);
 
   const send = useCallback(async (text: string) => {
-    if (!adr || isInteractionBusy || chatLocked) return;
+    if (!adr || isInteractionBusy || chatLocked || resumeGate.composerBlocked) return;
     if (!text.trim() && attachments.length === 0) return;
     const payload = text.trim();
     const pendingAttachments = attachments;
@@ -452,7 +515,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     setError(null);
     await session.send(payload, { model, attachments: pendingAttachments });
     if (session.sendError) setError(session.sendError);
-  }, [adr, attachments, chatLocked, clearAttachments, isInteractionBusy, model, session]);
+  }, [adr, attachments, chatLocked, clearAttachments, isInteractionBusy, model, resumeGate.composerBlocked, session]);
 
   const cancelActiveRun = useCallback(async () => {
     setError(null);
@@ -490,22 +553,32 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     if (hasKickoffEcho) setSeededKickoffPrompt(null);
   }, [seededKickoffPrompt, sessionVisibleMessages]);
 
-  if (isLoading) return <div className={styles.loadingState}>Loading ADR…</div>;
+  if (isLoading) {
+    return (
+      <div className={styles.loadingState} role="status" aria-busy="true" aria-label="Loading ADR">
+        <ApexLoader size={72} />
+        <div className={styles.loadingLabel}>Loading ADR…</div>
+      </div>
+    );
+  }
   if (isError || !adr) return <div className={styles.errorState}>ADR not found.</div>;
 
   const unresolvedCount = reviewComments.filter((comment) => comment.status === 'open').length;
   const currentAssignment = assignments.find((assignment) => assignment.approverUserId === userId);
   const isAssignedReviewer = !!currentAssignment;
-  const approvalMode = reviewConfig?.approvalMode ?? 'any_one';
-  const reviewerApprovalComplete = assignments.length === 0
-    ? true
-    : approvalMode === 'all_required'
-      ? assignments.every((assignment) => assignment.status === 'approved')
-      : assignments.some((assignment) => assignment.status === 'approved');
+  const ownerOnly = !assignmentsLoading && !assignmentsError && assignments.length === 0;
+  const approvalMode = reviewConfig?.approvalModes?.adr ?? reviewConfig?.approvalMode ?? 'any_one';
+  const reviewerApprovalComplete = assignmentsLoading || assignmentsError
+    ? false
+    : assignments.length === 0
+      ? true
+      : approvalMode === 'all_required'
+        ? assignments.every((assignment) => assignment.status === 'approved')
+        : assignments.some((assignment) => assignment.status === 'approved');
   const canReviewAdr = can('adr:review') && isAssignedReviewer && !isAuthor && adr.status === 'proposed';
-  const showCommentLayer = (adr.status === 'proposed' || adr.status === 'accepted')
-    && (isAssignedReviewer || isAuthor);
-  const ownerCanFinalize = isAuthor
+  const showCommentLayer = adr.status === 'proposed' || adr.status === 'accepted';
+  const canActAsOwner = isAuthor || (ownerOnly && isSuperAdmin);
+  const ownerCanFinalize = canActAsOwner
     && adr.status === 'proposed'
     && reviewerApprovalComplete
     && unresolvedCount === 0
@@ -566,7 +639,12 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
             <h1 className={styles.title}>{adr.title}</h1>
             <div className={styles.titleMeta}>
               {adr.project} · {adr.repo} · {adr.status.replace('_', ' ')} · Owner: {adr.ownerName} · Reviewers: {reviewerNames} · Model: {adr.model ?? 'Default'}
+              {adr.effort ? ` · Effort: ${effortLabel(adr.effort)}` : ''}
             </div>
+            <ArtifactUsageStrip
+              endpoint={`/api/adr/${adr.id}/usage`}
+              visible={adr.status !== 'in_progress'}
+            />
           </div>
         </div>
         <div className={styles.actions}>
@@ -581,29 +659,35 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               {generateAdr.isPending ? 'Generating…' : 'Generate ADR'}
             </button>
           )}
-          {isAuthor && adr.status === 'proposed' && can('adr:edit') && (
+          {(isAuthor || ownerOnly) && adr.status === 'proposed' && (can('adr:edit') || ownerOnly) && (
             <>
-              <button
-                className={styles.actionBtn}
-                type="button"
-                onClick={() => setReviewerModalOpen(true)}
-                {...{ 'data-testid': 'adr-manage-reviewers-btn' }}
-              >
-                Manage Reviewers
-              </button>
-              <button
-                className={styles.actionBtn}
-                type="button"
-                aria-expanded={assistantOpen}
-                onClick={() => setAssistantOpen((open) => !open)}
-                {...{ 'data-testid': 'adr-assistant-toggle-btn' }}
-              >
-                ADR Apex Assistant
-              </button>
+              {!ownerOnly && (
+                <button
+                  className={styles.actionBtn}
+                  type="button"
+                  onClick={() => setReviewerModalOpen(true)}
+                  {...{ 'data-testid': 'adr-manage-reviewers-btn' }}
+                >
+                  Manage Reviewers
+                </button>
+              )}
+              {isAuthor && (
+                <button
+                  className={styles.actionBtn}
+                  type="button"
+                  aria-expanded={assistantOpen}
+                  onClick={() => setAssistantOpen((open) => !open)}
+                  {...{ 'data-testid': 'adr-assistant-toggle-btn' }}
+                >
+                  ADR Apex Assistant
+                </button>
+              )}
               <button
                 className={styles.actionBtn}
                 type="button"
                 disabled={!ownerCanFinalize || respondToOwnerApproval.isPending}
+                aria-disabled={!ownerCanFinalize || respondToOwnerApproval.isPending}
+                aria-describedby={ownerOnly && !canActAsOwner ? 'owner-approve-disabled-reason' : undefined}
                 title={
                   adr.proposedContent != null
                     ? 'Apply or reject the proposed edits before accepting the ADR'
@@ -624,6 +708,15 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               >
                 {respondToOwnerApproval.isPending ? 'Accepting…' : 'Accept ADR'}
               </button>
+              {ownerOnly && !canActAsOwner && (
+                <span
+                  id="owner-approve-disabled-reason"
+                  role="status"
+                  {...{ 'data-testid': 'owner-approve-disabled-reason' }}
+                >
+                  Only the document owner or a Platform Admin can approve
+                </span>
+              )}
             </>
           )}
           {canReviewAdr && currentAssignment?.status !== 'approved' && (
@@ -712,6 +805,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
           <span><strong>Owner:</strong> {adr.ownerName}</span>
           <span><strong>Reviewers:</strong> {reviewerNames}</span>
           <span><strong>Model:</strong> {adr.model ?? 'Default'}</span>
+          {adr.effort && <span><strong>Effort:</strong> {effortLabel(adr.effort)}</span>}
           <span><strong>Review:</strong> {approvalSummary}{ownerApproval?.status === 'approved' ? ' · Owner approved' : ''}</span>
         </div>
       )}
@@ -837,19 +931,20 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                 >
                   {progressPhase === 'queued' ? (
                     <span {...{ 'data-testid': 'agent-run-status-queued' }}>
-                      Queued — waiting for available worker
+                      {friendlyChatProgressLabel(progressLabel, 'queued')}
                     </span>
                   ) : progressPhase === 'dispatched' ? (
                     <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
-                      Starting…
+                      {friendlyChatProgressLabel(progressLabel, 'dispatched')}
                     </span>
+                  ) : progressLabel ? (
+                    friendlyChatProgressLabel(progressLabel, progressPhase)
+                  ) : isChatThreadError ? (
+                    'The ADR service is reconnecting after a temporary interruption…'
+                  ) : isChatThreadLoading ? (
+                    'Connecting to the ADR service…'
                   ) : (
-                    progressLabel
-                      ?? (isChatThreadError
-                        ? 'The ADR service is reconnecting after a temporary interruption…'
-                        : isChatThreadLoading
-                          ? 'Connecting to the ADR service…'
-                          : 'Setting up the workspace and repository context so your ADR interview starts grounded…')
+                    'Setting up the workspace and repository context so your ADR interview starts grounded…'
                   )}
                 </p>
               </div>
@@ -860,18 +955,21 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
               </div>
             )}
-            {isAgentProcessing && !streamingText && !showPreparationState && (
+            {showTypingIndicator && !showPreparationState && (
               <div
                 className={styles.typingIndicator}
                 role="status"
                 aria-live="polite"
-                aria-label="Architect is processing your response"
+                aria-label={friendlyChatProgressLabel(progressLabel, progressPhase) || 'Architect is processing your response'}
                 {...{ 'data-testid': 'adr-agent-processing' }}
               >
                 <span aria-hidden="true" {...{ 'data-testid': 'chat-run-spinner' }} />
                 <span className={styles.typingDot} />
                 <span className={styles.typingDot} />
                 <span className={styles.typingDot} />
+                <span className={styles.typingProgressLabel} {...{ 'data-testid': 'adr-progress-label' }}>
+                  {friendlyChatProgressLabel(progressLabel, progressPhase)}
+                </span>
               </div>
             )}
             <div ref={messagesEndRef} />
@@ -885,12 +983,13 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
       ) : !adr.content && (chatLocked ? (
         <div className={styles.lockedNotice}>This ADR conversation is read-only.</div>
       ) : (
+        <>
         <AgentComposer
           value={input}
           onChange={setInput}
           onSend={() => void send(input)}
           onCancel={() => void cancelActiveRun()}
-          disabled={isInteractionBusy}
+          disabled={isInteractionBusy || resumeGate.composerBlocked}
           isRunning={isRunning}
           isSending={session.isSending}
           isBusy={isInteractionBusy}
@@ -929,6 +1028,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
             />
           )}
         />
+        </>
       ))}
       {pendingSelector && (
         <div

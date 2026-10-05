@@ -211,6 +211,7 @@ describe('startScoping', () => {
       USER_ID,
       expect.objectContaining({
         project: PROJECT_ID,
+        agentModule: 'designModuleScoping',
         repo: 'org/repo',
         skillPath: DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH,
         freeformContext: expect.stringContaining('Load Testing'),

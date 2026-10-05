@@ -31,7 +31,7 @@ The spacing scale (e.g. 4 / 8 / 12 / 16 / 24 / 32 px) and font-role conventions 
 
 ## How APEX uses this file
 
-1. `prototypeContextService` fetches `.cursor/skills/design-system/SKILL.md` from the project's ADO repo (path configurable via **prototypeDesignSystemPath** in project settings; defaults to this path).
+1. `prototypeContextService` fetches `design-system/SKILL.md` from the configured canonical skill root in the project's repository (the complete path remains configurable via **prototypeDesignSystemPath**).
 2. The raw markdown is passed as `ctx.designSystemMarkdown` to the Bedrock prototype prompt.
 3. Bedrock is instructed: *"Use ONLY the colors and tokens defined in this Design System section. Never invent, approximate, or sample any hex/rgba value not listed here."*
 

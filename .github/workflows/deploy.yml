@@ -117,8 +117,11 @@ jobs:
           cd ..
           (cd deploy && zip -r ../deploy.zip .)
 
-      - name: Verify packaged native dependencies
-        run: node -e "require('./deploy/node_modules/sqlite3'); console.log('sqlite3 binding loaded')"
+      - name: Verify packaged runtime dependencies
+        working-directory: deploy
+        run: |
+          node -e "require('sqlite3'); console.log('sqlite3 binding loaded')"
+          node -e "Promise.all([import('@mastra/core'), import('@mastra/core/workflows'), import('@mastra/pg')]).then(() => console.log('Playbook engine dependencies loaded'))"
 
       - name: Login to Azure
         uses: azure/login@v2
@@ -130,6 +133,34 @@ jobs:
           echo "AZURE_TENANT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.tenantId')" >> $GITHUB_ENV
           echo "AZURE_CLIENT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientId')" >> $GITHUB_ENV
           echo "AZURE_CLIENT_SECRET=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientSecret')" >> $GITHUB_ENV
+
+      # Migrations and staging settings use secrets.DATABASE_URL. Production keeps its
+      # own sticky value. Fail before slot configure/swap if those hosts diverge so we
+      # never migrate one DB then promote code onto another.
+      - name: Verify GitHub DATABASE_URL matches production
+        env:
+          SECRET_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          host_of() {
+            printf '%s' "$1" | sed -E 's#.*@([^/:?]+).*#\1#'
+          }
+          PROD_URL=$(az webapp config appsettings list \
+            --name "${{ env.APP_SERVICE_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP_NAME }}" \
+            --query "[?name=='DATABASE_URL'].value | [0]" -o tsv)
+          if [ -z "$PROD_URL" ] || [ -z "$SECRET_DATABASE_URL" ]; then
+            echo "ERROR: DATABASE_URL missing on production App Service or in GitHub secrets" >&2
+            exit 1
+          fi
+          PROD_HOST=$(host_of "$PROD_URL")
+          SECRET_HOST=$(host_of "$SECRET_DATABASE_URL")
+          echo "production_db_host=$PROD_HOST"
+          echo "github_secret_db_host=$SECRET_HOST"
+          if [ "$PROD_HOST" != "$SECRET_HOST" ]; then
+            echo "ERROR: production DATABASE_URL host ($PROD_HOST) does not match GitHub secrets.DATABASE_URL host ($SECRET_HOST)." >&2
+            echo "Update the GitHub environment DATABASE_URL secret to match production before deploying." >&2
+            exit 1
+          fi
 
       - name: Configure staging slot settings
         env:
@@ -201,6 +232,7 @@ jobs:
               CURSOR_API_KEY="${{ secrets.CURSOR_API_KEY }}" \
               CURSOR_TEAM_API_KEY="${{ secrets.CURSOR_TEAM_API_KEY }}" \
               AGENT_RUN_HARD_LIMIT_MS="${{ secrets.AGENT_RUN_HARD_LIMIT_MS }}" \
+              AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS="${{ vars.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS || '600000' }}" \
               PORT=8080 \
               POLL_INTERVAL=30 \
               WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
@@ -251,6 +283,8 @@ jobs:
           # Mark sticky slot settings (these stay with their slot during swap)
           # LT_APEX_CALLBACK_BASE_URL must be sticky so staging dispatches callback
           # to the staging host and production keeps the production host.
+          # Staging DATABASE_URL tracks secrets.DATABASE_URL (set above) and is
+          # sticky so a swap cannot move it onto production.
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
@@ -258,14 +292,27 @@ jobs:
             --slot-settings \
               AZURE_REDIRECT_URL="${STAGING_REDIRECT_URL}" \
               APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
+              DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
               APEX_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net"
 
           # Production slot sticky callback + shared MI runner auth (not swapped away).
+          # Re-mark the *existing* production DATABASE_URL as sticky — do not write
+          # secrets.DATABASE_URL here, or every deploy would overwrite a portal
+          # cutover with a stale GitHub secret (Aug 25 failure mode).
+          PROD_DATABASE_URL=$(az webapp config appsettings list \
+            --name ${{ env.APP_SERVICE_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
+            --query "[?name=='DATABASE_URL'].value | [0]" -o tsv)
+          if [ -z "$PROD_DATABASE_URL" ]; then
+            echo "ERROR: production DATABASE_URL is empty; refusing to clear it" >&2
+            exit 1
+          fi
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot-settings \
+              DATABASE_URL="$PROD_DATABASE_URL" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net" \
               APEX_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net"
 
@@ -281,6 +328,7 @@ jobs:
               AI_RUNS_SERVICEBUS_NAMESPACE="${{ vars.AI_RUNS_SERVICEBUS_NAMESPACE }}" \
               AI_RUNS_BACKGROUND_QUEUE_NAME="${{ vars.AI_RUNS_BACKGROUND_QUEUE_NAME }}" \
               AI_RUNS_BACKGROUND_INFLIGHT_LIMIT="${{ vars.AI_RUNS_BACKGROUND_INFLIGHT_LIMIT }}" \
+              AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS="${{ vars.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS || '600000' }}" \
               AI_RUNS_CALLBACK_TOKEN_AUDIENCE="${{ vars.AI_RUNS_CALLBACK_TOKEN_AUDIENCE }}" \
               AI_RUNS_RUNNER_ALLOWED_CLIENT_IDS="${{ vars.AI_RUNS_RUNNER_ALLOWED_CLIENT_IDS }}" \
               AI_RUNS_RUNNER_CALLBACK_TOKEN="${{ secrets.AI_RUNS_RUNNER_CALLBACK_TOKEN }}" \
@@ -297,18 +345,93 @@ jobs:
           # WEBSITES_CONTAINER_START_TIME_LIMIT (230s) when apt mirrors are slow,
           # which takes instances out of rotation (503 / timeouts).
           # safe.directory is handled in application code (repoCheckoutService.ts).
-          az webapp config set \
-            --name ${{ env.APP_SERVICE_NAME }} \
-            --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
-            --slot ${{ env.SLOT_NAME }} \
-            --linux-fx-version "NODE|24-lts" \
-            --startup-file 'bash -c "(command -v git >/dev/null 2>&1 || (apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git || true) &) && exec node /home/site/wwwroot/dist/server/index.js"'
+          #
+          # Write only when a value actually differs. Setting linux-fx-version
+          # or the startup file restarts the slot along with its SCM container,
+          # and Kudu aborts a ZIP deploy that begins during that restart
+          # ("Deployment has been stopped due to SCM container restart"). That
+          # is what failed the 2026-09-11 production deploy after 26 minutes,
+          # leaving a merged fix undeployed. These values are identical on
+          # nearly every run, so writing them unconditionally bought a restart,
+          # and a chance of that race, for no change at all.
+          DESIRED_FX="NODE|24-lts"
+          DESIRED_STARTUP='bash -c "(command -v git >/dev/null 2>&1 || (apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git || true) &) && exec node /home/site/wwwroot/dist/server/index.js"'
 
-          az webapp update \
+          SITE_CONFIG=$(az webapp config show \
+            --name ${{ env.APP_SERVICE_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
+            --slot ${{ env.SLOT_NAME }} -o json)
+          CURRENT_FX=$(printf '%s' "$SITE_CONFIG" | jq -r '.linuxFxVersion // ""')
+          CURRENT_STARTUP=$(printf '%s' "$SITE_CONFIG" | jq -r '.appCommandLine // ""')
+
+          if [ "$CURRENT_FX" = "$DESIRED_FX" ] && [ "$CURRENT_STARTUP" = "$DESIRED_STARTUP" ]; then
+            echo "Runtime and startup command already current — skipping (no slot restart)."
+          else
+            echo "Runtime/startup differs from desired; applying (this restarts the slot)."
+            az webapp config set \
+              --name ${{ env.APP_SERVICE_NAME }} \
+              --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
+              --slot ${{ env.SLOT_NAME }} \
+              --linux-fx-version "$DESIRED_FX" \
+              --startup-file "$DESIRED_STARTUP"
+          fi
+
+          CURRENT_AFFINITY=$(az webapp show \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot ${{ env.SLOT_NAME }} \
-            --set clientAffinityEnabled=true
+            --query clientAffinityEnabled -o tsv)
+          if [ "$CURRENT_AFFINITY" = "true" ]; then
+            echo "clientAffinityEnabled already true — skipping."
+          else
+            az webapp update \
+              --name ${{ env.APP_SERVICE_NAME }} \
+              --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
+              --slot ${{ env.SLOT_NAME }} \
+              --set clientAffinityEnabled=true
+          fi
+
+      - name: Wait for SCM to settle before deploying
+        run: |
+          # The step above writes app settings on every run, and that alone
+          # restarts the slot's container. Kudu aborts a ZIP deploy started
+          # while SCM is restarting. Poll Kudu so the deploy begins against a
+          # live SCM rather than racing a restart it cannot see.
+          #
+          # A single 200 only proves SCM answers right now. A write above can
+          # queue a restart that has not begun yet, so one success can land
+          # before the very restart this step exists to wait out. Let the
+          # restart surface first, then require consecutive successes so a brief
+          # window of availability is not mistaken for a settled container.
+          SCM_HOST="${APP_SERVICE_NAME}-${SLOT_NAME}.scm.azurewebsites.net"
+          SETTLE_DELAY_SECONDS=20
+          REQUIRED_STREAK=3
+          TOKEN=$(az account get-access-token \
+            --resource https://management.azure.com \
+            --query accessToken -o tsv)
+          sleep "$SETTLE_DELAY_SECONDS"
+          streak=0
+          for attempt in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+              -H "Authorization: Bearer $TOKEN" \
+              "https://$SCM_HOST/api/settings" || true)
+            if [ "$code" = "200" ]; then
+              streak=$((streak + 1))
+              if [ "$streak" -ge "$REQUIRED_STREAK" ]; then
+                echo "SCM settled: $REQUIRED_STREAK consecutive successes."
+                exit 0
+              fi
+            else
+              if [ "$streak" -gt 0 ]; then
+                echo "  SCM dropped out again (http=$code); streak reset."
+              fi
+              streak=0
+            fi
+            sleep 5
+          done
+          # Deploy anyway rather than failing the run outright: if SCM really is
+          # down the deploy reports it with a clearer error than this probe can.
+          echo "SCM did not settle within ~5 minutes; deploying anyway." >&2
 
       - name: Deploy to staging slot
         uses: azure/webapps-deploy@v3
@@ -355,6 +478,21 @@ jobs:
           AI_RUNS_INTERACTIVE_IMAGE_REPO: ${{ vars.AI_RUNS_INTERACTIVE_IMAGE_REPO }}
           IMAGE_TAG: ${{ github.sha }}
         run: bash scripts/ci/publish-ai-runs-interactive.sh
+
+      # Stage 3 repo-read service. The script exits cleanly when the Container
+      # App name is unset or Terraform has not applied enable_repo_read_service,
+      # so this stays green until the service is provisioned.
+      - name: Publish repo-read service image
+        if: >-
+          steps.image_publish.outputs.repo_read_service == 'true' &&
+          hashFiles('runners/repo-read-service/Dockerfile') != ''
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          REPO_READ_SERVICE_CONTAINER_APP_NAME: ${{ vars.REPO_READ_SERVICE_CONTAINER_APP_NAME }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
+          REPO_READ_SERVICE_IMAGE_REPO: ${{ vars.REPO_READ_SERVICE_IMAGE_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: bash scripts/ci/publish-repo-read-service.sh
 
       - name: Health check staging slot
         run: |

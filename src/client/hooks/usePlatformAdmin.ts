@@ -29,6 +29,10 @@ import type {
   UpdateRestrictedUserAccessRequest,
 } from '../../shared/types/restrictedAccess';
 import type { PlatformAdminRfpSubmitAccessRequest } from '../../shared/types/rfpIntake';
+import type {
+  DevEnvAllowlistEntry,
+  DevEnvAllowlistResponse,
+} from '../../shared/types/devEnvAllowlist';
 
 export const platformAdminQueryKeys = {
   projects: ['platform-admin', 'projects'] as const,
@@ -43,6 +47,7 @@ export const platformAdminQueryKeys = {
   menuSetting: (project: string | null) => ['platform-admin', 'menu-settings', project] as const,
   userAccess: ['platform-admin', 'user-access'] as const,
   userAccessRoles: ['platform-admin', 'user-access', 'roles'] as const,
+  devAccess: ['platform-admin', 'dev-access'] as const,
 };
 
 export const projectAccessRequestQueryKeys = {
@@ -404,6 +409,41 @@ export function useDeletePlatformAdminUserAccess() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.userAccess });
+    },
+  });
+}
+
+export function useDevEnvAllowlist() {
+  return useQuery<DevEnvAllowlistResponse>({
+    queryKey: platformAdminQueryKeys.devAccess,
+    queryFn: () => platformAdminFetch<DevEnvAllowlistResponse>('/api/platform-admin/dev-access'),
+  });
+}
+
+export function useAddDevEnvAllowlistEntry() {
+  const queryClient = useQueryClient();
+  return useMutation<DevEnvAllowlistEntry, Error, string>({
+    mutationFn: (email) =>
+      platformAdminFetch<DevEnvAllowlistEntry>('/api/platform-admin/dev-access', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.devAccess });
+    },
+  });
+}
+
+export function useRemoveDevEnvAllowlistEntry() {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error, { id: string }>({
+    mutationFn: ({ id }) =>
+      platformAdminFetch<void>(`/api/platform-admin/dev-access/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.devAccess });
     },
   });
 }

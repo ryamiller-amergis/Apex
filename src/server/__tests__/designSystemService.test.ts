@@ -11,7 +11,7 @@ import https from 'https';
 
 jest.mock('https');
 
-import { fetchExistingPageContext, clearDesignSystemCache } from '../services/designSystemService';
+import { fetchExistingPageContext, getScreenInventory, clearDesignSystemCache } from '../services/designSystemService';
 
 const INVENTORY_PATH = '/.cursor/skills/figma-ui-knowledge-base/clientapp-screens.md';
 
@@ -193,5 +193,36 @@ describe('fetchExistingPageContext — deep traversal + keyword prioritization',
     expect(context).toContain('…truncated…');
     // Budget is exhausted by the page, so no child files are appended.
     expect(context).not.toContain('TimecardsGrid.js');
+  });
+});
+
+describe('getScreenInventory — per-project source', () => {
+  beforeEach(() => {
+    clearDesignSystemCache();
+    (https.request as jest.Mock).mockReset();
+    process.env.ADO_ORG = 'https://dev.azure.com/myorg';
+    process.env.ADO_PAT = 'test-pat';
+  });
+
+  it('reads the project inventory path instead of the MaxView default', async () => {
+    const apexInventory = [
+      '| Route | Component / File | Purpose |',
+      '| --- | --- | --- |',
+      '| `/home` | `AgentHome.tsx` | Agent Home |',
+    ].join('\n');
+    setupAdo({
+      [INVENTORY_PATH]: INVENTORY_MD,
+      '/.cursor/skills/design-system/apex-screens.md': apexInventory,
+    });
+
+    const rows = await getScreenInventory({
+      adoProject: 'ApexProj',
+      repo: 'Apex',
+      branch: 'main',
+      inventoryPath: '.cursor/skills/design-system/apex-screens.md',
+    });
+
+    expect(rows.map((r) => r.route)).toEqual(['/home']);
+    expect(rows[0].file).toContain('AgentHome.tsx');
   });
 });

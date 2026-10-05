@@ -1,0 +1,693 @@
+{
+  "epics": [
+    {
+      "title": "Home Pill Access Control",
+      "features": [
+        {
+          "id": "FEAT-001",
+          "items": [
+            {
+              "id": "PBI-001",
+              "type": "PBI",
+              "title": "Restrict a Home skill pill to specific users or groups",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-001",
+                "TBI-002"
+              ],
+              "userStory": {
+                "iWant": "restrict a Home skill pill to specific users or groups",
+                "soThat": "only the people who need that skill see and can start it from Home",
+                "persona": "Project Admin"
+              },
+              "userTypes": [
+                "Project Admin"
+              ],
+              "outOfScope": [
+                "Bulk-editing allow-lists across multiple pills at once"
+              ],
+              "businessRules": [
+                "BR-001: Empty allow-list means everyone with Home access"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "the allow-list is persisted, and only those users (directly or via group membership) see and can start that pill on Home",
+                  "when": "I add one or more users or groups to the pill's allow-list and save",
+                  "given": "I am a Project Admin editing a Home skill pill in Project Settings"
+                },
+                {
+                  "then": "the previously saved allow-list remains in effect and I see an error indicating the save did not succeed",
+                  "when": "I submit the change",
+                  "given": "I am a Project Admin editing a pill's allow-list and the save request fails"
+                },
+                {
+                  "then": "that pill is visible to them, matching today's behavior",
+                  "when": "any user with Home access loads Home",
+                  "given": "a Home skill pill has no users or groups on its allow-list"
+                },
+                {
+                  "then": "the request is denied and no allow-list change is persisted",
+                  "when": "they call the admin write endpoint directly to change a pill's allow-list",
+                  "given": "a caller without Project Admin access to project settings"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Only callers passing the existing admin write gate can persist an allow-list change",
+                "performance": "Saving an allow-list completes within the same time as any other pill edit in Project Settings today",
+                "accessibility": "The user/group selection control is keyboard-navigable and screen-reader labeled, matching the existing pill editor fields"
+              }
+            },
+            {
+              "id": "PBI-002",
+              "type": "PBI",
+              "title": "Restrict a Home MCP pill to specific users or groups",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-001",
+                "TBI-002"
+              ],
+              "userStory": {
+                "iWant": "restrict a Home MCP pill to specific users or groups",
+                "soThat": "an MCP shortcut can't be used as a way around a restricted skill pill",
+                "persona": "Project Admin"
+              },
+              "userTypes": [
+                "Project Admin"
+              ],
+              "outOfScope": [
+                "Bulk-editing allow-lists across multiple pills at once"
+              ],
+              "businessRules": [
+                "BR-001: Empty allow-list means everyone with Home access"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "the allow-list is persisted, and only those users (directly or via group membership) see and can start that MCP pill on Home",
+                  "when": "I add one or more users or groups to the pill's allow-list and save",
+                  "given": "I am a Project Admin editing a Home MCP pill in Project Settings"
+                },
+                {
+                  "then": "the previously saved allow-list remains in effect and I see an error indicating the save did not succeed",
+                  "when": "I submit the change",
+                  "given": "I am a Project Admin editing an MCP pill's allow-list and the save request fails"
+                },
+                {
+                  "then": "that MCP pill is visible to them, matching today's behavior",
+                  "when": "any user with Home access loads Home",
+                  "given": "a Home MCP pill has no users or groups on its allow-list"
+                },
+                {
+                  "then": "the request is denied and no allow-list change is persisted",
+                  "when": "they call the admin write endpoint directly to change an MCP pill's allow-list",
+                  "given": "a caller without Project Admin access to project settings"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Only callers passing the existing admin write gate can persist an allow-list change",
+                "performance": "Saving an allow-list completes within the same time as any other MCP pill edit in Project Settings today",
+                "accessibility": "The user/group selection control is keyboard-navigable and screen-reader labeled, matching the existing pill editor fields"
+              }
+            },
+            {
+              "id": "TBI-001",
+              "type": "TBI",
+              "title": "Add allow-list fields to Home pill storage and shared types",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Add optional allowedUserIds and allowedGroupIds fields to the shared skill-pill and MCP-pill types, and extend the admin project-settings read and write path so the full pill list — including these new fields — is returned and persisted exactly as every other pill attribute is today. No new tables or columns: both fields live inside the existing JSON-backed pill arrays on the project's skill settings row.",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "Skill-pill and MCP-pill shared types carry optional allowedUserIds and allowedGroupIds fields",
+                "Admin project-settings GET returns the full pill list including allow-list fields",
+                "Admin project-settings PUT persists allow-list fields on both skill and MCP pills without a database migration",
+                "Existing pills with no allow-list fields continue to round-trip unchanged"
+              ],
+              "technicalDependencies": [
+                "Existing project skill settings persistence for quick skill and MCP pills"
+              ],
+              "nonFunctionalRequirements": [
+                "Admin read/write path continues to return the full pill list unfiltered for authorized editors"
+              ]
+            },
+            {
+              "id": "TBI-002",
+              "type": "TBI",
+              "title": "Extend Admin Project Settings pill editor with allow-list controls",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-001"
+              ],
+              "description": "Add a user/group selection control to each pill row (skill and MCP) in the Admin Project Settings pill editor, following the existing project user/group picker pattern used for reviewer and approver pools, so a Project Admin can set or clear an allow-list without leaving the editor.",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "Each skill pill row exposes a user/group selection control bound to its allow-list fields",
+                "Each MCP pill row exposes the same user/group selection control bound to its allow-list fields",
+                "Saving the pill editor persists allow-list changes alongside existing pill attributes",
+                "Clearing a pill's allow-list back to empty restores the everyone-with-Home-access default"
+              ],
+              "technicalDependencies": [
+                "TBI-001 allow-list fields on skill and MCP pill types"
+              ],
+              "nonFunctionalRequirements": [
+                "Selection control is keyboard-navigable and screen-reader labeled",
+                "Editing one pill's allow-list does not require reloading the full pill list"
+              ]
+            }
+          ],
+          "route": "/home",
+          "title": "Configure Home Pill Allow-Lists",
+          "priority": "Must Have",
+          "dependsOn": [],
+          "userTypes": [
+            "Project Admin"
+          ],
+          "outOfScope": [
+            "Restricting Interview, ADR, or any other non-Home skill selector",
+            "Validating that an allow-listed user or group belongs to the project being configured"
+          ],
+          "description": "Project Admins configure per-pill allow-lists — specific users or groups — on Home skill and MCP pills for any Apex project, so only intended people see and can start those shortcuts.",
+          "dependencies": [
+            "None"
+          ],
+          "affectedPersonas": [
+            "Project Admin"
+          ],
+          "personaBehaviors": [
+            {
+              "behavior": "Configure per-pill allow-lists for Home skill and MCP pills, specifying which users or groups can see and start each pill",
+              "userTypes": [
+                "Project Admin"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "FEAT-002",
+          "items": [
+            {
+              "id": "PBI-003",
+              "type": "PBI",
+              "title": "See only the Home pills I'm allowed to use",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-003",
+                "TBI-004"
+              ],
+              "userStory": {
+                "iWant": "see only the Home skill and MCP pills I'm allowed to use",
+                "soThat": "I'm not tempted to start a skill I don't have access to",
+                "persona": "Authenticated User"
+              },
+              "userTypes": [
+                "Authenticated User"
+              ],
+              "outOfScope": [
+                "Filtering any field on skill-config other than the Home pill arrays"
+              ],
+              "businessRules": [
+                "BR-001: Empty allow-list means everyone with Home access",
+                "BR-002: Group membership is evaluated live",
+                "BR-004: Project Admin follows allow-lists on Home"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "I see only the pills whose allow-list includes me directly or through a group I belong to, or that have no allow-list at all",
+                  "when": "I load Home",
+                  "given": "a project has pills with different allow-lists and I am on some but not all of them"
+                },
+                {
+                  "then": "that group grants no access rather than the request failing",
+                  "when": "pill visibility is evaluated for me",
+                  "given": "a pill's allow-list references a group that no longer exists"
+                },
+                {
+                  "then": "I see the existing pill-less Home experience, unchanged",
+                  "when": "I load Home",
+                  "given": "a project has no configured Home pills at all"
+                },
+                {
+                  "then": "both the skill pill and MCP pill arrays returned to me are empty, and no allow-list identifiers appear anywhere in the response",
+                  "when": "I load Home",
+                  "given": "I am allowed on zero of the project's configured pills"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The public skill-config response never includes allowedUserIds or allowedGroupIds for any pill",
+                "performance": "Pill filtering adds only in-memory list evaluation and existing membership lookups to the current skill-config read",
+                "accessibility": "The filtered pill row renders through the same accessible pill components already used on Home"
+              }
+            },
+            {
+              "id": "PBI-004",
+              "type": "PBI",
+              "title": "See every Home pill as Platform Admin",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-003",
+                "TBI-004"
+              ],
+              "userStory": {
+                "iWant": "see and start every configured Home pill regardless of allow-lists",
+                "soThat": "I can verify pill configuration and test restricted skills without being added to every allow-list",
+                "persona": "Platform Admin"
+              },
+              "userTypes": [
+                "Platform Admin"
+              ],
+              "outOfScope": [
+                "Extending the bypass to the admin pill-editor experience, which already shows every pill to Project Admin"
+              ],
+              "businessRules": [
+                "BR-003: Platform Admin bypasses allow-lists on Home",
+                "BR-004: Project Admin does not get this bypass"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "I see every configured skill and MCP pill for that project, unfiltered",
+                  "when": "I load Home",
+                  "given": "I am a Platform Admin (Super Admin) and a project has pills with non-empty allow-lists I am not on"
+                },
+                {
+                  "then": "I am treated as a regular user subject to allow-lists, not granted the bypass",
+                  "when": "Home pills are resolved for me",
+                  "given": "my session cannot be verified as a Platform Admin (Super Admin) identity"
+                },
+                {
+                  "then": "I see the same pill-less Home experience as any other user",
+                  "when": "I load Home as a Platform Admin",
+                  "given": "a project has no configured Home pills at all"
+                },
+                {
+                  "then": "that pill is not shown to me, even though I can see and edit it in Project Settings",
+                  "when": "I load Home",
+                  "given": "I am a Project Admin, not a Platform Admin, and I am not on a pill's allow-list"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The bypass relies on the existing super-admin identity check already used elsewhere in Apex; it is not a new privilege boundary",
+                "performance": "The bypass check adds only a single identity check to the existing skill-config read",
+                "accessibility": "Pills render through the same accessible pill components already used on Home"
+              }
+            },
+            {
+              "id": "PBI-005",
+              "type": "PBI",
+              "title": "Home thread creation denies an unauthorized pill",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-003",
+                "TBI-005"
+              ],
+              "userStory": {
+                "iWant": "start Home threads only on pills I'm allowed to use",
+                "soThat": "a restricted skill can't be reached by calling the create endpoint directly instead of clicking a hidden pill",
+                "persona": "Authenticated User"
+              },
+              "userTypes": [
+                "Authenticated User"
+              ],
+              "outOfScope": [
+                "Changing the error response shape returned by thread creation for unrelated failures"
+              ],
+              "businessRules": [
+                "BR-007: Thread creation must match an allowed configured pill or be eligible pill-less"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "the thread is created",
+                  "when": "I start a Home thread naming that pill's skillPath",
+                  "given": "I am allowed on a specific configured Home skill pill"
+                },
+                {
+                  "then": "the request is denied and no thread is created",
+                  "when": "I call the thread-creation endpoint directly naming that pill's MCP identity, bypassing the Home composer",
+                  "given": "I am not allowed on a specific configured Home MCP pill"
+                },
+                {
+                  "then": "the request is denied",
+                  "when": "I attempt to start a Home thread with it and I am not allowed on any configured pill",
+                  "given": "a kickoff names a skillPath that does not match any pill configured for the project"
+                },
+                {
+                  "then": "the thread is created regardless of that pill's allow-list",
+                  "when": "I start a Home thread against any configured pill",
+                  "given": "I am a Platform Admin (Super Admin)"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Enforcement runs server-side even when the request bypasses the Home composer entirely",
+                "performance": "The allow-list check adds only an in-memory lookup to the existing thread-creation call",
+                "accessibility": "Not applicable — this is a server-enforced request check with no direct UI surface beyond the existing error message"
+              }
+            },
+            {
+              "id": "PBI-006",
+              "type": "PBI",
+              "title": "Blocked from starting a Home thread with no allowed pills",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-003",
+                "TBI-005",
+                "TBI-006"
+              ],
+              "userStory": {
+                "iWant": "start a Home conversation only when I have at least one pill I'm allowed to use",
+                "soThat": "I can't work around a single-skill restriction by starting a free-form Home chat instead",
+                "persona": "Authenticated User"
+              },
+              "userTypes": [
+                "Authenticated User"
+              ],
+              "outOfScope": [
+                "Blocking access to threads the user already owns"
+              ],
+              "businessRules": [
+                "BR-005: Zero allowed pills blocks Home thread start, including pill-less",
+                "BR-006: No configured pills at all keeps pill-less chat allowed"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "the request is denied and I see an explanation that I have no available Home skills",
+                  "when": "I try to start a new Home thread with no pill selected",
+                  "given": "a project has configured Home pills and I am allowed on none of them"
+                },
+                {
+                  "then": "the server still denies the request",
+                  "when": "the project has pills and I am allowed on none",
+                  "given": "I bypass the disabled Home composer and call the create endpoint directly with no skillPath and no MCP identity"
+                },
+                {
+                  "then": "the thread is created as pill-less chat, unchanged from today",
+                  "when": "I start a new Home thread with no pill selected",
+                  "given": "a project has no configured Home pills at all"
+                },
+                {
+                  "then": "the pill-less request is still evaluated on its own terms and is not denied purely because other pills exist",
+                  "when": "I try to start a new Home thread with no pill selected",
+                  "given": "I am allowed on at least one configured pill"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The block is enforced server-side on thread creation, not only by disabling the composer",
+                "performance": "The zero-allowed-pills check reuses the same resolver call already made for pill filtering",
+                "accessibility": "The Home composer visibly disables sending in this state with an explanatory message"
+              }
+            },
+            {
+              "id": "PBI-007",
+              "type": "PBI",
+              "title": "Continue using a Home thread after losing pill access",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-005"
+              ],
+              "userStory": {
+                "iWant": "keep messaging in a Home thread I already started, even after an admin removes me from that pill's allow-list",
+                "soThat": "an access change doesn't interrupt work I'm already in the middle of",
+                "persona": "Authenticated User"
+              },
+              "userTypes": [
+                "Authenticated User"
+              ],
+              "outOfScope": [
+                "Re-checking pill access on follow-up messages"
+              ],
+              "businessRules": [
+                "BR-007: Access is enforced only at thread creation"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "my message is accepted and the conversation continues",
+                  "when": "an admin later removes me from that pill's allow-list and I send another message on the same thread",
+                  "given": "I started a Home thread on a pill I was allowed on at the time"
+                },
+                {
+                  "then": "access is denied by the existing thread-ownership rules, unrelated to pill access",
+                  "when": "I attempt to open or write to it",
+                  "given": "a thread is owned by someone else"
+                },
+                {
+                  "then": "the new thread creation is denied, even though my existing thread on that pill still works",
+                  "when": "I click New Chat and try to start a fresh thread on that same pill",
+                  "given": "my access to a pill was removed after I started a thread on it"
+                },
+                {
+                  "then": "I can view the full prior conversation and send new messages without being blocked",
+                  "when": "I reopen my existing thread on that pill from Thread History",
+                  "given": "my access to a pill was removed"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Existing thread-ownership checks continue to gate who may read or write a thread; this PBI does not loosen them",
+                "performance": "Not specified — reopening and sending messages on an existing thread involves no new checks",
+                "accessibility": "Not applicable — no UI change to the existing conversation view"
+              }
+            },
+            {
+              "id": "TBI-003",
+              "type": "TBI",
+              "title": "Build a pill access resolver for live allow-list evaluation",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Build a resolver that, given a project's configured Home pills (skill and MCP) and a caller's identity, returns the subset of pills that caller may use and whether that caller may start a Home thread at all under the project's current pill configuration. The resolver applies the empty-allow-list-means-everyone default, evaluates group membership live against current project group data, and exempts the Platform Admin (Super Admin) identity from every check. It is the single source of truth consumed by both the skill-config read path and Home thread creation.",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "Resolver returns the allowed subset of skill and MCP pills for a given caller and pill configuration",
+                "Resolver returns whether a caller may start a pill-less Home thread given the project's pill configuration",
+                "Resolver treats a Platform Admin (Super Admin) identity as allowed on every pill",
+                "Resolver treats a missing or deleted group reference in an allow-list as granting no access",
+                "Unit tests cover the empty-allow-list default, non-empty allow-list matching by user and by group, and the Platform Admin bypass"
+              ],
+              "technicalDependencies": [
+                "TBI-001 allow-list fields on skill and MCP pill types",
+                "Existing project group membership lookups"
+              ],
+              "nonFunctionalRequirements": [
+                "Resolver evaluation is a pure function of its inputs (pills, caller identity, membership) with no direct HTTP or database coupling of its own"
+              ]
+            },
+            {
+              "id": "TBI-004",
+              "type": "TBI",
+              "title": "Filter and strip Home pills on the public skill-config read path",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-003"
+              ],
+              "description": "Extend the public skill-config read path to run its Home skill and MCP pill arrays through the pill access resolver for the requesting caller, returning only the pills that caller may use with allowedUserIds and allowedGroupIds omitted from each. Every other field on that response is left exactly as it is today, so Interview, ADR, and other consumers of the same read path see no change in behavior.",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "Public skill-config response includes only pills the caller may use",
+                "allowedUserIds and allowedGroupIds never appear in the public response",
+                "Platform Admin callers receive every configured pill on the public response",
+                "Interview, ADR, and other skill-config fields unrelated to Home pills are unchanged in the response"
+              ],
+              "technicalDependencies": [
+                "TBI-003 pill access resolver"
+              ],
+              "nonFunctionalRequirements": [
+                "No new fields are added to the public response beyond the existing pill shape minus the two allow-list fields",
+                "Non-Home-pill fields on the response are unaffected"
+              ]
+            },
+            {
+              "id": "TBI-005",
+              "type": "TBI",
+              "title": "Enforce pill access on Home thread creation",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-003"
+              ],
+              "description": "Extend Home thread creation to call the pill access resolver before persisting a new thread: accept the kickoff only when it names an allowed configured pill (skill or MCP) or carries no pill and the caller is allowed to start Home chat at all under the project's pill configuration, otherwise deny with an explicit error. Platform Admin (Super Admin) is exempt. This check runs only on thread creation — reopening a thread the caller owns and sending further messages on it are untouched.",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "Thread creation denies a kickoff naming a pill the caller is not allowed on",
+                "Thread creation denies a pill-less kickoff when the project has pills and the caller is allowed on none",
+                "Thread creation allows a pill-less kickoff when the project has no configured pills",
+                "Thread creation allows any kickoff from a Platform Admin (Super Admin) caller",
+                "Sending a message on an existing thread the caller owns is unaffected by this check"
+              ],
+              "technicalDependencies": [
+                "TBI-003 pill access resolver"
+              ],
+              "nonFunctionalRequirements": [
+                "The check runs before a new thread row is persisted, so a denied kickoff creates no thread",
+                "The check does not run on existing-thread read or message-send paths"
+              ]
+            },
+            {
+              "id": "TBI-006",
+              "type": "TBI",
+              "title": "Update Home composer for filtered pills and blocked-start state",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-004",
+                "TBI-005"
+              ],
+              "description": "Update the Home composer to render only the pill arrays already filtered by the skill-config read path, and to disable sending a pill-less message when the project has pills configured and the caller's filtered arrays are both empty, with an explanatory message. This mirrors the server-side rule client-side for a clear experience; the server-side check remains the actual enforcement boundary.",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "Composer renders only the filtered pill arrays from skill-config",
+                "Composer disables pill-less send when the project has pills and the caller's filtered arrays are both empty",
+                "Composer allows pill-less send unchanged when the project has no configured pills",
+                "Existing pill selection and send flow for allowed pills is unaffected"
+              ],
+              "technicalDependencies": [
+                "TBI-004 filtered skill-config response",
+                "TBI-005 server-side thread-creation enforcement"
+              ],
+              "nonFunctionalRequirements": [
+                "Composer disabled-state message is screen-reader accessible",
+                "Composer behavior degrades safely if the skill-config response is slow or errors, defaulting to disabled rather than allowing an unchecked send"
+              ]
+            }
+          ],
+          "route": "/home",
+          "title": "Enforce Home Pill Access",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-001"
+          ],
+          "userTypes": [
+            "Authenticated User",
+            "Project Admin",
+            "Platform Admin"
+          ],
+          "outOfScope": [
+            "Re-checking pill access on every follow-up message of an existing thread",
+            "Hiding a user's own thread history when their pill access is later removed"
+          ],
+          "description": "Authenticated Users see and can start only the Home skill and MCP pills their allow-list permits, Platform Admin sees and can start every configured pill to verify configuration, and Project Admin follows the same allow-lists as any other user on Home — closing every path (visible pills, thread creation, and pill-less chat) a restricted user could otherwise use to reach a skill they aren't allowed on.",
+          "dependencies": [
+            "Requires the allow-list fields and admin editor from Configure Home Pill Allow-Lists"
+          ],
+          "affectedPersonas": [
+            "Authenticated User",
+            "Project Admin",
+            "Platform Admin"
+          ],
+          "personaBehaviors": [
+            {
+              "behavior": "See only Home skill and MCP pills in their allow-list; blocked from creating threads with unauthorized pills or when no pills are allowed; can continue existing threads even after losing pill access",
+              "userTypes": [
+                "Authenticated User"
+              ]
+            },
+            {
+              "behavior": "See and can start every configured Home pill regardless of allow-lists to verify configuration",
+              "userTypes": [
+                "Platform Admin"
+              ]
+            },
+            {
+              "behavior": "Follow the same allow-lists as any other user; subject to pill visibility and thread creation restrictions",
+              "userTypes": [
+                "Project Admin"
+              ]
+            }
+          ]
+        }
+      ],
+      "priority": "Must Have",
+      "outOfScope": [
+        "Applying allow-lists to Interview, ADR, or any other skill/model selector outside Home pills",
+        "A separate project-level restricted-Home-users list independent of any specific pill"
+      ],
+      "assumptions": [
+        "\"Super Admin\" in the originating conversation maps to the Platform Admin persona; the bypass behavior is scoped to Apex's existing super-admin bypass and does not extend to every Project Admin",
+        "Group allow-list membership reuses the existing project groups membership model; no new group type or membership table is introduced",
+        "No database migration is required — allow-list fields are added inside the existing JSON-backed pill arrays already stored on the project's skill settings row"
+      ],
+      "description": "Project Admins currently cannot limit which users see or start a given Home skill or MCP pill — every pill is visible to everyone with Home access. This blocks projects that want to hand a narrow group of users a single-purpose entry point (for example, a Knowledge-only shortcut for BI & Analytics) without exposing every other shortcut on the project. This epic adds per-pill user/group allow-lists, configurable for any project, and enforces them everywhere a Home thread can start.",
+      "dependencies": [
+        "None"
+      ],
+      "successMetrics": [
+        "A Project Admin can restrict at least one Home skill or MCP pill to a defined set of users or groups without engineering involvement",
+        "Zero reported incidents of a user starting a Home skill outside their configured pill allow-list within 30 days of rollout"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "Authenticated User",
+      "type": "Internal",
+      "description": "Any logged-in Apex user with Home access who sees and starts Home skill/MCP pill conversations"
+    },
+    {
+      "name": "Project Admin",
+      "type": "Admin",
+      "description": "Per-project admin who configures Home pill allow-lists in Project Settings and, on Home itself, follows the same allow-lists as any other user"
+    },
+    {
+      "name": "Platform Admin",
+      "type": "Admin",
+      "description": "Platform-level administrator (Super Admin) who bypasses Home pill allow-lists to see and start every configured pill"
+    }
+  ],
+  "businessRules": [
+    {
+      "id": "BR-001",
+      "rule": "An empty or omitted allowedUserIds and allowedGroupIds on a Home pill (skill or MCP) means every user with Home access may see and start that pill.",
+      "appliesTo": "Configure Home Pill Allow-Lists"
+    },
+    {
+      "id": "BR-002",
+      "rule": "Group allow-list membership is evaluated against live project group membership at the moment of the request; no membership snapshot is stored on the pill.",
+      "appliesTo": "Enforce Home Pill Access"
+    },
+    {
+      "id": "BR-003",
+      "rule": "Platform Admin (Super Admin) sees and may start every configured Home pill regardless of allow-lists.",
+      "appliesTo": "See every Home pill as Platform Admin"
+    },
+    {
+      "id": "BR-004",
+      "rule": "Project Admin's own Home pill visibility and thread-start eligibility follow the same allow-lists as any other user; the unrestricted view of all pills is limited to the Project Settings pill editor, not Home itself.",
+      "appliesTo": "See only the Home pills I'm allowed to use"
+    },
+    {
+      "id": "BR-005",
+      "rule": "When a project has one or more configured Home pills and the current caller is allowed on zero of them, Home thread creation is denied, including a pill-less kickoff.",
+      "appliesTo": "Blocked from starting a Home thread with no allowed pills"
+    },
+    {
+      "id": "BR-006",
+      "rule": "When a project has no configured Home pills at all, pill-less Home thread creation remains allowed, unchanged from today.",
+      "appliesTo": "Blocked from starting a Home thread with no allowed pills"
+    },
+    {
+      "id": "BR-007",
+      "rule": "Home thread creation must reference an allowed configured pill (skill or MCP) or be pill-less when the caller is allowed to start Home chat at all; access is enforced only at thread creation, so the owner of an existing thread may keep messaging even after later losing access to that thread's pill.",
+      "appliesTo": "Continue using a Home thread after losing pill access"
+    },
+    {
+      "id": "BR-008",
+      "rule": "Home pill allow-list enforcement applies only to Home skill and MCP pills; Interview, ADR, and other consumers of the shared skill-config read path are unaffected.",
+      "appliesTo": "Enforce Home Pill Access"
+    }
+  ],
+  "assumptionsMade": [
+    "\"Super Admin\" in the originating conversation maps to the Platform Admin persona for backlog and persona classification; the bypass behavior described (seeing and starting every Home pill) is scoped to Apex's existing super-admin bypass, and does not extend to every user holding the Project Admin role — Project Admin follows the same allow-lists as any other user on Home.",
+    "Group allow-list membership reuses the existing project groups membership model; no new group type or membership table is introduced.",
+    "A configured Home pill \"match\" for enforcement purposes is a skillPath equal to a configured skill pill's skillPath, or an MCP kickoff whose server identity equals a configured MCP pill's mcpServerName; any other kickoff is treated as pill-less for enforcement purposes.",
+    "Admin-side allow-list entries are validated only for being well-formed identifiers; validating that a referenced user or group actually belongs to the project being configured is not required by this PRD and should be confirmed with the admin experience owner.",
+    "No database migration is required — the allow-list fields are added inside the existing JSON-backed pill arrays already stored on the project's skill settings row."
+  ],
+  "implementationPhases": [
+    {
+      "epics": [
+        "Home Pill Access Control"
+      ],
+      "phase": 1,
+      "rationale": "The PRD scopes exactly one epic. Within it, Feature-level dependsOn (Enforce Home Pill Access depends on Configure Home Pill Allow-Lists) sequences building the allow-list data and admin editor before the read-path filtering and thread-creation enforcement that consume them."
+    }
+  ]
+}

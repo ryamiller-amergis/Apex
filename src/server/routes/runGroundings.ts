@@ -38,6 +38,8 @@ const permissionBySurface: Record<GroundingSurface, string> = {
   interview: 'interviews:view',
   prd: 'prds:review',
   design_doc: 'design-docs:review',
+  chat: 'chat:view',
+  adr: 'adr:view',
 };
 
 function requestedRole(value: unknown): RepoRole | null {

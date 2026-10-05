@@ -66,12 +66,42 @@ describe('resolveAccessibleRoute', () => {
       expect(withGroup).toBe('/my-work');
     });
 
-    it('skips /my-work when not in Developer group', () => {
+    it('returns /my-work for a Project Admin with admin:roles and no Developer group', () => {
+      const result = resolveAccessibleRoute({
+        ...base,
+        can: (k) => k === 'dev-workbench:view' || k === 'admin:roles',
+        enabledViews: ['my-work'],
+        isInAnyGroup: () => false,
+      });
+      expect(result).toBe('/my-work');
+    });
+
+    it('skips /my-work when the user is neither a Developer nor holds admin:roles', () => {
       const result = resolveAccessibleRoute({
         ...base,
         can: (k) => k === 'dev-workbench:view',
         enabledViews: ['my-work'],
         isInAnyGroup: () => false,
+      });
+      expect(result).toBe('/');
+    });
+
+    it('skips /my-work when the menu view is disabled', () => {
+      const result = resolveAccessibleRoute({
+        ...base,
+        can: (k) => k === 'dev-workbench:view' || k === 'admin:roles',
+        enabledViews: [],
+        isInAnyGroup: (groups) => groups.includes('Developer'),
+      });
+      expect(result).toBe('/');
+    });
+
+    it('skips /my-work when dev-workbench:view is missing', () => {
+      const result = resolveAccessibleRoute({
+        ...base,
+        can: (k) => k === 'admin:roles',
+        enabledViews: ['my-work'],
+        isInAnyGroup: (groups) => groups.includes('Developer'),
       });
       expect(result).toBe('/');
     });

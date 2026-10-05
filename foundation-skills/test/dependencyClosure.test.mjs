@@ -191,7 +191,7 @@ test('scoped reinstall updates the lockfile to a newer suite only after adding n
     assert.equal(code, 0, `updated install failed:\n${logs.join('\n')}`);
 
     lock = readLockfile(repo);
-    assert.equal(lock.suiteVersion, '2.0.3');
+    assert.equal(lock.suiteVersion, '2.1.0');
     assert.deepEqual(
       Object.keys(lock.skills).sort(),
       ['post-skill-bootstrap', 'prd-spec-review', 'to-prd', 'update-changelog'],

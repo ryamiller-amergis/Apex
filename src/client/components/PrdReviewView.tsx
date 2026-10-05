@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useMemo, useEffect, useReducer, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { PrdAssistantPanel } from './PrdAssistantPanel';
+import { ArtifactUsageStrip } from './ArtifactUsageStrip';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -70,8 +71,8 @@ import { BacklogViewer } from './BacklogViewer';
 import { ApexMaterializeModal } from './ApexMaterializeModal';
 import { CreateAdoItemsModal } from './CreateAdoItemsModal';
 import { ApexFixRunningBanner } from './ApexFixRunningBanner';
-import { RunGroundingStatus } from './RunGroundingStatus';
 import type { PrdStatus, PrdValidationBaseline, TestCaseCoverageSummary, Prd } from '../../shared/types/interview';
+import { effortLabel } from '../../shared/utils/effort';
 import {
   isPrdFixFlowOwningAccept,
   isPrdSingleCommentFixPending,
@@ -98,12 +99,13 @@ import {
   type PrdReadinessStageStatus,
 } from '../../shared/utils/prdReadiness';
 import { resolvePrototypeStageEnabled } from '../../shared/utils/prototypeStage';
-import { buildPassingValidationReasonsMarkdown } from '../../shared/utils/validationReport';
+import { buildPassingValidationReasonsMarkdown, collectValidationGaps, normalizeCrossCuttingCheck } from '../../shared/utils/validationReport';
 import type {
   ReviewSectionKey,
   TextSelector,
 } from '../../shared/types/reviewComments';
 import styles from './PrdReviewView.module.css';
+import { ApexLoader } from './ApexLoader';
 
 type TabId = 'preview' | 'backlog' | 'validation';
 
@@ -625,6 +627,7 @@ export const PrdReviewView: React.FC = () => {
   const reviewPrd = useReviewPrd();
   const reviewTestCases = useReviewTestCases();
   const ownerApprovePrd = useOwnerApprove(id ?? null, 'prd');
+  const ownerApproveQa = useOwnerApprove(id ?? null, 'test_case');
   const deletePrd = useDeletePrd();
   const createAdoItems = useCreatePrdAdoItems();
   const syncAdoStatus = useSyncPrdAdoStatus(id);
@@ -726,21 +729,30 @@ export const PrdReviewView: React.FC = () => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
 
-  const { data: assignments = [] } = useDocumentAssignments(id, 'prd');
-  const { data: qaAssignments = [] } = useDocumentAssignments(id, 'test_case');
+  const {
+    data: assignments = [],
+    isLoading: assignmentsLoading,
+    isError: assignmentsError,
+  } = useDocumentAssignments(id, 'prd');
+  const {
+    data: qaAssignments = [],
+    isLoading: qaAssignmentsLoading,
+    isError: qaAssignmentsError,
+  } = useDocumentAssignments(id, 'test_case');
   const { data: designPrototypeAssignments = [] } = useDocumentAssignments(id, 'design_prototype');
 
   const reviewerApprovalComplete = useMemo(() => {
+    if (assignmentsLoading || assignmentsError) {
+      return false;
+    }
     if (assignments.length > 0) {
-      const mode = projectConfig?.approvalMode ?? 'any_one';
+      const mode = projectConfig?.approvalModes?.prd ?? projectConfig?.approvalMode ?? 'any_one';
       return mode === 'all_required'
         ? assignments.every((a) => a.status === 'approved')
         : assignments.some((a) => a.status === 'approved');
     }
-    const kickoffReviewerIds = sourceInterview?.prdApproverIds;
-    if (kickoffReviewerIds && kickoffReviewerIds.length > 0) return false;
     return true;
-  }, [assignments, projectConfig?.approvalMode, sourceInterview?.prdApproverIds]);
+  }, [assignments, assignmentsError, assignmentsLoading, projectConfig?.approvalModes?.prd, projectConfig?.approvalMode]);
   const { data: activeUsers = [] } = useActiveUsers();
   const { data: routeOptions = [] } = useScreenInventoryRoutes(!!prd && prd.status !== 'approved');
 
@@ -855,25 +867,29 @@ export const PrdReviewView: React.FC = () => {
   const approvalChecklistGroups = useMemo(() => {
     type GroupEntry = { label: string; informational?: boolean; subtitle?: string; rows: { name: string; status: 'pending' | 'approved' | 'revision_requested'; respondedAt?: string | null }[] };
     const groups: GroupEntry[] = [];
-    const approvalMode = projectConfig?.approvalMode ?? 'any_one';
-
-    const buildSubtitle = (count: number) => {
+    const buildSubtitle = (
+      module: 'prd' | 'design_doc' | 'design_prototype' | 'test_case',
+      count: number,
+    ) => {
       if (count <= 1) return undefined;
+      const approvalMode = projectConfig?.approvalModes?.[module]
+        ?? projectConfig?.approvalMode
+        ?? 'any_one';
       return approvalMode === 'all_required' ? 'All required' : `1 of ${count} required`;
     };
 
     if (prdReviewerRows.length > 0) {
-      groups.push({ label: 'PRD Review', subtitle: buildSubtitle(prdReviewerRows.length), rows: prdReviewerRows });
+      groups.push({ label: 'PRD Review', subtitle: buildSubtitle('prd', prdReviewerRows.length), rows: prdReviewerRows });
     }
     if (designDocReviewerRows.length > 0) {
       const hasRealDocs = relatedDesignDocs && relatedDesignDocs.length > 0;
-      groups.push({ label: 'Design Doc Review', informational: !hasRealDocs, subtitle: buildSubtitle(designDocReviewerRows.length), rows: designDocReviewerRows });
+      groups.push({ label: 'Design Doc Review', informational: !hasRealDocs, subtitle: buildSubtitle('design_doc', designDocReviewerRows.length), rows: designDocReviewerRows });
     }
     if (prototypeStageEnabled && designPrototypeReviewerRows.length > 0) {
-      groups.push({ label: 'Design Prototype Review', informational: designPrototypeAssignments.length === 0, subtitle: buildSubtitle(designPrototypeReviewerRows.length), rows: designPrototypeReviewerRows });
+      groups.push({ label: 'Design Prototype Review', informational: designPrototypeAssignments.length === 0, subtitle: buildSubtitle('design_prototype', designPrototypeReviewerRows.length), rows: designPrototypeReviewerRows });
     }
     if (testCasesRequired && qaReviewerRows.length > 0) {
-      groups.push({ label: 'QA Review', subtitle: buildSubtitle(qaReviewerRows.length), rows: qaReviewerRows });
+      groups.push({ label: 'QA Review', subtitle: buildSubtitle('test_case', qaReviewerRows.length), rows: qaReviewerRows });
     }
 
     const showOwnerApproval = prd && ['pending_review', 'reviewer_approved', 'approved', 'revision_requested'].includes(prd.status);
@@ -887,7 +903,7 @@ export const PrdReviewView: React.FC = () => {
     }
 
     return groups;
-  }, [prdReviewerRows, designDocReviewerRows, designPrototypeReviewerRows, designPrototypeAssignments, qaReviewerRows, prd, ownerApproval, projectConfig?.approvalMode, relatedDesignDocs, testCasesRequired, prototypeStageEnabled]);
+  }, [prdReviewerRows, designDocReviewerRows, designPrototypeReviewerRows, designPrototypeAssignments, qaReviewerRows, prd, ownerApproval, projectConfig?.approvalMode, projectConfig?.approvalModes, relatedDesignDocs, testCasesRequired, prototypeStageEnabled]);
 
   const isGenerating =
     !!prd && prd.status === 'generating' && prd.content === '';
@@ -1011,6 +1027,11 @@ export const PrdReviewView: React.FC = () => {
     await reviewTestCases.mutateAsync({ prdId: id, status: 'approved' });
   }, [id, reviewTestCases]);
 
+  const handleQaOwnerApprove = useCallback(async () => {
+    if (!id) return;
+    await ownerApproveQa.mutateAsync({ status: 'approved' });
+  }, [id, ownerApproveQa]);
+
   const handleOwnerApprove = useCallback(async () => {
     if (!id) return;
     await ownerApprovePrd.mutateAsync({ status: 'approved' });
@@ -1091,9 +1112,9 @@ export const PrdReviewView: React.FC = () => {
     }
   }, [id, fixWithAi]);
 
-  const handleAcceptAllProposed = useCallback(() => {
+  const handleAcceptAllProposed = useCallback(async () => {
     if (!id) return;
-    applyProposedPrd.mutate();
+    await applyProposedPrd.mutateAsync();
   }, [id, applyProposedPrd]);
 
   const handleRejectAllProposed = useCallback(() => {
@@ -1126,6 +1147,16 @@ export const PrdReviewView: React.FC = () => {
       prdFixFlowDispatch({ type: 'RESET' });
     }
   }, [id, prd, fixPrdValidation, prdFixFlow.phase, apexFixStartLocked]);
+
+  const handleRunPrdValidation = useCallback(async () => {
+    if (!prd) return;
+    setFixIdleNotice(null);
+    try {
+      await createPrdValidationThread.mutateAsync(prd.id);
+    } catch (err) {
+      setFixIdleNotice(err instanceof Error ? err.message : 'Validation could not start.');
+    }
+  }, [prd, createPrdValidationThread]);
 
   const handleStartFixCoverage = useCallback(async () => {
     if (!id || !prd) return;
@@ -1573,7 +1604,14 @@ export const PrdReviewView: React.FC = () => {
     void handleSubmit();
   }, [canAutoSubmitDraft, id, prd?.status, submitPrd.isPending, handleSubmit]);
 
-  if (isLoading) return <div className={styles.loadingState}>Loading PRD…</div>;
+  if (isLoading) {
+    return (
+      <div className={styles.loadingState} role="status" aria-busy="true" aria-label="Loading PRD">
+        <ApexLoader size={72} />
+        <div className={styles.loadingLabel}>Loading PRD…</div>
+      </div>
+    );
+  }
   if (isError || !prd)
     return <div className={styles.errorState}>PRD not found.</div>;
   if (!readiness)
@@ -1581,6 +1619,10 @@ export const PrdReviewView: React.FC = () => {
 
   const isAuthor = prd.authorId === userId;
   const isOwner = prd.ownerId === userId;
+  const ownerOnly = !assignmentsLoading && !assignmentsError && assignments.length === 0;
+  const qaOwnerOnly = !qaAssignmentsLoading && !qaAssignmentsError && qaAssignments.length === 0;
+  const isOwnerActor = (prd.ownerId ? isOwner : isAuthor) || isSuperAdmin;
+  const isQaOwnerActor = sourceInterview?.testCaseOwnerId === userId || isSuperAdmin;
   const canManage = can('interviews:manage');
   const canReview = can('prds:review');
   const isAssignedApprover = assignments.length > 0
@@ -1596,7 +1638,7 @@ export const PrdReviewView: React.FC = () => {
     (a) => a.approverUserId === userId && a.status === 'approved'
   );
   const canPerformReview =
-    canReview && (isAssignedApprover || isAdmin) && (!isAuthor || isAdmin);
+    !ownerOnly && canReview && (isAssignedApprover || isAdmin) && (!isAuthor || isAdmin);
   const anyDesignDocApproved =
     relatedDesignDocs && relatedDesignDocs.some((d) => d.status === 'approved');
 
@@ -1609,7 +1651,7 @@ export const PrdReviewView: React.FC = () => {
   const showCommentLayer =
     (prd.status === 'pending_review' || prd.status === 'revision_requested') &&
     readiness.readyForReviewActions &&
-    (canPerformReview || isAssignedQaApprover || isAuthor || isOwner || isAdmin);
+    (ownerOnly || canPerformReview || isAssignedQaApprover || isAuthor || isOwner || isAdmin);
 
   const canEditContent =
     canManage && (isAuthor || isOwner || isAdmin) && prd.status !== 'approved';
@@ -1646,7 +1688,7 @@ export const PrdReviewView: React.FC = () => {
     canManageDraftReviewAction && prd.status === 'pending_review';
   const canDeletePrdAction = canManageDraftReviewAction;
   const canReassignReviewersAction =
-    prd.status === 'pending_review' && canManageDraftReviewAction;
+    !ownerOnly && prd.status === 'pending_review' && canManageDraftReviewAction;
   const canShowHeaderActionMenu =
     canShowApprovalsAction ||
     canRunValidationAction ||
@@ -1850,6 +1892,13 @@ export const PrdReviewView: React.FC = () => {
                     </span>
                   );
                 }
+                if (prd.validationThreadId) {
+                  return (
+                    <span className={`${styles.validationBadge} ${styles.badgeError}`}>
+                      ✗ Could not score
+                    </span>
+                  );
+                }
                 if (!hasAllArtifacts && prd.validationScore == null) {
                   return (
                     <span className={`${styles.validationBadge} ${styles.badgeUnavailable}`}>
@@ -1892,11 +1941,21 @@ export const PrdReviewView: React.FC = () => {
                   <span className={styles.metaValue}>{prd.model}</span>
                 </span>
               )}
+              {prd.effort && (
+                <span className={styles.metaItem}>
+                  <span className={styles.metaLabel}>Effort:</span>
+                  <span className={styles.metaValue}>{effortLabel(prd.effort)}</span>
+                </span>
+              )}
               <WorkflowSummaryBadge
                 testCasesRequired={testCasesRequired}
                 prototypeStageEnabled={prototypeStageEnabled}
               {...{ 'data-testid': 'prd-workflow-summary' }}/>
             </div>
+            <ArtifactUsageStrip
+              endpoint={`/api/interviews/prds/${prd.id}/usage`}
+              visible
+            />
             {sourceInterview && (
               <div className={styles.parentLinks}>
                 <button
@@ -1933,11 +1992,6 @@ export const PrdReviewView: React.FC = () => {
                 </button>
               </div>
             )}
-            <RunGroundingStatus
-              surface="prd"
-              domainRunId={prd.id}
-              project={prd.project}
-            />
           </div>
         </div>
 
@@ -2101,15 +2155,38 @@ export const PrdReviewView: React.FC = () => {
               </>
             )}
 
-          {prd.status === 'pending_review' && (isOwner || isAdmin) && (
+          {testCasesRequired &&
+            qaOwnerOnly &&
+            prd.status === 'pending_review' &&
+            isQaOwnerActor && (
+              <>
+                <span className={styles.actionDivider} />
+                <div className={styles.reviewControls}>
+                  <button
+                    className={styles.btnApprove}
+                    onClick={() => void handleQaOwnerApprove()}
+                    disabled={ownerApproveQa.isPending || !readiness.readyForReviewActions}
+                    title={!readiness.readyForReviewActions ? readiness.blockingReason : undefined}
+                    type="button"
+                    {...{ 'data-testid': 'approve-qa-owner-btn' }}
+                  >
+                    Approve QA as Owner
+                  </button>
+                </div>
+              </>
+            )}
+
+          {prd.status === 'pending_review' && (isOwnerActor || ownerOnly) && (
             <>
               <span className={styles.actionDivider} />
               <div className={styles.reviewControls}>
                 <button
                   className={styles.btnApprove}
                   onClick={() => void handleOwnerApprove()}
-                  disabled={ownerApprovePrd.isPending || (!reviewerApprovalComplete && !isAdmin)}
-                  title={!reviewerApprovalComplete && !isAdmin
+                  disabled={ownerApprovePrd.isPending || !isOwnerActor || (!reviewerApprovalComplete && !isSuperAdmin)}
+                  aria-disabled={ownerApprovePrd.isPending || !isOwnerActor || (!reviewerApprovalComplete && !isSuperAdmin)}
+                  aria-describedby={ownerOnly && !isOwnerActor ? 'owner-approve-disabled-reason' : undefined}
+                  title={!reviewerApprovalComplete && !isSuperAdmin
                     ? 'Reviewers must approve the PRD before owner approval'
                     : undefined}
                   type="button"
@@ -2117,6 +2194,15 @@ export const PrdReviewView: React.FC = () => {
                 >
                   Approve as Owner
                 </button>
+                {ownerOnly && !isOwnerActor && (
+                  <span
+                    id="owner-approve-disabled-reason"
+                    role="status"
+                    {...{ 'data-testid': 'owner-approve-disabled-reason' }}
+                  >
+                    Only the document owner or a Platform Admin can approve
+                  </span>
+                )}
               </div>
             </>
           )}
@@ -2195,7 +2281,7 @@ export const PrdReviewView: React.FC = () => {
                       className={styles.actionMenuItem}
                       onClick={() => {
                         setActionMenuOpen(false);
-                        void createPrdValidationThread.mutateAsync(prd.id);
+                        void handleRunPrdValidation();
                       }}
                       disabled={createPrdValidationThread.isPending}
                       type="button"
@@ -2390,7 +2476,7 @@ export const PrdReviewView: React.FC = () => {
                     {prdFixFlow.phase === 'idle' && (
                       <button
                         className={styles.fixBtnSecondary}
-                        onClick={() => void createPrdValidationThread.mutateAsync(prd.id)}
+                        onClick={() => void handleRunPrdValidation()}
                         disabled={createPrdValidationThread.isPending}
                         type="button"
                       {...{ 'data-testid': 'prd-revalidate-btn' }}>
@@ -2722,7 +2808,7 @@ export const PrdReviewView: React.FC = () => {
       )}
 
       {isGenerating ? (
-        /* ── Generating skeleton ─────────────────────────────────────────────── */
+        /* ── Generating (same Apex mark as prototypes) ───────────────────────── */
         <>
           <div className={styles.tabs}>
             <button
@@ -2737,71 +2823,17 @@ export const PrdReviewView: React.FC = () => {
             </button>
           </div>
           <div className={styles.tabContent}>
-            <div className={styles.skeletonArea}>
-              <div className={styles.generatingBanner}>
-                <svg
-                  className={styles.bannerSpinner}
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                </svg>
-                <div>
-                  <div className={styles.bannerTitle}>Generating your PRD…</div>
-                  <div className={styles.bannerSub}>
-                    This may take a few minutes. You can navigate away and
-                    return.
-                  </div>
-                </div>
-              </div>
-
-              <div className={styles.skeletonSection}>
-                <div
-                  className={styles.skeletonHeader}
-                  style={{ width: '75%' }}
-                />
-                <div
-                  className={styles.skeletonLine}
-                  style={{ width: '100%' }}
-                />
-                <div className={styles.skeletonLine} style={{ width: '65%' }} />
-                <div
-                  className={styles.skeletonLine}
-                  style={{ width: '100%' }}
-                />
-              </div>
-
-              <div className={styles.skeletonSection}>
-                <div
-                  className={styles.skeletonHeader}
-                  style={{ width: '45%' }}
-                />
-                <div
-                  className={styles.skeletonLine}
-                  style={{ width: '100%' }}
-                />
-                <div className={styles.skeletonLine} style={{ width: '70%' }} />
-              </div>
-
-              <div className={styles.skeletonSection}>
-                <div
-                  className={styles.skeletonHeader}
-                  style={{ width: '60%' }}
-                />
-                <div
-                  className={styles.skeletonLine}
-                  style={{ width: '100%' }}
-                />
-                <div
-                  className={styles.skeletonLine}
-                  style={{ width: '100%' }}
-                />
-                <div className={styles.skeletonLine} style={{ width: '40%' }} />
+            <div
+              className={styles.loadingState}
+              role="status"
+              aria-busy="true"
+              aria-label="Generating PRD"
+              {...{ 'data-testid': 'prd-generating-loader' }}
+            >
+              <ApexLoader size={72} />
+              <div className={styles.loadingLabel}>Generating your PRD…</div>
+              <div className={styles.bannerSub}>
+                This may take a few minutes. You can navigate away and return.
               </div>
             </div>
           </div>
@@ -2932,7 +2964,16 @@ export const PrdReviewView: React.FC = () => {
                     onReply={(commentId, body) =>
                       void handleReply(commentId, body)
                     }
-                    onResolve={(commentId) => resolveComment.mutate(commentId)}
+                    onResolve={(commentId) => {
+                      if (
+                        prd.fixCommentId === commentId &&
+                        (prd.proposedContent != null || prd.proposedBacklogJson != null)
+                      ) {
+                        void applyProposedPrd.mutateAsync();
+                        return;
+                      }
+                      resolveComment.mutate(commentId);
+                    }}
                     onReopen={(commentId) =>
                       reopenReviewComment.mutate(commentId)
                     }
@@ -3020,7 +3061,16 @@ export const PrdReviewView: React.FC = () => {
                     onReply={(commentId, body) =>
                       void handleReply(commentId, body)
                     }
-                    onResolve={(commentId) => resolveComment.mutate(commentId)}
+                    onResolve={(commentId) => {
+                      if (
+                        prd.fixCommentId === commentId &&
+                        (prd.proposedContent != null || prd.proposedBacklogJson != null)
+                      ) {
+                        void applyProposedPrd.mutateAsync();
+                        return;
+                      }
+                      resolveComment.mutate(commentId);
+                    }}
                     onReopen={(commentId) =>
                       reopenReviewComment.mutate(commentId)
                     }
@@ -3051,9 +3101,7 @@ export const PrdReviewView: React.FC = () => {
                     const scoreColor = sc.overall_score >= effectiveThreshold ? 'var(--success-color)' : sc.overall_score >= 70 ? '#e6a817' : 'var(--error-color)';
                     const files = sc.files ?? [];
                     const features = sc.features ?? [];
-                    const allGaps = files.length > 0
-                      ? files.flatMap(f => (f.gaps ?? []))
-                      : features.flatMap(f => (f.gaps ?? []));
+                    const allGaps = collectValidationGaps(sc);
                     const pendingGaps = allGaps.filter(g => g.resolution === 'pending');
                     const filledGaps = allGaps.filter(g => g.resolution === 'filled');
                     const deferredGaps = allGaps.filter(g => g.resolution === 'deferred' || g.resolution === 'accepted');
@@ -3183,17 +3231,43 @@ export const PrdReviewView: React.FC = () => {
                           </div>
                         )}
 
+                        {files.length === 0 && features.length === 0 && pendingGaps.length > 0 && (
+                          <div
+                            className={styles.featureGaps}
+                            {...{ 'data-testid': 'prd-validation-root-gaps' }}
+                          >
+                            {pendingGaps.map((gap) => (
+                              <div key={gap.id} className={styles.gapItem} data-resolution={gap.resolution}>
+                                <span className={styles.gapIcon}>
+                                  {gap.resolution === 'filled' ? '✓' : gap.resolution === 'pending' ? '○' : '—'}
+                                </span>
+                                <div className={styles.gapContent}>
+                                  <span className={styles.gapDesc}>{gap.description}</span>
+                                  <span className={styles.gapSection}>
+                                    {gap.section}
+                                    {gap.what_3_looks_like ? ` — ${gap.what_3_looks_like}` : ''}
+                                  </span>
+                                </div>
+                                <span className={styles.gapScore}>{gap.score}/3</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
                         {/* Cross-cutting checks */}
                         {sc.cross_cutting_checks && Object.keys(sc.cross_cutting_checks).length > 0 && (
                           <div className={styles.crossCuttingSection}>
                             <h4 className={styles.crossCuttingTitle}>Cross-Cutting Checks</h4>
                             <div className={styles.crossCuttingGrid}>
-                              {Object.entries(sc.cross_cutting_checks).map(([key, value]) => (
-                                <div key={key} className={styles.crossCuttingItem}>
-                                  <span className={styles.crossCuttingKey}>{key.replace(/_/g, ' ')}</span>
-                                  <span className={styles.crossCuttingValue} data-status={value.toLowerCase()}>{value}</span>
-                                </div>
-                              ))}
+                              {Object.entries(sc.cross_cutting_checks).map(([key, value]) => {
+                                const check = normalizeCrossCuttingCheck(key, value);
+                                return (
+                                  <div key={key} className={styles.crossCuttingItem}>
+                                    <span className={styles.crossCuttingKey}>{check.label}</span>
+                                    <span className={styles.crossCuttingValue} data-status={check.status}>{check.displayText}</span>
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
                         )}

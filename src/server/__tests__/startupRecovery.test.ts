@@ -1,6 +1,7 @@
 const mockFindMany = jest.fn();
 const mockAgentRunsFindMany = jest.fn();
 const mockPrdsFindMany = jest.fn();
+const mockPrdsFindFirst = jest.fn();
 const mockDesignDocsFindMany = jest.fn();
 const mockTestCasesFindMany = jest.fn();
 const mockAgentRunsFindFirst = jest.fn();
@@ -12,7 +13,10 @@ jest.mock('../db/drizzle', () => ({
   db: {
     query: {
       devSessions: { findMany: (...args: unknown[]) => mockFindMany(...args) },
-      prds: { findMany: (...args: unknown[]) => mockPrdsFindMany(...args) },
+      prds: {
+        findMany: (...args: unknown[]) => mockPrdsFindMany(...args),
+        findFirst: (...args: unknown[]) => mockPrdsFindFirst(...args),
+      },
       designDocs: { findMany: (...args: unknown[]) => mockDesignDocsFindMany(...args) },
       testCases: { findMany: (...args: unknown[]) => mockTestCasesFindMany(...args) },
       agentRuns: {
@@ -40,11 +44,16 @@ jest.mock('../services/designDocService', () => ({
   startSingleFeatureDocWatcher: jest.fn(),
   startValidationWatcher: jest.fn(),
   isValidationWatcherActive: jest.fn(),
+  isDocWatcherActive: jest.fn(),
   routeDesignDocGenerationKickoff: jest.fn(),
 }));
 jest.mock('../services/testCaseService', () => ({
   startTestCaseWatcher: jest.fn(),
   isTestCaseWatcherActive: jest.fn(),
+  routeTestCaseGenerationKickoff: jest.fn(),
+}));
+jest.mock('../services/documentValidationService', () => ({
+  routeDocumentValidationKickoff: jest.fn(),
 }));
 jest.mock('../services/designPrototypeService', () => ({
   failStalePrototypes: jest.fn(),
@@ -85,10 +94,16 @@ import { findRunningInterviewThreads, clearStaleRun } from '../services/chatThre
 import {
   hydrateThread,
   reevaluateThreadGroundingForRecovery,
+  sendMessage,
 } from '../services/chatAgentService';
 import { isThreadRunAlive } from '../services/agentRunReaperService';
 import { finalizeOwnedAgentRun } from '../services/pgNotifyService';
-import { routeDesignDocGenerationKickoff } from '../services/designDocService';
+import {
+  routeDesignDocGenerationKickoff,
+  startSingleFeatureDocWatcher,
+  isDocWatcherActive,
+} from '../services/designDocService';
+import { routeTestCaseGenerationKickoff } from '../services/testCaseService';
 
 const mockedFindRunning = findRunningInterviewThreads as jest.MockedFunction<typeof findRunningInterviewThreads>;
 const mockedClearStale = clearStaleRun as jest.MockedFunction<typeof clearStaleRun>;
@@ -170,6 +185,32 @@ describe('design-doc generation recovery claim', () => {
     expect(mockUpdateReturning).not.toHaveBeenCalled();
   });
 
+  it('leaves a watcher that is already running alone', async () => {
+    // The sweep runs every 60s and a doc generates for far longer, so adopting
+    // a live watcher tore one down and built another ~30 times per doc. That
+    // churn is how two watchers came to read the same workspace mid-write.
+    (isDocWatcherActive as jest.Mock).mockReturnValue(true);
+
+    await recoverInFlightWork();
+
+    expect(startSingleFeatureDocWatcher).not.toHaveBeenCalled();
+  });
+
+  it('adopts a doc whose watcher was lost with the process', async () => {
+    (isDocWatcherActive as jest.Mock).mockReturnValue(false);
+    // Lose the re-kick claim: this test is only about adopting the watcher.
+    mockUpdateReturning.mockResolvedValue([]);
+
+    await recoverInFlightWork();
+
+    expect(startSingleFeatureDocWatcher).toHaveBeenCalledWith(
+      'doc-1',
+      'thread-design',
+      'prd-1',
+      'Apex',
+    );
+  });
+
   it('re-kicks an expired row only after winning the atomic claim', async () => {
     mockDesignDocsFindMany.mockReset()
       .mockResolvedValueOnce([{
@@ -222,6 +263,72 @@ describe('design-doc generation recovery claim', () => {
 
     expect(mockUpdateReturning).toHaveBeenCalledTimes(1);
     expect(routeDesignDoc).not.toHaveBeenCalled();
+  });
+});
+
+describe('test-case generation recovery routing', () => {
+  const routeTestCases = routeTestCaseGenerationKickoff as jest.MockedFunction<
+    typeof routeTestCaseGenerationKickoff
+  >;
+  const mockSendMessage = sendMessage as jest.MockedFunction<typeof sendMessage>;
+  const mockIsThreadIdle = jest.requireMock('../services/chatAgentService')
+    .isThreadIdle as jest.Mock;
+  const mockIsTestCaseWatcherActive = jest.requireMock('../services/testCaseService')
+    .isTestCaseWatcherActive as jest.Mock;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUpdateWhere.mockImplementation(() => ({ returning: mockUpdateReturning }));
+    mockFindMany.mockResolvedValue([]);
+    mockPrdsFindMany.mockResolvedValue([]);
+    mockDesignDocsFindMany.mockResolvedValue([]);
+    mockAgentRunsFindFirst.mockResolvedValue(null);
+    mockTestCasesFindMany.mockResolvedValue([{
+      id: 'tc-1',
+      prdId: 'prd-1',
+      chatThreadId: 'thread-tc',
+      updatedAt: '2026-08-11T05:00:00.000Z',
+    }]);
+    mockPrdsFindFirst.mockResolvedValue({
+      authorId: 'user-1',
+      project: 'Apex',
+      chatThreadId: 'thread-prd',
+    });
+    mockedHydrate.mockResolvedValue(true);
+    mockIsThreadIdle.mockReturnValue(true);
+    mockedIsAlive.mockResolvedValue(false);
+    mockIsTestCaseWatcherActive.mockReturnValue(false);
+    mockedFindRunning.mockResolvedValue([]);
+    jest.requireMock('../services/designPrototypeService')
+      .failStalePrototypes.mockResolvedValue(0);
+    jest.requireMock('../services/pdfAssemblyService')
+      .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
+    jest.requireMock('../services/featureRequestAnalysisService')
+      .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
+    jest.requireMock('../services/rfpEvaluationOrchestrationService')
+      .recoverEvaluatingRfps.mockResolvedValue(0);
+    routeTestCases.mockResolvedValue(true);
+  });
+
+  it('re-kicks a stale test-case row through the background worker, not sendMessage', async () => {
+    mockUpdateReturning.mockResolvedValueOnce([{ id: 'tc-1' }]);
+    const nowSpy = jest.spyOn(Date, 'now')
+      .mockReturnValue(Date.parse('2026-08-11T05:16:37.000Z'));
+    try {
+      await recoverInFlightWork();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(routeTestCases).toHaveBeenCalledWith(expect.objectContaining({
+      testCaseId: 'tc-1',
+      prdId: 'prd-1',
+      userId: 'user-1',
+      project: 'Apex',
+      threadId: 'thread-tc',
+      sourceThreadId: 'thread-prd',
+    }));
+    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 });
 
@@ -332,6 +439,25 @@ describe('recoverStaleDevSessionSetups', () => {
         id: 'live-session',
         status: 'setting_up',
         updatedAt: '2026-07-14T13:59:00.000Z',
+      },
+    ]);
+
+    const recovered = await recoverStaleDevSessionSetups({
+      now: () => Date.parse('2026-07-14T14:00:00.000Z'),
+      setupTimeoutMs: 15 * 60_000,
+    });
+
+    expect(recovered).toBe(0);
+    expect(mockUpdateSet).not.toHaveBeenCalled();
+  });
+
+  it('does not fail a Cloud Agent session that owns a run', async () => {
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'cloud-session',
+        status: 'setting_up',
+        currentRunId: 'cloud-run-1',
+        updatedAt: '2026-07-14T13:00:00.000Z',
       },
     ]);
 

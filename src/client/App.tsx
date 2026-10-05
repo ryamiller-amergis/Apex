@@ -8,6 +8,7 @@ import { Changelog } from './components/Changelog';
 import { GuidedWalkthroughHost } from './components/GuidedWalkthroughHost';
 import { WhatsNewBanner } from './components/WhatsNewBanner';
 import { Login } from './components/Login';
+import { DevEnvAccessDenied } from './components/DevEnvAccessDenied';
 import { ViewErrorFallback } from './components/ViewErrorFallback';
 import { ViewSkeleton } from './components/ViewSkeleton';
 import { AppHeader } from './components/AppHeader';
@@ -16,7 +17,8 @@ import { PlanningTabs, type PlanningTab } from './components/PlanningTabs';
 import { ApexLoader } from './components/ApexLoader';
 import { ProjectSelector } from './components/ProjectSelector';
 import { AgentHome } from './components/AgentHome';
-import { ChatAgentPanel } from './components/ChatAgentPanel';
+import { FoundationSkillUpdateBanner } from './components/FoundationSkillUpdateBanner';
+import { ChatAgentPanel, type StartPanelChatOptions } from './components/ChatAgentPanel';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { ToastContainer } from './components/ToastContainer';
 import { useAppShell } from './hooks/useAppShell';
@@ -25,6 +27,8 @@ import { useProjectMenuConfig } from './hooks/useProjectMenuConfig';
 import { useProjectRepoConfigs } from './hooks/useProjectRepoConfigs';
 import { useProjectSkillConfig } from './hooks/useProjectSkillConfig';
 import { useChatThread, useSkillRepos, useStartChat } from './hooks/useChatThreads';
+import { useUiLabSharedDesigns } from './hooks/useUiLab';
+import { resolveUiLabRouteAccess } from '../shared/types/uiLab';
 import { RepoSelector } from './components/RepoSelector';
 import { DEFAULT_MODEL_ID } from './config/models';
 import { FeatureFlagDemo } from './components/FeatureFlagDemo';
@@ -32,6 +36,7 @@ import { PdfToolsRouteGuard } from './components/PdfToolsRouteGuard';
 import { DesktopOnlyGate } from './components/DesktopOnlyGate';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
+import { canAccessMyWork } from './utils/canAccessMyWork';
 import { setInteractiveWsEnabled } from './utils/threadEventStream';
 import { IS_BETA_RELEASE } from './config/release';
 import { RESTRICTED_ACCESS_PROJECT } from '../shared/types/restrictedAccess';
@@ -88,6 +93,7 @@ const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ defau
 const ApryseWebViewerPoc = lazy(() => import('./components/ApryseWebViewerPoc').then(m => ({ default: m.ApryseWebViewerPoc })));
 const NutrientWebSdkPoc = lazy(() => import('./components/NutrientWebSdkPoc').then(m => ({ default: m.NutrientWebSdkPoc })));
 const DesignModuleView = lazy(() => import('./components/DesignModuleView'));
+const PlaybookStatusView = lazy(() => import('./components/PlaybookStatusView'));
 const LoadTestsListPage = lazy(() => import('./components/LoadTestsListPage').then(m => ({ default: m.LoadTestsListPage })));
 const LoadTestDefinitionBuilderView = lazy(() =>
   import('./components/LoadTestDefinitionBuilderView').then((m) => ({ default: m.LoadTestDefinitionBuilderView })),
@@ -131,6 +137,7 @@ function App() {
 
   const [chatOpen, setChatOpen] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [activeThreadProject, setActiveThreadProject] = useState<string | null>(null);
   const [pendingProject, setPendingProject] = useState<string | null>(null);
   const [calendarAssistantOpen, setCalendarAssistantOpen] = useState(false);
   const [calendarAssistantAnchor, setCalendarAssistantAnchor] = useState<{
@@ -159,9 +166,9 @@ function App() {
       return next;
     });
   }, []);
-  const { data: activeThread = null } = useChatThread(activeThreadId);
+  const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'rfp-intake' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'rfp-intake' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -205,6 +212,8 @@ function App() {
                     ? 'ai-cost'
                     : location.pathname === '/design-module'
                     ? 'design-module'
+                    : location.pathname === '/playbooks' || location.pathname.startsWith('/playbooks/')
+                    ? 'playbooks'
                     : location.pathname.startsWith('/work-board')
                     ? 'work-board'
                     : location.pathname.startsWith('/load-tests')
@@ -217,12 +226,15 @@ function App() {
     ? location.pathname.split('/')[2]
     : undefined;
 
-  // Close the slide-out panel when landing on the home view — the full-page
-  // AgentHome already provides the complete chat experience there.
-  // Adjust during render (same pattern as AppHeader) to avoid set-state-in-effect.
-  if (currentView === 'home' && chatOpen) {
-    setChatOpen(false);
-  }
+  useEffect(() => {
+    if (currentView !== 'home') {
+      setChatOpen(false);
+    }
+  }, [currentView]);
+
+  const handleHomeViewChange = useCallback((view: 'chat' | 'status') => {
+    setChatOpen(view === 'chat');
+  }, []);
 
   useEffect(() => {
     const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
@@ -240,10 +252,9 @@ function App() {
     isInAnyGroup,
     userId,
     isSuperAdmin,
+    devAccessDenied,
     isRestricted,
     restrictedModules,
-    isAdmin,
-    groups,
     permissionsLoaded,
     workItems,
     workBoardEnabled,
@@ -296,9 +307,23 @@ function App() {
   }, [location.pathname, location.search, selectedProject, availableProjects, changeProject]);
 
   const rfpIntakeEnabled = useFeatureFlag('rfp-intake', 'Apex');
+
+  // Deep-link from UI Lab share notifications: /ui-lab/:id?project=…
+  useEffect(() => {
+    const match = /^\/ui-lab\/([^/?#]+)/.exec(location.pathname);
+    if (!match) return;
+    const project = new URLSearchParams(location.search).get('project');
+    if (!project || project === selectedProject) return;
+    if (!availableProjects.includes(project)) return;
+    changeProject(project);
+  }, [location.pathname, location.search, selectedProject, availableProjects, changeProject]);
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
   const interactiveWsEnabled = homeFlags['ai-runs-interactive'] === true;
+  const canAccessPlaybooks =
+    !homeFlagsLoading &&
+    homeFlags['playbooks-production-adapters'] === true &&
+    (isSuperAdmin || can('playbooks:view'));
 
   // @feature-flag:ai-runs-interactive start winner=disabled
   // FEAT-007: flip the chat stream transport to the WebSocket agent gateway when
@@ -327,6 +352,18 @@ function App() {
   const effectiveEnabledViews = isRestricted ? restrictedModules : enabledViews;
   const menuConfigReady = isRestricted || !menuConfigLoading;
   const restrictedSkipRef = useRef(false);
+
+  // UI Lab members read the whole project list; everyone else only reaches
+  // designs shared with them, which is also what earns them the nav item.
+  const uiLabWorkspaceAccess = isSuperAdmin || isInAnyGroup(['UI/UX']);
+  const uiLabSharesProject = !uiLabWorkspaceAccess
+    && selectedProject
+    && effectiveEnabledViews.includes('ui-lab')
+    && can('ui-lab:view')
+    ? selectedProject
+    : null;
+  const { data: uiLabSharedDesigns, isLoading: uiLabSharesLoading } = useUiLabSharedDesigns(uiLabSharesProject);
+  const hasUiLabShares = (uiLabSharedDesigns?.length ?? 0) > 0;
 
   // Bind restricted users to the internal Apex project token (project-less UX).
   useEffect(() => {
@@ -441,7 +478,15 @@ function App() {
     if (currentView === 'backlog'       && !isSuperAdmin && (!effectiveEnabledViews.includes('backlog')   || !can('interviews:view'))) navigate(fallback);
     if (currentView === 'adr'           && !isSuperAdmin && (!effectiveEnabledViews.includes('adr')       || !can('adr:view'))) navigate(fallback);
     if (currentView === 'notifications' && !can('notifications:view'))  navigate(fallback);
-    if (currentView === 'my-work'       && !isSuperAdmin && (!effectiveEnabledViews.includes('my-work') || !can('dev-workbench:view'))) navigate(fallback);
+    if (
+      currentView === 'my-work'
+      && !canAccessMyWork({
+        can,
+        isSuperAdmin,
+        isInAnyGroup,
+        enabledViews: effectiveEnabledViews,
+      })
+    ) navigate(fallback);
     if (currentView === 'standup'        && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
     if (currentView === 'standup-manage' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:manage')))      navigate(fallback);
     if (currentView === 'standup-summary' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
@@ -453,7 +498,32 @@ function App() {
       );
       if (!allowed) navigate(fallback);
     }
-    if (currentView === 'ui-lab'        && !isSuperAdmin && (!effectiveEnabledViews.includes('ui-lab') || !can('ui-lab:view') || !isInAnyGroup(['UI/UX']))) navigate(fallback);
+    // UI Lab workspace requires UI/UX. Named viewers reach it two ways: a
+    // deep-linked design (`/ui-lab/:id`), or the shared list once something has
+    // been shared with them. The server enforces live share access either way.
+    // Wait when the link's ?project= has not been applied yet, or when the
+    // shared-with-me list is still loading — both used to bounce viewers off.
+    if (currentView === 'ui-lab') {
+      const uiLabDesignDeepLink = /^\/ui-lab\/[^/]+/.test(location.pathname);
+      const uiLabLinkProject = new URLSearchParams(location.search).get('project');
+      const projectSwitchPending = Boolean(
+        uiLabDesignDeepLink
+        && uiLabLinkProject
+        && uiLabLinkProject !== selectedProject
+        && availableProjects.includes(uiLabLinkProject),
+      );
+      const access = resolveUiLabRouteAccess({
+        isSuperAdmin,
+        menuEnabled: effectiveEnabledViews.includes('ui-lab'),
+        canView: can('ui-lab:view'),
+        inUiUxGroup: isInAnyGroup(['UI/UX']),
+        isDesignDeepLink: uiLabDesignDeepLink,
+        hasShares: hasUiLabShares,
+        sharesPending: Boolean(uiLabSharesProject) && uiLabSharesLoading,
+        projectSwitchPending,
+      });
+      if (access === 'deny') navigate(fallback);
+    }
     if (currentView === 'pdf-tools'     && !isSuperAdmin && (!effectiveEnabledViews.includes('pdf-tools') || !can('pdf-assembly:use'))) navigate(fallback);
     if (currentView === 'design-module' && !isSuperAdmin && (!effectiveEnabledViews.includes('design-module') || !can('design-module:view'))) navigate(fallback);
     if (currentView === 'load-tests'    && !isSuperAdmin && (!effectiveEnabledViews.includes('load-tests')    || !can('load-test:view')))    navigate(fallback);
@@ -468,7 +538,7 @@ function App() {
         navigate(firstAccessible ? `/planning/${firstAccessible}` : fallback);
       }
     }
-  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, workBoardEnabled, rfpIntakeEnabled, navigate]);
+  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, availableProjects, workBoardEnabled, rfpIntakeEnabled, hasUiLabShares, uiLabSharesLoading, uiLabSharesProject, navigate, location.pathname, location.search]);
 
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
@@ -481,11 +551,15 @@ function App() {
     [activeSkillConfig, skillRepos, selectedProject],
   );
 
-  const handleStartPanelChat = useCallback(async () => {
-    if (!can('chat:view')) return;
+  const handleStartPanelChat = useCallback(async (options?: StartPanelChatOptions) => {
+    if (!can('chat:view') || !can('chat:create')) return;
     setChatOpen(true);
+    if (!options) {
+      setActiveThreadId(null);
+      setActiveThreadProject(null);
+      return;
+    }
     if (!panelRepo || startChat.isPending) return;
-    setActiveThreadId(null);
     try {
       const result = await startChat.mutateAsync({
         kickoff: {
@@ -493,15 +567,71 @@ function App() {
           repo: panelRepo.name,
           branch: panelRepo.defaultBranch ?? 'main',
           skillProvider: activeSkillConfig?.skillProvider ?? undefined,
-          model: DEFAULT_MODEL_ID,
-          skillSettingsId: selectedSkillSettingsId ?? undefined,
+          model: options?.model ?? DEFAULT_MODEL_ID,
+          skillSettingsId: activeSkillConfig?.id ?? selectedSkillSettingsId ?? undefined,
+          skillPath: options?.quickSkill?.skillPath,
+          pillLabel: options?.quickSkill?.label ?? options?.mcpPill?.label,
+          pillDescription: options?.quickSkill?.description ?? options?.mcpPill?.description ?? undefined,
+          pillBypassScopePolicy: options?.quickSkill?.bypassScopePolicy ?? undefined,
+          ...(options?.mcpPill ? { mcpPill: options.mcpPill } : {}),
         },
+        skipAutoKickoff: true,
       });
       setActiveThreadId(result.threadId);
+      setActiveThreadProject(selectedProject);
+      if (options?.initialMessage) {
+        await fetch(`/api/chat/threads/${result.threadId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            text: options.initialMessage,
+            model: options.model ?? DEFAULT_MODEL_ID,
+            ...(options.attachments?.length ? { attachments: options.attachments } : {}),
+          }),
+        });
+      }
     } catch {
       // Error shown inside the panel
     }
   }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig]);
+
+  useEffect(() => {
+    if (
+      currentView !== 'home'
+      || !activeThreadId
+      || activeThreadProject !== selectedProject
+      || activeThread?.id !== activeThreadId
+      || activeThread.kickoff.project !== selectedProject
+    ) return;
+    sessionStorage.setItem(`agentHomeThreadId:${selectedProject}`, activeThreadId);
+  }, [
+    activeThread,
+    activeThreadId,
+    activeThreadProject,
+    currentView,
+    selectedProject,
+  ]);
+
+  useEffect(() => {
+    if (
+      !activeThreadId
+      || !activeThread
+      || activeThread.id !== activeThreadId
+      || activeThreadProject !== selectedProject
+      || activeThread.kickoff.project === selectedProject
+    ) return;
+    const storageKey = `agentHomeThreadId:${selectedProject}`;
+    if (sessionStorage.getItem(storageKey) === activeThreadId) {
+      sessionStorage.removeItem(storageKey);
+    }
+  }, [activeThread, activeThreadId, activeThreadProject, selectedProject]);
+
+  const projectScopedActiveThread =
+    activeThreadProject === selectedProject
+    && activeThread?.kickoff.project === selectedProject
+      ? activeThread
+      : null;
 
   if (isAuthenticated === null) {
     return (
@@ -516,6 +646,7 @@ function App() {
     );
   }
   if (!isAuthenticated) return <Login />;
+  if (devAccessDenied) return <DevEnvAccessDenied onLogout={() => { void handleLogout(); }} />;
 
   if (currentView === 'project-selector') {
     // Restricted users never see the project picker — show a brief loader while redirecting.
@@ -682,7 +813,11 @@ function App() {
     );
   }
 
-  if (currentView === 'not-found') {
+  if (currentView === 'playbooks' && homeFlagsLoading) {
+    return <ViewSkeleton />;
+  }
+
+  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks)) {
     return (
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <div role="status" aria-live="polite" {...{ 'data-testid': 'route-not-found' }}>
@@ -707,6 +842,7 @@ function App() {
             isInAnyGroup={isInAnyGroup}
             menuEnabledViews={effectiveEnabledViews}
             isSuperAdmin={isSuperAdmin}
+            hasUiLabShares={hasUiLabShares}
             selectedProject={selectedProject}
             canAccessHome={canAccessHome}
             onNavigateHome={() => navigate('/home')}
@@ -757,6 +893,7 @@ function App() {
             isInAnyGroup={isInAnyGroup}
             menuEnabledViews={effectiveEnabledViews}
             isSuperAdmin={isSuperAdmin}
+            hasUiLabShares={hasUiLabShares}
             selectedProject={isRestricted ? undefined : selectedProject}
             hideProjectChrome={isRestricted}
             canAccessHome={canAccessHome}
@@ -789,7 +926,7 @@ function App() {
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
             onLogout={handleLogout}
-            onOpenAgentChat={currentView !== 'home' ? () => setChatOpen(true) : undefined}
+            onOpenAgentChat={undefined}
           />
           {hasUnreadChangelog && (
             <div className="changelog-banner-row">
@@ -803,20 +940,81 @@ function App() {
             </div>
           )}
 
-          {currentView === 'home' && canAccessHome ? (
-            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
-              {/* Top-level split: demo component gated by "example-flag-demo" flag */}
-              <FeatureFlagDemo project={selectedProject} />
-              <AgentHome selectedProject={selectedProject} selectedSkillSettingsId={selectedSkillSettingsId} isAdmin={isSuperAdmin || isAdmin || (groups ?? []).includes('Manager') || (groups ?? []).includes('Product-Owner')} />
-            </ErrorBoundary>
+          {/*
+            Sits outside agent-home-keepalive on purpose: the Home chat panel is an
+            absolute overlay pinned below the tab strip, so a banner inside that
+            container would be covered by it.
+          */}
+          {canAccessHome && currentView === 'home'
+            && isInAnyGroup(['Manager', 'Product-Owner'])
+            && activeSkillConfig?.skillRepo && (
+            <div className="foundation-skill-banner-row">
+              <FoundationSkillUpdateBanner
+                project={selectedProject || null}
+                repo={activeSkillConfig.skillRepo}
+                provider={activeSkillConfig.skillProvider ?? 'ado'}
+                branch={activeSkillConfig.skillBranch ?? 'main'}
+                {...{ 'data-testid': 'agent-home-foundation-skill-banner' }}
+              />
+            </div>
+          )}
+
+          {canAccessHome ? (
+            <div
+              className="agent-home-keepalive"
+              style={
+                currentView === 'home'
+                  ? undefined
+                  : { display: 'none' }
+              }
+              aria-hidden={currentView !== 'home'}
+            >
+              <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+                {/* Top-level split: demo component gated by "example-flag-demo" flag */}
+                <FeatureFlagDemo project={selectedProject} />
+                <AgentHome
+                  selectedProject={selectedProject}
+                  isActive={currentView === 'home'}
+                  onHomeViewChange={handleHomeViewChange}
+                  onRestoreThread={(id) => {
+                    setActiveThreadId(id);
+                    setActiveThreadProject(selectedProject);
+                  }}
+                />
+                {/* data-testid-exempt — ChatAgentPanel API has no data-testid prop */}
+                <ChatAgentPanel
+                  thread={projectScopedActiveThread}
+                  activeThreadId={projectScopedActiveThread?.id ?? null}
+                  isLoadingThread={
+                    Boolean(activeThreadId)
+                    && activeThreadProject === selectedProject
+                    && (isFetchingActiveThread || !projectScopedActiveThread)
+                  }
+                  isOpen={currentView === 'home' && chatOpen}
+                  onClose={() => setChatOpen(false)}
+                  onNewChat={handleStartPanelChat}
+                  onSelectThread={(id) => {
+                    setActiveThreadId(id || null);
+                    setActiveThreadProject(id ? selectedProject : null);
+                  }}
+                  selectedProject={selectedProject}
+                  canStartNewChat={!!panelRepo && !isLoadingSkillRepos && !startChat.isPending}
+                  isStartingNewChat={startChat.isPending}
+                  newChatError={startChat.error?.message}
+                  launchedFromHome
+                  selectedSkillSettingsId={selectedSkillSettingsId}
+                />
+              </ErrorBoundary>
+            </div>
           ) : currentView === 'home' ? (
             /* Access controls still loading — withhold content to avoid a flash */
             null
-          ) : currentView === 'calendar' ? (
+          ) : null}
+          {currentView === 'home' ? null : currentView === 'calendar' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 {error && !isLoading && (
-                  <div className="work-items-inline-error" role="status" data-testid="work-items-inline-error">
+                  <div className="work-items-inline-error" role="status" {...{ 'data-testid': 'work-items-inline-error' }}>
                     <span>
                       Calendar work items couldn&apos;t be refreshed
                       {workItems.length > 0 ? ' — showing the last loaded data.' : '.'}
@@ -826,7 +1024,7 @@ function App() {
                       className="work-items-inline-error-retry"
                       onClick={() => { void refetchWorkItems(); }}
                       disabled={isFetchingWorkItems}
-                      data-testid="work-items-retry"
+                      {...{ 'data-testid': 'work-items-retry' }}
                     >
                       {isFetchingWorkItems ? 'Retrying…' : 'Retry'}
                     </button>
@@ -1098,7 +1296,18 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 <div className="ui-lab-view" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-                  <UiLabView project={selectedProject} />
+                  <UiLabView
+                    project={selectedProject}
+                    initialDesignId={(() => {
+                      const match = /^\/ui-lab\/([^/?#]+)/.exec(location.pathname);
+                      return match ? decodeURIComponent(match[1]) : null;
+                    })()}
+                    sharedMode={
+                      /^\/ui-lab\/[^/?#]+/.test(location.pathname)
+                      && !uiLabWorkspaceAccess
+                    }
+                    hasWorkspaceAccess={uiLabWorkspaceAccess}
+                  />
                 </div>
               </Suspense>
             </ErrorBoundary>
@@ -1126,6 +1335,13 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 <DesignModuleView selectedProject={selectedProject} />
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'playbooks' ? (
+            // Only reachable when the flag is on; the off case returned the not-found surface above.
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <PlaybookStatusView selectedProject={selectedProject} />
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'load-tests' ? (
@@ -1208,7 +1424,7 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <div className="planning-view">
                 {error && !isLoading && (
-                  <div className="work-items-inline-error" role="status" data-testid="work-items-inline-error">
+                  <div className="work-items-inline-error" role="status" {...{ 'data-testid': 'work-items-inline-error' }}>
                     <span>
                       Planning work items couldn&apos;t be refreshed
                       {workItems.length > 0 ? ' — showing the last loaded data.' : '.'}
@@ -1218,7 +1434,7 @@ function App() {
                       className="work-items-inline-error-retry"
                       onClick={() => { void refetchWorkItems(); }}
                       disabled={isFetchingWorkItems}
-                      data-testid="work-items-retry"
+                      {...{ 'data-testid': 'work-items-retry' }}
                     >
                       {isFetchingWorkItems ? 'Retrying…' : 'Retry'}
                     </button>
@@ -1328,18 +1544,6 @@ function App() {
           enabled={isAuthenticated === true && permissionsLoaded && Boolean(selectedProject)}
           whatsNewSettled={whatsNewAutomaticOverlaySettled}
           whatsNewBlocksWalkthrough={whatsNewBlocksAutomaticWalkthrough}
-        />
-        {/* data-testid-exempt — ChatAgentPanel API has no data-testid prop */}
-        <ChatAgentPanel
-          thread={activeThread}
-          isOpen={chatOpen}
-          onClose={() => setChatOpen(false)}
-          onNewChat={handleStartPanelChat}
-          onSelectThread={(id) => setActiveThreadId(id || null)}
-          selectedProject={selectedProject}
-          canStartNewChat={!!panelRepo && !isLoadingSkillRepos && !startChat.isPending}
-          isStartingNewChat={startChat.isPending}
-          newChatError={startChat.error?.message}
         />
       </NotificationWrapper>
       </DndProvider>

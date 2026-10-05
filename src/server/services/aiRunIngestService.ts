@@ -43,6 +43,8 @@ import {
 } from '../../shared/types/aiRunIngest';
 import { INTERACTIVE_LANE } from '../../shared/types/interactiveWorkflow';
 import { workerTierTelemetry } from './workerTierTelemetry';
+import { recordCursorChatUsage } from './aiUsageService';
+import type { RecordUsageInput } from '../../shared/types/aiCostAnalytics';
 
 const MAX_DETAIL_LENGTH = 500;
 const AGENT_RUN_PHASES: ReadonlySet<string> = new Set([
@@ -87,12 +89,31 @@ export type CompletedArtifactConsumer = (
   workspaceDir: string,
 ) => Promise<void>;
 
+export type FailedGenerationConsumer = (threadId: string) => Promise<void>;
+
 export interface AiRunIngestDependencies {
   consumeCompletedArtifacts?: CompletedArtifactConsumer;
+  failGeneratingArtifacts?: FailedGenerationConsumer;
   persistThreadMessage?: (
     threadId: string,
     message: ChatMessage,
   ) => Promise<void>;
+  recordCursorChatUsage?: (input: {
+    kickoff: {
+      skillPath?: string;
+      project?: string;
+    };
+    modelId: string;
+    threadId: string;
+    runId?: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+    tokenSource?: RecordUsageInput['tokenSource'];
+    durationMs: number;
+    status: RecordUsageInput['status'];
+  }) => Promise<void>;
 }
 
 async function consumeCompletedArtifacts(
@@ -101,6 +122,68 @@ async function consumeCompletedArtifacts(
 ): Promise<void> {
   const { syncOutputToDb } = await import('./chatAgentService');
   await syncOutputToDb(threadId, workspaceDir);
+}
+
+async function failGeneratingArtifacts(threadId: string): Promise<void> {
+  const { failGeneratingTestCasesForThread } = await import('./testCaseService');
+  await failGeneratingTestCasesForThread(threadId);
+}
+
+async function reflectFailedGeneration(
+  threadId: string,
+  dependencies: AiRunIngestDependencies,
+): Promise<void> {
+  await (dependencies.failGeneratingArtifacts ?? failGeneratingArtifacts)(
+    threadId,
+  );
+}
+
+async function persistBackgroundRunUsage(
+  existing: typeof agentRuns.$inferSelect,
+  body: AiRunTerminalIngest,
+  dependencies: AiRunIngestDependencies,
+): Promise<void> {
+  if (existing.lane === INTERACTIVE_LANE) return;
+  const snapshot = existing.executionSnapshot;
+  if (!snapshot?.model || !existing.threadId) return;
+  if (
+    body.durationMs === undefined
+    && body.inputTokens === undefined
+    && body.outputTokens === undefined
+  ) {
+    return;
+  }
+  const inputTokens = body.inputTokens ?? 0;
+  const outputTokens = body.outputTokens ?? 0;
+  const hasReportedTokens = body.inputTokens !== undefined || body.outputTokens !== undefined;
+  const usageStatus = body.status === 'completed'
+    ? 'success'
+    : body.status === 'cancelled'
+      ? 'cancelled'
+      : 'error';
+  try {
+    await (dependencies.recordCursorChatUsage ?? recordCursorChatUsage)({
+      kickoff: {
+        skillPath: snapshot.skillPath,
+        project: snapshot.projectId,
+      },
+      modelId: snapshot.model,
+      threadId: existing.threadId,
+      runId: existing.id,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens: body.cacheReadTokens,
+      cacheWriteTokens: body.cacheWriteTokens,
+      tokenSource: hasReportedTokens ? 'exact' : 'estimated',
+      durationMs: body.durationMs ?? 0,
+      status: usageStatus,
+    });
+  } catch (err) {
+    console.error(
+      `[aiRunIngest] Failed to record background usage (runId=${existing.id})`,
+      err,
+    );
+  }
 }
 
 /**
@@ -118,7 +201,11 @@ async function persistThreadMessage(
 
 function sanitizeDetail(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
-  const sanitized = value.replace(/\s+/g, ' ').trim().slice(0, MAX_DETAIL_LENGTH);
+  const sanitized = value
+    .split('\u0000').join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_DETAIL_LENGTH);
   return sanitized || undefined;
 }
 
@@ -209,6 +296,22 @@ function validateBody(body: AiRunIngestBody): void {
         'AI_RUN_VALIDATION',
       );
     }
+    for (const field of [
+      'durationMs',
+      'inputTokens',
+      'outputTokens',
+      'cacheReadTokens',
+      'cacheWriteTokens',
+    ] as const) {
+      const value = body[field];
+      if (value === undefined) continue;
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+        throw new AiRunIngestError(
+          `${field} must be a non-negative number`,
+          'AI_RUN_VALIDATION',
+        );
+      }
+    }
   }
 }
 
@@ -229,6 +332,11 @@ function mapRow(row: typeof agentRuns.$inferSelect): AgentRunLifecycleRow {
     timeoutAt: row.timeoutAt ?? null,
     ownerInstance: row.ownerInstance ?? null,
     updatedAt: row.updatedAt,
+    devSessionId: row.devSessionId ?? null,
+    workflowClass: row.workflowClass ?? null,
+    cloudAgentIdentity: row.cloudAgentIdentity ?? null,
+    cloudAgentManaged: row.cloudAgentManaged ?? false,
+    checkResults: row.checkResults ?? null,
   };
 }
 
@@ -525,6 +633,9 @@ export async function ingest(
         terminalReason: body.terminalReason,
         detail: detail ?? body.status,
       }));
+      if (body.status === 'failed' || body.status === 'cancelled') {
+        await reflectFailedGeneration(existing.threadId, dependencies);
+      }
       return { run, cancelRequested: run.cancelRequested };
     }
     throw new AiRunIngestError(
@@ -654,6 +765,7 @@ export async function ingest(
       )
       .returning();
     const run = updated[0] ? mapRow(updated[0]) : terminal;
+    await reflectFailedGeneration(existing.threadId, dependencies);
     return { run, cancelRequested: true };
   }
 
@@ -674,9 +786,27 @@ export async function ingest(
         'AI_RUN_ILLEGAL_TRANSITION',
       );
     }
-    await (
-      dependencies.consumeCompletedArtifacts ?? consumeCompletedArtifacts
-    )(existing.threadId, workspaceDir);
+    // Runs before markTerminal so a completed run's output is durable before
+    // anything observes the run as finished. A throw here therefore leaves the
+    // run non-terminal and answers the worker with a bare 500, which is
+    // retryable but anonymous — name the subsystem so a recurrence is
+    // diagnosable without reproducing it.
+    try {
+      await (
+        dependencies.consumeCompletedArtifacts ?? consumeCompletedArtifacts
+      )(existing.threadId, workspaceDir);
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: 'AiRunTerminalArtifactSyncFailed',
+        runId,
+        threadId: existing.threadId,
+        lane: existing.lane ?? null,
+        errorType: error instanceof Error ? error.name : 'UnknownError',
+        errorMessage:
+          error instanceof Error ? error.message.slice(0, 200) : 'unknown',
+      }));
+      throw error;
+    }
 
     // Persist Cursor agent id for interactive restart recovery (best effort).
     if (existing.lane === INTERACTIVE_LANE) {
@@ -686,6 +816,8 @@ export async function ingest(
         await setCursorAgentId(existing.threadId, cursorAgentId).catch(() => {});
       }
     }
+  } else {
+    await reflectFailedGeneration(existing.threadId, dependencies);
   }
 
   const envelope = buildTerminalEnvelope(
@@ -705,5 +837,6 @@ export async function ingest(
     detail: detail ?? body.status,
     events: terminalEvents,
   }));
+  await persistBackgroundRunUsage(existing, body, dependencies);
   return { run, cancelRequested: run.cancelRequested };
 }

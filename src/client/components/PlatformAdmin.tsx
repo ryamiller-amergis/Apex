@@ -60,6 +60,7 @@ import { MODULE_VIEW_PERMISSIONS, isRestrictedAccessEmail } from '../../shared/t
 import type { RoleWithPermissions } from '../../shared/types/rbac';
 import { GroundingRolloutStatus } from './GroundingRolloutStatus';
 import { RfpQueueView } from './RfpQueueView';
+import { DevEnvAllowlistPanel } from './DevEnvAllowlistPanel';
 import styles from './PlatformAdmin.module.css';
 
 const ObservabilityWorkspace = lazy(() =>
@@ -85,7 +86,7 @@ const userAccessSchema = z.object({
 
 type UserAccessFormValues = z.infer<typeof userAccessSchema>;
 
-type PlatformAdminTab = 'access' | 'product-requests' | 'menu' | 'user-access' | 'flags' | 'skills' | 'walkthroughs' | 'observability';
+type PlatformAdminTab = 'access' | 'product-requests' | 'menu' | 'user-access' | 'dev-access' | 'flags' | 'skills' | 'walkthroughs' | 'observability';
 
 function resolveGroundingRolloutStage(
   flags: FeatureFlagWithRules[],
@@ -288,6 +289,18 @@ const PlatformAdminNav: React.FC<PlatformAdminNavProps> = ({
         {...{ 'data-testid': 'platform-admin-tab-user-access' }}
       >
         User Access
+      </button>
+      <button
+        type="button"
+        role="tab"
+        id="platform-admin-tab-dev-access"
+        aria-selected={activeTab === 'dev-access'}
+        aria-controls="platform-admin-panel-dev-access"
+        className={`${styles.navButton} ${activeTab === 'dev-access' ? styles.navButtonActive : ''}`}
+        onClick={() => onSelect('dev-access')}
+        {...{ 'data-testid': 'platform-admin-tab-dev-access' }}
+      >
+        Dev access
       </button>
       <button
         type="button"
@@ -617,6 +630,17 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
               className={styles.tabPanel}
             >
               <UserAccessSection />
+            </div>
+          )}
+          {activeTab === 'dev-access' && (
+            <div
+              id="platform-admin-panel-dev-access"
+              role="tabpanel"
+              aria-labelledby="platform-admin-tab-dev-access"
+              className={styles.tabPanel}
+            >
+              {/* data-testid-exempt -- panel owns test IDs for its interactive controls */}
+              <DevEnvAllowlistPanel />
             </div>
           )}
           {activeTab === 'flags' && (
@@ -1212,7 +1236,7 @@ const MenuVisibilitySection: React.FC<MenuVisibilitySectionProps> = ({
         <div>
           <h2 id="menu-visibility-title" className={styles.sectionTitle}>Menu Visibility</h2>
           <p className={styles.sectionHint}>
-            Choose which app views appear in navigation for each project. Users still need the matching role permission (and Developer group for My Work).
+            Choose which app views appear in navigation for each project. Users still need the matching role permission (My Work also needs Developer group membership or Project Admin).
           </p>
         </div>
       </div>

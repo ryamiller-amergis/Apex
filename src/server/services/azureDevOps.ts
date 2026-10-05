@@ -1,10 +1,16 @@
 import { Readable } from 'stream';
 import * as azdev from 'azure-devops-node-api';
 import { WorkItemExpand } from 'azure-devops-node-api/interfaces/WorkItemTrackingInterfaces';
+import { PullRequestStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateHitRateStats, Release, ReleaseMetrics, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, AIWorkItemMetric, AIWorkItemHealthSummary, DesignDocKickoffStats } from '../types/workitem';
 import type { AiCodeWorkItemAdoptionSummary } from '../types/aiCapabilityLadder';
 import { retryWithBackoff } from '../utils/retry';
 import { APEX_ORIGIN_TAG } from '../../shared/types/devWorkbench';
+import type { RelatedItemCycleTime, RelatedItemsCycleTimeResponse } from '../../shared/types/relatedItemCycleTime';
+import {
+  computeLastEnterInProgressToDone,
+  summarizeRelatedItemCycleTimes,
+} from './relatedItemCycleTime';
 
 /**
  * Ensures the canonical APEX origin tag is present in a tag list without
@@ -36,7 +42,7 @@ export class AzureDevOpsService {
   private areaPath: string;
   private readonly WORK_ITEM_BATCH_SIZE = 200;
 
-  constructor(project?: string, areaPath?: string, opts?: { bearerToken?: string }) {
+  constructor(project?: string, areaPath?: string, opts?: { bearerToken?: string; socketTimeout?: number }) {
     const orgUrl = process.env.ADO_ORG;
     const pat = process.env.ADO_PAT;
     const defaultProject = process.env.ADO_PROJECT || '';
@@ -67,9 +73,11 @@ export class AzureDevOpsService {
       }
       authHandler = azdev.getPersonalAccessTokenHandler(pat);
     }
-    // Configure with longer timeout for revision queries (default is 30s, increase to 120s)
+    // Revision queries need a long socket timeout (the client default is 30s).
+    // Callers that must answer quickly, such as the App Service health probe,
+    // pass a shorter socketTimeout so a stalled ADO call cannot hold the request.
     const options = {
-      socketTimeout: 120000, // 120 seconds
+      socketTimeout: opts?.socketTimeout ?? 120_000,
     };
     this.connection = new azdev.WebApi(orgUrl, authHandler, options);
   }
@@ -226,6 +234,29 @@ export class AzureDevOpsService {
             })),
           })),
       };
+    });
+  }
+
+  /**
+   * Run a link WIQL query without discarding source/target pairs.
+   * Rollups use these edges to distinguish hierarchy children from Related or
+   * Duplicate links without issuing one hierarchy request per parent.
+   */
+  async queryWorkItemLinksByWiql(wiql: string): Promise<Array<{
+    sourceId: number;
+    targetId: number;
+  }>> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const result = await witApi.queryByWiql({ query: wiql }, { project: this.project });
+      return (result.workItemRelations ?? [])
+        .filter((relation) =>
+          typeof relation.source?.id === 'number'
+          && typeof relation.target?.id === 'number')
+        .map((relation) => ({
+          sourceId: relation.source!.id!,
+          targetId: relation.target!.id!,
+        }));
     });
   }
 
@@ -2981,6 +3012,62 @@ export class AzureDevOpsService {
         description: wi.fields?.['System.Description'],
       }));
     });
+  }
+
+  /**
+   * Cycle time for related work items: last enter In Progress → last enter Done/Closed.
+   * Distinct from calculateCycleTime (first In Progress → first Ready For Test).
+   */
+  async getRelatedItemsCycleTime(epicId: number): Promise<RelatedItemsCycleTimeResponse> {
+    const related = await this.getRelatedItems(epicId);
+    const witApi = await this.connection.getWorkItemTrackingApi();
+
+    const readItem = async (wi: WorkItem): Promise<RelatedItemCycleTime> => {
+      const base = {
+        id: wi.id,
+        title: wi.title,
+        workItemType: wi.workItemType,
+        state: wi.state,
+        workItem: wi,
+      };
+
+      try {
+        const revisions = await witApi.getRevisions(
+          wi.id,
+          undefined,
+          undefined,
+          undefined,
+          this.project,
+        );
+        const cycle = computeLastEnterInProgressToDone(revisions ?? []);
+        return {
+          ...base,
+          lastInProgressAt: cycle.lastInProgressAt,
+          lastDoneAt: cycle.lastDoneAt,
+          cycleTimeDays: cycle.cycleTimeDays,
+          incompleteReason: cycle.incompleteReason,
+        };
+      } catch (error) {
+        console.error(`[getRelatedItemsCycleTime] Failed revisions for ${wi.id}:`, error);
+        return {
+          ...base,
+          lastInProgressAt: null,
+          lastDoneAt: null,
+          cycleTimeDays: null,
+          incompleteReason: 'missing_done',
+        };
+      }
+    };
+
+    // Same batch size as calculateCycleTimeForItems — revision reads are the slow part.
+    const batchSize = 3;
+    const items: RelatedItemCycleTime[] = [];
+    for (let i = 0; i < related.length; i += batchSize) {
+      const batch = await Promise.all(related.slice(i, i + batchSize).map(readItem));
+      items.push(...batch);
+    }
+
+    return summarizeRelatedItemCycleTimes(items);
   }
 
   /**
@@ -6004,6 +6091,32 @@ export class AzureDevOpsService {
   }
 
   /**
+   * Active pull request already opened from this source branch, if one exists.
+   * Cloud-agent completion can be observed more than once.
+   */
+  async findPullRequestUrlBySourceBranch(
+    repo: string,
+    project: string,
+    sourceBranch: string,
+  ): Promise<string | null> {
+    const gitApi = await this.connection.getGitApi();
+    const matches = await gitApi.getPullRequests(
+      repo,
+      {
+        sourceRefName: `refs/heads/${sourceBranch}`,
+        status: PullRequestStatus.Active,
+      },
+      project,
+      undefined,
+      undefined,
+      1,
+    );
+    const pullRequestId = matches?.[0]?.pullRequestId;
+    if (!pullRequestId) return null;
+    return `${this.organization}/${project}/_git/${repo}/pullrequest/${pullRequestId}`;
+  }
+
+  /**
    * Transitions an ADO work item to the given state.
    */
   async setWorkItemState(workItemId: number, state: string): Promise<void> {
@@ -6035,6 +6148,93 @@ export class AzureDevOpsService {
       ],
       workItemId,
     );
+  }
+
+  /**
+   * Adds Azure Repos' native PR artifact relation to an existing ADO work item.
+   * The relation is idempotent because Cloud Agent completion can be observed
+   * more than once by status polling or a future webhook receiver.
+   */
+  async linkWorkItemToPullRequest(
+    project: string,
+    repo: string,
+    pullRequestId: number,
+    workItemId: number,
+  ): Promise<void> {
+    const gitApi = await this.connection.getGitApi();
+    const pr = await gitApi.getPullRequest(repo, pullRequestId, project);
+    const projectId = pr.repository?.project?.id;
+    const repositoryId = pr.repository?.id;
+    const artifactId = pr.artifactId
+      ?? (
+        projectId && repositoryId
+          ? `vstfs:///Git/PullRequestId/${projectId}/${repositoryId}/${pullRequestId}`
+          : null
+      );
+    if (!artifactId) {
+      throw new Error('ADO pull request returned no artifact identity');
+    }
+
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const workItem = await witApi.getWorkItem(
+      workItemId,
+      undefined,
+      undefined,
+      WorkItemExpand.Relations,
+      project,
+    );
+    const normalizedArtifactId = decodeURIComponent(artifactId).toLowerCase();
+    const alreadyLinked = workItem.relations?.some((relation) => (
+      relation.rel === 'ArtifactLink'
+      && decodeURIComponent(relation.url ?? '').toLowerCase() === normalizedArtifactId
+    ));
+    if (alreadyLinked) return;
+
+    await witApi.updateWorkItem(
+      [],
+      [
+        {
+          op: 'add',
+          path: '/relations/-',
+          value: {
+            rel: 'ArtifactLink',
+            url: artifactId,
+            attributes: { name: 'Pull Request' },
+          },
+        },
+      ],
+      workItemId,
+      project,
+    );
+  }
+
+  /**
+   * Reads an Azure Repos pull request and reduces it to the host-agnostic PR
+   * status shared with the GitHub path.
+   */
+  async getPullRequestStatus(
+    repo: string,
+    project: string,
+    pullRequestId: number,
+  ): Promise<'open' | 'abandoned' | 'merged'> {
+    const gitApi = await this.connection.getGitApi();
+    const pr = await gitApi.getPullRequest(repo, pullRequestId, project);
+    // The SDK deserializes status into the PullRequestStatus enum, but raw REST
+    // payloads carry the string form.
+    const status: unknown = pr?.status;
+    if (
+      status === PullRequestStatus.Completed
+      || (typeof status === 'string' && status.toLowerCase() === 'completed')
+    ) {
+      return 'merged';
+    }
+    if (
+      status === PullRequestStatus.Abandoned
+      || (typeof status === 'string' && status.toLowerCase() === 'abandoned')
+    ) {
+      return 'abandoned';
+    }
+    return 'open';
   }
 
   /**

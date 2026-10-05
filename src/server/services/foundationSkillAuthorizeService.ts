@@ -202,14 +202,15 @@ function configuredAdoOrganization(): string | null {
 export function normalizeConfiguredRepository(
   provider: 'ado' | 'github' | undefined,
   skillRepo: string,
-  githubOrg = process.env.GITHUB_ORG ?? '',
+  githubOrg = process.env.GITHUB_ORG,
 ): string {
   const trimmed = skillRepo.trim().replace(/\.git$/i, '');
   if ((provider ?? 'ado') !== 'github') return trimmed;
   const parts = trimmed.split('/').filter(Boolean);
-  const org = githubOrg.trim().replace(/^\/+|\/+$/g, '');
-  if (parts.length === 1 && org) return `${org}/${parts[0]}`;
-  return trimmed;
+  if (parts.length !== 1) return trimmed;
+  const org = githubOrg?.trim().replace(/^\/+|\/+$/g, '');
+  if (!org) return trimmed;
+  return `${org}/${parts[0]}`;
 }
 
 export function validateConfiguredRepository(

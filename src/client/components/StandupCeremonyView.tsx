@@ -212,6 +212,7 @@ export const StandupCeremonyView: React.FC = () => {
     retryReason,
     isRunning,
     status: streamStatus,
+    showTypingIndicator,
   } = chatSession;
   const speech = useSpeechInput(useCallback((text: string) => setInput(text), []));
 
@@ -357,7 +358,7 @@ export const StandupCeremonyView: React.FC = () => {
               </div>
             )}
 
-            {isRunning && !streamingText && (
+            {showTypingIndicator && (
               <div className={`${styles.message} ${styles.agent}`}>
                 <div className={styles.role}>Standup Bot</div>
                 <div className={styles.bubble}>

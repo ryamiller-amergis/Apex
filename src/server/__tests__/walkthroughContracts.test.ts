@@ -278,6 +278,15 @@ describe('Walkthrough shared contracts (TBI-001)', () => {
           runId: 'run-1',
         })
       ).toThrow(/skillPath/);
+      expect(
+        validateGenerationProvenance({
+          provider: 'cursor',
+          model: 'composer-2.5',
+          skillPath: '/.agents/skills/walkthrough-generation/SKILL.md',
+          generatedAt: '2026-07-30T01:00:00Z',
+          runId: 'run-1',
+        })?.skillPath
+      ).toBe('.agents/skills/walkthrough-generation/SKILL.md');
     });
   });
 });

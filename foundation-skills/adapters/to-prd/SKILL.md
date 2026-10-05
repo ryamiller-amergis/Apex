@@ -10,9 +10,9 @@ description: Project adapter for to-prd. Customize for your project.
 
 - Project: {{slot:projectName}}
 - Input: `{{slot:aiPilotDir}}kickoff-transcript.md` (sole requirements input — treat as authoritative)
-- Reference: `{{slot:contextFile}}`, `{{slot:agentsFile}}`, `{{slot:skillsDir}}to-prd/backlog-schema.json`, `{{slot:skillsDir}}to-prd/SKILL.md`
-- PRD template: `{{slot:skillsDir}}to-prd/prd-template.md`
-- Backlog example: `{{slot:skillsDir}}to-prd/backlog-example.json`
+- Reference: `{{slot:contextFile}}`, `{{slot:agentsFile}}`, `backlog-schema.json`, `SKILL.md`
+- PRD template: `prd-template.md`
+- Backlog example: `backlog-example.json`
 - Output: `{{slot:aiPilotDir}}output/{kebab-slug}.prd.md` and `{{slot:aiPilotDir}}output/{kebab-slug}.backlog.json`
 
 ## Input scope

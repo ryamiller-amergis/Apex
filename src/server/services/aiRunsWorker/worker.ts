@@ -6,8 +6,12 @@ import type {
   AiRunIngestResponse,
 } from '../../../shared/types/aiRunIngest';
 import {
+  CursorExecutionWaitError,
   executeCursorExecutionCore,
+  tokenFieldsForTerminalIngest,
   type CursorExecutionResult,
+  type CursorExecutionWaitResult,
+  type CursorTokenUsage,
 } from '../cursorExecutionCore';
 import type { WorkerCursorExecution } from './cursorExecution';
 import { AiRunFenceConflictError } from './callbackClient';
@@ -53,6 +57,20 @@ function isSuccessfulWait(result: CursorExecutionResult): boolean {
   return result.waitResult.status === 'finished'
     || result.waitResult.status === 'completed'
     || result.waitResult.status === 'success';
+}
+
+/**
+ * The SDK's wait payload is the only record of why a turn did not finish. `usage` is dropped
+ * because it is large and says nothing about the outcome; everything else is kept so a later
+ * ingest row can name the actual runtime error, not just the word `error`.
+ */
+function describeWaitFailure(waitResult: CursorExecutionWaitResult): string {
+  const { usage: _usage, ...rest } = waitResult;
+  try {
+    return JSON.stringify(rest);
+  } catch {
+    return waitResult.status || 'no status';
+  }
 }
 
 /** Keep failure details short, single-line, and safe for ingest/UI. */
@@ -178,6 +196,9 @@ export function createAiRunsWorker(
         }, false);
       };
 
+      const startedAtMs = Date.now();
+      let capturedUsage: CursorTokenUsage | undefined;
+
       try {
         await post({
           dispatchMessageId: dispatch.dispatchMessageId,
@@ -239,8 +260,12 @@ export function createAiRunsWorker(
           await clearHeartbeat();
         }
 
+        capturedUsage = result.usage ?? capturedUsage;
+
         if (!isSuccessfulWait(result)) {
-          throw new Error('Cursor execution did not finish successfully');
+          throw new Error(
+            `Cursor execution did not finish successfully (${describeWaitFailure(result.waitResult)})`
+          );
         }
         if (cancellationRequested) {
           throw new AiRunCancellationObservedError();
@@ -252,6 +277,8 @@ export function createAiRunsWorker(
           kind: 'terminal',
           status: 'completed',
           artifactsFlushed: true,
+          durationMs: Date.now() - startedAtMs,
+          ...tokenFieldsForTerminalIngest(capturedUsage),
         });
       } catch (error) {
         if (heartbeatTimer) {
@@ -259,6 +286,10 @@ export function createAiRunsWorker(
           heartbeatTimer = undefined;
         }
         await callbackQueue;
+
+        if (error instanceof CursorExecutionWaitError) {
+          capturedUsage = error.usage ?? capturedUsage;
+        }
 
         if (fenceConflict || error instanceof AiRunFenceConflictError) {
           throw fenceConflict ?? error;
@@ -272,7 +303,9 @@ export function createAiRunsWorker(
         }
 
         await dependencies.flushArtifacts(snapshot.workspaceRef);
-        const failureDetail = formatWorkerExecutionFailure(error);
+        const failureDetail = formatWorkerExecutionFailure(
+          error instanceof CursorExecutionWaitError ? error.cause : error,
+        );
         console.error(JSON.stringify({
           event: 'AiRunsWorkerExecutionFailed',
           runId: dispatch.runId,
@@ -286,6 +319,8 @@ export function createAiRunsWorker(
           status: 'failed',
           detail: failureDetail,
           artifactsFlushed: true,
+          durationMs: Date.now() - startedAtMs,
+          ...tokenFieldsForTerminalIngest(capturedUsage),
         });
       } finally {
         if (heartbeatTimer) clearInterval(heartbeatTimer);

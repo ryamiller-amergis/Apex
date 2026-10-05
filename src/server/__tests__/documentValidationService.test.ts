@@ -20,6 +20,7 @@ jest.mock('../services/chatAgentService', () => ({
     projectId: 'proj-alpha',
     threadWorkspacePath: '/tmp/validation',
   }),
+  hydrateThread: jest.fn().mockResolvedValue(true),
 }));
 
 jest.mock('../services/backgroundWorkflowRouter', () => ({
@@ -156,7 +157,7 @@ describe('generateFallbackReport', () => {
     expect(report).toContain('- All required evidence is present.');
     expect(report).toContain('| Slider Defaults | 90% | 92% | 91% | 91% | ready |');
     expect(report).toContain('- **Assumptions** (design): Clarify launch assumptions.');
-    expect(report).toContain('- **traceability**: No traceability blockers remain.');
+    expect(report).toContain('- **Traceability**: No traceability blockers remain.');
     expect(report).toContain('- Manual QA will cover legacy browser behavior.');
     expect(report).toContain('- Analytics refinement deferred to phase 2.');
   });
@@ -180,6 +181,33 @@ describe('generateFallbackReport', () => {
     expect(report).toContain('**PRD Content** passed at 93%');
     expect(report).not.toContain('## Feature Scores');
   });
+
+  it('lists top-level structural gaps so a 0% fail-fast card explains why', () => {
+    const report = generateFallbackReport(
+      makeScorecard({
+        slug: 'prd-structural',
+        overall_score: 0,
+        is_ready: false,
+        verdict: 'significant_gaps',
+        features: undefined,
+        files: undefined,
+        gaps: [
+          {
+            id: 'missing-problem-statement',
+            file: 'prd.md',
+            section: 'Problem Statement',
+            score: 0,
+            description: 'Required section "Problem Statement" is missing.',
+            what_3_looks_like: 'A "## Problem Statement" section with substantive content.',
+            resolution: 'pending',
+          },
+        ],
+      }),
+    );
+
+    expect(report).toContain('## Open Gaps');
+    expect(report).toContain('Required section "Problem Statement" is missing.');
+  });
 });
 
 describe('autoStartDocumentValidation background routing', () => {
@@ -195,7 +223,7 @@ describe('autoStartDocumentValidation background routing', () => {
     getSkillPath: () => '/skills/validate.md',
     getModel: () => 'validation-model',
     updateDbForValidationStart: jest.fn().mockResolvedValue(undefined),
-    updateDbForValidationResult: jest.fn().mockResolvedValue(undefined),
+    updateDbForValidationResult: jest.fn().mockResolvedValue(true),
     updateDbForValidationTimeout: jest.fn().mockResolvedValue(undefined),
     updateDbForValidationError: jest.fn().mockResolvedValue(undefined),
     isCurrentValidationThread: jest.fn().mockResolvedValue(true),

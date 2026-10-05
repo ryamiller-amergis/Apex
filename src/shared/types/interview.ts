@@ -1,5 +1,6 @@
 import type { PrdReadinessOverride } from '../utils/prdReadiness';
 import type { ValidationOverrideAuditEntry } from '../utils/validationOverride';
+import type { EffortLevel } from './effort';
 
 export type { PrdReadinessOverride };
 
@@ -14,6 +15,7 @@ export interface InterviewSummary {
   project: string;
   repo: string;
   model?: string;
+  effort?: EffortLevel;
   status: InterviewStatus;
   prdCount: number;
   prdOwnerId?: string;
@@ -31,6 +33,8 @@ export interface InterviewSummary {
   designDocApproverIds?: string[];
   designPrototypeApproverIds?: string[];
   testCaseApproverIds?: string[];
+  /** Kick-off snapshot; resolved with project skill config via `resolvePrototypeStageEnabled`. */
+  prototypeStageEnabled?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -52,6 +56,7 @@ export interface PrdSummary {
   project: string;
   title: string;
   model?: string;
+  effort?: EffortLevel;
   skillSettingsId?: string | null;
   skillSettingsName?: string | null;
   status: PrdStatus;
@@ -227,11 +232,24 @@ export interface ValidationScorecardFile {
   gaps?: ValidationScorecardGap[];
 }
 
+/** Object-shaped cross-cutting check from the foundation prd-spec-review skill. */
+export interface ValidationCrossCuttingCheck {
+  label?: string;
+  status?: string;
+  detail?: string;
+}
+
 export interface ValidationScorecard {
   slug: string;
   generated_at: string;
   review_phase: 'initial' | 'final';
   overall_score: number;
+  /**
+   * Alternate prd-spec-review shape: per-file and overall percentages nested
+   * here with no top-level `overall_score`. Read via
+   * `resolveScorecardOverallScore`, not directly.
+   */
+  scores?: Record<string, unknown>;
   ready_threshold: number;
   is_ready: boolean;
   verdict: 'ready' | 'gaps' | 'significant_gaps';
@@ -243,9 +261,15 @@ export interface ValidationScorecard {
    * root instead of under each feature. Prefer `collectValidationGaps`.
    */
   gaps?: ValidationScorecardGap[];
-  cross_cutting_checks?: Record<string, string>;
+  /**
+   * PRD spec-review may emit a plain status string (`"pass"`) or an object
+   * `{ label, status, detail }`. Normalize with `normalizeCrossCuttingCheck`.
+   */
+  cross_cutting_checks?: Record<string, string | ValidationCrossCuttingCheck>;
   accepted_gaps?: string[];
   deferred_gaps?: string[];
+  /** SHA-256 of PRD content + backlog at score time; skips agent re-run when unchanged. */
+  contentHash?: string;
 }
 
 export interface ContentSnapshot {
@@ -302,6 +326,7 @@ export interface DesignDocSummary {
   ownerName?: string;
   title: string;
   model?: string;
+  effort?: EffortLevel;
   skillSettingsId?: string | null;
   skillSettingsName?: string | null;
   status: DesignDocStatus;

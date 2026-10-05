@@ -72,6 +72,7 @@ export async function install({
   enrich = false,
   skipFeed = false,
   skipApexCheck = false,
+  skillRoot = null,
 } = {}) {
   const repoRoot = findGitRoot();
 
@@ -143,6 +144,7 @@ export async function install({
       enrich,
       fill,
       skipFeed,
+      skillRoot,
       cwd: repoRoot,
     },
     (msg) => console.log(msg),

@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { agentRuns, chatThreads, interviews, prds, testCases } from '../db/schema';
+import { chatThreads, interviews, prds, testCases } from '../db/schema';
 import type {
   TestCaseCoverageSummary,
   TestCaseRecord,
@@ -18,8 +18,13 @@ import {
   updateThreadKickoffContext,
 } from './chatAgentService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
+import {
+  canThisInstanceFailGeneration,
+  isThreadRunAlive,
+} from './agentRunReaperService';
 import { resolveSkillConfig } from './projectSettingsService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
+import { recordArtifactDoneEvent } from './artifactDoneEventService';
 import {
   propagatePipelineGrounding,
   runGroundingService,
@@ -637,6 +642,21 @@ export async function markTestCaseFailed(
   await cleanupWorkspace(prdRow?.chatThreadId);
 }
 
+/** Flip a still-generating test-case row when its agent run ends without output. */
+export async function failGeneratingTestCasesForThread(
+  threadId: string,
+): Promise<void> {
+  const row = await db.query.testCases.findFirst({
+    where: and(
+      eq(testCases.chatThreadId, threadId),
+      eq(testCases.status, 'generating'),
+    ),
+    columns: { id: true, prdId: true, chatThreadId: true },
+  });
+  if (!row?.chatThreadId) return;
+  await markTestCaseFailed(row.id, row.prdId, row.chatThreadId);
+}
+
 export async function readOutputTestCases(
   threadId: string,
   workspaceDirOverride?: string,
@@ -686,6 +706,80 @@ export async function readOutputTestCasesMd(
   }
 
   return file ? fs.readFileSync(file, 'utf-8') : null;
+}
+
+const TEST_CASE_GENERATION_KICKOFF =
+  'Generate QA test cases for the provided PRD and backlog. Use the configured skill instructions and write the required output files.';
+
+export async function routeTestCaseGenerationKickoff(opts: {
+  testCaseId: string;
+  prdId: string;
+  userId: string;
+  project: string;
+  threadId: string;
+  sourceThreadId: string;
+  kickoffMessage?: string;
+}): Promise<boolean> {
+  const kickoffMessage = opts.kickoffMessage ?? TEST_CASE_GENERATION_KICKOFF;
+  const destinationRun = {
+    runType: 'chat' as const,
+    runId: opts.threadId,
+    project: opts.project,
+  };
+  const reportPreparationFailure = async (): Promise<void> => {
+    await runGroundingService.persistThenMarkTerminalInactive(
+      destinationRun,
+      () => markTestCaseFailed(opts.testCaseId, opts.prdId, opts.threadId),
+    );
+  };
+
+  try {
+    await routeBackgroundWorkflow({
+      userId: opts.userId,
+      workflowClass: 'test-cases',
+      destinationRun,
+      threadId: opts.threadId,
+      prepareWorker: async () => {
+        try {
+          await propagatePipelineGrounding(
+            {
+              runType: 'chat',
+              runId: opts.sourceThreadId,
+              project: opts.project,
+            },
+            destinationRun,
+            opts.userId,
+            { deferMaterialization: true },
+          );
+        } catch {
+          console.warn(
+            `[run-grounding] Test-case propagation unavailable (testCaseId=${opts.testCaseId})`,
+          );
+        }
+        const prepared = await prepareBackgroundWorkflowTurn(
+          opts.threadId,
+          kickoffMessage,
+        );
+        const targetGrounding = (
+          await runGroundingService.getGroundings(destinationRun)
+        ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
+        return { ...prepared, targetGrounding };
+      },
+      runInProcess: () =>
+        sendMessage(
+          opts.threadId,
+          kickoffMessage,
+          undefined,
+          [],
+          { hidden: true },
+        ),
+      reportRecoverablePreparationFailure: reportPreparationFailure,
+    });
+    return true;
+  } catch {
+    await reportPreparationFailure();
+    return false;
+  }
 }
 
 export async function triggerTestCaseGeneration(
@@ -765,6 +859,7 @@ export async function triggerTestCaseGeneration(
     prdRow.authorId,
     {
       project: prdRow.project,
+      agentModule: 'testCase',
       repo: skillConfig.skillRepo,
       branch: skillConfig.skillBranch ?? 'main',
       skillProvider: skillConfig.skillProvider ?? undefined,
@@ -803,71 +898,19 @@ export async function triggerTestCaseGeneration(
     })
     .returning({ id: testCases.id });
 
-  const kickoffMessage =
-    'Generate QA test cases for the provided PRD and backlog. Use the configured skill instructions and write the required output files.';
-  const destinationRun = {
-    runType: 'chat' as const,
-    runId: thread.id,
-    project: prdRow.project,
-  };
-  const reportPreparationFailure = async (): Promise<void> => {
-    await runGroundingService.persistThenMarkTerminalInactive(
-      destinationRun,
-      () => markTestCaseFailed(testCaseRow.id, prdId, thread.id),
-    );
-  };
-
   // Do not start the output watcher until routing succeeds. Background
   // materialization can take longer than WATCHER_INTERVAL_MS, and the thread
   // stays idle until the worker begins — an early watcher would delete the
   // scratch workspace mid-prep and force workspace-preparation-failed.
-  let routedSuccessfully = false;
-  try {
-    await routeBackgroundWorkflow({
-      userId: actorUserId ?? prdRow.authorId,
-      workflowClass: 'test-cases',
-      destinationRun,
-      threadId: thread.id,
-      prepareWorker: async () => {
-        try {
-          await propagatePipelineGrounding(
-            {
-              runType: 'chat',
-              runId: sourceThreadId,
-              project: prdRow.project,
-            },
-            destinationRun,
-            actorUserId ?? prdRow.authorId,
-            { deferMaterialization: true },
-          );
-        } catch {
-          console.warn(
-            `[run-grounding] Test-case propagation unavailable (testCaseId=${testCaseRow.id})`,
-          );
-        }
-        const prepared = await prepareBackgroundWorkflowTurn(
-          thread.id,
-          kickoffMessage,
-        );
-        const targetGrounding = (
-          await runGroundingService.getGroundings(destinationRun)
-        ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
-        return { ...prepared, targetGrounding };
-      },
-      runInProcess: () =>
-        sendMessage(
-          thread.id,
-          kickoffMessage,
-          undefined,
-          [],
-          { hidden: true }
-        ),
-      reportRecoverablePreparationFailure: reportPreparationFailure,
-    });
-    routedSuccessfully = true;
-  } catch {
-    await reportPreparationFailure();
-  }
+  const routedSuccessfully = await routeTestCaseGenerationKickoff({
+    testCaseId: testCaseRow.id,
+    prdId,
+    userId: actorUserId ?? prdRow.authorId,
+    project: prdRow.project,
+    threadId: thread.id,
+    sourceThreadId,
+    kickoffMessage: TEST_CASE_GENERATION_KICKOFF,
+  });
 
   if (routedSuccessfully) {
     startTestCaseWatcher(testCaseRow.id, thread.id);
@@ -920,28 +963,41 @@ export function startTestCaseWatcher(
       return;
     }
 
-    // Background lane keeps the App Service thread idle while the job is
-    // queued/dispatched/running. Only treat idle as "finished without output"
-    // once there is no in-flight agent run for this thread.
-    const inFlightRun = await db.query.agentRuns.findFirst({
-      where: and(
-        eq(agentRuns.threadId, chatThreadId),
-        inArray(agentRuns.status, ['queued', 'dispatched', 'running']),
-      ),
-      columns: { id: true },
-    });
-    if (inFlightRun) {
-      return;
-    }
-
-    if (attempts > WATCHER_MAX_ATTEMPTS || isThreadIdle(chatThreadId)) {
+    if (attempts > WATCHER_MAX_ATTEMPTS) {
       clearInterval(interval);
       activeTestCaseWatchers.delete(testCaseId);
       console.warn(
-        `[testCaseWatcher] No test-case output produced — marking failed (testCaseId=${testCaseId}, threadId=${chatThreadId})`
+        `[testCaseWatcher] Timed out waiting for test-case output — marking failed (testCaseId=${testCaseId}, threadId=${chatThreadId})`
       );
       await markTestCaseFailed(testCaseId, row.prdId, chatThreadId);
+      return;
     }
+
+    // Background lane keeps the App Service thread idle while the job is
+    // queued/dispatched/running, so idle alone never means "finished".
+    const agentFinished =
+      isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId));
+    if (!agentFinished) return;
+
+    // Requires a terminal agent_runs row owned by this instance (or an orphan
+    // past its grace). Without it, keep polling: the recovery sweep starts a
+    // watcher while triggerTestCaseGeneration is still routing, and back then
+    // an idle thread with no run row yet looked identical to "finished without
+    // output" — which failed the row and deleted the workspace out from under
+    // the worker that was about to run. Timeout above is the backstop.
+    if (!(await canThisInstanceFailGeneration(chatThreadId))) {
+      console.warn(
+        `[testCaseWatcher] Waiting — not run owner or no terminal run yet (testCaseId=${testCaseId}, threadId=${chatThreadId})`
+      );
+      return;
+    }
+
+    clearInterval(interval);
+    activeTestCaseWatchers.delete(testCaseId);
+    console.warn(
+      `[testCaseWatcher] No test-case output produced — marking failed (testCaseId=${testCaseId}, threadId=${chatThreadId})`
+    );
+    await markTestCaseFailed(testCaseId, row.prdId, chatThreadId);
   }, WATCHER_INTERVAL_MS);
 
   activeTestCaseWatchers.set(testCaseId, interval);
@@ -990,15 +1046,24 @@ export async function syncTestCaseOutput(
     testCasesJson
   );
   const coverageSummary = extractCoverageSummary(testCasesJson);
+  const readyAt = new Date().toISOString();
   const updates: Partial<typeof testCases.$inferInsert> = {
     status: 'ready',
     testCasesJson: testCasesJson as any,
     testCasesMd: testCasesMd ?? null,
     coverageSummary: coverageSummary ?? null,
-    updatedAt: new Date().toISOString(),
+    updatedAt: readyAt,
   };
 
   await db.update(testCases).set(updates).where(eq(testCases.id, testCaseId));
+
+  // Frozen cycle-time end instant — insert-once, so a regeneration keeps the
+  // first suite-ready timestamp (FEAT-001 / TBI-002).
+  try {
+    await recordArtifactDoneEvent('test_case', testCaseId, readyAt);
+  } catch (err) {
+    console.error(`[testCase] Failed to record done event (testCaseId=${testCaseId})`, err);
+  }
   if (backlogWithTestCaseCounts !== null) {
     await db
       .update(prds)

@@ -1,16 +1,25 @@
 import * as azdev from 'azure-devops-node-api';
-import type { AdoProject, AdoRepo, SkillEntry, SkillDetail, SupportingFile, SkillFrontmatter } from '../../shared/types/skills';
+import type {
+  AdoProject,
+  AdoRepo,
+  SkillEntry,
+  SkillDetail,
+  SupportingFile,
+  SkillFrontmatter,
+} from '../../shared/types/skills';
 import { resolveAdoRepository } from './adoRepositoryTarget';
+import {
+  SKILL_DISCOVERY_ROOTS,
+  selectSkillsByRootPrecedence,
+} from '../../shared/skillPaths';
 
 const ORG_URL = process.env.ADO_ORG || '';
 const PAT = process.env.ADO_PAT || '';
 /** Bound ADO code-search HTTP calls so MCP tools cannot hang the agent stream forever. */
-const ADO_FETCH_TIMEOUT_MS = Number(process.env.ADO_FETCH_TIMEOUT_MS) > 0
-  ? Number(process.env.ADO_FETCH_TIMEOUT_MS)
-  : 30_000;
-
-/** Roots to search for SKILL.md files within a repo, in priority order */
-const SKILL_ROOTS = ['skills', '.cursor/skills'];
+const ADO_FETCH_TIMEOUT_MS =
+  Number(process.env.ADO_FETCH_TIMEOUT_MS) > 0
+    ? Number(process.env.ADO_FETCH_TIMEOUT_MS)
+    : 30_000;
 
 /** In-memory cache with TTL */
 interface CacheEntry<T> {
@@ -59,7 +68,10 @@ function getConnection(): azdev.WebApi {
 }
 
 /** Parse YAML frontmatter from a markdown string. Only handles simple key: value pairs. */
-export function parseFrontmatter(raw: string): { frontmatter: SkillFrontmatter; body: string } {
+export function parseFrontmatter(raw: string): {
+  frontmatter: SkillFrontmatter;
+  body: string;
+} {
   const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
   const match = raw.match(FM_RE);
   if (!match) {
@@ -131,7 +143,10 @@ export async function listRepos(project: string): Promise<AdoRepo[]> {
   return result;
 }
 
-export async function listBranches(project: string, repo: string): Promise<string[]> {
+export async function listBranches(
+  project: string,
+  repo: string
+): Promise<string[]> {
   ({ project, repo } = resolveAdoRepository(project, repo));
   const cacheKey = `branches:${project}:${repo}`;
   const cached = branchCache.get(cacheKey);
@@ -140,7 +155,9 @@ export async function listBranches(project: string, repo: string): Promise<strin
   const conn = getConnection();
   const gitApi = await conn.getGitApi();
   const repos = await listRepos(project);
-  const repoObj = repos.find((r) => r.name.toLowerCase() === repo.toLowerCase());
+  const repoObj = repos.find(
+    (r) => r.name.toLowerCase() === repo.toLowerCase()
+  );
   if (!repoObj) return [];
 
   const branches = await gitApi.getBranches(repoObj.id);
@@ -160,7 +177,7 @@ export async function listBranches(project: string, repo: string): Promise<strin
 export async function listSkills(
   project: string,
   repo: string,
-  branch?: string,
+  branch?: string
 ): Promise<SkillEntry[]> {
   ({ project, repo } = resolveAdoRepository(project, repo));
   const cacheKey = `skills:${project}:${repo}:${branch ?? 'default'}`;
@@ -180,7 +197,8 @@ export async function listSkills(
 
   const skillPaths: string[] = [];
 
-  for (const root of SKILL_ROOTS) {
+  // SKILL_DISCOVERY_ROOTS order is deliberate; duplicates collapse below.
+  for (const root of SKILL_DISCOVERY_ROOTS) {
     try {
       const items = await gitApi.getItems(
         repo,
@@ -191,10 +209,13 @@ export async function listSkills(
         undefined,
         undefined,
         undefined,
-        { versionType: 0, version: resolvedBranch }, // 0 = Branch
+        { versionType: 0, version: resolvedBranch } // 0 = Branch
       );
       for (const item of items ?? []) {
-        if (item.path?.endsWith('/SKILL.md') || item.path === `/${root}/SKILL.md`) {
+        if (
+          item.path?.endsWith('/SKILL.md') ||
+          item.path === `/${root}/SKILL.md`
+        ) {
           skillPaths.push(item.path);
         }
       }
@@ -207,7 +228,13 @@ export async function listSkills(
 
   for (const skillPath of skillPaths) {
     try {
-      const content = await fetchFileContent(project, repo, skillPath, resolvedBranch, gitApi);
+      const content = await fetchFileContent(
+        project,
+        repo,
+        skillPath,
+        resolvedBranch,
+        gitApi
+      );
       const { frontmatter } = parseFrontmatter(content);
       if (!frontmatter.name) continue;
 
@@ -226,15 +253,22 @@ export async function listSkills(
     }
   }
 
-  skillListCache.set(cacheKey, skills);
-  return skills;
+  const resolved = selectSkillsByRootPrecedence(skills);
+  for (const collision of resolved.collisions) {
+    console.warn(
+      `[skillCatalog] Duplicate skill "${collision.name}" in ${project}/${repo}: ` +
+        `${collision.paths.join(', ')}. Using ${collision.paths[0]}.`
+    );
+  }
+  skillListCache.set(cacheKey, resolved.skills);
+  return resolved.skills;
 }
 
 export async function getSkill(
   project: string,
   repo: string,
   path: string,
-  branch?: string,
+  branch?: string
 ): Promise<SkillDetail> {
   ({ project, repo } = resolveAdoRepository(project, repo));
   const cacheKey = `detail:${project}:${repo}:${path}:${branch ?? 'default'}`;
@@ -251,7 +285,13 @@ export async function getSkill(
     resolvedBranch = found?.defaultBranch ?? 'main';
   }
 
-  const content = await fetchFileContent(project, repo, path, resolvedBranch, gitApi);
+  const content = await fetchFileContent(
+    project,
+    repo,
+    path,
+    resolvedBranch,
+    gitApi
+  );
   const { frontmatter } = parseFrontmatter(content);
 
   // Collect sibling files + check for apex-skill.json contract
@@ -268,7 +308,7 @@ export async function getSkill(
       undefined,
       undefined,
       undefined,
-      { versionType: 0, version: resolvedBranch },
+      { versionType: 0, version: resolvedBranch }
     );
     let apexSkillJsonPath: string | null = null;
     for (const item of siblings ?? []) {
@@ -281,14 +321,26 @@ export async function getSkill(
     // Resolve declared foundation dependencies from apex-skill.json
     if (apexSkillJsonPath) {
       try {
-        const contractText = await fetchFileContent(project, repo, apexSkillJsonPath, resolvedBranch, gitApi);
-        const contract = JSON.parse(contractText) as { managedFoundationFiles?: string[] };
+        const contractText = await fetchFileContent(
+          project,
+          repo,
+          apexSkillJsonPath,
+          resolvedBranch,
+          gitApi
+        );
+        const contract = JSON.parse(contractText) as {
+          managedFoundationFiles?: string[];
+        };
         for (const depPath of contract.managedFoundationFiles ?? []) {
           if (!depPath) continue;
           const depName = depPath.split('/').filter(Boolean).pop() ?? depPath;
           // Only add if not already in the list
-          if (!supportingFiles.some(f => f.path === depPath)) {
-            supportingFiles.push({ path: depPath, name: depName, isFoundationDep: true });
+          if (!supportingFiles.some((f) => f.path === depPath)) {
+            supportingFiles.push({
+              path: depPath,
+              name: depName,
+              isFoundationDep: true,
+            });
           }
         }
       } catch {
@@ -320,7 +372,7 @@ export async function getSkillFile(
   project: string,
   repo: string,
   path: string,
-  branch?: string,
+  branch?: string
 ): Promise<string> {
   ({ project, repo } = resolveAdoRepository(project, repo));
   const cacheKey = `file:${project}:${repo}:${path}:${branch ?? 'default'}`;
@@ -337,7 +389,13 @@ export async function getSkillFile(
     resolvedBranch = found?.defaultBranch ?? 'main';
   }
 
-  const content = await fetchFileContent(project, repo, path, resolvedBranch, gitApi);
+  const content = await fetchFileContent(
+    project,
+    repo,
+    path,
+    resolvedBranch,
+    gitApi
+  );
   fileContentCache.set(cacheKey, content);
   return content;
 }
@@ -368,7 +426,7 @@ export async function listRepoDir(
   project: string,
   repo: string,
   dirPath: string,
-  branch?: string,
+  branch?: string
 ): Promise<RepoFileEntry[]> {
   ({ project, repo } = resolveAdoRepository(project, repo));
   const cacheKey = `dir:${project}:${repo}:${dirPath}:${branch ?? 'default'}`;
@@ -396,7 +454,7 @@ export async function listRepoDir(
     undefined,
     undefined,
     undefined,
-    { versionType: 0, version: resolvedBranch },
+    { versionType: 0, version: resolvedBranch }
   );
 
   const result: RepoFileEntry[] = (items ?? [])
@@ -416,7 +474,7 @@ export async function searchRepoCode(
   repo: string,
   query: string,
   branch?: string,
-  limit = 10,
+  limit = 10
 ): Promise<RepoCodeSearchResult[]> {
   if (!query.trim()) return [];
   ({ project, repo } = resolveAdoRepository(project, repo));
@@ -431,7 +489,9 @@ export async function searchRepoCode(
 
   const org = extractOrgName(ORG_URL);
   if (!org) {
-    throw new Error(`Could not parse organization name from ADO_ORG: ${ORG_URL}`);
+    throw new Error(
+      `Could not parse organization name from ADO_ORG: ${ORG_URL}`
+    );
   }
 
   const url = `https://almsearch.dev.azure.com/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/search/codesearchresults?api-version=7.1-preview.1`;
@@ -461,14 +521,14 @@ export async function searchRepoCode(
   if (!response.ok) {
     const errorBody = await response.text().catch(() => '');
     throw new Error(
-      `Code search request failed (${response.status} ${response.statusText}). ${errorBody}`.trim(),
+      `Code search request failed (${response.status} ${response.statusText}). ${errorBody}`.trim()
     );
   }
 
   // The ADO code search API returns matches as an object keyed by match type
   // (e.g. { content: [...], fileName: [...] }), not a flat array.
   // Each entry has { charOffset, length, line, column, codeSnippet, type }.
-  const body = await response.json() as {
+  const body = (await response.json()) as {
     count?: number;
     results?: Array<{
       path?: string;
@@ -476,14 +536,17 @@ export async function searchRepoCode(
       repository?: { name?: string };
       project?: { name?: string };
       versions?: Array<{ branchName?: string }>;
-      matches?: Record<string, Array<{
-        charOffset?: number;
-        length?: number;
-        line?: number;
-        column?: number;
-        codeSnippet?: string | null;
-        type?: string | null;
-      }>>;
+      matches?: Record<
+        string,
+        Array<{
+          charOffset?: number;
+          length?: number;
+          line?: number;
+          column?: number;
+          codeSnippet?: string | null;
+          type?: string | null;
+        }>
+      >;
     }>;
   };
 
@@ -502,7 +565,7 @@ export async function searchRepoCode(
 
     return {
       path: item.path ?? '',
-      fileName: item.fileName ?? ((item.path ?? '').split('/').pop() ?? ''),
+      fileName: item.fileName ?? (item.path ?? '').split('/').pop() ?? '',
       repository: item.repository?.name ?? repo,
       project: item.project?.name ?? project,
       branch,
@@ -517,7 +580,7 @@ export async function searchRepoCode(
 export function searchSkills(
   skills: SkillEntry[],
   query: string,
-  limit = 10,
+  limit = 10
 ): SkillEntry[] {
   const q = query.toLowerCase();
   return skills
@@ -557,7 +620,7 @@ async function fetchFileContent(
   repo: string,
   path: string,
   branch: string,
-  gitApi: Awaited<ReturnType<azdev.WebApi['getGitApi']>>,
+  gitApi: Awaited<ReturnType<azdev.WebApi['getGitApi']>>
 ): Promise<string> {
   const stream = await gitApi.getItemContent(
     repo,
@@ -568,7 +631,7 @@ async function fetchFileContent(
     undefined,
     undefined,
     undefined,
-    { versionType: 0, version: branch },
+    { versionType: 0, version: branch }
   );
 
   return new Promise<string>((resolve, reject) => {

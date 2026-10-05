@@ -12,6 +12,7 @@ import { pkgAdapterDir } from './layout.mjs';
 import { RECIPE_NAME } from './layout.mjs';
 import { collectEvidence, indexEvidence } from './evidence.mjs';
 import { renderTemplate, hasTodos } from './template.mjs';
+import { skillRootWithTrailingSlash } from './skillRoot.mjs';
 
 export function loadRecipe(pkgRoot, skill) {
   const p = path.join(pkgAdapterDir(pkgRoot, skill), RECIPE_NAME);
@@ -32,6 +33,14 @@ export function bootstrapSkill(pkgRoot, repoRoot, skill, opts = {}) {
   const recipe = loadRecipe(pkgRoot, skill);
   const { entries, meta } = collectEvidence(repoRoot, recipe, now ? { now } : {});
   const idx = indexEvidence(entries);
+  if (opts.skillRoot) {
+    (idx['repo-docs'] ??= {}).skillsDir = {
+      detector: 'repo-docs',
+      key: 'skillsDir',
+      value: skillRootWithTrailingSlash(opts.skillRoot),
+      source: { file: 'apex-skills.lock.json' },
+    };
+  }
 
   const adapterDir = pkgAdapterDir(pkgRoot, skill);
   const templateRels = listFilesRel(adapterDir).filter((f) => f !== RECIPE_NAME);

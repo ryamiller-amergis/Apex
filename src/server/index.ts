@@ -59,6 +59,10 @@ import {
   startAdmissionGovernorScheduler,
   stopAdmissionGovernorScheduler,
 } from './services/admissionGovernorScheduler';
+import {
+  startPlaybookReconciliation,
+  stopPlaybookReconciliation,
+} from './services/playbookReconciliationScheduler';
 import { initPgNotify, shutdownPgNotify } from './services/pgNotifyService';
 import {
   initInteractiveLiveBus,
@@ -88,6 +92,7 @@ import pdfRoutes from './routes/pdf';
 import aiCostRoutes from './routes/aiCost';
 import e2eSetupRoutes from './routes/e2eSetup';
 import designModuleRoutes from './routes/designModule';
+import homeDashboardRoutes from './routes/homeDashboard';
 import loadTestsRoutes from './routes/loadTests';
 import loadTestTargetsRoutes from './routes/loadTestTargets';
 import apiKeysRoutes from './routes/apiKeys';
@@ -267,6 +272,7 @@ app.use('/api/apex-work-items', ensureAuthenticated, apexWorkItemsRoutes);
 app.use('/api/profile', ensureAuthenticated, profileRoutes);
 app.use('/api/ask-apex', ensureAuthenticated, askApexRoutes);
 app.use('/api/design-modules', ensureAuthenticated, designModuleRoutes);
+app.use('/api/home-dashboard', ensureAuthenticated, homeDashboardRoutes);
 app.use('/api/projects/:projectId/load-tests', ensureAuthenticated, loadTestsRoutes);
 app.use('/api/projects/:projectId/load-test-targets', ensureAuthenticated, loadTestTargetsRoutes);
 app.use('/api/projects/:projectId/api-keys', ensureAuthenticated, apiKeysRoutes);
@@ -453,6 +459,9 @@ const server = app.listen(PORT, () => {
   startReaper();
   startAdmissionGovernorScheduler();
   server.once('close', stopAdmissionGovernorScheduler);
+  // Phase 0/1 runs are not behind playbooks-production-adapters, so recovery always starts.
+  void startPlaybookReconciliation();
+  server.once('close', stopPlaybookReconciliation);
   startLoadTestRunReaper();
   initPgNotify().catch((err) => console.error('[startup] initPgNotify failed:', err.message));
 

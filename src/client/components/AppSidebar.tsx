@@ -1,5 +1,6 @@
 import React from 'react';
 import { useBreakpoint } from '../hooks/useBreakpoint';
+import { canAccessMyWork } from '../utils/canAccessMyWork';
 import styles from './AppSidebar.module.css';
 
 interface NavItem {
@@ -28,6 +29,8 @@ interface AppSidebarProps {
   isInAnyGroup?: (groups: string[]) => boolean;
   menuEnabledViews?: string[];
   isSuperAdmin?: boolean;
+  /** True when designs have been shared with the user, who is otherwise not a UI Lab member. */
+  hasUiLabShares?: boolean;
   selectedProject?: string;
   canAccessHome?: boolean;
   onNavigateHome: () => void;
@@ -208,6 +211,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   isInAnyGroup,
   menuEnabledViews = [],
   isSuperAdmin = false,
+  hasUiLabShares = false,
   selectedProject,
   canAccessHome = true,
   onNavigateHome,
@@ -280,8 +284,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
 
   const isItemVisible = (item: NavItem): boolean => {
     if (item.view === 'my-work') {
-      if (!isSuperAdmin && !menuEnabledViews.includes('my-work')) return false;
-      return can('dev-workbench:view') && (isInAnyGroup?.(['Developer']) ?? false);
+      return canAccessMyWork({ can, isSuperAdmin, isInAnyGroup, enabledViews: menuEnabledViews });
     }
     if (item.view === 'standup') {
       if (!isSuperAdmin && !menuEnabledViews.includes('standup')) return false;
@@ -313,7 +316,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
     if (item.view === 'ui-lab') {
       if (!isSuperAdmin && !menuEnabledViews.includes('ui-lab')) return false;
       if (!isSuperAdmin && !can('ui-lab:view')) return false;
-      return isSuperAdmin || (isInAnyGroup?.(['UI/UX']) ?? false);
+      return isSuperAdmin || (isInAnyGroup?.(['UI/UX']) ?? false) || hasUiLabShares;
     }
     if (!isSuperAdmin && !menuEnabledViews.includes(item.view)) return false;
     if (!isSuperAdmin && item.permission !== null && !can(item.permission)) return false;

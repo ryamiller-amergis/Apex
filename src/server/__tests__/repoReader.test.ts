@@ -13,6 +13,8 @@ import {
 } from '../services/groundingProfileResolver';
 import { LocalCheckoutReader } from '../services/localCheckoutReader';
 import { RemoteCatalogReader } from '../services/remoteCatalogReader';
+import { BareRepoReader } from '../services/repoRead/bareRepoReader';
+import { RepoServiceReader } from '../services/repoRead/repoServiceReader';
 import { RepoReaderError } from '../services/repoReader';
 import * as adoCatalog from '../services/skillCatalog';
 import * as skillCatalogFacade from '../services/skillCatalogFacade';
@@ -271,6 +273,204 @@ describe('TBI-001 DoD-1 rejects traversal, symlink escape, expiry, and cross-run
         runRef: 'interview:run-1',
         project: 'Apex',
       })).rejects.toMatchObject({ code: 'PROFILE_UNAVAILABLE' });
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('selects BareRepoReader when repo-read-service is enabled and a mirror path is registered', async () => {
+    const fixture = makeFixture();
+    const bare = path.join(fixture.root, 'mirror.git');
+    git(fixture.root, ['clone', '--bare', '.', bare]);
+    const caller = {
+      userId: 'user-1',
+      runRef: 'chat:thread-1',
+      project: 'Apex',
+    };
+    const resolver = new GroundingProfileResolver({
+      authorization: { authorize: async () => true },
+      isFeatureEnabled: async () => true,
+      isRepoReadServiceEnabledForCaller: async () => true,
+    });
+    const profile = resolver.registerConnectionProfile(
+      {
+        runRef: caller.runRef,
+        ...identity('ado', fixture.sha),
+        checkoutPath: fixture.root,
+        mirrorPath: bare,
+        caller: 'chat-agent',
+      },
+      caller,
+      async () => true,
+    );
+
+    try {
+      const reader = await resolver.resolveConnectionProfile(profile.id);
+      expect(reader).toBeInstanceOf(BareRepoReader);
+      await expect(reader.readFile('README.md')).resolves.toBe('fixture\n');
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('selects RepoServiceReader when repo-read-service is enabled and REPO_READ_SERVICE_URL is set', async () => {
+    const previous = process.env.REPO_READ_SERVICE_URL;
+    process.env.REPO_READ_SERVICE_URL = 'https://repo-read.test';
+    const caller = {
+      userId: 'user-1',
+      runRef: 'chat:thread-1',
+      project: 'Apex',
+    };
+    const resolver = new GroundingProfileResolver({
+      authorization: { authorize: async () => true },
+      isFeatureEnabled: async () => true,
+      isRepoReadServiceEnabledForCaller: async () => true,
+    });
+    const profile = resolver.registerConnectionProfile(
+      {
+        runRef: caller.runRef,
+        ...identity('ado', 'a'.repeat(40)),
+        checkoutPath: 'not-used-when-http',
+        caller: 'chat-agent',
+      },
+      caller,
+      async () => true,
+    );
+
+    try {
+      const reader = await resolver.resolveConnectionProfile(profile.id);
+      expect(reader).toBeInstanceOf(RepoServiceReader);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.REPO_READ_SERVICE_URL;
+      } else {
+        process.env.REPO_READ_SERVICE_URL = previous;
+      }
+    }
+  });
+
+  it('selects BareRepoReader when a usable mirror exists even if repo-read-service is off', async () => {
+    const fixture = makeFixture();
+    const bare = path.join(fixture.root, 'mirror.git');
+    git(fixture.root, ['clone', '--bare', '.', bare]);
+    const caller = {
+      userId: 'user-1',
+      runRef: 'chat:thread-1',
+      project: 'Apex',
+    };
+    const resolver = new GroundingProfileResolver({
+      authorization: { authorize: async () => true },
+      isFeatureEnabled: async () => true,
+      isRepoReadServiceEnabledForCaller: async () => false,
+    });
+    const profile = resolver.registerConnectionProfile(
+      {
+        runRef: caller.runRef,
+        ...identity('ado', fixture.sha),
+        checkoutPath: fixture.root,
+        mirrorPath: bare,
+        caller: 'chat-agent',
+      },
+      caller,
+      async () => true,
+    );
+
+    try {
+      const reader = await resolver.resolveConnectionProfile(profile.id);
+      expect(reader).toBeInstanceOf(BareRepoReader);
+      await expect(reader.readFile('README.md')).resolves.toBe('fixture\n');
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps LocalCheckoutReader when the registered mirror path is not a git directory', async () => {
+    const fixture = makeFixture();
+    const missing = path.join(fixture.root, 'not-a-mirror');
+    const caller = {
+      userId: 'user-1',
+      runRef: 'chat:thread-1',
+      project: 'Apex',
+    };
+    const resolver = new GroundingProfileResolver({
+      authorization: { authorize: async () => true },
+      isFeatureEnabled: async () => true,
+      isRepoReadServiceEnabledForCaller: async () => true,
+    });
+    const profile = resolver.registerConnectionProfile(
+      {
+        runRef: caller.runRef,
+        ...identity('ado', fixture.sha),
+        checkoutPath: fixture.root,
+        mirrorPath: missing,
+        caller: 'chat-agent',
+      },
+      caller,
+      async () => true,
+    );
+
+    try {
+      const reader = await resolver.resolveConnectionProfile(profile.id);
+      expect(reader).toBeInstanceOf(LocalCheckoutReader);
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps LocalCheckoutReader when repo-read-service is on but no mirror path is registered', async () => {
+    const fixture = makeFixture();
+    const caller = {
+      userId: 'user-1',
+      runRef: 'chat:thread-1',
+      project: 'Apex',
+    };
+    const resolver = new GroundingProfileResolver({
+      authorization: { authorize: async () => true },
+      isFeatureEnabled: async () => true,
+      isRepoReadServiceEnabledForCaller: async () => true,
+    });
+    const profile = resolver.registerConnectionProfile(
+      {
+        runRef: caller.runRef,
+        ...identity('ado', fixture.sha),
+        checkoutPath: fixture.root,
+        caller: 'chat-agent',
+      },
+      caller,
+      async () => true,
+    );
+
+    try {
+      const reader = await resolver.resolveConnectionProfile(profile.id);
+      expect(reader).toBeInstanceOf(LocalCheckoutReader);
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('selects BareRepoReader from resolveProfile when a usable mirror is registered', async () => {
+    const fixture = makeFixture();
+    const bare = path.join(fixture.root, 'mirror.git');
+    git(fixture.root, ['clone', '--bare', '.', bare]);
+    const resolver = new GroundingProfileResolver({
+      authorization: { authorize: async () => true },
+      isFeatureEnabled: async () => true,
+    });
+    const profile = resolver.registerProfile({
+      runRef: 'interview:run-1',
+      ...identity('ado', fixture.sha),
+      checkoutPath: fixture.root,
+      mirrorPath: bare,
+    });
+
+    try {
+      const reader = await resolver.resolveProfile(profile.id, {
+        userId: 'user-1',
+        runRef: 'interview:run-1',
+        project: 'Apex',
+      });
+      expect(reader).toBeInstanceOf(BareRepoReader);
+      await expect(reader.readFile('README.md')).resolves.toBe('fixture\n');
     } finally {
       fs.rmSync(fixture.root, { recursive: true, force: true });
     }

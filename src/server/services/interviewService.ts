@@ -3,10 +3,12 @@ import { db } from '../db/drizzle';
 import { interviews, prds } from '../db/schema';
 import type { Interview, InterviewStatus, InterviewSummary, PrdSummary } from '../../shared/types/interview';
 import type { PrdStatus } from '../../shared/types/interview';
+import type { EffortLevel } from '../../shared/types/effort';
 import { cancelRun, markAsInterviewThread } from './chatAgentService';
 import { createNotification } from './notificationService';
 import { getSkillSettingsName } from './projectSettingsService';
 import { runGroundingService } from './runGroundingService';
+import { recordArtifactDoneEvent } from './artifactDoneEventService';
 
 const VALID_INTERVIEW_STATUSES: InterviewStatus[] = ['in_progress', 'complete', 'archived'];
 
@@ -25,6 +27,7 @@ export async function createInterview(opts: {
   title?: string;
   chatThreadId: string;
   model?: string;
+  effort?: EffortLevel;
   skillSettingsId?: string | null;
   prdOwnerId?: string;
   designDocOwnerId?: string;
@@ -49,6 +52,7 @@ export async function createInterview(opts: {
       project: opts.project,
       repo: opts.repo,
       model: opts.model ?? null,
+      effort: opts.effort ?? null,
       skillSettingsId: opts.skillSettingsId ?? null,
       status: 'in_progress',
       prdOwnerId: opts.prdOwnerId ?? null,
@@ -186,6 +190,7 @@ export async function listInterviews(
       project: interviews.project,
       repo: interviews.repo,
       model: interviews.model,
+      effort: interviews.effort,
       status: interviews.status,
       prdOwnerId: interviews.prdOwnerId,
       designDocOwnerId: interviews.designDocOwnerId,
@@ -196,6 +201,7 @@ export async function listInterviews(
       designDocApproverIds: interviews.designDocApproverIds,
       designPrototypeApproverIds: interviews.designPrototypeApproverIds,
       testCaseApproverIds: interviews.testCaseApproverIds,
+      prototypeStageEnabled: interviews.prototypeStageEnabled,
       createdAt: interviews.createdAt,
       updatedAt: interviews.updatedAt,
     })
@@ -222,6 +228,7 @@ export async function listInterviews(
     project: row.project,
     repo: row.repo,
     model: row.model ?? undefined,
+    effort: row.effort ?? undefined,
     status: row.status as InterviewStatus,
     prdCount: prdCountMap.get(row.id) ?? 0,
     prdOwnerId: row.prdOwnerId ?? undefined,
@@ -234,6 +241,7 @@ export async function listInterviews(
     designDocApproverIds: row.designDocApproverIds ?? undefined,
     designPrototypeApproverIds: row.designPrototypeApproverIds ?? undefined,
     testCaseApproverIds: row.testCaseApproverIds ?? undefined,
+    prototypeStageEnabled: row.prototypeStageEnabled,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }));
@@ -257,6 +265,7 @@ export async function getInterview(id: string): Promise<Interview | null> {
     project: p.project,
     title: p.title,
     model: p.model ?? undefined,
+    effort: p.effort ?? undefined,
     status: p.status as PrdStatus,
     reviewerId: p.reviewerId ?? undefined,
     reviewComment: p.reviewComment ?? undefined,
@@ -273,6 +282,7 @@ export async function getInterview(id: string): Promise<Interview | null> {
     project: row.project,
     repo: row.repo,
     model: row.model ?? undefined,
+    effort: row.effort ?? undefined,
     status: row.status as InterviewStatus,
     prdCount: row.prds.length,
     prdOwnerId: row.prdOwnerId ?? undefined,
@@ -314,10 +324,11 @@ export async function updateInterviewStatus(
     throw err;
   }
 
+  const transitionAt = new Date().toISOString();
   const persistStatus = () =>
     db
       .update(interviews)
-      .set({ status: newStatus, updatedAt: new Date().toISOString() })
+      .set({ status: newStatus, updatedAt: transitionAt })
       .where(eq(interviews.id, id));
 
   if (newStatus === 'complete' || newStatus === 'archived') {
@@ -329,6 +340,13 @@ export async function updateInterviewStatus(
       },
       persistStatus,
     );
+    if (newStatus === 'complete') {
+      try {
+        await recordArtifactDoneEvent('interview', id, transitionAt);
+      } catch (err) {
+        console.error(`[interview] Failed to record done event (interviewId=${id})`, err);
+      }
+    }
     return;
   }
 

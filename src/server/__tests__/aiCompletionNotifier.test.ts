@@ -51,6 +51,8 @@ jest.mock('../db/schema', () => ({
 }));
 
 import { notifyAiCompletion } from '../services/aiCompletionNotifier';
+import { shouldPlayGenerationSound } from '../../shared/types/notification';
+import type { NotificationType } from '../../shared/types/notification';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
 const { createNotification: mockCreateNotification } = jest.requireMock(
@@ -321,5 +323,65 @@ describe('notifyAiCompletion', () => {
     expect(mockCreateNotification).toHaveBeenCalledWith('owner-prd', expect.objectContaining({
       body: 'Validation needs attention for "My PRD" (score: 40)',
     }));
+  });
+});
+
+// ── Completion-sound coupling ─────────────────────────────────────────────────
+// The client decides whether to play a sound by matching the notification
+// title. Renaming a title below without updating
+// GENERATION_SOUND_NOTIFICATION_TITLES would silence the sound with no error,
+// so these assertions run the real payloads through the real predicate.
+
+describe('generation completion sound coupling', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  function emittedPayload(): { type: NotificationType; title: string } {
+    const [, payload] = mockCreateNotification.mock.calls[0] as [
+      string,
+      { type: NotificationType; title: string },
+    ];
+    return payload;
+  }
+
+  it('plays for prd_generated', async () => {
+    mockResolveFromPrd();
+    mockReviewerSelect([]);
+
+    await notifyAiCompletion('prd_generated', 'prd-1', { title: 'My PRD' });
+
+    expect(shouldPlayGenerationSound(emittedPayload())).toBe(true);
+  });
+
+  it('plays for design_doc_generated', async () => {
+    mockResolveFromDesignDoc();
+    mockReviewerSelect([]);
+
+    await notifyAiCompletion('design_doc_generated', 'dd-1', { title: 'Auth Design' });
+
+    expect(shouldPlayGenerationSound(emittedPayload())).toBe(true);
+  });
+
+  it('plays for design_prototype_generated', async () => {
+    mockResolveFromPrototype();
+    mockReviewerSelect([]);
+
+    await notifyAiCompletion('design_prototype_generated', 'proto-1', {
+      title: 'Auth Prototype',
+    });
+
+    expect(shouldPlayGenerationSound(emittedPayload())).toBe(true);
+  });
+
+  it('stays silent for validation and fix events', async () => {
+    mockResolveFromDesignDoc();
+    mockReviewerSelect([]);
+
+    await notifyAiCompletion('design_doc_validation_complete', 'dd-1', {
+      title: 'Auth Design',
+      score: 92,
+      passed: true,
+    });
+
+    expect(shouldPlayGenerationSound(emittedPayload())).toBe(false);
   });
 });

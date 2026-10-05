@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { SkillProvider } from '../../shared/types/projectSettings';
@@ -7,8 +8,10 @@ import type { RunGrounding } from '../../shared/types/runGrounding';
 import { git, safeArgs } from '../utils/asyncGit';
 import { resolveDataRoot } from '../utils/dataDir';
 import {
+  USER_FACING_REPO_CACHE_LEASE_WAIT_MS,
   withRepoCacheLease,
   type RepoCacheLeaseContext,
+  type RepoCacheLeaseOptions,
 } from './repoCacheLeaseService';
 import { resolveAdoRepository } from './adoRepositoryTarget';
 import {
@@ -19,15 +22,24 @@ import {
 } from './repoGitSettings';
 
 export { COLD_CACHE_TIMEOUT_MS } from './repoGitSettings';
+export { USER_FACING_REPO_CACHE_LEASE_WAIT_MS } from './repoCacheLeaseService';
 
 const REPO_CACHE_BASE = path.join(resolveDataRoot(), 'repo-cache');
 const inFlightRefreshes = new Map<string, Promise<RepoCacheResult>>();
+const inFlightPinFetches = new Map<string, Promise<boolean>>();
 
 export interface RepoCacheOptions {
   provider: SkillProvider;
   project: string;
   repo: string;
   branch: string;
+}
+
+/** The part of a cache key that identifies the mirror, without a branch. */
+export interface RepoCacheIdentity {
+  provider: SkillProvider;
+  project: string;
+  repo: string;
 }
 
 export interface GitRemote {
@@ -53,7 +65,13 @@ function safeSlug(value: string): string {
     .slice(0, 32) || 'repo';
 }
 
-function cacheIdentity(options: RepoCacheOptions): string {
+const ALL_HEADS_REFSPEC = '+refs/heads/*:refs/heads/*';
+
+function cacheIdentity(options: RepoCacheOptions | RepoCacheIdentity): string {
+  return [options.provider, options.project, options.repo].join('\0');
+}
+
+function legacyCacheIdentity(options: RepoCacheOptions): string {
   return [
     options.provider,
     options.project,
@@ -62,7 +80,24 @@ function cacheIdentity(options: RepoCacheOptions): string {
   ].join('\0');
 }
 
-export function getRepoCacheLeaseKey(options: RepoCacheOptions): string {
+function cacheDirForIdentity(
+  identity: string,
+  options: RepoCacheOptions,
+  includeBranch: boolean,
+): string {
+  const readable = [
+    options.provider,
+    safeSlug(options.project),
+    safeSlug(options.repo),
+    ...(includeBranch ? [safeSlug(options.branch)] : []),
+  ].join('-');
+  const hash = crypto.createHash('sha256').update(identity).digest('hex').slice(0, 12);
+  return path.join(REPO_CACHE_BASE, `${readable}-${hash}.git`);
+}
+
+export function getRepoCacheLeaseKey(
+  options: RepoCacheOptions | RepoCacheIdentity,
+): string {
   return `repo-cache:${crypto
     .createHash('sha256')
     .update(cacheIdentity(options))
@@ -70,14 +105,11 @@ export function getRepoCacheLeaseKey(options: RepoCacheOptions): string {
 }
 
 export function getRepoCacheDir(options: RepoCacheOptions): string {
-  const readable = [
-    options.provider,
-    safeSlug(options.project),
-    safeSlug(options.repo),
-    safeSlug(options.branch),
-  ].join('-');
-  const hash = crypto.createHash('sha256').update(cacheIdentity(options)).digest('hex').slice(0, 12);
-  return path.join(REPO_CACHE_BASE, `${readable}-${hash}.git`);
+  const canonical = cacheDirForIdentity(cacheIdentity(options), options, false);
+  if (cacheExists(canonical)) return canonical;
+  const legacy = cacheDirForIdentity(legacyCacheIdentity(options), options, true);
+  if (cacheExists(legacy)) return legacy;
+  return canonical;
 }
 
 function authEnvironment(username: string, secret: string): Record<string, string> {
@@ -173,6 +205,33 @@ export async function readCachedOriginSha(
   }
 }
 
+const LS_REMOTE_TIMEOUT_MS = 15_000;
+const COMMIT_SHA_RE = /^[0-9a-f]{40}$/i;
+
+/**
+ * One round-trip tip probe. Does not transfer objects. Returns null when the
+ * remote has no such head or the response is unusable.
+ */
+export async function readRemoteBranchTip(
+  options: RepoCacheOptions,
+): Promise<string | null> {
+  const remote = resolveGitRemote(options.provider, options.project, options.repo);
+  const cacheDir = getRepoCacheDir(options);
+  const workDir = cacheExists(cacheDir) ? cacheDir : os.tmpdir();
+  const ref = `refs/heads/${options.branch}`;
+  const output = await git(
+    safeArgs(workDir, ['ls-remote', '--heads', remote.url, ref]),
+    {
+      cwd: workDir,
+      timeout: LS_REMOTE_TIMEOUT_MS,
+      env: remote.env,
+    },
+  );
+  const line = output.split(/\r?\n/).find((row) => row.includes(`\t${ref}`));
+  const sha = line?.split('\t', 1)[0]?.trim() ?? '';
+  return COMMIT_SHA_RE.test(sha) ? sha.toLowerCase() : null;
+}
+
 /** Returns whether the exact pinned commit is present in the local bare cache. */
 export async function hasCachedCommit(
   grounding: Pick<
@@ -231,6 +290,68 @@ async function verifyCacheConnectivity(
   return baseSha;
 }
 
+function identityPath(cacheDir: string): string {
+  return path.join(cacheDir, 'apex-cache-identity.json');
+}
+
+function lastUsedPath(cacheDir: string): string {
+  return path.join(cacheDir, 'apex-last-used');
+}
+
+/**
+ * Records which repository a mirror directory belongs to. The directory name
+ * only carries a hash, so without this an eviction sweep cannot take the
+ * mirror's own lease before deleting it.
+ */
+export function writeRepoCacheIdentity(
+  cacheDir: string,
+  options: RepoCacheOptions,
+): void {
+  const identity: RepoCacheIdentity = {
+    provider: options.provider,
+    project: options.project,
+    repo: options.repo,
+  };
+  try {
+    fs.writeFileSync(identityPath(cacheDir), JSON.stringify(identity), 'utf-8');
+  } catch {
+    // Best effort. Eviction falls back to treating the mirror as an orphan.
+  }
+}
+
+export function readRepoCacheIdentity(cacheDir: string): RepoCacheIdentity | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(identityPath(cacheDir), 'utf-8'));
+    if (
+      typeof parsed?.provider !== 'string'
+      || typeof parsed?.project !== 'string'
+      || typeof parsed?.repo !== 'string'
+    ) {
+      return null;
+    }
+    return parsed as RepoCacheIdentity;
+  } catch {
+    return null;
+  }
+}
+
+/** Bumps the LRU timestamp the eviction sweep orders mirrors by. */
+export function markRepoCacheUsed(cacheDir: string): void {
+  try {
+    fs.writeFileSync(lastUsedPath(cacheDir), `${Date.now()}\n`, 'utf-8');
+  } catch {
+    // Best effort. Eviction falls back to the directory mtime.
+  }
+}
+
+export function readRepoCacheLastUsed(cacheDir: string): number | null {
+  try {
+    return fs.statSync(lastUsedPath(cacheDir)).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
 function repairMarkerPath(cacheDir: string): string {
   return path.join(cacheDir, 'apex-repair-complete');
 }
@@ -270,6 +391,36 @@ function readRepairMarker(cacheDir: string): string | null {
   }
 }
 
+/**
+ * A fetch that dies mid-transfer leaves its `tmp_pack_*` behind — one file the
+ * size of the pack it was receiving. Git never reclaims them, so on the
+ * fixed-size Azure Files share they pile up until writes fail and deploys are
+ * rejected for lack of space. Only sweep temps older than the longest a fetch
+ * may run; a younger one can still belong to a fetch in flight.
+ */
+function pruneAbandonedPackTemps(cacheDir: string): void {
+  const packDir = path.join(cacheDir, 'objects', 'pack');
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(packDir);
+  } catch {
+    return;
+  }
+
+  const cutoff = Date.now() - COLD_CACHE_TIMEOUT_MS;
+  for (const entry of entries) {
+    if (!entry.startsWith('tmp_pack_')) continue;
+    const file = path.join(packDir, entry);
+    try {
+      if (fs.statSync(file).mtimeMs > cutoff) continue;
+      fs.rmSync(file, { force: true });
+      console.warn(`[repo-cache] removed abandoned pack temp ${entry} in ${cacheDir}`);
+    } catch {
+      // Another instance may have swept it first; nothing left to do.
+    }
+  }
+}
+
 async function refetchAndVerifyCache(
   cacheDir: string,
   options: RepoCacheOptions,
@@ -277,13 +428,14 @@ async function refetchAndVerifyCache(
   abortSignal: AbortSignal,
   assertOwned: () => Promise<void>,
 ): Promise<string> {
+  pruneAbandonedPackTemps(cacheDir);
   await git(
     safeArgs(cacheDir, [
       'fetch',
       '--refetch',
       '--prune',
-      'origin',
-      `+refs/heads/${options.branch}:refs/heads/${options.branch}`,
+      remote.url,
+      ALL_HEADS_REFSPEC,
     ]),
     {
       cwd: cacheDir,
@@ -330,9 +482,6 @@ async function populateColdCache(
     await git([
       'clone',
       '--bare',
-      '--single-branch',
-      '--branch',
-      options.branch,
       '--progress',
       remote.url,
       tempDir,
@@ -351,6 +500,8 @@ async function populateColdCache(
     );
     const baseSha = await verifyCacheConnectivity(tempDir, options.branch, abortSignal);
     writeRepairMarker(tempDir, baseSha);
+    writeRepoCacheIdentity(tempDir, options);
+    markRepoCacheUsed(tempDir);
     await assertLeaseOwned();
     abortSignal.throwIfAborted();
     fs.renameSync(tempDir, cacheDir);
@@ -385,12 +536,13 @@ async function refreshWarmCache(
   remote: GitRemote,
   abortSignal: AbortSignal,
 ): Promise<void> {
+  pruneAbandonedPackTemps(cacheDir);
   await git(
     safeArgs(cacheDir, [
       'fetch',
       '--prune',
-      'origin',
-      `+refs/heads/${options.branch}:refs/heads/${options.branch}`,
+      remote.url,
+      ALL_HEADS_REFSPEC,
     ]),
     {
       cwd: cacheDir,
@@ -434,6 +586,13 @@ async function refreshWarmMirrorUnderLease(
     }
     console.log(`[repo-cache] phase=warm-commit-verified repo=${repoLabel}`);
   } catch (refreshError) {
+    const message =
+      refreshError instanceof Error ? refreshError.message : String(refreshError);
+    console.warn(
+      `[repo-cache] phase=incremental-fetch-failed repo=${repoLabel} ` +
+        `aborted=${abortSignal.aborted} durationMs=${Date.now() - startedAt}: ` +
+        message.replace(/\/\/[^/@\s]+@/g, '//***@').slice(0, 300),
+    );
     if (abortSignal.aborted) throw refreshError;
     if (!isTransientGitError(refreshError)) throw refreshError;
     try {
@@ -452,6 +611,9 @@ async function refreshWarmMirrorUnderLease(
   await assertOwned();
   abortSignal.throwIfAborted();
   writeRefreshMarker(cacheDir);
+  // Backfills the sidecar on mirrors cloned before eviction existed.
+  writeRepoCacheIdentity(cacheDir, options);
+  markRepoCacheUsed(cacheDir);
   console.log(
     `[repo-cache] ${stale ? 'verified stale' : 'ready'} ${options.provider}/${options.repo}@${options.branch} ` +
     `sha=${baseSha.slice(0, 12)} durationMs=${Date.now() - startedAt}`,
@@ -484,6 +646,7 @@ export async function refreshRepoCacheUnderLease(
     await assertOwned();
     abortSignal.throwIfAborted();
     writeRefreshMarker(cacheDir);
+    markRepoCacheUsed(cacheDir);
     console.log(
       `[repo-cache] ready ${options.provider}/${options.repo}@${options.branch} ` +
       `sha=${baseSha.slice(0, 12)} durationMs=${Date.now() - startedAt}`,
@@ -534,6 +697,7 @@ export async function fetchRepositoryTip(
       }
       return refreshWarmMirrorUnderLease(options, lease);
     },
+    { waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS },
   ).finally(() => {
     inFlightRefreshes.delete(key);
   });
@@ -541,7 +705,134 @@ export async function fetchRepositoryTip(
   return refresh;
 }
 
-export function ensureRepoCache(options: RepoCacheOptions): Promise<RepoCacheResult> {
+async function commitExistsInCache(
+  cacheDir: string,
+  sha: string,
+  abortSignal?: AbortSignal,
+): Promise<boolean> {
+  try {
+    await git(
+      safeArgs(cacheDir, ['cat-file', '-e', `${sha}^{commit}`]),
+      { cwd: cacheDir, abortSignal, timeout: 10_000 },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Fetch one pinned commit into an existing bare mirror. Does not clone, and
+ * does not fetch every branch — MaxView's all-heads incremental fetch is what
+ * hung home chat. Coalesces per SHA so overlapping chats share one git fetch.
+ */
+export async function fetchPinnedCommit(
+  options: RepoCacheOptions,
+  sha: string,
+): Promise<boolean> {
+  const normalized = sha.trim().toLowerCase();
+  if (!COMMIT_SHA_RE.test(normalized)) return false;
+  const cacheDir = getRepoCacheDir(options);
+  if (!cacheExists(cacheDir)) return false;
+  if (await commitExistsInCache(cacheDir, normalized)) {
+    try {
+      await withRepoCacheLease(
+        getRepoCacheLeaseKey(options),
+        async () => {
+          writeRepoCacheIdentity(cacheDir, options);
+          markRepoCacheUsed(cacheDir);
+        },
+        { waitMs: 0 },
+      );
+    } catch (error) {
+      // Fetch already holds the lease. Do not write identity unguarded.
+      if (
+        !(error instanceof Error)
+        || !error.message.startsWith('Timed out waiting for repository cache lease:')
+      ) {
+        throw error;
+      }
+      markRepoCacheUsed(cacheDir);
+    }
+    return true;
+  }
+
+  const key = `pin:${cacheIdentity(options)}:${normalized}`;
+  const existing = inFlightPinFetches.get(key);
+  if (existing) return existing;
+
+  const work = withRepoCacheLease(
+    getRepoCacheLeaseKey(options),
+    async ({ signal, assertOwned }) => {
+      writeRepoCacheIdentity(cacheDir, options);
+      if (await commitExistsInCache(cacheDir, normalized, signal)) {
+        markRepoCacheUsed(cacheDir);
+        return true;
+      }
+      const remote = resolveGitRemote(
+        options.provider,
+        options.project,
+        options.repo,
+      );
+      const repoLabel = `${options.provider}/${options.repo}@${options.branch}`;
+      const startedAt = Date.now();
+      console.log(
+        `[repo-cache] phase=pin-fetch-start repo=${repoLabel} sha=${normalized.slice(0, 12)}`,
+      );
+      try {
+        // Bundle restore clones from snapshot.bundle, so `origin` is that temp
+        // path. The scratch dir is deleted; fetch by URL, not the remote name.
+        try {
+          await git(
+            safeArgs(cacheDir, ['remote', 'set-url', 'origin', remote.url]),
+            { cwd: cacheDir, timeout: 10_000, abortSignal: signal },
+          );
+        } catch {
+          // Fetch below uses remote.url regardless of origin.
+        }
+        pruneAbandonedPackTemps(cacheDir);
+        await git(
+          safeArgs(cacheDir, ['fetch', '--no-tags', remote.url, normalized]),
+          {
+            cwd: cacheDir,
+            timeout: CACHE_FETCH_TIMEOUT_MS,
+            idleTimeout: CACHE_FETCH_IDLE_TIMEOUT_MS,
+            abortSignal: signal,
+            env: remote.env,
+          },
+        );
+        await assertOwned();
+        const got = await commitExistsInCache(cacheDir, normalized, signal);
+        writeRepoCacheIdentity(cacheDir, options);
+        if (got) markRepoCacheUsed(cacheDir);
+        console.log(
+          `[repo-cache] phase=pin-fetch-${got ? 'complete' : 'miss'} repo=${repoLabel} ` +
+            `sha=${normalized.slice(0, 12)} durationMs=${Date.now() - startedAt}`,
+        );
+        return got;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[repo-cache] phase=pin-fetch-failed repo=${repoLabel} ` +
+            `sha=${normalized.slice(0, 12)} aborted=${signal.aborted} ` +
+            `durationMs=${Date.now() - startedAt}: ` +
+            message.replace(/\/\/[^/@\s]+@/g, '//***@').slice(0, 300),
+        );
+        throw error;
+      }
+    },
+  ).finally(() => {
+    inFlightPinFetches.delete(key);
+  });
+
+  inFlightPinFetches.set(key, work);
+  return work;
+}
+
+export function ensureRepoCache(
+  options: RepoCacheOptions,
+  leaseOptions?: Pick<RepoCacheLeaseOptions, 'waitMs'>,
+): Promise<RepoCacheResult> {
   const key = cacheIdentity(options);
   const existing = inFlightRefreshes.get(key);
   if (existing) return existing;
@@ -549,6 +840,7 @@ export function ensureRepoCache(options: RepoCacheOptions): Promise<RepoCacheRes
   const refresh = withRepoCacheLease(
     getRepoCacheLeaseKey(options),
     (lease) => refreshRepoCacheUnderLease(options, lease),
+    leaseOptions,
   ).finally(() => {
     inFlightRefreshes.delete(key);
   });

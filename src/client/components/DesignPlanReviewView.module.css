@@ -137,6 +137,21 @@
   white-space: nowrap;
 }
 
+.decisionField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 160px;
+}
+
+.updatePageSection {
+  margin-bottom: 12px;
+  padding: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
 /* ── Design brief: the main editable area ── */
 
 .briefField {
@@ -273,16 +288,26 @@
   font-weight: 500;
 }
 
-.footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
+.footerBlock {
   margin-top: 20px;
   position: sticky;
   bottom: 0;
   background: var(--bg-primary);
   padding: 16px 0;
   border-top: 1px solid var(--border-color);
+}
+
+.generateHelper {
+  font-size: 12px;
+  color: var(--error-color);
+  font-weight: 500;
+  margin: 0 0 12px;
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
 }
 
 .primaryBtn {
@@ -328,9 +353,13 @@
 .screenshotSection {
   margin-bottom: 12px;
   padding: 12px;
-  background: var(--bg-secondary);
+  background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: 6px;
+}
+
+.updatePageSection .screenshotSection {
+  margin-bottom: 0;
 }
 
 .screenshotPreview {

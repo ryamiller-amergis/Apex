@@ -1,7 +1,8 @@
 import type { Request } from 'express';
+import type { AppEnvironment } from '../../shared/types/appEnvironment';
 import { getUserEmail } from './requestUser';
 
-export type AppEnvironment = 'local' | 'dev' | 'prod';
+export type { AppEnvironment };
 
 /**
  * Resolve the current application environment used to scope platform-admin
@@ -36,15 +37,17 @@ const SUPER_ADMIN_EMAILS_BY_ENV: Record<AppEnvironment, string[]> = {
   local: [
     'ryamiller@amergis.com',
     'anedunur@amergis.com',
-    'laleduy@amergis.com',
+    'mojubile@amergis.com',
   ],
   dev: [
     'ryamiller@amergis.com',
     'anedunur@amergis.com',
+    'mojubile@amergis.com',
   ],
   prod: [
     'ryamiller@amergis.com',
     'anedunur@amergis.com',
+    'mojubile@amergis.com',
   ],
 };
 

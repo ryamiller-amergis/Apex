@@ -47,7 +47,7 @@ Your baseline context below includes \`context.md\` (comprehensive product guide
 2. When a question goes beyond what the baseline covers, USE YOUR TOOLS to look up the answer:
    - Browse \`src/client/components/\` for UI features
    - Browse \`src/server/services/\` and \`src/server/routes/\` for backend logic
-   - Browse \`.cursor/skills/\` and \`design-docs/\` for feature documentation
+   - Browse \`.agents/skills/\`, legacy \`.cursor/skills/\`, and \`design-docs/\` for feature documentation
    - Read \`public/CHANGELOG.json\` for recent changes
    - Search code to find where specific features or concepts are implemented
 3. If you still can't find the answer after searching, say so honestly and suggest the user submit a feature request — the Feature Request system will even auto-analyze it with AI!
@@ -67,16 +67,18 @@ Do NOT answer off-topic questions even if the user insists — always redirect b
 function buildRepositoryReadGuidance(
   nativeReads: boolean,
   repoInfo?: RepoInfo | null,
-  repoReader?: RepoReader
+  repoReader?: RepoReader,
+  storage: 'bare mirror' | 'Azure Files checkout' = 'Azure Files checkout',
+  forbidProviderRepoMcp = false,
 ): string {
-  return nativeReads
-    ? [
+  if (nativeReads) {
+    return [
         '# Sandbox workspace and native repository reads',
         'The current working directory remains the Apex agent sandbox; it is NOT the repository checkout.',
         ...(repoInfo && repoReader
           ? [
               'Repository grounding provenance:',
-              '  storage: "Azure Files checkout"',
+              `  storage: "${storage}"`,
               `  repository: "${repoReader.identity.repo}"`,
               `  branch: "${repoInfo.branch}"`,
               `  pinned SHA: "${repoReader.identity.sha}"`,
@@ -87,8 +89,16 @@ function buildRepositoryReadGuidance(
         '- `list_repo_dir` — list a repository-relative directory',
         '- `search_repo_code` — search the pinned checkout',
         'Never use the GitHub or ADO provider MCP servers for repository reads.',
-      ].join('\n')
-    : [
+      ].join('\n');
+  }
+  if (forbidProviderRepoMcp) {
+    return [
+      '# Sandbox workspace',
+      'The current working directory is an isolated sandbox, not the project checkout.',
+      'Do not use the GitHub or ADO provider MCP servers for repository reads. Local checkout tools are unavailable this turn.',
+    ].join('\n');
+  }
+  return [
         '# Sandbox workspace and provider repository reads',
         'The current working directory is an isolated sandbox, not the project checkout.',
         'Repository files must be fetched via the `github-repo` MCP server.',
@@ -102,11 +112,13 @@ function buildRepositoryReadGuidance(
 function fallbackSystemPrompt(
   nativeReads: boolean,
   repoInfo?: RepoInfo | null,
-  repoReader?: RepoReader
+  repoReader?: RepoReader,
+  storage?: 'bare mirror' | 'Azure Files checkout',
+  forbidProviderRepoMcp = false,
 ): string {
   return `${SYSTEM_PROMPT_BASE}
 
-${buildRepositoryReadGuidance(nativeReads, repoInfo, repoReader)}
+${buildRepositoryReadGuidance(nativeReads, repoInfo, repoReader, storage, forbidProviderRepoMcp)}
 
 Note: I was unable to load the latest documentation from the repository. I'll do my best to answer using my tools and general knowledge of the application.`;
 }
@@ -148,11 +160,14 @@ async function fetchRepoContext(
   repoInfo: RepoInfo | null,
   runtime: AskApexRepositoryRuntime
 ): Promise<string> {
+  const forbidProviderRepoMcp = runtime.localGrounded && !runtime.nativeReads;
   if (!repoInfo) {
     return fallbackSystemPrompt(
       runtime.nativeReads,
       repoInfo,
-      runtime.repoReader
+      runtime.repoReader,
+      runtime.storage,
+      forbidProviderRepoMcp,
     );
   }
 
@@ -165,21 +180,24 @@ async function fetchRepoContext(
     return cached.prompt;
   }
 
-  const remoteCatalog = runtime.nativeReads
-    ? null
-    : await import('./skillCatalogGitHub');
+  const remoteCatalog =
+    runtime.nativeReads || forbidProviderRepoMcp
+      ? null
+      : await import('./skillCatalogGitHub');
   const sections: string[] = [
     SYSTEM_PROMPT_BASE,
     '',
     buildRepositoryReadGuidance(
       runtime.nativeReads,
       repoInfo,
-      runtime.repoReader
+      runtime.repoReader,
+      runtime.storage,
+      forbidProviderRepoMcp,
     ),
     '',
   ];
 
-  if (!runtime.nativeReads) {
+  if (!runtime.nativeReads && !forbidProviderRepoMcp) {
     // Inject repo coordinates so the agent knows what to pass to provider MCP tools.
     sections.push(
       `# Repo coordinates (use with MCP tools)`,
@@ -201,6 +219,7 @@ async function fetchRepoContext(
   ];
 
   for (const file of filesToFetch) {
+    if (!runtime.repoReader && !remoteCatalog) break;
     try {
       const content = runtime.repoReader
         ? await runtime.repoReader.readFile(file.path)
@@ -221,7 +240,13 @@ async function fetchRepoContext(
   const prompt =
     sections.length > 6
       ? sections.join('\n\n')
-      : fallbackSystemPrompt(runtime.nativeReads, repoInfo, runtime.repoReader);
+      : fallbackSystemPrompt(
+          runtime.nativeReads,
+          repoInfo,
+          runtime.repoReader,
+          runtime.storage,
+          forbidProviderRepoMcp,
+        );
   contextPromptCache.set(sourceKey, {
     prompt,
     fetchedAt: Date.now(),
@@ -237,27 +262,27 @@ function buildAskApexMcpServers(
   grounding: CallerGroundingSelection,
   options?: {
     nativeReads?: boolean;
-    omitGroundingProfile?: boolean;
   }
 ): Record<string, McpServerConfig> {
+  // Local grounding never remounts github-repo — list_skills is the hang path.
+  if (options?.nativeReads || grounding.mode === 'local') {
+    return {};
+  }
   const port = process.env.PORT ?? '3001';
-  const profilePath =
-    grounding.mode === 'local' && !options?.omitGroundingProfile
-      ? `/grounding/${grounding.profileId}`
-      : '';
-  const browseQuery = options?.nativeReads ? '?enableRepoBrowse=false' : '';
   return {
     'github-repo': {
-      url: `http://localhost:${port}/mcp/github-repo${profilePath}${browseQuery}`,
+      url: `http://localhost:${port}/mcp/github-repo`,
     },
   };
 }
 
 interface AskApexRepositoryRuntime {
   nativeReads: boolean;
+  localGrounded: boolean;
   local: LocalAgentOptions;
   mcpServers: Record<string, McpServerConfig>;
   repoReader?: RepoReader;
+  storage?: 'bare mirror' | 'Azure Files checkout';
 }
 
 function isExactAskApexReader(
@@ -297,15 +322,17 @@ async function prepareAskApexRepositoryRuntime(
   const nativeReads = Boolean(repoReader);
   return {
     nativeReads,
+    localGrounded: grounding.mode === 'local',
     local: {
       cwd: process.cwd(),
       ...(repoReader ? { customTools: createNativeReadTools(repoReader) } : {}),
     },
-    mcpServers: buildAskApexMcpServers(grounding, {
-      nativeReads,
-      omitGroundingProfile: requestedNative,
-    }),
+    mcpServers: buildAskApexMcpServers(grounding, { nativeReads }),
     repoReader,
+    storage:
+      grounding.mode === 'local' && !grounding.workingTree
+        ? 'bare mirror'
+        : 'Azure Files checkout',
   };
 }
 
@@ -323,7 +350,9 @@ async function buildSystemPrompt(
     return fallbackSystemPrompt(
       runtime.nativeReads,
       repoInfo,
-      runtime.repoReader
+      runtime.repoReader,
+      runtime.storage,
+      runtime.localGrounded && !runtime.nativeReads,
     );
   }
 }

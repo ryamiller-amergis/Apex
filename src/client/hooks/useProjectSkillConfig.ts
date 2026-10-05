@@ -220,6 +220,8 @@ export function useSetProjectApprovers() {
       designPrototypeApproverGroups,
       testCaseApprovers,
       testCaseApproverGroups,
+      adrApprovers,
+      adrApproverGroups,
     }: SetApproversRequest) => {
       const res = await fetch(
         `/api/admin/project-settings/${encodeURIComponent(settingsId)}/approvers`,
@@ -236,6 +238,8 @@ export function useSetProjectApprovers() {
             designPrototypeApproverGroups,
             testCaseApprovers,
             testCaseApproverGroups,
+            adrApprovers,
+            adrApproverGroups,
           }),
         },
       );

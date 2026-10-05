@@ -104,6 +104,34 @@ describe('useChatThreadList', () => {
     );
   });
 
+  it('does not retain another project history while the new project loads', async () => {
+    const maxViewThread = {
+      ...threadSummary,
+      kickoff: { ...threadSummary.kickoff, project: 'MaxView' },
+    };
+    global.fetch = jest.fn().mockImplementation((url: string) => {
+      if (url.includes('project=MaxView')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([maxViewThread]),
+        });
+      }
+      return new Promise(() => {});
+    }) as jest.Mock;
+    const { wrapper } = createWrapper();
+
+    const { result, rerender } = renderHook(
+      ({ project }) => useChatThreadList(50, project),
+      { wrapper, initialProps: { project: 'MaxView' } },
+    );
+    await waitFor(() => expect(result.current.data).toEqual([maxViewThread]));
+
+    rerender({ project: 'Apex' });
+
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.isPlaceholderData).toBe(false);
+  });
+
   it('is disabled when project is not provided', () => {
     mockFetchOk([]);
     const { wrapper } = createWrapper();

@@ -5,6 +5,12 @@ import { DEV_MOCK_USER_BY_ID, DEV_MOCK_USERS } from '../../shared/constants/devM
 import type { DevMockPersonaId } from '../../shared/constants/devMockUsers';
 import { upsertAppUser } from '../services/rbacService';
 import { resolvePendingAssignments } from '../services/pendingAssignmentService';
+import { sanitizeAuthReturnTo } from '../../shared/utils/authReturnTo';
+import {
+  DEV_ENV_ACCESS_DENIED_CODE,
+  DEV_ENV_ACCESS_DENIED_MESSAGE,
+} from '../../shared/types/devEnvAllowlist';
+import { isDevEnvironmentAllowed } from '../services/devEnvAllowlistService';
 
 const router = express.Router();
 
@@ -130,11 +136,20 @@ router.get('/login', (req, res, next) => {
     console.warn('[auth] Azure AD is not configured — /login is unavailable. Use dev-login in non-production environments.');
     return res.redirect('/auth/login-failed');
   }
+  const returnTo = sanitizeAuthReturnTo(req.query.returnTo);
+  const session = req.session as { returnTo?: string } | undefined;
+  if (session) {
+    if (returnTo) {
+      session.returnTo = returnTo;
+    } else {
+      delete session.returnTo;
+    }
+  }
   const strategyName = resolveStrategyName(req);
   console.log(`Login route hit, initiating OAuth flow via "${strategyName}" (host: ${req.get('host')})`);
-  passport.authenticate(strategyName, { 
+  passport.authenticate(strategyName, {
     failureRedirect: '/auth/login-failed',
-    failureMessage: true 
+    failureMessage: true
   })(req, res, next);
 });
 
@@ -146,7 +161,7 @@ router.get(
     if (!isAzureAdConfigured) {
       return res.redirect('/auth/login-failed');
     }
-    passport.authenticate(resolveStrategyName(req), (err: any, user: any, info: any) => {
+    passport.authenticate(resolveStrategyName(req), async (err: any, user: any, info: any) => {
       if (err) {
         console.error('Authentication error:', err);
         return res.redirect('/auth/login-failed');
@@ -155,20 +170,33 @@ router.get(
         console.error('Authentication failed - no user:', info);
         return res.redirect('/auth/login-failed');
       }
-      req.logIn(user, (loginErr) => {
+      // Capture before logIn: Passport 0.7 regenerates the session and drops
+      // prior fields unless keepSessionInfo is set. The snapshot covers both.
+      const pendingReturnTo = sanitizeAuthReturnTo(
+        (req.session as { returnTo?: string } | undefined)?.returnTo,
+      );
+      const userEmail =
+        user.profile?.upn ||
+        user.profile?.email ||
+        user.profile?.preferred_username ||
+        (Array.isArray(user.profile?.emails) ? user.profile.emails[0] : '') ||
+        user.profile?._json?.email ||
+        user.profile?._json?.preferred_username ||
+        '';
+      try {
+        if (!(await isDevEnvironmentAllowed(userEmail))) {
+          return res.redirect('/auth/dev-access-denied');
+        }
+      } catch (accessErr) {
+        console.error('[auth] Dev access check failed:', accessErr);
+        return res.redirect('/auth/login-failed');
+      }
+      req.logIn(user, { session: true, keepSessionInfo: true }, (loginErr) => {
         if (loginErr) {
           console.error('Login error:', loginErr);
           return res.redirect('/auth/login-failed');
         }
         console.log('User logged in successfully');
-        const userEmail =
-          user.profile?.upn ||
-          user.profile?.email ||
-          user.profile?.preferred_username ||
-          (Array.isArray(user.profile?.emails) ? user.profile.emails[0] : '') ||
-          user.profile?._json?.email ||
-          user.profile?._json?.preferred_username ||
-          '';
         if (!userEmail) {
           console.warn('[auth] No email found in profile claims:', Object.keys(user.profile ?? {}));
         }
@@ -182,10 +210,14 @@ router.get(
           user.profile?.oid ?? '',
           userEmail,
         ).catch((err) => console.error('resolvePendingAssignments failed:', err));
-        // Redirect to the Vite dev server (or root in production)
-        const redirectUrl = process.env.NODE_ENV === 'production' 
-          ? '/' 
-          : 'http://localhost:3000/';
+        const session = req.session as { returnTo?: string } | undefined;
+        const sessionReturnTo = sanitizeAuthReturnTo(session?.returnTo) ?? pendingReturnTo;
+        if (session) delete session.returnTo;
+        // Redirect to the Vite dev server (or root in production), preserving a
+        // validated internal return path when one was supplied at login.
+        const redirectUrl = process.env.NODE_ENV === 'production'
+          ? (sessionReturnTo ?? '/')
+          : `http://localhost:3000${sessionReturnTo ?? '/'}`;
         return res.redirect(redirectUrl);
       });
     })(req, res, next);
@@ -242,6 +274,56 @@ router.get('/login-failed', (req, res) => {
   `);
 });
 
+router.get('/dev-access-denied', (_req, res) => {
+  res.status(403).send(`
+    <html>
+      <head>
+        <title>Dev access required</title>
+        <style>
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 50%, #1a1a1a 100%);
+            color: white;
+          }
+          .container {
+            text-align: center;
+            padding: 3rem;
+            max-width: 32rem;
+            background: rgba(45, 45, 45, 0.95);
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+          }
+          h1 { color: #f59e0b; margin-bottom: 1rem; }
+          p { color: #b0b0b0; margin-bottom: 2rem; line-height: 1.5; }
+          a {
+            display: inline-block;
+            background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+          }
+          a:hover { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h1>Dev access required</h1>
+          <p>${DEV_ENV_ACCESS_DENIED_MESSAGE} Ask a platform admin to add your email, then sign in again.</p>
+          <a href="/">Return to Login</a>
+        </div>
+      </body>
+    </html>
+  `);
+});
+
 // Logout route
 router.get('/logout', (req, res) => {
   req.logout((err) => {
@@ -278,11 +360,18 @@ if (process.env.NODE_ENV !== 'production') {
     });
   });
 
-  router.post('/dev-login', (req, res) => {
+  router.post('/dev-login', async (req, res) => {
     const persona = (req.body?.persona ?? 'developer') as DevMockPersonaId;
     const personaUser = DEV_MOCK_USER_BY_ID.get(persona);
     if (!personaUser) {
       return res.status(400).json({ error: `Unknown dev persona: ${persona}` });
+    }
+
+    if (!(await isDevEnvironmentAllowed(personaUser.email))) {
+      return res.status(403).json({
+        error: DEV_ENV_ACCESS_DENIED_MESSAGE,
+        code: DEV_ENV_ACCESS_DENIED_CODE,
+      });
     }
 
     const mockUser = {
@@ -312,7 +401,8 @@ if (process.env.NODE_ENV !== 'production') {
         mockUser.profile.oid,
         mockUser.profile.upn
       ).catch((e) => console.error('resolvePendingAssignments failed:', e));
-      res.json({ ok: true, persona: personaUser.id });
+      const redirectTo = sanitizeAuthReturnTo(req.body?.returnTo) ?? '/';
+      res.json({ ok: true, persona: personaUser.id, redirectTo });
     });
   });
 }

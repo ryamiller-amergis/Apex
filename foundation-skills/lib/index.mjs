@@ -18,3 +18,11 @@ export {
 export { validatePackage }                    from './validatePackage.mjs';
 export { loadCatalog, findSkill, validateCatalog } from './catalog.mjs';
 export { readLockfile, emptyLockfile, serializeLockfile, lockfileIntegrity } from './lockfile.mjs';
+export { migrateSkillRoot, planSkillRootMigration } from './migrateRoot.mjs';
+export {
+  AGENT_SKILL_ROOT,
+  LEGACY_SKILL_ROOT,
+  normalizeSkillRoot,
+  resolveRepoSkillRoot,
+  resolveSkillRoot,
+} from './skillRoot.mjs';
