@@ -806,7 +806,8 @@ to poll queue length). Each replica runs one document run at a time. The worker
 completes the queue message once the run starts, so KEDA can pick a busy replica to
 remove. On SIGTERM the worker stops taking messages and lets the current run finish
 for `AI_RUNS_V2_SHUTDOWN_DRAIN_MS` (grace period minus 30 s) before aborting it.
-`azapi_update_resource.ai_platform_v2_documents_scale_timing` sets the termination grace
+`azapi_resource_action.ai_platform_v2_documents_scale_timing` (a PATCH, re-run whenever
+the app changes) sets the termination grace
 period (`ai_platform_v2_documents_termination_grace_seconds`, at most 600) and the
 cooldown (`ai_platform_v2_documents_scale_cooldown_seconds`), which azurerm 3.x cannot
 set. After apply, check that the Container App system logs have no `KEDAScalerFailed` and

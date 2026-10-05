@@ -381,13 +381,16 @@ resource "azurerm_container_app" "ai_platform_v2_documents" {
 
 # azurerm 3.x cannot set the termination grace period or the scale cooldown. Both matter
 # because a run claims its queue message at start: scale-in is decided on an empty queue
-# while replicas are still busy. An azurerm update that rewrites the template drops these,
-# and the next apply restores them.
-resource "azapi_update_resource" "ai_platform_v2_documents_scale_timing" {
+# while replicas are still busy. This is a PATCH, not azapi_update_resource: that sends a
+# full PUT built from a GET, which carries secrets without values and is rejected
+# (ContainerAppSecretInvalid). An azurerm update can rewrite the template and drop these,
+# so any change to the app re-runs the PATCH.
+resource "azapi_resource_action" "ai_platform_v2_documents_scale_timing" {
   count = local.ai_platform_v2_runtime_enabled ? 1 : 0
 
   type        = "Microsoft.App/containerApps@2025-01-01"
   resource_id = azurerm_container_app.ai_platform_v2_documents[0].id
+  method      = "PATCH"
 
   body = {
     properties = {
@@ -398,5 +401,9 @@ resource "azapi_update_resource" "ai_platform_v2_documents_scale_timing" {
         }
       }
     }
+  }
+
+  lifecycle {
+    replace_triggered_by = [azurerm_container_app.ai_platform_v2_documents[count.index]]
   }
 }
