@@ -3,7 +3,7 @@ import { db } from '../db/drizzle';
 import { designDocs, playbookDefinitions, playbookDefinitionVersions, playbookRuns } from '../db/schema';
 import type { PlaybookGraph } from '../../shared/types/playbook';
 import { isFeatureEnabled } from './featureFlagService';
-import { createThread } from './chatAgentService';
+import { createThread, getThread } from './chatAgentService';
 import { getDesignDoc } from './designDocService';
 import { stopDocumentValidationWatcher } from './documentValidationService';
 import { createDefinition, publishDraft } from './playbookDefinitionService';
@@ -263,8 +263,12 @@ async function ensureValidationThread(designDocId: string, ownerUserId: string):
   const document = await getDesignDoc(designDocId);
   if (!document) throw new DesignDocValidationPlaybookNotFoundError(designDocId);
   if (document.validationThreadId) {
-    stopDocumentValidationWatcher(designDocId);
-    return document.validationThreadId;
+    // A closed thread fails the repository reader's reauthorization, so the Skill cannot load.
+    const saved = await getThread(document.validationThreadId);
+    if (saved && saved.status !== 'closed') {
+      stopDocumentValidationWatcher(designDocId);
+      return document.validationThreadId;
+    }
   }
 
   const skillConfig = await resolveSkillConfig({
