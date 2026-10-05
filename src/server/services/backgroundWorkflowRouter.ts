@@ -67,6 +67,13 @@ const SCRATCH_ONLY_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new 
   'playbook-step',
 ]);
 
+/**
+ * Waits between re-preparations while the shared mirror fetches the pinned commit. Runs started
+ * together race that fetch; about 50 seconds in total covers a refresh without holding a caller
+ * much longer than repository preparation already can.
+ */
+const SKILL_SYNC_RETRY_DELAYS_MS: readonly number[] = [5_000, 10_000, 15_000, 20_000];
+
 export interface RecoverableBackgroundWorkflowFailure {
   reason: 'materialization-unavailable';
   workflowClass: BackgroundWorkflowClass;
@@ -84,6 +91,8 @@ export interface PreparedBackgroundWorkflowWorker {
   skillPath: string;
   skillContent?: string;
   skillSha256?: string;
+  /** No Skill was frozen because the mirror was still fetching the pinned commit. */
+  skillRepositorySyncing?: boolean;
   projectId: string;
 }
 
@@ -131,6 +140,7 @@ export interface BackgroundWorkflowRouterDependencies {
   resolveHardLimitMs?: () => number;
   trackEvent?: typeof trackEvent;
   now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
   repositoryPreparation?: Pick<RepositoryPreparationService, 'prepareWritable'>;
   sharedReadCheckout?: Pick<
     SharedReadCheckoutService,
@@ -343,6 +353,9 @@ export function createBackgroundWorkflowRouter(
   const hardLimitMs = dependencies.resolveHardLimitMs ?? resolveAgentRunHardLimitMs;
   const emitEvent = dependencies.trackEvent ?? trackEvent;
   const now = dependencies.now ?? Date.now;
+  const sleep =
+    dependencies.sleep
+    ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const sharedReadCheckout =
     dependencies.sharedReadCheckout ?? sharedReadCheckoutService;
   const repositoryPreparation =
@@ -466,6 +479,32 @@ export function createBackgroundWorkflowRouter(
         preparationStartedAt,
         error,
       );
+    }
+
+    if (useV2Transport) {
+      for (const [index, delayMs] of SKILL_SYNC_RETRY_DELAYS_MS.entries()) {
+        if (prepared.skillContent || !prepared.skillRepositorySyncing) break;
+        safeTrack(
+          'background.preparation.retry',
+          {
+            workflowClass: input.workflowClass,
+            project: input.destinationRun.project,
+            reason: 'repository-syncing',
+          },
+          { attempt: index + 1, delayMs },
+        );
+        await sleep(delayMs);
+        try {
+          prepared = await input.prepareWorker();
+        } catch (error) {
+          return recoverPreparation(
+            input,
+            'worker-preparation-failed',
+            preparationStartedAt,
+            error,
+          );
+        }
+      }
     }
 
     let documentScratchInputs: AiRunV2DocumentScratchInput[] = [];

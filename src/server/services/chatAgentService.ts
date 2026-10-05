@@ -146,6 +146,7 @@ import type {
 } from '../../shared/types/repoReader';
 import { groundingTelemetry } from './groundingTelemetry';
 import { groundingProfileResolver } from './groundingProfileResolver';
+import { isRepositorySyncingError } from './repoRead/mirrorHydration';
 import { createNativeReadTools } from './nativeReadToolAdapter';
 import { workerCanReadWithoutWorkingTree } from './repoRead/workerReadVisibility';
 import {
@@ -2005,6 +2006,7 @@ async function buildNewAgentTurnPrompt(
     repoReader?: RepoReader;
     groundingProvenance?: GroundingProvenance;
     onResolvedSkill?: (skill: { path: string; content: string }) => void;
+    onSkillReadError?: (error: unknown) => void;
   }
 ): Promise<string> {
   let initialPrompt = buildInitialPrompt(kickoff, {
@@ -2063,6 +2065,7 @@ async function buildNewAgentTurnPrompt(
       results.forEach((result, index) => {
         const request = requests[index];
         if (result.status === 'rejected') {
+          if (request.key === 'skill') options?.onSkillReadError?.(result.reason);
           console.warn(
             `[chat] Failed to pre-fetch ${request.path} from ${provider}:`,
             result.reason instanceof Error
@@ -2117,6 +2120,7 @@ async function buildNewAgentTurnPrompt(
             break;
           }
         } catch (err) {
+          options?.onSkillReadError?.(err);
           console.warn(
             `[chat] Cross-root skill fetch failed for ${candidate}:`,
             err instanceof Error ? err.message : String(err)
@@ -2202,6 +2206,8 @@ export interface PreparedBackgroundWorkflowTurn {
   skillPath: string;
   skillContent?: string;
   skillSha256?: string;
+  /** Set when no Skill was frozen because the mirror was still fetching the pinned commit. */
+  skillRepositorySyncing?: boolean;
   projectId: string;
   threadWorkspacePath: string;
   repository: RepositoryPreparationTarget;
@@ -2215,6 +2221,7 @@ export function buildBackgroundWorkflowPrompt(
     skipProviderCatalogFetch?: boolean;
     groundingProvenance?: GroundingProvenance;
     onResolvedSkill?: (skill: { path: string; content: string }) => void;
+    onSkillReadError?: (error: unknown) => void;
   }
 ): Promise<string> {
   return buildNewAgentTurnPrompt(kickoff, promptText, false, undefined, {
@@ -2224,6 +2231,7 @@ export function buildBackgroundWorkflowPrompt(
     skipProviderCatalogFetch: options?.skipProviderCatalogFetch,
     groundingProvenance: options?.groundingProvenance,
     onResolvedSkill: options?.onResolvedSkill,
+    onSkillReadError: options?.onSkillReadError,
   });
 }
 
@@ -2267,14 +2275,18 @@ export async function prepareBackgroundWorkflowTurn(
   }
 
   let resolvedSkill: { path: string; content: string } | null = null;
+  let skillReadHitSyncingMirror = false;
   const prompt = await buildBackgroundWorkflowPrompt(kickoff, promptText, {
-      repoReader,
-      skipProviderCatalogFetch,
-      groundingProvenance,
-      onResolvedSkill: (skill) => {
-        resolvedSkill = skill;
-      },
-    });
+    repoReader,
+    skipProviderCatalogFetch,
+    groundingProvenance,
+    onResolvedSkill: (skill) => {
+      resolvedSkill = skill;
+    },
+    onSkillReadError: (error) => {
+      if (isRepositorySyncingError(error)) skillReadHitSyncingMirror = true;
+    },
+  });
   const frozenSkill = resolvedSkill as
     | { path: string; content: string }
     | null;
@@ -2290,7 +2302,9 @@ export async function prepareBackgroundWorkflowTurn(
             .update(frozenSkill.content)
             .digest('hex'),
         }
-      : {}),
+      : skillReadHitSyncingMirror
+        ? { skillRepositorySyncing: true }
+        : {}),
     projectId: kickoff.project,
     threadWorkspacePath: state.thread.workspaceDir,
     repository: {

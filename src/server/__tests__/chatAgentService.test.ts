@@ -230,6 +230,11 @@ import type {
   GroundingProfileId,
   RepoReader,
 } from '../../shared/types/repoReader';
+import { RepoReaderError } from '../services/repoReader';
+import {
+  REPO_SYNCING_MESSAGE,
+  isRepositorySyncingError,
+} from '../services/repoRead/mirrorHydration';
 
 describe('turn skill prompts', () => {
   it('keeps the user request separate while directing the agent to load the selected skill', () => {
@@ -936,6 +941,27 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
       path: '.cursor/skills/to-prd/SKILL.md',
       content: '# Frozen skill content',
     });
+  });
+
+  it('reports Skill read errors so preparation can tell a syncing mirror apart', async () => {
+    const syncing = new RepoReaderError('LOCAL_READ_UNAVAILABLE', REPO_SYNCING_MESSAGE, true);
+    const onSkillReadError = jest.fn();
+    const onResolvedSkill = jest.fn();
+    const repoReader = {
+      identity: { provider: 'github', project: 'Apex', repo: 'AI-Pilot', sha: 'sha-gen' },
+      readFile: jest.fn().mockRejectedValue(syncing),
+    } as unknown as RepoReader;
+
+    await buildBackgroundWorkflowPrompt(
+      baseKickoff({ skillPath: '.cursor/skills/to-prd/SKILL.md' }),
+      'Begin.',
+      { repoReader, onResolvedSkill, onSkillReadError },
+    );
+
+    expect(onResolvedSkill).not.toHaveBeenCalled();
+    expect(onSkillReadError).toHaveBeenCalledWith(syncing);
+    expect(isRepositorySyncingError(onSkillReadError.mock.calls[0][0])).toBe(true);
+    expect(isRepositorySyncingError(new Error(REPO_SYNCING_MESSAGE))).toBe(false);
   });
 
   it('does not HTTP-fetch the provider skill catalog when local grounding has no checkout reader', async () => {

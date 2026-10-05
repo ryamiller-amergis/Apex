@@ -640,6 +640,97 @@ describe('background workflow routing', () => {
     expect(admitV2Run).toHaveBeenCalledWith(expect.objectContaining({ runId: 'fresh-run' }));
   });
 
+  describe('when the Skill read hit a syncing mirror', () => {
+    const syncingPreparation = {
+      targetGrounding,
+      threadWorkspacePath: 'C:\\threads\\thread-1',
+      prompt: 'confidential generation prompt',
+      model: 'claude-4',
+      skillPath: '.cursor/skills/to-prd/SKILL.md',
+      skillRepositorySyncing: true,
+      projectId: 'project-1',
+    };
+    const admitted = {
+      status: 'dispatched',
+      runId: 'run-1',
+      attemptId: 'attempt-1',
+      attemptNumber: 1,
+      dispatchMessageId: 'dispatch-1',
+      outboxId: 'outbox-1',
+    };
+
+    it('waits and re-prepares until the Skill is frozen, then admits', async () => {
+      const ready = await makeInput().prepareWorker();
+      const prepareWorker = jest.fn()
+        .mockResolvedValueOnce(syncingPreparation)
+        .mockResolvedValueOnce(syncingPreparation)
+        .mockResolvedValueOnce(ready);
+      const sleep = jest.fn().mockResolvedValue(undefined);
+      const admitV2Run = jest.fn().mockResolvedValue(admitted);
+      const dependencies = makeDependencies({
+        isFeatureEnabled: jest.fn().mockResolvedValue(true),
+        admitV2Run,
+        sleep,
+      });
+
+      const decision = await createBackgroundWorkflowRouter(dependencies).route(
+        makeInput({ prepareWorker }),
+      );
+
+      expect(decision).toEqual(expect.objectContaining({ route: 'worker', runId: 'run-1' }));
+      expect(prepareWorker).toHaveBeenCalledTimes(3);
+      expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([5_000, 10_000]);
+      expect(admitV2Run).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses the run once the retries are spent', async () => {
+      const prepareWorker = jest.fn().mockResolvedValue(syncingPreparation);
+      const sleep = jest.fn().mockResolvedValue(undefined);
+      const admitV2Run = jest.fn();
+      const dependencies = makeDependencies({
+        isFeatureEnabled: jest.fn().mockResolvedValue(true),
+        admitV2Run,
+        sleep,
+      });
+
+      const decision = await createBackgroundWorkflowRouter(dependencies).route(
+        makeInput({ prepareWorker }),
+      );
+
+      expect(decision.route).not.toBe('worker');
+      expect(prepareWorker).toHaveBeenCalledTimes(5);
+      expect(sleep).toHaveBeenCalledTimes(4);
+      expect(admitV2Run).not.toHaveBeenCalled();
+    });
+
+    it('does not retry when the Skill is missing for another reason', async () => {
+      const { skillRepositorySyncing: _syncing, ...missingSkill } = syncingPreparation;
+      const prepareWorker = jest.fn().mockResolvedValue(missingSkill);
+      const sleep = jest.fn().mockResolvedValue(undefined);
+      const dependencies = makeDependencies({
+        isFeatureEnabled: jest.fn().mockResolvedValue(true),
+        admitV2Run: jest.fn(),
+        sleep,
+      });
+
+      await createBackgroundWorkflowRouter(dependencies).route(makeInput({ prepareWorker }));
+
+      expect(prepareWorker).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    });
+
+    it('does not retry on the V1 worker path', async () => {
+      const prepareWorker = jest.fn().mockResolvedValue(syncingPreparation);
+      const sleep = jest.fn().mockResolvedValue(undefined);
+      const dependencies = makeDependencies({ sleep });
+
+      await createBackgroundWorkflowRouter(dependencies).route(makeInput({ prepareWorker }));
+
+      expect(prepareWorker).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    });
+  });
+
   it('freezes every worker input into the V2 document specification', async () => {
     const admitV2Run = jest.fn().mockResolvedValue({
       status: 'dispatched',
