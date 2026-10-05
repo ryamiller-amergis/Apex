@@ -113,7 +113,7 @@ export function createArtifactZip(files: ArtifactFile[], modifiedAt = new Date()
   endView.setUint32(16, localOffset, true);
   endView.setUint16(20, 0, true);
 
-  return new Blob([...localParts, centralDirectory, endRecord], { type: 'application/zip' });
+  return new Blob([...localParts, centralDirectory, endRecord] as BlobPart[], { type: 'application/zip' });
 }
 
 export function sanitizeArtifactName(value: string, fallback: string): string {

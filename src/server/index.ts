@@ -59,6 +59,10 @@ import {
   startAdmissionGovernorScheduler,
   stopAdmissionGovernorScheduler,
 } from './services/admissionGovernorScheduler';
+import {
+  startPlaybookReconciliation,
+  stopPlaybookReconciliation,
+} from './services/playbookReconciliationScheduler';
 import { initPgNotify, shutdownPgNotify } from './services/pgNotifyService';
 import {
   initInteractiveLiveBus,
@@ -446,6 +450,9 @@ const server = app.listen(PORT, () => {
   startReaper();
   startAdmissionGovernorScheduler();
   server.once('close', stopAdmissionGovernorScheduler);
+  // Phase 0/1 runs are not behind playbooks-production-adapters, so recovery always starts.
+  void startPlaybookReconciliation();
+  server.once('close', stopPlaybookReconciliation);
   startLoadTestRunReaper();
   initPgNotify().catch((err) => console.error('[startup] initPgNotify failed:', err.message));
 

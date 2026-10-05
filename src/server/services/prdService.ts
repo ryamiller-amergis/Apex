@@ -26,7 +26,6 @@ import { extractFeatures } from '../services/designPrototypeService';
 import { stampAdoIds } from '../../shared/utils/backlogTransform';
 import { derivePrdReadiness } from '../../shared/utils/prdReadiness';
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
-import { parseAgentValidationScorecard, NO_SCORECARD_REASON, VALIDATION_TIMEOUT_REASON } from '../../shared/utils/validationReport';
 import { BACKLOG_USER_TYPE_CONVENTIONS_MD } from '../../shared/utils/backlogUserTypeConventions';
 import {
   hashPrdValidationContent,
@@ -38,11 +37,8 @@ import { resolvePrototypeStageEnabled } from '../../shared/utils/prototypeStage'
 import {
   autoStartDocumentValidation,
   cancelDocumentValidation,
-  generateFallbackReport,
   isDocumentValidationWatcherActive,
-  persistUnusableValidationResult,
   startDocumentValidationWatcher,
-  stopDocumentValidationWatcher,
   type DocumentValidationAdapter,
 } from './documentValidationService';
 import {
@@ -1778,7 +1774,6 @@ export async function resolvePrdCommentWithApply(
 
 // ── PRD Validation ────────────────────────────────────────────────────────────
 
-const activePrdValidationWatchers = new Map<string, boolean>();
 const activePrdValidationStarts = new Set<string>();
 
 export async function arePrdValidationArtifactsReady(prdId: string): Promise<boolean> {
@@ -1805,7 +1800,7 @@ export async function arePrdValidationArtifactsReady(prdId: string): Promise<boo
   return !!tc;
 }
 
-function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
+export function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
   const adapter: DocumentValidationAdapter = {
     getDocumentId: () => prd.id,
     getProject: () => prd.project,
@@ -1875,7 +1870,7 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
             .set({ status: 'draft', updatedAt: new Date().toISOString() })
             .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')));
         }
-        return;
+        return true;
       }
       // Persist score/status only while still validating so a later 0%
       // placeholder cannot clobber a completed post-run result. A usable
@@ -1915,7 +1910,7 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
         .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')))
         .returning({ id: prds.id });
       if (written.length === 0) {
-        if (isUnusablePlaceholder) return;
+        if (isUnusablePlaceholder) return true;
         await db.update(prds)
           .set({
             validationScorecard: stamped,
@@ -1941,13 +1936,10 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
           console.error(`[prdValidation] Failed to notify approvers (prdId=${prd.id})`, err),
         );
       }
+      return true;
     },
-    updateDbForValidationTimeout: async () => {
-      await persistUnusableValidationResult(adapter, VALIDATION_TIMEOUT_REASON);
-    },
-    updateDbForValidationError: async () => {
-      await persistUnusableValidationResult(adapter, NO_SCORECARD_REASON);
-    },
+    updateDbForValidationTimeout: async () => undefined,
+    updateDbForValidationError: async () => undefined,
     isCurrentValidationThread: async (threadId: string) => {
       const current = await db.query.prds.findFirst({
         where: eq(prds.id, prd.id),
@@ -2042,41 +2034,21 @@ export async function syncPrdValidationResult(prdId: string): Promise<{ score: n
     return null;
   }
 
-  const scorecard = parseAgentValidationScorecard(scorecardRaw);
-  const stamped: ValidationScorecard = {
-    ...scorecard,
-    contentHash: hashPrdValidationContent(prd.content, prd.backlogJson),
+  const { ingestValidationScorecard } = await import('./documentValidationService');
+  const result = await ingestValidationScorecard(
+    createPrdValidationAdapter(prd),
+    prd.validationThreadId,
+    {
+      kind: 'success',
+      scorecardRaw,
+      reportMd: readOutputValidationScorecardMd(prd.validationThreadId) ?? undefined,
+    },
+  );
+  if (result.disposition === 'discarded_stale') return null;
+  return {
+    score: result.scorecard.overall_score,
+    is_ready: result.scorecard.is_ready,
   };
-  const reportMd = readOutputValidationScorecardMd(prd.validationThreadId) ?? generateFallbackReport(stamped);
-  const newStatus: PrdStatus = stamped.is_ready ? 'pending_review' : 'draft';
-  const kickoff = newStatus === 'pending_review'
-    ? await applyKickoffApproversForReview(prd.id, prd.interviewId, prd.authorId)
-    : null;
-
-  await db.update(prds)
-    .set({
-      validationScore: Math.round(stamped.overall_score),
-      validationScorecard: stamped,
-      validationPhase: stamped.review_phase,
-      validationReportMd: reportMd,
-      status: newStatus,
-      ...(kickoff?.designDocApproverIds
-        ? { designDocApproverIds: kickoff.designDocApproverIds }
-        : {}),
-      ...(kickoff?.designPrototypeApproverIds
-        ? { designPrototypeApproverIds: kickoff.designPrototypeApproverIds }
-        : {}),
-      updatedAt: new Date().toISOString(),
-    })
-    .where(eq(prds.id, prdId));
-
-  if (newStatus === 'pending_review') {
-    notifyApproversDocumentReady(prdId, 'prd').catch((err) =>
-      console.error(`[syncPrdValidationResult] Failed to notify approvers (prdId=${prdId})`, err),
-    );
-  }
-
-  return { score: stamped.overall_score, is_ready: stamped.is_ready };
 }
 
 export async function markPrdValidationReady(prdId: string, requestingUserId: string): Promise<void> {

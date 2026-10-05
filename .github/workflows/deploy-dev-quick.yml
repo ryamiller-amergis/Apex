@@ -190,6 +190,9 @@ jobs:
         # scripts to install their Linux bindings. prepare tolerates omitted Husky.
         run: npm ci --omit=dev
 
+      - name: Verify Playbook runtime dependencies
+        run: node -e "Promise.all([import('@mastra/core'), import('@mastra/core/workflows'), import('@mastra/pg')]).then(() => console.log('Playbook engine dependencies loaded'))"
+
       - name: Download build output
         uses: actions/download-artifact@v4
         with:

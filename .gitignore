@@ -13,6 +13,7 @@ apryse-modules/
 # Environment variables
 .env
 .env.local
+.aipilot-pg-password
 
 # Local deployed-smoke E2E config (E2E_BASE_URL + SSO creds) — never commit.
 # Copy from the committed .env.e2e.example / .env.e2e.prod.example templates.
