@@ -71,6 +71,7 @@ import {
   buildCloudAgentPrompt,
   cancelCloudAgentRun,
   CloudAgentConflictError,
+  cloudAgentPreIdentityTimeoutAt,
   evaluateCloudAgentEligibility,
   getCloudAgentActivityStream,
   getCloudAgentRunStatus,
@@ -87,6 +88,16 @@ const eligibleItem = {
   state: 'Committed',
   tags: 'apex; wave-1',
 };
+
+describe('cloudAgentPreIdentityTimeoutAt', () => {
+  it('gives each later claimed run its own two-minute launch window', () => {
+    const now = Date.parse('2026-10-05T13:00:00.000Z');
+
+    expect(cloudAgentPreIdentityTimeoutAt(0, now)).toBe('2026-10-05T13:02:00.000Z');
+    expect(cloudAgentPreIdentityTimeoutAt(1, now)).toBe('2026-10-05T13:04:00.000Z');
+    expect(cloudAgentPreIdentityTimeoutAt(2, now)).toBe('2026-10-05T13:06:00.000Z');
+  });
+});
 
 describe('evaluateCloudAgentEligibility (VT-01 / VT-02 / VT-05 / VT-11)', () => {
   it('allows an APEX Feature when flag, skill settings, and uniqueness are satisfied', () => {

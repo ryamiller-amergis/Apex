@@ -79,6 +79,17 @@ import {
 } from './cloudAgentQueue';
 
 export const CLOUD_AGENT_PRE_IDENTITY_TTL_MS = 2 * 60_000;
+
+/**
+ * Deadline for a claimed run that still has `position` launches ahead of it.
+ * Position 0 is the run whose container start is about to begin. Later runs
+ * get their own two-minute window so one slow start does not expire them
+ * while they are waiting.
+ */
+export function cloudAgentPreIdentityTimeoutAt(position: number, nowMs = Date.now()): string {
+  const place = Number.isInteger(position) && position >= 0 ? position : 0;
+  return new Date(nowMs + (place + 1) * CLOUD_AGENT_PRE_IDENTITY_TTL_MS).toISOString();
+}
 const CLOUD_AGENT_DISPATCH_LOCK = 'cloud-agent-dispatch';
 const pendingCloudAgentUserTokens = new Map<string, string>();
 let cloudAgentQueuePumpRunning = false;
@@ -620,15 +631,15 @@ async function claimCloudAgentRunIds(cap: number): Promise<string[]> {
       .orderBy(asc(agentRuns.queuedAt), asc(agentRuns.id))
       .limit(slots);
 
-    const nowIso = new Date().toISOString();
-    const claimUntil = new Date(Date.now() + CLOUD_AGENT_PRE_IDENTITY_TTL_MS).toISOString();
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
     const ids: string[] = [];
-    for (const candidate of waiting) {
+    for (const [index, candidate] of waiting.entries()) {
       const updated = await tx
         .update(agentRuns)
         .set({
           ownerInstance: instance,
-          timeoutAt: claimUntil,
+          timeoutAt: cloudAgentPreIdentityTimeoutAt(index, nowMs),
           updatedAt: nowIso,
         })
         .where(and(
@@ -847,6 +858,24 @@ export async function reconcileRunningCloudAgentRuns(
   }
 }
 
+async function extendCloudAgentLaunchTimeouts(runIds: string[]): Promise<void> {
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  for (let index = 0; index < runIds.length; index += 1) {
+    await db
+      .update(agentRuns)
+      .set({
+        timeoutAt: cloudAgentPreIdentityTimeoutAt(index, nowMs),
+        updatedAt: nowIso,
+      })
+      .where(and(
+        eq(agentRuns.id, runIds[index]),
+        eq(agentRuns.status, 'queued'),
+        sql`${agentRuns.cloudAgentIdentity} IS NULL`,
+      ));
+  }
+}
+
 /** Starts queued cloud-agent runs until the container cap is full. */
 export async function pumpCloudAgentQueue(
   deps: CloudAgentServiceDeps = defaultDeps,
@@ -855,8 +884,12 @@ export async function pumpCloudAgentQueue(
   cloudAgentQueuePumpRunning = true;
   try {
     const claimed = await claimCloudAgentRunIds(resolveCloudAgentMaxConcurrent());
-    for (const runId of claimed) {
-      await launchClaimedCloudAgentRun(runId, deps);
+    for (let index = 0; index < claimed.length; index += 1) {
+      // A slow start must not leave the runs behind it on the deadline from
+      // when the batch was claimed. Push those deadlines out before the next
+      // container start, and give the run that is starting a fresh window.
+      await extendCloudAgentLaunchTimeouts(claimed.slice(index));
+      await launchClaimedCloudAgentRun(claimed[index], deps);
     }
   } catch (err) {
     console.error('[cloud-agent] queue dispatch failed', err instanceof Error ? err.message : err);
