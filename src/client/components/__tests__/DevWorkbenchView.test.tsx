@@ -370,6 +370,7 @@ describe('DevWorkbenchView', () => {
   });
 
   it('filters assigned work items by title, id, state, and cloud run', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
     (useAssignedWorkItems as jest.Mock).mockReturnValue({
       data: [
         ...workItems,
@@ -465,6 +466,12 @@ describe('DevWorkbenchView', () => {
     renderView();
     expect(screen.queryByRole('button', { name: /^Start cloud agent$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Start Development$/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('my-work-ado-cloud-filters')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cloud agent')).not.toBeInTheDocument();
+    expect(screen.getByTestId('my-work-ado-status-filter-in_pr')).toHaveAttribute(
+      'title',
+      'State is In Pull Request',
+    );
     expect(screen.getAllByRole('button', { name: /^Start Local Development$/i })).toHaveLength(2);
   });
 

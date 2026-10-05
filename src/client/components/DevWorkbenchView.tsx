@@ -1154,7 +1154,7 @@ export const ADO_STATUS_FILTERS: { id: AdoStatusFilter; label: string; title: st
   { id: 'all', label: 'All', title: 'Show every assigned work item' },
   { id: 'new', label: 'New', title: 'State is New' },
   { id: 'in_progress', label: 'In Progress', title: 'State is In Progress or Active' },
-  { id: 'in_pr', label: 'In PR', title: 'In Pull Request, or a cloud run with an open pull request' },
+  { id: 'in_pr', label: 'In PR', title: 'State is In Pull Request' },
 ];
 
 export const ADO_CLOUD_FILTERS: { id: AdoCloudFilter; label: string; title: string }[] = [
@@ -1640,6 +1640,7 @@ const ApexBacklogView: React.FC<{
 
 export const DevWorkbenchView: React.FC = () => {
   const { selectedProject, usesBoardWorkItems } = useAppShell();
+  const cloudAgentEnabled = useFeatureFlag(MY_WORK_CLOUD_AGENT_FLAG, selectedProject);
   const usesAppNativeRequirements = isAppNativeRequirementsProject(selectedProject);
   const showBoardAssigned = usesBoardWorkItems;
 
@@ -1681,11 +1682,18 @@ export const DevWorkbenchView: React.FC = () => {
     });
     return filterAssignedWorkItems(stableWorkItems, {
       status: adoStatusFilter,
-      cloud: adoCloudFilter,
+      cloud: cloudAgentEnabled ? adoCloudFilter : 'all',
       search: adoSearch,
-      cloudRunByWorkItemId,
+      cloudRunByWorkItemId: cloudAgentEnabled ? cloudRunByWorkItemId : undefined,
     });
-  }, [stableWorkItems, adoStatusFilter, adoCloudFilter, adoSearch, cloudSessionByWorkItem]);
+  }, [
+    stableWorkItems,
+    adoStatusFilter,
+    adoCloudFilter,
+    adoSearch,
+    cloudSessionByWorkItem,
+    cloudAgentEnabled,
+  ]);
 
   useEffect(() => {
     setAdoStatusFilter('all');
@@ -1694,7 +1702,9 @@ export const DevWorkbenchView: React.FC = () => {
   }, [selectedProject]);
 
   const adoFiltersActive =
-    adoStatusFilter !== 'all' || adoCloudFilter !== 'all' || adoSearch.trim() !== '';
+    adoStatusFilter !== 'all'
+    || (cloudAgentEnabled && adoCloudFilter !== 'all')
+    || adoSearch.trim() !== '';
 
   const clearAdoFilters = () => {
     setAdoStatusFilter('all');
@@ -1768,7 +1778,11 @@ export const DevWorkbenchView: React.FC = () => {
                     type="button"
                     className={`${styles['filter-pill']}${adoStatusFilter === id ? ` ${styles['filter-pill-active']}` : ''}`}
                     aria-pressed={adoStatusFilter === id}
-                    title={title}
+                    title={
+                      id === 'in_pr' && cloudAgentEnabled
+                        ? 'In Pull Request, or a cloud run with an open pull request'
+                        : title
+                    }
                     onClick={() => setAdoStatusFilter(id)}
                     {...{ 'data-testid': `my-work-ado-status-filter-${id}` }}
                   >
@@ -1776,28 +1790,42 @@ export const DevWorkbenchView: React.FC = () => {
                   </button>
                 ))}
               </div>
-              <span className={styles['filter-divider']} aria-hidden="true" />
-              <div
-                className={styles['filter-group']}
-                role="group"
-                aria-label="Filter by cloud agent run"
-                {...{ 'data-testid': 'my-work-ado-cloud-filters' }}
-              >
-                <span className={styles['filter-group-label']}>Cloud agent</span>
-                {ADO_CLOUD_FILTERS.map(({ id, label, title }) => (
-                  <button
-                    key={id}
-                    type="button"
-                    className={`${styles['filter-pill']}${adoCloudFilter === id ? ` ${styles['filter-pill-active']}` : ''}`}
-                    aria-pressed={adoCloudFilter === id}
-                    title={title}
-                    onClick={() => setAdoCloudFilter(id)}
-                    {...{ 'data-testid': `my-work-ado-cloud-filter-${id}` }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+              {
+                // @feature-flag:my-work-cloud-agent start winner=enabled
+                cloudAgentEnabled ? (
+                  // @feature-flag:my-work-cloud-agent enabled-start
+                  <>
+                    <span className={styles['filter-divider']} aria-hidden="true" />
+                    <div
+                      className={styles['filter-group']}
+                      role="group"
+                      aria-label="Filter by cloud agent run"
+                      {...{ 'data-testid': 'my-work-ado-cloud-filters' }}
+                    >
+                      <span className={styles['filter-group-label']}>Cloud agent</span>
+                      {ADO_CLOUD_FILTERS.map(({ id, label, title }) => (
+                        <button
+                          key={id}
+                          type="button"
+                          className={`${styles['filter-pill']}${adoCloudFilter === id ? ` ${styles['filter-pill-active']}` : ''}`}
+                          aria-pressed={adoCloudFilter === id}
+                          title={title}
+                          onClick={() => setAdoCloudFilter(id)}
+                          {...{ 'data-testid': `my-work-ado-cloud-filter-${id}` }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                  // @feature-flag:my-work-cloud-agent enabled-end
+                ) : (
+                  // @feature-flag:my-work-cloud-agent disabled-start
+                  null
+                  // @feature-flag:my-work-cloud-agent disabled-end
+                )
+                // @feature-flag:my-work-cloud-agent end
+              }
               {adoFiltersActive ? (
                 <button
                   type="button"
