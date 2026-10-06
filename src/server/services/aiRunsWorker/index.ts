@@ -12,6 +12,7 @@ export {
 export {
   AI_RUNS_DEFAULT_HEARTBEAT_MS,
   createAiRunsWorker,
+  localizeExecutionSnapshot,
   resolveAiRunsHeartbeatMs,
   type AiRunsWorker,
   type AiRunsWorkerDependencies,

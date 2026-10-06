@@ -5,9 +5,14 @@ const { existsSync, readFileSync } = fs;
 import { BedrockRuntimeClient, InvokeModelWithResponseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
 import { retryWithBackoff } from '../utils/retry';
 import { getDesignSystemCatalog, getScreenInventory } from './designSystemService';
+import { NEW_PRODUCT_PROTOTYPE_MARKER } from '../../shared/types/productBuild';
 import { getMaxviewColorTokens, getApexColorTokens } from './designTokensService';
 import { getFigmaReference } from './figmaReferenceService';
 import { recordAiUsage, computeCost } from './aiUsageService';
+import {
+  renderNewProductTheme,
+  selectNewProductTheme,
+} from './newProductThemeService';
 
 /**
  * Cross-region inference profiles (us.anthropic.* model IDs) must be invoked
@@ -62,6 +67,33 @@ function apexProjectName(): string {
 function isApexProject(project?: string): boolean {
   if (!project) return false;
   return project.trim().toLowerCase() === apexProjectName().toLowerCase();
+}
+
+export type UiLabGrounding = 'existing-app' | 'new-product';
+
+/** A product-build prototype must not inherit MaxView or Apex visuals. */
+export function isNewProductPrototypePrompt(text?: string | null): boolean {
+  return typeof text === 'string' && text.includes(NEW_PRODUCT_PROTOTYPE_MARKER);
+}
+
+export function newProductNameFromPrompt(text?: string | null): string {
+  if (!text) return 'this application';
+  const match = text.match(/This prototype is a new application named "([^"]+)"/);
+  const name = match?.[1]?.trim();
+  return name || 'this application';
+}
+
+export function resolveUiLabGrounding(
+  text: string | null | undefined,
+  project?: string,
+): { grounding: UiLabGrounding; designSystemName: string } {
+  if (isNewProductPrototypePrompt(text)) {
+    return { grounding: 'new-product', designSystemName: newProductNameFromPrompt(text) };
+  }
+  return {
+    grounding: 'existing-app',
+    designSystemName: isApexProject(project) ? 'APEX' : 'MaxView',
+  };
 }
 
 function loadApexComponentIndex(): string {
@@ -136,6 +168,21 @@ async function buildContextSection(
   skillBranch?: string | null,
   skillProvider?: 'ado' | 'github' | null,
 ): Promise<string> {
+  if (isNewProductPrototypePrompt(featureText)) {
+    const name = newProductNameFromPrompt(featureText);
+    const theme = selectNewProductTheme(featureText ?? '');
+    return [
+      '## New application',
+      '',
+      `Design ${name} as its own product. It has no existing screens, navigation, or brand to extend.`,
+      'Use only the screens, people, and visual direction in the task below.',
+      'Start from the suggested theme below, then tailor it to the product’s workflow and visual direction.',
+      'Do not reproduce another product.',
+      '',
+      renderNewProductTheme(theme),
+    ].join('\n');
+  }
+
   const parts: string[] = [];
   const forApex = isApexProject(project);
 
@@ -259,17 +306,37 @@ function buildGenerationPrompt(
   targetRoute?: string | null,
   figmaBase64?: string,
   designSystemName?: string,
+  grounding: UiLabGrounding = 'existing-app',
 ): string {
   const dsName = designSystemName ?? 'MaxView';
-  const routeClause = targetRoute
+  const routeClause = grounding === 'new-product'
+    ? 'This is a new application. Design the screens described in the task, and no screens from another product.'
+    : targetRoute
     ? `The UI should be designed for the route: \`${targetRoute}\`. Study the existing page context from the design system catalog and match the surrounding layout/navigation shell.`
     : 'This is a standalone new UI — design an appropriate layout and navigation shell.';
 
-  const fontInstruction = dsName === 'APEX'
-    ? '- Use the system font stack defined by the APEX design system (no external font import required).'
+  const fontInstruction = grounding === 'new-product' || dsName === 'APEX'
+    ? '- Use the system font stack. Do not import a brand font.'
     : '- Use Roboto font: add `<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">` in <head>.';
 
-  return `You are an expert UI/UX designer and front-end engineer specializing in the ${dsName} design system. Generate a complete, self-contained, interactive HTML prototype that exactly follows the ${dsName} design system tokens, spacing, typography, and component usage rules defined below.
+  const fidelity = grounding === 'new-product'
+    ? `### 1. A new application
+- Design ${dsName} only. Do not copy another product's name, logo, navigation, or pages.
+- Start with the suggested theme tokens, then tailor the layout and emphasis to the task's visual direction.
+- Reuse the supplied colors consistently; add no competing brand palette.
+- Use the system font stack. Do not import a brand font.
+- Show only the screens named in the task. A simple top bar with the application name is enough.`
+    : `### 1. Design system fidelity
+- Use ONLY color values from the ${dsName} Color Tokens above — no invented hex values.
+- Use ONLY the spacing scale (multiples of 4px, base 8px grid).
+${fontInstruction}
+- Follow the component usage rules exactly (button variants, form patterns, elevation).`;
+
+  const intro = grounding === 'new-product'
+    ? `You are designing the first screens of a new application named ${dsName}. There is no existing product to match. Generate a complete, self-contained, interactive HTML prototype for this application alone.`
+    : `You are an expert UI/UX designer and front-end engineer specializing in the ${dsName} design system. Generate a complete, self-contained, interactive HTML prototype that exactly follows the ${dsName} design system tokens, spacing, typography, and component usage rules defined below.`;
+
+  return `${intro}
 
 ${contextSection}
 
@@ -285,11 +352,7 @@ ${routeClause}
 
 ## Critical output requirements
 
-### 1. Design system fidelity
-- Use ONLY color values from the ${dsName} Color Tokens above — no invented hex values.
-- Use ONLY the spacing scale (multiples of 4px, base 8px grid).
-${fontInstruction}
-- Follow the component usage rules exactly (button variants, form patterns, elevation).
+${fidelity}
 
 ### 2. Four required UI states
 Include all four states with these exact HTML comment markers:
@@ -344,6 +407,7 @@ function buildEditPrompt(
   selectedHtml?: string | null,
   contextSection?: string,
   designSystemName?: string,
+  grounding: UiLabGrounding = 'existing-app',
 ): string {
   const dsName = designSystemName ?? 'MaxView';
   const scopeClause = selectedSelector && selectedHtml
@@ -356,7 +420,11 @@ Only change this element and its children unless the instruction explicitly requ
 
   const ctx = contextSection ? `${contextSection}\n\n---\n\n` : '';
 
-  return `You are an expert UI/UX designer and front-end engineer specializing in the ${dsName} design system. Edit the provided HTML prototype according to the instruction below.
+  const intro = grounding === 'new-product'
+    ? `You are editing the prototype of a new application named ${dsName}. Keep it specific to this application. Do not restyle it as another product.`
+    : `You are an expert UI/UX designer and front-end engineer specializing in the ${dsName} design system. Edit the provided HTML prototype according to the instruction below.`;
+
+  return `${intro}
 
 ${ctx}## Instruction
 
@@ -376,7 +444,7 @@ ${currentHtml}
 
 ## Rules
 - Output the COMPLETE updated HTML — never omit any part.
-- Maintain design system fidelity: ${dsName} colors, spacing, typography.
+- ${grounding === 'new-product' ? `Keep the visual direction of ${dsName}. Do not switch it to another product's shell.` : `Maintain design system fidelity: ${dsName} colors, spacing, typography.`}
 - Keep all four \`<!-- STATE:*:START/END -->\` comment markers intact.
 - Do NOT add external scripts or API calls.
 - Do NOT change unrelated parts of the UI.
@@ -570,18 +638,19 @@ export async function generateUiLabDesign(opts: UiLabGenerateOptions): Promise<s
   const maxTokens = opts.maxTokens ?? DEFAULT_UI_LAB_MAX_TOKENS;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_UI_LAB_TIMEOUT_MS;
 
+  const { grounding, designSystemName } = resolveUiLabGrounding(opts.prompt, opts.project);
   let figmaBase64: string | undefined;
-  try {
-    const figmaRef = getFigmaReference();
-    figmaBase64 = figmaRef.tablePageBase64 ?? undefined;
-  } catch {
-    // non-fatal
+  if (grounding !== 'new-product') {
+    try {
+      const figmaRef = getFigmaReference();
+      figmaBase64 = figmaRef.tablePageBase64 ?? undefined;
+    } catch {
+      // non-fatal
+    }
   }
 
-  const forApex = isApexProject(opts.project);
-  const dsName  = forApex ? 'APEX' : 'MaxView';
   const contextSection = await buildContextSection(opts.targetRoute, opts.prompt, opts.project, opts.uiLabSkillPath, opts.skillRepo, opts.skillBranch, opts.skillProvider);
-  const prompt = buildGenerationPrompt(opts.prompt, contextSection, opts.targetRoute, figmaBase64, dsName);
+  const prompt = buildGenerationPrompt(opts.prompt, contextSection, opts.targetRoute, figmaBase64, designSystemName, grounding);
 
   return invokeStreaming(
     prompt,
@@ -601,8 +670,7 @@ export async function editUiLabDesign(opts: UiLabEditOptions): Promise<string> {
   const maxTokens = opts.maxTokens ?? DEFAULT_UI_LAB_MAX_TOKENS;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_UI_LAB_TIMEOUT_MS;
 
-  const forApex = isApexProject(opts.project);
-  const dsName  = forApex ? 'APEX' : 'MaxView';
+  const { grounding, designSystemName } = resolveUiLabGrounding(opts.featureText ?? opts.instruction, opts.project);
   const contextSection = await buildContextSection(
     opts.targetRoute,
     opts.featureText ?? undefined,
@@ -618,7 +686,8 @@ export async function editUiLabDesign(opts: UiLabEditOptions): Promise<string> {
     opts.selectedSelector,
     opts.selectedHtml,
     contextSection,
-    dsName,
+    designSystemName,
+    grounding,
   );
 
   return invokeStreaming(prompt, modelId, maxTokens, timeoutMs, opts.temperature, opts.onToken, undefined, opts.project, opts.userId);

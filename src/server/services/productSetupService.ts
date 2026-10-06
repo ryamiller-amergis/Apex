@@ -4,17 +4,27 @@ import { rfpRequests } from '../db/schema';
 import { RFP_APPS_ADO_PROJECT } from '../../shared/types/rfpIntake';
 import { AzureDevOpsService } from './azureDevOps';
 import { PRODUCT_FOUNDATION_SKILL_PATH, SETUP_CHAT_MODEL } from './newProjectSkillSeedService';
+import { getProductBuildSetup, type ProductBuildSetupStatus } from './productBuildService';
 import { listSkillConfigsForProject } from './projectSettingsService';
 import { listProjectTeammateCandidates } from './projectTeammateService';
 import { getUserProjectRoles } from './rbacService';
 
-export interface ProductSetupStatus {
+export interface ProductSetupFoundationStatus {
   active: boolean;
+  phase: 'foundation';
   skillPath: string;
   model: string;
   candidates: { userId: string; displayName: string; email: string }[];
+  /** Adding teammates needs `admin:roles`; the approved requester may not have it. */
+  canInviteTeammates: boolean;
   foundationAnswers: string[];
+  build: null;
+  chatThreadId: null;
+  thread: null;
+  design: null;
 }
+
+export type ProductSetupStatus = ProductSetupFoundationStatus | ProductBuildSetupStatus;
 
 export class ProductFoundationError extends Error {
   constructor(message: string, readonly status: number, readonly code: string) {
@@ -23,13 +33,41 @@ export class ProductFoundationError extends Error {
   }
 }
 
-function inactive(): ProductSetupStatus {
+function inactive(): ProductSetupFoundationStatus {
   return {
     active: false,
+    phase: 'foundation',
     skillPath: PRODUCT_FOUNDATION_SKILL_PATH,
     model: SETUP_CHAT_MODEL,
     candidates: [],
+    canInviteTeammates: false,
     foundationAnswers: [],
+    build: null,
+    chatThreadId: null,
+    thread: null,
+    design: null,
+  };
+}
+
+async function foundationStatus(
+  project: string,
+  row: typeof rfpRequests.$inferSelect,
+  isAdmin: boolean,
+): Promise<ProductSetupFoundationStatus> {
+  const configs = await listSkillConfigsForProject(project);
+  const pill = configs[0]?.quickSkillPills?.find((item) => item.skillPath.includes('product-foundation'));
+  return {
+    active: true,
+    phase: 'foundation',
+    skillPath: pill?.skillPath ?? PRODUCT_FOUNDATION_SKILL_PATH,
+    model: SETUP_CHAT_MODEL,
+    candidates: isAdmin ? await listProjectTeammateCandidates(project) : [],
+    canInviteTeammates: isAdmin,
+    foundationAnswers: foundationAnswersFromIntake(row),
+    build: null,
+    chatThreadId: null,
+    thread: null,
+    design: null,
   };
 }
 
@@ -51,7 +89,7 @@ function foundationAnswersFromIntake(row: typeof rfpRequests.$inferSelect): stri
 
 export async function getProductSetup(project: string, userId: string): Promise<ProductSetupStatus> {
   const roles = await getUserProjectRoles(userId, project);
-  if (!roles.includes('admin')) return inactive();
+  const isAdmin = roles.includes('admin');
 
   const row = await db.query.rfpRequests.findFirst({
     where: and(
@@ -61,38 +99,27 @@ export async function getProductSetup(project: string, userId: string): Promise<
     ),
   });
   if (!row?.approvedRepoName) return inactive();
+  if (!isAdmin && row.ownerId !== userId) return inactive();
 
+  let productFile: string | null;
   try {
-    const productFile = await new AzureDevOpsService(RFP_APPS_ADO_PROJECT).getRepositoryFile(
+    productFile = await new AzureDevOpsService(RFP_APPS_ADO_PROJECT).getRepositoryFile(
       RFP_APPS_ADO_PROJECT,
       row.approvedRepoName,
       'PRODUCT.md',
     );
-    if (productFile !== null) return inactive();
   } catch {
-    // A failed lookup does not prove the file exists, so the guide stays up.
+    // A failed lookup does not prove the file exists, so the foundation guide stays up.
+    return foundationStatus(project, row, isAdmin);
   }
 
-  const configs = await listSkillConfigsForProject(project);
-  const pill = configs[0]?.quickSkillPills?.find((item) => item.skillPath.includes('product-foundation'));
-  return {
-    active: true,
-    skillPath: pill?.skillPath ?? PRODUCT_FOUNDATION_SKILL_PATH,
-    // Product setup is a short, fixed interview. Keep it on the fast model
-    // even when the project's general chat default is Auto or a slower model.
-    model: SETUP_CHAT_MODEL,
-    candidates: await listProjectTeammateCandidates(project),
-    foundationAnswers: foundationAnswersFromIntake(row),
-  };
+  if (productFile === null) return foundationStatus(project, row, isAdmin);
+
+  return getProductBuildSetup(project, userId);
 }
 
 /** The approved repo for a project whose PRODUCT.md has not been written yet. */
 export async function requireOpenProductSetup(project: string, userId: string): Promise<{ repoName: string }> {
-  const roles = await getUserProjectRoles(userId, project);
-  if (!roles.includes('admin')) {
-    throw new ProductFoundationError('Only a project admin can set up this product.', 403, 'FORBIDDEN');
-  }
-
   const row = await db.query.rfpRequests.findFirst({
     where: and(
       eq(rfpRequests.apexProject, project),
@@ -102,6 +129,17 @@ export async function requireOpenProductSetup(project: string, userId: string): 
   });
   if (!row?.approvedRepoName) {
     throw new ProductFoundationError('This project is not waiting on a product foundation.', 404, 'SETUP_INACTIVE');
+  }
+
+  if (row.ownerId !== userId) {
+    const roles = await getUserProjectRoles(userId, project);
+    if (!roles.includes('admin')) {
+      throw new ProductFoundationError(
+        'Only the approved requester or a project admin can set up this product.',
+        403,
+        'FORBIDDEN',
+      );
+    }
   }
 
   let existing: string | null;

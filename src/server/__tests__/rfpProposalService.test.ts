@@ -104,6 +104,8 @@ jest.mock('../services/projectSettingsService', () => ({
 jest.mock('../services/newProjectSkillSeedService', () => ({
   seedNewProjectSkills: jest.fn().mockResolvedValue(undefined),
   PRODUCT_FOUNDATION_SKILL_PATH: '.agents/skills/product-foundation/SKILL.md',
+  PRODUCT_DISCOVERY_SKILL_PATH: '.agents/skills/product-discovery/SKILL.md',
+  PRODUCT_IMPLEMENTATION_SKILL_PATH: '.agents/skills/product-implementation/SKILL.md',
   SETUP_CHAT_MODEL: 'auto-smart',
 }));
 
@@ -768,11 +770,17 @@ describe('approveProposal', () => {
       isDefault: true,
       updatedBy: 'owner-1',
       defaultModel: 'auto-smart',
+      developmentSkillPath: '.agents/skills/product-implementation/SKILL.md',
       quickSkillPills: [{
+        label: 'Product discovery',
+        skillPath: '.agents/skills/product-discovery/SKILL.md',
+        model: 'auto-smart',
+        description: 'Choose the smallest build that fits one pull request, then confirm it for a prototype.',
+      }, {
         label: 'Product foundation',
         skillPath: '.agents/skills/product-foundation/SKILL.md',
         model: 'auto-smart',
-        description: 'Who the product is for, what the first release includes, and how you would know it worked.',
+        description: 'Keep PRODUCT.md as the product north star. It is broader than one build.',
       }],
     });
   });

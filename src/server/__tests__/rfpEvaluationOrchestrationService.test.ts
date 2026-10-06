@@ -16,6 +16,16 @@ jest.mock('../services/chatAgentService', () => ({
   isThreadIdle: jest.fn(),
   hydrateThread: jest.fn(),
   createThread: jest.fn(),
+  prepareBackgroundWorkflowTurn: jest.fn(),
+  sendMessage: jest.fn(),
+}));
+
+jest.mock('../services/backgroundWorkflowRouter', () => ({
+  routeBackgroundWorkflow: jest.fn(),
+}));
+
+jest.mock('../services/agentRunReaperService', () => ({
+  isThreadRunAlive: jest.fn(),
 }));
 
 jest.mock('../services/projectSettingsService', () => ({
@@ -35,7 +45,14 @@ jest.mock('../services/rfpIntakeService', () => ({
 }));
 
 import { db } from '../db/drizzle';
-import { createThread, hydrateThread, isThreadIdle } from '../services/chatAgentService';
+import {
+  createThread,
+  hydrateThread,
+  isThreadIdle,
+  prepareBackgroundWorkflowTurn,
+} from '../services/chatAgentService';
+import { routeBackgroundWorkflow } from '../services/backgroundWorkflowRouter';
+import { isThreadRunAlive } from '../services/agentRunReaperService';
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import {
@@ -55,6 +72,12 @@ import type { ProductIntakeEvaluationOutput, RfpRequest } from '../../shared/typ
 
 const mockedDb = db as any;
 const mockedCreateThread = createThread as jest.MockedFunction<typeof createThread>;
+const mockedPrepareTurn =
+  prepareBackgroundWorkflowTurn as jest.MockedFunction<typeof prepareBackgroundWorkflowTurn>;
+const mockedRouteBackground =
+  routeBackgroundWorkflow as jest.MockedFunction<typeof routeBackgroundWorkflow>;
+const mockedThreadRunAlive =
+  isThreadRunAlive as jest.MockedFunction<typeof isThreadRunAlive>;
 const mockedHydrateThread = hydrateThread as jest.MockedFunction<typeof hydrateThread>;
 const mockedIsThreadIdle = isThreadIdle as jest.MockedFunction<typeof isThreadIdle>;
 const mockedResolveSkillConfig = resolveSkillConfig as jest.MockedFunction<typeof resolveSkillConfig>;
@@ -160,6 +183,25 @@ beforeEach(() => {
     createdAt: '2026-08-19T12:00:00.000Z',
   });
   mockedSetThread.mockResolvedValue(undefined);
+  mockedThreadRunAlive.mockResolvedValue(false);
+  mockedPrepareTurn.mockResolvedValue({
+    prompt: 'prepared prompt',
+    model: 'claude-sonnet-4',
+    skillPath: FAKE_SKILL_CONFIG.productIntakeEvaluationSkillPath,
+    projectId: 'Apex',
+    threadWorkspacePath: '/tmp/ws/thread-1',
+    repository: {
+      provider: 'github',
+      project: 'Apex',
+      repo: 'org/repo',
+      branch: 'main',
+    },
+  });
+  mockedRouteBackground.mockResolvedValue({
+    route: 'worker',
+    workspacePath: '/tmp/ws/thread-1',
+    runId: 'thread-1',
+  });
 });
 
 afterEach(() => {
@@ -175,14 +217,23 @@ describe('autoStartEvaluation TBI-002', () => {
 
     await autoStartEvaluation('rfp-1');
 
-    expect(mockedCreateThread).toHaveBeenCalledWith('system', expect.objectContaining({
-      project: 'Apex',
-      skillPath: FAKE_SKILL_CONFIG.productIntakeEvaluationSkillPath,
-      model: 'claude-sonnet-4',
-      freeformContext: expect.stringContaining('Track RFPs in Apex'),
-    }));
+    expect(mockedCreateThread).toHaveBeenCalledWith(
+      'system',
+      expect.objectContaining({
+        project: 'Apex',
+        skillPath: FAKE_SKILL_CONFIG.productIntakeEvaluationSkillPath,
+        model: 'claude-sonnet-4',
+        freeformContext: expect.stringContaining('Track RFPs in Apex'),
+      }),
+      { skipAutoKickoff: true },
+    );
     expect(mockedSetThread).toHaveBeenCalledWith('rfp-1', 'thread-1');
     expect(isWatcherActive('rfp-1')).toBe(true);
+    expect(mockedRouteBackground).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'owner-1',
+      workflowClass: 'product-intake-evaluation',
+      threadId: 'thread-1',
+    }));
   });
 
   it('FF-4 includes expected users and AI intent in the intake JSON', async () => {
@@ -214,9 +265,13 @@ describe('autoStartEvaluation TBI-002', () => {
 
     await autoStartEvaluation('rfp-1');
 
-    expect(mockedCreateThread).toHaveBeenCalledWith('system', expect.objectContaining({
-      freeformContext: expect.stringContaining('Replace unused Cornerstone'),
-    }));
+    expect(mockedCreateThread).toHaveBeenCalledWith(
+      'system',
+      expect.objectContaining({
+        freeformContext: expect.stringContaining('Replace unused Cornerstone'),
+      }),
+      { skipAutoKickoff: true },
+    );
   });
 
   it('marks failed without a thread when productIntakeEvaluationSkillPath is missing', async () => {
@@ -272,6 +327,20 @@ describe('PBI-001 startWatcher', () => {
     await jest.advanceTimersByTimeAsync(5_000);
     expect(mockedMarkFailed).toHaveBeenCalledWith('rfp-1');
     expect(mockedPersist).not.toHaveBeenCalled();
+  });
+
+  it('keeps watching an idle thread while its background worker is alive', async () => {
+    mockedDb.query.chatThreads.findFirst.mockResolvedValue({ workspaceDir: '/tmp/ws/thread-1' });
+    mockFs.existsSync.mockReturnValue(false);
+    mockedIsThreadIdle.mockReturnValue(true);
+    mockedThreadRunAlive.mockResolvedValue(true);
+
+    startWatcher('rfp-1', 'thread-1');
+    await jest.advanceTimersByTimeAsync(5_000);
+    await jest.advanceTimersByTimeAsync(5_000);
+
+    expect(mockedMarkFailed).not.toHaveBeenCalled();
+    expect(isWatcherActive('rfp-1')).toBe(true);
   });
 
   it('VT-04 times out after the 10-minute watcher ceiling without creating a version', async () => {

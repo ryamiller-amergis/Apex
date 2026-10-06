@@ -29,6 +29,17 @@ describe('deriveFailingChecks (TBI-005 DoD-0; PBI-006 AC-a/AC-b; supports VT-03,
     ]);
   });
 
+  it('includes install, lint, typecheck, build, migration, and security failures in report order', () => {
+    expect(deriveFailingChecks([
+      failed('install'),
+      passed('lint'),
+      failed('typecheck'),
+      failed('build'),
+      passed('migrations'),
+      failed('security'),
+    ])).toEqual(['install', 'typecheck', 'build', 'security']);
+  });
+
   it('TBI-005 DoD-0 — returns an empty list for null or empty results rather than throwing', () => {
     expect(deriveFailingChecks(null)).toEqual([]);
     expect(deriveFailingChecks([])).toEqual([]);

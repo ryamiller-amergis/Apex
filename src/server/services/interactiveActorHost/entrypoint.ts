@@ -26,7 +26,10 @@ import {
 import '../telemetry';
 import { exitAfterFlush } from '../../utils/processExit';
 import { getAiRunnerCallbackToken } from '../aiRunsCallbackToken';
-import { createAiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
+import {
+  AiRunCallbackError,
+  createAiRunsCallbackClient,
+} from '../aiRunsWorker/callbackClient';
 import { openGroundedReader } from '../aiRunsWorker/workspace';
 import { interactiveLiveBus } from '../interactiveLiveBus';
 import type { RepoReader } from '../../../shared/types/repoReader';
@@ -289,10 +292,17 @@ export async function main(): Promise<void> {
       // restarting replica), no actor exists to write a terminal event. Resolve
       // the fenced bootstrap here and finish the run through the same durable
       // ingest path used by the actor so the client can retry immediately.
-      const bootstrap = await callback.getBootstrap({
-        runId: payload.runId,
-        dispatchMessageId: payload.dispatchMessageId,
-      });
+      let bootstrap: Awaited<ReturnType<typeof callback.getBootstrap>>;
+      try {
+        bootstrap = await callback.getBootstrap({
+          runId: payload.runId,
+          dispatchMessageId: payload.dispatchMessageId,
+        });
+      } catch (error) {
+        // 409 means the actor already wrote the run's terminal event.
+        if (error instanceof AiRunCallbackError && error.status === 409) return;
+        throw error;
+      }
       await callback.postIngest(bootstrap.projectId, payload.runId, {
         dispatchMessageId: payload.dispatchMessageId,
         kind: 'terminal',

@@ -39,7 +39,9 @@ import { createNotification } from './notificationService';
 import { listProjectCatalog } from './projectCatalogService';
 import { listSkillConfigsForProject, upsertSkillConfig } from './projectSettingsService';
 import {
+  PRODUCT_DISCOVERY_SKILL_PATH,
   PRODUCT_FOUNDATION_SKILL_PATH,
+  PRODUCT_IMPLEMENTATION_SKILL_PATH,
   SETUP_CHAT_MODEL,
   seedNewProjectSkills,
 } from './newProjectSkillSeedService';
@@ -525,6 +527,9 @@ async function seedIntakeRepository(repoName: string): Promise<void> {
   const ado = new AzureDevOpsService(RFP_APPS_ADO_PROJECT);
   try {
     await seedNewProjectSkills({
+      // Foundation marks a repo as already seeded. A new repo has none of the
+      // pack, so the first push includes discovery, foundation, and implementation.
+      // A repo seeded before those skills existed stays on the foundation-only setup.
       alreadySeeded: async () => (
         await ado.getRepositoryFile(RFP_APPS_ADO_PROJECT, repoName, PRODUCT_FOUNDATION_SKILL_PATH)
       ) !== null,
@@ -578,11 +583,17 @@ export async function approveProposal(rfpId: string, ownerId: string): Promise<R
       isDefault: true,
       updatedBy: ownerId,
       defaultModel: SETUP_CHAT_MODEL,
+      developmentSkillPath: PRODUCT_IMPLEMENTATION_SKILL_PATH,
       quickSkillPills: [{
+        label: 'Product discovery',
+        skillPath: PRODUCT_DISCOVERY_SKILL_PATH,
+        model: SETUP_CHAT_MODEL,
+        description: 'Choose the smallest build that fits one pull request, then confirm it for a prototype.',
+      }, {
         label: 'Product foundation',
         skillPath: PRODUCT_FOUNDATION_SKILL_PATH,
         model: SETUP_CHAT_MODEL,
-        description: 'Who the product is for, what the first release includes, and how you would know it worked.',
+        description: 'Keep PRODUCT.md as the product north star. It is broader than one build.',
       }],
     });
   }

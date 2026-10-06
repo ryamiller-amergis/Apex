@@ -18,6 +18,34 @@ import { AiRunFenceConflictError } from './callbackClient';
 
 export const AI_RUNS_DEFAULT_HEARTBEAT_MS = 15_000;
 
+/**
+ * Rewrites frozen workspace paths when the worker runs in a container whose
+ * mount point differs from the API host. Unset in Azure, where both sides
+ * share `/home/data/ai-pilot/workspaces`.
+ */
+export function localizeExecutionSnapshot(
+  snapshot: Readonly<ExecutionSnapshot>,
+  env: NodeJS.ProcessEnv = process.env,
+): ExecutionSnapshot {
+  const from = env.AI_RUNS_WORKSPACE_PATH_FROM?.trim();
+  const to = env.AI_RUNS_WORKSPACE_PATH_TO?.trim();
+  if (!from || !to) return { ...snapshot };
+  const fromKey = from.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const toRoot = to.replace(/\\/g, '/').replace(/\/+$/, '');
+  const rewrite = (value: string): string => {
+    const normalized = value.replace(/\\/g, '/');
+    const key = normalized.replace(/\/+$/, '').toLowerCase();
+    if (key !== fromKey && !key.startsWith(`${fromKey}/`)) return value;
+    return `${toRoot}${normalized.slice(fromKey.length)}`;
+  };
+  return {
+    ...snapshot,
+    workspaceRef: rewrite(snapshot.workspaceRef),
+    ...(snapshot.checkoutRef ? { checkoutRef: rewrite(snapshot.checkoutRef) } : {}),
+    ...(snapshot.mirrorRef ? { mirrorRef: rewrite(snapshot.mirrorRef) } : {}),
+  };
+}
+
 export function resolveAiRunsHeartbeatMs(): number {
   const configured = Number(process.env.AI_RUNS_HEARTBEAT_INTERVAL_MS);
   return Number.isFinite(configured) && configured > 0
@@ -116,7 +144,9 @@ export function createAiRunsWorker(
       // Bootstrap precedes every project-scoped callback or workspace access.
       const bootstrap = await dependencies.getBootstrap(dispatch);
       const { projectId, run: bootstrapRun } = bootstrap;
-      const snapshot = Object.freeze({ ...bootstrapRun.executionSnapshot });
+      const snapshot = Object.freeze(
+        localizeExecutionSnapshot({ ...bootstrapRun.executionSnapshot }),
+      );
 
       if (
         bootstrapRun.dispatchMessageId !== dispatch.dispatchMessageId

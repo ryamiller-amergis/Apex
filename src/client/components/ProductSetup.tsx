@@ -35,6 +35,8 @@ export function splitFoundationReply(text: string): FoundationReply {
 
 interface ProductSetupProps {
   step: 'people' | 'chat';
+  /** When false, the viewer cannot add teammates, so only the foundation step is shown. */
+  canInviteTeammates?: boolean;
   candidates: ProductSetupCandidate[];
   adding: boolean;
   error: string | null;
@@ -266,6 +268,7 @@ const FoundationReviewStep: React.FC<FoundationReviewStepProps> = ({
 
 export const ProductSetup: React.FC<ProductSetupProps> = ({
   step,
+  canInviteTeammates = true,
   candidates,
   adding,
   error,
@@ -298,6 +301,10 @@ export const ProductSetup: React.FC<ProductSetupProps> = ({
   const [foundationAnswers, setFoundationAnswers] = useState<string[]>(
     initialAnswers,
   );
+
+  const visibleSteps = canInviteTeammates
+    ? STEPS
+    : STEPS.filter((item) => item.id === 'chat').map((item) => ({ ...item, number: '1' }));
 
   const toggle = (userId: string) => {
     setSelected((current) => (
@@ -374,12 +381,14 @@ export const ProductSetup: React.FC<ProductSetupProps> = ({
       <header className={styles.header}>
         <h1 className={styles.heading}>Product setup</h1>
         <p className={styles.subtitle}>
-          Two steps before your project opens: add your team, then review its foundation.
+          {canInviteTeammates
+            ? 'Two steps before your project opens: add your team, then review its foundation.'
+            : 'Review the product foundation before your project opens.'}
         </p>
       </header>
 
       <ol className={styles.stepper} aria-label="Product setup steps">
-        {STEPS.map((item) => (
+        {visibleSteps.map((item) => (
           <li key={item.id} className={styles.stepItem}>
             <button
               type="button"

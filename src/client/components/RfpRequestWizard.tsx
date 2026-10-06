@@ -22,7 +22,7 @@ import {
 } from '../../shared/types/rfpIntake';
 import { formatRfpStatusSubtitle } from '../../shared/utils/rfpEvaluationDisplay';
 import { useRfpRequestDetail } from '../hooks/useRfpIntake';
-import { useRfpTriageDetail, useSubmitRfpReview } from '../hooks/useRfpTriage';
+import { useRetryRfpEvaluation, useRfpTriageDetail, useSubmitRfpReview } from '../hooks/useRfpTriage';
 import { RfpArchitectureForm } from './RfpArchitectureForm';
 import { RfpClarificationForm } from './RfpClarificationForm';
 import { RfpEvaluationCard } from './RfpEvaluationCard';
@@ -140,6 +140,12 @@ const ArchitectureSummary: React.FC<{ architecture: RfpArchitecture | null }> = 
   );
 };
 
+function latestEvaluationFailureReason(detail: RfpRequestDetail): string | null {
+  const event = [...detail.activity].reverse().find((item) => item.eventType === 'evaluation-failed');
+  const reason = event?.payload?.reason;
+  return typeof reason === 'string' && reason.trim() !== '' ? reason.trim() : null;
+}
+
 export const RfpRequestWizard: React.FC<RfpRequestWizardProps> = ({ mode, requestId, canManage, onClose }) => {
   const isTriage = mode === 'triage';
   const requesterQuery = useRfpRequestDetail(requestId, !isTriage);
@@ -150,6 +156,7 @@ export const RfpRequestWizard: React.FC<RfpRequestWizardProps> = ({ mode, reques
   const [chosenStep, setChosenStep] = useState<RfpWizardStep | null>(null);
   const [reviewSaved, setReviewSaved] = useState(false);
   const submitReview = useSubmitRfpReview();
+  const retryEvaluation = useRetryRfpEvaluation();
   const unlocked = unlockedThrough(detail, manage);
   const preferred: RfpWizardStep = chosenStep ?? (detail ? rfpWizardInitialStep(detail) : 1);
   const step: RfpWizardStep = preferred > unlocked ? unlocked : preferred;
@@ -258,9 +265,28 @@ export const RfpRequestWizard: React.FC<RfpRequestWizardProps> = ({ mode, reques
             <>
               {isTriage && <RfpStatusControl detail={detail as RfpTriageDetail} canManage={canManage} />}
               {detail.aiStatus === 'failed' && (
-                <p className={`${landing.banner} ${landing.errorBanner}`} role="alert">
-                  Evaluation failed. Apex triage can retry. This request has no successful Evaluation yet.
-                </p>
+                <div className={`${landing.banner} ${landing.errorBanner}`} role="alert" {...{ 'data-testid': 'rfp-evaluation-failed' }}>
+                  <p>Evaluation failed. This request has no successful evaluation yet.</p>
+                  {latestEvaluationFailureReason(detail) && (
+                    <p {...{ 'data-testid': 'rfp-evaluation-failure-reason' }}>{latestEvaluationFailureReason(detail)}</p>
+                  )}
+                  {manage && (
+                    <button
+                      type="button"
+                      className={landing.secondaryButton}
+                      disabled={retryEvaluation.isPending}
+                      onClick={() => retryEvaluation.mutate({ id: detail.id })}
+                      {...{ 'data-testid': 'rfp-evaluation-retry' }}
+                    >
+                      {retryEvaluation.isPending ? 'Retrying…' : 'Retry evaluation'}
+                    </button>
+                  )}
+                  {retryEvaluation.isError && (
+                    <p {...{ 'data-testid': 'rfp-evaluation-retry-error' }}>
+                      {retryEvaluation.error?.message ?? 'The evaluation could not be restarted.'}
+                    </p>
+                  )}
+                </div>
               )}
               {detail.aiStatus === 'evaluating' && (
                 <p className={landing.subtitle} role="status" {...{ 'data-testid': 'rfp-evaluation-running' }}>

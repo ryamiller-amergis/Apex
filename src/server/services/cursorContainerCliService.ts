@@ -4,8 +4,18 @@ import { mkdtemp, rm, writeFile } from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
+import type { RunCheckKind, RunCheckResult } from '../../shared/types/agentRunLifecycle';
 import type { CloudAgentActivityEvent } from '../../shared/types/devWorkbench';
 import { uploadCursorPrompt } from './cursorPromptStore';
+import {
+  LOCAL_EXECUTION_PREFIX,
+  getLocalContainerLogs,
+  getLocalContainerStatus,
+  isLocalExecution,
+  startLocalCursorContainer,
+  stopLocalContainer,
+  useLocalCursorContainer,
+} from './localCursorContainerService';
 
 const execFileAsync = promisify(execFile);
 
@@ -47,6 +57,7 @@ export function resolveContainerObservation(input: {
   noChanges: boolean;
   agentExitCode: number | null;
   settled: boolean;
+  qualityGateFailed?: boolean;
 }): { status: string; resultText: string | null } {
   let status = mapContainerJobStatus(input.jobStatus);
   let resultText: string | null = null;
@@ -65,6 +76,10 @@ export function resolveContainerObservation(input: {
     resultText = input.prUrl
       ? `The Cursor CLI exited with code ${input.agentExitCode}. Its partial changes are in the pull request.`
       : `The Cursor CLI exited with code ${input.agentExitCode}.`;
+  }
+  if (input.qualityGateFailed && status !== 'cancelled') {
+    status = 'failed';
+    resultText = 'Required quality checks failed. No branch or pull request was created.';
   }
   return { status, resultText };
 }
@@ -94,12 +109,15 @@ export function parseContainerCliLogs(logs: string): {
   summary: string | null;
   agentExitCode: number | null;
   settled: boolean;
+  qualityGateFailed: boolean;
+  checkResults: RunCheckResult[] | null;
 } {
   const pr = logs.match(/APEX_PR_URL=(https:\/\/[^\s"\\]+\/pullrequest\/\d+)/);
   const branch = logs.match(/APEX_BRANCH_PUSHED=([^\s"\\]+)/);
   const base = logs.match(/APEX_BASE_BRANCH=([^\s"\\]+)/);
   const summary = logs.match(/APEX_SUMMARY=([^"\\]*)/);
   const exit = logs.match(/APEX_AGENT_EXIT=(\d+)/);
+  const checks = logs.match(/APEX_CHECK_RESULTS=([^\s"\\]+)/);
   return {
     prUrl: pr?.[1] ?? null,
     noChanges: logs.includes('APEX_RESULT no file changes'),
@@ -108,7 +126,37 @@ export function parseContainerCliLogs(logs: string): {
     summary: summary?.[1]?.trim() || null,
     agentExitCode: exit ? Number(exit[1]) : null,
     settled: logs.includes('APEX_RUN_SETTLED'),
+    qualityGateFailed: logs.includes('APEX_QUALITY_GATE_FAILED'),
+    checkResults: parseCheckResultsMarker(checks?.[1] ?? null),
   };
+}
+
+const CHECK_KINDS = new Set<RunCheckKind>([
+  'unit',
+  'e2e',
+  'wcag',
+  'install',
+  'lint',
+  'typecheck',
+  'build',
+  'migrations',
+  'security',
+]);
+
+/** Suite outcomes from `APEX_CHECK_RESULTS=kind=passed;kind=failed`. */
+export function parseCheckResultsMarker(raw: string | null | undefined): RunCheckResult[] | null {
+  if (!raw?.trim()) return null;
+  const results: RunCheckResult[] = [];
+  for (const part of raw.split(';')) {
+    const splitAt = part.indexOf('=');
+    if (splitAt <= 0) continue;
+    const kind = part.slice(0, splitAt);
+    const outcome = part.slice(splitAt + 1);
+    if (!CHECK_KINDS.has(kind as RunCheckKind)) continue;
+    if (outcome !== 'passed' && outcome !== 'failed') continue;
+    results.push({ kind: kind as RunCheckKind, outcome });
+  }
+  return results.length > 0 ? results : null;
 }
 
 const ACTIVITY_KINDS = new Set(['assistant', 'thinking', 'tool', 'status', 'task']);
@@ -189,6 +237,9 @@ export function buildContainerExecutionTemplate(
     authorEmail?: string;
     skillName?: string;
     adoUserToken?: string | null;
+    draftPullRequest?: boolean;
+    requiredReviewerId?: string;
+    enforceChecks?: boolean;
   },
 ): JobTemplate {
   const container = template.containers?.[0];
@@ -207,6 +258,9 @@ export function buildContainerExecutionTemplate(
     'AGENT_AUTHOR_EMAIL',
     'AGENT_SKILL',
     'ADO_USER_TOKEN',
+    'AGENT_DRAFT_PR',
+    'AGENT_REQUIRED_REVIEWER_ID',
+    'AGENT_ENFORCE_CHECKS',
   ]);
   const env = (container.env ?? []).filter((entry) => !entry.name || !replaced.has(entry.name));
   env.push(
@@ -228,6 +282,11 @@ export function buildContainerExecutionTemplate(
   if (authorEmail) env.push({ name: 'AGENT_AUTHOR_EMAIL', value: authorEmail });
   if (input.skillName) env.push({ name: 'AGENT_SKILL', value: input.skillName });
   if (input.adoUserToken) env.push({ name: 'ADO_USER_TOKEN', value: input.adoUserToken });
+  if (input.draftPullRequest) env.push({ name: 'AGENT_DRAFT_PR', value: '1' });
+  if (input.requiredReviewerId) {
+    env.push({ name: 'AGENT_REQUIRED_REVIEWER_ID', value: input.requiredReviewerId });
+  }
+  if (input.enforceChecks) env.push({ name: 'AGENT_ENFORCE_CHECKS', value: '1' });
   return {
     ...template,
     containers: [{
@@ -251,6 +310,7 @@ function branchNameFor(workItemId: number | undefined): string {
 }
 
 async function executionLogs(executionName: string, tail: string): Promise<string> {
+  if (isLocalExecution(executionName)) return getLocalContainerLogs(executionName, tail);
   const jobName = requireEnv('CURSOR_CONTAINER_JOB_NAME');
   const resourceGroup = requireEnv('CURSOR_CONTAINER_JOB_RESOURCE_GROUP');
   return az([
@@ -283,8 +343,12 @@ export async function launchCursorContainerCli(input: {
   authorEmail?: string;
   skillName?: string;
   adoUserToken?: string | null;
+  draftPullRequest?: boolean;
+  requiredReviewerId?: string;
+  enforceChecks?: boolean;
   repoUrl: string;
 }): Promise<{ cloudAgentId: string; cursorRunId: string; jobName: string; branchName: string }> {
+  if (useLocalCursorContainer()) return launchLocalCursorContainer(input);
   const jobName = requireEnv('CURSOR_CONTAINER_JOB_NAME');
   const resourceGroup = requireEnv('CURSOR_CONTAINER_JOB_RESOURCE_GROUP');
   const image = requireEnv('CURSOR_CONTAINER_JOB_IMAGE');
@@ -313,6 +377,9 @@ export async function launchCursorContainerCli(input: {
     authorEmail: input.authorEmail,
     skillName: input.skillName,
     adoUserToken: input.adoUserToken,
+    draftPullRequest: input.draftPullRequest,
+    requiredReviewerId: input.requiredReviewerId,
+    enforceChecks: input.enforceChecks,
   });
 
   const dir = await mkdtemp(path.join(os.tmpdir(), 'apex-container-cli-'));
@@ -338,6 +405,68 @@ export async function launchCursorContainerCli(input: {
   }
 }
 
+const LOCAL_SECRET_ENV = new Set(['ADO_PAT', 'ADO_USER_TOKEN']);
+
+async function launchLocalCursorContainer(
+  input: Parameters<typeof launchCursorContainerCli>[0],
+): Promise<{ cloudAgentId: string; cursorRunId: string; jobName: string; branchName: string }> {
+  const branchName = branchNameFor(input.workItemId);
+  const executionName = `${LOCAL_EXECUTION_PREFIX}${input.workItemId ?? 'run'}-${randomBytes(4).toString('hex')}`;
+  const template = buildContainerExecutionTemplate(
+    { containers: [{ name: 'cursor-pool-worker', env: [] }] },
+    {
+      image: 'local',
+      repoUrl: input.repoUrl,
+      baseBranch: input.skillBranch,
+      branchName,
+      model: input.model,
+      promptBlobUrl: '',
+      adoPat: '',
+      workItemId: input.workItemId,
+      workItemTitle: input.workItemTitle,
+      authorName: input.authorName,
+      authorEmail: input.authorEmail,
+      skillName: input.skillName,
+      draftPullRequest: input.draftPullRequest,
+      requiredReviewerId: input.requiredReviewerId,
+      enforceChecks: input.enforceChecks,
+    },
+  );
+  const env = (template.containers?.[0]?.env ?? [])
+    .filter((entry): entry is { name: string; value: string } => Boolean(entry.name) && typeof entry.value === 'string')
+    .filter((entry) => !LOCAL_SECRET_ENV.has(entry.name) && entry.value !== '');
+  await startLocalCursorContainer({
+    executionName,
+    prompt: input.prompt,
+    env,
+    secrets: {
+      CURSOR_API_KEY: requireEnv('CURSOR_API_KEY'),
+      ADO_PAT: requireEnv('ADO_PAT'),
+      ADO_USER_TOKEN: input.adoUserToken,
+    },
+  });
+  return {
+    cloudAgentId: `${CONTAINER_AGENT_PREFIX}${executionName}`,
+    cursorRunId: executionName,
+    jobName: 'local-docker',
+    branchName,
+  };
+}
+
+async function executionStatus(executionName: string): Promise<string> {
+  if (isLocalExecution(executionName)) return getLocalContainerStatus(executionName);
+  const jobName = requireEnv('CURSOR_CONTAINER_JOB_NAME');
+  const resourceGroup = requireEnv('CURSOR_CONTAINER_JOB_RESOURCE_GROUP');
+  return (await az([
+    'containerapp', 'job', 'execution', 'show',
+    '--name', jobName,
+    '--resource-group', resourceGroup,
+    '--job-execution-name', executionName,
+    '--query', 'properties.status',
+    '-o', 'tsv',
+  ])).trim();
+}
+
 export async function getCursorContainerCliRun(executionName: string): Promise<{
   status: string;
   prUrl: string | null;
@@ -347,17 +476,9 @@ export async function getCursorContainerCliRun(executionName: string): Promise<{
   summary: string | null;
   noChanges: boolean;
   settled: boolean;
+  checkResults: RunCheckResult[] | null;
 }> {
-  const jobName = requireEnv('CURSOR_CONTAINER_JOB_NAME');
-  const resourceGroup = requireEnv('CURSOR_CONTAINER_JOB_RESOURCE_GROUP');
-  const status = (await az([
-    'containerapp', 'job', 'execution', 'show',
-    '--name', jobName,
-    '--resource-group', resourceGroup,
-    '--job-execution-name', executionName,
-    '--query', 'properties.status',
-    '-o', 'tsv',
-  ])).trim();
+  const status = await executionStatus(executionName);
   let prUrl: string | null = null;
   let branchName: string | null = null;
   let baseBranch: string | null = null;
@@ -365,6 +486,8 @@ export async function getCursorContainerCliRun(executionName: string): Promise<{
   let noChanges = false;
   let agentExitCode: number | null = null;
   let settled = false;
+  let qualityGateFailed = false;
+  let checkResults: RunCheckResult[] | null = null;
   try {
     const logs = await executionLogs(executionName, '200');
     const parsed = parseContainerCliLogs(logs);
@@ -375,6 +498,8 @@ export async function getCursorContainerCliRun(executionName: string): Promise<{
     noChanges = parsed.noChanges;
     agentExitCode = parsed.agentExitCode;
     settled = parsed.settled;
+    qualityGateFailed = parsed.qualityGateFailed;
+    checkResults = parsed.checkResults;
   } catch (err) {
     console.warn('[container-cli] could not read job logs', err instanceof Error ? err.message : err);
   }
@@ -384,6 +509,7 @@ export async function getCursorContainerCliRun(executionName: string): Promise<{
     noChanges,
     agentExitCode,
     settled,
+    qualityGateFailed,
   });
   return {
     status: observed.status,
@@ -394,6 +520,7 @@ export async function getCursorContainerCliRun(executionName: string): Promise<{
     summary,
     noChanges,
     settled,
+    checkResults,
   };
 }
 
@@ -409,17 +536,7 @@ export async function* streamCursorContainerCliRun(
   for (;;) {
     let status = 'running';
     try {
-      const jobName = requireEnv('CURSOR_CONTAINER_JOB_NAME');
-      const resourceGroup = requireEnv('CURSOR_CONTAINER_JOB_RESOURCE_GROUP');
-      const raw = (await az([
-        'containerapp', 'job', 'execution', 'show',
-        '--name', jobName,
-        '--resource-group', resourceGroup,
-        '--job-execution-name', executionName,
-        '--query', 'properties.status',
-        '-o', 'tsv',
-      ])).trim();
-      status = mapContainerJobStatus(raw);
+      status = mapContainerJobStatus(await executionStatus(executionName));
     } catch (err) {
       console.warn('[container-cli] could not read job status', err instanceof Error ? err.message : err);
     }
@@ -462,6 +579,10 @@ export async function* streamCursorContainerCliRun(
 }
 
 export async function cancelCursorContainerCliRun(executionName: string): Promise<void> {
+  if (isLocalExecution(executionName)) {
+    await stopLocalContainer(executionName);
+    return;
+  }
   const jobName = requireEnv('CURSOR_CONTAINER_JOB_NAME');
   const resourceGroup = requireEnv('CURSOR_CONTAINER_JOB_RESOURCE_GROUP');
   await az([

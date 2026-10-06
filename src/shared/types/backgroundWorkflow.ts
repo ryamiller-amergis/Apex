@@ -19,6 +19,7 @@ export type BackgroundWorkflowClass =
   | 'validation'
   | 'test-cases'
   | 'walkthrough-smart-tagging'
+  | 'product-intake-evaluation'
   | 'playbook-step';
 
 export type WorkflowRouteDecision =

@@ -35,6 +35,23 @@ describe('CurrentRunChecksSummary', () => {
     expect(screen.queryByText(/passed/i)).not.toBeInTheDocument();
   });
 
+  it('names install, lint, typecheck, build, migration, and security failures', () => {
+    render(
+      <CurrentRunChecksSummary
+        prUrl="https://dev.azure.com/org/proj/_git/repo/pullrequest/7"
+        finishedWithoutPr={false}
+        failingChecks={['install', 'lint', 'typecheck', 'build', 'migrations', 'security']}
+      />,
+    );
+
+    expect(screen.getByText('Install checks failed')).toBeInTheDocument();
+    expect(screen.getByText('Lint checks failed')).toBeInTheDocument();
+    expect(screen.getByText('Typecheck checks failed')).toBeInTheDocument();
+    expect(screen.getByText('Build checks failed')).toBeInTheDocument();
+    expect(screen.getByText('Migration checks failed')).toBeInTheDocument();
+    expect(screen.getByText('Security checks failed')).toBeInTheDocument();
+  });
+
   it('PBI-006 AC-1: names only the suites that failed', () => {
     render(
       <CurrentRunChecksSummary

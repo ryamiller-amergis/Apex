@@ -76,6 +76,14 @@ describe('ProductSetup', () => {
     expect(screen.getByTestId('product-setup-person-user-2')).toBeChecked();
   });
 
+  it('shows only the foundation step to a viewer who cannot add teammates', () => {
+    render(<ProductSetup {...base} step="chat" canInviteTeammates={false} />);
+    expect(screen.getByTestId('product-setup-step-1')).toHaveTextContent('Review product foundation');
+    expect(screen.queryByTestId('product-setup-step-2')).not.toBeInTheDocument();
+    expect(screen.queryByText('Add people')).not.toBeInTheDocument();
+    expect(screen.getByText('Review your product foundation')).toBeInTheDocument();
+  });
+
   it('shows a four-part foundation review on step 2', () => {
     render(<ProductSetup {...base} step="chat" />);
     expect(screen.getByText('Review your product foundation')).toBeInTheDocument();

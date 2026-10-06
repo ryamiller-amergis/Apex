@@ -17,6 +17,8 @@ describe('cursor container CLI', () => {
       summary: null,
       agentExitCode: null,
       settled: false,
+      qualityGateFailed: false,
+      checkResults: null,
     });
   });
 
@@ -79,6 +81,27 @@ describe('cursor container CLI', () => {
     })).toEqual({
       status: 'failed',
       resultText: 'The Cursor CLI exited with code 1. Its partial changes are in the pull request.',
+    });
+  });
+
+  it('fails an enforced quality gate before a branch or pull request is created', () => {
+    const parsed = parseContainerCliLogs([
+      'APEX_CHECK_RESULTS=install=passed;lint=failed;unit=failed',
+      'APEX_QUALITY_GATE_FAILED',
+      'APEX_RUN_SETTLED',
+    ].join('\n'));
+
+    expect(parsed.qualityGateFailed).toBe(true);
+    expect(resolveContainerObservation({
+      jobStatus: 'Running',
+      prUrl: null,
+      noChanges: false,
+      agentExitCode: null,
+      settled: parsed.settled,
+      qualityGateFailed: parsed.qualityGateFailed,
+    })).toEqual({
+      status: 'failed',
+      resultText: 'Required quality checks failed. No branch or pull request was created.',
     });
   });
 
@@ -183,6 +206,62 @@ describe('cursor container CLI', () => {
         status: 'running',
       },
     ]);
+  });
+
+  it('reads the suite check marker without treating a failed check as a missing run', () => {
+    const logs = [
+      '{"Log":"APEX_CHECK_RESULTS=install=passed;lint=failed;typecheck=passed;unit=passed;build=failed;migrations=passed;e2e=failed;wcag=passed;security=passed"}',
+    ].join('\n');
+
+    expect(parseContainerCliLogs(logs).checkResults).toEqual([
+      { kind: 'install', outcome: 'passed' },
+      { kind: 'lint', outcome: 'failed' },
+      { kind: 'typecheck', outcome: 'passed' },
+      { kind: 'unit', outcome: 'passed' },
+      { kind: 'build', outcome: 'failed' },
+      { kind: 'migrations', outcome: 'passed' },
+      { kind: 'e2e', outcome: 'failed' },
+      { kind: 'wcag', outcome: 'passed' },
+      { kind: 'security', outcome: 'passed' },
+    ]);
+  });
+
+  it('passes draft, required reviewer, and enforced checks only when the run asks for them', () => {
+    const drafted = buildContainerExecutionTemplate({
+      containers: [{ name: 'cursor-pool-worker', env: [] }],
+    }, {
+      image: 'example.azurecr.io/apex-cursor-worker:cli-run',
+      repoUrl: 'https://dev.azure.com/Amergis/Apex%20-%20Apps/_git/benefits-tracker',
+      baseBranch: 'main',
+      branchName: 'feature/apex-77-abcdef',
+      model: 'composer-2.5',
+      promptBlobUrl: 'https://stapexdevasync.blob.core.windows.net/cursor-prompts/prompts/abc.txt',
+      adoPat: 'secret-pat',
+      draftPullRequest: true,
+      requiredReviewerId: 'ryan-oid',
+      enforceChecks: true,
+    });
+    expect(drafted.containers?.[0]?.env).toEqual(expect.arrayContaining([
+      { name: 'AGENT_DRAFT_PR', value: '1' },
+      { name: 'AGENT_REQUIRED_REVIEWER_ID', value: 'ryan-oid' },
+      { name: 'AGENT_ENFORCE_CHECKS', value: '1' },
+    ]));
+
+    const plain = buildContainerExecutionTemplate({
+      containers: [{ name: 'cursor-pool-worker', env: [] }],
+    }, {
+      image: 'example.azurecr.io/apex-cursor-worker:cli-run',
+      repoUrl: 'https://dev.azure.com/Amergis/MaxView/_git/MaxView',
+      baseBranch: 'development',
+      branchName: 'feature/apex-1-abcdef',
+      model: 'composer-2.5',
+      promptBlobUrl: 'https://stapexdevasync.blob.core.windows.net/cursor-prompts/prompts/abc.txt',
+      adoPat: 'secret-pat',
+    });
+    const names = (plain.containers?.[0]?.env ?? []).map((entry) => entry.name);
+    expect(names).not.toContain('AGENT_DRAFT_PR');
+    expect(names).not.toContain('AGENT_REQUIRED_REVIEWER_ID');
+    expect(names).not.toContain('AGENT_ENFORCE_CHECKS');
   });
 
   it('reads the pushed branch and summary Apex uses to open the pull request', () => {

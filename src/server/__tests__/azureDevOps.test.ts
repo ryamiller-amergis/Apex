@@ -1088,4 +1088,55 @@ describe('AzureDevOpsService', () => {
       expect(result.medianDays).toBeNull();
     });
   });
+
+  describe('createPullRequest draft and reviewer', () => {
+    it('sets isDraft and a required reviewer for a product build', async () => {
+      mockGitApi.createPullRequest = jest.fn().mockResolvedValue({ pullRequestId: 9 });
+      const service = new AzureDevOpsService('Apex - Apps');
+
+      await service.createPullRequest({
+        repo: 'benefits-tracker',
+        project: 'Apex - Apps',
+        sourceBranch: 'feature/apex-77-abc',
+        targetBranch: 'main',
+        title: 'AB#77: See enrolled benefits',
+        description: 'Implemented the approved build.',
+        workItemId: 77,
+        isDraft: true,
+        reviewers: [{ id: 'ryan-oid', isRequired: true }],
+      });
+
+      expect(mockGitApi.createPullRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          isDraft: true,
+          reviewers: [{ id: 'ryan-oid', isRequired: true }],
+          workItemRefs: [{ id: '77' }],
+        }),
+        'benefits-tracker',
+        'Apex - Apps',
+      );
+    });
+
+    it('leaves a My Work pull request active when draft and reviewer are omitted', async () => {
+      mockGitApi.createPullRequest = jest.fn().mockResolvedValue({ pullRequestId: 3 });
+      const service = new AzureDevOpsService('MaxView');
+
+      await service.createPullRequest({
+        repo: 'MaxView',
+        project: 'MaxView',
+        sourceBranch: 'feature/apex-42-abc',
+        targetBranch: 'development',
+        title: 'AB#42',
+        description: 'Implemented login.',
+        workItemId: 42,
+      });
+
+      const payload = mockGitApi.createPullRequest.mock.calls[0][0] as {
+        isDraft?: boolean;
+        reviewers?: unknown;
+      };
+      expect(payload.isDraft).toBeUndefined();
+      expect(payload.reviewers).toBeUndefined();
+    });
+  });
 });

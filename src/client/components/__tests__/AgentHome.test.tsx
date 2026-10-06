@@ -38,6 +38,28 @@ jest.mock('remark-gfm', () => ({
   default: jest.fn(),
 }));
 
+jest.mock('../../hooks/useChatThreads', () => ({
+  useChatThread: jest.fn(() => ({ data: undefined })),
+}));
+
+jest.mock('../../hooks/useAgentChatSession', () => ({
+  useAgentChatSession: jest.fn(() => ({
+    visibleMessages: [],
+    streamingText: '',
+    progressLabel: null,
+    isRunning: false,
+    isSending: false,
+    isInteractionBusy: false,
+    isAwaitingAgentResponse: false,
+    sendError: null,
+    hasConnectionError: false,
+    send: jest.fn(),
+    cancel: jest.fn(),
+    retryLast: jest.fn(),
+    showTypingIndicator: false,
+  })),
+}));
+
 jest.mock('../../hooks/useProductSetup', () => {
   const actual = jest.requireActual('../../hooks/useProductSetup');
   return {
@@ -285,7 +307,7 @@ describe('product setup', () => {
 
     await waitFor(() => {
       const draftCall = (global.fetch as jest.Mock).mock.calls.find((call) =>
-        String(call[0]).includes('/api/admin/product-setup/draft'),
+        String(call[0]).includes('/api/product-builds/foundation/draft'),
       );
       expect(draftCall).toBeDefined();
       const body = JSON.parse(draftCall![1].body);
@@ -298,5 +320,191 @@ describe('product setup', () => {
       ]);
     });
     expect((global.fetch as jest.Mock).mock.calls.some((call) => String(call[0]).includes('/messages'))).toBe(false);
+  });
+
+  it('keeps the foundation guide while PRODUCT.md is still open', () => {
+    (useProductSetup as jest.Mock).mockReturnValue({
+      data: {
+        active: true,
+        phase: 'foundation',
+        skillPath: setupSkillPath,
+        model: 'auto-smart',
+        candidates: [],
+        canInviteTeammates: true,
+        foundationAnswers: [],
+        build: null,
+        chatThreadId: null,
+        thread: null,
+        design: null,
+      },
+      isLoading: false,
+      isPending: false,
+      isFetched: true,
+      refetch: jest.fn(),
+    });
+
+    render(<AgentHome selectedProject="To Do App" />, { wrapper });
+
+    expect(screen.getByTestId('product-setup')).toBeInTheDocument();
+    expect(screen.queryByTestId('product-build-setup')).not.toBeInTheDocument();
+  });
+
+  it('switches to the build panel once PRODUCT.md exists and keeps a finished pull request there', () => {
+    (useProductSetup as jest.Mock).mockReturnValue({
+      data: {
+        active: true,
+        phase: 'build',
+        skillPath: '.agents/skills/product-discovery/SKILL.md',
+        model: 'gemini-3.8-flash',
+        candidates: [],
+        foundationAnswers: [],
+        project: 'To Do App',
+        build: {
+          id: 'build-1',
+          kind: 'initial',
+          status: 'pr-open',
+          project: 'To Do App',
+          rfpRequestId: 'rfp-1',
+          chatThreadId: 'thread-1',
+          uiLabDesignId: 'design-1',
+          prototypeVersion: 1,
+          devSessionId: null,
+          agentRunId: 'run-9',
+          brief: {
+            version: 1,
+            kind: 'initial',
+            product: {
+              name: 'To Do App',
+              audience: 'Employees',
+              problem: 'Tasks are scattered.',
+              scopeSummary: 'Tasks and reminders.',
+              successCriteria: ['A person can see today\'s tasks.'],
+            },
+            initialBuild: {
+              summary: 'See today\'s tasks.',
+              coreWorkflow: 'Open the list.',
+              personas: [{ name: 'Employee', goal: 'See today.' }],
+              screens: [{ name: 'Today', purpose: 'List tasks.' }],
+              data: [{ name: 'Task', fields: ['title'] }],
+              integrations: [],
+              auth: 'Company sign-in.',
+              visualDirection: 'Calm.',
+              nonFunctionalRequirements: ['The list loads with the page.'],
+              acceptanceCriteria: [{ id: 'AC-1', statement: 'Today\'s tasks are visible.' }],
+              outOfScope: ['Reminders'],
+              deferred: ['Sharing'],
+            },
+            stack: {
+              client: 'React + TypeScript + Vite',
+              server: 'Express',
+              database: 'PostgreSQL',
+              overrideReason: null,
+            },
+            deployment: {
+              localSetup: 'npm run dev',
+              migrations: 'node-pg-migrate',
+              ci: 'unit tests',
+              hosting: 'Document the deploy path.',
+            },
+            singlePr: { fitsSinglePr: true, rationale: 'One screen fits one pull request.' },
+            confirmedBy: 'Ada',
+            confirmedAt: '2026-10-05T17:00:00.000Z',
+          },
+          requesterId: 'user-1',
+          reviewerId: 'reviewer-1',
+          adoWorkItemId: 4521,
+          prUrl: 'https://dev.azure.com/org/project/_git/todo/pullrequest/9',
+          errorMessage: null,
+          approvedAt: '2026-10-05T17:00:00.000Z',
+          prOpenedAt: '2026-10-05T18:00:00.000Z',
+          mergedAt: null,
+          createdAt: '2026-10-05T16:00:00.000Z',
+          updatedAt: '2026-10-05T18:00:00.000Z',
+        },
+        chatThreadId: 'thread-1',
+        thread: null,
+        design: null,
+        history: [],
+      },
+      isLoading: false,
+      isPending: false,
+      isFetched: true,
+      refetch: jest.fn(),
+    });
+
+    render(<AgentHome selectedProject="To Do App" />, { wrapper });
+
+    expect(screen.getByTestId('product-build-setup')).toBeInTheDocument();
+    expect(screen.queryByTestId('product-setup')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('product-home')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('home-view-chat')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('home-view-status')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('home-dashboard-root')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Ready for review' })).toBeInTheDocument();
+  });
+
+  it('shows the app home after the latest build is live and does not open chat for other teams', () => {
+    (useProductSetup as jest.Mock).mockReturnValue({
+      data: {
+        active: true,
+        phase: 'build',
+        skillPath: '.agents/skills/product-discovery/SKILL.md',
+        model: 'gemini-3.8-flash',
+        candidates: [],
+        foundationAnswers: [],
+        project: 'To Do App',
+        build: {
+          id: 'build-1',
+          kind: 'initial',
+          status: 'merged',
+          project: 'To Do App',
+          rfpRequestId: 'rfp-1',
+          chatThreadId: 'thread-1',
+          uiLabDesignId: 'design-1',
+          prototypeVersion: 1,
+          devSessionId: null,
+          agentRunId: null,
+          brief: null,
+          requesterId: 'user-1',
+          reviewerId: null,
+          adoWorkItemId: null,
+          prUrl: null,
+          errorMessage: null,
+          approvedAt: '2026-10-05T17:00:00.000Z',
+          prOpenedAt: '2026-10-05T18:00:00.000Z',
+          mergedAt: '2026-10-05T19:00:00.000Z',
+          createdAt: '2026-10-05T16:00:00.000Z',
+          updatedAt: '2026-10-05T19:00:00.000Z',
+        },
+        chatThreadId: 'thread-1',
+        thread: null,
+        design: {
+          id: 'design-1',
+          status: 'ready',
+          html: '<html><body><h1>To Do</h1></body></html>',
+        },
+        history: [],
+      },
+      isLoading: false,
+      isPending: false,
+      isFetched: true,
+      refetch: jest.fn(),
+    });
+
+    render(<AgentHome selectedProject="To Do App" />, { wrapper });
+
+    expect(screen.getByTestId('product-home')).toBeInTheDocument();
+    expect(screen.getByTestId('product-home-prompt')).toBeInTheDocument();
+    expect(screen.queryByTestId('product-build-setup')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('home-view-chat')).not.toBeInTheDocument();
+    expect(screen.getByTitle('Your app')).toHaveAttribute('sandbox', 'allow-scripts');
+  });
+
+  it('keeps the chat tab for projects that are not new products', () => {
+    (useProductSetup as jest.Mock).mockReturnValue(inactiveSetup);
+    render(<AgentHome selectedProject="MaxView" />, { wrapper });
+    expect(screen.getByTestId('home-view-chat')).toBeInTheDocument();
+    expect(screen.queryByTestId('product-home')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('product-build-setup')).not.toBeInTheDocument();
   });
 });

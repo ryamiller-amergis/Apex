@@ -4247,9 +4247,10 @@ async function tryDispatchInteractiveTurn(
             pillLabel: options.turnSkill.name,
           }
         : state.thread.kickoff;
-      const recoveryContext = state.isInterviewThread
-        ? buildAgentRecoveryContext(state.thread.messages)
-        : null;
+      // Any follow-up turn can land on a new agent. Interview threads are not
+      // the only chats that need the saved transcript. The current reply is not
+      // in the thread yet, so this is the earlier conversation only.
+      const recoveryContext = buildAgentRecoveryContext(state.thread.messages);
       const prompt = await buildNewAgentTurnPrompt(
         turnKickoff,
         buildTurnPrompt(text, options?.turnSkill),
@@ -4672,9 +4673,10 @@ export async function sendMessage(
         (message) => message.id !== interactiveAttempt.persistedUserMessage?.id
       )
     : [...state.thread.messages];
-  const recoveryContext = state.isInterviewThread
-    ? buildAgentRecoveryContext(priorMessages)
-    : null;
+  // A new or recreated agent only sees this prompt. Paste the saved transcript
+  // for every chat, not only interviews, so a short reply like "a" still
+  // refers to the question already asked.
+  const recoveryContext = buildAgentRecoveryContext(priorMessages);
 
   const userMsg = interactiveAttempt.persistedUserMessage ?? {
     id: turnId,
@@ -4853,7 +4855,7 @@ export async function sendMessage(
   );
 
   // A missing cursorAgentId can mean either a brand-new conversation or a
-  // force-disposed interview agent. In the latter case, include the visible
+  // force-disposed agent. In the latter case, include the visible
   // PostgreSQL-backed history so Agent.create() continues instead of restarting.
   const hadCursorAgentId = Boolean(state.thread.cursorAgentId);
   let prompt = hadCursorAgentId
@@ -4998,7 +5000,7 @@ export async function sendMessage(
         agentAcquisitionMode === 'recreated')
     ) {
       console.log(
-        '[chat] Injected PostgreSQL history into replacement interview agent',
+        '[chat] Injected PostgreSQL history into replacement agent',
         {
           threadId,
           messageCount: recoveryContext.totalMessageCount,

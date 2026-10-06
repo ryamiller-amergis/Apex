@@ -25,9 +25,10 @@ import type {
   RunCheckResult,
 } from '../../shared/types/agentRunLifecycle';
 import { deriveFailingChecks } from '../../shared/utils/runCheckResults';
-import { isFeatureEnabled } from './featureFlagService';
+import { isFeatureEnabled, isFeatureOperational } from './featureFlagService';
 import { getSkillConfig } from './projectSettingsService';
 import { buildLocalDevContext } from './localDevContextService';
+import { useLocalCursorContainer } from './localCursorContainerService';
 import { logMyWorkSession } from './myWorkSessionLogger';
 import { trackEvent } from './telemetry';
 import {
@@ -70,6 +71,7 @@ import {
   openCloudAgentPullRequest,
   type OpenCloudAgentPullRequestInput,
 } from './cloudAgentPullRequest';
+import { resolveAdoRepository } from './adoRepositoryTarget';
 import {
   CLOUD_AGENT_QUEUE_WAIT_MS,
   CLOUD_AGENT_USER_TOKEN_CLAIM_MS,
@@ -255,6 +257,11 @@ export interface CloudAgentServiceDeps {
   getGithubPullRequestStatus: typeof getGithubPullRequestStatus;
   retryWithBackoff: typeof retryWithBackoff;
   buildPrompt: (input: { project: string; workItemId: number }) => Promise<string>;
+  /**
+   * Platform cloud-agent infrastructure, used when a system-triggered product
+   * build is not covered by the My Work project flag.
+   */
+  isCloudAgentInfraAvailable?: () => Promise<boolean>;
   persistLeftoverWork: typeof persistLeftoverWork;
   writeLeftoverWorkToAdo: typeof writeLeftoverWorkToAdo;
   openCloudAgentPullRequest: (input: OpenCloudAgentPullRequestInput) => Promise<string>;
@@ -279,6 +286,9 @@ const defaultDeps: CloudAgentServiceDeps = {
   getGithubPullRequestStatus,
   retryWithBackoff,
   buildPrompt: buildCloudAgentPrompt,
+  // Local dev without a Container Apps job runs the worker in Docker instead.
+  isCloudAgentInfraAvailable: async () => useLocalCursorContainer()
+    || isFeatureOperational(MY_WORK_CLOUD_AGENT_FLAG),
   persistLeftoverWork,
   writeLeftoverWorkToAdo,
   openCloudAgentPullRequest,
@@ -389,23 +399,49 @@ export interface StartCloudAgentRunInput {
   adoUserToken?: string | null;
   isSuperAdmin: boolean;
   item: Pick<AssignedWorkItem, 'workItemType' | 'state' | 'tags'>;
+  /**
+   * Replaces the My Work local-dev context prompt. Product builds point the
+   * worker at the artifacts already committed on main.
+   */
+  promptOverride?: string;
+  /** Azure DevOps project for work-item reads, links, and transitions. */
+  workItemProject?: string;
+  draftPullRequest?: boolean;
+  requiredReviewerId?: string;
+  allowServiceAccountPullRequest?: boolean;
+  enforceChecks?: boolean;
+  /** RFP product builds start without a developer sitting in My Work. */
+  systemTriggered?: boolean;
 }
 
 export async function startCloudAgentRun(
   input: StartCloudAgentRunInput,
   deps: CloudAgentServiceDeps = defaultDeps,
 ): Promise<StartCloudAgentRunResponse> {
-  const flagEnabled = await deps.isFeatureEnabled(MY_WORK_CLOUD_AGENT_FLAG, {
+  const projectFlag = await deps.isFeatureEnabled(MY_WORK_CLOUD_AGENT_FLAG, {
     userId: input.userId,
     project: input.project,
   });
+  let flagEnabled = projectFlag;
+  if (!flagEnabled && input.systemTriggered) {
+    const infraAvailable = deps.isCloudAgentInfraAvailable
+      ? await deps.isCloudAgentInfraAvailable()
+      : false;
+    if (!infraAvailable) {
+      throw new CloudAgentEligibilityError(
+        'Cloud Development is not available for this product build. The cloud-agent infrastructure flag is off.',
+      );
+    }
+    flagEnabled = true;
+  }
   const skillConfig = await deps.getSkillConfig(input.project);
   const liveByWorkItem = await loadLiveRunWorkItemIds(input.userId, input.project);
   const eligibility = evaluateCloudAgentEligibility({
     flagEnabled,
     project: input.project,
     item: input.item,
-    isSuperAdmin: input.isSuperAdmin,
+    // An approved product build is already authorized. Apex - Apps has no Feature type.
+    isSuperAdmin: input.isSuperAdmin || input.systemTriggered === true,
     skillProvider: skillConfig?.skillProvider,
     skillRepo: skillConfig?.skillRepo,
     skillBranch: skillConfig?.skillBranch,
@@ -453,7 +489,8 @@ async function persistQueuedRun(
   const lockKey = `cloud-agent:${input.project}:${input.workItemId}:${input.userId}`;
   const nowIso = new Date().toISOString();
   const timeoutAt = new Date(Date.now() + CLOUD_AGENT_QUEUE_WAIT_MS).toISOString();
-  const basePrompt = await deps.buildPrompt({
+  const override = input.promptOverride?.trim();
+  const basePrompt = override || await deps.buildPrompt({
     project: input.project,
     workItemId: input.workItemId,
   });
@@ -532,6 +569,11 @@ async function persistQueuedRun(
             initiatorEmail: input.initiatorEmail,
             ...(skillName ? { skillName } : {}),
             ...(input.adoUserToken ? { userTokenInstance: cloudAgentInstanceId() } : {}),
+            ...(input.workItemProject ? { workItemProject: input.workItemProject } : {}),
+            ...(input.draftPullRequest ? { draftPullRequest: true } : {}),
+            ...(input.requiredReviewerId ? { requiredReviewerId: input.requiredReviewerId } : {}),
+            ...(input.allowServiceAccountPullRequest ? { allowServiceAccountPullRequest: true } : {}),
+            ...(input.enforceChecks ? { enforceChecks: true } : {}),
           },
         },
       });
@@ -710,6 +752,9 @@ async function launchClaimedCloudAgentRun(
       initiatorEmail: cloud.initiatorEmail,
       skillName: cloud.skillName,
       adoUserToken,
+      ...(cloud.draftPullRequest ? { draftPullRequest: true } : {}),
+      ...(cloud.requiredReviewerId ? { requiredReviewerId: cloud.requiredReviewerId } : {}),
+      ...(cloud.enforceChecks ? { enforceChecks: true } : {}),
     });
   } catch (err) {
     const detail = err instanceof Error ? err.message : 'Cloud Agent launch failed';
@@ -843,6 +888,7 @@ export async function reconcileRunningCloudAgentRuns(
           prUrl: observed.prUrl,
           dispatchMessageId: row.dispatchMessageId,
           detail: mapped === 'failed' ? (observed.resultText ?? undefined) : undefined,
+          ...(observed.checkResults?.length ? { checkResults: observed.checkResults } : {}),
         }, deps);
       } catch (err) {
         console.warn('[cloud-agent] execution reconciliation failed', JSON.stringify({
@@ -913,6 +959,14 @@ function emitTerminal(
   });
 }
 
+function workItemAdoProject(
+  snapshot: { cloudAgent?: { workItemProject?: string } } | null | undefined,
+  fallbackProject: string,
+): string {
+  const named = snapshot?.cloudAgent?.workItemProject?.trim();
+  return named || fallbackProject;
+}
+
 async function lookupPullRequestStatus(
   input: {
     prUrl: string;
@@ -926,8 +980,8 @@ async function lookupPullRequestStatus(
   if (input.provider === 'github') {
     return deps.getGithubPullRequestStatus(input.repository, pullRequestId);
   }
-  const repository = input.repository.split('/').filter(Boolean).pop() ?? input.repository;
-  return deps.getAdoPullRequestStatus(repository, input.project, pullRequestId);
+  const ado = resolveAdoRepository(input.project, input.repository);
+  return deps.getAdoPullRequestStatus(ado.repo, ado.project, pullRequestId);
 }
 
 function cachedPullRequestStatus(
@@ -1040,6 +1094,7 @@ export async function applyCloudAgentCompletion(input: {
 
   const provider = terminal.run.executionSnapshot?.provider;
   const repository = terminal.run.executionSnapshot?.repository;
+  const adoProject = workItemAdoProject(terminal.run.executionSnapshot, input.project);
   let prStatus: HostAgnosticPrStatus = input.prUrl ? 'open' : 'none';
   if (input.prUrl && provider && repository) {
     try {
@@ -1047,7 +1102,7 @@ export async function applyCloudAgentCompletion(input: {
         prUrl: input.prUrl,
         provider,
         repository,
-        project: input.project,
+        project: adoProject,
       }, deps);
     } catch (err) {
       console.warn('[cloud-agent] initial PR status lookup failed', JSON.stringify({
@@ -1104,7 +1159,7 @@ export async function applyCloudAgentCompletion(input: {
   if (persisted.firstWrite && summary && session.workItemId) {
     await deps.writeLeftoverWorkToAdo({
       sessionId,
-      project: input.project,
+      project: adoProject,
       workItemId: session.workItemId,
       runId: input.runId,
       summary,
@@ -1125,7 +1180,7 @@ export async function applyCloudAgentCompletion(input: {
     }
     await writeWorkItemPullRequest({
       provider,
-      project: input.project,
+      project: adoProject,
       repository,
       prUrl: input.prUrl,
       workItemId: session.workItemId,
@@ -1187,10 +1242,11 @@ export async function getCloudAgentRunStatus(
       // before a non-zero exit fails the run.
       const readyForPullRequest = mapped !== 'running' || observed.settled === true;
       if (!prUrl && sourceBranch && readyForPullRequest && mapped !== 'failed' && mapped !== 'cancelled') {
-        if (!adoUserToken && process.env.NODE_ENV === 'production') {
+        const meta = run.executionSnapshot?.cloudAgent;
+        const allowServiceAccount = meta?.allowServiceAccountPullRequest === true;
+        if (!adoUserToken && process.env.NODE_ENV === 'production' && !allowServiceAccount) {
           mapped = 'running';
         } else {
-          const meta = run.executionSnapshot?.cloudAgent;
           const repository = run.executionSnapshot?.repository;
           let targetBranch = meta?.baseBranch || observed.baseBranch || null;
           if (!targetBranch) {
@@ -1202,9 +1258,13 @@ export async function getCloudAgentRunStatus(
             throw new Error('Cloud Agent run is missing pull request context');
           }
           if (run.executionSnapshot?.provider !== 'github') {
+            const ado = resolveAdoRepository(
+              workItemAdoProject(run.executionSnapshot, session.project),
+              repository,
+            );
             prUrl = await deps.openCloudAgentPullRequest({
-              project: session.project,
-              repo: repository,
+              project: ado.project,
+              repo: ado.repo,
               sourceBranch,
               targetBranch,
               workItemId,
@@ -1213,12 +1273,17 @@ export async function getCloudAgentRunStatus(
               authorEmail: meta?.initiatorEmail,
               summary: observed.summary,
               adoUserToken,
+              ...(meta?.draftPullRequest ? { draftPullRequest: true } : {}),
+              ...(meta?.requiredReviewerId ? { requiredReviewerId: meta.requiredReviewerId } : {}),
+              ...(allowServiceAccount ? { allowServiceAccount: true } : {}),
+              ...(observed.checkResults?.length ? { checkResults: observed.checkResults } : {}),
             });
             mapped = 'completed';
           }
         }
       }
       if (mapped && isAgentRunTerminalStatus(mapped)) {
+        const reportedChecks = observed.checkResults?.length ? observed.checkResults : null;
         await applyCloudAgentCompletion({
           runId: run.id,
           sessionId,
@@ -1227,13 +1292,14 @@ export async function getCloudAgentRunStatus(
           prUrl,
           dispatchMessageId: run.dispatchMessageId,
           detail: mapped === 'failed' ? (observed.resultText ?? undefined) : undefined,
+          ...(reportedChecks ? { checkResults: reportedChecks } : {}),
         }, deps);
         return toRunSummary(
           {
             id: run.id,
             status: mapped,
             terminalReason: run.terminalReason as AgentRunTerminalReason | null,
-            checkResults: run.checkResults ?? null,
+            checkResults: reportedChecks ?? run.checkResults ?? null,
             lastError: mapped === 'failed' ? observed.resultText : run.lastError,
             cloudJobName: run.cloudJobName,
             cloudJobExecutionName: run.cloudJobExecutionName,
@@ -1283,7 +1349,7 @@ export async function getCloudAgentRunStatus(
         prUrl,
         provider,
         repository,
-        project: session.project,
+        project: workItemAdoProject(run.executionSnapshot, session.project),
       }, deps);
       if (refreshedStatus !== prStatus) {
         prStatus = refreshedStatus;
@@ -1368,7 +1434,7 @@ export async function getCloudAgentRunHistory(
           prUrl,
           provider,
           repository,
-          project: session.project,
+          project: workItemAdoProject(run.executionSnapshot, session.project),
         }, deps);
         if (refreshedStatus !== prStatus) {
           prStatus = refreshedStatus;

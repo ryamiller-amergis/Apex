@@ -1527,4 +1527,391 @@ describe('reconcileRunningCloudAgentRuns', () => {
     }));
     warn.mockRestore();
   });
+
+  it('forwards parsed check results from a finished execution', async () => {
+    mockLiveRows([liveExecution()]);
+    const checkResults = [passedCheck('lint'), failedCheck('unit')];
+
+    await reconcileRunningCloudAgentRuns(makeDeps({
+      getCloudAgentRun: jest.fn().mockResolvedValue(observation({
+        status: 'finished',
+        prUrl: PR_URL,
+        checkResults,
+      })),
+    }));
+
+    expect(mockMarkTerminal).toHaveBeenCalledWith(RUN_ID, expect.objectContaining({
+      status: 'completed',
+      checkResults,
+    }));
+  });
+});
+
+const productSkill = {
+  skillProvider: 'ado' as const,
+  skillRepo: 'Apex - Apps/benefits-tracker',
+  skillBranch: 'main',
+  developmentSkillPath: '.agents/skills/product-implementation/SKILL.md',
+};
+
+async function startQueuedRun(
+  input: Parameters<typeof startCloudAgentRun>[0],
+  depOverrides: Partial<CloudAgentServiceDeps> = {},
+) {
+  const { db: mockedDb } = jest.requireMock('../db/drizzle') as {
+    db: { select: jest.Mock; transaction: jest.Mock };
+  };
+  const { enqueue: mockEnqueue } = jest.requireMock('../services/agentRunLifecycleService') as {
+    enqueue: jest.Mock;
+  };
+  mockedDb.select.mockReset();
+  mockedDb.transaction.mockReset();
+  mockEnqueue.mockReset();
+  mockedDb.select.mockReturnValueOnce({
+    from: () => ({ where: jest.fn().mockResolvedValue([]) }),
+  });
+  mockedDb.select.mockReturnValueOnce({
+    from: () => ({ where: jest.fn().mockResolvedValue([{ position: 1 }]) }),
+  });
+  mockedDb.transaction.mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
+    const tx = {
+      execute: jest.fn().mockResolvedValue(undefined),
+      select: jest.fn(() => ({
+        from: () => ({
+          where: () => ({
+            orderBy: () => ({
+              limit: jest.fn().mockResolvedValue([]),
+            }),
+          }),
+        }),
+      })),
+      insert: jest.fn(() => ({ values: jest.fn().mockResolvedValue(undefined) })),
+      update: jest.fn(() => ({
+        set: () => ({ where: jest.fn().mockResolvedValue(undefined) }),
+      })),
+    };
+    return callback(tx);
+  });
+  mockEnqueue.mockResolvedValueOnce({ runId: 'run-product' });
+  const setImmediateSpy = jest.spyOn(global, 'setImmediate').mockImplementation(
+    (() => ({})) as unknown as typeof setImmediate,
+  );
+  try {
+    const result = await startCloudAgentRun(input, makeDeps(depOverrides));
+    const snapshot = mockEnqueue.mock.calls[0]?.[0]?.snapshot as {
+      prompt: string;
+      projectId: string;
+      repository?: string;
+      cloudAgent?: Record<string, unknown>;
+    } | undefined;
+    return { result, snapshot, enqueue: mockEnqueue };
+  } finally {
+    setImmediateSpy.mockRestore();
+  }
+}
+
+describe('startCloudAgentRun product build handoff', () => {
+  const promptOverride = [
+    'Read PRODUCT.md, docs/product/BUILD_BRIEF.md, docs/product/prototype.html, and docs/product/build-manifest.json on main.',
+    'Invoke the product-implementation skill and implement only that build.',
+  ].join('\n');
+
+  it('freezes the override prompt and Apex - Apps work item fields without building local dev context', async () => {
+    const buildPrompt = jest.fn().mockResolvedValue('local dev context');
+    const { snapshot } = await startQueuedRun({
+      userId: 'ryan-oid',
+      project: 'Benefits Tracker',
+      workItemId: 77,
+      workItemTitle: 'See enrolled benefits',
+      isSuperAdmin: false,
+      adoUserToken: null,
+      item: eligibleItem,
+      systemTriggered: true,
+      promptOverride,
+      workItemProject: 'Apex - Apps',
+      draftPullRequest: true,
+      requiredReviewerId: 'ryan-oid',
+      allowServiceAccountPullRequest: true,
+      enforceChecks: true,
+    }, {
+      isFeatureEnabled: jest.fn().mockResolvedValue(false),
+      isCloudAgentInfraAvailable: jest.fn().mockResolvedValue(true),
+      getSkillConfig: jest.fn().mockResolvedValue(productSkill),
+      buildPrompt,
+    });
+
+    expect(buildPrompt).not.toHaveBeenCalled();
+    expect(snapshot).toEqual(expect.objectContaining({
+      prompt: expect.stringContaining('product-implementation'),
+      projectId: 'Benefits Tracker',
+      repository: 'Apex - Apps/benefits-tracker',
+      skillPath: '.agents/skills/product-implementation/SKILL.md',
+      cloudAgent: expect.objectContaining({
+        workItemId: 77,
+        workItemProject: 'Apex - Apps',
+        draftPullRequest: true,
+        requiredReviewerId: 'ryan-oid',
+        allowServiceAccountPullRequest: true,
+        enforceChecks: true,
+        skillName: 'product-implementation',
+        baseBranch: 'main',
+      }),
+    }));
+    expect(snapshot?.cloudAgent?.userTokenInstance).toBeUndefined();
+    expect(snapshot?.prompt).not.toContain('local dev context');
+  });
+
+  it('starts a Basic-process Issue for an approved product build', async () => {
+    const { result } = await startQueuedRun({
+      userId: 'ryan-oid',
+      project: 'Benefits Tracker',
+      workItemId: 77,
+      isSuperAdmin: false,
+      item: { workItemType: 'Issue', state: 'New', tags: 'apex; product-build' },
+      systemTriggered: true,
+      promptOverride: 'Read the committed product artifacts.',
+      workItemProject: 'Apex - Apps',
+    }, {
+      isFeatureEnabled: jest.fn().mockResolvedValue(false),
+      isCloudAgentInfraAvailable: jest.fn().mockResolvedValue(true),
+      getSkillConfig: jest.fn().mockResolvedValue(productSkill),
+    });
+
+    expect(result.runId).toBe('run-product');
+  });
+
+  it('still refuses an Issue when a person starts it from My Work', async () => {
+    await expect(startQueuedRun({
+      userId: USER_ID,
+      project: 'MaxView',
+      workItemId: 42,
+      isSuperAdmin: false,
+      item: { workItemType: 'Issue', state: 'New', tags: 'apex' },
+    }, {
+      getSkillConfig: jest.fn().mockResolvedValue({
+        skillProvider: 'ado',
+        skillRepo: 'MaxView',
+        skillBranch: 'main',
+      }),
+    })).rejects.toThrow(/only available on Features/);
+  });
+
+  it('keeps My Work snapshots on the session project without draft or service-account fields', async () => {
+    const buildPrompt = jest.fn().mockResolvedValue('base execution prompt');
+    const { snapshot } = await startQueuedRun({
+      userId: USER_ID,
+      project: 'MaxView',
+      workItemId: 42,
+      isSuperAdmin: false,
+      item: eligibleItem,
+    }, {
+      getSkillConfig: jest.fn().mockResolvedValue({
+        skillProvider: 'ado',
+        skillRepo: 'MaxView',
+        skillBranch: 'main',
+        developmentSkillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
+      }),
+      buildPrompt,
+    });
+
+    expect(buildPrompt).toHaveBeenCalledWith({ project: 'MaxView', workItemId: 42 });
+    expect(snapshot?.prompt).toBe('base execution prompt');
+    expect(snapshot?.projectId).toBe('MaxView');
+    expect(snapshot?.repository).toBe('MaxView');
+    expect(snapshot?.cloudAgent?.workItemProject).toBeUndefined();
+    expect(snapshot?.cloudAgent?.draftPullRequest).toBeUndefined();
+    expect(snapshot?.cloudAgent?.requiredReviewerId).toBeUndefined();
+    expect(snapshot?.cloudAgent?.allowServiceAccountPullRequest).toBeUndefined();
+    expect(snapshot?.cloudAgent?.enforceChecks).toBeUndefined();
+  });
+
+  it('errors when the cloud-agent flag is unavailable and does not skip a missing skill config', async () => {
+    const missingFlag = startQueuedRun({
+      userId: 'ryan-oid',
+      project: 'Benefits Tracker',
+      workItemId: 77,
+      isSuperAdmin: false,
+      item: eligibleItem,
+      systemTriggered: true,
+      promptOverride: 'Read the committed product artifacts.',
+    }, {
+      isFeatureEnabled: jest.fn().mockResolvedValue(false),
+      isCloudAgentInfraAvailable: jest.fn().mockResolvedValue(false),
+      getSkillConfig: jest.fn().mockResolvedValue(productSkill),
+    });
+    await expect(missingFlag).rejects.toThrow(/not available for this product build/i);
+
+    const missingSkill = startQueuedRun({
+      userId: 'ryan-oid',
+      project: 'Benefits Tracker',
+      workItemId: 77,
+      isSuperAdmin: false,
+      item: eligibleItem,
+      systemTriggered: true,
+      promptOverride: 'Read the committed product artifacts.',
+    }, {
+      isFeatureEnabled: jest.fn().mockResolvedValue(false),
+      isCloudAgentInfraAvailable: jest.fn().mockResolvedValue(true),
+      getSkillConfig: jest.fn().mockResolvedValue(null),
+    });
+    await expect(missingSkill).rejects.toThrow(/Skill settings are incomplete/);
+  });
+
+  it('still rejects a GitHub repository for a system-triggered build', async () => {
+    await expect(startQueuedRun({
+      userId: 'ryan-oid',
+      project: 'Benefits Tracker',
+      workItemId: 77,
+      isSuperAdmin: false,
+      item: eligibleItem,
+      systemTriggered: true,
+      promptOverride: 'Read the committed product artifacts.',
+    }, {
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      getSkillConfig: jest.fn().mockResolvedValue({
+        ...productSkill,
+        skillProvider: 'github',
+        skillRepo: 'amergis/benefits-tracker',
+      }),
+    })).rejects.toThrow(/Azure Repos only/);
+  });
+});
+
+describe('cloud agent completion uses the work item project', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPersistLeftoverWork.mockResolvedValue({ firstWrite: true });
+    mockLinkWorkItemToPullRequest.mockResolvedValue({ mechanism: 'native-link', verified: true });
+    mockWriteLeftoverWorkToAdo.mockResolvedValue(undefined);
+    mockGetAdoPullRequestStatus.mockResolvedValue('open');
+    mockTransitionWorkItemForPullRequest.mockResolvedValue(undefined);
+  });
+
+  it('links and comments on Apex - Apps while the session stays on the virtual project', async () => {
+    const checkResults = [failedCheck('lint'), passedCheck('unit')];
+    mockMarkTerminal.mockResolvedValue({
+      ok: true,
+      run: linkableRun({
+        status: 'completed',
+        devSessionId: SESSION_ID,
+        checkResults,
+        executionSnapshot: {
+          provider: 'ado',
+          repository: 'Apex - Apps/benefits-tracker',
+          projectId: 'Benefits Tracker',
+          cloudAgent: {
+            workItemId: 77,
+            workItemProject: 'Apex - Apps',
+          },
+        },
+      }),
+    });
+    mockDevSessionFindFirst.mockResolvedValue(session({
+      project: 'Benefits Tracker',
+      workItemId: 77,
+    }));
+
+    await applyCloudAgentCompletion({
+      runId: RUN_ID,
+      sessionId: SESSION_ID,
+      project: 'Benefits Tracker',
+      status: 'completed',
+      prUrl: 'https://dev.azure.com/amergis/Apex%20-%20Apps/_git/benefits-tracker/pullrequest/9',
+      checkResults,
+    }, makeDeps());
+
+    expect(mockPersistLeftoverWork).toHaveBeenCalledWith(expect.objectContaining({
+      project: 'Benefits Tracker',
+      summary: expect.objectContaining({ failingChecks: ['lint'] }),
+    }));
+    expect(mockWriteLeftoverWorkToAdo).toHaveBeenCalledWith(expect.objectContaining({
+      project: 'Apex - Apps',
+      workItemId: 77,
+    }));
+    expect(mockLinkWorkItemToPullRequest).toHaveBeenCalledWith(expect.objectContaining({
+      project: 'Apex - Apps',
+      workItemId: 77,
+    }));
+    expect(mockTransitionWorkItemForPullRequest).toHaveBeenCalledWith('Apex - Apps', 77);
+    expect(mockGetAdoPullRequestStatus).toHaveBeenCalledWith('benefits-tracker', 'Apex - Apps', 9);
+  });
+
+  it('projects parsed checks onto the status summary and still opens the pull request', async () => {
+    const checkResults = [passedCheck('install'), failedCheck('lint')];
+    mockDevSessionFindFirst.mockResolvedValue(linkableSession({
+      project: 'Benefits Tracker',
+      currentRunPrUrl: null,
+    }));
+    mockAgentRunFindFirst.mockResolvedValue(linkableRun({
+      status: 'running',
+      projectId: 'Benefits Tracker',
+      executionSnapshot: {
+        provider: 'ado',
+        repository: 'Apex - Apps/benefits-tracker',
+        cloudAgent: {
+          workItemId: 77,
+          workItemProject: 'Apex - Apps',
+          baseBranch: 'main',
+          allowServiceAccountPullRequest: true,
+          draftPullRequest: true,
+          requiredReviewerId: 'ryan-oid',
+        },
+      },
+    }));
+    mockMarkTerminal.mockResolvedValue({
+      ok: true,
+      run: linkableRun({
+        status: 'completed',
+        checkResults,
+        executionSnapshot: {
+          provider: 'ado',
+          repository: 'Apex - Apps/benefits-tracker',
+          cloudAgent: { workItemId: 77, workItemProject: 'Apex - Apps' },
+        },
+      }),
+    });
+    const previous = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    const openCloudAgentPullRequest = jest.fn().mockResolvedValue(
+      'https://dev.azure.com/amergis/Apex%20-%20Apps/_git/benefits-tracker/pullrequest/9',
+    );
+    const getSkillConfig = jest.fn();
+    try {
+      const summary = await getCloudAgentRunStatus(SESSION_ID, USER_ID, makeDeps({
+        getCloudAgentRun: jest.fn().mockResolvedValue({
+          status: 'finished',
+          prUrl: null,
+          resultText: null,
+          branchName: 'feature/apex-77-abc',
+          summary: 'Added the list.',
+          settled: true,
+          checkResults,
+        }),
+        openCloudAgentPullRequest,
+        getSkillConfig,
+      }), null);
+
+      expect(openCloudAgentPullRequest).toHaveBeenCalledWith(expect.objectContaining({
+        project: 'Apex - Apps',
+        repo: 'benefits-tracker',
+        draftPullRequest: true,
+        requiredReviewerId: 'ryan-oid',
+        allowServiceAccount: true,
+        adoUserToken: null,
+        checkResults,
+      }));
+      expect(getSkillConfig).not.toHaveBeenCalled();
+      expect(summary).toEqual(expect.objectContaining({
+        status: 'completed',
+        prUrl: 'https://dev.azure.com/amergis/Apex%20-%20Apps/_git/benefits-tracker/pullrequest/9',
+        checkResults,
+        failingChecks: ['lint'],
+      }));
+      expect(mockMarkTerminal).toHaveBeenCalledWith(RUN_ID, expect.objectContaining({
+        checkResults,
+      }));
+    } finally {
+      process.env.NODE_ENV = previous;
+    }
+  });
 });

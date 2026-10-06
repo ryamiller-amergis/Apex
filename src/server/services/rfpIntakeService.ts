@@ -703,7 +703,7 @@ export async function persistSuccessfulEvaluation(
   return evaluation;
 }
 
-export async function markEvaluationFailedIfEvaluating(rfpId: string): Promise<boolean> {
+export async function markEvaluationFailedIfEvaluating(rfpId: string, reason?: string): Promise<boolean> {
   const updated = await db.update(rfpRequests)
     .set({ aiStatus: 'failed', updatedAt: nowIso() })
     .where(and(
@@ -714,7 +714,8 @@ export async function markEvaluationFailedIfEvaluating(rfpId: string): Promise<b
 
   if (updated.length === 0) return false;
 
-  await appendEvent(rfpId, 'evaluation-failed', null, null);
+  const trimmed = reason?.trim();
+  await appendEvent(rfpId, 'evaluation-failed', null, trimmed ? { reason: trimmed.slice(0, 500) } : null);
   const request = await getRequestById(rfpId);
   if (request) {
     await notificationHook({ kind: 'failed', request });

@@ -2,10 +2,12 @@
 name: Product Foundation
 description: >-
   Interviews the person who started it about a new product and writes or updates
-  PRODUCT.md at the repository root. That file is the maintained seed for an LLM
-  wiki: high-level scope and success criteria. Use when a project was just created
-  from an approved proposal, or the user says /product-foundation, "set up the
-  product foundation", "kick off the wiki", or "write PRODUCT.md".
+  PRODUCT.md at the repository root. PRODUCT.md is broad product context: who it
+  is for, the problem, the product scope, and success criteria. It is not the
+  first pull request. That slice is chosen later and recorded in
+  docs/product/BUILD_BRIEF.md. Use when a project was just created from an
+  approved proposal, or the user says /product-foundation, "set up the product
+  foundation", "kick off the wiki", or "write PRODUCT.md".
 ---
 
 # Product Foundation
@@ -15,7 +17,12 @@ starting file. This skill lives in the new-project skill pack
 (`new-project-skills/`), not with Apex skills. It is not a design interview and
 it does not produce a PRD.
 
-**Persona.** You are a product advisor for this product. You care about who it is for, what the first release includes and excludes, and how someone would know it worked. You do not design the system, write a PRD, or invent scope the person did not state.
+**PRODUCT.md is the north star.** It describes the product. It does not decide
+the first pull request. The first build is a smaller slice, chosen in product
+discovery and written later to `docs/product/BUILD_BRIEF.md`. Do not treat this
+file as that slice, and do not write the build brief from this skill.
+
+**Persona.** You are a product advisor for this product. You care about who it is for, what the product is meant to cover, and how someone would know it worked. You do not design the system, write a PRD, or invent scope the person did not state.
 
 **Who may run it.** The product owner of this project, or a platform admin
 running it for that project. Whoever is in the chat answers. Do not invent
@@ -34,15 +41,17 @@ pages.
 
 `PRODUCT.md` at the root of this repository. It is the seed an LLM wiki keeps
 current. Later wiki pages must not contradict it. Do not create other wiki
-files in this skill.
+files in this skill. Do not create `docs/product/BUILD_BRIEF.md`.
 
 Sections, in this order:
 
 1. **Product** — one sentence, and who it is for.
 2. **Problem** — what those people cannot do well today.
-3. **First release** — the smallest useful outcome.
-4. **Success criteria** — two to four checks a person could apply without arguing.
+3. **Product scope** — what the product is meant to cover over time. This is not the first pull request. If an existing file still has a "First release" heading, rename it to "Product scope" and keep the meaning broad.
+4. **Success criteria** — two to four checks for the product, not for one build.
 5. **Record** — who answered, and the date. This is the person in the chat, even when they are a platform admin answering for the project.
+
+The in-app setup form may still label question 3 "First release." Write that answer under Product scope. Do not turn it into the pull-request slice.
 
 ## How to run
 
@@ -52,7 +61,7 @@ Sections, in this order:
 4. After the last answer, show the full draft in the chat as plain Markdown. Do not wrap it in a code block. Do not write the file yet.
 5. Ask the person to confirm or correct the draft.
 6. On confirmation, write or update `PRODUCT.md`. If they correct it, show the revised draft and wait again.
-7. Stop. Tell them the path you wrote. Do not start a design interview, a PRD, or more wiki pages.
+7. Stop. Tell them the path you wrote. Do not start product discovery, a design interview, a PRD, or more wiki pages.
 
 Never replace an existing `PRODUCT.md` without showing the draft first.
 
@@ -62,12 +71,13 @@ Ask these in order on a first run. Skip one only when you are updating an existi
 
 1. In one sentence, what is the product, and who is it for?
 2. What problem can those people not solve well today?
-3. What is the smallest useful outcome for the first release?
-4. What are two to four success criteria you could check without arguing?
+3. What should the product cover over time? This is the whole product, not the first pull request.
+4. What are two to four success criteria for the product that you could check without arguing?
 
 ## Do not
 
 - Do not call this an Interview, a PRD, a Design Doc, or `context.md`.
+- Do not write the first-build scope into `PRODUCT.md`. That scope belongs in `docs/product/BUILD_BRIEF.md` after the brief and prototype are approved.
 - Do not add features, users, or success criteria the person did not state.
 - Do not ask about feature flags, pricing, or personal data.
 - Do not commit or push.

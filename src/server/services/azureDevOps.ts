@@ -6066,19 +6066,41 @@ export class AzureDevOpsService {
     title: string;
     description: string;
     workItemId?: number;
+    /** Product builds open as a draft. Omitted leaves the pull request active. */
+    isDraft?: boolean;
+    reviewers?: { id: string; isRequired?: boolean }[];
   }): Promise<string> {
-    const { repo, project, sourceBranch, targetBranch, title, description, workItemId } = opts;
+    const { repo, project, sourceBranch, targetBranch, title, description, workItemId, isDraft, reviewers } = opts;
     const gitApi = await this.connection.getGitApi();
 
-    const prPayload: any = {
+    const prPayload: {
+      title: string;
+      description: string;
+      sourceRefName: string;
+      targetRefName: string;
+      isDraft?: boolean;
+      workItemRefs?: Array<{ id: string }>;
+      reviewers?: Array<{ id: string; isRequired: boolean }>;
+    } = {
       title,
       description,
       sourceRefName: `refs/heads/${sourceBranch}`,
       targetRefName: `refs/heads/${targetBranch}`,
     };
 
+    if (isDraft) {
+      prPayload.isDraft = true;
+    }
+
     if (workItemId) {
       prPayload.workItemRefs = [{ id: String(workItemId) }];
+    }
+
+    if (reviewers?.length) {
+      prPayload.reviewers = reviewers.map((reviewer) => ({
+        id: reviewer.id,
+        isRequired: reviewer.isRequired === true,
+      }));
     }
 
     const pr = await gitApi.createPullRequest(prPayload, repo, project);
@@ -6280,7 +6302,8 @@ export class AzureDevOpsService {
   }
 
   /**
-   * Adds files on a branch. An empty repository gets its first commit on that branch.
+   * Adds or updates files on a branch. An empty repository gets its first commit.
+   * A file that is already on the branch is edited; a missing file is added.
    */
   async pushRepositoryFiles(
     project: string,
@@ -6304,6 +6327,18 @@ export class AzureDevOpsService {
     if (!refs.ok) throw new Error(await refs.text());
     const refBody = await refs.json() as { value?: { objectId?: string }[] };
     const oldObjectId = refBody.value?.[0]?.objectId ?? '0000000000000000000000000000000000000000';
+    const branchExists = oldObjectId !== '0000000000000000000000000000000000000000';
+    const commitChanges = await Promise.all(changes.map(async (change) => {
+      const itemPath = change.path.startsWith('/') ? change.path : `/${change.path}`;
+      const existing = branchExists
+        ? await this.getRepositoryFile(project, repo, itemPath, branch)
+        : null;
+      return {
+        changeType: existing === null ? 'add' : 'edit',
+        item: { path: itemPath },
+        newContent: { content: change.content, contentType: 'rawtext' },
+      };
+    }));
 
     const pushed = await fetch(
       `${orgUrl}/${encodeURIComponent(project)}/_apis/git/repositories/${repository.id}/pushes?api-version=7.1`,
@@ -6314,11 +6349,7 @@ export class AzureDevOpsService {
           refUpdates: [{ name: `refs/heads/${branch}`, oldObjectId }],
           commits: [{
             comment,
-            changes: changes.map((change) => ({
-              changeType: 'add',
-              item: { path: change.path.startsWith('/') ? change.path : `/${change.path}` },
-              newContent: { content: change.content, contentType: 'rawtext' },
-            })),
+            changes: commitChanges,
           }],
         }),
       },

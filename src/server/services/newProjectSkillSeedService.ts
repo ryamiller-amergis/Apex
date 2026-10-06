@@ -2,6 +2,8 @@ import fs from 'fs/promises';
 import path from 'path';
 
 export const PRODUCT_FOUNDATION_SKILL_PATH = '.agents/skills/product-foundation/SKILL.md';
+export const PRODUCT_DISCOVERY_SKILL_PATH = '.agents/skills/product-discovery/SKILL.md';
+export const PRODUCT_IMPLEMENTATION_SKILL_PATH = '.agents/skills/product-implementation/SKILL.md';
 export const SETUP_CHAT_MODEL = 'gemini-3.8-flash';
 export const CANONICAL_SKILL_ROOT = '.agents/skills';
 export const CURSOR_SKILL_ROOT = '.cursor/skills';
@@ -31,6 +33,7 @@ export function buildSkillSeedChanges(files: SkillPackFile[]): SkillSeedChange[]
 export async function readNewProjectSkillPack(root = path.join(process.cwd(), 'new-project-skills')): Promise<SkillPackFile[]> {
   const files: SkillPackFile[] = [];
   await walk(root, root, files);
+  files.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
   return files;
 }
 

@@ -9,6 +9,7 @@ import {
 import * as groupService from '../services/groupService';
 import { getDefaultModel, getAppSetting, setAppSetting } from '../services/appSettingsService';
 import { getProductSetup, ProductFoundationError } from '../services/productSetupService';
+import { ProductBuildError } from '../services/productBuildService';
 import {
   draftProductFoundation,
   reviseProductFoundation,
@@ -768,7 +769,11 @@ router.get('/product-setup', async (req: Request, res: Response): Promise<void> 
       return;
     }
     res.json(await getProductSetup(project, setupActor(req).actorId));
-  } catch {
+  } catch (err) {
+    if (err instanceof ProductBuildError) {
+      res.status(err.status).json({ error: err.message, code: err.code });
+      return;
+    }
     res.status(500).json({ error: 'Internal server error' });
   }
 });

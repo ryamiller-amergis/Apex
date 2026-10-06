@@ -3,6 +3,8 @@ import { useSearchParams } from 'react-router-dom';
 import { useHomeDashboard } from '../hooks/useHomeDashboard';
 import { HomeDashboardSection } from './HomeDashboardSection';
 import { ProductSetup, type FoundationReview } from './ProductSetup';
+import { ProductBuildSetup } from './ProductBuildSetup';
+import { ProductHome } from './ProductHome';
 import {
   draftProductFoundation,
   reviseProductFoundation,
@@ -50,6 +52,9 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
   const foundationRetryRef = useRef<{ progress: string; task: () => Promise<string | null> } | null>(null);
   const dashboard = useHomeDashboard(selectedProject, 'team');
   const setupQuery = useProductSetup(selectedProject || null);
+  const setupStatus = setupQuery.data;
+  const buildStatus = setupStatus?.phase === 'build' ? setupStatus : null;
+  const canInviteTeammates = setupStatus?.phase !== 'foundation' || setupStatus.canInviteTeammates !== false;
   const addTeammate = useAddProjectTeammate(selectedProject);
   const [searchParams] = useSearchParams();
   const preferredView = projectViews[selectedProject] ?? loadHomeView(selectedProject);
@@ -60,7 +65,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
   const view = threadFromUrl || (!dashboard.isLoading && !statusAvailable)
     ? 'chat'
     : preferredView;
-  const setupOn = setupQuery.data?.active === true;
+  const setupOn = setupStatus?.active === true;
+  const latestLive = buildStatus?.build.status === 'merged';
   const setupUnresolved = Boolean(selectedProject)
     && setupQuery.data === undefined
     && setupQuery.isFetched !== true;
@@ -147,7 +153,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
 
   const productSetupPanel = (
     <ProductSetup
-      step={setupStep}
+      step={canInviteTeammates ? setupStep : 'chat'}
+      canInviteTeammates={canInviteTeammates}
       candidates={setupQuery.data?.candidates ?? []}
       adding={addTeammate.isPending}
       error={setupError}
@@ -198,36 +205,46 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
     <main
       className={styles.dashboardPage}
       style={setupOn ? { zIndex: 2 } : undefined}
-      data-testid="agent-home-dashboard"
+      {...{ 'data-testid': 'agent-home-dashboard' }}
     >
-      <div className={styles.tabStrip} role="tablist" aria-label="Home view">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={view === 'chat'}
-          className={`${styles.tab} ${view === 'chat' ? styles.activeTab : ''}`}
-          onClick={() => selectView('chat')}
-          data-testid="home-view-chat"
-        >
-          Chat
-        </button>
-        {!setupOn && statusAvailable && (
+      {!setupOn && (
+        <div className={styles.tabStrip} role="tablist" aria-label="Home view">
           <button
             type="button"
             role="tab"
-            aria-selected={view === 'status'}
-            className={`${styles.tab} ${view === 'status' ? styles.activeTab : ''}`}
-            onClick={() => selectView('status')}
-            data-testid="home-view-status"
+            aria-selected={view === 'chat'}
+            className={`${styles.tab} ${view === 'chat' ? styles.activeTab : ''}`}
+            onClick={() => selectView('chat')}
+            {...{ 'data-testid': 'home-view-chat' }}
           >
-            Project status
+            Chat
           </button>
-        )}
-      </div>
+          {statusAvailable && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === 'status'}
+              className={`${styles.tab} ${view === 'status' ? styles.activeTab : ''}`}
+              onClick={() => selectView('status')}
+              {...{ 'data-testid': 'home-view-status' }}
+            >
+              Project status
+            </button>
+          )}
+        </div>
+      )}
       {setupOn ? (
         <div className={`${styles.compose} ${styles.setupCompose}`} role="tabpanel" aria-label="Product setup">
           <div className={styles.composeInner}>
-            {productSetupPanel}
+            {buildStatus ? (
+              latestLive ? (
+                <ProductHome project={selectedProject} status={buildStatus} />
+              ) : (
+                <ProductBuildSetup project={selectedProject} status={buildStatus} />
+              )
+            ) : (
+              productSetupPanel
+            )}
           </div>
         </div>
       ) : view === 'status' && statusAvailable && (

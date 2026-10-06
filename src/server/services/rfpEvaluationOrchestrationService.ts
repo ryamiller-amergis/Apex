@@ -11,7 +11,11 @@ import {
   hydrateThread,
   isThreadIdle,
   createThread as createChatThread,
+  prepareBackgroundWorkflowTurn,
+  sendMessage,
 } from './chatAgentService';
+import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
+import { isThreadRunAlive } from './agentRunReaperService';
 import { resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
 import {
@@ -25,6 +29,8 @@ import {
 const WATCHER_INTERVAL_MS = 5_000;
 /** ~10 minute hard ceiling at a 5s poll, independent of the 60s P95 target. */
 const WATCHER_MAX_ATTEMPTS = 120;
+const EVALUATION_KICKOFF_MESSAGE =
+  'Evaluate the product intake in .ai-pilot/kickoff-context.md and write the required JSON output.';
 
 const activeWatchers = new Map<string, ReturnType<typeof setInterval>>();
 
@@ -126,6 +132,8 @@ export async function autoStartEvaluation(rfpId: string): Promise<void> {
   const model = skillConfig.productIntakeEvaluationModel ?? skillConfig.defaultModel ?? globalModel;
   const freeformContext = buildIntakeContext(request);
 
+  // Attach the watcher before dispatch. The background lane may finish quickly,
+  // and its output file is the durable handoff back to the RFP.
   const thread = await createChatThread('system', {
     project: APEX_PROJECT,
     repo: skillConfig.skillRepo,
@@ -134,11 +142,45 @@ export async function autoStartEvaluation(rfpId: string): Promise<void> {
     skillPath,
     freeformContext,
     model,
-  });
+  }, { skipAutoKickoff: true });
 
   stopWatcher(rfpId);
   await setEvaluationThread(rfpId, thread.id);
-  startWatcher(rfpId, thread.id);
+
+  const destinationRun = {
+    runType: 'chat' as const,
+    runId: thread.id,
+    project: APEX_PROJECT,
+  };
+  try {
+    const decision = await routeBackgroundWorkflow({
+      userId: request.ownerId,
+      workflowClass: 'product-intake-evaluation',
+      destinationRun,
+      threadId: thread.id,
+      prepareWorker: () =>
+        prepareBackgroundWorkflowTurn(thread.id, EVALUATION_KICKOFF_MESSAGE),
+      runInProcess: () =>
+        sendMessage(
+          thread.id,
+          EVALUATION_KICKOFF_MESSAGE,
+          undefined,
+          [],
+          { hidden: true },
+        ),
+      reportRecoverablePreparationFailure: () =>
+        markEvaluationFailedIfEvaluating(
+          rfpId,
+          'The evaluation worker could not prepare its workspace.',
+        ).then(() => undefined),
+    });
+    console.log(`[rfpEvaluation] Routed ${decision.route} — rfpId=${rfpId}`);
+    startWatcher(rfpId, thread.id);
+  } catch (err) {
+    stopWatcher(rfpId);
+    const reason = err instanceof Error ? err.message : 'Evaluation orchestration failed';
+    await markEvaluationFailedIfEvaluating(rfpId, reason);
+  }
 }
 
 export function startWatcher(rfpId: string, threadId: string): void {
@@ -170,7 +212,8 @@ export function startWatcher(rfpId: string, threadId: string): void {
     const raw = readOutputFromWorkspace(workspaceDir);
 
     if (!raw) {
-      if (isThreadIdle(threadId)) {
+      const workerRunning = await isThreadRunAlive(threadId).catch(() => false);
+      if (isThreadIdle(threadId) && !workerRunning) {
         clearInterval(interval);
         activeWatchers.delete(rfpId);
         console.warn(`[rfpEvaluation] Agent completed without output — rfpId=${rfpId}`);
@@ -256,7 +299,8 @@ export async function recoverEvaluatingRfps(): Promise<number> {
     const workspaceDir = await getWorkspaceDir(request.aiThreadId);
     const hasOutput = workspaceDir ? Boolean(readOutputFromWorkspace(workspaceDir)) : false;
 
-    if (isThreadIdle(request.aiThreadId) && !hasOutput) {
+    const workerRunning = await isThreadRunAlive(request.aiThreadId).catch(() => false);
+    if (isThreadIdle(request.aiThreadId) && !hasOutput && !workerRunning) {
       console.log(
         `[rfpEvaluation] Recovery re-kick dead agent — rfpId=${request.id} threadId=${request.aiThreadId}`,
       );

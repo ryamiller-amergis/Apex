@@ -57,6 +57,93 @@ emit_activity() {
       + (if $status != "" then {status:$status} else {} end)')"
 }
 
+# Suite outcomes printed as APEX_CHECK_RESULTS. Failures do not stop the branch
+# or the pull request unless AGENT_ENFORCE_CHECKS=1. Enforced runs stop before
+# commit, push, and pull-request creation when any check fails or is missing.
+check_results=""
+failed_check_count=0
+
+record_check() {
+  local kind="$1"
+  local outcome="$2"
+  local title="$3"
+  local detail="${4:-$outcome}"
+  if [ -n "${check_results}" ]; then
+    check_results="${check_results};"
+  fi
+  check_results="${check_results}${kind}=${outcome}"
+  local activity_status="completed"
+  if [ "${outcome}" = "failed" ]; then
+    activity_status="failed"
+    failed_check_count=$((failed_check_count + 1))
+  fi
+  emit_activity "check:${kind}" "status" "${title}" "${detail}" "${activity_status}"
+}
+
+script_defined() {
+  jq -e --arg name "$1" '.scripts[$name] | type == "string"' package.json >/dev/null 2>&1
+}
+
+run_script_check() {
+  local kind="$1"
+  local script="$2"
+  local title="$3"
+  local log_file="$4"
+  if ! script_defined "${script}"; then
+    if [ "${AGENT_ENFORCE_CHECKS:-}" = "1" ]; then
+      record_check "${kind}" "failed" "${title}" "missing script ${script}"
+    fi
+    return 0
+  fi
+  if npm run "${script}" >"${log_file}" 2>&1; then
+    record_check "${kind}" "passed" "${title}" "passed"
+  else
+    record_check "${kind}" "failed" "${title}" "failed"
+  fi
+}
+
+run_quality_checks() {
+  if [ ! -f package.json ]; then
+    if [ "${AGENT_ENFORCE_CHECKS:-}" = "1" ]; then
+      record_check "install" "failed" "Install" "package.json is missing"
+    fi
+    return 0
+  fi
+
+  local log_file
+  log_file="$(mktemp)"
+  emit_activity "check:start" "status" "Running quality checks" "" "running"
+  if [ -f package-lock.json ]; then
+    if npm ci --no-audit --no-fund >"${log_file}" 2>&1; then
+      record_check "install" "passed" "Install" "npm ci"
+    else
+      record_check "install" "failed" "Install" "npm ci"
+    fi
+  else
+    if npm install --no-audit --no-fund >"${log_file}" 2>&1; then
+      record_check "install" "passed" "Install" "npm install"
+    else
+      record_check "install" "failed" "Install" "npm install"
+    fi
+  fi
+
+  run_script_check "lint" "lint" "Lint" "${log_file}"
+  run_script_check "typecheck" "typecheck" "Typecheck" "${log_file}"
+  run_script_check "unit" "test" "Unit" "${log_file}"
+  run_script_check "build" "build" "Build" "${log_file}"
+  run_script_check "migrations" "migrate:check" "Migrations" "${log_file}"
+  run_script_check "e2e" "test:e2e" "E2E" "${log_file}"
+  run_script_check "wcag" "test:a11y" "WCAG" "${log_file}"
+
+  if npm audit --omit=dev --audit-level=high >"${log_file}" 2>&1; then
+    record_check "security" "passed" "Security" "npm audit"
+  else
+    record_check "security" "failed" "Security" "npm audit"
+  fi
+  rm -f "${log_file}"
+  emit_activity "check:done" "status" "Quality checks finished" "${check_results}" "completed"
+}
+
 dest="/workspace/repo"
 rm -rf "${dest}"
 emit_activity "clone:start" "status" "Cloning repository" "${REPO_URL}" "running"
@@ -119,6 +206,9 @@ finish_run() {
     echo "APEX_BASE_BRANCH=${AGENT_BASE_BRANCH}"
     echo "APEX_SUMMARY=${summary_line}"
   fi
+  if [ -n "${check_results}" ]; then
+    echo "APEX_CHECK_RESULTS=${check_results}"
+  fi
   # Printed last. Apex waits for this before it treats the run as finished,
   # so a poll cannot record success in the gap before APEX_AGENT_EXIT.
   echo "APEX_RUN_SETTLED"
@@ -137,6 +227,19 @@ if git diff --quiet && git diff --cached --quiet && [ -z "$(git ls-files --other
   echo "APEX_RESULT no file changes"
   rm -f "${summary_file}"
   finish_run
+fi
+
+run_quality_checks
+
+if [ "${AGENT_ENFORCE_CHECKS:-}" = "1" ] && [ "${failed_check_count}" -gt 0 ]; then
+  emit_activity "quality-gate" "status" "Quality gate failed" "${check_results}" "failed"
+  echo "APEX_CHECK_RESULTS=${check_results}"
+  echo "APEX_QUALITY_GATE_FAILED"
+  echo "APEX_RUN_SETTLED"
+  rm -f "${summary_file}"
+  # Keep the logs available long enough for Apex to record the failed run.
+  sleep 120
+  exit 0
 fi
 
 commit_title="${AGENT_WORK_ITEM_TITLE:-${AGENT_BRANCH}}"
@@ -185,20 +288,42 @@ ${started_by}
 ${summary_line}"
 fi
 
+if [ -n "${check_results}" ]; then
+  description="${description}"$'\n\n## Quality checks'
+  quality_item=""
+  quality_kind=""
+  quality_outcome=""
+  IFS=';'
+  for quality_item in ${check_results}; do
+    quality_kind="${quality_item%%=*}"
+    quality_outcome="${quality_item#*=}"
+    description="${description}"$'\n'"- ${quality_kind}: ${quality_outcome}"
+  done
+  IFS=$' \t\n'
+fi
+
 url="${REPO_URL%.git}"
 url="${url#https://dev.azure.com/}"
 org="${url%%/*}"
 rest="${url#*/}"
 project="${rest%%/*}"
 repo="${url##*/}"
+draft_pr="false"
+case "${AGENT_DRAFT_PR:-}" in
+  1|true|TRUE|yes) draft_pr="true" ;;
+esac
 body="$(jq -n \
   --arg source "refs/heads/${AGENT_BRANCH}" \
   --arg target "refs/heads/${AGENT_BASE_BRANCH}" \
   --arg title "${pr_title}" \
   --arg description "${description}" \
   --arg workItemId "${AGENT_WORK_ITEM_ID:-}" \
+  --argjson isDraft "${draft_pr}" \
+  --arg reviewerId "${AGENT_REQUIRED_REVIEWER_ID:-}" \
   '{sourceRefName:$source,targetRefName:$target,title:$title,description:$description}
-    + (if $workItemId != "" then {workItemRefs:[{id:$workItemId}]} else {} end)')"
+    + (if $isDraft then {isDraft:true} else {} end)
+    + (if $workItemId != "" then {workItemRefs:[{id:$workItemId}]} else {} end)
+    + (if $reviewerId != "" then {reviewers:[{id:$reviewerId, isRequired:true}]} else {} end)')"
 
 emit_activity "pr:start" "status" "Opening pull request" "${pr_title}" "running"
 if [ -n "${ADO_USER_TOKEN:-}" ]; then

@@ -111,6 +111,10 @@ export function useSubmitRfpReview() {
   }));
 }
 
+export function useRetryRfpEvaluation() {
+  return useTriageMutation<{ id: string }>(() => ({ path: '/retry', method: 'POST' }));
+}
+
 export function useRegenerateRfpProposal() {
   return useTriageMutation<{ id: string }>(() => ({ path: '/proposal/regenerate', method: 'POST' }));
 }

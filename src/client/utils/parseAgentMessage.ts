@@ -74,8 +74,23 @@ function tryMatchOption(lines: string[], i: number): [string, string, number] | 
   return null;
 }
 
+/**
+ * Models sometimes put `a. … b. … c. …` on one line. The choice UI only
+ * matches an option that starts its own line, so split those before parsing.
+ */
+function splitInlineChoiceLines(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => {
+      const markers = line.match(/(?:^|\s)[a-eA-E][.)]\s+/g);
+      if (!markers || markers.length < 2) return line;
+      return line.replace(/\s+([b-eB-E][.)]\s+)/g, '\n$1');
+    })
+    .join('\n');
+}
+
 export function parseAgentMessage(text: string): MessagePart[] {
-  const lines = text.split('\n');
+  const lines = splitInlineChoiceLines(text).split('\n');
   const parts: MessagePart[] = [];
   let pendingLines: string[] = [];
   let partIdx = 0;

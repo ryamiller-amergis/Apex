@@ -76,6 +76,11 @@ import type {
   RfpProposal,
   RfpProposalJobStatus,
 } from '../../shared/types/rfpIntake';
+import type {
+  ProductBuildBrief,
+  ProductBuildKind,
+  ProductBuildStatus,
+} from '../../shared/types/productBuild';
 import type { DesignModuleIconKey } from '../../shared/types/designModule';
 import type {
   LoadProfile,
@@ -166,6 +171,7 @@ export const threadsRelations = relations(chatThreads, ({ many }) => ({
   prds: many(prds),
   testCases: many(testCases),
   designDocs: many(designDocs, { relationName: 'designDocChatThread' }),
+  productBuilds: many(productBuilds),
 }));
 
 export const messagesRelations = relations(chatMessages, ({ one, many }) => ({
@@ -219,11 +225,12 @@ export const devSessions = pgTable('dev_sessions', {
   ),
 }));
 
-export const devSessionsRelations = relations(devSessions, ({ one }) => ({
+export const devSessionsRelations = relations(devSessions, ({ one, many }) => ({
   chatThread: one(chatThreads, {
     fields: [devSessions.chatThreadId],
     references: [chatThreads.id],
   }),
+  productBuilds: many(productBuilds),
 }));
 
 export const repoCacheLeases = pgTable('repo_cache_leases', {
@@ -355,6 +362,8 @@ export const appUsersRelations = relations(appUsers, ({ many, one }) => ({
   rfpIntakeSubmitRequests: many(rfpIntakeSubmitRequests),
   featureRequests: many(featureRequests),
   rfpRequests: many(rfpRequests),
+  requestedProductBuilds: many(productBuilds, { relationName: 'productBuildRequester' }),
+  reviewedProductBuilds: many(productBuilds, { relationName: 'productBuildReviewer' }),
   profile: one(userProfiles, {
     fields: [appUsers.oid],
     references: [userProfiles.userOid],
@@ -1547,6 +1556,7 @@ export const uiLabDesignShares = pgTable('ui_lab_design_shares', {
 export const uiLabDesignsRelations = relations(uiLabDesigns, ({ many }) => ({
   comments: many(uiLabComments),
   shares: many(uiLabDesignShares),
+  productBuilds: many(productBuilds),
 }));
 
 export const uiLabCommentsRelations = relations(uiLabComments, ({ one }) => ({
@@ -3003,6 +3013,7 @@ export const rfpRequestsRelations = relations(rfpRequests, ({ one, many }) => ({
   attachments: many(rfpAttachments),
   events: many(rfpRequestEvents),
   evaluationMessages: many(rfpEvaluationMessages),
+  productBuilds: many(productBuilds),
 }));
 
 export const rfpEvaluationsRelations = relations(rfpEvaluations, ({ one }) => ({
@@ -3300,5 +3311,98 @@ export const playbookGateApproversRelations = relations(playbookGateApprovers, (
   stepRun: one(playbookStepRuns, {
     fields: [playbookGateApprovers.stepRunId],
     references: [playbookStepRuns.id],
+  }),
+}));
+
+// ── Product builds ────────────────────────────────────────────────────────────
+// One initial build per RFP. Later feature, bug, and refinement rows are separate.
+// agent_run_id is text with no FK: agent_runs already points at dev_sessions, and
+// a build points at both, so a hard FK would cycle if a run later points back here.
+
+export const productBuilds = pgTable('product_builds', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  kind: text('kind').$type<ProductBuildKind>().notNull(),
+  status: text('status').$type<ProductBuildStatus>().notNull().default('discovery'),
+  project: text('project').notNull(),
+  rfpRequestId: uuid('rfp_request_id').references(() => rfpRequests.id, { onDelete: 'set null' }),
+  chatThreadId: uuid('chat_thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+  uiLabDesignId: uuid('ui_lab_design_id').references(() => uiLabDesigns.id, { onDelete: 'set null' }),
+  devSessionId: uuid('dev_session_id').references(() => devSessions.id, { onDelete: 'set null' }),
+  agentRunId: text('agent_run_id'),
+  brief: jsonb('brief').$type<ProductBuildBrief>(),
+  prototypeVersion: integer('prototype_version'),
+  requesterId: text('requester_id').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  reviewerId: text('reviewer_id').references(() => appUsers.oid, { onDelete: 'set null' }),
+  adoWorkItemId: integer('ado_work_item_id'),
+  prUrl: text('pr_url'),
+  errorMessage: text('error_message'),
+  approvedAt: timestamp('approved_at', { withTimezone: true, mode: 'string' }),
+  prOpenedAt: timestamp('pr_opened_at', { withTimezone: true, mode: 'string' }),
+  mergedAt: timestamp('merged_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  kindCheck: check(
+    'product_builds_kind_check',
+    sql`${t.kind} IN ('initial', 'feature', 'bug', 'refinement')`,
+  ),
+  statusCheck: check(
+    'product_builds_status_check',
+    sql`${t.status} IN ('discovery', 'brief-confirmed', 'prototype', 'approved', 'building', 'pr-open', 'merged', 'failed')`,
+  ),
+  briefCheck: check(
+    'product_builds_brief_check',
+    sql`${t.brief} IS NULL OR jsonb_typeof(${t.brief}) = 'object'`,
+  ),
+  prototypeVersionCheck: check(
+    'product_builds_prototype_version_check',
+    sql`${t.prototypeVersion} IS NULL OR ${t.prototypeVersion} >= 1`,
+  ),
+  adoWorkItemCheck: check(
+    'product_builds_ado_work_item_check',
+    sql`${t.adoWorkItemId} IS NULL OR ${t.adoWorkItemId} > 0`,
+  ),
+  oneInitialPerRfp: uniqueIndex('idx_product_builds_one_initial_per_rfp')
+    .on(t.rfpRequestId)
+    .where(sql`${t.kind} = 'initial' AND ${t.rfpRequestId} IS NOT NULL`),
+  projectStatusIdx: index('idx_product_builds_project_status').on(t.project, t.status),
+  requesterCreatedIdx: index('idx_product_builds_requester_created').on(t.requesterId, t.createdAt),
+  rfpIdx: index('idx_product_builds_rfp')
+    .on(t.rfpRequestId)
+    .where(sql`${t.rfpRequestId} IS NOT NULL`),
+  chatThreadIdx: index('idx_product_builds_chat_thread')
+    .on(t.chatThreadId)
+    .where(sql`${t.chatThreadId} IS NOT NULL`),
+  agentRunIdx: index('idx_product_builds_agent_run')
+    .on(t.agentRunId)
+    .where(sql`${t.agentRunId} IS NOT NULL`),
+}));
+
+export const productBuildsRelations = relations(productBuilds, ({ one }) => ({
+  rfpRequest: one(rfpRequests, {
+    fields: [productBuilds.rfpRequestId],
+    references: [rfpRequests.id],
+  }),
+  chatThread: one(chatThreads, {
+    fields: [productBuilds.chatThreadId],
+    references: [chatThreads.id],
+  }),
+  uiLabDesign: one(uiLabDesigns, {
+    fields: [productBuilds.uiLabDesignId],
+    references: [uiLabDesigns.id],
+  }),
+  devSession: one(devSessions, {
+    fields: [productBuilds.devSessionId],
+    references: [devSessions.id],
+  }),
+  requester: one(appUsers, {
+    fields: [productBuilds.requesterId],
+    references: [appUsers.oid],
+    relationName: 'productBuildRequester',
+  }),
+  reviewer: one(appUsers, {
+    fields: [productBuilds.reviewerId],
+    references: [appUsers.oid],
+    relationName: 'productBuildReviewer',
   }),
 }));

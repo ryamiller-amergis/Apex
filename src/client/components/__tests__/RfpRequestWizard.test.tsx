@@ -5,6 +5,7 @@ import {
   useDeleteIntakeProject,
   usePublishRfpProposal,
   useRegenerateRfpProposal,
+  useRetryRfpEvaluation,
   useRfpAttachmentUpload,
   useRfpMentionCandidates,
   useRfpTriageDetail,
@@ -40,6 +41,7 @@ jest.mock('../../hooks/useRfpTriage', () => ({
   useRfpMentionCandidates: jest.fn(),
   useSubmitRfpReview: jest.fn(),
   useRegenerateRfpProposal: jest.fn(),
+  useRetryRfpEvaluation: jest.fn(() => ({ mutate: jest.fn(), isPending: false, isError: false, error: null })),
   useSaveRfpProposalDraft: jest.fn(),
   usePublishRfpProposal: jest.fn(),
   useDeleteIntakeProject: jest.fn(),
@@ -62,6 +64,7 @@ const mockUpload = useRfpAttachmentUpload as jest.MockedFunction<typeof useRfpAt
 const mockMentions = useRfpMentionCandidates as jest.MockedFunction<typeof useRfpMentionCandidates>;
 const mockSubmitReview = useSubmitRfpReview as jest.MockedFunction<typeof useSubmitRfpReview>;
 const mockRegenerate = useRegenerateRfpProposal as jest.MockedFunction<typeof useRegenerateRfpProposal>;
+const mockRetryEvaluation = useRetryRfpEvaluation as jest.MockedFunction<typeof useRetryRfpEvaluation>;
 const mockSaveDraft = useSaveRfpProposalDraft as jest.MockedFunction<typeof useSaveRfpProposalDraft>;
 const mockPublish = usePublishRfpProposal as jest.MockedFunction<typeof usePublishRfpProposal>;
 const mockDeleteProject = useDeleteIntakeProject as jest.MockedFunction<typeof useDeleteIntakeProject>;
@@ -314,6 +317,7 @@ describe('RfpRequestWizard', () => {
     mockUpload.mockReturnValue(idleMutation() as never);
     mockSubmitReview.mockReturnValue(idleMutation() as never);
     mockRegenerate.mockReturnValue(idleMutation() as never);
+    mockRetryEvaluation.mockReturnValue(idleMutation() as never);
     mockSaveDraft.mockReturnValue(idleMutation() as never);
     mockPublish.mockReturnValue(idleMutation() as never);
     mockDeleteProject.mockReturnValue(idleMutation() as never);
@@ -659,6 +663,36 @@ describe('RfpRequestWizard', () => {
       renderTriage();
       goToStep(2);
       expect(screen.getByTestId('rfp-review-submit-error')).toHaveTextContent('Proposal generation is already running');
+    });
+
+    it('shows a retry action to triage when the evaluation failed', () => {
+      const mutate = jest.fn();
+      mockRetryEvaluation.mockReturnValue({ ...idleMutation(), mutate } as never);
+      renderTriage(makeDetail({
+        aiStatus: 'failed',
+        status: 'evaluating',
+        currentEvaluation: null,
+        currentEvaluationId: null,
+        activity: [{
+          id: 'evt-fail',
+          rfpRequestId: 'rfp-1',
+          eventType: 'evaluation-failed',
+          actorId: null,
+          payload: { reason: 'verdict must be one of: build, rent' },
+          createdAt: '2026-08-19T12:01:00.000Z',
+        }],
+      }));
+      goToStep(2);
+      expect(screen.getByTestId('rfp-evaluation-failure-reason')).toHaveTextContent('verdict must be one of: build, rent');
+      fireEvent.click(screen.getByTestId('rfp-evaluation-retry'));
+      expect(mutate).toHaveBeenCalledWith({ id: 'rfp-1' });
+    });
+
+    it('does not offer evaluation retry to the requester', () => {
+      renderRequester(makeDetail({ aiStatus: 'failed', status: 'evaluating', currentEvaluation: null, currentEvaluationId: null }));
+      goToStep(2);
+      expect(screen.getByTestId('rfp-evaluation-failed')).toBeInTheDocument();
+      expect(screen.queryByTestId('rfp-evaluation-retry')).not.toBeInTheDocument();
     });
 
     it('SR-5 hides the submit action while the evaluation is running', () => {

@@ -12,6 +12,7 @@ import {
   AI_RUNS_DEFAULT_HEARTBEAT_MS,
   AiRunFenceConflictError,
   createAiRunsWorker,
+  localizeExecutionSnapshot,
   openGroundedReader,
   openLocalCheckout,
   resolveAiRunsHeartbeatMs,
@@ -416,6 +417,15 @@ describe('aiRunsWorker local checkout and heartbeat contracts', () => {
     } finally {
       await fs.promises.rm(checkout, { recursive: true, force: true });
     }
+  });
+
+  it('rewrites only the mounted workspace prefix for a local container', () => {
+    const localized = localizeExecutionSnapshot(snapshot, {
+      AI_RUNS_WORKSPACE_PATH_FROM: 'C:\\shared',
+      AI_RUNS_WORKSPACE_PATH_TO: '/workspaces',
+    });
+    expect(localized.workspaceRef).toBe('/workspaces/runs/run-1');
+    expect(localizeExecutionSnapshot(snapshot).workspaceRef).toBe(snapshot.workspaceRef);
   });
 
   it('TBI-004 performance NFR: defaults heartbeat interval to 15 seconds', () => {
