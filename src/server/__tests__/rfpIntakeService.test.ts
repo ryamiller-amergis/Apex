@@ -367,6 +367,37 @@ describe('PBI-002 answerClarification VT-07', () => {
       aiStatus: 'evaluating',
     }));
   });
+
+  it('returns the persisted clarification when evaluation start fails', async () => {
+    mockedDb.query.rfpRequests.findFirst.mockResolvedValue({
+      ...REQUEST_ROW,
+      status: 'evaluated',
+      aiStatus: 'complete',
+      currentEvaluationId: 'eval-1',
+      clarificationUsed: false,
+    });
+    mockedDb.query.rfpEvaluations.findFirst.mockResolvedValue({
+      id: 'eval-1',
+      rfpRequestId: 'rfp-1',
+      version: 1,
+      ...VALID_OUTPUT,
+      rawOutput: VALID_OUTPUT,
+      createdAt: NOW,
+    });
+    mockedAutoStart.mockRejectedValueOnce(new Error('ADO clone failed'));
+
+    const result = await answerClarification('rfp-1', 'owner-1', {
+      request: 'Track RFPs with a dedicated queue and form',
+      clarifyingAnswers: ['Salesforce today'],
+    });
+
+    expect(result.id).toBe('rfp-1');
+    expect(mockedAutoStart).toHaveBeenCalledWith('rfp-1');
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      clarificationUsed: true,
+    }));
+    expect(mockedDb.delete).not.toHaveBeenCalled();
+  });
 });
 
 describe('PBI-002 retryEvaluation VT-08', () => {
@@ -492,6 +523,23 @@ describe('applyReviewerDecision', () => {
       constraints: expect.stringContaining('[Apex reviewer decision]'),
     }));
     expect(mockedAutoStart).toHaveBeenCalledWith('rfp-1');
+  });
+
+  it('returns the persisted reviewer decision when evaluation start fails', async () => {
+    mockedAutoStart.mockRejectedValueOnce(new Error('ADO clone failed'));
+
+    const result = await applyReviewerDecision('rfp-1', 'triage-1', {
+      verdict: 'build',
+      rationale: 'Replace unused Cornerstone',
+    });
+
+    expect(result.id).toBe('rfp-1');
+    expect(mockedAutoStart).toHaveBeenCalledWith('rfp-1');
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      reviewerVerdict: 'build',
+      reviewerRationale: 'Replace unused Cornerstone',
+    }));
+    expect(mockedDb.delete).not.toHaveBeenCalled();
   });
 
   it('skips the re-run when reevaluate is false', async () => {

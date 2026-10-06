@@ -407,9 +407,14 @@ function attachmentDir(rfpId: string): string {
   return path.join(resolveDataRoot(), 'rfp-attachments', rfpId);
 }
 
-async function startEvaluation(rfpId: string): Promise<void> {
+async function startEvaluation(rfpId: string, options?: { rethrow?: boolean }): Promise<void> {
   const { autoStartEvaluation } = await import('./rfpEvaluationOrchestrationService');
-  await autoStartEvaluation(rfpId);
+  try {
+    await autoStartEvaluation(rfpId);
+  } catch (err) {
+    if (options?.rethrow) throw err;
+    // autoStartEvaluation already marked the row failed.
+  }
 }
 
 async function abandonCreatedRequest(rfpId: string): Promise<void> {
@@ -449,7 +454,7 @@ export async function createRequest(
     for (const file of files) {
       await addAttachment(row.id, ownerId, file);
     }
-    await startEvaluation(row.id);
+    await startEvaluation(row.id, { rethrow: true });
   } catch (err) {
     try {
       await abandonCreatedRequest(row.id);
