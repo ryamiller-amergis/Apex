@@ -73,8 +73,6 @@ import {
 import {
   CLOUD_AGENT_QUEUE_WAIT_MS,
   CLOUD_AGENT_USER_TOKEN_CLAIM_MS,
-  cloudAgentLaunchSlots,
-  resolveCloudAgentMaxConcurrent,
   resolveCloudAgentRunLimitMs,
 } from './cloudAgentQueue';
 
@@ -82,7 +80,7 @@ export const CLOUD_AGENT_PRE_IDENTITY_TTL_MS = 2 * 60_000;
 
 /**
  * Deadline for a claimed run that still has `position` launches ahead of it.
- * Position 0 is the run whose container start is about to begin. Later runs
+ * Position 0 is the run whose Cursor start is about to begin. Later runs
  * get their own two-minute window so one slow start does not expire them
  * while they are waiting.
  */
@@ -90,7 +88,6 @@ export function cloudAgentPreIdentityTimeoutAt(position: number, nowMs = Date.no
   const place = Number.isInteger(position) && position >= 0 ? position : 0;
   return new Date(nowMs + (place + 1) * CLOUD_AGENT_PRE_IDENTITY_TTL_MS).toISOString();
 }
-const CLOUD_AGENT_DISPATCH_LOCK = 'cloud-agent-dispatch';
 const pendingCloudAgentUserTokens = new Map<string, string>();
 let cloudAgentQueuePumpRunning = false;
 let cloudAgentReconcileRunning = false;
@@ -190,22 +187,19 @@ function toRunSummary(
     terminalReason: AgentRunTerminalReason | null;
     checkResults: RunCheckResult[] | null;
     lastError?: string | null;
-    cloudJobName?: string | null;
-    cloudJobExecutionName?: string | null;
+    cloudAgentIdentity?: string | null;
     cloudBranchName?: string | null;
     createdAt?: string;
   },
   prUrl: string | null,
   prStatus: HostAgnosticPrStatus,
   expectsPullRequest = true,
-  queuePosition: number | null = null,
 ): CloudAgentRunSummary {
   const status = run.status as AgentRunStatus;
   return {
     runId: run.id,
     status,
-    jobName: run.cloudJobName ?? process.env.CURSOR_CONTAINER_JOB_NAME?.trim() ?? null,
-    executionName: run.cloudJobExecutionName ?? null,
+    cloudAgentId: run.cloudAgentIdentity ?? null,
     branchName: run.cloudBranchName ?? null,
     createdAt: run.createdAt ?? new Date(0).toISOString(),
     prUrl,
@@ -215,7 +209,6 @@ function toRunSummary(
     checkResults: run.checkResults,
     failingChecks: deriveFailingChecks(run.checkResults),
     lastError: status === 'failed' ? (run.lastError ?? null) : null,
-    queuePosition,
   };
 }
 
@@ -423,8 +416,9 @@ export async function startCloudAgentRun(
 
   const started = await persistQueuedRun(input, skillConfig, deps);
   if (input.adoUserToken) pendingCloudAgentUserTokens.set(started.runId, input.adoUserToken);
-  const queuePosition = await lookupCloudAgentQueuePosition(started.runId);
-  scheduleCloudAgentDispatch();
+  if (await claimCloudAgentRun(started.runId)) {
+    await launchClaimedCloudAgentRun(started.runId, deps);
+  }
   trackEvent('cloud_agent_run.started', {
     project: input.project,
     sessionId: started.sessionId,
@@ -434,9 +428,9 @@ export async function startCloudAgentRun(
     sessionId: started.sessionId,
     project: input.project,
     workItemId: input.workItemId,
-    status: 'queued',
+    status: 'launched',
   });
-  return { sessionId: started.sessionId, runId: started.runId, queuePosition };
+  return { sessionId: started.sessionId, runId: started.runId };
 }
 
 interface PersistedCloudAgentRun {
@@ -560,7 +554,7 @@ async function persistQueuedRun(
 function scheduleCloudAgentDispatch(): void {
   setImmediate(() => {
     void pumpCloudAgentQueue().catch((err) => {
-      console.error('[cloud-agent] queue dispatch failed', err instanceof Error ? err.message : err);
+      console.error('[cloud-agent] launch recovery failed', err instanceof Error ? err.message : err);
     });
   });
 }
@@ -571,88 +565,66 @@ function takeCloudAgentUserToken(runId: string): string | null {
   return token;
 }
 
-/** 1-based place among cloud-agent runs still waiting for a container. */
-export async function lookupCloudAgentQueuePosition(runId: string): Promise<number | null> {
-  const [row] = await db
-    .select({
-      position: sql<number>`count(*)::int`,
+/** Marks one saved run so this process can send it to Cursor. */
+async function claimCloudAgentRun(runId: string): Promise<boolean> {
+  const instance = cloudAgentInstanceId();
+  const nowMs = Date.now();
+  const updated = await db
+    .update(agentRuns)
+    .set({
+      ownerInstance: instance,
+      timeoutAt: cloudAgentPreIdentityTimeoutAt(0, nowMs),
+      updatedAt: new Date(nowMs).toISOString(),
     })
+    .where(and(
+      eq(agentRuns.id, runId),
+      eq(agentRuns.status, 'queued'),
+      eq(agentRuns.cancelRequested, false),
+      sql`${agentRuns.ownerInstance} IS NULL`,
+      sql`${agentRuns.cloudAgentIdentity} IS NULL`,
+    ))
+    .returning({ id: agentRuns.id });
+  return Array.isArray(updated) && updated.length > 0;
+}
+
+/** Claims saved runs that never reached Cursor. There is no launch cap. */
+async function claimCloudAgentRunIds(): Promise<string[]> {
+  const instance = cloudAgentInstanceId();
+  const tokenClaimCutoff = new Date(Date.now() - CLOUD_AGENT_USER_TOKEN_CLAIM_MS).toISOString();
+  const tokenInstance = sql`${agentRuns.executionSnapshot}->'cloudAgent'->>'userTokenInstance'`;
+  const waiting = await db
+    .select({ id: agentRuns.id })
     .from(agentRuns)
     .where(and(
       eq(agentRuns.lane, 'cloud-agent'),
       eq(agentRuns.status, 'queued'),
-      sql`${agentRuns.cloudAgentIdentity} IS NULL`,
       eq(agentRuns.cancelRequested, false),
-      sql`(${agentRuns.queuedAt}, ${agentRuns.id}) <= (
-        (SELECT queued_at FROM agent_runs WHERE id = ${runId}),
-        ${runId}
-      )`,
-    ));
-  const position = Number(row?.position ?? 0);
-  return position > 0 ? position : null;
-}
+      sql`${agentRuns.ownerInstance} IS NULL`,
+      sql`${agentRuns.cloudAgentIdentity} IS NULL`,
+      sql`(${tokenInstance} IS NULL OR ${tokenInstance} = ${instance} OR ${agentRuns.queuedAt} <= ${tokenClaimCutoff})`,
+    ))
+    .orderBy(asc(agentRuns.queuedAt), asc(agentRuns.id));
 
-async function claimCloudAgentRunIds(cap: number): Promise<string[]> {
-  const claimed = await db.transaction(async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${CLOUD_AGENT_DISPATCH_LOCK}))`);
-    const active = await tx
-      .select({ id: agentRuns.id })
-      .from(agentRuns)
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const ids: string[] = [];
+  for (const [index, candidate] of waiting.entries()) {
+    const updated = await db
+      .update(agentRuns)
+      .set({
+        ownerInstance: instance,
+        timeoutAt: cloudAgentPreIdentityTimeoutAt(index, nowMs),
+        updatedAt: nowIso,
+      })
       .where(and(
-        eq(agentRuns.lane, 'cloud-agent'),
-        inArray(agentRuns.status, ['dispatched', 'running']),
-      ));
-    const starting = await tx
-      .select({ id: agentRuns.id })
-      .from(agentRuns)
-      .where(and(
-        eq(agentRuns.lane, 'cloud-agent'),
+        eq(agentRuns.id, candidate.id),
         eq(agentRuns.status, 'queued'),
-        sql`${agentRuns.ownerInstance} IS NOT NULL`,
-        sql`${agentRuns.cloudAgentIdentity} IS NULL`,
-      ));
-    const slots = cloudAgentLaunchSlots(active.length + starting.length, cap);
-    if (slots <= 0) return [];
-
-    const instance = cloudAgentInstanceId();
-    const tokenClaimCutoff = new Date(Date.now() - CLOUD_AGENT_USER_TOKEN_CLAIM_MS).toISOString();
-    const tokenInstance = sql`${agentRuns.executionSnapshot}->'cloudAgent'->>'userTokenInstance'`;
-    const waiting = await tx
-      .select({ id: agentRuns.id })
-      .from(agentRuns)
-      .where(and(
-        eq(agentRuns.lane, 'cloud-agent'),
-        eq(agentRuns.status, 'queued'),
-        eq(agentRuns.cancelRequested, false),
         sql`${agentRuns.ownerInstance} IS NULL`,
-        sql`${agentRuns.cloudAgentIdentity} IS NULL`,
-        sql`(${tokenInstance} IS NULL OR ${tokenInstance} = ${instance} OR ${agentRuns.queuedAt} <= ${tokenClaimCutoff})`,
       ))
-      .orderBy(asc(agentRuns.queuedAt), asc(agentRuns.id))
-      .limit(slots);
-
-    const nowMs = Date.now();
-    const nowIso = new Date(nowMs).toISOString();
-    const ids: string[] = [];
-    for (const [index, candidate] of waiting.entries()) {
-      const updated = await tx
-        .update(agentRuns)
-        .set({
-          ownerInstance: instance,
-          timeoutAt: cloudAgentPreIdentityTimeoutAt(index, nowMs),
-          updatedAt: nowIso,
-        })
-        .where(and(
-          eq(agentRuns.id, candidate.id),
-          eq(agentRuns.status, 'queued'),
-          sql`${agentRuns.ownerInstance} IS NULL`,
-        ))
-        .returning({ id: agentRuns.id });
-      if (updated[0]) ids.push(updated[0].id);
-    }
-    return ids;
-  });
-  return Array.isArray(claimed) ? claimed : [];
+      .returning({ id: agentRuns.id });
+    if (Array.isArray(updated) && updated[0]) ids.push(updated[0].id);
+  }
+  return ids;
 }
 
 async function launchClaimedCloudAgentRun(
@@ -876,23 +848,22 @@ async function extendCloudAgentLaunchTimeouts(runIds: string[]): Promise<void> {
   }
 }
 
-/** Starts queued cloud-agent runs until the container cap is full. */
+/** Sends saved cloud-agent runs that never reached Cursor. */
 export async function pumpCloudAgentQueue(
   deps: CloudAgentServiceDeps = defaultDeps,
 ): Promise<void> {
   if (cloudAgentQueuePumpRunning) return;
   cloudAgentQueuePumpRunning = true;
   try {
-    const claimed = await claimCloudAgentRunIds(resolveCloudAgentMaxConcurrent());
+    const claimed = await claimCloudAgentRunIds();
     for (let index = 0; index < claimed.length; index += 1) {
       // A slow start must not leave the runs behind it on the deadline from
-      // when the batch was claimed. Push those deadlines out before the next
-      // container start, and give the run that is starting a fresh window.
+      // when this recovery batch was claimed.
       await extendCloudAgentLaunchTimeouts(claimed.slice(index));
       await launchClaimedCloudAgentRun(claimed[index], deps);
     }
   } catch (err) {
-    console.error('[cloud-agent] queue dispatch failed', err instanceof Error ? err.message : err);
+    console.error('[cloud-agent] launch recovery failed', err instanceof Error ? err.message : err);
   } finally {
     cloudAgentQueuePumpRunning = false;
   }
@@ -1235,8 +1206,7 @@ export async function getCloudAgentRunStatus(
             terminalReason: run.terminalReason as AgentRunTerminalReason | null,
             checkResults: run.checkResults ?? null,
             lastError: mapped === 'failed' ? observed.resultText : run.lastError,
-            cloudJobName: run.cloudJobName,
-            cloudJobExecutionName: run.cloudJobExecutionName,
+            cloudAgentIdentity: run.cloudAgentIdentity,
             cloudBranchName: run.cloudBranchName,
             createdAt: run.createdAt,
           },
@@ -1254,6 +1224,7 @@ export async function getCloudAgentRunStatus(
             terminalReason: null,
             checkResults: run.checkResults ?? null,
             lastError: null,
+            cloudAgentIdentity: run.cloudAgentIdentity,
           },
           null,
           'none',
@@ -1306,9 +1277,6 @@ export async function getCloudAgentRunStatus(
     }
   }
 
-  const queuePosition = run.status === 'queued' && !run.cloudAgentIdentity
-    ? await lookupCloudAgentQueuePosition(run.id)
-    : null;
   return toRunSummary(
     {
       id: run.id,
@@ -1316,15 +1284,12 @@ export async function getCloudAgentRunStatus(
       terminalReason: run.terminalReason as AgentRunTerminalReason | null,
       checkResults: run.checkResults ?? null,
       lastError: run.lastError,
-      cloudJobName: run.cloudJobName,
-      cloudJobExecutionName: run.cloudJobExecutionName,
+      cloudAgentIdentity: run.cloudAgentIdentity,
       cloudBranchName: run.cloudBranchName,
       createdAt: run.createdAt,
     },
     prUrl,
     prStatus,
-    true,
-    queuePosition,
   );
 }
 
@@ -1393,10 +1358,7 @@ export async function getCloudAgentRunHistory(
       }
     }
 
-    const queuePosition = run.status === 'queued' && !run.cloudAgentIdentity
-      ? await lookupCloudAgentQueuePosition(run.id)
-      : null;
-    return toRunSummary(run, prUrl, prStatus, true, queuePosition);
+    return toRunSummary(run, prUrl, prStatus);
   }));
 }
 

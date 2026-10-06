@@ -25,7 +25,13 @@ jest.mock('../db/drizzle', () => ({
     update: () => ({
       set: (...setArgs: unknown[]) => {
         mockUpdateSet(...setArgs);
-        return { where: (...whereArgs: unknown[]) => mockUpdateWhere(...whereArgs) };
+        return {
+          where: (...whereArgs: unknown[]) => {
+            const result = mockUpdateWhere(...whereArgs);
+            const pending = result instanceof Promise ? result : Promise.resolve(result);
+            return Object.assign(pending, { returning: () => pending });
+          },
+        };
       },
     }),
     transaction: jest.fn(),
@@ -346,9 +352,6 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
     mockedDb.select.mockReturnValueOnce({
       from: () => ({ where: jest.fn().mockResolvedValue([]) }),
     });
-    mockedDb.select.mockReturnValueOnce({
-      from: () => ({ where: jest.fn().mockResolvedValue([{ position: 4 }]) }),
-    });
     mockedDb.transaction.mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
       const tx = {
         execute: jest.fn().mockResolvedValue(undefined),
@@ -375,9 +378,8 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
       return callback(tx);
     });
     mockEnqueue.mockResolvedValueOnce({ runId: 'run-resume' });
-    const setImmediateSpy = jest
-      .spyOn(global, 'setImmediate')
-      .mockImplementation((() => ({}) as NodeJS.Immediate) as unknown as typeof setImmediate);
+    mockUpdateWhere.mockResolvedValueOnce([{ id: 'run-resume' }]);
+    mockAgentRunFindFirst.mockResolvedValueOnce(undefined);
 
     const result = await startCloudAgentRun({
       userId: USER_ID,
@@ -395,7 +397,7 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
       buildPrompt: jest.fn().mockResolvedValue('base execution prompt'),
     }));
 
-    expect(result).toEqual({ sessionId: SESSION_ID, runId: 'run-resume', queuePosition: 4 });
+    expect(result).toEqual({ sessionId: SESSION_ID, runId: 'run-resume' });
     expect(mockEnqueue).toHaveBeenCalledWith(expect.objectContaining({
       snapshot: expect.objectContaining({
         prompt: expect.stringMatching(
@@ -411,8 +413,9 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
       currentRunId: 'run-resume',
       leftoverWork: null,
     }));
-
-    setImmediateSpy.mockRestore();
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      ownerInstance: 'apex-cloud-agent',
+    }));
   });
 });
 
@@ -768,8 +771,7 @@ describe('getCloudAgentRunStatus check projection (TBI-005 DoD-0/DoD-1/DoD-2; PB
     expect(summary).toEqual({
       runId: RUN_ID,
       status: 'completed',
-      jobName: 'apex-cursor-worker',
-      executionName: 'cursor-run-1',
+      cloudAgentId: 'bc-agent-1',
       branchName: 'feature/apex-42-abc123',
       createdAt: '2026-09-28T14:00:00.000Z',
       prUrl: 'https://pr/1',
@@ -779,7 +781,6 @@ describe('getCloudAgentRunStatus check projection (TBI-005 DoD-0/DoD-1/DoD-2; PB
       checkResults,
       failingChecks: [],
       lastError: null,
-      queuePosition: null,
     });
     expect(shouldClaimAllChecksPassed(summary!.checkResults, summary!.finishedWithoutPr)).toBe(true);
   });

@@ -186,10 +186,8 @@ function cloudRun(
     checkResults: null,
     failingChecks: [],
     lastError: null,
-    queuePosition: null,
     ...overrides,
-    jobName: overrides.jobName ?? 'apex-cursor-worker',
-    executionName: overrides.executionName ?? 'apex-cursor-worker-abc123',
+    cloudAgentId: overrides.cloudAgentId ?? 'bc-agent-1',
     branchName: overrides.branchName ?? 'feature/apex-42-abc123',
     createdAt: overrides.createdAt ?? '2026-09-28T14:00:00.000Z',
   };
@@ -519,23 +517,14 @@ describe('DevWorkbenchView', () => {
         workItemId: 42,
         project: 'MaxView',
       });
-      expect(screen.getByTestId('my-work-cloud-run-status-42')).toHaveTextContent('Queued');
+      expect(screen.getByTestId('my-work-cloud-run-status-42')).toHaveTextContent('Starting');
       expect(screen.getByTestId('my-work-cancel-cloud-run-42')).toBeInTheDocument();
     });
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
-  it('shows a queued cloud agent run by its place in line', () => {
-    mockUseFeatureFlag.mockReturnValue(true);
-    mockCloudSession(cloudRun('queued', { queuePosition: 3, executionName: null }));
-
-    renderView();
-
-    expect(screen.getByTestId('my-work-cloud-run-status-42')).toHaveTextContent('3rd in line');
-  });
-
   it.each([
-    ['queued', 'Queued'],
+    ['queued', 'Starting'],
     ['dispatched', 'Starting'],
     ['running', 'Running'],
   ] as const)(
@@ -586,8 +575,9 @@ describe('DevWorkbenchView', () => {
     expect(screen.getByText(/agent activity appears here when available/i)).toBeInTheDocument();
     expect(screen.getByText('Updates will appear here when available.')).toBeInTheDocument();
     expect(screen.queryByText('Connecting')).not.toBeInTheDocument();
-    expect(screen.getByText('apex-cursor-worker')).toBeInTheDocument();
-    expect(screen.getAllByText('apex-cursor-worker-abc123').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('bc-agent-1').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Container job')).not.toBeInTheDocument();
+    expect(screen.queryByText('Execution')).not.toBeInTheDocument();
     expect(screen.getByText('Run history')).toBeInTheDocument();
     expect(screen.getByText('Technical details')).toBeInTheDocument();
   });
@@ -693,7 +683,7 @@ describe('DevWorkbenchView', () => {
     expect(cancel).toHaveTextContent('Cancelling…');
   });
 
-  it('PBI-005 AC-0: renders a stable accessible PR link and Resume for completion', () => {
+  it('PBI-005 AC-0: renders a stable accessible PR link and hides Resume when a PR exists', () => {
     const prUrl = 'https://github.com/example/apex/pull/42';
     mockUseFeatureFlag.mockReturnValue(true);
     mockCloudSession(cloudRun('completed', { prUrl }));
@@ -703,7 +693,7 @@ describe('DevWorkbenchView', () => {
     expect(screen.getByTestId('my-work-cloud-run-status-42')).toHaveTextContent('Completed');
     expect(screen.getByTestId('my-work-cloud-run-pr-42')).toHaveAttribute('href', prUrl);
     expect(within(cloudRunControls(42)).getByRole('link', { name: 'View PR' })).toBeInTheDocument();
-    expect(screen.getByTestId('my-work-resume-cloud-run-42')).toBeInTheDocument();
+    expect(screen.queryByTestId('my-work-resume-cloud-run-42')).not.toBeInTheDocument();
   });
 
   it.each([
@@ -886,7 +876,7 @@ describe('DevWorkbenchView', () => {
     expect(within(failing).getByText('Unit checks failed')).toBeInTheDocument();
     expect(within(failing).getByText('WCAG checks failed')).toBeInTheDocument();
     expect(within(failing).queryByText('E2E checks failed')).not.toBeInTheDocument();
-    expect(screen.getByTestId('my-work-resume-cloud-run-42')).toBeInTheDocument();
+    expect(screen.queryByTestId('my-work-resume-cloud-run-42')).not.toBeInTheDocument();
   });
 
   it('PBI-006 AC-0: shows the PR link with no failure indicator when every check passed', () => {

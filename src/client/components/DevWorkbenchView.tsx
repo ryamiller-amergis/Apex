@@ -31,7 +31,6 @@ import type {
   CloudAgentRunSummary,
 } from '../../shared/types/devWorkbench';
 import { isAppNativeRequirementsProject } from '../../shared/types/devWorkbench';
-import { queuePlaceLabel } from '../../shared/utils/queuePlace';
 import {
   computeFeatureWorkStatus,
   formatMyWorkStatusLabel,
@@ -258,7 +257,6 @@ const TIMED_OUT_REASONS = new Set(['queue_ttl', 'cloud_agent_timeout']);
 function cloudRunStatusText(run: CloudAgentRunSummary): string {
   switch (run.status) {
     case 'queued':
-      return run.queuePosition ? queuePlaceLabel(run.queuePosition) : 'Queued';
     case 'dispatched':
       return 'Starting';
     case 'running':
@@ -416,12 +414,10 @@ function activityTitle(event: CloudAgentActivityEvent): string {
 function emptyActivityCopy(run: CloudAgentRunSummary): { title: string; detail: string } {
   switch (run.status) {
     case 'queued':
-      return run.queuePosition
-        ? {
-            title: queuePlaceLabel(run.queuePosition),
-            detail: 'This run starts when a container is free.',
-          }
-        : { title: 'Queued', detail: 'Waiting for the cloud agent to start.' };
+      return {
+        title: 'Starting',
+        detail: 'Sending this run to Cursor.',
+      };
     case 'dispatched':
     case 'running':
       return {
@@ -593,32 +589,15 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
                 </p>
               ) : null}
             </div>
-            {run.jobName === 'cursor-sdk' ? (
-              <div>
-                <span>Runtime</span>
-                <code>Cursor cloud agent</code>
-              </div>
-            ) : run.jobName ? (
+            {run.cloudAgentId ? (
               <CopyableId
-                label="Container job"
-                value={run.jobName}
-                testId={`my-work-copy-job-name-${item.id}`}
+                label="Cursor cloud agent"
+                value={run.cloudAgentId}
+                testId={`my-work-copy-cloud-agent-id-${item.id}`}
               />
             ) : (
               <div>
-                <span>Container job</span>
-                <code>Not recorded</code>
-              </div>
-            )}
-            {run.executionName ? (
-              <CopyableId
-                label={run.jobName === 'cursor-sdk' ? 'Cursor run' : 'Execution'}
-                value={run.executionName}
-                testId={`my-work-copy-execution-name-${item.id}`}
-              />
-            ) : (
-              <div>
-                <span>{run.jobName === 'cursor-sdk' ? 'Cursor run' : 'Execution'}</span>
+                <span>Cursor cloud agent</span>
                 <code>Not recorded</code>
               </div>
             )}
@@ -645,7 +624,7 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
           <section className={styles['run-history']} aria-labelledby={`cloud-run-history-${item.id}`}>
             <div className={styles['run-history-heading']}>
               <h3 id={`cloud-run-history-${item.id}`}>Run history</h3>
-              <p>Cloud executions and their pull-request outcomes.</p>
+              <p>Cloud agent runs and their pull-request outcomes.</p>
             </div>
             {history.isLoading ? (
               <p className={styles['run-history-message']}>Loading run history…</p>
@@ -662,7 +641,7 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
                     <div>
                       <strong>{cloudRunStatusText(historyRun)}</strong>
                       <span>
-                        {historyRun.executionName ?? 'Execution not recorded'}
+                        {historyRun.cloudAgentId ?? 'Cloud agent not recorded'}
                         {historyRun.createdAt && historyRun.createdAt !== new Date(0).toISOString()
                           ? ` · ${new Date(historyRun.createdAt).toLocaleString()}`
                           : ''}
@@ -847,9 +826,8 @@ const CloudAgentEnabledRowAction: React.FC<{
       setCancelledRunId(null);
       setOptimisticRun({
         runId: result.runId,
-        status: 'queued',
-        jobName: null,
-        executionName: null,
+        status: 'dispatched',
+        cloudAgentId: null,
         branchName: null,
         createdAt: new Date().toISOString(),
         prUrl: null,
@@ -859,7 +837,6 @@ const CloudAgentEnabledRowAction: React.FC<{
         checkResults: null,
         failingChecks: [],
         lastError: null,
-        queuePosition: result.queuePosition,
       });
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Unable to start Cloud Development.');
@@ -944,6 +921,7 @@ const CloudAgentEnabledRowAction: React.FC<{
   }
 
   const prStatusLabel = prStatusText(currentRun);
+  const pullRequestUrl = currentRun.status === 'completed' ? currentRun.prUrl : null;
 
   return (
     <>
@@ -969,10 +947,10 @@ const CloudAgentEnabledRowAction: React.FC<{
             <span className={styles['cloud-details-chevron']} aria-hidden="true">›</span>
           </button>
           <div className={styles['cloud-run-actions']} aria-live="polite">
-            {currentRun.status === 'completed' && currentRun.prUrl ? (
+            {pullRequestUrl ? (
               <a
                 className={styles['cloud-pr-link']}
-                href={currentRun.prUrl}
+                href={pullRequestUrl}
                 target="_blank"
                 rel="noreferrer"
                 {...{ 'data-testid': `my-work-cloud-run-pr-${item.id}` }}
@@ -1011,7 +989,7 @@ const CloudAgentEnabledRowAction: React.FC<{
               >
                 {cancelCloud.isPending ? 'Cancelling…' : 'Cancel'}
               </button>
-            ) : (
+            ) : pullRequestUrl ? null : (
               <button
                 className={styles['cloud-resume-btn']}
                 type="button"
