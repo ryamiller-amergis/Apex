@@ -198,6 +198,14 @@ resource "azurerm_container_app" "ai_platform_v2_orchestrator" {
         name  = "AI_ORCHESTRATOR_LANE_FLOOR_AGENTIC"
         value = tostring(local.ai_platform_v2_orchestrator_lane_floor_agentic)
       }
+      env {
+        name  = "AI_ORCHESTRATOR_USER_INTERACTIVE_LIMIT"
+        value = tostring(local.ai_platform_v2_orchestrator_user_interactive_limit)
+      }
+      env {
+        name  = "AI_ORCHESTRATOR_USER_AGENTIC_LIMIT"
+        value = tostring(local.ai_platform_v2_orchestrator_user_agentic_limit)
+      }
       dynamic "env" {
         for_each = var.ai_platform_v2_application_insights_connection_string != null && var.ai_platform_v2_application_insights_connection_string != "" ? [1] : []
         content {

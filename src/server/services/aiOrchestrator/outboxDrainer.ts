@@ -50,6 +50,11 @@ import {
 } from './types';
 import type { InteractiveClass } from '../../../shared/types/durableInteractiveTurn';
 
+type InteractiveEndReason =
+  | 'deadline_expired'
+  | 'user_slot_wait_expired'
+  | 'cancelled_while_queued';
+
 export type OutboxDrainerDeps = Readonly<{
   executor: SqlExecutor;
   publisher: CommandPublisher;
@@ -60,7 +65,13 @@ export type OutboxDrainerDeps = Readonly<{
     | 'markInteractiveDispatched'
     | 'failExpiredInteractiveDispatch'
     | 'failInvalidInteractiveDispatch'
-  >;
+  > &
+    Partial<
+      Pick<
+        RunAttemptRepository,
+        'failUserSlotWaitExpired' | 'cancelQueuedInteractiveDispatch'
+      >
+    >;
   getUtilization: () => Promise<ProviderUtilization>;
   getUncertainWorkerCount: () => Promise<number>;
   clock?: Clock;
@@ -352,18 +363,58 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
     return value === 'fast' || value === 'agentic' ? value : null;
   }
 
+  function requireAttemptMethod<T>(method: T | undefined, name: string): T {
+    if (!method) throw new Error(`Outbox drainer attempts.${name} is not wired`);
+    return method;
+  }
+
+  async function terminalizeInteractiveCandidate(
+    payload: InteractiveAdmissionCandidate['payload'],
+    reason: InteractiveEndReason,
+  ): Promise<InteractiveTerminalizeResult> {
+    const fence = {
+      attemptId: payload.attemptId,
+      expectedDispatchMessageId: payload.dispatchMessageId,
+    };
+    switch (reason) {
+      case 'deadline_expired':
+        return deps.attempts.failExpiredInteractiveDispatch({
+          ...fence,
+          detail: 'Interactive turn exceeded its absolute deadline',
+        });
+      case 'user_slot_wait_expired':
+        return requireAttemptMethod(
+          deps.attempts.failUserSlotWaitExpired,
+          'failUserSlotWaitExpired',
+        )({
+          ...fence,
+          detail:
+            'Your other chats were still running after 15 minutes, so this message was not started. Send it again.',
+        });
+      case 'cancelled_while_queued':
+        return requireAttemptMethod(
+          deps.attempts.cancelQueuedInteractiveDispatch,
+          'cancelQueuedInteractiveDispatch',
+        )({
+          ...fence,
+          detail: 'Stopped before it started',
+        });
+      default: {
+        const unhandled: never = reason;
+        throw new Error(`Unsupported interactive end reason: ${String(unhandled)}`);
+      }
+    }
+  }
+
   async function expireInteractiveCandidate(
     active: ActiveInteractiveCandidate,
     reservation: ProviderCapacityReservation,
     releasedAttemptIds: Set<string>,
+    reason: InteractiveEndReason = 'deadline_expired',
   ): Promise<PageOutcome> {
     const { outbox: row, payload } = active.candidate;
     try {
-      const result = await deps.attempts.failExpiredInteractiveDispatch({
-        attemptId: payload.attemptId,
-        expectedDispatchMessageId: payload.dispatchMessageId,
-        detail: 'Interactive turn exceeded its absolute deadline',
-      });
+      const result = await terminalizeInteractiveCandidate(payload, reason);
       switch (result.outcome) {
         case 'terminalized': {
           // Planner-charged queued turns still hold a ledger slot even when
@@ -373,8 +424,8 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
             reservation,
             releasedAttemptIds,
           );
-          const discarded = await discardRow(row, 'deadline_expired');
-          metrics.increment('orchestrator.interactive.deadline_expired');
+          const discarded = await discardRow(row, reason);
+          metrics.increment(`orchestrator.interactive.${reason}`);
           return { published: 0, discarded };
         }
         case 'already-terminal': {
@@ -505,6 +556,7 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
               return { published: 0, discarded };
             }
             case 'queued':
+            case 'cancel-requested':
               throw new Error(
                 `Interactive attempt remained queued after dispatch: ${payload.attemptId}`,
               );
@@ -674,6 +726,22 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
         case 'not-found':
           discarded += await discardRow(row, 'attempt_not_found');
           break;
+        case 'cancel-requested': {
+          const outcome = await expireInteractiveCandidate(
+            {
+              candidate,
+              state: 'queued',
+              capacityCharged: false,
+              reservationOwned: false,
+            },
+            reservation,
+            releasedAttemptIds,
+            'cancelled_while_queued',
+          );
+          discarded += outcome.discarded;
+          published += outcome.published;
+          break;
+        }
         case 'queued':
         case 'dispatched':
         case 'running': {
@@ -683,11 +751,21 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
             capacityCharged: state !== 'queued',
             reservationOwned: false,
           };
-          if (Date.parse(candidate.payload.deadlineAt) <= now.getTime()) {
+          const userSlotQueuedUntil = candidate.payload.userSlotQueuedUntil;
+          const endReason: InteractiveEndReason | null =
+            Date.parse(candidate.payload.deadlineAt) <= now.getTime()
+              ? 'deadline_expired'
+              : state === 'queued' &&
+                  userSlotQueuedUntil !== undefined &&
+                  Date.parse(userSlotQueuedUntil) <= now.getTime()
+                ? 'user_slot_wait_expired'
+                : null;
+          if (endReason) {
             const outcome = await expireInteractiveCandidate(
               active,
               reservation,
               releasedAttemptIds,
+              endReason,
             );
             discarded += outcome.discarded;
             published += outcome.published;

@@ -18,6 +18,7 @@ import type {
   InteractiveTurnAcceptedResponse,
 } from '../../shared/types/durableInteractiveTurn';
 import {
+  INTERACTIVE_USER_SLOT_MAX_WAIT_MS,
   absoluteTurnMsForClass,
   isCanonicalUuid,
   isDurableInteractiveTurnSpecification,
@@ -169,6 +170,9 @@ type ServiceDependencies = Readonly<{
   loadRetrySource: (
     input: Readonly<{ threadId: string; runId: string }>,
   ) => Promise<DurableInteractiveRetrySource | null>;
+  resolveUserQueue: (
+    input: Readonly<{ userId: string; project: string }>,
+  ) => Promise<boolean>;
   now: () => Date;
 }>;
 
@@ -828,6 +832,20 @@ export async function resolveDurableMaxviewCapability(
   return dependencies.isConfigured() ? 'enabled' : 'unavailable';
 }
 
+export async function resolveDurableUserQueue(
+  input: Readonly<{ userId: string; project: string }>,
+  evaluate: typeof isFeatureEnabled = isFeatureEnabled,
+): Promise<boolean> {
+  try {
+    return await evaluate('ai-runs-interactive-user-queue', {
+      userId: input.userId,
+      project: input.project,
+    });
+  } catch {
+    return false;
+  }
+}
+
 let resolvedDefaultAttachmentStore: InteractiveAttachmentStore | null = null;
 
 const lazyDefaultAttachmentStore: InteractiveAttachmentStore = {
@@ -852,6 +870,7 @@ function defaultDependencies(): ServiceDependencies {
     resolveDeadlines: resolveInteractiveDeadlinePolicy,
     encryptToolGrant: encryptInteractiveToolGrant,
     loadRetrySource: loadDurableInteractiveRetrySource,
+    resolveUserQueue: resolveDurableUserQueue,
     now: () => new Date(),
   };
 }
@@ -1034,8 +1053,15 @@ export function createDurableInteractiveTurnService(
         interactiveClass: classification.interactiveClass,
         requiresRepositoryPreparation,
       });
+      const queueOverUserLimit = await deps.resolveUserQueue({
+        userId: input.userId,
+        project: thread.kickoff.project,
+      });
+      // Whether this turn waits is only known inside the admission transaction.
       const expiresAt = new Date(
-        deps.now().getTime() + deadlines.absoluteTurnMs,
+        deps.now().getTime() +
+          deadlines.absoluteTurnMs +
+          (queueOverUserLimit ? INTERACTIVE_USER_SLOT_MAX_WAIT_MS : 0),
       ).toISOString();
       const hasAdoCapability =
         input.toolGrant !== undefined ||
@@ -1112,6 +1138,7 @@ export function createDurableInteractiveTurnService(
         hidden: Boolean(input.hidden),
         attachments: immutableAttachments,
         specification,
+        queueOverUserLimit,
       });
 
       switch (admitted.status) {
@@ -1189,8 +1216,14 @@ export function createDurableInteractiveTurnService(
 
       const previousGrant = source.specification.toolGrant;
       const needsToolGrant = previousGrant !== null || input.toolGrant !== undefined;
+      const queueOverUserLimit = await deps.resolveUserQueue({
+        userId: input.userId,
+        project: source.specification.projectId,
+      });
       const expiresAt = new Date(
-        deps.now().getTime() + refreshedDeadlines.absoluteTurnMs,
+        deps.now().getTime() +
+          refreshedDeadlines.absoluteTurnMs +
+          (queueOverUserLimit ? INTERACTIVE_USER_SLOT_MAX_WAIT_MS : 0),
       ).toISOString();
       const refreshedToolGrant = needsToolGrant
         ? deps.encryptToolGrant({
@@ -1211,6 +1244,7 @@ export function createDurableInteractiveTurnService(
         userId: input.userId,
         refreshedToolGrant,
         refreshedDeadlines,
+        queueOverUserLimit,
       });
 
       switch (retried.status) {

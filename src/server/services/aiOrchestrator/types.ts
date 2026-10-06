@@ -24,7 +24,13 @@ export type ProviderCapacityConfig = Readonly<{
   interactiveReservedBedrockSlots: number;
   /** Per-lane reserved floors that may borrow from unused shared capacity. */
   laneFloors: Readonly<Record<AiOrchestratorLane, number>>;
+  /** Running interactive turns per user before turns waiting for a user slot are held. */
+  userLimits?: InteractiveUserLimits;
 }>;
+
+export type InteractiveUserLimits = Readonly<{ total: number; agentic: number }>;
+
+export type InteractiveUserInFlight = { total: number; agentic: number };
 
 export const DEFAULT_PROVIDER_CAPACITY: ProviderCapacityConfig = {
   cursorCap: 20,
@@ -39,11 +45,21 @@ export const DEFAULT_PROVIDER_CAPACITY: ProviderCapacityConfig = {
   },
 };
 
+/** Matches the App Service admission defaults in durableInteractiveTurnRepository. */
+export const DEFAULT_INTERACTIVE_USER_LIMITS: InteractiveUserLimits = {
+  total: 2,
+  agentic: 1,
+};
+
 export type ProviderUtilization = Readonly<{
   cursorInFlight: number;
   bedrockInFlight: number;
   laneInFlight: Readonly<Record<AiOrchestratorLane, number>>;
   interactiveClassInFlight: Readonly<Record<InteractiveClass, number>>;
+  /** Dispatched or running interactive turns keyed by requesting user. */
+  interactiveUserInFlight?: Readonly<
+    Record<string, Readonly<InteractiveUserInFlight>>
+  >;
   providerClassInFlight: Readonly<
     Record<
       AiOrchestratorProvider,
@@ -57,6 +73,7 @@ export type ProviderCapacityReservation = {
   bedrockInFlight: number;
   laneInFlight: Record<AiOrchestratorLane, number>;
   interactiveClassInFlight: Record<InteractiveClass, number>;
+  interactiveUserInFlight?: Record<string, InteractiveUserInFlight>;
   providerClassInFlight: Record<
     AiOrchestratorProvider,
     Record<AiRunV2CapacityClass, number>

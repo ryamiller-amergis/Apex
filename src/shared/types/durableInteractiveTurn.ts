@@ -124,7 +124,22 @@ export type InteractiveDispatchOutboxPayload = Readonly<{
   workloadLane: InteractiveClass;
   capacityClass: 'interactive';
   deadlineAt: string;
+  /**
+   * Set when the turn was accepted over the user's running-turn limit. The orchestrator holds it
+   * until the user has a free slot and fails it if it is still waiting at this time.
+   */
+  userSlotQueuedUntil?: string;
 }>;
+
+/** Longest a turn accepted over the user's limit may wait for a slot. */
+export const INTERACTIVE_USER_SLOT_MAX_WAIT_MS = 15 * 60_000;
+
+/** Turns a user may have waiting for a slot; one more is refused. */
+export const INTERACTIVE_USER_SLOT_WAITING_CAP = 3;
+
+/** Progress label of a turn waiting for one of the user's own turns to finish. */
+export const INTERACTIVE_USER_SLOT_WAIT_LABEL =
+  'Waiting for your other chat to finish';
 
 export const INTERACTIVE_TURN_ACCEPTED_STATUSES = [
   'queued',
@@ -465,6 +480,8 @@ export function isInteractiveDispatchOutboxPayload(
     isInteractiveClass(value.interactiveClass) &&
     value.workloadLane === value.interactiveClass &&
     value.capacityClass === 'interactive' &&
-    isIsoTimestamp(value.deadlineAt)
+    isIsoTimestamp(value.deadlineAt) &&
+    (value.userSlotQueuedUntil === undefined ||
+      isIsoTimestamp(value.userSlotQueuedUntil))
   );
 }

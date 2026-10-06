@@ -34,6 +34,9 @@ describe('friendlyChatProgressLabel', () => {
     expect(friendlyChatProgressLabel('Starting…', 'dispatched')).toBe(
       'Dispatched'
     );
+    expect(
+      friendlyChatProgressLabel('Waiting for your other chat to finish', 'queued')
+    ).toBe('Waiting for your other chat to finish');
     expect(friendlyChatProgressLabel('Preparing project repository…')).toBe(
       'Loading…'
     );
@@ -44,10 +47,10 @@ describe('friendlyChatProgressLabel', () => {
 
   it('maps durable per-user limit codes to exact copy', () => {
     expect(friendlyDurableInteractiveLimitError('USER_INTERACTIVE_LIMIT')).toBe(
-      'You already have two active AI turns. Finish or stop one before starting another.',
+      'You already have as many AI turns running or waiting as allowed. Finish or stop one before starting another.',
     );
     expect(friendlyDurableInteractiveLimitError('USER_AGENTIC_LIMIT')).toBe(
-      'You already have an agentic AI turn running. Finish or stop it before starting another.',
+      'You already have as many agentic AI turns running or waiting as allowed. Finish or stop one before starting another.',
     );
     expect(friendlyDurableInteractiveLimitError('OTHER')).toBeNull();
   });

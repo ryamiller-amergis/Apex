@@ -10,6 +10,7 @@ import {
   emptyUtilization,
   evaluateInteractiveCapacity,
 } from '../../services/aiOrchestrator/providerGovernor';
+import { DEFAULT_PROVIDER_CAPACITY } from '../../services/aiOrchestrator/types';
 import type { OutboxRow } from '../../services/aiRunV2/outboxRepository';
 
 const DEADLINE_AT = '2026-09-23T16:00:00.000Z';
@@ -256,5 +257,98 @@ describe('interactive admission planning', () => {
       reason: 'provider_cap',
     });
     expect(reservation.cursorInFlight).toBe(20);
+  });
+});
+
+describe('per-user slot waiting', () => {
+  const USER_LIMITS = { total: 2, agentic: 1 };
+
+  function waitingRow(
+    id: string,
+    interactiveClass: InteractiveClass,
+    createdAt: string,
+    userId: string,
+  ): OutboxRow {
+    const base = row(id, interactiveClass, createdAt);
+    return {
+      ...base,
+      payload: {
+        ...base.payload,
+        userId,
+        userSlotQueuedUntil: '2026-09-23T15:45:00.000Z',
+      },
+    };
+  }
+
+  function plan(
+    queued: OutboxRow[],
+    userInFlight: Record<string, { total: number; agentic: number }>,
+  ): string[] {
+    return planInteractiveAdmissionBatch({
+      candidates: candidates(queued),
+      utilization: {
+        ...utilization({ fast: 0, agentic: 0 }),
+        interactiveUserInFlight: userInFlight,
+      },
+      config: {
+        ...DEFAULT_PROVIDER_CAPACITY,
+        userLimits: USER_LIMITS,
+      },
+      now: NOW,
+    }).map((candidate) => candidate.outbox.id);
+  }
+
+  it('holds a waiting agentic turn while the same user has an agentic turn running', () => {
+    expect(
+      plan(
+        [
+          waitingRow('held', 'agentic', '2026-09-23T15:00:00.000Z', 'user-a'),
+          waitingRow('other-user', 'agentic', '2026-09-23T15:00:01.000Z', 'user-b'),
+        ],
+        { 'user-a': { total: 1, agentic: 1 } },
+      ),
+    ).toEqual(['other-user']);
+  });
+
+  it('lets a waiting fast turn start when only the agentic limit is reached', () => {
+    expect(
+      plan(
+        [waitingRow('fast', 'fast', '2026-09-23T15:00:00.000Z', 'user-a')],
+        { 'user-a': { total: 1, agentic: 1 } },
+      ),
+    ).toEqual(['fast']);
+  });
+
+  it('counts turns planned in the same pass against the user', () => {
+    expect(
+      plan(
+        [
+          waitingRow('first', 'agentic', '2026-09-23T15:00:00.000Z', 'user-a'),
+          waitingRow('second', 'agentic', '2026-09-23T15:00:01.000Z', 'user-a'),
+        ],
+        {},
+      ),
+    ).toEqual(['first']);
+  });
+
+  it('counts a turn admitted under the limit before holding the waiting one', () => {
+    expect(
+      plan(
+        [
+          row('admitted', 'agentic', '2026-09-23T15:00:00.000Z'),
+          waitingRow('waiting', 'agentic', '2026-09-23T15:00:01.000Z', 'user-1'),
+        ],
+        {},
+      ),
+    ).toEqual(['admitted']);
+  });
+
+  it('never holds a turn that was admitted under the limit', () => {
+    expect(
+      plan(
+        [row('admitted', 'agentic', '2026-09-23T15:00:00.000Z')],
+        { 'user-1': { total: 2, agentic: 1 } },
+      ),
+    ).toEqual(['admitted']);
   });
 });

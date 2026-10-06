@@ -11,6 +11,9 @@ import type {
   InteractiveTurnAcceptedStatus,
 } from '../../shared/types/durableInteractiveTurn';
 import {
+  INTERACTIVE_USER_SLOT_MAX_WAIT_MS,
+  INTERACTIVE_USER_SLOT_WAITING_CAP,
+  INTERACTIVE_USER_SLOT_WAIT_LABEL,
   absoluteTurnMsForClass,
   isCanonicalUuid,
   isDurableInteractiveTurnSpecification,
@@ -23,6 +26,65 @@ import {
 } from './aiRunV2/outboxRepository';
 
 const QUEUED_PROGRESS_LABEL = 'Queued — waiting for available worker';
+type UserTurnLimitCode = 'USER_INTERACTIVE_LIMIT' | 'USER_AGENTIC_LIMIT';
+
+export type UserTurnLimits = Readonly<{ total: number; agentic: number }>;
+
+function readUserTurnLimit(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/** Running interactive turns allowed per user. The orchestrator enforces the same limits for waiting turns. */
+export function resolveUserTurnLimits(): UserTurnLimits {
+  return {
+    total: readUserTurnLimit('AI_RUNS_INTERACTIVE_USER_TOTAL_LIMIT', 2),
+    agentic: readUserTurnLimit('AI_RUNS_INTERACTIVE_USER_AGENTIC_LIMIT', 1),
+  };
+}
+
+type UserSlotDecision =
+  | Readonly<{ kind: 'admit' }>
+  | Readonly<{ kind: 'queue' }>
+  | Readonly<{ kind: 'refuse'; code: UserTurnLimitCode }>;
+
+/** Active counts include turns already waiting, so turns past a limit are the ones waiting. */
+function decideUserSlot(input: Readonly<{
+  activeCount: number;
+  agenticCount: number;
+  interactiveClass: InteractiveClass;
+  limits: UserTurnLimits;
+  queueOverUserLimit: boolean;
+}>): UserSlotDecision {
+  const overTotal = input.activeCount >= input.limits.total;
+  const overAgentic =
+    input.interactiveClass === 'agentic' &&
+    input.agenticCount >= input.limits.agentic;
+  if (!overTotal && !overAgentic) return { kind: 'admit' };
+  const code: UserTurnLimitCode = overTotal
+    ? 'USER_INTERACTIVE_LIMIT'
+    : 'USER_AGENTIC_LIMIT';
+  if (!input.queueOverUserLimit) return { kind: 'refuse', code };
+  const waitingAgentic = overAgentic
+    ? input.agenticCount - input.limits.agentic
+    : 0;
+  const waitingTotal = overTotal ? input.activeCount - input.limits.total : 0;
+  if (waitingAgentic >= INTERACTIVE_USER_SLOT_WAITING_CAP) {
+    return { kind: 'refuse', code: 'USER_AGENTIC_LIMIT' };
+  }
+  if (waitingTotal >= INTERACTIVE_USER_SLOT_WAITING_CAP) {
+    return { kind: 'refuse', code: 'USER_INTERACTIVE_LIMIT' };
+  }
+  return { kind: 'queue' };
+}
+
+function userSlotQueuedUntil(acceptedAt: string): string {
+  return new Date(
+    Date.parse(acceptedAt) + INTERACTIVE_USER_SLOT_MAX_WAIT_MS,
+  ).toISOString();
+}
 
 export type PreparedDurableInteractiveTurn = Readonly<{
   turnId: string;
@@ -35,6 +97,8 @@ export type PreparedDurableInteractiveTurn = Readonly<{
   hidden: boolean;
   attachments: ReadonlyArray<ImmutableInteractiveAttachmentRef>;
   specification: DurableInteractiveTurnSpecification;
+  /** Accept a turn over the user's limit and let it wait instead of refusing it. */
+  queueOverUserLimit?: boolean;
 }>;
 
 export type AdmitDurableInteractiveTurnResult =
@@ -52,6 +116,8 @@ export type RetryDurableInteractiveRunInput = Readonly<{
   userId: string;
   refreshedToolGrant: FrozenInteractiveToolGrant | null;
   refreshedDeadlines: InteractiveDeadlinePolicy;
+  /** Accept a retry over the user's limit and let it wait instead of refusing it. */
+  queueOverUserLimit?: boolean;
 }>;
 
 export type RetryDurableInteractiveRunResult =
@@ -180,11 +246,13 @@ export function createDurableInteractiveTurnRepository(options?: {
   afterWrite?: (
     stage: DurableInteractiveAdmissionWriteStage,
   ) => Promise<void> | void;
+  userLimits?: UserTurnLimits;
 }): DurableInteractiveTurnRepository {
   const runInTransaction =
     options?.runInTransaction ?? defaultTransactionRunner;
   const newId = options?.newId ?? randomUUID;
   const afterWrite = options?.afterWrite ?? (() => undefined);
+  const userLimits = () => options?.userLimits ?? resolveUserTurnLimits();
 
   return {
     async admit(input) {
@@ -271,24 +339,30 @@ export function createDurableInteractiveTurnRepository(options?: {
         }>(countResult)[0];
         const activeCount = Number(counts?.active_count ?? 0);
         const agenticCount = Number(counts?.agentic_count ?? 0);
-        if (activeCount >= 2) {
-          return {
-            status: 'user_limit',
-            code: 'USER_INTERACTIVE_LIMIT',
-          };
+        const slot = decideUserSlot({
+          activeCount,
+          agenticCount,
+          interactiveClass: input.interactiveClass,
+          limits: userLimits(),
+          queueOverUserLimit: input.queueOverUserLimit === true,
+        });
+        if (slot.kind === 'refuse') {
+          return { status: 'user_limit', code: slot.code };
         }
-        if (input.interactiveClass === 'agentic' && agenticCount >= 1) {
-          return {
-            status: 'user_limit',
-            code: 'USER_AGENTIC_LIMIT',
-          };
-        }
+        const waitsForUserSlot = slot.kind === 'queue';
+        // A waiting turn still gets its full turn time if it starts within the maximum wait.
+        const turnBudgetMs =
+          input.specification.deadlines.absoluteTurnMs +
+          (waitsForUserSlot ? INTERACTIVE_USER_SLOT_MAX_WAIT_MS : 0);
+        const queuedLabel = waitsForUserSlot
+          ? INTERACTIVE_USER_SLOT_WAIT_LABEL
+          : QUEUED_PROGRESS_LABEL;
 
         const clockResult = await executor.execute(sql`
           SELECT
             accepted_at,
             accepted_at + (
-              ${input.specification.deadlines.absoluteTurnMs}
+              ${turnBudgetMs}
               * INTERVAL '1 millisecond'
             ) AS deadline_at
           FROM (SELECT now() AS accepted_at) AS admission_clock
@@ -391,7 +465,7 @@ export function createDurableInteractiveTurnRepository(options?: {
             FALSE,
             TRUE,
             'queued',
-            ${QUEUED_PROGRESS_LABEL},
+            ${queuedLabel},
             ${acceptedAt}::timestamptz,
             ${acceptedAt}::timestamptz,
             ${acceptedAt}::timestamptz,
@@ -439,6 +513,9 @@ export function createDurableInteractiveTurnRepository(options?: {
           workloadLane: input.interactiveClass,
           capacityClass: 'interactive',
           deadlineAt,
+          ...(waitsForUserSlot
+            ? { userSlotQueuedUntil: userSlotQueuedUntil(acceptedAt) }
+            : {}),
         };
         const outboxResult = await executor.execute(sql`
           INSERT INTO ai_run_outbox (
@@ -470,7 +547,7 @@ export function createDurableInteractiveTurnRepository(options?: {
           type: 'phase' as const,
           phase: 'queued' as const,
           status: 'pending' as const,
-          detail: QUEUED_PROGRESS_LABEL,
+          detail: queuedLabel,
           runId,
           eventTimestamp: acceptedAt,
         };
@@ -498,7 +575,7 @@ export function createDurableInteractiveTurnRepository(options?: {
             'phase',
             'queued',
             'pending',
-            ${QUEUED_PROGRESS_LABEL},
+            ${queuedLabel},
             ${JSON.stringify(event)}::jsonb,
             ${acceptedAt}::timestamptz
           )
@@ -690,30 +767,32 @@ export function createDurableInteractiveTurnRepository(options?: {
         }>(countResult)[0];
         const activeCount = Number(counts?.active_count ?? 0);
         const agenticCount = Number(counts?.agentic_count ?? 0);
-        if (activeCount >= 2) {
-          return {
-            status: 'user_limit',
-            code: 'USER_INTERACTIVE_LIMIT',
-          };
+        const slot = decideUserSlot({
+          activeCount,
+          agenticCount,
+          interactiveClass: lockedRun.interactive_class,
+          limits: userLimits(),
+          queueOverUserLimit: input.queueOverUserLimit === true,
+        });
+        if (slot.kind === 'refuse') {
+          return { status: 'user_limit', code: slot.code };
         }
-        if (
-          lockedRun.interactive_class === 'agentic' &&
-          agenticCount >= 1
-        ) {
-          return {
-            status: 'user_limit',
-            code: 'USER_AGENTIC_LIMIT',
-          };
-        }
+        const waitsForUserSlot = slot.kind === 'queue';
+        const queuedLabel = waitsForUserSlot
+          ? INTERACTIVE_USER_SLOT_WAIT_LABEL
+          : QUEUED_PROGRESS_LABEL;
 
         const absoluteTurnMs = absoluteTurnMsForClass(
           lockedRun.interactive_class,
         );
+        const turnBudgetMs =
+          absoluteTurnMs +
+          (waitsForUserSlot ? INTERACTIVE_USER_SLOT_MAX_WAIT_MS : 0);
         const clockResult = await executor.execute(sql`
           SELECT
             accepted_at,
             accepted_at + (
-              ${absoluteTurnMs}
+              ${turnBudgetMs}
               * INTERVAL '1 millisecond'
             ) AS deadline_at
           FROM (SELECT now() AS accepted_at) AS retry_clock
@@ -745,7 +824,7 @@ export function createDurableInteractiveTurnRepository(options?: {
             execution_snapshot = ${JSON.stringify(specification)}::jsonb,
             cancel_requested = FALSE,
             progress_phase = 'queued',
-            progress_label = ${QUEUED_PROGRESS_LABEL},
+            progress_label = ${queuedLabel},
             heartbeat_at = ${acceptedAt}::timestamptz,
             started_at = ${acceptedAt}::timestamptz,
             last_error = NULL,
@@ -793,6 +872,9 @@ export function createDurableInteractiveTurnRepository(options?: {
           workloadLane: lockedRun.interactive_class,
           capacityClass: 'interactive',
           deadlineAt,
+          ...(waitsForUserSlot
+            ? { userSlotQueuedUntil: userSlotQueuedUntil(acceptedAt) }
+            : {}),
         };
         const outboxResult = await executor.execute(sql`
           INSERT INTO ai_run_outbox (
@@ -834,7 +916,7 @@ export function createDurableInteractiveTurnRepository(options?: {
           type: 'phase' as const,
           phase: 'queued' as const,
           status: 'pending' as const,
-          detail: QUEUED_PROGRESS_LABEL,
+          detail: queuedLabel,
           runId: input.runId,
           eventTimestamp: acceptedAt,
         };
@@ -862,7 +944,7 @@ export function createDurableInteractiveTurnRepository(options?: {
             'phase',
             'queued',
             'pending',
-            ${QUEUED_PROGRESS_LABEL},
+            ${queuedLabel},
             ${JSON.stringify(event)}::jsonb,
             ${acceptedAt}::timestamptz
           )

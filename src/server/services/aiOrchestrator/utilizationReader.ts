@@ -12,7 +12,7 @@ import {
 import type { InteractiveClass } from '../../../shared/types/durableInteractiveTurn';
 import type { SqlExecutor } from '../aiRunV2/outboxRepository';
 import { emptyUtilization, providerForLane } from './providerGovernor';
-import type { ProviderUtilization } from './types';
+import type { InteractiveUserInFlight, ProviderUtilization } from './types';
 
 export type UtilizationReaderDeps = Readonly<{
   executor: SqlExecutor;
@@ -26,6 +26,7 @@ type LaneCountRow = Readonly<{
   workload_lane: unknown;
   capacity_class: unknown;
   interactive_class: unknown;
+  requested_by_user_id?: unknown;
 }>;
 
 function resultRows<T>(result: unknown): T[] {
@@ -48,7 +49,8 @@ export function createUtilizationReader(deps: UtilizationReaderDeps) {
           o.published_at,
           o.payload->>'workloadLane' AS workload_lane,
           o.payload->>'capacityClass' AS capacity_class,
-          r.interactive_class
+          r.interactive_class,
+          r.requested_by_user_id
         FROM ai_run_attempts a
         JOIN agent_runs r
           ON r.id = a.run_id
@@ -77,6 +79,7 @@ export function createUtilizationReader(deps: UtilizationReaderDeps) {
         interactiveClassInFlight: {
           ...emptyUtilization().interactiveClassInFlight,
         },
+        interactiveUserInFlight: {} as Record<string, InteractiveUserInFlight>,
         providerClassInFlight: {
           cursor: { ...emptyUtilization().providerClassInFlight.cursor },
           bedrock: { ...emptyUtilization().providerClassInFlight.bedrock },
@@ -100,6 +103,13 @@ export function createUtilizationReader(deps: UtilizationReaderDeps) {
             continue;
           }
           utilization.interactiveClassInFlight[row.interactive_class] += 1;
+          if (typeof row.requested_by_user_id === 'string') {
+            const userCounts = (utilization.interactiveUserInFlight[
+              row.requested_by_user_id
+            ] ??= { total: 0, agentic: 0 });
+            userCounts.total += 1;
+            if (row.interactive_class === 'agentic') userCounts.agentic += 1;
+          }
           utilization.cursorInFlight += 1;
           utilization.providerClassInFlight.cursor.interactive += 1;
           continue;

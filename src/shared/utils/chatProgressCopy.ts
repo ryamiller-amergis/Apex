@@ -1,4 +1,5 @@
 import type { AgentRunPhase } from '../types/chat';
+import { INTERACTIVE_USER_SLOT_WAIT_LABEL } from '../types/durableInteractiveTurn';
 
 type RepoReadTool = 'get_skill_file' | 'list_repo_dir' | 'search_repo_code';
 
@@ -70,15 +71,19 @@ function copyForPhase(phase: AgentRunPhase): string {
 /**
  * User-facing loading copy for the bare-mirror / repo-read / actor path.
  * Stored progress labels stay machine-readable for the reaper; this is display only.
- * Durable interactive turns show exactly "Queued" then "Dispatched" — never a
- * numeric position or wait estimate.
+ * Durable interactive turns show exactly "Queued" (or the waiting-for-your-other-chat
+ * label) then "Dispatched" — never a numeric position or wait estimate.
  */
 export function friendlyChatProgressLabel(
   raw?: string | null,
   phase?: AgentRunPhase | null,
 ): string {
   const text = (raw ?? '').replace(/\s+/g, ' ').trim();
-  if (phase === 'queued') return 'Queued';
+  if (phase === 'queued') {
+    return text === INTERACTIVE_USER_SLOT_WAIT_LABEL
+      ? INTERACTIVE_USER_SLOT_WAIT_LABEL
+      : 'Queued';
+  }
   if (phase === 'dispatched') return 'Dispatched';
   if (text && ALREADY_FRIENDLY.has(text)) return text;
 
@@ -183,9 +188,9 @@ export function friendlyDurableInteractiveLimitError(
 ): string | null {
   switch (code) {
     case 'USER_INTERACTIVE_LIMIT':
-      return 'You already have two active AI turns. Finish or stop one before starting another.';
+      return 'You already have as many AI turns running or waiting as allowed. Finish or stop one before starting another.';
     case 'USER_AGENTIC_LIMIT':
-      return 'You already have an agentic AI turn running. Finish or stop it before starting another.';
+      return 'You already have as many agentic AI turns running or waiting as allowed. Finish or stop one before starting another.';
     default:
       return null;
   }

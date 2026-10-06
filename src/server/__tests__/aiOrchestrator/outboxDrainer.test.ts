@@ -650,6 +650,113 @@ describe('outboxDrainer', () => {
     expect(markPublished).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: 'fails a turn that waited too long for a user slot',
+      state: 'queued' as const,
+      method: 'failUserSlotWaitExpired' as const,
+      reason: 'user_slot_wait_expired',
+    },
+    {
+      name: 'cancels a queued turn the user stopped',
+      state: 'cancel-requested' as const,
+      method: 'cancelQueuedInteractiveDispatch' as const,
+      reason: 'cancelled_while_queued',
+    },
+  ])('$name without invoking the actor', async ({ state, method, reason }) => {
+    const dispatch = jest.fn();
+    const failExpiredInteractiveDispatch = jest.fn();
+    const failUserSlotWaitExpired = jest
+      .fn()
+      .mockResolvedValue(terminalizedResult());
+    const cancelQueuedInteractiveDispatch = jest
+      .fn()
+      .mockResolvedValue(terminalizedResult());
+    const markDiscarded = jest.fn().mockResolvedValue(true);
+    const drainer = createOutboxDrainer({
+      executor: { execute: async () => [] },
+      publisher: { publish: jest.fn() },
+      interactiveDispatchClient: { dispatch },
+      attempts: {
+        readInteractiveDispatchState: async () => state,
+        markInteractiveDispatched: jest.fn(),
+        failExpiredInteractiveDispatch,
+        failInvalidInteractiveDispatch: async () => terminalizedResult(),
+        failUserSlotWaitExpired,
+        cancelQueuedInteractiveDispatch,
+      },
+      getUtilization: async () => emptyUtilization(),
+      getUncertainWorkerCount: async () => 0,
+      clock: {
+        now: () => new Date('2026-09-23T15:00:00.000Z'),
+        sleep: async () => undefined,
+      },
+      enableNotify: false,
+      acquireOutboxLease: async (work) => work(lease()),
+      outbox: fakeOutbox({
+        claimInteractiveCandidates: async () => [
+          interactiveRow('interactive-waiting', 'agentic', undefined, {
+            userSlotQueuedUntil: '2026-09-23T15:00:00.000Z',
+          }),
+        ],
+        markDiscarded,
+      }),
+    });
+
+    await expect(drainer.drainOnce()).resolves.toBe(0);
+    const called =
+      method === 'failUserSlotWaitExpired'
+        ? failUserSlotWaitExpired
+        : cancelQueuedInteractiveDispatch;
+    expect(called).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attemptId: '22222222-2222-4222-8222-222222222222',
+        expectedDispatchMessageId: '33333333-3333-4333-8333-333333333333',
+      }),
+    );
+    expect(failExpiredInteractiveDispatch).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(markDiscarded).toHaveBeenCalledWith(
+      'interactive-waiting',
+      expect.any(String),
+      reason,
+    );
+  });
+
+  it('dispatches a waiting turn whose user has a free slot', async () => {
+    const dispatch = jest.fn().mockResolvedValue(undefined);
+    const markInteractiveDispatched = jest.fn().mockResolvedValue('dispatched');
+    const drainer = createOutboxDrainer({
+      executor: { execute: async () => [] },
+      publisher: { publish: jest.fn() },
+      interactiveDispatchClient: { dispatch },
+      attempts: {
+        readInteractiveDispatchState: async () => 'queued',
+        markInteractiveDispatched,
+        failExpiredInteractiveDispatch: jest.fn(),
+        failInvalidInteractiveDispatch: jest.fn(),
+      },
+      getUtilization: async () => emptyUtilization(),
+      getUncertainWorkerCount: async () => 0,
+      clock: {
+        now: () => new Date('2026-09-23T15:00:00.000Z'),
+        sleep: async () => undefined,
+      },
+      enableNotify: false,
+      acquireOutboxLease: async (work) => work(lease()),
+      outbox: fakeOutbox({
+        claimInteractiveCandidates: async () => [
+          interactiveRow('interactive-waiting', 'agentic', undefined, {
+            userSlotQueuedUntil: '2026-09-23T15:10:00.000Z',
+          }),
+        ],
+      }),
+    });
+
+    await drainer.drainOnce();
+    expect(markInteractiveDispatched).toHaveBeenCalled();
+  });
+
   it('publishes a terminal replay without invoking the actor again', async () => {
     const dispatch = jest.fn();
     const markPublished = jest.fn(async (ids: string[]) => ids.length);

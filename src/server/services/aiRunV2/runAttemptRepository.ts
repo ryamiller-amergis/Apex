@@ -121,6 +121,8 @@ export type AcceptCheckpointResult =
 
 export type InteractiveDispatchState =
   | 'queued'
+  /** Still queued, and the user pressed Stop before it was dispatched. */
+  | 'cancel-requested'
   | 'dispatched'
   | 'running'
   | 'terminal'
@@ -182,7 +184,23 @@ export type RunAttemptRepository = {
   failInvalidInteractiveDispatch(
     input: FailExpiredInteractiveDispatchInput,
   ): Promise<InteractiveTerminalizeResult>;
+  failUserSlotWaitExpired(
+    input: FailExpiredInteractiveDispatchInput,
+  ): Promise<InteractiveTerminalizeResult>;
+  cancelQueuedInteractiveDispatch(
+    input: FailExpiredInteractiveDispatchInput,
+  ): Promise<InteractiveTerminalizeResult>;
 };
+
+type InteractiveDispatchTerminal =
+  | Readonly<{
+      status: 'failed';
+      failureCategory: Extract<
+        AiRunV2FailureCategory,
+        'hard_timeout' | 'validation_failed' | 'queue_ttl'
+      >;
+    }>
+  | Readonly<{ status: 'cancelled' }>;
 
 type TransactionRunner = <T>(
   work: (executor: SqlExecutor) => Promise<T>
@@ -312,12 +330,11 @@ export function createRunAttemptRepository(options?: {
 
   async function terminalizeInteractiveDispatch(
     input: FailExpiredInteractiveDispatchInput,
-    failureCategory: Extract<
-      AiRunV2FailureCategory,
-      'hard_timeout' | 'validation_failed'
-    >,
-    sourceName: 'timeout' | 'validation',
+    terminal: InteractiveDispatchTerminal,
+    sourceName: 'timeout' | 'validation' | 'user-slot-wait' | 'cancel',
   ): Promise<InteractiveTerminalizeResult> {
+    const cancelled = terminal.status === 'cancelled';
+    const failureCategory = cancelled ? null : terminal.failureCategory;
     return runInTransaction(async (executor) => {
       const result = await executor.execute(sql`
         SELECT
@@ -367,13 +384,15 @@ export function createRunAttemptRepository(options?: {
         type: 'done' as const,
         runId: row.run_id,
       };
+      const terminalStatus = cancelled ? 'cancelled' : 'failed';
+      const lastError = cancelled ? null : input.detail;
 
       await executor.execute(sql`
         UPDATE ai_run_attempts
         SET
-          status = 'failed',
+          status = ${terminalStatus},
           failure_category = ${failureCategory},
-          failure_detail = ${input.detail},
+          failure_detail = ${lastError},
           updated_at = ${timestamp}::timestamptz
         WHERE id = ${input.attemptId}
           AND dispatch_message_id = ${input.expectedDispatchMessageId}
@@ -388,8 +407,8 @@ export function createRunAttemptRepository(options?: {
       await executor.execute(sql`
         UPDATE agent_runs
         SET
-          status = 'failed',
-          last_error = ${input.detail},
+          status = ${terminalStatus},
+          last_error = ${lastError},
           progress_phase = 'completion',
           progress_label = ${input.detail},
           progress_at = ${timestamp}::timestamptz,
@@ -403,11 +422,54 @@ export function createRunAttemptRepository(options?: {
         SET
           status = 'idle',
           active_run_id = NULL,
-          last_error = ${input.detail},
+          last_error = ${lastError},
           last_activity_at = ${timestamp}::timestamptz
         WHERE id = ${row.thread_id}::uuid
           AND active_run_id = ${row.run_id}
       `);
+      if (cancelled) {
+        await executor.execute(sql`
+          INSERT INTO agent_run_events (
+            event_id,
+            thread_id,
+            run_id,
+            source_instance,
+            sequence,
+            event_timestamp,
+            event_type,
+            phase,
+            status,
+            detail,
+            event
+          ) VALUES (
+            ${errorEventId}::uuid,
+            ${row.thread_id},
+            ${row.run_id},
+            ${sourceInstance},
+            1,
+            ${timestamp}::timestamptz,
+            'cancel',
+            'completion',
+            'cancelled',
+            ${input.detail},
+            ${JSON.stringify({ type: 'cancel' })}::jsonb
+          )
+        `);
+        await executor.execute(sql`
+          SELECT pg_notify(
+            'agent_run_events',
+            json_build_object(
+                'threadId', ${row.thread_id}::text,
+                'eventId', ${errorEventId}::text
+            )::text
+          )
+        `);
+        return {
+          outcome: 'terminalized',
+          priorAttemptStatus,
+          capacityCharged,
+        };
+      }
       await executor.execute(sql`
         INSERT INTO agent_run_events (
           event_id,
@@ -483,21 +545,27 @@ export function createRunAttemptRepository(options?: {
         const result = await executor.execute(sql`
           SELECT
             attempt.status AS attempt_status,
-            attempt.dispatch_message_id
+            attempt.dispatch_message_id,
+            run.cancel_requested
           FROM ai_run_attempts AS attempt
           JOIN agent_runs AS run
             ON run.id = attempt.run_id
            AND run.transport_version = 'dapr-actor-v2'
           WHERE attempt.id = ${input.attemptId}
         `);
-        const row = resultRows<InteractiveAttemptRow>(result)[0];
+        const row = resultRows<
+          InteractiveAttemptRow & { cancel_requested?: boolean | null }
+        >(result)[0];
         if (!row) return 'not-found';
         if (
           row.dispatch_message_id !== input.expectedDispatchMessageId
         ) {
           return 'fence-mismatch';
         }
-        return mapInteractiveDispatchState(row.attempt_status);
+        const state = mapInteractiveDispatchState(row.attempt_status);
+        return state === 'queued' && row.cancel_requested === true
+          ? 'cancel-requested'
+          : state;
       });
     },
 
@@ -617,7 +685,7 @@ export function createRunAttemptRepository(options?: {
     ): Promise<InteractiveTerminalizeResult> {
       return terminalizeInteractiveDispatch(
         input,
-        'hard_timeout',
+        { status: 'failed', failureCategory: 'hard_timeout' },
         'timeout',
       );
     },
@@ -627,8 +695,28 @@ export function createRunAttemptRepository(options?: {
     ): Promise<InteractiveTerminalizeResult> {
       return terminalizeInteractiveDispatch(
         input,
-        'validation_failed',
+        { status: 'failed', failureCategory: 'validation_failed' },
         'validation',
+      );
+    },
+
+    async failUserSlotWaitExpired(
+      input: FailExpiredInteractiveDispatchInput,
+    ): Promise<InteractiveTerminalizeResult> {
+      return terminalizeInteractiveDispatch(
+        input,
+        { status: 'failed', failureCategory: 'queue_ttl' },
+        'user-slot-wait',
+      );
+    },
+
+    async cancelQueuedInteractiveDispatch(
+      input: FailExpiredInteractiveDispatchInput,
+    ): Promise<InteractiveTerminalizeResult> {
+      return terminalizeInteractiveDispatch(
+        input,
+        { status: 'cancelled' },
+        'cancel',
       );
     },
 

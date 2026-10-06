@@ -26,6 +26,7 @@ import type {
   ProviderUtilization,
 } from './types';
 import {
+  DEFAULT_INTERACTIVE_USER_LIMITS,
   DEFAULT_PROVIDER_CAPACITY,
   UNCERTAIN_WORKER_PAUSE_THRESHOLD,
 } from './types';
@@ -105,20 +106,44 @@ export function planInteractiveAdmissionBatch(input: {
     .filter((candidate) => Date.parse(candidate.payload.deadlineAt) > nowMs)
     .sort(compareInteractiveCandidates);
   const planned: InteractiveAdmissionCandidate[] = [];
+  const userLimits = config.userLimits ?? DEFAULT_INTERACTIVE_USER_LIMITS;
+  const userInFlight = (reservation.interactiveUserInFlight ??= {});
+  const heldForUserSlot = (candidate: InteractiveAdmissionCandidate) => {
+    if (candidate.payload.userSlotQueuedUntil === undefined) return false;
+    const counts = userInFlight[candidate.payload.userId];
+    if (!counts) return false;
+    return (
+      counts.total >= userLimits.total ||
+      (candidate.payload.interactiveClass === 'agentic' &&
+        counts.agentic >= userLimits.agentic)
+    );
+  };
 
-  while (availableSlots > 0 && remaining.length > 0) {
-    const floorEligible = remaining.filter(
+  while (availableSlots > 0) {
+    const admissible = remaining.filter(
+      (candidate) => !heldForUserSlot(candidate),
+    );
+    if (admissible.length === 0) break;
+    const floorEligible = admissible.filter(
       (candidate) =>
         reservation.interactiveClassInFlight[
           candidate.payload.interactiveClass
         ] <
         config.laneFloors[candidate.payload.interactiveClass],
     );
-    const selected = (floorEligible.length > 0 ? floorEligible : remaining)[0];
+    const selected = (floorEligible.length > 0 ? floorEligible : admissible)[0];
     planned.push(selected);
     reservation.interactiveClassInFlight[
       selected.payload.interactiveClass
     ] += 1;
+    const selectedUser = (userInFlight[selected.payload.userId] ??= {
+      total: 0,
+      agentic: 0,
+    });
+    selectedUser.total += 1;
+    if (selected.payload.interactiveClass === 'agentic') {
+      selectedUser.agentic += 1;
+    }
     reservation.cursorInFlight += 1;
     reservation.providerClassInFlight.cursor.interactive += 1;
     remaining.splice(remaining.indexOf(selected), 1);

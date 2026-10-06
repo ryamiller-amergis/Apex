@@ -9,6 +9,8 @@ describe('resolveProviderCapacityFromEnvironment', () => {
     delete process.env.AI_ORCHESTRATOR_INTERACTIVE_CAP;
     delete process.env.AI_ORCHESTRATOR_LANE_FLOOR_FAST;
     delete process.env.AI_ORCHESTRATOR_LANE_FLOOR_AGENTIC;
+    delete process.env.AI_ORCHESTRATOR_USER_INTERACTIVE_LIMIT;
+    delete process.env.AI_ORCHESTRATOR_USER_AGENTIC_LIMIT;
   });
 
   afterAll(() => {
@@ -16,9 +18,19 @@ describe('resolveProviderCapacityFromEnvironment', () => {
   });
 
   it('returns locked defaults when env is unset', () => {
-    expect(resolveProviderCapacityFromEnvironment()).toEqual(
-      DEFAULT_PROVIDER_CAPACITY,
-    );
+    expect(resolveProviderCapacityFromEnvironment()).toEqual({
+      ...DEFAULT_PROVIDER_CAPACITY,
+      userLimits: { total: 2, agentic: 1 },
+    });
+  });
+
+  it('reads per-user limits from orchestrator env', () => {
+    process.env.AI_ORCHESTRATOR_USER_INTERACTIVE_LIMIT = '3';
+    process.env.AI_ORCHESTRATOR_USER_AGENTIC_LIMIT = '2';
+    expect(resolveProviderCapacityFromEnvironment().userLimits).toEqual({
+      total: 3,
+      agentic: 2,
+    });
   });
 
   it('reads DEV-style caps from orchestrator env', () => {

@@ -130,6 +130,7 @@ describe('utilizationReader', () => {
       bedrockInFlight: 0,
       laneInFlight: { document: 0, visual: 0, fast: 0, agentic: 0 },
       interactiveClassInFlight: { fast: 0, agentic: 0 },
+      interactiveUserInFlight: {},
       providerClassInFlight: {
         cursor: { batch: 0, interactive: 0 },
         bedrock: { batch: 0, interactive: 0 },
@@ -194,6 +195,7 @@ describe('utilizationReader', () => {
               workload_lane: null,
               capacity_class: null,
               interactive_class: 'fast',
+              requested_by_user_id: 'user-a',
             },
             {
               transport_version: 'dapr-actor-v2',
@@ -202,6 +204,7 @@ describe('utilizationReader', () => {
               workload_lane: null,
               capacity_class: null,
               interactive_class: 'fast',
+              requested_by_user_id: 'user-a',
             },
             {
               transport_version: 'dapr-actor-v2',
@@ -210,6 +213,7 @@ describe('utilizationReader', () => {
               workload_lane: null,
               capacity_class: null,
               interactive_class: 'agentic',
+              requested_by_user_id: 'user-a',
             },
           ],
         }),
@@ -226,6 +230,7 @@ describe('utilizationReader', () => {
         agentic: 0,
       },
       interactiveClassInFlight: { fast: 1, agentic: 1 },
+      interactiveUserInFlight: { 'user-a': { total: 2, agentic: 1 } },
       providerClassInFlight: {
         cursor: { batch: 0, interactive: 2 },
         bedrock: { batch: 0, interactive: 0 },

@@ -708,7 +708,7 @@ describe('useAgentChatSession', () => {
     });
 
     expect(result.current.sendError).toBe(
-      'You already have two active AI turns. Finish or stop one before starting another.',
+      'You already have as many AI turns running or waiting as allowed. Finish or stop one before starting another.',
     );
   });
 
@@ -724,7 +724,7 @@ describe('useAgentChatSession', () => {
     });
 
     expect(result.current.sendError).toBe(
-      'You already have an agentic AI turn running. Finish or stop it before starting another.',
+      'You already have as many agentic AI turns running or waiting as allowed. Finish or stop one before starting another.',
     );
   });
 

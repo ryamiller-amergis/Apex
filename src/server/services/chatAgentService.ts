@@ -6660,10 +6660,10 @@ export async function cancelRun(threadId: string): Promise<void> {
       .where(
         and(
           eq(agentRuns.id, activeRunId),
-          eq(
-            agentRuns.dispatchMessageId,
-            activeRunRow.dispatchMessageId ?? '',
-          ),
+          // A turn still waiting for dispatch has no dispatch id yet; the orchestrator cancels it.
+          activeRunRow.dispatchMessageId === null
+            ? isNull(agentRuns.dispatchMessageId)
+            : eq(agentRuns.dispatchMessageId, activeRunRow.dispatchMessageId),
           inArray(agentRuns.status, [...CANCELLABLE_AGENT_RUN_STATUSES]),
         ),
       )

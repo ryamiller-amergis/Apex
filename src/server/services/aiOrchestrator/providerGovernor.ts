@@ -51,6 +51,11 @@ export function createProviderCapacityReservation(
     interactiveClassInFlight: {
       ...utilization.interactiveClassInFlight,
     },
+    interactiveUserInFlight: Object.fromEntries(
+      Object.entries(utilization.interactiveUserInFlight ?? {}).map(
+        ([userId, counts]) => [userId, { ...counts }],
+      ),
+    ),
     providerClassInFlight: {
       cursor: { ...utilization.providerClassInFlight.cursor },
       bedrock: { ...utilization.providerClassInFlight.bedrock },

@@ -50,6 +50,10 @@ locals {
   ai_platform_v2_orchestrator_interactive_cap    = var.environment == "dev" ? 4 : 16
   ai_platform_v2_orchestrator_lane_floor_fast    = var.environment == "dev" ? 1 : 2
   ai_platform_v2_orchestrator_lane_floor_agentic = var.environment == "dev" ? 1 : 2
+  # Per-user running-turn limits for turns waiting on a user slot. App Service must use the same
+  # values (AI_RUNS_INTERACTIVE_USER_TOTAL_LIMIT / _AGENTIC_LIMIT).
+  ai_platform_v2_orchestrator_user_interactive_limit = var.environment == "dev" ? 2 : 3
+  ai_platform_v2_orchestrator_user_agentic_limit     = var.environment == "dev" ? 1 : 2
 
   ai_platform_v2_interactive_dispatch_urls = local.ai_platform_v2_split_interactive_enabled ? {
     fast    = "https://${azurerm_container_app.ai_platform_v2_interactive_class["fast-interactive"].ingress[0].fqdn}"
