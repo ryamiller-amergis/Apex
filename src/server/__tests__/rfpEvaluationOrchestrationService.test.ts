@@ -292,7 +292,7 @@ describe('autoStartEvaluation TBI-002', () => {
     mockedResolveSkillConfig.mockResolvedValue(FAKE_SKILL_CONFIG as any);
     mockedCreateThread.mockRejectedValue(new Error('ADO clone failed'));
 
-    await expect(autoStartEvaluation('rfp-1')).resolves.toBeUndefined();
+    await expect(autoStartEvaluation('rfp-1')).rejects.toThrow('ADO clone failed');
 
     expect(mockedSetThread).not.toHaveBeenCalled();
     expect(mockedRouteBackground).not.toHaveBeenCalled();

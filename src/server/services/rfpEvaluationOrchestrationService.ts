@@ -180,6 +180,7 @@ export async function autoStartEvaluation(rfpId: string): Promise<void> {
     stopWatcher(rfpId);
     const reason = err instanceof Error ? err.message : 'Evaluation orchestration failed';
     await markEvaluationFailedIfEvaluating(rfpId, reason);
+    throw err;
   }
 }
 
@@ -281,7 +282,11 @@ export async function recoverEvaluatingRfps(): Promise<number> {
 
     if (!request.aiThreadId) {
       console.log(`[rfpEvaluation] Recovery restart (no thread) — rfpId=${request.id}`);
-      await autoStartEvaluation(request.id);
+      try {
+        await autoStartEvaluation(request.id);
+      } catch {
+        // autoStartEvaluation already marked the row failed.
+      }
       recovered += 1;
       continue;
     }
@@ -304,7 +309,11 @@ export async function recoverEvaluatingRfps(): Promise<number> {
       console.log(
         `[rfpEvaluation] Recovery re-kick dead agent — rfpId=${request.id} threadId=${request.aiThreadId}`,
       );
-      await autoStartEvaluation(request.id);
+      try {
+        await autoStartEvaluation(request.id);
+      } catch {
+        // autoStartEvaluation already marked the row failed.
+      }
       recovered += 1;
       continue;
     }
