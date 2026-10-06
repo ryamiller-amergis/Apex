@@ -163,3 +163,19 @@ export function useRemoveProjectRole() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
   });
 }
+
+export function useAddProjectTeammate(project: string) {
+  const qc = useQueryClient();
+  return useMutation<{ status: 'assigned' | 'pending'; email: string }, Error, string>({
+    mutationFn: (email) =>
+      apiFetch<{ status: 'assigned' | 'pending'; email: string }>('/api/admin/teammates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project, email }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'users'] });
+      qc.invalidateQueries({ queryKey: ['product-setup', project] });
+    },
+  });
+}

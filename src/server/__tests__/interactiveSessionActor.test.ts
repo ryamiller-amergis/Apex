@@ -64,6 +64,9 @@ interface FakeAgentOptions {
   onSend?: () => void;
   model?: string;
   workspaceRef?: string;
+  waitStatus?: string;
+  waitResult?: string;
+  waitError?: { message: string; code?: string };
 }
 
 function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgentHandle {
@@ -80,7 +83,11 @@ function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgent
     },
     async wait() {
       if (options.waitGate) await options.waitGate;
-      return { status: 'finished' };
+      return {
+        status: options.waitStatus ?? 'finished',
+        result: options.waitResult,
+        error: options.waitError,
+      };
     },
     cancel: async () => {
       options.onCancel?.();
@@ -382,6 +389,47 @@ describe('interactiveSessionActor', () => {
     errorSpy.mockRestore();
   });
 
+  it('surfaces the Cursor wait status and safe result when a run is unsuccessful', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const posted: AiRunIngestBody[] = [];
+    const { publishLive, live } = captureLive();
+    const deps: InteractiveActorDependencies = {
+      openWarmCheckout: jest.fn(async () => ({ workspacePath: '/warm/checkout' })),
+      acquireAgent: jest.fn(async () =>
+        makeAgentHandle({
+          waitStatus: 'failed',
+          waitError: {
+            message: 'transport disconnected',
+            code: 'TRANSPORT_DISCONNECTED',
+          },
+        })
+      ),
+      publishLive,
+      postIngest: jest.fn(async (_p, _r, body): Promise<AiRunIngestResponse> => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      }),
+    };
+
+    const actor = createInteractiveSessionActor(deps);
+    await expect(actor.handleTurn(makeRequest())).rejects.toThrow();
+
+    const liveError = live.find((event) => event.event.type === 'error');
+    expect((liveError?.event as { error: string }).error).toContain(
+      'TRANSPORT_DISCONNECTED',
+    );
+    expect((liveError?.event as { error: string }).error).toContain(
+      'transport disconnected',
+    );
+    expect(posted).toContainEqual(expect.objectContaining({
+      kind: 'terminal',
+      status: 'failed',
+      detail: expect.stringContaining('status "failed"'),
+    }));
+
+    errorSpy.mockRestore();
+  });
+
   it('redacts secret-bearing fatal error messages to the error class only', async () => {
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     const posted: AiRunIngestBody[] = [];
@@ -533,5 +581,77 @@ describe('interactiveSessionActor', () => {
     expect(acquireAgent).toHaveBeenCalledTimes(2);
     expect(disposeAgent).toHaveBeenCalled();
     expect(disposeCheckout).toHaveBeenCalled();
+  });
+
+  it('starts a new agent when the resumed agent still has an active run', async () => {
+    const stuckDispose = jest.fn(async () => {});
+    const stuck: InteractiveCursorAgentHandle = {
+      ...makeAgentHandle({ agentId: 'agent-stuck' }),
+      send: async () => {
+        throw new Error('Agent agent-stuck already has active run');
+      },
+      dispose: stuckDispose,
+    };
+    const acquireAgent = jest
+      .fn()
+      .mockResolvedValueOnce(stuck)
+      .mockResolvedValueOnce(makeAgentHandle({ tokens: ['ok'], agentId: 'agent-new' }));
+    const deps: InteractiveActorDependencies = {
+      openWarmCheckout: jest.fn(async () => ({ workspacePath: '/warm/checkout' })),
+      acquireAgent,
+      postIngest: async (): Promise<AiRunIngestResponse> => ({
+        ok: true,
+        cancelRequested: false,
+      }),
+      activeRunRetryDelayMs: 0,
+    };
+
+    const outcome = await createInteractiveSessionActor(deps).handleTurn(
+      makeRequest({ cursorAgentId: 'agent-stuck' }),
+    );
+
+    expect(outcome).toEqual({ status: 'completed', cursorAgentId: 'agent-new' });
+    expect(stuckDispose).toHaveBeenCalled();
+    expect(acquireAgent).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      expect.anything(),
+      { resumeAgentId: 'agent-stuck' },
+    );
+    expect(acquireAgent).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      expect.anything(),
+      { resumeAgentId: null },
+    );
+  });
+
+  it('retries the same agent once when its previous run is still finishing', async () => {
+    const base = makeAgentHandle({ tokens: ['ok'], agentId: 'agent-1' });
+    let sends = 0;
+    const handle: InteractiveCursorAgentHandle = {
+      ...base,
+      send: async (prompt, sendOptions) => {
+        sends += 1;
+        if (sends === 1) throw new Error('Agent agent-1 already has active run');
+        return base.send(prompt, sendOptions);
+      },
+    };
+    const acquireAgent = jest.fn(async () => handle);
+    const deps: InteractiveActorDependencies = {
+      openWarmCheckout: jest.fn(async () => ({ workspacePath: '/warm/checkout' })),
+      acquireAgent,
+      postIngest: async (): Promise<AiRunIngestResponse> => ({
+        ok: true,
+        cancelRequested: false,
+      }),
+      activeRunRetryDelayMs: 0,
+    };
+
+    const outcome = await createInteractiveSessionActor(deps).handleTurn(makeRequest());
+
+    expect(outcome).toEqual({ status: 'completed', cursorAgentId: 'agent-1' });
+    expect(sends).toBe(2);
+    expect(acquireAgent).toHaveBeenCalledTimes(1);
   });
 });

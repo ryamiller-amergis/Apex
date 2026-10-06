@@ -143,6 +143,7 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
         </div>
       )}
       <div className={styles.panel} style={{ width: panelWidth }}>
+        {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- pointer-only panel resize handle; existing interaction stays as-is */}
         <div
           className={`${styles.resizeHandle} ${isDragging ? styles.resizeHandleDragging : ''}`}
           onMouseDown={handleResizeMouseDown}
@@ -208,6 +209,7 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
           onCancel={isRunning ? () => void session.cancel() : undefined}
           disabled={!threadId || isCreating || isRunning || isSending}
           isRunning={isRunning}
+          isCancelling={session.isCancelling}
           isSending={isSending}
           placeholder={isRunning ? 'Assistant is investigating…' : 'Ask about refinements or trade-offs…'}
           testIdPrefix="adr-assistant"

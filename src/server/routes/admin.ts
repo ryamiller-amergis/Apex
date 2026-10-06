@@ -8,6 +8,15 @@ import {
 } from '../services/foundationSkillAuthorizeService';
 import * as groupService from '../services/groupService';
 import { getDefaultModel, getAppSetting, setAppSetting } from '../services/appSettingsService';
+import { getProductSetup, ProductFoundationError } from '../services/productSetupService';
+import { ProductBuildError } from '../services/productBuildService';
+import {
+  draftProductFoundation,
+  reviseProductFoundation,
+  saveProductFoundation,
+} from '../services/productFoundationDraftService';
+import { ProjectMemberRoleError } from '../services/projectMemberRole';
+import { addProjectTeammate, ProjectTeammateError } from '../services/projectTeammateService';
 import { fetchAvailableModels } from '../services/modelsService';
 import { listAvailableBedrockModels } from '../services/bedrockService';
 import type {
@@ -713,6 +722,120 @@ router.put('/app-settings/teamsNotifications', async (req: Request, res: Respons
     res.json({ enabledTypes });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/teammates', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const project = typeof req.body?.project === 'string' ? req.body.project.trim() : '';
+    const email = typeof req.body?.email === 'string' ? req.body.email : '';
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    const actorId = (req.user as { profile?: { oid?: string } } | undefined)?.profile?.oid ?? 'unknown';
+    const result = await addProjectTeammate(project, email, actorId);
+    res.status(201).json(result);
+  } catch (err) {
+    if (err instanceof ProjectTeammateError || err instanceof ProjectMemberRoleError) {
+      res.status(err.status).json({ error: err.message, code: err.code });
+      return;
+    }
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+function setupActor(req: Request): { actorId: string; answeredBy: string } {
+  const profile = (req.user as { profile?: { oid?: string; displayName?: string; upn?: string } } | undefined)?.profile;
+  return {
+    actorId: profile?.oid ?? '',
+    answeredBy: profile?.displayName || profile?.upn || 'Project admin',
+  };
+}
+
+function sendSetupError(res: Response, err: unknown): void {
+  if (err instanceof ProductFoundationError) {
+    res.status(err.status).json({ error: err.message, code: err.code });
+    return;
+  }
+  res.status(500).json({ error: 'Internal server error' });
+}
+
+router.get('/product-setup', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const project = typeof req.query.project === 'string' ? req.query.project : '';
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    res.json(await getProductSetup(project, setupActor(req).actorId));
+  } catch (err) {
+    if (err instanceof ProductBuildError) {
+      res.status(err.status).json({ error: err.message, code: err.code });
+      return;
+    }
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/product-setup/draft', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const project = typeof req.body?.project === 'string' ? req.body.project.trim() : '';
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    const actor = setupActor(req);
+    const markdown = await draftProductFoundation({
+      project,
+      userId: actor.actorId,
+      answeredBy: actor.answeredBy,
+      answers: req.body?.answers,
+    });
+    res.json({ markdown });
+  } catch (err) {
+    sendSetupError(res, err);
+  }
+});
+
+router.post('/product-setup/revise', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const project = typeof req.body?.project === 'string' ? req.body.project.trim() : '';
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    const actor = setupActor(req);
+    const markdown = await reviseProductFoundation({
+      project,
+      userId: actor.actorId,
+      answeredBy: actor.answeredBy,
+      draft: req.body?.draft,
+      changes: req.body?.changes,
+    });
+    res.json({ markdown });
+  } catch (err) {
+    sendSetupError(res, err);
+  }
+});
+
+router.post('/product-setup/save', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const project = typeof req.body?.project === 'string' ? req.body.project.trim() : '';
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    const actor = setupActor(req);
+    await saveProductFoundation({
+      project,
+      userId: actor.actorId,
+      answeredBy: actor.answeredBy,
+      markdown: req.body?.markdown,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    sendSetupError(res, err);
   }
 });
 

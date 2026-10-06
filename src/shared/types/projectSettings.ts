@@ -271,6 +271,10 @@ export interface ProjectSkillConfig extends ProjectEffortSettings {
   designModuleScopingSkillPath?: string | null;
   /** Model override for Design Module sourceGlob scoping. */
   designModuleScopingModel?: string | null;
+  /** Product Intake Evaluation Skill path (RFP Intake). */
+  productIntakeEvaluationSkillPath?: string | null;
+  /** Model override for Product Intake Evaluation. */
+  productIntakeEvaluationModel?: string | null;
   /** Admin-managed repository checkout status for this configuration. */
   repositoryCheckoutStatus?: RepositoryCheckoutStatus;
   repositoryCheckoutSha?: string | null;
@@ -361,6 +365,8 @@ export interface UpsertProjectSkillConfigRequest extends ProjectEffortSettings {
   designModuleModel?: string | null;
   designModuleScopingSkillPath?: string | null;
   designModuleScopingModel?: string | null;
+  productIntakeEvaluationSkillPath?: string | null;
+  productIntakeEvaluationModel?: string | null;
   cursorApiKeyEnvRef?: string | null;
   cursorServiceAccountId?: string | null;
 }
@@ -457,6 +463,8 @@ export interface ProjectSkillConfigResponse extends ProjectEffortSettings {
   designModuleModel?: string | null;
   designModuleScopingSkillPath?: string | null;
   designModuleScopingModel?: string | null;
+  productIntakeEvaluationSkillPath?: string | null;
+  productIntakeEvaluationModel?: string | null;
   repositoryCheckoutStatus?: RepositoryCheckoutStatus;
   repositoryCheckoutSha?: string | null;
   repositoryCheckoutError?: string | null;

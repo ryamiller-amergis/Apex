@@ -128,6 +128,7 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
   return (
     <>
       {showNewConvConfirm && (
+        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- backdrop click dismisses the confirm dialog; existing interaction stays as-is
         <div
           className={styles.confirmOverlay}
           onClick={(e) => { if (e.target === e.currentTarget) setShowNewConvConfirm(false); }}
@@ -223,6 +224,7 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
               onCancel={isRunning ? () => void session.cancel() : undefined}
               disabled={isRunning || isSending || isCreating || !threadId}
               isRunning={isRunning}
+              isCancelling={session.isCancelling}
               isSending={isSending}
               placeholder={
                 isCreating ? 'Starting assistant…' :

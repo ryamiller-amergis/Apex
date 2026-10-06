@@ -3,7 +3,9 @@ import userEvent from '@testing-library/user-event';
 import { PlatformAdmin } from '../PlatformAdmin';
 import {
   useApproveProjectAccessRequest,
+  useApproveRfpSubmitAccessRequest,
   usePlatformAdminAccessRequests,
+  usePlatformAdminRfpSubmitAccessRequests,
   usePlatformAdminAssignments,
   usePlatformAdminMenuConfigs,
   usePlatformAdminPendingAssignments,
@@ -12,6 +14,7 @@ import {
   usePlatformAdminGroups,
   useRemovePlatformAdminPendingAssignment,
   useRejectProjectAccessRequest,
+  useRejectRfpSubmitAccessRequest,
   useSetPlatformAdminAssignments,
   useSetPlatformAdminMenuConfig,
 } from '../../hooks/usePlatformAdmin';
@@ -50,10 +53,22 @@ jest.mock('../UserMenu', () => ({
   UserMenu: () => <div data-testid="user-menu" />,
 }));
 
+jest.mock('../NotificationBell', () => ({
+  NotificationBell: () => <button type="button" aria-label="Notifications" data-testid="notification-bell" />,
+}));
+
 jest.mock('../WalkthroughsAdminPanel', () => ({
   WalkthroughsAdminPanel: () => (
     <div data-testid="walkthroughs-admin-panel">
       <div data-testid="walkthrough-catalog" />
+    </div>
+  ),
+}));
+
+jest.mock('../RfpQueueView', () => ({
+  RfpQueueView: ({ embedded }: { embedded?: boolean }) => (
+    <div data-testid="platform-admin-product-requests-view">
+      {embedded ? 'Embedded product requests' : 'Product requests'}
     </div>
   ),
 }));
@@ -81,7 +96,9 @@ jest.mock('../GroundingRolloutStatus', () => ({
 
 jest.mock('../../hooks/usePlatformAdmin', () => ({
   useApproveProjectAccessRequest: jest.fn(),
+  useApproveRfpSubmitAccessRequest: jest.fn(),
   usePlatformAdminAccessRequests: jest.fn(),
+  usePlatformAdminRfpSubmitAccessRequests: jest.fn(),
   usePlatformAdminAssignments: jest.fn(),
   usePlatformAdminMenuConfigs: jest.fn(),
   usePlatformAdminPendingAssignments: jest.fn(),
@@ -90,6 +107,7 @@ jest.mock('../../hooks/usePlatformAdmin', () => ({
   usePlatformAdminGroups: jest.fn(),
   useRemovePlatformAdminPendingAssignment: jest.fn(),
   useRejectProjectAccessRequest: jest.fn(),
+  useRejectRfpSubmitAccessRequest: jest.fn(),
   useSetPlatformAdminAssignments: jest.fn(),
   useSetPlatformAdminMenuConfig: jest.fn(),
 }));
@@ -105,7 +123,9 @@ jest.mock('../../hooks/usePlatformAdminFeatureFlags', () => ({
 }));
 
 const mockUseApproveProjectAccessRequest = useApproveProjectAccessRequest as jest.Mock;
+const mockUseApproveRfpSubmitAccessRequest = useApproveRfpSubmitAccessRequest as jest.Mock;
 const mockUsePlatformAdminAccessRequests = usePlatformAdminAccessRequests as jest.Mock;
+const mockUsePlatformAdminRfpSubmitAccessRequests = usePlatformAdminRfpSubmitAccessRequests as jest.Mock;
 const mockUsePlatformAdminAssignments = usePlatformAdminAssignments as jest.Mock;
 const mockUsePlatformAdminMenuConfigs = usePlatformAdminMenuConfigs as jest.Mock;
 const mockUsePlatformAdminPendingAssignments = usePlatformAdminPendingAssignments as jest.Mock;
@@ -114,6 +134,7 @@ const mockUsePlatformAdminUsers = usePlatformAdminUsers as jest.Mock;
 const mockUsePlatformAdminGroups = usePlatformAdminGroups as jest.Mock;
 const mockUseRemovePlatformAdminPendingAssignment = useRemovePlatformAdminPendingAssignment as jest.Mock;
 const mockUseRejectProjectAccessRequest = useRejectProjectAccessRequest as jest.Mock;
+const mockUseRejectRfpSubmitAccessRequest = useRejectRfpSubmitAccessRequest as jest.Mock;
 const mockUseSetPlatformAdminAssignments = useSetPlatformAdminAssignments as jest.Mock;
 const mockUseSetPlatformAdminMenuConfig = useSetPlatformAdminMenuConfig as jest.Mock;
 const mockUseFeatureFlagsList = useFeatureFlagsList as jest.Mock;
@@ -214,6 +235,12 @@ function setupPlatformAdmin(
     isError: false,
     error: null,
   });
+  mockUsePlatformAdminRfpSubmitAccessRequests.mockReturnValue({
+    data: [],
+    isLoading: false,
+    isError: false,
+    error: null,
+  });
   mockUsePlatformAdminPendingAssignments.mockImplementation((project: string) => ({
     data: pendingAssignmentsByProject[project] ?? [],
     isLoading: false,
@@ -242,6 +269,16 @@ function setupPlatformAdmin(
   });
   mockUseRejectProjectAccessRequest.mockReturnValue({
     mutateAsync: rejectRequest,
+    isPending: false,
+    error: null,
+  });
+  mockUseApproveRfpSubmitAccessRequest.mockReturnValue({
+    mutateAsync: jest.fn().mockResolvedValue(undefined),
+    isPending: false,
+    error: null,
+  });
+  mockUseRejectRfpSubmitAccessRequest.mockReturnValue({
+    mutateAsync: jest.fn().mockResolvedValue(undefined),
     isPending: false,
     error: null,
   });
@@ -375,6 +412,23 @@ describe('PlatformAdmin user-project access', () => {
       expect(approveRequest).toHaveBeenCalledWith({ requestId: 'request-1' });
       expect(rejectRequest).toHaveBeenCalledWith({ requestId: 'request-2' });
     });
+  });
+});
+
+describe('PlatformAdmin product requests tab', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUseAppShell.mockReturnValue({ selectedProject: 'MaxView', isSuperAdmin: true });
+  });
+
+  it('WZ-3 lets a platform admin open the product request queue', async () => {
+    const user = userEvent.setup();
+    setupPlatformAdmin();
+
+    await user.click(screen.getByTestId('platform-admin-tab-product-requests'));
+
+    expect(screen.getByTestId('platform-admin-panel-product-requests')).toBeInTheDocument();
+    expect(screen.getByTestId('platform-admin-product-requests-view')).toHaveTextContent('Embedded product requests');
   });
 });
 

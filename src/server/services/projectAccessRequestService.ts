@@ -4,6 +4,7 @@ import { appUsers, projectAccessRequests, userProjectAssignments } from '../db/s
 import { getAssignmentsForUser } from './userProjectAssignmentService';
 import { listProjectCatalog } from './projectCatalogService';
 import { createNotification } from './notificationService';
+import { listIntakePrivateProjectNames } from './rfpProposalService';
 import { isSuperAdminEmail } from '../utils/superAdmin';
 import type {
   PlatformAdminAccessRequest,
@@ -39,6 +40,15 @@ function normalizeProjects(projects: string[]): string[] {
   });
 
   return [...byLowerName.values()];
+}
+
+async function listRequestableCatalog(): Promise<PlatformAdminProject[]> {
+  const [catalog, privateNames] = await Promise.all([
+    listProjectCatalog(),
+    listIntakePrivateProjectNames(),
+  ]);
+  const hidden = new Set(privateNames.map((name) => name.toLowerCase()));
+  return catalog.filter((project) => !hidden.has(project.name.toLowerCase()));
 }
 
 function toRequest(row: RequestRow): ProjectAccessRequest {
@@ -133,7 +143,7 @@ export async function listCurrentUserAccessRequests(userId: string): Promise<Pro
 
 export async function listRequestableProjectsForUser(userId: string): Promise<PlatformAdminProject[]> {
   const [catalog, assignedProjects, requests] = await Promise.all([
-    listProjectCatalog(),
+    listRequestableCatalog(),
     getAssignmentsForUser(userId),
     listCurrentUserAccessRequests(userId),
   ]);
@@ -158,7 +168,7 @@ export async function createProjectAccessRequests(
   if (requestedProjects.length === 0) return [];
 
   const [catalog, assignedProjects, existingPendingRequests] = await Promise.all([
-    listProjectCatalog(),
+    listRequestableCatalog(),
     getAssignmentsForUser(userId),
     db
       .select({ project: projectAccessRequests.project })

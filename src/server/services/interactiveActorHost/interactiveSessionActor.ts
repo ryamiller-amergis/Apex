@@ -209,6 +209,8 @@ export interface InteractiveActorDependencies {
   agentCacheIdleMs?: number;
   /** Max cached Agents in this process (default 32). */
   agentCacheMax?: number;
+  /** Wait before resending after an "already has active run" error (default 3000). */
+  activeRunRetryDelayMs?: number;
 }
 
 export interface InteractiveSessionActor {
@@ -222,6 +224,20 @@ interface CachedAgentEntry {
   lastUsedAt: number;
 }
 
+/**
+ * A turn ends on Cursor's turn-end signal and cancels the run. Cursor can keep
+ * reporting that run as active for a few seconds after the local wait returns.
+ */
+const ACTIVE_RUN_RETRY_DELAY_MS = 3_000;
+
+function isActiveRunConflict(error: unknown): boolean {
+  const message =
+    error && typeof error === 'object' && 'message' in error
+      ? String((error as { message?: unknown }).message ?? '')
+      : '';
+  return /already has active run/i.test(message);
+}
+
 function isSuccessfulWait(result: CursorExecutionResult): boolean {
   if (result.completedOnTurnEnd) return true;
   return (
@@ -229,6 +245,24 @@ function isSuccessfulWait(result: CursorExecutionResult): boolean {
     result.waitResult.status === 'completed' ||
     result.waitResult.status === 'success'
   );
+}
+
+function unsuccessfulWaitError(result: CursorExecutionResult): Error {
+  const status = String(result.waitResult.status || 'unknown').slice(0, 64);
+  const rawDetail =
+    result.waitResult.error?.message ?? result.waitResult.result ?? '';
+  const detail = redactFailureMessage(rawDetail);
+  const error = new Error(
+    detail
+      ? `Cursor run ended with status "${status}": ${detail}`
+      : `Cursor run ended with status "${status}"`,
+  );
+  if (result.waitResult.error?.code) {
+    Object.assign(error, {
+      code: result.waitResult.error.code.slice(0, 64),
+    });
+  }
+  return error;
 }
 
 export function createInteractiveSessionActor(
@@ -248,6 +282,8 @@ export function createInteractiveSessionActor(
     dependencies.agentCacheIdleMs ?? INTERACTIVE_AGENT_CACHE_IDLE_MS;
   const agentCacheMax =
     dependencies.agentCacheMax ?? INTERACTIVE_AGENT_CACHE_MAX;
+  const retryDelayMs =
+    dependencies.activeRunRetryDelayMs ?? ACTIVE_RUN_RETRY_DELAY_MS;
 
   // Warm session cache keyed by threadId — single activation reuses the
   // grounded checkout and live Cursor Agent across turns.
@@ -486,10 +522,42 @@ export function createInteractiveSessionActor(
       }
 
       const sendStartedAt = now();
-      const turnEndMonitor = createCursorTurnEndMonitor();
-      activeRun = await agentHandle.send(snapshot.prompt, {
-        onDelta: (update) => turnEndMonitor.observe(update),
-      });
+      let turnEndMonitor = createCursorTurnEndMonitor();
+      const sendTurn = async (
+        handle: InteractiveCursorAgentHandle,
+      ): Promise<WorkerCursorExecutionRun> => {
+        turnEndMonitor = createCursorTurnEndMonitor();
+        return handle.send(snapshot.prompt, {
+          onDelta: (update) => turnEndMonitor.observe(update),
+        });
+      };
+      try {
+        try {
+          activeRun = await sendTurn(agentHandle);
+        } catch (sendError) {
+          if (!isActiveRunConflict(sendError)) throw sendError;
+          await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+          activeRun = await sendTurn(agentHandle);
+        }
+      } catch (sendError) {
+        if (!isActiveRunConflict(sendError)) throw sendError;
+        // The stuck run belongs to this agent id, so resuming it would fail
+        // the same way on every retry. The prompt carries the saved transcript,
+        // so a new agent keeps the conversation.
+        console.warn('[interactive] agent has a stuck run; starting a new agent', {
+          runId,
+        });
+        agentCache.delete(threadId);
+        await agentHandle.dispose().catch(() => {});
+        agentIdByThread.delete(threadId);
+        agentHandle = await dependencies.acquireAgent(snapshot, checkout, {
+          resumeAgentId: null,
+        });
+        if (agentHandle.agentId) {
+          agentIdByThread.set(threadId, agentHandle.agentId);
+        }
+        activeRun = await sendTurn(agentHandle);
+      }
       emitStage(telemetryContext, 'send', sendStartedAt);
 
       let result: CursorExecutionResult;
@@ -539,7 +607,7 @@ export function createInteractiveSessionActor(
 
       if (cancellationRequested) throw new InteractiveCancellationObservedError();
       if (!isSuccessfulWait(result)) {
-        throw new Error('Interactive turn did not finish successfully');
+        throw unsuccessfulWaitError(result);
       }
 
       // Durable FINAL assistant message so a refresh/replay always shows the

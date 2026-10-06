@@ -5,6 +5,7 @@ import { AzureDevOpsService } from '../services/azureDevOps';
 import * as userProjectAssignmentService from '../services/userProjectAssignmentService';
 import * as projectCatalogService from '../services/projectCatalogService';
 import * as projectAccessRequestService from '../services/projectAccessRequestService';
+import * as rfpProposalService from '../services/rfpProposalService';
 import * as workerTierHealthService from '../services/workerTierHealthService';
 
 // Mock the AzureDevOpsService
@@ -30,6 +31,10 @@ jest.mock('../services/projectCatalogService', () => ({
     return catalog.filter((project: { name: string }) => requested.has(project.name.toLowerCase()));
   }),
   listProjectCatalog: jest.fn(),
+}));
+
+jest.mock('../services/rfpProposalService', () => ({
+  listArchivedIntakeProjectNames: jest.fn().mockResolvedValue([]),
 }));
 
 jest.mock('../services/projectAccessRequestService', () => ({
@@ -168,6 +173,17 @@ describe('API Routes', () => {
 
       expect(response.body.map((project: any) => project.name)).toEqual(['Apex', 'Support Ops']);
       expect(mockProjectCatalogService.listProjectCatalog).toHaveBeenCalledTimes(1);
+    });
+
+    it('hides archived intake projects from the selector', async () => {
+      (rfpProposalService.listArchivedIntakeProjectNames as jest.Mock).mockResolvedValue(['Support Ops']);
+
+      const response = await request(buildAppWithUser({ oid: 'admin-oid', upn: 'ryamiller@amergis.com' }))
+        .get('/api/projects')
+        .expect(200);
+
+      expect(response.body.map((project: { name: string }) => project.name)).not.toContain('Support Ops');
+      expect(response.body.map((project: { name: string }) => project.name)).toContain('Apex');
     });
 
     it('returns no projects for unassigned users', async () => {

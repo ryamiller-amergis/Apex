@@ -33,6 +33,7 @@ import {
   listRequestableProjectsForUser,
 } from '../services/projectAccessRequestService';
 import { getUserProjects } from '../services/adoMembershipService';
+import { listArchivedIntakeProjectNames } from '../services/rfpProposalService';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 import { getUserEmail } from '../utils/requestUser';
 import { isDevAccessAllowlisted } from '../services/devEnvAllowlistService';
@@ -65,12 +66,16 @@ import {
 
 import runGroundingsRouter from './runGroundings';
 import diagramsRouter from './diagrams';
+import rfpIntakeRouter from './rfpIntake';
 import playbooksRouter from './playbooks';
+import productBuildsRouter from './productBuilds';
 const router = express.Router();
 
 router.use('/run-groundings', runGroundingsRouter);
 router.use('/projects/:projectId/diagrams', diagramsRouter);
+router.use('/rfp-intake', rfpIntakeRouter);
 router.use('/playbooks', playbooksRouter);
+router.use('/product-builds', productBuildsRouter);
 // GET /api/available-models — accessible to all authenticated users so that
 // non-admin roles (e.g. interviews:manage) can populate model dropdowns.
 router.get('/available-models', async (_req: Request, res: Response) => {
@@ -111,8 +116,14 @@ function isStringArrayOfNonEmptyItems(value: unknown): value is string[] {
 //   2. ADO team membership (auto-detected via Teams/Members API)
 router.get('/projects', async (req: Request, res: Response) => {
   try {
+    const archived = new Set(
+      (await listArchivedIntakeProjectNames()).map((name) => name.toLowerCase()),
+    );
+    const visible = <T extends { name: string }>(projects: T[]): T[] =>
+      projects.filter((project) => !archived.has(project.name.toLowerCase()));
+
     if (isSuperAdminRequest(req)) {
-      res.json(await listProjectCatalog());
+      res.json(visible(await listProjectCatalog()));
       return;
     }
 
@@ -136,7 +147,7 @@ router.get('/projects', async (req: Request, res: Response) => {
     }
 
     const catalog = await listProjectCatalog();
-    res.json(filterProjectCatalogByNames(catalog, merged));
+    res.json(visible(filterProjectCatalogByNames(catalog, merged)));
   } catch (error: any) {
     console.error('Error fetching ADO projects:', error);
     res.status(500).json({ error: 'Failed to fetch projects' });

@@ -11,6 +11,10 @@ jest.mock('../services/userProjectAssignmentService', () => ({
   assignUserToProject: jest.fn(),
 }));
 
+jest.mock('../services/projectMemberRole', () => ({
+  ensureProjectMemberRole: jest.fn(),
+}));
+
 import {
   addPendingAssignments,
   listPendingForProject,
@@ -21,6 +25,9 @@ import {
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
 const { assignUserToProject } = jest.requireMock('../services/userProjectAssignmentService') as {
   assignUserToProject: jest.Mock;
+};
+const { ensureProjectMemberRole } = jest.requireMock('../services/projectMemberRole') as {
+  ensureProjectMemberRole: jest.Mock;
 };
 
 describe('pendingAssignmentService', () => {
@@ -69,7 +76,9 @@ describe('pendingAssignmentService', () => {
     await resolvePendingAssignments('user-1', 'MISSING@example.com');
 
     expect(assignUserToProject).toHaveBeenCalledWith('user-1', 'MaxView', 'super-admin');
+    expect(ensureProjectMemberRole).toHaveBeenCalledWith('user-1', 'MaxView', 'super-admin');
     expect(assignUserToProject).toHaveBeenCalledWith('user-1', 'MatterWorx', null);
+    expect(ensureProjectMemberRole).toHaveBeenCalledWith('user-1', 'MatterWorx', null);
     expect(txDelete).toHaveBeenCalledTimes(1);
     expect(deleteWhere).toHaveBeenCalledTimes(1);
   });

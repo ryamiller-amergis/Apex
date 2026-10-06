@@ -49,6 +49,38 @@ import type { ArtifactDoneEventType } from '../../shared/types/homeDashboard';
 import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmin';
 import type { FlagLifecycle, FlagRuleType, FlagAuditAction } from '../../shared/types/featureFlags';
 import type { WorkItemType } from '../../shared/types/featureRequest';
+import type {
+  ProductIntakeEvaluationOutput,
+  RfpAiStatus,
+  RfpAudience,
+  RfpConfidence,
+  RfpDataSensitivity,
+  RfpDeliveryApproach,
+  RfpHostingRecommendation,
+  RfpHumanStatus,
+  RfpNativeBenefit,
+  RfpPriority,
+  RfpRecommendedLane,
+  RfpRequestEventType,
+  RfpRequestType,
+  RfpRisk,
+  RfpSubmitAccessRequestStatus,
+  RfpTechVelocity,
+  RfpVerdict,
+  RfpEvaluationChatRole,
+  RfpAiIntent,
+  RfpArchitecture,
+  RfpDraftKind,
+  RfpExpectedUserScale,
+  RfpGeneratedDraft,
+  RfpProposal,
+  RfpProposalJobStatus,
+} from '../../shared/types/rfpIntake';
+import type {
+  ProductBuildBrief,
+  ProductBuildKind,
+  ProductBuildStatus,
+} from '../../shared/types/productBuild';
 import type { DesignModuleIconKey } from '../../shared/types/designModule';
 import type {
   LoadProfile,
@@ -139,6 +171,7 @@ export const threadsRelations = relations(chatThreads, ({ many }) => ({
   prds: many(prds),
   testCases: many(testCases),
   designDocs: many(designDocs, { relationName: 'designDocChatThread' }),
+  productBuilds: many(productBuilds),
 }));
 
 export const messagesRelations = relations(chatMessages, ({ one, many }) => ({
@@ -192,11 +225,12 @@ export const devSessions = pgTable('dev_sessions', {
   ),
 }));
 
-export const devSessionsRelations = relations(devSessions, ({ one }) => ({
+export const devSessionsRelations = relations(devSessions, ({ one, many }) => ({
   chatThread: one(chatThreads, {
     fields: [devSessions.chatThreadId],
     references: [chatThreads.id],
   }),
+  productBuilds: many(productBuilds),
 }));
 
 export const repoCacheLeases = pgTable('repo_cache_leases', {
@@ -325,7 +359,11 @@ export const appUsersRelations = relations(appUsers, ({ many, one }) => ({
   groupMemberships: many(appGroupMembers),
   projectAssignments: many(userProjectAssignments),
   projectAccessRequests: many(projectAccessRequests),
+  rfpIntakeSubmitRequests: many(rfpIntakeSubmitRequests),
   featureRequests: many(featureRequests),
+  rfpRequests: many(rfpRequests),
+  requestedProductBuilds: many(productBuilds, { relationName: 'productBuildRequester' }),
+  reviewedProductBuilds: many(productBuilds, { relationName: 'productBuildReviewer' }),
   profile: one(userProfiles, {
     fields: [appUsers.oid],
     references: [userProfiles.userOid],
@@ -442,6 +480,26 @@ export const projectAccessRequests = pgTable('project_access_requests', {
 export const projectAccessRequestsRelations = relations(projectAccessRequests, ({ one }) => ({
   user: one(appUsers, {
     fields: [projectAccessRequests.userId],
+    references: [appUsers.oid],
+  }),
+}));
+
+export const rfpIntakeSubmitRequests = pgTable('rfp_intake_submit_requests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  status: text('status').$type<RfpSubmitAccessRequestStatus>().notNull().default('pending'),
+  requestedAt: timestamp('requested_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  reviewedBy: text('reviewed_by'),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true, mode: 'string' }),
+  reviewNote: text('review_note'),
+}, (t) => ({
+  userIdx: index('idx_rfp_intake_submit_requests_user_id').on(t.userId),
+  statusIdx: index('idx_rfp_intake_submit_requests_status').on(t.status),
+}));
+
+export const rfpIntakeSubmitRequestsRelations = relations(rfpIntakeSubmitRequests, ({ one }) => ({
+  user: one(appUsers, {
+    fields: [rfpIntakeSubmitRequests.userId],
     references: [appUsers.oid],
   }),
 }));
@@ -865,6 +923,8 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designModuleScopingSkillPath: text('design_module_scoping_skill_path'),
   designModuleScopingModel: text('design_module_scoping_model'),
   designModuleScopingEffort: text('design_module_scoping_effort').$type<EffortLevel>(),
+  productIntakeEvaluationSkillPath: text('product_intake_evaluation_skill_path'),
+  productIntakeEvaluationModel: text('product_intake_evaluation_model'),
   /** Admin-managed checkout readiness for this skill-settings repository identity. */
   repositoryCheckoutStatus: text('repository_checkout_status').notNull().default('not_cloned'),
   repositoryCheckoutSha: text('repository_checkout_sha'),
@@ -1496,6 +1556,7 @@ export const uiLabDesignShares = pgTable('ui_lab_design_shares', {
 export const uiLabDesignsRelations = relations(uiLabDesigns, ({ many }) => ({
   comments: many(uiLabComments),
   shares: many(uiLabDesignShares),
+  productBuilds: many(productBuilds),
 }));
 
 export const uiLabCommentsRelations = relations(uiLabComments, ({ one }) => ({
@@ -2776,6 +2837,241 @@ export const traceEventsRelations = relations(traceEvents, ({ one }) => ({
   }),
 }));
 
+// ── RFP Intake ────────────────────────────────────────────────────────────────
+
+export const rfpRequests = pgTable('rfp_requests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  ownerId: text('owner_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  title: text('title').notNull(),
+  stakeholder: text('stakeholder').notNull(),
+  request: text('request').notNull(),
+  problem: text('problem').notNull(),
+  audience: text('audience').$type<RfpAudience>().notNull(),
+  dataSensitivity: text('data_sensitivity').$type<RfpDataSensitivity>().notNull(),
+  existingSolution: text('existing_solution').notNull(),
+  advantage: text('advantage'),
+  constraints: text('constraints'),
+  requestType: text('request_type').$type<RfpRequestType>(),
+  existingSystemStack: text('existing_system_stack'),
+  status: text('status').$type<RfpHumanStatus>().notNull().default('evaluating'),
+  aiStatus: text('ai_status').$type<RfpAiStatus>().notNull().default('evaluating'),
+  aiThreadId: text('ai_thread_id'),
+  sourceProject: text('source_project').notNull(),
+  currentEvaluationId: uuid('current_evaluation_id').references((): AnyPgColumn => rfpEvaluations.id, { onDelete: 'set null' }),
+  clarificationUsed: boolean('clarification_used').notNull().default(false),
+  reviewerVerdict: text('reviewer_verdict').$type<RfpVerdict>(),
+  reviewerRationale: text('reviewer_rationale'),
+  reviewerId: text('reviewer_id').references(() => appUsers.oid, { onDelete: 'set null' }),
+  reviewerDecidedAt: timestamp('reviewer_decided_at', { withTimezone: true, mode: 'string' }),
+  reviewerSourceMessageIds: jsonb('reviewer_source_message_ids').$type<string[]>().notNull().default([]),
+  expectedUsers: text('expected_users').$type<RfpExpectedUserScale>(),
+  aiInApp: text('ai_in_app').$type<RfpAiIntent>(),
+  architecture: jsonb('architecture').$type<RfpArchitecture>(),
+  reviewSubmittedAt: timestamp('review_submitted_at', { withTimezone: true, mode: 'string' }),
+  reviewSubmittedBy: text('review_submitted_by').references(() => appUsers.oid, { onDelete: 'set null' }),
+  currentProposalJobId: uuid('current_proposal_job_id').references((): AnyPgColumn => rfpProposalJobs.id, { onDelete: 'set null' }),
+  proposalDraft: jsonb('proposal_draft').$type<RfpGeneratedDraft>(),
+  proposal: jsonb('proposal').$type<RfpProposal>(),
+  approvedRepoName: text('approved_repo_name'),
+  approvedRepoUrl: text('approved_repo_url'),
+  apexProject: text('apex_project'),
+  approvedAt: timestamp('approved_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  apexProjectUniq: uniqueIndex('idx_rfp_requests_apex_project')
+    .on(sql`lower(${t.apexProject})`)
+    .where(sql`${t.apexProject} IS NOT NULL`),
+  ownerCreatedIdx: index('idx_rfp_requests_owner_created').on(t.ownerId, t.createdAt),
+  statusCreatedIdx: index('idx_rfp_requests_status_created').on(t.status, t.createdAt),
+  aiStatusIdx: index('idx_rfp_requests_ai_status').on(t.aiStatus),
+}));
+
+export const rfpEvaluations = pgTable('rfp_evaluations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  rfpRequestId: uuid('rfp_request_id').notNull().references(() => rfpRequests.id, { onDelete: 'cascade' }),
+  version: integer('version').notNull(),
+  verdict: text('verdict').$type<RfpVerdict>().notNull(),
+  confidence: text('confidence').$type<RfpConfidence>().notNull(),
+  techVelocity: text('tech_velocity').$type<RfpTechVelocity>().notNull(),
+  nativeBenefit: text('native_benefit').$type<RfpNativeBenefit>().notNull(),
+  audience: text('audience').$type<RfpAudience>().notNull(),
+  dataLeavesTenant: boolean('data_leaves_tenant').notNull(),
+  priority: text('priority').$type<RfpPriority>().notNull(),
+  risk: text('risk').$type<RfpRisk>().notNull(),
+  deliveryApproach: text('delivery_approach').$type<RfpDeliveryApproach>().notNull(),
+  recommendedLane: text('recommended_lane').$type<RfpRecommendedLane>().notNull(),
+  recommendedTooling: jsonb('recommended_tooling').$type<string[]>().notNull().default([]),
+  hostingRecommendation: text('hosting_recommendation').$type<RfpHostingRecommendation>().notNull(),
+  operationalOwner: text('operational_owner').notNull(),
+  reuseOpportunity: text('reuse_opportunity').notNull(),
+  entersInterviewFlow: boolean('enters_interview_flow').notNull(),
+  buildBuyRentSummary: text('build_buy_rent_summary').notNull(),
+  rationale: text('rationale').notNull(),
+  existingOverlap: text('existing_overlap').notNull(),
+  clarifyingQuestions: jsonb('clarifying_questions').$type<string[]>().notNull().default([]),
+  rawOutput: jsonb('raw_output').$type<ProductIntakeEvaluationOutput>().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  requestVersionUniq: unique('rfp_evaluations_request_version_key').on(t.rfpRequestId, t.version),
+  requestIdx: index('idx_rfp_evaluations_request_id').on(t.rfpRequestId),
+  verdictIdx: index('idx_rfp_evaluations_verdict').on(t.verdict),
+}));
+
+export const rfpComments = pgTable('rfp_comments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  rfpRequestId: uuid('rfp_request_id').notNull().references(() => rfpRequests.id, { onDelete: 'cascade' }),
+  authorId: text('author_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  body: text('body').notNull(),
+  mentionedUserIds: jsonb('mentioned_user_ids').$type<string[]>().notNull().default([]),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  requestCreatedIdx: index('idx_rfp_comments_request_created').on(t.rfpRequestId, t.createdAt),
+}));
+
+export const rfpAttachments = pgTable('rfp_attachments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  rfpRequestId: uuid('rfp_request_id').notNull().references(() => rfpRequests.id, { onDelete: 'cascade' }),
+  commentId: uuid('comment_id').references(() => rfpComments.id, { onDelete: 'cascade' }),
+  filename: text('filename').notNull(),
+  contentType: text('content_type').notNull(),
+  sizeBytes: integer('size_bytes').notNull(),
+  storageKey: text('storage_key').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  requestIdx: index('idx_rfp_attachments_request_id').on(t.rfpRequestId),
+  commentIdx: index('idx_rfp_attachments_comment_id').on(t.commentId),
+}));
+
+export const rfpRequestEvents = pgTable('rfp_request_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  rfpRequestId: uuid('rfp_request_id').notNull().references(() => rfpRequests.id, { onDelete: 'cascade' }),
+  eventType: text('event_type').$type<RfpRequestEventType>().notNull(),
+  actorId: text('actor_id').references(() => appUsers.oid, { onDelete: 'set null' }),
+  payload: jsonb('payload').$type<Record<string, unknown>>(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  requestCreatedIdx: index('idx_rfp_request_events_request_created').on(t.rfpRequestId, t.createdAt),
+}));
+
+export const rfpEvaluationMessages = pgTable('rfp_evaluation_messages', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  rfpRequestId: uuid('rfp_request_id').notNull().references(() => rfpRequests.id, { onDelete: 'cascade' }),
+  evaluationId: uuid('evaluation_id').references(() => rfpEvaluations.id, { onDelete: 'set null' }),
+  authorId: text('author_id').references(() => appUsers.oid, { onDelete: 'set null' }),
+  role: text('role').$type<RfpEvaluationChatRole>().notNull(),
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  requestCreatedIdx: index('idx_rfp_evaluation_messages_request_created').on(t.rfpRequestId, t.createdAt),
+}));
+
+export const rfpProposalJobs = pgTable('rfp_proposal_jobs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  rfpRequestId: uuid('rfp_request_id').notNull().references((): AnyPgColumn => rfpRequests.id, { onDelete: 'cascade' }),
+  kind: text('kind').$type<RfpDraftKind>().notNull(),
+  status: text('status').$type<RfpProposalJobStatus>().notNull().default('queued'),
+  verdict: text('verdict').$type<RfpVerdict>().notNull(),
+  inputFingerprint: text('input_fingerprint').notNull(),
+  requestedBy: text('requested_by').references(() => appUsers.oid, { onDelete: 'set null' }),
+  attempts: integer('attempts').notNull().default(0),
+  maxAttempts: integer('max_attempts').notNull().default(3),
+  availableAt: timestamp('available_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  ownerInstance: text('owner_instance'),
+  heartbeatAt: timestamp('heartbeat_at', { withTimezone: true, mode: 'string' }),
+  lockExpiresAt: timestamp('lock_expires_at', { withTimezone: true, mode: 'string' }),
+  draft: jsonb('draft').$type<RfpGeneratedDraft>(),
+  errorCode: text('error_code'),
+  errorMessage: text('error_message'),
+  startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
+  completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  oneActive: uniqueIndex('idx_rfp_proposal_jobs_one_active')
+    .on(t.rfpRequestId)
+    .where(sql`${t.status} IN ('queued', 'researching-prices', 'writing')`),
+  claimIdx: index('idx_rfp_proposal_jobs_claim').on(t.status, t.availableAt, t.createdAt),
+  requestCreatedIdx: index('idx_rfp_proposal_jobs_request_created').on(t.rfpRequestId, t.createdAt),
+}));
+
+export const rfpRequestsRelations = relations(rfpRequests, ({ one, many }) => ({
+  owner: one(appUsers, {
+    fields: [rfpRequests.ownerId],
+    references: [appUsers.oid],
+  }),
+  currentEvaluation: one(rfpEvaluations, {
+    fields: [rfpRequests.currentEvaluationId],
+    references: [rfpEvaluations.id],
+  }),
+  currentProposalJob: one(rfpProposalJobs, {
+    fields: [rfpRequests.currentProposalJobId],
+    references: [rfpProposalJobs.id],
+  }),
+  evaluations: many(rfpEvaluations),
+  comments: many(rfpComments),
+  attachments: many(rfpAttachments),
+  events: many(rfpRequestEvents),
+  evaluationMessages: many(rfpEvaluationMessages),
+  productBuilds: many(productBuilds),
+}));
+
+export const rfpEvaluationsRelations = relations(rfpEvaluations, ({ one }) => ({
+  request: one(rfpRequests, {
+    fields: [rfpEvaluations.rfpRequestId],
+    references: [rfpRequests.id],
+  }),
+}));
+
+export const rfpCommentsRelations = relations(rfpComments, ({ one, many }) => ({
+  request: one(rfpRequests, {
+    fields: [rfpComments.rfpRequestId],
+    references: [rfpRequests.id],
+  }),
+  author: one(appUsers, {
+    fields: [rfpComments.authorId],
+    references: [appUsers.oid],
+  }),
+  attachments: many(rfpAttachments),
+}));
+
+export const rfpAttachmentsRelations = relations(rfpAttachments, ({ one }) => ({
+  request: one(rfpRequests, {
+    fields: [rfpAttachments.rfpRequestId],
+    references: [rfpRequests.id],
+  }),
+  comment: one(rfpComments, {
+    fields: [rfpAttachments.commentId],
+    references: [rfpComments.id],
+  }),
+}));
+
+export const rfpRequestEventsRelations = relations(rfpRequestEvents, ({ one }) => ({
+  request: one(rfpRequests, {
+    fields: [rfpRequestEvents.rfpRequestId],
+    references: [rfpRequests.id],
+  }),
+  actor: one(appUsers, {
+    fields: [rfpRequestEvents.actorId],
+    references: [appUsers.oid],
+  }),
+}));
+
+export const rfpEvaluationMessagesRelations = relations(rfpEvaluationMessages, ({ one }) => ({
+  request: one(rfpRequests, {
+    fields: [rfpEvaluationMessages.rfpRequestId],
+    references: [rfpRequests.id],
+  }),
+  evaluation: one(rfpEvaluations, {
+    fields: [rfpEvaluationMessages.evaluationId],
+    references: [rfpEvaluations.id],
+  }),
+  author: one(appUsers, {
+    fields: [rfpEvaluationMessages.authorId],
+    references: [appUsers.oid],
+  }),
+}));
+
 // ── Artifact done events (frozen cycle-time end instants) ─────────────────────
 
 // Insert-once per (artifactType, artifactId). No foreign key: artifactId points
@@ -3015,5 +3311,98 @@ export const playbookGateApproversRelations = relations(playbookGateApprovers, (
   stepRun: one(playbookStepRuns, {
     fields: [playbookGateApprovers.stepRunId],
     references: [playbookStepRuns.id],
+  }),
+}));
+
+// ── Product builds ────────────────────────────────────────────────────────────
+// One initial build per RFP. Later feature, bug, and refinement rows are separate.
+// agent_run_id is text with no FK: agent_runs already points at dev_sessions, and
+// a build points at both, so a hard FK would cycle if a run later points back here.
+
+export const productBuilds = pgTable('product_builds', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  kind: text('kind').$type<ProductBuildKind>().notNull(),
+  status: text('status').$type<ProductBuildStatus>().notNull().default('discovery'),
+  project: text('project').notNull(),
+  rfpRequestId: uuid('rfp_request_id').references(() => rfpRequests.id, { onDelete: 'set null' }),
+  chatThreadId: uuid('chat_thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+  uiLabDesignId: uuid('ui_lab_design_id').references(() => uiLabDesigns.id, { onDelete: 'set null' }),
+  devSessionId: uuid('dev_session_id').references(() => devSessions.id, { onDelete: 'set null' }),
+  agentRunId: text('agent_run_id'),
+  brief: jsonb('brief').$type<ProductBuildBrief>(),
+  prototypeVersion: integer('prototype_version'),
+  requesterId: text('requester_id').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  reviewerId: text('reviewer_id').references(() => appUsers.oid, { onDelete: 'set null' }),
+  adoWorkItemId: integer('ado_work_item_id'),
+  prUrl: text('pr_url'),
+  errorMessage: text('error_message'),
+  approvedAt: timestamp('approved_at', { withTimezone: true, mode: 'string' }),
+  prOpenedAt: timestamp('pr_opened_at', { withTimezone: true, mode: 'string' }),
+  mergedAt: timestamp('merged_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  kindCheck: check(
+    'product_builds_kind_check',
+    sql`${t.kind} IN ('initial', 'feature', 'bug', 'refinement')`,
+  ),
+  statusCheck: check(
+    'product_builds_status_check',
+    sql`${t.status} IN ('discovery', 'brief-confirmed', 'prototype', 'approved', 'building', 'pr-open', 'merged', 'failed')`,
+  ),
+  briefCheck: check(
+    'product_builds_brief_check',
+    sql`${t.brief} IS NULL OR jsonb_typeof(${t.brief}) = 'object'`,
+  ),
+  prototypeVersionCheck: check(
+    'product_builds_prototype_version_check',
+    sql`${t.prototypeVersion} IS NULL OR ${t.prototypeVersion} >= 1`,
+  ),
+  adoWorkItemCheck: check(
+    'product_builds_ado_work_item_check',
+    sql`${t.adoWorkItemId} IS NULL OR ${t.adoWorkItemId} > 0`,
+  ),
+  oneInitialPerRfp: uniqueIndex('idx_product_builds_one_initial_per_rfp')
+    .on(t.rfpRequestId)
+    .where(sql`${t.kind} = 'initial' AND ${t.rfpRequestId} IS NOT NULL`),
+  projectStatusIdx: index('idx_product_builds_project_status').on(t.project, t.status),
+  requesterCreatedIdx: index('idx_product_builds_requester_created').on(t.requesterId, t.createdAt),
+  rfpIdx: index('idx_product_builds_rfp')
+    .on(t.rfpRequestId)
+    .where(sql`${t.rfpRequestId} IS NOT NULL`),
+  chatThreadIdx: index('idx_product_builds_chat_thread')
+    .on(t.chatThreadId)
+    .where(sql`${t.chatThreadId} IS NOT NULL`),
+  agentRunIdx: index('idx_product_builds_agent_run')
+    .on(t.agentRunId)
+    .where(sql`${t.agentRunId} IS NOT NULL`),
+}));
+
+export const productBuildsRelations = relations(productBuilds, ({ one }) => ({
+  rfpRequest: one(rfpRequests, {
+    fields: [productBuilds.rfpRequestId],
+    references: [rfpRequests.id],
+  }),
+  chatThread: one(chatThreads, {
+    fields: [productBuilds.chatThreadId],
+    references: [chatThreads.id],
+  }),
+  uiLabDesign: one(uiLabDesigns, {
+    fields: [productBuilds.uiLabDesignId],
+    references: [uiLabDesigns.id],
+  }),
+  devSession: one(devSessions, {
+    fields: [productBuilds.devSessionId],
+    references: [devSessions.id],
+  }),
+  requester: one(appUsers, {
+    fields: [productBuilds.requesterId],
+    references: [appUsers.oid],
+    relationName: 'productBuildRequester',
+  }),
+  reviewer: one(appUsers, {
+    fields: [productBuilds.reviewerId],
+    references: [appUsers.oid],
+    relationName: 'productBuildReviewer',
   }),
 }));

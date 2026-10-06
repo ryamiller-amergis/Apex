@@ -28,6 +28,12 @@ export interface LaunchCloudAgentInput {
   skillName?: string;
   /** Azure DevOps token for the developer who started the run. Used only to open the pull request. */
   adoUserToken?: string | null;
+  /** Product builds open a draft pull request. My Work stays active. */
+  draftPullRequest?: boolean;
+  /** Azure DevOps identity id required on the pull request. */
+  requiredReviewerId?: string;
+  /** Product builds fail when a required npm script is missing. */
+  enforceChecks?: boolean;
 }
 
 export interface LaunchCloudAgentResult {
@@ -48,6 +54,8 @@ export interface CloudAgentRunObservation {
   noChanges?: boolean;
   /** `APEX_RUN_SETTLED` is in the logs, after the CLI exit and branch markers. */
   settled?: boolean;
+  /** Suite outcomes from `APEX_CHECK_RESULTS`, when the runner printed them. */
+  checkResults?: import('../../shared/types/agentRunLifecycle').RunCheckResult[] | null;
 }
 
 export function toCloudRepoUrl(remoteUrl: string): string {
@@ -94,6 +102,9 @@ export async function launchCloudAgent(
     authorEmail: input.initiatorEmail,
     skillName: input.skillName,
     adoUserToken: input.adoUserToken,
+    draftPullRequest: input.draftPullRequest,
+    requiredReviewerId: input.requiredReviewerId,
+    enforceChecks: input.enforceChecks,
     repoUrl,
   });
 }

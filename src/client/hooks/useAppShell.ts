@@ -15,6 +15,8 @@ import { WORK_BOARD_FLAG } from '../../shared/types/featureFlags';
 
 import { THEME_CYCLE, isThemeMode, type ThemeMode } from '../config/themes';
 import { notifySelectedProjectChanged } from '../utils/apiFetch';
+import { clearPlatformProjectListing } from '../utils/platformLanding';
+import { fetchAuthStatus } from '../utils/fetchAuthStatus';
 
 export type { ThemeMode };
 
@@ -74,6 +76,7 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
   const queryClient = useQueryClient();
   const [currentDate] = useState(new Date());
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [isAuthReconnecting, setIsAuthReconnecting] = useState(false);
   const [authenticatedUser, setAuthenticatedUser] = useState<AuthenticatedUser | null>(null);
   const [permissions, setPermissions] = useState<string[]>([]);
   const [roles, setRoles] = useState<string[]>([]);
@@ -91,8 +94,6 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
   });
   const [whatsNewBootstrap, setWhatsNewBootstrap] = useState<WhatsNewState | null>(null);
   const whatsNewCapturedRef = useRef(false);
-  const [betaAnnouncementDismissed, setBetaAnnouncementDismissed] = useState(false);
-  const [devAccessAllowlisted, setDevAccessAllowlisted] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [pendingDueDateChange, setPendingDueDateChange] = useState<DueDateChange | null>(null);
   const [isChangingTeam, setIsChangingTeam] = useState(false);
@@ -130,18 +131,21 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
   useEffect(() => {
     let cancelled = false;
     let retryTimer: number | null = null;
+    const unmountController = new AbortController();
 
     const checkAuth = async () => {
       try {
-        const r = await fetch('/auth/status', { credentials: 'include' });
+        const r = await fetchAuthStatus({ signal: unmountController.signal });
         if (!r.ok) throw new Error(`auth status ${r.status}`);
         const d = await r.json();
         if (cancelled) return;
+        setIsAuthReconnecting(false);
         setIsAuthenticated(d.authenticated);
         setAuthenticatedUser(d.authenticated ? d.user ?? null : null);
       } catch {
-        if (cancelled) return;
-        // Server may be restarting (nodemon) — retry instead of sending user to login.
+        if (cancelled || unmountController.signal.aborted) return;
+        // Hung instance or nodemon restart — abort and retry instead of an infinite loader.
+        setIsAuthReconnecting(true);
         retryTimer = window.setTimeout(checkAuth, 2000);
       }
     };
@@ -149,6 +153,7 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
     void checkAuth();
     return () => {
       cancelled = true;
+      unmountController.abort();
       if (retryTimer !== null) window.clearTimeout(retryTimer);
     };
   }, []);
@@ -179,8 +184,6 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
           setGroups(d.groups ?? []);
           setUserId(d.userId ?? '');
           setIsSuperAdmin(d.isSuperAdmin ?? false);
-          setBetaAnnouncementDismissed(d.betaAnnouncementDismissed);
-          setDevAccessAllowlisted(d.devAccessAllowlisted === true);
           const restricted = d.restrictedAccess ?? null;
           setIsRestricted(Boolean(restricted));
           setRestrictedModules(restricted?.modules ?? []);
@@ -340,16 +343,6 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
     dismissWhatsNew('banner');
   }, [dismissWhatsNew]);
 
-  const handleDismissBetaAnnouncement = useCallback(() => {
-    setBetaAnnouncementDismissed(true);
-    void fetch('/api/me/preferences', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ dismissBetaAnnouncement: true }),
-    });
-  }, []);
-
   const handleToggleShowChangelogOnLogin = useCallback((show: boolean) => {
     setWhatsNewShowOnLogin(show);
   }, [setWhatsNewShowOnLogin]);
@@ -362,6 +355,7 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
 
   const handleLogout = useCallback(async () => {
     sessionStorage.removeItem('agentHomeThreadId');
+    clearPlatformProjectListing();
     try { await fetch('/auth/logout', { credentials: 'include' }); } catch { /* ignore */ }
     window.location.href = '/';
   }, []);
@@ -377,6 +371,7 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
 
   return {
     isAuthenticated,
+    isAuthReconnecting,
     authenticatedUser,
     permissions,
     roles,
@@ -416,9 +411,6 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
     whatsNewCurrentVersion: whatsNew.currentVersion,
     whatsNewAutomaticOverlaySettled,
     whatsNewBlocksAutomaticWalkthrough,
-    betaAnnouncementDismissed,
-    devAccessAllowlisted,
-    handleDismissBetaAnnouncement,
     handleLogout,
     selectedProject,
     selectedAreaPath,

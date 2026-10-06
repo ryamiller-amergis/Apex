@@ -43,7 +43,16 @@ export type AgentRunTerminalReason =
 export type AgentRunCancelState = 'requested' | 'acknowledged' | 'completed';
 
 /** Pre-PR quality check reported by a Cloud Agent run (FEAT-003 TBI-005). */
-export type RunCheckKind = 'unit' | 'e2e' | 'wcag';
+export type RunCheckKind =
+  | 'unit'
+  | 'e2e'
+  | 'wcag'
+  | 'install'
+  | 'lint'
+  | 'typecheck'
+  | 'build'
+  | 'migrations'
+  | 'security';
 
 export type RunCheckOutcome = 'passed' | 'failed';
 
@@ -102,6 +111,19 @@ export interface ExecutionSnapshot {
      * as the developer.
      */
     userTokenInstance?: string;
+    /**
+     * Azure DevOps project that owns the work item. Skill settings and the
+     * dev session stay on `projectId`, which may be a different virtual project.
+     */
+    workItemProject?: string;
+    /** Open the pull request as a draft. Omitted means an active pull request. */
+    draftPullRequest?: boolean;
+    /** Azure DevOps identity id added as a required reviewer. */
+    requiredReviewerId?: string;
+    /** Production may open the pull request with the service PAT. */
+    allowServiceAccountPullRequest?: boolean;
+    /** Runner fails a product build when a required npm script is missing. */
+    enforceChecks?: boolean;
   };
   workflowClass: string;
   skillPath: string;

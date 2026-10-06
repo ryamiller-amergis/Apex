@@ -25,6 +25,8 @@ export type AiFeature =
   | 'home-chat'
   | 'ai-cost-insights'
   | 'calendar-work-item-assistant'
+  | 'rfp-intake'
+  | 'product-foundation'
   | 'adr'
   | 'other';
 

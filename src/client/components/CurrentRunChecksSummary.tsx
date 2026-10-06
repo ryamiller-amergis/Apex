@@ -9,6 +9,12 @@ const FAILING_CHECK_LABELS: Record<RunCheckKind, string> = {
   unit: 'Unit checks failed',
   e2e: 'E2E checks failed',
   wcag: 'WCAG checks failed',
+  install: 'Install checks failed',
+  lint: 'Lint checks failed',
+  typecheck: 'Typecheck checks failed',
+  build: 'Build checks failed',
+  migrations: 'Migration checks failed',
+  security: 'Security checks failed',
 };
 
 interface CurrentRunChecksSummaryProps {

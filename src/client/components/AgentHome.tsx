@@ -1,7 +1,17 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useHomeDashboard } from '../hooks/useHomeDashboard';
 import { HomeDashboardSection } from './HomeDashboardSection';
+import { ProductSetup, type FoundationReview } from './ProductSetup';
+import { ProductBuildSetup } from './ProductBuildSetup';
+import { ProductHome } from './ProductHome';
+import {
+  draftProductFoundation,
+  reviseProductFoundation,
+  saveProductFoundation,
+  useProductSetup,
+} from '../hooks/useProductSetup';
+import { useAddProjectTeammate } from '../hooks/useRbac';
 import styles from './AgentHome.module.css';
 
 export type HomeView = 'chat' | 'status';
@@ -30,9 +40,22 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
   onRestoreThread,
 }) => {
   const [projectViews, setProjectViews] = useState<Record<string, HomeView>>({});
+  const [setupStep, setSetupStep] = useState<'people' | 'chat'>('people');
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const [foundationDraft, setFoundationDraft] = useState<string | null>(null);
+  const [foundationWorking, setFoundationWorking] = useState(false);
+  const [foundationError, setFoundationError] = useState<string | null>(null);
+  const [foundationSaved, setFoundationSaved] = useState(false);
+  const [foundationProgress, setFoundationProgress] = useState<string | null>(null);
   const restoredProjectRef = useRef<string | null>(null);
   const restoredUrlThreadRef = useRef<string | null>(null);
+  const foundationRetryRef = useRef<{ progress: string; task: () => Promise<string | null> } | null>(null);
   const dashboard = useHomeDashboard(selectedProject, 'team');
+  const setupQuery = useProductSetup(selectedProject || null);
+  const setupStatus = setupQuery.data;
+  const buildStatus = setupStatus?.phase === 'build' ? setupStatus : null;
+  const canInviteTeammates = setupStatus?.phase !== 'foundation' || setupStatus.canInviteTeammates !== false;
+  const addTeammate = useAddProjectTeammate(selectedProject);
   const [searchParams] = useSearchParams();
   const preferredView = projectViews[selectedProject] ?? loadHomeView(selectedProject);
   const threadFromUrl = searchParams.get('thread');
@@ -42,12 +65,53 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
   const view = threadFromUrl || (!dashboard.isLoading && !statusAvailable)
     ? 'chat'
     : preferredView;
+  const setupOn = setupStatus?.active === true;
+  const latestLive = buildStatus?.build.status === 'merged';
+  const setupUnresolved = Boolean(selectedProject)
+    && setupQuery.data === undefined
+    && setupQuery.isFetched !== true;
+
+  const foundationReview = useMemo<FoundationReview>(() => ({
+    reply: foundationDraft,
+    error: foundationError,
+    progressLabel: foundationProgress,
+    saved: foundationSaved,
+  }), [foundationDraft, foundationError, foundationProgress, foundationSaved]);
+
+  const runFoundation = useCallback(async (
+    progress: string,
+    task: () => Promise<string | null>,
+  ) => {
+    setFoundationProgress(progress);
+    setFoundationWorking(true);
+    setFoundationError(null);
+    try {
+      const markdown = await task();
+      if (markdown) setFoundationDraft(markdown);
+      return true;
+    } catch (err) {
+      setFoundationError(err instanceof Error ? err.message : 'The draft could not be created.');
+      return false;
+    } finally {
+      setFoundationWorking(false);
+    }
+  }, []);
 
   const selectView = (nextView: HomeView) => {
     setProjectViews((current) => ({ ...current, [selectedProject]: nextView }));
     try { localStorage.setItem(storageKey(selectedProject), nextView); } catch { /* noop */ }
     onHomeViewChange?.(nextView);
   };
+
+  useEffect(() => {
+    setSetupStep('people');
+    setSetupError(null);
+    setFoundationDraft(null);
+    setFoundationError(null);
+    setFoundationSaved(false);
+    setFoundationProgress(null);
+    foundationRetryRef.current = null;
+  }, [selectedProject]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -58,6 +122,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
   }, [isActive, onHomeViewChange, selectedProject, threadFromUrl, view]);
 
   useEffect(() => {
+    if (setupUnresolved || setupOn) return;
+
     if (threadFromUrl) {
       if (
         restoredUrlThreadRef.current === threadFromUrl
@@ -76,35 +142,112 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
     restoredProjectRef.current = selectedProject;
     const storedThreadId = sessionStorage.getItem(`agentHomeThreadId:${selectedProject}`);
     if (storedThreadId) onRestoreThread?.(storedThreadId);
-  }, [onRestoreThread, selectedProject, threadFromUrl]);
+  }, [onRestoreThread, selectedProject, setupOn, setupUnresolved, threadFromUrl]);
+
+  const addSetupTeammate = (email: string) => {
+    setSetupError(null);
+    addTeammate.mutate(email, { onError: (err) => setSetupError(err.message) });
+  };
+
+  const refetchSetup = setupQuery.refetch;
+
+  const productSetupPanel = (
+    <ProductSetup
+      step={canInviteTeammates ? setupStep : 'chat'}
+      canInviteTeammates={canInviteTeammates}
+      candidates={setupQuery.data?.candidates ?? []}
+      adding={addTeammate.isPending}
+      error={setupError}
+      onAddEmail={addSetupTeammate}
+      onAddExisting={addSetupTeammate}
+      onSkip={() => setSetupStep('chat')}
+      onContinue={() => setSetupStep('chat')}
+      onChooseStep={setSetupStep}
+      initialFoundationAnswers={setupQuery.data?.foundationAnswers ?? []}
+      onCompleteFoundation={(answers) => {
+        const progress = 'Writing the draft from your answers';
+        const task = async () => (await draftProductFoundation(selectedProject, answers)).markdown;
+        foundationRetryRef.current = { progress, task };
+        void runFoundation(progress, task);
+      }}
+      creatingDraft={foundationWorking}
+      conversationStarted={foundationWorking || foundationDraft !== null || foundationError !== null || foundationSaved}
+      review={foundationReview}
+      onConfirmDraft={() => {
+        if (!foundationDraft) return;
+        const progress = 'Saving PRODUCT.md';
+        const markdown = foundationDraft;
+        const task = async () => {
+          await saveProductFoundation(selectedProject, markdown);
+          setFoundationSaved(true);
+          await refetchSetup();
+          return null;
+        };
+        foundationRetryRef.current = { progress, task };
+        void runFoundation(progress, task);
+      }}
+      onReviseDraft={(changes) => {
+        if (!foundationDraft) return;
+        const progress = 'Updating the draft';
+        const markdown = foundationDraft;
+        const task = async () => (await reviseProductFoundation(selectedProject, markdown, changes)).markdown;
+        foundationRetryRef.current = { progress, task };
+        void runFoundation(progress, task);
+      }}
+      onRetryDraft={() => {
+        const retry = foundationRetryRef.current;
+        if (retry) void runFoundation(retry.progress, retry.task);
+      }}
+    />
+  );
 
   return (
-    <main className={styles.dashboardPage} data-testid="agent-home-dashboard">
-      <div className={styles.tabStrip} role="tablist" aria-label="Home view">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={view === 'chat'}
-          className={`${styles.tab} ${view === 'chat' ? styles.activeTab : ''}`}
-          onClick={() => selectView('chat')}
-          data-testid="home-view-chat"
-        >
-          Chat
-        </button>
-        {statusAvailable && (
+    <main
+      className={styles.dashboardPage}
+      style={setupOn ? { zIndex: 2 } : undefined}
+      {...{ 'data-testid': 'agent-home-dashboard' }}
+    >
+      {!setupOn && (
+        <div className={styles.tabStrip} role="tablist" aria-label="Home view">
           <button
             type="button"
             role="tab"
-            aria-selected={view === 'status'}
-            className={`${styles.tab} ${view === 'status' ? styles.activeTab : ''}`}
-            onClick={() => selectView('status')}
-            data-testid="home-view-status"
+            aria-selected={view === 'chat'}
+            className={`${styles.tab} ${view === 'chat' ? styles.activeTab : ''}`}
+            onClick={() => selectView('chat')}
+            {...{ 'data-testid': 'home-view-chat' }}
           >
-            Project status
+            Chat
           </button>
-        )}
-      </div>
-      {view === 'status' && statusAvailable && (
+          {statusAvailable && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === 'status'}
+              className={`${styles.tab} ${view === 'status' ? styles.activeTab : ''}`}
+              onClick={() => selectView('status')}
+              {...{ 'data-testid': 'home-view-status' }}
+            >
+              Project status
+            </button>
+          )}
+        </div>
+      )}
+      {setupOn ? (
+        <div className={`${styles.compose} ${styles.setupCompose}`} role="tabpanel" aria-label="Product setup">
+          <div className={styles.composeInner}>
+            {buildStatus ? (
+              latestLive ? (
+                <ProductHome project={selectedProject} status={buildStatus} />
+              ) : (
+                <ProductBuildSetup project={selectedProject} status={buildStatus} />
+              )
+            ) : (
+              productSetupPanel
+            )}
+          </div>
+        </div>
+      ) : view === 'status' && statusAvailable && (
         <div className={styles.statusView} role="tabpanel" aria-label="Project status">
           <HomeDashboardSection
             payload={dashboard.data}

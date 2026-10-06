@@ -266,8 +266,12 @@
     animation: none;
     opacity: 0.75;
   }
-  .preparationSpinner {
+  .preparationSpinner,
+  .stopSpinner,
+  .stopLabel {
     animation: none;
+  }
+  .preparationSpinner {
     border-top-color: var(--accent-color, #2563eb);
   }
 }
@@ -592,15 +596,41 @@
   opacity: 0.85;
 }
 
-.stopBtnStopping,
-.stopBtnStopping:disabled {
-  opacity: 0.8;
+.sendBtn.stopBtnStopping,
+.sendBtn.stopBtnStopping:disabled {
+  opacity: 1;
   cursor: wait;
+  background: color-mix(in srgb, var(--error-color) 78%, #000);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #fff 40%, transparent);
+}
+
+.stopLabel {
+  animation: stopPulse 1.1s ease-in-out infinite;
+}
+
+@keyframes stopPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.stoppingBanner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--error-color) 45%, var(--border-color));
+  background: color-mix(in srgb, var(--error-color) 12%, var(--bg-secondary));
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 600;
 }
 
 .stopSpinner {
   width: 14px;
   height: 14px;
+  flex-shrink: 0;
   border: 2px solid color-mix(in srgb, currentColor 35%, transparent);
   border-top-color: currentColor;
   border-radius: 50%;

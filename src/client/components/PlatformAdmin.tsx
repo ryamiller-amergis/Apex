@@ -7,8 +7,10 @@ import { useAppShell } from '../hooks/useAppShell';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import {
   useApproveProjectAccessRequest,
+  useApproveRfpSubmitAccessRequest,
   usePlatformAdminPendingAssignments,
   usePlatformAdminAccessRequests,
+  usePlatformAdminRfpSubmitAccessRequests,
   usePlatformAdminAssignments,
   usePlatformAdminMenuConfigs,
   usePlatformAdminProjects,
@@ -16,6 +18,7 @@ import {
   usePlatformAdminGroups,
   useRemovePlatformAdminPendingAssignment,
   useRejectProjectAccessRequest,
+  useRejectRfpSubmitAccessRequest,
   useSetPlatformAdminAssignments,
   useSetPlatformAdminMenuConfig,
   usePlatformAdminUserAccess,
@@ -33,8 +36,11 @@ import {
   useRemoveFlagRule,
   useFlagAudit,
 } from '../hooks/usePlatformAdminFeatureFlags';
+import { IS_BETA_RELEASE } from '../config/release';
 import { FoundationSkillsAdmin } from './FoundationSkillsAdmin';
+import { BrandLogo } from './BrandLogo';
 import { WalkthroughsAdminPanel } from './WalkthroughsAdminPanel';
+import { NotificationBell } from './NotificationBell';
 import { UserMenu } from './UserMenu';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import type { ThemeMode } from '../hooks/useAppShell';
@@ -49,9 +55,11 @@ import type {
 import type { FeatureFlagRule, FeatureFlagWithRules, FlagLifecycle, FlagRuleType } from '../../shared/types/featureFlags';
 import type { GroundingRolloutStage } from '../../shared/types/groundingOperations';
 import type { RestrictedUserAccess } from '../../shared/types/restrictedAccess';
+import type { PlatformAdminRfpSubmitAccessRequest } from '../../shared/types/rfpIntake';
 import { MODULE_VIEW_PERMISSIONS, isRestrictedAccessEmail } from '../../shared/types/restrictedAccess';
 import type { RoleWithPermissions } from '../../shared/types/rbac';
 import { GroundingRolloutStatus } from './GroundingRolloutStatus';
+import { RfpQueueView } from './RfpQueueView';
 import { DevEnvAllowlistPanel } from './DevEnvAllowlistPanel';
 import styles from './PlatformAdmin.module.css';
 
@@ -78,7 +86,7 @@ const userAccessSchema = z.object({
 
 type UserAccessFormValues = z.infer<typeof userAccessSchema>;
 
-type PlatformAdminTab = 'access' | 'menu' | 'user-access' | 'dev-access' | 'flags' | 'skills' | 'walkthroughs' | 'observability';
+type PlatformAdminTab = 'access' | 'product-requests' | 'menu' | 'user-access' | 'dev-access' | 'flags' | 'skills' | 'walkthroughs' | 'observability';
 
 function resolveGroundingRolloutStage(
   flags: FeatureFlagWithRules[],
@@ -198,6 +206,167 @@ function formatImportMessage(importedCount: number, pendingCount: number): strin
   return `Imported ${importedLabel}, ${pendingCount} pending first login.`;
 }
 
+interface PlatformAdminNavProps {
+  activeTab: PlatformAdminTab;
+  pendingCount: number;
+  isSuperAdmin: boolean;
+  observabilityViewerEnabled: boolean;
+  onSelect: (tab: PlatformAdminTab) => void;
+  onOpenProjects: () => void;
+}
+
+const PlatformAdminNav: React.FC<PlatformAdminNavProps> = ({
+  activeTab,
+  pendingCount,
+  isSuperAdmin,
+  observabilityViewerEnabled,
+  onSelect,
+  onOpenProjects,
+}) => (
+  <nav className={styles.nav} aria-label="Platform" {...{ 'data-testid': 'platform-admin-nav' }}>
+    <div className={styles.brand}>
+      <BrandLogo beta={IS_BETA_RELEASE} align="start" />
+    </div>
+    <button
+      type="button"
+      className={styles.navButton}
+      onClick={onOpenProjects}
+      {...{ 'data-testid': 'platform-admin-back' }}
+    >
+      Projects
+    </button>
+    <div className={styles.navDivider} />
+    <div className={styles.navTabs} role="tablist" aria-label="Platform admin sections">
+      <button
+        type="button"
+        role="tab"
+        id="platform-admin-tab-access"
+        aria-selected={activeTab === 'access'}
+        aria-controls="platform-admin-panel-access"
+        className={`${styles.navButton} ${activeTab === 'access' ? styles.navButtonActive : ''}`}
+        onClick={() => onSelect('access')}
+        {...{ 'data-testid': 'platform-admin-tab-access' }}
+      >
+        Access &amp; Users
+        {pendingCount > 0 && (
+          <span className={styles.tabBadge} aria-label={`${pendingCount} pending requests`}>
+            {pendingCount}
+          </span>
+        )}
+      </button>
+      <button
+        type="button"
+        role="tab"
+        id="platform-admin-tab-product-requests"
+        aria-selected={activeTab === 'product-requests'}
+        aria-controls="platform-admin-panel-product-requests"
+        className={`${styles.navButton} ${activeTab === 'product-requests' ? styles.navButtonActive : ''}`}
+        onClick={() => onSelect('product-requests')}
+        {...{ 'data-testid': 'platform-admin-tab-product-requests' }}
+      >
+        Product Requests
+      </button>
+      <button
+        type="button"
+        role="tab"
+        id="platform-admin-tab-menu"
+        aria-selected={activeTab === 'menu'}
+        aria-controls="platform-admin-panel-menu"
+        className={`${styles.navButton} ${activeTab === 'menu' ? styles.navButtonActive : ''}`}
+        onClick={() => onSelect('menu')}
+        {...{ 'data-testid': 'platform-admin-tab-menu' }}
+      >
+        Menu Visibility
+      </button>
+      <button
+        type="button"
+        role="tab"
+        id="platform-admin-tab-user-access"
+        aria-selected={activeTab === 'user-access'}
+        aria-controls="platform-admin-panel-user-access"
+        className={`${styles.navButton} ${activeTab === 'user-access' ? styles.navButtonActive : ''}`}
+        onClick={() => onSelect('user-access')}
+        {...{ 'data-testid': 'platform-admin-tab-user-access' }}
+      >
+        User Access
+      </button>
+      <button
+        type="button"
+        role="tab"
+        id="platform-admin-tab-dev-access"
+        aria-selected={activeTab === 'dev-access'}
+        aria-controls="platform-admin-panel-dev-access"
+        className={`${styles.navButton} ${activeTab === 'dev-access' ? styles.navButtonActive : ''}`}
+        onClick={() => onSelect('dev-access')}
+        {...{ 'data-testid': 'platform-admin-tab-dev-access' }}
+      >
+        Dev access
+      </button>
+      <button
+        type="button"
+        role="tab"
+        id="platform-admin-tab-flags"
+        aria-selected={activeTab === 'flags'}
+        aria-controls="platform-admin-panel-flags"
+        className={`${styles.navButton} ${activeTab === 'flags' ? styles.navButtonActive : ''}`}
+        onClick={() => onSelect('flags')}
+        {...{ 'data-testid': 'platform-admin-tab-flags' }}
+      >
+        Feature Flags
+      </button>
+      <button
+        type="button"
+        role="tab"
+        id="platform-admin-tab-skills"
+        aria-selected={activeTab === 'skills'}
+        aria-controls="platform-admin-panel-skills"
+        className={`${styles.navButton} ${activeTab === 'skills' ? styles.navButtonActive : ''}`}
+        onClick={() => onSelect('skills')}
+        {...{ 'data-testid': 'platform-admin-tab-skills' }}
+      >
+        APEX Skills
+      </button>
+      <button
+        type="button"
+        role="tab"
+        id="platform-admin-tab-walkthroughs"
+        aria-selected={activeTab === 'walkthroughs'}
+        aria-controls="platform-admin-panel-walkthroughs"
+        className={`${styles.navButton} ${activeTab === 'walkthroughs' ? styles.navButtonActive : ''}`}
+        onClick={() => onSelect('walkthroughs')}
+        {...{ 'data-testid': 'platform-admin-tab-walkthroughs' }}
+      >
+        Walkthroughs
+      </button>
+      {(() => {
+        // @feature-flag:observability-viewer start winner=enabled
+        if (!(isSuperAdmin && observabilityViewerEnabled)) {
+          // @feature-flag:observability-viewer disabled-start
+          return null;
+          // @feature-flag:observability-viewer disabled-end
+        }
+        // @feature-flag:observability-viewer enabled-start
+        return (
+          <button
+            type="button"
+            role="tab"
+            id="platform-admin-tab-observability"
+            aria-selected={activeTab === 'observability'}
+            aria-controls="platform-admin-panel-observability"
+            className={`${styles.navButton} ${activeTab === 'observability' ? styles.navButtonActive : ''}`}
+            onClick={() => onSelect('observability')}
+            {...{ 'data-testid': 'platform-admin-tab-observability' }}
+          >
+            Observability
+          </button>
+        );
+        // @feature-flag:observability-viewer enabled-end
+        // @feature-flag:observability-viewer end
+      })()}
+    </div>
+  </nav>
+);
+
 interface PlatformAdminProps {
   onBackToProjects: () => void;
   user: { name: string; email?: string } | null;
@@ -255,10 +424,18 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
     isError: accessRequestsIsError,
     error: accessRequestsError,
   } = usePlatformAdminAccessRequests('pending');
+  const {
+    data: rfpSubmitAccessRequests = [],
+    isLoading: rfpSubmitAccessRequestsLoading,
+    isError: rfpSubmitAccessRequestsIsError,
+    error: rfpSubmitAccessRequestsError,
+  } = usePlatformAdminRfpSubmitAccessRequests('pending');
   const setAssignments = useSetPlatformAdminAssignments();
   const setMenuConfig = useSetPlatformAdminMenuConfig();
   const approveAccessRequest = useApproveProjectAccessRequest();
   const rejectAccessRequest = useRejectProjectAccessRequest();
+  const approveRfpSubmitAccess = useApproveRfpSubmitAccessRequest();
+  const rejectRfpSubmitAccess = useRejectRfpSubmitAccessRequest();
 
   const projectNames = useMemo(() => {
     return projects.map((project) => project.name);
@@ -276,10 +453,10 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
     return new Map(menuConfigs.map((config) => [config.project, config]));
   }, [menuConfigs]);
 
-  const loadError = projectsError ?? assignmentsError ?? menuConfigsError ?? usersError ?? accessRequestsError;
-  const mutationError = setAssignments.error ?? setMenuConfig.error ?? approveAccessRequest.error ?? rejectAccessRequest.error;
-  const isLoading = projectsLoading || assignmentsLoading || menuConfigsLoading || usersLoading || accessRequestsLoading;
-  const hasLoadError = projectsIsError || assignmentsIsError || menuConfigsIsError || usersIsError || accessRequestsIsError;
+  const loadError = projectsError ?? assignmentsError ?? menuConfigsError ?? usersError ?? accessRequestsError ?? rfpSubmitAccessRequestsError;
+  const mutationError = setAssignments.error ?? setMenuConfig.error ?? approveAccessRequest.error ?? rejectAccessRequest.error ?? approveRfpSubmitAccess.error ?? rejectRfpSubmitAccess.error;
+  const isLoading = projectsLoading || assignmentsLoading || menuConfigsLoading || usersLoading || accessRequestsLoading || rfpSubmitAccessRequestsLoading;
+  const hasLoadError = projectsIsError || assignmentsIsError || menuConfigsIsError || usersIsError || accessRequestsIsError || rfpSubmitAccessRequestsIsError;
 
   const handleSaveAssignments = useCallback(async (project: string, userIds: string[], pendingEmails?: string[]) => {
     setAssignmentSavedProject(null);
@@ -301,6 +478,14 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
     await rejectAccessRequest.mutateAsync({ requestId });
   }, [rejectAccessRequest]);
 
+  const handleApproveRfpSubmitAccess = useCallback(async (requestId: string) => {
+    await approveRfpSubmitAccess.mutateAsync({ requestId });
+  }, [approveRfpSubmitAccess]);
+
+  const handleRejectRfpSubmitAccess = useCallback(async (requestId: string) => {
+    await rejectRfpSubmitAccess.mutateAsync({ requestId });
+  }, [rejectRfpSubmitAccess]);
+
   useEffect(() => {
     if (selectedMenuProject && projectNames.includes(selectedMenuProject)) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- keep selection valid when project list changes
@@ -308,24 +493,18 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
   }, [projectNames, selectedMenuProject]);
 
   return (
-    <div className={styles.page}>
-      <header className={styles.header}>
-        <button
-          type="button"
-          className={styles.backButton}
-          onClick={onBackToProjects}
-          {...{ 'data-testid': 'platform-admin-back' }}
-        >
-          Back to projects
-        </button>
-        <div>
-          <p className={styles.eyebrow}>Super admin</p>
-          <h1 className={styles.title}>Platform Admin</h1>
-          <p className={styles.subtitle}>
-            Manage project access and per-project navigation without selecting an in-project context.
-          </p>
-        </div>
-        <div className={styles.headerActions}>
+    <div className={styles.shell}>
+      <PlatformAdminNav
+        activeTab={activeTab}
+        pendingCount={accessRequests.length}
+        isSuperAdmin={isSuperAdmin}
+        observabilityViewerEnabled={observabilityViewerEnabled}
+        onSelect={setActiveTab}
+        onOpenProjects={onBackToProjects}
+      />
+      <div className={styles.main}>
+        <div className={styles.topbar}>
+          <NotificationBell />
           <UserMenu
             onOpenChangelog={onOpenChangelog}
             onThemeChange={onThemeChange}
@@ -336,145 +515,44 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
             {...{ 'data-testid': 'platform-admin-user-menu' }}
           />
         </div>
-      </header>
+        <div className={styles.body}>
+          <h1 className={styles.title}>Platform Admin</h1>
+          <p className={styles.subtitle}>
+            Manage project access and per-project navigation without selecting an in-project context.
+          </p>
 
-      {hasLoadError && (
-        <div className={styles.error} role="alert">
-          {formatError(loadError)}
-        </div>
-      )}
-      {mutationError && (
-        <div className={styles.error} role="alert">
-          {formatError(mutationError)}
-        </div>
-      )}
+          {hasLoadError && (
+            <div className={styles.error} role="alert">
+              {formatError(loadError)}
+            </div>
+          )}
+          {mutationError && (
+            <div className={styles.error} role="alert">
+              {formatError(mutationError)}
+            </div>
+          )}
 
-      {isLoading ? (
-        <div className={styles.loading}>Loading platform admin settings...</div>
-      ) : projectNames.length === 0 ? (
-        <div className={styles.emptyState}>
-          <h2>No projects available</h2>
-          <p>Projects will appear here once the platform can load the project catalog.</p>
-        </div>
-      ) : (
-        <main className={styles.content}>
-          <div className={styles.tabBar} role="tablist" aria-label="Platform admin sections">
-            <button
-              type="button"
-              role="tab"
-              id="platform-admin-tab-access"
-              aria-selected={activeTab === 'access'}
-              aria-controls="platform-admin-panel-access"
-              className={`${styles.tabButton} ${activeTab === 'access' ? styles.tabButtonActive : ''}`}
-              onClick={() => setActiveTab('access')}
-              {...{ 'data-testid': 'platform-admin-tab-access' }}
+          {isLoading ? (
+            <div className={styles.loading}>Loading platform admin settings...</div>
+          ) : projectNames.length === 0 ? (
+            <div className={styles.emptyState}>
+              <h2>No projects available</h2>
+              <p>Projects will appear here once the platform can load the project catalog.</p>
+            </div>
+          ) : (
+            <main className={styles.content}>
+          {activeTab === 'product-requests' && (
+            <div
+              id="platform-admin-panel-product-requests"
+              role="tabpanel"
+              aria-labelledby="platform-admin-tab-product-requests"
+              className={styles.tabPanel}
+              {...{ 'data-testid': 'platform-admin-panel-product-requests' }}
             >
-              Access &amp; Users
-              {accessRequests.length > 0 && (
-                <span className={styles.tabBadge} aria-label={`${accessRequests.length} pending requests`}>
-                  {accessRequests.length}
-                </span>
-              )}
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id="platform-admin-tab-menu"
-              aria-selected={activeTab === 'menu'}
-              aria-controls="platform-admin-panel-menu"
-              className={`${styles.tabButton} ${activeTab === 'menu' ? styles.tabButtonActive : ''}`}
-              onClick={() => setActiveTab('menu')}
-              {...{ 'data-testid': 'platform-admin-tab-menu' }}
-            >
-              Menu Visibility
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id="platform-admin-tab-user-access"
-              aria-selected={activeTab === 'user-access'}
-              aria-controls="platform-admin-panel-user-access"
-              className={`${styles.tabButton} ${activeTab === 'user-access' ? styles.tabButtonActive : ''}`}
-              onClick={() => setActiveTab('user-access')}
-              {...{ 'data-testid': 'platform-admin-tab-user-access' }}
-            >
-              User Access
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id="platform-admin-tab-dev-access"
-              aria-selected={activeTab === 'dev-access'}
-              aria-controls="platform-admin-panel-dev-access"
-              className={`${styles.tabButton} ${activeTab === 'dev-access' ? styles.tabButtonActive : ''}`}
-              onClick={() => setActiveTab('dev-access')}
-              {...{ 'data-testid': 'platform-admin-tab-dev-access' }}
-            >
-              Dev access
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id="platform-admin-tab-flags"
-              aria-selected={activeTab === 'flags'}
-              aria-controls="platform-admin-panel-flags"
-              className={`${styles.tabButton} ${activeTab === 'flags' ? styles.tabButtonActive : ''}`}
-              onClick={() => setActiveTab('flags')}
-              {...{ 'data-testid': 'platform-admin-tab-flags' }}
-            >
-              Feature Flags
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id="platform-admin-tab-skills"
-              aria-selected={activeTab === 'skills'}
-              aria-controls="platform-admin-panel-skills"
-              className={`${styles.tabButton} ${activeTab === 'skills' ? styles.tabButtonActive : ''}`}
-              onClick={() => setActiveTab('skills')}
-              {...{ 'data-testid': 'platform-admin-tab-skills' }}
-            >
-              APEX Skills
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id="platform-admin-tab-walkthroughs"
-              aria-selected={activeTab === 'walkthroughs'}
-              aria-controls="platform-admin-panel-walkthroughs"
-              className={`${styles.tabButton} ${activeTab === 'walkthroughs' ? styles.tabButtonActive : ''}`}
-              onClick={() => setActiveTab('walkthroughs')}
-              {...{ 'data-testid': 'platform-admin-tab-walkthroughs' }}
-            >
-              Walkthroughs
-            </button>
-            {(() => {
-              // @feature-flag:observability-viewer start winner=enabled
-              if (!(isSuperAdmin && observabilityViewerEnabled)) {
-                // @feature-flag:observability-viewer disabled-start
-                return null;
-                // @feature-flag:observability-viewer disabled-end
-              }
-              // @feature-flag:observability-viewer enabled-start
-              return (
-                <button
-                  type="button"
-                  role="tab"
-                  id="platform-admin-tab-observability"
-                  aria-selected={activeTab === 'observability'}
-                  aria-controls="platform-admin-panel-observability"
-                  className={`${styles.tabButton} ${activeTab === 'observability' ? styles.tabButtonActive : ''}`}
-                  onClick={() => setActiveTab('observability')}
-                  {...{ 'data-testid': 'platform-admin-tab-observability' }}
-                >
-                  Observability
-                </button>
-              );
-              // @feature-flag:observability-viewer enabled-end
-              // @feature-flag:observability-viewer end
-            })()}
-          </div>
-
+              {/* data-testid-exempt — embedded queue root is marked rfp-queue-view */}
+              <RfpQueueView embedded />
+            </div>
+          )}
           {activeTab === 'access' && (
             <div
               id="platform-admin-panel-access"
@@ -488,6 +566,14 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
                 isRejecting={rejectAccessRequest.isPending}
                 onApprove={handleApproveAccessRequest}
                 onReject={handleRejectAccessRequest}
+              />
+
+              <RfpSubmitAccessRequestsSection
+                requests={rfpSubmitAccessRequests}
+                isApproving={approveRfpSubmitAccess.isPending}
+                isRejecting={rejectRfpSubmitAccess.isPending}
+                onApprove={handleApproveRfpSubmitAccess}
+                onReject={handleRejectRfpSubmitAccess}
               />
 
               <section className={styles.section} aria-labelledby="user-project-access-title">
@@ -553,6 +639,7 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
               aria-labelledby="platform-admin-tab-dev-access"
               className={styles.tabPanel}
             >
+              {/* data-testid-exempt -- panel owns test IDs for its interactive controls */}
               <DevEnvAllowlistPanel />
             </div>
           )}
@@ -611,8 +698,10 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
             // @feature-flag:observability-viewer enabled-end
             // @feature-flag:observability-viewer end
           })()}
-        </main>
-      )}
+            </main>
+          )}
+        </div>
+      </div>
     </div>
   );
 };
@@ -680,6 +769,83 @@ const AccessRequestsSection: React.FC<AccessRequestsSectionProps> = ({
                   disabled={pending}
                   onClick={() => void onApprove(request.id)}
                   {...{ 'data-testid': `platform-admin-access-approve-${request.id}` }}
+                >
+                  Accept
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+};
+
+interface RfpSubmitAccessRequestsSectionProps {
+  requests: PlatformAdminRfpSubmitAccessRequest[];
+  isApproving: boolean;
+  isRejecting: boolean;
+  onApprove: (requestId: string) => Promise<void>;
+  onReject: (requestId: string) => Promise<void>;
+}
+
+const RfpSubmitAccessRequestsSection: React.FC<RfpSubmitAccessRequestsSectionProps> = ({
+  requests,
+  isApproving,
+  isRejecting,
+  onApprove,
+  onReject,
+}) => {
+  const pending = isApproving || isRejecting;
+
+  return (
+    <section className={styles.section} aria-labelledby="rfp-submit-access-requests-title">
+      <div className={styles.sectionHeader}>
+        <div>
+          <h2 id="rfp-submit-access-requests-title" className={styles.sectionTitle}>
+            Request for Product Access
+          </h2>
+          <p className={styles.sectionHint}>
+            Review requests from users who want permission to submit a Request for Product.
+          </p>
+        </div>
+        <span className={styles.countBadge}>{requests.length} pending</span>
+      </div>
+
+      {requests.length === 0 ? (
+        <p className={styles.muted}>No pending Request for Product access requests.</p>
+      ) : (
+        <div className={styles.requestList}>
+          {requests.map((request) => (
+            <article key={request.id} className={styles.requestCard}>
+              <div className={styles.requestDetails}>
+                <div>
+                  <h3 className={styles.cardTitle}>Submit Requests for Product</h3>
+                  <p className={styles.muted}>
+                    Requested by {request.displayName || request.email || request.userId}
+                  </p>
+                  {request.email && <p className={styles.requestMeta}>{request.email}</p>}
+                </div>
+                <span className={styles.requestMeta}>
+                  {new Date(request.requestedAt).toLocaleString()}
+                </span>
+              </div>
+              <div className={styles.requestActions}>
+                <button
+                  type="button"
+                  className={styles.secondaryButton}
+                  disabled={pending}
+                  onClick={() => void onReject(request.id)}
+                  {...{ 'data-testid': `platform-admin-rfp-submit-reject-${request.id}` }}
+                >
+                  Reject
+                </button>
+                <button
+                  type="button"
+                  className={styles.primaryButton}
+                  disabled={pending}
+                  onClick={() => void onApprove(request.id)}
+                  {...{ 'data-testid': `platform-admin-rfp-submit-approve-${request.id}` }}
                 >
                   Accept
                 </button>
@@ -1176,7 +1342,7 @@ const UserAccessSection: React.FC = () => {
     },
   });
 
-  // eslint-disable-next-line react-hooks/incompatible-library -- RHF watch() is intentionally unmemoizable
+  // eslint-disable-next-line react-hooks/incompatible-library, react-hooks/exhaustive-deps -- RHF watch() is read fresh each render
   const watchedModules = watch('modules') ?? [];
   const watchedRoleId = watch('roleId');
 

@@ -8,6 +8,24 @@ Apex (formerly AI-Pilot) is an internal product-building and project-management 
 
 ## Key Terminology
 
+### Product foundation
+
+- **Definition:** The first maintained description of a new product: who it is for, what the first release includes and excludes, and the success criteria that say it worked.
+- **Use when:** A product owner, or a platform admin acting for that project, kicks off the product after the Apex project exists and before a design interview starts.
+- **Don't confuse with:** An Interview (the design conversation that becomes a PRD), a PRD, a Design Doc, or Apex's own `context.md`. The product foundation lives in `PRODUCT.md` at the root of that product's repository.
+
+### Product setup
+
+- **Definition:** The Home flow for a project created from an approved Request for Product. It first captures the product foundation, then moves into discovery for the first build.
+- **Use when:** Right after the project exists, through `PRODUCT.md`, build Q&A, prototype review, and autonomous implementation kickoff.
+- **Don't confuse with:** The product foundation or a product build. Product setup is the containing Home experience.
+
+### Product build
+
+- **Definition:** One implementation slice that must fit one pull request. Its approved scope lives in `docs/product/BUILD_BRIEF.md` and `docs/product/build-manifest.json`.
+- **Use when:** Choosing and implementing the first usable slice, or shaping a later feature, bug, or refinement.
+- **Don't confuse with:** `PRODUCT.md`, which remains the broader product north star. Confirming a brief only starts prototype review; **Approve and build** is the code authorization.
+
 - **Diagram** — a freeform, human-drawn, saveable and shareable whiteboard canvas used for ideation. Use Diagram for artifacts managed through the `/diagrams` module and `diagram:*` permissions. A Diagram is not a Design Prototype (approved-feature interactive HTML), a Mermaid diagram generated inside documentation, or a UI Lab mock generated from a prompt. The v1 term does not imply real-time collaboration or embedding in ADRs, PRDs, or design documents.
 
 ### Apex Backlog item
@@ -45,6 +63,19 @@ The default landing experience for AI-assisted work within a project.
 - **Streaming chat** — SSE-powered agent responses with attachment support
 - **MCP integrations** — optional quick-launch pills for configured MCP servers
 - **Gated by** — `home:view` permission and the `agent-home` feature flag (both granted to all roles by default)
+
+### Product Setup and Product Build
+
+Projects created from an approved Request for Product use a guided path from product context to a reviewable implementation.
+
+- **Product foundation** — captures the broad product north star in `PRODUCT.md`
+- **Grounded discovery** — reads `PRODUCT.md`, asks one question at a time, and proposes the smallest usable build that fits one pull request
+- **Interactive prototype** — generates a sandboxed HTML prototype, supports natural-language revisions and version history, and keeps out-of-scope and deferred work visible
+- **Single approval gate** — **Approve and build** writes the durable brief, prototype, and manifest; no code starts before this action
+- **Autonomous implementation** — creates an Apex-tagged Azure DevOps Feature in `Apex - Apps`, assigns it to Ryan Miller, and starts the configured `product-implementation` cloud run
+- **Draft pull request** — the Apex service identity pushes the branch, runs install/lint/type/test/build/migration/E2E/accessibility/security checks, opens a draft PR, and requires Ryan Miller as reviewer; failed checks remain visible and do not discard the code
+- **Later changes** — the seeded Product discovery skill supports feature, bug, and refinement briefs; UI changes require prototype review
+- **Gated by** — the existing `rfp-intake` feature flag
 
 ### 1. AI-Guided Design Interviews
 

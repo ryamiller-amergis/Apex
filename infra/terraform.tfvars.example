@@ -7,6 +7,8 @@ app_service_name       = "app-ai-pilot-dev"
 app_service_plan_name  = "plan-ai-pilot-dev"
 app_service_plan_sku   = "B1" # Use S1+ in prod for deployment slots (blue-green)
 environment            = "dev"
+# Health Check path / eviction are fixed in main.tf (GET /api/health/live, 2 min).
+# Not a tfvar — do not point it at /api/health (ADO) or /api/health/db.
 
 # Azure DevOps Configuration
 ado_org     = "https://dev.azure.com/your-org"

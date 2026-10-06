@@ -125,6 +125,7 @@ function fixFlowReducer(state: FixFlowState, action: FixFlowAction): FixFlowStat
       return { phase: 'reviewing', baseline: state.baseline, gapChanges: action.gapChanges, agentError: action.agentError };
     case 'START_DISCUSS':
       if (state.phase !== 'reviewing' && state.phase !== 'discussing') return state;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- discussion state shares the reviewing baseline; existing interaction stays as-is
       return { phase: 'discussing', baseline: (state as any).baseline, gapChanges: (state as any).gapChanges ?? [], activeSection: action.activeSection };
     case 'END_DISCUSS':
       if (state.phase !== 'discussing') return state;
@@ -492,6 +493,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
   return (
     <>
     {showNewConvConfirm && (
+      // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- backdrop click dismisses the confirm dialog; existing interaction stays as-is
       <div
         className={styles.confirmOverlay}
         onClick={(e) => { if (e.target === e.currentTarget) setShowNewConvConfirm(false); }}
@@ -576,6 +578,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
             onCancel={isRunning ? () => void session.cancel() : undefined}
             disabled={isRunning || isSending || isCreating || !threadId}
             isRunning={isRunning}
+            isCancelling={session.isCancelling}
             isSending={isSending}
             placeholder={
               isCreating ? 'Starting assistant…' :
@@ -1496,6 +1499,7 @@ export const DesignDocReviewView: React.FC = () => {
 
   const handleFixRevertSection = useCallback(async (section: 'design' | 'tech-spec' | 'assumptions') => {
     if (!id || fixFlow.phase === 'idle') return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- fix baseline is only present outside the idle phase; existing interaction stays as-is
     const bl = (fixFlow as any).baseline as ContentSnapshot;
     const body: { designDocId: string; designContent?: string; techSpecContent?: string; assumptionsContent?: string } = { designDocId: id };
     if (section === 'design') body.designContent = bl.design;
@@ -1549,6 +1553,7 @@ export const DesignDocReviewView: React.FC = () => {
 
   const handleFixRevertAll = useCallback(async () => {
     if (!id || fixFlow.phase === 'idle') return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- fix baseline is only present outside the idle phase; existing interaction stays as-is
     const bl = (fixFlow as any).baseline as ContentSnapshot;
     await revertSection.mutateAsync({
       designDocId: id,
@@ -1793,6 +1798,7 @@ export const DesignDocReviewView: React.FC = () => {
     }
     setActiveCommentId(commentId);
     expandCommentsPanel();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- section tab map is a stable lookup; existing interaction stays as-is
   }, [reviewComments, expandCommentsPanel]);
 
   const handleAddComment = useCallback((sectionKey: ReviewSectionKey, selector: TextSelector) => {
@@ -2692,12 +2698,15 @@ export const DesignDocReviewView: React.FC = () => {
           {/* ── Fix flow: reviewing/discussing diff panel ────────────── */}
           {showFixReviewPanel && (
             <FixValidationPanel
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- fix baseline is only present outside the idle phase; existing interaction stays as-is
               baseline={(fixFlow as any).baseline as ContentSnapshot}
               currentDesign={doc.designContent}
               currentTechSpec={doc.techSpecContent}
               currentAssumptions={doc.assumptionsContent}
               scorecard={doc.validationScorecard}
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- gap list is only present outside the idle phase; existing interaction stays as-is
               gapChanges={(fixFlow as any).gapChanges ?? []}
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- agent error is only present outside the idle phase; existing interaction stays as-is
               agentError={(fixFlow as any).agentError}
               isApplying={acceptFixValidation.isPending}
               isReverting={revertSection.isPending}
@@ -2875,6 +2884,7 @@ export const DesignDocReviewView: React.FC = () => {
                     {/* Center split: secondary pane (e.g. Design + Tech Spec side by side) */}
                     {splitTab && (
                       <>
+                        {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- pointer-only split resize handle; existing interaction stays as-is */}
                         <div
                           className={`${styles.centerSplitDivider} ${isDraggingSplit ? styles.centerSplitDividerDragging : ''}`}
                           onMouseDown={handleSplitResizeMouseDown}
@@ -2961,6 +2971,7 @@ export const DesignDocReviewView: React.FC = () => {
 
                 {pinnedTab && (
                   <div className={styles.pinnedPane} style={{ width: pinnedWidth }}>
+                    {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- pointer-only pinned-pane resize handle; existing interaction stays as-is */}
                     <div
                       className={`${styles.pinnedResizeHandle} ${isDraggingPinned ? styles.pinnedResizeHandleDragging : ''}`}
                       onMouseDown={handlePinnedResizeMouseDown}
@@ -3031,6 +3042,7 @@ export const DesignDocReviewView: React.FC = () => {
       )}
 
       {pendingSelector && (
+        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- backdrop click dismisses the comment dialog; existing interaction stays as-is
         <div className={styles.commentModal} onClick={(e) => { if (e.target === e.currentTarget) setPendingSelector(null); }} role="dialog" aria-modal="true">
           <div className={styles.commentModalCard}>
             <h3 className={styles.commentModalTitle}>Add Comment</h3>
@@ -3041,6 +3053,7 @@ export const DesignDocReviewView: React.FC = () => {
               onChange={(e) => setNewCommentBody(e.target.value)}
               placeholder="Write your comment…"
               rows={3}
+              // eslint-disable-next-line jsx-a11y/no-autofocus -- comment field takes focus when the dialog opens; existing interaction stays as-is
               autoFocus
             />
             <div className={styles.commentModalActions}>

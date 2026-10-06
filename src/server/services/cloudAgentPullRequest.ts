@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import type { RunCheckResult } from '../../shared/types/agentRunLifecycle';
 import { db } from '../db/drizzle';
 import { AzureDevOpsService } from './azureDevOps';
 
@@ -12,6 +13,7 @@ export interface CloudAgentPullRequestTextInput {
   authorEmail?: string | null;
   summary?: string | null;
   sourceBranch: string;
+  checkResults?: RunCheckResult[] | null;
 }
 
 export interface OpenCloudAgentPullRequestInput extends CloudAgentPullRequestTextInput {
@@ -20,6 +22,15 @@ export interface OpenCloudAgentPullRequestInput extends CloudAgentPullRequestTex
   targetBranch: string;
   /** Bearer token for the developer who started the run. Null uses the service PAT. */
   adoUserToken: string | null;
+  /** Product builds open a draft. Omitted leaves an active pull request. */
+  draftPullRequest?: boolean;
+  /** Azure DevOps identity id added as a required reviewer. */
+  requiredReviewerId?: string | null;
+  /**
+   * Production may open the pull request with the service PAT when the
+   * snapshot says this run was started without a developer token.
+   */
+  allowServiceAccount?: boolean;
 }
 
 /** Thrown when a production run must wait for the starter's Azure DevOps token. */
@@ -58,6 +69,12 @@ export function buildCloudAgentPullRequestText(
   if (summary) {
     lines.push('', '## Implementation summary', '', summary);
   }
+  if (input.checkResults?.length) {
+    lines.push('', '## Quality checks', '');
+    for (const result of input.checkResults) {
+      lines.push(`- ${result.kind}: ${result.outcome}`);
+    }
+  }
 
   return {
     title,
@@ -68,7 +85,7 @@ export function buildCloudAgentPullRequestText(
 export async function openCloudAgentPullRequest(
   input: OpenCloudAgentPullRequestInput,
 ): Promise<string> {
-  if (!input.adoUserToken && process.env.NODE_ENV === 'production') {
+  if (!input.adoUserToken && process.env.NODE_ENV === 'production' && !input.allowServiceAccount) {
     throw new CloudAgentPullRequestDeferred();
   }
   if (!input.adoUserToken) {
@@ -77,7 +94,15 @@ export async function openCloudAgentPullRequest(
     );
   }
 
-  const { title, description } = buildCloudAgentPullRequestText(input);
+  const { title, description } = buildCloudAgentPullRequestText({
+    workItemId: input.workItemId,
+    workItemTitle: input.workItemTitle,
+    authorName: input.authorName,
+    authorEmail: input.authorEmail,
+    summary: input.summary,
+    sourceBranch: input.sourceBranch,
+    checkResults: input.checkResults,
+  });
   const ado = input.adoUserToken
     ? new AzureDevOpsService(input.project, undefined, { bearerToken: input.adoUserToken })
     : new AzureDevOpsService(input.project);
@@ -99,6 +124,10 @@ export async function openCloudAgentPullRequest(
       title,
       description,
       workItemId: input.workItemId,
+      ...(input.draftPullRequest ? { isDraft: true } : {}),
+      ...(input.requiredReviewerId
+        ? { reviewers: [{ id: input.requiredReviewerId, isRequired: true as const }] }
+        : {}),
     });
   });
 }

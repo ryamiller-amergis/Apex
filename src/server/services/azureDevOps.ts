@@ -6014,6 +6014,48 @@ export class AzureDevOpsService {
   }
 
   /**
+   * Creates an empty Git repository in the given project. The service PAT must be
+   * allowed to create repositories there.
+   */
+  async createGitRepository(project: string, name: string): Promise<{ name: string; webUrl: string }> {
+    const gitApi = await this.connection.getGitApi();
+    const repository = await gitApi.createRepository({ name }, project);
+    if (!repository?.name) {
+      throw new Error('ADO createRepository returned no repository');
+    }
+    return {
+      name: repository.name,
+      webUrl: repository.webUrl
+        ?? `${this.organization.replace(/\/$/, '')}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repository.name)}`,
+    };
+  }
+
+  /**
+   * Deletes a Git repository. A missing repository is treated as already deleted.
+   */
+  async deleteGitRepository(project: string, name: string): Promise<void> {
+    const orgUrl = this.organization.replace(/\/$/, '');
+    const auth = `Basic ${Buffer.from(':' + (process.env.ADO_PAT ?? '')).toString('base64')}`;
+    const encodedProject = encodeURIComponent(project);
+    const lookupUrl = `${orgUrl}/${encodedProject}/_apis/git/repositories/${encodeURIComponent(name)}?api-version=7.1`;
+    const lookup = await fetch(lookupUrl, { headers: { Authorization: auth } });
+    if (lookup.status === 404) return;
+    if (!lookup.ok) {
+      throw new Error(await lookup.text());
+    }
+    const repository = await lookup.json() as { id?: string };
+    if (!repository.id) return;
+    const deleted = await fetch(
+      `${orgUrl}/${encodedProject}/_apis/git/repositories/${repository.id}?api-version=7.1`,
+      { method: 'DELETE', headers: { Authorization: auth } },
+    );
+    if (deleted.status === 404) return;
+    if (!deleted.ok) {
+      throw new Error(await deleted.text());
+    }
+  }
+
+  /**
    * Creates a pull request in Azure DevOps and returns the PR URL.
    */
   async createPullRequest(opts: {
@@ -6024,19 +6066,41 @@ export class AzureDevOpsService {
     title: string;
     description: string;
     workItemId?: number;
+    /** Product builds open as a draft. Omitted leaves the pull request active. */
+    isDraft?: boolean;
+    reviewers?: { id: string; isRequired?: boolean }[];
   }): Promise<string> {
-    const { repo, project, sourceBranch, targetBranch, title, description, workItemId } = opts;
+    const { repo, project, sourceBranch, targetBranch, title, description, workItemId, isDraft, reviewers } = opts;
     const gitApi = await this.connection.getGitApi();
 
-    const prPayload: any = {
+    const prPayload: {
+      title: string;
+      description: string;
+      sourceRefName: string;
+      targetRefName: string;
+      isDraft?: boolean;
+      workItemRefs?: Array<{ id: string }>;
+      reviewers?: Array<{ id: string; isRequired: boolean }>;
+    } = {
       title,
       description,
       sourceRefName: `refs/heads/${sourceBranch}`,
       targetRefName: `refs/heads/${targetBranch}`,
     };
 
+    if (isDraft) {
+      prPayload.isDraft = true;
+    }
+
     if (workItemId) {
       prPayload.workItemRefs = [{ id: String(workItemId) }];
+    }
+
+    if (reviewers?.length) {
+      prPayload.reviewers = reviewers.map((reviewer) => ({
+        id: reviewer.id,
+        isRequired: reviewer.isRequired === true,
+      }));
     }
 
     const pr = await gitApi.createPullRequest(prPayload, repo, project);
@@ -6214,5 +6278,82 @@ export class AzureDevOpsService {
       }),
     );
     return deleted;
+  }
+
+  private adoAuthHeader(): string {
+    return `Basic ${Buffer.from(':' + (process.env.ADO_PAT ?? '')).toString('base64')}`;
+  }
+
+  /**
+   * Reads a file from a repository branch. A missing file returns null.
+   */
+  async getRepositoryFile(project: string, repo: string, filePath: string, branch = 'main'): Promise<string | null> {
+    const orgUrl = this.organization.replace(/\/$/, '');
+    const pathParam = filePath.startsWith('/') ? filePath : `/${filePath}`;
+    const url = `${orgUrl}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repo)}/items`
+      + `?path=${encodeURIComponent(pathParam)}`
+      + `&versionDescriptor.version=${encodeURIComponent(branch)}`
+      + `&versionDescriptor.versionType=branch`
+      + `&includeContent=true&api-version=7.1`;
+    const response = await fetch(url, { headers: { Authorization: this.adoAuthHeader() } });
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(await response.text());
+    return response.text();
+  }
+
+  /**
+   * Adds or updates files on a branch. An empty repository gets its first commit.
+   * A file that is already on the branch is edited; a missing file is added.
+   */
+  async pushRepositoryFiles(
+    project: string,
+    repo: string,
+    branch: string,
+    comment: string,
+    changes: { path: string; content: string }[],
+  ): Promise<void> {
+    if (changes.length === 0) return;
+    const orgUrl = this.organization.replace(/\/$/, '');
+    const auth = this.adoAuthHeader();
+    const repoUrl = `${orgUrl}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repo)}`;
+    const lookup = await fetch(`${repoUrl}?api-version=7.1`, { headers: { Authorization: auth } });
+    if (!lookup.ok) throw new Error(await lookup.text());
+    const repository = await lookup.json() as { id?: string };
+    if (!repository.id) throw new Error('ADO repository lookup returned no id');
+
+    const refUrl = `${orgUrl}/${encodeURIComponent(project)}/_apis/git/repositories/${repository.id}/refs`
+      + `?filter=heads/${encodeURIComponent(branch)}&api-version=7.1`;
+    const refs = await fetch(refUrl, { headers: { Authorization: auth } });
+    if (!refs.ok) throw new Error(await refs.text());
+    const refBody = await refs.json() as { value?: { objectId?: string }[] };
+    const oldObjectId = refBody.value?.[0]?.objectId ?? '0000000000000000000000000000000000000000';
+    const branchExists = oldObjectId !== '0000000000000000000000000000000000000000';
+    const commitChanges = await Promise.all(changes.map(async (change) => {
+      const itemPath = change.path.startsWith('/') ? change.path : `/${change.path}`;
+      const existing = branchExists
+        ? await this.getRepositoryFile(project, repo, itemPath, branch)
+        : null;
+      return {
+        changeType: existing === null ? 'add' : 'edit',
+        item: { path: itemPath },
+        newContent: { content: change.content, contentType: 'rawtext' },
+      };
+    }));
+
+    const pushed = await fetch(
+      `${orgUrl}/${encodeURIComponent(project)}/_apis/git/repositories/${repository.id}/pushes?api-version=7.1`,
+      {
+        method: 'POST',
+        headers: { Authorization: auth, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          refUpdates: [{ name: `refs/heads/${branch}`, oldObjectId }],
+          commits: [{
+            comment,
+            changes: commitChanges,
+          }],
+        }),
+      },
+    );
+    if (!pushed.ok) throw new Error(await pushed.text());
   }
 }

@@ -125,6 +125,16 @@ describe('validateConfiguredRepository', () => {
     expect(validateConfiguredRepository('github', 'amergis/Workforce')).toBeNull();
   });
 
+  it('prefixes a bare GitHub repo with GITHUB_ORG', () => {
+    expect(normalizeConfiguredRepository('github', 'Apex', 'ryamiller-amergis')).toBe(
+      'ryamiller-amergis/Apex',
+    );
+    expect(normalizeConfiguredRepository('github', 'amergis/Workforce', 'other')).toBe(
+      'amergis/Workforce',
+    );
+    expect(normalizeConfiguredRepository('ado', 'MaxView', 'org')).toBe('MaxView');
+  });
+
   it('rejects unsupported providers at the API boundary', () => {
     expect(
       validateConfiguredRepository(

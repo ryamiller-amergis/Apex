@@ -93,6 +93,10 @@ function addTokenUsage(
 export interface CursorExecutionWaitResult {
   status: string;
   result?: string;
+  error?: {
+    message: string;
+    code?: string;
+  };
   /** Cumulative usage across turns; absent when the runtime reported none. */
   usage?: unknown;
 }

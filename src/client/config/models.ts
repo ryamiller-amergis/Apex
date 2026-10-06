@@ -5,6 +5,7 @@ export interface AgentModel {
 }
 
 export const AGENT_MODELS: AgentModel[] = [
+  { id: 'auto-smart',        label: 'Auto',           badge: 'Auto'     },
   { id: 'composer-2',        label: 'Composer 2',     badge: 'Composer' },
   { id: 'claude-opus-4-6',   label: 'Opus 4.6',       badge: 'Opus'     },
   { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6',     badge: 'Sonnet'   },

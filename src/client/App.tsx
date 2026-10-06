@@ -4,7 +4,6 @@ import { ErrorBoundary } from 'react-error-boundary';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { DueDateReasonModal } from './components/DueDateReasonModal';
-import { BetaAnnouncementModal } from './components/BetaAnnouncementModal';
 import { Changelog } from './components/Changelog';
 import { GuidedWalkthroughHost } from './components/GuidedWalkthroughHost';
 import { WhatsNewBanner } from './components/WhatsNewBanner';
@@ -23,6 +22,7 @@ import { ChatAgentPanel, type StartPanelChatOptions } from './components/ChatAge
 import { NotificationProvider } from './contexts/NotificationContext';
 import { ToastContainer } from './components/ToastContainer';
 import { useAppShell } from './hooks/useAppShell';
+import { hasPlatformProjectListingChoice, markPlatformProjectListing } from './utils/platformLanding';
 import { useProjectMenuConfig } from './hooks/useProjectMenuConfig';
 import { useProjectRepoConfigs } from './hooks/useProjectRepoConfigs';
 import { useProjectSkillConfig } from './hooks/useProjectSkillConfig';
@@ -87,6 +87,7 @@ const StandupCeremonyView = lazy(() => import('./components/StandupCeremonyView'
 const StandupManageView = lazy(() => import('./components/StandupManageView'));
 const StandupSummaryView = lazy(() => import('./components/StandupSummaryView'));
 const FeatureRequestsView = lazy(() => import('./components/FeatureRequestsView'));
+const RfpQueueView = lazy(() => import('./components/RfpQueueView'));
 const ApexWorkBoardView = lazy(() => import('./components/ApexWorkBoardView').then(m => ({ default: m.ApexWorkBoardView })));
 const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ default: m.UiLabView })));
 const ApryseWebViewerPoc = lazy(() => import('./components/ApryseWebViewerPoc').then(m => ({ default: m.ApryseWebViewerPoc })));
@@ -167,7 +168,7 @@ function App() {
   }, []);
   const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'rfp-intake' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -201,6 +202,8 @@ function App() {
                     ? 'standup'
                     : location.pathname === '/feature-requests'
                     ? 'feature-requests'
+                    : location.pathname.startsWith('/rfp-intake')
+                    ? 'rfp-intake'
                     : location.pathname.startsWith('/ui-lab')
                     ? 'ui-lab'
                     : location.pathname.startsWith('/pdf-tools')
@@ -243,6 +246,7 @@ function App() {
 
   const {
     isAuthenticated,
+    isAuthReconnecting,
     authenticatedUser,
     can,
     isInAnyGroup,
@@ -291,9 +295,6 @@ function App() {
     handleConfirmDueDateChange,
     handleCancelDueDateChange,
     handleFieldUpdate,
-    betaAnnouncementDismissed,
-    devAccessAllowlisted,
-    handleDismissBetaAnnouncement,
   } = useAppShell({ workItemsEnabled: needsWorkItems });
 
   // Deep-link from API key expiry notifications: /admin/api-keys?project=…
@@ -305,6 +306,8 @@ function App() {
     changeProject(project);
   }, [location.pathname, location.search, selectedProject, availableProjects, changeProject]);
 
+  const rfpIntakeEnabled = useFeatureFlag('rfp-intake', 'Apex');
+
   // Deep-link from UI Lab share notifications: /ui-lab/:id?project=…
   useEffect(() => {
     const match = /^\/ui-lab\/([^/?#]+)/.exec(location.pathname);
@@ -314,8 +317,6 @@ function App() {
     if (!availableProjects.includes(project)) return;
     changeProject(project);
   }, [location.pathname, location.search, selectedProject, availableProjects, changeProject]);
-
-  const showBetaAnnouncement = useFeatureFlag('beta-to-prod-announcement', selectedProject);
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
   const interactiveWsEnabled = homeFlags['ai-runs-interactive'] === true;
@@ -460,6 +461,15 @@ function App() {
     });
 
     if (currentView === 'platform-admin' && !isSuperAdmin) navigate('/');
+    if (
+      currentView === 'project-selector' &&
+      isSuperAdmin &&
+      !isRestricted &&
+      !hasPlatformProjectListingChoice()
+    ) {
+      navigate('/platform-admin', { replace: true });
+      return;
+    }
     if (currentView === 'home'           && !canAccessHome) navigate(fallback);
     if (currentView === 'admin'         && !can('admin:roles'))   navigate(fallback);
     if (currentView === 'calendar'      && !isSuperAdmin && (!effectiveEnabledViews.includes('calendar')  || !can('calendar:view')))  navigate(fallback);
@@ -481,6 +491,13 @@ function App() {
     if (currentView === 'standup-manage' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:manage')))      navigate(fallback);
     if (currentView === 'standup-summary' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
     if (currentView === 'feature-requests' && !isSuperAdmin && (!effectiveEnabledViews.includes('feature-requests') || !can('feature-requests:view'))) navigate(fallback);
+    if (currentView === 'rfp-intake') {
+      const isApex = selectedProject.toLowerCase() === 'apex';
+      const allowed = rfpIntakeEnabled && (
+        isSuperAdmin || (isApex && effectiveEnabledViews.includes('rfp-intake') && can('rfp-intake:view'))
+      );
+      if (!allowed) navigate(fallback);
+    }
     // UI Lab workspace requires UI/UX. Named viewers reach it two ways: a
     // deep-linked design (`/ui-lab/:id`), or the shared list once something has
     // been shared with them. The server enforces live share access either way.
@@ -521,7 +538,7 @@ function App() {
         navigate(firstAccessible ? `/planning/${firstAccessible}` : fallback);
       }
     }
-  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, availableProjects, workBoardEnabled, hasUiLabShares, uiLabSharesLoading, uiLabSharesProject, navigate, location.pathname, location.search]);
+  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, availableProjects, workBoardEnabled, rfpIntakeEnabled, hasUiLabShares, uiLabSharesLoading, uiLabSharesProject, navigate, location.pathname, location.search]);
 
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
@@ -616,7 +633,18 @@ function App() {
       ? activeThread
       : null;
 
-  if (isAuthenticated === null) return <div className="app-loading"><ApexLoader size={80} /></div>;
+  if (isAuthenticated === null) {
+    return (
+      <div className="app-loading">
+        <ApexLoader size={80} />
+        {isAuthReconnecting ? (
+          <p className="app-loading-status" {...{ 'data-testid': 'app-auth-reconnecting' }}>
+            Reconnecting…
+          </p>
+        ) : null}
+      </div>
+    );
+  }
   if (!isAuthenticated) return <Login />;
   if (devAccessDenied) return <DevEnvAccessDenied onLogout={() => { void handleLogout(); }} />;
 
@@ -718,12 +746,14 @@ function App() {
     }
 
     return (
+      <NotificationWrapper can={can}>
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <ProjectSelector
           selectedProject={selectedProject}
           onSelect={(project) => {
             setPendingProject(project);
           }}
+          showNotifications={can('notifications:view')}
           isSuperAdmin={isSuperAdmin}
           onOpenPlatformAdmin={() => navigate('/platform-admin')}
           hasUnreadChangelog={hasUnreadChangelog}
@@ -755,16 +785,21 @@ function App() {
           whatsNewBlocksWalkthrough={whatsNewBlocksAutomaticWalkthrough}
         />
       </ErrorBoundary>
+      </NotificationWrapper>
     );
   }
 
   if (currentView === 'platform-admin') {
     if (!permissionsLoaded || !isSuperAdmin) return null;
     return (
+      <NotificationWrapper can={can}>
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <Suspense fallback={<ViewSkeleton />}>
           <PlatformAdmin
-            onBackToProjects={() => navigate('/')}
+            onBackToProjects={() => {
+              markPlatformProjectListing();
+              navigate('/');
+            }}
             user={authenticatedUser}
             theme={theme}
             hasUnreadChangelog={hasUnreadChangelog}
@@ -774,6 +809,7 @@ function App() {
           />
         </Suspense>
       </ErrorBoundary>
+      </NotificationWrapper>
     );
   }
 
@@ -819,6 +855,8 @@ function App() {
             onNavigateStandup={() => navigate('/standup')}
             onNavigateUiLab={() => navigate('/ui-lab')}
             onNavigateFeatureRequests={() => navigate('/feature-requests')}
+            onNavigateRfpIntake={() => navigate('/rfp-intake')}
+            rfpIntakeEnabled={rfpIntakeEnabled}
             onNavigatePdfTools={() => navigate('/pdf-tools/nutrient-poc')}
             onNavigateAiCost={() => navigate('/ai-cost')}
             onNavigateDesignModule={() => navigate('/design-module')}
@@ -863,7 +901,10 @@ function App() {
             selectedSkillSettingsId={selectedSkillSettingsId}
             onChangeSkillSettings={isRestricted ? undefined : changeSkillSettings}
             onNavigateHome={() => navigate('/home')}
-            onNavigateProjects={isRestricted ? undefined : () => navigate('/')}
+            onNavigateProjects={isRestricted ? undefined : () => {
+              if (isSuperAdmin) markPlatformProjectListing();
+              navigate('/');
+            }}
             onNavigateCalendar={() => navigate('/calendar')}
             onNavigatePlanning={() => navigate(`/planning/${planningTab}`)}
             onNavigateCloudCost={() => navigate('/cloud-cost')}
@@ -872,6 +913,8 @@ function App() {
             onNavigateMyWork={() => navigate('/my-work')}
             onNavigateStandup={() => navigate('/standup')}
             onNavigateFeatureRequests={() => navigate('/feature-requests')}
+            onNavigateRfpIntake={() => navigate('/rfp-intake')}
+            rfpIntakeEnabled={rfpIntakeEnabled}
             onNavigateUiLab={() => navigate('/ui-lab')}
             onNavigateAdmin={() => navigate('/admin/roles')}
             onNavigateAiCost={() => navigate('/ai-cost')}
@@ -1227,6 +1270,12 @@ function App() {
                 <FeatureRequestsView />
               </Suspense>
             </ErrorBoundary>
+          ) : currentView === 'rfp-intake' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <RfpQueueView />
+              </Suspense>
+            </ErrorBoundary>
           ) : currentView === 'work-board' ? (
             // @feature-flag:work-board start winner=enabled
             workBoardEnabled && (isSuperAdmin || can('work-board:view')) ? (
@@ -1496,14 +1545,6 @@ function App() {
           whatsNewSettled={whatsNewAutomaticOverlaySettled}
           whatsNewBlocksWalkthrough={whatsNewBlocksAutomaticWalkthrough}
         />
-        {permissionsLoaded && showBetaAnnouncement && !devAccessAllowlisted && !(isSuperAdmin && betaAnnouncementDismissed) && (
-          // data-testid-exempt — BetaAnnouncementModal API has no data-testid prop
-          <BetaAnnouncementModal
-            isSuperAdmin={isSuperAdmin}
-            onDismiss={handleDismissBetaAnnouncement}
-          />
-        )}
-
       </NotificationWrapper>
       </DndProvider>
     </ErrorBoundary>

@@ -30,6 +30,19 @@ describe('parseAgentMessage', () => {
 
   // ── Basic choice blocks ─────────────────────────────────────────────────────
 
+  it('splits options that were written on one line into choice buttons', () => {
+    const text = [
+      'I recommend a single-screen task list.',
+      '',
+      'a. Single-user task list: create, view, and mark tasks complete b. Authenticated task list: log in, then manage a personal list c. Collaborative task list: assign tasks to teammates',
+    ].join('\n');
+    const parts = parseAgentMessage(text);
+    const block = parts.find((part) => part.type === 'choices') as ChoiceBlock;
+    expect(block.options.map((option) => option.letter)).toEqual(['a', 'b', 'c']);
+    expect(block.options[0].text).toContain('Single-user task list');
+    expect(block.question).toBe('I recommend a single-screen task list.');
+  });
+
   it('detects a minimal two-option choice block', () => {
     const text = 'Which approach?\na. Option Alpha\nb. Option Beta';
     const parts = parseAgentMessage(text);

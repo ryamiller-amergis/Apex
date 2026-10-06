@@ -25,7 +25,7 @@ For a full product overview, see [`context.md`](./context.md). For agent and con
 - Shared local env files from the team (preferred) — or values to fill `.env` yourself
 - Azure DevOps access / PAT with Work Items (Read, Write) permissions
 - Azure AD app registration configured for local sign-in (redirect: `http://localhost:3001/auth/callback`)
-- Docker Desktop (required to build/run the load-test k6 runner image locally; not required for day-to-day `npm run dev`)
+- Docker Desktop (required for the local interactive AI runtime and the load-test k6 runner)
 
 ### Windows developer tooling (Chocolatey)
 
@@ -102,6 +102,16 @@ Playwright Chromium is **not** a Chocolatey package — after `npm install`, run
 6. Smoke-check: home loads, you can open a project view, ADO-backed data appears when configured
 
 Optional for AI agent flows: `CURSOR_API_KEY` and Bedrock vars must be present in the shared env (see [`.env.example`](./.env.example)).
+
+For cloud-equivalent interactive AI turns during local development, start the
+Docker-backed actor runtime before `npm run dev`:
+
+```powershell
+.\runners\ai-runs-interactive\start-local.ps1
+```
+
+See [`runners/ai-runs-interactive/README.md`](./runners/ai-runs-interactive/README.md)
+for the one-time prerequisites, feature-flag targeting, ports, and troubleshooting.
 
 ## Setup
 
@@ -214,6 +224,9 @@ A Husky **pre-commit** hook runs:
 
 1. ESLint via `lint-staged` on staged `src/{client,server,shared}/**/*.{ts,tsx}` files only (untouched files are skipped). Warnings and errors both fail the commit (`--max-warnings=0`). Fix with `npm run lint:fix` or address findings manually, then re-stage.
 2. A **data-testid** policy (`scripts/check-data-testid.mjs`) on staged client TSX under `src/client/` (excludes tests). When a file is staged, **every** interactive element in that file must include a `data-testid` (or `anchorTestIdProps`) — not only newly added lines. Covered: `button`, `input`, `select`, `textarea`, `a`, `form`, `dialog`, elements with click/submit handlers, and common `*Button` / `*Modal` / … components. Escape hatch: `// data-testid-exempt` on the line above the tag. In Cursor: `/resolve-pre-commit-data-testid` or `/resolve-pre-commit-eslint` for the matching hook failure.
+3. A **theme-contrast** policy (`scripts/ci/check-theme-contrast.mjs`) across client CSS. Accent and success fills must use their semantic foreground tokens. In Cursor: `/resolve-theme-contrast`.
+
+Each failed gate prints the matching Cursor resolver: `/resolve-pre-commit-eslint`, `/resolve-pre-commit-data-testid`, or `/resolve-theme-contrast`.
 
 Pull requests opened in GitHub use the description template in [`.github/PULL_REQUEST_TEMPLATE.md`](./.github/PULL_REQUEST_TEMPLATE.md). In Cursor, developers can kick off a filled PR with the [`create-pull-request`](./.cursor/skills/create-pull-request/SKILL.md) skill (`/create-pull-request`).
 

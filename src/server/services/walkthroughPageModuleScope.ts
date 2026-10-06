@@ -247,6 +247,15 @@ const PAGE_MODULE_BY_MENU_KEY: Record<
       },
     ],
   },
+  'rfp-intake': {
+    pageEntries: [
+      {
+        component: 'src/client/components/RfpQueueView.tsx',
+        routePattern: '/rfp-intake',
+        suggestedRoute: '/rfp-intake',
+      },
+    ],
+  },
 };
 
 const FIXED_PAGE_MODULES: readonly WalkthroughPageModuleContext[] = [

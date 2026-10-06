@@ -13,7 +13,8 @@ export type MenuItemKey =
   | 'design-module'
   | 'load-tests'
   | 'diagrams'
-  | 'work-board';
+  | 'work-board'
+  | 'rfp-intake';
 
 export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'calendar', label: 'Calendar' },
@@ -31,6 +32,7 @@ export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'load-tests', label: 'Load Tests' },
   { key: 'diagrams', label: 'Diagrams' },
   { key: 'work-board', label: 'Work Board' },
+  { key: 'rfp-intake', label: 'RFP Intake' },
 ];
 
 /** All configurable menu keys (includes opt-in-only keys such as Diagrams). */

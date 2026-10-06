@@ -68,6 +68,9 @@ jest.mock('../services/pdfAssemblyService', () => ({
 jest.mock('../services/featureRequestAnalysisService', () => ({
   recoverAnalyzingFeatureRequests: jest.fn(),
 }));
+jest.mock('../services/rfpEvaluationOrchestrationService', () => ({
+  recoverEvaluatingRfps: jest.fn(),
+}));
 jest.mock('../services/agentRunReaperService', () => ({
   isThreadRunAlive: jest.fn(),
 }));
@@ -164,6 +167,8 @@ describe('design-doc generation recovery claim', () => {
       .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
     jest.requireMock('../services/featureRequestAnalysisService')
       .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
+    jest.requireMock('../services/rfpEvaluationOrchestrationService')
+      .recoverEvaluatingRfps.mockResolvedValue(0);
     routeDesignDoc.mockResolvedValue();
   });
 
@@ -300,6 +305,8 @@ describe('test-case generation recovery routing', () => {
       .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
     jest.requireMock('../services/featureRequestAnalysisService')
       .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
+    jest.requireMock('../services/rfpEvaluationOrchestrationService')
+      .recoverEvaluatingRfps.mockResolvedValue(0);
     routeTestCases.mockResolvedValue(true);
   });
 
@@ -322,6 +329,29 @@ describe('test-case generation recovery routing', () => {
       sourceThreadId: 'thread-prd',
     }));
     expect(mockSendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('RFP evaluation recovery wiring VT-11', () => {
+  it('invokes recoverEvaluatingRfps from recoverInFlightWork', async () => {
+    mockFindMany.mockResolvedValue([]);
+    mockPrdsFindMany.mockResolvedValue([]);
+    mockDesignDocsFindMany.mockResolvedValue([]);
+    mockTestCasesFindMany.mockResolvedValue([]);
+    mockedFindRunning.mockResolvedValue([]);
+    jest.requireMock('../services/designPrototypeService')
+      .failStalePrototypes.mockResolvedValue(0);
+    jest.requireMock('../services/pdfAssemblyService')
+      .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
+    jest.requireMock('../services/featureRequestAnalysisService')
+      .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
+    const recoverRfps = jest.requireMock('../services/rfpEvaluationOrchestrationService')
+      .recoverEvaluatingRfps as jest.Mock;
+    recoverRfps.mockResolvedValue(2);
+
+    await recoverInFlightWork();
+
+    expect(recoverRfps).toHaveBeenCalled();
   });
 });
 

@@ -477,6 +477,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   );
 
   const skipScrollToEndRef = useRef(false);
+  // eslint-disable-next-line react-hooks/refs -- skip scroll when a message is focused; moving this into an effect would scroll one frame late
   skipScrollToEndRef.current = Boolean(focusMessageId || highlightedMessageId);
   useEffect(() => {
     if (skipScrollToEndRef.current) return;
@@ -1202,7 +1203,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 className={styles.message}
                 role="status"
                 aria-live="polite"
-                aria-label={progressLabel ?? 'Agent is processing'}
+                aria-label={isCancelling ? 'Stopping the agent' : (progressLabel ?? 'Agent is processing')}
                 {...{ 'data-testid': 'chat-run-spinner' }}
               >
                 <div className={styles.agentHeader}>
@@ -1215,12 +1216,12 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                     <span className={styles.typingDot} />
                     <span className={styles.typingDot} />
                   </div>
-                  {(progressLabel || showStartupTyping) && (
+                  {(isCancelling || progressLabel || showStartupTyping) && (
                     <p
                       className={styles.progressLabel}
                       {...{ 'data-testid': 'chat-agent-progress-label' }}
                     >
-                      {progressLabel ?? 'Starting skill…'}
+                      {isCancelling ? 'Stopping the agent…' : (progressLabel ?? 'Starting skill…')}
                     </p>
                   )}
                 </div>
@@ -1235,6 +1236,9 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                   <span className={styles.agentLabel}>Agent</span>
                 </div>
                 <div className={styles.agentBubble}>
+                  {isCancelling && (
+                    <p className={styles.progressLabel} role="status">Stopping the agent…</p>
+                  )}
                   <div className={`${styles.markdownBody} ${styles.streamingBody}`}>
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
                   </div>

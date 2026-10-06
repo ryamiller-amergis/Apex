@@ -45,6 +45,9 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `chat:view_all` | chat | admin |
 | `home:view` | chat | admin, member, viewer |
 | `cost:view` | cost | admin, viewer |
+| `feature-requests:view` | feature-requests | admin |
+| `feature-requests:submit` | feature-requests | admin, member |
+| `feature-requests:manage` | feature-requests | admin |
 | `diagram:view` | diagram | admin, member, viewer |
 | `diagram:create` | diagram | admin, member |
 | `diagram:edit` | diagram | admin, member |
@@ -71,6 +74,9 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `playbooks:author` | playbooks | *(no default roles — assign explicitly)* |
 | `playbooks:admin` | playbooks | admin |
 | `prds:review` | prds | admin, member |
+| `rfp-intake:view` | rfp-intake | admin |
+| `rfp-intake:manage` | rfp-intake | admin |
+| `rfp-intake:submit` | rfp-intake | admin, rfp-submitter |
 | `skills:manage` | skills | admin |
 | `wiki:write` | wiki | admin, member |
 | `work-board:view` | work-board | admin, member, viewer |

@@ -232,6 +232,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
   return (
     <>
       {showNewConvConfirm && (
+        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- backdrop click dismisses the confirm dialog; existing interaction stays as-is
         <div
           className={styles.overlay}
           role="dialog"
@@ -570,6 +571,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
               onCancel={isRunning ? () => void chat.cancelRun() : undefined}
               disabled={isRunning || isSending}
               isRunning={isRunning}
+              isCancelling={chat.isCancelling}
               isSending={isSending}
               placeholder="Message the assistant… (Enter to send)"
               testIdPrefix="calendar-assistant"

@@ -35,6 +35,7 @@ jest.mock('../db/drizzle', () => {
         appUserProjectRoles: { findMany: jest.fn() },
         appRoles: { findFirst: jest.fn(), findMany: jest.fn() },
         appUsers: { findMany: jest.fn() },
+        rfpRequests: { findFirst: jest.fn().mockResolvedValue(null) },
       },
       insert: jest.fn().mockImplementation(makeInsertChain),
       update: jest.fn().mockImplementation(makeUpdateChain),
@@ -587,6 +588,31 @@ describe('getUserPermissions (project-aware)', () => {
 
     expect(perms.has('admin:roles')).toBe(true);
     expect(mockDb.query.appUserProjectRoles.findMany).not.toHaveBeenCalled();
+    expect(mockDb.query.rfpRequests.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('does not add Apex Backlog view on a project that came from Azure DevOps', async () => {
+    mockDb.query.appUserProjectRoles.findMany.mockResolvedValue([{ role: memberRole }]);
+    mockDb.query.rfpRequests.findFirst.mockResolvedValue(null);
+
+    const perms = await getUserPermissions('user-1', 'MatterWorx');
+
+    expect(perms.has('feature-requests:view')).toBe(false);
+  });
+
+  it('adds Apex Backlog view only when the project was created in Apex', async () => {
+    mockDb.query.appUserProjectRoles.findMany.mockResolvedValue([{ role: memberRole }]);
+    mockDb.query.rfpRequests.findFirst.mockResolvedValue({
+      id: 'rfp-1',
+      apexProject: 'Benefits Tracker',
+      approvedAt: '2026-09-30T00:00:00.000Z',
+      status: 'approved',
+    });
+
+    const perms = await getUserPermissions('user-1', 'Benefits Tracker');
+
+    expect(perms.has('feature-requests:view')).toBe(true);
+    expect(perms.has('chat:create')).toBe(true);
   });
 });
 

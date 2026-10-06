@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, type KeyboardEvent } from 'react';
+import React, { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { formatAttachmentSize } from '../../hooks/useChatAttachments';
 import styles from './agentChat.module.css';
 
@@ -147,8 +147,10 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
   onKeyDown,
   'data-testid': dataTestId,
 }) => {
+  const [stopRequested, setStopRequested] = useState(false);
   const internalTextareaRef = useRef<HTMLTextAreaElement>(null);
   const textareaRef = externalTextareaRef ?? internalTextareaRef;
+  const stopping = isCancelling || (stopRequested && isRunning);
   const busy = isBusy ?? (disabled || isRunning || isSending);
   const canType = !disabled && !isSending;
   const derivedCanSend = !disabled && !isRunning && !isSending
@@ -165,6 +167,10 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
     el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
   }, [value, maxHeight, textareaRef]);
 
+  useEffect(() => {
+    if (!isRunning || isCancelling) setStopRequested(false);
+  }, [isCancelling, isRunning]);
+
   const handleKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
     onKeyDown?.(event);
     if (event.defaultPrevented) return;
@@ -174,8 +180,15 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
     }
   }, [canSend, onKeyDown, onSend]);
 
-  const resolvedPlaceholder = placeholder
-    ?? (isRunning ? 'Agent is thinking…' : 'Type a message… (Enter to send)');
+  const handleCancel = useCallback(() => {
+    if (stopping || !onCancel) return;
+    setStopRequested(true);
+    onCancel();
+  }, [onCancel, stopping]);
+
+  const resolvedPlaceholder = stopping
+    ? 'Stopping the agent…'
+    : (placeholder ?? (isRunning ? 'Agent is thinking…' : 'Type a message… (Enter to send)'));
 
   const showModel = typeof model === 'string' && typeof onModelChange === 'function';
   const showAttach = typeof onAttachClick === 'function';
@@ -185,6 +198,7 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
   const micTestId = resolveTestId('microphone', 'microphone');
   const modelTestId = resolveTestId('model', 'model');
   const stopTestId = resolveTestId('stop', 'stop-btn', 'agent-composer-stop-btn');
+  const stoppingTestId = testId(testIdPrefix, 'stopping-status') ?? 'agent-stopping-status';
   const sendTestId = resolveTestId('send', 'send-btn', 'agent-composer-send-btn');
 
   const rootTestId = dataTestId
@@ -197,6 +211,17 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
       {...{ 'data-testid': rootTestId }}
     >
       {before}
+      {stopping && (
+        <div
+          className={styles.stoppingBanner}
+          role="status"
+          aria-live="polite"
+          {...{ 'data-testid': stoppingTestId }}
+        >
+          <span className={styles.stopSpinner} aria-hidden="true" />
+          <span>Stopping the agent…</span>
+        </div>
+      )}
       {fileInput}
       <div
         className={[
@@ -308,22 +333,23 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
 
             {isRunning && onCancel ? (
               <button
-                className={`${styles.sendBtn} ${styles.stopBtn} ${isCancelling ? styles.stopBtnStopping : ''}`}
-                onClick={onCancel}
+                className={`${styles.sendBtn} ${styles.stopBtn} ${stopping ? styles.stopBtnStopping : ''}`}
+                onClick={handleCancel}
                 type="button"
-                aria-label={isCancelling ? 'Stopping agent' : 'Stop'}
-                title="Stop"
-                disabled={isCancelling}
+                aria-label={stopping ? 'Stopping agent' : 'Stop'}
+                aria-busy={stopping}
+                title={stopping ? 'Stopping the agent' : 'Stop'}
+                disabled={stopping}
                 {...(stopTestId ? { 'data-testid': stopTestId } : {})}
               >
-                {isCancelling ? (
+                {stopping ? (
                   <span className={styles.stopSpinner} aria-hidden="true" />
                 ) : (
                   <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                     <rect x="4" y="4" width="12" height="12" rx="2" />
                   </svg>
                 )}
-                <span>{isCancelling ? 'Stopping…' : 'Stop'}</span>
+                <span className={stopping ? styles.stopLabel : undefined}>{stopping ? 'Stopping…' : 'Stop'}</span>
               </button>
             ) : (
               sendButton ?? (

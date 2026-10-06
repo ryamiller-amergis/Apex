@@ -1,6 +1,7 @@
 import type { SDKCustomTool } from '@cursor/sdk';
 import type { RepoReader } from '../../shared/types/repoReader';
 import { createNativeReadTools } from '../services/nativeReadToolAdapter';
+import { RepoReaderError } from '../services/repoReader';
 
 function reader(): jest.Mocked<RepoReader> {
   return {
@@ -96,6 +97,52 @@ describe('native read custom-tool adapter', () => {
       content: [{
         type: 'text',
         text: JSON.stringify(await repoReader.searchCode.mock.results[0].value, null, 2),
+      }],
+    });
+  });
+
+  it('returns a terminal MCP error result when a repository read fails', async () => {
+    // Arrange
+    const repoReader = reader();
+    repoReader.readFile.mockRejectedValue(
+      new Error('Repository content is unavailable'),
+    );
+    const tools = createNativeReadTools(repoReader);
+
+    // Act
+    const result = await execute(tools.get_skill_file, {
+      path: '/PRODUCT.md',
+    });
+
+    // Assert
+    expect(result).toEqual({
+      content: [{
+        type: 'text',
+        text: 'Repository content is unavailable',
+      }],
+      isError: true,
+    });
+  });
+
+  it('returns a successful not-found result for a missing repository file', async () => {
+    const repoReader = reader();
+    repoReader.readFile.mockRejectedValue(
+      new RepoReaderError(
+        'LOCAL_READ_UNAVAILABLE',
+        'ENOENT: PRODUCT.md',
+        true,
+      ),
+    );
+    const tools = createNativeReadTools(repoReader);
+
+    const result = await execute(tools.get_skill_file, {
+      path: '/PRODUCT.md',
+    });
+
+    expect(result).toEqual({
+      content: [{
+        type: 'text',
+        text: 'File not found in repository: /PRODUCT.md',
       }],
     });
   });

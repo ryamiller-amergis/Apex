@@ -11,6 +11,7 @@ Apex is an internal product-building and project-management platform. It central
 | Feature | Design Docs | Skills | Key Services | Key Components |
 |---------|------------|--------|-------------|----------------|
 | Agent Home | `design-docs/chat-history-from-home-page.md`, `design-docs/chat-thread-history.md` | — | `chatAgentService.ts`, `chatThreadRepository.ts` | `AgentHome.tsx`, `ThreadHistorySidebar.tsx`, `ChatAgentPanel.tsx` |
+| Product Setup & Build | — | `new-project-skills/product-foundation/SKILL.md`, `new-project-skills/product-discovery/SKILL.md`, `new-project-skills/product-implementation/SKILL.md` | `productSetupService.ts`, `productBuildService.ts`, `productImplementationQueue.ts`, `cloudAgentService.ts` | `ProductSetup.tsx`, `ProductBuildSetup.tsx`, `UiMockPreview.tsx` |
 | Design Interviews | `design-docs/interview-prd-workflow.md` | `.cursor/skills/kick-off/SKILL.md`, `.cursor/skills/grill-with-docs/SKILL.md`, `.cursor/skills/grill-design/SKILL.md` | `interviewService.ts` | `InterviewChatView.tsx`, `InterviewsDashboard.tsx` |
 | Architecture Decision Records | — | `.cursor/skills/adr-interview/SKILL.md`, `.cursor/skills/adr-finalize/SKILL.md`, `.cursor/skills/azure-async-infra/SKILL.md` (messaging/storage/workers), `.cursor/skills/terraform-infra/SKILL.md` (Terraform changes) | `adrService.ts` | `AdrChatView.tsx`, `AdrsDashboard.tsx` |
 | PRD Generation & Review | `design-docs/interview-prd-workflow.md`, `design-docs/prd-spec-review.md`, `design-docs/prd-generation-ux.md` | `.cursor/skills/to-prd/SKILL.md`, `.cursor/skills/prd-spec-review/SKILL.md`, `.cursor/skills/create-test-case/SKILL.md` | `prdService.ts`, `chatAgentService.ts` | `PrdReviewView.tsx`, `PrdAssistantPanel.tsx`, `BacklogViewer.tsx` |
@@ -44,6 +45,9 @@ Apex is an internal product-building and project-management platform. It central
 
 | Term | Meaning |
 |------|---------|
+| **Product Setup** | Home flow for an approved Request for Product: create `PRODUCT.md`, choose one build, review its prototype, then approve autonomous implementation |
+| **Product Foundation** | Broad product north star stored in repository-root `PRODUCT.md`; context for builds, not their implementation scope |
+| **Product Build** | One initial, feature, bug, or refinement slice that fits one pull request; the approved scope is stored in `docs/product/BUILD_BRIEF.md` and `docs/product/build-manifest.json` |
 | **Interview** | An AI-guided design conversation (using `/grill-with-docs` skill) that captures requirements for a feature or project |
 | **PRD** | Product Requirements Document — auto-generated from an interview transcript with epics, features, PBIs, and TBIs |
 | **Design Doc** | Technical design document auto-generated from an approved design prototype, grounded in the PRD and interview |
@@ -106,6 +110,7 @@ src/
 
 | Question | Where to Look |
 |----------|--------------|
+| How does a new approved product go from `PRODUCT.md` to a draft PR? | `productBuildService.ts`, `productImplementationQueue.ts`, `ProductBuildSetup.tsx`, `new-project-skills/product-discovery/SKILL.md` |
 | What features does Apex have? | `context.md` → Key Features section |
 | How does a specific feature work? | Feature map above → design doc + service file |
 | What permissions exist? | `.cursor/rules/rbac-governance.mdc` → Permission Catalog |

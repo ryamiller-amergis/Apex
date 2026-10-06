@@ -109,6 +109,14 @@ describe('repoCacheService', () => {
     expect(remote.secret).toBe('ado-secret');
   });
 
+  it('uses the ADO project stored in a Project/repo skill setting', () => {
+    const remote = resolveGitRemote('ado', 'To Do App', 'Apex - Apps/to-do-app');
+
+    expect(remote.url).toBe(
+      'https://dev.azure.com/amergis/Apex%20-%20Apps/_git/to-do-app',
+    );
+  });
+
   it('encodes ADO project and repository URL path segments', () => {
     const remote = resolveGitRemote('ado', 'Max View', 'Time # Clock');
 

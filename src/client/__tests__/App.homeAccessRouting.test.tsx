@@ -25,10 +25,6 @@ jest.mock('../hooks/useFeatureFlags', () => ({
   useFeatureFlag: jest.fn().mockReturnValue(false),
 }));
 
-jest.mock('../components/BetaAnnouncementModal', () => ({
-  BetaAnnouncementModal: () => null,
-}));
-
 jest.mock('../components/GuidedWalkthroughHost', () => ({
   GuidedWalkthroughHost: () => null,
 }));
@@ -165,8 +161,6 @@ function makeAppShell(overrides: Record<string, unknown> = {}) {
     whatsNewCurrentVersion: '1.0.0',
     whatsNewAutomaticOverlaySettled: true,
     whatsNewBlocksAutomaticWalkthrough: false,
-    betaAnnouncementDismissed: false,
-    handleDismissBetaAnnouncement: jest.fn(),
     handleLogout: jest.fn(),
     selectedProject: 'MaxView',
     selectedAreaPath: 'MaxView',
@@ -217,6 +211,7 @@ function setupBase(flagsOverride: Record<string, boolean> = {}) {
     refetch: jest.fn(),
     isLoadingError: false,
     isRefetchError: false,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- partial react-query mock; existing interaction stays as-is
   } as any);
 }
 
@@ -339,6 +334,7 @@ describe('App — Home access when flag is disabled', () => {
       refetch: jest.fn(),
       isLoadingError: false,
       isRefetchError: false,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- partial react-query mock; existing interaction stays as-is
     } as any);
   });
 
@@ -381,6 +377,7 @@ describe('App — Home access when permission is missing', () => {
       refetch: jest.fn(),
       isLoadingError: false,
       isRefetchError: false,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- partial react-query mock; existing interaction stays as-is
     } as any);
   });
 
@@ -420,6 +417,7 @@ describe('App — loading state does not expose Home content prematurely', () =>
       refetch: jest.fn(),
       isLoadingError: false,
       isRefetchError: false,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- partial react-query mock; existing interaction stays as-is
     } as any);
   });
 

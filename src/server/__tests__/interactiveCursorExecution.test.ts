@@ -58,6 +58,7 @@ describe('interactive Cursor execution repository tools', () => {
             cwd: '/shared/grounding/checkout',
             settingSources: ['project'],
             customTools,
+            enableAgentRetries: true,
           },
           mcpServers: {},
           model: {
@@ -69,6 +70,42 @@ describe('interactive Cursor execution repository tools', () => {
       expect(execution.agentId).toBe('agent-1');
     } finally {
       delete process.env.CURSOR_API_KEY;
+      jest.clearAllMocks();
+    }
+  });
+
+  it('disables SDK retries when the local actor setting is false', async () => {
+    process.env.CURSOR_API_KEY = 'test-key';
+    process.env.AI_RUNS_INTERACTIVE_AGENT_RETRIES = 'false';
+    mockCreateAgent.mockResolvedValue({
+      id: 'agent-1',
+      send: jest.fn(),
+      [Symbol.asyncDispose]: jest.fn().mockResolvedValue(undefined),
+    });
+    mockCreateNativeReadTools.mockReturnValue({});
+    const snapshot: ExecutionSnapshot = {
+      prompt: 'continue',
+      model: 'auto',
+      workspaceRef: '/warm',
+      workflowClass: 'interview',
+      skillPath: '/.agents/skills/product-foundation/SKILL.md',
+      projectId: 'To Do App',
+      threadId: 'thread-1',
+    };
+
+    try {
+      await acquireInteractiveCursorAgent(
+        snapshot,
+        {} as RepoReader,
+      );
+      expect(mockCreateAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          local: expect.objectContaining({ enableAgentRetries: false }),
+        }),
+      );
+    } finally {
+      delete process.env.CURSOR_API_KEY;
+      delete process.env.AI_RUNS_INTERACTIVE_AGENT_RETRIES;
       jest.clearAllMocks();
     }
   });
