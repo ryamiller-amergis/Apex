@@ -13,15 +13,19 @@ jest.mock('../services/featureFlagService', () => ({
   isFeatureEnabled: jest.fn().mockResolvedValue(true),
 }));
 
-jest.mock('../middleware/rbac', () => ({
-  requirePermission: () => (req: express.Request, res: express.Response, next: express.NextFunction) => {
+jest.mock('../middleware/rbac', () => {
+  const passthrough = () => (req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (req.headers['x-deny'] === '1') {
       res.status(403).json({ error: 'Forbidden' });
       return;
     }
     next();
-  },
-}));
+  };
+  return {
+    requirePermission: passthrough,
+    requireAnyPermission: passthrough,
+  };
+});
 
 jest.mock('../services/rfpIntakeService', () => {
   const actual = jest.requireActual('../services/rfpIntakeService');

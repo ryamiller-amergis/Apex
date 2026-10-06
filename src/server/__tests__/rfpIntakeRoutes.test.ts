@@ -5,19 +5,28 @@ jest.mock('../utils/requestUser', () => ({
   getUserId: () => 'user-1',
 }));
 
+jest.mock('../utils/superAdmin', () => ({
+  ...jest.requireActual('../utils/superAdmin'),
+  isSuperAdminRequest: () => false,
+}));
+
 jest.mock('../services/featureFlagService', () => ({
   isFeatureEnabled: jest.fn().mockResolvedValue(true),
 }));
 
-jest.mock('../middleware/rbac', () => ({
-  requirePermission: () => (req: express.Request, res: express.Response, next: express.NextFunction) => {
+jest.mock('../middleware/rbac', () => {
+  const passthrough = () => (req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (req.headers['x-deny'] === '1') {
       res.status(403).json({ error: 'Forbidden' });
       return;
     }
     next();
-  },
-}));
+  };
+  return {
+    requirePermission: passthrough,
+    requireAnyPermission: passthrough,
+  };
+});
 
 jest.mock('../services/rfpSubmitAccessRequestService', () => ({
   createRfpSubmitAccessRequest: jest.fn(),
@@ -335,7 +344,7 @@ describe('RFP intake self-scoped routes', () => {
         .send({ body: 'Thanks' });
 
       expect(response.status).toBe(201);
-      expect(mockedAddComment).toHaveBeenCalledWith('rfp-1', 'user-1', { body: 'Thanks', mentionedUserIds: [], attachmentIds: [] });
+      expect(mockedAddComment).toHaveBeenCalledWith('rfp-1', 'user-1', { body: 'Thanks', mentionedUserIds: [], attachmentIds: [] }, { isSuperAdmin: false });
     });
   });
 
@@ -352,7 +361,7 @@ describe('RFP intake self-scoped routes', () => {
 
       expect(response.status).toBe(201);
       expect(response.body).toHaveLength(2);
-      expect(mockedAskChat).toHaveBeenCalledWith('rfp-1', 'user-1', 'Why buy?');
+      expect(mockedAskChat).toHaveBeenCalledWith('rfp-1', 'user-1', 'Why buy?', { isSuperAdmin: false });
       expect(mockedListChat).not.toHaveBeenCalled();
     });
   });

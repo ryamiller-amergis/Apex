@@ -396,6 +396,28 @@ describe('PBI-006 attachments VT-07 VT-08', () => {
       code: 'NOT_FOUND',
     });
   });
+
+  it('allows a super admin to download an attachment without rfp-intake:view', async () => {
+    mockedGetUserPermissions.mockResolvedValue(new Set());
+    mockedDb.query.rfpRequests.findFirst.mockResolvedValue({
+      ...BASE_REQUEST,
+      ownerId: 'someone-else',
+    });
+    mockedDb.query.rfpAttachments.findFirst.mockResolvedValue({
+      id: 'att-1',
+      rfpRequestId: 'rfp-1',
+      commentId: null,
+      filename: 'spec.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 4,
+      storageKey: '/tmp/spec.pdf',
+      createdAt: NOW,
+    });
+
+    const result = await getAttachment('rfp-1', 'att-1', 'super-admin-1', { isSuperAdmin: true });
+    expect(result.attachment.filename).toBe('spec.pdf');
+    expect(result.filePath).toBe('/tmp/spec.pdf');
+  });
 });
 
 describe('PBI-005 first triage comment moves Evaluated to In Review', () => {

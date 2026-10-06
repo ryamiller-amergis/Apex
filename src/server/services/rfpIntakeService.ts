@@ -289,7 +289,12 @@ async function currentVerdict(request: RfpRequest): Promise<RfpVerdict | null> {
   return request.currentEvaluation.verdict;
 }
 
-export async function actorCanViewRfp(actorId: string, request: RfpRequest): Promise<boolean> {
+export async function actorCanViewRfp(
+  actorId: string,
+  request: RfpRequest,
+  options?: { isSuperAdmin?: boolean },
+): Promise<boolean> {
+  if (options?.isSuperAdmin) return true;
   if (request.ownerId === actorId) return true;
   const permissions = await getUserPermissions(actorId, APEX_PROJECT);
   return permissions.has(RFP_INTAKE_VIEW) || permissions.has(RFP_INTAKE_MANAGE);
@@ -444,6 +449,7 @@ export async function createRequest(
     for (const file of files) {
       await addAttachment(row.id, ownerId, file);
     }
+    await startEvaluation(row.id);
   } catch (err) {
     try {
       await abandonCreatedRequest(row.id);
@@ -452,7 +458,6 @@ export async function createRequest(
     }
     throw err;
   }
-  await startEvaluation(row.id);
   const created = await getRequestById(row.id);
   return created ?? mapRequest(row);
 }
@@ -868,9 +873,13 @@ async function requireView(actorId: string, isSuperAdmin = false): Promise<void>
   }
 }
 
-async function loadAuthorizedRequest(rfpId: string, actorId: string): Promise<RfpRequest> {
+async function loadAuthorizedRequest(
+  rfpId: string,
+  actorId: string,
+  options?: { isSuperAdmin?: boolean },
+): Promise<RfpRequest> {
   const request = await getRequestById(rfpId);
-  if (!request || !(await actorCanViewRfp(actorId, request))) {
+  if (!request || !(await actorCanViewRfp(actorId, request, options))) {
     throw new RfpIntakeError('RFP not found', 404, 'NOT_FOUND');
   }
   return request;
@@ -1164,8 +1173,9 @@ export async function addComment(
   rfpId: string,
   actorId: string,
   dto: CreateRfpCommentDTO,
+  options?: { isSuperAdmin?: boolean },
 ): Promise<RfpComment> {
-  const request = await loadAuthorizedRequest(rfpId, actorId);
+  const request = await loadAuthorizedRequest(rfpId, actorId, options);
   const body = dto.body?.trim() ?? '';
   if (!body) {
     throw new RfpIntakeError('body is required', 400, 'VALIDATION');
@@ -1228,8 +1238,9 @@ export async function addAttachment(
   actorId: string,
   file: RfpAttachmentCandidate & { buffer: Buffer },
   commentId?: string | null,
+  options?: { isSuperAdmin?: boolean },
 ): Promise<RfpAttachment> {
-  await loadAuthorizedRequest(rfpId, actorId);
+  await loadAuthorizedRequest(rfpId, actorId, options);
 
   const existing = await db.query.rfpAttachments.findMany({
     where: and(
@@ -1279,8 +1290,9 @@ export async function getAttachment(
   rfpId: string,
   attachmentId: string,
   actorId: string,
+  options?: { isSuperAdmin?: boolean },
 ): Promise<{ attachment: RfpAttachment; filePath: string }> {
-  await loadAuthorizedRequest(rfpId, actorId);
+  await loadAuthorizedRequest(rfpId, actorId, options);
   const row = await db.query.rfpAttachments.findFirst({
     where: and(eq(rfpAttachments.id, attachmentId), eq(rfpAttachments.rfpRequestId, rfpId)),
   });
@@ -1290,8 +1302,12 @@ export async function getAttachment(
   return { attachment: mapAttachment(row), filePath: row.storageKey };
 }
 
-export async function listComments(rfpId: string, actorId: string): Promise<RfpComment[]> {
-  await loadAuthorizedRequest(rfpId, actorId);
+export async function listComments(
+  rfpId: string,
+  actorId: string,
+  options?: { isSuperAdmin?: boolean },
+): Promise<RfpComment[]> {
+  await loadAuthorizedRequest(rfpId, actorId, options);
   const rows = await db.query.rfpComments.findMany({
     where: eq(rfpComments.rfpRequestId, rfpId),
     orderBy: [asc(rfpComments.createdAt)],

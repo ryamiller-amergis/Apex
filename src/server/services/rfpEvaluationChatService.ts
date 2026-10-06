@@ -30,9 +30,13 @@ function mapMessage(row: typeof rfpEvaluationMessages.$inferSelect): RfpEvaluati
   };
 }
 
-async function requireChatAccess(rfpId: string, actorId: string): Promise<RfpRequest> {
+async function requireChatAccess(
+  rfpId: string,
+  actorId: string,
+  options?: { isSuperAdmin?: boolean },
+): Promise<RfpRequest> {
   const request = await getRequestById(rfpId);
-  if (!request || !(await actorCanViewRfp(actorId, request))) {
+  if (!request || !(await actorCanViewRfp(actorId, request, options))) {
     throw new RfpIntakeError('RFP not found', 404, 'NOT_FOUND');
   }
   return request;
@@ -41,8 +45,9 @@ async function requireChatAccess(rfpId: string, actorId: string): Promise<RfpReq
 export async function listEvaluationChat(
   rfpId: string,
   actorId: string,
+  options?: { isSuperAdmin?: boolean },
 ): Promise<RfpEvaluationChatMessage[]> {
-  await requireChatAccess(rfpId, actorId);
+  await requireChatAccess(rfpId, actorId, options);
   const rows = await db.query.rfpEvaluationMessages.findMany({
     where: eq(rfpEvaluationMessages.rfpRequestId, rfpId),
     orderBy: [asc(rfpEvaluationMessages.createdAt)],
@@ -120,8 +125,9 @@ export async function askEvaluationChat(
   rfpId: string,
   actorId: string,
   message: string,
+  options?: { isSuperAdmin?: boolean },
 ): Promise<RfpEvaluationChatMessage[]> {
-  const request = await requireChatAccess(rfpId, actorId);
+  const request = await requireChatAccess(rfpId, actorId, options);
   const trimmed = message.trim();
   if (!trimmed) {
     throw new RfpIntakeError('message is required', 400, 'VALIDATION');
@@ -137,7 +143,7 @@ export async function askEvaluationChat(
     throw new RfpIntakeError('Ask about reasoning after an evaluation exists', 409, 'NOT_READY');
   }
 
-  const existing = await listEvaluationChat(rfpId, actorId);
+  const existing = await listEvaluationChat(rfpId, actorId, options);
   const history = existing.slice(-HISTORY_LIMIT);
   const prompt = buildPrompt(request, request.currentEvaluation, history, trimmed);
   const reply = (await completePlainTextWithBedrock(prompt, {

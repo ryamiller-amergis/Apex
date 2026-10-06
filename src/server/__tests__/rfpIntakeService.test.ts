@@ -213,6 +213,17 @@ describe('createRequest', () => {
     expect(mockedDb.delete).toHaveBeenCalled();
     expect(mockDeleteWhere).toHaveBeenCalled();
   });
+
+  it('deletes the request when evaluation start fails after persist', async () => {
+    mockedAutoStart.mockRejectedValueOnce(new Error('ADO clone failed'));
+    const mockDeleteWhere = jest.fn().mockResolvedValue(undefined);
+    mockedDb.delete.mockReturnValue({ where: mockDeleteWhere });
+
+    await expect(createRequest('owner-1', INTAKE)).rejects.toThrow('ADO clone failed');
+
+    expect(mockedDb.delete).toHaveBeenCalled();
+    expect(mockDeleteWhere).toHaveBeenCalled();
+  });
 });
 
 describe('proposal generation mapping', () => {

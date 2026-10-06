@@ -16,7 +16,7 @@ import {
 } from '../../shared/types/rfpIntake';
 import { getUserId } from '../utils/requestUser';
 import { isSuperAdminRequest } from '../utils/superAdmin';
-import { requirePermission } from '../middleware/rbac';
+import { requireAnyPermission, requirePermission } from '../middleware/rbac';
 import { isFeatureEnabled } from '../services/featureFlagService';
 import {
   createRfpSubmitAccessRequest,
@@ -240,6 +240,11 @@ async function requireRfpIntakeFlag(
 }
 
 const ownerSubmit = [requireRfpIntakeFlag, forceApexProject, requirePermission('rfp-intake:submit')];
+const ownerOrTriageView = [
+  requireRfpIntakeFlag,
+  forceApexProject,
+  requireAnyPermission('rfp-intake:submit', 'rfp-intake:view'),
+];
 
 router.get('/submit-access-requests/me', requireRfpIntakeFlag, async (req, res, next) => {
   try {
@@ -364,16 +369,18 @@ router.post('/requests/:id/reject', ...ownerSubmit, async (req, res, next) => {
   }
 });
 
-router.get('/requests/:id/comments', ...ownerSubmit, async (req, res, next) => {
+router.get('/requests/:id/comments', ...ownerOrTriageView, async (req, res, next) => {
   try {
-    const comments = await listComments(req.params.id, getUserId(req));
+    const comments = await listComments(req.params.id, getUserId(req), {
+      isSuperAdmin: isSuperAdminRequest(req),
+    });
     return res.json(comments);
   } catch (err) {
     handleRfpError(err, res, next);
   }
 });
 
-router.post('/requests/:id/comments', ...ownerSubmit, async (req, res, next) => {
+router.post('/requests/:id/comments', ...ownerOrTriageView, async (req, res, next) => {
   try {
     const body = typeof req.body?.body === 'string' ? req.body.body : '';
     const mentionedUserIds = Array.isArray(req.body?.mentionedUserIds)
@@ -386,33 +393,37 @@ router.post('/requests/:id/comments', ...ownerSubmit, async (req, res, next) => 
       body,
       mentionedUserIds,
       attachmentIds,
-    });
+    }, { isSuperAdmin: isSuperAdminRequest(req) });
     return res.status(201).json(comment);
   } catch (err) {
     handleRfpError(err, res, next);
   }
 });
 
-router.get('/requests/:id/evaluation-chat', ...ownerSubmit, async (req, res, next) => {
+router.get('/requests/:id/evaluation-chat', ...ownerOrTriageView, async (req, res, next) => {
   try {
-    const messages = await listEvaluationChat(req.params.id, getUserId(req));
+    const messages = await listEvaluationChat(req.params.id, getUserId(req), {
+      isSuperAdmin: isSuperAdminRequest(req),
+    });
     return res.json(messages);
   } catch (err) {
     handleRfpError(err, res, next);
   }
 });
 
-router.post('/requests/:id/evaluation-chat', ...ownerSubmit, async (req, res, next) => {
+router.post('/requests/:id/evaluation-chat', ...ownerOrTriageView, async (req, res, next) => {
   try {
     const message = typeof req.body?.message === 'string' ? req.body.message : '';
-    const created = await askEvaluationChat(req.params.id, getUserId(req), message);
+    const created = await askEvaluationChat(req.params.id, getUserId(req), message, {
+      isSuperAdmin: isSuperAdminRequest(req),
+    });
     return res.status(201).json(created);
   } catch (err) {
     handleRfpError(err, res, next);
   }
 });
 
-router.post('/requests/:id/attachments', ...ownerSubmit, acceptAttachments, async (req, res, next) => {
+router.post('/requests/:id/attachments', ...ownerOrTriageView, acceptAttachments, async (req, res, next) => {
   try {
     const files = filesFromRequest(req);
     if (files.length === 0) {
@@ -435,7 +446,7 @@ router.post('/requests/:id/attachments', ...ownerSubmit, acceptAttachments, asyn
         contentType: file.mimetype,
         sizeBytes: file.size,
         buffer: file.buffer,
-      }));
+      }, undefined, { isSuperAdmin: isSuperAdminRequest(req) }));
     }
     return res.status(201).json(stored.length === 1 ? stored[0] : stored);
   } catch (err) {
@@ -443,12 +454,13 @@ router.post('/requests/:id/attachments', ...ownerSubmit, acceptAttachments, asyn
   }
 });
 
-router.get('/requests/:id/attachments/:attachmentId', ...ownerSubmit, async (req, res, next) => {
+router.get('/requests/:id/attachments/:attachmentId', ...ownerOrTriageView, async (req, res, next) => {
   try {
     const { attachment, filePath } = await getAttachment(
       req.params.id,
       req.params.attachmentId,
       getUserId(req),
+      { isSuperAdmin: isSuperAdminRequest(req) },
     );
     if (!filePath || !fs.existsSync(filePath)) {
       return res.status(404).json({ error: 'RFP not found' });

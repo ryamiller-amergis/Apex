@@ -128,31 +128,31 @@ export async function autoStartEvaluation(rfpId: string): Promise<void> {
     return;
   }
 
-  const globalModel = await getDefaultModel();
-  const model = skillConfig.productIntakeEvaluationModel ?? skillConfig.defaultModel ?? globalModel;
-  const freeformContext = buildIntakeContext(request);
-
-  // Attach the watcher before dispatch. The background lane may finish quickly,
-  // and its output file is the durable handoff back to the RFP.
-  const thread = await createChatThread('system', {
-    project: APEX_PROJECT,
-    repo: skillConfig.skillRepo,
-    branch: skillConfig.skillBranch ?? 'main',
-    skillProvider: skillConfig.skillProvider ?? 'ado',
-    skillPath,
-    freeformContext,
-    model,
-  }, { skipAutoKickoff: true });
-
-  stopWatcher(rfpId);
-  await setEvaluationThread(rfpId, thread.id);
-
-  const destinationRun = {
-    runType: 'chat' as const,
-    runId: thread.id,
-    project: APEX_PROJECT,
-  };
   try {
+    const globalModel = await getDefaultModel();
+    const model = skillConfig.productIntakeEvaluationModel ?? skillConfig.defaultModel ?? globalModel;
+    const freeformContext = buildIntakeContext(request);
+
+    // Attach the watcher before dispatch. The background lane may finish quickly,
+    // and its output file is the durable handoff back to the RFP.
+    const thread = await createChatThread('system', {
+      project: APEX_PROJECT,
+      repo: skillConfig.skillRepo,
+      branch: skillConfig.skillBranch ?? 'main',
+      skillProvider: skillConfig.skillProvider ?? 'ado',
+      skillPath,
+      freeformContext,
+      model,
+    }, { skipAutoKickoff: true });
+
+    stopWatcher(rfpId);
+    await setEvaluationThread(rfpId, thread.id);
+
+    const destinationRun = {
+      runType: 'chat' as const,
+      runId: thread.id,
+      project: APEX_PROJECT,
+    };
     const decision = await routeBackgroundWorkflow({
       userId: request.ownerId,
       workflowClass: 'product-intake-evaluation',

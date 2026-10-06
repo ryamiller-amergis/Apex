@@ -286,6 +286,19 @@ describe('autoStartEvaluation TBI-002', () => {
     expect(mockedCreateThread).not.toHaveBeenCalled();
     expect(mockedMarkFailed).toHaveBeenCalledWith('rfp-1');
   });
+
+  it('marks failed when creating the evaluation thread throws', async () => {
+    mockedGetRequest.mockResolvedValue(FAKE_REQUEST);
+    mockedResolveSkillConfig.mockResolvedValue(FAKE_SKILL_CONFIG as any);
+    mockedCreateThread.mockRejectedValue(new Error('ADO clone failed'));
+
+    await expect(autoStartEvaluation('rfp-1')).resolves.toBeUndefined();
+
+    expect(mockedSetThread).not.toHaveBeenCalled();
+    expect(mockedRouteBackground).not.toHaveBeenCalled();
+    expect(mockedMarkFailed).toHaveBeenCalledWith('rfp-1', 'ADO clone failed');
+    expect(isWatcherActive('rfp-1')).toBe(false);
+  });
 });
 
 describe('PBI-001 startWatcher', () => {

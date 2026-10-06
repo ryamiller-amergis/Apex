@@ -22,6 +22,14 @@ jest.mock('../middleware/rbac', () => ({
     }
     next();
   },
+  requireAnyPermission: (...keys: string[]) => (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const denied = String(req.headers['x-deny'] ?? '').split(',');
+    if (keys.length > 0 && keys.every((key) => denied.includes(key))) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+    next();
+  },
 }));
 
 jest.mock('../services/rfpIntakeService', () => {
