@@ -1126,6 +1126,24 @@ variable "enable_ai_platform_v2_split_interactive" {
   default     = false
 }
 
+variable "enable_ai_platform_v2_container_logs" {
+  description = "Send the shared Container Apps Environment's console and system logs to a dedicated Log Analytics workspace."
+  type        = bool
+  default     = false
+}
+
+variable "ai_platform_v2_container_logs_retention_days" {
+  description = "Days the Container Apps log workspace keeps logs."
+  type        = number
+  default     = 30
+}
+
+variable "ai_platform_v2_container_logs_daily_quota_gb" {
+  description = "Daily ingestion cap for the Container Apps log workspace, in GB. Ingestion stops for the day once reached."
+  type        = number
+  default     = 1
+}
+
 variable "ai_platform_v2_interactive_image" {
   description = "Full ACR image reference shared by the V2 fast and agentic actor hosts."
   type        = string

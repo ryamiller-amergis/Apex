@@ -78,6 +78,7 @@ VARS=(
   -var=github_token=placeholder
   -var=enable_ai_platform_v2_runtime=true
   -var=enable_ai_platform_v2_split_interactive=true
+  -var=enable_ai_platform_v2_container_logs=true
   -var=ai_platform_v2_acr_name=acrapexltdev
   -var=ai_platform_v2_acr_resource_group_name="$RG"
   -var=ai_platform_v2_interactive_key_vault_id="$KEY_VAULT_ID"
