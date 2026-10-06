@@ -593,7 +593,12 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
                 </p>
               ) : null}
             </div>
-            {run.jobName ? (
+            {run.jobName === 'cursor-sdk' ? (
+              <div>
+                <span>Runtime</span>
+                <code>Cursor cloud agent</code>
+              </div>
+            ) : run.jobName ? (
               <CopyableId
                 label="Container job"
                 value={run.jobName}
@@ -607,13 +612,13 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
             )}
             {run.executionName ? (
               <CopyableId
-                label="Execution"
+                label={run.jobName === 'cursor-sdk' ? 'Cursor run' : 'Execution'}
                 value={run.executionName}
                 testId={`my-work-copy-execution-name-${item.id}`}
               />
             ) : (
               <div>
-                <span>Execution</span>
+                <span>{run.jobName === 'cursor-sdk' ? 'Cursor run' : 'Execution'}</span>
                 <code>Not recorded</code>
               </div>
             )}

@@ -592,6 +592,10 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
 
     for (const row of rows) {
       if (row.lane === 'cloud-agent') {
+        // Cursor SDK agents (bc-) keep running in Cursor. The container hard
+        // limit does not apply to them for now.
+        if (row.cloudAgentIdentity?.startsWith('bc-')) continue;
+
         const expired = Boolean(row.timeoutAt && Date.parse(row.timeoutAt) <= nowMs);
         if (!expired) continue;
 

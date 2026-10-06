@@ -1547,6 +1547,23 @@ describe('reapOrphanedRuns — cloud-agent lane (VT-09)', () => {
     expect(mockUpdateSet).not.toHaveBeenCalled();
   });
 
+  it('leaves Cursor SDK cloud agents running past timeoutAt', async () => {
+    mockFindMany.mockResolvedValue([{
+      id: 'run-sdk',
+      threadId: 'session-1',
+      status: 'running',
+      lane: 'cloud-agent',
+      cloudAgentManaged: true,
+      cloudAgentIdentity: 'bc-1',
+      timeoutAt: timestamp(1),
+      cancelRequested: false,
+    }]);
+
+    await reapOrphanedRuns({ now: () => now, config });
+
+    expect(finalizeReconciledAgentRun).not.toHaveBeenCalled();
+  });
+
   it('reaps managed Cloud Agent runs past timeoutAt as cloud_agent_timeout', async () => {
     mockFindMany.mockResolvedValue([{
       id: 'run-cloud-hard',
@@ -1554,7 +1571,7 @@ describe('reapOrphanedRuns — cloud-agent lane (VT-09)', () => {
       status: 'running',
       lane: 'cloud-agent',
       cloudAgentManaged: true,
-      cloudAgentIdentity: 'bc-1',
+      cloudAgentIdentity: 'container-agent-exec-1',
       timeoutAt: timestamp(1),
       heartbeatAt: timestamp(90_001),
       progressAt: timestamp(10 * 60_000),
