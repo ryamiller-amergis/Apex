@@ -205,6 +205,37 @@
   gap: 10px;
 }
 
+.release-assignment-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border: 1px solid;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.release-assignment-notice.success {
+  color: var(--success-color);
+  background: rgba(40, 167, 69, 0.1);
+  border-color: rgba(40, 167, 69, 0.35);
+}
+
+.release-assignment-notice.error {
+  color: var(--error-color);
+  background: rgba(220, 53, 69, 0.1);
+  border-color: rgba(220, 53, 69, 0.35);
+}
+
+.release-assignment-notice button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
 .btn-create-release {
   background-color: #0078d4;
   color: white;
@@ -1315,12 +1346,13 @@
   color: var(--text-secondary);
 }
 
-/* Child Items Grid */
+/* Child Items Grid — each card is its own lane and keeps its own height */
 .child-items-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 16px;
   padding: 8px 0;
+  align-items: start;
 }
 
 /* Child Item Card */
@@ -1335,6 +1367,8 @@
   gap: 12px;
   position: relative;
   overflow: hidden;
+  align-self: start;
+  height: auto;
 }
 
 .child-item-content {
@@ -1342,7 +1376,6 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  flex: 1;
 }
 
 .child-item-card::before {
@@ -1365,6 +1398,29 @@
 
 .child-item-card:hover::before {
   opacity: 1;
+}
+
+.child-item-card[draggable='true'] {
+  cursor: grab;
+  user-select: none;
+  -webkit-user-drag: element;
+}
+
+.child-item-card[draggable='true'] * {
+  pointer-events: none;
+}
+
+.child-item-card[draggable='true'] button {
+  pointer-events: auto;
+}
+
+.child-item-card[draggable='true']:active {
+  cursor: grabbing;
+}
+
+.child-item-card.moving {
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 /* Highlight for cards with UAT-ready children */
@@ -2113,6 +2169,61 @@
 
 .row-drop-target > td {
   border-top: 2px solid var(--accent-color);
+}
+
+.release-item-drop-row {
+  display: none;
+}
+
+.release-view.is-moving-card .release-item-drop-row {
+  display: table-row;
+}
+
+.release-view.is-moving-card .release-item-drop-row.is-source {
+  display: none;
+}
+
+.release-item-drop-zone {
+  margin: 8px 4px 12px;
+  padding: 18px 16px;
+  border: 2px dashed var(--accent-color);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-color) 8%, var(--bg-primary));
+  color: var(--accent-color);
+  font-weight: 600;
+  text-align: center;
+}
+
+.release-item-drop-zone.active {
+  border-style: solid;
+  background: color-mix(in srgb, var(--accent-color) 18%, var(--bg-primary));
+}
+
+.release-scroll-edge {
+  display: none;
+  position: fixed;
+  z-index: 30;
+  height: 48px;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 14%, var(--bg-primary));
+  color: var(--accent-color);
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.release-view.is-moving-card .release-scroll-edge {
+  display: flex;
+}
+
+.release-scroll-edge.active {
+  background: color-mix(in srgb, var(--accent-color) 28%, var(--bg-primary));
+  border-style: solid;
+}
+
+.child-item-card.is-drag-source {
+  opacity: 0.45;
 }
 
 /* ── Inline rename ───────────────────────────────────────────────────────── */
