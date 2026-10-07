@@ -98,9 +98,11 @@ describe('cursorCloudAgentClient', () => {
     );
   });
 
-  it('starts a Cursor SDK cloud agent with CURSOR_API_KEY', async () => {
-    const previous = process.env.CURSOR_API_KEY;
-    process.env.CURSOR_API_KEY = 'cursor-key';
+  it('starts a Cursor SDK cloud agent with CURSOR_USER_LEVEL_API_KEY', async () => {
+    const previous = process.env.CURSOR_USER_LEVEL_API_KEY;
+    const previousService = process.env.CURSOR_API_KEY;
+    process.env.CURSOR_USER_LEVEL_API_KEY = 'user-key';
+    process.env.CURSOR_API_KEY = 'service-key';
     mockDispose.mockResolvedValue(undefined);
     mockSend.mockResolvedValue({ id: 'run-1' });
     mockCreate.mockResolvedValue({
@@ -121,7 +123,7 @@ describe('cursorCloudAgentClient', () => {
       });
 
       expect(mockCreate).toHaveBeenCalledWith({
-        apiKey: 'cursor-key',
+        apiKey: 'user-key',
         model: { id: 'composer-2.5' },
         name: 'Document Management',
         cloud: {
@@ -140,14 +142,16 @@ describe('cursorCloudAgentClient', () => {
         jobName: 'cursor-sdk',
       });
     } finally {
-      if (previous === undefined) delete process.env.CURSOR_API_KEY;
-      else process.env.CURSOR_API_KEY = previous;
+      if (previous === undefined) delete process.env.CURSOR_USER_LEVEL_API_KEY;
+      else process.env.CURSOR_USER_LEVEL_API_KEY = previous;
+      if (previousService === undefined) delete process.env.CURSOR_API_KEY;
+      else process.env.CURSOR_API_KEY = previousService;
     }
   });
 
   it('reads pull request and branch from the Cursor run', async () => {
-    const previous = process.env.CURSOR_API_KEY;
-    process.env.CURSOR_API_KEY = 'cursor-key';
+    const previous = process.env.CURSOR_USER_LEVEL_API_KEY;
+    process.env.CURSOR_USER_LEVEL_API_KEY = 'cursor-key';
     mockGetRun.mockResolvedValue({
       id: 'run-1',
       status: 'finished',
@@ -184,14 +188,14 @@ describe('cursorCloudAgentClient', () => {
         settled: true,
       });
     } finally {
-      if (previous === undefined) delete process.env.CURSOR_API_KEY;
-      else process.env.CURSOR_API_KEY = previous;
+      if (previous === undefined) delete process.env.CURSOR_USER_LEVEL_API_KEY;
+      else process.env.CURSOR_USER_LEVEL_API_KEY = previous;
     }
   });
 
   it('cancels the Cursor run', async () => {
-    const previous = process.env.CURSOR_API_KEY;
-    process.env.CURSOR_API_KEY = 'cursor-key';
+    const previous = process.env.CURSOR_USER_LEVEL_API_KEY;
+    process.env.CURSOR_USER_LEVEL_API_KEY = 'cursor-key';
     const cancel = jest.fn().mockResolvedValue(undefined);
     mockGetRun.mockResolvedValue({
       supports: () => true,
@@ -206,14 +210,14 @@ describe('cursorCloudAgentClient', () => {
       });
       expect(cancel).toHaveBeenCalled();
     } finally {
-      if (previous === undefined) delete process.env.CURSOR_API_KEY;
-      else process.env.CURSOR_API_KEY = previous;
+      if (previous === undefined) delete process.env.CURSOR_USER_LEVEL_API_KEY;
+      else process.env.CURSOR_USER_LEVEL_API_KEY = previous;
     }
   });
 
   it('keeps a successful launch when disposing the agent handle fails', async () => {
-    const previous = process.env.CURSOR_API_KEY;
-    process.env.CURSOR_API_KEY = 'cursor-key';
+    const previous = process.env.CURSOR_USER_LEVEL_API_KEY;
+    process.env.CURSOR_USER_LEVEL_API_KEY = 'cursor-key';
     mockDispose.mockRejectedValue(new Error('dispose failed'));
     mockSend.mockResolvedValue({ id: 'run-1' });
     mockCreate.mockResolvedValue({
@@ -236,14 +240,14 @@ describe('cursorCloudAgentClient', () => {
         jobName: 'cursor-sdk',
       });
     } finally {
-      if (previous === undefined) delete process.env.CURSOR_API_KEY;
-      else process.env.CURSOR_API_KEY = previous;
+      if (previous === undefined) delete process.env.CURSOR_USER_LEVEL_API_KEY;
+      else process.env.CURSOR_USER_LEVEL_API_KEY = previous;
     }
   });
 
   it('lets Cursor open the pull request only for GitHub', async () => {
-    const previous = process.env.CURSOR_API_KEY;
-    process.env.CURSOR_API_KEY = 'cursor-key';
+    const previous = process.env.CURSOR_USER_LEVEL_API_KEY;
+    process.env.CURSOR_USER_LEVEL_API_KEY = 'cursor-key';
     mockDispose.mockResolvedValue(undefined);
     mockSend.mockResolvedValue({ id: 'run-gh' });
     mockCreate.mockResolvedValue({
@@ -265,8 +269,8 @@ describe('cursorCloudAgentClient', () => {
         cloud: expect.objectContaining({ autoCreatePR: true }),
       }));
     } finally {
-      if (previous === undefined) delete process.env.CURSOR_API_KEY;
-      else process.env.CURSOR_API_KEY = previous;
+      if (previous === undefined) delete process.env.CURSOR_USER_LEVEL_API_KEY;
+      else process.env.CURSOR_USER_LEVEL_API_KEY = previous;
     }
   });
 

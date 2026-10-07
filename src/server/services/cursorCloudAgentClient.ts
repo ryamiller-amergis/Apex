@@ -81,10 +81,11 @@ export function buildCloudRepoUrl(
   return toCloudRepoUrl(remote.url);
 }
 
-function cursorApiKey(): string {
-  const apiKey = process.env.CURSOR_API_KEY?.trim();
+/** Cloud Agent.create clones Azure DevOps as the user. A service-account key is rejected. */
+function cursorUserLevelApiKey(): string {
+  const apiKey = process.env.CURSOR_USER_LEVEL_API_KEY?.trim();
   if (!apiKey) {
-    throw new Error('CURSOR_API_KEY is not set on the server.');
+    throw new Error('CURSOR_USER_LEVEL_API_KEY is not set on the server.');
   }
   return apiKey;
 }
@@ -93,7 +94,7 @@ function loadCloudRun(cloudAgentId: string, cursorRunId: string): Promise<Run> {
   return Agent.getRun(cursorRunId, {
     runtime: 'cloud',
     agentId: cloudAgentId,
-    apiKey: cursorApiKey(),
+    apiKey: cursorUserLevelApiKey(),
   });
 }
 
@@ -137,7 +138,7 @@ export async function launchCloudAgent(
 ): Promise<LaunchCloudAgentResult> {
   const repoUrl = buildCloudRepoUrl(input.skillProvider, input.project, input.skillRepo);
   const agent = await Agent.create({
-    apiKey: cursorApiKey(),
+    apiKey: cursorUserLevelApiKey(),
     model: { id: input.model.trim() || 'composer-2.5' },
     name: input.workItemTitle,
     cloud: {
