@@ -440,7 +440,7 @@ const NewInterviewCompose: React.FC = () => {
 
   useEffect(() => {
     const newDefault = resolveAvailableModelId(
-      selectedSkillOption?.model ?? skillConfig?.interviewModel ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID,
+      selectedSkillOption?.model?.trim() || skillConfig?.interviewModel?.trim() || globalDefaultModel?.value?.trim() || DEFAULT_MODEL_ID,
       availableModels ?? [],
     );
     const prevDefault = prevEffectiveDefaultRef.current;

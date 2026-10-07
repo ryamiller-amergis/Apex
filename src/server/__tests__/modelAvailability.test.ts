@@ -1,4 +1,4 @@
-import { resolveAvailableModelId } from '../modelAvailability';
+import { resolveAvailableModelId } from '../../shared/utils/modelAvailability';
 
 const AVAILABLE = [
   { id: 'auto-smart' },
@@ -25,5 +25,10 @@ describe('resolveAvailableModelId', () => {
 
   it('keeps the requested model when the catalog is empty', () => {
     expect(resolveAvailableModelId('claude-opus-4-6', [])).toBe('claude-opus-4-6');
+  });
+
+  it('keeps an empty selection so the caller default applies instead of Auto', () => {
+    expect(resolveAvailableModelId('', AVAILABLE)).toBe('');
+    expect(resolveAvailableModelId('  ', AVAILABLE)).toBe('  ');
   });
 });

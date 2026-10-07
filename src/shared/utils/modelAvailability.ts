@@ -13,13 +13,15 @@ function modelFamily(id: string): string {
  * Resolve a requested model ID against the models the Cursor SDK currently
  * offers. A retired ID (for example a saved `claude-opus-4-6` default) maps to
  * the first listed model in the same family, then to `default`. An empty list
- * means the catalog could not be read, so the requested ID is kept.
+ * means the catalog could not be read, so the requested ID is kept. An empty
+ * request means "no choice yet" and is kept so the caller's own default
+ * applies instead of `default` (Auto).
  */
 export function resolveAvailableModelId(
   requested: string,
   available: ReadonlyArray<ModelOption>,
 ): string {
-  if (available.length === 0) return requested;
+  if (available.length === 0 || requested.trim() === '') return requested;
   if (available.some((model) => model.id === requested)) return requested;
   const family = modelFamily(requested);
   const sameFamily = available.find((model) => modelFamily(model.id) === family);
