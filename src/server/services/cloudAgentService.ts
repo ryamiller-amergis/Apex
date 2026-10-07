@@ -417,7 +417,23 @@ export async function startCloudAgentRun(
   const started = await persistQueuedRun(input, skillConfig, deps);
   if (input.adoUserToken) pendingCloudAgentUserTokens.set(started.runId, input.adoUserToken);
   if (await claimCloudAgentRun(started.runId)) {
-    await launchClaimedCloudAgentRun(started.runId, deps);
+    try {
+      await launchClaimedCloudAgentRun(started.runId, deps);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'Cloud Agent launch failed';
+      console.error('[cloud-agent] launch failed after claim', JSON.stringify({
+        runId: started.runId,
+        error: detail,
+      }));
+      try {
+        await markTerminal(started.runId, { status: 'failed', detail });
+      } catch (markErr) {
+        console.error('[cloud-agent] could not record launch failure', JSON.stringify({
+          runId: started.runId,
+          error: markErr instanceof Error ? markErr.message : String(markErr),
+        }));
+      }
+    }
   }
   trackEvent('cloud_agent_run.started', {
     project: input.project,
@@ -710,42 +726,86 @@ async function launchClaimedCloudAgentRun(
   }
 
   const timeoutAt = new Date(Date.now() + resolveCloudAgentRunLimitMs()).toISOString();
-  const captured = await captureCloudAgentIdentity(runId, {
-    cloudAgentIdentity: launched.cloudAgentId,
-    cursorRunId: launched.cursorRunId,
-    jobName: launched.jobName,
-    branchName: launched.branchName,
-    timeoutAt,
-  });
-  if (!captured.ok && captured.reason === 'run_cancelled') {
-    console.warn('[cloud-agent] run was cancelled while its job was starting; stopping the job', JSON.stringify({
+  let identityStored = false;
+  try {
+    const captured = await captureCloudAgentIdentity(runId, {
+      cloudAgentIdentity: launched.cloudAgentId,
+      cursorRunId: launched.cursorRunId,
+      jobName: launched.jobName,
+      branchName: launched.branchName,
+      timeoutAt,
+    });
+    if (!captured.ok) {
+      if (captured.reason === 'run_cancelled') {
+        console.warn('[cloud-agent] run was cancelled while its job was starting; stopping the job', JSON.stringify({
+          runId,
+          jobExecution: launched.cursorRunId,
+        }));
+      } else {
+        const detail = captured.reason ?? 'Could not record the Cloud Agent';
+        console.error('[cloud-agent] could not record the Cursor agent', JSON.stringify({
+          runId,
+          reason: captured.reason ?? null,
+        }));
+        await markTerminal(runId, { status: 'failed', detail });
+        emitTerminal({ sessionId, runId }, snapshot.projectId, 'failed', null);
+      }
+      await stopUntrackedCloudAgent(deps, snapshot.projectId, launched, runId);
+      scheduleCloudAgentDispatch();
+      return;
+    }
+    identityStored = true;
+    if (launched.branchName) {
+      await db
+        .update(devSessions)
+        .set({
+          branchName: launched.branchName,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(devSessions.id, sessionId));
+    }
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : 'Cloud Agent launch failed';
+    console.error('[cloud-agent] launch failed after the Cursor agent was created', JSON.stringify({
       runId,
-      jobExecution: launched.cursorRunId,
+      sessionId,
+      cloudAgentId: launched.cloudAgentId,
+      error: detail,
     }));
-    try {
-      await deps.cancelCursorCloudAgentRun({
-        project: snapshot.projectId,
-        cloudAgentId: launched.cloudAgentId,
-        cursorRunId: launched.cursorRunId,
-      });
-    } catch (err) {
-      console.error('[cloud-agent] could not stop the job for a cancelled run', JSON.stringify({
-        runId,
-        jobExecution: launched.cursorRunId,
-        error: err instanceof Error ? err.message : String(err),
-      }));
+    if (!identityStored) {
+      await stopUntrackedCloudAgent(deps, snapshot.projectId, launched, runId);
+      const terminal = await markTerminal(runId, { status: 'failed', detail });
+      if (!terminal.ok) {
+        console.error('[cloud-agent] could not record launch failure', JSON.stringify({
+          runId,
+          reason: terminal.reason,
+          status: terminal.run?.status ?? null,
+        }));
+      }
+      emitTerminal({ sessionId, runId }, snapshot.projectId, 'failed', null);
     }
     scheduleCloudAgentDispatch();
-    return;
   }
-  if (launched.branchName) {
-    await db
-      .update(devSessions)
-      .set({
-        branchName: launched.branchName,
-        updatedAt: new Date().toISOString(),
-      })
-      .where(eq(devSessions.id, sessionId));
+}
+
+async function stopUntrackedCloudAgent(
+  deps: CloudAgentServiceDeps,
+  project: string,
+  launched: LaunchCloudAgentResult,
+  runId: string,
+): Promise<void> {
+  try {
+    await deps.cancelCursorCloudAgentRun({
+      project,
+      cloudAgentId: launched.cloudAgentId,
+      cursorRunId: launched.cursorRunId,
+    });
+  } catch (err) {
+    console.error('[cloud-agent] could not stop the job for a run that was not recorded', JSON.stringify({
+      runId,
+      jobExecution: launched.cursorRunId,
+      error: err instanceof Error ? err.message : String(err),
+    }));
   }
 }
 

@@ -417,6 +417,99 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
       ownerInstance: 'apex-cloud-agent',
     }));
   });
+
+  it('fails the claimed run when the Cursor agent cannot be recorded', async () => {
+    const { db: mockedDb } = jest.requireMock('../db/drizzle') as {
+      db: { select: jest.Mock; transaction: jest.Mock };
+    };
+    const { enqueue: mockEnqueue, captureCloudAgentIdentity } = jest.requireMock(
+      '../services/agentRunLifecycleService',
+    ) as { enqueue: jest.Mock; captureCloudAgentIdentity: jest.Mock };
+    mockedDb.select.mockReturnValueOnce({
+      from: () => ({ where: jest.fn().mockResolvedValue([]) }),
+    });
+    mockedDb.transaction.mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        execute: jest.fn().mockResolvedValue(undefined),
+        select: jest.fn(() => ({
+          from: () => ({
+            where: () => ({
+              orderBy: () => ({
+                limit: jest.fn().mockResolvedValue([session({
+                currentRunId: null,
+                leftoverWork: null,
+              })]),
+              }),
+            }),
+          }),
+        })),
+        insert: jest.fn(),
+        update: jest.fn(() => ({
+          set: () => ({ where: jest.fn().mockResolvedValue(undefined) }),
+        })),
+      };
+      return callback(tx);
+    });
+    mockEnqueue.mockResolvedValueOnce({ runId: 'run-stranded' });
+    mockUpdateWhere.mockResolvedValueOnce([{ id: 'run-stranded' }]);
+    mockAgentRunFindFirst.mockResolvedValueOnce({
+      id: 'run-stranded',
+      status: 'queued',
+      cloudAgentIdentity: null,
+      devSessionId: SESSION_ID,
+      executionSnapshot: {
+        prompt: 'base execution prompt',
+        model: 'composer-2.5',
+        projectId: 'MaxView',
+        repository: 'MaxView',
+        provider: 'ado',
+        threadId: SESSION_ID,
+        cloudAgent: { baseBranch: 'main', workItemId: 42 },
+      },
+    });
+    captureCloudAgentIdentity.mockRejectedValueOnce(new Error('db write failed'));
+    mockMarkTerminal.mockResolvedValue({ ok: true, run: run({ status: 'failed' }) });
+    const cancelCursorCloudAgentRun = jest.fn().mockResolvedValue(undefined);
+    const setImmediateSpy = jest.spyOn(global, 'setImmediate').mockImplementation(
+      (() => ({})) as unknown as typeof setImmediate,
+    );
+
+    try {
+      const result = await startCloudAgentRun({
+        userId: USER_ID,
+        project: 'MaxView',
+        workItemId: 42,
+        isSuperAdmin: false,
+        item: eligibleItem,
+      }, makeDeps({
+        getSkillConfig: jest.fn().mockResolvedValue({
+          skillProvider: 'ado',
+          skillRepo: 'MaxView',
+          skillBranch: 'main',
+        }),
+        buildPrompt: jest.fn().mockResolvedValue('base execution prompt'),
+        launchCloudAgent: jest.fn().mockResolvedValue({
+          cloudAgentId: 'bc-1',
+          cursorRunId: 'cursor-run-1',
+          jobName: 'cursor-sdk',
+        }),
+        cancelCursorCloudAgentRun,
+      }));
+
+      expect(result).toEqual({ sessionId: SESSION_ID, runId: 'run-stranded' });
+      expect(cancelCursorCloudAgentRun).toHaveBeenCalledWith({
+        project: 'MaxView',
+        cloudAgentId: 'bc-1',
+        cursorRunId: 'cursor-run-1',
+      });
+      expect(mockMarkTerminal).toHaveBeenCalledWith('run-stranded', expect.objectContaining({
+        status: 'failed',
+        detail: 'db write failed',
+      }));
+    } finally {
+      setImmediateSpy.mockRestore();
+    }
+  });
 });
 
 describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {

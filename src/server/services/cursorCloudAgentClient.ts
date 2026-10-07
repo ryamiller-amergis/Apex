@@ -6,6 +6,12 @@
 import { Agent, type Run, type SDKMessage } from '@cursor/sdk';
 import type { SkillProvider } from '../../shared/types/projectSettings';
 import type { CloudAgentActivityEvent } from '../../shared/types/devWorkbench';
+import {
+  cancelCursorContainerCliRun,
+  getCursorContainerCliRun,
+  isContainerAgentId,
+  streamCursorContainerCliRun,
+} from './cursorContainerCliService';
 import { resolveGitRemote } from './repoCacheService';
 
 export interface LaunchCloudAgentInput {
@@ -95,7 +101,16 @@ function isTerminalStatus(status: Run['status']): boolean {
   return status === 'finished' || status === 'error' || status === 'cancelled';
 }
 
+function containerExecutionName(cloudAgentId: string, cursorRunId: string): string {
+  if (isContainerAgentId(cursorRunId)) {
+    return cursorRunId.slice('container-agent-'.length);
+  }
+  if (cursorRunId.trim()) return cursorRunId.trim();
+  return cloudAgentId.slice('container-agent-'.length);
+}
+
 export function observeCloudRun(run: Run): CloudAgentRunObservation {
+  const gitKnown = run.git != null;
   const branches = run.git?.branches ?? [];
   const withPr = branches.find((branch) => branch.prUrl);
   const withBranch = branches.find((branch) => branch.branch);
@@ -104,15 +119,16 @@ export function observeCloudRun(run: Run): CloudAgentRunObservation {
   const resultText = run.status === 'error'
     ? (run.error?.message ?? run.result ?? null)
     : (run.result ?? null);
+  const gitPending = run.status === 'finished' && !gitKnown;
   return {
-    status: run.status,
+    status: gitPending ? 'running' : run.status,
     prUrl,
     resultText,
     branchName,
     baseBranch: null,
     summary: run.result ?? null,
-    noChanges: run.status === 'finished' && !branchName && !prUrl,
-    settled: isTerminalStatus(run.status),
+    noChanges: run.status === 'finished' && gitKnown && !branchName && !prUrl,
+    settled: isTerminalStatus(run.status) && !gitPending,
   };
 }
 
@@ -126,7 +142,7 @@ export async function launchCloudAgent(
     name: input.workItemTitle,
     cloud: {
       repos: [{ url: repoUrl, startingRef: input.skillBranch }],
-      autoCreatePR: true,
+      autoCreatePR: input.skillProvider === 'github',
       skipReviewerRequest: true,
     },
   });
@@ -147,6 +163,9 @@ export async function getCloudAgentRun(input: {
   cloudAgentId: string;
   cursorRunId: string;
 }): Promise<CloudAgentRunObservation> {
+  if (isContainerAgentId(input.cloudAgentId)) {
+    return getCursorContainerCliRun(containerExecutionName(input.cloudAgentId, input.cursorRunId));
+  }
   const run = await loadCloudRun(input.cloudAgentId, input.cursorRunId);
   return observeCloudRun(run);
 }
@@ -216,6 +235,12 @@ export async function* streamCloudAgentRun(input: {
   cloudAgentId: string;
   cursorRunId: string;
 }): AsyncGenerator<CloudAgentActivityEvent> {
+  if (isContainerAgentId(input.cloudAgentId)) {
+    yield* streamCursorContainerCliRun(
+      containerExecutionName(input.cloudAgentId, input.cursorRunId),
+    );
+    return;
+  }
   const run = await loadCloudRun(input.cloudAgentId, input.cursorRunId);
   if (!run.supports('stream')) {
     throw new Error(run.unsupportedReason('stream') ?? 'This Cursor run cannot be streamed.');
@@ -233,6 +258,12 @@ export async function cancelCursorCloudAgentRun(input: {
   cloudAgentId: string;
   cursorRunId: string;
 }): Promise<void> {
+  if (isContainerAgentId(input.cloudAgentId)) {
+    await cancelCursorContainerCliRun(
+      containerExecutionName(input.cloudAgentId, input.cursorRunId),
+    );
+    return;
+  }
   const run = await loadCloudRun(input.cloudAgentId, input.cursorRunId);
   if (!run.supports('cancel')) {
     throw new Error(run.unsupportedReason('cancel') ?? 'This Cursor run cannot be cancelled.');

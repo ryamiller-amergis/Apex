@@ -10,6 +10,16 @@ jest.mock('@cursor/sdk', () => ({
   },
 }));
 
+const mockGetContainerRun = jest.fn();
+const mockCancelContainerRun = jest.fn();
+
+jest.mock('../services/cursorContainerCliService', () => ({
+  isContainerAgentId: (id: string) => id.startsWith('container-agent-'),
+  getCursorContainerCliRun: (...args: unknown[]) => mockGetContainerRun(...args),
+  streamCursorContainerCliRun: jest.fn(),
+  cancelCursorContainerCliRun: (...args: unknown[]) => mockCancelContainerRun(...args),
+}));
+
 jest.mock('../services/repoCacheService', () => ({
   resolveGitRemote: jest.fn((provider: string, project: string, repo: string) => {
     if (provider === 'github') {
@@ -28,6 +38,7 @@ import {
   cancelCursorCloudAgentRun,
   getCloudAgentRun,
   launchCloudAgent,
+  observeCloudRun,
   sdkMessageToActivity,
   toCloudRepoUrl,
 } from '../services/cursorCloudAgentClient';
@@ -118,7 +129,7 @@ describe('cursorCloudAgentClient', () => {
             url: 'https://dev.azure.com/amergis/MaxView/_git/MaxView',
             startingRef: 'development',
           }],
-          autoCreatePR: true,
+          autoCreatePR: false,
           skipReviewerRequest: true,
         },
       });
@@ -198,5 +209,93 @@ describe('cursorCloudAgentClient', () => {
       if (previous === undefined) delete process.env.CURSOR_API_KEY;
       else process.env.CURSOR_API_KEY = previous;
     }
+  });
+
+  it('lets Cursor open the pull request only for GitHub', async () => {
+    const previous = process.env.CURSOR_API_KEY;
+    process.env.CURSOR_API_KEY = 'cursor-key';
+    mockDispose.mockResolvedValue(undefined);
+    mockSend.mockResolvedValue({ id: 'run-gh' });
+    mockCreate.mockResolvedValue({
+      agentId: 'bc-gh',
+      send: mockSend,
+      [Symbol.asyncDispose]: mockDispose,
+    });
+
+    try {
+      await launchCloudAgent({
+        project: 'Apex',
+        prompt: 'Implement the work item',
+        model: 'composer-2.5',
+        skillProvider: 'github',
+        skillRepo: 'amergis/Apex',
+        skillBranch: 'main',
+      });
+      expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({
+        cloud: expect.objectContaining({ autoCreatePR: true }),
+      }));
+    } finally {
+      if (previous === undefined) delete process.env.CURSOR_API_KEY;
+      else process.env.CURSOR_API_KEY = previous;
+    }
+  });
+
+  it('waits when a finished Cursor run has no git metadata yet', () => {
+    const observed = observeCloudRun({
+      status: 'finished',
+      result: 'Done',
+    } as Parameters<typeof observeCloudRun>[0]);
+
+    expect(observed.status).toBe('running');
+    expect(observed.noChanges).toBe(false);
+    expect(observed.settled).toBe(false);
+  });
+
+  it('treats an explicit empty branch list as no file changes', () => {
+    const observed = observeCloudRun({
+      status: 'finished',
+      git: { branches: [] },
+    } as Parameters<typeof observeCloudRun>[0]);
+
+    expect(observed.status).toBe('finished');
+    expect(observed.noChanges).toBe(true);
+    expect(observed.settled).toBe(true);
+  });
+
+  it('reads a live container execution through the container adapter', async () => {
+    mockGetRun.mockClear();
+    mockGetContainerRun.mockResolvedValue({
+      status: 'running',
+      prUrl: null,
+      resultText: null,
+      branchName: null,
+      baseBranch: null,
+      summary: null,
+      noChanges: false,
+      settled: false,
+    });
+
+    await getCloudAgentRun({
+      project: 'MaxView',
+      cloudAgentId: 'container-agent-exec-1',
+      cursorRunId: 'exec-1',
+    });
+
+    expect(mockGetContainerRun).toHaveBeenCalledWith('exec-1');
+    expect(mockGetRun).not.toHaveBeenCalled();
+  });
+
+  it('cancels a live container execution through the container adapter', async () => {
+    mockGetRun.mockClear();
+    mockCancelContainerRun.mockResolvedValue(undefined);
+
+    await cancelCursorCloudAgentRun({
+      project: 'MaxView',
+      cloudAgentId: 'container-agent-exec-1',
+      cursorRunId: 'exec-1',
+    });
+
+    expect(mockCancelContainerRun).toHaveBeenCalledWith('exec-1');
+    expect(mockGetRun).not.toHaveBeenCalled();
   });
 });
