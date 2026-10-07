@@ -100,7 +100,15 @@ import {
   markValidationReady,
   overrideDesignDocValidation,
 } from '../services/designDocService';
-import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, getThreadAsync, updateThreadKickoffContext, sendMessage } from '../services/chatAgentService';
+import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, getThreadAsync, updateThreadKickoffContext, updateThreadKickoffTranscript, sendMessage } from '../services/chatAgentService';
+import {
+  approveInterviewBrief,
+  formatInterviewBriefForPrd,
+  getApprovedInterviewBriefForPrd,
+  getInterviewBrief,
+  saveInterviewBrief,
+} from '../services/interviewBriefService';
+import { draftInterviewBriefSections } from '../services/interviewOrchestratorService';
 import { propagatePipelineGrounding } from '../services/runGroundingService';
 import { getApproverPoolForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
@@ -3250,6 +3258,54 @@ router.delete('/:id', requirePermission('interviews:manage'), async (req, res, n
   }
 });
 
+router.get('/:id/brief', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const brief = await getInterviewBrief(req.params.id);
+    res.json(brief);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/:id/brief', requirePermission('interviews:manage'), requireGroupMembership('BA', 'Manager', 'Product-Owner'), async (req, res, next) => {
+  try {
+    const brief = await saveInterviewBrief({
+      interviewId: req.params.id,
+      sections: req.body?.sections,
+      savedBy: getUserId(req),
+    });
+    res.json(brief);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/brief/draft', requirePermission('interviews:manage'), requireGroupMembership('BA', 'Manager', 'Product-Owner'), async (req, res, next) => {
+  try {
+    const sections = await draftInterviewBriefSections({ interviewId: req.params.id });
+    const brief = await saveInterviewBrief({
+      interviewId: req.params.id,
+      sections,
+      savedBy: getUserId(req),
+    });
+    res.json(brief);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/brief/approve', requirePermission('interviews:manage'), requireGroupMembership('BA', 'Manager', 'Product-Owner'), async (req, res, next) => {
+  try {
+    const result = await approveInterviewBrief({
+      interviewId: req.params.id,
+      approvedBy: getUserId(req),
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post('/:interviewId/prds', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
@@ -3270,6 +3326,22 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
     if (!interview) {
       res.status(404).json({ error: 'Interview not found' });
       return;
+    }
+
+    const approvedBrief = await getApprovedInterviewBriefForPrd(req.params.interviewId);
+    if (interview.playbookRunId && !approvedBrief) {
+      res.status(409).json({ error: 'Approve the interview brief before generating a PRD.' });
+      return;
+    }
+    if (approvedBrief) {
+      const updated = await updateThreadKickoffTranscript(
+        chatThreadId,
+        formatInterviewBriefForPrd(approvedBrief),
+      );
+      if (!updated) {
+        res.status(409).json({ error: 'The PRD thread could not be prepared from the approved brief.' });
+        return;
+      }
     }
 
     const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({

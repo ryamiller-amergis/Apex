@@ -92,6 +92,17 @@ export class PlaybookDraftNotFoundError extends Error {
   }
 }
 
+/**
+ * Publish refused an interview node whose profile key is blank, missing, or disabled
+ * in the target project's skill configuration.
+ */
+export class PlaybookInterviewProfilePublishError extends Error {
+  constructor(project: string, profileKey: string) {
+    super(`Interview profile "${profileKey}" is missing or disabled for project ${project}.`);
+    this.name = 'PlaybookInterviewProfilePublishError';
+  }
+}
+
 /** The caller saved or published from a revision that another author has replaced. */
 export class PlaybookDraftConflictError extends Error {
   constructor(definitionId: string) {
@@ -199,6 +210,8 @@ interface CreateDefinitionInput {
   description?: string | null;
   graph: PlaybookGraph;
   createdByUserId: string;
+  templateKey?: string | null;
+  templateVersion?: number | null;
 }
 
 interface UpdateDraftInput {
@@ -215,6 +228,8 @@ interface PublishDraftInput {
   definitionId: string;
   publishedByUserId: string;
   expectedDraftUpdatedAt: string;
+  /** Used when an interview node's profileKey is a `${input.*}` binding. */
+  sampleRunInput?: Record<string, unknown>;
 }
 
 interface DeprecateVersionInput {
@@ -241,10 +256,54 @@ function toDefinition(row: DefinitionRow): PlaybookDefinition {
     project: row.project,
     name: row.name,
     description: row.description,
+    templateKey: row.templateKey ?? null,
+    templateVersion: row.templateVersion ?? null,
     createdBy: row.createdBy,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+function enabledInterviewProfile(
+  options: Array<{ key?: string | null; enabled?: boolean | null }> | null | undefined,
+  profileKey: string,
+): boolean {
+  const key = profileKey.trim();
+  if (!key) return false;
+  return (options ?? []).some(
+    (option) =>
+      Boolean(option.key?.trim()) && option.key?.trim() === key && option.enabled !== false,
+  );
+}
+
+/**
+ * Interview publish resolves each node's profileKey against the target project.
+ * A `${input.*}` binding is substituted from the publisher's sample run input.
+ * The check runs before the draft is copied into an immutable version.
+ */
+async function assertInterviewProfilesForPublish(
+  project: string,
+  graph: PlaybookGraph,
+  sampleRunInput: Record<string, unknown> | undefined,
+): Promise<void> {
+  const interviewNodes = graph.nodes.filter((node) => node.stepType === 'interview');
+  if (interviewNodes.length === 0) return;
+
+  const { resolveSkillConfig } = await import('./projectSettingsService');
+  const { resolvePlaybookBindings } = await import('./playbookBindingResolver');
+  const skillConfig = await resolveSkillConfig({ project });
+  const options = skillConfig?.interviewSkillOptions;
+
+  for (const node of interviewNodes) {
+    const raw = typeof node.config?.profileKey === 'string' ? node.config.profileKey.trim() : '';
+    const resolved = raw.includes('${')
+      ? resolvePlaybookBindings(raw, { input: sampleRunInput ?? {}, steps: {} })
+      : raw;
+    const key = typeof resolved === 'string' ? resolved.trim() : '';
+    if (!key || !enabledInterviewProfile(options, key)) {
+      throw new PlaybookInterviewProfilePublishError(project, key || raw || '(blank)');
+    }
+  }
 }
 
 function toDraft(row: VersionRow): PlaybookDefinitionDraft {
@@ -306,6 +365,8 @@ export async function createDefinition(
         project: input.project,
         name: input.name.trim(),
         description: input.description ?? null,
+        templateKey: input.templateKey ?? null,
+        templateVersion: input.templateVersion ?? null,
         createdBy: input.createdByUserId,
       })
       .returning();
@@ -436,6 +497,11 @@ export async function publishDraft(
     );
     assertGraphWithinGuards(draft.graph);
     assertCursorAgentsUseReadOnlyMcp(draft.graph);
+    await assertInterviewProfilesForPublish(
+      input.project,
+      draft.graph,
+      input.sampleRunInput,
+    );
 
     const publishedAt = new Date().toISOString();
     const [advancedDraft] = await tx

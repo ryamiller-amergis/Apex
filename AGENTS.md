@@ -38,7 +38,7 @@ Apex is an internal product-building and project-management platform. It central
 | ADO Export | — | — | `azureDevOps.ts` | `CreateAdoItemsModal.tsx` |
 | Ask Apex (this agent) | — | `.cursor/skills/app-knowledge/SKILL.md` | `askApexService.ts` | `AskApexChat.tsx` |
 | User Profile | — | — | `profileService.ts`, `avatarResolverService.ts` | `ProfilePage.tsx`, `AvatarEditor.tsx`, `UserMenu.tsx` |
-| Playbook Orchestration | `design-docs/playbook-epic-1-phase-0.plan.md`, `design-docs/playbook-demo-runbook.md` | — | `playbookRunService.ts`, `playbookSteps/`, `playbookTerminalEventService.ts`, `playbookReconciliationService.ts` | `PlaybookStatusView.tsx`, `PlaybookRunList.tsx`, `PlaybookGateReviewPanel.tsx` |
+| Playbook Orchestration | `design-docs/playbook-epic-1-phase-0.plan.md`, `design-docs/playbook-demo-runbook.md`, `design-docs/reusable-playbook-interview-step.md` | `.cursor/skills/interview-orchestrator/SKILL.md`, `.cursor/skills/interview-requirements-review/SKILL.md`, `.cursor/skills/interview-brief-draft/SKILL.md` | `playbookRunService.ts`, `playbookSteps/`, `playbookTerminalEventService.ts`, `playbookReconciliationService.ts` | `PlaybookStatusView.tsx`, `PlaybookRunList.tsx`, `PlaybookGateReviewPanel.tsx` |
 
 ## Key Terminology
 

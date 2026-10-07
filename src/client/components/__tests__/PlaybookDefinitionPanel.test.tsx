@@ -28,6 +28,8 @@ const DETAIL: PlaybookDefinitionDetail = {
     project: PROJECT,
     name: 'Release checks',
     description: 'Checks a release',
+    templateKey: null,
+    templateVersion: null,
     createdBy: 'author',
     createdAt: '2026-09-22T10:00:00.000Z',
     updatedAt: '2026-09-22T12:00:00.000Z',

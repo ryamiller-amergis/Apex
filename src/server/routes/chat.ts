@@ -38,6 +38,7 @@ import type {
 import type { ThreadAccess } from '../services/threadAccessService';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import { requirePermission } from '../middleware/rbac';
+import { prepareAssistedInterviewTurn } from '../services/interviewOrchestratorService';
 import { writeSseEvent, startSseHeartbeat } from '../utils/sseResponse';
 import {
   replayRunEvents,
@@ -207,6 +208,13 @@ export function buildRunStatusResponse(
 interface ThreadRequest extends Request {
   thread?: ChatThread;
   threadAccess?: ThreadAccess;
+}
+
+function isMultiAgentAssistedThread(thread: ChatThread): boolean {
+  const kickoff = thread.kickoff as ChatThread['kickoff'] & {
+    playbookInterview?: { snapshot?: { mode?: string } };
+  };
+  return kickoff.playbookInterview?.snapshot?.mode === 'multi_agent_assisted';
 }
 
 class HttpError extends Error {
@@ -679,9 +687,29 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
     attachmentCount: String(attachments.length),
   });
   res.status(202).json({ ok: true });
-  sendMessage(threadId, body.text ?? '', body.model, attachments, {
-    turnSkill,
-  })
+  const deliver = async (): Promise<void> => {
+    let internalContext: string | undefined;
+    if (isMultiAgentAssistedThread(thread)) {
+      try {
+        const prepared = await prepareAssistedInterviewTurn({
+          mainThreadId: threadId,
+          answerText: body.text ?? '',
+          specialists: ['requirements'],
+        });
+        if (prepared.internalContext) internalContext = prepared.internalContext;
+      } catch (err: unknown) {
+        console.error(
+          `[chat] assisted interview preparation failed for thread ${threadId}:`,
+          errorMessage(err),
+        );
+      }
+    }
+    await sendMessage(threadId, body.text ?? '', body.model, attachments, {
+      turnSkill,
+      ...(internalContext ? { internalContext } : {}),
+    });
+  };
+  void deliver()
     .finally(releaseAdoWriteTurn)
     .catch((err: unknown) => {
       console.error(`[chat] sendMessage error for thread ${threadId}:`, errorMessage(err));

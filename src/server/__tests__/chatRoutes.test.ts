@@ -119,6 +119,11 @@ jest.mock('../services/groupService', () => ({
 
 const mockResolveThreadAccess = jest.fn();
 const mockCanWriteThread = jest.fn();
+const mockPrepareAssistedInterviewTurn = jest.fn().mockResolvedValue({ internalContext: null });
+
+jest.mock('../services/interviewOrchestratorService', () => ({
+  prepareAssistedInterviewTurn: (...args: unknown[]) => mockPrepareAssistedInterviewTurn(...args),
+}));
 
 jest.mock('../services/threadAccessService', () => ({
   resolveThreadAccess: (...args: unknown[]) => mockResolveThreadAccess(...args),
@@ -1181,5 +1186,113 @@ describe('POST /api/chat/threads/:id/messages — cached grounding delegation', 
     expect(res.status).toBe(202);
     expect(mockGetAdoTokenForUser).not.toHaveBeenCalled();
     expect(mockRegisterChatAdoWriteTurn).not.toHaveBeenCalled();
+  });
+});
+
+describe('VT-ASSIST-6 — assisted messages stay 202 and prepare before sendMessage', () => {
+  const threadId = 'assisted-interview-thread';
+  const baText = 'Cashiers need a faster close.';
+  const idleThread = {
+    id: threadId,
+    userId: 'user-1',
+    kickoff: {
+      project: 'Apex',
+      repo: 'AI-Pilot',
+      skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+    },
+    messages: [],
+    status: 'idle',
+    workspaceDir: '/tmp/ws',
+    flagged: false,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    lastActivityAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  function threadWithMode(mode: 'human_led' | 'multi_agent_assisted' | null) {
+    return {
+      ...idleThread,
+      kickoff: {
+        ...idleThread.kickoff,
+        ...(mode
+          ? { playbookInterview: { snapshot: { mode } } }
+          : {}),
+      },
+    };
+  }
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+    mockPrepareAssistedInterviewTurn.mockResolvedValue({ internalContext: null });
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: idleThread,
+      access: 'owner',
+    });
+    mockCanWriteThread.mockResolvedValue(true);
+    mockChatService.sendMessage.mockResolvedValue(undefined);
+  });
+
+  it('returns 202 before preparation finishes, then sends the exact BA text with internal context', async () => {
+    let release: (value: { internalContext: string }) => void = () => {};
+    mockPrepareAssistedInterviewTurn.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: threadWithMode('multi_agent_assisted'),
+      access: 'owner',
+    });
+
+    const res = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: baText });
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ ok: true });
+    expect(mockPrepareAssistedInterviewTurn).toHaveBeenCalledWith({
+      mainThreadId: threadId,
+      answerText: baText,
+      specialists: ['requirements'],
+    });
+    expect(mockChatService.sendMessage).not.toHaveBeenCalled();
+
+    const internalContext = [
+      '<<<INTERNAL_SPECIALIST_CONTEXT>>>',
+      '{"findings":["Close is slow"]}',
+      '<<<END_INTERNAL_SPECIALIST_CONTEXT>>>',
+    ].join('\n');
+    release({ internalContext });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(mockChatService.sendMessage).toHaveBeenCalledTimes(1);
+    expect(mockChatService.sendMessage).toHaveBeenCalledWith(
+      threadId,
+      baText,
+      undefined,
+      [],
+      { turnSkill: undefined, internalContext },
+    );
+  });
+
+  it('sends an ordinary or human-led message immediately and does not prepare a review', async () => {
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: threadWithMode('human_led'),
+      access: 'owner',
+    });
+
+    const res = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: baText });
+
+    expect(res.status).toBe(202);
+    expect(mockPrepareAssistedInterviewTurn).not.toHaveBeenCalled();
+    expect(mockChatService.sendMessage).toHaveBeenCalledWith(
+      threadId,
+      baText,
+      undefined,
+      [],
+      { turnSkill: undefined },
+    );
   });
 });

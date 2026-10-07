@@ -83,6 +83,7 @@ function suspensionOf(steps: PlaybookStepRun[]): PlaybookSuspensionDetail | null
     // machine is a property the step type declares, and duplicating it would let the two drift.
     reason: suspendReasonForStepType(parked.stepType),
     deadline: parked.expiresAt,
+    actionId: parked.stepType === 'interview' ? parked.resumeToken : null,
   };
 }
 

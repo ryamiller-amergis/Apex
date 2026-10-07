@@ -27,6 +27,16 @@ export const PlaybookSuspensionDetail: React.FC<PlaybookSuspensionDetailProps> =
         {suspendReasonLabel(suspension.reason)}
       </p>
 
+      {suspension.reason === 'interview' && suspension.actionId && (
+        <a
+          className={styles.suspensionAction}
+          href={`/backlog/interview/${suspension.actionId}`}
+          {...{ 'data-testid': 'playbook-open-interview' }}
+        >
+          Open interview
+        </a>
+      )}
+
       {deadline ? (
         <p className={styles.suspensionDeadline} {...{ 'data-testid': 'playbook-suspension-deadline' }}>
           {/*

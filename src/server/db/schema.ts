@@ -68,11 +68,18 @@ import type {
   ExcalidrawScene,
 } from '../../shared/types/diagram';
 import type {
+  InterviewProfileSnapshot,
+  InterviewStepMode,
   PlaybookGraph,
   PlaybookRunStatus,
   PlaybookStepRunStatus,
   PlaybookVersionStatus,
 } from '../../shared/types/playbook';
+import type {
+  InterviewBriefSections,
+  InterviewBriefStatus,
+  InterviewSpecialistReviewStatus,
+} from '../../shared/types/interview';
 import type { ApiKeyCadence, ApiKeyScope } from '../../shared/types/apiKey';
 import type { SafeTraceDetails, TraceEventType } from '../../shared/types/observability';
 import type {
@@ -504,9 +511,44 @@ export const interviews = pgTable('interviews', {
   prototypeStageEnabled: boolean('prototype_stage_enabled').notNull().default(true),
   testCasesEnabled: boolean('test_cases_enabled').notNull().default(true),
   status: text('status').notNull().default('in_progress'),
+  /** Set together when a Playbook interview step started this interview. Ordinary interviews leave them null. */
+  playbookRunId: uuid('playbook_run_id').references(() => playbookRuns.id, { onDelete: 'restrict' }),
+  playbookStepRunId: uuid('playbook_step_run_id').references(() => playbookStepRuns.id, { onDelete: 'restrict' }),
+  playbookInterviewMode: text('playbook_interview_mode').$type<InterviewStepMode>(),
+  playbookProfileKey: text('playbook_profile_key'),
+  playbookProfileSnapshot: jsonb('playbook_profile_snapshot').$type<InterviewProfileSnapshot>(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
-});
+}, (t) => ({
+  playbookStepRunUq: uniqueIndex('uq_interviews_playbook_step_run')
+    .on(t.playbookStepRunId)
+    .where(sql`${t.playbookStepRunId} IS NOT NULL`),
+  playbookRunIdx: index('idx_interviews_playbook_run')
+    .on(t.playbookRunId)
+    .where(sql`${t.playbookRunId} IS NOT NULL`),
+  playbookInterviewModeCheck: check(
+    'interviews_playbook_interview_mode_check',
+    sql`${t.playbookInterviewMode} IS NULL OR ${t.playbookInterviewMode} IN ('human_led', 'multi_agent_assisted')`,
+  ),
+  playbookLinkageCheck: check(
+    'interviews_playbook_linkage_check',
+    sql`(
+      (${t.playbookRunId} IS NULL
+        AND ${t.playbookStepRunId} IS NULL
+        AND ${t.playbookInterviewMode} IS NULL
+        AND ${t.playbookProfileKey} IS NULL
+        AND ${t.playbookProfileSnapshot} IS NULL)
+      OR
+      (${t.playbookRunId} IS NOT NULL
+        AND ${t.playbookStepRunId} IS NOT NULL
+        AND ${t.playbookInterviewMode} IS NOT NULL
+        AND ${t.playbookProfileKey} IS NOT NULL
+        AND length(btrim(${t.playbookProfileKey})) > 0
+        AND ${t.playbookProfileSnapshot} IS NOT NULL
+        AND jsonb_typeof(${t.playbookProfileSnapshot}) = 'object')
+    )`,
+  ),
+}));
 
 /** Typed Interview ↔ ADR grounding links (FEAT-001). */
 export const interviewAdrLinks = pgTable('interview_adr_links', {
@@ -530,6 +572,108 @@ export const interviewDesignModuleLinks = pgTable('interview_design_module_links
 }, (t) => ({
   interviewModuleUq: unique('uq_interview_design_module_links_interview_module').on(t.interviewId, t.designModuleId),
   interviewIdx: index('idx_interview_design_module_links_interview_id').on(t.interviewId),
+}));
+
+function briefSectionsCheck(sections: AnyPgColumn) {
+  return sql`
+    jsonb_typeof(${sections}) = 'object'
+    AND ${sections} ?& ARRAY['problemAndOutcome','users','scope','businessRules','scenarios','acceptanceCriteria','assumptions','unresolvedItems']
+    AND (${sections} - ARRAY['problemAndOutcome','users','scope','businessRules','scenarios','acceptanceCriteria','assumptions','unresolvedItems']) = '{}'::jsonb
+    AND jsonb_typeof(${sections} -> 'problemAndOutcome') = 'string'
+    AND jsonb_typeof(${sections} -> 'users') = 'string'
+    AND jsonb_typeof(${sections} -> 'scope') = 'string'
+    AND jsonb_typeof(${sections} -> 'businessRules') = 'string'
+    AND jsonb_typeof(${sections} -> 'scenarios') = 'string'
+    AND jsonb_typeof(${sections} -> 'acceptanceCriteria') = 'string'
+    AND jsonb_typeof(${sections} -> 'assumptions') = 'string'
+    AND jsonb_typeof(${sections} -> 'unresolvedItems') = 'array'
+  `;
+}
+
+/** Current brief for an interview. Revisions keep every prior save. */
+export const interviewBriefs = pgTable('interview_briefs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  interviewId: uuid('interview_id').notNull().references(() => interviews.id, { onDelete: 'cascade' }),
+  status: text('status').$type<InterviewBriefStatus>().notNull().default('draft'),
+  version: integer('version').notNull(),
+  sections: jsonb('sections').$type<InterviewBriefSections>().notNull(),
+  approvedBy: text('approved_by').references(() => appUsers.oid, { onDelete: 'restrict' }),
+  approvedAt: timestamp('approved_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  interviewUq: unique('uq_interview_briefs_interview').on(t.interviewId),
+  statusCheck: check(
+    'interview_briefs_status_check',
+    sql`${t.status} IN ('draft', 'approved')`,
+  ),
+  versionCheck: check('interview_briefs_version_check', sql`${t.version} >= 1`),
+  approvalCheck: check(
+    'interview_briefs_approval_check',
+    sql`(
+      (${t.status} = 'draft' AND ${t.approvedBy} IS NULL AND ${t.approvedAt} IS NULL)
+      OR
+      (${t.status} = 'approved' AND ${t.approvedBy} IS NOT NULL AND ${t.approvedAt} IS NOT NULL)
+    )`,
+  ),
+  sectionsCheck: check('interview_briefs_sections_check', briefSectionsCheck(t.sections)),
+}));
+
+/** Immutable copy of the brief at each save and at approval. No updated_at. */
+export const interviewBriefRevisions = pgTable('interview_brief_revisions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  briefId: uuid('brief_id').notNull().references(() => interviewBriefs.id, { onDelete: 'cascade' }),
+  interviewId: uuid('interview_id').notNull().references(() => interviews.id, { onDelete: 'cascade' }),
+  version: integer('version').notNull(),
+  status: text('status').$type<InterviewBriefStatus>().notNull(),
+  sections: jsonb('sections').$type<InterviewBriefSections>().notNull(),
+  createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  briefVersionUq: unique('uq_interview_brief_revisions_brief_version').on(t.briefId, t.version),
+  interviewIdx: index('idx_interview_brief_revisions_interview').on(t.interviewId, t.version),
+  statusCheck: check(
+    'interview_brief_revisions_status_check',
+    sql`${t.status} IN ('draft', 'approved')`,
+  ),
+  versionCheck: check('interview_brief_revisions_version_check', sql`${t.version} >= 1`),
+  sectionsCheck: check('interview_brief_revisions_sections_check', briefSectionsCheck(t.sections)),
+}));
+
+/** One row per specialist attempt. `result` is structured JSON; chain-of-thought is not stored. */
+export const interviewSpecialistReviews = pgTable('interview_specialist_reviews', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  interviewId: uuid('interview_id').notNull().references(() => interviews.id, { onDelete: 'cascade' }),
+  briefVersion: integer('brief_version').notNull(),
+  specialist: text('specialist').notNull(),
+  status: text('status').$type<InterviewSpecialistReviewStatus>().notNull(),
+  result: jsonb('result').$type<Record<string, unknown>>().notNull(),
+  model: text('model'),
+  durationMs: integer('duration_ms').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  interviewVersionIdx: index('idx_interview_specialist_reviews_interview_version').on(t.interviewId, t.briefVersion),
+  specialistIdx: index('idx_interview_specialist_reviews_specialist').on(t.specialist),
+  specialistCheck: check(
+    'interview_specialist_reviews_specialist_check',
+    sql`length(btrim(${t.specialist})) > 0`,
+  ),
+  statusCheck: check(
+    'interview_specialist_reviews_status_check',
+    sql`${t.status} IN ('succeeded', 'failed')`,
+  ),
+  resultCheck: check(
+    'interview_specialist_reviews_result_check',
+    sql`jsonb_typeof(${t.result}) = 'object'`,
+  ),
+  briefVersionCheck: check(
+    'interview_specialist_reviews_brief_version_check',
+    sql`${t.briefVersion} >= 1`,
+  ),
+  durationCheck: check(
+    'interview_specialist_reviews_duration_check',
+    sql`${t.durationMs} >= 0`,
+  ),
 }));
 
 export const adrs = pgTable('adrs', {
@@ -670,6 +814,20 @@ export const interviewsRelations = relations(interviews, ({ one, many }) => ({
   prds: many(prds),
   adrLinks: many(interviewAdrLinks),
   designModuleLinks: many(interviewDesignModuleLinks),
+  playbookRun: one(playbookRuns, {
+    fields: [interviews.playbookRunId],
+    references: [playbookRuns.id],
+  }),
+  playbookStepRun: one(playbookStepRuns, {
+    fields: [interviews.playbookStepRunId],
+    references: [playbookStepRuns.id],
+  }),
+  brief: one(interviewBriefs, {
+    fields: [interviews.id],
+    references: [interviewBriefs.interviewId],
+  }),
+  briefRevisions: many(interviewBriefRevisions),
+  specialistReviews: many(interviewSpecialistReviews),
 }));
 
 export const interviewAdrLinksRelations = relations(interviewAdrLinks, ({ one }) => ({
@@ -691,6 +849,32 @@ export const interviewDesignModuleLinksRelations = relations(interviewDesignModu
   designModule: one(designModules, {
     fields: [interviewDesignModuleLinks.designModuleId],
     references: [designModules.id],
+  }),
+}));
+
+export const interviewBriefsRelations = relations(interviewBriefs, ({ one, many }) => ({
+  interview: one(interviews, {
+    fields: [interviewBriefs.interviewId],
+    references: [interviews.id],
+  }),
+  revisions: many(interviewBriefRevisions),
+}));
+
+export const interviewBriefRevisionsRelations = relations(interviewBriefRevisions, ({ one }) => ({
+  brief: one(interviewBriefs, {
+    fields: [interviewBriefRevisions.briefId],
+    references: [interviewBriefs.id],
+  }),
+  interview: one(interviews, {
+    fields: [interviewBriefRevisions.interviewId],
+    references: [interviews.id],
+  }),
+}));
+
+export const interviewSpecialistReviewsRelations = relations(interviewSpecialistReviews, ({ one }) => ({
+  interview: one(interviews, {
+    fields: [interviewSpecialistReviews.interviewId],
+    references: [interviews.id],
   }),
 }));
 
@@ -2843,6 +3027,10 @@ export const playbookDefinitions = pgTable('playbook_definitions', {
   project: text('project').notNull(),
   name: text('name').notNull(),
   description: text('description'),
+  /** Null for definitions that were not installed from a shipped template. */
+  templateKey: text('template_key'),
+  /** Null when templateKey is null. Monotonic shipped template version at install. */
+  templateVersion: integer('template_version'),
   createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -2854,6 +3042,21 @@ export const playbookDefinitions = pgTable('playbook_definitions', {
     'playbook_definitions_name_not_blank',
     sql`length(btrim(${t.name})) > 0`,
   ),
+  templateMetadata: check(
+    'playbook_definitions_template_metadata_check',
+    sql`(
+      (${t.templateKey} IS NULL AND ${t.templateVersion} IS NULL)
+      OR (
+        ${t.templateKey} IS NOT NULL
+        AND length(btrim(${t.templateKey})) > 0
+        AND ${t.templateVersion} IS NOT NULL
+        AND ${t.templateVersion} >= 1
+      )
+    )`,
+  ),
+  templateKeyUq: uniqueIndex('uq_playbook_definitions_project_template')
+    .on(t.project, t.templateKey)
+    .where(sql`${t.templateKey} IS NOT NULL`),
 }));
 
 export const playbookDefinitionVersions = pgTable('playbook_definition_versions', {
@@ -3001,6 +3204,7 @@ export const playbookRunsRelations = relations(playbookRuns, ({ one, many }) => 
     references: [playbookDefinitionVersions.id],
   }),
   steps: many(playbookStepRuns),
+  interviews: many(interviews),
 }));
 
 export const playbookStepRunsRelations = relations(playbookStepRuns, ({ one, many }) => ({
@@ -3009,6 +3213,7 @@ export const playbookStepRunsRelations = relations(playbookStepRuns, ({ one, man
     references: [playbookRuns.id],
   }),
   gateApprovers: many(playbookGateApprovers),
+  interviews: many(interviews),
 }));
 
 export const playbookGateApproversRelations = relations(playbookGateApprovers, ({ one }) => ({

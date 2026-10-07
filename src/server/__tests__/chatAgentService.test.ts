@@ -225,6 +225,21 @@ describe('turn skill prompts', () => {
     );
   });
 
+  it('VT-ASSIST-5 keeps the visible user request exact when internal specialist context is added to the prompt', () => {
+    const baText = 'Cashiers need a faster close.';
+    const internalContext = [
+      '<<<INTERNAL_SPECIALIST_CONTEXT>>>',
+      '{"findings":["Close is slow"]}',
+      '<<<END_INTERNAL_SPECIALIST_CONTEXT>>>',
+    ].join('\n');
+
+    const prompt = buildTurnPrompt(baText, undefined, internalContext);
+
+    expect(prompt.split('User request:\n')[1]).toBe(baText);
+    expect(prompt).toContain(internalContext);
+    expect(prompt.indexOf(internalContext)).toBeLessThan(prompt.indexOf('User request:\n'));
+  });
+
   it('routes only MCP-dependent skill content away from the interactive actor', () => {
     expect(
       interactivePromptRequiresInProcessMcp(
@@ -1769,6 +1784,120 @@ describe('document assistant MCP wiring', () => {
         'https://interactive.test/dispatch',
         expect.objectContaining({ method: 'POST' })
       );
+    } finally {
+      global.fetch = originalFetch;
+      delete process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL;
+      mockIsFeatureEnabled.mockReset();
+      mockIsFeatureEnabled.mockResolvedValue(false);
+      mockInteractiveWorkflowRoute.mockReset();
+      mockEnqueueAgentRun.mockReset();
+      await closeThread(thread.id);
+      mockCallerGroundingStart.mockReset();
+      mockResolveConnectionProfile.mockReset();
+      mockCallerGroundingSelectionToBinding.mockReset();
+      mockEvaluateBindingContinuity.mockReset();
+    }
+  });
+
+  it('VT-ASSIST-5 persists the BA text and puts specialist context only in the model prompt', async () => {
+    const { insertMessage: mockPgInsertMessage } = jest.requireMock(
+      '../services/chatThreadRepository'
+    ) as {
+      insertMessage: jest.Mock;
+    };
+    const originalFetch = global.fetch;
+    const baText = 'Cashiers need a faster close.';
+    const internalContext = [
+      '<<<INTERNAL_SPECIALIST_CONTEXT>>>',
+      '{"findings":["Close is slow"]}',
+      '<<<END_INTERNAL_SPECIALIST_CONTEXT>>>',
+    ].join('\n');
+    process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL = 'https://interactive.test';
+    mockIsFeatureEnabled.mockImplementation(
+      async (key: string) => key === 'ai-runs-interactive'
+    );
+    mockPgInsertMessage.mockClear();
+    mockEnqueueAgentRun.mockResolvedValue({ runId: 'interactive-run-assist' });
+    mockInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        dispatchToActor(dispatch: {
+          runId: string;
+          dispatchMessageId: string;
+        }): Promise<void>;
+      }) => {
+        await input.dispatchToActor({
+          runId: 'interactive-run-assist',
+          dispatchMessageId: 'dispatch-assist',
+        });
+        return {
+          route: 'actor',
+          runId: 'interactive-run-assist',
+          dispatchMessageId: 'dispatch-assist',
+          slot: 'reserved',
+        };
+      }
+    );
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ accepted: true }),
+    }) as unknown as typeof fetch;
+    const repoReader: RepoReader = {
+      identity: {
+        provider: 'github',
+        project: 'Apex',
+        repo: 'AI-Pilot',
+        sha: 'interactive-sha',
+      },
+      readFile: jest.fn().mockResolvedValue('# repository context'),
+      listDir: jest.fn().mockResolvedValue([]),
+      searchCode: jest.fn().mockResolvedValue([]),
+    };
+    mockCallerGroundingStart.mockResolvedValue({
+      mode: 'local',
+      cwd: '/tmp/interactive-checkout',
+      profileId: 'interactive-profile' as GroundingProfileId,
+      resolvedSha: 'interactive-sha',
+      nativeReads: true,
+      workingTree: true,
+      release: jest.fn().mockResolvedValue(undefined),
+    });
+    mockResolveConnectionProfile.mockResolvedValue(repoReader);
+    mockCallerGroundingSelectionToBinding.mockReturnValue({
+      mode: 'local',
+      sha: 'interactive-sha',
+    });
+    mockEvaluateBindingContinuity.mockReturnValue({
+      decision: 'recreate',
+      reason: 'legacy-binding-missing',
+    });
+
+    const thread = await createThread('developer-1', baseKickoff(), {
+      skipAutoKickoff: true,
+    });
+
+    try {
+      await sendMessage(thread.id, baText, undefined, [], { internalContext });
+
+      expect(mockPgInsertMessage).toHaveBeenCalledTimes(1);
+      const persisted = mockPgInsertMessage.mock.calls[0][1] as {
+        role: string;
+        text: string;
+        hidden?: boolean;
+      };
+      expect(persisted.role).toBe('user');
+      expect(persisted.text).toBe(baText);
+      expect(persisted.hidden).toBeUndefined();
+      expect(persisted.text).not.toContain('INTERNAL_SPECIALIST_CONTEXT');
+      expect(mockEnqueueAgentRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          snapshot: expect.objectContaining({
+            prompt: expect.stringContaining(internalContext),
+          }),
+        })
+      );
+      const prompt = mockEnqueueAgentRun.mock.calls[0][0].snapshot.prompt as string;
+      expect(prompt.split('User request:\n')[1]).toContain(baText);
+      expect(prompt.split('User request:\n')[1]).not.toContain('INTERNAL_SPECIALIST_CONTEXT');
     } finally {
       global.fetch = originalFetch;
       delete process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL;

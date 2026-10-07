@@ -10,6 +10,8 @@ import type {
   DesignDocStatus,
   DesignDocSummary,
   Interview,
+  InterviewBriefRecord,
+  InterviewBriefSections,
   InterviewStatus,
   InterviewSummary,
   Prd,
@@ -68,6 +70,61 @@ export function useInterview(id: string | null) {
     queryFn: () => apiFetch(`/api/interviews/${id}`),
     enabled: !!id,
     staleTime: 30_000,
+  });
+}
+
+export function useInterviewBrief(interviewId: string | null, enabled = true) {
+  return useQuery<InterviewBriefRecord | null>({
+    queryKey: ['interview-brief', interviewId],
+    queryFn: () => apiFetch(`/api/interviews/${interviewId}/brief`),
+    enabled: enabled && !!interviewId,
+    staleTime: 30_000,
+  });
+}
+
+export function useSaveInterviewBrief() {
+  const qc = useQueryClient();
+  return useMutation<
+    InterviewBriefRecord,
+    Error,
+    { interviewId: string; sections: InterviewBriefSections }
+  >({
+    mutationFn: ({ interviewId, sections }) =>
+      apiFetch(`/api/interviews/${interviewId}/brief`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sections }),
+      }),
+    onSuccess: (brief) => {
+      qc.setQueryData(['interview-brief', brief.interviewId], brief);
+    },
+  });
+}
+
+export function useDraftInterviewBrief() {
+  const qc = useQueryClient();
+  return useMutation<InterviewBriefRecord, Error, string>({
+    mutationFn: (interviewId) =>
+      apiFetch(`/api/interviews/${interviewId}/brief/draft`, { method: 'POST' }),
+    onSuccess: (brief) => {
+      qc.setQueryData(['interview-brief', brief.interviewId], brief);
+    },
+  });
+}
+
+export function useApproveInterviewBrief() {
+  const qc = useQueryClient();
+  return useMutation<
+    { version: number; resumed: boolean },
+    Error,
+    string
+  >({
+    mutationFn: (interviewId) =>
+      apiFetch(`/api/interviews/${interviewId}/brief/approve`, { method: 'POST' }),
+    onSuccess: (_result, interviewId) => {
+      void qc.invalidateQueries({ queryKey: ['interview-brief', interviewId] });
+      void qc.invalidateQueries({ queryKey: ['interview', interviewId] });
+    },
   });
 }
 

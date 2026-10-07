@@ -124,6 +124,17 @@ export interface QuickSkillPill {
 }
 
 export interface InterviewSkillOption {
+  /**
+   * Stable slug unique within the project skill configuration.
+   * Optional so JSON stored before keys existed still loads.
+   * Playbook interview resolution requires a non-blank key at runtime.
+   */
+  key?: string;
+  /**
+   * When false, Playbook resolution treats the profile as unavailable.
+   * Omitted means enabled, so stored options stay usable.
+   */
+  enabled?: boolean;
   path: string;
   friendlyName: string;
   /** Model override for this interview skill; null/undefined uses project default. */

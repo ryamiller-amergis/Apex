@@ -28,11 +28,13 @@ import {
   assertSkillAllowed,
   createStepTypeRegistry,
   getStepTypeDescriptor,
+  isAgentStepType,
   isRegisteredStepType,
   listStepTypeDescriptors,
   requiresInitiatorPermissionRecheck,
   resolveDeadlineMs,
   sideEffectOfStepType,
+  suspendReasonForStepType,
   validateStepTypeDescriptor,
   validateStepTypeRegistry,
 } from '../services/playbookSteps/registry';
@@ -124,6 +126,7 @@ describe('TBI-016 VT-02 — the three production step types', () => {
       'branch',
       'cursor-agent',
       'ingest-artifact',
+      'interview',
       'notify',
     ]);
   });
@@ -523,5 +526,113 @@ describe('FEAT-008 S1 — the half of the contract the compiler holds', () => {
 
     expect(noPermissions.stepType).toBe('compile-time-empty');
     expect(staleClassification.stepType).toBe('compile-time-none');
+  });
+});
+
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+describe('VT-STEP-1 — interview is a suspending non-agent writes-apex step', () => {
+  it('requires playbooks:run, suspends for interview, and defaults to 7 days', () => {
+    const interview = getStepTypeDescriptor('interview');
+
+    expect(listStepTypeDescriptors().map((d) => d.stepType)).toContain('interview');
+    expect(interview.canSuspend).toBe(true);
+    expect(interview.isAgentStep).toBe(false);
+    expect(isAgentStepType('interview')).toBe(false);
+    expect(interview.sideEffect).toBe('writes-apex');
+    expect(interview.requiredPermissions).toEqual(['playbooks:run']);
+    expect(interview.suspendReason).toBe('interview');
+    expect(suspendReasonForStepType('interview')).toBe('interview');
+    expect(interview.deadlineOverridable).toBe(true);
+    expect(interview.defaultDeadlineMs).toBe(7 * DAY_MS);
+    expect(resolveDeadlineMs('interview')).toBe(7 * DAY_MS);
+  });
+});
+
+describe('VT-STEP-2 — interview config accepts mode, profile key, and a bounded deadline', () => {
+  function inputSchema() {
+    return getStepTypeDescriptor('interview').inputSchema;
+  }
+
+  it('accepts both modes, a nonblank profile key, and a deadline from 1 hour through 14 days', () => {
+    expect(inputSchema().safeParse({ mode: 'human_led', profileKey: 'ba-discovery' }).success).toBe(
+      true
+    );
+    expect(
+      inputSchema().safeParse({
+        mode: 'multi_agent_assisted',
+        profileKey: 'ba-discovery',
+        deadlineMs: HOUR_MS,
+      }).success
+    ).toBe(true);
+    expect(
+      inputSchema().safeParse({
+        mode: 'human_led',
+        profileKey: 'ba-discovery',
+        deadlineMs: 14 * DAY_MS,
+      }).success
+    ).toBe(true);
+    expect(resolveDeadlineMs('interview', HOUR_MS)).toBe(HOUR_MS);
+    expect(resolveDeadlineMs('interview', 14 * DAY_MS)).toBe(14 * DAY_MS);
+  });
+
+  it('rejects a bad mode, a blank profile key, and a deadline outside 1 hour through 14 days', () => {
+    expect(inputSchema().safeParse({ mode: 'assisted', profileKey: 'ba-discovery' }).success).toBe(
+      false
+    );
+    expect(inputSchema().safeParse({ profileKey: 'ba-discovery' }).success).toBe(false);
+    expect(inputSchema().safeParse({ mode: 'human_led' }).success).toBe(false);
+    expect(inputSchema().safeParse({ mode: 'human_led', profileKey: '' }).success).toBe(false);
+    expect(inputSchema().safeParse({ mode: 'human_led', profileKey: '   ' }).success).toBe(false);
+
+    for (const deadlineMs of [HOUR_MS - 1, 14 * DAY_MS + 1, 0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(
+        inputSchema().safeParse({ mode: 'human_led', profileKey: 'ba-discovery', deadlineMs }).success
+      ).toBe(false);
+    }
+
+    expect(() => resolveDeadlineMs('interview', HOUR_MS - 1)).toThrow(PlaybookStepTypeError);
+    expect(() => resolveDeadlineMs('interview', 14 * DAY_MS + 1)).toThrow(/1 hour through 14 days/);
+  });
+});
+
+describe('VT-STEP-3 — interview output names the approved brief', () => {
+  function outputSchema() {
+    return getStepTypeDescriptor('interview').outputSchema;
+  }
+
+  const valid = {
+    interviewId: 'interview-1',
+    briefId: 'brief-1',
+    briefVersion: 2,
+    approvedBy: 'analyst-1',
+    approvedAt: '2026-10-07T16:00:00.000Z',
+    unresolvedCount: 0,
+  };
+
+  it('accepts an interview id, brief id, positive integer version, approver, time, and count', () => {
+    expect(outputSchema().safeParse(valid).success).toBe(true);
+    expect(outputSchema().safeParse({ ...valid, unresolvedCount: 4 }).success).toBe(true);
+  });
+
+  it('rejects a missing id, a non-positive version, an unreadable time, and a negative count', () => {
+    expect(outputSchema().safeParse({ ...valid, interviewId: '' }).success).toBe(false);
+    expect(outputSchema().safeParse({ ...valid, briefId: '' }).success).toBe(false);
+    expect(outputSchema().safeParse({ ...valid, briefVersion: 0 }).success).toBe(false);
+    expect(outputSchema().safeParse({ ...valid, briefVersion: -1 }).success).toBe(false);
+    expect(outputSchema().safeParse({ ...valid, briefVersion: 1.5 }).success).toBe(false);
+    expect(outputSchema().safeParse({ ...valid, approvedBy: '' }).success).toBe(false);
+    expect(outputSchema().safeParse({ ...valid, approvedAt: 'whenever' }).success).toBe(false);
+    expect(outputSchema().safeParse({ ...valid, unresolvedCount: -1 }).success).toBe(false);
+
+    const { interviewId: _interviewId, ...withoutInterview } = valid;
+    const { briefId: _briefId, ...withoutBrief } = valid;
+    const { approvedBy: _approvedBy, ...withoutApprover } = valid;
+    const { approvedAt: _approvedAt, ...withoutTime } = valid;
+    expect(outputSchema().safeParse(withoutInterview).success).toBe(false);
+    expect(outputSchema().safeParse(withoutBrief).success).toBe(false);
+    expect(outputSchema().safeParse(withoutApprover).success).toBe(false);
+    expect(outputSchema().safeParse(withoutTime).success).toBe(false);
   });
 });

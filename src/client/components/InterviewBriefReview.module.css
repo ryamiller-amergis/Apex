@@ -1,0 +1,131 @@
+.panel {
+  margin: 16px 24px;
+  padding: 20px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.header h2 {
+  margin: 0 0 4px;
+  color: var(--text-primary);
+  font-size: 18px;
+}
+
+.header p,
+.field small {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.status {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  color: var(--accent-color);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.field textarea {
+  min-height: 80px;
+  padding: 10px 12px;
+  resize: vertical;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 400;
+}
+
+.field textarea:focus {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+.field textarea:disabled {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  grid-column: 1 / -1;
+  gap: 8px;
+}
+
+.primary,
+.secondary {
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.primary {
+  color: var(--bg-primary);
+  background: var(--accent-color);
+  border: 1px solid var(--accent-color);
+  box-shadow: var(--glow-accent);
+}
+
+.secondary {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+}
+
+.primary:disabled,
+.secondary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.error {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  color: var(--error-color);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--error-color);
+  border-radius: 8px;
+}
+
+.state {
+  margin: 16px 24px;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 800px) {
+  .form {
+    grid-template-columns: 1fr;
+  }
+}

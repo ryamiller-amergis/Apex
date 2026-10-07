@@ -17,6 +17,16 @@ import * as prdService from '../services/prdService';
 
 jest.mock('../services/interviewService');
 jest.mock('../services/prdService');
+jest.mock('../services/interviewBriefService', () => ({
+  getInterviewBrief: jest.fn(),
+  saveInterviewBrief: jest.fn(),
+  approveInterviewBrief: jest.fn(),
+  getApprovedInterviewBriefForPrd: jest.fn().mockResolvedValue(null),
+  formatInterviewBriefForPrd: jest.fn().mockReturnValue('# Approved Interview Brief'),
+}));
+jest.mock('../services/interviewOrchestratorService', () => ({
+  draftInterviewBriefSections: jest.fn(),
+}));
 jest.mock('../services/chatAgentService', () => ({
   readOutputPrd: jest.fn().mockReturnValue(null),
   readOutputBacklog: jest.fn().mockReturnValue(null),
@@ -28,6 +38,7 @@ jest.mock('../services/chatAgentService', () => ({
   createThread: jest.fn().mockResolvedValue({ id: 'thread-mock', kickoff: {} }),
   sendMessage: jest.fn().mockResolvedValue(undefined),
   getThreadAsync: jest.fn().mockResolvedValue(null),
+  updateThreadKickoffTranscript: jest.fn().mockResolvedValue(true),
 }));
 
 jest.mock('../services/designDocService');
@@ -190,12 +201,29 @@ const {
   readOutputBacklog: mockReadOutputBacklog,
   createThread: mockCreateThread,
   sendMessage: mockSendMessage,
+  updateThreadKickoffTranscript: mockUpdateThreadKickoffTranscript,
 } = jest.requireMock('../services/chatAgentService') as {
   readOutputPrd: jest.Mock;
   readOutputBacklog: jest.Mock;
   createThread: jest.Mock;
   sendMessage: jest.Mock;
+  updateThreadKickoffTranscript: jest.Mock;
 };
+
+const {
+  getInterviewBrief: mockGetInterviewBrief,
+  saveInterviewBrief: mockSaveInterviewBrief,
+  approveInterviewBrief: mockApproveInterviewBrief,
+  getApprovedInterviewBriefForPrd: mockGetApprovedInterviewBriefForPrd,
+} = jest.requireMock('../services/interviewBriefService') as {
+  getInterviewBrief: jest.Mock;
+  saveInterviewBrief: jest.Mock;
+  approveInterviewBrief: jest.Mock;
+  getApprovedInterviewBriefForPrd: jest.Mock;
+};
+const { draftInterviewBriefSections: mockDraftInterviewBriefSections } = jest.requireMock(
+  '../services/interviewOrchestratorService',
+) as { draftInterviewBriefSections: jest.Mock };
 
 const { getSkillConfig: mockGetSkillConfig } = jest.requireMock(
   '../services/projectSettingsService',
@@ -673,6 +701,61 @@ describe('DELETE /api/interviews/:id', () => {
   });
 });
 
+describe('Playbook interview brief routes', () => {
+  const brief = {
+    id: 'brief-1',
+    interviewId: 'interview-1',
+    status: 'draft',
+    version: 1,
+    sections: {
+      problemAndOutcome: 'Reduce rework',
+      users: 'Business analysts',
+      scope: 'Discovery',
+      businessRules: '',
+      scenarios: '',
+      acceptanceCriteria: '',
+      assumptions: '',
+      unresolvedItems: [],
+    },
+    approvedBy: null,
+    approvedAt: null,
+  };
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it('loads, saves, and approves the BA brief with the request user', async () => {
+    mockGetInterviewBrief.mockResolvedValue(brief);
+    mockSaveInterviewBrief.mockResolvedValue({ ...brief, version: 2 });
+    mockApproveInterviewBrief.mockResolvedValue({ version: 3, resumed: true });
+    mockDraftInterviewBriefSections.mockResolvedValue(brief.sections);
+
+    const loaded = await request(buildApp()).get('/api/interviews/interview-1/brief');
+    const drafted = await request(buildApp()).post('/api/interviews/interview-1/brief/draft');
+    const saved = await request(buildApp())
+      .put('/api/interviews/interview-1/brief')
+      .send({ sections: brief.sections });
+    const approved = await request(buildApp())
+      .post('/api/interviews/interview-1/brief/approve');
+
+    expect(loaded.status).toBe(200);
+    expect(drafted.status).toBe(200);
+    expect(saved.status).toBe(200);
+    expect(approved.status).toBe(200);
+    expect(mockSaveInterviewBrief).toHaveBeenCalledWith({
+      interviewId: 'interview-1',
+      sections: brief.sections,
+      savedBy: 'user-test',
+    });
+    expect(mockDraftInterviewBriefSections).toHaveBeenCalledWith({
+      interviewId: 'interview-1',
+    });
+    expect(mockApproveInterviewBrief).toHaveBeenCalledWith({
+      interviewId: 'interview-1',
+      approvedBy: 'user-test',
+    });
+  });
+});
+
 // ── GET /api/interviews/prds ───────────────────────────────────────────────────
 
 describe('GET /api/interviews/prds', () => {
@@ -1020,6 +1103,40 @@ describe('POST /api/interviews/:interviewId/prds', () => {
     expect(mockPrdService.routePrdGenerationKickoff).toHaveBeenCalledTimes(1);
 
     finishKickoff();
+  });
+
+  it('uses the approved brief as the canonical PRD transcript for a Playbook interview', async () => {
+    mockInterviewService.getInterview.mockResolvedValue({
+      ...interview,
+      playbookRunId: 'run-1',
+    });
+    mockGetApprovedInterviewBriefForPrd.mockResolvedValue({ id: 'brief-1', status: 'approved' });
+    mockPrdService.createPrd.mockResolvedValue({ prdId: 'prd-new', threadId: 'thread-new' });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/interview-1/prds')
+      .send({ chatThreadId: 'thread-new' });
+
+    expect(res.status).toBe(201);
+    expect(mockUpdateThreadKickoffTranscript).toHaveBeenCalledWith(
+      'thread-new',
+      '# Approved Interview Brief',
+    );
+  });
+
+  it('refuses PRD generation for a Playbook interview until its brief is approved', async () => {
+    mockInterviewService.getInterview.mockResolvedValue({
+      ...interview,
+      playbookRunId: 'run-1',
+    });
+    mockGetApprovedInterviewBriefForPrd.mockResolvedValue(null);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/interview-1/prds')
+      .send({ chatThreadId: 'thread-new' });
+
+    expect(res.status).toBe(409);
+    expect(mockPrdService.createPrd).not.toHaveBeenCalled();
   });
 
   it('returns 404 when interview does not exist', async () => {

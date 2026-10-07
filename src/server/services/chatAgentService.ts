@@ -3079,6 +3079,17 @@ export function updateThreadKickoffContext(
   persistThread(state.thread);
 }
 
+export async function updateThreadKickoffTranscript(
+  threadId: string,
+  transcript: string,
+): Promise<boolean> {
+  const state = await ensureThreadState(threadId);
+  if (!state) return false;
+  state.thread.kickoff = { ...state.thread.kickoff, transcript };
+  await pgUpsertThread(state.thread);
+  return true;
+}
+
 /**
  * Mark an in-memory thread as interview-backed, extending its idle timeout.
  * Call this after linking a thread to an interviews row so the longer timeout
@@ -4012,6 +4023,8 @@ interface InteractiveDispatchAttempt {
 interface ChatSendOptions {
   hidden?: boolean;
   turnSkill?: ChatTurnSkill;
+  /** Specialist findings for this turn's model prompt. The visible user message stays `text`. */
+  internalContext?: string;
 }
 
 const ADO_WRITE_TARGET =
@@ -4036,7 +4049,12 @@ const CHAT_WRITE_POLICY_LINES = [
   '',
 ] as const;
 
-export function buildTurnPrompt(text: string, turnSkill?: ChatTurnSkill): string {
+export function buildTurnPrompt(
+  text: string,
+  turnSkill?: ChatTurnSkill,
+  internalContext?: string,
+): string {
+  const context = internalContext?.trim();
   return [
     ...CHAT_WRITE_POLICY_LINES,
     ...(turnSkill
@@ -4045,6 +4063,7 @@ export function buildTurnPrompt(text: string, turnSkill?: ChatTurnSkill): string
           '',
         ]
       : []),
+    ...(context ? [context, ''] : []),
     'User request:',
     text,
   ].join('\n');
@@ -4252,7 +4271,7 @@ async function tryDispatchInteractiveTurn(
         : null;
       const prompt = await buildNewAgentTurnPrompt(
         turnKickoff,
-        buildTurnPrompt(text, options?.turnSkill),
+        buildTurnPrompt(text, options?.turnSkill, options?.internalContext),
         false,
         recoveryContext,
         {
@@ -4664,7 +4683,7 @@ export async function sendMessage(
     attachments
   );
   const promptText = buildPromptWithAttachments(
-    buildTurnPrompt(text, options?.turnSkill),
+    buildTurnPrompt(text, options?.turnSkill, options?.internalContext),
     attachmentMeta
   );
   const priorMessages = interactiveAttempt.persistedUserMessage

@@ -1,6 +1,7 @@
 import type { PrdReadinessOverride } from '../utils/prdReadiness';
 import type { ValidationOverrideAuditEntry } from '../utils/validationOverride';
 import type { EffortLevel } from './effort';
+import type { InterviewProfileSnapshot, InterviewStepMode } from './playbook';
 
 export type { PrdReadinessOverride };
 
@@ -41,6 +42,11 @@ export interface InterviewSummary {
 
 export interface Interview extends InterviewSummary {
   prds: PrdSummary[];
+  playbookRunId?: string | null;
+  playbookStepRunId?: string | null;
+  playbookInterviewMode?: InterviewStepMode | null;
+  playbookProfileKey?: string | null;
+  playbookProfileSnapshot?: InterviewProfileSnapshot | null;
 }
 
 export type PrdStatus = 'generating' | 'draft' | 'validating' | 'pending_review' | 'reviewer_approved' | 'approved' | 'revision_requested';
@@ -154,6 +160,45 @@ export interface CreateInterviewRequest {
 export interface CreateInterviewResponse {
   interviewId: string;
   threadId: string;
+}
+
+/** Design section names, in interview order. `key` is the stored JSON field. */
+export const INTERVIEW_BRIEF_SECTIONS = [
+  { key: 'problemAndOutcome', label: 'problem and outcome' },
+  { key: 'users', label: 'users' },
+  { key: 'scope', label: 'scope' },
+  { key: 'businessRules', label: 'business rules' },
+  { key: 'scenarios', label: 'scenarios' },
+  { key: 'acceptanceCriteria', label: 'acceptance criteria' },
+  { key: 'assumptions', label: 'assumptions' },
+  { key: 'unresolvedItems', label: 'unresolved items' },
+] as const;
+
+export type InterviewBriefSectionKey = (typeof INTERVIEW_BRIEF_SECTIONS)[number]['key'];
+
+export interface InterviewBriefSections {
+  problemAndOutcome: string;
+  users: string;
+  scope: string;
+  businessRules: string;
+  scenarios: string;
+  acceptanceCriteria: string;
+  assumptions: string;
+  unresolvedItems: string[];
+}
+
+export type InterviewBriefStatus = 'draft' | 'approved';
+
+export type InterviewSpecialistReviewStatus = 'succeeded' | 'failed';
+
+export interface InterviewBriefRecord {
+  id: string;
+  interviewId: string;
+  status: InterviewBriefStatus;
+  version: number;
+  sections: InterviewBriefSections;
+  approvedBy: string | null;
+  approvedAt: string | null;
 }
 
 export interface CreatePrdRequest {

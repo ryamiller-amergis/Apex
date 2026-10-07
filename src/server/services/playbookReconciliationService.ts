@@ -22,7 +22,7 @@
  */
 import { and, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { agentRuns, playbookRuns, playbookStepRuns } from '../db/schema';
+import { agentRuns, interviews, playbookRuns, playbookStepRuns } from '../db/schema';
 import { advanceStalledRuns } from './playbookAdvanceService';
 import { cursorAgentCompletionOutput } from './playbookSteps/cursorAgentCompletion';
 import { failStepRun, resumeStepRun } from './playbookSteps/stepRuns';
@@ -154,6 +154,15 @@ async function expireOverdueSuspensions(now: Date): Promise<number> {
   for (const step of expiredSteps) {
     if (step.stepType === 'cursor-agent') {
       await applyExpiredValidationTimeout(step.runId);
+    }
+    if (step.stepType === 'interview') {
+      await db
+        .update(interviews)
+        .set({ status: 'archived', updatedAt: now.toISOString() })
+        .where(and(
+          eq(interviews.playbookRunId, step.runId),
+          eq(interviews.status, 'in_progress'),
+        ));
     }
     await db
       .update(playbookRuns)

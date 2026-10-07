@@ -22,6 +22,10 @@ import { DEFAULT_MODEL_ID } from '../config/models';
 import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 import {
   useInterview,
+  useInterviewBrief,
+  useDraftInterviewBrief,
+  useSaveInterviewBrief,
+  useApproveInterviewBrief,
   useUpdateInterviewStatus,
   useUpdateInterviewTitle,
   useCreatePrd,
@@ -29,10 +33,11 @@ import {
   useDeleteInterview,
 } from '../hooks/useInterviews';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
+import { InterviewBriefReview } from './InterviewBriefReview';
 import { SectionOwnerModal } from './SectionOwnerModal';
 import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
 import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
-import type { InterviewStatus } from '../../shared/types/interview';
+import type { InterviewBriefSections, InterviewStatus } from '../../shared/types/interview';
 import type { InterviewSkillOption } from '../../shared/types/projectSettings';
 import { effortLabel } from '../../shared/utils/effort';
 import { parseAgentMessage, isAgentOtherOptionText } from '../utils/parseAgentMessage';
@@ -958,6 +963,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     location.state as ExistingInterviewLocationState | null;
 
   const { data: interview, isLoading, isError } = useInterview(id);
+  const isPlaybookInterview = Boolean(interview?.playbookRunId);
+  const {
+    data: interviewBrief,
+    isLoading: isBriefLoading,
+  } = useInterviewBrief(id, isPlaybookInterview);
   const { data: skillConfig } = useProjectSkillConfig(interview?.project ?? null);
   const repoReadiness = useProjectRepositoryReadiness(
     skillConfig?.id ?? interview?.skillSettingsId,
@@ -990,6 +1000,9 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const startChat = useStartChat();
   const createPrd = useCreatePrd();
   const deleteInterview = useDeleteInterview();
+  const saveInterviewBrief = useSaveInterviewBrief();
+  const draftInterviewBrief = useDraftInterviewBrief();
+  const approveInterviewBrief = useApproveInterviewBrief();
 
   const { data: prdRepos = [] } = useSkillRepos(interview?.project ?? null);
   const prdRepoInfo = prdRepos.find((r) => r.name === (skillConfig?.skillRepo ?? interview?.repo));
@@ -1193,6 +1206,18 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     await updateStatus.mutateAsync({ id, status: newStatus });
   }, [id, updateStatus]);
 
+  const handleSaveBrief = useCallback(async (sections: InterviewBriefSections) => {
+    await saveInterviewBrief.mutateAsync({ interviewId: id, sections });
+  }, [id, saveInterviewBrief]);
+
+  const handleDraftBrief = useCallback(async () => {
+    await draftInterviewBrief.mutateAsync(id);
+  }, [draftInterviewBrief, id]);
+
+  const handleApproveBrief = useCallback(async () => {
+    await approveInterviewBrief.mutateAsync(id);
+  }, [approveInterviewBrief, id]);
+
   const startTitleEdit = useCallback(() => {
     if (!interview) return;
     setEditTitle(interview.title);
@@ -1264,7 +1289,21 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
       const msg = err instanceof Error ? err.message : 'Failed to generate PRD';
       setPrdGenError(msg);
     }
-  }, [id, interview, messages, toPrdSkill, skillConfig?.prdModel, globalDefaultModel?.value, startChat, createPrd, navigate]);
+  }, [
+    createPrd,
+    globalDefaultModel?.value,
+    id,
+    interview,
+    messages,
+    navigate,
+    resolvedPrdBranch,
+    resolvedPrdRepo,
+    skillConfig?.id,
+    skillConfig?.prdModel,
+    skillConfig?.skillProvider,
+    startChat,
+    toPrdSkill,
+  ]);
 
   const requestGeneratePrd = useCallback(() => {
     void handleGeneratePrd('inherit');
@@ -1436,7 +1475,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
           </button>
           {canManage && (
             <div className={styles.actions}>
-              {interview.status === 'in_progress' && (
+              {interview.status === 'in_progress' && !isPlaybookInterview && (
                 <button
                   className={styles.actionBtn}
                   onClick={() => void handleStatusChange('complete')}
@@ -1547,6 +1586,20 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             >×</button>
           )}
         </div>
+      )}
+
+      {isPlaybookInterview && (
+        <InterviewBriefReview
+          brief={interviewBrief}
+          isLoading={isBriefLoading}
+          isDrafting={draftInterviewBrief.isPending}
+          isSaving={saveInterviewBrief.isPending}
+          isApproving={approveInterviewBrief.isPending}
+          error={draftInterviewBrief.error?.message ?? saveInterviewBrief.error?.message ?? approveInterviewBrief.error?.message}
+          onDraft={handleDraftBrief}
+          onSave={handleSaveBrief}
+          onApprove={handleApproveBrief}
+        />
       )}
 
       <div className={styles.messages}>
