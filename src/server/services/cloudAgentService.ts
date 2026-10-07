@@ -741,16 +741,32 @@ async function launchClaimedCloudAgentRun(
           runId,
           jobExecution: launched.cursorRunId,
         }));
-      } else {
+        await stopUntrackedCloudAgent(deps, snapshot.projectId, launched, runId);
+      } else if (
+        captured.reason === 'identity_already_set'
+        && captured.run?.cloudAgentIdentity !== launched.cloudAgentId
+      ) {
+        console.error('[cloud-agent] could not record the Cursor agent', JSON.stringify({
+          runId,
+          reason: captured.reason,
+        }));
+        await stopUntrackedCloudAgent(deps, snapshot.projectId, launched, runId);
+      } else if (captured.reason !== 'identity_already_set') {
         const detail = captured.reason ?? 'Could not record the Cloud Agent';
         console.error('[cloud-agent] could not record the Cursor agent', JSON.stringify({
           runId,
           reason: captured.reason ?? null,
         }));
-        await markTerminal(runId, { status: 'failed', detail });
-        emitTerminal({ sessionId, runId }, snapshot.projectId, 'failed', null);
+        await failLaunchAfterCursorCreate(
+          deps,
+          snapshot.projectId,
+          sessionId,
+          launched,
+          runId,
+          detail,
+          captured.run,
+        );
       }
-      await stopUntrackedCloudAgent(deps, snapshot.projectId, launched, runId);
       scheduleCloudAgentDispatch();
       return;
     }
@@ -773,19 +789,56 @@ async function launchClaimedCloudAgentRun(
       error: detail,
     }));
     if (!identityStored) {
-      await stopUntrackedCloudAgent(deps, snapshot.projectId, launched, runId);
-      const terminal = await markTerminal(runId, { status: 'failed', detail });
-      if (!terminal.ok) {
-        console.error('[cloud-agent] could not record launch failure', JSON.stringify({
-          runId,
-          reason: terminal.reason,
-          status: terminal.run?.status ?? null,
-        }));
-      }
-      emitTerminal({ sessionId, runId }, snapshot.projectId, 'failed', null);
+      const latest = await db.query.agentRuns.findFirst({
+        where: eq(agentRuns.id, runId),
+      });
+      await failLaunchAfterCursorCreate(
+        deps,
+        snapshot.projectId,
+        sessionId,
+        launched,
+        runId,
+        detail,
+        latest ?? null,
+      );
     }
     scheduleCloudAgentDispatch();
   }
+}
+
+/**
+ * Fails the Apex row after Cursor already created an agent. Identity capture
+ * writes `dispatchMessageId` before the queued → running move, so a later
+ * failure must present that fence or `markTerminal` leaves the row queued.
+ */
+async function failLaunchAfterCursorCreate(
+  deps: CloudAgentServiceDeps,
+  projectId: string,
+  sessionId: string,
+  launched: LaunchCloudAgentResult,
+  runId: string,
+  detail: string,
+  recorded: { dispatchMessageId?: string | null; cloudAgentIdentity?: string | null } | null,
+): Promise<void> {
+  const ours = recorded?.cloudAgentIdentity === launched.cloudAgentId
+    || recorded?.dispatchMessageId === launched.cursorRunId;
+  const fence = ours
+    ? (recorded?.dispatchMessageId ?? launched.cursorRunId)
+    : null;
+  await stopUntrackedCloudAgent(deps, projectId, launched, runId);
+  const terminal = await markTerminal(runId, {
+    status: 'failed',
+    detail,
+    ...(fence ? { dispatchMessageId: fence } : {}),
+  });
+  if (!terminal.ok) {
+    console.error('[cloud-agent] could not record launch failure', JSON.stringify({
+      runId,
+      reason: terminal.reason,
+      status: terminal.run?.status ?? null,
+    }));
+  }
+  emitTerminal({ sessionId, runId }, projectId, 'failed', null);
 }
 
 async function stopUntrackedCloudAgent(
