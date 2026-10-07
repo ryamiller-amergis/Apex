@@ -86,10 +86,8 @@ function cloudAgentRun(overrides: Partial<CloudAgentRunSummary> = {}): CloudAgen
     checkResults: null,
     failingChecks: [],
     lastError: null,
-    queuePosition: null,
     ...overrides,
-    jobName: overrides.jobName ?? 'apex-cursor-worker',
-    executionName: overrides.executionName ?? 'apex-cursor-worker-abc123',
+    cloudAgentId: overrides.cloudAgentId ?? 'bc-agent-1',
     branchName: overrides.branchName ?? 'feature/apex-42-abc123',
     createdAt: overrides.createdAt ?? '2026-09-28T14:00:00.000Z',
   };

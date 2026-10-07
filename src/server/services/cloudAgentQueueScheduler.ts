@@ -1,7 +1,7 @@
 /**
- * Restarts the cloud-agent queue after a process start. Each sweep first
- * finishes container executions whose page is closed, then starts queued runs
- * in the slots that opened. Slot releases also pump the queue immediately.
+ * After a process start, finishes cloud-agent runs that have already ended,
+ * then sends any saved runs that never reached Cursor. A start calls the SDK
+ * in the request that created it; this sweep only recovers leftovers.
  */
 import { pumpCloudAgentQueue, reconcileRunningCloudAgentRuns } from './cloudAgentService';
 

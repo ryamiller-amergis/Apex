@@ -126,10 +126,8 @@ export type HostAgnosticPrStatus = 'none' | 'open' | 'abandoned' | 'merged';
 export interface CloudAgentRunSummary {
   runId: string;
   status: import('./agentRunLifecycle').AgentRunStatus;
-  /** Azure Container Apps job resource that owns the execution. */
-  jobName: string | null;
-  /** Azure Container Apps execution name used to inspect logs and status. */
-  executionName: string | null;
+  /** Cursor cloud agent id (`bc-…`). Null until the SDK start returns one. */
+  cloudAgentId: string | null;
   branchName: string | null;
   createdAt: string;
   prUrl: string | null;
@@ -142,8 +140,6 @@ export interface CloudAgentRunSummary {
   failingChecks: import('./agentRunLifecycle').RunCheckKind[];
   /** Launch or terminal failure detail when status is failed; null otherwise. */
   lastError: string | null;
-  /** 1-based place among cloud-agent runs still waiting for a container. */
-  queuePosition: number | null;
 }
 
 export type CloudAgentActivityKind = 'assistant' | 'thinking' | 'tool' | 'status' | 'task';
@@ -191,8 +187,6 @@ export interface StartCloudAgentRunRequest {
 export interface StartCloudAgentRunResponse {
   sessionId: string;
   runId: string;
-  /** Place in line when the run is still waiting for a container. */
-  queuePosition: number | null;
 }
 
 export interface BacklogFeatureItem {

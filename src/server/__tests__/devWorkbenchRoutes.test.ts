@@ -199,8 +199,7 @@ function cloudRunWithOpenPr(): CloudAgentRunSummary {
   return {
     runId: 'run-pr-open',
     status: 'completed',
-    jobName: 'apex-cursor-worker',
-    executionName: 'apex-cursor-worker-abc123',
+    cloudAgentId: 'bc-agent-1',
     branchName: 'feature/apex-42-abc123',
     createdAt: '2026-09-28T14:00:00.000Z',
     prUrl: CLOUD_PR_URL,
@@ -210,7 +209,6 @@ function cloudRunWithOpenPr(): CloudAgentRunSummary {
     checkResults: null,
     failingChecks: [],
     lastError: null,
-    queuePosition: null,
   };
 }
 
@@ -875,8 +873,7 @@ describe('GET /api/dev-workbench/sessions', () => {
     expect(res.body).toEqual([
       expect.objectContaining({
         runId: 'run-pr-open',
-        jobName: 'apex-cursor-worker',
-        executionName: 'apex-cursor-worker-abc123',
+        cloudAgentId: 'bc-agent-1',
         prStatus: 'open',
       }),
     ]);

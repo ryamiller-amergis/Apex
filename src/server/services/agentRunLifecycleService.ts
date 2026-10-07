@@ -714,6 +714,9 @@ export async function requestCancel(runId: string): Promise<LifecycleResult> {
       status: 'cancelled',
       terminalReason: 'forced_cancel',
       detail: 'Cancelled before dispatch',
+      ...(existing.dispatchMessageId
+        ? { dispatchMessageId: existing.dispatchMessageId }
+        : {}),
     });
     if (result.ok && result.run.lane === 'background') {
       emitWorkerTelemetry(() => {
