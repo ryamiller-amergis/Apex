@@ -870,6 +870,28 @@ describe('cancelCloudAgentRun (PBI-004)', () => {
     expect(mockMarkTerminal).not.toHaveBeenCalled();
   });
 
+  it('stops the Cursor agent when a queued cancel already has an identity', async () => {
+    mockDevSessionFindFirst.mockResolvedValue(session());
+    mockAgentRunFindFirst.mockResolvedValue(run({ status: 'queued' }));
+    mockRequestCancel.mockResolvedValue({
+      ok: true,
+      run: run({
+        status: 'cancelled',
+        terminalReason: 'forced_cancel',
+      }),
+    });
+
+    const result = await cancelCloudAgentRun(SESSION_ID, USER_ID, makeDeps());
+
+    expect(result).toEqual({ ok: true, status: 'cancelled' });
+    expect(mockVendorCancel).toHaveBeenCalledWith({
+      project: 'MaxView',
+      cloudAgentId: 'bc-agent-1',
+      cursorRunId: 'cursor-run-1',
+    });
+    expect(mockMarkTerminal).not.toHaveBeenCalled();
+  });
+
   it('AC-1: rejects a run that is already terminal before cancel is attempted', async () => {
     mockDevSessionFindFirst.mockResolvedValue(session());
     mockAgentRunFindFirst.mockResolvedValue(run({ status: 'completed' }));

@@ -1571,10 +1571,26 @@ export async function cancelCloudAgentRun(
   }
 
   // Queued runs are finalized synchronously inside requestCancel. A run that is
-  // already terminal here lost a race to another writer.
+  // already terminal here lost a race to another writer. A queued row can
+  // already hold a Cursor identity when the status move failed, so stop that
+  // agent before returning.
   if (isAgentRunTerminalStatus(requested.run.status)) {
     if (requested.run.status !== 'cancelled') {
       throw cancelConflictError(requested.run);
+    }
+    if (requested.run.cloudAgentIdentity && requested.run.dispatchMessageId) {
+      try {
+        await deps.cancelCursorCloudAgentRun({
+          project: session.project,
+          cloudAgentId: requested.run.cloudAgentIdentity,
+          cursorRunId: requested.run.dispatchMessageId,
+        });
+      } catch (err) {
+        console.warn('[cloud-agent] vendor cancel request failed', JSON.stringify({
+          runId: run.id,
+          error: err instanceof Error ? err.message : String(err),
+        }));
+      }
     }
     emitTerminal(
       { sessionId, runId: run.id },
