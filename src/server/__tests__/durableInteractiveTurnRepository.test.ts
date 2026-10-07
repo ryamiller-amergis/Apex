@@ -451,45 +451,6 @@ describe('durable interactive turn repository', () => {
     ).toBe(false);
   });
 
-  it.each([
-    {
-      activeCount: 2,
-      agenticCount: 0,
-      interactiveClass: 'fast' as const,
-      code: 'USER_INTERACTIVE_LIMIT',
-    },
-    {
-      activeCount: 1,
-      agenticCount: 1,
-      interactiveClass: 'agentic' as const,
-      code: 'USER_AGENTIC_LIMIT',
-    },
-  ])('returns the exact $code response', async (testCase) => {
-    const { repository } = repositoryHarness(testCase);
-    const frozen = specification({
-      interactiveClass: testCase.interactiveClass,
-      deadlines: {
-        absoluteTurnMs:
-          testCase.interactiveClass === 'fast' ? 300_000 : 1_200_000,
-        repositoryPreparationMs: null,
-        firstEventMs: 45_000,
-        toolCallMs: 60_000,
-      },
-    });
-
-    await expect(
-      repository.admit(
-        preparedTurn({
-          interactiveClass: testCase.interactiveClass,
-          specification: frozen,
-        }),
-      ),
-    ).resolves.toEqual({
-      status: 'user_limit',
-      code: testCase.code,
-    });
-  });
-
   it('does not query or order limits by model or global capacity', async () => {
     const { repository, sqlStatements } = repositoryHarness();
 
@@ -504,12 +465,13 @@ describe('durable interactive turn repository', () => {
     expect(countQuery).not.toContain('capacity');
   });
 
-  it('accepts a turn over the user limit as waiting when queueing is on', async () => {
+  it('accepts a turn over the user limit as waiting for a user slot', async () => {
     const { repository, queries } = repositoryHarness({ activeCount: 2 });
 
-    await expect(
-      repository.admit(preparedTurn({ queueOverUserLimit: true })),
-    ).resolves.toMatchObject({ status: 'queued', runId: RUN_ID });
+    await expect(repository.admit(preparedTurn())).resolves.toMatchObject({
+      status: 'queued',
+      runId: RUN_ID,
+    });
 
     const bound = queries.flatMap((query) => boundStrings(query)).join('\n');
     const queuedUntil = new Date(
@@ -519,10 +481,10 @@ describe('durable interactive turn repository', () => {
     expect(bound).toContain('Waiting for your other chat to finish');
   });
 
-  it('does not mark a turn under the limit as waiting when queueing is on', async () => {
+  it('does not mark a turn under the limit as waiting', async () => {
     const { repository, queries } = repositoryHarness({ activeCount: 1 });
 
-    await repository.admit(preparedTurn({ queueOverUserLimit: true }));
+    await repository.admit(preparedTurn());
 
     const bound = queries.flatMap((query) => boundStrings(query)).join('\n');
     expect(bound).not.toContain('userSlotQueuedUntil');
@@ -560,7 +522,6 @@ describe('durable interactive turn repository', () => {
         preparedTurn({
           interactiveClass: testCase.interactiveClass,
           specification: frozen,
-          queueOverUserLimit: true,
         }),
       ),
     ).resolves.toEqual({ status: 'user_limit', code: testCase.code });
@@ -807,8 +768,8 @@ describe('durable interactive turn repository retry', () => {
     });
   });
 
-  it('returns exact user limit codes without writing', async () => {
-    const harness = retryHarness({ activeCount: 2 });
+  it('returns exact user limit codes without writing once three turns are waiting', async () => {
+    const harness = retryHarness({ activeCount: 5 });
     await expect(harness.repository.retry(retryInput())).resolves.toEqual({
       status: 'user_limit',
       code: 'USER_INTERACTIVE_LIMIT',
@@ -901,7 +862,6 @@ function durableServiceHarness(options?: {
   groundingNeverSettles?: boolean;
   maxviewCapability?: 'disabled' | 'enabled' | 'unavailable';
   repositoryContext?: { contextContent: string | null; agentsContent: string | null };
-  userQueue?: boolean;
 }) {
   const admitted: PreparedDurableInteractiveTurn[] = [];
   const order: string[] = [];
@@ -983,7 +943,6 @@ function durableServiceHarness(options?: {
     resolveMaxviewCapability: jest
       .fn()
       .mockResolvedValue(options?.maxviewCapability ?? 'disabled'),
-    resolveUserQueue: jest.fn().mockResolvedValue(options?.userQueue ?? false),
     resolveDeadlines: jest.fn(({ interactiveClass, requiresRepositoryPreparation }) => ({
       absoluteTurnMs:
         interactiveClass === 'fast' ? 300_000 : 1_200_000,
@@ -1476,24 +1435,6 @@ describe('durable interactive turn service', () => {
       message: testCase.code,
     });
   });
-
-  it.each([true, false])(
-    'passes queueOverUserLimit=%s from the user-queue flag to admission',
-    async (userQueue) => {
-      const { service, admitted } = durableServiceHarness({ userQueue });
-
-      await service.admit({
-        threadId: THREAD_ID,
-        userId: USER_ID,
-        workflowClass: 'home-chat',
-        turnId: TURN_ID,
-        text: 'Hello',
-        attachments: [],
-      });
-
-      expect(admitted[0].queueOverUserLimit).toBe(userQueue);
-    },
-  );
 
   it('has no Cursor SDK, interactive executor, Agent, or model-client import', () => {
     const source = fs.readFileSync(

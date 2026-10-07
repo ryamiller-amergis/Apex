@@ -56,17 +56,12 @@ function decideUserSlot(input: Readonly<{
   agenticCount: number;
   interactiveClass: InteractiveClass;
   limits: UserTurnLimits;
-  queueOverUserLimit: boolean;
 }>): UserSlotDecision {
   const overTotal = input.activeCount >= input.limits.total;
   const overAgentic =
     input.interactiveClass === 'agentic' &&
     input.agenticCount >= input.limits.agentic;
   if (!overTotal && !overAgentic) return { kind: 'admit' };
-  const code: UserTurnLimitCode = overTotal
-    ? 'USER_INTERACTIVE_LIMIT'
-    : 'USER_AGENTIC_LIMIT';
-  if (!input.queueOverUserLimit) return { kind: 'refuse', code };
   const waitingAgentic = overAgentic
     ? input.agenticCount - input.limits.agentic
     : 0;
@@ -97,8 +92,6 @@ export type PreparedDurableInteractiveTurn = Readonly<{
   hidden: boolean;
   attachments: ReadonlyArray<ImmutableInteractiveAttachmentRef>;
   specification: DurableInteractiveTurnSpecification;
-  /** Accept a turn over the user's limit and let it wait instead of refusing it. */
-  queueOverUserLimit?: boolean;
 }>;
 
 export type AdmitDurableInteractiveTurnResult =
@@ -116,8 +109,6 @@ export type RetryDurableInteractiveRunInput = Readonly<{
   userId: string;
   refreshedToolGrant: FrozenInteractiveToolGrant | null;
   refreshedDeadlines: InteractiveDeadlinePolicy;
-  /** Accept a retry over the user's limit and let it wait instead of refusing it. */
-  queueOverUserLimit?: boolean;
 }>;
 
 export type RetryDurableInteractiveRunResult =
@@ -344,7 +335,6 @@ export function createDurableInteractiveTurnRepository(options?: {
           agenticCount,
           interactiveClass: input.interactiveClass,
           limits: userLimits(),
-          queueOverUserLimit: input.queueOverUserLimit === true,
         });
         if (slot.kind === 'refuse') {
           return { status: 'user_limit', code: slot.code };
@@ -772,7 +762,6 @@ export function createDurableInteractiveTurnRepository(options?: {
           agenticCount,
           interactiveClass: lockedRun.interactive_class,
           limits: userLimits(),
-          queueOverUserLimit: input.queueOverUserLimit === true,
         });
         if (slot.kind === 'refuse') {
           return { status: 'user_limit', code: slot.code };
