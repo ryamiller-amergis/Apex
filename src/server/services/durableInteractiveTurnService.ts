@@ -625,6 +625,7 @@ function currentPrompt(
   frozenSkill: DurableInteractiveTurnSpecification['skill'],
   attachments: DurableInteractiveTurnSpecification['currentMessage']['attachments'],
   instructions: ReadonlyArray<string>,
+  skillScope: 'turn' | 'session',
 ): string {
   return [
     ...CHAT_WRITE_POLICY_LINES,
@@ -635,7 +636,14 @@ function currentPrompt(
           `# Pre-loaded skill content (${frozenSkill.path})`,
           frozenSkill.content,
           '',
-          'The skill content above is already loaded. Follow it for this turn.',
+          // A mid-thread turn skill is one-off; the thread skill is sent once and must persist.
+          ...(skillScope === 'turn'
+            ? ['The skill content above is already loaded. Follow it for this turn.']
+            : [
+                'The skill content above is already loaded and governs this whole session, not only this turn. Later messages will not repeat it.',
+                "Follow the skill's instructions exactly and completely. The skill defines everything: which repo files to load, how to interact with the user, what to produce, and when to produce it.",
+                "Do not add steps, skip steps, or modify the skill's behavior in any way.",
+              ]),
           '',
         ]
       : []),
@@ -1132,6 +1140,7 @@ export function createDurableInteractiveTurnService(
         frozenSkill,
         immutableAttachments,
         sessionInstructions(thread, input.workflowClass),
+        input.turnSkill ? 'turn' : 'session',
       );
       // A live or resumed agent already holds the thread skill from its first
       // turn. Resending it every turn makes step-by-step skills (interviews)
@@ -1139,7 +1148,7 @@ export function createDurableInteractiveTurnService(
       const threadSkillAlreadyLoaded =
         !input.turnSkill && transcript.some((entry) => entry.role === 'agent');
       const preparedCurrentPrompt = threadSkillAlreadyLoaded
-        ? currentPrompt(input.text, null, null, immutableAttachments, [])
+        ? currentPrompt(input.text, null, null, immutableAttachments, [], 'session')
         : firstTurnPrompt;
       const specification: DurableInteractiveTurnSpecification = {
         schemaVersion: 1,

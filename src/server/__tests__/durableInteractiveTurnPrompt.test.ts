@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatThread } from '../../shared/types/chat';
+import type { ChatMessage, ChatThread, ChatTurnSkill } from '../../shared/types/chat';
 import type { InteractiveWorkflowClass } from '../../shared/types/interactiveWorkflow';
 import { createDurableInteractiveTurnService } from '../services/durableInteractiveTurnService';
 import type { PreparedDurableInteractiveTurn } from '../services/durableInteractiveTurnRepository';
@@ -54,6 +54,7 @@ async function admittedSpecification(
   options: {
     workflowClass?: InteractiveWorkflowClass;
     kickoff?: Partial<ChatThread['kickoff']>;
+    turnSkill?: ChatTurnSkill;
   } = {},
 ): Promise<PreparedDurableInteractiveTurn['specification']> {
   const repositoryAdmit = jest.fn(async (input: PreparedDurableInteractiveTurn) => ({
@@ -100,6 +101,7 @@ async function admittedSpecification(
     turnId: TURN_ID,
     text: 'confirm',
     attachments: [],
+    turnSkill: options.turnSkill,
   });
   expect(repositoryAdmit).toHaveBeenCalledTimes(1);
   return repositoryAdmit.mock.calls[0][0].specification;
@@ -112,6 +114,28 @@ describe('durable interactive turn prompt', () => {
     expect(specification.currentPrompt).toContain(SKILL_CONTENT);
     expect(specification.currentPrompt).toContain('# UI rendering — interactive questions');
     expect(specification.currentPrompt).toContain('User request:\nconfirm');
+  });
+
+  it('tells the agent the skill governs the whole session, since later turns omit it', async () => {
+    const specification = await admittedSpecification([]);
+
+    expect(specification.currentPrompt).toContain('governs this whole session, not only this turn');
+    expect(specification.currentPrompt).not.toContain('Follow it for this turn');
+    expect(specification.recreationPrompt).toContain('governs this whole session, not only this turn');
+  });
+
+  it('scopes a skill picked mid-thread to that turn only', async () => {
+    const specification = await admittedSpecification(
+      [
+        message('user', 'Summarize this thread', 1),
+        message('agent', 'Here is the summary.', 2),
+      ],
+      { turnSkill: { name: 'Grill with docs', path: SKILL_PATH } },
+    );
+
+    expect(specification.currentPrompt).toContain(SKILL_CONTENT);
+    expect(specification.currentPrompt).toContain('Follow it for this turn.');
+    expect(specification.currentPrompt).not.toContain('governs this whole session');
   });
 
   it('sends only the reply on later turns but keeps the skill for a rebuilt agent', async () => {
