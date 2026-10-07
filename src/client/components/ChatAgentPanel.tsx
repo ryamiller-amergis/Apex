@@ -6,6 +6,7 @@ import { useSkillList } from '../hooks/useChatThreads';
 import { DEFAULT_MODEL_ID, modelBadge } from '../config/models';
 import { IS_BETA_RELEASE } from '../config/release';
 import { useAvailableModels, useGlobalDefaultModel, useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
+import { useAvailableModelSelection } from '../hooks/useAvailableModelSelection';
 import { useChatAttachments } from '../hooks/useChatAttachments';
 import { useSpeechInput } from '../hooks/useSpeechInput';
 import type {
@@ -413,6 +414,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   } = session;
 
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
+  useAvailableModelSelection(selectedModel, setSelectedModel, availableModels);
   const { data: globalDefaultModel } = useGlobalDefaultModel();
   const {
     data: skillConfig,

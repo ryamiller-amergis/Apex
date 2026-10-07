@@ -5,8 +5,9 @@ import {
   useSkillList,
   useStartChat,
 } from '../hooks/useChatThreads';
-import { useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
-import { AGENT_MODELS, DEFAULT_MODEL_ID, getDefaultModelForSkill } from '../config/models';
+import { useAvailableModels, useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
+import { useAvailableModelSelection } from '../hooks/useAvailableModelSelection';
+import { DEFAULT_MODEL_ID, getDefaultModelForSkill } from '../config/models';
 import styles from './StartChatModal.module.css';
 
 interface StartChatModalProps {
@@ -30,6 +31,8 @@ export const StartChatModal: React.FC<StartChatModalProps> = ({ onClose, onStart
     skillConfig?.skillBranch ?? undefined,
   );
   const startChat = useStartChat();
+  const { data: availableModels = [], isLoading: loadingModels } = useAvailableModels();
+  useAvailableModelSelection(model, setModel, availableModels);
 
   // Resolve repo + branch from admin config, falling back to heuristic
   const fallbackRepo = repos.find((r) => r.name.toLowerCase() === project.toLowerCase()) ?? repos[0];
@@ -167,9 +170,13 @@ export const StartChatModal: React.FC<StartChatModalProps> = ({ onClose, onStart
               value={model}
               onChange={(e) => setModel(e.target.value)}
             >
-              {AGENT_MODELS.map((m) => (
-                <option key={m.id} value={m.id}>{m.label}</option>
-              ))}
+              {loadingModels || availableModels.length === 0 ? (
+                <option value={model}>Loading models…</option>
+              ) : (
+                availableModels.map((m) => (
+                  <option key={m.id} value={m.id}>{m.displayName}</option>
+                ))
+              )}
             </select>
           </div>
 

@@ -10,6 +10,7 @@ import type { ChatMessage } from '../../shared/types/chat';
 import { effortLabel } from '../../shared/utils/effort';
 import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 import { useAvailableModels, useGlobalDefaultModel, useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
+import { useAvailableModelSelection } from '../hooks/useAvailableModelSelection';
 import {
   useAdr,
   useAdrAssignments,
@@ -81,6 +82,7 @@ const NewAdrCompose: React.FC = () => {
   const { data: repos = [] } = useSkillRepos(selectedProject || null);
   const { data: globalDefault } = useGlobalDefaultModel();
   const { data: models = [] } = useAvailableModels();
+  useAvailableModelSelection(model, setModel, models);
   const startChat = useStartChat();
   const createAdr = useCreateAdr();
   const repoReadiness = useProjectRepositoryReadiness(skillConfig?.id, selectedProject || null);
@@ -388,6 +390,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const { data: adr, isLoading, isError } = useAdr(id);
   const { data: reviewConfig } = useProjectSkillConfig(adr?.project);
   const { data: models = [], isLoading: modelsLoading } = useAvailableModels();
+  useAvailableModelSelection(model, setModel, models);
   const {
     data: assignments = [],
     isLoading: assignmentsLoading,

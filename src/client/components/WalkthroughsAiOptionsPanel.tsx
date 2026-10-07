@@ -6,7 +6,6 @@ import {
 } from '../contexts/WalkthroughsAiOptionsContext';
 import { DEFAULT_WALKTHROUGH_ANCHOR_SMART_TAGGING_SKILL_PATH } from '../../shared/types/walkthroughAnchorSmartTagging';
 import { DEFAULT_WALKTHROUGH_ANCHOR_DISCOVERY_SKILL_PATH } from '../../shared/types/walkthroughAnchorDiscovery';
-import { AGENT_MODELS } from '../config/models';
 import {
   useAvailableModels,
   useProjectSkillConfig,
@@ -74,11 +73,7 @@ export const WalkthroughsAiOptionsPanel: React.FC = () => {
   );
 
   const skills = skillsQuery.data ?? [];
-  const agentModels = useMemo(() => {
-    const fromApi = modelsQuery.data ?? [];
-    if (fromApi.length > 0) return fromApi;
-    return AGENT_MODELS.map((m) => ({ id: m.id, displayName: m.label }));
-  }, [modelsQuery.data]);
+  const agentModels = useMemo(() => modelsQuery.data ?? [], [modelsQuery.data]);
 
   return (
     <section

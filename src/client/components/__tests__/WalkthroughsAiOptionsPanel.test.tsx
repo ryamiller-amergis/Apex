@@ -4,8 +4,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WalkthroughsAiOptionsPanel } from '../WalkthroughsAiOptionsPanel';
 import { WalkthroughsAiOptionsProvider } from '../../contexts/WalkthroughsAiOptionsContext';
 import { defaultWalkthroughAiOptionsRecord } from '../../../shared/types/walkthroughAiOptions';
-import { AGENT_MODELS } from '../../config/models';
-
 const mockSave = jest.fn();
 
 jest.mock('../../hooks/useWalkthroughAiOptions', () => ({
@@ -123,7 +121,6 @@ describe('WalkthroughsAiOptionsPanel', () => {
         /Ryan Miller/i,
       );
     });
-    expect(AGENT_MODELS.length).toBeGreaterThan(0);
   });
 
   it('exposes discovery skill and model selects', () => {

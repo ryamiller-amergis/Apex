@@ -72,6 +72,8 @@ import {
   durableInteractiveTurnService,
   type DurableInteractiveToolGrantInput,
 } from './durableInteractiveTurnService';
+import { fetchAvailableModels } from './modelsService';
+import { resolveAvailableModelId } from '../../shared/utils/modelAvailability';
 import { resolveGroundingPreparationTimeoutMs } from './interactiveDeadlinePolicy';
 import { interactiveLiveBus } from './interactiveLiveBus';
 import { isExternalRunAbortEvent } from './agentRunAbort';
@@ -6503,7 +6505,10 @@ export async function sendMessage(
         workflowClass,
         turnId,
         text,
-        modelOverride,
+        modelOverride: resolveAvailableModelId(
+          resolveModelId(modelOverride ?? state.thread.kickoff.model),
+          await fetchAvailableModels(),
+        ),
         attachments,
         hidden: options?.hidden,
         turnSkill: options?.turnSkill,

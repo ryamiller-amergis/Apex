@@ -1313,10 +1313,45 @@ describe('ExistingInterviewView — model select reflects kickoff model', () => 
         status: 'idle',
       },
     });
+    (useAvailableModels as jest.Mock).mockReturnValue({
+      data: [
+        { id: 'composer-2', displayName: 'Composer 2' },
+        { id: 'claude-opus-4-6', displayName: 'Claude Opus 4.6' },
+      ],
+      isLoading: false,
+    });
 
     renderExistingInterview();
 
     const modelSelect = await screen.findByLabelText('Model');
     expect(modelSelect).toHaveValue('claude-opus-4-6');
+  });
+
+  it('moves a retired saved model to the newest available model in its family', async () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ model: 'claude-opus-4-6' }),
+      isLoading: false,
+      isError: false,
+    });
+    (useChatThread as jest.Mock).mockReturnValue({
+      data: {
+        id: 'thread-iv-1',
+        kickoff: { project: 'MaxView', repo: 'MaxView' },
+        messages: [],
+        status: 'idle',
+      },
+    });
+    (useAvailableModels as jest.Mock).mockReturnValue({
+      data: [
+        { id: 'composer-2', displayName: 'Composer 2' },
+        { id: 'claude-opus-5-5', displayName: 'Claude Opus 5.5' },
+      ],
+      isLoading: false,
+    });
+
+    renderExistingInterview();
+
+    const modelSelect = await screen.findByLabelText('Model');
+    expect(modelSelect).toHaveValue('claude-opus-5-5');
   });
 });

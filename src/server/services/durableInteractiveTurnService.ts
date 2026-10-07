@@ -69,6 +69,19 @@ const CHAT_WRITE_POLICY_LINES = [
   '- Informational questions and analysis must not mutate Azure DevOps.',
   '',
 ] as const;
+// Keep in step with the legacy kickoff prompt's interactive-question block;
+// the chat UI renders `a. text` lines as clickable options.
+const INTERACTIVE_QUESTION_UI_LINES = [
+  '# UI rendering — interactive questions',
+  'This chat has an interactive question UI. When you ask the user a multiple-choice question:',
+  '',
+  '1. Format each option as `a. text`, `b. text`, etc. on its own line — the UI renders these as clickable buttons the user can select.',
+  "2. **Ask only ONE question per message.** After presenting a question, STOP and wait for the user's answer before continuing. Do NOT batch multiple questions into a single response.",
+  '3. You may include context, analysis, or trade-offs BEFORE the question in the same message, but the message must end with exactly one set of options.',
+  "4. After receiving an answer, acknowledge it, incorporate it into your thinking, then ask the next question. The user's answers may change which questions you ask next.",
+  '5. You do NOT have an AskQuestion tool — format questions directly in your text output using the `a. text` pattern described above.',
+  '',
+] as const;
 
 type AllowedOperation = FrozenInteractiveToolGrant['allowedOperations'][number];
 
@@ -571,9 +584,11 @@ function currentPrompt(
   skill: ChatTurnSkill | null,
   frozenSkill: DurableInteractiveTurnSpecification['skill'],
   attachments: DurableInteractiveTurnSpecification['currentMessage']['attachments'],
+  includeSessionInstructions: boolean,
 ): string {
   return [
     ...CHAT_WRITE_POLICY_LINES,
+    ...(includeSessionInstructions ? INTERACTIVE_QUESTION_UI_LINES : []),
     ...(skill ? [`Run skill: ${skill.name} (\`${skill.path}\`)`, ''] : []),
     ...(frozenSkill
       ? [
@@ -1058,12 +1073,21 @@ export function createDurableInteractiveTurnService(
       const transcript = visibleTranscript(thread);
       const messageText =
         input.text.trim() || 'Uploaded files for context.';
-      const preparedCurrentPrompt = currentPrompt(
+      const firstTurnPrompt = currentPrompt(
         input.text,
         skill,
         frozenSkill,
         immutableAttachments,
+        true,
       );
+      // A live or resumed agent already holds the thread skill from its first
+      // turn. Resending it every turn makes step-by-step skills (interviews)
+      // restart their procedure and repeat answered questions.
+      const threadSkillAlreadyLoaded =
+        !input.turnSkill && transcript.some((entry) => entry.role === 'agent');
+      const preparedCurrentPrompt = threadSkillAlreadyLoaded
+        ? currentPrompt(input.text, null, null, immutableAttachments, false)
+        : firstTurnPrompt;
       const specification: DurableInteractiveTurnSpecification = {
         schemaVersion: 1,
         kind: 'interactive-turn',
@@ -1095,7 +1119,7 @@ export function createDurableInteractiveTurnService(
         recreationPrompt: recreationPrompt({
           thread,
           transcript,
-          currentPrompt: preparedCurrentPrompt,
+          currentPrompt: firstTurnPrompt,
           repositoryContextPack,
         }),
         deadlines,

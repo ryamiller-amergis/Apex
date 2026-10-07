@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm';
 import { useAppShell } from '../hooks/useAppShell';
 import { useStartChat, useChatThread, useSkillList, useSkillRepos } from '../hooks/useChatThreads';
 import { useProjectSkillConfig, useGlobalDefaultModel, useAvailableModels } from '../hooks/useProjectSkillConfig';
+import { useAvailableModelSelection } from '../hooks/useAvailableModelSelection';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatAttachments, formatAttachmentSize } from '../hooks/useChatAttachments';
 import { useProjectRepositoryReadiness } from '../hooks/useProjectRepositoryReadiness';
@@ -19,6 +20,7 @@ import { useContextEstimate } from '../hooks/useContextEstimate';
 import { useLinkFeatureRequestInterview } from '../hooks/useFeatureRequests';
 import { usePersistStagedLinks } from '../hooks/useLinkedContext';
 import { DEFAULT_MODEL_ID } from '../config/models';
+import { resolveAvailableModelId } from '../../shared/utils/modelAvailability';
 import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 import {
   useInterview,
@@ -335,6 +337,7 @@ const NewInterviewCompose: React.FC = () => {
   const repoReadiness = useProjectRepositoryReadiness(skillConfig?.id, selectedProject || null);
   const { data: globalDefaultModel } = useGlobalDefaultModel();
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
+  useAvailableModelSelection(model, setModel, availableModels);
 
   const interviewSkillOptions = skillConfig?.interviewSkillOptions ?? [];
 
@@ -436,11 +439,14 @@ const NewInterviewCompose: React.FC = () => {
   }, [input]);
 
   useEffect(() => {
-    const newDefault = selectedSkillOption?.model ?? skillConfig?.interviewModel ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID;
+    const newDefault = resolveAvailableModelId(
+      selectedSkillOption?.model ?? skillConfig?.interviewModel ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID,
+      availableModels ?? [],
+    );
     const prevDefault = prevEffectiveDefaultRef.current;
     prevEffectiveDefaultRef.current = newDefault;
     setModel((current) => current === prevDefault ? newDefault : current);
-  }, [selectedSkillOption?.model, skillConfig?.interviewModel, globalDefaultModel?.value]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedSkillOption?.model, skillConfig?.interviewModel, globalDefaultModel?.value, availableModels]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSend = useCallback(() => {
     const text = input.trim();
@@ -1075,9 +1081,9 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   useEffect(() => {
     const resolved = chatThread?.kickoff.model ?? interview?.model;
     if (resolved) {
-      setModel(resolved);
+      setModel(resolveAvailableModelId(resolved, availableModels ?? []));
     }
-  }, [chatThread?.id, interview?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [chatThread?.id, interview?.id, availableModels]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
