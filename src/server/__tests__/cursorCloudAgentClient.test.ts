@@ -211,6 +211,36 @@ describe('cursorCloudAgentClient', () => {
     }
   });
 
+  it('keeps a successful launch when disposing the agent handle fails', async () => {
+    const previous = process.env.CURSOR_API_KEY;
+    process.env.CURSOR_API_KEY = 'cursor-key';
+    mockDispose.mockRejectedValue(new Error('dispose failed'));
+    mockSend.mockResolvedValue({ id: 'run-1' });
+    mockCreate.mockResolvedValue({
+      agentId: 'bc-1',
+      send: mockSend,
+      [Symbol.asyncDispose]: mockDispose,
+    });
+
+    try {
+      await expect(launchCloudAgent({
+        project: 'MaxView',
+        prompt: 'Implement the work item',
+        model: 'composer-2.5',
+        skillProvider: 'ado',
+        skillRepo: 'MaxView',
+        skillBranch: 'development',
+      })).resolves.toEqual({
+        cloudAgentId: 'bc-1',
+        cursorRunId: 'run-1',
+        jobName: 'cursor-sdk',
+      });
+    } finally {
+      if (previous === undefined) delete process.env.CURSOR_API_KEY;
+      else process.env.CURSOR_API_KEY = previous;
+    }
+  });
+
   it('lets Cursor open the pull request only for GitHub', async () => {
     const previous = process.env.CURSOR_API_KEY;
     process.env.CURSOR_API_KEY = 'cursor-key';

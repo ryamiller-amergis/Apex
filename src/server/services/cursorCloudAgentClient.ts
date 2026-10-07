@@ -154,7 +154,12 @@ export async function launchCloudAgent(
       jobName: 'cursor-sdk',
     };
   } finally {
-    await agent[Symbol.asyncDispose]();
+    await agent[Symbol.asyncDispose]().catch((err) => {
+      console.warn(
+        '[cloud-agent] could not dispose the Cursor agent handle',
+        err instanceof Error ? err.message : err,
+      );
+    });
   }
 }
 
