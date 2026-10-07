@@ -2444,7 +2444,8 @@ export class AzureDevOpsService {
       let wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${this.project}' AND [System.WorkItemType] = 'Epic' AND [System.Tags] CONTAINS 'ReleaseVersion'`;
 
       if (this.areaPath) {
-        wiql += ` AND [System.AreaPath] = '${this.areaPath}'`;
+        const escapedAreaPath = this.areaPath.replace(/'/g, "''");
+        wiql += ` AND [System.AreaPath] UNDER '${escapedAreaPath}'`;
       }
 
       wiql += ' ORDER BY [Microsoft.VSTS.Scheduling.TargetDate] DESC';
@@ -2860,6 +2861,43 @@ export class AzureDevOpsService {
         version: parentWorkItem.fields['System.Title'] || ''
       };
     });
+  }
+
+  /**
+   * Find release Epics currently related to each requested work item.
+   */
+  async findReleaseAssignments(workItemIds: number[]): Promise<Record<number, number[]>> {
+    const uniqueIds = [...new Set(workItemIds)].filter((id) => Number.isInteger(id) && id > 0);
+    if (uniqueIds.length === 0) return {};
+
+    const escapedProject = this.project.replace(/'/g, "''");
+    const escapedAreaPath = this.areaPath?.replace(/'/g, "''");
+    const areaClause = escapedAreaPath
+      ? ` AND [Source].[System.AreaPath] = '${escapedAreaPath}'`
+      : '';
+    const wiql = `
+      SELECT [System.Id]
+      FROM WorkItemLinks
+      WHERE (
+        [Source].[System.TeamProject] = '${escapedProject}'
+        AND [Source].[System.WorkItemType] = 'Epic'
+        AND [Source].[System.Tags] CONTAINS 'ReleaseVersion'
+        ${areaClause}
+      )
+      AND [System.Links.LinkType] = 'System.LinkTypes.Related'
+      AND [Target].[System.Id] IN (${uniqueIds.join(', ')})
+      MODE (MustContain)
+    `;
+
+    const edges = await this.queryWorkItemLinksByWiql(wiql);
+    const assignments: Record<number, number[]> = {};
+    for (const { sourceId, targetId } of edges) {
+      if (!uniqueIds.includes(targetId)) continue;
+      const epicIds = assignments[targetId] ?? [];
+      if (!epicIds.includes(sourceId)) epicIds.push(sourceId);
+      assignments[targetId] = epicIds;
+    }
+    return assignments;
   }
 
   /**
