@@ -164,8 +164,28 @@ export interface BackgroundWorkflowRouter {
   route(input: BackgroundWorkflowRouteInput): Promise<WorkflowRouteDecision>;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+const WRAPPED_ERROR_MESSAGE_MAX_CHARS = 300;
+
+/**
+ * Drizzle wraps driver errors as "Failed query: <sql> params: <values>" and
+ * keeps the Postgres error on `cause`. Lead with the cause and cut the wrapper
+ * so the real reason survives log truncation and parameters stay out of logs.
+ */
+export function errorMessage(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const cause = (error as { cause?: unknown }).cause;
+  if (cause === undefined || cause === null) return error.message;
+  const { code, constraint } = cause as { code?: unknown; constraint?: unknown };
+  const details = [
+    typeof code === 'string' ? `code=${code}` : null,
+    typeof constraint === 'string' ? `constraint=${constraint}` : null,
+  ].filter((detail): detail is string => detail !== null);
+  const causeMessage = cause instanceof Error ? cause.message : String(cause);
+  return [
+    `cause: ${causeMessage}`,
+    ...(details.length > 0 ? [`(${details.join(', ')})`] : []),
+    `| ${error.message.replace(/\s+/g, ' ').slice(0, WRAPPED_ERROR_MESSAGE_MAX_CHARS)}`,
+  ].join(' ');
 }
 
 async function readOptionalScratchFile(

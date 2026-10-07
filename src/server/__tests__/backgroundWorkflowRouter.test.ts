@@ -29,6 +29,7 @@ jest.mock('../services/telemetry', () => ({
 
 import {
   createBackgroundWorkflowRouter,
+  errorMessage,
   prepareBackgroundWorkflowWorkspace,
   readDocumentScratchInputs,
   workerCanReadWithoutWorkingTree,
@@ -1314,5 +1315,34 @@ describe('background workspace preparation', () => {
     await expect(
       prepareBackgroundWorkflowWorkspace(source, destination),
     ).rejects.toThrow(/symbolic link/i);
+  });
+});
+
+describe('background route error messages', () => {
+  it('leads with the database cause and drops query parameters', () => {
+    const cause = Object.assign(new Error('duplicate key value violates unique constraint'), {
+      code: '23505',
+      constraint: 'uq_agent_runs_v2_active_thread',
+    });
+    const wrapped = Object.assign(
+      new Error(
+        `Failed query: INSERT INTO agent_runs (id) VALUES ($1)\nparams: ${'secret document text '.repeat(50)}`,
+      ),
+      { cause },
+    );
+
+    const message = errorMessage(wrapped);
+
+    expect(message).toMatch(
+      /^cause: duplicate key value violates unique constraint \(code=23505, constraint=uq_agent_runs_v2_active_thread\) \| Failed query: INSERT INTO agent_runs/,
+    );
+    expect(message.length).toBeLessThan(500);
+  });
+
+  it('keeps plain errors unchanged', () => {
+    expect(errorMessage(new Error('Document execution specification is incomplete'))).toBe(
+      'Document execution specification is incomplete',
+    );
+    expect(errorMessage('boom')).toBe('boom');
   });
 });
