@@ -95,6 +95,9 @@ const HOME_CHAT_TURN_CONTRACT_LINES = [
 ] as const;
 const KICKOFF_CONTEXT_FILE_REFERENCE = /`?\.ai-pilot\/kickoff-context\.md`?/g;
 const INLINE_THREAD_CONTEXT_REFERENCE = 'the `# Thread context` section of this prompt';
+// The worker clears `.ai-pilot/kickoff-transcript.md` before each turn.
+const KICKOFF_TRANSCRIPT_NOTE =
+  'This section is the full content of `.ai-pilot/kickoff-transcript.md`. That file is not on disk for this session; wherever the skill or request refers to it, read this section instead.';
 
 /**
  * Instructions an agent needs once per session: the chat UI contract, the
@@ -658,6 +661,15 @@ function recreationPrompt(input: {
     `Repository: ${input.thread.kickoff.repo}`,
     ...(input.thread.kickoff.freeformContext
       ? ['', '# Thread context', input.thread.kickoff.freeformContext]
+      : []),
+    ...(input.thread.kickoff.transcript
+      ? [
+          '',
+          '# Kickoff transcript',
+          KICKOFF_TRANSCRIPT_NOTE,
+          '',
+          input.thread.kickoff.transcript,
+        ]
       : []),
     ...(input.repositoryContextPack ? ['', input.repositoryContextPack] : []),
     '',

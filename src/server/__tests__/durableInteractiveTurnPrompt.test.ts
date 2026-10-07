@@ -147,6 +147,18 @@ describe('durable interactive turn prompt', () => {
     expect(specification.recreationPrompt).toContain('# Applying edits — MANDATORY tool use');
   });
 
+  it('inlines the kickoff transcript for a rebuilt agent', async () => {
+    const specification = await admittedSpecification([], {
+      workflowClass: 'home-chat',
+      kickoff: { transcript: 'Interviewer: which states? User: California only.' },
+    });
+
+    expect(specification.recreationPrompt).toContain('# Kickoff transcript');
+    expect(specification.recreationPrompt).toContain(
+      'Interviewer: which states? User: California only.',
+    );
+  });
+
   it('leaves ado-skills off for an interview without ADO intent', async () => {
     const specification = await admittedSpecification([]);
 
