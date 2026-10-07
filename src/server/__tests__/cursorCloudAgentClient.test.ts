@@ -274,7 +274,7 @@ describe('cursorCloudAgentClient', () => {
     const observed = observeCloudRun({
       status: 'finished',
       result: 'Done',
-    } as Parameters<typeof observeCloudRun>[0]);
+    } as unknown as Parameters<typeof observeCloudRun>[0]);
 
     expect(observed.status).toBe('running');
     expect(observed.noChanges).toBe(false);
@@ -285,7 +285,7 @@ describe('cursorCloudAgentClient', () => {
     const observed = observeCloudRun({
       status: 'finished',
       git: { branches: [] },
-    } as Parameters<typeof observeCloudRun>[0]);
+    } as unknown as Parameters<typeof observeCloudRun>[0]);
 
     expect(observed.status).toBe('finished');
     expect(observed.noChanges).toBe(true);
