@@ -477,6 +477,24 @@ export interface ExecuteCursorExecutionCoreInput {
   maxIdenticalToolCalls?: number;
   /** Authoritative end-of-turn signal captured from Cursor's onDelta callback. */
   turnEnd?: Promise<CursorTurnEndResult>;
+  /** How long a run may take to settle after turn end before it is cancelled. */
+  turnEndSettleMs?: number;
+}
+
+const DEFAULT_TURN_END_SETTLE_MS = 5_000;
+
+async function settlesWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => true, () => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export interface CursorExecutionResult {
@@ -519,6 +537,7 @@ export async function executeCursorExecutionCore(
   let anonymousToolUseCount = 0;
   let streamedUsage: CursorTokenUsage | undefined;
   let completedOnTurnEnd = false;
+  let turnEndWait: Promise<CursorExecutionWaitResult> | null = null;
   let terminalStatusMessage: string | undefined;
   const identicalToolCallCounts = new Map<string, number>();
 
@@ -563,7 +582,14 @@ export async function executeCursorExecutionCore(
         }
         streamedUsage =
           readTokenUsage(turnEndEvent.usage) ?? streamedUsage;
-        if (run.cancel && run.supports('cancel')) {
+        // Cursor drops a cancelled run's turn from the agent's conversation, so
+        // only cancel a run that does not settle on its own after turn end.
+        turnEndWait = run.wait();
+        const settled = await settlesWithin(
+          turnEndWait,
+          input.turnEndSettleMs ?? DEFAULT_TURN_END_SETTLE_MS,
+        );
+        if (!settled && run.cancel && run.supports('cancel')) {
           try {
             await run.cancel();
           } catch {
@@ -713,7 +739,7 @@ export async function executeCursorExecutionCore(
   await flushThinkingPhase();
   let waitResult: CursorExecutionWaitResult;
   try {
-    waitResult = await run.wait();
+    waitResult = await (turnEndWait ?? run.wait());
   } catch (error) {
     throw new CursorExecutionWaitError(error, streamedUsage, terminalStatusMessage);
   }
