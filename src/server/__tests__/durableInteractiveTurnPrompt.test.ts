@@ -1,4 +1,5 @@
 import type { ChatMessage, ChatThread } from '../../shared/types/chat';
+import type { InteractiveWorkflowClass } from '../../shared/types/interactiveWorkflow';
 import { createDurableInteractiveTurnService } from '../services/durableInteractiveTurnService';
 import type { PreparedDurableInteractiveTurn } from '../services/durableInteractiveTurnRepository';
 
@@ -23,7 +24,10 @@ function message(role: 'user' | 'agent', text: string, index: number): ChatMessa
   } as ChatMessage;
 }
 
-function thread(messages: ChatMessage[]): ChatThread {
+function thread(
+  messages: ChatMessage[],
+  kickoffOverrides: Partial<ChatThread['kickoff']> = {},
+): ChatThread {
   return {
     id: THREAD_ID,
     userId: USER_ID,
@@ -34,6 +38,7 @@ function thread(messages: ChatMessage[]): ChatThread {
       skillPath: SKILL_PATH,
       model: 'model-a',
       effort: 'low',
+      ...kickoffOverrides,
     },
     messages,
     status: 'idle',
@@ -46,6 +51,10 @@ function thread(messages: ChatMessage[]): ChatThread {
 
 async function admittedSpecification(
   messages: ChatMessage[],
+  options: {
+    workflowClass?: InteractiveWorkflowClass;
+    kickoff?: Partial<ChatThread['kickoff']>;
+  } = {},
 ): Promise<PreparedDurableInteractiveTurn['specification']> {
   const repositoryAdmit = jest.fn(async (input: PreparedDurableInteractiveTurn) => ({
     turnId: input.turnId,
@@ -59,7 +68,7 @@ async function admittedSpecification(
     attachmentStore: { upload: jest.fn() },
     resolveThreadAccess: jest.fn().mockResolvedValue({
       access: 'owner',
-      thread: thread(messages),
+      thread: thread(messages, options.kickoff),
     }),
     resolveSkillConfig: jest.fn().mockResolvedValue({
       interviewSkillOptions: [{ path: SKILL_PATH, friendlyName: 'Grill with docs' }],
@@ -87,7 +96,7 @@ async function admittedSpecification(
   await service.admit({
     threadId: THREAD_ID,
     userId: USER_ID,
-    workflowClass: 'interview',
+    workflowClass: options.workflowClass ?? 'interview',
     turnId: TURN_ID,
     text: 'confirm',
     attachments: [],
@@ -118,4 +127,40 @@ describe('durable interactive turn prompt', () => {
     expect(specification.recreationPrompt).toContain('# UI rendering — interactive questions');
     expect(specification.recreationPrompt).toContain('Q1: which platforms?');
   });
+
+  it('gives a PRD assistant the staging tool and its edit guidance', async () => {
+    const specification = await admittedSpecification([], {
+      workflowClass: 'assistant',
+      kickoff: {
+        assistantType: 'prd',
+        freeformContext: 'prd_id: prd-1\nproject: project-1',
+      },
+    });
+
+    expect(specification.mcpServers).toContainEqual(
+      expect.objectContaining({ kind: 'internal-proxy', serverName: 'ado-skills' }),
+    );
+    expect(specification.currentPrompt).toContain('# Applying edits — MANDATORY tool use');
+    expect(specification.currentPrompt).toContain('prd_id:    prd-1');
+    expect(specification.currentPrompt).not.toContain('.ai-pilot/kickoff-context.md');
+    expect(specification.currentPrompt).toContain('the `# Thread context` section of this prompt');
+    expect(specification.recreationPrompt).toContain('# Applying edits — MANDATORY tool use');
+  });
+
+  it('leaves ado-skills off for an interview without ADO intent', async () => {
+    const specification = await admittedSpecification([]);
+
+    expect(specification.mcpServers).not.toContainEqual(
+      expect.objectContaining({ serverName: 'ado-skills' }),
+    );
+  });
+
+  it('sends the Home turn contract only to home chats', async () => {
+    const home = await admittedSpecification([], { workflowClass: 'home-chat' });
+    const interview = await admittedSpecification([]);
+
+    expect(home.currentPrompt).toContain('# Conversational turn contract');
+    expect(interview.currentPrompt).not.toContain('# Conversational turn contract');
+  });
+
 });

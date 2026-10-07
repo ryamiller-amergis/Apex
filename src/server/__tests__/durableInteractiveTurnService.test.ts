@@ -285,7 +285,7 @@ describe('durable MaxView capability resolution', () => {
 describe('durable repository search availability', () => {
   it.each([
     ['interview', false],
-    ['adr', false],
+    ['adr', true],
     ['home-chat', true],
     ['ask-apex', true],
     ['assistant', true],

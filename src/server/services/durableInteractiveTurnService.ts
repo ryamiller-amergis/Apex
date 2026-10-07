@@ -36,6 +36,10 @@ import { buildRepositoryContextPack } from './repositoryContextPack';
 import type { ThreadAccessResult } from './threadAccessService';
 import { resolveThreadAccess } from './threadAccessService';
 import { resolveSkillConfig } from './projectSettingsService';
+import {
+  buildDocumentAssistantEditGuidance,
+  resolveDocumentAssistantType,
+} from './documentAssistantGuidance';
 import { isFeatureEnabled } from './featureFlagService';
 import { isMaxviewConfigured } from './maxviewAuthService';
 import {
@@ -82,6 +86,38 @@ const INTERACTIVE_QUESTION_UI_LINES = [
   '5. You do NOT have an AskQuestion tool — format questions directly in your text output using the `a. text` pattern described above.',
   '',
 ] as const;
+const HOME_CHAT_TURN_CONTRACT_LINES = [
+  '# Conversational turn contract',
+  '- Do all repository reads before writing the answer.',
+  '- Do not narrate tool use, emit progress commentary, or continue researching after answering.',
+  '- Emit exactly one user-facing answer for this turn. Once the answer is emitted, the turn is complete.',
+  '',
+] as const;
+const KICKOFF_CONTEXT_FILE_REFERENCE = /`?\.ai-pilot\/kickoff-context\.md`?/g;
+const INLINE_THREAD_CONTEXT_REFERENCE = 'the `# Thread context` section of this prompt';
+
+/**
+ * Instructions an agent needs once per session: the chat UI contract, the
+ * Home turn contract, and document-assistant staging rules. V2 inlines the
+ * kickoff context instead of writing `.ai-pilot/kickoff-context.md`, so file
+ * references in the shared document guidance point at that section instead.
+ */
+function sessionInstructions(
+  thread: ChatThread,
+  workflowClass: InteractiveWorkflowClass,
+): string[] {
+  const documentGuidance = buildDocumentAssistantEditGuidance(thread.kickoff).map(
+    (line) =>
+      line
+        .replace(KICKOFF_CONTEXT_FILE_REFERENCE, INLINE_THREAD_CONTEXT_REFERENCE)
+        .replace(/\bRead this file\b/g, 'Read that section'),
+  );
+  return [
+    ...INTERACTIVE_QUESTION_UI_LINES,
+    ...(workflowClass === 'home-chat' ? HOME_CHAT_TURN_CONTRACT_LINES : []),
+    ...(documentGuidance.length > 0 ? [...documentGuidance, ''] : []),
+  ];
+}
 
 type AllowedOperation = FrozenInteractiveToolGrant['allowedOperations'][number];
 
@@ -496,7 +532,8 @@ function capabilityMetadata(
   if (
     thread.kickoff.mcpPill ||
     thread.kickoff.webResearchEnabled ||
-    thread.kickoff.assistantType === 'calendar-work-item'
+    thread.kickoff.assistantType === 'calendar-work-item' ||
+    resolveDocumentAssistantType(thread.kickoff)
   ) {
     capabilities.push('mcp');
   }
@@ -584,11 +621,11 @@ function currentPrompt(
   skill: ChatTurnSkill | null,
   frozenSkill: DurableInteractiveTurnSpecification['skill'],
   attachments: DurableInteractiveTurnSpecification['currentMessage']['attachments'],
-  includeSessionInstructions: boolean,
+  instructions: ReadonlyArray<string>,
 ): string {
   return [
     ...CHAT_WRITE_POLICY_LINES,
-    ...(includeSessionInstructions ? INTERACTIVE_QUESTION_UI_LINES : []),
+    ...instructions,
     ...(skill ? [`Run skill: ${skill.name} (\`${skill.path}\`)`, ''] : []),
     ...(frozenSkill
       ? [
@@ -651,14 +688,17 @@ async function defaultLoadRepositoryContext(
   return { contextContent, agentsContent };
 }
 
-/** Interview and ADR sessions avoid broad repository search, matching the in-process path. */
+/**
+ * Interview sessions (including ADR interviews, which classify as `interview`)
+ * avoid broad repository search, matching the in-process path.
+ */
 export function workflowAllowsRepositorySearch(
   workflowClass: InteractiveWorkflowClass,
 ): boolean {
   switch (workflowClass) {
     case 'interview':
-    case 'adr':
       return false;
+    case 'adr':
     case 'home-chat':
     case 'ask-apex':
     case 'assistant':
@@ -702,7 +742,8 @@ function frozenMcpDescriptors(
       enableRepoBrowse: false,
     });
   }
-  if (hasAdoCapability) {
+  // Document assistants stage edits through ado-skills `update_*` tools.
+  if (hasAdoCapability || resolveDocumentAssistantType(thread.kickoff)) {
     descriptors.push({
       kind: 'internal-proxy',
       serverName: 'ado-skills',
@@ -1078,7 +1119,7 @@ export function createDurableInteractiveTurnService(
         skill,
         frozenSkill,
         immutableAttachments,
-        true,
+        sessionInstructions(thread, input.workflowClass),
       );
       // A live or resumed agent already holds the thread skill from its first
       // turn. Resending it every turn makes step-by-step skills (interviews)
@@ -1086,7 +1127,7 @@ export function createDurableInteractiveTurnService(
       const threadSkillAlreadyLoaded =
         !input.turnSkill && transcript.some((entry) => entry.role === 'agent');
       const preparedCurrentPrompt = threadSkillAlreadyLoaded
-        ? currentPrompt(input.text, null, null, immutableAttachments, false)
+        ? currentPrompt(input.text, null, null, immutableAttachments, [])
         : firstTurnPrompt;
       const specification: DurableInteractiveTurnSpecification = {
         schemaVersion: 1,
