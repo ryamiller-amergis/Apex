@@ -32,6 +32,7 @@ import { assertSkillAllowed, resolveDeadlineMs } from './registry';
 import {
   deadlineFromNow,
   failStepRun,
+  failStepRunForHuman,
   suspendStepRun,
   PlaybookStepExecutionContext,
   PlaybookStepOutcome,
@@ -175,9 +176,8 @@ export async function executeCursorAgentStep(
     }
     if (!v2RunId) {
       // Same end state as an agent run that failed: parked, retryable by a person.
-      await failStepRun({
+      await failStepRunForHuman({
         stepRunId: context.stepRunId,
-        retryable: true,
         reason: 'The V2 runtime could not prepare this agent run.',
       });
       return { kind: 'suspended', expiresAt: stepExpiresAt };

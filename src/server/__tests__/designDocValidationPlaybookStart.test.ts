@@ -87,7 +87,7 @@ describe('FEAT-014 owner start path', () => {
     expect(startRun).not.toHaveBeenCalled();
   });
 
-  it('VT-11 returns the existing run for the same validation thread', async () => {
+  it('VT-11 returns the existing run for the same document', async () => {
     selectLimit.mockResolvedValue([{ id: 'run-existing', definitionVersionId: 'version-9' }]);
 
     await expect(startDesignDocValidationPlaybook({
@@ -99,6 +99,24 @@ describe('FEAT-014 owner start path', () => {
       definitionVersionId: 'version-9',
       outcome: 'already-running',
     });
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
+  it('returns the active run without replacing a closed validation thread', async () => {
+    getThread.mockResolvedValue({ id: 'thread-1', status: 'closed' });
+    selectLimit.mockResolvedValue([{ id: 'run-at-gate', definitionVersionId: 'version-9' }]);
+
+    await expect(startDesignDocValidationPlaybook({
+      designDocId: 'doc-1',
+      project: 'Apex',
+      callerUserId: 'owner-1',
+    })).resolves.toEqual({
+      runId: 'run-at-gate',
+      definitionVersionId: 'version-9',
+      outcome: 'already-running',
+    });
+    expect(createThread).not.toHaveBeenCalled();
+    expect(updateWhere).not.toHaveBeenCalled();
     expect(startRun).not.toHaveBeenCalled();
   });
 

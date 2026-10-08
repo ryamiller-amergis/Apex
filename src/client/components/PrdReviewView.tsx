@@ -1090,6 +1090,7 @@ export const PrdReviewView: React.FC = () => {
   const handleFixCommentWithAi = useCallback(
     async (commentId: string) => {
       if (!id) return;
+      fixWithAi.reset();
       setFixingCommentId(commentId);
       try {
         await fixPrdCommentWithAi.mutateAsync({ commentId });
@@ -1097,11 +1098,12 @@ export const PrdReviewView: React.FC = () => {
         setFixingCommentId(null);
       }
     },
-    [id, fixPrdCommentWithAi]
+    [id, fixPrdCommentWithAi, fixWithAi]
   );
 
   const handleFixAllCommentsWithAi = useCallback(async () => {
     if (!id) return;
+    fixPrdCommentWithAi.reset();
     markApexFixInProgress('prd-comments-bulk', id);
     setBulkCommentFixRunning(true);
     try {
@@ -1110,7 +1112,7 @@ export const PrdReviewView: React.FC = () => {
       clearApexFixInProgress('prd-comments-bulk', id);
       setBulkCommentFixRunning(false);
     }
-  }, [id, fixWithAi]);
+  }, [id, fixWithAi, fixPrdCommentWithAi]);
 
   const handleAcceptAllProposed = useCallback(async () => {
     if (!id) return;

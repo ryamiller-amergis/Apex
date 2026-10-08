@@ -40,10 +40,12 @@ jest.mock('../db/drizzle', () => ({ db: {} }));
 
 const suspendStepRun = jest.fn().mockResolvedValue(undefined);
 const failStepRun = jest.fn().mockResolvedValue(undefined);
+const failStepRunForHuman = jest.fn().mockResolvedValue(true);
 jest.mock('../services/playbookSteps/stepRuns', () => ({
   ...jest.requireActual('../services/playbookSteps/stepRuns'),
   suspendStepRun: (...a: unknown[]) => suspendStepRun(...a),
   failStepRun: (...a: unknown[]) => failStepRun(...a),
+  failStepRunForHuman: (...a: unknown[]) => failStepRunForHuman(...a),
 }));
 
 import fs from 'fs';
@@ -276,9 +278,9 @@ describe('ai-runs-v2-transport', () => {
 
     expect(enqueue).not.toHaveBeenCalled();
     expect(suspendStepRun).not.toHaveBeenCalled();
-    expect(failStepRun).toHaveBeenCalledWith(expect.objectContaining({
+    expect(failStepRun).not.toHaveBeenCalled();
+    expect(failStepRunForHuman).toHaveBeenCalledWith(expect.objectContaining({
       stepRunId: 'step-run-1',
-      retryable: true,
     }));
     expect(outcome).toEqual(expect.objectContaining({ kind: 'suspended' }));
     expect(outcome).not.toHaveProperty('agentRunId');
