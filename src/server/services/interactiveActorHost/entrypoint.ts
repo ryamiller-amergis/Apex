@@ -55,7 +55,10 @@ import {
 import { collectInteractiveArtifacts } from './interactiveArtifactCollector';
 import { materializeInteractiveWorkspace } from './interactiveWorkspaceMaterializer';
 import { createPerThreadTurnQueue } from './perThreadTurnQueue';
-import { createInteractiveShutdownDrain } from './shutdownDrain';
+import {
+  createInteractiveShutdownDrain,
+  interactiveInFlightInvocations,
+} from './shutdownDrain';
 import {
   interactiveSessionActorClassFor,
   setInteractiveActorRuntime,
@@ -186,6 +189,16 @@ export async function registerInteractiveHealthHandler(
   );
 }
 
+export interface InteractiveDispatchDrain {
+  isDraining(): boolean;
+  track<T>(work: () => Promise<T>): Promise<T>;
+}
+
+const NO_DISPATCH_DRAIN: InteractiveDispatchDrain = {
+  isDraining: () => false,
+  track: (work) => work(),
+};
+
 export async function registerInteractiveDispatchHandler(
   invoker: InteractiveDispatchInvoker,
   resolveActor: (threadId: string) => IInteractiveSessionActor,
@@ -193,7 +206,7 @@ export async function registerInteractiveDispatchHandler(
     payload: InteractiveDispatchRequest,
     error: unknown
   ) => Promise<void>,
-  isDraining: () => boolean = () => false
+  drain: InteractiveDispatchDrain = NO_DISPATCH_DRAIN
 ): Promise<void> {
   await invoker.listen(
     'dispatch',
@@ -212,7 +225,7 @@ export async function registerInteractiveDispatchHandler(
       }
       // The orchestrator retries a refused dispatch, which then lands on a replica
       // that is not shutting down.
-      if (isDraining()) {
+      if (drain.isDraining()) {
         console.warn(
           JSON.stringify({
             event: 'InteractiveDispatchRefusedDraining',
@@ -232,11 +245,13 @@ export async function registerInteractiveDispatchHandler(
         })
       );
       const actor = resolveActor(payload.threadId);
-      void actor
-        .handleTurn({
-          runId: payload.runId,
-          dispatchMessageId: payload.dispatchMessageId,
-        })
+      void drain
+        .track(() =>
+          actor.handleTurn({
+            runId: payload.runId,
+            dispatchMessageId: payload.dispatchMessageId,
+          })
+        )
         .then((outcome) => {
           console.log(
             JSON.stringify({
@@ -458,7 +473,8 @@ export async function main(): Promise<void> {
 
   const shutdownDrain = createInteractiveShutdownDrain({
     drainMs: resolveShutdownDrainMs(process.env.AI_RUNS_V2_SHUTDOWN_DRAIN_MS),
-    activeTurnCount: () => turnQueue.activeThreadCount(),
+    activeTurnCount: () =>
+      turnQueue.activeThreadCount() + interactiveInFlightInvocations.count(),
     dispose: () => logic.disposeAll(),
     exit: (code) => void exitAfterFlush(code),
   });
@@ -519,7 +535,10 @@ export async function main(): Promise<void> {
           : {}),
       });
     },
-    () => shutdownDrain.isDraining()
+    {
+      isDraining: () => shutdownDrain.isDraining(),
+      track: (work) => interactiveInFlightInvocations.track(work),
+    }
   );
 
   await server.start();

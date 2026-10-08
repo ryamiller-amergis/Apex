@@ -10,6 +10,7 @@ import type {
   InteractiveSessionActor,
   InteractiveTurnOutcome,
 } from '../services/interactiveActorHost/interactiveSessionActor';
+import { interactiveInFlightInvocations } from '../services/interactiveActorHost/shutdownDrain';
 
 const TURN_ID = '10000000-0000-4000-8000-000000000001';
 const THREAD_ID = '10000000-0000-4000-8000-000000000002';
@@ -93,9 +94,10 @@ describe('interactive compatibility actor class', () => {
     };
     setInteractiveActorRuntime({ logic, callback });
 
-    const actor = {
-      getActorId: () => ({ getId: () => THREAD_ID }),
-    } as unknown as InteractiveSessionActorImpl;
+    const actor = Object.assign(
+      Object.create(InteractiveSessionActorImpl.prototype),
+      { getActorId: () => ({ getId: () => THREAD_ID }) },
+    ) as InteractiveSessionActorImpl;
 
     await expect(
       InteractiveSessionActorImpl.prototype.handleTurn.call(actor, {
@@ -126,9 +128,10 @@ describe('interactive compatibility actor class', () => {
     };
     setInteractiveActorRuntime({ logic, callback });
 
-    const actor = {
-      getActorId: () => ({ getId: () => THREAD_ID }),
-    } as unknown as InteractiveSessionActorImpl;
+    const actor = Object.assign(
+      Object.create(InteractiveSessionActorImpl.prototype),
+      { getActorId: () => ({ getId: () => THREAD_ID }) },
+    ) as InteractiveSessionActorImpl;
 
     await expect(
       InteractiveSessionActorImpl.prototype.handleTurn.call(actor, {
@@ -137,6 +140,42 @@ describe('interactive compatibility actor class', () => {
       }),
     ).resolves.toEqual({ status: 'completed', cursorAgentId: null });
     expect(handleDurableTurn).not.toHaveBeenCalled();
+  });
+
+  it('counts the call as in flight until the durable turn is queued', async () => {
+    let releaseBootstrap!: (value: InteractiveActorBootstrap) => void;
+    const handleDurableTurn = jest.fn(
+      () => new Promise<InteractiveTurnOutcome>(() => {}),
+    );
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    setInteractiveActorRuntime({
+      logic: { handleTurn: jest.fn(), handleDurableTurn, disposeAll: jest.fn() },
+      callback: {
+        getBootstrap: jest.fn(
+          () =>
+            new Promise<InteractiveActorBootstrap>((resolve) => {
+              releaseBootstrap = resolve;
+            }),
+        ),
+        postIngest: jest.fn(),
+      } as unknown as AiRunsCallbackClient,
+    });
+    const actor = Object.assign(
+      Object.create(InteractiveSessionActorImpl.prototype),
+      { getActorId: () => ({ getId: () => THREAD_ID }) },
+    ) as InteractiveSessionActorImpl;
+    const before = interactiveInFlightInvocations.count();
+
+    const outcome = InteractiveSessionActorImpl.prototype.handleTurn.call(actor, {
+      runId: RUN_ID,
+      dispatchMessageId: DISPATCH_MESSAGE_ID,
+    });
+    expect(interactiveInFlightInvocations.count()).toBe(before + 1);
+
+    releaseBootstrap(makeBootstrap());
+    await expect(outcome).resolves.toEqual({ status: 'accepted' });
+    expect(handleDurableTurn).toHaveBeenCalled();
+    expect(interactiveInFlightInvocations.count()).toBe(before);
   });
 });
 

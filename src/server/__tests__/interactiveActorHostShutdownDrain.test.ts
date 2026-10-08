@@ -1,4 +1,38 @@
-import { createInteractiveShutdownDrain } from '../services/interactiveActorHost/shutdownDrain';
+import {
+  createInFlightCounter,
+  createInteractiveShutdownDrain,
+} from '../services/interactiveActorHost/shutdownDrain';
+
+describe('in-flight counter', () => {
+  it('counts work from the call until it settles, success or failure', async () => {
+    const counter = createInFlightCounter();
+    let finish: () => void = () => {};
+    const ok = counter.track(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const failed = counter.track(() => Promise.reject(new Error('boom')));
+    expect(counter.count()).toBe(2);
+
+    await expect(failed).rejects.toThrow('boom');
+    expect(counter.count()).toBe(1);
+    finish();
+    await ok;
+    expect(counter.count()).toBe(0);
+  });
+
+  it('releases the count when the work throws synchronously', async () => {
+    const counter = createInFlightCounter();
+    await expect(
+      counter.track(() => {
+        throw new Error('sync');
+      }),
+    ).rejects.toThrow('sync');
+    expect(counter.count()).toBe(0);
+  });
+});
 
 describe('interactive actor host shutdown drain', () => {
   let activeTurns: number;

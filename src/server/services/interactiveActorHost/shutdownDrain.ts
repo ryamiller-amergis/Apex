@@ -20,6 +20,38 @@ export interface InteractiveShutdownDrain {
 
 const DEFAULT_POLL_MS = 1_000;
 
+/**
+ * Counts work that has been accepted but is not yet on the turn queue: a dispatch between
+ * `accepted: true` and the actor's reply, and an actor call before it submits its turn.
+ * Without it an idle-looking host would exit and lose a turn the orchestrator won't retry.
+ */
+export interface InFlightCounter {
+  track<T>(work: () => Promise<T>): Promise<T>;
+  count(): number;
+}
+
+export function createInFlightCounter(): InFlightCounter {
+  let active = 0;
+  return {
+    track<T>(work: () => Promise<T>): Promise<T> {
+      active += 1;
+      let pending: Promise<T>;
+      try {
+        pending = work();
+      } catch (error) {
+        active -= 1;
+        return Promise.reject(error);
+      }
+      return pending.finally(() => {
+        active -= 1;
+      });
+    },
+    count: () => active,
+  };
+}
+
+export const interactiveInFlightInvocations = createInFlightCounter();
+
 export function createInteractiveShutdownDrain(
   options: InteractiveShutdownDrainOptions,
 ): InteractiveShutdownDrain {
