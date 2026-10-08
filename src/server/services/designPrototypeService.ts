@@ -1695,7 +1695,8 @@ export async function retryPrototype(prototypeId: string): Promise<void> {
 export async function failStalePrototypes(thresholdMs: number): Promise<number> {
   const now = new Date();
   const cutoff = new Date(now.getTime() - thresholdMs).toISOString();
-  const activeV2RunBeforeDeadline = sql`
+  // notExists() does not parenthesize a raw sql fragment, so the parentheses live here.
+  const activeV2RunBeforeDeadline = sql`(
     SELECT 1
     FROM ${agentRuns}
     WHERE ${agentRuns.transportVersion} = ${'servicebus-blob-v2'}
@@ -1703,7 +1704,7 @@ export async function failStalePrototypes(thresholdMs: number): Promise<number> 
         ${visualRunThreadPrefix('design-prototype')} || ${designPrototypes.id}::text
       AND ${agentRuns.status} IN ('queued', 'dispatched', 'running')
       AND ${agentRuns.timeoutAt} > ${now.toISOString()}::timestamptz
-  `;
+  )`;
   const reset = await db
     .update(designPrototypes)
     .set({

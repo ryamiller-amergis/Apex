@@ -688,7 +688,7 @@ describe('failStalePrototypes V2 deadline safety', () => {
     if (!predicate) return;
     const compiled = new PgDialect().sqlToQuery(predicate as SQL);
     const sqlText = compiled.sql.toLowerCase();
-    expect(sqlText).toContain('not exists');
+    expect(sqlText).toMatch(/not exists\s*\(\s*select 1\b/);
     expect(compiled.sql).toContain('"agent_runs"."timeout_at"');
     expect(compiled.params).toEqual(
       expect.arrayContaining([
