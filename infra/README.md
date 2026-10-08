@@ -19,6 +19,7 @@ This directory contains Terraform configuration for provisioning Azure resources
 - **Managed-identity access**: The cross-cutting Apex App Service identity is scoped to the shared Storage Account. PDF assembly stays in the Apex application; job delivery uses the Postgres queue (Service Bus deferred).
 - **Load Test infrastructure** (FEAT-002): Dedicated Service Bus namespace, Container Apps Job, and managed identities — see [Load Test module](#load-test-module-feat-002) below.
 - **AI Runs background worker** (FEAT-003): Shared AI-runs Service Bus namespace (`sbns-apex-ai-*`), `ai-runs-background` queue, KEDA Container Apps Job, runner MI, Azure Files workspace mount — see [AI Runs worker module](#ai-runs-background-worker-module-feat-003) below.
+- **My Work Cursor worker Job** (dev and production): Manual Container Apps Job in `cae-apex-ai-{environment}` that Apex starts for each cloud-agent run — see [My Work Cursor worker Job](#my-work-cursor-worker-job-dev-and-production).
 - **Repo read service** (optional): Container App serving git reads from ephemeral disk; gated by `enable_repo_read_service` — see [Repo read service](#repo-read-service) below.
 
 ## Shared async platform conventions
@@ -620,6 +621,69 @@ terraform output ai_runs_runner_identity_client_id
 
 Infrastructure is safe to apply while `ai-runs-background` is disabled; the Job
 scales from zero until the governor publishes admitted work.
+
+---
+
+## My Work Cursor worker Job (dev and production)
+
+`cursor-cloud-workers.tf` provisions the Container Apps Job that My Work starts
+for each cloud-agent run. Set `enable_cursor_pool_workers = true` in that
+environment's tfvars file (`terraform.tfvars` for dev, `terraform.prd.tfvars`
+for production). The job is created only when that flag is true. Resource
+names still include the environment.
+
+Apex starts one execution and overrides the command to
+`/usr/local/bin/cursor-run-cli`. The Job does not register a Cursor Team Pool
+and does not call the Cloud Agents SDK.
+
+The stack reuses `cae-apex-ai-{environment}`, the existing ACR, Application
+Insights, and the `cursor-api-key` secret in the AI-runs Key Vault. It does
+not mount the shared Azure Files workspace: each run gets an isolated
+ephemeral checkout.
+
+| Resource | Dev name | Production name | Purpose |
+|----------|----------|-----------------|---------|
+| Worker Container Apps Job | `caj-apex-cursor-worker-dev` | `caj-apex-cursor-worker-prd` | Manual Job; one execution per Start cloud agent click |
+| Worker identity | `mi-apex-cursor-worker-dev` | `mi-apex-cursor-worker-prd` | Pull image, read the Cursor API key, and read prompt blobs |
+| Prompt container | `cursor-prompts` on the shared account | `cursor-prompts` on the shared account | Private text of the Apex-built prompt; deleted after one day |
+
+### Image contract
+
+Terraform provisions compute and identity but does not build the image:
+
+- `cursor_pool_worker_image` must contain the Cursor `agent` CLI, `git`, and
+  `/usr/local/bin/cursor-run-cli` from `runners/cursor-pool-worker/`.
+- The Key Vault `cursor-api-key` is the key the CLI uses inside the container.
+- `ADO_PAT` is passed on the execution only, for Azure DevOps remotes. It is
+  not stored on the Job.
+- The execution receives `AGENT_PROMPT_BLOB_URL`, not the prompt text. Apex
+  uploads that text to the private `cursor-prompts` container before starting
+  the job. The worker identity reads it. The container is deleted after one day.
+
+### RBAC and networking
+
+The worker identity can pull from ACR, read Key Vault secrets, and read the
+`cursor-prompts` container. The Apex app identity can write that container.
+The worker does not receive access to the AI-runs Service Bus queue or the
+shared workspace.
+
+Workers require outbound HTTPS to Cursor, the source-control host, and the
+package registries used by the repository. No inbound port or public IP is
+required.
+
+### Activation
+
+Use the dev workspace and `terraform.tfvars`, or the production workspace and
+`terraform.prd.tfvars`:
+
+```hcl
+enable_cursor_pool_workers = true
+cursor_pool_worker_image   = "<acr>.azurecr.io/apex-cursor-worker:<tag>"
+```
+
+```bash
+terraform output cursor_pool_worker_job_name
+```
 
 ---
 

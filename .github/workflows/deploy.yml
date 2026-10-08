@@ -233,6 +233,7 @@ jobs:
               AZURE_COST_CLIENT_SECRET="${{ secrets.AZURE_COST_CLIENT_SECRET }}" \
               SESSION_SECRET="${{ secrets.SESSION_SECRET }}" \
               CURSOR_API_KEY="${{ secrets.CURSOR_API_KEY }}" \
+              CURSOR_USER_LEVEL_API_KEY="${{ secrets.CURSOR_USER_LEVEL_API_KEY }}" \
               CURSOR_TEAM_API_KEY="${{ secrets.CURSOR_TEAM_API_KEY }}" \
               AGENT_RUN_HARD_LIMIT_MS="${{ secrets.AGENT_RUN_HARD_LIMIT_MS }}" \
               PORT=8080 \

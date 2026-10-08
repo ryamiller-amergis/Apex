@@ -18,6 +18,7 @@ jest.mock('../services/releaseOrderService', () => ({
 
 // Mock release management service for rename route tests
 jest.mock('../services/releaseManagementService', () => ({
+  assignWorkItemsToRelease: jest.fn(),
   renameRelease: jest.fn(),
 }));
 
@@ -441,6 +442,37 @@ describe('Release Management API Routes', () => {
         .expect(400);
 
       expect(response.body).toEqual({ error: 'workItemIds array is required' });
+    });
+  });
+
+  describe('POST /api/releases/:epicId/link-related', () => {
+    const mockAssignWorkItems = releaseManagementService.assignWorkItemsToRelease as jest.Mock;
+
+    it('assigns items exclusively to the target release', async () => {
+      mockAssignWorkItems.mockResolvedValue({
+        linkedCount: 2,
+        movedCount: 1,
+        unchangedCount: 0,
+        movedFrom: { 2: [456] },
+      });
+
+      const response = await request(app)
+        .post('/api/releases/123/link-related')
+        .send({
+          workItemIds: [1, 2],
+          project: 'TestProject',
+          areaPath: 'TestArea',
+        })
+        .expect(200);
+
+      expect(mockAssignWorkItems).toHaveBeenCalledWith(123, [1, 2], mockAdoService);
+      expect(response.body).toEqual({
+        success: true,
+        linkedCount: 2,
+        movedCount: 1,
+        unchangedCount: 0,
+        movedFrom: { 2: [456] },
+      });
     });
   });
 });

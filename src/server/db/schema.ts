@@ -33,6 +33,8 @@ import type {
   AgentRunLane,
   AgentRunStatus,
   AgentRunTerminalReason,
+  AgentRunWorkflowClass,
+  RunCheckResult,
 } from '../../shared/types/agentRunLifecycle';
 import type {
   DurableInteractiveTurnSpecification,
@@ -49,7 +51,7 @@ import type {
 import type { ContentSnapshot, DesignDocValidationOverride, PrdReadinessOverride, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
 import type { UiLabHistoryEntry } from '../../shared/types/uiLab';
-import type { DevSessionSetupPhase } from '../../shared/types/devWorkbench';
+import type { DevSessionSetupPhase, LeftoverWorkSummary } from '../../shared/types/devWorkbench';
 import type { DesignPlanFeature, DesignPlanHistoryEntry } from '../../shared/types/designPlan';
 import type { QuickSkillPill, QuickMcpPill, InterviewSkillOption, PrototypeEngine } from '../../shared/types/projectSettings';
 import type { EffortLevel } from '../../shared/types/effort';
@@ -196,7 +198,18 @@ export const devSessions = pgTable('dev_sessions', {
   branchPushed: boolean('branch_pushed').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
-});
+  // Soft pointer to agent_runs.id (text). No FK — avoids a circular reference
+  // with agent_runs.dev_session_id.
+  currentRunId: text('current_run_id'),
+  currentRunPrUrl: text('current_run_pr_url'),
+  currentRunPrStatus: text('current_run_pr_status').$type<'none' | 'open' | 'abandoned' | 'merged'>().default('none'),
+  leftoverWork: jsonb('leftover_work').$type<LeftoverWorkSummary>(),
+}, (t) => ({
+  currentRunPrStatusCheck: check(
+    'dev_sessions_current_run_pr_status_check',
+    sql`${t.currentRunPrStatus} IS NULL OR ${t.currentRunPrStatus} IN ('none', 'open', 'abandoned', 'merged')`,
+  ),
+}));
 
 export const devSessionsRelations = relations(devSessions, ({ one }) => ({
   chatThread: one(chatThreads, {
@@ -1707,6 +1720,20 @@ export const agentRuns = pgTable('agent_runs', {
   interactiveClass: text('interactive_class').$type<InteractiveClass>(),
   clientTurnId: uuid('client_turn_id'),
   clientTurnHash: text('client_turn_hash'),
+  devSessionId: uuid('dev_session_id').references(() => devSessions.id, { onDelete: 'set null' }),
+  workflowClass: text('workflow_class').$type<AgentRunWorkflowClass>(),
+  cloudAgentIdentity: text('cloud_agent_identity'),
+  cloudAgentManaged: boolean('cloud_agent_managed').notNull().default(false),
+  cloudJobName: text('cloud_job_name'),
+  cloudJobExecutionName: text('cloud_job_execution_name'),
+  cloudBranchName: text('cloud_branch_name'),
+  cloudPrUrl: text('cloud_pr_url'),
+  cloudPrStatus: text('cloud_pr_status')
+    .$type<'none' | 'open' | 'abandoned' | 'merged'>()
+    .default('none'),
+  // FEAT-003 TBI-005: suite-level unit/e2e/WCAG outcomes reported at terminal write time.
+  // NULL means the run reported nothing; never gates PR creation or run completion.
+  checkResults: jsonb('check_results').$type<RunCheckResult[]>(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
@@ -1729,6 +1756,10 @@ export const agentRuns = pgTable('agent_runs', {
   interactiveUserActiveIdx: index('idx_agent_runs_interactive_user_active')
     .on(t.requestedByUserId, t.interactiveClass, t.createdAt)
     .where(sql`${t.lane} = 'ai-runs-interactive' AND ${t.status} IN ('queued', 'dispatched', 'running')`),
+  cloudPrStatusCheck: check(
+    'agent_runs_cloud_pr_status_check',
+    sql`${t.cloudPrStatus} IS NULL OR ${t.cloudPrStatus} IN ('none', 'open', 'abandoned', 'merged')`,
+  ),
   queuedWorkerIdx: index('idx_agent_runs_queued_at_worker')
     .on(t.queuedAt)
     .where(sql`${t.lane} = 'background'`),
@@ -1746,11 +1777,11 @@ export const agentRuns = pgTable('agent_runs', {
     .where(sql`${t.lane} = 'background' AND ${t.status} = 'queued'`),
   laneCheck: check(
     'agent_runs_lane_check',
-    sql`${t.lane} IS NULL OR ${t.lane} IN ('background', 'ai-runs-interactive')`,
+    sql`${t.lane} IS NULL OR ${t.lane} IN ('background', 'ai-runs-interactive', 'cloud-agent')`,
   ),
   terminalReasonCheck: check(
     'agent_runs_terminal_reason_check',
-    sql`${t.terminalReason} IS NULL OR ${t.terminalReason} IN ('worker_lost', 'progress_timeout', 'queue_ttl', 'forced_cancel', 'dispatch_ttl')`,
+    sql`${t.terminalReason} IS NULL OR ${t.terminalReason} IN ('worker_lost', 'progress_timeout', 'queue_ttl', 'forced_cancel', 'dispatch_ttl', 'cloud_agent_timeout')`,
   ),
   transportVersionCheck: check(
     'agent_runs_transport_version_check',
@@ -1772,6 +1803,17 @@ export const agentRuns = pgTable('agent_runs', {
     'agent_runs_dapr_actor_v2_required_fields_check',
     sql`${t.transportVersion} <> 'dapr-actor-v2' OR (${t.requestedByUserId} IS NOT NULL AND ${t.interactiveClass} IS NOT NULL AND ${t.clientTurnId} IS NOT NULL AND ${t.clientTurnHash} IS NOT NULL)`,
   ),
+  workflowClassCheck: check(
+    'agent_runs_workflow_class_check',
+    sql`${t.workflowClass} IS NULL OR ${t.workflowClass} IN ('generation', 'implementation')`,
+  ),
+  cloudAgentManagedIdentityCheck: check(
+    'agent_runs_cloud_agent_managed_identity_check',
+    sql`${t.cloudAgentManaged} = false OR ${t.cloudAgentIdentity} IS NOT NULL`,
+  ),
+  oneLiveImplementationPerSession: uniqueIndex('uq_agent_runs_one_live_per_session')
+    .on(t.devSessionId)
+    .where(sql`${t.workflowClass} = 'implementation' AND ${t.status} IN ('queued', 'dispatched', 'running') AND ${t.devSessionId} IS NOT NULL`),
   nonTerminalTimeoutCheck: check(
     'agent_runs_non_terminal_timeout_at_check',
     sql`${t.status} NOT IN ('queued', 'running') OR ${t.timeoutAt} IS NOT NULL`,

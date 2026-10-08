@@ -1,6 +1,6 @@
 import type { Server } from 'http';
 import { randomUUID } from 'crypto';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { prds, designDocs, testCases, devSessions, agentRuns } from '../db/schema';
 import type { AgentRunEventEnvelope } from '../../shared/types/chat';
@@ -213,8 +213,11 @@ export async function recoverStaleDevSessionSetups(
   const setupTimeoutMs = options.setupTimeoutMs
     ?? positiveDuration(process.env.DEV_SESSION_SETUP_TIMEOUT_MS, DEFAULT_SETUP_TIMEOUT_MS);
   const settingUp = await db.query.devSessions.findMany({
-    where: eq(devSessions.status, 'setting_up'),
-    columns: { id: true, status: true, updatedAt: true },
+    where: and(
+      eq(devSessions.status, 'setting_up'),
+      isNull(devSessions.currentRunId),
+    ),
+    columns: { id: true, status: true, updatedAt: true, currentRunId: true },
     orderBy: [asc(devSessions.updatedAt), asc(devSessions.id)],
     limit: RECOVERY_SWEEP_BATCH_SIZE,
   });
@@ -222,6 +225,7 @@ export async function recoverStaleDevSessionSetups(
 
   for (const session of settingUp) {
     throwIfAborted(options.signal);
+    if (session.currentRunId) continue;
     const updatedAtMs = Date.parse(session.updatedAt);
     if (Number.isFinite(updatedAtMs) && nowMs - updatedAtMs < setupTimeoutMs) continue;
 
@@ -238,7 +242,11 @@ export async function recoverStaleDevSessionSetups(
         setupProgressAt: updatedAt,
         updatedAt,
       })
-      .where(and(eq(devSessions.id, session.id), eq(devSessions.status, 'setting_up')));
+      .where(and(
+        eq(devSessions.id, session.id),
+        eq(devSessions.status, 'setting_up'),
+        isNull(devSessions.currentRunId),
+      ));
     failed++;
     console.warn(`[recovery] Failed abandoned dev session setup (sessionId=${session.id})`);
   }

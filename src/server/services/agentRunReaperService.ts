@@ -849,6 +849,48 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
         continue;
       }
 
+      if (row.lane === 'cloud-agent') {
+        // Cursor SDK agents (bc-) keep running in Cursor. The container hard
+        // limit does not apply to them for now.
+        if (row.cloudAgentIdentity?.startsWith('bc-')) continue;
+
+        const expired = Boolean(row.timeoutAt && Date.parse(row.timeoutAt) <= nowMs);
+        if (!expired) continue;
+
+        const managed = Boolean(row.cloudAgentManaged);
+        const terminalReason = managed ? 'cloud_agent_timeout' : 'queue_ttl';
+        const detail = managed
+          ? 'Cloud Agent run exceeded configured hard limit'
+          : 'Cloud Agent start exceeded the pre-identity queue TTL';
+        const errorEvent = {
+          eventId: randomUUID(),
+          threadId: row.threadId,
+          runId: row.id,
+          sourceInstance: WATCHDOG_SOURCE_INSTANCE,
+          sequence: nextRunEventSequence(row.id, WATCHDOG_SOURCE_INSTANCE),
+          timestamp: updatedAt,
+          type: 'error' as const,
+          phase: 'completion' as const,
+          status: 'failed' as const,
+          detail,
+          event: { type: 'error' as const, error: detail },
+        };
+        const won = await finalizeReconciledAgentRun({
+          runId: row.id,
+          threadId: row.threadId,
+          status: 'failed',
+          terminalReason,
+          detail,
+          events: [errorEvent],
+        });
+        if (won) {
+          console.log(
+            `[reaper] Reaped cloud-agent run (id=${row.id}, managed=${managed}) — ${terminalReason}`,
+          );
+        }
+        continue;
+      }
+
       // Interactive dispatch is acknowledged before the Dapr actor invocation
       // finishes. A process crash can therefore bypass the host's rejection
       // handler and leave the fenced row dispatched forever. Unlike background
@@ -1372,6 +1414,11 @@ export function startReaper(): void {
   if (reaperTimer) {
     return;
   }
+  void import('./cloudAgentQueueScheduler')
+    .then((scheduler) => scheduler.startCloudAgentQueueScheduler())
+    .catch((err) => {
+      console.error('[cloud-agent] queue scheduler failed to start:', err instanceof Error ? err.message : err);
+    });
 
   void runReaperCycle('[reaper] Initial reap failed:');
   reaperTimer = setInterval(() => {
@@ -1388,4 +1435,7 @@ export function stopReaper(): void {
     clearInterval(reaperTimer);
     reaperTimer = null;
   }
+  void import('./cloudAgentQueueScheduler')
+    .then((scheduler) => scheduler.stopCloudAgentQueueScheduler())
+    .catch(() => undefined);
 }

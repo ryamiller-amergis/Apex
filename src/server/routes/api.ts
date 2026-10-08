@@ -45,7 +45,7 @@ import {
   bulkUpdateReleaseOrder,
   pruneStaleOrders,
 } from '../services/releaseOrderService';
-import { renameRelease } from '../services/releaseManagementService';
+import { assignWorkItemsToRelease, renameRelease } from '../services/releaseManagementService';
 import { chatThreads as chatThreadsSchema } from '../db/schema';
 import {
   createOrReuseSession,
@@ -1378,8 +1378,8 @@ router.post('/releases/:epicId/link-related', async (req: Request, res: Response
     }
 
     const adoService = await adoWriteForRequest(req, project, areaPath);
-    await adoService.linkWorkItemsToRelease(epicId, workItemIds);
-    res.json({ success: true, linkedCount: workItemIds.length });
+    const assignmentResult = await assignWorkItemsToRelease(epicId, workItemIds, adoService);
+    res.json({ success: true, ...assignmentResult });
   } catch (error: any) {
     if (isAdoUserAuthError(error)) {
       return res.status(403).json({ error: error.message });

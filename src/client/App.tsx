@@ -1490,7 +1490,7 @@ function App() {
                   ) : planningTab === 'releases' ? (
                     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                       <Suspense fallback={<ViewSkeleton />}>
-                        {usesBoardWorkItems ? (
+                        {selectedProject.toLowerCase() === 'apex' ? (
                           <BoardReleaseView project={selectedProject} />
                         ) : (
                           <ReleaseView workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />

@@ -175,6 +175,21 @@ pdf_blob_container_name = "pdf-artifacts"
 # ai_runs_apex_callback_base_url    = "https://app-scrum-dev.azurewebsites.net"
 
 # ---------------------------------------------------------------------------
+# My Work Cursor worker Job (dev and production)
+# Reuses cae-apex-ai-{environment}, the load-test ACR, and the AI-runs Key
+# Vault. Set the same switch in terraform.prd.tfvars to provision
+# caj-apex-cursor-worker-prd. Left unset, the job is not created.
+#
+# Apex starts one execution and overrides the command to cursor-run-cli.
+# The worker image must contain `agent`, git, and that script.
+# ---------------------------------------------------------------------------
+# enable_cursor_pool_workers = true
+# cursor_pool_worker_image     = "<acr>.azurecr.io/apex-cursor-worker:<tag>"
+# cursor_pool_worker_cpu         = 2.0
+# cursor_pool_worker_memory      = "4Gi"
+# cursor_pool_worker_timeout_seconds      = 21600
+
+# ---------------------------------------------------------------------------
 # AI Runs interactive lane — FEAT-007 (WebSocket gateway + Dapr virtual actors)
 # Additive/inert while disabled. Reuses the FEAT-003 ai-runs Container Apps
 # Environment, runner managed identity, Azure Files workspace, LT ACR, and the
