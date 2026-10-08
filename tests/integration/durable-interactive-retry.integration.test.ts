@@ -23,10 +23,23 @@ const THREAD_ID = '12000000-0000-4000-8000-000000000001';
 const USER_ID = '42000000-0000-4000-8000-000000000001';
 const OTHER_THREAD_A = '12000000-0000-4000-8000-000000000002';
 const OTHER_THREAD_B = '12000000-0000-4000-8000-000000000003';
+const OTHER_THREAD_C = '12000000-0000-4000-8000-000000000004';
+const OTHER_THREAD_D = '12000000-0000-4000-8000-000000000005';
+const OTHER_THREAD_E = '12000000-0000-4000-8000-000000000006';
 const TURN_ID = '22000000-0000-4000-8000-000000000001';
 const OTHER_TURN_A = '22000000-0000-4000-8000-000000000002';
 const OTHER_TURN_B = '22000000-0000-4000-8000-000000000003';
-const ALL_THREADS = [THREAD_ID, OTHER_THREAD_A, OTHER_THREAD_B] as const;
+const OTHER_TURN_C = '22000000-0000-4000-8000-000000000004';
+const OTHER_TURN_D = '22000000-0000-4000-8000-000000000005';
+const OTHER_TURN_E = '22000000-0000-4000-8000-000000000006';
+const ALL_THREADS = [
+  THREAD_ID,
+  OTHER_THREAD_A,
+  OTHER_THREAD_B,
+  OTHER_THREAD_C,
+  OTHER_THREAD_D,
+  OTHER_THREAD_E,
+] as const;
 
 function specification(input: {
   threadId: string;
@@ -308,10 +321,19 @@ describe('durable interactive retry integration', () => {
     expect(afterOutbox.rows[0]?.count).toBe(beforeOutbox.rows[0]?.count);
   });
 
-  it('user cap rejection adds no attempt or outbox', async () => {
+  it('user cap rejection past the waiting cap adds no attempt or outbox', async () => {
     const repository = createDurableInteractiveTurnRepository();
-    await insertThread(OTHER_THREAD_A, USER_ID);
-    await insertThread(OTHER_THREAD_B, USER_ID);
+    // Two running turns plus three waiting fill the user's waiting cap.
+    const otherTurns = [
+      [OTHER_THREAD_A, OTHER_TURN_A],
+      [OTHER_THREAD_B, OTHER_TURN_B],
+      [OTHER_THREAD_C, OTHER_TURN_C],
+      [OTHER_THREAD_D, OTHER_TURN_D],
+      [OTHER_THREAD_E, OTHER_TURN_E],
+    ] as const;
+    for (const [threadId] of otherTurns) {
+      await insertThread(threadId, USER_ID);
+    }
 
     const failed = await repository.admit(
       preparedTurn({ threadId: THREAD_ID, turnId: TURN_ID, userId: USER_ID }),
@@ -319,20 +341,11 @@ describe('durable interactive retry integration', () => {
     if (!('runId' in failed)) throw new Error('expected failed-run admission');
     await markRunFailed(failed.runId);
 
-    await repository.admit(
-      preparedTurn({
-        threadId: OTHER_THREAD_A,
-        turnId: OTHER_TURN_A,
-        userId: USER_ID,
-      }),
-    );
-    await repository.admit(
-      preparedTurn({
-        threadId: OTHER_THREAD_B,
-        turnId: OTHER_TURN_B,
-        userId: USER_ID,
-      }),
-    );
+    for (const [threadId, turnId] of otherTurns) {
+      await repository.admit(
+        preparedTurn({ threadId, turnId, userId: USER_ID }),
+      );
+    }
 
     const beforeAttempts = await pool.query(
       `SELECT COUNT(*)::int AS count FROM ai_run_attempts WHERE run_id = $1`,

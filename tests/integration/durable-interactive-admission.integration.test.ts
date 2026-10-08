@@ -267,6 +267,19 @@ async function committedCounts(threadId: string): Promise<{
   return result.rows[0];
 }
 
+async function countWaitingForUserSlot(): Promise<number> {
+  const result = await pool.query<{ count: number }>(
+    `SELECT COUNT(*)::int AS count
+     FROM ai_run_outbox
+     WHERE payload->>'userSlotQueuedUntil' IS NOT NULL
+       AND run_id IN (
+         SELECT id FROM agent_runs WHERE thread_id = ANY($1::text[])
+       )`,
+    [THREAD_IDS],
+  );
+  return result.rows[0]?.count ?? 0;
+}
+
 function isAccepted(
   result: Awaited<
     ReturnType<
@@ -586,47 +599,33 @@ describe('durable interactive atomic admission', () => {
     );
   });
 
-  it('allows two user turns on different threads and refuses a third', async () => {
+  it('queues user turns past the limit and refuses one past the waiting cap', async () => {
     const userId = USER_IDS[0];
-    await Promise.all([
-      insertThread(THREAD_IDS[0], userId),
-      insertThread(THREAD_IDS[1], userId),
-      insertThread(THREAD_IDS[2], userId),
-    ]);
+    await Promise.all(
+      THREAD_IDS.slice(0, 6).map((threadId) => insertThread(threadId, userId)),
+    );
     const repository = createDurableInteractiveTurnRepository();
-    const firstTwo = await Promise.all([
+    const admit = (index: number) =>
       repository.admit(
         preparedTurn({
-          threadId: THREAD_IDS[0],
-          turnId: TURN_IDS[0],
+          threadId: THREAD_IDS[index],
+          turnId: TURN_IDS[index],
           userId,
         }),
-      ),
-      repository.admit(
-        preparedTurn({
-          threadId: THREAD_IDS[1],
-          turnId: TURN_IDS[1],
-          userId,
-        }),
-      ),
-    ]);
+      );
 
-    expect(firstTwo.every(isAccepted)).toBe(true);
-    await expect(
-      repository.admit(
-        preparedTurn({
-          threadId: THREAD_IDS[2],
-          turnId: TURN_IDS[2],
-          userId,
-        }),
-      ),
-    ).resolves.toEqual({
+    const running = await Promise.all([admit(0), admit(1)]);
+    const waiting = [await admit(2), await admit(3), await admit(4)];
+
+    expect([...running, ...waiting].every(isAccepted)).toBe(true);
+    await expect(countWaitingForUserSlot()).resolves.toBe(3);
+    await expect(admit(5)).resolves.toEqual({
       status: 'user_limit',
       code: 'USER_INTERACTIVE_LIMIT',
     });
   });
 
-  it('allows only one concurrent agentic turn per user', async () => {
+  it('queues a second concurrent agentic turn behind the first', async () => {
     const userId = USER_IDS[0];
     await Promise.all([
       insertThread(THREAD_IDS[0], userId),
@@ -653,11 +652,8 @@ describe('durable interactive atomic admission', () => {
       ),
     ]);
 
-    expect(results.filter(isAccepted)).toHaveLength(1);
-    expect(results).toContainEqual({
-      status: 'user_limit',
-      code: 'USER_AGENTIC_LIMIT',
-    });
+    expect(results.every(isAccepted)).toBe(true);
+    await expect(countWaitingForUserSlot()).resolves.toBe(1);
   });
 
   it('ignores sixteen dispatched global runs when this user remains eligible', async () => {
