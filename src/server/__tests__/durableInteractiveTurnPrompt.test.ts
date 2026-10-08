@@ -153,6 +153,37 @@ describe('durable interactive turn prompt', () => {
     expect(specification.recreationPrompt).toContain('Q1: which platforms?');
   });
 
+  it('resends saved answers with their questions on later interview turns', async () => {
+    const specification = await admittedSpecification([
+      message('user', 'We need a California break attestation', 1),
+      message('agent', 'Context first.\n**Where will this ship?**\na. Web\nb. Mobile', 2),
+      message('user', 'Q1: A — Web', 3),
+      message('agent', 'Noted.\nDoes this surface any PHI?\na. Yes\nb. No', 4),
+    ]);
+
+    expect(specification.currentPrompt).toContain("# Answers so far (from Apex's saved conversation)");
+    expect(specification.currentPrompt).toContain(
+      '1. Original request: We need a California break attestation',
+    );
+    expect(specification.currentPrompt).toContain(
+      '2. You asked: **Where will this ship?**\n   User answered: Q1: A — Web',
+    );
+    expect(specification.currentPrompt).not.toContain('Does this surface any PHI?');
+    expect(specification.currentPrompt).not.toContain(SKILL_CONTENT);
+  });
+
+  it('does not add an answer recap to Home chat turns', async () => {
+    const specification = await admittedSpecification(
+      [
+        message('user', 'What does the notifications service do?', 1),
+        message('agent', 'It fans out events. Anything else?', 2),
+      ],
+      { workflowClass: 'home-chat' },
+    );
+
+    expect(specification.currentPrompt).not.toContain('# Answers so far');
+  });
+
   it('gives a PRD assistant the staging tool and its edit guidance', async () => {
     const specification = await admittedSpecification([], {
       workflowClass: 'assistant',

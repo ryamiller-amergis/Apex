@@ -66,6 +66,8 @@ import { sql } from 'drizzle-orm';
 
 const DEFAULT_MODEL = 'composer-2.5';
 const MAX_TRANSCRIPT_CHARS = 120_000;
+const MAX_RECAP_QUESTION_CHARS = 400;
+const MAX_RECAP_ANSWER_CHARS = 1_500;
 const CHAT_WRITE_POLICY_LINES = [
   '# Repository and Azure DevOps write policy',
   '- Treat the repository checkout as read-only. Never create, edit, delete, or move files in it.',
@@ -597,6 +599,52 @@ function visibleTranscript(
     };
   }
   return visible;
+}
+
+function clipped(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+}
+
+function lastQuestion(agentText: string): string {
+  const lines = agentText.split('\n').map((line) => line.trim()).filter(Boolean);
+  const question = [...lines].reverse().find((line) => /\?(\*\*)?$/.test(line));
+  return clipped(question ?? lines[lines.length - 1] ?? '', MAX_RECAP_QUESTION_CHARS);
+}
+
+/**
+ * A live agent receives only the newest reply, so its own memory is otherwise
+ * the only record of earlier answers. Question-driven sessions resend the
+ * saved question/answer pairs every turn so an answered question is not
+ * asked again.
+ */
+function answersSoFar(
+  transcript: DurableInteractiveTurnSpecification['transcript'],
+  workflowClass: InteractiveWorkflowClass,
+): string[] {
+  if (workflowClass !== 'interview' && workflowClass !== 'adr') return [];
+  const entries: string[] = [];
+  let pendingQuestion: string | null = null;
+  for (const entry of transcript) {
+    if (entry.role === 'agent') {
+      pendingQuestion = lastQuestion(entry.text);
+      continue;
+    }
+    const answer = clipped(entry.text, MAX_RECAP_ANSWER_CHARS);
+    entries.push(
+      pendingQuestion === null
+        ? `${entries.length + 1}. Original request: ${answer}`
+        : `${entries.length + 1}. You asked: ${pendingQuestion}\n   User answered: ${answer}`,
+    );
+    pendingQuestion = null;
+  }
+  if (entries.length === 0) return [];
+  return [
+    "# Answers so far (from Apex's saved conversation)",
+    'These are the user\'s earlier replies, each with the question you had just asked. Treat every question listed here as answered. Do not ask it again unless the user changes the answer.',
+    ...entries,
+    '',
+  ];
 }
 
 function promptWithAttachments(
@@ -1149,7 +1197,14 @@ export function createDurableInteractiveTurnService(
       const threadSkillAlreadyLoaded =
         !input.turnSkill && transcript.some((entry) => entry.role === 'agent');
       const preparedCurrentPrompt = threadSkillAlreadyLoaded
-        ? currentPrompt(input.text, null, null, immutableAttachments, [], 'session')
+        ? currentPrompt(
+            input.text,
+            null,
+            null,
+            immutableAttachments,
+            answersSoFar(transcript, input.workflowClass),
+            'session',
+          )
         : firstTurnPrompt;
       const specification: DurableInteractiveTurnSpecification = {
         schemaVersion: 1,
