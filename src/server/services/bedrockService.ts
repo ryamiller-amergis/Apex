@@ -3,6 +3,7 @@ import { BedrockClient, ListInferenceProfilesCommand } from '@aws-sdk/client-bed
 import { retryWithBackoff } from '../utils/retry';
 import { getFigmaReference } from './figmaReferenceService';
 import { getMaxviewColorTokens } from './designTokensService';
+import { applyBacklogEdits, flattenBacklogForPrompt, readBacklogEdits } from './backlogEdits';
 import type { DesignSystemCatalog } from './designSystemService';
 import type { ScreenInventoryRoute } from '../../shared/types/designSystem';
 import type { UiSurfacePlan, PbiContribution, UiLayoutPattern, PbiContributionType } from '../../shared/types/backlog';
@@ -2904,7 +2905,8 @@ ${commentLines}
 
 /**
  * Apply open review comments to a PRD backlog and return the revised backlog JSON.
- * Calls Bedrock once — returns the updated backlog as a parsed object.
+ * The model replies with targeted edits only; they are applied to a copy of the
+ * backlog. Returns null when the reply is not a valid set of edits.
  */
 export async function fixPrdBacklogWithBedrock(
   backlogJson: unknown,
@@ -2914,15 +2916,14 @@ export async function fixPrdBacklogWithBedrock(
   usageCtx?: BedrockUsageContext,
 ): Promise<unknown> {
   const commentLines = formatCommentsForPrompt(comments);
-  const backlogStr = JSON.stringify(backlogJson, null, 2);
 
-  const prompt = `You are a senior product owner. Revise the backlog JSON below to address every review comment listed.
+  const prompt = `You are a senior product owner. Address every review comment below by editing the backlog.
 
-## Current Backlog JSON
+## Current Backlog
 
-\`\`\`json
-${backlogStr}
-\`\`\`
+Each line is one field of the backlog JSON: \`path = value\`, where value is JSON.
+
+${flattenBacklogForPrompt(backlogJson)}
 
 ## Review Comments to Address
 
@@ -2930,23 +2931,27 @@ ${commentLines}
 
 ## Instructions
 
-- Each comment has a "Highlighted text" field — this is the EXACT text the reviewer selected from the rendered backlog. Your fix MUST target that specific content (e.g. a specific epic title, feature description, user story, acceptance criteria, etc.). Do not make unrelated changes.
+- Each comment has a "Highlighted text" field — this is the EXACT text the reviewer selected from the rendered backlog. Your fix MUST target that specific content. Do not make unrelated changes.
 - Pay close attention to thread replies — they often contain the specific wording or instructions for what to change.
-- Output ONLY the complete revised backlog as valid JSON (no markdown fences, no preamble, no explanation).
-- Only modify the fields/items referenced by the highlighted text. Keep all other data unchanged.
-- Preserve the exact same JSON structure and all existing fields.`;
+- Reply with ONLY this JSON object (no markdown fences, no preamble, no explanation):
+  {"edits": [{"op": "set", "path": "<path>", "value": <new JSON value>}, {"op": "remove", "path": "<path>"}]}
+- Copy each path exactly as it appears in the Current Backlog lines.
+- "set" replaces the value at an existing path. To add an item to a list, set the path at the next unused index (for example \`acceptanceCriteria[3]\` when the list ends at \`[2]\`); the value may be a string or a whole object.
+- "remove" deletes an existing list item or field. Paths always refer to the backlog as shown, before any edit.
+- Include one edit for every field that must change, and none for fields that stay the same.`;
 
   const resolvedModel = modelId ?? MODEL_ID;
   const resolvedMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
   const text = await invokeModel(prompt, undefined, resolvedModel, resolvedMaxTokens, undefined, usageCtx ?? { feature: 'prd-review', project: 'unknown' });
 
-  const parsed = parseModelJsonReply(text);
-  if (parsed === null) {
+  const edits = readBacklogEdits(parseModelJsonReply(text));
+  const revised = edits ? applyBacklogEdits(backlogJson, edits) : null;
+  if (revised === null) {
     console.warn(
-      `[bedrockService] Backlog fix reply was not valid JSON (model=${resolvedModel}, chars=${text.length}).`,
+      `[bedrockService] Backlog fix reply was not a valid set of edits (model=${resolvedModel}, edits=${edits?.length ?? 'unparsed'}, reply=${JSON.stringify(text.slice(0, 500))}).`,
     );
   }
-  return parsed;
+  return revised;
 }
 
 /**
