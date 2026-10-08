@@ -139,8 +139,12 @@ resource "azuread_app_role_assignment" "ai_platform_v2_interactive_runner_ingest
   resource_object_id  = var.ai_platform_v2_interactive_runner_service_principal_object_id
 }
 
+# Only for a workspace that reuses Dapr components another state owns (DEV V2). Where
+# ai-runs-interactive.tf manages them in this state, it already adds the V2 scopes.
 resource "azapi_update_resource" "ai_platform_v2_interactive_dapr_scopes" {
-  for_each = local.ai_platform_v2_split_interactive_enabled ? local.ai_platform_v2_interactive_dapr_components : {}
+  for_each = (
+    local.ai_platform_v2_split_interactive_enabled && !local.ai_runs_interactive_enabled
+  ) ? local.ai_platform_v2_interactive_dapr_components : {}
 
   type        = "Microsoft.App/managedEnvironments/daprComponents@2024-03-01"
   resource_id = "${data.azurerm_container_app_environment.ai_platform_v2_host[0].id}/daprComponents/${each.key}"
