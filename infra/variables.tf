@@ -52,6 +52,12 @@ variable "enable_staging_slot" {
   default     = false
 }
 
+variable "staging_slot_shares_app_identity" {
+  description = "True when Azure reports the staging slot with the same managed identity as the production app. The app's Blob grants then cover the slot, and Azure refuses a second identical role assignment, so the slot-only grants are skipped."
+  type        = bool
+  default     = false
+}
+
 variable "staging_slot_name" {
   description = "Name of the staging deployment slot."
   type        = string
