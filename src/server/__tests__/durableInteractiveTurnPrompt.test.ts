@@ -113,6 +113,7 @@ describe('durable interactive turn prompt', () => {
 
     expect(specification.currentPrompt).toContain(SKILL_CONTENT);
     expect(specification.currentPrompt).toContain('# UI rendering — interactive questions');
+    expect(specification.currentPrompt).toContain('match each answer to the question text it quotes');
     expect(specification.currentPrompt).toContain('User request:\nconfirm');
   });
 

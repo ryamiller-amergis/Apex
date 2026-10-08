@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { parseAgentMessage } from '../../utils/parseAgentMessage';
 import type { ChoiceBlock as ChoiceBlockType } from '../../utils/parseAgentMessage';
+import { formatChoiceAnswers } from '../../utils/formatChoiceAnswers';
 import { ChoiceBlock } from './ChoiceBlock';
 import { ReadAloudButton } from '../ReadAloudButton';
 import styles from './agentChat.module.css';
@@ -91,21 +92,7 @@ export const AgentMessage: React.FC<AgentMessageProps> = ({
 
   const handleSubmit = useCallback(() => {
     if (!allAnswered || sent || !onChoiceSubmit) return;
-    const lines: string[] = [];
-    let qNum = questionOffset + 1;
-    for (const block of choiceBlocks) {
-      const s = selections[block.id];
-      if (!s) continue;
-      if (s.selected === 'other') {
-        lines.push(`Q${qNum}: ${s.freeform.trim()}`);
-      } else if (s.selected) {
-        const opt = block.options.find((o) => o.letter === s.selected);
-        lines.push(`Q${qNum}: ${s.selected.toUpperCase()} — ${opt?.text ?? s.selected}`);
-        if (s.freeform.trim()) lines.push(`  Notes: ${s.freeform.trim()}`);
-      }
-      qNum++;
-    }
-    onChoiceSubmit(lines.join('\n'));
+    onChoiceSubmit(formatChoiceAnswers(choiceBlocks, selections, questionOffset));
     setSent(true);
   }, [allAnswered, sent, onChoiceSubmit, questionOffset, choiceBlocks, selections]);
 

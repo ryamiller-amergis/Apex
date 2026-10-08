@@ -1604,7 +1604,8 @@ export function buildInitialPrompt(
     `2. **Ask only ONE question per message.** After presenting a question, STOP and wait for the user's answer before continuing. Do NOT batch multiple questions into a single response.`,
     `3. You may include context, analysis, or trade-offs BEFORE the question in the same message, but the message must end with exactly one set of options.`,
     `4. After receiving an answer, acknowledge it, incorporate it into your thinking, then ask the next question. The user's answers may change which questions you ask next.`,
-    `5. You do NOT have an AskQuestion tool — format questions directly in your text output using the \`a. text\` pattern described above.`
+    `5. You do NOT have an AskQuestion tool — format questions directly in your text output using the \`a. text\` pattern described above.`,
+    `6. Picker answers arrive as \`Q<n> · <question>\` then \`Answer: ...\`. \`Q<n>\` is the UI's running counter and may not match your own question labels; match each answer to the question text it quotes.`
   );
 
   if (kickoff.transcript) {

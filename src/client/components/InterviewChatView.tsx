@@ -40,6 +40,7 @@ import type { InterviewSkillOption } from '../../shared/types/projectSettings';
 import { effortLabel } from '../../shared/utils/effort';
 import { parseAgentMessage, isAgentOtherOptionText } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
+import { formatChoiceAnswers } from '../utils/formatChoiceAnswers';
 import { createChatTurnId } from '../utils/chatTurnId';
 import { trackEvent, trackException } from '../services/telemetry';
 import { ReadAloudButton } from './ReadAloudButton';
@@ -189,21 +190,7 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
 
   const handleSubmit = () => {
     if (!allAnswered || sent) return;
-    const lines: string[] = [];
-    let qNum = questionOffset + 1;
-    for (const block of choiceBlocks) {
-      const s = selections[block.id];
-      if (!s) continue;
-      if (s.selected === 'other') {
-        lines.push(`Q${qNum}: ${s.freeform.trim()}`);
-      } else if (s.selected) {
-        const opt = block.options.find((o) => o.letter === s.selected);
-        lines.push(`Q${qNum}: ${s.selected.toUpperCase()} — ${opt?.text ?? s.selected}`);
-        if (s.freeform.trim()) lines.push(`  Notes: ${s.freeform.trim()}`);
-      }
-      qNum++;
-    }
-    onSend(lines.join('\n'));
+    onSend(formatChoiceAnswers(choiceBlocks, selections, questionOffset));
     setSent(true);
   };
 
