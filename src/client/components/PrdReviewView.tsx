@@ -2982,7 +2982,7 @@ export const PrdReviewView: React.FC = () => {
                       canManage ? () => void handleFixAllCommentsWithAi() : undefined
                     }
                     isFixingWithAi={isBulkCommentFixing}
-                    fixAiError={fixWithAi.error?.message}
+                    fixAiError={fixWithAi.error?.message ?? fixPrdCommentWithAi.error?.message}
                     onFixCommentWithAi={
                       canManage ? handleFixCommentWithAi : undefined
                     }
@@ -3079,7 +3079,7 @@ export const PrdReviewView: React.FC = () => {
                       canManage ? () => void handleFixAllCommentsWithAi() : undefined
                     }
                     isFixingWithAi={isBulkCommentFixing}
-                    fixAiError={fixWithAi.error?.message}
+                    fixAiError={fixWithAi.error?.message ?? fixPrdCommentWithAi.error?.message}
                     onFixCommentWithAi={
                       canManage ? handleFixCommentWithAi : undefined
                     }

@@ -2940,16 +2940,34 @@ ${commentLines}
   const resolvedMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
   const text = await invokeModel(prompt, undefined, resolvedModel, resolvedMaxTokens, undefined, usageCtx ?? { feature: 'prd-review', project: 'unknown' });
 
-  // Strip any accidental code fences
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  const cleaned = fenced ? fenced[1].trim() : text.trim();
-
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    // If the model produces invalid JSON, fall back to returning null so caller knows it failed
-    return null;
+  const parsed = parseModelJsonReply(text);
+  if (parsed === null) {
+    console.warn(
+      `[bedrockService] Backlog fix reply was not valid JSON (model=${resolvedModel}, chars=${text.length}).`,
+    );
   }
+  return parsed;
+}
+
+/**
+ * Parses a JSON reply that the model may wrap in code fences or surround with
+ * a sentence of prose. Returns null when no candidate parses.
+ */
+export function parseModelJsonReply(text: string): unknown | null {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/)?.[1]?.trim();
+  const start = trimmed.search(/[[{]/);
+  const end = Math.max(trimmed.lastIndexOf('}'), trimmed.lastIndexOf(']'));
+  const outermost = start >= 0 && end > start ? trimmed.slice(start, end + 1) : null;
+  for (const candidate of [fenced, trimmed, outermost]) {
+    if (!candidate) continue;
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // try the next candidate
+    }
+  }
+  return null;
 }
 
 /* ── Persona / user-type enrichment ───────────────────────────────────────── */

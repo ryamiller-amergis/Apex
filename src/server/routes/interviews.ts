@@ -1231,6 +1231,9 @@ router.post('/prds/:prdId/reject-proposed', requirePermission('interviews:manage
   }
 });
 
+const INVALID_BACKLOG_FIX_MESSAGE =
+  'Apex could not produce a valid backlog update for this comment. Try Fix with Apex again.';
+
 // POST /prds/:prdId/fix-with-ai — ask Bedrock to apply all open review comments
 // and stage the result as proposedContent/proposedBacklogJson for the owner to accept/reject.
 router.post('/prds/:prdId/fix-with-ai', requirePermission('interviews:manage'), async (req, res, next) => {
@@ -1290,6 +1293,9 @@ router.post('/prds/:prdId/fix-with-ai', requirePermission('interviews:manage'), 
       );
       if (fixedBacklog != null) {
         updates['proposedBacklogJson'] = fixedBacklog;
+      } else if (!('proposedContent' in updates)) {
+        res.status(422).json({ error: INVALID_BACKLOG_FIX_MESSAGE });
+        return;
       }
     }
 
@@ -1365,9 +1371,16 @@ router.post('/prds/:prdId/fix-comment-with-ai', requirePermission('interviews:ma
           bedrockMaxTokens,
           prdReviewUsageCtx(prd.project, prd.id, getUserId(req)),
         );
-        if (fixedBacklog != null) {
-          updates['proposedBacklogJson'] = fixedBacklog;
+        // The review screen shows "fixing" while fixCommentId is set without a proposal.
+        if (fixedBacklog == null) {
+          await db
+            .update(prdsTable)
+            .set({ fixCommentId: null, updatedAt: new Date().toISOString() })
+            .where(eq(prdsTable.id, req.params.prdId));
+          res.status(422).json({ error: INVALID_BACKLOG_FIX_MESSAGE });
+          return;
         }
+        updates['proposedBacklogJson'] = fixedBacklog;
       } else {
         await db
           .update(prdsTable)
