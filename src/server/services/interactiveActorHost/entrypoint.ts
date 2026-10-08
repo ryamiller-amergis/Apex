@@ -39,6 +39,7 @@ import {
   resolveArtifactContainerClient,
 } from '../aiRunV2/artifactContainer';
 import { createArtifactUploader } from '../aiRunsV2Worker/artifactUploader';
+import { resolveShutdownDrainMs } from '../aiRunsV2Worker/shutdownDrain';
 import { interactiveLiveBus } from '../interactiveLiveBus';
 import { LocalCheckoutReader } from '../localCheckoutReader';
 import {
@@ -53,6 +54,8 @@ import {
 } from './interactiveSessionActor';
 import { collectInteractiveArtifacts } from './interactiveArtifactCollector';
 import { materializeInteractiveWorkspace } from './interactiveWorkspaceMaterializer';
+import { createPerThreadTurnQueue } from './perThreadTurnQueue';
+import { createInteractiveShutdownDrain } from './shutdownDrain';
 import {
   interactiveSessionActorClassFor,
   setInteractiveActorRuntime,
@@ -189,7 +192,8 @@ export async function registerInteractiveDispatchHandler(
   recoverActorFailure?: (
     payload: InteractiveDispatchRequest,
     error: unknown
-  ) => Promise<void>
+  ) => Promise<void>,
+  isDraining: () => boolean = () => false
 ): Promise<void> {
   await invoker.listen(
     'dispatch',
@@ -202,6 +206,19 @@ export async function registerInteractiveDispatchHandler(
           JSON.stringify({
             event: 'InteractiveDispatchRejected',
             ...describeError(error),
+          })
+        );
+        return { accepted: false };
+      }
+      // The orchestrator retries a refused dispatch, which then lands on a replica
+      // that is not shutting down.
+      if (isDraining()) {
+        console.warn(
+          JSON.stringify({
+            event: 'InteractiveDispatchRefusedDraining',
+            threadId: payload.threadId,
+            runId: payload.runId,
+            dispatchMessageId: payload.dispatchMessageId,
           })
         );
         return { accepted: false };
@@ -290,8 +307,11 @@ export async function main(): Promise<void> {
 
   const repositoryCheckout = createGroundedRepositoryCheckout();
 
+  const turnQueue = createPerThreadTurnQueue();
+
   // Single shared logic core: thread-keyed warm checkout + live Agent cache.
   const logic = createInteractiveSessionActor({
+    turnQueue,
     openWarmCheckout: async (_threadId, snapshot) => {
       // Dynamic import keeps the actor-host static graph free of App Service
       // workspace helpers that transitively import PostgreSQL.
@@ -436,11 +456,14 @@ export async function main(): Promise<void> {
   await interactiveLiveBus.init();
   setInteractiveActorRuntime({ logic, callback });
 
-  const disposeOnShutdown = (): void => {
-    void logic.disposeAll().catch(() => {});
-  };
-  process.once('SIGTERM', disposeOnShutdown);
-  process.once('SIGINT', disposeOnShutdown);
+  const shutdownDrain = createInteractiveShutdownDrain({
+    drainMs: resolveShutdownDrainMs(process.env.AI_RUNS_V2_SHUTDOWN_DRAIN_MS),
+    activeTurnCount: () => turnQueue.activeThreadCount(),
+    dispose: () => logic.disposeAll(),
+    exit: (code) => void exitAfterFlush(code),
+  });
+  process.on('SIGTERM', () => shutdownDrain.shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdownDrain.shutdown('SIGINT'));
 
   const server = new DaprServer({
     serverPort,
@@ -495,7 +518,8 @@ export async function main(): Promise<void> {
           ? { attemptId: bootstrap.attemptId }
           : {}),
       });
-    }
+    },
+    () => shutdownDrain.isDraining()
   );
 
   await server.start();

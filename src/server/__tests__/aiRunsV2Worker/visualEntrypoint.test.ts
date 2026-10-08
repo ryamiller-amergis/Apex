@@ -146,4 +146,51 @@ describe('visual worker entrypoint', () => {
 
     nowSpy.mockRestore();
   });
+
+  describe('SIGTERM', () => {
+    const originalDrainMs = process.env.AI_RUNS_V2_SHUTDOWN_DRAIN_MS;
+
+    afterEach(() => {
+      jest.useRealTimers();
+      if (originalDrainMs === undefined) {
+        delete process.env.AI_RUNS_V2_SHUTDOWN_DRAIN_MS;
+      } else {
+        process.env.AI_RUNS_V2_SHUTDOWN_DRAIN_MS = originalDrainMs;
+      }
+    });
+
+    async function startAndSendSigterm() {
+      await startVisualWorker();
+      const onSpy = process.on as unknown as jest.Mock;
+      const sigterm = onSpy.mock.calls.find(([event]) => event === 'SIGTERM')?.[1] as
+        | (() => void)
+        | undefined;
+      const workerDeps = mockedCreateV2Worker.mock.calls[0]?.[0];
+      sigterm?.();
+      return workerDeps;
+    }
+
+    it('stops receiving but lets the run in flight drain', async () => {
+      jest.useFakeTimers();
+      process.env.AI_RUNS_V2_SHUTDOWN_DRAIN_MS = '570000';
+
+      const workerDeps = await startAndSendSigterm();
+
+      expect(workerDeps?.signal?.aborted).toBe(true);
+      expect(workerDeps?.executionSignal?.aborted).toBe(false);
+      jest.advanceTimersByTime(569_999);
+      expect(workerDeps?.executionSignal?.aborted).toBe(false);
+      jest.advanceTimersByTime(1);
+      expect(workerDeps?.executionSignal?.aborted).toBe(true);
+    });
+
+    it('aborts the run in flight at once when no drain is configured', async () => {
+      delete process.env.AI_RUNS_V2_SHUTDOWN_DRAIN_MS;
+
+      const workerDeps = await startAndSendSigterm();
+
+      expect(workerDeps?.signal?.aborted).toBe(true);
+      expect(workerDeps?.executionSignal?.aborted).toBe(true);
+    });
+  });
 });

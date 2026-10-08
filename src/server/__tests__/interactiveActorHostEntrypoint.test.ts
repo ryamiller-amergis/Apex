@@ -125,6 +125,40 @@ describe('interactive actor host dispatch endpoint', () => {
     expect(resolveActor).not.toHaveBeenCalled();
   });
 
+  it('refuses a dispatch while the host drains, so the orchestrator retries it elsewhere', async () => {
+    let callback:
+      | ((content: DaprInvokerCallbackContent) => Promise<unknown>)
+      | undefined;
+    const listen = jest.fn(
+      async (
+        _methodName: string,
+        handler: (content: DaprInvokerCallbackContent) => Promise<unknown>
+      ) => {
+        callback = handler;
+      }
+    );
+    const resolveActor = jest.fn();
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await registerInteractiveDispatchHandler(
+      { listen },
+      resolveActor,
+      undefined,
+      () => true
+    );
+
+    await expect(
+      callback!({
+        body: JSON.stringify({
+          threadId: 'thread-1',
+          runId: 'run-1',
+          dispatchMessageId: 'dispatch-1',
+        }),
+      })
+    ).resolves.toEqual({ accepted: false });
+    expect(resolveActor).not.toHaveBeenCalled();
+  });
+
   it('acknowledges dispatch and durably recovers an actor invocation failure', async () => {
     let callback:
       | ((content: DaprInvokerCallbackContent) => Promise<unknown>)

@@ -14,6 +14,7 @@ import {
 import type { AiRunV2Command } from '../../../shared/types/aiRunV2';
 import { createWorkerServiceBusClient } from './serviceBusClient';
 import { resolveWorkerEnvironment } from './entrypointSupport';
+import { createShutdownController, resolveShutdownDrainMs } from './shutdownDrain';
 import {
   buildProjectPrototypePrompt,
   buildPrototypePrompt,
@@ -295,7 +296,8 @@ const executeVisualWorkload: ExecuteWorkload = createVisualExecute({
 
 export async function startVisualWorker(): Promise<void> {
   const env = resolveWorkerEnvironment('visual');
-  const abort = new AbortController();
+  const drainMs = resolveShutdownDrainMs(process.env.AI_RUNS_V2_SHUTDOWN_DRAIN_MS);
+  const shutdownController = createShutdownController(drainMs);
   const concurrency = createVisualConcurrencyController();
 
   const worker = createV2Worker({
@@ -325,12 +327,15 @@ export async function startVisualWorker(): Promise<void> {
     containerAppsExecutionId: env.containerAppsExecutionId,
     resolveCommandDeadlineMs: resolveVisualCommandDeadlineMs,
     resolveDeadlineMs: resolveVisualDeadlineMs,
-    signal: abort.signal,
+    signal: shutdownController.receiveSignal,
+    executionSignal: shutdownController.executionSignal,
   });
 
   const shutdown = (signal: string): void => {
-    console.log(`[aiRunsV2Worker/visual] shutting down on ${signal}`);
-    abort.abort();
+    console.log(
+      `[aiRunsV2Worker/visual] shutting down on ${signal} (drainMs=${drainMs})`,
+    );
+    shutdownController.shutdown();
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));

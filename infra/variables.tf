@@ -1127,6 +1127,28 @@ variable "ai_platform_v2_documents_termination_grace_seconds" {
   }
 }
 
+variable "ai_platform_v2_visual_termination_grace_seconds" {
+  description = "Seconds a visual-v2 replica gets after SIGTERM before it is killed. Container Apps allows at most 600."
+  type        = number
+  default     = 600
+
+  validation {
+    condition     = var.ai_platform_v2_visual_termination_grace_seconds >= 60 && var.ai_platform_v2_visual_termination_grace_seconds <= 600
+    error_message = "ai_platform_v2_visual_termination_grace_seconds must be between 60 and 600."
+  }
+}
+
+variable "ai_platform_v2_interactive_termination_grace_seconds" {
+  description = "Seconds a V2 interactive (fast/agentic) replica gets after SIGTERM before it is killed. Container Apps allows at most 600."
+  type        = number
+  default     = 600
+
+  validation {
+    condition     = var.ai_platform_v2_interactive_termination_grace_seconds >= 60 && var.ai_platform_v2_interactive_termination_grace_seconds <= 600
+    error_message = "ai_platform_v2_interactive_termination_grace_seconds must be between 60 and 600."
+  }
+}
+
 variable "ai_platform_v2_documents_scale_cooldown_seconds" {
   description = "Seconds the documents-v2 queue must stay empty before KEDA removes a replica. Runs claim their message at start, so this is how long a scaled-out run may last before scale-in begins."
   type        = number
