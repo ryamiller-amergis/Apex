@@ -39,7 +39,7 @@ if [[ ! -f "$DOCKERFILE" ]]; then
   exit 0
 fi
 
-if [[ ! -f "$ENTRYPOINT" ]]; then
+if [[ "$SKIP_IMAGE_PUBLISH" != "true" && ! -f "$ENTRYPOINT" ]]; then
   echo "FAIL: ${ENTRYPOINT} missing."
   echo "Run npm run build (or build:server) before publishing the interactive host image."
   exit 1

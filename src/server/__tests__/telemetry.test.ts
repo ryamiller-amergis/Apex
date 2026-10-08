@@ -12,7 +12,9 @@ describe('telemetry service name', () => {
       if (value === undefined) delete process.env[key];
     }
     jest.isolateModules(() => {
+      /* eslint-disable @typescript-eslint/no-require-imports -- the module reads env at load time */
       require('../services/telemetry');
+      /* eslint-enable @typescript-eslint/no-require-imports */
     });
   }
 
