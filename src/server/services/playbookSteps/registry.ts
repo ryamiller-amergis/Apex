@@ -491,8 +491,10 @@ export function requiresInitiatorPermissionRecheck(stepType: string): boolean {
  */
 export function assertSkillAllowed(stepType: string, skillPath: string): void {
   const allowed = getStepTypeDescriptor(stepType).allowedSkillPaths ?? [];
+  // Project settings store repo-root paths with a leading '/'; the allow-list does not.
+  const repoRelativePath = skillPath.startsWith('/') ? skillPath.slice(1) : skillPath;
 
-  if (!allowed.includes(skillPath)) {
+  if (!allowed.includes(repoRelativePath)) {
     throw new PlaybookStepTypeError(
       `Step type "${stepType}" may not run Skill "${skillPath}". ` +
         `Phase 0 permits: ${allowed.join(', ') || 'no Skills'}.`

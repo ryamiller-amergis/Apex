@@ -5,7 +5,9 @@ const findFirstDefinition = jest.fn();
 const selectLimit = jest.fn();
 const updateWhere = jest.fn();
 const createThread = jest.fn();
+const getThread = jest.fn();
 const stopDocumentValidationWatcher = jest.fn();
+const resolveSkillConfig = jest.fn();
 
 jest.mock('../db/drizzle', () => ({
   db: {
@@ -33,6 +35,10 @@ jest.mock('../services/playbookRunService', () => ({
 }));
 jest.mock('../services/chatAgentService', () => ({
   createThread: (...args: unknown[]) => createThread(...args),
+  getThread: (...args: unknown[]) => getThread(...args),
+}));
+jest.mock('../services/appSettingsService', () => ({
+  getDefaultModel: jest.fn().mockResolvedValue('default-model'),
 }));
 jest.mock('../services/documentValidationService', () => ({
   stopDocumentValidationWatcher: (...args: unknown[]) => stopDocumentValidationWatcher(...args),
@@ -43,7 +49,7 @@ jest.mock('../services/playbookDefinitionService', () => ({
 }));
 jest.mock('../services/projectSettingsService', () => ({
   getSkillConfig: jest.fn(),
-  resolveSkillConfig: jest.fn(),
+  resolveSkillConfig: (...args: unknown[]) => resolveSkillConfig(...args),
 }));
 
 import {
@@ -62,6 +68,7 @@ describe('FEAT-014 owner start path', () => {
       validationThreadId: 'thread-1',
       status: 'validating',
     });
+    getThread.mockResolvedValue({ id: 'thread-1', status: 'idle' });
     findFirstDefinition.mockResolvedValue({ id: 'def-1', name: 'Design-Doc Validation' });
     selectLimit.mockResolvedValue([]);
     startRun.mockResolvedValue({
@@ -80,7 +87,7 @@ describe('FEAT-014 owner start path', () => {
     expect(startRun).not.toHaveBeenCalled();
   });
 
-  it('VT-11 returns the existing run for the same validation thread', async () => {
+  it('VT-11 returns the existing run for the same document', async () => {
     selectLimit.mockResolvedValue([{ id: 'run-existing', definitionVersionId: 'version-9' }]);
 
     await expect(startDesignDocValidationPlaybook({
@@ -92,6 +99,24 @@ describe('FEAT-014 owner start path', () => {
       definitionVersionId: 'version-9',
       outcome: 'already-running',
     });
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
+  it('returns the active run without replacing a closed validation thread', async () => {
+    getThread.mockResolvedValue({ id: 'thread-1', status: 'closed' });
+    selectLimit.mockResolvedValue([{ id: 'run-at-gate', definitionVersionId: 'version-9' }]);
+
+    await expect(startDesignDocValidationPlaybook({
+      designDocId: 'doc-1',
+      project: 'Apex',
+      callerUserId: 'owner-1',
+    })).resolves.toEqual({
+      runId: 'run-at-gate',
+      definitionVersionId: 'version-9',
+      outcome: 'already-running',
+    });
+    expect(createThread).not.toHaveBeenCalled();
+    expect(updateWhere).not.toHaveBeenCalled();
     expect(startRun).not.toHaveBeenCalled();
   });
 
@@ -114,6 +139,34 @@ describe('FEAT-014 owner start path', () => {
         validationThreadId: 'thread-1',
         ownerUserId: 'owner-1',
       }),
+    }));
+    expect(createThread).not.toHaveBeenCalled();
+  });
+
+  it('starts a fresh validation thread when the saved one is closed', async () => {
+    getThread.mockResolvedValue({ id: 'thread-1', status: 'closed' });
+    resolveSkillConfig.mockResolvedValue({
+      id: 'settings-1',
+      skillRepo: 'ryamiller-amergis/Apex',
+      skillProvider: 'github',
+      designDocValidationSkillPath: '/.cursor/skills/design-doc-validation/SKILL.md',
+    });
+    createThread.mockResolvedValue({ id: 'thread-2' });
+
+    await startDesignDocValidationPlaybook({
+      designDocId: 'doc-1',
+      project: 'Apex',
+      callerUserId: 'owner-1',
+    });
+
+    expect(createThread).toHaveBeenCalledWith(
+      'owner-1',
+      expect.objectContaining({ skillPath: '/.cursor/skills/design-doc-validation/SKILL.md' }),
+      { skipAutoKickoff: true },
+    );
+    expect(updateWhere).toHaveBeenCalled();
+    expect(startRun).toHaveBeenCalledWith(expect.objectContaining({
+      runInput: expect.objectContaining({ validationThreadId: 'thread-2' }),
     }));
   });
 });

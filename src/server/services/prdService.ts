@@ -309,7 +309,11 @@ export async function routePrdGenerationKickoff(opts: {
         ),
       reportRecoverablePreparationFailure: reportPreparationFailure,
     });
-  } catch {
+  } catch (err: unknown) {
+    console.error(
+      `[prd] PRD generation kickoff failed (prdId=${opts.prdId}, threadId=${opts.threadId}):`,
+      err instanceof Error ? err.message : String(err),
+    );
     await reportPreparationFailure();
   }
 }
@@ -802,7 +806,11 @@ export async function syncPrdContent(
   content: string,
   backlogJson?: unknown,
   finalStatus: PrdStatus = 'draft',
-): Promise<void> {
+  completionGuard?: {
+    expectedStatus: 'generating';
+    expectedThreadId: string;
+  },
+): Promise<boolean> {
   // Auto-infer an existing-page `route` per feature so the design-prototype generator
   // can run in EXTEND mode for features that modify existing MaxView pages. Best-effort:
   // inference failures or a missing inventory leave the backlog unchanged.
@@ -855,15 +863,28 @@ export async function syncPrdContent(
     stampedContent = content;
   }
 
-  await db
+  const update = db
     .update(prds)
     .set({
       content: stampedContent,
       status: finalStatus,
       ...(resolvedBacklog !== undefined ? { backlogJson: resolvedBacklog as any } : {}),
       updatedAt: new Date().toISOString(),
-    })
-    .where(eq(prds.id, id));
+    });
+  if (completionGuard) {
+    const applied = await update
+      .where(
+        and(
+          eq(prds.id, id),
+          eq(prds.status, completionGuard.expectedStatus),
+          eq(prds.chatThreadId, completionGuard.expectedThreadId),
+        ),
+      )
+      .returning({ id: prds.id });
+    return applied.length === 1;
+  }
+  await update.where(eq(prds.id, id));
+  return true;
 }
 
 const WATCHER_INTERVAL_MS = 5_000;
@@ -958,14 +979,19 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
     activePrdWatchers.delete(prdId);
     console.log(`[prdWatcher] Run finished with complete output — syncing to DB (prdId=${prdId})`);
     try {
-      await runGroundingService.persistThenMarkTerminalInactive(
+      const completion = await runGroundingService.persistThenMarkTerminalInactive(
           {
             runType: 'chat',
             runId: chatThreadId,
             project: prdRow.project,
           },
-          () => syncPrdContent(prdId, content, backlog),
+          () =>
+            syncPrdContent(prdId, content, backlog, 'draft', {
+              expectedStatus: 'generating',
+              expectedThreadId: chatThreadId,
+            }),
         );
+      if (!completion.persisted) return;
       console.log(`[prdWatcher] Sync complete — PRD is now draft (prdId=${prdId})`);
       try {
         const prdRowAfterSync = await db.query.prds.findFirst({
@@ -1855,7 +1881,11 @@ export function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter 
         })
         .where(eq(prds.id, prd.id));
     },
-    updateDbForValidationResult: async (scorecard: ValidationScorecard, reportMd: string) => {
+    updateDbForValidationResult: async (
+      scorecard: ValidationScorecard,
+      reportMd: string,
+      validationThreadId?: string,
+    ) => {
       // Stale watchers must not flip validationScore mid Fix-with-Apex review.
       const current = await db.query.prds.findFirst({
         where: eq(prds.id, prd.id),
@@ -1877,6 +1907,11 @@ export function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter 
       // scorecard still applies kickoff approvers, contentHash, and
       // notifications even if post-run already left pending_review/draft.
       const isUnusablePlaceholder = scorecard.slug === 'validation-unusable';
+      // A newer validation can take over the PRD between the ingest's thread
+      // check and these writes; only the thread that still owns it may write.
+      const sameThread = validationThreadId
+        ? eq(prds.validationThreadId, validationThreadId)
+        : undefined;
       const newStatus: PrdStatus = scorecard.is_ready ? 'pending_review' : 'draft';
       const kickoff = !isUnusablePlaceholder && newStatus === 'pending_review'
         ? await applyKickoffApproversForReview(prd.id, prd.interviewId, prd.authorId)
@@ -1907,11 +1942,11 @@ export function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter 
             : {}),
           updatedAt: new Date().toISOString(),
         })
-        .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')))
+        .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating'), sameThread))
         .returning({ id: prds.id });
       if (written.length === 0) {
         if (isUnusablePlaceholder) return true;
-        await db.update(prds)
+        const backfilled = await db.update(prds)
           .set({
             validationScorecard: stamped,
             ...(kickoff?.designDocApproverIds
@@ -1922,7 +1957,9 @@ export function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter 
               : {}),
             updatedAt: new Date().toISOString(),
           })
-          .where(eq(prds.id, prd.id));
+          .where(and(eq(prds.id, prd.id), sameThread))
+          .returning({ id: prds.id });
+        if (backfilled.length === 0) return false;
       }
       notifyAiCompletion('prd_validation_complete', prd.id, {
         title: prd.title,

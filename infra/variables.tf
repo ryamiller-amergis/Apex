@@ -942,3 +942,396 @@ variable "repo_read_service_target_port" {
   type        = number
   default     = 8080
 }
+
+# ---------------------------------------------------------------------------
+# AI Platform V2 — additive onto existing host platform (DEV=EUS, PROD=CUS)
+# Reuses existing RG / Service Bus / shared storage / CAE; adds queues + container + UAMIs.
+# ---------------------------------------------------------------------------
+
+variable "enable_ai_platform_v2" {
+  description = "Add V2 queues, artifact container, and identities onto the existing host platform. Default false."
+  type        = bool
+  default     = false
+}
+
+variable "ai_platform_v2_location" {
+  description = "Host region for V2 (informational / contract check). Null uses locationsByEnvironment[environment] from contracts (dev=eastus, prd=centralus)."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_resource_group_name" {
+  description = "Existing host resource group (required when enable_ai_platform_v2). DEV: rg-scrum-dev."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_servicebus_namespace_name" {
+  description = "Existing AI Service Bus namespace to host V2 queues (required when enabled). DEV: sbns-apex-ai-dev."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.ai_platform_v2_servicebus_namespace_name == null || can(regex("^[a-zA-Z][a-zA-Z0-9-]{4,48}[a-zA-Z0-9]$", var.ai_platform_v2_servicebus_namespace_name))
+    error_message = "ai_platform_v2_servicebus_namespace_name must be 6–50 chars, start with a letter, and contain only letters, numbers, or hyphens."
+  }
+}
+
+variable "ai_platform_v2_container_app_env_name" {
+  description = "Existing Container Apps Environment for future V2 apps (required when enabled). DEV: cae-apex-ai-dev."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_storage_account_name" {
+  description = "Existing shared async storage account for the ai-run-artifacts container (required when enabled). DEV: stapexdevasync."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.ai_platform_v2_storage_account_name == null || can(regex("^[a-z0-9]{3,24}$", var.ai_platform_v2_storage_account_name))
+    error_message = "ai_platform_v2_storage_account_name must contain 3-24 lowercase letters or numbers."
+  }
+}
+
+variable "ai_platform_v2_grant_app_service_sender" {
+  description = "Grant the Apex App Service system identity Sender on V2 command queues (additive; does not remove V1 sender roles). Requires the web app in the same Terraform state."
+  type        = bool
+  default     = false
+}
+
+variable "enable_ai_platform_v2_runtime" {
+  description = "Deploy V2 orchestrator + document lane Container Apps on the host CAE (requires enable_ai_platform_v2)."
+  type        = bool
+  default     = false
+}
+
+variable "ai_platform_v2_orchestrator_container_app_name" {
+  description = "Orchestrator Container App name. Default ca-apex-ai-orchestrator-{environment}."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_documents_container_app_name" {
+  description = "Document lane worker Container App name. Default ca-apex-ai-runs-documents-v2-{environment}."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_orchestrator_image" {
+  description = "Full ACR image reference for the orchestrator (e.g. acrapexltdev.azurecr.io/apex-ai-orchestrator:latest)."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_documents_v2_image" {
+  description = "Full ACR image reference for the document lane worker."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_database_url" {
+  description = "PostgreSQL connection string for the orchestrator (same DB as Apex App Service)."
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
+variable "ai_platform_v2_interactive_dispatch_base_url" {
+  description = "HTTPS base URL for the interactive actor host (no /dispatch suffix). Orchestrator posts to {base}/dispatch."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_acr_name" {
+  description = "ACR hosting V2 runner images (DEV: acrapexltdev)."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_acr_resource_group_name" {
+  description = "Resource group of ai_platform_v2_acr_name."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_app_service_name" {
+  description = "Apex App Service name for optional blob RBAC (defaults to app_service_name)."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_grant_app_service_blob" {
+  description = "Grant App Service Storage Blob Data Contributor on the V2 artifact container (required for V2 spec upload)."
+  type        = bool
+  default     = true
+}
+
+variable "ai_platform_v2_application_insights_connection_string" {
+  description = "Optional App Insights connection string on V2 runtime apps."
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
+variable "ai_platform_v2_orchestrator_min_replicas" {
+  type    = number
+  default = 1
+}
+
+variable "ai_platform_v2_orchestrator_max_replicas" {
+  type    = number
+  default = 2
+}
+
+variable "ai_platform_v2_orchestrator_cpu" {
+  type    = number
+  default = 0.5
+}
+
+variable "ai_platform_v2_orchestrator_memory" {
+  type    = string
+  default = "1Gi"
+}
+
+variable "ai_platform_v2_documents_min_replicas" {
+  type    = number
+  default = 1
+}
+
+variable "ai_platform_v2_documents_max_replicas" {
+  type    = number
+  default = 2
+}
+
+variable "ai_platform_v2_documents_scale_message_count" {
+  description = "Queued document commands per replica before KEDA adds another (azure-servicebus messageCount)."
+  type        = number
+  default     = 1
+}
+
+variable "ai_platform_v2_documents_termination_grace_seconds" {
+  description = "Seconds a documents-v2 replica gets after SIGTERM before it is killed. Container Apps allows at most 600."
+  type        = number
+  default     = 600
+
+  validation {
+    condition     = var.ai_platform_v2_documents_termination_grace_seconds >= 60 && var.ai_platform_v2_documents_termination_grace_seconds <= 600
+    error_message = "ai_platform_v2_documents_termination_grace_seconds must be between 60 and 600."
+  }
+}
+
+variable "ai_platform_v2_documents_scale_cooldown_seconds" {
+  description = "Seconds the documents-v2 queue must stay empty before KEDA removes a replica. Runs claim their message at start, so this is how long a scaled-out run may last before scale-in begins."
+  type        = number
+  default     = 900
+}
+
+variable "ai_platform_v2_documents_cpu" {
+  type    = number
+  default = 0.5
+}
+
+variable "ai_platform_v2_documents_memory" {
+  type    = string
+  default = "1Gi"
+}
+
+variable "ai_platform_v2_visual_image" {
+  description = "Visual lane worker image. The visual Container App is created only when set."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_visual_container_app_name" {
+  description = "Visual lane worker Container App name. Default ca-apex-ai-runs-visual-v2-{environment}."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_visual_aws_access_key_id" {
+  description = "AWS access key id the visual worker uses for Bedrock."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+variable "ai_platform_v2_visual_aws_secret_access_key" {
+  description = "AWS secret access key the visual worker uses for Bedrock."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+variable "ai_platform_v2_visual_min_replicas" {
+  type    = number
+  default = 1
+}
+
+variable "ai_platform_v2_visual_max_replicas" {
+  type    = number
+  default = 2
+}
+
+variable "ai_platform_v2_visual_cpu" {
+  type    = number
+  default = 0.5
+}
+
+variable "ai_platform_v2_visual_memory" {
+  type    = string
+  default = "1Gi"
+}
+
+variable "ai_platform_v2_fast_interactive_container_app_name" {
+  description = "Fast interactive actor host Container App name. Default ca-apex-ai-fast-interactive-{environment}."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_agentic_container_app_name" {
+  description = "Agentic interactive actor host Container App name. Default ca-apex-ai-agentic-{environment}."
+  type        = string
+  default     = null
+}
+
+variable "enable_ai_platform_v2_split_interactive" {
+  description = "Deploy the V2 fast and agentic actor hosts onto the existing Container Apps Environment."
+  type        = bool
+  default     = false
+}
+
+variable "enable_ai_platform_v2_container_logs" {
+  description = "Send the shared Container Apps Environment's console and system logs to a dedicated Log Analytics workspace."
+  type        = bool
+  default     = false
+}
+
+variable "ai_platform_v2_container_logs_retention_days" {
+  description = "Days the Container Apps log workspace keeps logs."
+  type        = number
+  default     = 30
+}
+
+variable "ai_platform_v2_container_logs_daily_quota_gb" {
+  description = "Daily ingestion cap for the Container Apps log workspace, in GB. Ingestion stops for the day once reached."
+  type        = number
+  default     = 1
+}
+
+variable "ai_platform_v2_interactive_image" {
+  description = "Full ACR image reference shared by the V2 fast and agentic actor hosts."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_interactive_callback_base_url" {
+  description = "Apex App Service base URL used by V2 actor hosts for durable callbacks."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_interactive_callback_token" {
+  description = "Optional static callback token used until AiRun.Runner managed-identity auth is enabled."
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
+variable "ai_platform_v2_interactive_callback_token_audience" {
+  description = "Optional audience used by V2 actor hosts to request managed-identity callback tokens."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_interactive_runner_app_role_id" {
+  description = "Optional AiRun.Runner application role ID assigned to each V2 interactive identity."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_interactive_runner_service_principal_object_id" {
+  description = "Optional object ID of the callback API service principal that exposes AiRun.Runner."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_interactive_key_vault_id" {
+  description = "Existing Key Vault resource ID holding the Cursor API key."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_interactive_cursor_api_key_secret_id" {
+  description = "Existing Key Vault secret resource ID for CURSOR_API_KEY."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_interactive_redis_host" {
+  description = "Existing interactive Redis hostname shared by Dapr and the live event bus."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_interactive_redis_port" {
+  description = "TLS port for the existing interactive Redis service."
+  type        = number
+  default     = 6380
+}
+
+variable "ai_platform_v2_interactive_redis_key" {
+  description = "Access key for the existing interactive Redis service."
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
+variable "ai_platform_v2_interactive_workspace_storage_name" {
+  description = "Existing Container Apps Environment storage name mounted by actor hosts."
+  type        = string
+  default     = "ai-runs-workspace"
+}
+
+variable "ai_platform_v2_interactive_workspace_mount_path" {
+  description = "Mount path for the shared actor-host workspace."
+  type        = string
+  default     = "/home/data/ai-pilot"
+}
+
+variable "ai_platform_v2_interactive_grounding_container_name" {
+  description = "Blob container in the V2 host storage account holding grounding bundles the interactive hosts restore checkouts from."
+  type        = string
+  default     = "repo-grounding"
+}
+
+variable "ai_platform_v2_interactive_target_port" {
+  description = "HTTP port exposed by the actor host and Dapr sidecar."
+  type        = number
+  default     = 8080
+}
+
+variable "ai_platform_v2_interactive_cpu" {
+  description = "CPU cores allocated to each fast/agentic replica."
+  type        = number
+  default     = 1
+}
+
+variable "ai_platform_v2_interactive_memory" {
+  description = "Memory allocated to each fast/agentic replica."
+  type        = string
+  default     = "2Gi"
+}
+
+variable "ai_platform_v2_interactive_repo_read_service_url" {
+  description = "Optional existing repo-read service URL used by grounded interactive turns."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_interactive_repo_read_service_token" {
+  description = "Optional token used by V2 actor hosts to call the repo-read service."
+  type        = string
+  sensitive   = true
+  default     = null
+}

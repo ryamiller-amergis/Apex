@@ -1,0 +1,52 @@
+{
+  "hostReuse": true,
+  "locationsByEnvironment": {
+    "dev": "eastus",
+    "prd": "centralus"
+  },
+  "sku": "Standard",
+  "artifactContainer": "ai-run-artifacts",
+  "artifactLifecycleDays": 90,
+  "identities": [
+    "orchestrator",
+    "document",
+    "visual",
+    "fast-interactive",
+    "agentic"
+  ],
+  "queues": {
+    "ai-runs-v2-document": {
+      "kind": "command",
+      "requiresDuplicateDetection": true,
+      "requiresSession": false
+    },
+    "ai-runs-v2-visual": {
+      "kind": "command",
+      "requiresDuplicateDetection": true,
+      "requiresSession": false
+    },
+    "ai-runs-v2-checkpoint": {
+      "kind": "checkpoint",
+      "requiresDuplicateDetection": false,
+      "requiresSession": false
+    },
+    "ai-runs-v2-result": {
+      "kind": "result",
+      "requiresDuplicateDetection": true,
+      "requiresSession": false
+    }
+  },
+  "queueDefaults": {
+    "maxDeliveryCount": 5,
+    "deadLetteringOnMessageExpiration": true,
+    "lockDuration": "PT5M",
+    "duplicateDetectionHistoryTimeWindow": "PT30M"
+  },
+  "cutover": {
+    "additiveOnly": true,
+    "reuseExistingResourceGroup": true,
+    "reuseExistingServiceBusNamespace": true,
+    "reuseExistingSharedStorage": true,
+    "reuseExistingContainerAppEnvironment": true
+  }
+}

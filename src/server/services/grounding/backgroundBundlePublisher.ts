@@ -15,6 +15,8 @@ import {
 } from './groundingBundlePublisherService';
 
 const REPO_READ_SERVICE_FLAG = 'repo-read-service';
+// V2 interactive hosts restore their repository checkout from this bundle.
+const V2_TRANSPORT_FLAG = 'ai-runs-v2-transport';
 
 export interface BackgroundBundlePublishInput {
   identity: RepositoryIdentity;
@@ -61,10 +63,13 @@ export function createBackgroundBundlePublisher(
 
       return (async () => {
         try {
-          const enabled = await isEnabled(REPO_READ_SERVICE_FLAG, {
+          const flagContext = {
             userId: input.userId,
             project: identity.project,
-          });
+          };
+          const enabled =
+            (await isEnabled(REPO_READ_SERVICE_FLAG, flagContext)) ||
+            (await isEnabled(V2_TRANSPORT_FLAG, flagContext));
           if (!enabled) return;
           await publisher.publish({
             identity,

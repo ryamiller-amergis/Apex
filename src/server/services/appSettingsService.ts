@@ -2,7 +2,7 @@ import { db } from '../db/drizzle';
 import { appSettings } from '../db/schema';
 import { eq } from 'drizzle-orm';
 
-const CODE_DEFAULT_MODEL = 'composer-2';
+const CODE_DEFAULT_MODEL = 'composer-2.5';
 
 export async function getAppSetting(key: string): Promise<string | null> {
   const rows = await db

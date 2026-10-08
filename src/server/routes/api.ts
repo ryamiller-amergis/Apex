@@ -14,6 +14,7 @@ import { getPrResolutionMetricsStats } from '../services/agentEvalsPrResolutionS
 import { getMaxViewEslintBurnDown } from '../services/eslintBurnDownService';
 import { getMaxViewEslintSnapshot } from '../services/eslintMetricsService';
 import { sql, eq as drizzleEq } from 'drizzle-orm';
+import { getDbPoolStats } from '../db';
 import { db } from '../db/drizzle';
 import { getSkillConfig, getSkillConfigById, listSkillConfigsForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
@@ -67,6 +68,18 @@ import runGroundingsRouter from './runGroundings';
 import diagramsRouter from './diagrams';
 import playbooksRouter from './playbooks';
 const router = express.Router();
+const publicHealthPaths = new Set([
+  '/health',
+  '/health/live',
+  '/health/ready',
+  '/health/dependencies',
+  '/health/db',
+  '/health/agents',
+]);
+
+export function isPublicHealthPath(path: string): boolean {
+  return publicHealthPaths.has(path);
+}
 
 router.use('/run-groundings', runGroundingsRouter);
 router.use('/projects/:projectId/diagrams', diagramsRouter);
@@ -392,50 +405,68 @@ router.post('/cycle-time', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/health - ADO connectivity check.
-// Production App Service still probes this path. The ADO client default socket
-// timeout is 120s, which is longer than the health-check ping, so a stalled
-// /_apis/Location call is recorded as HTTP 499 and the worker is marked
-// unhealthy. Bound this call so the probe gets a response either way.
+function sendProcessHealth(res: Response) {
+  return res.json({ healthy: true, timestamp: new Date().toISOString() });
+}
+
+// The ADO client default socket timeout is 120s, longer than a health-check
+// ping, so a stalled /_apis/Location call would leave the probe hanging.
 const HEALTH_CHECK_SOCKET_TIMEOUT_MS = 8_000;
 
-router.get('/health', async (req: Request, res: Response) => {
+async function sendDatabaseReadinessHealth(res: Response) {
   try {
-    // Health check uses default project from env
+    const result = await db.execute<{ now: string }>(sql`SELECT NOW() AS now`);
+    return res.json({ healthy: true, timestamp: result.rows[0].now });
+  } catch (error: any) {
+    console.error('[db] Health check failed:', error);
+    return res.status(503).json({ healthy: false, error: 'Database unavailable' });
+  }
+}
+
+// GET /api/health - Process-only liveness check
+router.get('/health', (_req: Request, res: Response) => sendProcessHealth(res));
+
+// GET /api/health/live - Explicit process-only liveness check
+router.get('/health/live', (_req: Request, res: Response) => sendProcessHealth(res));
+
+// GET /api/health/ready - Database readiness check
+router.get('/health/ready', (_req: Request, res: Response) => sendDatabaseReadinessHealth(res));
+
+// GET /api/health/db - Database readiness compatibility alias
+router.get('/health/db', (_req: Request, res: Response) => sendDatabaseReadinessHealth(res));
+
+// GET /api/health/dependencies - External dependency health
+router.get('/health/dependencies', async (_req: Request, res: Response) => {
+  try {
     const adoService = new AzureDevOpsService(undefined, undefined, {
       socketTimeout: HEALTH_CHECK_SOCKET_TIMEOUT_MS,
     });
     const healthy = await adoService.healthCheck();
-    res.json({ healthy, timestamp: new Date().toISOString() });
-  } catch (error: any) {
-    console.error('Health check error:', error);
-    res.status(503).json({ healthy: false, error: 'Service unavailable' });
-  }
-});
+    if (!healthy) {
+      return res.status(503).json({ healthy: false, error: 'Dependencies unavailable' });
+    }
 
-// GET /api/health/db - Database connectivity check
-router.get('/health/db', async (_req: Request, res: Response) => {
-  try {
-    const result = await db.execute<{ now: string }>(sql`SELECT NOW() AS now`);
-    res.json({ healthy: true, timestamp: result.rows[0].now });
+    return res.json({ healthy: true, timestamp: new Date().toISOString() });
   } catch (error: any) {
-    console.error('[db] Health check failed:', error);
-    res.status(503).json({ healthy: false, error: 'Database unavailable' });
+    console.error('[dependencies] Health check failed:', error);
+    return res.status(503).json({ healthy: false, error: 'Dependencies unavailable' });
   }
 });
 
 // GET /api/health/agents - Chat agent system health
 router.get('/health/agents', async (_req: Request, res: Response) => {
   const agentHealth = getAgentHealthStats();
+  const databasePool = getDbPoolStats();
   try {
     const workerHealth = await getWorkerTierHealthStats();
-    res.json({ ...agentHealth, ...workerHealth });
+    res.json({ ...agentHealth, ...workerHealth, databasePool });
   } catch {
     console.error('[health/agents] Worker health query failed');
     res.json({
       ...agentHealth,
       workerTierSaturation: 0,
       oldestQueuedAgeMs: 0,
+      databasePool,
     });
   }
 });

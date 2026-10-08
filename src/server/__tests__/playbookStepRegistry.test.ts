@@ -182,6 +182,18 @@ describe('the Skill allow-list', () => {
     );
   });
 
+  it('accepts the leading-slash form project settings store, and nothing looser', () => {
+    expect(() =>
+      assertSkillAllowed('cursor-agent', '/.cursor/skills/design-doc-validation/SKILL.md')
+    ).not.toThrow();
+    expect(() =>
+      assertSkillAllowed('cursor-agent', '//.cursor/skills/design-doc-validation/SKILL.md')
+    ).toThrow(/may not run Skill/);
+    expect(() =>
+      assertSkillAllowed('cursor-agent', '/.cursor/skills/design-spec-review/SKILL.md')
+    ).toThrow(/may not run Skill/);
+  });
+
   it('default-denies: a step type naming no Skills permits none', () => {
     expect(() => assertSkillAllowed('notify', '.cursor/skills/app-knowledge/SKILL.md')).toThrow(
       /no Skills/

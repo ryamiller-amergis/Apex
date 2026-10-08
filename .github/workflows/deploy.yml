@@ -20,6 +20,9 @@ jobs:
   deploy-staging:
     runs-on: ubuntu-latest
     environment: prd
+    outputs:
+      ai_orchestrator: ${{ steps.image_publish.outputs.ai_orchestrator }}
+      ai_runs_interactive: ${{ steps.image_publish.outputs.ai_runs_interactive }}
 
     steps:
       - name: Checkout code
@@ -233,7 +236,6 @@ jobs:
               CURSOR_USER_LEVEL_API_KEY="${{ secrets.CURSOR_USER_LEVEL_API_KEY }}" \
               CURSOR_TEAM_API_KEY="${{ secrets.CURSOR_TEAM_API_KEY }}" \
               AGENT_RUN_HARD_LIMIT_MS="${{ secrets.AGENT_RUN_HARD_LIMIT_MS }}" \
-              AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS="${{ vars.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS || '600000' }}" \
               PORT=8080 \
               POLL_INTERVAL=30 \
               WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
@@ -294,6 +296,7 @@ jobs:
               AZURE_REDIRECT_URL="${STAGING_REDIRECT_URL}" \
               APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
               DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+              AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS="${{ vars.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS || '600000' }}" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
               APEX_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net"
 
@@ -314,6 +317,7 @@ jobs:
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot-settings \
               DATABASE_URL="$PROD_DATABASE_URL" \
+              AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS="${{ vars.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS || '600000' }}" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net" \
               APEX_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net"
 
@@ -329,7 +333,6 @@ jobs:
               AI_RUNS_SERVICEBUS_NAMESPACE="${{ vars.AI_RUNS_SERVICEBUS_NAMESPACE }}" \
               AI_RUNS_BACKGROUND_QUEUE_NAME="${{ vars.AI_RUNS_BACKGROUND_QUEUE_NAME }}" \
               AI_RUNS_BACKGROUND_INFLIGHT_LIMIT="${{ vars.AI_RUNS_BACKGROUND_INFLIGHT_LIMIT }}" \
-              AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS="${{ vars.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS || '600000' }}" \
               AI_RUNS_CALLBACK_TOKEN_AUDIENCE="${{ vars.AI_RUNS_CALLBACK_TOKEN_AUDIENCE }}" \
               AI_RUNS_RUNNER_ALLOWED_CLIENT_IDS="${{ vars.AI_RUNS_RUNNER_ALLOWED_CLIENT_IDS }}" \
               AI_RUNS_RUNNER_CALLBACK_TOKEN="${{ secrets.AI_RUNS_RUNNER_CALLBACK_TOKEN }}" \
@@ -475,10 +478,25 @@ jobs:
         env:
           AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
           AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME }}
+          AI_PLATFORM_V2_FAST_INTERACTIVE_CONTAINER_APP_NAME: ${{ vars.AI_PLATFORM_V2_FAST_INTERACTIVE_CONTAINER_APP_NAME || 'ca-apex-ai-fast-interactive-prd' }}
+          AI_PLATFORM_V2_AGENTIC_CONTAINER_APP_NAME: ${{ vars.AI_PLATFORM_V2_AGENTIC_CONTAINER_APP_NAME || 'ca-apex-ai-agentic-prd' }}
           AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
           AI_RUNS_INTERACTIVE_IMAGE_REPO: ${{ vars.AI_RUNS_INTERACTIVE_IMAGE_REPO }}
           IMAGE_TAG: ${{ github.sha }}
+          SKIP_APP_UPDATE: true
         run: bash scripts/ci/publish-ai-runs-interactive.sh
+
+      - name: Publish AI orchestrator image to staging
+        if: >-
+          steps.image_publish.outputs.ai_orchestrator == 'true' &&
+          hashFiles('runners/ai-orchestrator/Dockerfile') != ''
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_ORCHESTRATOR_CONTAINER_APP_NAME: ${{ vars.AI_ORCHESTRATOR_STAGING_CONTAINER_APP_NAME }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
+          AI_ORCHESTRATOR_IMAGE_REPO: ${{ vars.AI_ORCHESTRATOR_IMAGE_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: bash scripts/ci/publish-ai-orchestrator.sh
 
       # Stage 3 repo-read service. The script exits cleanly when the Container
       # App name is unset or Terraform has not applied enable_repo_read_service,
@@ -526,6 +544,9 @@ jobs:
     environment: prd-production
 
     steps:
+      - name: Checkout deployment scripts
+        uses: actions/checkout@v4
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -539,6 +560,30 @@ jobs:
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot ${{ env.SLOT_NAME }} \
             --target-slot production
+
+      - name: Promote AI orchestrator image to production
+        if: needs.deploy-staging.outputs.ai_orchestrator == 'true'
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_ORCHESTRATOR_CONTAINER_APP_NAME: ${{ vars.AI_ORCHESTRATOR_CONTAINER_APP_NAME || 'ca-apex-ai-orchestrator-prd' }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
+          AI_ORCHESTRATOR_IMAGE_REPO: ${{ vars.AI_ORCHESTRATOR_IMAGE_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+          SKIP_IMAGE_PUBLISH: true
+        run: bash scripts/ci/publish-ai-orchestrator.sh
+
+      - name: Promote interactive image to production
+        if: needs.deploy-staging.outputs.ai_runs_interactive == 'true'
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME }}
+          AI_PLATFORM_V2_FAST_INTERACTIVE_CONTAINER_APP_NAME: ${{ vars.AI_PLATFORM_V2_FAST_INTERACTIVE_CONTAINER_APP_NAME || 'ca-apex-ai-fast-interactive-prd' }}
+          AI_PLATFORM_V2_AGENTIC_CONTAINER_APP_NAME: ${{ vars.AI_PLATFORM_V2_AGENTIC_CONTAINER_APP_NAME || 'ca-apex-ai-agentic-prd' }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
+          AI_RUNS_INTERACTIVE_IMAGE_REPO: ${{ vars.AI_RUNS_INTERACTIVE_IMAGE_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+          SKIP_IMAGE_PUBLISH: true
+        run: bash scripts/ci/publish-ai-runs-interactive.sh
 
       - name: Smoke test production
         id: smoke

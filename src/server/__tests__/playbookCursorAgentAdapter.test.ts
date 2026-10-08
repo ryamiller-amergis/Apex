@@ -14,7 +14,21 @@ const enqueue = jest.fn();
 jest.mock('../services/agentRunLifecycleService', () => ({ enqueue: (...a: unknown[]) => enqueue(...a) }));
 
 const createThread = jest.fn();
-jest.mock('../services/chatAgentService', () => ({ createThread: (...a: unknown[]) => createThread(...a) }));
+const prepareBackgroundWorkflowTurn = jest.fn();
+jest.mock('../services/chatAgentService', () => ({
+  createThread: (...a: unknown[]) => createThread(...a),
+  prepareBackgroundWorkflowTurn: (...a: unknown[]) => prepareBackgroundWorkflowTurn(...a),
+}));
+
+const isFeatureEnabled = jest.fn();
+jest.mock('../services/featureFlagService', () => ({
+  isFeatureEnabled: (...a: unknown[]) => isFeatureEnabled(...a),
+}));
+
+const routeBackgroundWorkflow = jest.fn();
+jest.mock('../services/backgroundWorkflowRouter', () => ({
+  routeBackgroundWorkflow: (...a: unknown[]) => routeBackgroundWorkflow(...a),
+}));
 
 const getSkillConfig = jest.fn();
 jest.mock('../services/projectSettingsService', () => ({
@@ -26,10 +40,12 @@ jest.mock('../db/drizzle', () => ({ db: {} }));
 
 const suspendStepRun = jest.fn().mockResolvedValue(undefined);
 const failStepRun = jest.fn().mockResolvedValue(undefined);
+const failStepRunForHuman = jest.fn().mockResolvedValue(true);
 jest.mock('../services/playbookSteps/stepRuns', () => ({
   ...jest.requireActual('../services/playbookSteps/stepRuns'),
   suspendStepRun: (...a: unknown[]) => suspendStepRun(...a),
   failStepRun: (...a: unknown[]) => failStepRun(...a),
+  failStepRunForHuman: (...a: unknown[]) => failStepRunForHuman(...a),
 }));
 
 import fs from 'fs';
@@ -65,6 +81,7 @@ beforeEach(() => {
     defaultModel: 'claude-4',
   });
   enqueue.mockResolvedValue({ runId: 'agent-run-1' });
+  isFeatureEnabled.mockResolvedValue(false);
 });
 
 describe('VT-09 — enqueue, correlate, suspend', () => {
@@ -184,5 +201,88 @@ describe('VT-12 — it does not wait for the agent', () => {
     ]) {
       expect(code).not.toContain(forbidden);
     }
+  });
+});
+
+describe('ai-runs-v2-transport', () => {
+  beforeEach(() => {
+    isFeatureEnabled.mockResolvedValue(true);
+    routeBackgroundWorkflow.mockResolvedValue({
+      route: 'worker',
+      workspacePath: '/tmp/threads/thread-1',
+      runId: 'v2-run-1',
+    });
+  });
+
+  it('keeps the V1 enqueue when the flag is off', async () => {
+    isFeatureEnabled.mockResolvedValue(false);
+
+    await executeCursorAgentStep(context());
+
+    expect(enqueue).toHaveBeenCalled();
+    expect(routeBackgroundWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('keeps the V1 enqueue when the flag cannot be read', async () => {
+    isFeatureEnabled.mockRejectedValue(new Error('flag store down'));
+
+    await executeCursorAgentStep(context());
+
+    expect(enqueue).toHaveBeenCalled();
+    expect(routeBackgroundWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('routes the step as a playbook-step run with its own agent run id, and suspends on it', async () => {
+    const outcome = await executeCursorAgentStep(context());
+
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(routeBackgroundWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      userId: INITIATOR,
+      workflowClass: 'playbook-step',
+      threadId: 'thread-1',
+      destinationRun: { runType: 'chat', runId: 'thread-1', project: 'Apex' },
+    }));
+    const routed = routeBackgroundWorkflow.mock.calls[0][0];
+    expect(routed.agentRunId).toEqual(expect.any(String));
+    expect(routed.agentRunId).not.toBe('thread-1');
+    expect(suspendStepRun).toHaveBeenCalledWith(expect.objectContaining({
+      stepRunId: 'step-run-1',
+      agentRunId: 'v2-run-1',
+    }));
+    expect(outcome).toEqual(expect.objectContaining({ kind: 'suspended', agentRunId: 'v2-run-1' }));
+  });
+
+  it('prepares the worker turn with the step prompt and its resolved model', async () => {
+    prepareBackgroundWorkflowTurn.mockResolvedValue({
+      prompt: 'framed prompt',
+      model: 'thread-model',
+      skillPath: ALLOWED_SKILL,
+      projectId: 'Apex',
+      threadWorkspacePath: '/tmp/threads/thread-1',
+    });
+
+    await executeCursorAgentStep(context());
+    const prepared = await routeBackgroundWorkflow.mock.calls[0][0].prepareWorker();
+
+    expect(prepareBackgroundWorkflowTurn).toHaveBeenCalledWith('thread-1', 'Summarise the design docs');
+    expect(prepared.model).toBe('claude-4');
+  });
+
+  it('fails the step as retryable instead of running in process when V2 cannot prepare', async () => {
+    routeBackgroundWorkflow.mockImplementation(async (input: { runInProcess(): unknown }) => {
+      input.runInProcess();
+      return { route: 'in-process', reason: 'materialization-unavailable', fallbackStarted: true };
+    });
+
+    const outcome = await executeCursorAgentStep(context());
+
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(suspendStepRun).not.toHaveBeenCalled();
+    expect(failStepRun).not.toHaveBeenCalled();
+    expect(failStepRunForHuman).toHaveBeenCalledWith(expect.objectContaining({
+      stepRunId: 'step-run-1',
+    }));
+    expect(outcome).toEqual(expect.objectContaining({ kind: 'suspended' }));
+    expect(outcome).not.toHaveProperty('agentRunId');
   });
 });

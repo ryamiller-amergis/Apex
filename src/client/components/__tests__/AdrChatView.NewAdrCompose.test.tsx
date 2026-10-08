@@ -171,6 +171,12 @@ describe('NewAdrCompose', () => {
         body: expect.stringContaining('"constraints.txt"'),
       }),
     );
+    const messageCall = (global.fetch as jest.Mock).mock.calls.find((call) =>
+      String(call[0]).includes('/api/chat/threads/thread-1/messages'),
+    );
+    expect(JSON.parse(messageCall![1].body).turnId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
     expect(clearAttachments).toHaveBeenCalled();
     expect(mockUseReviewerAvailability).toHaveBeenCalledWith('Apex', 'adr');
   });

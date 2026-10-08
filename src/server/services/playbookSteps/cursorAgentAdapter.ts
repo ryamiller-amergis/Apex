@@ -16,8 +16,11 @@
  * Thread-per-step rather than thread-per-run: `chat_threads.active_run_id` holds one run, so two
  * concurrent agent steps in one Playbook sharing a thread would collide.
  */
-import { createThread, getThread } from '../chatAgentService';
+import { randomUUID } from 'node:crypto';
+import { createThread, getThread, prepareBackgroundWorkflowTurn } from '../chatAgentService';
 import { enqueue } from '../agentRunLifecycleService';
+import { routeBackgroundWorkflow } from '../backgroundWorkflowRouter';
+import { isFeatureEnabled } from '../featureFlagService';
 import { getSkillConfig } from '../projectSettingsService';
 import { getDefaultModel } from '../appSettingsService';
 import {
@@ -29,6 +32,7 @@ import { assertSkillAllowed, resolveDeadlineMs } from './registry';
 import {
   deadlineFromNow,
   failStepRun,
+  failStepRunForHuman,
   suspendStepRun,
   PlaybookStepExecutionContext,
   PlaybookStepOutcome,
@@ -47,6 +51,46 @@ import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle'
  */
 const STEP_TYPE = 'cursor-agent';
 const TERMINAL_EVENT_GRACE_MS = 5 * 60 * 1000;
+const V2_TRANSPORT_FLAG = 'ai-runs-v2-transport';
+
+async function isV2TransportEnabled(userId: string, project: string): Promise<boolean> {
+  try {
+    return await isFeatureEnabled(V2_TRANSPORT_FLAG, { userId, project, caller: 'playbook-step' });
+  } catch {
+    // An unreadable flag keeps the V1 path, as the background router does.
+    return false;
+  }
+}
+
+/**
+ * Admits the step's agent run on the V2 document lane and returns its run id, or null when the
+ * router did not reach a worker. The router's in-process fallback is a no-op here: running the
+ * agent on App Service would hide a V2 failure, so the caller fails the step as retryable instead.
+ */
+async function routeStepThroughV2(input: {
+  userId: string;
+  project: string;
+  threadId: string;
+  prompt: string;
+  model: string;
+}): Promise<string | null> {
+  const decision = await routeBackgroundWorkflow({
+    userId: input.userId,
+    workflowClass: 'playbook-step',
+    destinationRun: { runType: 'chat', runId: input.threadId, project: input.project },
+    // The validation thread is reused across Playbook runs and retries; the terminal-event
+    // listener correlates on this id, so each step needs its own.
+    agentRunId: randomUUID(),
+    threadId: input.threadId,
+    prepareWorker: async () => ({
+      ...(await prepareBackgroundWorkflowTurn(input.threadId, input.prompt)),
+      model: input.model,
+    }),
+    runInProcess: () => undefined,
+    reportRecoverablePreparationFailure: () => undefined,
+  });
+  return decision.route === 'worker' ? decision.runId : null;
+}
 
 export async function executeCursorAgentStep(
   context: PlaybookStepExecutionContext
@@ -112,6 +156,39 @@ export async function executeCursorAgentStep(
     projectId: context.project,
     threadId: thread.id,
   };
+
+  if (await isV2TransportEnabled(context.initiatorUserId, context.project)) {
+    let v2RunId: string | null;
+    try {
+      v2RunId = await routeStepThroughV2({
+        userId: context.initiatorUserId,
+        project: context.project,
+        threadId: thread.id,
+        prompt: config.prompt,
+        model,
+      });
+    } catch (error) {
+      await failStepRun({
+        stepRunId: context.stepRunId,
+        reason: error instanceof Error ? error.message : 'Failed to admit the V2 agent run',
+      });
+      throw error;
+    }
+    if (!v2RunId) {
+      // Same end state as an agent run that failed: parked, retryable by a person.
+      await failStepRunForHuman({
+        stepRunId: context.stepRunId,
+        reason: 'The V2 runtime could not prepare this agent run.',
+      });
+      return { kind: 'suspended', expiresAt: stepExpiresAt };
+    }
+    await suspendStepRun({
+      stepRunId: context.stepRunId,
+      expiresAt: stepExpiresAt,
+      agentRunId: v2RunId,
+    });
+    return { kind: 'suspended', expiresAt: stepExpiresAt, agentRunId: v2RunId };
+  }
 
   let agentRunId: string;
   try {

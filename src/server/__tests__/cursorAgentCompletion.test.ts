@@ -4,6 +4,9 @@ jest.mock('../services/chatAgentService', () => ({
   readOutputValidationScorecard: jest.fn().mockReturnValue({ is_ready: true }),
   readOutputValidationScorecardMd: jest.fn().mockReturnValue('# report'),
 }));
+jest.mock('../services/playbookSteps/v2StepArtifacts', () => ({
+  readV2ScorecardFiles: jest.fn().mockResolvedValue(null),
+}));
 
 import { cursorAgentCompletionOutput } from '../services/playbookSteps/cursorAgentCompletion';
 import {

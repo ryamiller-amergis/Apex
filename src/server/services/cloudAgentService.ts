@@ -20,8 +20,10 @@ import {
 } from '../../shared/types/devWorkbench';
 import { isAgentRunTerminalStatus } from '../../shared/types/agentRunLifecycle';
 import type {
+  AgentRunExecutionSnapshot,
   AgentRunStatus,
   AgentRunTerminalReason,
+  ExecutionSnapshot,
   RunCheckResult,
 } from '../../shared/types/agentRunLifecycle';
 import { deriveFailingChecks } from '../../shared/utils/runCheckResults';
@@ -169,6 +171,20 @@ function missingSkillField(input: EvaluateCloudAgentEligibilityInput): string | 
   if (!input.skillRepo?.trim()) return 'skillRepo';
   if (!input.skillBranch?.trim()) return 'skillBranch';
   return null;
+}
+
+function isInteractiveTurnSnapshot(
+  snapshot: AgentRunExecutionSnapshot,
+): snapshot is Exclude<AgentRunExecutionSnapshot, ExecutionSnapshot> {
+  return 'kind' in snapshot && snapshot.kind === 'interactive-turn';
+}
+
+/** Cloud-agent runs carry a background snapshot, never an interactive-turn specification. */
+function backgroundSnapshot(
+  snapshot: AgentRunExecutionSnapshot | null | undefined,
+): ExecutionSnapshot | null {
+  if (!snapshot || isInteractiveTurnSnapshot(snapshot)) return null;
+  return snapshot;
 }
 
 function isUniqueViolation(err: unknown): boolean {
@@ -650,7 +666,7 @@ async function launchClaimedCloudAgentRun(
   const run = await db.query.agentRuns.findFirst({
     where: eq(agentRuns.id, runId),
   });
-  const snapshot = run?.executionSnapshot;
+  const snapshot = backgroundSnapshot(run?.executionSnapshot);
   const cloud = snapshot?.cloudAgent;
   const sessionId = run?.devSessionId ?? snapshot?.threadId ?? null;
   if (!run || run.status !== 'queued' || run.cloudAgentIdentity) {
@@ -1122,8 +1138,9 @@ export async function applyCloudAgentCompletion(input: {
   });
   if (!session) return;
 
-  const provider = terminal.run.executionSnapshot?.provider;
-  const repository = terminal.run.executionSnapshot?.repository;
+  const terminalSnapshot = backgroundSnapshot(terminal.run.executionSnapshot);
+  const provider = terminalSnapshot?.provider;
+  const repository = terminalSnapshot?.repository;
   let prStatus: HostAgnosticPrStatus = input.prUrl ? 'open' : 'none';
   if (input.prUrl && provider && repository) {
     try {
@@ -1274,8 +1291,8 @@ export async function getCloudAgentRunStatus(
         if (!adoUserToken && process.env.NODE_ENV === 'production') {
           mapped = 'running';
         } else {
-          const meta = run.executionSnapshot?.cloudAgent;
-          const repository = run.executionSnapshot?.repository;
+          const meta = backgroundSnapshot(run.executionSnapshot)?.cloudAgent;
+          const repository = backgroundSnapshot(run.executionSnapshot)?.repository;
           let targetBranch = meta?.baseBranch || observed.baseBranch || null;
           if (!targetBranch) {
             const skill = await deps.getSkillConfig(session.project);
@@ -1285,7 +1302,7 @@ export async function getCloudAgentRunStatus(
           if (!repository || !targetBranch || !workItemId) {
             throw new Error('Cloud Agent run is missing pull request context');
           }
-          if (run.executionSnapshot?.provider !== 'github') {
+          if (backgroundSnapshot(run.executionSnapshot)?.provider !== 'github') {
             prUrl = await deps.openCloudAgentPullRequest({
               project: session.project,
               repo: repository,
@@ -1358,8 +1375,8 @@ export async function getCloudAgentRunStatus(
   );
   if (prUrl && prStatus !== 'merged') {
     try {
-      const provider = run.executionSnapshot?.provider;
-      const repository = run.executionSnapshot?.repository;
+      const provider = backgroundSnapshot(run.executionSnapshot)?.provider;
+      const repository = backgroundSnapshot(run.executionSnapshot)?.repository;
       if (!provider || !repository) {
         throw new Error('Cloud Agent run is missing repository context for PR status');
       }
@@ -1437,8 +1454,8 @@ export async function getCloudAgentRunHistory(
 
     if (prUrl && prStatus !== 'merged') {
       try {
-        const provider = run.executionSnapshot?.provider;
-        const repository = run.executionSnapshot?.repository;
+        const provider = backgroundSnapshot(run.executionSnapshot)?.provider;
+        const repository = backgroundSnapshot(run.executionSnapshot)?.repository;
         if (!provider || !repository) {
           throw new Error('Cloud Agent run is missing repository context for PR status');
         }

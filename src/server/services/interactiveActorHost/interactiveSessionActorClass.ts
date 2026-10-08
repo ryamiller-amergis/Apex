@@ -16,6 +16,11 @@
  * entrypoint calls {@link setInteractiveActorRuntime} before `server.start()`.
  */
 import { AbstractActor } from '@dapr/dapr';
+import type { AgentRunExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
+import {
+  isInteractiveActorBootstrap,
+  type InteractiveActorBootstrap,
+} from '../../../shared/types/aiRunIngest';
 import { INTERACTIVE_LANE } from '../../../shared/types/interactiveWorkflow';
 import type { AiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
 import { workerTierTelemetry } from '../workerTierTelemetry';
@@ -33,6 +38,15 @@ export interface InteractiveActorRuntime {
 
 let runtime: InteractiveActorRuntime | undefined;
 
+function isDurableInteractiveSnapshot(
+  snapshot: AgentRunExecutionSnapshot,
+): snapshot is Extract<
+  AgentRunExecutionSnapshot,
+  { kind: 'interactive-turn' }
+> {
+  return 'kind' in snapshot && snapshot.kind === 'interactive-turn';
+}
+
 export function setInteractiveActorRuntime(next: InteractiveActorRuntime): void {
   runtime = next;
 }
@@ -47,6 +61,24 @@ export interface IInteractiveSessionActor {
   handleTurn(
     payload: InteractiveDispatchPayload,
   ): Promise<InteractiveTurnOutcome>;
+}
+
+function priorOutcomeForTerminalAttempt(
+  bootstrap: InteractiveActorBootstrap,
+): InteractiveTurnOutcome {
+  switch (bootstrap.attemptStatus) {
+    case 'completed':
+      return {
+        status: 'completed',
+        cursorAgentId: bootstrap.cursorAgentId,
+      };
+    case 'cancelled':
+      return { status: 'cancelled' };
+    case 'failed':
+      return { status: 'cancelled' };
+    default:
+      return { status: 'fence-conflict' };
+  }
 }
 
 export class InteractiveSessionActorImpl
@@ -96,7 +128,65 @@ export class InteractiveSessionActorImpl
       // ignore
     }
 
-    const snapshot = Object.freeze({ ...bootstrap.run.executionSnapshot });
+    // Durable interactive V2 bootstrap — attempt-aware path.
+    if (isInteractiveActorBootstrap(bootstrap)) {
+      if (bootstrap.dispatchMessageId !== payload.dispatchMessageId) {
+        return { status: 'fence-conflict' };
+      }
+      if (
+        bootstrap.attemptStatus === 'completed' ||
+        bootstrap.attemptStatus === 'failed' ||
+        bootstrap.attemptStatus === 'cancelled'
+      ) {
+        return priorOutcomeForTerminalAttempt(bootstrap);
+      }
+      if (
+        bootstrap.attemptStatus !== 'queued' &&
+        bootstrap.attemptStatus !== 'dispatched' &&
+        bootstrap.attemptStatus !== 'running'
+      ) {
+        return { status: 'fence-conflict' };
+      }
+
+      // Return as soon as the fence is verified. The Dapr actor invocation
+      // cancels long calls, so the turn runs detached; the per-thread turn
+      // queue still serializes turns and the turn reports its own terminal.
+      const threadId = this.getActorId().getId();
+      void active.logic
+        .handleDurableTurn({ threadId, bootstrap })
+        .then((outcome) => {
+          console.log(
+            JSON.stringify({
+              event: 'InteractiveDurableTurnSettled',
+              threadId,
+              runId: payload.runId,
+              dispatchMessageId: payload.dispatchMessageId,
+              status: outcome.status,
+            }),
+          );
+        })
+        .catch((error: unknown) => {
+          console.error(
+            JSON.stringify({
+              event: 'InteractiveDurableTurnCrashed',
+              threadId,
+              runId: payload.runId,
+              dispatchMessageId: payload.dispatchMessageId,
+              errorType: error instanceof Error ? error.name : 'UnknownError',
+              errorMessage: error instanceof Error ? error.message : String(error),
+            }),
+          );
+        });
+      return { status: 'accepted' };
+    }
+
+    const persistedSnapshot = bootstrap.run.executionSnapshot;
+    if (isDurableInteractiveSnapshot(persistedSnapshot)) {
+      throw new Error(
+        'Durable interactive turns require the direct actor V2 executor',
+      );
+    }
+    const snapshot = Object.freeze({ ...persistedSnapshot });
 
     // A stale fence aborts before any warm-checkout access or ingest (BR-018).
     if (
@@ -118,5 +208,26 @@ export class InteractiveSessionActorImpl
       snapshot,
       cursorAgentId: bootstrap.cursorAgentId ?? null,
     });
+  }
+}
+
+/**
+ * Dapr places an actor type on every replica in the environment that registers
+ * it, so hosts sharing a type share turns. Each warm class registers its own
+ * type; the legacy host keeps the original name.
+ */
+export class InteractiveSessionActorFast extends InteractiveSessionActorImpl {}
+export class InteractiveSessionActorAgentic extends InteractiveSessionActorImpl {}
+
+export function interactiveSessionActorClassFor(
+  daprAppId: string | undefined,
+): typeof InteractiveSessionActorImpl {
+  switch (daprAppId?.trim()) {
+    case 'apex-ai-fast-interactive':
+      return InteractiveSessionActorFast;
+    case 'apex-ai-agentic':
+      return InteractiveSessionActorAgentic;
+    default:
+      return InteractiveSessionActorImpl;
   }
 }

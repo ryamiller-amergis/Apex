@@ -5,11 +5,21 @@ import type {
   BackgroundWorkflowClass,
   WorkflowRouteDecision,
 } from '../../shared/types/backgroundWorkflow';
+import {
+  isAllowedDocumentScratchInputPath,
+  isAiRunV2DocumentSpecification,
+  type AiRunV2DocumentScratchInput,
+  type AiRunV2DocumentSpecification,
+} from '../../shared/types/aiRunV2DocumentSpec';
 import type { SkillProvider } from '../../shared/types/projectSettings';
 import type { EffortLevel } from '../../shared/types/effort';
 import type { RunGrounding, RunRef } from '../../shared/types/runGrounding';
 import { resolveAgentRunHardLimitMs } from './agentRunReaperService';
 import { enqueue } from './agentRunLifecycleService';
+import {
+  createV2AdmissionService,
+  type V2AdmissionService,
+} from './aiRunV2/v2AdmissionService';
 import { isFeatureEnabled } from './featureFlagService';
 import { getRepoCacheDir, type RepoCacheOptions } from './repoCacheService';
 import {
@@ -35,6 +45,10 @@ import {
 } from './repositoryPreparationService';
 
 const BACKGROUND_WORKFLOW_FLAG = 'ai-runs-background';
+const V2_TRANSPORT_FLAG = 'ai-runs-v2-transport';
+
+/** Every class this router handles is document work; visual has its own path. */
+const V2_WORKLOAD_LANE = 'document' as const;
 
 /** Generation workflows that reuse the interview's shared SHA checkout (no full clone). */
 const SHARED_READ_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new Set([
@@ -50,7 +64,15 @@ const SHARED_READ_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new S
 const SCRATCH_ONLY_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new Set([
   'validation',
   'walkthrough-smart-tagging',
+  'playbook-step',
 ]);
+
+/**
+ * Waits between re-preparations while the shared mirror fetches the pinned commit. Runs started
+ * together race that fetch; about 50 seconds in total covers a refresh without holding a caller
+ * much longer than repository preparation already can.
+ */
+const SKILL_SYNC_RETRY_DELAYS_MS: readonly number[] = [5_000, 10_000, 15_000, 20_000];
 
 export interface RecoverableBackgroundWorkflowFailure {
   reason: 'materialization-unavailable';
@@ -67,6 +89,10 @@ export interface PreparedBackgroundWorkflowWorker {
   model: string;
   effort?: EffortLevel;
   skillPath: string;
+  skillContent?: string;
+  skillSha256?: string;
+  /** No Skill was frozen because the mirror was still fetching the pinned commit. */
+  skillRepositorySyncing?: boolean;
   projectId: string;
 }
 
@@ -75,6 +101,11 @@ export interface BackgroundWorkflowRouteInput {
   workflowClass: BackgroundWorkflowClass;
   /** Generation-thread run identity used for the pinned destination. */
   destinationRun: RunRef;
+  /**
+   * Agent run id for the dispatch. Defaults to `destinationRun.runId`; callers that reuse a
+   * thread across runs pass a fresh id so each run has its own row.
+   */
+  agentRunId?: string;
   threadId: string;
   /** Worker-only preparation, evaluated lazily after the feature flag enables routing. */
   prepareWorker(): Promise<PreparedBackgroundWorkflowWorker>;
@@ -102,18 +133,21 @@ type EnqueueRun = typeof enqueue;
 
 export interface BackgroundWorkflowRouterDependencies {
   isFeatureEnabled?: FeatureFlagEvaluator;
+  admitV2Run?: V2AdmissionService['admit'];
   materializeRunGroundingWithPath?: MaterializeGrounding;
   prepareWorkspace?: typeof prepareBackgroundWorkflowWorkspace;
   enqueue?: EnqueueRun;
   resolveHardLimitMs?: () => number;
   trackEvent?: typeof trackEvent;
   now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
   repositoryPreparation?: Pick<RepositoryPreparationService, 'prepareWritable'>;
   sharedReadCheckout?: Pick<
     SharedReadCheckoutService,
     'getReady' | 'retain'
   >;
   clearGenerationOutput?: (threadWorkspacePath: string) => Promise<void>;
+  readDocumentScratchInputs?: typeof readDocumentScratchInputs;
   getRepoCacheDir?: (options: RepoCacheOptions) => string;
   isUsableBareMirror?: (path: string | undefined) => boolean;
   /**
@@ -128,6 +162,110 @@ export { workerCanReadWithoutWorkingTree } from './repoRead/workerReadVisibility
 
 export interface BackgroundWorkflowRouter {
   route(input: BackgroundWorkflowRouteInput): Promise<WorkflowRouteDecision>;
+}
+
+const WRAPPED_ERROR_MESSAGE_MAX_CHARS = 300;
+
+/**
+ * Drizzle wraps driver errors as "Failed query: <sql> params: <values>" and
+ * keeps the Postgres error on `cause`. Lead with the cause and cut the wrapper
+ * so the real reason survives log truncation and parameters stay out of logs.
+ */
+export function errorMessage(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const cause = (error as { cause?: unknown }).cause;
+  if (cause === undefined || cause === null) return error.message;
+  const { code, constraint } = cause as { code?: unknown; constraint?: unknown };
+  const details = [
+    typeof code === 'string' ? `code=${code}` : null,
+    typeof constraint === 'string' ? `constraint=${constraint}` : null,
+  ].filter((detail): detail is string => detail !== null);
+  const causeMessage = cause instanceof Error ? cause.message : String(cause);
+  return [
+    `cause: ${causeMessage}`,
+    ...(details.length > 0 ? [`(${details.join(', ')})`] : []),
+    `| ${error.message.replace(/\s+/g, ' ').slice(0, WRAPPED_ERROR_MESSAGE_MAX_CHARS)}`,
+  ].join(' ');
+}
+
+async function readOptionalScratchFile(
+  workspaceRoot: string,
+  relativePath: string,
+): Promise<AiRunV2DocumentScratchInput | null> {
+  const target = path.join(workspaceRoot, ...relativePath.split('/'));
+  try {
+    const metadata = await fs.lstat(target);
+    if (metadata.isSymbolicLink() || !metadata.isFile()) {
+      throw new Error(`Document scratch input is not a regular file: ${relativePath}`);
+    }
+    return {
+      path: relativePath,
+      content: await fs.readFile(target, 'utf8'),
+    };
+  } catch (error) {
+    if (
+      error
+      && typeof error === 'object'
+      && 'code' in error
+      && error.code === 'ENOENT'
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Read only the workflow inputs the document worker is allowed to materialize.
+ * Repository files, secrets, stale outputs, and the host workspace path never
+ * become scratch-file content in the immutable specification.
+ */
+export async function readDocumentScratchInputs(
+  threadWorkspacePath: string,
+  workflowClass: BackgroundWorkflowClass,
+): Promise<AiRunV2DocumentScratchInput[]> {
+  const workspaceRoot = path.resolve(threadWorkspacePath);
+  const inputs: AiRunV2DocumentScratchInput[] = [];
+  for (const relativePath of [
+    '.ai-pilot/kickoff-context.md',
+    '.ai-pilot/kickoff-transcript.md',
+    '.ai-pilot/session.json',
+  ]) {
+    if (!isAllowedDocumentScratchInputPath(workflowClass, relativePath)) {
+      continue;
+    }
+    const input = await readOptionalScratchFile(workspaceRoot, relativePath);
+    if (input) inputs.push(input);
+  }
+
+  if (workflowClass === 'test-cases') {
+    const outputDirectory = path.join(workspaceRoot, '.ai-pilot', 'output');
+    let names: string[] = [];
+    try {
+      names = await fs.readdir(outputDirectory);
+    } catch (error) {
+      if (
+        !error
+        || typeof error !== 'object'
+        || !('code' in error)
+        || error.code !== 'ENOENT'
+      ) {
+        throw error;
+      }
+    }
+    for (const name of names.sort()) {
+      if (!/\.prd\.md$/i.test(name) && !/\.backlog\.json$/i.test(name)) {
+        continue;
+      }
+      const input = await readOptionalScratchFile(
+        workspaceRoot,
+        `.ai-pilot/output/${name}`,
+      );
+      if (input) inputs.push(input);
+    }
+  }
+
+  return inputs.sort((left, right) => left.path.localeCompare(right.path));
 }
 
 async function copyDirectoryContentsSafely(
@@ -227,10 +365,17 @@ export function createBackgroundWorkflowRouter(
     dependencies.prepareWorkspace ?? prepareBackgroundWorkflowWorkspace;
   const clearGenerationOutput =
     dependencies.clearGenerationOutput ?? clearBackgroundGenerationOutput;
+  const readScratchInputs =
+    dependencies.readDocumentScratchInputs ?? readDocumentScratchInputs;
   const enqueueRun = dependencies.enqueue ?? enqueue;
+  const admitV2Run =
+    dependencies.admitV2Run ?? ((input) => createV2AdmissionService().admit(input));
   const hardLimitMs = dependencies.resolveHardLimitMs ?? resolveAgentRunHardLimitMs;
   const emitEvent = dependencies.trackEvent ?? trackEvent;
   const now = dependencies.now ?? Date.now;
+  const sleep =
+    dependencies.sleep
+    ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const sharedReadCheckout =
     dependencies.sharedReadCheckout ?? sharedReadCheckoutService;
   const repositoryPreparation =
@@ -277,7 +422,13 @@ export function createBackgroundWorkflowRouter(
     input: BackgroundWorkflowRouteInput,
     reason: string,
     startedAt: number,
+    error?: unknown,
   ): Promise<WorkflowRouteDecision> => {
+    if (error !== undefined) {
+      console.warn(
+        `[background-route] ${reason} (workflow=${input.workflowClass}, runId=${input.destinationRun.runId}): ${errorMessage(error)}`,
+      );
+    }
     safeTrack(
       'background.materialization.outcome',
       {
@@ -306,7 +457,10 @@ export function createBackgroundWorkflowRouter(
     } catch {
       execution = Promise.reject(new Error('In-process fallback failed'));
     }
-    void execution.catch(async () => {
+    void execution.catch(async (error: unknown) => {
+      console.warn(
+        `[background-route] in-process fallback failed (workflow=${input.workflowClass}, runId=${input.destinationRun.runId}): ${errorMessage(error)}`,
+      );
       safeTrack('background.route.fallback', {
         workflowClass: input.workflowClass,
         project: input.destinationRun.project,
@@ -332,18 +486,139 @@ export function createBackgroundWorkflowRouter(
 
   const routeWorker = async (
     input: BackgroundWorkflowRouteInput,
+    useV2Transport: boolean,
   ): Promise<WorkflowRouteDecision> => {
     const preparationStartedAt = now();
     let prepared: PreparedBackgroundWorkflowWorker;
     try {
       prepared = await input.prepareWorker();
-    } catch {
+    } catch (error) {
       return recoverPreparation(
         input,
         'worker-preparation-failed',
         preparationStartedAt,
+        error,
       );
     }
+
+    if (useV2Transport) {
+      for (const [index, delayMs] of SKILL_SYNC_RETRY_DELAYS_MS.entries()) {
+        if (prepared.skillContent || !prepared.skillRepositorySyncing) break;
+        safeTrack(
+          'background.preparation.retry',
+          {
+            workflowClass: input.workflowClass,
+            project: input.destinationRun.project,
+            reason: 'repository-syncing',
+          },
+          { attempt: index + 1, delayMs },
+        );
+        await sleep(delayMs);
+        try {
+          prepared = await input.prepareWorker();
+        } catch (error) {
+          return recoverPreparation(
+            input,
+            'worker-preparation-failed',
+            preparationStartedAt,
+            error,
+          );
+        }
+      }
+    }
+
+    let documentScratchInputs: AiRunV2DocumentScratchInput[] = [];
+    if (useV2Transport) {
+      try {
+        documentScratchInputs = await readScratchInputs(
+          prepared.threadWorkspacePath,
+          input.workflowClass,
+        );
+      } catch {
+        return recoverPreparation(
+          input,
+          'workspace-preparation-failed',
+          preparationStartedAt,
+        );
+      }
+    }
+
+    const dispatch = async (
+      snapshot: ExecutionSnapshot,
+      targetGrounding?: RunGrounding,
+    ): Promise<string> => {
+      const deadlineMs = hardLimitMs();
+      const timeoutAt = new Date(now() + deadlineMs).toISOString();
+      // Retain enabled once V2 carries production document traffic.
+      // @feature-flag:ai-runs-v2-transport start winner=enabled
+      if (useV2Transport) {
+        // @feature-flag:ai-runs-v2-transport enabled-start
+        const specificationCandidate: Record<string, unknown> = {
+          workloadLane: V2_WORKLOAD_LANE,
+          prompt: snapshot.prompt,
+          model: snapshot.model,
+          effort: snapshot.effort ?? null,
+          skillPath: prepared.skillPath,
+          skillContent: prepared.skillContent,
+          skillSha256: prepared.skillSha256,
+          workflowClass: input.workflowClass,
+          projectId: prepared.projectId,
+          threadId: input.threadId,
+          deadlineMs,
+          scratchInputs: documentScratchInputs,
+          ...(targetGrounding
+            ? {
+                groundedSha: targetGrounding.groundedSha,
+                repository: targetGrounding.repository,
+                provider: targetGrounding.provider === 'azure_devops' ? 'ado' : 'github',
+              }
+            : {}),
+        };
+        if (!isAiRunV2DocumentSpecification(specificationCandidate)) {
+          const present = (value: unknown): string =>
+            typeof value === 'string' && value.length > 0 ? 'yes' : 'no';
+          throw new Error(
+            'Document execution specification is incomplete'
+            + ` (model=${present(snapshot.model)}, skillPath=${present(prepared.skillPath)}`
+            + `, skillContent=${present(prepared.skillContent)}, skillSha256=${present(prepared.skillSha256)}`
+            + `, groundedSha=${present(targetGrounding?.groundedSha)}`
+            + `, scratchInputs=${documentScratchInputs.map((entry) => entry.path).join(',') || 'none'})`,
+          );
+        }
+        const specification: AiRunV2DocumentSpecification =
+          specificationCandidate;
+        const admitted = await admitV2Run({
+          runId: input.agentRunId ?? input.destinationRun.runId,
+          threadId: input.threadId,
+          projectId: prepared.projectId,
+          workloadLane: V2_WORKLOAD_LANE,
+          capacityClass: 'batch',
+          timeoutAt,
+          specification: specification as unknown as Record<string, unknown>,
+          executionSnapshot:
+            specification as unknown as Record<string, unknown>,
+        });
+        if (admitted.status !== 'dispatched') {
+          throw new Error(
+          `V2 admission refused the document run: ${admitted.status} (existing run ${admitted.existingRunId}, ${admitted.existingStatus})`,
+        );
+        }
+        return admitted.runId;
+        // @feature-flag:ai-runs-v2-transport enabled-end
+      }
+
+      // @feature-flag:ai-runs-v2-transport disabled-start
+      const enqueued = await enqueueRun({
+        threadId: input.threadId,
+        projectId: prepared.projectId,
+        snapshot,
+        timeoutAt,
+        runId: input.agentRunId ?? input.destinationRun.runId,
+      });
+      return enqueued.runId;
+      // @feature-flag:ai-runs-v2-transport disabled-end
+      // @feature-flag:ai-runs-v2-transport end
+    };
 
     // PRD / design-doc validation: score content from kickoff-context only.
     // No grounding, shared checkout, or MaxView clone.
@@ -381,28 +656,22 @@ export function createBackgroundWorkflowRouter(
         projectId: prepared.projectId,
         threadId: input.threadId,
       };
-      const timeoutAt = new Date(now() + hardLimitMs()).toISOString();
-      let enqueued: Awaited<ReturnType<EnqueueRun>>;
+      let dispatchedRunId: string;
       try {
-        enqueued = await enqueueRun({
-          threadId: input.threadId,
-          projectId: prepared.projectId,
-          snapshot,
-          timeoutAt,
-          runId: input.destinationRun.runId,
-        });
-      } catch {
+        dispatchedRunId = await dispatch(snapshot);
+      } catch (error) {
         return recoverPreparation(
           input,
           'worker-enqueue-failed',
           preparationStartedAt,
+          error,
         );
       }
       routeDecision(input, 'worker', materializationReason);
       return {
         route: 'worker',
         workspacePath: workspaceRef,
-        runId: enqueued.runId,
+        runId: dispatchedRunId,
       };
     }
 
@@ -550,78 +819,103 @@ export function createBackgroundWorkflowRouter(
       projectId: prepared.projectId,
       threadId: input.threadId,
     };
-    const timeoutAt = new Date(now() + hardLimitMs()).toISOString();
-    let enqueued: Awaited<ReturnType<EnqueueRun>>;
+    let dispatchedRunId: string;
     try {
-      enqueued = await enqueueRun({
-        threadId: input.threadId,
-        projectId: prepared.projectId,
-        snapshot,
-        timeoutAt,
-        runId: input.destinationRun.runId,
-      });
-    } catch {
+      dispatchedRunId = await dispatch(snapshot, prepared.targetGrounding);
+    } catch (error) {
       return recoverPreparation(
         input,
         'worker-enqueue-failed',
         preparationStartedAt,
+        error,
       );
     }
     routeDecision(input, 'worker', materializationReason);
     return {
       route: 'worker',
       workspacePath: workspaceRef,
-      runId: enqueued.runId,
+      runId: dispatchedRunId,
     };
+  };
+
+  const routeLegacyOrInProcess = async (
+    input: BackgroundWorkflowRouteInput,
+  ): Promise<WorkflowRouteDecision> => {
+    let enabled = false;
+    let evaluationReason = 'flag-disabled';
+    try {
+      enabled = await evaluateFlag(BACKGROUND_WORKFLOW_FLAG, {
+        userId: input.userId,
+        project: input.destinationRun.project,
+        caller: input.workflowClass,
+      });
+    } catch {
+      evaluationReason = 'flag-evaluation-error';
+    }
+
+    // Retain enabled after two stable sprints at full rollout.
+    // @feature-flag:ai-runs-background start winner=enabled
+    if (!enabled) {
+      // @feature-flag:ai-runs-background disabled-start
+      routeDecision(input, 'in-process', evaluationReason);
+      let execution: Promise<void>;
+      try {
+        execution = Promise.resolve(input.runInProcess());
+      } catch {
+        execution = Promise.reject(new Error('In-process workflow failed'));
+      }
+      void execution.catch(async () => {
+        await Promise.resolve(
+          input.reportRecoverablePreparationFailure({
+            reason: 'materialization-unavailable',
+            workflowClass: input.workflowClass,
+            project: input.destinationRun.project,
+            runId: input.destinationRun.runId,
+          }),
+        ).catch(() => undefined);
+      });
+      const decision: WorkflowRouteDecision = {
+        route: 'in-process',
+        reason: 'flag-disabled',
+      };
+      // @feature-flag:ai-runs-background disabled-end
+      return decision;
+    }
+
+    // @feature-flag:ai-runs-background enabled-start
+    const decision = await routeWorker(input, false);
+    // @feature-flag:ai-runs-background enabled-end
+    // @feature-flag:ai-runs-background end
+    return decision;
   };
 
   return {
     async route(input) {
-      let enabled = false;
-      let evaluationReason = 'flag-disabled';
+      let useV2Transport = false;
       try {
-        enabled = await evaluateFlag(BACKGROUND_WORKFLOW_FLAG, {
+        useV2Transport = await evaluateFlag(V2_TRANSPORT_FLAG, {
           userId: input.userId,
           project: input.destinationRun.project,
           caller: input.workflowClass,
         });
       } catch {
-        evaluationReason = 'flag-evaluation-error';
+        // An unreadable V2 flag keeps the proven V1 or in-process path.
+        useV2Transport = false;
       }
 
-      // Retain enabled after two stable sprints at full rollout.
-      // @feature-flag:ai-runs-background start winner=enabled
-      if (!enabled) {
-        // @feature-flag:ai-runs-background disabled-start
-        routeDecision(input, 'in-process', evaluationReason);
-        let execution: Promise<void>;
-        try {
-          execution = Promise.resolve(input.runInProcess());
-        } catch {
-          execution = Promise.reject(new Error('In-process workflow failed'));
-        }
-        void execution.catch(async () => {
-          await Promise.resolve(
-            input.reportRecoverablePreparationFailure({
-              reason: 'materialization-unavailable',
-              workflowClass: input.workflowClass,
-              project: input.destinationRun.project,
-              runId: input.destinationRun.runId,
-            }),
-          ).catch(() => undefined);
-        });
-        const decision: WorkflowRouteDecision = {
-          route: 'in-process',
-          reason: 'flag-disabled',
-        };
-        // @feature-flag:ai-runs-background disabled-end
-        return decision;
+      let decision: WorkflowRouteDecision;
+      // Retain enabled once V2 carries production document traffic.
+      // @feature-flag:ai-runs-v2-transport start winner=enabled
+      if (useV2Transport) {
+        // @feature-flag:ai-runs-v2-transport enabled-start
+        decision = await routeWorker(input, true);
+        // @feature-flag:ai-runs-v2-transport enabled-end
+      } else {
+        // @feature-flag:ai-runs-v2-transport disabled-start
+        decision = await routeLegacyOrInProcess(input);
+        // @feature-flag:ai-runs-v2-transport disabled-end
       }
-
-      // @feature-flag:ai-runs-background enabled-start
-      const decision = await routeWorker(input);
-      // @feature-flag:ai-runs-background enabled-end
-      // @feature-flag:ai-runs-background end
+      // @feature-flag:ai-runs-v2-transport end
       return decision;
     },
   };

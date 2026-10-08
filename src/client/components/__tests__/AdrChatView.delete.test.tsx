@@ -434,7 +434,7 @@ describe('AdrChatView — delete', () => {
     renderAdrView();
 
     expect(screen.getByTestId('agent-run-status-queued')).toHaveTextContent(
-      'Waiting…',
+      'Queued',
     );
   });
 });
