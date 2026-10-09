@@ -309,6 +309,9 @@ describe('buildCursorModelSelection', () => {
       params: [{ id: 'effort', value: 'medium' }],
     });
     expect(buildCursorModelSelection('composer-2.5', 'medium')).toEqual({ id: 'composer-2.5' });
+    expect(
+      buildCursorModelSelection('composer-2.5', 'medium', [{ id: 'effort', values: levels('medium') }]),
+    ).toEqual({ id: 'composer-2.5' });
     expect(buildCursorModelSelection('claude-opus-5-5')).toEqual({ id: 'claude-opus-5-5' });
   });
 

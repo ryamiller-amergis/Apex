@@ -116,6 +116,39 @@ describe('modelsService', () => {
     });
   });
 
+  it('disposes a probe agent created after its timeout and waits for it before the next round', async () => {
+    process.env.CURSOR_API_KEY = 'test-key';
+    jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] });
+    try {
+      let finishCreate: (agent: unknown) => void = () => {};
+      const lateAgent = agentFinishingWith({ status: 'finished' });
+      mockAgentCreate.mockImplementation(async ({ model }: { model: { id: string } }) =>
+        model.id === 'default'
+          ? new Promise((resolve) => {
+              finishCreate = resolve;
+            })
+          : agentFinishingWith({ status: 'finished' }),
+      );
+
+      await fetchAvailableModels();
+      await jest.advanceTimersByTimeAsync(60 * 1000);
+      await modelProbeInFlightForTests();
+
+      jest.setSystemTime(Date.now() + 6 * 60 * 1000);
+      requestModelAvailabilityProbe();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(modelProbeInFlightForTests()).toBeNull();
+
+      finishCreate(lateAgent);
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(lateAgent.send).not.toHaveBeenCalled();
+      expect(lateAgent[Symbol.asyncDispose]).toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('probes once per interval, and again soon after a run reports a block', async () => {
     process.env.CURSOR_API_KEY = 'test-key';
     blockModels('grok-4.7');

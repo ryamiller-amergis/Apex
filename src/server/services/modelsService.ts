@@ -112,7 +112,7 @@ export function requestModelAvailabilityProbe(): void {
 
 function scheduleModelProbe(catalog: CatalogModel[], minimumGapMs: number): void {
   const apiKey = process.env.CURSOR_API_KEY?.trim();
-  if (!apiKey || catalog.length === 0 || probeInFlight) return;
+  if (!apiKey || catalog.length === 0 || probeInFlight || runningProbeAttempts > 0) return;
   if (Date.now() - lastProbeStartedAt < minimumGapMs) return;
   lastProbeStartedAt = Date.now();
   probeInFlight = probeModels(
@@ -128,42 +128,56 @@ function scheduleModelProbe(catalog: CatalogModel[], minimumGapMs: number): void
 }
 
 async function probeModels(apiKey: string, models: CatalogModel[]): Promise<void> {
-  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'apex-model-probe-'));
-  try {
-    const blocked = new Set(blockedModelIds);
-    const queue = [...models];
-    const probeNext = async (): Promise<void> => {
-      for (let model = queue.shift(); model; model = queue.shift()) {
-        const outcome = await probeModel(apiKey, model.id, workspace);
-        if (outcome === 'blocked') blocked.add(model.id);
-        if (outcome === 'available') blocked.delete(model.id);
-      }
-    };
-    await Promise.all(
-      Array.from({ length: Math.min(PROBE_CONCURRENCY, queue.length) }, probeNext),
-    );
-    blockedModelIds = blocked;
-  } finally {
-    await fs.rm(workspace, { recursive: true, force: true }).catch(() => {});
-  }
+  const blocked = new Set(blockedModelIds);
+  const queue = [...models];
+  let roundTimedOut = false;
+  const probeNext = async (): Promise<void> => {
+    for (let model = queue.shift(); model && !roundTimedOut; model = queue.shift()) {
+      const outcome = await probeModel(apiKey, model.id);
+      if (outcome === 'timed-out') roundTimedOut = true;
+      if (outcome === 'blocked') blocked.add(model.id);
+      if (outcome === 'available') blocked.delete(model.id);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(PROBE_CONCURRENCY, queue.length) }, probeNext),
+  );
+  blockedModelIds = blocked;
 }
 
-type ProbeOutcome = 'available' | 'blocked' | 'unknown';
+type ProbeOutcome = 'available' | 'blocked' | 'unknown' | 'timed-out';
 
-async function probeModel(apiKey: string, id: string, cwd: string): Promise<ProbeOutcome> {
+/**
+ * Attempts still running after a timeout. A new round waits for them, so a
+ * hung `Agent.create` cannot pile up agents across rounds.
+ */
+let runningProbeAttempts = 0;
+
+async function probeModel(apiKey: string, id: string): Promise<ProbeOutcome> {
+  let timedOut = false;
   let agent: { [Symbol.asyncDispose](): Promise<void> } | undefined;
   let timer: NodeJS.Timeout | undefined;
-  const timedOut = new Promise<ProbeOutcome>((resolve) => {
+  const timeout = new Promise<ProbeOutcome>((resolve) => {
     timer = setTimeout(() => {
+      timedOut = true;
       void agent?.[Symbol.asyncDispose]().catch(() => {});
-      resolve('unknown');
+      resolve('timed-out');
     }, PROBE_TIMEOUT_MS);
     timer.unref?.();
   });
+  runningProbeAttempts += 1;
   const attempt = (async (): Promise<ProbeOutcome> => {
+    let workspace: string | undefined;
     try {
-      const created = await Agent.create({ apiKey, model: { id }, local: { cwd }, mcpServers: {} });
+      workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'apex-model-probe-'));
+      const created = await Agent.create({
+        apiKey,
+        model: { id },
+        local: { cwd: workspace },
+        mcpServers: {},
+      });
       agent = created;
+      if (timedOut) return 'timed-out';
       const result = await (await created.send(PROBE_PROMPT)).wait();
       if (result.status === 'finished') return 'available';
       return isCursorModelBlockedMessage(errorMessage(result.error)) ? 'blocked' : 'unknown';
@@ -171,10 +185,12 @@ async function probeModel(apiKey: string, id: string, cwd: string): Promise<Prob
       return isCursorModelBlockedMessage(errorMessage(error)) ? 'blocked' : 'unknown';
     } finally {
       await agent?.[Symbol.asyncDispose]().catch(() => {});
+      if (workspace) await fs.rm(workspace, { recursive: true, force: true }).catch(() => {});
+      runningProbeAttempts -= 1;
     }
   })();
   try {
-    return await Promise.race([attempt, timedOut]);
+    return await Promise.race([attempt, timeout]);
   } finally {
     clearTimeout(timer);
   }
@@ -194,6 +210,7 @@ export function resetModelsServiceForTests(): void {
   blockedModelIds = new Set();
   lastProbeStartedAt = 0;
   probeInFlight = null;
+  runningProbeAttempts = 0;
 }
 
 export function modelProbeInFlightForTests(): Promise<void> | null {

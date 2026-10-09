@@ -180,12 +180,8 @@ export function buildCursorModelSelection(
   id: string;
   params?: Array<{ id: string; value: EffortLevel }>;
 } {
-  if (!effort) return { id: model };
-  const parameterId = parameters
-    ? effortParameterFor(parameters, effort)
-    : acceptsEffortParameter(model)
-      ? 'effort'
-      : null;
+  if (!effort || !acceptsEffortParameter(model)) return { id: model };
+  const parameterId = parameters ? effortParameterFor(parameters, effort) : 'effort';
   return parameterId
     ? { id: model, params: [{ id: parameterId, value: effort }] }
     : { id: model };
