@@ -714,15 +714,29 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
         postIngest: async () => ({ ok: true, cancelRequested: false }),
         now: () => clock,
       });
-      const turn = (threadId: string, attempt: string) =>
-        actor.handleDurableTurn({
-          threadId,
-          bootstrap: makeDurableBootstrap({
-            attemptId: `${attempt}0000000-0000-4000-8000-000000000000`,
-            dispatchMessageId: `dispatch-${attempt}`,
-            runId: `run-${attempt}`,
-          }),
+      const turn = (threadId: string, attempt: string, sha?: string) => {
+        const base = makeDurableBootstrap({
+          attemptId: `${attempt}0000000-0000-4000-8000-000000000000`,
+          dispatchMessageId: `dispatch-${attempt}`,
+          runId: `run-${attempt}`,
         });
+        const bootstrap = sha
+          ? {
+              ...base,
+              specification: {
+                ...base.specification,
+                grounding: {
+                  provider: 'github' as const,
+                  project: 'proj-1',
+                  repository: 'owner/repo',
+                  sha,
+                  profileId: 'profile-1',
+                },
+              },
+            }
+          : base;
+        return actor.handleDurableTurn({ threadId, bootstrap });
+      };
       return {
         actor,
         events,
@@ -761,6 +775,18 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
         `materialize:${OTHER_THREAD_ID}`,
         `materialize:${THREAD_ID}`,
         `release:${OTHER_THREAD_ID}`,
+      ]);
+    });
+
+    it("releases the thread's own worktree from an earlier commit before checking out the new one", async () => {
+      const harness = makeTwoThreadActor();
+      await harness.turn(THREAD_ID, 'a', '1'.repeat(40));
+      await harness.turn(THREAD_ID, 'b', '2'.repeat(40));
+
+      expect(harness.events).toEqual([
+        `materialize:${THREAD_ID}`,
+        `release:${THREAD_ID}`,
+        `materialize:${THREAD_ID}`,
       ]);
     });
 

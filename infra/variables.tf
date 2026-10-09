@@ -1358,13 +1358,13 @@ variable "ai_platform_v2_interactive_memory" {
 }
 
 variable "ai_platform_v2_agentic_cpu" {
-  description = "CPU cores for each agentic replica. Null uses ai_platform_v2_interactive_cpu. On a Consumption environment, ephemeral storage is 2 GiB per core (max 8 GiB)."
+  description = "CPU cores for each agentic replica. Null uses ai_platform_v2_interactive_cpu. On a Consumption environment, ephemeral storage is 4 GiB per core (max 8 GiB)."
   type        = number
   default     = null
 }
 
 variable "ai_platform_v2_agentic_memory" {
-  description = "Memory for each agentic replica. Null uses ai_platform_v2_interactive_memory."
+  description = "Memory for each agentic replica. Null uses 2 GiB per ai_platform_v2_agentic_cpu core when that is set, otherwise ai_platform_v2_interactive_memory."
   type        = string
   default     = null
 }

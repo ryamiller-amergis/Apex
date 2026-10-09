@@ -47,14 +47,27 @@ locals {
     agentic            = { min = 2, max = 16 }
   }
 
+  # Must match DEFAULT_DISK_BUDGET_BYTES in groundedRepositoryCheckout.ts; used when no budget is set.
+  ai_platform_v2_worker_default_checkout_disk_budget_bytes = 2684354560
+
+  # Consumption apps need 2 GiB of memory per vCPU, so an agentic CPU override without a memory
+  # override gets the matching memory.
   ai_platform_v2_interactive_resources = {
     "fast-interactive" = {
-      cpu    = var.ai_platform_v2_interactive_cpu
-      memory = var.ai_platform_v2_interactive_memory
+      cpu                        = var.ai_platform_v2_interactive_cpu
+      memory                     = var.ai_platform_v2_interactive_memory
+      checkout_disk_budget_bytes = local.ai_platform_v2_worker_default_checkout_disk_budget_bytes
     }
     agentic = {
-      cpu    = coalesce(var.ai_platform_v2_agentic_cpu, var.ai_platform_v2_interactive_cpu)
-      memory = coalesce(var.ai_platform_v2_agentic_memory, var.ai_platform_v2_interactive_memory)
+      cpu = coalesce(var.ai_platform_v2_agentic_cpu, var.ai_platform_v2_interactive_cpu)
+      memory = coalesce(
+        var.ai_platform_v2_agentic_memory,
+        var.ai_platform_v2_agentic_cpu == null ? var.ai_platform_v2_interactive_memory : "${var.ai_platform_v2_agentic_cpu * 2}Gi"
+      )
+      checkout_disk_budget_bytes = coalesce(
+        var.ai_platform_v2_agentic_checkout_disk_budget_bytes,
+        local.ai_platform_v2_worker_default_checkout_disk_budget_bytes
+      )
     }
   }
 
@@ -96,17 +109,15 @@ check "ai_platform_v2_split_interactive_inputs" {
   }
 }
 
-# Consumption replicas get 2 GiB of ephemeral storage per core (max 8 GiB); the budget leaves
+# Consumption replicas get 4 GiB of ephemeral storage per core (max 8 GiB); the budget leaves
 # 1 GiB for the image layer, logs, and agent scratch files.
-check "ai_platform_v2_agentic_checkout_disk_budget" {
+check "ai_platform_v2_interactive_checkout_disk_budget" {
   assert {
-    condition = (
-      var.ai_platform_v2_agentic_checkout_disk_budget_bytes == null
-      || var.ai_platform_v2_agentic_checkout_disk_budget_bytes <= (
-        min(2 * local.ai_platform_v2_interactive_resources.agentic.cpu, 8) - 1
-      ) * 1073741824
-    )
-    error_message = "ai_platform_v2_agentic_checkout_disk_budget_bytes exceeds the agentic replica's ephemeral storage minus 1 GiB; Container Apps would evict the replica."
+    condition = alltrue([
+      for resources in values(local.ai_platform_v2_interactive_resources) :
+      resources.checkout_disk_budget_bytes <= (min(4 * resources.cpu, 8) - 1) * 1073741824
+    ])
+    error_message = "An interactive class's checkout disk budget (the worker's 2.5 GiB default when unset) exceeds its replica's ephemeral storage minus 1 GiB; Container Apps would evict the replica. Raise the class's CPU or lower ai_platform_v2_agentic_checkout_disk_budget_bytes."
   }
 }
 

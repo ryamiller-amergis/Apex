@@ -1005,6 +1005,11 @@ export function createInteractiveSessionActor(
         );
       }
       await evictIdleDurableAgents(now() - agentCacheIdleMs);
+      // A worktree from an earlier commit still counts against the disk budget.
+      const cachedForThread = agentCache.get(threadId);
+      if (cachedForThread && cachedForThread.handle.workspaceRef !== destination) {
+        await disposeAgentEntry(threadId);
+      }
       try {
         attemptCheckout = await dependencies.materializeWorkspace(
           bootstrap,
