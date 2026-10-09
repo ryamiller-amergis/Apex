@@ -1,20 +1,19 @@
 ---
 name: grill-with-docs
-description: Relentless interview session that stress-tests a feature plan against context.md, AGENTS.md, existing design docs, and the live codebase. Sharpens domain terminology, surfaces contradictions, and captures precise requirements. Use when the user wants to pressure-test a design, sharpen domain language, or thoroughly vet a feature plan before PRD generation.
+description: Three-phase feature interview. Discovery and Delivery come first in product language. Technical depth is optional and comes last. Use when starting a feature interview or when the user sends /grill-with-docs.
 ---
 
 # Grill With Docs
+
+This interview uses the Guided Interview plan until a project phase plan says otherwise. Discovery and Delivery are required. Technical is optional. A Business Analyst can generate a PRD once those two phases are done. Do not edit this skill during the interview.
 
 ## When to load this skill
 
 Load immediately when any of the following are true:
 
 - The user sends `/grill-with-docs`.
-- The user asks to "stress-test", "grill", "pressure-test", "challenge", or "sharpen" a plan or design.
+- The user asks to start a feature interview, grill a plan, or pressure-test a feature before a PRD.
 - The user wants to resolve what the canonical term for a concept is.
-- The user asks to start a feature interview focused on building a new feature or enhancement.
-
----
 
 ## How to invoke
 
@@ -22,155 +21,139 @@ Load immediately when any of the following are true:
 /grill-with-docs
 ```
 
-No arguments. The session runs against whatever plan, design, or idea is currently active in the chat. If nothing is stated, ask the user to describe what they want to grill before starting.
+No arguments. The session runs against the plan, design, or idea already in the chat. If nothing is stated, the first Discovery question asks what problem they want to solve.
 
----
+## Before the first question
 
-## Linked context pre-read
+If `.ai-pilot/linked-context.md` is present, read it and treat it as project grounding. If it is absent, continue.
 
-If `.ai-pilot/linked-context.md` is present in the workspace, read it before proceeding. Treat its provenance-labeled sections as authoritative project grounding. If it is absent, proceed normally.
+Read `context.md` at the repo root before the first question. In a remote-repo or MCP context, call `get_skill_file` with that exact path. Do not search for it.
 
-## Pre-read (do this before the first question)
+Do not read `AGENTS.md`, scan `design-docs/`, or search the codebase during Discovery or Delivery. Those lookups belong in Technical, and only when that phase starts.
 
-1. Read `context.md` (repo root) — the product context guide. In a remote-repo/MCP context, call `get_skill_file` with this exact path; do not search for it. Know the features, terminology, and workflows. This is the only mandatory pre-read.
-2. Read `AGENTS.md` (repo root) — in a remote-repo/MCP context, call `get_skill_file` with this exact path. Use its feature map and key file references for subsequent scoped reads.
-3. Scan file names in `design-docs/` — use `list_repo_dir` in remote-repo/MCP contexts. Only open a design doc with `get_skill_file` when a question directly touches that area.
+## How to ask
 
-Do not ask the user a question until step 1 is complete. Steps 2–3 are deferred lookups, not blocking pre-reads.
+Ask one question per message, then stop and wait.
 
----
+This chat has no AskQuestion tool. End the message with options in this shape, each on its own line:
 
-## Mandatory opening questions (ask these first, in order)
+```
+a. First choice
+b. Second choice
+c. Skip — decide later
+```
 
-Before the free-form grilling loop, ask these five questions using the **AskQuestion tool** — one at a time, wait for the answer, acknowledge it, then move to the next. These fire for every grill session regardless of feature type. Do not skip any of them, and do not ask them all at once.
+The last option on every phase question is `Skip — decide later`. A skip is recorded as unresolved. Do not ask that question again.
 
-**Q1 — Surface (frontend vs. backend vs. full-stack)**
+When an answer is already obvious from the conversation or from `context.md`, state the recommendation in one or two sentences, then ask the person to confirm it or change it. Do not ask an open question when a recommendation will do.
 
-Ask whether the feature will be on the frontend (React client), backend (Express server), or full-stack. If the work item description already answers this, surface what you found and only ask if ambiguity remains.
+The person may also type their own answer instead of picking an option. Acknowledge it and move on.
 
-- Options: `Frontend only (React client)` | `Backend only (Express server)` | `Full-stack (both client and server)` | `Shared types only` | `Database migration only`
-- Hold the answer: it drives layer routing, UI/UX scope in the design doc, and which skills apply.
+If they say they are done, or that they want a PRD, before the current phase is finished: stop asking, mark every remaining topic as unresolved, write the transcript, and tell them they can generate the PRD from this interview. Start that closing message with `[[interview-phase:discovery:stopped]]` or `[[interview-phase:delivery:stopped]]`, matching the phase that was still open.
 
-**Q2 — Access control**
+The interview screen shows Discovery, Delivery, and Technical. It reads a marker and does not show that marker to the person. Put the marker on the first line of every reply, and do not mention it. Do not write the marker into `.ai-pilot/kickoff-transcript.md`.
 
-Ask which groups/roles can perform each action and what data scope applies. If the feature area maps to a known route or service, check that route for existing RBAC guards (limit to 1–2 targeted local Grep calls, or exact-path `get_skill_file` reads in remote-repo/MCP contexts). Surface what you found and ask only where ambiguity remains.
+| Moment | First line |
+|---|---|
+| Discovery question 2 of 6 | `[[interview-phase:discovery:2:6]]` |
+| Delivery question 1 of 5 | `[[interview-phase:delivery:1:5]]` |
+| Delivery is done and they may continue or generate a PRD | `[[interview-phase:delivery:done]]` |
+| Technical question 3 | `[[interview-phase:technical:3]]` |
+| They generate a PRD without Technical | `[[interview-phase:technical:skipped]]` |
+| Technical is finished | `[[interview-phase:technical:done]]` |
 
-- Group options: `Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA`, `Platform Admin (Super Admin)`, `Project Admin`
-- RBAC role options: `admin`, `member`, `viewer`
-- Data scope options: `Project-scoped` | `User-scoped (self-only)` | `Global (all projects)` | `No scope restriction`
-- Authorization is an acceptance criterion, not an implementation detail. It must be resolved here.
+After each phase, give a short recap of what was decided and what was skipped. Keep the recap in the same message as the next step. The message still ends with one question. The marker on that message names the step you are now asking, not the phase you just finished.
 
-**Q3 — Data sensitivity**
+## Phase 1 — Discovery
 
-Ask whether any fields involved contain sensitive data (credentials, tokens, PII).
+Always run this phase. Six topics, in this order, and no extras. Target a short sitting, about six questions.
 
-- Options: `Yes — identify fields` | `No — none involved` | `Uncertain — needs data model review`
-- If "Yes": follow up asking which fields and what handling is required. Options: `Encrypt at rest` | `Mask in logs` | `Exclude from API responses` | `All three` (the UI provides Other / free-form — do not add an Other option in the lettered list)
-- If "Uncertain": flag it as a `⚠ Unresolved` item for the assumptions file.
-- If "No": move on.
+1. Problem and who has it
+2. What success looks like
+3. Who uses it, and what they can do
+4. What is in scope, and what is out
+5. The main scenarios, including the obvious exceptions
+6. Acceptance criteria in plain language
 
-**Q4 — Non-functional requirements**
+Discovery is complete when each topic has an answer or a skip.
 
-Ask what the acceptable performance bounds are for the primary user action in this feature. If the user is uncertain, propose reasonable defaults based on similar existing features and ask them to confirm or override.
+Then recap and go straight into Delivery. Delivery is part of this interview. Do not treat it as optional, and do not offer to stop for a PRD until Delivery is complete.
 
-Specifically ask about:
-- Response time (e.g., "API responds within 2 seconds at P95")
-- Concurrent users (e.g., "Supports up to 100 simultaneous users")
-- Data volume (e.g., "Query returns up to 500 records; pagination required above 50")
+## Phase 2 — Delivery
 
-Do not accept "we'll figure it out later" — record the answer as a requirement, not an assumption.
+Five topics, in this order, and no extras. Stay in product and delivery language. Do not design permission keys, role enums, or API checks here. Name groups the way a BA would: BA, Developer, QA, Manager, Product Owner, and so on.
 
-**Q5 — Feature flag rollout**
+1. Who can do each action
+2. What the user sees when they are not allowed
+3. Whether any information is sensitive, and what must be hidden
+4. What "done" means for the first release versus a later one
+5. Which follow-on outputs this work needs: prototype, test cases, design doc
 
-Ask whether this feature will be gated behind a feature flag. If yes, ask three follow-up questions in one message: rollout sequence, kill switch owner, and behavior when disabled.
+When all five have an answer or a skip, recap, then ask this and nothing else. The first line of that message is `[[interview-phase:delivery:done]]`.
 
-- Options: `No flag needed — ship directly` | `Flag required — internal first then gradual rollout` | `Flag required — team will define sequence`
-- If a flag is confirmed, ask: what is the flag key (or "TBD"), who enables it for each tier, and what does the user see when the flag is off (hidden entirely, read-only, degraded mode, etc.)?
+```
+a. Continue to technical decisions
+b. Generate the PRD
+```
 
----
+There is no skip on this question. If they choose the PRD, write the transcript with Technical left as unresolved assumptions. The reply starts with `[[interview-phase:technical:skipped]]`. Tell them to use Generate PRD on this interview. Do not start Technical.
 
-## The grilling loop
+## Phase 3 — Technical
 
-Interview the user **relentlessly** until you reach a shared, precise understanding of the plan. Walk down each branch of the design tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
+Run this phase only after they choose to continue. It is the deep interview: frontend or backend, existing patterns, data model, performance, and rollout. It is not required for a PRD.
 
-**Ask questions one at a time.** Use the **AskQuestion tool** for each question (never render questions as plain markdown). One `AskQuestion` call per message, wait for the answer, acknowledge it, then ask the next.
+Read `AGENTS.md` first. Open a design doc or a source file only when the current question needs it. Limit that lookup to two reads. If a gap remains, record an unresolved assumption and ask the person.
 
-If a question can be answered by **exploring the codebase** (using Grep, Read, or Glob), do that instead of asking the human — but **limit exploration to 2 tool calls per question**. In remote-repo/MCP contexts, prefer scoped lookups: use `list_repo_dir` to locate the relevant area, then `get_skill_file` for the specific file. Use `search_repo_code` only when the file/path is genuinely unknown, at most once per question, and never issue duplicate or parallel code searches in the same turn. If a search reports busy, throttled, rate-limited, or timed out, continue with known paths or ask the user; do not immediately retry. If ambiguity remains after 2 calls, surface what you found and ask the user to clarify. If exploration hits its cap and a gap remains, flag it as a `⚠ Unresolved assumption` in your acknowledgment so it carries forward to to-prd.
+Ask these first, one at a time, in order. Recommend from the codebase when you can. Each one still ends with `Skip — decide later`.
 
-### During the session, apply these five lenses:
+1. Surface — frontend, backend, or both
+2. Existing pattern to follow, extend, or replace
+3. Data model — what is stored, and whether it extends something that already exists
+4. Performance bounds for the main action — response time, concurrent users, and data volume
+5. Rollout — ship directly, or behind a feature flag, and what the user sees when it is off
 
-**1. Challenge against the product context**
+After those five, keep going one question at a time until the person says they are done or want the PRD. Use these lenses, and do not reopen Discovery or Delivery topics that already have an answer:
 
-When the user uses a term that conflicts with or is undefined in `context.md` or `AGENTS.md`, call it out immediately before moving on.
+- If a term conflicts with `context.md`, say so and ask which meaning they intend.
+- Replace a fuzzy word with the Apex term and ask them to confirm.
+- Stress-test a rule with one concrete exception.
+- If they assert how the code works, check the known file before agreeing.
+- State the better option and ask them to confirm or change it.
 
-> "context.md defines 'Interview' as an AI-guided design conversation. You used 'interview' to describe a user survey — do you mean a new type of interview, or something else?"
+Unfinished Technical questions do not block the PRD. They go in the transcript as unresolved assumptions. When Technical is finished, the closing message starts with `[[interview-phase:technical:done]]`.
 
-**2. Sharpen fuzzy language**
+## Terms
 
-When the user uses vague or overloaded terms, propose a precise canonical term and ask them to confirm.
-
-> "You said 'document' — do you mean a PRD, a Design Doc, or a Design Prototype? Those are different artifacts in Apex."
-
-**3. Discuss concrete scenarios**
-
-When domain relationships are being discussed, stress-test them with specific scenarios. Invent edge cases that force the user to be precise about boundaries.
-
-> "If a user has both BA and Developer group membership, which interview actions can they perform? Can a Developer start an interview, or only participate as a reviewer?"
-
-**4. Cross-reference with code**
-
-When the user asserts how something works, check whether the code agrees. Read the relevant files directly (`get_skill_file` in remote-repo/MCP contexts); search only if no known path applies:
-
-- RBAC assertions → `.cursor/rules/rbac-governance.mdc`
-- Database patterns → `.cursor/rules/postgresql-db.mdc`
-- Service layer assertions → check relevant `src/server/services/` files
-- UI assertions → check relevant `src/client/components/` files
-- Shared types → check `src/shared/types/`
-
-If you find a contradiction, surface it:
-
-> "Your design says notifications should be sent via the standup service, but `notificationService.ts` is the canonical notification dispatcher — standup just calls into it. Should we follow the existing pattern?"
-
-**5. Own the recommendation**
-
-Do not ask open-ended questions when one answer is clearly better. State your recommendation and ask the user to confirm or override.
-
-> "I recommend adding this as a new route in `src/server/routes/api.ts` rather than a separate route file because all feature routes follow that pattern. Do you agree, or do you have a reason to separate it?"
-
----
-
-## Update context.md inline
-
-When a term is resolved and you have write access, update `context.md` right there. Don't batch these up — capture them as they happen. Use the format below:
+When a term is resolved and you can write files, update `context.md` in the same turn, then ask the next question. Do not batch these. Use:
 
 ```markdown
 ### {Term}
 
-- **Definition:** One sentence, domain-meaningful. Write what the term means to a domain expert, not to an implementer.
-- **Use when:** The canonical context in which this term applies.
-- **Don't confuse with:** Sibling or overloaded terms — name each one and explain the distinction.
+- **Definition:** One sentence a domain expert would recognize.
+- **Use when:** The situation this term applies to.
+- **Don't confuse with:** The sibling term, and how it differs.
 ```
 
-If running in a **read-only or web agent context** where file writes are unavailable, collect term resolutions in your chat response with the prefix `📌 CONTEXT update:` so they are captured in the transcript and can be applied later.
+`context.md` stays free of implementation detail. If you cannot write files, prefix the resolution with `📌 CONTEXT update:` in the chat so the transcript keeps it.
 
-`context.md` should be totally devoid of implementation details. It is a product context guide and glossary.
+## Transcript
 
----
+When the interview stops, write `.ai-pilot/kickoff-transcript.md` with these sections:
 
-## Transcript persistence
+- **Feature Description**
+- **Phase 1 — Discovery** — each of the six topics, with the answer or `Unresolved`
+- **Phase 2 — Delivery** — each of the five topics, or `Unresolved — Delivery not started`
+- **Phase 3 — Technical** — decisions, or `Unresolved — Technical not started`
+- **Unresolved items** — every skip and every unfinished topic
+- **Key decisions**
 
-When the grilling session ends (user says "done", "that's enough", "wrap up", or explicitly ends the interview):
+Tell the person the transcript is ready and they can generate the PRD from this interview.
 
-1. Create `.ai-pilot/kickoff-transcript.md` — a structured summary of the entire session including all Q&A, decisions made, and unresolved items.
-2. Format the transcript with clear sections: **Feature Description**, **Opening Questions (Q1–Q5)**, **Grilling Decisions**, **Unresolved Assumptions**, **Key Design Decisions**.
-3. This file is the sole input for `/to-prd`.
-
----
-
-## What this skill does NOT do
+## What this skill does not do
 
 - Does not write production code.
 - Does not fetch ADO work items.
-- Does not generate PRDs (that is `/to-prd`'s job).
+- Does not generate the PRD. That is `/to-prd`, or Generate PRD on the interview.
 - Does not create design docs or design specs.
-- Does not modify files outside of `context.md` and `.ai-pilot/kickoff-transcript.md`.
+- Does not modify files other than `context.md` and `.ai-pilot/kickoff-transcript.md`.
+- Does not change this skill, and does not open it for editing.

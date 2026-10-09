@@ -42,6 +42,13 @@ import type { InterviewSkillOption } from '../../shared/types/projectSettings';
 import { effortLabel } from '../../shared/utils/effort';
 import { parseAgentMessage, isAgentOtherOptionText } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
+import {
+  deriveInterviewPhaseProgress,
+  previewInterviewPhaseProgress,
+  stripInterviewPhaseMarkers,
+  usesGuidedInterviewPhases,
+} from '../utils/interviewPhaseProgress';
+import { InterviewPhaseBar } from './InterviewPhaseBar';
 import { trackEvent, trackException } from '../services/telemetry';
 import { ReadAloudButton } from './ReadAloudButton';
 import {
@@ -154,7 +161,8 @@ interface InterviewAgentMessageProps {
 }
 
 export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onSend, isRunning, questionOffset = 0, interviewLocked = false, alreadyAnswered = false, fullWidth = false }) => {
-  const parts = parseAgentMessage(text);
+  const visibleText = stripInterviewPhaseMarkers(text);
+  const parts = parseAgentMessage(visibleText);
   const choiceBlocks = parts.filter((p): p is ChoiceBlock => p.type === 'choices');
 
   const [selections, setSelections] = useState<Record<string, QuestionState>>(() => {
@@ -213,11 +221,11 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
       <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant} ${fullWidth ? styles.assistantBubbleFullWidth : ''}`}>
         <div className={styles.bubbleActions}>
           <ReadAloudButton
-            text={text}
+            text={visibleText}
             {...{ 'data-testid': 'interview-message-read-aloud' }}
           />
         </div>
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{visibleText}</ReactMarkdown>
       </div>
     );
   }
@@ -227,7 +235,7 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
     <div className={`${styles.assistantBubble} ${fullWidth ? styles.assistantBubbleFullWidth : ''}`}>
       <div className={styles.bubbleActions}>
         <ReadAloudButton
-          text={text}
+          text={visibleText}
           {...{ 'data-testid': 'interview-message-read-aloud' }}
         />
       </div>
@@ -653,6 +661,10 @@ const NewInterviewCompose: React.FC = () => {
 
       <div className={styles.composeInner}>
         <h1 className={styles.composeHeading}>What would you like to interview about?</h1>
+
+        {usesGuidedInterviewPhases(resolvedSkillPath ?? grillSkill?.path) && (
+          <InterviewPhaseBar progress={previewInterviewPhaseProgress()} layout="compose" />
+        )}
 
         <div className={styles.composePills}>
           {selectedProject && (
@@ -1588,6 +1600,16 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         </div>
       )}
 
+      {usesGuidedInterviewPhases(chatThread?.kickoff.skillPath)
+        && interview.playbookInterviewMode !== 'multi_agent_assisted' && (
+        <InterviewPhaseBar
+          progress={deriveInterviewPhaseProgress([
+            ...messages.filter((message) => message.role === 'agent').map((message) => message.text),
+            streamingText,
+          ])}
+        />
+      )}
+
       {isPlaybookInterview && (
         <InterviewBriefReview
           brief={interviewBrief}
@@ -1731,9 +1753,9 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             </div>
           )}
 
-          {streamingText && (
+          {streamingText && stripInterviewPhaseMarkers(streamingText) && (
             <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{stripInterviewPhaseMarkers(streamingText)}</ReactMarkdown>
             </div>
           )}
 

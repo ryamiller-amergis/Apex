@@ -263,6 +263,14 @@ describe('NewInterviewCompose — title required', () => {
     expect(screen.getByPlaceholderText(/describe what you'd like/i)).toBeInTheDocument();
   });
 
+  it('shows the three interview phases before the conversation starts', () => {
+    renderCompose();
+    expect(screen.getByTestId('interview-phase-bar')).toBeInTheDocument();
+    expect(screen.getByTestId('interview-phase-discovery')).toHaveTextContent('6 questions');
+    expect(screen.getByTestId('interview-phase-delivery')).toHaveTextContent('5 questions');
+    expect(screen.getByTestId('interview-phase-technical')).toHaveTextContent('Optional');
+  });
+
   it('opens staged ADR and Design Module selection from a compact composer control', async () => {
     renderCompose();
 

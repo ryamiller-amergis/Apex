@@ -581,6 +581,52 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
+  it('shows Discovery, Delivery, and Technical for a grill-with-docs interview', () => {
+    (useChatThread as jest.Mock).mockReturnValue({
+      data: {
+        id: 'thread-iv-1',
+        status: 'idle',
+        kickoff: {
+          skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+          model: 'composer-2',
+        },
+        messages: [],
+      },
+    });
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      messages: [{
+        id: 'm1',
+        role: 'agent',
+        text: '[[interview-phase:discovery:2:6]]\nWhat does success look like?\n\na. Confirm\nb. Change it\nc. Skip — decide later',
+        ts: '2026-01-01T00:00:00Z',
+      }],
+    });
+
+    renderExistingInterview();
+
+    expect(screen.getByTestId('interview-phase-discovery')).toHaveTextContent('Question 2 of 6');
+    expect(screen.getByTestId('interview-phase-delivery')).toHaveTextContent('Later');
+    expect(screen.getByTestId('interview-phase-technical')).toHaveTextContent('Optional');
+    expect(screen.getByText(/What does success look like/)).toBeInTheDocument();
+    expect(screen.queryByText(/interview-phase/)).not.toBeInTheDocument();
+  });
+
+  it('hides the phase bar when the interview skill is not grill-with-docs', () => {
+    (useChatThread as jest.Mock).mockReturnValue({
+      data: {
+        id: 'thread-iv-1',
+        status: 'idle',
+        kickoff: { skillPath: '.cursor/skills/grill-design/SKILL.md' },
+        messages: [],
+      },
+    });
+
+    renderExistingInterview();
+
+    expect(screen.queryByTestId('interview-phase-bar')).not.toBeInTheDocument();
+  });
+
   it('shows a recoverable error when repository preparation fails', () => {
     (useChatThread as jest.Mock).mockReturnValue({
       data: {
