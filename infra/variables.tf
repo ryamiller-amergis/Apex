@@ -52,6 +52,12 @@ variable "enable_staging_slot" {
   default     = false
 }
 
+variable "staging_slot_shares_app_identity" {
+  description = "True when Azure reports the staging slot with the same managed identity as the production app. The app's Blob grants then cover the slot, and Azure refuses a second identical role assignment, so the slot-only grants are skipped."
+  type        = bool
+  default     = false
+}
+
 variable "staging_slot_name" {
   description = "Name of the staging deployment slot."
   type        = string
@@ -966,6 +972,12 @@ variable "ai_platform_v2_resource_group_name" {
   default     = null
 }
 
+variable "ai_platform_v2_data_resource_group_name" {
+  description = "Resource group of the existing Service Bus namespace and storage account when they differ from ai_platform_v2_resource_group_name (prod: rg-apex-prd-data). Null uses ai_platform_v2_resource_group_name."
+  type        = string
+  default     = null
+}
+
 variable "ai_platform_v2_servicebus_namespace_name" {
   description = "Existing AI Service Bus namespace to host V2 queues (required when enabled). DEV: sbns-apex-ai-dev."
   type        = string
@@ -1118,6 +1130,28 @@ variable "ai_platform_v2_documents_termination_grace_seconds" {
   validation {
     condition     = var.ai_platform_v2_documents_termination_grace_seconds >= 60 && var.ai_platform_v2_documents_termination_grace_seconds <= 600
     error_message = "ai_platform_v2_documents_termination_grace_seconds must be between 60 and 600."
+  }
+}
+
+variable "ai_platform_v2_visual_termination_grace_seconds" {
+  description = "Seconds a visual-v2 replica gets after SIGTERM before it is killed. Container Apps allows at most 600."
+  type        = number
+  default     = 600
+
+  validation {
+    condition     = var.ai_platform_v2_visual_termination_grace_seconds >= 60 && var.ai_platform_v2_visual_termination_grace_seconds <= 600
+    error_message = "ai_platform_v2_visual_termination_grace_seconds must be between 60 and 600."
+  }
+}
+
+variable "ai_platform_v2_interactive_termination_grace_seconds" {
+  description = "Seconds a V2 interactive (fast/agentic) replica gets after SIGTERM before it is killed. Container Apps allows at most 600."
+  type        = number
+  default     = 600
+
+  validation {
+    condition     = var.ai_platform_v2_interactive_termination_grace_seconds >= 60 && var.ai_platform_v2_interactive_termination_grace_seconds <= 600
+    error_message = "ai_platform_v2_interactive_termination_grace_seconds must be between 60 and 600."
   }
 }
 
@@ -1321,6 +1355,32 @@ variable "ai_platform_v2_interactive_memory" {
   description = "Memory allocated to each fast/agentic replica."
   type        = string
   default     = "2Gi"
+}
+
+variable "ai_platform_v2_agentic_cpu" {
+  description = "CPU cores for each agentic replica. Null uses ai_platform_v2_interactive_cpu. On a Consumption environment, ephemeral storage is 4 GiB per core (max 8 GiB)."
+  type        = number
+  default     = null
+}
+
+variable "ai_platform_v2_agentic_memory" {
+  description = "Memory for each agentic replica. Null uses 2 GiB per ai_platform_v2_agentic_cpu core when that is set, otherwise ai_platform_v2_interactive_memory."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_agentic_checkout_disk_budget_bytes" {
+  description = "Disk budget in bytes for repository checkouts on each agentic replica (AI_RUNS_INTERACTIVE_CHECKOUT_DISK_BUDGET_BYTES). Null keeps the worker default of 2.5 GiB. Must stay below the replica's ephemeral storage, or Container Apps evicts the replica."
+  type        = number
+  default     = null
+
+  validation {
+    condition = (
+      var.ai_platform_v2_agentic_checkout_disk_budget_bytes == null
+      || try(var.ai_platform_v2_agentic_checkout_disk_budget_bytes >= 1073741824, false)
+    )
+    error_message = "ai_platform_v2_agentic_checkout_disk_budget_bytes must be at least 1 GiB (1073741824) or null."
+  }
 }
 
 variable "ai_platform_v2_interactive_repo_read_service_url" {

@@ -672,6 +672,147 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     expect(dispose).not.toHaveBeenCalled();
   });
 
+  describe('idle thread workspaces', () => {
+    const OTHER_THREAD_ID = '10000000-0000-4000-8000-000000000009';
+
+    function makeTwoThreadActor(options: {
+      onMaterialize?: (
+        threadId: string,
+        reclaimDisk: (() => Promise<void>) | undefined,
+      ) => Promise<void>;
+    } = {}) {
+      let clock = 1_000_000;
+      const events: string[] = [];
+      const agentOptions = new Map<string, FakeAgentOptions>();
+      const threadOf = (destination: string): string =>
+        destination.includes(OTHER_THREAD_ID) ? OTHER_THREAD_ID : THREAD_ID;
+      const actor = createInteractiveSessionActor({
+        openWarmCheckout: jest.fn(),
+        acquireAgent: jest.fn(async (_s, checkout) => {
+          const opts: FakeAgentOptions = {
+            tokens: ['ok'],
+            workspaceRef: checkout.workspacePath,
+          };
+          agentOptions.set(threadOf(checkout.workspacePath), opts);
+          return makeAgentHandle(opts);
+        }),
+        materializeWorkspace: async (_bootstrap, destination, _signal, materializeOptions) => {
+          const threadId = threadOf(destination);
+          events.push(`materialize:${threadId}`);
+          await options.onMaterialize?.(threadId, materializeOptions?.reclaimDisk);
+          return {
+            workspacePath: destination,
+            dispose: async () => {
+              events.push(`release:${threadId}`);
+            },
+          };
+        },
+        uploadAttemptArtifacts: jest.fn(async () => ({
+          container: 'artifacts',
+          key: 'runs/r/attempts/1/manifest.json',
+        })),
+        postIngest: async () => ({ ok: true, cancelRequested: false }),
+        now: () => clock,
+      });
+      const turn = (threadId: string, attempt: string, sha?: string) => {
+        const base = makeDurableBootstrap({
+          attemptId: `${attempt}0000000-0000-4000-8000-000000000000`,
+          dispatchMessageId: `dispatch-${attempt}`,
+          runId: `run-${attempt}`,
+        });
+        const bootstrap = sha
+          ? {
+              ...base,
+              specification: {
+                ...base.specification,
+                grounding: {
+                  provider: 'github' as const,
+                  project: 'proj-1',
+                  repository: 'owner/repo',
+                  sha,
+                  profileId: 'profile-1',
+                },
+              },
+            }
+          : base;
+        return actor.handleDurableTurn({ threadId, bootstrap });
+      };
+      return {
+        actor,
+        events,
+        agentOptions,
+        turn,
+        advance: (ms: number) => {
+          clock += ms;
+        },
+      };
+    }
+
+    it('releases a workspace idle past the cache TTL before the next checkout', async () => {
+      const harness = makeTwoThreadActor();
+      await harness.turn(OTHER_THREAD_ID, 'a');
+      harness.advance(11 * 60_000);
+      await harness.turn(THREAD_ID, 'b');
+
+      expect(harness.events).toEqual([
+        `materialize:${OTHER_THREAD_ID}`,
+        `release:${OTHER_THREAD_ID}`,
+        `materialize:${THREAD_ID}`,
+      ]);
+    });
+
+    it('keeps a recently used workspace until a checkout asks to reclaim disk', async () => {
+      const harness = makeTwoThreadActor({
+        onMaterialize: async (threadId, reclaimDisk) => {
+          if (threadId === THREAD_ID) await reclaimDisk?.();
+        },
+      });
+      await harness.turn(OTHER_THREAD_ID, 'a');
+      harness.advance(60_000);
+      await harness.turn(THREAD_ID, 'b');
+
+      expect(harness.events).toEqual([
+        `materialize:${OTHER_THREAD_ID}`,
+        `materialize:${THREAD_ID}`,
+        `release:${OTHER_THREAD_ID}`,
+      ]);
+    });
+
+    it("releases the thread's own worktree from an earlier commit before checking out the new one", async () => {
+      const harness = makeTwoThreadActor();
+      await harness.turn(THREAD_ID, 'a', '1'.repeat(40));
+      await harness.turn(THREAD_ID, 'b', '2'.repeat(40));
+
+      expect(harness.events).toEqual([
+        `materialize:${THREAD_ID}`,
+        `release:${THREAD_ID}`,
+        `materialize:${THREAD_ID}`,
+      ]);
+    });
+
+    it('never releases the workspace of a thread whose turn is running', async () => {
+      const gate = deferred();
+      const harness = makeTwoThreadActor({
+        onMaterialize: async (threadId, reclaimDisk) => {
+          if (threadId === THREAD_ID) await reclaimDisk?.();
+        },
+      });
+      await harness.turn(OTHER_THREAD_ID, 'a');
+      const cachedOptions = harness.agentOptions.get(OTHER_THREAD_ID);
+      if (!cachedOptions) throw new Error('expected a cached agent');
+      cachedOptions.waitGate = gate.promise;
+      harness.advance(11 * 60_000);
+
+      const running = harness.turn(OTHER_THREAD_ID, 'c');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await harness.turn(THREAD_ID, 'b');
+      gate.resolve();
+      await running;
+
+      expect(harness.events).not.toContain(`release:${OTHER_THREAD_ID}`);
+    });
+  });
+
   it('ignores a repeated dispatch for an attempt that already started', async () => {
     const materializeWorkspace = jest.fn(async (_bootstrap, destination: string) => ({
       workspacePath: destination,
@@ -1101,8 +1242,48 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     expect(cancelCalled).toBe(true);
     expect(posted.find((b) => b.kind === 'terminal')).toMatchObject({
       status: 'failed',
+      detail: 'Interactive absolute deadline exceeded',
       failureCategory: 'hard_timeout',
       artifactsFlushed: false,
+    });
+  }, 15_000);
+
+  it('reports a first-event timeout separately from the absolute deadline', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          waitGate: new Promise<void>(() => {}),
+          workspaceRef: checkout.workspacePath,
+        }),
+      ),
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+      }),
+      uploadAttemptArtifacts: jest.fn(),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+    });
+
+    const outcome = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        effectiveDeadlines: {
+          repositoryPreparationMs: null,
+          firstEventMs: 50,
+          toolCallMs: 60_000,
+        },
+      }),
+    });
+
+    expect(outcome).toEqual({ status: 'failed', failureCategory: 'hard_timeout' });
+    expect(posted.find((b) => b.kind === 'terminal')).toMatchObject({
+      status: 'failed',
+      detail: 'Interactive first event deadline exceeded',
+      failureCategory: 'hard_timeout',
     });
   }, 15_000);
 

@@ -241,11 +241,16 @@ export interface InteractiveActorDependencies {
   ): Promise<
     import('./interactiveCursorExecution').InteractiveAgentAcquisition
   >;
-  /** Materialize a pinned attempt-local workspace for durable turns. */
+  /**
+   * Materialize a pinned attempt-local workspace for durable turns.
+   * `reclaimDisk` removes idle threads' workspaces so a checkout refused for
+   * disk space can be retried.
+   */
   materializeWorkspace?(
     bootstrap: InteractiveActorBootstrap,
     destination: string,
     signal: AbortSignal,
+    options?: { reclaimDisk(): Promise<void> },
   ): Promise<WarmThreadCheckout>;
   /**
    * Collect attempt-local outputs, upload attempt-scoped blobs, write the
@@ -434,12 +439,26 @@ export function createInteractiveSessionActor(
     }
   };
 
+  // Threads with a durable turn in progress; their cached Agent and workspace
+  // are in use and must not be evicted.
+  const activeDurableThreads = new Set<string>();
+
+  const evictIdleDurableAgents = async (cutoff: number): Promise<void> => {
+    for (const [threadId, entry] of agentCache) {
+      if (activeDurableThreads.has(threadId)) continue;
+      if (entry.lastUsedAt < cutoff) {
+        await disposeAgentEntry(threadId);
+      }
+    }
+  };
+
   const evictOverflowAgents = async (retainThreadId: string): Promise<void> => {
     while (agentCache.size > agentCacheMax) {
       let oldestThreadId: string | null = null;
       let oldestAt = Number.POSITIVE_INFINITY;
       for (const [threadId, entry] of agentCache) {
         if (threadId === retainThreadId) continue;
+        if (activeDurableThreads.has(threadId)) continue;
         if (entry.lastUsedAt < oldestAt) {
           oldestAt = entry.lastUsedAt;
           oldestThreadId = threadId;
@@ -877,6 +896,7 @@ export function createInteractiveSessionActor(
     let fenceConflict = false;
     let cancellationRequested = false;
     let failureCategory: 'hard_timeout' | 'tool_timeout' | null = null;
+    let firstEventTimedOut = false;
 
     const stopRun = async (): Promise<void> => {
       if (activeRunRef?.cancel) await activeRunRef.cancel().catch(() => {});
@@ -942,6 +962,7 @@ export function createInteractiveSessionActor(
     };
     heartbeat();
     const heartbeatTimer = setInterval(heartbeat, durableHeartbeatMs);
+    activeDurableThreads.add(threadId);
 
     try {
       await publishLive(threadId, createCursorRunEventEnvelope({
@@ -983,11 +1004,21 @@ export function createInteractiveSessionActor(
           prepMs,
         );
       }
+      await evictIdleDurableAgents(now() - agentCacheIdleMs);
+      // A worktree from an earlier commit still counts against the disk budget.
+      const cachedForThread = agentCache.get(threadId);
+      if (cachedForThread && cachedForThread.handle.workspaceRef !== destination) {
+        await disposeAgentEntry(threadId);
+      }
       try {
         attemptCheckout = await dependencies.materializeWorkspace(
           bootstrap,
           destination,
           prepAbort.signal,
+          {
+            reclaimDisk: () =>
+              evictIdleDurableAgents(Number.POSITIVE_INFINITY),
+          },
         );
       } finally {
         if (prepTimer) clearTimeout(prepTimer);
@@ -1061,6 +1092,7 @@ export function createInteractiveSessionActor(
       const firstEventTimer = setTimeout(() => {
         if (!firstEventSeen) {
           failureCategory = 'hard_timeout';
+          firstEventTimedOut = true;
           absoluteAbort.abort(
             Object.assign(new Error('hard_timeout'), { code: 'hard_timeout' }),
           );
@@ -1372,7 +1404,9 @@ export function createInteractiveSessionActor(
         code === 'tool_timeout'
           ? 'Interactive tool deadline exceeded'
           : code === 'hard_timeout'
-            ? 'Interactive absolute deadline exceeded'
+            ? firstEventTimedOut
+              ? 'Interactive first event deadline exceeded'
+              : 'Interactive absolute deadline exceeded'
             : describeInteractiveFailure(error).reason;
       await post({
         dispatchMessageId,
@@ -1396,6 +1430,7 @@ export function createInteractiveSessionActor(
       );
       return { status: 'failed' };
     } finally {
+      activeDurableThreads.delete(threadId);
       clearInterval(heartbeatTimer);
       clearTimeout(absoluteTimer);
       clearToolTimer();

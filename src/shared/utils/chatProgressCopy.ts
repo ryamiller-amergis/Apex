@@ -156,6 +156,8 @@ const DEADLINE_ERRORS: Record<string, string> = {
     'The answer took too long and was stopped. Try a narrower question, or retry.',
   'Interactive turn exceeded its absolute deadline':
     'The answer took too long and was stopped. Try a narrower question, or retry.',
+  'Interactive first event deadline exceeded':
+    "The AI didn't start answering in time. Please retry.",
   'Interactive tool deadline exceeded':
     "One of the agent's steps took too long and was stopped. Please retry.",
 };

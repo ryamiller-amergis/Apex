@@ -47,6 +47,35 @@ locals {
     agentic            = { min = 2, max = 16 }
   }
 
+  # Must match DEFAULT_DISK_BUDGET_BYTES in groundedRepositoryCheckout.ts; used when no budget is set.
+  ai_platform_v2_worker_default_checkout_disk_budget_bytes = 2684354560
+
+  # Consumption apps need 2 GiB of memory per vCPU, so an agentic CPU override without a memory
+  # override gets the matching memory.
+  ai_platform_v2_interactive_resources = {
+    "fast-interactive" = {
+      cpu                        = var.ai_platform_v2_interactive_cpu
+      memory                     = var.ai_platform_v2_interactive_memory
+      checkout_disk_budget_bytes = local.ai_platform_v2_worker_default_checkout_disk_budget_bytes
+    }
+    agentic = {
+      cpu = coalesce(var.ai_platform_v2_agentic_cpu, var.ai_platform_v2_interactive_cpu)
+      memory = coalesce(
+        var.ai_platform_v2_agentic_memory,
+        var.ai_platform_v2_agentic_cpu == null ? var.ai_platform_v2_interactive_memory : "${var.ai_platform_v2_agentic_cpu * 2}Gi"
+      )
+      checkout_disk_budget_bytes = coalesce(
+        var.ai_platform_v2_agentic_checkout_disk_budget_bytes,
+        local.ai_platform_v2_worker_default_checkout_disk_budget_bytes
+      )
+    }
+  }
+
+  # Turns in flight get until 30 s before the platform kill; the host then exits.
+  ai_platform_v2_interactive_shutdown_drain_ms = (
+    (var.ai_platform_v2_interactive_termination_grace_seconds - 30) * 1000
+  )
+
   ai_platform_v2_orchestrator_interactive_cap    = var.environment == "dev" ? 4 : 16
   ai_platform_v2_orchestrator_lane_floor_fast    = var.environment == "dev" ? 1 : 2
   ai_platform_v2_orchestrator_lane_floor_agentic = var.environment == "dev" ? 1 : 2
@@ -77,6 +106,18 @@ check "ai_platform_v2_split_interactive_inputs" {
       )
     )
     error_message = "V2 split interactive runtime requires its image, callback URL, Redis host/key, Cursor API Key secret ID, and App Insights connection string."
+  }
+}
+
+# Consumption replicas get 4 GiB of ephemeral storage per core (max 8 GiB); the budget leaves
+# 1 GiB for the image layer, logs, and agent scratch files.
+check "ai_platform_v2_interactive_checkout_disk_budget" {
+  assert {
+    condition = alltrue([
+      for resources in values(local.ai_platform_v2_interactive_resources) :
+      resources.checkout_disk_budget_bytes <= (min(4 * resources.cpu, 8) - 1) * 1073741824
+    ])
+    error_message = "An interactive class's checkout disk budget (the worker's 2.5 GiB default when unset) exceeds its replica's ephemeral storage minus 1 GiB; Container Apps would evict the replica. Raise the class's CPU or lower ai_platform_v2_agentic_checkout_disk_budget_bytes."
   }
 }
 
@@ -139,8 +180,12 @@ resource "azuread_app_role_assignment" "ai_platform_v2_interactive_runner_ingest
   resource_object_id  = var.ai_platform_v2_interactive_runner_service_principal_object_id
 }
 
+# Only for a workspace that reuses Dapr components another state owns (DEV V2). Where
+# ai-runs-interactive.tf manages them in this state, it already adds the V2 scopes.
 resource "azapi_update_resource" "ai_platform_v2_interactive_dapr_scopes" {
-  for_each = local.ai_platform_v2_split_interactive_enabled ? local.ai_platform_v2_interactive_dapr_components : {}
+  for_each = (
+    local.ai_platform_v2_split_interactive_enabled && !local.ai_runs_interactive_enabled
+  ) ? local.ai_platform_v2_interactive_dapr_components : {}
 
   type        = "Microsoft.App/managedEnvironments/daprComponents@2024-03-01"
   resource_id = "${data.azurerm_container_app_environment.ai_platform_v2_host[0].id}/daprComponents/${each.key}"
@@ -266,8 +311,8 @@ resource "azurerm_container_app" "ai_platform_v2_interactive_class" {
     container {
       name   = "ai-runs-interactive"
       image  = var.ai_platform_v2_interactive_image
-      cpu    = var.ai_platform_v2_interactive_cpu
-      memory = var.ai_platform_v2_interactive_memory
+      cpu    = local.ai_platform_v2_interactive_resources[each.key].cpu
+      memory = local.ai_platform_v2_interactive_resources[each.key].memory
 
       volume_mounts {
         name = "ai-pilot-data"
@@ -339,6 +384,10 @@ resource "azurerm_container_app" "ai_platform_v2_interactive_class" {
         value = local.ai_platform_v2_interactive_dapr_app_ids[each.key]
       }
       env {
+        name  = "AI_RUNS_V2_SHUTDOWN_DRAIN_MS"
+        value = tostring(local.ai_platform_v2_interactive_shutdown_drain_ms)
+      }
+      env {
         name  = "AI_RUNS_INTERACTIVE_PUBSUB_NAME"
         value = "interactive-pubsub"
       }
@@ -392,6 +441,14 @@ resource "azurerm_container_app" "ai_platform_v2_interactive_class" {
       }
 
       dynamic "env" {
+        for_each = each.key == "agentic" && var.ai_platform_v2_agentic_checkout_disk_budget_bytes != null ? [1] : []
+        content {
+          name  = "AI_RUNS_INTERACTIVE_CHECKOUT_DISK_BUDGET_BYTES"
+          value = tostring(var.ai_platform_v2_agentic_checkout_disk_budget_bytes)
+        }
+      }
+
+      dynamic "env" {
         for_each = var.ai_platform_v2_interactive_repo_read_service_url != null ? [1] : []
         content {
           name  = "REPO_READ_SERVICE_URL"
@@ -425,4 +482,26 @@ resource "azurerm_container_app" "ai_platform_v2_interactive_class" {
     azurerm_role_assignment.ai_platform_v2_interactive_blob_contributor,
     azapi_update_resource.ai_platform_v2_interactive_dapr_scopes,
   ]
+}
+
+# Same PATCH as ai_platform_v2_documents_scale_timing: azurerm cannot set the grace period,
+# and an azurerm update can drop it, so any change to the app re-runs the PATCH.
+resource "azapi_resource_action" "ai_platform_v2_interactive_termination_grace" {
+  for_each = local.ai_platform_v2_split_interactive_enabled ? local.ai_platform_v2_interactive_class_keys : toset([])
+
+  type        = "Microsoft.App/containerApps@2025-01-01"
+  resource_id = azurerm_container_app.ai_platform_v2_interactive_class[each.key].id
+  method      = "PATCH"
+
+  body = {
+    properties = {
+      template = {
+        terminationGracePeriodSeconds = var.ai_platform_v2_interactive_termination_grace_seconds
+      }
+    }
+  }
+
+  lifecycle {
+    replace_triggered_by = [azurerm_container_app.ai_platform_v2_interactive_class[each.key]]
+  }
 }

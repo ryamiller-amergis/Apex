@@ -39,6 +39,7 @@ import {
   resolveArtifactContainerClient,
 } from '../aiRunV2/artifactContainer';
 import { createArtifactUploader } from '../aiRunsV2Worker/artifactUploader';
+import { resolveShutdownDrainMs } from '../aiRunsV2Worker/shutdownDrain';
 import { interactiveLiveBus } from '../interactiveLiveBus';
 import { LocalCheckoutReader } from '../localCheckoutReader';
 import {
@@ -46,13 +47,21 @@ import {
   resolveRepoReadServiceUrl,
 } from '../repoRead/repoServiceReader';
 import { acquireInteractiveCursorAgent } from './interactiveCursorExecution';
-import { createGroundedRepositoryCheckout } from './groundedRepositoryCheckout';
+import {
+  checkoutWithDiskReclaim,
+  createGroundedRepositoryCheckout,
+} from './groundedRepositoryCheckout';
 import {
   createInteractiveSessionActor,
   type WarmThreadCheckout,
 } from './interactiveSessionActor';
 import { collectInteractiveArtifacts } from './interactiveArtifactCollector';
 import { materializeInteractiveWorkspace } from './interactiveWorkspaceMaterializer';
+import { createPerThreadTurnQueue } from './perThreadTurnQueue';
+import {
+  createInteractiveShutdownDrain,
+  interactiveInFlightInvocations,
+} from './shutdownDrain';
 import {
   interactiveSessionActorClassFor,
   setInteractiveActorRuntime,
@@ -183,13 +192,24 @@ export async function registerInteractiveHealthHandler(
   );
 }
 
+export interface InteractiveDispatchDrain {
+  isDraining(): boolean;
+  track<T>(work: () => Promise<T>): Promise<T>;
+}
+
+const NO_DISPATCH_DRAIN: InteractiveDispatchDrain = {
+  isDraining: () => false,
+  track: (work) => work(),
+};
+
 export async function registerInteractiveDispatchHandler(
   invoker: InteractiveDispatchInvoker,
   resolveActor: (threadId: string) => IInteractiveSessionActor,
   recoverActorFailure?: (
     payload: InteractiveDispatchRequest,
     error: unknown
-  ) => Promise<void>
+  ) => Promise<void>,
+  drain: InteractiveDispatchDrain = NO_DISPATCH_DRAIN
 ): Promise<void> {
   await invoker.listen(
     'dispatch',
@@ -206,6 +226,19 @@ export async function registerInteractiveDispatchHandler(
         );
         return { accepted: false };
       }
+      // The orchestrator retries a refused dispatch, which then lands on a replica
+      // that is not shutting down.
+      if (drain.isDraining()) {
+        console.warn(
+          JSON.stringify({
+            event: 'InteractiveDispatchRefusedDraining',
+            threadId: payload.threadId,
+            runId: payload.runId,
+            dispatchMessageId: payload.dispatchMessageId,
+          })
+        );
+        return { accepted: false };
+      }
       console.log(
         JSON.stringify({
           event: 'InteractiveDispatchAccepted',
@@ -215,11 +248,13 @@ export async function registerInteractiveDispatchHandler(
         })
       );
       const actor = resolveActor(payload.threadId);
-      void actor
-        .handleTurn({
-          runId: payload.runId,
-          dispatchMessageId: payload.dispatchMessageId,
-        })
+      void drain
+        .track(() =>
+          actor.handleTurn({
+            runId: payload.runId,
+            dispatchMessageId: payload.dispatchMessageId,
+          })
+        )
         .then((outcome) => {
           console.log(
             JSON.stringify({
@@ -290,8 +325,11 @@ export async function main(): Promise<void> {
 
   const repositoryCheckout = createGroundedRepositoryCheckout();
 
+  const turnQueue = createPerThreadTurnQueue();
+
   // Single shared logic core: thread-keyed warm checkout + live Agent cache.
   const logic = createInteractiveSessionActor({
+    turnQueue,
     openWarmCheckout: async (_threadId, snapshot) => {
       // Dynamic import keeps the actor-host static graph free of App Service
       // workspace helpers that transitively import PostgreSQL.
@@ -329,22 +367,28 @@ export async function main(): Promise<void> {
           mcpServers: bootstrap.mcpServers,
         },
       ),
-    materializeWorkspace: async (bootstrap, destination, signal) => {
+    materializeWorkspace: async (bootstrap, destination, signal, options) => {
       const grounding = bootstrap.specification.grounding;
       const checkout = grounding
-        ? await repositoryCheckout.checkout(grounding, destination, signal)
+        ? await checkoutWithDiskReclaim({
+            repositoryCheckout,
+            grounding,
+            destination,
+            signal,
+            reclaimDisk: options?.reclaimDisk,
+            log: (result, retried) =>
+              console.log(
+                JSON.stringify({
+                  event: 'InteractiveRepositoryCheckout',
+                  runId: bootstrap.runId,
+                  status: result.status,
+                  detail: result.status === 'ready' ? result.source : result.reason,
+                  durationMs: result.durationMs,
+                  ...(retried ? { retriedAfterReclaim: true } : {}),
+                }),
+              ),
+          })
         : null;
-      if (checkout) {
-        console.log(
-          JSON.stringify({
-            event: 'InteractiveRepositoryCheckout',
-            runId: bootstrap.runId,
-            status: checkout.status,
-            detail: checkout.status === 'ready' ? checkout.source : checkout.reason,
-            durationMs: checkout.durationMs,
-          }),
-        );
-      }
       const reader =
         checkout?.status === 'ready'
           ? new LocalCheckoutReader({
@@ -436,11 +480,15 @@ export async function main(): Promise<void> {
   await interactiveLiveBus.init();
   setInteractiveActorRuntime({ logic, callback });
 
-  const disposeOnShutdown = (): void => {
-    void logic.disposeAll().catch(() => {});
-  };
-  process.once('SIGTERM', disposeOnShutdown);
-  process.once('SIGINT', disposeOnShutdown);
+  const shutdownDrain = createInteractiveShutdownDrain({
+    drainMs: resolveShutdownDrainMs(process.env.AI_RUNS_V2_SHUTDOWN_DRAIN_MS),
+    activeTurnCount: () =>
+      turnQueue.activeThreadCount() + interactiveInFlightInvocations.count(),
+    dispose: () => logic.disposeAll(),
+    exit: (code) => void exitAfterFlush(code),
+  });
+  process.on('SIGTERM', () => shutdownDrain.shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdownDrain.shutdown('SIGINT'));
 
   const server = new DaprServer({
     serverPort,
@@ -495,6 +543,10 @@ export async function main(): Promise<void> {
           ? { attemptId: bootstrap.attemptId }
           : {}),
       });
+    },
+    {
+      isDraining: () => shutdownDrain.isDraining(),
+      track: (work) => interactiveInFlightInvocations.track(work),
     }
   );
 

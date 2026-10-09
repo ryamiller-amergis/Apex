@@ -5,6 +5,7 @@ import path from 'path';
 import type { ContainerClient } from '@azure/storage-blob';
 import {
   bundleIdentityForGrounding,
+  checkoutWithDiskReclaim,
   createGroundedRepositoryCheckout,
 } from '../services/interactiveActorHost/groundedRepositoryCheckout';
 import { bundleKey } from '../services/grounding/bundleCheckout';
@@ -325,5 +326,79 @@ describe('grounded repository checkout for durable interactive turns', () => {
     await expect(
       checkout.checkout(grounding(), path.join(root, 'threads', 'd'), new AbortController().signal),
     ).resolves.toMatchObject({ status: 'unavailable', reason: 'not-configured' });
+  });
+});
+
+describe('checkoutWithDiskReclaim', () => {
+  const grounding = {
+    provider: 'github' as const,
+    project: 'Apex',
+    repository: 'owner/Apex',
+    sha: 'a'.repeat(40),
+    profileId: 'profile-1',
+  };
+  const diskBudget = { status: 'unavailable', reason: 'disk-budget', durationMs: 1 } as const;
+  const ready = {
+    status: 'ready',
+    identity: { provider: 'github', project: 'Apex', repo: 'Apex', sha: 'a'.repeat(40) },
+    source: 'base',
+    durationMs: 2,
+  } as const;
+
+  it('reclaims idle workspaces and retries once when the disk budget is full', async () => {
+    const checkout = jest.fn().mockResolvedValueOnce(diskBudget).mockResolvedValueOnce(ready);
+    const reclaimDisk = jest.fn(async () => {});
+    const log = jest.fn();
+
+    await expect(
+      checkoutWithDiskReclaim({
+        repositoryCheckout: { checkout },
+        grounding,
+        destination: '/tmp/thread',
+        signal: new AbortController().signal,
+        reclaimDisk,
+        log,
+      }),
+    ).resolves.toBe(ready);
+    expect(reclaimDisk).toHaveBeenCalledTimes(1);
+    expect(checkout).toHaveBeenCalledTimes(2);
+    expect(log.mock.calls).toEqual([
+      [diskBudget, false],
+      [ready, true],
+    ]);
+  });
+
+  it('does not reclaim for other unavailable reasons or a ready checkout', async () => {
+    const reclaimDisk = jest.fn(async () => {});
+    for (const result of [
+      { status: 'unavailable', reason: 'bundle-missing', durationMs: 1 } as const,
+      ready,
+    ]) {
+      const checkout = jest.fn().mockResolvedValue(result);
+      await checkoutWithDiskReclaim({
+        repositoryCheckout: { checkout },
+        grounding,
+        destination: '/tmp/thread',
+        signal: new AbortController().signal,
+        reclaimDisk,
+        log: jest.fn(),
+      });
+      expect(checkout).toHaveBeenCalledTimes(1);
+    }
+    expect(reclaimDisk).not.toHaveBeenCalled();
+  });
+
+  it('returns the refusal when the caller cannot reclaim', async () => {
+    const checkout = jest.fn().mockResolvedValue(diskBudget);
+    await expect(
+      checkoutWithDiskReclaim({
+        repositoryCheckout: { checkout },
+        grounding,
+        destination: '/tmp/thread',
+        signal: new AbortController().signal,
+        log: jest.fn(),
+      }),
+    ).resolves.toBe(diskBudget);
+    expect(checkout).toHaveBeenCalledTimes(1);
   });
 });

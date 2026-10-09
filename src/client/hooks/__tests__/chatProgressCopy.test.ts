@@ -120,6 +120,9 @@ describe('friendlyChatErrorMessage', () => {
     expect(
       friendlyChatErrorMessage('Interactive turn exceeded its absolute deadline'),
     ).toMatch(/too long/);
+    expect(friendlyChatErrorMessage('Interactive first event deadline exceeded')).toBe(
+      "The AI didn't start answering in time. Please retry.",
+    );
     expect(
       friendlyChatErrorMessage(
         'Interactive turn failed: Error: Interactive turn ended with status: error: Model Blocked for team',

@@ -14,6 +14,12 @@ locals {
     var.ai_platform_v2_visual_container_app_name,
     "ca-apex-ai-runs-visual-v2-${var.environment}",
   )
+
+  # The run in flight is aborted 30 s before the platform kill, so it can still publish a
+  # terminal result.
+  ai_platform_v2_visual_shutdown_drain_ms = (
+    (var.ai_platform_v2_visual_termination_grace_seconds - 30) * 1000
+  )
 }
 
 resource "azurerm_role_assignment" "ai_platform_v2_visual_acr_pull" {
@@ -87,6 +93,10 @@ resource "azurerm_container_app" "ai_platform_v2_visual" {
         value = local.ai_platform_v2_artifact_container
       }
       env {
+        name  = "AI_RUNS_V2_SHUTDOWN_DRAIN_MS"
+        value = tostring(local.ai_platform_v2_visual_shutdown_drain_ms)
+      }
+      env {
         name        = "AWS_ACCESS_KEY_ID"
         secret_name = "aws-access-key-id"
       }
@@ -113,4 +123,26 @@ resource "azurerm_container_app" "ai_platform_v2_visual" {
   depends_on = [
     azurerm_role_assignment.ai_platform_v2_visual_acr_pull,
   ]
+}
+
+# Same PATCH as ai_platform_v2_documents_scale_timing: azurerm cannot set the grace period,
+# and an azurerm update can drop it, so any change to the app re-runs the PATCH.
+resource "azapi_resource_action" "ai_platform_v2_visual_termination_grace" {
+  count = local.ai_platform_v2_visual_enabled ? 1 : 0
+
+  type        = "Microsoft.App/containerApps@2025-01-01"
+  resource_id = azurerm_container_app.ai_platform_v2_visual[0].id
+  method      = "PATCH"
+
+  body = {
+    properties = {
+      template = {
+        terminationGracePeriodSeconds = var.ai_platform_v2_visual_termination_grace_seconds
+      }
+    }
+  }
+
+  lifecycle {
+    replace_triggered_by = [azurerm_container_app.ai_platform_v2_visual[count.index]]
+  }
 }

@@ -28,6 +28,7 @@ import type {
   InteractiveSessionActor,
   InteractiveTurnOutcome,
 } from './interactiveSessionActor';
+import { interactiveInFlightInvocations } from './shutdownDrain';
 
 export interface InteractiveActorRuntime {
   /** Shared logic core (thread-keyed warm checkout + agent cache). */
@@ -84,7 +85,14 @@ function priorOutcomeForTerminalAttempt(
 export class InteractiveSessionActorImpl
   extends AbstractActor
   implements IInteractiveSessionActor {
-  async handleTurn(
+  handleTurn(
+    payload: InteractiveDispatchPayload,
+  ): Promise<InteractiveTurnOutcome> {
+    // Counted until the turn is on the turn queue, so a draining host does not exit first.
+    return interactiveInFlightInvocations.track(() => this.runTurn(payload));
+  }
+
+  private async runTurn(
     payload: InteractiveDispatchPayload,
   ): Promise<InteractiveTurnOutcome> {
     const active = runtime;
