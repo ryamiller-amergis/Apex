@@ -430,3 +430,27 @@ export function createGroundedRepositoryCheckout(
 export type GroundedRepositoryCheckout = ReturnType<
   typeof createGroundedRepositoryCheckout
 >;
+
+/**
+ * Idle threads keep their worktrees until evicted, so a checkout refused for
+ * disk space is retried once after `reclaimDisk` removes them.
+ */
+export async function checkoutWithDiskReclaim(input: {
+  repositoryCheckout: Pick<GroundedRepositoryCheckout, 'checkout'>;
+  grounding: NonNullable<DurableInteractiveTurnSpecification['grounding']>;
+  destination: string;
+  signal: AbortSignal;
+  reclaimDisk?: () => Promise<void>;
+  log: (result: GroundedCheckoutResult, retried: boolean) => void;
+}): Promise<GroundedCheckoutResult> {
+  const { repositoryCheckout, grounding, destination, signal } = input;
+  const first = await repositoryCheckout.checkout(grounding, destination, signal);
+  input.log(first, false);
+  if (first.status !== 'unavailable' || first.reason !== 'disk-budget' || !input.reclaimDisk) {
+    return first;
+  }
+  await input.reclaimDisk();
+  const retried = await repositoryCheckout.checkout(grounding, destination, signal);
+  input.log(retried, true);
+  return retried;
+}

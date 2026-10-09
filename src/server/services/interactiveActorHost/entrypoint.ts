@@ -47,7 +47,10 @@ import {
   resolveRepoReadServiceUrl,
 } from '../repoRead/repoServiceReader';
 import { acquireInteractiveCursorAgent } from './interactiveCursorExecution';
-import { createGroundedRepositoryCheckout } from './groundedRepositoryCheckout';
+import {
+  checkoutWithDiskReclaim,
+  createGroundedRepositoryCheckout,
+} from './groundedRepositoryCheckout';
 import {
   createInteractiveSessionActor,
   type WarmThreadCheckout,
@@ -364,22 +367,28 @@ export async function main(): Promise<void> {
           mcpServers: bootstrap.mcpServers,
         },
       ),
-    materializeWorkspace: async (bootstrap, destination, signal) => {
+    materializeWorkspace: async (bootstrap, destination, signal, options) => {
       const grounding = bootstrap.specification.grounding;
       const checkout = grounding
-        ? await repositoryCheckout.checkout(grounding, destination, signal)
+        ? await checkoutWithDiskReclaim({
+            repositoryCheckout,
+            grounding,
+            destination,
+            signal,
+            reclaimDisk: options?.reclaimDisk,
+            log: (result, retried) =>
+              console.log(
+                JSON.stringify({
+                  event: 'InteractiveRepositoryCheckout',
+                  runId: bootstrap.runId,
+                  status: result.status,
+                  detail: result.status === 'ready' ? result.source : result.reason,
+                  durationMs: result.durationMs,
+                  ...(retried ? { retriedAfterReclaim: true } : {}),
+                }),
+              ),
+          })
         : null;
-      if (checkout) {
-        console.log(
-          JSON.stringify({
-            event: 'InteractiveRepositoryCheckout',
-            runId: bootstrap.runId,
-            status: checkout.status,
-            detail: checkout.status === 'ready' ? checkout.source : checkout.reason,
-            durationMs: checkout.durationMs,
-          }),
-        );
-      }
       const reader =
         checkout?.status === 'ready'
           ? new LocalCheckoutReader({
