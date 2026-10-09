@@ -525,7 +525,9 @@ function App() {
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
   const startChat = useStartChat();
-  const [firstMessageError, setFirstMessageError] = useState<string | null>(null);
+  const [firstMessageError, setFirstMessageError] = useState<
+    { threadId: string; message: string } | null
+  >(null);
   const panelRepo = useMemo(
     () =>
       activeSkillConfig
@@ -616,9 +618,10 @@ function App() {
         });
         if (!res.ok) {
           const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
-          setFirstMessageError(
-            friendlyChatErrorMessage(typeof body?.error === 'string' ? body.error : null),
-          );
+          setFirstMessageError({
+            threadId: result.threadId,
+            message: friendlyChatErrorMessage(typeof body?.error === 'string' ? body.error : null),
+          });
         }
       }
     } catch {
@@ -999,7 +1002,6 @@ function App() {
                   onClose={() => setChatOpen(false)}
                   onNewChat={handleStartPanelChat}
                   onSelectThread={(id) => {
-                    setFirstMessageError(null);
                     setActiveThreadId(id || null);
                     setActiveThreadProject(id ? selectedProject : null);
                     syncHomeThreadUrl(id || null);
@@ -1007,7 +1009,13 @@ function App() {
                   selectedProject={selectedProject}
                   canStartNewChat={!!panelRepo && !isLoadingSkillRepos && !startChat.isPending}
                   isStartingNewChat={startChat.isPending}
-                  newChatError={startChat.error?.message ?? firstMessageError ?? undefined}
+                  newChatError={
+                    startChat.error?.message
+                    ?? (firstMessageError?.threadId === activeThreadId
+                      ? firstMessageError.message
+                      : undefined)
+                  }
+                  onClearNewChatError={() => setFirstMessageError(null)}
                   launchedFromHome
                   selectedSkillSettingsId={selectedSkillSettingsId}
                 />

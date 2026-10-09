@@ -504,6 +504,30 @@ describe('ChatAgentPanel shared Home shell', () => {
     );
   });
 
+  it('clears a refused first message when the user sends again', () => {
+    const onClearNewChatError = jest.fn();
+    render(
+      <ChatAgentPanel
+        thread={thread}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+        newChatError="Something went wrong. Please retry."
+        onClearNewChatError={onClearNewChatError}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId('chat-agent-message-input'), {
+      target: { value: 'Try again' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send mock' }));
+
+    expect(onClearNewChatError).toHaveBeenCalledTimes(1);
+    expect(mockSend).toHaveBeenCalledWith('Try again', expect.anything());
+  });
+
   it('PBI-006 AC-1 keeps the transcript visible while disconnected', () => {
     mockSessionOverrides = {
       isConnected: false,
