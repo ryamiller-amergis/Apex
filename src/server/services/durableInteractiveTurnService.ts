@@ -32,6 +32,8 @@ import type { GroundingProfileId } from '../../shared/types/repoReader';
 import type { RepoReader } from '../../shared/types/repoReader';
 import { callerGroundingService } from './callerGroundingService';
 import { groundingProfileResolver } from './groundingProfileResolver';
+import { RepoReaderError } from './repoReader';
+import { isRepositorySyncingError } from './repoRead/mirrorHydration';
 import { buildRepositoryContextPack } from './repositoryContextPack';
 import type { ThreadAccessResult } from './threadAccessService';
 import { resolveThreadAccess } from './threadAccessService';
@@ -364,6 +366,64 @@ export function isAllowlistedBuiltInSkillPath(
   });
 }
 
+export const DURABLE_SKILL_SYNC_WAIT_MS = 60_000;
+export const DURABLE_SKILL_SYNC_RETRY_MS = 3_000;
+
+export type DurableSkillSyncWait = Readonly<{
+  waitMs: number;
+  retryMs: number;
+  sleep: (ms: number) => Promise<void>;
+  now: () => number;
+}>;
+
+const DEFAULT_SKILL_SYNC_WAIT: DurableSkillSyncWait = {
+  waitMs: DURABLE_SKILL_SYNC_WAIT_MS,
+  retryMs: DURABLE_SKILL_SYNC_RETRY_MS,
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  now: Date.now,
+};
+
+function warnSkillUnavailable(skillPath: string, reason: string): void {
+  console.warn(
+    `[durable-interactive] skill unavailable path=${skillPath} reason=${reason}`,
+  );
+}
+
+function describeSkillLoadError(error: unknown): string {
+  if (error instanceof RepoReaderError) return `${error.code}: ${error.message}`;
+  if (error instanceof Error) {
+    return `${error.name}: ${error.message
+      .replace(/\/\/[^/@\s]+@/g, '//***@')
+      .slice(0, 200)}`;
+  }
+  return 'unknown error';
+}
+
+/**
+ * The repo read service answers "syncing" while it fetches a commit its mirror
+ * has not seen yet, such as the first read after a push to the branch.
+ */
+async function readPinnedSkill(
+  reader: RepoReader,
+  skillPath: string,
+  syncWait: DurableSkillSyncWait,
+): Promise<string> {
+  const deadline = syncWait.now() + syncWait.waitMs;
+  for (;;) {
+    try {
+      return await reader.readFile(skillPath);
+    } catch (error) {
+      if (
+        !isRepositorySyncingError(error)
+        || syncWait.now() + syncWait.retryMs > deadline
+      ) {
+        throw error;
+      }
+      await syncWait.sleep(syncWait.retryMs);
+    }
+  }
+}
+
 export async function loadDurableInteractiveSkill(
   input: Readonly<{
     path: string;
@@ -372,11 +432,13 @@ export async function loadDurableInteractiveSkill(
   }>,
   options: Readonly<{
     builtInRoots: ReadonlyArray<BuiltInSkillRoot>;
+    syncWait?: DurableSkillSyncWait;
   }>,
 ): Promise<{ path: string; content: string }> {
   const normalized = strictPortableSkillPath(input.path);
   switch (input.registration) {
     case 'unknown':
+      warnSkillUnavailable(normalized, 'skill is not registered for the project');
       throw unavailableSkill();
     case 'project':
       break;
@@ -391,14 +453,26 @@ export async function loadDurableInteractiveSkill(
   }
 
   if (input.registration === 'project') {
-    if (!input.pinnedReader) throw unavailableSkill();
-    try {
-      const content = await input.pinnedReader.readFile(normalized);
-      if (typeof content !== 'string') throw unavailableSkill();
-      return { path: normalized, content };
-    } catch {
+    if (!input.pinnedReader) {
+      warnSkillUnavailable(normalized, 'no pinned repository reader');
       throw unavailableSkill();
     }
+    let content: unknown;
+    try {
+      content = await readPinnedSkill(
+        input.pinnedReader,
+        normalized,
+        options.syncWait ?? DEFAULT_SKILL_SYNC_WAIT,
+      );
+    } catch (error) {
+      warnSkillUnavailable(normalized, describeSkillLoadError(error));
+      throw unavailableSkill();
+    }
+    if (typeof content !== 'string') {
+      warnSkillUnavailable(normalized, 'repository returned no file content');
+      throw unavailableSkill();
+    }
+    return { path: normalized, content };
   }
 
   for (const root of options.builtInRoots) {
@@ -875,14 +949,21 @@ async function defaultLoadSkill(
       { builtInRoots: input.builtInRoots },
     );
   }
-  if (!input.grounding) throw unavailableSkill();
+  if (!input.grounding) {
+    warnSkillUnavailable(input.skill.path, 'repository grounding is not ready');
+    throw unavailableSkill();
+  }
   let pinnedReader: RepoReader;
   try {
     pinnedReader =
       await groundingProfileResolver.resolveConnectionProfile(
         input.grounding.profileId as GroundingProfileId,
       );
-  } catch {
+  } catch (error) {
+    warnSkillUnavailable(
+      input.skill.path,
+      `grounding profile unavailable: ${describeSkillLoadError(error)}`,
+    );
     throw unavailableSkill();
   }
   return loadDurableInteractiveSkill(

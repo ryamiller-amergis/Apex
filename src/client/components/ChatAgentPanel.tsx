@@ -298,6 +298,7 @@ interface ChatAgentPanelProps {
   canStartNewChat?: boolean;
   isStartingNewChat?: boolean;
   newChatError?: string;
+  onClearNewChatError?: () => void;
   selectedProject?: string;
   selectedSkillSettingsId?: string | null;
   launchedFromHome?: boolean;
@@ -322,6 +323,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   canStartNewChat = true,
   isStartingNewChat = false,
   newChatError,
+  onClearNewChatError,
   selectedProject,
   selectedSkillSettingsId,
   launchedFromHome = false,
@@ -567,6 +569,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     setInput('');
     setSkillPickerOpen(false);
     speech.stop();
+    onClearNewChatError?.();
     await session.send(
       trimmedText || 'Please use the attached files as additional context.',
       { model: selectedModel, attachments: messageAttachments },
@@ -579,6 +582,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     selectedModel,
     clearAttachments,
     speech,
+    onClearNewChatError,
   ]);
 
   const selectSkill = useCallback((skill: { name: string; path: string }) => {
@@ -1275,9 +1279,9 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             </div>
           )}
 
-          {sendError && (
+          {(sendError ?? newChatError) && (
             <p className={styles.emptyError} role="alert">
-              {sendError}
+              {sendError ?? newChatError}
             </p>
           )}
 

@@ -7,7 +7,10 @@ import {
   resolveDurableMaxviewCapability,
   workflowAllowsRepositorySearch,
   type BuiltInSkillRoot,
+  type DurableSkillSyncWait,
 } from '../services/durableInteractiveTurnService';
+import { REPO_SYNCING_MESSAGE } from '../services/repoRead/mirrorHydration';
+import { RepoReaderError } from '../services/repoReader';
 
 function reader(
   readFile: RepoReader['readFile'],
@@ -230,6 +233,92 @@ describe('durable interactive skill loading', () => {
       content: '# pinned project',
     });
     expect(readFile).toHaveBeenCalledTimes(1);
+  });
+
+  describe('while the repo read service syncs the pinned commit', () => {
+    const skillPath = '.cursor/skills/project-skill/SKILL.md';
+    const syncing = () =>
+      new RepoReaderError('LOCAL_READ_UNAVAILABLE', REPO_SYNCING_MESSAGE, true);
+    let warn: jest.SpyInstance;
+
+    beforeEach(() => {
+      warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+      warn.mockRestore();
+    });
+
+    function fakeClock(): {
+      syncWait: DurableSkillSyncWait;
+      sleep: jest.Mock;
+    } {
+      let current = 0;
+      const sleep = jest.fn(async (ms: number) => {
+        current += ms;
+      });
+      return {
+        sleep,
+        syncWait: { waitMs: 10, retryMs: 3, sleep, now: () => current },
+      };
+    }
+
+    it('retries until the commit is available', async () => {
+      const readFile = jest
+        .fn()
+        .mockRejectedValueOnce(syncing())
+        .mockRejectedValueOnce(syncing())
+        .mockResolvedValue('# pinned project skill');
+      const { syncWait, sleep } = fakeClock();
+
+      await expect(
+        loadDurableInteractiveSkill(
+          { path: skillPath, registration: 'project', pinnedReader: reader(readFile) },
+          { builtInRoots: roots, syncWait },
+        ),
+      ).resolves.toEqual({ path: skillPath, content: '# pinned project skill' });
+      expect(readFile).toHaveBeenCalledTimes(3);
+      expect(sleep).toHaveBeenCalledTimes(2);
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('gives up after the wait and logs the reason', async () => {
+      const readFile = jest.fn().mockRejectedValue(syncing());
+      const { syncWait } = fakeClock();
+
+      await expect(
+        loadDurableInteractiveSkill(
+          { path: skillPath, registration: 'project', pinnedReader: reader(readFile) },
+          { builtInRoots: roots, syncWait },
+        ),
+      ).rejects.toMatchObject({
+        status: 422,
+        code: 'INTERACTIVE_V2_SKILL_UNAVAILABLE',
+      });
+      expect(readFile).toHaveBeenCalledTimes(4);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(`path=${skillPath} reason=LOCAL_READ_UNAVAILABLE`),
+      );
+    });
+
+    it('does not retry other read failures', async () => {
+      const readFile = jest
+        .fn()
+        .mockRejectedValue(
+          new RepoReaderError('LOCAL_READ_UNAVAILABLE', 'File not found', true),
+        );
+      const { syncWait, sleep } = fakeClock();
+
+      await expect(
+        loadDurableInteractiveSkill(
+          { path: skillPath, registration: 'project', pinnedReader: reader(readFile) },
+          { builtInRoots: roots, syncWait },
+        ),
+      ).rejects.toMatchObject({ code: 'INTERACTIVE_V2_SKILL_UNAVAILABLE' });
+      expect(readFile).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('File not found'));
+    });
   });
 });
 
