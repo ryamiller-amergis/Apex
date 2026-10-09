@@ -47,6 +47,17 @@ locals {
     agentic            = { min = 2, max = 16 }
   }
 
+  ai_platform_v2_interactive_resources = {
+    "fast-interactive" = {
+      cpu    = var.ai_platform_v2_interactive_cpu
+      memory = var.ai_platform_v2_interactive_memory
+    }
+    agentic = {
+      cpu    = coalesce(var.ai_platform_v2_agentic_cpu, var.ai_platform_v2_interactive_cpu)
+      memory = coalesce(var.ai_platform_v2_agentic_memory, var.ai_platform_v2_interactive_memory)
+    }
+  }
+
   # Turns in flight get until 30 s before the platform kill; the host then exits.
   ai_platform_v2_interactive_shutdown_drain_ms = (
     (var.ai_platform_v2_interactive_termination_grace_seconds - 30) * 1000
@@ -82,6 +93,20 @@ check "ai_platform_v2_split_interactive_inputs" {
       )
     )
     error_message = "V2 split interactive runtime requires its image, callback URL, Redis host/key, Cursor API Key secret ID, and App Insights connection string."
+  }
+}
+
+# Consumption replicas get 2 GiB of ephemeral storage per core (max 8 GiB); the budget leaves
+# 1 GiB for the image layer, logs, and agent scratch files.
+check "ai_platform_v2_agentic_checkout_disk_budget" {
+  assert {
+    condition = (
+      var.ai_platform_v2_agentic_checkout_disk_budget_bytes == null
+      || var.ai_platform_v2_agentic_checkout_disk_budget_bytes <= (
+        min(2 * local.ai_platform_v2_interactive_resources.agentic.cpu, 8) - 1
+      ) * 1073741824
+    )
+    error_message = "ai_platform_v2_agentic_checkout_disk_budget_bytes exceeds the agentic replica's ephemeral storage minus 1 GiB; Container Apps would evict the replica."
   }
 }
 
@@ -275,8 +300,8 @@ resource "azurerm_container_app" "ai_platform_v2_interactive_class" {
     container {
       name   = "ai-runs-interactive"
       image  = var.ai_platform_v2_interactive_image
-      cpu    = var.ai_platform_v2_interactive_cpu
-      memory = var.ai_platform_v2_interactive_memory
+      cpu    = local.ai_platform_v2_interactive_resources[each.key].cpu
+      memory = local.ai_platform_v2_interactive_resources[each.key].memory
 
       volume_mounts {
         name = "ai-pilot-data"
@@ -401,6 +426,14 @@ resource "azurerm_container_app" "ai_platform_v2_interactive_class" {
         content {
           name        = "AI_RUNS_RUNNER_CALLBACK_TOKEN"
           secret_name = "ai-runs-runner-callback-token"
+        }
+      }
+
+      dynamic "env" {
+        for_each = each.key == "agentic" && var.ai_platform_v2_agentic_checkout_disk_budget_bytes != null ? [1] : []
+        content {
+          name  = "AI_RUNS_INTERACTIVE_CHECKOUT_DISK_BUDGET_BYTES"
+          value = tostring(var.ai_platform_v2_agentic_checkout_disk_budget_bytes)
         }
       }
 

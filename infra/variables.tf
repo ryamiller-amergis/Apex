@@ -1351,6 +1351,32 @@ variable "ai_platform_v2_interactive_memory" {
   default     = "2Gi"
 }
 
+variable "ai_platform_v2_agentic_cpu" {
+  description = "CPU cores for each agentic replica. Null uses ai_platform_v2_interactive_cpu. On a Consumption environment, ephemeral storage is 2 GiB per core (max 8 GiB)."
+  type        = number
+  default     = null
+}
+
+variable "ai_platform_v2_agentic_memory" {
+  description = "Memory for each agentic replica. Null uses ai_platform_v2_interactive_memory."
+  type        = string
+  default     = null
+}
+
+variable "ai_platform_v2_agentic_checkout_disk_budget_bytes" {
+  description = "Disk budget in bytes for repository checkouts on each agentic replica (AI_RUNS_INTERACTIVE_CHECKOUT_DISK_BUDGET_BYTES). Null keeps the worker default of 2.5 GiB. Must stay below the replica's ephemeral storage, or Container Apps evicts the replica."
+  type        = number
+  default     = null
+
+  validation {
+    condition = (
+      var.ai_platform_v2_agentic_checkout_disk_budget_bytes == null
+      || try(var.ai_platform_v2_agentic_checkout_disk_budget_bytes >= 1073741824, false)
+    )
+    error_message = "ai_platform_v2_agentic_checkout_disk_budget_bytes must be at least 1 GiB (1073741824) or null."
+  }
+}
+
 variable "ai_platform_v2_interactive_repo_read_service_url" {
   description = "Optional existing repo-read service URL used by grounded interactive turns."
   type        = string
