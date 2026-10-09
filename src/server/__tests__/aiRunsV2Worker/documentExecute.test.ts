@@ -233,6 +233,38 @@ describe('V2 document execution', () => {
     });
   });
 
+  it("names Cursor's own reason when the run ends without finishing", async () => {
+    const execute = createDocumentExecute({
+      openRepository: jest.fn().mockResolvedValue(repoReader),
+      createExecution: jest.fn(async () => ({
+        run: {
+          supports: () => false,
+          async *stream() {
+            yield undefined as never;
+          },
+          async wait() {
+            return {
+              status: 'error',
+              error: { message: 'Model Blocked This model has been blocked by your team admin settings.' },
+            };
+          },
+        },
+        dispose: jest.fn().mockResolvedValue(undefined),
+      })),
+    });
+
+    await expect(
+      execute({
+        specification: specification(),
+        command: command(),
+        checkpoints: checkpoints(),
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow(
+      'Cursor document execution did not finish successfully: Model Blocked This model has been blocked by your team admin settings.',
+    );
+  });
+
   it('aborts a repository reader that hangs during startup', async () => {
     let receivedSignal: AbortSignal | undefined;
     let reportOpened!: () => void;

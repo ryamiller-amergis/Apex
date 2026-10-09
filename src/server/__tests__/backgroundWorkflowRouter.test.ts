@@ -107,6 +107,7 @@ function makeDependencies(
     clearGenerationOutput: jest.fn().mockResolvedValue(undefined),
     enqueue: jest.fn().mockResolvedValue({ runId: 'run-1' }),
     resolveHardLimitMs: jest.fn().mockReturnValue(60_000),
+    resolveModelChoice: jest.fn(async (model: string, effort?: string) => ({ model, effort })),
     now: jest.fn().mockReturnValue(1_000),
     trackEvent: jest.fn(),
     isUsableBareMirror: jest.fn().mockReturnValue(false),
@@ -729,6 +730,50 @@ describe('background workflow routing', () => {
 
       expect(prepareWorker).toHaveBeenCalledTimes(1);
       expect(sleep).not.toHaveBeenCalled();
+    });
+  });
+
+  it('sends the resolved model and effort to both transports', async () => {
+    const resolveModelChoice = jest
+      .fn()
+      .mockResolvedValue({ model: 'claude-opus-5-5', effort: undefined });
+    const prepareWorker = jest.fn().mockResolvedValue({
+      targetGrounding,
+      threadWorkspacePath: 'C:\\threads\\thread-1',
+      prompt: 'confidential generation prompt',
+      model: 'claude-opus-4-6',
+      effort: 'high',
+      skillPath: '.cursor/skills/to-prd/SKILL.md',
+      skillContent: '# Frozen to-prd skill',
+      skillSha256: createHash('sha256').update('# Frozen to-prd skill').digest('hex'),
+      projectId: 'project-1',
+    });
+
+    const v1 = makeDependencies({ resolveModelChoice });
+    await createBackgroundWorkflowRouter(v1).route(makeInput({ prepareWorker }));
+    expect(resolveModelChoice).toHaveBeenCalledWith('claude-opus-4-6', 'high');
+    expect((v1.enqueue as jest.Mock).mock.calls[0][0].snapshot).toMatchObject({
+      model: 'claude-opus-5-5',
+      effort: undefined,
+    });
+
+    const admitV2Run = jest.fn().mockResolvedValue({
+      status: 'dispatched',
+      runId: 'run-1',
+      attemptId: 'attempt-1',
+      attemptNumber: 1,
+      dispatchMessageId: 'dispatch-1',
+      outboxId: 'outbox-1',
+    });
+    const v2 = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      admitV2Run,
+      resolveModelChoice,
+    });
+    await createBackgroundWorkflowRouter(v2).route(makeInput({ prepareWorker }));
+    expect(admitV2Run.mock.calls[0][0].specification).toMatchObject({
+      model: 'claude-opus-5-5',
+      effort: null,
     });
   });
 

@@ -4,6 +4,11 @@ export interface ModelOption {
 
 const GENERIC_FALLBACK_MODEL_ID = 'default';
 
+/** Cursor's run error when the team admin has blocked the requested model. */
+export function isCursorModelBlockedMessage(message: string): boolean {
+  return /model blocked|blocked by your team admin/i.test(message);
+}
+
 function modelFamily(id: string): string {
   const versionStart = /-\d/.exec(id);
   return (versionStart ? id.slice(0, versionStart.index) : id).toLowerCase();

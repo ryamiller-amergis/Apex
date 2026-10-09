@@ -11,6 +11,7 @@ jest.mock('../../hooks/useProjectSkillConfig', () => ({
   useDeleteProjectSkillConfig: jest.fn(),
   useAvailableModels: jest.fn(),
   useAvailableBedrockModels: jest.fn(),
+  useGlobalDefaultModel: jest.fn().mockReturnValue({ data: { key: 'defaultModel', value: 'composer-2.5' } }),
   useProjectApprovers: jest.fn(),
   useSetProjectApprovers: jest.fn(),
 }));

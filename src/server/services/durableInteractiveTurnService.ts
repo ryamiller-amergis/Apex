@@ -139,6 +139,11 @@ export type AdmitDurableInteractiveTurnInput = Readonly<{
   turnId: string;
   text: string;
   modelOverride?: string;
+  /**
+   * The effort the turn sends, already checked against the model's Cursor
+   * parameters; null sends none. Omitted uses the thread's effort.
+   */
+  effort?: EffortLevel | null;
   attachments?: ReadonlyArray<ChatAttachment>;
   hidden?: boolean;
   turnSkill?: ChatTurnSkill;
@@ -1216,7 +1221,10 @@ export function createDurableInteractiveTurnService(
         interactiveClass: classification.interactiveClass,
         workflowClass: input.workflowClass,
         model,
-        effort: thread.kickoff.effort ?? null,
+        effort:
+          input.effort === undefined
+            ? thread.kickoff.effort ?? null
+            : input.effort,
         skill: frozenSkill,
         currentMessage: {
           id: input.turnId,

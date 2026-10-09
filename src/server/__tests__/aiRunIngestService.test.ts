@@ -634,6 +634,30 @@ describe('aiRunIngestService durable terminal completion', () => {
     },
   );
 
+  it('asks for a model re-probe only when a failure says the model is blocked', async () => {
+    mockFindFirst.mockResolvedValue(baseRow({ executionSnapshot }));
+    const onModelBlocked = jest.fn();
+    const failWith = (detail: string) =>
+      ingest('project-1', 'run-1', {
+        dispatchMessageId: 'dispatch-current',
+        kind: 'terminal',
+        status: 'failed',
+        artifactsFlushed: true,
+        detail,
+      }, {
+        consumeCompletedArtifacts: mockConsumeCompletedArtifacts,
+        onModelBlocked,
+      });
+
+    await failWith('Cursor execution did not finish successfully ({"status":"error"})');
+    expect(onModelBlocked).not.toHaveBeenCalled();
+
+    await failWith(
+      'Cursor execution did not finish successfully: Model Blocked This model has been blocked by your team admin settings.',
+    );
+    expect(onModelBlocked).toHaveBeenCalledTimes(1);
+  });
+
   it('FEAT-007: accepts an unflushed actor failure and emits error plus done', async () => {
     mockFindFirst.mockResolvedValue(baseRow({
       lane: 'ai-runs-interactive',

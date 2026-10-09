@@ -55,6 +55,7 @@ async function admittedSpecification(
     workflowClass?: InteractiveWorkflowClass;
     kickoff?: Partial<ChatThread['kickoff']>;
     turnSkill?: ChatTurnSkill;
+    effort?: null;
   } = {},
 ): Promise<PreparedDurableInteractiveTurn['specification']> {
   const repositoryAdmit = jest.fn(async (input: PreparedDurableInteractiveTurn) => ({
@@ -102,12 +103,20 @@ async function admittedSpecification(
     text: 'confirm',
     attachments: [],
     turnSkill: options.turnSkill,
+    ...('effort' in options ? { effort: options.effort } : {}),
   });
   expect(repositoryAdmit).toHaveBeenCalledTimes(1);
   return repositoryAdmit.mock.calls[0][0].specification;
 }
 
 describe('durable interactive turn prompt', () => {
+  it("freezes the caller's resolved effort, and the thread's when none is given", async () => {
+    await expect(admittedSpecification([], { effort: null })).resolves.toMatchObject({
+      effort: null,
+    });
+    await expect(admittedSpecification([])).resolves.toMatchObject({ effort: 'low' });
+  });
+
   it('sends the skill and question-UI rules on the first turn', async () => {
     const specification = await admittedSpecification([]);
 

@@ -1,4 +1,7 @@
-import { resolveAvailableModelId } from '../../shared/utils/modelAvailability';
+import {
+  isCursorModelBlockedMessage,
+  resolveAvailableModelId,
+} from '../../shared/utils/modelAvailability';
 
 const AVAILABLE = [
   { id: 'auto-smart' },
@@ -30,5 +33,14 @@ describe('resolveAvailableModelId', () => {
   it('keeps an empty selection so the caller default applies instead of Auto', () => {
     expect(resolveAvailableModelId('', AVAILABLE)).toBe('');
     expect(resolveAvailableModelId('  ', AVAILABLE)).toBe('  ');
+  });
+});
+
+describe('isCursorModelBlockedMessage', () => {
+  it("recognizes Cursor's team-admin block error", () => {
+    expect(
+      isCursorModelBlockedMessage('Model Blocked This model has been blocked by your team admin settings.'),
+    ).toBe(true);
+    expect(isCursorModelBlockedMessage('[resource_exhausted] Error')).toBe(false);
   });
 });
