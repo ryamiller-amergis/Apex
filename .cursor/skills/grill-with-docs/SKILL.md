@@ -25,11 +25,13 @@ No arguments. The session runs against the plan, design, or idea already in the 
 
 ## Before the first question
 
-If `.ai-pilot/linked-context.md` is present, read it and treat it as project grounding. If it is absent, continue.
+If `.ai-pilot/linked-context.md` is present, read it and treat it as extra project grounding. If it is absent, continue.
 
-Read `context.md` at the repo root before the first question. In a remote-repo or MCP context, call `get_skill_file` with that exact path. Do not search for it.
+Apex puts an application brief in the message before each Discovery and Delivery turn. That brief is the product context. It is already loaded. Do not open `context.md`, and do not search for it.
 
-Do not read `AGENTS.md`, scan `design-docs/`, or search the codebase during Discovery or Delivery. Those lookups belong in Technical, and only when that phase starts.
+Repository tools are closed during Discovery and Delivery. Do not call grep, glob, read, `search_repo_code`, `get_skill_file`, or `list_repo_dir`. If the brief does not answer something, ask the person or record it as unresolved.
+
+`AGENTS.md`, design docs, and source files belong in Technical, and only when that phase starts.
 
 ## How to ask
 
@@ -45,7 +47,7 @@ c. Skip — decide later
 
 The last option on every phase question is `Skip — decide later`. A skip is recorded as unresolved. Do not ask that question again.
 
-When an answer is already obvious from the conversation or from `context.md`, state the recommendation in one or two sentences, then ask the person to confirm it or change it. Do not ask an open question when a recommendation will do.
+When an answer is already obvious from the conversation or from the application brief, state the recommendation in one or two sentences, then ask the person to confirm it or change it. Do not ask an open question when a recommendation will do.
 
 The person may also type their own answer instead of picking an option. Acknowledge it and move on.
 
@@ -102,7 +104,7 @@ There is no skip on this question. If they choose the PRD, write the transcript 
 
 Run this phase only after they choose to continue. It is the deep interview: frontend or backend, existing patterns, data model, performance, and rollout. It is not required for a PRD.
 
-Read `AGENTS.md` first. Open a design doc or a source file only when the current question needs it. Limit that lookup to two reads. If a gap remains, record an unresolved assumption and ask the person.
+Read `AGENTS.md` with `get_skill_file` first. Open one more design doc or source file only when the current question needs it. That is the limit: two reads. Do not use grep, glob, or `search_repo_code`. If a gap remains, record an unresolved assumption and ask the person.
 
 Ask these first, one at a time, in order. Recommend from the codebase when you can. Each one still ends with `Skip — decide later`.
 

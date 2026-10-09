@@ -136,6 +136,16 @@ import type {
 import { groundingTelemetry } from './groundingTelemetry';
 import { groundingProfileResolver } from './groundingProfileResolver';
 import { createNativeReadTools } from './nativeReadToolAdapter';
+import { readInterviewBaBrief } from './interviewBaBrief';
+import {
+  applyGuidedInterviewRuntime,
+  guidedInterviewNeedsFreshAgent,
+  interviewRepositoryPhase,
+  isInterviewSandboxUnsupported,
+  markGuidedInterviewGrounding,
+  wrapGuidedInterviewPrompt,
+  writeInterviewBaBriefFile,
+} from './interviewGroundingPolicy';
 import { workerCanReadWithoutWorkingTree } from './repoRead/workerReadVisibility';
 import {
   createCursorTurnEndMonitor,
@@ -878,7 +888,8 @@ export async function prepareRepositoryReadRuntime(options: {
 function groundedTurnPromptOptions(
   state: ThreadState,
   grounding: CallerGroundingSelection,
-  runtime: RepositoryReadRuntime
+  runtime: RepositoryReadRuntime,
+  productPhaseInterview = false
 ) {
   const localGrounded = grounding.mode === 'local';
   const appKnowledgeHome =
@@ -888,9 +899,11 @@ function groundedTurnPromptOptions(
       .toLowerCase()
       .includes('/app-knowledge/');
   return {
+    productPhaseInterview,
     preloadRepositoryContext:
-      (state.isInterviewThread && grounding.mode === 'remote') ||
-      appKnowledgeHome,
+      !productPhaseInterview &&
+      ((state.isInterviewThread && grounding.mode === 'remote') ||
+        appKnowledgeHome),
     repoSearchEnabled: !state.isInterviewThread,
     nativeReads: runtime.nativeReads,
     forbidProviderRepoMcp: localGrounded && !runtime.nativeReads,
@@ -1994,6 +2007,8 @@ async function buildNewAgentTurnPrompt(
     skipProviderCatalogFetch?: boolean;
     repoReader?: RepoReader;
     groundingProvenance?: GroundingProvenance;
+    /** Discovery and Delivery already carry the application brief. Do not preload AGENTS.md. */
+    productPhaseInterview?: boolean;
   }
 ): Promise<string> {
   let initialPrompt = buildInitialPrompt(kickoff, {
@@ -2025,7 +2040,7 @@ async function buildNewAgentTurnPrompt(
       }> = [];
       if (kickoff.skillPath)
         requests.push({ key: 'skill', path: kickoff.skillPath });
-      if (options?.preloadRepositoryContext) {
+      if (options?.preloadRepositoryContext && !options.productPhaseInterview) {
         requests.push(
           { key: 'context', path: 'context.md' },
           { key: 'agents', path: 'AGENTS.md' }
@@ -2143,7 +2158,17 @@ async function buildNewAgentTurnPrompt(
     }
   }
 
-  if (options?.preloadRepositoryContext) {
+  if (options?.productPhaseInterview) {
+    initialPrompt += [
+      '',
+      '',
+      '# Discovery and Delivery grounding',
+      'The application brief is included in the user message. Do not search the repository.',
+      'Do not open AGENTS.md or design docs until the interview enters Technical.',
+    ].join('\n');
+  }
+
+  if (options?.preloadRepositoryContext && !options.productPhaseInterview) {
     const contextPack = buildRepositoryContextPack({
       project: kickoff.project,
       repo: kickoff.repo,
@@ -4833,7 +4858,11 @@ export async function sendMessage(
     await state.agent[Symbol.asyncDispose]().catch(() => {});
     state.agent = null;
   }
-  const repositoryRuntime = await prepareRepositoryReadRuntime({
+  const interviewPhase = interviewRepositoryPhase(
+    state.thread.kickoff.skillPath,
+    priorMessages
+  );
+  let repositoryRuntime = await prepareRepositoryReadRuntime({
     grounding,
     kickoff: state.thread.kickoff,
     adoSkillsUrl: mcpServerUrl,
@@ -4846,6 +4875,43 @@ export async function sendMessage(
       turnRequiresAdoOperations ||
       interactiveAttempt.bypassReason === 'mcp-tools-required',
   });
+  let agentPromptText = promptText;
+  let guidedFreshAgent = false;
+  if (interviewPhase) {
+    const brief = await readInterviewBaBrief(async () => {
+      if (repositoryRuntime.repoReader) {
+        return repositoryRuntime.repoReader.readFile('context.md');
+      }
+      if (grounding.mode !== 'local') {
+        const { getSkillFile } = await import('./skillCatalogFacade');
+        return getSkillFile(
+          state.thread.kickoff.project,
+          state.thread.kickoff.repo,
+          'context.md',
+          state.thread.kickoff.skillBranch ?? state.thread.kickoff.branch ?? 'main',
+          state.thread.kickoff.skillProvider ?? 'ado'
+        );
+      }
+      const repoLeaf = state.thread.kickoff.repo.split('/').pop() ?? '';
+      const sameCheckout =
+        repoLeaf.toLowerCase() === path.basename(process.cwd()).toLowerCase() ||
+        state.thread.kickoff.project === 'Apex';
+      const localBrief = path.join(process.cwd(), 'context.md');
+      if (!sameCheckout || !fs.existsSync(localBrief)) return null;
+      return fs.readFileSync(localBrief, 'utf8');
+    });
+    if (brief.startsWith('No application brief')) {
+      console.warn('[chat] Guided interview has no application brief', {
+        threadId,
+        project: state.thread.kickoff.project,
+        repo: state.thread.kickoff.repo,
+      });
+    }
+    writeInterviewBaBriefFile(state.thread.workspaceDir, brief);
+    agentPromptText = wrapGuidedInterviewPrompt(promptText, interviewPhase, brief);
+    repositoryRuntime = applyGuidedInterviewRuntime(repositoryRuntime, interviewPhase);
+    guidedFreshAgent = guidedInterviewNeedsFreshAgent(state.thread.workspaceDir);
+  }
 
   // FEAT-003: live linked-context materialization (fail-open; never blocks the turn).
   // Dynamic import avoids a circular dependency through designModuleService.
@@ -4859,7 +4925,7 @@ export async function sendMessage(
   });
 
   const agentWorkspaceDir = state.thread.workspaceDir;
-  const localAgentOptions = repositoryRuntime.local;
+  let localAgentOptions = repositoryRuntime.local;
   const mcpServers = repositoryRuntime.mcpServers;
   console.log(
     '[chat] MCP servers for turn:',
@@ -4875,14 +4941,20 @@ export async function sendMessage(
   // force-disposed interview agent. In the latter case, include the visible
   // PostgreSQL-backed history so Agent.create() continues instead of restarting.
   const hadCursorAgentId = Boolean(state.thread.cursorAgentId);
+  const productPhaseInterview = interviewPhase === 'product';
   let prompt = hadCursorAgentId
-    ? promptText
+    ? agentPromptText
     : await buildNewAgentTurnPrompt(
         state.thread.kickoff,
-        promptText,
+        agentPromptText,
         maxviewEnabled,
         recoveryContext,
-        groundedTurnPromptOptions(state, grounding, repositoryRuntime)
+        groundedTurnPromptOptions(
+          state,
+          grounding,
+          repositoryRuntime,
+          productPhaseInterview
+        )
       );
   let agentAcquisitionMode: 'existing' | 'created' | 'resumed' | 'recreated' =
     state.agent ? 'existing' : hadCursorAgentId ? 'resumed' : 'created';
@@ -4924,11 +4996,19 @@ export async function sendMessage(
       model: { id: 'claude-opus-4-6' },
     };
 
+    if (guidedFreshAgent && state.agent) {
+      await state.agent[Symbol.asyncDispose]().catch(() => {});
+      state.agent = null;
+    }
+
     if (!state.agent) {
       const priorCursorAgentId = state.thread.cursorAgentId;
       const acquisition = await resumeOrCreateAgent({
         cursorAgentId: priorCursorAgentId,
-        forceRecreate: boundaryRecreationReason !== null || staleIdleResume,
+        forceRecreate:
+          boundaryRecreationReason !== null ||
+          staleIdleResume ||
+          guidedFreshAgent,
         resume: async () => {
           logMyWork('agent.resume_started', {
             cursorAgentId: priorCursorAgentId,
@@ -4952,20 +5032,35 @@ export async function sendMessage(
         },
         create: async () => {
           logMyWork('agent.create_started', { model: resolvedModel });
-          return retryWithBackoff(
-            () =>
+          return retryWithBackoff(async () => {
+            const createWith = (local: LocalAgentOptions) =>
               Agent.create({
                 apiKey,
                 model: buildCursorModelSelection(
                   resolvedModel,
                   state.thread.kickoff.effort,
                 ),
-                local: localAgentOptions,
+                local,
                 mcpServers,
                 agents: { 'code-reviewer': codeReviewerAgent },
-              }),
-            sdkRetryOpts
-          );
+              });
+            try {
+              return await createWith(localAgentOptions);
+            } catch (error) {
+              if (
+                !localAgentOptions.sandboxOptions?.enabled ||
+                !isInterviewSandboxUnsupported(error)
+              ) {
+                throw error;
+              }
+              console.warn(
+                '[chat] Interview workspace sandbox is unavailable; repository tools stay closed without it'
+              );
+              localAgentOptions = { ...localAgentOptions };
+              delete localAgentOptions.sandboxOptions;
+              return createWith(localAgentOptions);
+            }
+          }, sdkRetryOpts);
         },
       });
       state.agent = acquisition.agent;
@@ -4976,6 +5071,12 @@ export async function sendMessage(
         acquisition.mode,
         state.resolvedGroundingBinding
       );
+      if (
+        interviewPhase &&
+        (acquisition.mode === 'created' || acquisition.mode === 'recreated')
+      ) {
+        markGuidedInterviewGrounding(state.thread.workspaceDir);
+      }
       if (
         (acquisition.mode === 'created' || acquisition.mode === 'recreated') &&
         state.resolvedGroundingBinding
@@ -5002,10 +5103,15 @@ export async function sendMessage(
         );
         prompt = await buildNewAgentTurnPrompt(
           state.thread.kickoff,
-          promptText,
+          agentPromptText,
           maxviewEnabled,
           recoveryContext,
-          groundedTurnPromptOptions(state, grounding, repositoryRuntime)
+          groundedTurnPromptOptions(
+            state,
+            grounding,
+            repositoryRuntime,
+            productPhaseInterview
+          )
         );
       }
     }
@@ -5040,6 +5146,12 @@ export async function sendMessage(
       turnEndMonitor = monitor;
       return target.send(prompt, {
         onDelta: ({ update }) => monitor.observe(update),
+        ...(interviewPhase
+          ? {
+              mcpServers,
+              local: { customTools: localAgentOptions.customTools },
+            }
+          : {}),
       });
     };
 
@@ -5550,10 +5662,15 @@ export async function sendMessage(
             state.thread.cursorAgentId = undefined;
             prompt = await buildNewAgentTurnPrompt(
               state.thread.kickoff,
-              promptText,
+              agentPromptText,
               maxviewEnabled,
               recoveryContext,
-              groundedTurnPromptOptions(state, grounding, repositoryRuntime)
+              groundedTurnPromptOptions(
+                state,
+                grounding,
+                repositoryRuntime,
+                productPhaseInterview
+              )
             );
             state.agent = await retryWithBackoff(
               () =>
@@ -5575,6 +5692,9 @@ export async function sendMessage(
             currentRun = await sendWithTurnMonitor(state.agent);
             state.thread.cursorAgentId =
               state.agent.agentId ?? state.thread.cursorAgentId;
+            if (interviewPhase) {
+              markGuidedInterviewGrounding(state.thread.workspaceDir);
+            }
             state.thread.activeRunId = getRunId(currentRun);
             continue;
           }

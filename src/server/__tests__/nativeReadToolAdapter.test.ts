@@ -79,6 +79,11 @@ describe('native read custom-tool adapter', () => {
     });
   });
 
+  it('omits repository search when the interview phase closes it', () => {
+    const tools = createNativeReadTools(reader(), { allowSearch: false });
+    expect(Object.keys(tools)).toEqual(['get_skill_file', 'list_repo_dir']);
+  });
+
   it('delegates search validation and limit handling to the authorized reader', async () => {
     // Arrange
     const repoReader = reader();
