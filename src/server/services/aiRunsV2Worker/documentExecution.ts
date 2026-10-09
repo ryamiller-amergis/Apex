@@ -400,6 +400,23 @@ function isSuccessfulWait(result: CursorExecutionResult): boolean {
   );
 }
 
+const MAX_WAIT_FAILURE_DETAIL = 300;
+
+/** Cursor's own reason, such as "Model Blocked", so the failed run names it. */
+function describeWaitFailure(result: CursorExecutionResult): string {
+  const { status, error } = result.waitResult;
+  const message =
+    error && typeof error === 'object' && 'message' in error
+      ? String((error as { message: unknown }).message)
+      : typeof error === 'string'
+        ? error
+        : '';
+  const detail = message.trim().replace(/\s+/g, ' ') || `status ${status || 'unknown'}`;
+  return detail.length > MAX_WAIT_FAILURE_DETAIL
+    ? `${detail.slice(0, MAX_WAIT_FAILURE_DETAIL)}…`
+    : detail;
+}
+
 function abortError(): Error {
   const error = new Error('Document execution aborted');
   error.name = 'AbortError';
@@ -550,7 +567,9 @@ export function createDocumentExecute(
         signal,
       );
       if (!isSuccessfulWait(result)) {
-        throw new Error('Cursor document execution did not finish successfully');
+        throw new Error(
+          `Cursor document execution did not finish successfully: ${describeWaitFailure(result)}`,
+        );
       }
 
       await raceOperation(

@@ -72,7 +72,11 @@ import {
   durableInteractiveTurnService,
   type DurableInteractiveToolGrantInput,
 } from './durableInteractiveTurnService';
-import { fetchAvailableModels } from './modelsService';
+import {
+  fetchAvailableModels,
+  fetchModelParameters,
+  resolveCursorModelChoice,
+} from './modelsService';
 import {
   buildDocumentAssistantEditGuidance,
   resolveDocumentAssistantType,
@@ -4575,9 +4579,11 @@ async function sendMessageLegacy(
 
   // If the caller wants a different model, dispose the current agent so it
   // will be recreated (or resumed) with the new model on this turn.
-  const resolvedModel = resolveModelId(
-    modelOverride ?? state.thread.kickoff.model
+  const resolvedModel = resolveAvailableModelId(
+    resolveModelId(modelOverride ?? state.thread.kickoff.model),
+    await fetchAvailableModels(),
   );
+  const resolvedModelParameters = await fetchModelParameters(resolvedModel);
   if (state.thread.kickoff.model !== resolvedModel) {
     state.thread.kickoff.model = resolvedModel;
     if (state.agent) {
@@ -4911,6 +4917,7 @@ async function sendMessageLegacy(
                 model: buildCursorModelSelection(
                   resolvedModel,
                   state.thread.kickoff.effort,
+                  resolvedModelParameters,
                 ),
                 local: localAgentOptions,
                 mcpServers,
@@ -4928,6 +4935,7 @@ async function sendMessageLegacy(
                 model: buildCursorModelSelection(
                   resolvedModel,
                   state.thread.kickoff.effort,
+                  resolvedModelParameters,
                 ),
                 local: localAgentOptions,
                 mcpServers,
@@ -5531,6 +5539,7 @@ async function sendMessageLegacy(
                   model: buildCursorModelSelection(
                     resolvedModel,
                     state.thread.kickoff.effort,
+                    resolvedModelParameters,
                   ),
                   local: localAgentOptions,
                   mcpServers,
@@ -5609,6 +5618,7 @@ async function sendMessageLegacy(
                     model: buildCursorModelSelection(
                       resolvedModel,
                       state.thread.kickoff.effort,
+                      resolvedModelParameters,
                     ),
                     local: localAgentOptions,
                     mcpServers,
@@ -5662,6 +5672,7 @@ async function sendMessageLegacy(
                     model: buildCursorModelSelection(
                       resolvedModel,
                       state.thread.kickoff.effort,
+                      resolvedModelParameters,
                     ),
                     local: localAgentOptions,
                     mcpServers,
@@ -6346,16 +6357,18 @@ export async function sendMessage(
       const turnId =
         options?.turnId ??
         (options?.turnIdPolicy === 'required' ? '' : uuidv4());
+      const modelChoice = await resolveCursorModelChoice(
+        resolveModelId(modelOverride ?? state.thread.kickoff.model),
+        state.thread.kickoff.effort,
+      );
       return durableInteractiveTurnService.admit({
         threadId,
         userId: requesterUserId,
         workflowClass,
         turnId,
         text,
-        modelOverride: resolveAvailableModelId(
-          resolveModelId(modelOverride ?? state.thread.kickoff.model),
-          await fetchAvailableModels(),
-        ),
+        modelOverride: modelChoice.model,
+        effort: modelChoice.effort ?? null,
         attachments,
         hidden: options?.hidden,
         turnSkill: options?.turnSkill,

@@ -67,6 +67,7 @@ import {
   createBlobInteractiveArtifactReader,
 } from './interactiveArtifactApplier';
 import { resolveArtifactContainerClient } from './aiRunV2/artifactContainer';
+import { isCursorModelBlockedMessage } from '../../shared/utils/modelAvailability';
 
 // Ingest persists worker events without emitting them to this instance's
 // in-memory thread subscribers, so they must not carry this instance's id or
@@ -150,6 +151,14 @@ export interface AiRunIngestDependencies {
     durationMs: number;
     status: RecordUsageInput['status'];
   }) => Promise<void>;
+  /** Called when a failed run reports that the Cursor team admin blocked its model. */
+  onModelBlocked?: () => void;
+}
+
+function requestModelAvailabilityProbe(): void {
+  void import('./modelsService')
+    .then((models) => models.requestModelAvailabilityProbe())
+    .catch(() => {});
 }
 
 async function consumeCompletedArtifacts(
@@ -1139,6 +1148,15 @@ export async function ingest(
 
   const nowIso = new Date().toISOString();
   const detail = sanitizeDetail(body.detail);
+
+  if (
+    body.kind === 'terminal'
+    && body.status === 'failed'
+    && detail
+    && isCursorModelBlockedMessage(detail)
+  ) {
+    (dependencies.onModelBlocked ?? requestModelAvailabilityProbe)();
+  }
 
   if (body.kind === 'terminal' && isAgentRunTerminalStatus(existing.status)) {
     if (existing.status === body.status) {

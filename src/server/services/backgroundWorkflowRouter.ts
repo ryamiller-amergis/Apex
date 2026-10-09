@@ -21,6 +21,7 @@ import {
   type V2AdmissionService,
 } from './aiRunV2/v2AdmissionService';
 import { isFeatureEnabled } from './featureFlagService';
+import { resolveCursorModelChoice } from './modelsService';
 import { getRepoCacheDir, type RepoCacheOptions } from './repoCacheService';
 import {
   cacheOptionsFromGrounding,
@@ -138,6 +139,7 @@ export interface BackgroundWorkflowRouterDependencies {
   prepareWorkspace?: typeof prepareBackgroundWorkflowWorkspace;
   enqueue?: EnqueueRun;
   resolveHardLimitMs?: () => number;
+  resolveModelChoice?: typeof resolveCursorModelChoice;
   trackEvent?: typeof trackEvent;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -371,6 +373,8 @@ export function createBackgroundWorkflowRouter(
   const admitV2Run =
     dependencies.admitV2Run ?? ((input) => createV2AdmissionService().admit(input));
   const hardLimitMs = dependencies.resolveHardLimitMs ?? resolveAgentRunHardLimitMs;
+  const resolveModelChoice =
+    dependencies.resolveModelChoice ?? resolveCursorModelChoice;
   const emitEvent = dependencies.trackEvent ?? trackEvent;
   const now = dependencies.now ?? Date.now;
   const sleep =
@@ -646,10 +650,11 @@ export function createBackgroundWorkflowRouter(
         { durationMs: Math.max(0, now() - preparationStartedAt) },
       );
 
+      const modelChoice = await resolveModelChoice(prepared.model, prepared.effort);
       const snapshot: ExecutionSnapshot = {
         prompt: prepared.prompt,
-        model: prepared.model,
-        effort: prepared.effort,
+        model: modelChoice.model,
+        effort: modelChoice.effort,
         workspaceRef,
         workflowClass: input.workflowClass,
         skillPath: prepared.skillPath,
@@ -804,10 +809,11 @@ export function createBackgroundWorkflowRouter(
       { durationMs: Math.max(0, now() - preparationStartedAt) },
     );
 
+    const modelChoice = await resolveModelChoice(prepared.model, prepared.effort);
     const snapshot: ExecutionSnapshot = {
       prompt: prepared.prompt,
-      model: prepared.model,
-      effort: prepared.effort,
+      model: modelChoice.model,
+      effort: modelChoice.effort,
       workspaceRef,
       ...(checkoutRef ? { checkoutRef } : {}),
       ...(mirrorRef ? { mirrorRef } : {}),
