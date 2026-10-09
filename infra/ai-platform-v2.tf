@@ -71,15 +71,21 @@ data "azurerm_resource_group" "ai_platform_v2_host" {
 data "azurerm_servicebus_namespace" "ai_platform_v2_host" {
   count = local.ai_platform_v2_enabled ? 1 : 0
 
-  name                = var.ai_platform_v2_servicebus_namespace_name
-  resource_group_name = data.azurerm_resource_group.ai_platform_v2_host[0].name
+  name = var.ai_platform_v2_servicebus_namespace_name
+  resource_group_name = coalesce(
+    var.ai_platform_v2_data_resource_group_name,
+    data.azurerm_resource_group.ai_platform_v2_host[0].name,
+  )
 }
 
 data "azurerm_storage_account" "ai_platform_v2_host" {
   count = local.ai_platform_v2_enabled ? 1 : 0
 
-  name                = var.ai_platform_v2_storage_account_name
-  resource_group_name = data.azurerm_resource_group.ai_platform_v2_host[0].name
+  name = var.ai_platform_v2_storage_account_name
+  resource_group_name = coalesce(
+    var.ai_platform_v2_data_resource_group_name,
+    data.azurerm_resource_group.ai_platform_v2_host[0].name,
+  )
 }
 
 data "azurerm_container_app_environment" "ai_platform_v2_host" {

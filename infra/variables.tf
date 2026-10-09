@@ -972,6 +972,12 @@ variable "ai_platform_v2_resource_group_name" {
   default     = null
 }
 
+variable "ai_platform_v2_data_resource_group_name" {
+  description = "Resource group of the existing Service Bus namespace and storage account when they differ from ai_platform_v2_resource_group_name (prod: rg-apex-prd-data). Null uses ai_platform_v2_resource_group_name."
+  type        = string
+  default     = null
+}
+
 variable "ai_platform_v2_servicebus_namespace_name" {
   description = "Existing AI Service Bus namespace to host V2 queues (required when enabled). DEV: sbns-apex-ai-dev."
   type        = string
