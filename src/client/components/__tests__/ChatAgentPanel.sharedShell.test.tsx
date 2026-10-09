@@ -485,6 +485,49 @@ describe('ChatAgentPanel shared Home shell', () => {
     expect(screen.getByText('Starting skill…')).toBeInTheDocument();
   });
 
+  it('shows a refused first message inside the new thread', () => {
+    const startingThread: ChatThread = { ...thread, messages: [] };
+    render(
+      <ChatAgentPanel
+        thread={startingThread}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+        newChatError="This skill couldn't be loaded from the project's repository."
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      "This skill couldn't be loaded from the project's repository.",
+    );
+  });
+
+  it('clears a refused first message when the user sends again', () => {
+    const onClearNewChatError = jest.fn();
+    render(
+      <ChatAgentPanel
+        thread={thread}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+        newChatError="Something went wrong. Please retry."
+        onClearNewChatError={onClearNewChatError}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId('chat-agent-message-input'), {
+      target: { value: 'Try again' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send mock' }));
+
+    expect(onClearNewChatError).toHaveBeenCalledTimes(1);
+    expect(mockSend).toHaveBeenCalledWith('Try again', expect.anything());
+  });
+
   it('PBI-006 AC-1 keeps the transcript visible while disconnected', () => {
     mockSessionOverrides = {
       isConnected: false,

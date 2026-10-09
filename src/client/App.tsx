@@ -39,6 +39,7 @@ import { resolveAccessibleRoute } from './utils/accessibleRoute';
 import { canAccessMyWork } from './utils/canAccessMyWork';
 import { setInteractiveWsEnabled } from './utils/threadEventStream';
 import { createChatTurnId } from './utils/chatTurnId';
+import { friendlyChatErrorMessage } from '../shared/utils/chatProgressCopy';
 import { IS_BETA_RELEASE } from './config/release';
 import { RESTRICTED_ACCESS_PROJECT } from '../shared/types/restrictedAccess';
 import './App.css';
@@ -524,6 +525,9 @@ function App() {
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
   const startChat = useStartChat();
+  const [firstMessageError, setFirstMessageError] = useState<
+    { threadId: string; message: string } | null
+  >(null);
   const panelRepo = useMemo(
     () =>
       activeSkillConfig
@@ -572,6 +576,7 @@ function App() {
   const handleStartPanelChat = useCallback(async (options?: StartPanelChatOptions) => {
     if (!can('chat:view') || !can('chat:create')) return;
     setChatOpen(true);
+    setFirstMessageError(null);
     if (!options) {
       setActiveThreadId(null);
       setActiveThreadProject(null);
@@ -600,7 +605,7 @@ function App() {
       setActiveThreadProject(selectedProject);
       syncHomeThreadUrl(result.threadId);
       if (options?.initialMessage) {
-        await fetch(`/api/chat/threads/${result.threadId}/messages`, {
+        const res = await fetch(`/api/chat/threads/${result.threadId}/messages`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
@@ -611,6 +616,13 @@ function App() {
             ...(options.attachments?.length ? { attachments: options.attachments } : {}),
           }),
         });
+        if (!res.ok) {
+          const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+          setFirstMessageError({
+            threadId: result.threadId,
+            message: friendlyChatErrorMessage(typeof body?.error === 'string' ? body.error : null),
+          });
+        }
       }
     } catch {
       // Error shown inside the panel
@@ -997,7 +1009,13 @@ function App() {
                   selectedProject={selectedProject}
                   canStartNewChat={!!panelRepo && !isLoadingSkillRepos && !startChat.isPending}
                   isStartingNewChat={startChat.isPending}
-                  newChatError={startChat.error?.message}
+                  newChatError={
+                    startChat.error?.message
+                    ?? (firstMessageError?.threadId === activeThreadId
+                      ? firstMessageError.message
+                      : undefined)
+                  }
+                  onClearNewChatError={() => setFirstMessageError(null)}
                   launchedFromHome
                   selectedSkillSettingsId={selectedSkillSettingsId}
                 />
