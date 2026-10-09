@@ -25,6 +25,7 @@ jest.mock('../services/foundationSkillReleaseService', () => ({
   // Real targeting logic is covered by foundationSkillReleaseTargeting.test.ts;
   // here we only need it to behave like the real resolver.
   getVisibleSkillsForProject: jest.fn(),
+  isReleaseVisibleToRepo: jest.fn(() => true),
 }));
 
 const mockSettings = projectSettings as jest.Mocked<typeof projectSettings>;

@@ -16,6 +16,7 @@ jest.mock('../services/foundationSkillReleaseService', () => ({
   getRelease: jest.fn(),
   getLatestPublishedRelease: jest.fn(),
   isReleaseVisibleToProject: jest.fn(),
+  isReleaseVisibleToRepo: jest.fn(() => true),
   getVisibleSkillsForProject: jest.fn(),
   listRollbackTargets: jest.fn(),
   semverGreaterThan: jest.fn(),

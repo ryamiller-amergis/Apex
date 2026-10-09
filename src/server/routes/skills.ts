@@ -270,7 +270,22 @@ router.get(
   async (req: Request, res: Response) => {
     try {
       const apexProject = (req.query.project as string | undefined) ?? null;
-      const release = await getLatestPublishedRelease(apexProject);
+      const repoName = (req.query.repo as string | undefined)?.trim();
+      const repoProject = (req.query.repoProject as string | undefined)?.trim();
+      const provider = (req.query.provider as string | undefined)?.trim();
+      const branch = (req.query.branch as string | undefined)?.trim();
+      const release = await getLatestPublishedRelease(
+        apexProject,
+        repoName
+          ? {
+              apexProject,
+              provider: provider === 'github' ? 'github' : 'ado',
+              project: repoProject || apexProject || '',
+              repo: repoName,
+              branch: branch || 'main',
+            }
+          : null,
+      );
       res.json({
         release: release ? toProjectReleaseView(release, apexProject) : null,
       });

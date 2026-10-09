@@ -329,6 +329,13 @@ describe('authorizeSkillInstall', () => {
     expect(mockGetPublishedReleaseByArtifactVersion).toHaveBeenCalledWith(
       '1.0.0',
       'maxview',
+      {
+        apexProject: 'maxview',
+        provider: 'ado',
+        project: 'maxview',
+        repo: 'MaxView',
+        branch: 'development',
+      },
     );
     expect(mockGetLatestPublishedRelease).not.toHaveBeenCalled();
   });

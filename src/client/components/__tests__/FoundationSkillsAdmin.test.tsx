@@ -505,6 +505,55 @@ describe('FoundationSkillsAdmin', () => {
       expect(screen.getByTestId('fs-project-skill-checkbox-Apex-to-prd')).toBeChecked();
     });
 
+    it('submits only the selected repository under a project', async () => {
+      const mutateAsync = jest.fn().mockResolvedValue({ ...draftRelease });
+      mockCreate.mockReturnValue({ mutateAsync, isPending: false });
+      mockCatalog.mockReturnValue({ skills: dependencyCatalog(), isLoading: false });
+      mockTeams.mockReturnValue({
+        data: [{
+          apexProject: 'MaxView',
+          repos: [
+            {
+              provider: 'ado', project: 'MaxView', repo: 'MaxView', branch: 'development',
+              friendlyName: 'MaxView', observed: false, installedVersion: null,
+              installedReleaseStatus: null, installedSkills: [], releasedSkills: [],
+              availableVersion: null, updateAvailable: false, compatibilityStatus: 'unknown',
+              compatibilityCheckedAt: null, lastObservedAt: null,
+            },
+            {
+              provider: 'ado', project: 'MaxView', repo: 'MaxView.Infra', branch: 'development',
+              friendlyName: 'Infra', observed: false, installedVersion: null,
+              installedReleaseStatus: null, installedSkills: [], releasedSkills: [],
+              availableVersion: null, updateAvailable: false, compatibilityStatus: 'unknown',
+              compatibilityCheckedAt: null, lastObservedAt: null,
+            },
+          ],
+        }],
+        isLoading: false,
+      });
+      renderComponent();
+      fireEvent.click(screen.getByRole('tab', { name: 'Create Draft' }));
+      fireEvent.change(screen.getByLabelText('Suite version'), { target: { value: '2.0.0' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      fireEvent.click(screen.getByRole('radio', { name: 'Specific projects' }));
+      fireEvent.focus(screen.getByRole('combobox', { name: 'Projects' }));
+      fireEvent.click(screen.getByTestId('fs-project-picker-repo-MaxView-Infra'));
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      fireEvent.submit(screen.getByText('Create draft').closest('form')!);
+
+      await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+      expect(mutateAsync.mock.calls[0][0].targetProjects).toEqual(['MaxView']);
+      expect(mutateAsync.mock.calls[0][0].targetRepos).toEqual([
+        expect.objectContaining({
+          apexProject: 'MaxView',
+          repo: 'MaxView.Infra',
+          friendlyName: 'Infra',
+          branch: 'development',
+        }),
+      ]);
+    });
+
     it('submits dependency-first closure from the all-projects skill checklist', async () => {
       const mutateAsync = jest.fn().mockResolvedValue({ ...draftRelease });
       mockCreate.mockReturnValue({ mutateAsync, isPending: false });
