@@ -7,7 +7,7 @@ import { createNativeReadTools } from './nativeReadToolAdapter';
 
 export type InterviewRepositoryPhase = 'product' | 'technical';
 
-const MARKER_RE = /\[\[interview-phase:(discovery|delivery|technical):(done|stopped|skipped|\d+)(?::\d+)?\]\]/g;
+const MARKER_RE = /\[\[interview-phase:(discovery|delivery|technical):(done|stopped|skipped|wrapup|\d+)(?::\d+)?(?::followup)?\]\]/g;
 const CLOSED_TOOL_TEXT = 'Repository tools are closed during Discovery and Delivery. Use the application brief in this message. If it does not cover the question, ask the person or record the gap as unresolved.';
 const TECHNICAL_SEARCH_TEXT = 'Repository search is closed. Read at most two known files with get_skill_file, or ask the person.';
 

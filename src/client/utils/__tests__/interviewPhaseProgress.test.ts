@@ -32,8 +32,19 @@ describe('interviewPhaseProgress', () => {
       '[[interview-phase:discovery:9:6]]\nignored',
       '[[interview-phase:discovery:2:6]]\nSuccess?',
     ]);
-    expect(progress.steps[0]).toMatchObject({ state: 'current', detail: 'Question 2 of 6' });
-    expect(progress.summary).toBe('5 questions left in Discovery.');
+    expect(progress.steps[0]).toMatchObject({ state: 'current', detail: 'Topic 2 of 6' });
+    expect(progress.summary).toBe('5 topics left in Discovery.');
+  });
+
+  it('keeps a follow-up on the same Discovery topic', () => {
+    const progress = deriveInterviewPhaseProgress([
+      '[[interview-phase:discovery:2:6:followup]]\nWhich exception matters?',
+    ]);
+    expect(progress.steps[0]).toMatchObject({
+      state: 'current',
+      detail: 'Topic 2 of 6 · follow-up',
+    });
+    expect(progress.summary).toBe('5 topics left in Discovery.');
   });
 
   it('marks Delivery in progress and Technical optional', () => {
@@ -43,7 +54,7 @@ describe('interviewPhaseProgress', () => {
       ['delivery', 'current'],
       ['technical', 'optional'],
     ]);
-    expect(progress.summary).toBe('5 questions left in Delivery.');
+    expect(progress.summary).toBe('5 topics left in Delivery.');
   });
 
   it('offers Technical after Delivery without treating it as unfinished work', () => {
@@ -58,6 +69,16 @@ describe('interviewPhaseProgress', () => {
       state: 'skipped',
       detail: 'Not in this interview',
     });
+  });
+
+  it('shows Technical topics and the wrap-up step', () => {
+    expect(
+      deriveInterviewPhaseProgress(['[[interview-phase:technical:3:5]]']).steps[2],
+    ).toMatchObject({ state: 'current', detail: 'Topic 3 of 5' });
+
+    const wrapUp = deriveInterviewPhaseProgress(['[[interview-phase:technical:wrapup]]']);
+    expect(wrapUp.steps[2]).toMatchObject({ state: 'current', detail: 'Wrapping up' });
+    expect(wrapUp.summary).toMatch(/up to 3 more questions/);
   });
 
   it('describes the plan on the new-interview screen', () => {

@@ -6,6 +6,7 @@ export type GuidedInterviewStepPhase =
   | 'delivery'
   | 'delivery-choice'
   | 'technical'
+  | 'technical-choice'
   | 'complete';
 
 export interface GuidedInterviewMessage {
@@ -18,7 +19,14 @@ export interface GuidedInterviewTurn {
   question: number | null;
   total: number | null;
   topic: string;
+  /** Marker used when the answer is sufficient and the interview moves on. */
   marker: string;
+  /**
+   * Marker for the one allowed follow-up on the topic just answered.
+   * Absent once that follow-up has been asked, and absent for the optional
+   * deeper Technical questions.
+   */
+  followUpMarker?: string;
   instruction: string;
 }
 
@@ -48,7 +56,10 @@ const TECHNICAL_TOPICS = [
 ] as const;
 
 const MARKER_RE =
-  /\[\[interview-phase:(discovery|delivery|technical):(done|stopped|skipped|\d+)(?::(\d+))?\]\]/g;
+  /\[\[interview-phase:(discovery|delivery|technical):(done|stopped|skipped|wrapup|\d+)(?::(\d+))?(?::(followup))?\]\]/g;
+
+const DEEPER_TECHNICAL_QUESTIONS = 3;
+const DEEPER_TECHNICAL_TOTAL = TECHNICAL_TOPICS.length + DEEPER_TECHNICAL_QUESTIONS;
 
 function numberedTurn(
   phase: 'discovery' | 'delivery' | 'technical',
@@ -60,15 +71,16 @@ function numberedTurn(
       : phase === 'delivery'
         ? DELIVERY_TOPICS
         : TECHNICAL_TOPICS;
-  const total = phase === 'technical' ? null : topics.length;
+  const deeper = phase === 'technical' && question > TECHNICAL_TOPICS.length;
+  const total = deeper ? DEEPER_TECHNICAL_TOTAL : topics.length;
   const topic =
     topics[question - 1] ??
-    'One technical decision that remains unresolved';
-  const marker = `[[interview-phase:${phase}:${question}${
-    total == null ? '' : `:${total}`
-  }]]`;
+    'The highest-impact technical decision still unresolved';
+  const marker = `[[interview-phase:${phase}:${question}:${total}]]`;
   const instruction = phase === 'technical'
-    ? `Ask exactly one question about: ${topic}. Implementation detail is allowed in this phase.`
+    ? deeper
+      ? `Ask exactly one question about: ${topic}. Pick a decision that changes how the feature is built, not an edge-case state rule. Implementation detail is allowed in this phase.`
+      : `Ask exactly one question about: ${topic}. Implementation detail is allowed in this phase.`
     : `Ask exactly one question about: ${topic}. Write it for a Business Analyst or Product Owner. Describe what a person can see and do, including what belongs in the first release versus later. Do not describe how it is built.`;
   return {
     phase,
@@ -92,6 +104,28 @@ function deliveryChoiceTurn(): GuidedInterviewTurn {
   };
 }
 
+function technicalWrapUpTurn(): GuidedInterviewTurn {
+  return {
+    phase: 'technical-choice',
+    question: null,
+    total: null,
+    topic: 'Finish Technical or go deeper',
+    marker: '[[interview-phase:technical:wrapup]]',
+    instruction: [
+      'Briefly recap the Technical decisions.',
+      'Then list, in one short bulleted section titled "Left for the design doc", any edge cases or state rules you noticed but did not ask about.',
+      `Then ask only this choice: a. Finish Technical; b. Go deeper (up to ${DEEPER_TECHNICAL_QUESTIONS} more questions).`,
+    ].join(' '),
+  };
+}
+
+function technicalDoneTurn(): GuidedInterviewTurn {
+  return completedTurn(
+    '[[interview-phase:technical:done]]',
+    'Write the transcript. Record every edge case not asked about under Unresolved items as "decide in design doc". Tell the person they can generate the PRD.',
+  );
+}
+
 function completedTurn(marker: string, instruction: string): GuidedInterviewTurn {
   return {
     phase: 'complete',
@@ -106,10 +140,14 @@ function completedTurn(marker: string, instruction: string): GuidedInterviewTurn
 function lastMarker(messages: GuidedInterviewMessage[]): {
   phase: 'discovery' | 'delivery' | 'technical';
   token: string;
+  total: number | null;
+  followUp: boolean;
 } | null {
   let result: {
     phase: 'discovery' | 'delivery' | 'technical';
     token: string;
+    total: number | null;
+    followUp: boolean;
   } | null = null;
   for (const message of messages) {
     if (message.role !== 'agent') continue;
@@ -117,10 +155,31 @@ function lastMarker(messages: GuidedInterviewMessage[]): {
       result = {
         phase: match[1] as 'discovery' | 'delivery' | 'technical',
         token: match[2],
+        total: match[3] ? Number(match[3]) : null,
+        followUp: match[4] === 'followup',
       };
     }
   }
   return result;
+}
+
+function withOptionalFollowUp(
+  current: GuidedInterviewTurn,
+  advance: GuidedInterviewTurn,
+): GuidedInterviewTurn {
+  const followUpMarker = `${current.marker.slice(0, -2)}:followup]]`;
+  return {
+    ...advance,
+    phase: current.phase,
+    instruction: [
+      `The person just answered topic ${current.question} of ${current.total}: ${current.topic}.`,
+      'If that answer is clear enough to record, move on and do not add a follow-up.',
+      advance.instruction,
+      'If it is unclear, contradictory, or reveals an important exception, ask one follow-up about this same topic and nothing else.',
+      'A topic gets at most one follow-up. Do not ask a follow-up when the answer is already sufficient.',
+    ].join(' '),
+    followUpMarker,
+  };
 }
 
 function choseTechnical(text: string): boolean {
@@ -138,6 +197,20 @@ function wantsPrd(text: string): boolean {
   );
 }
 
+function wantsDeeperTechnical(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return /^(b|option b)\b/.test(normalized) || normalized.includes('deeper');
+}
+
+function wantsToFinishTechnical(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return (
+    /^(a|option a)\b/.test(normalized) ||
+    normalized.includes('finish') ||
+    wantsPrd(text)
+  );
+}
+
 function wantsToStop(text: string): boolean {
   const normalized = text.trim().toLowerCase();
   return (
@@ -148,9 +221,10 @@ function wantsToStop(text: string): boolean {
 }
 
 /**
- * Selects the one turn the model may produce. The latest valid marker is the
- * durable record of the question that was asked; the current user text answers
- * that question and advances this state by exactly one topic.
+ * Selects the turn the model may produce. The latest valid marker is the
+ * durable record of the topic that was asked. Each numbered topic allows one
+ * follow-up, then the next topic. Technical ends at a wrap-up choice after its
+ * fixed topics; choosing to go deeper allows a few more questions, then ends.
  */
 export function deriveGuidedInterviewTurn(
   messagesBeforeCurrentUser: GuidedInterviewMessage[],
@@ -180,6 +254,13 @@ export function deriveGuidedInterviewTurn(
       'Write the transcript and tell the person they can generate the PRD.',
     );
   }
+  if (marker.phase === 'technical' && marker.token === 'wrapup') {
+    if (wantsDeeperTechnical(currentUserText)) {
+      return numberedTurn('technical', TECHNICAL_TOPICS.length + 1);
+    }
+    if (wantsToFinishTechnical(currentUserText)) return technicalDoneTurn();
+    return technicalWrapUpTurn();
+  }
   if (marker.phase === 'delivery' && marker.token === 'done') {
     if (choseTechnical(currentUserText)) return numberedTurn('technical', 1);
     if (wantsPrd(currentUserText)) {
@@ -194,17 +275,32 @@ export function deriveGuidedInterviewTurn(
   const question = Number(marker.token);
   if (!Number.isInteger(question)) return numberedTurn('discovery', 1);
 
-  if (marker.phase === 'discovery') {
-    return question < DISCOVERY_TOPICS.length
+  if (marker.phase === 'technical') {
+    if (marker.total === DEEPER_TECHNICAL_TOTAL) {
+      return question < DEEPER_TECHNICAL_TOTAL
+        ? numberedTurn('technical', question + 1)
+        : technicalDoneTurn();
+    }
+    // Older open-ended interviews have no total; past the fixed topics they wrap up.
+    if (question > TECHNICAL_TOPICS.length) return technicalWrapUpTurn();
+  }
+
+  const advance = marker.phase === 'discovery'
+    ? (question < DISCOVERY_TOPICS.length
       ? numberedTurn('discovery', question + 1)
-      : numberedTurn('delivery', 1);
+      : numberedTurn('delivery', 1))
+    : marker.phase === 'delivery'
+      ? (question < DELIVERY_TOPICS.length
+        ? numberedTurn('delivery', question + 1)
+        : deliveryChoiceTurn())
+      : question < TECHNICAL_TOPICS.length
+        ? numberedTurn('technical', question + 1)
+        : technicalWrapUpTurn();
+
+  if (!marker.followUp) {
+    return withOptionalFollowUp(numberedTurn(marker.phase, question), advance);
   }
-  if (marker.phase === 'delivery') {
-    return question < DELIVERY_TOPICS.length
-      ? numberedTurn('delivery', question + 1)
-      : deliveryChoiceTurn();
-  }
-  return numberedTurn('technical', question + 1);
+  return advance;
 }
 
 function transcriptExcerpt(messages: GuidedInterviewMessage[]): string {
@@ -235,7 +331,12 @@ export function buildGuidedInterviewTurnPrompt(
     '',
     `Phase: ${turn.phase}`,
     `Topic: ${turn.topic}`,
-    `Required first line: ${turn.marker}`,
+    turn.followUpMarker
+      ? `First line when the answer is sufficient: ${turn.marker}`
+      : `Required first line: ${turn.marker}`,
+    ...(turn.followUpMarker
+      ? [`First line when one follow-up is needed: ${turn.followUpMarker}`]
+      : []),
     '',
     turn.instruction,
     'Ask exactly one question and then stop.',
@@ -251,7 +352,9 @@ export function buildGuidedInterviewTurnPrompt(
     'Do not combine topics, add quick clarifications, preview later questions, or renumber the topic.',
     'Do not reopen a decision already recorded below.',
     'The Q&A below is authoritative. Never claim that prior context or choices are missing.',
-    'Use the exact required first line. The server and interview UI use it to advance the state.',
+    turn.followUpMarker
+      ? 'Use exactly one of the two first lines above. The server and interview UI use it to record the turn.'
+      : 'Use the exact required first line. The server and interview UI use it to advance the state.',
     '',
     '# Prior interview Q&A',
     '',
@@ -269,11 +372,14 @@ export function normalizeGuidedInterviewResponse(
 ): string {
   const withoutMarkers = text
     .replace(
-      /\[\[interview-phase:(?:discovery|delivery|technical):(?:done|stopped|skipped|\d+)(?::\d+)?\]\][ \t]*\n?/g,
+      /\[\[interview-phase:(?:discovery|delivery|technical):(?:done|stopped|skipped|wrapup|\d+)(?::\d+)?(?::followup)?\]\][ \t]*\n?/g,
       '',
     )
     .trimStart();
-  return `${turn.marker}\n\n${withoutMarkers}`;
+  const marker = turn.followUpMarker && text.includes(turn.followUpMarker)
+    ? turn.followUpMarker
+    : turn.marker;
+  return `${marker}\n\n${withoutMarkers}`;
 }
 
 export function writeGuidedInterviewState(
@@ -296,6 +402,7 @@ export function writeGuidedInterviewState(
         total: turn.total,
         topic: turn.topic,
         expectedMarker: turn.marker,
+        followUpMarker: turn.followUpMarker ?? null,
         updatedAt: new Date().toISOString(),
       },
       null,

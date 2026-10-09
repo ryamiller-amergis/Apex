@@ -266,8 +266,8 @@ describe('NewInterviewCompose — title required', () => {
   it('shows the three interview phases before the conversation starts', () => {
     renderCompose();
     expect(screen.getByTestId('interview-phase-bar')).toBeInTheDocument();
-    expect(screen.getByTestId('interview-phase-discovery')).toHaveTextContent('6 questions');
-    expect(screen.getByTestId('interview-phase-delivery')).toHaveTextContent('5 questions');
+    expect(screen.getByTestId('interview-phase-discovery')).toHaveTextContent('6 topics');
+    expect(screen.getByTestId('interview-phase-delivery')).toHaveTextContent('5 topics');
     expect(screen.getByTestId('interview-phase-technical')).toHaveTextContent('Optional');
   });
 

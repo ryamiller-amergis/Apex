@@ -1340,6 +1340,9 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const isReadOnlyViewer = !isAuthor && !isAdmin;
   const isStatusLocked = interview.status !== 'in_progress';
   const isChatLocked = isReadOnlyViewer || isStatusLocked;
+  const isGuidedInterview = usesGuidedInterviewPhases(
+    chatThread?.kickoff.skillPath,
+  );
 
   // Pre-compute cumulative question offset for each assistant message so Q-numbers
   // are globally sequential across the whole conversation rather than restarting at 1
@@ -1364,7 +1367,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
   return (
     <div className={styles.container}>
-      <div className={styles.header}>
+      <div
+        className={`${styles.header} ${
+          isGuidedInterview ? styles.headerCompact : ''
+        }`}
+      >
         <div className={styles.headerLeft}>
           <button
             className={styles.backBtn}
@@ -1375,7 +1382,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M10 3L5 8l5 5" />
             </svg>
-            Back
+            <span className={styles.backBtnLabel}>Back</span>
           </button>
 
           <div className={styles.titleBlock}>
@@ -1600,7 +1607,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         </div>
       )}
 
-      {usesGuidedInterviewPhases(chatThread?.kickoff.skillPath)
+      {isGuidedInterview
         && interview.playbookInterviewMode !== 'multi_agent_assisted' && (
         <InterviewPhaseBar
           progress={deriveInterviewPhaseProgress([
@@ -1724,6 +1731,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 questionOffset={messageQOffsets.get(msg.id) ?? 0}
                 interviewLocked={isChatLocked}
                 alreadyAnswered={msgIndex < lastUserMsgIndex}
+                fullWidth={msgIndex > lastUserMsgIndex}
               />
             );
           })}
@@ -1877,6 +1885,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
           />
           <AgentComposer
             className={styles.composerEmbed}
+            shellClassName={styles.interviewComposerShell}
             value={input}
             onChange={setInput}
             onSend={() => {

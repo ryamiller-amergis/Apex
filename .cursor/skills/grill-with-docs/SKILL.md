@@ -57,10 +57,14 @@ The interview screen shows Discovery, Delivery, and Technical. It reads a marker
 
 | Moment | First line |
 |---|---|
-| Discovery question 2 of 6 | `[[interview-phase:discovery:2:6]]` |
-| Delivery question 1 of 5 | `[[interview-phase:delivery:1:5]]` |
+| Discovery topic 2 of 6 | `[[interview-phase:discovery:2:6]]` |
+| The one follow-up on Discovery topic 2 | `[[interview-phase:discovery:2:6:followup]]` |
+| Delivery topic 1 of 5 | `[[interview-phase:delivery:1:5]]` |
+| The one follow-up on Delivery topic 1 | `[[interview-phase:delivery:1:5:followup]]` |
 | Delivery is done and they may continue or generate a PRD | `[[interview-phase:delivery:done]]` |
-| Technical question 3 | `[[interview-phase:technical:3]]` |
+| Technical topic 3 of 5 | `[[interview-phase:technical:3:5]]` |
+| Technical topics done; finish or go deeper | `[[interview-phase:technical:wrapup]]` |
+| Deeper Technical question 6 of 8 | `[[interview-phase:technical:6:8]]` |
 | They generate a PRD without Technical | `[[interview-phase:technical:skipped]]` |
 | Technical is finished | `[[interview-phase:technical:done]]` |
 
@@ -68,7 +72,7 @@ After each phase, give a short recap of what was decided and what was skipped. K
 
 ## Phase 1 — Discovery
 
-Always run this phase. Six topics, in this order, and no extras. Target a short sitting, about six questions.
+Always run this phase. Six topics, in this order, and no extras. Ask one question per topic. If the answer is unclear, contradictory, or reveals an important exception, ask one follow-up on that same topic, then move on. If the answer is already sufficient, do not ask a follow-up. A skipped topic stays unresolved. The screen shows Topic N of 6, not a question count.
 
 1. Problem and who has it
 2. What success looks like
@@ -83,7 +87,7 @@ Then recap and go straight into Delivery. Delivery is part of this interview. Do
 
 ## Phase 2 — Delivery
 
-Five topics, in this order, and no extras. Write for a Business Analyst or Product Owner. Describe what a person can see and do, and what belongs in the first release versus a later one. Do not mention persistence, CRUD, databases, APIs, schemas, MCP, skills, agent context, routes, components, or permission keys. Name groups the way a BA would: BA, Developer, QA, Manager, Product Owner, and so on.
+Five topics, in this order, and no extras. Ask one question per topic, plus at most one follow-up when the answer is unclear, contradictory, or reveals an important exception. Do not ask a follow-up when the answer is already sufficient. A skipped topic stays unresolved. The screen shows Topic N of 5. Write for a Business Analyst or Product Owner. Describe what a person can see and do, and what belongs in the first release versus a later one. Do not mention persistence, CRUD, databases, APIs, schemas, MCP, skills, agent context, routes, components, or permission keys. Name groups the way a BA would: BA, Developer, QA, Manager, Product Owner, and so on.
 
 1. Who can do each action
 2. What the user sees when they are not allowed
@@ -102,11 +106,11 @@ There is no skip on this question. If they choose the PRD, write the transcript 
 
 ## Phase 3 — Technical
 
-Run this phase only after they choose to continue. It is the deep interview: frontend or backend, existing patterns, data model, performance, and rollout. It is not required for a PRD.
+Run this phase only after they choose to continue. It covers the few technical choices the design doc needs from a person: frontend or backend, existing patterns, data model, performance, and rollout. It is not required for a PRD, and it has an end.
 
 Read `AGENTS.md` with `get_skill_file` first. Open one more design doc or source file only when the current question needs it. That is the limit: two reads. Do not use grep, glob, or `search_repo_code`. If a gap remains, record an unresolved assumption and ask the person.
 
-Ask these first, one at a time, in order. Recommend from the codebase when you can. Each one still ends with `Skip — decide later`.
+Five topics, in this order. Ask one question per topic, plus at most one follow-up when the answer is unclear, contradictory, or reveals an important exception. Recommend from the codebase when you can. Each one still ends with `Skip — decide later`. The screen shows Topic N of 5.
 
 1. Surface — frontend, backend, or both
 2. Existing pattern to follow, extend, or replace
@@ -114,15 +118,25 @@ Ask these first, one at a time, in order. Recommend from the codebase when you c
 4. Performance bounds for the main action — response time, concurrent users, and data volume
 5. Rollout — ship directly, or behind a feature flag, and what the user sees when it is off
 
-After those five, keep going one question at a time until the person says they are done or want the PRD. Use these lenses, and do not reopen Discovery or Delivery topics that already have an answer:
+Do not ask about edge-case state rules here: a second click while a run is in progress, reassignment mid-run, approval withdrawn after completion, history of failed attempts, and the like. The design doc stage decides those against the real code. Note them as you go.
+
+After topic 5, recap the Technical decisions, list the edge cases you noticed under **Left for the design doc**, and ask only this. The first line is `[[interview-phase:technical:wrapup]]`.
+
+```
+a. Finish Technical
+b. Go deeper (up to 3 more questions)
+```
+
+If they go deeper, ask up to three more questions, numbered `[[interview-phase:technical:6:8]]` through `[[interview-phase:technical:8:8]]`, with no follow-ups. Pick decisions that change how the feature is built, not edge cases. Then finish.
+
+Use these lenses for any question, and do not reopen Discovery or Delivery topics that already have an answer:
 
 - If a term conflicts with `context.md`, say so and ask which meaning they intend.
 - Replace a fuzzy word with the Apex term and ask them to confirm.
-- Stress-test a rule with one concrete exception.
 - If they assert how the code works, check the known file before agreeing.
 - State the better option and ask them to confirm or change it.
 
-Unfinished Technical questions do not block the PRD. They go in the transcript as unresolved assumptions. When Technical is finished, the closing message starts with `[[interview-phase:technical:done]]`.
+Unfinished Technical questions do not block the PRD. They go in the transcript as unresolved assumptions, and the edge cases go there as "decide in design doc". When Technical is finished, the closing message starts with `[[interview-phase:technical:done]]`.
 
 ## Terms
 

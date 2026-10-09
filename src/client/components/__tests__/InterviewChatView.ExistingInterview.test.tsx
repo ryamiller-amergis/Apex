@@ -605,7 +605,7 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
 
     renderExistingInterview();
 
-    expect(screen.getByTestId('interview-phase-discovery')).toHaveTextContent('Question 2 of 6');
+    expect(screen.getByTestId('interview-phase-discovery')).toHaveTextContent('Topic 2 of 6');
     expect(screen.getByTestId('interview-phase-delivery')).toHaveTextContent('Later');
     expect(screen.getByTestId('interview-phase-technical')).toHaveTextContent('Optional');
     expect(screen.getByText(/What does success look like/)).toBeInTheDocument();

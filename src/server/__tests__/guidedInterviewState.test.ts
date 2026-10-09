@@ -31,16 +31,29 @@ describe('guided interview state', () => {
     });
   });
 
-  it('advances exactly one Discovery topic per answer', () => {
-    const turn = deriveGuidedInterviewTurn(
+  it('offers one Discovery follow-up, and moves on when that follow-up is already used', () => {
+    const afterPrimary = deriveGuidedInterviewTurn(
       messages('[[interview-phase:discovery:1:6]]'),
       'Any signed-in user.',
     );
 
-    expect(turn).toMatchObject({
+    expect(afterPrimary).toMatchObject({
       phase: 'discovery',
       question: 2,
       topic: 'What success looks like',
+      marker: '[[interview-phase:discovery:2:6]]',
+      followUpMarker: '[[interview-phase:discovery:1:6:followup]]',
+    });
+
+    const afterFollowUp = deriveGuidedInterviewTurn(
+      messages('[[interview-phase:discovery:1:6:followup]]'),
+      'Signed-in users on the Home page.',
+    );
+    expect(afterFollowUp.followUpMarker).toBeUndefined();
+    expect(afterFollowUp).toMatchObject({
+      phase: 'discovery',
+      question: 2,
+      marker: '[[interview-phase:discovery:2:6]]',
     });
   });
 
@@ -51,10 +64,21 @@ describe('guided interview state', () => {
     );
 
     expect(turn).toMatchObject({
-      phase: 'delivery',
-      question: 1,
+      marker: '[[interview-phase:delivery:1:5]]',
+      followUpMarker: '[[interview-phase:discovery:6:6:followup]]',
       topic: 'Who can do each action',
     });
+
+    const afterFollowUp = deriveGuidedInterviewTurn(
+      messages('[[interview-phase:discovery:6:6:followup]]'),
+      'The exception is a guest who can only view.',
+    );
+    expect(afterFollowUp).toMatchObject({
+      phase: 'delivery',
+      question: 1,
+      marker: '[[interview-phase:delivery:1:5]]',
+    });
+    expect(afterFollowUp.followUpMarker).toBeUndefined();
   });
 
   it('requires the Technical-or-PRD choice after Delivery', () => {
@@ -63,8 +87,17 @@ describe('guided interview state', () => {
       'We need test cases and a design doc.',
     );
 
-    expect(turn.phase).toBe('delivery-choice');
     expect(turn.marker).toBe('[[interview-phase:delivery:done]]');
+    expect(turn.followUpMarker).toBe('[[interview-phase:delivery:5:5:followup]]');
+    expect(turn.instruction).toContain('Continue to technical decisions');
+
+    const afterFollowUp = deriveGuidedInterviewTurn(
+      messages('[[interview-phase:delivery:5:5:followup]]'),
+      'The first release only needs the prototype.',
+    );
+    expect(afterFollowUp.phase).toBe('delivery-choice');
+    expect(afterFollowUp.marker).toBe('[[interview-phase:delivery:done]]');
+    expect(afterFollowUp.followUpMarker).toBeUndefined();
   });
 
   it('enters Technical only when the person chooses it', () => {
@@ -75,7 +108,7 @@ describe('guided interview state', () => {
     ).toMatchObject({
       phase: 'technical',
       question: 1,
-      marker: '[[interview-phase:technical:1]]',
+      marker: '[[interview-phase:technical:1:5]]',
     });
     expect(
       deriveGuidedInterviewTurn(prior, 'b. Generate the PRD'),
@@ -120,7 +153,8 @@ describe('guided interview state', () => {
       turn,
     );
 
-    expect(prompt).toContain('Required first line: [[interview-phase:discovery:2:6]]');
+    expect(prompt).toContain('First line when the answer is sufficient: [[interview-phase:discovery:2:6]]');
+    expect(prompt).toContain('First line when one follow-up is needed: [[interview-phase:discovery:1:6:followup]]');
     expect(prompt).toContain('Ask exactly one question');
     expect(prompt).toContain('The Q&A below is authoritative');
     expect(prompt).toContain('Who has the problem?');
@@ -144,6 +178,7 @@ describe('guided interview state', () => {
       question: 1,
       topic: 'Problem and who has it',
       expectedMarker: '[[interview-phase:discovery:1:6]]',
+      followUpMarker: null,
     });
   });
 
@@ -161,5 +196,85 @@ describe('guided interview state', () => {
     ).toBe(
       '[[interview-phase:discovery:2:6]]\n\nWhat outcome shows success?',
     );
+  });
+
+  it('keeps a follow-up marker only when the model asks the allowed follow-up', () => {
+    const turn = deriveGuidedInterviewTurn(
+      messages('[[interview-phase:discovery:1:6]]'),
+      'Any signed-in user.',
+    );
+
+    expect(
+      normalizeGuidedInterviewResponse(
+        '[[interview-phase:discovery:1:6:followup]]\n\nWhich of those users feels this first?',
+        turn,
+      ),
+    ).toBe(
+      '[[interview-phase:discovery:1:6:followup]]\n\nWhich of those users feels this first?',
+    );
+  });
+
+  it('offers one follow-up on each fixed Technical topic', () => {
+    const turn = deriveGuidedInterviewTurn(
+      messages('[[interview-phase:technical:1:5]]'),
+      'Both the screen and the service.',
+    );
+
+    expect(turn.marker).toBe('[[interview-phase:technical:2:5]]');
+    expect(turn.followUpMarker).toBe('[[interview-phase:technical:1:5:followup]]');
+  });
+
+  it('ends the fixed Technical topics with a wrap-up choice', () => {
+    const turn = deriveGuidedInterviewTurn(
+      messages('[[interview-phase:technical:5:5:followup]]'),
+      'Behind a flag.',
+    );
+
+    expect(turn.phase).toBe('technical-choice');
+    expect(turn.marker).toBe('[[interview-phase:technical:wrapup]]');
+    expect(turn.instruction).toContain('Left for the design doc');
+  });
+
+  it('finishes Technical or allows up to three deeper questions from the wrap-up', () => {
+    const prior = messages('[[interview-phase:technical:wrapup]]');
+
+    expect(deriveGuidedInterviewTurn(prior, 'a. Finish Technical').marker).toBe(
+      '[[interview-phase:technical:done]]',
+    );
+
+    const deeper = deriveGuidedInterviewTurn(prior, 'b. Go deeper');
+    expect(deeper.marker).toBe('[[interview-phase:technical:6:8]]');
+
+    const seventh = deriveGuidedInterviewTurn(
+      messages('[[interview-phase:technical:6:8]]'),
+      'Use the existing worker.',
+    );
+    expect(seventh.marker).toBe('[[interview-phase:technical:7:8]]');
+    expect(seventh.followUpMarker).toBeUndefined();
+
+    expect(
+      deriveGuidedInterviewTurn(
+        messages('[[interview-phase:technical:8:8]]'),
+        'Fine.',
+      ).marker,
+    ).toBe('[[interview-phase:technical:done]]');
+  });
+
+  it('re-asks the wrap-up choice when the answer is neither option', () => {
+    const turn = deriveGuidedInterviewTurn(
+      messages('[[interview-phase:technical:wrapup]]'),
+      'Hmm, not sure.',
+    );
+
+    expect(turn.marker).toBe('[[interview-phase:technical:wrapup]]');
+  });
+
+  it('wraps up an older open-ended Technical interview past the fixed topics', () => {
+    const turn = deriveGuidedInterviewTurn(
+      messages('[[interview-phase:technical:23]]'),
+      'A. Trust skill output.',
+    );
+
+    expect(turn.marker).toBe('[[interview-phase:technical:wrapup]]');
   });
 });

@@ -26,7 +26,7 @@ const QUESTION_CAP: Record<InterviewPhaseId, number | null> = {
   technical: null,
 };
 
-const MARKER_RE = /\[\[interview-phase:(discovery|delivery|technical):(done|stopped|skipped|\d+)(?::(\d+))?\]\]/g;
+const MARKER_RE = /\[\[interview-phase:(discovery|delivery|technical):(done|stopped|skipped|wrapup|\d+)(?::(\d+))?(?::(followup))?\]\]/g;
 
 export function usesGuidedInterviewPhases(skillPath: string | null | undefined): boolean {
   if (!skillPath) return false;
@@ -43,8 +43,9 @@ export function stripInterviewPhaseMarkers(text: string): string {
 
 interface PhaseMarker {
   phase: InterviewPhaseId;
-  token: 'done' | 'stopped' | 'skipped' | number;
+  token: 'done' | 'stopped' | 'skipped' | 'wrapup' | number;
   total: number | null;
+  followUp: boolean;
 }
 
 function parseLastMarker(text: string): PhaseMarker | null {
@@ -52,9 +53,9 @@ function parseLastMarker(text: string): PhaseMarker | null {
   for (const match of text.matchAll(MARKER_RE)) {
     const phase = match[1] as InterviewPhaseId;
     const raw = match[2];
-    if (raw === 'done' || raw === 'stopped' || raw === 'skipped') {
-      if (raw === 'skipped' && phase !== 'technical') continue;
-      last = { phase, token: raw, total: null };
+    if (raw === 'done' || raw === 'stopped' || raw === 'skipped' || raw === 'wrapup') {
+      if ((raw === 'skipped' || raw === 'wrapup') && phase !== 'technical') continue;
+      last = { phase, token: raw, total: null, followUp: false };
       continue;
     }
     const question = Number(raw);
@@ -62,7 +63,7 @@ function parseLastMarker(text: string): PhaseMarker | null {
     const total = match[3] ? Number(match[3]) : cap;
     if (!Number.isInteger(question) || question < 1) continue;
     if (total != null && (!Number.isInteger(total) || question > total)) continue;
-    last = { phase, token: question, total };
+    last = { phase, token: question, total, followUp: match[4] === 'followup' };
   }
   return last;
 }
@@ -78,18 +79,23 @@ function step(
 export function previewInterviewPhaseProgress(): InterviewPhaseProgress {
   return {
     steps: [
-      step('discovery', 'upcoming', '6 questions'),
-      step('delivery', 'upcoming', '5 questions'),
-      step('technical', 'optional', 'Optional'),
+      step('discovery', 'upcoming', '6 topics'),
+      step('delivery', 'upcoming', '5 topics'),
+      step('technical', 'optional', 'Optional, 5 topics'),
     ],
     summary: 'This interview starts in Discovery, continues through Delivery, then offers optional Technical.',
   };
 }
 
-function questionsLeft(question: number, total: number, label: string): string {
+function topicsLeft(question: number, total: number, label: string): string {
   const left = total - question + 1;
-  const noun = left === 1 ? 'question' : 'questions';
+  const noun = left === 1 ? 'topic' : 'topics';
   return `${left} ${noun} left in ${label}.`;
+}
+
+function topicDetail(question: number, total: number | null, followUp: boolean): string {
+  const base = total ? `Topic ${question} of ${total}` : `Topic ${question}`;
+  return followUp ? `${base} · follow-up` : base;
 }
 
 export function deriveInterviewPhaseProgress(texts: string[]): InterviewPhaseProgress {
@@ -148,6 +154,17 @@ export function deriveInterviewPhaseProgress(texts: string[]): InterviewPhasePro
     };
   }
 
+  if (marker.phase === 'technical' && marker.token === 'wrapup') {
+    return {
+      steps: [
+        step('discovery', 'complete', 'Done'),
+        step('delivery', 'complete', 'Done'),
+        step('technical', 'current', 'Wrapping up'),
+      ],
+      summary: 'Technical topics are covered. Finish now, or go deeper with up to 3 more questions.',
+    };
+  }
+
   if (marker.phase === 'delivery' && marker.token === 'done') {
     return {
       steps: [
@@ -173,7 +190,7 @@ export function deriveInterviewPhaseProgress(texts: string[]): InterviewPhasePro
   const question = marker.token as number;
   const total = marker.total;
   if (marker.phase === 'discovery') {
-    const detail = total ? `Question ${question} of ${total}` : `Question ${question}`;
+    const detail = topicDetail(question, total, marker.followUp);
     return {
       steps: [
         step('discovery', 'current', detail),
@@ -181,13 +198,13 @@ export function deriveInterviewPhaseProgress(texts: string[]): InterviewPhasePro
         step('technical', 'optional', 'Optional'),
       ],
       summary: total
-        ? questionsLeft(question, total, 'Discovery')
-        : `Discovery, question ${question}.`,
+        ? topicsLeft(question, total, 'Discovery')
+        : `Discovery, topic ${question}.`,
     };
   }
 
   if (marker.phase === 'delivery') {
-    const detail = total ? `Question ${question} of ${total}` : `Question ${question}`;
+    const detail = topicDetail(question, total, marker.followUp);
     return {
       steps: [
         step('discovery', 'complete', 'Done'),
@@ -195,8 +212,8 @@ export function deriveInterviewPhaseProgress(texts: string[]): InterviewPhasePro
         step('technical', 'optional', 'Optional'),
       ],
       summary: total
-        ? questionsLeft(question, total, 'Delivery')
-        : `Delivery, question ${question}.`,
+        ? topicsLeft(question, total, 'Delivery')
+        : `Delivery, topic ${question}.`,
     };
   }
 
@@ -204,8 +221,10 @@ export function deriveInterviewPhaseProgress(texts: string[]): InterviewPhasePro
     steps: [
       step('discovery', 'complete', 'Done'),
       step('delivery', 'complete', 'Done'),
-      step('technical', 'current', `Question ${question}`),
+      step('technical', 'current', topicDetail(question, total, marker.followUp)),
     ],
-    summary: `Technical, question ${question}.`,
+    summary: total
+      ? topicsLeft(question, total, 'Technical')
+      : `Technical, topic ${question}.`,
   };
 }
