@@ -67,7 +67,7 @@ describe('interview grounding policy', () => {
 
     expect(runtime.mcpServers['github-repo']).toBeUndefined();
     expect(runtime.mcpServers.maxview).toBeDefined();
-    expect(runtime.local.sandboxOptions).toEqual({ enabled: true });
+    expect(runtime.local.sandboxOptions).toEqual({ enabled: false });
     const result = await runtime.local.customTools?.search_repo_code.execute({ query: 'home' }, {});
     expect(result).toMatchObject({ isError: true });
     expect(repoReader.searchCode).not.toHaveBeenCalled();

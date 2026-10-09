@@ -1,6 +1,7 @@
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import {
+  buildCursorModelSelection,
   deriveAgentModule,
   resolveEffort,
 } from '../services/agentEffortResolver';
@@ -20,6 +21,30 @@ function config(
 }
 
 describe('agentEffortResolver', () => {
+  it('omits effort for Composer models that do not support it', () => {
+    expect(buildCursorModelSelection('composer-2.5', 'low')).toEqual({
+      id: 'composer-2.5',
+    });
+    expect(buildCursorModelSelection('composer-2', 'high')).toEqual({
+      id: 'composer-2',
+    });
+  });
+
+  it('uses the reasoning parameter name advertised by each model family', () => {
+    expect(buildCursorModelSelection('claude-opus-5-5', 'medium')).toEqual({
+      id: 'claude-opus-5-5',
+      params: [{ id: 'effort', value: 'medium' }],
+    });
+    expect(buildCursorModelSelection('claude-sonnet-5-5', 'high')).toEqual({
+      id: 'claude-sonnet-5-5',
+      params: [{ id: 'reasoning_effort', value: 'high' }],
+    });
+    expect(buildCursorModelSelection('gpt-5.6-sol', 'low')).toEqual({
+      id: 'gpt-5.6-sol',
+      params: [{ id: 'reasoning', value: 'low' }],
+    });
+  });
+
   it('AC-0 / VT-01: resolves module effort before the project default', () => {
     expect(
       resolveEffort({

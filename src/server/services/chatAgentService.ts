@@ -138,11 +138,17 @@ import { groundingProfileResolver } from './groundingProfileResolver';
 import { createNativeReadTools } from './nativeReadToolAdapter';
 import { readInterviewBaBrief } from './interviewBaBrief';
 import {
+  buildGuidedInterviewTurnPrompt,
+  deriveGuidedInterviewTurn,
+  normalizeGuidedInterviewResponse,
+  writeGuidedInterviewState,
+} from './guidedInterviewState';
+import {
   applyGuidedInterviewRuntime,
   guidedInterviewNeedsFreshAgent,
-  interviewRepositoryPhase,
   isInterviewSandboxUnsupported,
   markGuidedInterviewGrounding,
+  usesGuidedInterview,
   wrapGuidedInterviewPrompt,
   writeInterviewBaBriefFile,
 } from './interviewGroundingPolicy';
@@ -4858,10 +4864,14 @@ export async function sendMessage(
     await state.agent[Symbol.asyncDispose]().catch(() => {});
     state.agent = null;
   }
-  const interviewPhase = interviewRepositoryPhase(
-    state.thread.kickoff.skillPath,
-    priorMessages
-  );
+  const guidedTurn = usesGuidedInterview(state.thread.kickoff.skillPath)
+    ? deriveGuidedInterviewTurn(priorMessages, text)
+    : null;
+  const interviewPhase = guidedTurn
+    ? guidedTurn.phase === 'technical'
+      ? 'technical'
+      : 'product'
+    : null;
   let repositoryRuntime = await prepareRepositoryReadRuntime({
     grounding,
     kickoff: state.thread.kickoff,
@@ -4908,7 +4918,17 @@ export async function sendMessage(
       });
     }
     writeInterviewBaBriefFile(state.thread.workspaceDir, brief);
-    agentPromptText = wrapGuidedInterviewPrompt(promptText, interviewPhase, brief);
+    writeGuidedInterviewState(state.thread.workspaceDir, guidedTurn!);
+    const controlledTurnPrompt = buildGuidedInterviewTurnPrompt(
+      priorMessages,
+      promptText,
+      guidedTurn!,
+    );
+    agentPromptText = wrapGuidedInterviewPrompt(
+      controlledTurnPrompt,
+      interviewPhase,
+      brief,
+    );
     repositoryRuntime = applyGuidedInterviewRuntime(repositoryRuntime, interviewPhase);
     guidedFreshAgent = guidedInterviewNeedsFreshAgent(state.thread.workspaceDir);
   }
@@ -5056,8 +5076,10 @@ export async function sendMessage(
               console.warn(
                 '[chat] Interview workspace sandbox is unavailable; repository tools stay closed without it'
               );
-              localAgentOptions = { ...localAgentOptions };
-              delete localAgentOptions.sandboxOptions;
+              localAgentOptions = {
+                ...localAgentOptions,
+                sandboxOptions: { enabled: false },
+              };
               return createWith(localAgentOptions);
             }
           }, sdkRetryOpts);
@@ -5779,7 +5801,9 @@ export async function sendMessage(
       }
 
       if (!executionResult) continue;
-      agentTextBuffer = executionResult.text;
+      agentTextBuffer = guidedTurn
+        ? normalizeGuidedInterviewResponse(executionResult.text, guidedTurn)
+        : executionResult.text;
       lastRunUsage = executionResult.usage ?? lastRunUsage;
       const result = executionResult.waitResult;
 

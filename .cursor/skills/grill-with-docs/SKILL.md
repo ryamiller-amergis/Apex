@@ -83,7 +83,7 @@ Then recap and go straight into Delivery. Delivery is part of this interview. Do
 
 ## Phase 2 — Delivery
 
-Five topics, in this order, and no extras. Stay in product and delivery language. Do not design permission keys, role enums, or API checks here. Name groups the way a BA would: BA, Developer, QA, Manager, Product Owner, and so on.
+Five topics, in this order, and no extras. Write for a Business Analyst or Product Owner. Describe what a person can see and do, and what belongs in the first release versus a later one. Do not mention persistence, CRUD, databases, APIs, schemas, MCP, skills, agent context, routes, components, or permission keys. Name groups the way a BA would: BA, Developer, QA, Manager, Product Owner, and so on.
 
 1. Who can do each action
 2. What the user sees when they are not allowed

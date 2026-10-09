@@ -140,9 +140,54 @@ export function buildCursorModelSelection(
   effort?: EffortLevel
 ): {
   id: string;
-  params?: Array<{ id: 'effort'; value: EffortLevel }>;
+  params?: Array<{
+    id: 'effort' | 'reasoning' | 'reasoning_effort';
+    value: EffortLevel;
+  }>;
 } {
-  return effort
-    ? { id: model, params: [{ id: 'effort', value: effort }] }
+  if (!effort) return { id: model };
+
+  const normalized = model.trim().toLowerCase();
+  let parameter: 'effort' | 'reasoning' | 'reasoning_effort' | undefined;
+
+  if (
+    normalized.startsWith('claude-opus-') ||
+    normalized === 'opus-latest' ||
+    normalized === 'opus' ||
+    normalized === 'opus-5.5' ||
+    normalized === 'opus-5-5' ||
+    normalized === 'grok-4.6' ||
+    normalized === 'muse-spark-1.3' ||
+    normalized === 'muse-spark' ||
+    normalized === 'muse'
+  ) {
+    parameter = 'effort';
+  } else if (
+    normalized === 'grok-4.7' ||
+    normalized === 'gemini-3.8-flash' ||
+    normalized === 'claude-sonnet-5-5' ||
+    normalized === 'claude-haiku-5-5'
+  ) {
+    parameter = 'reasoning_effort';
+  } else if (
+    normalized === 'gpt-5.6-sol' ||
+    normalized === 'gpt-latest' ||
+    normalized === 'gpt' ||
+    normalized === 'gpt-5-6-sol' ||
+    normalized === 'gpt-5.6' ||
+    normalized === 'gpt-5.6-luna' ||
+    normalized === 'gpt-5-6-luna' ||
+    normalized === 'kimi-k3' ||
+    normalized === 'glm-5.2' ||
+    normalized === 'glm-5p3' ||
+    normalized === 'glm-5p3-flash'
+  ) {
+    parameter = 'reasoning';
+  }
+
+  // Cursor rejects unknown model parameters with a detail-less run error.
+  // Omit effort for models such as Composer that do not advertise one.
+  return parameter
+    ? { id: model, params: [{ id: parameter, value: effort }] }
     : { id: model };
 }

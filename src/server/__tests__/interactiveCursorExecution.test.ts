@@ -62,7 +62,6 @@ describe('interactive Cursor execution repository tools', () => {
           mcpServers: {},
           model: {
             id: 'composer-2.5',
-            params: [{ id: 'effort', value: 'high' }],
           },
         }),
       );

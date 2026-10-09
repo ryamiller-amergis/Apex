@@ -124,7 +124,9 @@ export function applyGuidedInterviewRuntime<T extends GuidedRuntime>(
     local: {
       ...runtime.local,
       settingSources: [],
-      sandboxOptions: { enabled: true },
+      // This environment has no local sandbox. enabled: false also overrides
+      // ~/.cursor/sandbox.json, which otherwise requests sandboxing and fails the turn.
+      sandboxOptions: { enabled: false },
       customTools: phase === 'product'
         ? closedRepositoryTools()
         : technicalRepositoryTools(runtime.repoReader),
@@ -133,7 +135,7 @@ export function applyGuidedInterviewRuntime<T extends GuidedRuntime>(
 }
 
 export function guidedGroundingMarkerPath(workspaceDir: string): string {
-  return path.join(workspaceDir, '.ai-pilot', 'product-grounding-v1');
+  return path.join(workspaceDir, '.ai-pilot', 'product-grounding-v3');
 }
 
 export function guidedInterviewNeedsFreshAgent(workspaceDir: string): boolean {
