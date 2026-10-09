@@ -1275,9 +1275,9 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             </div>
           )}
 
-          {sendError && (
+          {(sendError ?? newChatError) && (
             <p className={styles.emptyError} role="alert">
-              {sendError}
+              {sendError ?? newChatError}
             </p>
           )}
 
