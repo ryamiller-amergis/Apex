@@ -1,6 +1,12 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import type { QaLabSuite, QaLabTestCase } from '../../shared/types/qaLab';
-import { useQaLabWorkItems, useWorkItemTestCases, useGenerateTestCasesForPrd } from '../hooks/useQaLab';
+import {
+  useGenerateTestCasesForAdoWorkItem,
+  useGenerateTestCasesForPrd,
+  usePublishAdoTestSuite,
+  useQaLabWorkItems,
+  useWorkItemTestCases,
+} from '../hooks/useQaLab';
 import { QaLabAssistantPanel } from './QaLabAssistantPanel';
 import styles from './QaLabView.module.css';
 
@@ -251,6 +257,8 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
     selectedWorkItemId,
   );
   const generateTestCases = useGenerateTestCasesForPrd();
+  const generateAdoTestCases = useGenerateTestCasesForAdoWorkItem();
+  const publishAdoSuite = usePublishAdoTestSuite();
 
   const testableItems = useMemo(
     () => (workItemList?.items ?? []).filter((item) => TESTABLE_TYPES.has(item.workItemType)),
@@ -307,6 +315,20 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
   );
 
   const primarySource = data?.sources?.[0] ?? null;
+  const generation = data?.generation ?? null;
+  const externalSuite = data?.externalSuite ?? null;
+  const canGenerateExternally = selectedWorkItem != null
+    && selectedWorkItem.workItemType !== 'Technical Backlog Item';
+  const canGenerate = generation != null || canGenerateExternally;
+  const isGenerating = generateTestCases.isPending
+    || generateAdoTestCases.isPending
+    || generation?.testCaseStatus === 'generating'
+    || externalSuite?.status === 'generating';
+  const publishedCaseIds = useMemo(
+    () => new Set((externalSuite?.publishedCases ?? []).map((entry) => entry.localCaseId)),
+    [externalSuite?.publishedCases],
+  );
+  const unpublishedCount = allCases.filter((entry) => !publishedCaseIds.has(entry.id)).length;
 
   const toggleCase = useCallback((id: string) => {
     setExpandedIds((previous) => {
@@ -328,10 +350,45 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
   }, [allCases, matchesFilters]);
 
   const handleGenerate = useCallback(async () => {
-    if (!primarySource) return;
-    await generateTestCases.mutateAsync({ prdId: primarySource.prdId });
-    await refetch();
-  }, [primarySource, generateTestCases, refetch]);
+    try {
+      if (generation) {
+        await generateTestCases.mutateAsync({
+          prdId: generation.prdId,
+          pbiIds: generation.pbiIds,
+          matchLevel: generation.matchLevel,
+          matchedTitle: generation.matchedTitle,
+        });
+      } else if (selectedWorkItemId && canGenerateExternally) {
+        await generateAdoTestCases.mutateAsync({
+          project,
+          workItemId: selectedWorkItemId,
+        });
+      } else {
+        return;
+      }
+      await refetch();
+    } catch {
+      // Mutation state renders the server error below the work-item header.
+    }
+  }, [
+    generation,
+    generateTestCases,
+    selectedWorkItemId,
+    canGenerateExternally,
+    generateAdoTestCases,
+    project,
+    refetch,
+  ]);
+
+  const handlePublish = useCallback(async () => {
+    if (!externalSuite || unpublishedCount === 0) return;
+    try {
+      await publishAdoSuite.mutateAsync({ suiteId: externalSuite.id });
+      await refetch();
+    } catch {
+      // Mutation state renders the server error below the work-item header.
+    }
+  }, [externalSuite, unpublishedCount, publishAdoSuite, refetch]);
 
   return (
     <div className={styles.layout} {...{ 'data-testid': 'qa-lab-view' }}>
@@ -454,41 +511,76 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
               </div>
 
               <div className={styles.contentActions}>
-                {primarySource && (
+                {canGenerate && (
                   <>
-                    <button
-                      type="button"
-                      className={styles.secondaryBtn}
-                      onClick={() => setAssistantOpen(true)}
-                      {...{ 'data-testid': 'qa-lab-open-assistant' }}
-                    >
-                      Ask QA Assistant
-                    </button>
+                    {generation && (
+                      <button
+                        type="button"
+                        className={styles.secondaryBtn}
+                        onClick={() => setAssistantOpen(true)}
+                        {...{ 'data-testid': 'qa-lab-open-assistant' }}
+                      >
+                        Ask QA Assistant
+                      </button>
+                    )}
+                    {externalSuite?.status === 'ready' && allCases.length > 0 && (
+                      <button
+                        type="button"
+                        className={styles.secondaryBtn}
+                        onClick={() => void handlePublish()}
+                        disabled={publishAdoSuite.isPending || unpublishedCount === 0}
+                        {...{ 'data-testid': 'qa-lab-publish-ado' }}
+                      >
+                        {publishAdoSuite.isPending
+                          ? 'Publishing…'
+                          : unpublishedCount === 0
+                            ? 'Published to ADO'
+                            : `Publish ${unpublishedCount} to ADO`}
+                      </button>
+                    )}
                     <button
                       type="button"
                       className={styles.primaryBtn}
                       onClick={() => void handleGenerate()}
-                      disabled={generateTestCases.isPending || primarySource.testCaseStatus === 'generating'}
+                      disabled={isGenerating}
                       {...{ 'data-testid': 'qa-lab-regenerate' }}
                     >
-                      {generateTestCases.isPending || primarySource.testCaseStatus === 'generating'
+                      {isGenerating
                         ? 'Generating…'
-                        : 'Regenerate suite'}
+                        : allCases.length > 0
+                          ? 'Regenerate suite'
+                          : 'Generate test cases'}
                     </button>
                   </>
                 )}
               </div>
             </header>
 
-            {primarySource && (
+            {(generateTestCases.error || generateAdoTestCases.error || publishAdoSuite.error) && (
+              <p className={`${styles.status} ${styles.statusError}`} {...{ 'data-testid': 'qa-lab-action-error' }}>
+                {(generateTestCases.error ?? generateAdoTestCases.error ?? publishAdoSuite.error)?.message}
+              </p>
+            )}
+
+            {(generation || externalSuite) && (
               <div className={styles.provenance} {...{ 'data-testid': 'qa-lab-provenance' }}>
-                <span>
-                  From PRD <strong>{primarySource.prdTitle}</strong> ({primarySource.prdStatus})
-                </span>
-                <span>
-                  Matched at {primarySource.matchLevel} level: {primarySource.matchedTitle}
-                </span>
-                {primarySource.coverageSummary && (
+                {generation ? (
+                  <>
+                    <span>
+                      From PRD <strong>{generation.prdTitle}</strong>
+                      {primarySource ? ` (${primarySource.prdStatus})` : ''}
+                    </span>
+                    <span>
+                      Matched at {generation.matchLevel} level: {generation.matchedTitle}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span>Generated directly from Azure DevOps</span>
+                    <span>{externalSuite?.publishedCases.length ?? 0} cases published to ADO</span>
+                  </>
+                )}
+                {primarySource?.coverageSummary && (
                   <span>
                     {primarySource.coverageSummary.totalCases} cases ·{' '}
                     AC {primarySource.coverageSummary.acCovered} ·{' '}
@@ -563,9 +655,11 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
               <div className={styles.placeholder} {...{ 'data-testid': 'qa-lab-empty' }}>
                 <h2 className={styles.placeholderTitle}>No generated test cases</h2>
                 <p className={styles.placeholderBody}>
-                  This work item is not linked to a generated backlog, or its backlog items have no
-                  test cases yet. Test cases appear here once a PRD backlog is pushed to Azure
-                  DevOps and a suite has been generated.
+                  {generation
+                    ? 'This work item is in an Apex backlog, and it has no test cases yet. Generate them for the selected backlog item.'
+                    : selectedWorkItem?.workItemType === 'Technical Backlog Item'
+                      ? 'TBIs provide technical context to their parent requirement and do not own test cases.'
+                      : 'Generate test cases directly from this Azure DevOps work item.'}
                 </p>
               </div>
             )}
@@ -583,10 +677,10 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
         )}
       </main>
 
-      {assistantOpen && primarySource && (
+      {assistantOpen && generation && (
         // data-testid-exempt — QaLabAssistantPanel owns its panel chrome
         <QaLabAssistantPanel
-          prdId={primarySource.prdId}
+          prdId={generation.prdId}
           contextLabel={selectedWorkItem?.title ?? `Work item #${selectedWorkItemId}`}
           open={assistantOpen}
           onClose={() => setAssistantOpen(false)}

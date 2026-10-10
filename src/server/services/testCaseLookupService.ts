@@ -2,6 +2,8 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { prds } from '../db/schema';
 import type {
+  QaAdoGenerationContext,
+  QaLabGenerationTarget,
   QaLabMatchLevel,
   QaLabSource,
   QaLabSuite,
@@ -254,10 +256,32 @@ function extractSuites(
   return suites;
 }
 
+/** Normalize a suite generated from ADO-native requirements for the QA Lab UI. */
+export function extractAdoNativeSuites(
+  testCasesJson: unknown,
+  sourceSnapshot: QaAdoGenerationContext,
+): QaLabSuite[] {
+  const pbiNodes = new Map<string, BacklogNode>();
+  for (const target of sourceSnapshot.targets) {
+    const pbiId = `PBI-${target.id}`;
+    pbiNodes.set(pbiId, {
+      id: pbiId,
+      title: target.title,
+      type: 'PBI',
+      adoWorkItemId: target.id,
+    });
+  }
+  return extractSuites(
+    testCasesJson,
+    Array.from(pbiNodes.keys()),
+    pbiNodes,
+  );
+}
+
 /**
  * Returns every generated test case tied to an ADO work item, across all PRDs in
- * the project. Empty `suites` means the work item is not linked to any generated
- * backlog, or its PBIs have no cases yet.
+ * the project. `generation` is set whenever the work item is stamped on a
+ * backlog, including when that PBI has no suite yet.
  */
 export async function getTestCasesForWorkItem(
   project: string,
@@ -268,6 +292,7 @@ export async function getTestCasesForWorkItem(
     suites: [],
     sources: [],
     totalCases: 0,
+    generation: null,
   };
 
   const prdRows = await db
@@ -286,6 +311,16 @@ export async function getTestCasesForWorkItem(
     if (!match || match.pbiIds.length === 0) continue;
 
     const testCaseRecord = await getTestCases(prdRow.id);
+    const target: QaLabGenerationTarget = {
+      prdId: prdRow.id,
+      prdTitle: prdRow.title,
+      matchLevel: match.level,
+      matchedTitle: match.title,
+      pbiIds: match.pbiIds,
+      testCaseStatus: testCaseRecord?.status ?? null,
+    };
+    if (!result.generation) result.generation = target;
+
     if (!testCaseRecord?.testCasesJson) continue;
 
     const suites = extractSuites(
@@ -309,6 +344,7 @@ export async function getTestCasesForWorkItem(
 
     result.sources.push(source);
     result.suites.push(...suites);
+    if (result.sources.length === 1) result.generation = target;
   }
 
   result.totalCases = result.suites.reduce(

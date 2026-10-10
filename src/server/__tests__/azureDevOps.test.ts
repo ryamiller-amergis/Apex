@@ -280,6 +280,65 @@ describe('AzureDevOpsService', () => {
     });
   });
 
+  describe('getQaTestGenerationContext', () => {
+    it('returns PBIs and Bugs as targets and TBIs as context', async () => {
+      mockWitApi.queryByWiql.mockResolvedValue({
+        workItemRelations: [
+          { source: { id: 10 }, target: { id: 20 } },
+          { source: { id: 20 }, target: { id: 30 } },
+          { source: { id: 20 }, target: { id: 31 } },
+        ],
+      });
+      mockWitApi.getWorkItems.mockResolvedValue([
+        {
+          id: 10,
+          fields: {
+            'System.Title': 'Release',
+            'System.State': 'Active',
+            'System.WorkItemType': 'Epic',
+            'System.AreaPath': 'MaxView',
+          },
+        },
+        {
+          id: 20,
+          fields: {
+            'System.Title': 'Checkout',
+            'System.State': 'Active',
+            'System.WorkItemType': 'Feature',
+            'System.AreaPath': 'MaxView',
+          },
+        },
+        {
+          id: 30,
+          fields: {
+            'System.Title': 'Pay by card',
+            'System.State': 'New',
+            'System.WorkItemType': 'Product Backlog Item',
+            'System.AreaPath': 'MaxView',
+            'Microsoft.VSTS.Common.AcceptanceCriteria': '<p>Payment succeeds</p>',
+          },
+        },
+        {
+          id: 31,
+          fields: {
+            'System.Title': 'Gateway client',
+            'System.State': 'New',
+            'System.WorkItemType': 'Technical Backlog Item',
+            'System.AreaPath': 'MaxView',
+          },
+        },
+      ]);
+
+      const service = new AzureDevOpsService('MaxView');
+      const context = await service.getQaTestGenerationContext(10);
+
+      expect(context?.root.id).toBe(10);
+      expect(context?.targets.map((item) => item.id)).toEqual([30]);
+      expect(context?.technicalContext.map((item) => item.id)).toEqual([31]);
+      expect(context?.targets[0].parentId).toBe(20);
+    });
+  });
+
   describe('calculateCycleTime', () => {
     it('should calculate cycle time with valid state transitions', async () => {
       const service = new AzureDevOpsService();

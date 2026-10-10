@@ -11,6 +11,7 @@ jest.mock('../services/testCaseService', () => ({
 import { db } from '../db/drizzle';
 import { getTestCases } from '../services/testCaseService';
 import {
+  extractAdoNativeSuites,
   findBacklogMatch,
   getTestCasesForWorkItem,
 } from '../services/testCaseLookupService';
@@ -189,6 +190,57 @@ describe('findBacklogMatch', () => {
   });
 });
 
+describe('extractAdoNativeSuites', () => {
+  it('links generated suites back to their ADO work item ids', () => {
+    const suites = extractAdoNativeSuites(
+      {
+        suites: [{
+          pbiId: 'PBI-90441',
+          pbiTitle: 'Existing ADO requirement',
+          testCases: [{
+            id: 'TC-PBI-90441-001',
+            title: 'Requirement succeeds',
+            preconditions: [],
+            steps: [{ order: 1, action: 'Perform the action', expected: 'It succeeds' }],
+            traceability: { pbiId: 'PBI-90441' },
+          }],
+        }],
+      },
+      {
+        root: {
+          id: 90441,
+          parentId: null,
+          workItemType: 'Product Backlog Item',
+          title: 'Existing ADO requirement',
+          state: 'New',
+          areaPath: 'MaxView',
+          description: '',
+          acceptanceCriteria: '',
+          reproSteps: '',
+        },
+        targets: [{
+          id: 90441,
+          parentId: null,
+          workItemType: 'Product Backlog Item',
+          title: 'Existing ADO requirement',
+          state: 'New',
+          areaPath: 'MaxView',
+          description: '',
+          acceptanceCriteria: '',
+          reproSteps: '',
+        }],
+        technicalContext: [],
+      },
+    );
+
+    expect(suites[0]).toMatchObject({
+      pbiId: 'PBI-90441',
+      adoWorkItemId: 90441,
+      pbiTitle: 'Existing ADO requirement',
+    });
+  });
+});
+
 describe('getTestCasesForWorkItem', () => {
   it('returns the single suite for a PBI, with its ADO link', async () => {
     const result = await getTestCasesForWorkItem('Checkout', 301);
@@ -257,6 +309,7 @@ describe('getTestCasesForWorkItem', () => {
       suites: [],
       sources: [],
       totalCases: 0,
+      generation: null,
     });
     expect(mockGetTestCases).not.toHaveBeenCalled();
   });
@@ -269,6 +322,14 @@ describe('getTestCasesForWorkItem', () => {
     expect(result.suites).toEqual([]);
     expect(result.sources).toEqual([]);
     expect(result.totalCases).toBe(0);
+    expect(result.generation).toEqual({
+      prdId: 'prd-1',
+      prdTitle: 'Checkout PRD',
+      matchLevel: 'pbi',
+      matchedTitle: 'Pay by card',
+      pbiIds: ['PBI-001'],
+      testCaseStatus: null,
+    });
   });
 
   it('aggregates matches across multiple PRDs in the project', async () => {

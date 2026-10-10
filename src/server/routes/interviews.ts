@@ -4,7 +4,7 @@ import path from 'path';
 import { requirePermission, requireGroupMembership } from '../middleware/rbac';
 import { getDisplayName, getUserId } from '../utils/requestUser';
 import { getAdoTokenForUser } from '../services/adoUserToken';
-import { isAdoUserAuthError } from '../services/adoFactory';
+import { adoWriteForRequest, isAdoUserAuthError } from '../services/adoFactory';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 import { db } from '../db/drizzle';
@@ -113,7 +113,15 @@ import {
   recalculateTestCaseCoverage,
   triggerTestCaseGeneration,
 } from '../services/testCaseService';
-import { getTestCasesForWorkItem } from '../services/testCaseLookupService';
+import {
+  extractAdoNativeSuites,
+  getTestCasesForWorkItem,
+} from '../services/testCaseLookupService';
+import {
+  getLatestAdoTestSuite,
+  publishAdoTestCases,
+  triggerAdoTestCaseGeneration,
+} from '../services/adoTestCaseSuiteService';
 import type { QaLabGenerateRequest } from '../../shared/types/qaLab';
 import type { EffortLevel } from '../../shared/types/effort';
 import {
@@ -401,8 +409,98 @@ router.get('/work-items/:workItemId/test-cases', requirePermission('planning:qa'
       return;
     }
 
-    res.json(await getTestCasesForWorkItem(project, workItemId));
+    const result = await getTestCasesForWorkItem(project, workItemId);
+    if (result.generation || result.totalCases > 0) {
+      res.json(result);
+      return;
+    }
+
+    const external = await getLatestAdoTestSuite(project, workItemId);
+    if (!external) {
+      res.json(result);
+      return;
+    }
+
+    const suites = external.testCasesJson
+      ? extractAdoNativeSuites(external.testCasesJson, external.sourceSnapshot)
+      : [];
+    res.json({
+      ...result,
+      suites,
+      totalCases: suites.reduce((sum, suite) => sum + suite.testCases.length, 0),
+      externalSuite: {
+        id: external.id,
+        status: external.status,
+        publishedCases: external.publishedCases ?? [],
+      },
+    });
   } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/work-items/:workItemId/test-cases/generate', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const workItemId = Number(req.params.workItemId);
+    if (!Number.isInteger(workItemId) || workItemId <= 0) {
+      res.status(400).json({ error: 'A positive integer work item ID is required' });
+      return;
+    }
+    const { project, model, effort } = (req.body ?? {}) as QaLabGenerateRequest & {
+      project?: string;
+    };
+    if (typeof project !== 'string' || !project.trim()) {
+      res.status(400).json({ error: 'A project is required' });
+      return;
+    }
+
+    const started = await triggerAdoTestCaseGeneration({
+      project: project.trim(),
+      rootWorkItemId: workItemId,
+      userId: getUserId(req),
+      model,
+      effort: effort as EffortLevel | undefined,
+    });
+    if (started.started) {
+      res.json(started);
+      return;
+    }
+    if (started.reason === 'already-generating' && started.suiteId) {
+      res.json({ started: true, suiteId: started.suiteId });
+      return;
+    }
+    const status = started.reason === 'root-not-found'
+      ? 404
+      : started.reason === 'routing-failed'
+        ? 503
+        : 422;
+    const messages: Record<typeof started.reason, string> = {
+      'root-not-found': 'The Azure DevOps work item was not found',
+      'no-targets': 'This work item has no PBI or Bug requirements to test',
+      'skill-not-configured': 'The project has no test-case skill configured',
+      'routing-failed': 'Test-case generation could not be started',
+      'already-generating': 'Test-case generation is already running',
+    };
+    res.status(status).json({ error: messages[started.reason], reason: started.reason });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/ado-test-suites/:suiteId/publish', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const suite = await getLatestAdoTestSuite(undefined, undefined, req.params.suiteId);
+    if (!suite) {
+      res.status(404).json({ error: 'QA suite not found' });
+      return;
+    }
+    const adoService = await adoWriteForRequest(req, suite.project);
+    res.json(await publishAdoTestCases(suite.id, adoService));
+  } catch (err) {
+    if (isAdoUserAuthError(err)) {
+      res.status(403).json({ error: err.message });
+      return;
+    }
     next(err);
   }
 });
@@ -449,19 +547,30 @@ router.post('/prds/:prdId/test-cases/generate', requirePermission('interviews:ma
     }
     // @feature-flag:project-repository-checkout-readiness end
 
-    const { model, effort } = (req.body ?? {}) as QaLabGenerateRequest;
+    const { model, effort, pbiIds, matchLevel, matchedTitle } = (req.body ?? {}) as QaLabGenerateRequest;
     const sourceThreadId = prdRow.chatThreadId ?? '';
     // Only forward overrides when the caller actually picked one, so the
     // project skill config stays the single source of truth otherwise.
     const overrides = model || effort
       ? { model, effort: effort as EffortLevel | undefined }
       : undefined;
-    const started = await triggerTestCaseGeneration(
-      prdId,
-      sourceThreadId,
-      userId,
-      overrides,
-    );
+    const scope = Array.isArray(pbiIds) && pbiIds.length > 0
+      ? { pbiIds, matchLevel, matchedTitle }
+      : undefined;
+    const started = scope
+      ? await triggerTestCaseGeneration(
+          prdId,
+          sourceThreadId,
+          userId,
+          overrides,
+          scope,
+        )
+      : await triggerTestCaseGeneration(
+          prdId,
+          sourceThreadId,
+          userId,
+          overrides,
+        );
     res.json({ started });
   } catch (err) {
     next(err);
