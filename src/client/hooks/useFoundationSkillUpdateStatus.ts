@@ -1,16 +1,43 @@
 import { useQuery } from '@tanstack/react-query';
 import type { FoundationSkillRelease, FoundationSkillRepoStatus } from '../../shared/types/foundationSkills';
 
+export interface FoundationSkillReleaseRepoQuery {
+  provider?: 'ado' | 'github' | string | null;
+  project?: string | null;
+  repo?: string | null;
+  branch?: string | null;
+}
+
 /**
  * Fetches the latest published foundation skills release visible to the given
- * Apex project. Pass `null`/`undefined` to get the global latest (admin use).
+ * Apex project. Pass a repository to limit that result to releases offered to
+ * that Project Settings repository. Pass `null`/`undefined` project to get the
+ * global latest (admin use).
  */
-export function useLatestFoundationSkillRelease(apexProject?: string | null) {
+export function useLatestFoundationSkillRelease(
+  apexProject?: string | null,
+  repo?: FoundationSkillReleaseRepoQuery | null,
+) {
+  const repoName = repo?.repo?.trim() || '';
+  const repoProject = repo?.project?.trim() || apexProject || '';
+  const provider = repo?.provider === 'github' ? 'github' : 'ado';
+  const branch = repo?.branch?.trim() || 'main';
   return useQuery<FoundationSkillRelease | null>({
-    queryKey: ['foundation-skill-release', 'latest', apexProject ?? null],
+    queryKey: ['foundation-skill-release', 'latest', apexProject ?? null, provider, repoProject, repoName, branch],
     queryFn: async () => {
-      const params = apexProject ? `?project=${encodeURIComponent(apexProject)}` : '';
-      const res = await fetch(`/api/skills/foundation-releases/latest${params}`, { credentials: 'include' });
+      const params = new URLSearchParams();
+      if (apexProject) params.set('project', apexProject);
+      if (repoName) {
+        params.set('repo', repoName);
+        params.set('repoProject', repoProject);
+        params.set('provider', provider);
+        params.set('branch', branch);
+      }
+      const query = params.toString();
+      const res = await fetch(
+        `/api/skills/foundation-releases/latest${query ? `?${query}` : ''}`,
+        { credentials: 'include' },
+      );
       if (!res.ok) return null;
       const data = await res.json() as { release: FoundationSkillRelease | null };
       return data.release ?? null;

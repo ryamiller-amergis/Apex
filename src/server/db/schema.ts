@@ -2762,6 +2762,7 @@ import type {
   FoundationSkillCompatibilityStatus,
   FoundationSkillArtifactManifest,
   FoundationSkillProjectNotes,
+  FoundationSkillTargetRepo,
 } from '../../shared/types/foundationSkills';
 
 export const foundationSkillReleases = pgTable('foundation_skill_releases', {
@@ -2775,6 +2776,7 @@ export const foundationSkillReleases = pgTable('foundation_skill_releases', {
   contractApiVersion:  integer('contract_api_version').notNull().default(1),
   selectedSkills:      jsonb('selected_skills').$type<string[]>().notNull().default([]),
   targetProjects:      jsonb('target_projects').$type<string[]>().notNull().default([]),
+  targetRepos:         jsonb('target_repos').$type<FoundationSkillTargetRepo[]>().notNull().default([]),
   skillTargets:        jsonb('skill_targets').$type<Record<string, string[]>>().notNull().default({}),
   manifestSnapshot:    jsonb('manifest_snapshot').$type<FoundationSkillArtifactManifest>(),
   releaseNotes:        text('release_notes'),

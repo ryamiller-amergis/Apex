@@ -316,6 +316,7 @@ export function validateReleaseUpdate(
   const mutable = new Set(['releaseNotes', 'breakingChanges', 'projectNotes']);
   if (release.status === 'published') {
     mutable.add('targetProjects');
+    mutable.add('targetRepos');
     mutable.add('skillTargets');
   }
   const immutableFields = Object.keys(input).filter((key) => !mutable.has(key));
@@ -325,7 +326,11 @@ export function validateReleaseUpdate(
     );
   }
 
-  if (input.targetProjects === undefined && input.skillTargets === undefined) return;
+  if (
+    input.targetProjects === undefined &&
+    input.targetRepos === undefined &&
+    input.skillTargets === undefined
+  ) return;
   validatePublishedAudience(release, input);
 }
 
