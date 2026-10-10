@@ -18,6 +18,78 @@ export interface RenameReleaseResult {
   outcomesUpdated: number;
 }
 
+export interface AssignWorkItemsToReleaseResult {
+  linkedCount: number;
+  movedCount: number;
+  unchangedCount: number;
+  movedFrom: Record<number, number[]>;
+}
+
+type ReleaseAssignmentService = Pick<
+  AzureDevOpsService,
+  'findReleaseAssignments' | 'linkWorkItemsToRelease' | 'unlinkWorkItemsFromRelease'
+>;
+
+/**
+ * Assign work items to one release. Existing links to other releases are
+ * removed first so a work item cannot remain assigned to multiple releases.
+ */
+export async function assignWorkItemsToRelease(
+  targetEpicId: number,
+  workItemIds: number[],
+  adoService: ReleaseAssignmentService,
+): Promise<AssignWorkItemsToReleaseResult> {
+  const uniqueWorkItemIds = [...new Set(workItemIds)];
+  const assignments = await adoService.findReleaseAssignments(uniqueWorkItemIds);
+  const result: AssignWorkItemsToReleaseResult = {
+    linkedCount: 0,
+    movedCount: 0,
+    unchangedCount: 0,
+    movedFrom: {},
+  };
+
+  for (const workItemId of uniqueWorkItemIds) {
+    const currentEpicIds = assignments[workItemId] ?? [];
+    const sourceEpicIds = currentEpicIds.filter((epicId) => epicId !== targetEpicId);
+    const alreadyLinkedToTarget = currentEpicIds.includes(targetEpicId);
+    const removedSourceEpicIds: number[] = [];
+
+    try {
+      for (const sourceEpicId of sourceEpicIds) {
+        await adoService.unlinkWorkItemsFromRelease(sourceEpicId, [workItemId]);
+        removedSourceEpicIds.push(sourceEpicId);
+      }
+
+      if (!alreadyLinkedToTarget) {
+        await adoService.linkWorkItemsToRelease(targetEpicId, [workItemId]);
+        result.linkedCount++;
+      } else if (sourceEpicIds.length === 0) {
+        result.unchangedCount++;
+      }
+    } catch (error) {
+      // Restore source assignments when a later unlink or target link fails.
+      for (const sourceEpicId of removedSourceEpicIds) {
+        try {
+          await adoService.linkWorkItemsToRelease(sourceEpicId, [workItemId]);
+        } catch (restoreError) {
+          console.error(
+            `[assignWorkItemsToRelease] Failed to restore item ${workItemId} to release ${sourceEpicId}:`,
+            restoreError,
+          );
+        }
+      }
+      throw error;
+    }
+
+    if (sourceEpicIds.length > 0) {
+      result.movedCount++;
+      result.movedFrom[workItemId] = sourceEpicIds;
+    }
+  }
+
+  return result;
+}
+
 /**
  * Validate inputs and perform the coordinated rename of a release across:
  *  1. ADO Epic title

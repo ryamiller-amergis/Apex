@@ -1,0 +1,44 @@
+.page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.card {
+  max-width: 32rem;
+  padding: 32px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  box-shadow: var(--shadow-md);
+  text-align: center;
+}
+
+.title {
+  margin: 0 0 12px;
+}
+
+.body {
+  margin: 0 0 24px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.button {
+  padding: 10px 18px;
+  border: 1px solid var(--accent-color);
+  border-radius: 8px;
+  background: var(--accent-color);
+  color: var(--on-accent);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.button:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}

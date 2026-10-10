@@ -288,14 +288,40 @@ export async function authorizeSkillInstall(
   }
 
   const apexProject = match.project;
+  const repoIdentity = {
+    apexProject,
+    provider: match.skillProvider ?? 'ado',
+    project: match.project,
+    repo: match.skillRepo,
+    branch: match.skillBranch || 'main',
+  };
   const release = requestedArtifactVersion
     ? await getPublishedReleaseByArtifactVersion(
         requestedArtifactVersion,
         apexProject,
+        repoIdentity,
       )
-    : await getLatestPublishedRelease(apexProject);
+    : await getLatestPublishedRelease(apexProject, repoIdentity);
 
   if (!release) {
+    const projectRelease = requestedArtifactVersion
+      ? await getPublishedReleaseByArtifactVersion(requestedArtifactVersion, apexProject)
+      : await getLatestPublishedRelease(apexProject);
+    if (projectRelease) {
+      return {
+        authorized: false,
+        reason: 'release-not-entitled',
+        repo,
+        apexProject,
+        version: null,
+        artifactVersion: requestedArtifactVersion ?? null,
+        artifactVersionVerified: false,
+        skills: [],
+        message:
+          `No published APEX release targets repository "${match.skillRepo}" ` +
+          `in project "${apexProject}".`,
+      };
+    }
     if (requestedArtifactVersion) {
       return {
         authorized: false,

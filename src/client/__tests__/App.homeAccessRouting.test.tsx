@@ -1,5 +1,5 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import App from '../App';
 import { useAppShell } from '../hooks/useAppShell';
 import { useProjectMenuConfig } from '../hooks/useProjectMenuConfig';
@@ -76,13 +76,23 @@ jest.mock('../components/ChatAgentPanel', () => ({
     thread?: { id: string; kickoff: { project: string } } | null;
     activeThreadId?: string | null;
     isOpen?: boolean;
-    onNewChat?: () => Promise<void>;
+    onNewChat?: (options?: { initialMessage?: string }) => Promise<void>;
+    onSelectThread?: (id: string) => void;
   }) => {
     mockChatPanelProps = props;
     return props.isOpen ? (
       <div data-testid="chat-agent-panel-open">
         Chat open
         <button type="button" onClick={() => { void props.onNewChat?.(); }}>Panel new</button>
+        <button
+          type="button"
+          onClick={() => { void props.onNewChat?.({ initialMessage: 'hello' }); }}
+        >
+          Start message
+        </button>
+        <button type="button" onClick={() => props.onSelectThread?.('history-thread')}>
+          Select history
+        </button>
       </div>
     ) : null;
   },
@@ -130,7 +140,8 @@ let mockChatPanelProps: {
   thread?: { id: string; kickoff: { project: string } } | null;
   activeThreadId?: string | null;
   isOpen?: boolean;
-  onNewChat?: () => Promise<void>;
+  onNewChat?: (options?: { initialMessage?: string }) => Promise<void>;
+  onSelectThread?: (id: string) => void;
 } = {};
 const mockStartChatMutateAsync = jest.fn();
 
@@ -220,10 +231,20 @@ function setupBase(flagsOverride: Record<string, boolean> = {}) {
   } as any);
 }
 
+function LocationProbe() {
+  const location = useLocation();
+  return (
+    <output data-testid="location">
+      {location.pathname}{location.search}
+    </output>
+  );
+}
+
 function renderApp(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <App />
+      <LocationProbe />
     </MemoryRouter>,
   );
 }
@@ -267,6 +288,42 @@ describe('App — Home access with permission + flag both enabled (default)', ()
     expect(mockStartChatMutateAsync).not.toHaveBeenCalled();
   });
 
+  it('keeps the active Home thread in the URL without adding history entries', async () => {
+    (useAppShell as jest.Mock).mockReturnValue(makeAppShell({
+      can: (key: string) => ['home:view', 'chat:view', 'chat:create'].includes(key),
+    }));
+    (useSkillRepos as jest.Mock).mockReturnValue({
+      data: [{ name: 'MaxView', defaultBranch: 'main' }],
+      isLoading: false,
+    });
+    mockStartChatMutateAsync.mockResolvedValue({ threadId: 'created-thread' });
+    const originalFetch = global.fetch;
+    global.fetch = jest.fn().mockResolvedValue({ ok: true } as Response);
+
+    try {
+      renderApp('/home?help=walkthroughs');
+      fireEvent.click(await screen.findByRole('button', { name: 'Start message' }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('location').textContent).toBe(
+          '/home?help=walkthroughs&thread=created-thread',
+        );
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Select history' }));
+      expect(screen.getByTestId('location').textContent).toBe(
+        '/home?help=walkthroughs&thread=history-thread',
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Panel new' }));
+      expect(screen.getByTestId('location').textContent).toBe(
+        '/home?help=walkthroughs',
+      );
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
   it('does not show a MaxView thread after switching to Apex', async () => {
     let selectedProject = 'MaxView';
     (useAppShell as jest.Mock).mockImplementation(() => makeAppShell({
@@ -292,7 +349,7 @@ describe('App — Home access with permission + flag both enabled (default)', ()
         : null,
       isFetching: false,
     }));
-    const view = renderApp('/home');
+    const view = renderApp('/home?thread=max-thread');
 
     await screen.findByTestId('agent-home');
     act(() => mockAgentHomeProps.onRestoreThread?.('max-thread'));
@@ -302,11 +359,68 @@ describe('App — Home access with permission + flag both enabled (default)', ()
     view.rerender(
       <MemoryRouter initialEntries={['/home']}>
         <App />
+        <LocationProbe />
       </MemoryRouter>,
     );
 
     expect(mockChatPanelProps.thread).toBeNull();
     expect(mockChatPanelProps.activeThreadId).toBeNull();
+    await waitFor(() => {
+      expect(screen.getByTestId('location').textContent).toBe('/home');
+    });
+  });
+
+  it("restores the destination project's last thread after switching projects", async () => {
+    let selectedProject = 'MaxView';
+    (useAppShell as jest.Mock).mockImplementation(() => makeAppShell({
+      selectedProject,
+      selectedAreaPath: selectedProject,
+      availableProjects: ['MaxView', 'Apex'],
+      can: (key: string) =>
+        ['home:view', 'chat:view', 'chat:create'].includes(key),
+    }));
+    const threadFor = (id: string, project: string) => ({
+      id,
+      userId: 'user-1',
+      kickoff: { project, repo: project, branch: 'main' },
+      messages: [],
+      status: 'idle',
+      workspaceDir: '',
+      flagged: false,
+      createdAt: '2026-09-03T18:00:00.000Z',
+      lastActivityAt: '2026-09-03T18:00:00.000Z',
+    });
+    (useChatThread as jest.Mock).mockImplementation((threadId: string | null) => ({
+      data: threadId === 'max-thread'
+        ? threadFor('max-thread', 'MaxView')
+        : threadId === 'apex-thread'
+          ? threadFor('apex-thread', 'Apex')
+          : null,
+      isFetching: false,
+    }));
+    sessionStorage.setItem('agentHomeThreadId:Apex', 'apex-thread');
+    try {
+      const view = renderApp('/home?thread=max-thread');
+      await screen.findByTestId('agent-home');
+      act(() => mockAgentHomeProps.onRestoreThread?.('max-thread'));
+
+      selectedProject = 'Apex';
+      view.rerender(
+        <MemoryRouter initialEntries={['/home']}>
+          <App />
+          <LocationProbe />
+        </MemoryRouter>,
+      );
+
+      await waitFor(() => {
+        expect(mockChatPanelProps.activeThreadId).toBe('apex-thread');
+      });
+      await waitFor(() => {
+        expect(screen.getByTestId('location').textContent).toBe('/home?thread=apex-thread');
+      });
+    } finally {
+      sessionStorage.removeItem('agentHomeThreadId:Apex');
+    }
   });
 });
 

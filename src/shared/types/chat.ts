@@ -78,6 +78,8 @@ export interface ChatThreadKickoff {
   freeformContext?: string;
   /** MCP pill selected on the home page — wires an external MCP server into this thread */
   mcpPill?: import('./projectSettings').QuickMcpPill;
+  /** Server-verified MCP profile applied to a Playbook cursor-agent thread. */
+  playbookMcpProfile?: string;
   /** Identifies the type of assistant thread — controls system prompt behavior */
   assistantType?: 'design-doc' | 'prd' | 'adr' | 'calendar-work-item';
   /** Calendar assistant: anchor work item ID */
@@ -187,6 +189,12 @@ export type SseEventType =
 export interface SseTokenEvent {
   type: 'token';
   text: string;
+  /** Character offset for durable streamed text; absent on legacy chat tokens. */
+  streamOffset?: number;
+  /** Raw end offset when sanitized durable text consumed hidden bytes. */
+  streamEndOffset?: number;
+  /** Full final text snapshot used to recover any missing streamed tail. */
+  streamSnapshot?: boolean;
 }
 
 export interface SseMessageEvent {
@@ -227,6 +235,7 @@ export interface SseErrorEvent {
   type: 'error';
   error: string;
   errorCode?: SseErrorCode;
+  runId?: string;
 }
 
 export interface SseRetryingEvent {
@@ -462,6 +471,8 @@ export interface ChatTurnSkill {
 }
 
 export interface SendMessageRequest {
+  /** Client-generated durable turn identity, stable across one send's network retries. */
+  turnId: string;
   text: string;
   /** Optional model override for this turn. If different from the thread's current model,
    *  the agent will be disposed and resumed with the new model. */

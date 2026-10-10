@@ -2,6 +2,7 @@ import React from 'react';
 import type { HomeDashboardPayload } from '../../shared/types/homeDashboard';
 import { ArtifactCycleTimeTile } from './ArtifactCycleTimeTile';
 import { IncompletePipelineTile } from './IncompletePipelineTile';
+import { AssignedToMeTile } from './AssignedToMeTile';
 import styles from './HomeDashboardSection.module.css';
 
 const SKELETON_CARDS = [
@@ -67,6 +68,11 @@ export const HomeDashboardSection: React.FC<HomeDashboardSectionProps> = ({
         <IncompletePipelineTile result={payload.incompletePipeline} onRetry={onRetry} />
         <ArtifactCycleTimeTile result={payload.artifactCycleTime} onRetry={onRetry} />
       </div>
+      {payload.assignedToMe ? (
+        <div className={styles['secondary-row']}>
+          <AssignedToMeTile result={payload.assignedToMe} onRetry={onRetry} />
+        </div>
+      ) : null}
     </section>
   );
 };

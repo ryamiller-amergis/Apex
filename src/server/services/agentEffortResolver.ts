@@ -135,14 +135,54 @@ export function resolveEffort(input: {
     : undefined;
 }
 
+/**
+ * Cursor team policy blocks Composer variants selected through the `effort`
+ * parameter, so Composer models are sent as the plain model id.
+ */
+function acceptsEffortParameter(model: string): boolean {
+  return !model.trim().toLowerCase().startsWith('composer-');
+}
+
+/** The parameter names Cursor models use for reasoning effort. */
+const EFFORT_PARAMETER_IDS = ['effort', 'reasoning_effort', 'reasoning'] as const;
+
+export interface CursorModelParameterDefinition {
+  id: string;
+  values: ReadonlyArray<{ value: string }>;
+}
+
+/**
+ * The parameter a model takes the effort level under, or null when none of
+ * its parameters accepts that level. Cursor rejects a run whose parameter
+ * name or value the model does not list.
+ */
+export function effortParameterFor(
+  parameters: ReadonlyArray<CursorModelParameterDefinition>,
+  effort: EffortLevel,
+): string | null {
+  for (const id of EFFORT_PARAMETER_IDS) {
+    const definition = parameters.find((parameter) => parameter.id === id);
+    if (definition?.values.some((option) => option.value === effort)) return id;
+  }
+  return null;
+}
+
+/**
+ * `parameters` is the model's definition list from `Cursor.models.list()`.
+ * Without it the effort is sent as `effort`, so callers that cannot read the
+ * catalog must pass an effort the model accepts under that name.
+ */
 export function buildCursorModelSelection(
   model: string,
-  effort?: EffortLevel
+  effort?: EffortLevel,
+  parameters?: ReadonlyArray<CursorModelParameterDefinition>,
 ): {
   id: string;
-  params?: Array<{ id: 'effort'; value: EffortLevel }>;
+  params?: Array<{ id: string; value: EffortLevel }>;
 } {
-  return effort
-    ? { id: model, params: [{ id: 'effort', value: effort }] }
+  if (!effort || !acceptsEffortParameter(model)) return { id: model };
+  const parameterId = parameters ? effortParameterFor(parameters, effort) : 'effort';
+  return parameterId
+    ? { id: model, params: [{ id: parameterId, value: effort }] }
     : { id: model };
 }

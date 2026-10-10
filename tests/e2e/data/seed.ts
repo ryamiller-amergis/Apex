@@ -141,6 +141,20 @@ export interface SeededProjectSettings {
   designDocValidationSkillPath: string | null;
 }
 
+export interface SeededPlaybookLifecycle {
+  definition: {
+    id: string;
+    project: string;
+    name: string;
+  };
+  draft: {
+    id: string;
+    definitionId: string;
+    versionNumber: number;
+    status: string;
+  };
+}
+
 export const SeedApi = {
   /**
    * Delete all records created by E2E tests in this run.
@@ -353,6 +367,19 @@ export const SeedApi = {
     },
   ): Promise<SeededProjectSettings> {
     return post<SeededProjectSettings>(request, '/seed/project-settings', opts);
+  },
+
+  async seedPlaybookLifecycle(
+    request: APIRequestContext,
+    opts: {
+      project: string;
+      authorId: string;
+      viewerId: string;
+      name: string;
+      published?: boolean;
+    },
+  ): Promise<SeededPlaybookLifecycle> {
+    return post<SeededPlaybookLifecycle>(request, '/seed/playbook-lifecycle', opts);
   },
 
   /**

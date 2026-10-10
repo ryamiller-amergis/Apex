@@ -1,0 +1,9 @@
+# Blocks AI access and indexing. Terminal commands still work.
+node_modules/
+dist/
+/data/
+playwright-report/
+test-results/
+*.log
+teams-app*.zip
+**/__pycache__/

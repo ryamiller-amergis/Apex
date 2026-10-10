@@ -1,0 +1,89 @@
+# AI V2 runtime — Phase 4 (DEV hygiene) handoff
+
+Branch `tbi/infra-changes`. DEV only; production V2 rollout is a separate project.
+Do not delete or remove from Terraform the legacy app `ca-apex-ai-interactive-dev`
+(used when `ai-runs-v2-transport` is off).
+
+## State (2026-10-01)
+
+- DEV runs `bc0c6bcd` on all V2 apps (working-copy size fix deploying next).
+- Flags: `ai-runs-v2-transport` on for Apex and MaxView; `maxview-mcp` off globally (keep off —
+  MaxView MCP is not configured in DEV and V2 turns error if it is on).
+- Terraform: workspace `dev-aiv2` tracks only the V2 slice (24 resources). Always run
+  `infra/scripts/dev-aiv2-tf.sh`, targeted at `terraform state list` addresses; an untargeted
+  plan tries to create the base DEV stack. Last targeted plan: no changes.
+
+## Done
+
+- Grounding wait capped for plain chat; bundle download timeout.
+- Telemetry: every V2 app reports under its own role name.
+- DEV imports and hand-set settings codified.
+- Harness repo prompts are project-neutral (`scripts/dev/interactive-v2-harness.mjs`).
+- Idle repository checkouts are evicted when the per-replica disk budget is full
+  (`groundedRepositoryCheckout.ts`). Applies to all interactive turns (Home, Interview, ADR, PRD).
+- MaxView harness: plain and reconnect pass; repo turn passes or is slow depending on how much the
+  agent explores (29–232 s). Accepted for now.
+
+- Dead-letter queues cleared (155 stale messages from 2026-09-29 01:48–01:51 UTC); all DEV queues at 0.
+- Replica limits already codified (1–2 per V2 app); scaling/shutdown/Dapr changes deferred to production.
+
+## Incident: MaxView PRD generation failed (2026-10-01)
+
+- PRD `/prd/274e36fe-dcbe-497c-bb02-4e786a66b8de`: the first PRD turn created a second MaxView
+  working copy on the Agentic replica (218 MB base + 1.8 GB interview copy + 1.8 GB PRD copy > 4 Gi
+  ephemeral disk). The replica was evicted, and the run ended as worker_lost.
+- The App Service reaper ended the run in `agent_runs` but left its `ai_run_attempts` row
+  `dispatched`. Four such rows filled the DEV interactive cap (4), so every later V2 turn waited
+  until the 20-minute limit (the regenerate was retried 42 times).
+- Fixes:
+  - Data fix: closed the 9 leaked attempt rows.
+  - `bc0c6bcd` (deployed): `finalizeAgentRun` also closes the run's V2 attempts; the
+    utilization reader ignores attempts whose run already ended.
+  - Working-copy size: checkout now measures the commit's real file size (`git ls-tree -l`)
+    instead of using the compressed bundle size, so a copy that doesn't fit the budget falls back
+    to remote reads instead of filling the disk.
+- Retest (PRD `84366190…`, run `0403be9e`): the AI finished in 107 s and the output files reached
+  App Service, but the PRD watcher waited forever. The V2 terminal updates only the DB; the
+  App Service in-memory thread stayed `running`, and watchers (PRD, ADR, test cases, design docs)
+  require `isThreadIdle`. Saved that PRD by restarting App Service (startup recovery reloads the
+  thread from the DB). Fix: `chatAgentService` subscribes to the run's terminal event after a durable
+  admission and clears the in-memory thread.
+- Follow-ups (not requested): App Insights keeps only about an hour of data; the orchestrator
+  logs almost nothing; the DEV interactive cap is 4.
+
+## Incident: MaxView prototype #2 lost, background V2 paused (2026-10-01)
+
+- Prototype run `visual-a833936a…` waited in the visual queue (one job at a time) longer than 90 s.
+  The reconciler counted `dispatched` attempts as stale and moved it to `checking_worker`. The
+  worker then finished, but `checking_worker → completed` was not allowed, and the result consumer
+  dropped the `illegal_transition` result as idempotent. The probe is a no-op (`unknown`), so the
+  attempt never left `checking_worker`.
+- With a stale 09-29 attempt also in `checking_worker`, the pause threshold (2) stopped all
+  background V2 dispatch (prototype #3 and design docs).
+- Fixes:
+  - Data fix: failed both attempts and runs as `worker_lost`.
+  - Code: `checking_worker` may complete, and a checkpoint returns it to `running`; the stale sweep
+    looks only at `running` attempts; a result for a still-live attempt is abandoned for retry
+    (dead-lettered at max delivery) instead of dropped; an unconfirmed `checking_worker` attempt is
+    failed as `worker_lost` after 15 min without a checkpoint.
+- User must regenerate prototype index 2.
+
+## Left in Phase 4
+
+- Managed-identity callbacks: blocked until the user re-runs `az login` (Graph blocked by
+  conditional access).
+- Optional: legacy app min replicas 4 → 1 (only if asked).
+- Optional: merge `main` into the branch so pull-request deploys stop failing.
+
+## Production-rollout tasks (not DEV)
+
+- Dapr components have two owners: `ai-runs-interactive.tf` creates `interactive-pubsub` and
+  `interactive-actor-state`; `azapi_update_resource.ai_platform_v2_interactive_dapr_scopes`
+  rewrites their scopes. A later legacy apply would drop the V2 apps. Fix: one definition that adds
+  the V2 app IDs to scopes when split interactive is enabled; remove the azapi update.
+- Worker shutdown: V2 workers abort the current job on SIGTERM; the grace period is the default
+  30 s. To let jobs finish, add drain-on-SIGTERM in the worker entrypoints and set
+  `termination_grace_period_seconds` (Azure max 600; agentic turns can run 20 min).
+- Large repos (MaxView ~215 MB, MatterWorx ~195 MB bundles): each commit gets a full bundle;
+  consider change-only bundles and blob cleanup (MaxView ~15 GB of bundles in DEV).
+- Optional latency work: short repo summary up front, or tool-step cap for Home chat.

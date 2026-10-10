@@ -22,11 +22,14 @@
  * (BR-016, BR-019).
  */
 import { randomUUID } from 'crypto';
+import os from 'node:os';
+import path from 'node:path';
 import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
 import type {
   AiRunIngestBody,
   AiRunIngestResponse,
 } from '../../../shared/types/aiRunIngest';
+import type { AiRunBlobRef } from '../../../shared/types/aiRunV2';
 import type {
   AgentRunEventEnvelope,
   ChatMessage,
@@ -37,7 +40,9 @@ import type { InteractiveStageName } from '../../../shared/types/workerTierOpera
 import {
   createCursorTurnEndMonitor,
   createCursorRunEventEnvelope,
+  CursorExecutionWaitError,
   executeCursorExecutionCore,
+  sanitizeCursorTerminalDetail,
   type CursorExecutionResult,
 } from '../cursorExecutionCore';
 import type { WorkerCursorExecutionRun } from '../aiRunsWorker/cursorExecution';
@@ -50,11 +55,23 @@ import {
   createIncrementalTokenBatcher,
   INTERACTIVE_TOKEN_BATCH_MAX_BYTES,
 } from '../interactiveTokenBatcher';
+import {
+  createInteractiveDurableStreamBatcher,
+  buildOffsetLiveTokenEvent,
+} from '../interactiveDurableStreamBatcher';
 import type { InteractiveCursorAgentHandle } from './interactiveCursorExecution';
+import type { InteractiveActorBootstrap } from '../../../shared/types/aiRunIngest';
 import { createPerThreadTurnQueue, type PerThreadTurnQueue } from './perThreadTurnQueue';
 
 /** Default cadence for durable progress heartbeats (clocks + cancel signal). */
 const DEFAULT_HEARTBEAT_MS = 4_000;
+
+/**
+ * Durable interactive turns heartbeat on a timer from the moment they start,
+ * so App Service can tell a slow turn (checkout, agent start) from a dead one.
+ * Must stay well inside the reaper's durable heartbeat timeout.
+ */
+const DEFAULT_DURABLE_HEARTBEAT_MS = 15_000;
 
 /** Idle TTL for the live per-thread Agent cache. */
 export const INTERACTIVE_AGENT_CACHE_IDLE_MS = 10 * 60_000;
@@ -64,6 +81,26 @@ export const INTERACTIVE_AGENT_CACHE_MAX = 32;
 
 /** Home-facing live phase detail before checkout / SDK work. */
 export const INTERACTIVE_STARTING_DETAIL = 'Starting agent…';
+
+/**
+ * Thread-scoped durable workspace keyed by the pinned grounding SHA. A stable
+ * path lets consecutive turns on one thread reuse the warm Cursor Agent, while
+ * a SHA change yields a new path and therefore a fresh Agent. Hosts may
+ * override the root with `AI_RUNS_INTERACTIVE_ATTEMPT_ROOT`.
+ */
+export function resolveInteractiveThreadWorkspacePath(
+  threadId: string,
+  groundingSha: string | null,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const configured = env.AI_RUNS_INTERACTIVE_ATTEMPT_ROOT?.trim();
+  const root = configured && configured.length > 0 ? configured : os.tmpdir();
+  const revision = groundingSha?.replace(/[^0-9a-zA-Z]/g, '') || 'ungrounded';
+  return path.join(root, 'apex-interactive-thread', threadId, revision);
+}
+
+/** Attempts remembered per process so a repeated dispatch never reruns a turn. */
+const STARTED_ATTEMPTS_MAX = 1_000;
 
 /** Publish a live (ephemeral) run-event envelope to the Redis backplane. */
 export type LiveEnvelopePublisher = (
@@ -135,9 +172,10 @@ function describeInteractiveFailure(error: unknown): {
     typeof err?.code === 'string' && err.code.trim()
       ? err.code.trim().slice(0, 64)
       : null;
-  const redactedMessage = redactFailureMessage(
-    typeof err?.message === 'string' ? err.message : '',
-  );
+  const redactedMessage =
+    error instanceof CursorExecutionWaitError && error.terminalStatusMessage
+      ? redactFailureMessage(sanitizeCursorTerminalDetail(error.terminalStatusMessage))
+      : redactFailureMessage(typeof err?.message === 'string' ? err.message : '');
   const head = errorCode ? `${errorName} (${errorCode})` : errorName;
   const reason = redactedMessage
     ? `Interactive turn failed: ${head}: ${redactedMessage}`
@@ -168,7 +206,10 @@ export interface InteractiveTurnRequest {
 
 export type InteractiveTurnOutcome =
   | { status: 'completed'; cursorAgentId?: string | null }
+  | { status: 'accepted' }
+  | { status: 'duplicate' }
   | { status: 'cancelled' }
+  | { status: 'failed'; failureCategory?: 'hard_timeout' | 'tool_timeout' }
   | { status: 'fence-conflict' };
 
 export interface InteractiveActorDependencies {
@@ -184,8 +225,43 @@ export interface InteractiveActorDependencies {
   acquireAgent(
     snapshot: Readonly<ExecutionSnapshot>,
     checkout: WarmThreadCheckout,
-    options: { resumeAgentId?: string | null },
+    options: {
+      resumeAgentId?: string | null;
+      mcpServers?: Readonly<Record<string, { url: string }>>;
+    },
   ): Promise<InteractiveCursorAgentHandle>;
+  /**
+   * Durable V2 acquisition that returns warm/resumed/recreated modes. When
+   * omitted, {@link handleDurableTurn} falls back to {@link acquireAgent}.
+   */
+  acquireDurableAgent?(
+    bootstrap: InteractiveActorBootstrap,
+    checkout: WarmThreadCheckout,
+    options: { resumeAgentId?: string | null },
+  ): Promise<
+    import('./interactiveCursorExecution').InteractiveAgentAcquisition
+  >;
+  /**
+   * Materialize a pinned attempt-local workspace for durable turns.
+   * `reclaimDisk` removes idle threads' workspaces so a checkout refused for
+   * disk space can be retried.
+   */
+  materializeWorkspace?(
+    bootstrap: InteractiveActorBootstrap,
+    destination: string,
+    signal: AbortSignal,
+    options?: { reclaimDisk(): Promise<void> },
+  ): Promise<WarmThreadCheckout>;
+  /**
+   * Collect attempt-local outputs, upload attempt-scoped blobs, write the
+   * manifest last, and return its blob ref. Required for durable completed
+   * terminals that claim `artifactsFlushed: true`.
+   */
+  uploadAttemptArtifacts?(
+    bootstrap: InteractiveActorBootstrap,
+    workspacePath: string,
+    signal: AbortSignal,
+  ): Promise<AiRunBlobRef>;
   /** Fenced runner ingest (reuses /api/internal/ai-runs/.../ingest). */
   postIngest(
     projectId: string,
@@ -204,6 +280,8 @@ export interface InteractiveActorDependencies {
   sourceInstance?: string;
   /** Durable progress heartbeat cadence in ms (default 4000). */
   heartbeatMs?: number;
+  /** Timer heartbeat cadence for durable V2 turns in ms (default 15000). */
+  durableHeartbeatMs?: number;
   now?: () => number;
   /** Idle TTL for cached Agents (default 10 minutes). */
   agentCacheIdleMs?: number;
@@ -213,6 +291,10 @@ export interface InteractiveActorDependencies {
 
 export interface InteractiveSessionActor {
   handleTurn(request: InteractiveTurnRequest): Promise<InteractiveTurnOutcome>;
+  handleDurableTurn(request: {
+    threadId: string;
+    bootstrap: InteractiveActorBootstrap;
+  }): Promise<InteractiveTurnOutcome>;
   /** Dispose every warm checkout + cached Agent (process shutdown / deactivation). */
   disposeAll(): Promise<void>;
 }
@@ -220,15 +302,58 @@ export interface InteractiveSessionActor {
 interface CachedAgentEntry {
   handle: InteractiveCursorAgentHandle;
   lastUsedAt: number;
+  /** Removes the thread workspace the cached Agent runs in. */
+  releaseWorkspace?: () => Promise<void>;
 }
 
 function isSuccessfulWait(result: CursorExecutionResult): boolean {
   if (result.completedOnTurnEnd) return true;
-  return (
-    result.waitResult.status === 'finished' ||
-    result.waitResult.status === 'completed' ||
-    result.waitResult.status === 'success'
+  const status = result.waitResult.status.trim().toLowerCase();
+  return status === 'finished' || status === 'completed' || status === 'success';
+}
+
+/**
+ * Rejects with the signal's reason once it aborts, even if `work` never
+ * settles; a hung Cursor stream or wait must not outlive the turn deadline.
+ */
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  work.catch(() => {});
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function unsuccessfulWaitDetail(result: CursorExecutionResult): string {
+  const status = result.waitResult.status
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '')
+    || 'unknown';
+  const waitError =
+    result.waitResult.error
+    && typeof result.waitResult.error === 'object'
+    && typeof (result.waitResult.error as { message?: unknown }).message ===
+      'string'
+      ? (result.waitResult.error as { message: string }).message
+      : '';
+  const detail = redactFailureMessage(
+    sanitizeCursorTerminalDetail(result.terminalStatusMessage || waitError),
   );
+  return detail
+    ? `Interactive turn ended with status: ${status}: ${detail}`
+    : `Interactive turn ended with status: ${status}`;
 }
 
 export function createInteractiveSessionActor(
@@ -241,6 +366,8 @@ export function createInteractiveSessionActor(
   const sourceInstance =
     dependencies.sourceInstance ?? 'ai-runs-interactive-actor';
   const heartbeatMs = dependencies.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
+  const durableHeartbeatMs =
+    dependencies.durableHeartbeatMs ?? DEFAULT_DURABLE_HEARTBEAT_MS;
   const publishLive: LiveEnvelopePublisher =
     dependencies.publishLive ?? (async () => {});
   const now = dependencies.now ?? Date.now;
@@ -277,6 +404,18 @@ export function createInteractiveSessionActor(
     if (!entry) return;
     agentCache.delete(threadId);
     await entry.handle.dispose().catch(() => {});
+    await entry.releaseWorkspace?.().catch(() => {});
+  };
+
+  const startedAttempts = new Set<string>();
+  const claimAttempt = (attemptId: string): boolean => {
+    if (startedAttempts.has(attemptId)) return false;
+    startedAttempts.add(attemptId);
+    if (startedAttempts.size > STARTED_ATTEMPTS_MAX) {
+      const oldest = startedAttempts.values().next().value;
+      if (oldest !== undefined) startedAttempts.delete(oldest);
+    }
+    return true;
   };
 
   const disposeCheckout = async (threadId: string): Promise<void> => {
@@ -300,12 +439,26 @@ export function createInteractiveSessionActor(
     }
   };
 
+  // Threads with a durable turn in progress; their cached Agent and workspace
+  // are in use and must not be evicted.
+  const activeDurableThreads = new Set<string>();
+
+  const evictIdleDurableAgents = async (cutoff: number): Promise<void> => {
+    for (const [threadId, entry] of agentCache) {
+      if (activeDurableThreads.has(threadId)) continue;
+      if (entry.lastUsedAt < cutoff) {
+        await disposeAgentEntry(threadId);
+      }
+    }
+  };
+
   const evictOverflowAgents = async (retainThreadId: string): Promise<void> => {
     while (agentCache.size > agentCacheMax) {
       let oldestThreadId: string | null = null;
       let oldestAt = Number.POSITIVE_INFINITY;
       for (const [threadId, entry] of agentCache) {
         if (threadId === retainThreadId) continue;
+        if (activeDurableThreads.has(threadId)) continue;
         if (entry.lastUsedAt < oldestAt) {
           oldestAt = entry.lastUsedAt;
           oldestThreadId = threadId;
@@ -539,7 +692,7 @@ export function createInteractiveSessionActor(
 
       if (cancellationRequested) throw new InteractiveCancellationObservedError();
       if (!isSuccessfulWait(result)) {
-        throw new Error('Interactive turn did not finish successfully');
+        throw new Error(unsuccessfulWaitDetail(result));
       }
 
       // Durable FINAL assistant message so a refresh/replay always shows the
@@ -653,6 +806,17 @@ export function createInteractiveSessionActor(
       // BR-015: serialize per thread — one in-flight turn, applied in order.
       return turnQueue.submit(request.threadId, () => runTurn(request));
     },
+    handleDurableTurn(request: {
+      threadId: string;
+      bootstrap: InteractiveActorBootstrap;
+    }): Promise<InteractiveTurnOutcome> {
+      if (!claimAttempt(request.bootstrap.attemptId)) {
+        return Promise.resolve({ status: 'duplicate' });
+      }
+      return turnQueue.submit(request.threadId, () =>
+        runDurableTurn(request.threadId, request.bootstrap),
+      );
+    },
     async disposeAll(): Promise<void> {
       const threadIds = new Set([
         ...warmCheckouts.keys(),
@@ -664,4 +828,618 @@ export function createInteractiveSessionActor(
       agentIdByThread.clear();
     },
   };
+
+  async function runDurableTurn(
+    threadId: string,
+    bootstrap: InteractiveActorBootstrap,
+  ): Promise<InteractiveTurnOutcome> {
+    const {
+      runId,
+      dispatchMessageId,
+      projectId,
+      specification,
+      effectiveDeadlines,
+      absoluteDeadlineAt,
+      attemptId,
+      cursorAgentId,
+      mcpServers,
+    } = bootstrap;
+
+    const absoluteMs = Date.parse(absoluteDeadlineAt);
+    const nowMs = now();
+    const deadlinesInvalid =
+      !Number.isFinite(absoluteMs) ||
+      !Number.isFinite(effectiveDeadlines.firstEventMs) ||
+      effectiveDeadlines.firstEventMs <= 0 ||
+      !Number.isFinite(effectiveDeadlines.toolCallMs) ||
+      effectiveDeadlines.toolCallMs <= 0 ||
+      (effectiveDeadlines.repositoryPreparationMs !== null &&
+        (!(effectiveDeadlines.repositoryPreparationMs > 0)));
+    if (deadlinesInvalid || absoluteMs <= nowMs) {
+      // The attempt is already claimed, so a redelivery is a duplicate; this
+      // turn must report its own terminal or the run stays open until the reaper.
+      const expired = !deadlinesInvalid;
+      await dependencies
+        .postIngest(projectId, runId, {
+          kind: 'terminal',
+          status: 'failed',
+          detail: expired
+            ? 'Interactive absolute deadline exceeded'
+            : 'Interactive effective deadlines are missing or invalid',
+          artifactsFlushed: false,
+          ...(expired ? { failureCategory: 'hard_timeout' as const } : {}),
+          attemptId,
+          dispatchMessageId,
+        })
+        .catch(() => {});
+      return expired
+        ? { status: 'failed', failureCategory: 'hard_timeout' }
+        : { status: 'failed' };
+    }
+
+    const absoluteAbort = new AbortController();
+    // Node timers are 32-bit; clamp so far-future absolute deadlines do not wrap.
+    const ABSOLUTE_TIMER_MAX_MS = 2_147_483_647;
+    const absoluteTimer = setTimeout(
+      () =>
+        absoluteAbort.abort(
+          Object.assign(new Error('hard_timeout'), { code: 'hard_timeout' }),
+        ),
+      Math.min(ABSOLUTE_TIMER_MAX_MS, Math.max(1, absoluteMs - nowMs)),
+    );
+
+    let attemptCheckout: WarmThreadCheckout | undefined;
+    let toolTimer: ReturnType<typeof setTimeout> | undefined;
+    let activeRunRef: WorkerCursorExecutionRun | undefined;
+    let agentHandle: InteractiveCursorAgentHandle | undefined;
+    let retainAgent = false;
+    let fenceConflict = false;
+    let cancellationRequested = false;
+    let failureCategory: 'hard_timeout' | 'tool_timeout' | null = null;
+    let firstEventTimedOut = false;
+
+    const stopRun = async (): Promise<void> => {
+      if (activeRunRef?.cancel) await activeRunRef.cancel().catch(() => {});
+    };
+    absoluteAbort.signal.addEventListener(
+      'abort',
+      () => {
+        void stopRun();
+      },
+      { once: true },
+    );
+
+    const clearToolTimer = (): void => {
+      if (toolTimer !== undefined) {
+        clearTimeout(toolTimer);
+        toolTimer = undefined;
+      }
+    };
+
+    const armToolTimer = (): void => {
+      clearToolTimer();
+      const toolMs = Math.min(
+        effectiveDeadlines.toolCallMs,
+        absoluteMs - now(),
+      );
+      if (!(toolMs > 0)) {
+        failureCategory = 'tool_timeout';
+        throw Object.assign(new Error('tool_timeout'), { code: 'tool_timeout' });
+      }
+      toolTimer = setTimeout(() => {
+        failureCategory = 'tool_timeout';
+        absoluteAbort.abort(
+          Object.assign(new Error('tool_timeout'), { code: 'tool_timeout' }),
+        );
+        void stopRun();
+      }, toolMs);
+    };
+
+    const post = async (body: AiRunIngestBody): Promise<void> => {
+      if (fenceConflict) return;
+      try {
+        const response = await dependencies.postIngest(projectId, runId, {
+          ...body,
+          attemptId,
+          dispatchMessageId,
+        });
+        if (response.cancelRequested && body.kind !== 'cancel_ack') {
+          cancellationRequested = true;
+          await stopRun();
+        }
+      } catch (error) {
+        if (error instanceof AiRunFenceConflictError) {
+          fenceConflict = true;
+          await stopRun();
+          return;
+        }
+        throw error;
+      }
+    };
+
+    const heartbeat = (): void => {
+      void post({ kind: 'heartbeat', dispatchMessageId, attemptId }).catch(() => {});
+    };
+    heartbeat();
+    const heartbeatTimer = setInterval(heartbeat, durableHeartbeatMs);
+    activeDurableThreads.add(threadId);
+
+    try {
+      await publishLive(threadId, createCursorRunEventEnvelope({
+        threadId,
+        runId,
+        sourceInstance,
+        sequence: 1,
+        timestamp: new Date(now()).toISOString(),
+        event: {
+          type: 'phase',
+          phase: 'setup',
+          status: 'running',
+          detail: INTERACTIVE_STARTING_DETAIL,
+        },
+      })).catch(() => {});
+
+      const destination = resolveInteractiveThreadWorkspacePath(
+        threadId,
+        specification.grounding?.sha ?? null,
+      );
+
+      if (!dependencies.materializeWorkspace) {
+        throw new Error(
+          'Durable interactive turns require materializeWorkspace',
+        );
+      }
+
+      const prepMs = effectiveDeadlines.repositoryPreparationMs;
+      const prepAbort = new AbortController();
+      const onAbsoluteAbort = () =>
+        prepAbort.abort(absoluteAbort.signal.reason);
+      absoluteAbort.signal.addEventListener('abort', onAbsoluteAbort, {
+        once: true,
+      });
+      let prepTimer: ReturnType<typeof setTimeout> | undefined;
+      if (prepMs != null) {
+        prepTimer = setTimeout(
+          () => prepAbort.abort(new Error('repository_preparation_timeout')),
+          prepMs,
+        );
+      }
+      await evictIdleDurableAgents(now() - agentCacheIdleMs);
+      // A worktree from an earlier commit still counts against the disk budget.
+      const cachedForThread = agentCache.get(threadId);
+      if (cachedForThread && cachedForThread.handle.workspaceRef !== destination) {
+        await disposeAgentEntry(threadId);
+      }
+      try {
+        attemptCheckout = await dependencies.materializeWorkspace(
+          bootstrap,
+          destination,
+          prepAbort.signal,
+          {
+            reclaimDisk: () =>
+              evictIdleDurableAgents(Number.POSITIVE_INFINITY),
+          },
+        );
+      } finally {
+        if (prepTimer) clearTimeout(prepTimer);
+        absoluteAbort.signal.removeEventListener('abort', onAbsoluteAbort);
+      }
+      // A repository-preparation timeout falls back to the remote reader; an
+      // expired absolute deadline ends the turn.
+      if (absoluteAbort.signal.aborted) throw absoluteAbort.signal.reason;
+
+      const checkout = attemptCheckout;
+
+      const cached = agentCache.get(threadId);
+      const cacheCompatible =
+        cached &&
+        cached.handle.model === specification.model &&
+        cached.handle.workspaceRef === checkout.workspacePath;
+
+      let acquisitionMode: 'warm' | 'resumed' | 'recreated' = 'warm';
+      if (cacheCompatible && cached) {
+        agentHandle = cached.handle;
+        acquisitionMode = 'warm';
+      } else {
+        if (cached) await disposeAgentEntry(threadId);
+        const resumeAgentId =
+          cursorAgentId ?? agentIdByThread.get(threadId) ?? null;
+        if (dependencies.acquireDurableAgent) {
+          const acquired = await dependencies.acquireDurableAgent(
+            bootstrap,
+            checkout,
+            { resumeAgentId },
+          );
+          agentHandle = acquired.handle;
+          acquisitionMode = acquired.mode;
+        } else {
+          agentHandle = await dependencies.acquireAgent(
+            {
+              prompt: specification.currentPrompt,
+              model: specification.model,
+              effort: specification.effort ?? undefined,
+              workspaceRef: checkout.workspacePath,
+              workflowClass: 'agent_home_chat',
+              skillPath: specification.skill?.path ?? '',
+              projectId: specification.projectId,
+              threadId: specification.threadId,
+            },
+            checkout,
+            { resumeAgentId, mcpServers },
+          );
+          acquisitionMode = resumeAgentId ? 'resumed' : 'recreated';
+        }
+      }
+
+      if (agentHandle.agentId) {
+        agentIdByThread.set(threadId, agentHandle.agentId);
+      }
+
+      const prompt =
+        acquisitionMode === 'recreated'
+          ? specification.recreationPrompt
+          : specification.currentPrompt;
+
+      const firstEventMs = Math.min(
+        effectiveDeadlines.firstEventMs,
+        absoluteMs - now(),
+      );
+      if (!(firstEventMs > 0)) {
+        throw Object.assign(new Error('hard_timeout'), { code: 'hard_timeout' });
+      }
+
+      let firstEventSeen = false;
+      const firstEventTimer = setTimeout(() => {
+        if (!firstEventSeen) {
+          failureCategory = 'hard_timeout';
+          firstEventTimedOut = true;
+          absoluteAbort.abort(
+            Object.assign(new Error('hard_timeout'), { code: 'hard_timeout' }),
+          );
+          void stopRun();
+        }
+      }, firstEventMs);
+
+      const liveBatcher = createIncrementalTokenBatcher({
+        maxBytes: batchMaxBytes,
+        now,
+      });
+      let liveSequence = 0;
+      let liveStreamOffset = 0;
+      let lastMatchingLive:
+        | Readonly<{
+            eventId: string;
+            streamOffset: number;
+            streamEndOffset: number;
+            text: string;
+          }>
+        | null = null;
+
+      const publishLiveEnvelope = async (
+        event: SseEvent,
+        eventId?: string,
+      ): Promise<string> => {
+        const envelope = createCursorRunEventEnvelope({
+          eventId,
+          threadId,
+          runId,
+          sourceInstance,
+          sequence: (liveSequence += 1),
+          timestamp: new Date(now()).toISOString(),
+          event,
+        });
+        await publishLive(threadId, envelope).catch(() => {});
+        return envelope.eventId;
+      };
+
+      const durableBatcher = createInteractiveDurableStreamBatcher({
+        persist: async ({ event, eventId }) => {
+          const matchedLive =
+            lastMatchingLive !== null &&
+            lastMatchingLive.streamOffset === event.streamOffset &&
+            lastMatchingLive.streamEndOffset === event.streamEndOffset &&
+            lastMatchingLive.text === event.text
+              ? lastMatchingLive
+              : null;
+          // Shared id when live Redis and durable Postgres share a chunk
+          // boundary; otherwise the batcher's id is published to both.
+          const sharedEventId = matchedLive ? matchedLive.eventId : eventId;
+          if (matchedLive) {
+            lastMatchingLive = null;
+          }
+          await post({
+            dispatchMessageId,
+            attemptId,
+            kind: 'progress',
+            phase: 'implementation',
+            status: 'running',
+            eventId: sharedEventId,
+            event,
+          });
+          if (!matchedLive) {
+            await publishLiveEnvelope(
+              buildOffsetLiveTokenEvent(event),
+              sharedEventId,
+            );
+          }
+        },
+      });
+
+      const publishLiveTokenBatches = async (
+        batches: string[],
+      ): Promise<void> => {
+        for (const text of batches) {
+          if (!text) continue;
+          const streamOffset = liveStreamOffset;
+          const streamEndOffset = streamOffset + text.length;
+          liveStreamOffset = streamEndOffset;
+          const tokenEvent = buildOffsetLiveTokenEvent({
+            text,
+            streamOffset,
+            streamEndOffset,
+          });
+          // Allocate before Redis publish so a matching durable persist can
+          // reuse the same eventId in Postgres.
+          const eventId = randomUUID();
+          await publishLiveEnvelope(tokenEvent, eventId);
+          lastMatchingLive = {
+            eventId,
+            streamOffset,
+            streamEndOffset,
+            text,
+          };
+          await durableBatcher.push(text);
+        }
+      };
+
+      try {
+        const turnEndMonitor = createCursorTurnEndMonitor();
+        activeRunRef = await untilAborted(
+          agentHandle.send(prompt, {
+            onDelta: (update) => {
+              if (!firstEventSeen) {
+                firstEventSeen = true;
+                clearTimeout(firstEventTimer);
+              }
+              turnEndMonitor.observe(update);
+            },
+          }),
+          absoluteAbort.signal,
+        );
+
+        const result = await untilAborted(executeCursorExecutionCore({
+          snapshot: {
+            prompt,
+            model: specification.model,
+            effort: specification.effort ?? undefined,
+            workspaceRef: checkout.workspacePath,
+            workflowClass: 'agent_home_chat',
+            skillPath: specification.skill?.path ?? '',
+            projectId: specification.projectId,
+            threadId: specification.threadId,
+          },
+          run: activeRunRef,
+          context: { runId, sourceInstance },
+          sink: {
+            publish: async (event: SseEvent) => {
+              if (fenceConflict) throw new AiRunFenceConflictError();
+              if (cancellationRequested) {
+                throw new InteractiveCancellationObservedError();
+              }
+              if (absoluteAbort.signal.aborted) {
+                throw absoluteAbort.signal.reason instanceof Error
+                  ? absoluteAbort.signal.reason
+                  : Object.assign(new Error('hard_timeout'), {
+                      code: 'hard_timeout',
+                    });
+              }
+              if (!firstEventSeen) {
+                firstEventSeen = true;
+                clearTimeout(firstEventTimer);
+              }
+              if (event.type === 'tool_call') {
+                armToolTimer();
+              } else if (event.type === 'tool_status') {
+                if (event.status === 'running') {
+                  armToolTimer();
+                } else {
+                  clearToolTimer();
+                }
+              }
+              if (event.type === 'token') {
+                await publishLiveTokenBatches(
+                  liveBatcher.push(event.text, now()),
+                );
+              } else {
+                await publishLiveEnvelope(event);
+                await post({
+                  dispatchMessageId,
+                  attemptId,
+                  kind: 'progress',
+                  phase: 'implementation',
+                  status: 'running',
+                  event,
+                });
+              }
+            },
+          },
+          hooks: {
+            beforeStreamEvent: () => {
+              if (fenceConflict) throw new AiRunFenceConflictError();
+              if (cancellationRequested) {
+                throw new InteractiveCancellationObservedError();
+              }
+            },
+          },
+          nextSequence: () => 1,
+          turnEnd: turnEndMonitor.completion,
+        }), absoluteAbort.signal);
+
+        const liveTail = liveBatcher.flush();
+        if (liveTail) {
+          await publishLiveTokenBatches([liveTail]);
+        }
+        await durableBatcher.flush();
+
+        clearToolTimer();
+
+        if (failureCategory || absoluteAbort.signal.aborted) {
+          const reason =
+            failureCategory ||
+            (absoluteAbort.signal.reason &&
+            typeof absoluteAbort.signal.reason === 'object' &&
+            'code' in absoluteAbort.signal.reason &&
+            ((absoluteAbort.signal.reason as { code?: string }).code ===
+              'hard_timeout' ||
+              (absoluteAbort.signal.reason as { code?: string }).code ===
+                'tool_timeout')
+              ? (absoluteAbort.signal.reason as {
+                  code: 'hard_timeout' | 'tool_timeout';
+                }).code
+              : null);
+          if (reason) {
+            throw Object.assign(new Error(reason), { code: reason });
+          }
+          throw absoluteAbort.signal.reason instanceof Error
+            ? absoluteAbort.signal.reason
+            : Object.assign(new Error('hard_timeout'), { code: 'hard_timeout' });
+        }
+
+        if (cancellationRequested) {
+          throw new InteractiveCancellationObservedError();
+        }
+        if (!isSuccessfulWait(result)) {
+          throw new Error(unsuccessfulWaitDetail(result));
+        }
+
+        const finalText = result.text;
+        if (finalText && finalText.trim().length > 0) {
+          const finalMessage: ChatMessage = {
+            id: randomUUID(),
+            role: 'agent',
+            text: finalText,
+            ts: new Date(now()).toISOString(),
+          };
+          await post({
+            dispatchMessageId,
+            attemptId,
+            kind: 'progress',
+            event: { type: 'message', message: finalMessage },
+          });
+        }
+
+        let artifactManifestRef: AiRunBlobRef | undefined;
+        let artifactsFlushed = false;
+        if (dependencies.uploadAttemptArtifacts) {
+          artifactManifestRef = await dependencies.uploadAttemptArtifacts(
+            bootstrap,
+            checkout.workspacePath,
+            absoluteAbort.signal,
+          );
+          artifactsFlushed = true;
+        }
+
+        if (!artifactsFlushed) {
+          throw new Error(
+            'Durable interactive completed terminal requires artifact collect/upload',
+          );
+        }
+
+        await post({
+          dispatchMessageId,
+          attemptId,
+          kind: 'terminal',
+          status: 'completed',
+          artifactsFlushed: true,
+          artifactManifestRef,
+          cursorAgentId: agentHandle.agentId ?? null,
+        });
+
+        agentCache.set(threadId, {
+          handle: agentHandle,
+          lastUsedAt: now(),
+          releaseWorkspace: checkout.dispose,
+        });
+        retainAgent = true;
+        await evictOverflowAgents(threadId);
+        return {
+          status: 'completed',
+          cursorAgentId: agentHandle.agentId ?? null,
+        };
+      } finally {
+        clearTimeout(firstEventTimer);
+        clearToolTimer();
+      }
+    } catch (error) {
+      if (fenceConflict || error instanceof AiRunFenceConflictError) {
+        await disposeAgentEntry(threadId);
+        return { status: 'fence-conflict' };
+      }
+      if (
+        cancellationRequested ||
+        error instanceof InteractiveCancellationObservedError ||
+        isStopRaceIngestError(error)
+      ) {
+        await disposeAgentEntry(threadId);
+        await post({
+          dispatchMessageId,
+          attemptId,
+          kind: 'cancel_ack',
+          detail: 'Interactive turn stopped',
+        });
+        return { status: 'cancelled' };
+      }
+
+      await disposeAgentEntry(threadId);
+      const code =
+        failureCategory ||
+        (error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        ((error as { code?: string }).code === 'hard_timeout' ||
+          (error as { code?: string }).code === 'tool_timeout')
+          ? ((error as { code: 'hard_timeout' | 'tool_timeout' }).code)
+          : null);
+      const detail =
+        code === 'tool_timeout'
+          ? 'Interactive tool deadline exceeded'
+          : code === 'hard_timeout'
+            ? firstEventTimedOut
+              ? 'Interactive first event deadline exceeded'
+              : 'Interactive absolute deadline exceeded'
+            : describeInteractiveFailure(error).reason;
+      await post({
+        dispatchMessageId,
+        attemptId,
+        kind: 'terminal',
+        status: 'failed',
+        detail,
+        artifactsFlushed: false,
+        ...(code ? { failureCategory: code } : {}),
+      }).catch(() => {});
+      if (code) {
+        return { status: 'failed', failureCategory: code };
+      }
+      console.error(
+        JSON.stringify({
+          event: 'InteractiveDurableTurnFailed',
+          runId,
+          attemptId,
+          reason: detail,
+        }),
+      );
+      return { status: 'failed' };
+    } finally {
+      activeDurableThreads.delete(threadId);
+      clearInterval(heartbeatTimer);
+      clearTimeout(absoluteTimer);
+      clearToolTimer();
+      if (!retainAgent && attemptCheckout?.dispose) {
+        await attemptCheckout.dispose().catch(() => {});
+      }
+      if (!retainAgent && agentHandle && !agentCache.has(threadId)) {
+        await agentHandle.dispose().catch(() => {});
+      }
+    }
+  }
 }

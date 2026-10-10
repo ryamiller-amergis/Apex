@@ -81,6 +81,7 @@ import {
   acceptFixValidation,
   assertDesignDocApprovalReady,
   cancelValidation,
+  createDesignDocValidationAdapter,
   createDesignDoc,
   deleteDesignDoc,
   dismissDesignDocFixSession,
@@ -98,7 +99,6 @@ import {
   autoStartValidation,
   markValidationReady,
   overrideDesignDocValidation,
-  syncValidationResult,
 } from '../services/designDocService';
 import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, getThreadAsync, updateThreadKickoffContext, sendMessage } from '../services/chatAgentService';
 import { propagatePipelineGrounding } from '../services/runGroundingService';
@@ -115,9 +115,17 @@ import {
 import { getTestCasesForWorkItem } from '../services/testCaseLookupService';
 import type { QaLabGenerateRequest } from '../../shared/types/qaLab';
 import type { EffortLevel } from '../../shared/types/effort';
-import { generateFallbackReport as generateFallbackValidationReport } from '../services/documentValidationService';
-import { normalizeValidationScorecard } from '../../shared/utils/validationReport';
+import {
+  generateFallbackReport as generateFallbackValidationReport,
+  ingestValidationScorecard,
+} from '../services/documentValidationService';
 import { isProjectRepositoryCheckoutReadinessEnabled } from '../services/featureFlagService';
+import {
+  DesignDocValidationPlaybookConfigurationError,
+  DesignDocValidationPlaybookForbiddenError,
+  DesignDocValidationPlaybookNotFoundError,
+  startDesignDocValidationPlaybook,
+} from '../services/designDocValidationPlaybookService';
 import {
   assertResolvedProjectRepositoryReady,
   ProjectRepositoryNotReady,
@@ -1258,6 +1266,9 @@ router.post('/prds/:prdId/reject-proposed', requirePermission('interviews:manage
   }
 });
 
+const INVALID_BACKLOG_FIX_MESSAGE =
+  'Apex could not produce a valid backlog update for this comment. Try Fix with Apex again.';
+
 // POST /prds/:prdId/fix-with-ai — ask Bedrock to apply all open review comments
 // and stage the result as proposedContent/proposedBacklogJson for the owner to accept/reject.
 router.post('/prds/:prdId/fix-with-ai', requirePermission('interviews:manage'), async (req, res, next) => {
@@ -1317,6 +1328,9 @@ router.post('/prds/:prdId/fix-with-ai', requirePermission('interviews:manage'), 
       );
       if (fixedBacklog != null) {
         updates['proposedBacklogJson'] = fixedBacklog;
+      } else if (!('proposedContent' in updates)) {
+        res.status(422).json({ error: INVALID_BACKLOG_FIX_MESSAGE });
+        return;
       }
     }
 
@@ -1392,9 +1406,16 @@ router.post('/prds/:prdId/fix-comment-with-ai', requirePermission('interviews:ma
           bedrockMaxTokens,
           prdReviewUsageCtx(prd.project, prd.id, getUserId(req)),
         );
-        if (fixedBacklog != null) {
-          updates['proposedBacklogJson'] = fixedBacklog;
+        // The review screen shows "fixing" while fixCommentId is set without a proposal.
+        if (fixedBacklog == null) {
+          await db
+            .update(prdsTable)
+            .set({ fixCommentId: null, updatedAt: new Date().toISOString() })
+            .where(eq(prdsTable.id, req.params.prdId));
+          res.status(422).json({ error: INVALID_BACKLOG_FIX_MESSAGE });
+          return;
         }
+        updates['proposedBacklogJson'] = fixedBacklog;
       } else {
         await db
           .update(prdsTable)
@@ -2140,6 +2161,46 @@ router.post('/design-docs/:id/validation-thread', requirePermission('interviews:
   }
 });
 
+router.post(
+  '/design-docs/:id/validation-playbook',
+  requirePermission('playbooks:run'),
+  async (req, res, next) => {
+    try {
+      const callerUserId = getUserId(req);
+      const project = typeof req.body?.project === 'string' ? req.body.project : '';
+      if (!callerUserId) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      if (!project.trim()) {
+        res.status(400).json({ error: 'project is required' });
+        return;
+      }
+
+      const result = await startDesignDocValidationPlaybook({
+        designDocId: req.params.id,
+        project,
+        callerUserId,
+      });
+      res.status(result.outcome === 'started' ? 201 : 200).json(result);
+    } catch (err) {
+      if (err instanceof DesignDocValidationPlaybookForbiddenError) {
+        res.status(403).json({ error: err.message });
+        return;
+      }
+      if (err instanceof DesignDocValidationPlaybookNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      if (err instanceof DesignDocValidationPlaybookConfigurationError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      next(err);
+    }
+  },
+);
+
 // GET /design-docs/:id/validation — get validation state
 router.get('/design-docs/:id/validation', requirePermission('interviews:view'), async (req, res, next) => {
   try {
@@ -2164,17 +2225,62 @@ router.post('/design-docs/:id/validation/refresh', requirePermission('interviews
     if (!doc.validationThreadId) { res.status(400).json({ error: 'No validation thread exists' }); return; }
 
     const scorecardRaw = readOutputValidationScorecard(doc.validationThreadId);
-    const scorecard = scorecardRaw ? normalizeValidationScorecard(JSON.parse(scorecardRaw)) : null;
-    if (scorecard) {
+    if (scorecardRaw) {
       const reportMd = readOutputValidationScorecardMd(doc.validationThreadId) ?? undefined;
-      await syncValidationResult(req.params.id, scorecard, reportMd);
-      res.json({ ok: true, score: scorecard.overall_score, is_ready: scorecard.is_ready });
+      const result = await ingestValidationScorecard(
+        createDesignDocValidationAdapter(req.params.id),
+        doc.validationThreadId,
+        { kind: 'success', scorecardRaw, reportMd },
+      );
+      if (result.disposition === 'discarded_stale') {
+        const current = await getDesignDoc(req.params.id);
+        if (current?.validationScorecard && current.status !== 'validating') {
+          res.json({
+            ok: true,
+            score: current.validationScorecard.overall_score,
+            is_ready: current.validationScorecard.is_ready,
+          });
+          return;
+        }
+        res.status(404).json({ error: 'Scorecard not yet available' });
+        return;
+      }
+      res.json({
+        ok: true,
+        score: result.scorecard.overall_score,
+        is_ready: result.scorecard.is_ready,
+      });
       return;
     }
 
     if (doc.validationScorecard && doc.status !== 'validating') {
-      await syncValidationResult(req.params.id, doc.validationScorecard, doc.validationReportMd ?? undefined);
-      res.json({ ok: true, score: doc.validationScorecard.overall_score, is_ready: doc.validationScorecard.is_ready });
+      const result = await ingestValidationScorecard(
+        createDesignDocValidationAdapter(req.params.id),
+        doc.validationThreadId,
+        {
+          kind: 'success',
+          scorecardRaw: doc.validationScorecard,
+          reportMd: doc.validationReportMd ?? undefined,
+        },
+      );
+      if (result.disposition === 'discarded_stale') {
+        const current = await getDesignDoc(req.params.id);
+        if (current?.validationScorecard && current.status !== 'validating') {
+          res.json({
+            ok: true,
+            score: current.validationScorecard.overall_score,
+            is_ready: current.validationScorecard.is_ready,
+          });
+          return;
+        }
+        res.status(404).json({ error: 'Scorecard not yet available' });
+        return;
+      }
+      res.json({
+        ok: true,
+        score: result.scorecard.overall_score,
+        is_ready: result.scorecard.is_ready,
+      });
       return;
     }
 
@@ -2206,7 +2312,13 @@ router.get('/design-docs/:id/validation/report', requirePermission('interviews:v
     let md = doc.validationReportMd;
     if (!md && doc.validationScorecard) {
       md = generateFallbackReport(doc.validationScorecard);
-      await syncValidationResult(req.params.id, doc.validationScorecard, md);
+      if (doc.validationThreadId) {
+        await ingestValidationScorecard(
+          createDesignDocValidationAdapter(req.params.id),
+          doc.validationThreadId,
+          { kind: 'success', scorecardRaw: doc.validationScorecard, reportMd: md },
+        );
+      }
     }
     if (!md) {
       if (doc.status === 'validating') {

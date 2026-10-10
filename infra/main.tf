@@ -64,9 +64,9 @@ resource "azurerm_linux_web_app" "main" {
   site_config {
     always_on = true
 
-    # The plan runs multiple instances, so without this a wedged instance keeps
-    # serving traffic instead of being pulled from rotation. Set live but never
-    # declared here, which meant a full apply would quietly remove it.
+    # Azure's rotation probe is process-only liveness by design. Readiness and
+    # dependency endpoints are observed separately so a shared database outage
+    # does not remove every application instance from rotation.
     health_check_path = "/api/health"
 
     # Required for the FEAT-007 interactive WebSocket gateway (client ↔ gateway
@@ -245,9 +245,9 @@ resource "azurerm_linux_web_app_slot" "staging" {
   site_config {
     always_on = true
 
-    # Azure takes an unhealthy instance out of rotation only when it has a path
-    # to probe. Without this a full apply strips the probe from the slot that
-    # pre-swap validation runs against.
+    # Azure's rotation probe is process-only liveness by design. Readiness and
+    # dependency endpoints are observed separately so a shared database outage
+    # does not remove every staging instance from rotation.
     health_check_path = "/api/health"
 
     # Same as production: keep the WebSocket upgrade enabled so a post-swap
@@ -307,8 +307,8 @@ resource "azurerm_postgresql_flexible_server" "main" {
   administrator_login    = var.postgresql_admin_username
   administrator_password = var.postgresql_admin_password
   sku_name               = var.postgresql_sku_name
-  storage_mb             = 32768
-  backup_retention_days  = 7
+  storage_mb             = var.postgresql_storage_mb
+  backup_retention_days  = var.postgresql_backup_retention_days
   zone                   = var.postgresql_availability_zone
   tags                   = merge(var.tags, { Environment = var.environment })
 
@@ -323,7 +323,11 @@ resource "azurerm_postgresql_flexible_server" "main" {
   lifecycle {
     # Availability-zone placement is fixed when the server is created. Preserve
     # the existing zone when an environment does not explicitly pass the value.
-    ignore_changes = [tags, zone]
+    # Azure never returns imported administrator credentials with Terraform's
+    # sensitivity metadata, so planning them would rewrite the active server
+    # during state-only reconciliation. Runtime credential rotation is managed
+    # outside Terraform.
+    ignore_changes = [administrator_login, administrator_password, tags, zone]
   }
 }
 
@@ -334,9 +338,25 @@ resource "azurerm_postgresql_flexible_server_database" "main" {
   charset   = "utf8"
 }
 
+# Query diagnostics. Both are dynamic parameters, so changing them does not
+# restart the server. Without these the only signal for a pool-exhaustion
+# incident is the client-side "Connection terminated due to connection timeout",
+# which never names the statement holding the connection.
+resource "azurerm_postgresql_flexible_server_configuration" "pg_stat_statements_track" {
+  name      = "pg_stat_statements.track"
+  server_id = azurerm_postgresql_flexible_server.main.id
+  value     = var.postgresql_pg_stat_statements_track
+}
+
+resource "azurerm_postgresql_flexible_server_configuration" "log_min_duration_statement" {
+  name      = "log_min_duration_statement"
+  server_id = azurerm_postgresql_flexible_server.main.id
+  value     = tostring(var.postgresql_log_min_duration_statement_ms)
+}
+
 # Allow Azure services to connect to the PostgreSQL server
 resource "azurerm_postgresql_flexible_server_firewall_rule" "azure_services" {
-  name             = "allow-azure-services"
+  name             = var.postgresql_azure_services_firewall_rule_name
   server_id        = azurerm_postgresql_flexible_server.main.id
   start_ip_address = "0.0.0.0"
   end_ip_address   = "0.0.0.0"

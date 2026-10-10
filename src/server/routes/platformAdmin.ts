@@ -12,6 +12,12 @@ import * as featureFlagService from '../services/featureFlagService';
 import * as groupService from '../services/groupService';
 import * as restrictedAccessService from '../services/restrictedAccessService';
 import { RestrictedAccessError } from '../services/restrictedAccessService';
+import {
+  addDevEnvAllowlistEntry,
+  DevEnvAllowlistError,
+  getDevEnvAllowlistView,
+  removeDevEnvAllowlistEntry,
+} from '../services/devEnvAllowlistService';
 import { listRoles } from '../services/rbacService';
 import { getUserId, getUserEmail, getDisplayName } from '../utils/requestUser';
 import { listProjectCatalog } from '../services/projectCatalogService';
@@ -495,6 +501,45 @@ router.delete('/user-access/:id', async (req: Request, res: Response): Promise<v
     res.status(204).send();
   } catch (err) {
     if (err instanceof RestrictedAccessError) {
+      const status = err.message.includes('not found') ? 404 : 400;
+      res.status(status).json({ error: err.message });
+      return;
+    }
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── Dev site access ───────────────────────────────────────────────────────────
+
+router.get('/dev-access', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const view = await getDevEnvAllowlistView();
+    res.json(view);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/dev-access', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const email = typeof req.body?.email === 'string' ? req.body.email : '';
+    const entry = await addDevEnvAllowlistEntry(email, getActingUserLabel(req));
+    res.status(201).json(entry);
+  } catch (err) {
+    if (err instanceof DevEnvAllowlistError) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.delete('/dev-access/:id', async (req: Request, res: Response): Promise<void> => {
+  try {
+    await removeDevEnvAllowlistEntry(req.params.id);
+    res.status(204).send();
+  } catch (err) {
+    if (err instanceof DevEnvAllowlistError) {
       const status = err.message.includes('not found') ? 404 : 400;
       res.status(status).json({ error: err.message });
       return;

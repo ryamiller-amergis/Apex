@@ -30,13 +30,18 @@ import type {
 } from '../../shared/types/foundationSkills';
 import {
   isReleaseVisibleToProject,
+  isReleaseVisibleToRepo,
   getEffectiveTargetProjects,
   getVisibleSkillsForProject,
+  normalizeTargetRepos,
+  type FoundationSkillRepoVisibility,
 } from '../../shared/types/foundationSkills';
 export {
   isReleaseVisibleToProject,
+  isReleaseVisibleToRepo,
   getEffectiveTargetProjects,
   getVisibleSkillsForProject,
+  normalizeTargetRepos,
 } from '../../shared/types/foundationSkills';
 import {
   isAzureArtifactsConfigured,
@@ -63,6 +68,7 @@ function mapRow(row: typeof foundationSkillReleases.$inferSelect): FoundationSki
     contractApiVersion:  row.contractApiVersion,
     selectedSkills:      (row.selectedSkills as string[]) ?? [],
     targetProjects:      (row.targetProjects as string[]) ?? [],
+    targetRepos:         (row.targetRepos as FoundationSkillRelease['targetRepos']) ?? [],
     skillTargets:        (row.skillTargets as Record<string, string[]>) ?? {},
     manifestSnapshot:    row.manifestSnapshot ?? null,
     releaseNotes:        row.releaseNotes ?? null,
@@ -223,6 +229,7 @@ export function semverGreaterThan(a: string, b: string): boolean {
 export async function listRollbackTargets(
   apexProject: string,
   installedVersion: string,
+  repo?: FoundationSkillRepoVisibility | null,
 ): Promise<FoundationSkillRelease[]> {
   const rows = await db
     .select()
@@ -233,7 +240,9 @@ export async function listRollbackTargets(
   return rows
     .map(mapRow)
     .filter((rel) =>
-      isReleaseVisibleToProject(rel, apexProject) &&
+      (repo
+        ? isReleaseVisibleToRepo(rel, { ...repo, apexProject })
+        : isReleaseVisibleToProject(rel, apexProject)) &&
       semverGreaterThan(installedVersion, rel.version),
     );
 }
@@ -244,6 +253,7 @@ export async function listRollbackTargets(
  */
 export async function getLatestPublishedRelease(
   apexProject?: string | null,
+  repo?: FoundationSkillRepoVisibility | null,
 ): Promise<FoundationSkillRelease | null> {
   const rows = await db
     .select()
@@ -253,7 +263,10 @@ export async function getLatestPublishedRelease(
 
   for (const row of rows) {
     const release = mapRow(row);
-    if (isReleaseVisibleToProject(release, apexProject ?? null)) return release;
+    const visible = repo
+      ? isReleaseVisibleToRepo(release, { ...repo, apexProject: apexProject ?? repo.apexProject })
+      : isReleaseVisibleToProject(release, apexProject ?? null);
+    if (visible) return release;
   }
   return null;
 }
@@ -265,6 +278,7 @@ export async function getLatestPublishedRelease(
 export async function getPublishedReleaseByArtifactVersion(
   artifactVersion: string,
   apexProject: string,
+  repo?: FoundationSkillRepoVisibility | null,
 ): Promise<FoundationSkillRelease | null> {
   const rows = await db
     .select()
@@ -274,10 +288,10 @@ export async function getPublishedReleaseByArtifactVersion(
 
   for (const row of rows) {
     const release = mapRow(row);
-    if (
-      release.artifactVersion === artifactVersion &&
-      isReleaseVisibleToProject(release, apexProject)
-    ) {
+    const visible = repo
+      ? isReleaseVisibleToRepo(release, { ...repo, apexProject })
+      : isReleaseVisibleToProject(release, apexProject);
+    if (release.artifactVersion === artifactVersion && visible) {
       return release;
     }
   }
@@ -302,6 +316,7 @@ export async function createRelease(
         integritySha256:     null,
         selectedSkills:      input.selectedSkills,
         targetProjects:      input.targetProjects ?? [],
+        targetRepos:         normalizeTargetRepos(input.targetRepos ?? [], input.targetProjects ?? []),
         skillTargets:        input.skillTargets ?? {},
         manifestSnapshot:    null,
         releaseNotes:        input.releaseNotes ?? null,
@@ -549,6 +564,8 @@ export interface UpdateReleaseInput {
   /** Per-project notes; replaces the whole map. Editable on any status. */
   projectNotes?:    Record<string, FoundationSkillProjectNotes>;
   targetProjects?:  string[];
+  /** Repository allowlist; updatable with the audience. */
+  targetRepos?:     FoundationSkillRelease['targetRepos'];
   /** Per-skill project targeting overrides; updatable on any status. */
   skillTargets?:    Record<string, string[]>;
   selectedSkills?:  string[];
@@ -567,6 +584,14 @@ export async function updateRelease(
 
   validateReleaseUpdate(existing, input as Record<string, unknown>);
 
+  const nextProjects = input.targetProjects ?? existing.targetProjects;
+  const nextRepos = input.targetRepos !== undefined || input.targetProjects !== undefined
+    ? normalizeTargetRepos(
+        input.targetRepos !== undefined ? input.targetRepos : existing.targetRepos,
+        nextProjects,
+      )
+    : undefined;
+
   return db.transaction(async (tx) => {
     const [updated] = await tx
       .update(foundationSkillReleases)
@@ -575,6 +600,7 @@ export async function updateRelease(
         ...(input.breakingChanges !== undefined && { breakingChanges: input.breakingChanges ?? null }),
         ...(input.projectNotes    !== undefined && { projectNotes:    input.projectNotes }),
         ...(input.targetProjects  !== undefined && { targetProjects:  input.targetProjects }),
+        ...(nextRepos             !== undefined && { targetRepos:     nextRepos }),
         ...(input.skillTargets    !== undefined && { skillTargets:    input.skillTargets }),
         ...(input.selectedSkills  !== undefined && { selectedSkills:  input.selectedSkills }),
         ...(input.version         !== undefined && { version:         input.version }),
@@ -606,6 +632,10 @@ export async function updateRelease(
         ...(input.skillTargets !== undefined && {
           previousSkillTargets: existing.skillTargets,
           skillTargets:         input.skillTargets,
+        }),
+        ...(nextRepos !== undefined && {
+          previousTargetRepos: existing.targetRepos ?? [],
+          targetRepos:         nextRepos,
         }),
       },
     });

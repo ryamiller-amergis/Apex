@@ -3,6 +3,7 @@ import { BedrockClient, ListInferenceProfilesCommand } from '@aws-sdk/client-bed
 import { retryWithBackoff } from '../utils/retry';
 import { getFigmaReference } from './figmaReferenceService';
 import { getMaxviewColorTokens } from './designTokensService';
+import { applyBacklogEdits, flattenBacklogForPrompt, readBacklogEdits } from './backlogEdits';
 import type { DesignSystemCatalog } from './designSystemService';
 import type { ScreenInventoryRoute } from '../../shared/types/designSystem';
 import type { UiSurfacePlan, PbiContribution, UiLayoutPattern, PbiContributionType } from '../../shared/types/backlog';
@@ -10,7 +11,23 @@ import type { DesignPlanFeature } from '../../shared/types/designPlan';
 import { DESIGN_PROTOTYPE_STATE_NAMES, type DesignPrototypeStateName } from '../../shared/types/designPrototype';
 import { recordAiUsage, computeCost } from './aiUsageService';
 import type { AiFeature } from '../../shared/types/aiCostAnalytics';
+import type {
+  VisualModelSettings,
+  VisualRetrySettings,
+} from '../../shared/types/aiRunV2VisualSpec';
 import { resolvePrototypeExtendMode } from './prototypeContextService';
+import {
+  buildComponentDetailCoverageSection,
+  buildProjectPrototypeScopingSection,
+  buildPrototypePageScreenshotHint,
+  buildPrototypePbiSection,
+  buildPrototypePlanSection,
+  buildPrototypeScopingSection,
+  buildPrototypeSourceSection,
+  buildPrototypeTargetScreenHint,
+} from './designContext/prototypePromptSections';
+import { normalizeGeneratedPrototypeHtml } from '../utils/htmlSanitizer';
+import { resolveVisualModelRegion } from './visualModelRegion';
 
 /** Attribution context passed down from callers to the invokeModel wrapper. */
 export interface BedrockUsageContext {
@@ -24,6 +41,17 @@ export interface BedrockUsageContext {
 const client = new BedrockRuntimeClient({
   region: process.env.AWS_REGION ?? 'us-east-1',
 });
+const visualClientsByRegion = new Map<string, BedrockRuntimeClient>();
+
+function visualClientForModel(modelId: string): BedrockRuntimeClient {
+  const region = resolveVisualModelRegion(modelId);
+  let resolved = visualClientsByRegion.get(region);
+  if (!resolved) {
+    resolved = new BedrockRuntimeClient({ region });
+    visualClientsByRegion.set(region, resolved);
+  }
+  return resolved;
+}
 
 const controlPlaneClient = new BedrockClient({
   region: process.env.AWS_REGION ?? 'us-east-1',
@@ -34,7 +62,7 @@ const controlPlaneClient = new BedrockClient({
  * generations are large (high max_tokens); a stalled connection would otherwise
  * hang indefinitely and leave the generation row stuck. On timeout we abort the
  * request so callers fail fast and transition to a retryable error state.
- * Override via BEDROCK_INVOKE_TIMEOUT_MS (default 8 minutes).
+ * Override via BEDROCK_INVOKE_TIMEOUT_MS (default 12 minutes).
  */
 const MODEL_INVOKE_TIMEOUT_MS = (() => {
   const raw = process.env.BEDROCK_INVOKE_TIMEOUT_MS;
@@ -48,6 +76,20 @@ const MODEL_INVOKE_MAX_ATTEMPTS = (() => {
   const parsed = raw ? Number(raw) : Number.NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 5;
 })();
+
+const MODEL_INVOKE_INITIAL_BACKOFF_MS = 2_000;
+const MODEL_INVOKE_BACKOFF_MULTIPLIER = 2;
+
+function resolvePrototypeRetrySettings(): VisualRetrySettings {
+  return {
+    // `retryWithBackoff` loops while an integer counter is below the configured
+    // number, so a fractional value already means its ceiling in process.
+    maxAttempts: Math.ceil(MODEL_INVOKE_MAX_ATTEMPTS),
+    initialBackoffMs: MODEL_INVOKE_INITIAL_BACKOFF_MS,
+    backoffMultiplier: MODEL_INVOKE_BACKOFF_MULTIPLIER,
+    jitter: true,
+  };
+}
 
 /**
  * Retry only on throttling/rate-limit and transient 5xx — NOT on the abort
@@ -127,6 +169,39 @@ const UI_MOCK_MAX_TOKENS = (() => {
   const parsed = raw ? Number(raw) : NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 32000;
 })();
+
+/** The prototype ceiling: a positive project override, else the app default. */
+function resolvePrototypeMaxTokens(override?: number | null): number {
+  return override != null && override > 0 ? override : UI_MOCK_MAX_TOKENS;
+}
+
+/** The wall-clock cap one invocation runs under, resolved the same way. */
+function resolveInvokeTimeoutMs(override?: number | null): number {
+  return override ?? MODEL_INVOKE_TIMEOUT_MS;
+}
+
+/**
+ * The prototype lane's model settings for a V2 execution specification.
+ *
+ * A worker holds no policy. It has neither the database the project override
+ * lives in nor the environment that tunes the app default, so both values are
+ * resolved here — by the same two functions the in-process call uses, which
+ * is what keeps the two transports on one number — and travel with the run.
+ * No temperature: the in-process prototype payload has no such key.
+ */
+export function resolvePrototypeVisualModel(input: {
+  modelId: string;
+  maxTokens?: number | null;
+  timeoutMs?: number | null;
+}): VisualModelSettings {
+  return {
+    modelId: input.modelId,
+    region: resolveVisualModelRegion(input.modelId),
+    maxTokens: resolvePrototypeMaxTokens(input.maxTokens),
+    timeoutMs: resolveInvokeTimeoutMs(input.timeoutMs),
+    retry: resolvePrototypeRetrySettings(),
+  };
+}
 
 /** Default max-tokens used by PRD Apex Review when no project-level override is set. */
 export const PRD_REVIEW_DEFAULT_MAX_TOKENS = 16000;
@@ -341,6 +416,28 @@ function extractJson(text: string, label: string): string {
   if (bare) return bare[1].trim();
 
   // Model returned plain text (clarification request, refusal, etc.) — surface it directly.
+  console.warn(`[bedrockService] ${label} — model returned non-JSON response:\n${text}`);
+  throw new BedrockModelRefusalError(text.trim());
+}
+
+/**
+ * Array-shaped counterpart to extractJson, for prompts that must return a
+ * top-level JSON array. Kept separate so object-returning callers never match
+ * an array that happens to appear earlier in the response.
+ */
+export function extractJsonArray(text: string, label: string): string {
+  const fencedJson = text.match(/```json\s*([\s\S]*?)\s*```/);
+  if (fencedJson) return fencedJson[1].trim();
+
+  const fencedPlain = text.match(/```\s*([\s\S]*?)\s*```/);
+  if (fencedPlain) {
+    const candidate = fencedPlain[1].trim();
+    if (candidate.startsWith('[')) return candidate;
+  }
+
+  const bare = text.match(/(\[[\s\S]*\])/);
+  if (bare) return bare[1].trim();
+
   console.warn(`[bedrockService] ${label} — model returned non-JSON response:\n${text}`);
   throw new BedrockModelRefusalError(text.trim());
 }
@@ -1612,6 +1709,9 @@ function buildCatalogSection(catalog: DesignSystemCatalog): string {
     parts.push('### Existing components in the codebase\n\n' + componentLines.join('\n'));
   }
 
+  const componentCoverage = buildComponentDetailCoverageSection(catalog);
+  if (componentCoverage) parts.push(componentCoverage);
+
   // Canonical MaxView color palette — the AI must use these exact values rather
   // than inventing hex/rgba colors. Bundled as a local asset (designTokensService).
   const colorTokens = getMaxviewColorTokens();
@@ -2072,11 +2172,13 @@ async function invokeModel(
   // hard); the abort-timeout and truncation are NOT retried (see predicate).
   const response = await retryWithBackoff(
     async () => {
-      const effectiveTimeout = timeoutMs ?? MODEL_INVOKE_TIMEOUT_MS;
+      const effectiveTimeout = resolveInvokeTimeoutMs(timeoutMs);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), effectiveTimeout);
       try {
-        return await client.send(command, { abortSignal: controller.signal });
+        return await visualClientForModel(modelId).send(command, {
+          abortSignal: controller.signal,
+        });
       } catch (err) {
         if (controller.signal.aborted) {
           throw new Error(
@@ -2090,7 +2192,7 @@ async function invokeModel(
     },
     {
       maxRetries: MODEL_INVOKE_MAX_ATTEMPTS,
-      initialDelay: 2000,
+      initialDelay: MODEL_INVOKE_INITIAL_BACKOFF_MS,
       jitter: true,
       shouldRetry: isBedrockThrottleError,
     },
@@ -2129,6 +2231,22 @@ async function invokeModel(
   }
 
   return text;
+}
+
+/** Invoke the standard text-only Bedrock path for small, strict-JSON workflows. */
+export async function invokeBedrockText(
+  prompt: string,
+  usageCtx: BedrockUsageContext,
+  options: { modelId?: string; maxTokens?: number } = {},
+): Promise<string> {
+  return invokeModel(
+    prompt,
+    undefined,
+    options.modelId ?? MODEL_ID,
+    options.maxTokens ?? 4096,
+    undefined,
+    usageCtx,
+  );
 }
 
 function parseUiMockResult(
@@ -2787,7 +2905,8 @@ ${commentLines}
 
 /**
  * Apply open review comments to a PRD backlog and return the revised backlog JSON.
- * Calls Bedrock once — returns the updated backlog as a parsed object.
+ * The model replies with targeted edits only; they are applied to a copy of the
+ * backlog. Returns null when the reply is not a valid set of edits.
  */
 export async function fixPrdBacklogWithBedrock(
   backlogJson: unknown,
@@ -2797,15 +2916,14 @@ export async function fixPrdBacklogWithBedrock(
   usageCtx?: BedrockUsageContext,
 ): Promise<unknown> {
   const commentLines = formatCommentsForPrompt(comments);
-  const backlogStr = JSON.stringify(backlogJson, null, 2);
 
-  const prompt = `You are a senior product owner. Revise the backlog JSON below to address every review comment listed.
+  const prompt = `You are a senior product owner. Address every review comment below by editing the backlog.
 
-## Current Backlog JSON
+## Current Backlog
 
-\`\`\`json
-${backlogStr}
-\`\`\`
+Each line is one field of the backlog JSON: \`path = value\`, where value is JSON.
+
+${flattenBacklogForPrompt(backlogJson)}
 
 ## Review Comments to Address
 
@@ -2813,26 +2931,48 @@ ${commentLines}
 
 ## Instructions
 
-- Each comment has a "Highlighted text" field — this is the EXACT text the reviewer selected from the rendered backlog. Your fix MUST target that specific content (e.g. a specific epic title, feature description, user story, acceptance criteria, etc.). Do not make unrelated changes.
+- Each comment has a "Highlighted text" field — this is the EXACT text the reviewer selected from the rendered backlog. Your fix MUST target that specific content. Do not make unrelated changes.
 - Pay close attention to thread replies — they often contain the specific wording or instructions for what to change.
-- Output ONLY the complete revised backlog as valid JSON (no markdown fences, no preamble, no explanation).
-- Only modify the fields/items referenced by the highlighted text. Keep all other data unchanged.
-- Preserve the exact same JSON structure and all existing fields.`;
+- Reply with ONLY this JSON object (no markdown fences, no preamble, no explanation):
+  {"edits": [{"op": "set", "path": "<path>", "value": <new JSON value>}, {"op": "remove", "path": "<path>"}]}
+- Copy each path exactly as it appears in the Current Backlog lines.
+- "set" replaces the value at an existing path. To add an item to a list, set the path at the next unused index (for example \`acceptanceCriteria[3]\` when the list ends at \`[2]\`); the value may be a string or a whole object.
+- "remove" deletes an existing list item or field. Paths always refer to the backlog as shown, before any edit.
+- Include one edit for every field that must change, and none for fields that stay the same.`;
 
   const resolvedModel = modelId ?? MODEL_ID;
   const resolvedMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
   const text = await invokeModel(prompt, undefined, resolvedModel, resolvedMaxTokens, undefined, usageCtx ?? { feature: 'prd-review', project: 'unknown' });
 
-  // Strip any accidental code fences
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  const cleaned = fenced ? fenced[1].trim() : text.trim();
-
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    // If the model produces invalid JSON, fall back to returning null so caller knows it failed
-    return null;
+  const edits = readBacklogEdits(parseModelJsonReply(text));
+  const revised = edits ? applyBacklogEdits(backlogJson, edits) : null;
+  if (revised === null) {
+    console.warn(
+      `[bedrockService] Backlog fix reply was not a valid set of edits (model=${resolvedModel}, edits=${edits?.length ?? 'unparsed'}, reply=${JSON.stringify(text.slice(0, 500))}).`,
+    );
   }
+  return revised;
+}
+
+/**
+ * Parses a JSON reply that the model may wrap in code fences or surround with
+ * a sentence of prose. Returns null when no candidate parses.
+ */
+export function parseModelJsonReply(text: string): unknown | null {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/)?.[1]?.trim();
+  const start = trimmed.search(/[[{]/);
+  const end = Math.max(trimmed.lastIndexOf('}'), trimmed.lastIndexOf(']'));
+  const outermost = start >= 0 && end > start ? trimmed.slice(start, end + 1) : null;
+  for (const candidate of [fenced, trimmed, outermost]) {
+    if (!candidate) continue;
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // try the next candidate
+    }
+  }
+  return null;
 }
 
 /* ── Persona / user-type enrichment ───────────────────────────────────────── */
@@ -3469,6 +3609,14 @@ export interface DesignPrototypeInput {
   existingPageContext?: string;
   /** Reviewer-uploaded screenshot of the existing page. Sent as vision input in EXTEND mode. */
   pageScreenshot?: { base64: string; mediaType: string };
+  /** Relevance-ranked repository source shared by V1 and V2. */
+  sourceFiles?: ReadonlyArray<Readonly<{ path: string; content: string }>>;
+  /** Every unreadable or byte-budget-omitted candidate, in ranked order. */
+  omittedSourcePaths?: ReadonlyArray<string>;
+  /** Resolved once on App Service so both transports receive one catalog. */
+  designSystemCatalog?: DesignSystemCatalog;
+  /** Resolved once on App Service so both transports receive one inventory. */
+  screenInventory?: ReadonlyArray<ScreenInventoryRoute>;
   /**
    * Authoritative design-plan decisions for this feature (from the reviewed/edited design plan).
    * When present, these override the model's own inference for layout/components/states.
@@ -3514,22 +3662,15 @@ function buildProjectPrototypePrompt(
   const ctx = input.prototypeContext!;
   const appName = ctx.appName;
 
-  const scopingSection = extendMode
-    ? `### CRITICAL SCOPING RULE — EXTEND an existing page; the EXISTING layout is FIXED ground truth
-${targetScreenHint}${pageScreenshotHint}
-The existing page is defined by the AUTHORITATIVE source(s) below${existingPageContext?.trim() ? `: the **ACTUAL source code** at \`${input.targetRoute}\`` : ''}${input.pageScreenshot ? `${existingPageContext?.trim() ? ' and' : ':'} the **page screenshot (vision input)**` : ''}. Reproduce the existing page faithfully and add the new feature as a clearly annotated delta.
-1. **Reproduce the existing page faithfully.** Keep the real structure: regions, panels, tab bars, and the real entry mechanism.
-2. **The feature description, PBIs, and design brief describe ONLY the DELTA.** Use them solely to decide what to add or modify.
-3. **Add the new feature** in the correct location. Wrap ONLY the new/changed element(s) in a 2px dashed annotation border using the project's primary color with 8px padding, and a small "NEW: ${input.featureName}" label at the top-left. Also wrap in \`<!-- NEW_FEATURE:START -->\` … \`<!-- NEW_FEATURE:END -->\` markers.
-4. **DO NOT invent, fabricate, or hallucinate** UI elements not in the existing page or described in the PBIs.
-5. **The four state sections apply ONLY to the NEW feature** — the reproduced existing page remains identical across all sections.
-${existingPageContext?.trim() ? `\n## Existing Page Code (route: ${input.targetRoute})\n\n${existingPageContext}` : '\nUse the screenshot as the ground truth for the existing page layout when source code is not available.'}`
-    : `### CRITICAL SCOPING RULE — ONLY render what is described; NEVER invent content
-
-1. **DO NOT invent, fabricate, or hallucinate any UI elements** that are not explicitly described in the PBI Requirements or the feature description.
-2. **The page shell** should match the app's design (described in the Design System section below). Render only what the feature requires plus the minimal app chrome described in the design system skill.
-3. **The content area must contain ONLY the new feature component** described in the PBI Requirements.
-4. **States apply ONLY to the new feature component** — the app chrome remains unchanged across all four sections.`;
+  const scopingSection = buildProjectPrototypeScopingSection({
+    extendMode,
+    featureName: input.featureName,
+    targetRoute: input.targetRoute,
+    pageScreenshot: input.pageScreenshot,
+    existingPageContext,
+    targetScreenHint,
+    pageScreenshotHint,
+  });
 
   const webSection = input.webReferences?.trim()
     ? `\n## Modern Design References (live web — inspiration only)\n\nThe following patterns were found via web research. Use them as **inspiration only** — they are **subordinate to the Design System** above. Apply the project's own tokens/components; do NOT copy off-brand colors, fonts, or layout structures from these references.\n\n${input.webReferences}\n`
@@ -3622,10 +3763,23 @@ export async function generateDesignPrototypeHtml(
         inventoryPath: projectCtx.extend.screenInventoryPath ?? undefined,
       }
     : undefined;
+  const prototypeRelevanceText = [
+    input.featureName,
+    input.featureDescription,
+    ...input.pbis.flatMap((pbi) => [
+      pbi.title,
+      pbi.description,
+      pbi.acceptanceCriteria,
+    ]),
+  ].filter(Boolean).join(' ');
 
   let catalogSection = '';
   if (!projectCtx) {
-    const catalog = await designSystemService.getDesignSystemCatalog();
+    const catalog =
+      input.designSystemCatalog
+      ?? await designSystemService.getDesignSystemCatalog({
+        relevanceText: prototypeRelevanceText,
+      });
     catalogSection = buildCatalogSection(catalog);
   }
 
@@ -3634,7 +3788,9 @@ export async function generateDesignPrototypeHtml(
     if (adoTarget?.inventoryPath) {
       screenInventory = await designSystemService.getScreenInventory(adoTarget);
     } else if (!projectCtx) {
-      screenInventory = await designSystemService.getScreenInventory();
+      screenInventory = input.screenInventory
+        ? [...input.screenInventory]
+        : await designSystemService.getScreenInventory();
     }
   } catch (err) {
     console.warn('[bedrockService] getScreenInventory failed for design prototype:', err);
@@ -3643,34 +3799,23 @@ export async function generateDesignPrototypeHtml(
     screenInventory,
     projectCtx?.appName ?? 'MaxView',
   );
+  const sourceContextSection = projectCtx
+    ? ''
+    : buildPrototypeSourceSection(
+        input.sourceFiles ?? [],
+        input.omittedSourcePaths ?? [],
+      );
 
-  const pbiSection = input.pbis.map((pbi, i) => {
-    const parts = [`### PBI ${i + 1}: ${pbi.title}`];
-    if (pbi.userTypes?.length) parts.push(`**Applies to user types:** ${pbi.userTypes.join(', ')}`);
-    if (pbi.description) parts.push(pbi.description);
-    if (pbi.acceptanceCriteria) parts.push(`**Acceptance Criteria:**\n${pbi.acceptanceCriteria}`);
-    if (pbi.personaBehaviors?.length) {
-      const behaviors = pbi.personaBehaviors
-        .map(pb => `- For user types ${pb.userTypes.join(', ')}: ${pb.behavior}`)
-        .join('\n');
-      parts.push(`**Per-persona behavior:** (same control, different behavior per persona group — render one variant per group; do not collapse)\n${behaviors}`);
-    }
-    return parts.join('\n');
-  }).join('\n\n');
+  const pbiSection = buildPrototypePbiSection(input.pbis);
 
   // EXTEND mode: fetch existing page source from this project's repo (MaxView default when
   // no prototype context). A screenshot alone is enough to EXTEND when page source is missing.
   let existingPageContext = input.existingPageContext;
   if (input.targetRoute && !existingPageContext) {
     try {
-      const featureText = [
-        input.featureName,
-        input.featureDescription,
-        ...input.pbis.flatMap(p => [p.title, p.description, p.acceptanceCriteria]),
-      ].filter(Boolean).join(' ');
       existingPageContext = await designSystemService.fetchExistingPageContext(
         input.targetRoute,
-        featureText,
+        prototypeRelevanceText,
         adoTarget,
       );
     } catch (err) {
@@ -3683,80 +3828,30 @@ export async function generateDesignPrototypeHtml(
     pageScreenshot: input.pageScreenshot,
   });
 
-  // EXTEND mode: surface the target screen's personas/states from the inventory (when known).
-  const targetScreen = input.targetRoute
-    ? screenInventory.find(s => inventoryRouteMatches(s.route, input.targetRoute!))
-    : undefined;
-  const targetScreenHint = extendMode && (targetScreen?.userTypes?.length || targetScreen?.states)
-    ? `\n\n**Existing page context from inventory:**` +
-      (targetScreen?.userTypes?.length ? `\n- Serves user types: ${targetScreen.userTypes.join(', ')}` : '') +
-      (targetScreen?.states ? `\n- Known UI states: ${targetScreen.states}` : '')
-    : '';
+  const targetScreenHint = buildPrototypeTargetScreenHint({
+    extendMode,
+    targetRoute: input.targetRoute,
+    screenInventory,
+  });
+  const pageScreenshotHint = buildPrototypePageScreenshotHint({
+    extendMode,
+    hasPageScreenshot: Boolean(input.pageScreenshot),
+  });
 
-  const pageScreenshotHint = extendMode && input.pageScreenshot
-    ? `\n\n**A screenshot of the ACTUAL existing page is provided as a vision input. It is the AUTHORITATIVE ground truth for the existing page's layout, structure, and control types.** Reproduce the layout you see — the same regions, the same arrangement, and the same entry mechanism (e.g. per-day cards vs. a table/grid). Do NOT substitute a different layout, and do NOT let the feature description or design brief change the existing layout.`
-    : '';
+  const scopingSection = buildPrototypeScopingSection({
+    extendMode,
+    targetRoute: input.targetRoute,
+    pageScreenshot: input.pageScreenshot,
+    existingPageContext,
+    targetScreenHint,
+    pageScreenshotHint,
+  });
 
-  const scopingSection = extendMode
-    ? `### CRITICAL SCOPING RULE — EXTEND an existing page; the EXISTING layout is FIXED ground truth
-${targetScreenHint}${pageScreenshotHint}
-The existing page is defined by the AUTHORITATIVE source(s) below: the **ACTUAL React source code** at \`${input.targetRoute}\`${input.pageScreenshot ? ' **and the page screenshot (vision input)**' : ''}. These — NOT the feature description or design brief — are the single source of truth for the existing page's layout. You must:
-1. **Reproduce the existing page faithfully from the code${input.pageScreenshot ? ' and screenshot' : ''}.** Recreate the REAL structure as accurately as you can: the actual regions, panels, tab bars, and the real entry mechanism. If the page uses per-day cards with Time In / Time Out / Break fields, reproduce per-day cards — do NOT convert them into a generic table/grid, and do NOT introduce rows, columns, or fields (e.g. "Hours", "Regular/Overtime", "Position") that are not present in the actual code/screenshot. Render the reproduced existing areas with muted styling so the new feature stands out, but keep their STRUCTURE true to the real page.
-2. **The feature description, PBI requirements, and design brief describe ONLY the DELTA** — the new or changed behavior to add on top of the existing page. Use them solely to decide what to add, disable, grey out, annotate, or modify. **NEVER use the feature/brief wording to infer or redraw the base page layout.** If the brief's wording implies a different layout than the code/screenshot (e.g. it says "grid", "columns", or "rows" but the real page uses cards), the code/screenshot WIN — reproduce the real layout and apply the delta to it.
-3. **Add the new feature** in the correct location within the faithfully-reproduced page (the specific control, cell, card, tab, or banner the requirements describe). The new/changed element(s) MUST be rendered in FULL DETAIL with all interactions, styling, and states. Wrap ONLY them in the purple annotation border and \`<!-- NEW_FEATURE:START/END -->\` markers.
-4. **DO NOT invent, fabricate, or hallucinate** UI elements that are neither in the existing page code/screenshot nor described in the PBI Requirements.
-5. **The four state sections (default / empty / error / loading) apply ONLY to the NEW feature** — the reproduced existing page remains identical across all sections.
-6. **IMPORTANT — Existing code/screenshot are READ-ONLY context.** They define the existing layout for this review only. The design doc receives the actual React source code separately and will never see this prototype HTML; the existing page must not be re-implemented or modified.
-
-## Existing Page Code (route: ${input.targetRoute})
-
-${existingPageContext}`
-    : `### CRITICAL SCOPING RULE — ONLY render what is described; NEVER invent content
-
-You must follow these rules with zero exceptions:
-1. **DO NOT invent, fabricate, or hallucinate any UI elements** that are not explicitly mentioned in the PBI Requirements or the feature description above. If a card, widget, table, chart, or section is not described in the requirements, it MUST NOT appear.
-2. **The page shell consists of ONLY**: the MaxView left sidebar nav (with the standard role-gated nav items: Home, Companies, Worksites, Users, Shift Scheduler, RTO Management, Coder, Credentials, Document Management, Timecards, Admin Portal, Power BI — only those visible to the relevant persona) and the top header bar (with "Hello, [Name]" + avatar). These are the ONLY existing elements you render. The sidebar and header are shown ONLY for visual context — they are existing shared components that MUST NOT be modified in any downstream implementation.
-3. **The content area must contain ONLY the new feature component** described in the PBI Requirements. Do not add other cards, widgets, summaries, charts, schedules, or any content that is not part of this feature.
-4. **States apply ONLY to the new feature component** — the sidebar and header remain unchanged across all four sections.
-5. **IMPORTANT — The sidebar, header, and page shell are READ-ONLY visual context.** They are rendered in the prototype purely for visual fidelity. When this prototype is used to generate a design doc and implementation code, ONLY the new feature component should be implemented. The sidebar navigation, header bar, and page layout MUST NOT be modified or regenerated — they already exist in the codebase.`;
-
-  const plan = input.plan;
-  const hasPlan = Boolean(
-    plan && (plan.designBrief || plan.decision || plan.layoutPattern || plan.primaryComponents?.length || plan.states?.length || plan.rationale || plan.notes || plan.pbiContributions?.length),
-  );
-
-  let planSection = '';
-  if (hasPlan) {
-    const parts: string[] = [];
-    parts.push('## Approved Design Brief (AUTHORITATIVE — follow exactly)');
-    parts.push('');
-    parts.push('A designer has reviewed and approved the following design brief for this feature. This brief is authoritative and **overrides any inference you would otherwise make**. Honor it precisely.');
-    if (extendMode) {
-      parts.push('');
-      parts.push('**Scope of this brief (EXTEND mode):** this brief is authoritative for the NEW or changed behavior (the delta) ONLY. The EXISTING page layout is defined by the actual page code and screenshot provided below — if any wording here describes the existing layout differently than the real code/screenshot, the code/screenshot win. Do NOT use this brief to redraw the existing page.');
-    }
-    parts.push('');
-
-    if (plan!.designBrief?.trim()) {
-      parts.push(plan!.designBrief.trim());
-      parts.push('');
-    }
-
-    const meta: string[] = [];
-    if (plan!.decision) meta.push(`- **Decision:** ${plan!.decision}${plan!.decision === 'update-page' && input.targetRoute ? ` (extend the existing page at \`${input.targetRoute}\`)` : ''}`);
-    if (plan!.targetPageTitle) meta.push(`- **Page title:** ${plan!.targetPageTitle}`);
-    if (plan!.layoutPattern) meta.push(`- **Layout pattern:** ${plan!.layoutPattern}`);
-    if (plan!.primaryComponents?.length) meta.push(`- **Primary components to use:** ${plan!.primaryComponents.join(', ')}`);
-    if (plan!.states?.length) meta.push(`- **States to render:** ${plan!.states.join(', ')}`);
-    if (plan!.rationale) meta.push(`- **Rationale:** ${plan!.rationale}`);
-    if (plan!.notes?.trim()) meta.push(`- **Reviewer notes (must honor):** ${plan!.notes.trim()}`);
-    if (meta.length) {
-      parts.push('### Technical details');
-      parts.push(...meta);
-      parts.push('');
-    }
-    planSection = parts.join('\n');
-  }
+  const planSection = buildPrototypePlanSection({
+    plan: input.plan,
+    extendMode,
+    targetRoute: input.targetRoute,
+  });
 
   // ── Project-specific prototype path ─────────────────────────────────────────
   // When the project has its own design-system skill (resolved by prototypeContextService),
@@ -3772,7 +3867,7 @@ You must follow these rules with zero exceptions:
       pageScreenshotHint,
     );
     const effectiveModelPS = modelId ?? UI_MOCK_MODEL_ID;
-    const effectiveMaxTokensPS = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
+    const effectiveMaxTokensPS = resolvePrototypeMaxTokens(maxTokens);
     const projectImages: ImageInput[] = [];
     if (attachScreenshot && input.pageScreenshot) {
       projectImages.push({
@@ -3790,16 +3885,12 @@ You must follow these rules with zero exceptions:
       timeoutMs,
       usageCtx ?? { feature: 'design-prototype', project: 'unknown' },
     );
-    let psHtml = psText.trim();
-    if (psHtml.startsWith('```')) {
-      psHtml = psHtml.replace(/^```(?:html)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-    }
-    return psHtml;
+    return normalizeGeneratedPrototypeHtml(psText);
   }
 
   const prompt = `You are a senior UI/UX designer generating a high-fidelity HTML prototype for a MaxView application feature.
 
-${catalogSection}${screensContextSection}
+${catalogSection}${screensContextSection}${sourceContextSection}
 ## Feature to Design
 
 **Feature:** ${input.featureName}
@@ -3908,7 +3999,7 @@ Return ONLY the complete HTML document. No markdown fences, no explanation — j
     : undefined;
 
   const effectiveModel = modelId ?? UI_MOCK_MODEL_ID;
-  const effectiveMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
+  const effectiveMaxTokens = resolvePrototypeMaxTokens(maxTokens);
 
   const images: ImageInput[] = [];
   if (image) images.push(image);
@@ -3923,12 +4014,7 @@ Return ONLY the complete HTML document. No markdown fences, no explanation — j
 
   const text = await invokeModel(prompt, images.length > 0 ? images : undefined, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' });
 
-  let html = text.trim();
-  if (html.startsWith('```')) {
-    html = html.replace(/^```(?:html)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-  }
-
-  return html;
+  return normalizeGeneratedPrototypeHtml(text);
 }
 
 // ── Per-state regeneration helpers ──────────────────────────────────────────
@@ -3965,14 +4051,6 @@ function spliceStateSection(html: string, state: DesignPrototypeStateName, newIn
  */
 function resolveAutoStates(_feedback: string, _comments: string[]): DesignPrototypeStateName[] {
   return ['default', 'error'];
-}
-
-function stripHtmlFences(raw: string): string {
-  let out = raw.trim();
-  if (out.startsWith('```')) {
-    out = out.replace(/^```(?:html)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-  }
-  return out.trim();
 }
 
 export async function regenerateDesignPrototypeHtml(
@@ -4057,7 +4135,7 @@ Return ONLY the complete revised HTML document. No markdown fences — just the 
 
     if (!scoped) {
       const text = await invokeModel(projectRegenPrompt, regenImages.length > 0 ? regenImages : undefined, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' });
-      return stripHtmlFences(text);
+      return normalizeGeneratedPrototypeHtml(text);
     }
 
     // Scoped path: regenerate only the requested sections
@@ -4092,7 +4170,7 @@ ${currentSections}
 
 Return ONLY the revised sections, each in its STATE markers. No markdown fences, no document shell.`;
 
-    const scopedText = stripHtmlFences(await invokeModel(projectScopedPrompt, regenImages.length > 0 ? regenImages : undefined, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' }));
+    const scopedText = normalizeGeneratedPrototypeHtml(await invokeModel(projectScopedPrompt, regenImages.length > 0 ? regenImages : undefined, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' }));
 
     if (/<!DOCTYPE html|<html[\s>]/i.test(scopedText)) return scopedText;
 
@@ -4103,7 +4181,7 @@ Return ONLY the revised sections, each in its STATE markers. No markdown fences,
       if (inner != null) { merged = spliceStateSection(merged, s, inner); appliedCount++; }
       else console.warn(`[bedrockService] project regen: state "${s}" missing from model output — keeping prior`);
     }
-    if (appliedCount === 0) return stripHtmlFences(await invokeModel(projectRegenPrompt, regenImages.length > 0 ? regenImages : undefined, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' }));
+    if (appliedCount === 0) return normalizeGeneratedPrototypeHtml(await invokeModel(projectRegenPrompt, regenImages.length > 0 ? regenImages : undefined, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' }));
     return merged;
   }
 
@@ -4252,7 +4330,7 @@ Return ONLY the complete revised HTML document. No markdown fences, no explanati
 
   if (!scoped) {
     const text = await invokeModel(prompt, regenImageArg, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' });
-    return stripHtmlFences(text);
+    return normalizeGeneratedPrototypeHtml(text);
   }
 
   // ── Scoped path: regenerate only the requested sections, splice the rest ──
@@ -4295,7 +4373,7 @@ ${scopingSection}
 
 Return ONLY the revised section(s), each wrapped in its STATE markers. No markdown fences, no explanation, no document shell.`;
 
-  const text = stripHtmlFences(await invokeModel(scopedPrompt, regenImageArg, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' }));
+  const text = normalizeGeneratedPrototypeHtml(await invokeModel(scopedPrompt, regenImageArg, effectiveModel, effectiveMaxTokens, timeoutMs, usageCtx ?? { feature: 'design-prototype', project: 'unknown' }));
 
   // Graceful fallback: if the model ignored the contract and returned a full
   // document, just use it directly.

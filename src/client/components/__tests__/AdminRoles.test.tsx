@@ -59,6 +59,15 @@ const allPermissions = [
   { id: 'p1', key: 'admin:roles', description: 'Manage roles', category: 'admin' },
   { id: 'p2', key: 'admin:users', description: 'Manage users', category: 'admin' },
   { id: 'p3', key: 'chat:create', description: 'Create chats', category: 'chat' },
+  { id: 'p-view', key: 'playbooks:view', description: 'View Playbooks', category: 'playbooks' },
+  {
+    id: 'p-run',
+    key: 'playbooks:run',
+    description: "Start Playbook runs; does not authorize the run's step effects",
+    category: 'playbooks',
+  },
+  { id: 'p-author', key: 'playbooks:author', description: 'Author Playbooks', category: 'playbooks' },
+  { id: 'p-admin', key: 'playbooks:admin', description: 'Administer Playbooks', category: 'playbooks' },
 ];
 
 function setupDefaultMocks() {
@@ -371,6 +380,54 @@ describe('AdminRoles — permissions modal', () => {
       );
     });
   });
+
+  it('PBI-008 AC-0 / TBI-037 DoD-0 / VT-19 warns before save without selecting run', () => {
+    render(<AdminRoles />);
+    fireEvent.click(screen.getAllByTitle('Manage permissions')[0]);
+
+    fireEvent.click(screen.getByTestId('playbook-permission-playbooks-author'));
+
+    expect(screen.getByTestId('playbook-author-without-run-warning')).toHaveAttribute(
+      'aria-live',
+      'polite',
+    );
+    expect(screen.getByTestId('playbook-permission-playbooks-run')).not.toBeChecked();
+    expect(screen.getByTestId('role-permissions-save')).toBeEnabled();
+  });
+
+  it('PBI-008 AC-0 / TBI-037 DoD-0 / VT-19 announces the saved warning and waits for acknowledgement', async () => {
+    const mutateAsync = jest.fn().mockResolvedValue(undefined);
+    (useUpdateRolePermissions as jest.Mock).mockReturnValue({
+      mutateAsync,
+      isPending: false,
+      error: null,
+    });
+
+    render(<AdminRoles />);
+    fireEvent.click(screen.getAllByTitle('Manage permissions')[0]);
+    fireEvent.click(screen.getByTestId('playbook-permission-playbooks-author'));
+    fireEvent.click(screen.getByTestId('role-permissions-save'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('playbook-author-without-run-warning')).toHaveAttribute(
+        'role',
+        'alert',
+      );
+    });
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('role-permissions-warning-acknowledge'));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('PBI-008 AC-0 exposes all Playbook keys with visible purpose text', () => {
+    render(<AdminRoles />);
+    fireEvent.click(screen.getAllByTitle('Manage permissions')[0]);
+
+    for (const key of ['view', 'run', 'author', 'admin']) {
+      expect(screen.getByTestId(`playbook-permission-playbooks-${key}`)).toBeInTheDocument();
+    }
+    expect(screen.getByText(/does not authorize the run's step effects/i)).toBeVisible();
+  });
 });
 
 // ── Members modal ──────────────────────────────────────────────────────────────
@@ -436,6 +493,49 @@ describe('AdminRoles — members modal', () => {
     expect(mutate).toHaveBeenCalledWith(
       { oid: 'u2', project: 'Apex', roleId: 'role-admin' },
       expect.objectContaining({ onSuccess: expect.any(Function) }),
+    );
+  });
+
+  it('PBI-008 AC-0 / TBI-037 DoD-0 shows the project assignment warning', () => {
+    const mutate = jest.fn((_variables, options) => {
+      options.onSuccess({ ok: true });
+    });
+    (useAssignProjectRole as jest.Mock).mockReturnValue({
+      mutate,
+      isPending: false,
+      error: null,
+    });
+    (useRoles as jest.Mock).mockReturnValue({
+      data: [{ ...adminRole, permissions: ['playbooks:author'] }, memberRole],
+      isLoading: false,
+    });
+    render(<AdminRoles selectedProject="Apex" />);
+
+    fireEvent.click(screen.getAllByTitle('Manage members')[0]);
+    fireEvent.change(screen.getByTestId('project-role-member-select'), {
+      target: { value: 'u2' },
+    });
+    fireEvent.click(screen.getByTestId('project-role-assign'));
+
+    expect(screen.getByTestId('playbook-author-without-run-warning')).toHaveAttribute(
+      'role',
+      'alert',
+    );
+  });
+
+  it('PBI-008 AC-2 / VT-10 renders the explicit project-role empty state', () => {
+    (useUsers as jest.Mock).mockReturnValue({
+      data: [
+        { oid: 'u2', displayName: 'Bob', email: 'bob@test.com', lastSeenAt: null, roles: [], projectRoles: [] },
+      ],
+      isLoading: false,
+    });
+    render(<AdminRoles selectedProject="Apex" />);
+
+    fireEvent.click(screen.getAllByTitle('Manage members')[0]);
+
+    expect(screen.getByTestId('project-role-members-empty')).toHaveTextContent(
+      'No members assigned yet.',
     );
   });
 

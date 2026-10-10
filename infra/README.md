@@ -19,6 +19,7 @@ This directory contains Terraform configuration for provisioning Azure resources
 - **Managed-identity access**: The cross-cutting Apex App Service identity is scoped to the shared Storage Account. PDF assembly stays in the Apex application; job delivery uses the Postgres queue (Service Bus deferred).
 - **Load Test infrastructure** (FEAT-002): Dedicated Service Bus namespace, Container Apps Job, and managed identities — see [Load Test module](#load-test-module-feat-002) below.
 - **AI Runs background worker** (FEAT-003): Shared AI-runs Service Bus namespace (`sbns-apex-ai-*`), `ai-runs-background` queue, KEDA Container Apps Job, runner MI, Azure Files workspace mount — see [AI Runs worker module](#ai-runs-background-worker-module-feat-003) below.
+- **My Work Cursor worker Job** (dev and production): Manual Container Apps Job in `cae-apex-ai-{environment}` that Apex starts for each cloud-agent run — see [My Work Cursor worker Job](#my-work-cursor-worker-job-dev-and-production).
 - **Repo read service** (optional): Container App serving git reads from ephemeral disk; gated by `enable_repo_read_service` — see [Repo read service](#repo-read-service) below.
 
 ## Shared async platform conventions
@@ -180,10 +181,37 @@ Dev and prod **must not share state**. See [Workspaces and environments](#worksp
 | `ado_project` | Azure DevOps project | (required) |
 | `github_org` | GitHub org for checkout (`GITHUB_ORG`; not the Apex product name) | `""` |
 | `github_token` | GitHub PAT for clone/fetch (`GITHUB_TOKEN`; same as App Service) | `null` |
+| `postgresql_location` | PostgreSQL Flexible Server region (keep equal to `app_service_location`) | `Central US` |
+| `postgresql_server_name` | PostgreSQL Flexible Server name | `psql-hub-dev` |
+| `postgresql_sku_name` | PostgreSQL compute SKU | `B_Standard_B1ms` |
+| `postgresql_storage_mb` | Provisioned storage in MiB; cannot be reduced after growth | `32768` |
+| `postgresql_backup_retention_days` | Point-in-time backup retention | `7` |
+| `postgresql_azure_services_firewall_rule_name` | Name of the `0.0.0.0` Azure-services firewall rule | `allow-azure-services` |
+| `postgresql_pg_stat_statements_track` | `pg_stat_statements` capture mode (`none` / `top` / `all`) | `top` |
+| `postgresql_log_min_duration_statement_ms` | Log statements slower than this many ms (`-1` disables) | `5000` |
 
 The App Service plan uses the fixed `app_service_worker_count`. Production
 autoscaling is intentionally deferred until Interview and other long-running AI
 flows have a multi-instance ownership, cleanup, and scale-in recovery design.
+
+### Importing an existing PostgreSQL server
+
+Before importing a Flexible Server, set its exact name, region, SKU, storage,
+backup retention, availability zone, and managed firewall-rule name in the
+environment's tfvars. Storage cannot shrink, and a mismatched region or name
+produces a replacement plan.
+
+Never change `postgresql_server_name` or `postgresql_location` and apply while
+Terraform state still owns a different server. Back up state, remove the old
+addresses from state without destroying Azure resources, import the active
+server and child resources, then require a refreshed plan with no PostgreSQL
+create, replacement, resize, or destroy. See the approved production
+reconciliation runbook before changing production state. Terraform ignores
+imported administrator credentials after server creation because Azure cannot
+return them with matching state metadata; rotate the password through the
+approved secret process. This credential-ownership rule applies to all
+environments: after a server is created, administrator credentials are managed
+outside Terraform rather than changed through tfvars.
 
 ### Shared async + PDF processing settings
 
@@ -596,6 +624,69 @@ scales from zero until the governor publishes admitted work.
 
 ---
 
+## My Work Cursor worker Job (dev and production)
+
+`cursor-cloud-workers.tf` provisions the Container Apps Job that My Work starts
+for each cloud-agent run. Set `enable_cursor_pool_workers = true` in that
+environment's tfvars file (`terraform.tfvars` for dev, `terraform.prd.tfvars`
+for production). The job is created only when that flag is true. Resource
+names still include the environment.
+
+Apex starts one execution and overrides the command to
+`/usr/local/bin/cursor-run-cli`. The Job does not register a Cursor Team Pool
+and does not call the Cloud Agents SDK.
+
+The stack reuses `cae-apex-ai-{environment}`, the existing ACR, Application
+Insights, and the `cursor-api-key` secret in the AI-runs Key Vault. It does
+not mount the shared Azure Files workspace: each run gets an isolated
+ephemeral checkout.
+
+| Resource | Dev name | Production name | Purpose |
+|----------|----------|-----------------|---------|
+| Worker Container Apps Job | `caj-apex-cursor-worker-dev` | `caj-apex-cursor-worker-prd` | Manual Job; one execution per Start cloud agent click |
+| Worker identity | `mi-apex-cursor-worker-dev` | `mi-apex-cursor-worker-prd` | Pull image, read the Cursor API key, and read prompt blobs |
+| Prompt container | `cursor-prompts` on the shared account | `cursor-prompts` on the shared account | Private text of the Apex-built prompt; deleted after one day |
+
+### Image contract
+
+Terraform provisions compute and identity but does not build the image:
+
+- `cursor_pool_worker_image` must contain the Cursor `agent` CLI, `git`, and
+  `/usr/local/bin/cursor-run-cli` from `runners/cursor-pool-worker/`.
+- The Key Vault `cursor-api-key` is the key the CLI uses inside the container.
+- `ADO_PAT` is passed on the execution only, for Azure DevOps remotes. It is
+  not stored on the Job.
+- The execution receives `AGENT_PROMPT_BLOB_URL`, not the prompt text. Apex
+  uploads that text to the private `cursor-prompts` container before starting
+  the job. The worker identity reads it. The container is deleted after one day.
+
+### RBAC and networking
+
+The worker identity can pull from ACR, read Key Vault secrets, and read the
+`cursor-prompts` container. The Apex app identity can write that container.
+The worker does not receive access to the AI-runs Service Bus queue or the
+shared workspace.
+
+Workers require outbound HTTPS to Cursor, the source-control host, and the
+package registries used by the repository. No inbound port or public IP is
+required.
+
+### Activation
+
+Use the dev workspace and `terraform.tfvars`, or the production workspace and
+`terraform.prd.tfvars`:
+
+```hcl
+enable_cursor_pool_workers = true
+cursor_pool_worker_image   = "<acr>.azurecr.io/apex-cursor-worker:<tag>"
+```
+
+```bash
+terraform output cursor_pool_worker_job_name
+```
+
+---
+
 ## AI Runs interactive transport (FEAT-007)
 
 The optional interactive lane adds a warm Dapr-enabled Container App and a
@@ -730,6 +821,87 @@ Because of that, repo-read reports its own exits instead: see
 (probe or scale), `uncaughtException` means it died on its own, and a
 `RepoReadServiceStarted` with no preceding exit means SIGKILL — OOM or an expired
 shutdown grace period, neither of which a handler can catch.
+
+---
+
+## AI Platform V2 (additive onto existing host)
+
+V2 does **not** create a parallel resource group, Service Bus namespace, storage
+account, or Container Apps Environment. It adds queues, an artifact container,
+and managed identities onto the environment you already run:
+
+| Env | Region | Typical host |
+|-----|--------|----------------|
+| DEV | East US | `rg-scrum-dev` / `sbns-apex-ai-dev` / `stapexdevasync` / `cae-apex-ai-dev` |
+| PROD | Central US | existing prod AI RG / `sbns-apex-ai-prd` / shared async / CAE |
+
+### Enable checklist
+
+1. Set `enable_ai_platform_v2 = true`.
+2. Set existing host names: `ai_platform_v2_resource_group_name`,
+   `ai_platform_v2_servicebus_namespace_name`,
+   `ai_platform_v2_storage_account_name`,
+   `ai_platform_v2_container_app_env_name`.
+3. Optional: `ai_platform_v2_location` (defaults from contracts:
+   `dev`→`eastus`, `prd`→`centralus`).
+4. `terraform plan` / `apply` (requires permission to create role assignments
+   for the new identities).
+5. Keep `ai-runs-v2-transport` off until apps are wired.
+
+**DEV runtime smoke test (after foundation apply):** from repo root, run
+`./scripts/dev/complete-v2-dev-setup.sh` (uses `az acr build` — no local Docker).
+It sets App Service V2 settings, blob + AcrPull RBAC, builds runner images, rolls
+`ca-apex-ai-orchestrator-dev`, `ca-apex-ai-runs-documents-v2-dev`, and the split
+interactive hosts (`ca-apex-ai-fast-interactive-dev`, `ca-apex-ai-agentic-dev`).
+Orchestrator dispatch URLs come from those apps (not the legacy shared host).
+Then enable `ai-runs-v2-transport` in Platform Admin for your user/project.
+
+Optional Terraform: `enable_ai_platform_v2_runtime = true` **and**
+`enable_ai_platform_v2_split_interactive = true` with image URLs,
+`ai_platform_v2_database_url`, and the existing Redis/workspace/secret inputs
+— see `ai-platform-v2-runtime.tf`, `ai-platform-v2-interactive-runtime.tf`, and
+`terraform.tfvars.example`.
+
+**Document worker scaling:** `ca-apex-ai-runs-documents-v2-{env}` scales from
+`min_replicas` to `ai_platform_v2_documents_max_replicas` on the documents queue
+length (KEDA rule `documents-v2-servicebus-keda`, secret `documents-keda-sb-connection`
+from the queue-scoped Manage SAS `ai-runs-v2-document-keda-manage`, which KEDA uses only
+to poll queue length). Each replica runs one document run at a time. The worker
+completes the queue message once the run starts, so KEDA can pick a busy replica to
+remove. On SIGTERM the worker stops taking messages and lets the current run finish
+for `AI_RUNS_V2_SHUTDOWN_DRAIN_MS` (grace period minus 30 s) before aborting it.
+`azapi_resource_action.ai_platform_v2_documents_scale_timing` (a PATCH, re-run whenever
+the app changes) sets the termination grace
+period (`ai_platform_v2_documents_termination_grace_seconds`, at most 600) and the
+cooldown (`ai_platform_v2_documents_scale_cooldown_seconds`), which azurerm 3.x cannot
+set. After apply, check that the Container App system logs have no `KEDAScalerFailed` and
+that `az containerapp show` reports both values.
+
+**Split interactive cutover (DEV/PROD):**
+
+1. Drain `ai-runs-v2-fast` and `ai-runs-v2-agentic` queues (must be empty active + DLQ).
+2. `terraform plan` and confirm queue/RBAC deletions match contracts (only those two queues).
+3. Apply — creates `ca-apex-ai-fast-interactive-{env}` and `ca-apex-ai-agentic-{env}` with
+   internal ingress, `/health` probes, class UAMIs, and orchestrator env for distinct
+   dispatch URLs + DEV caps (`interactiveCap=4`, lane floors `1+1`; PROD `16` / `2+2`).
+4. Publish one `apex-ai-runs-interactive` SHA via `scripts/ci/publish-ai-runs-interactive.sh`
+   (legacy + fast + agentic targets).
+5. Soak with legacy `ca-apex-ai-interactive-{env}` still present for canonical-flag-off traffic.
+
+Contracts: `infra/ai-platform-v2-contracts.json` (asserted by
+`aiPlatformV2Infrastructure.test.ts`).
+
+### Files
+
+| File | Owns |
+|------|------|
+| `ai-platform-v2.tf` | Host data sources, V2 queues, artifact container |
+| `ai-platform-v2-identities.tf` | UAMIs + entity-scoped RBAC |
+| `ai-platform-v2-contracts.json` | Queue matrix + host-reuse cutover |
+| `ai-platform-v2-networking.tf` | Stub (no new VNet/CAE) |
+| `ai-platform-v2-monitoring.tf` | Stub (no dedicated LA) |
+| `ai-platform-v2-runtime.tf` | Orchestrator + document worker Container Apps (optional) |
+| `ai-platform-v2-interactive-runtime.tf` | Fast + agentic actor hosts, orchestrator dispatch URLs (optional) |
 
 ---
 

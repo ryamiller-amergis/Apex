@@ -4,8 +4,7 @@
 $script:ApexProd = @{
   SubscriptionHint = 'MSS-Production'
   DataResourceGroup = 'rg-apex-prd-data'
-  # Live production server. The retired psql-apex-eus2 (East US 2) is stopped and
-  # pending decommission; see docs/superpowers/plans/2026-09-17-apex-database-state-reconciliation.md
+  # Sole production server. psql-apex-eus2 (East US 2) was deleted 2026-09-18.
   PostgresServer   = 'psql-apex-cus'
   AppResourceGroup = 'rg-apex-prd-app'
   AppName          = 'app-apex-prd'

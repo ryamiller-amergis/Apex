@@ -332,6 +332,30 @@ output "ai_runs_api_app_setting_names" {
   }
 }
 
+# ---------------------------------------------------------------------------
+# My Work Cursor worker Job (null while enable_cursor_pool_workers is false)
+# ---------------------------------------------------------------------------
+
+output "cursor_pool_name" {
+  description = "Idle template pool name. Apex overrides the command per execution."
+  value       = local.cursor_pool_enabled ? local.cursor_pool_name : null
+}
+
+output "cursor_pool_worker_job_name" {
+  description = "Manual Container Apps Job Apex starts for each My Work cloud-agent run."
+  value       = try(azurerm_container_app_job.cursor_pool_worker[0].name, null)
+}
+
+output "cursor_pool_worker_job_id" {
+  description = "Resource ID of the My Work Cursor worker Job."
+  value       = try(azurerm_container_app_job.cursor_pool_worker[0].id, null)
+}
+
+output "cursor_pool_worker_identity_client_id" {
+  description = "Managed identity client ID used by Cursor worker executions."
+  value       = try(azurerm_user_assigned_identity.cursor_pool_worker[0].client_id, null)
+}
+
 output "ai_runs_callback_token_audience" {
   description = "AAD App ID URI for MI ingest JWTs when enable_ai_runs_entra_app is true"
   value       = var.enable_ai_runs_entra_app || var.ai_runs_callback_token_audience != null ? local.ai_runs_ingest_identifier_uri : null
@@ -403,4 +427,113 @@ output "github_app_setting_names" {
     org   = "GITHUB_ORG"
     token = "GITHUB_TOKEN"
   }
+}
+
+# ---------------------------------------------------------------------------
+# AI Platform V2 (null while enable_ai_platform_v2 is false)
+# Host-reuse: existing RG / SB / storage / CAE; additive queues + container + UAMIs
+# ---------------------------------------------------------------------------
+
+output "ai_platform_v2_enabled" {
+  description = "Whether additive V2 host-reuse resources are enabled in this workspace"
+  value       = var.enable_ai_platform_v2
+}
+
+output "ai_platform_v2_resource_group_name" {
+  description = "Existing host resource group used for V2 identities and lookups"
+  value       = try(data.azurerm_resource_group.ai_platform_v2_host[0].name, null)
+}
+
+output "ai_platform_v2_location" {
+  description = "Host region for V2 (dev=eastus, prd=centralus via contracts or override)"
+  value       = var.enable_ai_platform_v2 ? local.ai_platform_v2_location : null
+}
+
+output "ai_platform_v2_servicebus_namespace_name" {
+  description = "Existing Service Bus namespace hosting V2 queues"
+  value       = try(data.azurerm_servicebus_namespace.ai_platform_v2_host[0].name, null)
+}
+
+output "ai_platform_v2_servicebus_namespace_fqdn" {
+  description = "Service Bus fully-qualified namespace hostname for V2 queues"
+  value = try(
+    "${data.azurerm_servicebus_namespace.ai_platform_v2_host[0].name}.servicebus.windows.net",
+    null
+  )
+}
+
+output "ai_platform_v2_queue_names" {
+  description = "V2 queue names keyed by contract name"
+  value = var.enable_ai_platform_v2 ? {
+    for name, queue in azurerm_servicebus_queue.ai_platform_v2 : name => queue.name
+  } : null
+}
+
+output "ai_platform_v2_storage_account_name" {
+  description = "Existing shared async storage account hosting the V2 artifact container"
+  value       = try(data.azurerm_storage_account.ai_platform_v2_host[0].name, null)
+}
+
+output "ai_platform_v2_artifact_container_name" {
+  description = "Private Blob container for V2 run artifacts"
+  value       = var.enable_ai_platform_v2 ? local.ai_platform_v2_artifact_container : null
+}
+
+output "ai_platform_v2_container_app_environment_name" {
+  description = "Existing Container Apps Environment used for V2 apps"
+  value       = try(data.azurerm_container_app_environment.ai_platform_v2_host[0].name, null)
+}
+
+output "ai_platform_v2_container_app_environment_id" {
+  description = "Existing Container Apps Environment resource ID"
+  value       = try(data.azurerm_container_app_environment.ai_platform_v2_host[0].id, null)
+}
+
+output "ai_platform_v2_identity_client_ids" {
+  description = "Client IDs for V2 user-assigned identities keyed by role"
+  value = var.enable_ai_platform_v2 ? {
+    for key, identity in azurerm_user_assigned_identity.ai_platform_v2 : key => identity.client_id
+  } : null
+}
+
+output "ai_platform_v2_identity_principal_ids" {
+  description = "Principal IDs for V2 user-assigned identities keyed by role"
+  value = var.enable_ai_platform_v2 ? {
+    for key, identity in azurerm_user_assigned_identity.ai_platform_v2 : key => identity.principal_id
+  } : null
+}
+
+output "ai_platform_v2_app_setting_names" {
+  description = "Non-secret app setting key contract for future V2 wiring"
+  value = {
+    servicebus_namespace = "AI_PLATFORM_V2_SERVICEBUS_NAMESPACE"
+    blob_account         = "AI_PLATFORM_V2_BLOB_ACCOUNT_NAME"
+    artifact_container   = "AI_PLATFORM_V2_ARTIFACT_CONTAINER"
+    cae_name             = "AI_PLATFORM_V2_CONTAINER_APP_ENV_NAME"
+  }
+}
+
+output "ai_platform_v2_orchestrator_container_app_name" {
+  description = "V2 orchestrator Container App name when runtime is enabled"
+  value       = try(azurerm_container_app.ai_platform_v2_orchestrator[0].name, null)
+}
+
+output "ai_platform_v2_documents_container_app_name" {
+  description = "V2 document lane worker Container App name when runtime is enabled"
+  value       = try(azurerm_container_app.ai_platform_v2_documents[0].name, null)
+}
+
+output "ai_platform_v2_fast_interactive_container_app_name" {
+  description = "V2 fast interactive actor host when split runtime is enabled"
+  value       = try(azurerm_container_app.ai_platform_v2_interactive_class["fast-interactive"].name, null)
+}
+
+output "ai_platform_v2_agentic_container_app_name" {
+  description = "V2 agentic interactive actor host when split runtime is enabled"
+  value       = try(azurerm_container_app.ai_platform_v2_interactive_class["agentic"].name, null)
+}
+
+output "ai_platform_v2_interactive_dispatch_urls" {
+  description = "Orchestrator dispatch base URLs (no /dispatch suffix) for fast and agentic classes"
+  value       = local.ai_platform_v2_interactive_dispatch_urls
 }

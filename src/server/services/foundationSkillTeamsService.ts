@@ -17,7 +17,7 @@
 
 import { listSkillConfigs } from './projectSettingsService';
 import { listRepoStatuses } from './foundationSkillCompatibilityService';
-import { getReleaseByVersion, getVisibleSkillsForProject } from './foundationSkillReleaseService';
+import { getReleaseByVersion, getVisibleSkillsForProject, isReleaseVisibleToRepo } from './foundationSkillReleaseService';
 import type {
   FoundationSkillTeam,
   FoundationSkillTeamRepo,
@@ -66,9 +66,17 @@ export async function getFoundationSkillTeams(): Promise<FoundationSkillTeam[]> 
       const release = await resolveRelease(status.installedVersion);
       if (release) {
         installedReleaseStatus = release.status;
-        // Resolve through per-skill targeting so the list reflects what this
-        // specific project was entitled to, not the whole release contents.
-        releasedSkills = getVisibleSkillsForProject(release, config.project);
+        if (isReleaseVisibleToRepo(release, {
+          apexProject: config.project,
+          provider,
+          project: config.project,
+          repo: config.skillRepo,
+          branch,
+        })) {
+          // Resolve through per-skill targeting so the list reflects what this
+          // repository was entitled to, not the whole release contents.
+          releasedSkills = getVisibleSkillsForProject(release, config.project);
+        }
       }
     }
 

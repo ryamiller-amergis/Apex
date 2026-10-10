@@ -147,6 +147,9 @@ const { getPrd: mockGetPrd, applyProposedPrdChanges: mockApplyProposedPrdChanges
 };
 const { getDesignDoc: mockGetDesignDoc } = jest.requireMock('../services/designDocService') as { getDesignDoc: jest.Mock };
 const { getComments: mockGetComments } = jest.requireMock('../services/reviewCommentService') as { getComments: jest.Mock };
+const { fixPrdBacklogWithBedrock: mockFixPrdBacklog } = jest.requireMock('../services/bedrockService') as {
+  fixPrdBacklogWithBedrock: jest.Mock;
+};
 const { db: mockDb } = jest.requireMock('../db/drizzle') as {
   db: {
     update: jest.Mock;
@@ -279,6 +282,24 @@ describe('POST /api/interviews/prds/:prdId/fix-comment-with-ai — stores fixCom
 
     expect(res.status).toBe(404);
   });
+
+  it('clears fixCommentId and returns 422 when the backlog reply is not valid JSON', async () => {
+    mockGetComments.mockResolvedValue([{ ...openCommentPrd, sectionKey: 'backlog' }]);
+    mockFixPrdBacklog.mockResolvedValueOnce(null);
+    const mockSet = jest.fn().mockReturnThis();
+    mockDb.update.mockReturnValue({ set: mockSet, where: jest.fn().mockResolvedValue(undefined) });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/fix-comment-with-ai')
+      .send({ commentId: 'comment-prd-1' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/valid backlog update/);
+    expect(mockSet).toHaveBeenLastCalledWith(expect.objectContaining({ fixCommentId: null }));
+    expect(mockSet).not.toHaveBeenCalledWith(
+      expect.objectContaining({ proposedBacklogJson: expect.anything() }),
+    );
+  });
 });
 
 // ── PRD fix-with-ai (bulk) — clears fixCommentId ─────────────────────────────
@@ -302,6 +323,18 @@ describe('POST /api/interviews/prds/:prdId/fix-with-ai — clears fixCommentId',
     expect(mockSet).toHaveBeenCalledWith(
       expect.objectContaining({ fixCommentId: null }),
     );
+  });
+
+  it('returns 422 when only backlog comments were open and the reply is not valid JSON', async () => {
+    mockGetComments.mockResolvedValue([{ ...openCommentPrd, sectionKey: 'backlog' }]);
+    mockFixPrdBacklog.mockResolvedValueOnce(null);
+    const mockSet = jest.fn().mockReturnThis();
+    mockDb.update.mockReturnValue({ set: mockSet, where: jest.fn().mockResolvedValue(undefined) });
+
+    const res = await request(buildApp()).post('/api/interviews/prds/prd-1/fix-with-ai');
+
+    expect(res.status).toBe(422);
+    expect(mockSet).not.toHaveBeenCalled();
   });
 });
 

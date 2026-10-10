@@ -34,7 +34,7 @@ Do **not** use for local or cloud-dev DBs — use `.cursor/skills/postgresql-mig
 
 Defined in `scripts/prod-db-defaults.ps1`.
 
-`psql-apex-eus2` (East US 2) is the retired server: it is stopped, no longer owned by Terraform, and pending decommission. Never target it. See `docs/superpowers/plans/2026-09-17-apex-database-state-reconciliation.md`.
+`psql-apex-cus` is the only production server. The former East US 2 server `psql-apex-eus2` was deleted on 2026-09-18 after the Central US migration; any command still naming it will fail.
 
 The firewall scripts use Azure CLI ≥ 2.80 argument names — `--server-name <server>` for the server and `--name <rule>` for the rule. The older `--name <server> --rule-name <rule>` spelling fails with `the following arguments are required: --server-name/-s`.
 

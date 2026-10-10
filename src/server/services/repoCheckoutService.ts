@@ -325,6 +325,18 @@ export function isMergeInProgress(workspaceDir: string): boolean {
 }
 
 /**
+ * Branch currently checked out in the workspace. Callers use this to confirm an
+ * agent left the workspace on the feature branch before committing or pushing.
+ */
+export async function getCurrentBranch(workspaceDir: string): Promise<string> {
+  const output = await git(safeArgs(workspaceDir, ['rev-parse', '--abbrev-ref', 'HEAD']), {
+    cwd: workspaceDir,
+    timeout: WORKTREE_GIT_TIMEOUT_MS,
+  });
+  return output.trim();
+}
+
+/**
  * Detects leftover git conflict markers in file content. Checks the start/end
  * markers (which effectively never appear in real source) to avoid false
  * positives from legitimate `=======` dividers in markdown/SQL.

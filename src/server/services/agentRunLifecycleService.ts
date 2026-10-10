@@ -15,10 +15,13 @@ import {
   isAgentRunTerminalReason,
   isAgentRunTerminalStatus,
   type AgentRunCancelState,
+  type AgentRunExecutionSnapshot,
   type AgentRunLane,
   type AgentRunStatus,
   type AgentRunTerminalReason,
+  type AgentRunWorkflowClass,
   type ExecutionSnapshot,
+  type RunCheckResult,
 } from '../../shared/types/agentRunLifecycle';
 import {
   finalizeReconciledAgentRun,
@@ -31,6 +34,12 @@ import {
   runAdmissionCycle,
   type AdmissionReason,
 } from './admissionGovernorService';
+import {
+  applyTerminalRunEffects,
+  bestEffortDeactivateGrounding,
+  deactivateTerminalGrounding,
+  type TerminalGroundingDeactivator,
+} from './agentRunTerminalEffects';
 import { workerTierTelemetry } from './workerTierTelemetry';
 
 const QUEUED_PROGRESS_LABEL = 'Queued — waiting for available worker';
@@ -49,10 +58,7 @@ export type TerminalCompletionHandler = (input: {
   terminalReason?: AgentRunTerminalReason;
 }) => Promise<boolean>;
 
-export type TerminalGroundingDeactivator = (
-  threadId: string,
-  projectId: string,
-) => Promise<void>;
+export type { TerminalGroundingDeactivator };
 
 export class AgentRunLifecycleConflictError extends Error {
   readonly code = 'AGENT_RUN_LIFECYCLE_CONFLICT';
@@ -65,7 +71,7 @@ export class AgentRunLifecycleConflictError extends Error {
 
 /** Legal edges for worker-aware lifecycle (BR-002). */
 const ALLOWED_TRANSITIONS: Record<AgentRunStatus, ReadonlySet<AgentRunStatus>> = {
-  queued: new Set(['dispatched', 'cancelled']),
+  queued: new Set(['dispatched', 'cancelled', 'failed']),
   dispatched: new Set(['running', 'failed', 'cancelled']),
   running: new Set(['completed', 'failed', 'cancelled']),
   completed: new Set(),
@@ -82,13 +88,19 @@ export type AgentRunLifecycleRow = {
   queuedAt: string | null;
   dispatchedAt: string | null;
   dispatchMessageId: string | null;
-  executionSnapshot: ExecutionSnapshot | null;
+  executionSnapshot: AgentRunExecutionSnapshot | null;
   cancelRequested: boolean;
   cancelState: AgentRunCancelState | null;
   terminalReason: AgentRunTerminalReason | null;
   timeoutAt: string | null;
   ownerInstance: string | null;
   updatedAt: string;
+  devSessionId: string | null;
+  workflowClass: AgentRunWorkflowClass | null;
+  cloudAgentIdentity: string | null;
+  cloudAgentManaged: boolean;
+  /** Suite-level pre-PR outcomes reported by the run; null when it reported nothing. */
+  checkResults: RunCheckResult[] | null;
 };
 
 export type LifecycleResult =
@@ -104,6 +116,9 @@ export interface EnqueueAgentRunInput {
   lane?: AgentRunLane;
   ownerInstance?: string | null;
   runId?: string;
+  devSessionId?: string | null;
+  workflowClass?: AgentRunWorkflowClass | null;
+  executor?: { insert: typeof db.insert };
 }
 
 export interface TransitionOptions {
@@ -120,6 +135,11 @@ export interface MarkTerminalInput {
   dispatchMessageId?: string;
   detail?: string;
   events?: AgentRunEventEnvelope[];
+  /**
+   * Suite-level unit/e2e/WCAG outcomes reported with this terminal write.
+   * Captured best-effort after the durable status write — never gates completion.
+   */
+  checkResults?: RunCheckResult[];
   /** Injected for tests; defaults to durable event persist + NOTIFY fan-out. */
   completionHandler?: TerminalCompletionHandler;
   /** Injected for tests; defaults to best-effort background grounding cleanup. */
@@ -167,6 +187,11 @@ function mapRow(row: typeof agentRuns.$inferSelect): AgentRunLifecycleRow {
     timeoutAt: row.timeoutAt ?? null,
     ownerInstance: row.ownerInstance ?? null,
     updatedAt: row.updatedAt,
+    devSessionId: row.devSessionId ?? null,
+    workflowClass: (row.workflowClass as AgentRunWorkflowClass | null) ?? null,
+    cloudAgentIdentity: row.cloudAgentIdentity ?? null,
+    cloudAgentManaged: row.cloudAgentManaged ?? false,
+    checkResults: row.checkResults ?? null,
   };
 }
 
@@ -268,32 +293,34 @@ async function loadRun(runId: string): Promise<AgentRunLifecycleRow | null> {
   return row ? mapRow(row) : null;
 }
 
-async function deactivateTerminalGrounding(
-  threadId: string,
-  projectId: string,
-): Promise<void> {
-  const { runGroundingService } = await import('./runGroundingService');
-  await runGroundingService.persistThenMarkTerminalInactive(
-    { runType: 'chat', runId: threadId, project: projectId },
-    async () => undefined,
-  );
-}
-
-async function bestEffortDeactivateGrounding(
-  run: AgentRunLifecycleRow,
-  deactivate: TerminalGroundingDeactivator,
-): Promise<void> {
-  if (run.lane !== 'background' || !run.projectId) return;
+/**
+ * Capture reported check outcomes on a run that is already durably terminal.
+ *
+ * The `check_results IS NULL` predicate makes the first write win, so a retry
+ * or a second reporter never overwrites what the run first reported. A failure
+ * here is logged and swallowed: the terminal status is already committed and
+ * the capture must not undo it (TBI-005 NFR).
+ *
+ * Returns the refreshed row when this call wrote the results, else null.
+ */
+async function captureCheckResults(
+  runId: string,
+  checkResults: RunCheckResult[],
+): Promise<AgentRunLifecycleRow | null> {
   try {
-    await deactivate(run.threadId, run.projectId);
+    const updated = await db
+      .update(agentRuns)
+      .set({ checkResults, updatedAt: new Date().toISOString() })
+      .where(and(eq(agentRuns.id, runId), sql`${agentRuns.checkResults} IS NULL`))
+      .returning();
+    return updated.length > 0 ? mapRow(updated[0]) : null;
   } catch {
+    // Never log outcome content (PBI-006 security NFR).
     console.error('[agent-run-lifecycle]', JSON.stringify({
-      runId: run.id,
-      projectId: run.projectId,
-      lane: run.lane,
-      status: run.status,
-      reason: 'grounding_deactivation_failed',
+      runId,
+      reason: 'check_results_capture_error',
     }));
+    return null;
   }
 }
 
@@ -325,13 +352,37 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
     ...(input.snapshot.provider
       ? { provider: input.snapshot.provider }
       : {}),
+    ...(input.snapshot.cloudAgent
+      ? {
+          cloudAgent: {
+            workItemId: input.snapshot.cloudAgent.workItemId,
+            ...(input.snapshot.cloudAgent.workItemTitle
+              ? { workItemTitle: input.snapshot.cloudAgent.workItemTitle }
+              : {}),
+            baseBranch: input.snapshot.cloudAgent.baseBranch,
+            ...(input.snapshot.cloudAgent.initiatorName
+              ? { initiatorName: input.snapshot.cloudAgent.initiatorName }
+              : {}),
+            ...(input.snapshot.cloudAgent.initiatorEmail
+              ? { initiatorEmail: input.snapshot.cloudAgent.initiatorEmail }
+              : {}),
+            ...(input.snapshot.cloudAgent.skillName
+              ? { skillName: input.snapshot.cloudAgent.skillName }
+              : {}),
+            ...(input.snapshot.cloudAgent.userTokenInstance
+              ? { userTokenInstance: input.snapshot.cloudAgent.userTokenInstance }
+              : {}),
+          },
+        }
+      : {}),
     workflowClass: input.snapshot.workflowClass,
     skillPath: input.snapshot.skillPath,
     projectId: input.snapshot.projectId,
     threadId: input.snapshot.threadId,
   };
 
-  await db.insert(agentRuns).values({
+  const executor = input.executor ?? db;
+  await executor.insert(agentRuns).values({
     id: runId,
     threadId: input.threadId,
     status: 'queued',
@@ -348,6 +399,8 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
     startedAt: nowIso,
     createdAt: nowIso,
     updatedAt: nowIso,
+    ...(input.devSessionId ? { devSessionId: input.devSessionId } : {}),
+    ...(input.workflowClass ? { workflowClass: input.workflowClass } : {}),
   });
 
   logTransition({
@@ -369,6 +422,81 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
   }
 
   return { runId };
+}
+
+export interface CaptureCloudAgentIdentityInput {
+  cloudAgentIdentity: string;
+  cursorRunId: string;
+  jobName: string;
+  branchName?: string;
+  timeoutAt: string;
+}
+
+/**
+ * Writes the once-written vendor identity, flips managed, fences with the
+ * Cursor run id, and moves queued → dispatched → running.
+ */
+export async function captureCloudAgentIdentity(
+  runId: string,
+  input: CaptureCloudAgentIdentityInput,
+): Promise<LifecycleResult> {
+  const existing = await loadRun(runId);
+  if (!existing) {
+    return { ok: false, conflict: true, run: null, reason: 'run_not_found' };
+  }
+
+  const nowIso = new Date().toISOString();
+  if (!existing.cloudAgentIdentity) {
+    const updated = await db
+      .update(agentRuns)
+      .set({
+        cloudAgentIdentity: input.cloudAgentIdentity,
+        cloudAgentManaged: true,
+        dispatchMessageId: input.cursorRunId,
+        cloudJobName: input.jobName,
+        cloudJobExecutionName: input.cursorRunId,
+        cloudBranchName: input.branchName ?? null,
+        timeoutAt: input.timeoutAt,
+        updatedAt: nowIso,
+      })
+      .where(and(
+        eq(agentRuns.id, runId),
+        sql`${agentRuns.cloudAgentIdentity} IS NULL`,
+        sql`${agentRuns.status} IN ('queued', 'dispatched', 'running')`,
+        eq(agentRuns.cancelRequested, false),
+      ))
+      .returning();
+    if (updated.length === 0) {
+      const latest = await loadRun(runId);
+      const cancelled = !latest
+        || isAgentRunTerminalStatus(latest.status)
+        || latest.cancelRequested;
+      return {
+        ok: false,
+        conflict: true,
+        run: latest,
+        reason: cancelled ? 'run_cancelled' : 'identity_already_set',
+      };
+    }
+  }
+
+  if (existing.status === 'queued') {
+    const dispatched = await transition(runId, 'dispatched', {
+      expectedFrom: 'queued',
+      dispatchMessageId: input.cursorRunId,
+    });
+    if (!dispatched.ok) return dispatched;
+  }
+
+  const current = await loadRun(runId);
+  if (current?.status === 'dispatched') {
+    return transition(runId, 'running', {
+      expectedFrom: 'dispatched',
+      dispatchMessageId: input.cursorRunId,
+    });
+  }
+
+  return { ok: true, run: current ?? existing };
 }
 
 /**
@@ -561,6 +689,9 @@ export async function requestCancel(runId: string): Promise<LifecycleResult> {
       status: 'cancelled',
       terminalReason: 'forced_cancel',
       detail: 'Cancelled before dispatch',
+      ...(existing.dispatchMessageId
+        ? { dispatchMessageId: existing.dispatchMessageId }
+        : {}),
     });
     if (result.ok && result.run.lane === 'background') {
       emitWorkerTelemetry(() => {
@@ -630,6 +761,11 @@ export async function markTerminal(
         existing,
         input.deactivateGrounding ?? deactivateTerminalGrounding,
       );
+      // A retry may still fill results a prior best-effort capture missed.
+      if (input.checkResults && !existing.checkResults) {
+        const captured = await captureCheckResults(runId, input.checkResults);
+        if (captured) return { ok: true, run: captured };
+      }
       return { ok: true, run: existing };
     }
     return {
@@ -700,30 +836,28 @@ export async function markTerminal(
     };
   }
 
-  await bestEffortDeactivateGrounding(
-    latest,
-    input.deactivateGrounding ?? deactivateTerminalGrounding,
-  );
+  const captured = input.checkResults
+    ? await captureCheckResults(runId, input.checkResults)
+    : null;
 
-  logTransition({
-    runId,
-    projectId: latest.projectId,
-    lane: latest.lane,
-    fromStatus,
-    toStatus: input.status,
-    dispatchMessageId: latest.dispatchMessageId,
-    terminalReason: latest.terminalReason,
+  // The completion handler persisted the terminal events and idled the thread
+  // inside the transaction that wrote the terminal row, so the shared effects
+  // path must not publish a second copy.
+  await applyTerminalRunEffects({
+    run: {
+      runId,
+      threadId: latest.threadId,
+      projectId: latest.projectId,
+      lane: latest.lane,
+      status: input.status,
+      fromStatus,
+      terminalReason: latest.terminalReason ?? input.terminalReason ?? null,
+      dispatchMessageId: latest.dispatchMessageId,
+    },
+    detail: input.detail,
+    terminalEventsPersisted: true,
+    deactivateGrounding: input.deactivateGrounding ?? deactivateTerminalGrounding,
   });
-  if (latest.lane === 'background') {
-    const terminalReason =
-      latest.terminalReason ?? input.terminalReason ?? input.status;
-    emitWorkerTelemetry(() => {
-      workerTierTelemetry.terminalReason(
-        workerTelemetryContext(latest),
-        terminalReason,
-      );
-    });
-  }
 
   if (
     latest.lane === 'background'
@@ -735,13 +869,15 @@ export async function markTerminal(
       lane: latest.lane,
     });
   }
-  return { ok: true, run: latest };
+  return { ok: true, run: captured ?? latest };
 }
 
 /**
  * Read-only snapshot accessor for tests / callers verifying immutability (AC-d).
  */
-export async function getExecutionSnapshot(runId: string): Promise<ExecutionSnapshot | null> {
+export async function getExecutionSnapshot(
+  runId: string,
+): Promise<AgentRunExecutionSnapshot | null> {
   const run = await loadRun(runId);
   return run?.executionSnapshot ?? null;
 }

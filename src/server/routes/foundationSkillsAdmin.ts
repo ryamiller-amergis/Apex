@@ -202,6 +202,10 @@ router.post('/releases', async (req: Request, res: Response): Promise<void> => {
       res.status(400).json({ error: 'skillTargets must be an object mapping skill names to project arrays' });
       return;
     }
+    if (body.targetRepos !== undefined && !Array.isArray(body.targetRepos)) {
+      res.status(400).json({ error: 'targetRepos must be an array' });
+      return;
+    }
     if (body.projectNotes !== undefined && (typeof body.projectNotes !== 'object' || Array.isArray(body.projectNotes))) {
       res.status(400).json({ error: 'projectNotes must be an object mapping project names to notes' });
       return;
@@ -309,7 +313,7 @@ router.delete('/releases/:id', async (req: Request, res: Response): Promise<void
 router.patch('/releases/:id', async (req: Request, res: Response): Promise<void> => {
   try {
     const {
-      releaseNotes, breakingChanges, projectNotes, targetProjects, skillTargets, selectedSkills,
+      releaseNotes, breakingChanges, projectNotes, targetProjects, targetRepos, skillTargets, selectedSkills,
       version, artifactVersion, artifactFeed,
     } = req.body;
     if (artifactFeed !== undefined) {
@@ -322,6 +326,10 @@ router.patch('/releases/:id', async (req: Request, res: Response): Promise<void>
     }
     if (targetProjects !== undefined && !Array.isArray(targetProjects)) {
       res.status(400).json({ error: 'targetProjects must be an array' });
+      return;
+    }
+    if (targetRepos !== undefined && !Array.isArray(targetRepos)) {
+      res.status(400).json({ error: 'targetRepos must be an array' });
       return;
     }
     if (
@@ -359,6 +367,7 @@ router.patch('/releases/:id', async (req: Request, res: Response): Promise<void>
       ...(breakingChanges !== undefined && { breakingChanges }),
       ...(projectNotes    !== undefined && { projectNotes }),
       ...(targetProjects  !== undefined && { targetProjects }),
+      ...(targetRepos    !== undefined && { targetRepos }),
       ...(skillTargets    !== undefined && { skillTargets }),
       ...(nextSelectedSkills !== undefined && { selectedSkills: nextSelectedSkills }),
       ...(version         !== undefined && { version }),
@@ -509,11 +518,31 @@ router.post('/update-repo', async (req: Request, res: Response): Promise<void> =
 router.get('/rollback-targets', async (req: Request, res: Response): Promise<void> => {
   const apexProject = (req.query.apexProject as string | undefined)?.trim();
   const installedVersion = (req.query.installedVersion as string | undefined)?.trim();
+  const repo = (req.query.repo as string | undefined)?.trim();
+  const repoProject = (req.query.repoProject as string | undefined)?.trim();
+  const provider = (req.query.provider as string | undefined)?.trim();
+  const branch = (req.query.branch as string | undefined)?.trim();
   if (!apexProject) { res.status(400).json({ error: 'apexProject query param is required' }); return; }
   if (!installedVersion) { res.status(400).json({ error: 'installedVersion query param is required' }); return; }
+  if (provider && provider !== 'ado' && provider !== 'github') {
+    res.status(400).json({ error: 'provider must be ado or github' });
+    return;
+  }
 
   try {
-    const releases = await listRollbackTargets(apexProject, installedVersion);
+    const releases = await listRollbackTargets(
+      apexProject,
+      installedVersion,
+      repo && repoProject
+        ? {
+            apexProject,
+            provider: provider === 'github' ? 'github' : 'ado',
+            project: repoProject,
+            repo,
+            branch: branch || 'main',
+          }
+        : null,
+    );
     res.json({ releases });
   } catch (err: any) {
     res.status(500).json({ error: err.message ?? 'Failed to list rollback targets' });

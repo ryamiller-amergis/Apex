@@ -231,7 +231,11 @@ function makeSelectChain(rows: any[] = []) {
 function makeUpdateChain() {
   const chain: any = {};
   chain.set = jest.fn().mockReturnValue(chain);
-  chain.where = jest.fn().mockResolvedValue(undefined);
+  chain.where = jest.fn().mockImplementation(() => {
+    const result: any = Promise.resolve(undefined);
+    result.returning = jest.fn().mockResolvedValue([{ id: 'row-1' }]);
+    return result;
+  });
   return chain;
 }
 
@@ -986,6 +990,7 @@ describe('startValidationWatcher', () => {
   it('resets status to pending_review when agent finishes without producing a scorecard', async () => {
     agentSvc.readOutputValidationScorecard.mockReturnValue(null);
     agentSvc.isThreadIdle.mockReturnValue(true); // agent is done but no scorecard
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ validationThreadId: 'thread-idle' });
     const updateChain = makeUpdateChain();
     mockDb.update.mockReturnValue(updateChain);
 
@@ -1053,6 +1058,7 @@ describe('startValidationWatcher', () => {
   it('resets status to pending_review on timeout after max attempts', async () => {
     agentSvc.readOutputValidationScorecard.mockReturnValue(null);
     agentSvc.isThreadIdle.mockReturnValue(false);
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ validationThreadId: 'thread-slow' });
     const updateChain = makeUpdateChain();
     mockDb.update.mockReturnValue(updateChain);
 

@@ -28,9 +28,11 @@ import type {
   FoundationSkillTeamRepo,
   FoundationSkillReleaseValidationIssue,
   FoundationSkillProjectNotes,
+  FoundationSkillTargetRepo,
 } from '../../shared/types/foundationSkills';
 import {
   alwaysInstallSkillsFromCatalog,
+  foundationSkillRepoKey,
   isAlwaysInstallCatalogSkill,
 } from '../../shared/types/foundationSkills';
 import {
@@ -48,6 +50,47 @@ import {
 import styles from './FoundationSkillsAdmin.module.css';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+function reposForProject(
+  teams: Array<{ apexProject: string; repos: FoundationSkillTeamRepo[] }>,
+  projectName: string,
+): FoundationSkillTeamRepo[] {
+  return (
+    teams.find((team) => team.apexProject.toLowerCase() === projectName.toLowerCase())
+      ?.repos ?? []
+  );
+}
+
+function toTargetRepo(
+  projectName: string,
+  repo: FoundationSkillTeamRepo,
+): FoundationSkillTargetRepo {
+  return {
+    apexProject: projectName,
+    provider: repo.provider,
+    project: repo.project,
+    repo: repo.repo,
+    branch: repo.branch || 'main',
+    friendlyName: repo.friendlyName || repo.repo,
+  };
+}
+
+function sameProject(left: string, right: string): boolean {
+  return left.toLowerCase() === right.toLowerCase();
+}
+
+/** Labels for the release list: repository names when the audience is narrowed. */
+function audienceLabels(release: Pick<FoundationSkillRelease, 'targetProjects' | 'targetRepos'>): string[] {
+  const projects = release.targetProjects ?? [];
+  const repos = release.targetRepos ?? [];
+  if (projects.length === 0) return [];
+  const narrowed = new Set(repos.map((repo) => repo.apexProject.toLowerCase()));
+  const whole = projects
+    .filter((project) => !narrowed.has(project.toLowerCase()))
+    .map((project) => project);
+  const named = repos.map((repo) => `${repo.apexProject} / ${repo.friendlyName || repo.repo}`);
+  return [...whole, ...named];
+}
 
 function lockedAlwaysInstallSkills(
   catalog: FoundationSkillCatalogEntry[]
@@ -376,9 +419,10 @@ const DROPDOWN_GAP = 12;
 
 const ProjectPicker: React.FC<{
   selected: string[];
-  onChange: (projects: string[]) => void;
+  selectedRepos: FoundationSkillTargetRepo[];
+  onChange: (projects: string[], repos: FoundationSkillTargetRepo[]) => void;
   placeholder?: string;
-}> = ({ selected, onChange, placeholder = 'Select projects…' }) => {
+}> = ({ selected, selectedRepos, onChange, placeholder = 'Select projects…' }) => {
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState<{
@@ -391,12 +435,19 @@ const ProjectPicker: React.FC<{
   const wrapRef = useRef<HTMLDivElement>(null);
   const listId = useId();
   const { data: allProjects = [], isLoading } = useProjects();
+  const { data: teams = [] } = useFoundationSkillTeams();
 
   const term = search.trim().toLowerCase();
   const allNames = allProjects.map((p) => p.name);
-  const filtered = term
-    ? allNames.filter((n) => n.toLowerCase().includes(term))
-    : allNames;
+  const projectVisible = (name: string) => {
+    if (!term) return true;
+    if (name.toLowerCase().includes(term)) return true;
+    return reposForProject(teams, name).some((repo) =>
+      repo.friendlyName.toLowerCase().includes(term) ||
+      repo.repo.toLowerCase().includes(term)
+    );
+  };
+  const filtered = allNames.filter(projectVisible);
 
   // Dismiss the list on outside click or Escape.
   useEffect(() => {
@@ -442,31 +493,97 @@ const ProjectPicker: React.FC<{
     };
   }, [open]);
 
-  const toggle = (name: string) =>
+  const reposOf = (name: string) =>
+    selectedRepos.filter((repo) => sameProject(repo.apexProject, name));
+
+  const toggleProject = (name: string) => {
+    const known = reposForProject(teams, name);
+    const chosen = reposOf(name);
+    const wholeProject = selected.includes(name) && chosen.length === 0;
+    const allExplicit = known.length > 0 && chosen.length === known.length;
+    if (wholeProject || allExplicit) {
+      onChange(
+        selected.filter((project) => project !== name),
+        selectedRepos.filter((repo) => !sameProject(repo.apexProject, name)),
+      );
+      return;
+    }
     onChange(
-      selected.includes(name)
-        ? selected.filter((p) => p !== name)
-        : [...selected, name]
+      selected.includes(name) ? selected : [...selected, name],
+      [
+        ...selectedRepos.filter((repo) => !sameProject(repo.apexProject, name)),
+        ...known.map((repo) => toTargetRepo(name, repo)),
+      ],
     );
+  };
+
+  const toggleRepo = (name: string, repo: FoundationSkillTeamRepo) => {
+    const target = toTargetRepo(name, repo);
+    const key = foundationSkillRepoKey(target);
+    const exists = selectedRepos.some((item) => foundationSkillRepoKey(item) === key);
+    if (exists) {
+      const nextRepos = selectedRepos.filter((item) => foundationSkillRepoKey(item) !== key);
+      const keepProject = nextRepos.some((item) => sameProject(item.apexProject, name));
+      onChange(
+        keepProject ? selected : selected.filter((project) => project !== name),
+        nextRepos,
+      );
+      return;
+    }
+    onChange(
+      selected.includes(name) ? selected : [...selected, name],
+      [...selectedRepos, target],
+    );
+  };
 
   return (
     <div className={styles.pickerWrap} ref={wrapRef}>
       {selected.length > 0 && (
         <div className={styles.chipRow}>
-          {selected.map((p) => (
-            <span key={p} className={styles.chip}>
-              {p}
-              <button
-                type="button"
-                className={styles.chipRemove}
-                onClick={() => onChange(selected.filter((x) => x !== p))}
-                aria-label={`Remove ${p}`}
-                {...{ 'data-testid': `fs-project-chip-remove-${p}` }}
-              >
-                ×
-              </button>
-            </span>
-          ))}
+          {selected.flatMap((project) => {
+            const chosen = reposOf(project);
+            if (chosen.length === 0) {
+              const hasRepos = reposForProject(teams, project).length > 0;
+              const label = hasRepos ? `${project} (all repositories)` : project;
+              return [(
+                <span key={project} className={styles.chip}>
+                  {label}
+                  <button
+                    type="button"
+                    className={styles.chipRemove}
+                    onClick={() => toggleProject(project)}
+                    aria-label={`Remove ${project}`}
+                    {...{ 'data-testid': `fs-project-chip-remove-${project}` }}
+                  >
+                    ×
+                  </button>
+                </span>
+              )];
+            }
+            return chosen.map((repo) => (
+              <span key={foundationSkillRepoKey(repo)} className={styles.chip}>
+                {repo.apexProject} / {repo.friendlyName}
+                <button
+                  type="button"
+                  className={styles.chipRemove}
+                  onClick={() => {
+                    const nextRepos = selectedRepos.filter(
+                      (item) => foundationSkillRepoKey(item) !== foundationSkillRepoKey(repo),
+                    );
+                    const keepProject = nextRepos.some((item) => sameProject(item.apexProject, project));
+                    onChange(
+                      keepProject ? selected : selected.filter((name) => name !== project),
+                      nextRepos,
+                    );
+                  }}
+                  aria-label={`Remove ${repo.friendlyName}`}
+                  {...{ 'data-testid': `fs-project-chip-remove-${project}-${repo.friendlyName}` }}
+                >
+                  ×
+                </button>
+              </span>
+            ));
+          })}
         </div>
       )}
 
@@ -512,20 +629,55 @@ const ProjectPicker: React.FC<{
             <>
               {filtered.map((name) => {
                 const isSelected = selected.includes(name);
+                const knownRepos = reposForProject(teams, name).filter((repo) =>
+                  !term ||
+                  name.toLowerCase().includes(term) ||
+                  repo.friendlyName.toLowerCase().includes(term) ||
+                  repo.repo.toLowerCase().includes(term)
+                );
+                const chosen = reposOf(name);
+                const knownCount = reposForProject(teams, name).length;
+                const wholeProject = isSelected && chosen.length === 0;
+                const parentChecked = wholeProject || (knownCount > 0 && chosen.length === knownCount);
                 return (
                   <li key={name}>
                     <button
                       type="button"
-                      className={`${styles.dropdownItem} ${isSelected ? styles.dropdownItemSelected : ''}`}
-                      aria-pressed={isSelected}
-                      onClick={() => toggle(name)}
+                      className={`${styles.dropdownItem} ${parentChecked ? styles.dropdownItemSelected : ''}`}
+                      aria-pressed={parentChecked}
+                      onClick={() => toggleProject(name)}
                       {...{ 'data-testid': `fs-project-picker-option-${name}` }}
                     >
                       <span className={styles.dropdownCheck} aria-hidden="true">
                         ✓
                       </span>
                       {name}
+                      {wholeProject && knownCount > 0 && (
+                        <span className={styles.dropdownRepoMeta}>all repositories</span>
+                      )}
                     </button>
+                    {knownRepos.map((repo) => {
+                      const target = toTargetRepo(name, repo);
+                      const repoSelected = chosen.some(
+                        (item) => foundationSkillRepoKey(item) === foundationSkillRepoKey(target),
+                      );
+                      return (
+                        <button
+                          key={foundationSkillRepoKey(target)}
+                          type="button"
+                          className={`${styles.dropdownItem} ${styles.dropdownSubItem} ${repoSelected ? styles.dropdownItemSelected : ''}`}
+                          aria-pressed={repoSelected}
+                          onClick={() => toggleRepo(name, repo)}
+                          {...{ 'data-testid': `fs-project-picker-repo-${name}-${repo.friendlyName}` }}
+                        >
+                          <span className={styles.dropdownCheck} aria-hidden="true">
+                            ✓
+                          </span>
+                          {repo.friendlyName}
+                          <span className={styles.dropdownRepoMeta}>{repo.repo}</span>
+                        </button>
+                      );
+                    })}
                   </li>
                 );
               })}
@@ -545,18 +697,21 @@ const ProjectPicker: React.FC<{
 const AudienceField: React.FC<{
   mode: 'all' | 'specific';
   projects: string[];
+  repos: FoundationSkillTargetRepo[];
   onModeChange: (mode: 'all' | 'specific') => void;
-  onProjectsChange: (projects: string[]) => void;
+  onAudienceChange: (projects: string[], repos: FoundationSkillTargetRepo[]) => void;
   idPrefix: string;
-}> = ({ mode, projects, onModeChange, onProjectsChange, idPrefix }) => (
+}> = ({ mode, projects, repos, onModeChange, onAudienceChange, idPrefix }) => (
   <>
     <div className={styles.formRow}>
       <span className={styles.label} id={`${idPrefix}-audience-label`}>
         Default audience
       </span>
       <p className={styles.fieldHint}>
-        Controls which Apex projects can see and install this release. Under
-        Specific projects, the next step assigns skills per project.
+        Choose which Apex projects can see this release. Open a project to
+        pick individual repositories, such as Infra. Only the repositories you
+        select see the release and the update banner. Skills are still assigned
+        per project on the next step.
       </p>
       <div
         className={styles.segmented}
@@ -587,10 +742,11 @@ const AudienceField: React.FC<{
     </div>
     {mode === 'specific' && (
       <div className={styles.formRow}>
-        <span className={styles.label}>Projects</span>
+        <span className={styles.label}>Projects and repositories</span>
         <ProjectPicker
           selected={projects}
-          onChange={onProjectsChange}
+          selectedRepos={repos}
+          onChange={onAudienceChange}
           {...{ 'data-testid': `fs-audience-project-picker-${idPrefix}` }}
         />
       </div>
@@ -1137,7 +1293,7 @@ const WIZARD_STEPS: Array<{
     id: 'audience',
     label: 'Audience',
     title: 'Default audience',
-    hint: 'Choose which Apex projects this release is offered to. Under Specific projects, the next step assigns skills per project.',
+    hint: 'Choose which Apex projects and repositories this release is offered to. Under Specific projects, the next step assigns skills per project.',
   },
   {
     id: 'skills',
@@ -1168,6 +1324,7 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({
   const [breakingChanges, setBreaking] = useState('');
   const [audienceMode, setAudienceMode] = useState<'all' | 'specific'>('all');
   const [selectedProjects, setSelected] = useState<string[]>([]);
+  const [selectedRepos, setSelectedRepos] = useState<FoundationSkillTargetRepo[]>([]);
   const [explicitSelectedSkills, setExplicitSelectedSkills] = useState<
     string[]
   >([]);
@@ -1357,6 +1514,7 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({
         artifactVersion: artifactVersion.trim() || version.trim(),
         selectedSkills: selectionState.dependencyOrder,
         targetProjects: audienceMode === 'specific' ? selectedProjects : [],
+        targetRepos: audienceMode === 'specific' ? selectedRepos : [],
         skillTargets: selectedSkillTargets,
         releaseNotes: releaseNotes.trim() || null,
         breakingChanges: breakingChanges.trim() || null,
@@ -1373,6 +1531,7 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({
       setBreaking('');
       setAudienceMode('all');
       setSelected([]);
+      setSelectedRepos([]);
       setExplicitSelectedSkills(catalog.map((s) => s.name));
       setProjectSkillPicks({});
       setProjectNotes({});
@@ -1577,12 +1736,17 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({
             <AudienceField
               mode={audienceMode}
               projects={selectedProjects}
+              repos={selectedRepos}
               onModeChange={(mode) => {
                 setAudienceMode(mode);
                 setSelected([]);
+                setSelectedRepos([]);
                 if (mode === 'all') setProjectSkillPicks({});
               }}
-              onProjectsChange={setSelected}
+              onAudienceChange={(projects, repos) => {
+                setSelected(projects);
+                setSelectedRepos(repos);
+              }}
               idPrefix="fs"
               {...{ 'data-testid': 'fs-wizard-audience-field' }}
             />
@@ -1718,6 +1882,17 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({
                         >
                           <strong>{project}</strong> — {count} skill
                           {count === 1 ? '' : 's'}
+                          {selectedRepos.some((repo) => sameProject(repo.apexProject, project)) && (
+                            <>
+                              {' '}
+                              (
+                              {selectedRepos
+                                .filter((repo) => sameProject(repo.apexProject, project))
+                                .map((repo) => repo.friendlyName)
+                                .join(', ')}
+                              )
+                            </>
+                          )}
                         </div>
                       );
                     })}
@@ -2010,6 +2185,9 @@ const EditReleasePanel: React.FC<{
   const [selectedProjects, setSelected] = useState<string[]>(
     release.targetProjects ?? []
   );
+  const [selectedRepos, setSelectedRepos] = useState<FoundationSkillTargetRepo[]>(
+    release.targetRepos ?? []
+  );
   const [localErr, setLocalErr] = useState<string | null>(null);
 
   const [explicitSelectedSkills, setExplicitSelectedSkills] = useState<
@@ -2134,6 +2312,7 @@ const EditReleasePanel: React.FC<{
       }),
       ...(canEditAudience && {
         targetProjects: audienceMode === 'specific' ? selectedProjects : [],
+        targetRepos: audienceMode === 'specific' ? selectedRepos : [],
         skillTargets: selectedSkillTargets,
       }),
       releaseNotes: notes.trim() || null,
@@ -2192,12 +2371,17 @@ const EditReleasePanel: React.FC<{
           <AudienceField
             mode={audienceMode}
             projects={selectedProjects}
+            repos={selectedRepos}
             onModeChange={(mode) => {
               setAudienceMode(mode);
               setSelected([]);
+              setSelectedRepos([]);
               if (mode === 'all') setProjectSkillPicks({});
             }}
-            onProjectsChange={setSelected}
+            onAudienceChange={(projects, repos) => {
+              setSelected(projects);
+              setSelectedRepos(repos);
+            }}
             idPrefix={`er-${release.id}`}
             {...{ 'data-testid': `fs-edit-audience-field-${release.id}` }}
           />
@@ -2826,7 +3010,12 @@ const TeamRepoDetail: React.FC<{
   const [rollbackMsg, setRollbackMsg] = useState<string | null>(null);
   const [confirmRollback, setConfirmRollback] = useState(false);
   const { data: targets = [], isLoading: targetsLoading } =
-    useFoundationSkillRollbackTargets(apexProject, repo.installedVersion);
+    useFoundationSkillRollbackTargets(apexProject, repo.installedVersion, {
+      provider: repo.provider,
+      project: repo.project,
+      repo: repo.repo,
+      branch: repo.branch,
+    });
   const rollback = useRollbackFoundationSkillRepo();
   const pendingTarget = targets.find((t) => t.id === targetId) ?? null;
 
@@ -3307,19 +3496,19 @@ export const FoundationSkillsAdmin: React.FC = () => {
                           unverified
                         </span>
                       )}
-                      {r.targetProjects && r.targetProjects.length > 0 ? (
+                      {audienceLabels(r).length > 0 ? (
                         <span
                           className={styles.audienceChips}
-                          title={r.targetProjects.join(', ')}
+                          title={audienceLabels(r).join(', ')}
                         >
-                          {r.targetProjects.slice(0, 3).map((p) => (
+                          {audienceLabels(r).slice(0, 3).map((p) => (
                             <span key={p} className={styles.chip}>
                               {p}
                             </span>
                           ))}
-                          {r.targetProjects.length > 3 && (
+                          {audienceLabels(r).length > 3 && (
                             <span className={styles.chip}>
-                              +{r.targetProjects.length - 3}
+                              +{audienceLabels(r).length - 3}
                             </span>
                           )}
                         </span>

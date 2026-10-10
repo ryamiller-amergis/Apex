@@ -42,7 +42,20 @@ describe('backgroundBundlePublisher', () => {
     });
   });
 
-  it('stays inert until the repo-read service is switched on', async () => {
+  it('publishes for V2 transport even when the repo-read service is off', async () => {
+    const publish = jest.fn().mockResolvedValue('published');
+    const subject = createBackgroundBundlePublisher({
+      publisher: { publish },
+      isEnabled: jest.fn(async (flag: string) => flag === 'ai-runs-v2-transport'),
+      log: jest.fn(),
+    });
+
+    await subject.publish(input);
+
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays inert until the repo-read service or V2 transport is switched on', async () => {
     const { subject, publish } = publisherWith({ enabled: false });
 
     await subject.publish(input);

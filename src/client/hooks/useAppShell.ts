@@ -9,6 +9,7 @@ import { env } from '../config/env';
 import type { WorkItem } from '../types/workitem';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { MyPermissionsResponse } from '../../shared/types/rbac';
+import { DEV_ENV_ACCESS_DENIED_CODE } from '../../shared/types/devEnvAllowlist';
 import type { WhatsNewState } from '../../shared/types/whatsNew';
 import { WORK_BOARD_FLAG } from '../../shared/types/featureFlags';
 
@@ -79,6 +80,7 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
   const [groups, setGroups] = useState<string[]>([]);
   const [userId, setUserId] = useState<string>('');
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [devAccessDenied, setDevAccessDenied] = useState(false);
   const [isRestricted, setIsRestricted] = useState(false);
   const [restrictedModules, setRestrictedModules] = useState<MenuItemKey[]>([]);
   const [permissionsLoaded, setPermissionsLoaded] = useState(false);
@@ -90,6 +92,7 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
   const [whatsNewBootstrap, setWhatsNewBootstrap] = useState<WhatsNewState | null>(null);
   const whatsNewCapturedRef = useRef(false);
   const [betaAnnouncementDismissed, setBetaAnnouncementDismissed] = useState(false);
+  const [devAccessAllowlisted, setDevAccessAllowlisted] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [pendingDueDateChange, setPendingDueDateChange] = useState<DueDateChange | null>(null);
   const [isChangingTeam, setIsChangingTeam] = useState(false);
@@ -157,15 +160,27 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
       ? `/api/me/permissions?project=${encodeURIComponent(selectedProject)}`
       : '/api/me/permissions';
     fetch(url, { credentials: 'include' })
-      .then(r => r.ok ? (r.json() as Promise<MyPermissionsResponse>) : null)
+      .then(async (r) => {
+        if (r.status === 403) {
+          const body = await r.json().catch(() => null) as { code?: string } | null;
+          if (body?.code === DEV_ENV_ACCESS_DENIED_CODE) {
+            setDevAccessDenied(true);
+            return null;
+          }
+        }
+        if (!r.ok) return null;
+        return r.json() as Promise<MyPermissionsResponse>;
+      })
       .then(d => {
         if (d) {
+          setDevAccessDenied(false);
           setPermissions(d.permissions);
           setRoles(d.roles);
           setGroups(d.groups ?? []);
           setUserId(d.userId ?? '');
           setIsSuperAdmin(d.isSuperAdmin ?? false);
           setBetaAnnouncementDismissed(d.betaAnnouncementDismissed);
+          setDevAccessAllowlisted(d.devAccessAllowlisted === true);
           const restricted = d.restrictedAccess ?? null;
           setIsRestricted(Boolean(restricted));
           setRestrictedModules(restricted?.modules ?? []);
@@ -371,6 +386,7 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
     can,
     isInAnyGroup,
     isSuperAdmin,
+    devAccessDenied,
     isRestricted,
     restrictedModules,
     isAdmin: isSuperAdmin || roles.includes('admin'),
@@ -401,6 +417,7 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
     whatsNewAutomaticOverlaySettled,
     whatsNewBlocksAutomaticWalkthrough,
     betaAnnouncementDismissed,
+    devAccessAllowlisted,
     handleDismissBetaAnnouncement,
     handleLogout,
     selectedProject,

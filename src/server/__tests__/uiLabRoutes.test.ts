@@ -218,6 +218,64 @@ describe('uiLab routes — project ui-lab enablement enforcement', () => {
     });
   });
 
+  describe('GET /api/ui-lab/:id/stream', () => {
+    it('carries durable event ids and the reconnect cursor through SSE', async () => {
+      mockUiLab.getDesignProject.mockResolvedValue('MaxView');
+      mockMenuSettings.getMenuConfig.mockResolvedValue(menuConfig(['ui-lab']));
+      mockUiLab.requireManageAccess.mockResolvedValue({
+        id: 'd1',
+        project: 'MaxView',
+      } as any);
+      mockUiLab.runGeneration.mockImplementation(
+        async (
+          _id,
+          onToken: (
+            text: string,
+            eventId?: string,
+            mode?: 'append' | 'replace',
+          ) => void,
+          _userId,
+          options?: { onTransport?: (transport: 'v1' | 'v2') => void },
+        ) => {
+          options?.onTransport?.('v2');
+          onToken('<html>', '3f44f6f1-ec42-4aa6-9df4-0d8ce8438491');
+          onToken(
+            '<html>ready</html>',
+            '3f44f6f1-ec42-4aa6-9df4-0d8ce8438492',
+            'replace',
+          );
+        },
+      );
+
+      const res = await request(buildApp())
+        .get('/api/ui-lab/d1/stream')
+        .set('Last-Event-ID', '3f44f6f1-ec42-4aa6-9df4-0d8ce8438490');
+
+      expect(res.status).toBe(200);
+      expect(res.text).toContain(
+        'id: 3f44f6f1-ec42-4aa6-9df4-0d8ce8438491\n',
+      );
+      expect(res.text).toContain(
+        'data: {"type":"token","text":"<html>"}',
+      );
+      expect(res.text).toContain(
+        'data: {"type":"transport","transport":"v2"}',
+      );
+      expect(res.text).toContain(
+        'data: {"type":"snapshot","text":"<html>ready</html>"}',
+      );
+      expect(mockUiLab.runGeneration).toHaveBeenCalledWith(
+        'd1',
+        expect.any(Function),
+        'user-1',
+        {
+          afterEventId: '3f44f6f1-ec42-4aa6-9df4-0d8ce8438490',
+          onTransport: expect.any(Function),
+        },
+      );
+    });
+  });
+
   describe('share routes', () => {
     it('creates a share for managers', async () => {
       mockUiLab.getDesignProject.mockResolvedValue('MaxView');

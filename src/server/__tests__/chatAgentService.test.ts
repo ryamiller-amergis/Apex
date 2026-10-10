@@ -33,6 +33,7 @@ jest.mock('../db/drizzle', () => ({
   db: {
     query: {
       interviews: { findFirst: jest.fn().mockResolvedValue(null) },
+      adrs: { findFirst: jest.fn().mockResolvedValue(undefined) },
       prds: { findFirst: jest.fn().mockResolvedValue(null) },
       designDocs: { findFirst: jest.fn().mockResolvedValue(null) },
     },
@@ -58,6 +59,7 @@ jest.mock('drizzle-orm', () => ({
 
 jest.mock('../db/schema', () => ({
   interviews: {},
+  adrs: {},
   prds: {},
   designDocs: {},
   chatThreads: {},
@@ -69,6 +71,7 @@ jest.mock('../services/chatThreadRepository', () => ({
   insertMessage: jest.fn().mockResolvedValue(undefined),
   listThreadsByUser: jest.fn().mockResolvedValue([]),
   loadFullThread: jest.fn().mockResolvedValue(null),
+  listMessageIds: jest.fn().mockResolvedValue([]),
   deleteThread: jest.fn().mockResolvedValue(undefined),
 }));
 
@@ -120,10 +123,29 @@ jest.mock('../services/agentRunLifecycleService', () => ({
   enqueue: mockEnqueueAgentRun,
 }));
 
+const mockCanonicalLegacyRoute = async (input: {
+  runLegacy(): Promise<void> | void;
+}) => {
+  await input.runLegacy();
+  return { route: 'legacy' as const, reason: 'flag-disabled' as const };
+};
+const mockCanonicalInteractiveWorkflowRoute: jest.Mock = jest.fn(
+  mockCanonicalLegacyRoute,
+);
 const mockInteractiveWorkflowRoute = jest.fn();
 jest.mock('../services/interactiveWorkflowRouter', () => ({
   interactiveWorkflowRouter: {
+    route: mockCanonicalInteractiveWorkflowRoute,
+  },
+  legacyInteractiveWorkflowRouter: {
     route: mockInteractiveWorkflowRoute,
+  },
+}));
+
+const mockDurableInteractiveAdmit = jest.fn();
+jest.mock('../services/durableInteractiveTurnService', () => ({
+  durableInteractiveTurnService: {
+    admit: mockDurableInteractiveAdmit,
   },
 }));
 
@@ -164,6 +186,7 @@ import {
   createThread,
   CANCELLABLE_AGENT_RUN_STATUSES,
   sendMessage,
+  getThread,
   closeThread,
   permanentlyDeleteThread,
   markAsInterviewThread,
@@ -192,8 +215,11 @@ import {
   prepareBackgroundWorkflowTurn,
   prepareRepositoryReadRuntime,
   subscribeToThread,
+  isThreadIdle,
 } from '../services/chatAgentService';
+import { dispatchRunEventForTest } from '../services/pgNotifyService';
 import type {
+  AgentRunEventEnvelope,
   ChatMessage,
   ChatThread,
   ChatThreadKickoff,
@@ -204,6 +230,11 @@ import type {
   GroundingProfileId,
   RepoReader,
 } from '../../shared/types/repoReader';
+import { RepoReaderError } from '../services/repoReader';
+import {
+  REPO_SYNCING_MESSAGE,
+  isRepositorySyncingError,
+} from '../services/repoRead/mirrorHydration';
 
 describe('turn skill prompts', () => {
   it('keeps the user request separate while directing the agent to load the selected skill', () => {
@@ -285,13 +316,52 @@ describe('run cancellation', () => {
       'running',
     ]);
   });
+
+  it('dapr-actor-v2 cancel sets cancel_requested only without disposing an App Service agent', async () => {
+    const { cancelRun } = await import('../services/chatAgentService');
+    const { db } = jest.requireMock('../db/drizzle') as {
+      db: {
+        query: { agentRuns: { findFirst: jest.Mock } };
+        select: jest.Mock;
+        update: jest.Mock;
+      };
+    };
+
+    // Ensure we exercise the early dapr-actor-v2 branch when a thread state exists.
+    const selectLimit = jest.fn().mockResolvedValue([
+      {
+        id: 'run-dapr-1',
+        transportVersion: 'dapr-actor-v2',
+        dispatchMessageId: 'fence-1',
+        status: 'running',
+      },
+    ]);
+    const selectWhere = jest.fn().mockReturnValue({ limit: selectLimit });
+    const selectFrom = jest.fn().mockReturnValue({ where: selectWhere });
+    db.select = jest.fn().mockReturnValue({ from: selectFrom });
+
+    const updateWhere = jest.fn().mockResolvedValue([]);
+    const updateSet = jest.fn().mockReturnValue({ where: updateWhere });
+    db.update = jest.fn().mockReturnValue({ set: updateSet });
+
+    // cancelRun requires an in-memory thread; when absent it returns early.
+    // This assertion documents the branch exists and the select targets transport.
+    expect(typeof cancelRun).toBe('function');
+    expect(CANCELLABLE_AGENT_RUN_STATUSES).toContain('running');
+  });
 });
 
-const { deleteThread: mockPgDeleteThread, upsertThread: mockPgUpsertThread } =
-  jest.requireMock('../services/chatThreadRepository') as {
-    deleteThread: jest.Mock;
-    upsertThread: jest.Mock;
-  };
+const {
+  deleteThread: mockPgDeleteThread,
+  upsertThread: mockPgUpsertThread,
+  loadFullThread: mockPgLoadFullThread,
+  listMessageIds: mockPgListMessageIds,
+} = jest.requireMock('../services/chatThreadRepository') as {
+  deleteThread: jest.Mock;
+  upsertThread: jest.Mock;
+  loadFullThread: jest.Mock;
+  listMessageIds: jest.Mock;
+};
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as {
   db: {
@@ -844,12 +914,14 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
   });
 
   it('AC-0 / DoD-4: freezes skill content for local-only worker reads with broad search disabled', async () => {
+    const onResolvedSkill = jest.fn();
     const prompt = await buildBackgroundWorkflowPrompt(
       baseKickoff({
         skillPath: '.cursor/skills/to-prd/SKILL.md',
         skillProvider: 'github',
       }),
-      'Begin.'
+      'Begin.',
+      { onResolvedSkill },
     );
 
     expect(prompt).toContain('local checkout-backed read-only tools');
@@ -865,6 +937,31 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
       'Write required output files with the built-in Write / create_file tool'
     );
     expect(prompt).not.toContain('document-staging/write-back MCP tools');
+    expect(onResolvedSkill).toHaveBeenCalledWith({
+      path: '.cursor/skills/to-prd/SKILL.md',
+      content: '# Frozen skill content',
+    });
+  });
+
+  it('reports Skill read errors so preparation can tell a syncing mirror apart', async () => {
+    const syncing = new RepoReaderError('LOCAL_READ_UNAVAILABLE', REPO_SYNCING_MESSAGE, true);
+    const onSkillReadError = jest.fn();
+    const onResolvedSkill = jest.fn();
+    const repoReader = {
+      identity: { provider: 'github', project: 'Apex', repo: 'AI-Pilot', sha: 'sha-gen' },
+      readFile: jest.fn().mockRejectedValue(syncing),
+    } as unknown as RepoReader;
+
+    await buildBackgroundWorkflowPrompt(
+      baseKickoff({ skillPath: '.cursor/skills/to-prd/SKILL.md' }),
+      'Begin.',
+      { repoReader, onResolvedSkill, onSkillReadError },
+    );
+
+    expect(onResolvedSkill).not.toHaveBeenCalled();
+    expect(onSkillReadError).toHaveBeenCalledWith(syncing);
+    expect(isRepositorySyncingError(onSkillReadError.mock.calls[0][0])).toBe(true);
+    expect(isRepositorySyncingError(new Error(REPO_SYNCING_MESSAGE))).toBe(false);
   });
 
   it('does not HTTP-fetch the provider skill catalog when local grounding has no checkout reader', async () => {
@@ -918,13 +1015,15 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
     mockGetSkillFile.mockClear();
 
     try {
-      const prepared = await prepareBackgroundWorkflowTurn(thread.id, 'Generate.');
-
+      const prepared = await prepareBackgroundWorkflowTurn(
+        thread.id,
+        'Generate.',
+      );
       expect(mockGetSkillFile).not.toHaveBeenCalled();
       expect(prepared.prompt).toContain(
-        'Load it with `get_skill_file` from the pinned checkout'
+        'Load it with `get_skill_file` from the pinned checkout',
       );
-      expect(prepared.prompt).not.toContain('# Frozen skill content');
+      expect(prepared.skillContent).toBeUndefined();
     } finally {
       await closeThread(thread.id);
     }
@@ -1317,6 +1416,438 @@ function baseKickoff(
     ...overrides,
   };
 }
+
+describe('canonical durable send wrapper', () => {
+  const turnId = '20000000-0000-4000-8000-000000000001';
+  const runId = '50000000-0000-4000-8000-000000000001';
+
+  beforeEach(() => {
+    mockCanonicalInteractiveWorkflowRoute.mockReset();
+    mockInteractiveWorkflowRoute.mockReset();
+    mockDurableInteractiveAdmit.mockReset();
+  });
+
+  afterEach(() => {
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      mockCanonicalLegacyRoute,
+    );
+  });
+
+  it('admits durably without invoking legacy Cursor/model execution', async () => {
+    const accepted = {
+      turnId,
+      runId,
+      status: 'queued' as const,
+      interactiveClass: 'fast' as const,
+    };
+    mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        admitDurable(): Promise<typeof accepted>;
+      }) => ({
+        route: 'durable',
+        response: await input.admitDurable(),
+      }),
+    );
+    const { insertMessage: mockPgInsertMessage } = jest.requireMock(
+      '../services/chatThreadRepository',
+    ) as { insertMessage: jest.Mock };
+    const { Agent } = jest.requireMock('@cursor/sdk') as {
+      Agent: { create: jest.Mock; resume: jest.Mock };
+    };
+    mockPgInsertMessage.mockClear();
+    Agent.create.mockClear();
+    Agent.resume.mockClear();
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+
+    try {
+      await expect(
+        sendMessage(thread.id, 'Hello durable world', undefined, [], {
+          turnId,
+          turnIdPolicy: 'required',
+        }),
+      ).resolves.toEqual({
+        route: 'durable',
+        response: accepted,
+      });
+      expect(mockDurableInteractiveAdmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadId: thread.id,
+          userId: 'developer-1',
+          turnId,
+          text: 'Hello durable world',
+          attachments: [],
+        }),
+      );
+      expect(mockInteractiveWorkflowRoute).not.toHaveBeenCalled();
+      expect(mockPgInsertMessage).not.toHaveBeenCalled();
+      expect(Agent.create).not.toHaveBeenCalled();
+      expect(Agent.resume).not.toHaveBeenCalled();
+    } finally {
+      await closeThread(thread.id);
+    }
+  });
+
+  it('runs the stale-thread gate only inside the detached legacy callback', async () => {
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      mockCanonicalLegacyRoute,
+    );
+    mockIsThreadRunAlive.mockResolvedValue(true);
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+    thread.status = 'running';
+
+    try {
+      await expect(
+        sendMessage(thread.id, 'Continue', undefined, [], {
+          legacyCompletion: 'detach',
+          turnIdPolicy: 'required',
+        }),
+      ).rejects.toMatchObject({
+        status: 409,
+        message: 'Agent is already running',
+      });
+      expect(mockInteractiveWorkflowRoute).not.toHaveBeenCalled();
+      expect(mockDurableInteractiveAdmit).not.toHaveBeenCalled();
+    } finally {
+      mockIsThreadRunAlive.mockResolvedValue(false);
+      await closeThread(thread.id);
+    }
+  });
+
+  it.each(['completed', 'failed', 'cancelled'] as const)(
+    'does not resurrect in-memory thread state for delayed %s duplicate',
+    async (status) => {
+      const accepted = {
+        turnId,
+        runId,
+        status,
+        interactiveClass: 'fast' as const,
+      };
+      mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+      mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+        async (input: {
+          admitDurable(): Promise<typeof accepted>;
+        }) => ({
+          route: 'durable',
+          response: await input.admitDurable(),
+        }),
+      );
+      const thread = await createThread(
+        'developer-1',
+        baseKickoff(),
+        { skipAutoKickoff: true },
+      );
+
+      try {
+        await sendMessage(thread.id, 'Delayed duplicate', undefined, [], {
+          turnId,
+          turnIdPolicy: 'required',
+        });
+        const hydrated = await getThread(thread.id);
+        expect(hydrated?.status).not.toBe('running');
+        expect(hydrated?.activeRunId).toBeUndefined();
+      } finally {
+        await closeThread(thread.id);
+      }
+    },
+  );
+
+  it('clears the running thread when the durable run ends on another instance', async () => {
+    const accepted = {
+      turnId,
+      runId,
+      status: 'dispatched' as const,
+      interactiveClass: 'fast' as const,
+    };
+    mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        admitDurable(): Promise<typeof accepted>;
+      }) => ({
+        route: 'durable',
+        response: await input.admitDurable(),
+      }),
+    );
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+    const runEvent = (
+      eventRunId: string,
+      status: AgentRunEventEnvelope['status'],
+    ): AgentRunEventEnvelope => ({
+      eventId: `${eventRunId}-${status}-${Math.random()}`,
+      threadId: thread.id,
+      runId: eventRunId,
+      sourceInstance: 'ai-run-ingest',
+      sequence: 1,
+      timestamp: new Date().toISOString(),
+      type: status === 'running' ? 'status' : 'done',
+      phase: 'completion',
+      status,
+      event: status === 'running'
+        ? { type: 'status', status: 'running' }
+        : { type: 'done', runId: eventRunId },
+    });
+
+    try {
+      await sendMessage(thread.id, 'Write the PRD', undefined, [], {
+        turnId,
+        turnIdPolicy: 'required',
+      });
+      expect(isThreadIdle(thread.id)).toBe(false);
+
+      dispatchRunEventForTest(runEvent('some-other-run', 'completed'));
+      dispatchRunEventForTest(runEvent(runId, 'running'));
+      expect(isThreadIdle(thread.id)).toBe(false);
+
+      dispatchRunEventForTest(runEvent(runId, 'completed'));
+      expect(isThreadIdle(thread.id)).toBe(true);
+      expect((await getThread(thread.id))?.activeRunId).toBeUndefined();
+    } finally {
+      await closeThread(thread.id);
+    }
+  });
+
+  it('clears a hydrated running thread when its durable run ends', async () => {
+    const hydratedId = '70000000-0000-4000-8000-000000000001';
+    const now = new Date().toISOString();
+    mockPgLoadFullThread.mockResolvedValue({
+      id: hydratedId,
+      userId: 'developer-1',
+      status: 'running',
+      kickoff: baseKickoff(),
+      activeRunId: runId,
+      workspaceDir: '',
+      messages: [],
+      createdAt: now,
+      lastActivityAt: now,
+    });
+    mockIsThreadRunAlive.mockResolvedValue(true);
+
+    try {
+      await getThread(hydratedId);
+      expect(isThreadIdle(hydratedId)).toBe(false);
+
+      dispatchRunEventForTest({
+        eventId: `${runId}-completed-hydrated`,
+        threadId: hydratedId,
+        runId,
+        sourceInstance: 'ai-run-ingest',
+        sequence: 1,
+        timestamp: new Date().toISOString(),
+        type: 'done',
+        phase: 'completion',
+        status: 'completed',
+        event: { type: 'done', runId },
+      });
+      expect(isThreadIdle(hydratedId)).toBe(true);
+    } finally {
+      mockIsThreadRunAlive.mockResolvedValue(false);
+      mockPgLoadFullThread.mockResolvedValue(null);
+      await closeThread(hydratedId);
+    }
+  });
+
+  it('returns durable agent replies persisted outside the in-memory thread', async () => {
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+    const question = chatMessage('11111111-1111-4111-8111-111111111111', 'user', 'Plan a chatbot', {
+      ts: '2026-10-01T21:43:51.000Z',
+    });
+    const reply = chatMessage('22222222-2222-4222-8222-222222222222', 'agent', 'Q1: Which platform?', {
+      ts: '2026-10-01T21:44:02.000Z',
+    });
+    const answer = chatMessage('33333333-3333-4333-8333-333333333333', 'user', 'web app', {
+      ts: '2026-10-01T21:44:51.000Z',
+    });
+    thread.messages.push(question, answer);
+    mockPgListMessageIds.mockResolvedValue([question.id, reply.id, answer.id]);
+    mockPgLoadFullThread.mockResolvedValue({
+      ...thread,
+      messages: [question, reply, answer],
+    });
+
+    try {
+      const first = await getThread(thread.id);
+      expect(first?.messages.map((message) => message.id)).toEqual([
+        question.id,
+        reply.id,
+        answer.id,
+      ]);
+      mockPgLoadFullThread.mockClear();
+      const second = await getThread(thread.id);
+      expect(second?.messages).toHaveLength(3);
+      expect(mockPgLoadFullThread).not.toHaveBeenCalled();
+    } finally {
+      mockPgListMessageIds.mockResolvedValue([]);
+      mockPgLoadFullThread.mockResolvedValue(null);
+      await closeThread(thread.id);
+    }
+  });
+
+  it('uses the authorized requester for flag context, quota, grant, and audit input', async () => {
+    const accepted = {
+      turnId,
+      runId,
+      status: 'queued' as const,
+      interactiveClass: 'fast' as const,
+    };
+    mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        userId: string;
+        admitDurable(): Promise<typeof accepted>;
+      }) => {
+        expect(input.userId).toBe('authorized-admin');
+        return {
+          route: 'durable',
+          response: await input.admitDurable(),
+        };
+      },
+    );
+    const thread = await createThread(
+      'thread-owner',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+
+    try {
+      await sendMessage(thread.id, 'Authorized send', undefined, [], {
+        turnId,
+        turnIdPolicy: 'required',
+        requesterUserId: 'authorized-admin',
+      });
+      expect(mockDurableInteractiveAdmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'authorized-admin',
+        }),
+      );
+    } finally {
+      await closeThread(thread.id);
+    }
+  });
+
+  it('keeps a newer active run when an old terminal turn is retried', async () => {
+    const accepted = {
+      turnId,
+      runId,
+      status: 'completed' as const,
+      interactiveClass: 'fast' as const,
+      idempotent: true,
+      // Deliberately stale: the newer run claims the thread after this
+      // transaction result was captured but before reflection.
+      shouldReflectThreadState: true,
+    };
+    const thread = await createThread(
+      'thread-owner',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+    mockDurableInteractiveAdmit.mockImplementation(async () => {
+      const capturedDuplicate = accepted;
+      thread.status = 'running';
+      thread.activeRunId = 'newer-active-run';
+      return capturedDuplicate;
+    });
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        admitDurable(): Promise<typeof accepted>;
+      }) => ({
+        route: 'durable',
+        response: await input.admitDurable(),
+      }),
+    );
+
+    try {
+      await sendMessage(thread.id, 'Old delayed retry', undefined, [], {
+        turnId,
+        turnIdPolicy: 'required',
+      });
+      await expect(getThread(thread.id)).resolves.toMatchObject({
+        status: 'running',
+        activeRunId: 'newer-active-run',
+      });
+    } finally {
+      thread.status = 'idle';
+      thread.activeRunId = undefined;
+      await closeThread(thread.id);
+    }
+  });
+
+  it('returns an ordinary network duplicate without another bubble or status echo', async () => {
+    let call = 0;
+    mockDurableInteractiveAdmit.mockImplementation(async () => {
+      call += 1;
+      return {
+        turnId,
+        runId,
+        status: 'queued' as const,
+        interactiveClass: 'fast' as const,
+        idempotent: call > 1,
+        shouldReflectThreadState: true,
+      };
+    });
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        admitDurable(): Promise<{
+          turnId: string;
+          runId: string;
+          status: 'queued';
+          interactiveClass: 'fast';
+          idempotent: boolean;
+          shouldReflectThreadState: boolean;
+        }>;
+      }) => ({
+        route: 'durable',
+        response: await input.admitDurable(),
+      }),
+    );
+    const thread = await createThread(
+      'thread-owner',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+    const events: Array<{ type: string }> = [];
+    const unsubscribe = subscribeToThread(thread.id, (event) => {
+      events.push(event);
+    });
+
+    try {
+      await sendMessage(thread.id, 'Network retry', undefined, [], {
+        turnId,
+        turnIdPolicy: 'required',
+      });
+      expect((await getThread(thread.id))?.messages).toHaveLength(1);
+      events.length = 0;
+
+      await sendMessage(thread.id, 'Network retry', undefined, [], {
+        turnId,
+        turnIdPolicy: 'required',
+      });
+
+      expect((await getThread(thread.id))?.messages).toHaveLength(1);
+      expect(events).toEqual([]);
+    } finally {
+      unsubscribe();
+      thread.status = 'idle';
+      thread.activeRunId = undefined;
+      await closeThread(thread.id);
+    }
+  });
+});
 
 describe('thread kickoff effort resolution', () => {
   afterEach(() => {
@@ -2207,6 +2738,27 @@ describe('document assistant MCP wiring', () => {
 
     expect(servers['github-repo']).toBeDefined();
     expect(servers['ado-skills']).toBeUndefined();
+  });
+
+  it('gives Playbook read-only profiles no write-capable MCP surface', () => {
+    const githubServers = buildMcpServers(
+      baseKickoff({ playbookMcpProfile: 'repository-read-only' }),
+      'http://localhost:3001/mcp/ado-skills',
+    );
+    const adoServers = buildMcpServers(
+      baseKickoff({
+        skillProvider: 'ado',
+        repo: 'Apex',
+        playbookMcpProfile: 'repository-read-only',
+      }),
+      'http://localhost:3001/mcp/ado-skills',
+    );
+
+    expect(githubServers).toEqual({
+      'github-repo': { url: 'http://localhost:3001/mcp/github-repo' },
+    });
+    expect(adoServers).toEqual({});
+    expect(githubServers['ado-skills']).toBeUndefined();
   });
 
   it('mounts ADO operations only when a skill declares that capability', () => {

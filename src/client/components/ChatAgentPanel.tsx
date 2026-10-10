@@ -6,6 +6,7 @@ import { useSkillList } from '../hooks/useChatThreads';
 import { DEFAULT_MODEL_ID, modelBadge } from '../config/models';
 import { IS_BETA_RELEASE } from '../config/release';
 import { useAvailableModels, useGlobalDefaultModel, useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
+import { useAvailableModelSelection } from '../hooks/useAvailableModelSelection';
 import { useChatAttachments } from '../hooks/useChatAttachments';
 import { useSpeechInput } from '../hooks/useSpeechInput';
 import type {
@@ -17,11 +18,13 @@ import type {
 } from '../../shared/types/chat';
 import type { QuickMcpPill, QuickSkillPill } from '../../shared/types/projectSettings';
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
+import { ChatRunProgressLabel } from './ChatRunProgressLabel';
 import { ThreadHistorySidebar } from './ThreadHistorySidebar';
 import { AgentComposer, AgentPanelShell } from './agentChat';
 import { BrandLogo } from './BrandLogo';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
+import { formatChoiceAnswers } from '../utils/formatChoiceAnswers';
 import { useFocusChatMessage } from '../hooks/useFocusChatMessage';
 import styles from './ChatAgentPanel.module.css';
 
@@ -179,21 +182,7 @@ const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning, hig
 
   const handleSend = () => {
     if (!allAnswered || sent) return;
-    const lines: string[] = [];
-    let qNum = 1;
-    for (const block of choiceBlocks) {
-      const s = selections[block.id];
-      if (!s) continue;
-      if (s.selected === 'other') {
-        lines.push(`Q${qNum}: ${s.freeform.trim()}`);
-      } else if (s.selected) {
-        const opt = block.options.find((o) => o.letter === s.selected);
-        lines.push(`Q${qNum}: ${s.selected.toUpperCase()} — ${opt?.text ?? s.selected}`);
-        if (s.freeform.trim()) lines.push(`  Additional notes: ${s.freeform.trim()}`);
-      }
-      qNum++;
-    }
-    onSend(lines.join('\n'));
+    onSend(formatChoiceAnswers(choiceBlocks, selections));
     setSent(true);
   };
 
@@ -309,6 +298,7 @@ interface ChatAgentPanelProps {
   canStartNewChat?: boolean;
   isStartingNewChat?: boolean;
   newChatError?: string;
+  onClearNewChatError?: () => void;
   selectedProject?: string;
   selectedSkillSettingsId?: string | null;
   launchedFromHome?: boolean;
@@ -333,6 +323,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   canStartNewChat = true,
   isStartingNewChat = false,
   newChatError,
+  onClearNewChatError,
   selectedProject,
   selectedSkillSettingsId,
   launchedFromHome = false,
@@ -405,11 +396,14 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     isInteractionBusy,
     status,
     progressLabel,
+    progressPhase,
+    toolProgress,
     showTypingIndicator,
     sendError,
   } = session;
 
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
+  useAvailableModelSelection(selectedModel, setSelectedModel, availableModels);
   const { data: globalDefaultModel } = useGlobalDefaultModel();
   const {
     data: skillConfig,
@@ -575,6 +569,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     setInput('');
     setSkillPickerOpen(false);
     speech.stop();
+    onClearNewChatError?.();
     await session.send(
       trimmedText || 'Please use the attached files as additional context.',
       { model: selectedModel, attachments: messageAttachments },
@@ -587,6 +582,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     selectedModel,
     clearAttachments,
     speech,
+    onClearNewChatError,
   ]);
 
   const selectSkill = useCallback((skill: { name: string; path: string }) => {
@@ -1160,8 +1156,10 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                       </span>
                       <button
                         className={styles.retryBtn}
-                        onClick={() => doSend(lastUserText)}
-                        disabled={isRunning}
+                        onClick={() => {
+                          void session.retryFailedRun();
+                        }}
+                        disabled={isRunning || !session.retryableRunId}
                         type="button"
                         {...{ 'data-testid': 'chat-agent-message-retry-btn' }}
                       >
@@ -1202,7 +1200,13 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 className={styles.message}
                 role="status"
                 aria-live="polite"
-                aria-label={progressLabel ?? 'Agent is processing'}
+                aria-label={
+                  progressPhase === 'queued'
+                    ? 'Queued'
+                    : progressPhase === 'dispatched'
+                      ? 'Dispatched'
+                      : progressLabel ?? 'Agent is processing'
+                }
                 {...{ 'data-testid': 'chat-run-spinner' }}
               >
                 <div className={styles.agentHeader}>
@@ -1215,12 +1219,26 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                     <span className={styles.typingDot} />
                     <span className={styles.typingDot} />
                   </div>
-                  {(progressLabel || showStartupTyping) && (
+                  {(progressLabel || progressPhase || showStartupTyping) && (
                     <p
                       className={styles.progressLabel}
                       {...{ 'data-testid': 'chat-agent-progress-label' }}
                     >
-                      {progressLabel ?? 'Starting skill…'}
+                      {progressPhase === 'queued' ? (
+                        <span {...{ 'data-testid': 'agent-run-status-queued' }}>
+                          Queued
+                        </span>
+                      ) : progressPhase === 'dispatched' ? (
+                        <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
+                          Dispatched
+                        </span>
+                      ) : (
+                        <ChatRunProgressLabel
+                          fallbackLabel={progressLabel ?? 'Starting skill…'}
+                          progressPhase={progressPhase}
+                          toolProgress={toolProgress}
+                        />
+                      )}
                     </p>
                   )}
                 </div>
@@ -1261,9 +1279,9 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             </div>
           )}
 
-          {sendError && (
+          {(sendError ?? newChatError) && (
             <p className={styles.emptyError} role="alert">
-              {sendError}
+              {sendError ?? newChatError}
             </p>
           )}
 

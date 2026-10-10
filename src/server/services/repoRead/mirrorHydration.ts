@@ -107,6 +107,11 @@ function syncingError(): RepoReaderError {
   return new RepoReaderError('LOCAL_READ_UNAVAILABLE', REPO_SYNCING_MESSAGE, true);
 }
 
+/** True when a read failed only because the mirror is still fetching the pinned commit. */
+export function isRepositorySyncingError(error: unknown): boolean {
+  return error instanceof RepoReaderError && error.message === REPO_SYNCING_MESSAGE;
+}
+
 export async function hydrateRepoReadMirror(
   identity: RepositoryIdentity,
   dependencies: MirrorHydrationDependencies,

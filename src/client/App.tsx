@@ -9,6 +9,7 @@ import { Changelog } from './components/Changelog';
 import { GuidedWalkthroughHost } from './components/GuidedWalkthroughHost';
 import { WhatsNewBanner } from './components/WhatsNewBanner';
 import { Login } from './components/Login';
+import { DevEnvAccessDenied } from './components/DevEnvAccessDenied';
 import { ViewErrorFallback } from './components/ViewErrorFallback';
 import { ViewSkeleton } from './components/ViewSkeleton';
 import { AppHeader } from './components/AppHeader';
@@ -35,7 +36,10 @@ import { PdfToolsRouteGuard } from './components/PdfToolsRouteGuard';
 import { DesktopOnlyGate } from './components/DesktopOnlyGate';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
+import { canAccessMyWork } from './utils/canAccessMyWork';
 import { setInteractiveWsEnabled } from './utils/threadEventStream';
+import { createChatTurnId } from './utils/chatTurnId';
+import { friendlyChatErrorMessage } from '../shared/utils/chatProgressCopy';
 import { IS_BETA_RELEASE } from './config/release';
 import { RESTRICTED_ACCESS_PROJECT } from '../shared/types/restrictedAccess';
 import './App.css';
@@ -91,6 +95,7 @@ const QaLabView = lazy(() => import('./components/QaLabView').then(m => ({ defau
 const ApryseWebViewerPoc = lazy(() => import('./components/ApryseWebViewerPoc').then(m => ({ default: m.ApryseWebViewerPoc })));
 const NutrientWebSdkPoc = lazy(() => import('./components/NutrientWebSdkPoc').then(m => ({ default: m.NutrientWebSdkPoc })));
 const DesignModuleView = lazy(() => import('./components/DesignModuleView'));
+const PlaybookStatusView = lazy(() => import('./components/PlaybookStatusView'));
 const LoadTestsListPage = lazy(() => import('./components/LoadTestsListPage').then(m => ({ default: m.LoadTestsListPage })));
 const LoadTestDefinitionBuilderView = lazy(() =>
   import('./components/LoadTestDefinitionBuilderView').then((m) => ({ default: m.LoadTestDefinitionBuilderView })),
@@ -165,7 +170,7 @@ function App() {
   }, []);
   const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'qa-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'qa-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -209,6 +214,8 @@ function App() {
                     ? 'ai-cost'
                     : location.pathname === '/design-module'
                     ? 'design-module'
+                    : location.pathname === '/playbooks' || location.pathname.startsWith('/playbooks/')
+                    ? 'playbooks'
                     : location.pathname.startsWith('/work-board')
                     ? 'work-board'
                     : location.pathname.startsWith('/load-tests')
@@ -246,6 +253,7 @@ function App() {
     isInAnyGroup,
     userId,
     isSuperAdmin,
+    devAccessDenied,
     isRestricted,
     restrictedModules,
     permissionsLoaded,
@@ -289,6 +297,7 @@ function App() {
     handleCancelDueDateChange,
     handleFieldUpdate,
     betaAnnouncementDismissed,
+    devAccessAllowlisted,
     handleDismissBetaAnnouncement,
   } = useAppShell({ workItemsEnabled: needsWorkItems });
 
@@ -314,18 +323,19 @@ function App() {
   const showBetaAnnouncement = useFeatureFlag('beta-to-prod-announcement', selectedProject);
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
-  const interactiveWsEnabled = homeFlags['ai-runs-interactive'] === true;
-
-  // @feature-flag:ai-runs-interactive start winner=disabled
-  // FEAT-007: flip the chat stream transport to the WebSocket agent gateway when
-  // ai-runs-interactive is enabled for this project; falls back to SSE otherwise.
+  const interactiveWsEnabled = homeFlags['ai-runs-v2-transport'] === true;
+  const canAccessPlaybooks =
+    !homeFlagsLoading &&
+    homeFlags['playbooks-production-adapters'] === true &&
+    (isSuperAdmin || can('playbooks:view'));
+  // Prefer the WebSocket agent gateway when the durable interactive transport
+  // flag is enabled; SSE remains the stream-transport fallback only.
   // Wait until flags resolve so we do not open SSE first, then leave it stuck
   // after the flag loads as true (useChatStream reopens on the change event).
   useEffect(() => {
     if (homeFlagsLoading) return;
     setInteractiveWsEnabled(interactiveWsEnabled);
   }, [homeFlagsLoading, interactiveWsEnabled]);
-  // @feature-flag:ai-runs-interactive end
 
   const canAccessHome =
     !isRestricted &&
@@ -460,7 +470,15 @@ function App() {
     if (currentView === 'backlog'       && !isSuperAdmin && (!effectiveEnabledViews.includes('backlog')   || !can('interviews:view'))) navigate(fallback);
     if (currentView === 'adr'           && !isSuperAdmin && (!effectiveEnabledViews.includes('adr')       || !can('adr:view'))) navigate(fallback);
     if (currentView === 'notifications' && !can('notifications:view'))  navigate(fallback);
-    if (currentView === 'my-work'       && !isSuperAdmin && (!effectiveEnabledViews.includes('my-work') || !can('dev-workbench:view'))) navigate(fallback);
+    if (
+      currentView === 'my-work'
+      && !canAccessMyWork({
+        can,
+        isSuperAdmin,
+        isInAnyGroup,
+        enabledViews: effectiveEnabledViews,
+      })
+    ) navigate(fallback);
     if (currentView === 'standup'        && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
     if (currentView === 'standup-manage' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:manage')))      navigate(fallback);
     if (currentView === 'standup-summary' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
@@ -511,6 +529,9 @@ function App() {
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
   const startChat = useStartChat();
+  const [firstMessageError, setFirstMessageError] = useState<
+    { threadId: string; message: string } | null
+  >(null);
   const panelRepo = useMemo(
     () =>
       activeSkillConfig
@@ -519,12 +540,51 @@ function App() {
     [activeSkillConfig, skillRepos, selectedProject],
   );
 
+  const syncHomeThreadUrl = useCallback((threadId: string | null) => {
+    const searchParams = new URLSearchParams(location.search);
+    if (
+      location.pathname === '/home'
+      && searchParams.get('thread') === threadId
+    ) {
+      return;
+    }
+    if (threadId) {
+      searchParams.set('thread', threadId);
+    } else {
+      searchParams.delete('thread');
+    }
+    const search = searchParams.toString();
+    navigate(
+      {
+        pathname: '/home',
+        search: search ? `?${search}` : '',
+      },
+      { replace: true },
+    );
+  }, [location.pathname, location.search, navigate]);
+
+  const previousHomeProjectRef = useRef(selectedProject);
+  useEffect(() => {
+    const projectChanged = previousHomeProjectRef.current !== selectedProject;
+    previousHomeProjectRef.current = selectedProject;
+    if (projectChanged && currentView === 'home') {
+      // Runs after AgentHome's effect, which still saw the outgoing project's
+      // ?thread= and rebound it; replace that with the destination's last thread.
+      const storedThreadId = sessionStorage.getItem(`agentHomeThreadId:${selectedProject}`);
+      setActiveThreadId(storedThreadId);
+      setActiveThreadProject(storedThreadId ? selectedProject : null);
+      syncHomeThreadUrl(storedThreadId);
+    }
+  }, [currentView, selectedProject, syncHomeThreadUrl]);
+
   const handleStartPanelChat = useCallback(async (options?: StartPanelChatOptions) => {
     if (!can('chat:view') || !can('chat:create')) return;
     setChatOpen(true);
+    setFirstMessageError(null);
     if (!options) {
       setActiveThreadId(null);
       setActiveThreadProject(null);
+      syncHomeThreadUrl(null);
       return;
     }
     if (!panelRepo || startChat.isPending) return;
@@ -547,22 +607,31 @@ function App() {
       });
       setActiveThreadId(result.threadId);
       setActiveThreadProject(selectedProject);
+      syncHomeThreadUrl(result.threadId);
       if (options?.initialMessage) {
-        await fetch(`/api/chat/threads/${result.threadId}/messages`, {
+        const res = await fetch(`/api/chat/threads/${result.threadId}/messages`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({
+            turnId: createChatTurnId(),
             text: options.initialMessage,
             model: options.model ?? DEFAULT_MODEL_ID,
             ...(options.attachments?.length ? { attachments: options.attachments } : {}),
           }),
         });
+        if (!res.ok) {
+          const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+          setFirstMessageError({
+            threadId: result.threadId,
+            message: friendlyChatErrorMessage(typeof body?.error === 'string' ? body.error : null),
+          });
+        }
       }
     } catch {
       // Error shown inside the panel
     }
-  }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig]);
+  }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig, syncHomeThreadUrl]);
 
   useEffect(() => {
     if (
@@ -603,6 +672,7 @@ function App() {
 
   if (isAuthenticated === null) return <div className="app-loading"><ApexLoader size={80} /></div>;
   if (!isAuthenticated) return <Login />;
+  if (devAccessDenied) return <DevEnvAccessDenied onLogout={() => { void handleLogout(); }} />;
 
   if (currentView === 'project-selector') {
     // Restricted users never see the project picker — show a brief loader while redirecting.
@@ -761,7 +831,11 @@ function App() {
     );
   }
 
-  if (currentView === 'not-found') {
+  if (currentView === 'playbooks' && homeFlagsLoading) {
+    return <ViewSkeleton />;
+  }
+
+  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks)) {
     return (
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <div role="status" aria-live="polite" {...{ 'data-testid': 'route-not-found' }}>
@@ -918,6 +992,7 @@ function App() {
                   onRestoreThread={(id) => {
                     setActiveThreadId(id);
                     setActiveThreadProject(selectedProject);
+                    syncHomeThreadUrl(id);
                   }}
                 />
                 {/* data-testid-exempt — ChatAgentPanel API has no data-testid prop */}
@@ -935,11 +1010,18 @@ function App() {
                   onSelectThread={(id) => {
                     setActiveThreadId(id || null);
                     setActiveThreadProject(id ? selectedProject : null);
+                    syncHomeThreadUrl(id || null);
                   }}
                   selectedProject={selectedProject}
                   canStartNewChat={!!panelRepo && !isLoadingSkillRepos && !startChat.isPending}
                   isStartingNewChat={startChat.isPending}
-                  newChatError={startChat.error?.message}
+                  newChatError={
+                    startChat.error?.message
+                    ?? (firstMessageError?.threadId === activeThreadId
+                      ? firstMessageError.message
+                      : undefined)
+                  }
+                  onClearNewChatError={() => setFirstMessageError(null)}
                   launchedFromHome
                   selectedSkillSettingsId={selectedSkillSettingsId}
                 />
@@ -1280,6 +1362,13 @@ function App() {
                 <DesignModuleView selectedProject={selectedProject} />
               </Suspense>
             </ErrorBoundary>
+          ) : currentView === 'playbooks' ? (
+            // Only reachable when the flag is on; the off case returned the not-found surface above.
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <PlaybookStatusView selectedProject={selectedProject} />
+              </Suspense>
+            </ErrorBoundary>
           ) : currentView === 'load-tests' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
@@ -1435,7 +1524,7 @@ function App() {
                   ) : planningTab === 'releases' ? (
                     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                       <Suspense fallback={<ViewSkeleton />}>
-                        {usesBoardWorkItems ? (
+                        {selectedProject.toLowerCase() === 'apex' ? (
                           <BoardReleaseView project={selectedProject} />
                         ) : (
                           <ReleaseView workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
@@ -1481,7 +1570,7 @@ function App() {
           whatsNewSettled={whatsNewAutomaticOverlaySettled}
           whatsNewBlocksWalkthrough={whatsNewBlocksAutomaticWalkthrough}
         />
-        {showBetaAnnouncement && !(isSuperAdmin && betaAnnouncementDismissed) && (
+        {permissionsLoaded && showBetaAnnouncement && !devAccessAllowlisted && !(isSuperAdmin && betaAnnouncementDismissed) && (
           // data-testid-exempt — BetaAnnouncementModal API has no data-testid prop
           <BetaAnnouncementModal
             isSuperAdmin={isSuperAdmin}

@@ -2,8 +2,8 @@
  * FEAT-007 / TBI-010 — long-running Azure Container Apps host for the
  * interactive AI-runs lane.
  *
- * Boots a Dapr server that registers {@link InteractiveSessionActorImpl} (one
- * activation per `threadId`) and exposes a single `dispatch` service-invocation
+ * Boots a Dapr server that registers the interactive session actor type for
+ * this host's Dapr app ID (one activation per `threadId`) and exposes a single `dispatch` service-invocation
  * method. The Apex API (App Service, no Dapr sidecar) posts turn dispatches to
  * this host's ingress; the handler resolves the thread's actor proxy through
  * the local Dapr sidecar and invokes `handleTurn`. The actor then fetches the
@@ -22,27 +22,82 @@ import {
   HttpMethod,
   type DaprInvokerCallbackContent,
 } from '@dapr/dapr';
+import { promises as fs } from 'fs';
+import path from 'path';
 // Side-effect: initialize Application Insights when the connection string is set.
 import '../telemetry';
 import { exitAfterFlush } from '../../utils/processExit';
+import {
+  isInteractiveActorBootstrap,
+  type InteractiveActorBootstrap,
+} from '../../../shared/types/aiRunIngest';
+import type { RepoReader, RepositoryIdentity } from '../../../shared/types/repoReader';
 import { getAiRunnerCallbackToken } from '../aiRunsCallbackToken';
 import { createAiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
-import { openGroundedReader } from '../aiRunsWorker/workspace';
+import {
+  artifactContainerName,
+  resolveArtifactContainerClient,
+} from '../aiRunV2/artifactContainer';
+import { createArtifactUploader } from '../aiRunsV2Worker/artifactUploader';
+import { resolveShutdownDrainMs } from '../aiRunsV2Worker/shutdownDrain';
 import { interactiveLiveBus } from '../interactiveLiveBus';
-import type { RepoReader } from '../../../shared/types/repoReader';
+import { LocalCheckoutReader } from '../localCheckoutReader';
+import {
+  RepoServiceReader,
+  resolveRepoReadServiceUrl,
+} from '../repoRead/repoServiceReader';
 import { acquireInteractiveCursorAgent } from './interactiveCursorExecution';
+import {
+  checkoutWithDiskReclaim,
+  createGroundedRepositoryCheckout,
+} from './groundedRepositoryCheckout';
 import {
   createInteractiveSessionActor,
   type WarmThreadCheckout,
 } from './interactiveSessionActor';
+import { collectInteractiveArtifacts } from './interactiveArtifactCollector';
+import { materializeInteractiveWorkspace } from './interactiveWorkspaceMaterializer';
+import { createPerThreadTurnQueue } from './perThreadTurnQueue';
 import {
-  InteractiveSessionActorImpl,
+  createInteractiveShutdownDrain,
+  interactiveInFlightInvocations,
+} from './shutdownDrain';
+import {
+  interactiveSessionActorClassFor,
   setInteractiveActorRuntime,
   type IInteractiveSessionActor,
 } from './interactiveSessionActorClass';
 
 /** Warm checkout carrying the reader the execution factory needs. */
 type ReaderCheckout = WarmThreadCheckout & { reader: RepoReader };
+
+async function openPinnedReaderForBootstrap(
+  bootstrap: InteractiveActorBootstrap,
+): Promise<RepoReader | null> {
+  const grounding = bootstrap.specification.grounding;
+  if (!grounding) return null;
+  const identity: RepositoryIdentity = {
+    provider: grounding.provider,
+    project: grounding.project,
+    repo: grounding.repository,
+    sha: grounding.sha,
+  };
+  const serviceUrl = resolveRepoReadServiceUrl();
+  if (!serviceUrl) {
+    throw new Error(
+      'Pinned grounding repository is unavailable: repo-read service URL is not configured',
+    );
+  }
+  try {
+    const reader = new RepoServiceReader({ identity, baseUrl: serviceUrl });
+    await reader.listDir('');
+    return reader;
+  } catch (error) {
+    const reason =
+      error instanceof Error ? error.message : 'pinned repo-read open failed';
+    throw new Error(`Pinned grounding repository is unavailable: ${reason}`);
+  }
+}
 
 export interface InteractiveDispatchRequest {
   threadId: string;
@@ -127,13 +182,34 @@ export function parseInteractiveDispatchRequest(
   };
 }
 
+export async function registerInteractiveHealthHandler(
+  invoker: InteractiveDispatchInvoker,
+): Promise<void> {
+  await invoker.listen(
+    'health',
+    async () => ({ status: 'ok' }),
+    { method: HttpMethod.GET },
+  );
+}
+
+export interface InteractiveDispatchDrain {
+  isDraining(): boolean;
+  track<T>(work: () => Promise<T>): Promise<T>;
+}
+
+const NO_DISPATCH_DRAIN: InteractiveDispatchDrain = {
+  isDraining: () => false,
+  track: (work) => work(),
+};
+
 export async function registerInteractiveDispatchHandler(
   invoker: InteractiveDispatchInvoker,
   resolveActor: (threadId: string) => IInteractiveSessionActor,
   recoverActorFailure?: (
     payload: InteractiveDispatchRequest,
     error: unknown
-  ) => Promise<void>
+  ) => Promise<void>,
+  drain: InteractiveDispatchDrain = NO_DISPATCH_DRAIN
 ): Promise<void> {
   await invoker.listen(
     'dispatch',
@@ -150,6 +226,19 @@ export async function registerInteractiveDispatchHandler(
         );
         return { accepted: false };
       }
+      // The orchestrator retries a refused dispatch, which then lands on a replica
+      // that is not shutting down.
+      if (drain.isDraining()) {
+        console.warn(
+          JSON.stringify({
+            event: 'InteractiveDispatchRefusedDraining',
+            threadId: payload.threadId,
+            runId: payload.runId,
+            dispatchMessageId: payload.dispatchMessageId,
+          })
+        );
+        return { accepted: false };
+      }
       console.log(
         JSON.stringify({
           event: 'InteractiveDispatchAccepted',
@@ -159,11 +248,13 @@ export async function registerInteractiveDispatchHandler(
         })
       );
       const actor = resolveActor(payload.threadId);
-      void actor
-        .handleTurn({
-          runId: payload.runId,
-          dispatchMessageId: payload.dispatchMessageId,
-        })
+      void drain
+        .track(() =>
+          actor.handleTurn({
+            runId: payload.runId,
+            dispatchMessageId: payload.dispatchMessageId,
+          })
+        )
         .then((outcome) => {
           console.log(
             JSON.stringify({
@@ -232,9 +323,17 @@ export async function main(): Promise<void> {
     getToken: getAiRunnerCallbackToken,
   });
 
+  const repositoryCheckout = createGroundedRepositoryCheckout();
+
+  const turnQueue = createPerThreadTurnQueue();
+
   // Single shared logic core: thread-keyed warm checkout + live Agent cache.
   const logic = createInteractiveSessionActor({
+    turnQueue,
     openWarmCheckout: async (_threadId, snapshot) => {
+      // Dynamic import keeps the actor-host static graph free of App Service
+      // workspace helpers that transitively import PostgreSQL.
+      const { openGroundedReader } = await import('../aiRunsWorker/workspace');
       const reader = await openGroundedReader(snapshot);
       const checkout: ReaderCheckout = {
         workspacePath: snapshot.workspaceRef,
@@ -244,10 +343,132 @@ export async function main(): Promise<void> {
     },
     acquireAgent: (snapshot, checkout, options) =>
       acquireInteractiveCursorAgent(
-        snapshot,
+        {
+          model: snapshot.model,
+          effort: snapshot.effort ?? null,
+          workspaceRef: snapshot.workspaceRef,
+        },
         (checkout as ReaderCheckout).reader,
-        options
+        {
+          resumeAgentId: options.resumeAgentId,
+          mcpServers: options.mcpServers ?? {},
+        },
+      ).then((acquired) => acquired.handle),
+    acquireDurableAgent: async (bootstrap, checkout, options) =>
+      acquireInteractiveCursorAgent(
+        {
+          model: bootstrap.specification.model,
+          effort: bootstrap.specification.effort,
+          workspaceRef: checkout.workspacePath,
+        },
+        (checkout as ReaderCheckout).reader,
+        {
+          resumeAgentId: options.resumeAgentId,
+          mcpServers: bootstrap.mcpServers,
+        },
       ),
+    materializeWorkspace: async (bootstrap, destination, signal, options) => {
+      const grounding = bootstrap.specification.grounding;
+      const checkout = grounding
+        ? await checkoutWithDiskReclaim({
+            repositoryCheckout,
+            grounding,
+            destination,
+            signal,
+            reclaimDisk: options?.reclaimDisk,
+            log: (result, retried) =>
+              console.log(
+                JSON.stringify({
+                  event: 'InteractiveRepositoryCheckout',
+                  runId: bootstrap.runId,
+                  status: result.status,
+                  detail: result.status === 'ready' ? result.source : result.reason,
+                  durationMs: result.durationMs,
+                  ...(retried ? { retriedAfterReclaim: true } : {}),
+                }),
+              ),
+          })
+        : null;
+      const reader =
+        checkout?.status === 'ready'
+          ? new LocalCheckoutReader({
+              checkoutPath: destination,
+              identity: checkout.identity,
+            })
+          : await openPinnedReaderForBootstrap(bootstrap);
+      // Turn outputs from a prior turn on this thread must not be re-uploaded.
+      await fs
+        .rm(path.join(destination, '.ai-pilot', 'output'), {
+          recursive: true,
+          force: true,
+        })
+        .catch(() => {});
+      await fs
+        .rm(path.join(destination, '.ai-pilot', 'kickoff-transcript.md'), {
+          force: true,
+        })
+        .catch(() => {});
+      // A retried turn rewrites its own attachments, which are created exclusively.
+      await fs
+        .rm(
+          path.join(
+            destination,
+            '.ai-pilot',
+            'attachments',
+            bootstrap.specification.turnId,
+          ),
+          { recursive: true, force: true },
+        )
+        .catch(() => {});
+      // The repository is already on disk (worktree) or read remotely through
+      // `reader`; only attachments are written here.
+      await materializeInteractiveWorkspace({
+        reader: null,
+        destination,
+        attachments: bootstrap.specification.currentMessage.attachments,
+        readAttachment: async (attachment) => {
+          const client = resolveArtifactContainerClient(
+            attachment.blobRef.container,
+          );
+          return client
+            .getBlockBlobClient(attachment.blobRef.key)
+            .downloadToBuffer();
+        },
+        signal,
+      });
+      return {
+        workspacePath: destination,
+        reader: reader ?? new LocalCheckoutReader({
+          checkoutPath: destination,
+          identity: {
+            provider: 'ado',
+            project: bootstrap.specification.projectId,
+            repo: 'empty',
+            sha: 'none',
+          },
+        }),
+        dispose: () => repositoryCheckout.release(destination),
+      } as ReaderCheckout;
+    },
+    uploadAttemptArtifacts: async (bootstrap, workspacePath, signal) => {
+      const collected = await collectInteractiveArtifacts(workspacePath);
+      const container = artifactContainerName();
+      const uploader = createArtifactUploader({
+        target: {
+          runId: bootstrap.runId,
+          attemptId: bootstrap.attemptId,
+          attemptNumber: bootstrap.attemptNumber,
+          container,
+        },
+      });
+      return uploader.uploadAll(
+        collected.map((file) => ({
+          path: file.relativePath,
+          content: file.content,
+        })),
+        signal,
+      );
+    },
     postIngest: (projectId, runId, body) =>
       callback.postIngest(projectId, runId, body),
     // Live token/tool/phase fan-out over Redis (ephemeral). No-op when Redis
@@ -259,22 +480,31 @@ export async function main(): Promise<void> {
   await interactiveLiveBus.init();
   setInteractiveActorRuntime({ logic, callback });
 
-  const disposeOnShutdown = (): void => {
-    void logic.disposeAll().catch(() => {});
-  };
-  process.once('SIGTERM', disposeOnShutdown);
-  process.once('SIGINT', disposeOnShutdown);
+  const shutdownDrain = createInteractiveShutdownDrain({
+    drainMs: resolveShutdownDrainMs(process.env.AI_RUNS_V2_SHUTDOWN_DRAIN_MS),
+    activeTurnCount: () =>
+      turnQueue.activeThreadCount() + interactiveInFlightInvocations.count(),
+    dispose: () => logic.disposeAll(),
+    exit: (code) => void exitAfterFlush(code),
+  });
+  process.on('SIGTERM', () => shutdownDrain.shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdownDrain.shutdown('SIGINT'));
 
   const server = new DaprServer({
     serverPort,
     communicationProtocol: CommunicationProtocolEnum.HTTP,
   });
 
+  const actorClass = interactiveSessionActorClassFor(
+    process.env.AI_RUNS_INTERACTIVE_DAPR_APP_ID,
+  );
   await server.actor.init();
-  await server.actor.registerActor(InteractiveSessionActorImpl);
+  await server.actor.registerActor(actorClass);
+
+  await registerInteractiveHealthHandler(server.invoker);
 
   const proxyBuilder = new ActorProxyBuilder<IInteractiveSessionActor>(
-    InteractiveSessionActorImpl,
+    actorClass,
     server.client
   );
 
@@ -293,13 +523,30 @@ export async function main(): Promise<void> {
         runId: payload.runId,
         dispatchMessageId: payload.dispatchMessageId,
       });
-      await callback.postIngest(bootstrap.projectId, payload.runId, {
+      // Only an attempt that never started gets the start-failure terminal; a
+      // running or finished attempt owns its own outcome.
+      if (
+        isInteractiveActorBootstrap(bootstrap) &&
+        bootstrap.attemptStatus !== 'queued' &&
+        bootstrap.attemptStatus !== 'dispatched'
+      ) {
+        return;
+      }
+      const projectId = bootstrap.projectId;
+      await callback.postIngest(projectId, payload.runId, {
         dispatchMessageId: payload.dispatchMessageId,
         kind: 'terminal',
         status: 'failed',
         phase: 'completion',
         detail: 'Interactive agent could not start. Please retry.',
+        ...(isInteractiveActorBootstrap(bootstrap)
+          ? { attemptId: bootstrap.attemptId }
+          : {}),
       });
+    },
+    {
+      isDraining: () => shutdownDrain.isDraining(),
+      track: (work) => interactiveInFlightInvocations.track(work),
     }
   );
 
@@ -308,6 +555,7 @@ export async function main(): Promise<void> {
     JSON.stringify({
       event: 'InteractiveActorHostStarted',
       serverPort,
+      actorType: actorClass.name,
     })
   );
 }
