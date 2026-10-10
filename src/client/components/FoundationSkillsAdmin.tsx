@@ -567,16 +567,14 @@ const ProjectPicker: React.FC<{
                   type="button"
                   className={styles.chipRemove}
                   onClick={() => {
-                    const source = reposForProject(teams, project).find(
-                      (item) => foundationSkillRepoKey(toTargetRepo(project, item)) === foundationSkillRepoKey(repo),
+                    const nextRepos = selectedRepos.filter(
+                      (item) => foundationSkillRepoKey(item) !== foundationSkillRepoKey(repo),
                     );
-                    if (source) toggleRepo(project, source);
-                    else {
-                      onChange(
-                        selected,
-                        selectedRepos.filter((item) => foundationSkillRepoKey(item) !== foundationSkillRepoKey(repo)),
-                      );
-                    }
+                    const keepProject = nextRepos.some((item) => sameProject(item.apexProject, project));
+                    onChange(
+                      keepProject ? selected : selected.filter((name) => name !== project),
+                      nextRepos,
+                    );
                   }}
                   aria-label={`Remove ${repo.friendlyName}`}
                   {...{ 'data-testid': `fs-project-chip-remove-${project}-${repo.friendlyName}` }}

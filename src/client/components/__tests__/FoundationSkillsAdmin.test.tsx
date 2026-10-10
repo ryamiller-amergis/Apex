@@ -577,6 +577,41 @@ describe('FoundationSkillsAdmin', () => {
       );
     });
 
+    it('drops the project when the last repository chip is removed before teams load', async () => {
+      const mutateAsync = jest.fn().mockResolvedValue({ release: draftRelease });
+      mockUpdateRelease.mockReturnValue({ mutateAsync, isPending: false });
+      mockCatalog.mockReturnValue({ skills: dependencyCatalog(), isLoading: false });
+      mockTeams.mockReturnValue({ data: [], isLoading: false });
+      mockReleases.mockReturnValue({
+        data: [
+          {
+            ...draftRelease,
+            selectedSkills: ['to-prd'],
+            targetProjects: ['MaxView'],
+            targetRepos: [{
+              apexProject: 'MaxView',
+              provider: 'ado',
+              project: 'MaxView',
+              repo: 'MaxView.Infra',
+              branch: 'development',
+              friendlyName: 'Infra',
+            }],
+            skillTargets: {},
+            artifactVersion: '2.0.0',
+          },
+        ],
+        isLoading: false,
+      });
+
+      renderComponent();
+      fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      fireEvent.click(screen.getByTestId('fs-project-chip-remove-MaxView-Infra'));
+      fireEvent.click(screen.getByTestId('fs-edit-save-rel-2'));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Select at least one project or switch to "All projects".');
+      expect(mutateAsync).not.toHaveBeenCalled();
+    });
+
     it('submits dependency-first closure from draft edit payloads', async () => {
       const mutateAsync = jest.fn().mockResolvedValue({ release: draftRelease });
       mockUpdateRelease.mockReturnValue({ mutateAsync, isPending: false });

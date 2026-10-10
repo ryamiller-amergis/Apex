@@ -812,7 +812,13 @@ export async function updateRepoWithFoundationSkills(
   try {
     release = opts.releaseId
       ? await getRelease(opts.releaseId)
-      : await getLatestPublishedRelease(apexProject);
+      : await getLatestPublishedRelease(apexProject, {
+          apexProject,
+          provider,
+          project,
+          repo,
+          branch: opts.defaultBranch ?? 'main',
+        });
   } catch (e: unknown) {
     errors.push(`Failed to resolve release: ${(e as Error).message}`);
   }
