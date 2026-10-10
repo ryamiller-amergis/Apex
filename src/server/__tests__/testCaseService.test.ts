@@ -127,6 +127,7 @@ import {
   triggerTestCaseGeneration,
   extractUncoveredCoverageItems,
   failGeneratingTestCasesForThread,
+  mergeScopedTestCaseJson,
 } from '../services/testCaseService';
 
 const { db: mockDb, __mockUpdateChains: mockUpdateChains } = jest.requireMock('../db/drizzle') as {
@@ -930,6 +931,22 @@ describe('testCaseService', () => {
 
     it('returns an empty array when there is no coverage matrix', () => {
       expect(extractUncoveredCoverageItems({ suites: [] })).toEqual([]);
+    });
+  });
+
+  describe('mergeScopedTestCaseJson', () => {
+    it('keeps suites for PBIs outside the requested scope', () => {
+      const merged = mergeScopedTestCaseJson(
+        { suites: [{ pbiId: 'PBI-001', testCases: [{ id: 'old' }] }, { pbiId: 'PBI-002', testCases: [{ id: 'keep' }] }] },
+        { suites: [{ pbiId: 'PBI-001', testCases: [{ id: 'new' }] }] },
+        ['PBI-001'],
+      );
+      expect(merged).toEqual({
+        suites: [
+          { pbiId: 'PBI-002', testCases: [{ id: 'keep' }] },
+          { pbiId: 'PBI-001', testCases: [{ id: 'new' }] },
+        ],
+      });
     });
   });
 });

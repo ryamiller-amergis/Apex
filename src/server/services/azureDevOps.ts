@@ -294,6 +294,54 @@ export class AzureDevOpsService {
     });
   }
 
+  /**
+   * Every Epic, Feature, PBI, TBI, and Bug in the project.
+   * No area-path and no due-date filter — those belong to the calendar query.
+   */
+  async listProjectBacklogWorkItems(): Promise<{
+    items: Array<{ id: number; title: string; state: string; workItemType: string }>;
+    truncated: boolean;
+  }> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const project = this.project.replace(/'/g, "''");
+      const wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${project}' AND ([System.WorkItemType] = 'Epic' OR [System.WorkItemType] = 'Feature' OR [System.WorkItemType] = 'Product Backlog Item' OR [System.WorkItemType] = 'Technical Backlog Item' OR [System.WorkItemType] = 'Bug') ORDER BY [System.ChangedDate] DESC`;
+      const top = 20_000;
+      const queryResult = await witApi.queryByWiql(
+        { query: wiql },
+        { project: this.project },
+        undefined,
+        top,
+      );
+
+      const ids = (queryResult.workItems ?? [])
+        .map((wi: { id?: number }) => wi.id)
+        .filter((id: number | undefined): id is number => typeof id === 'number');
+      if (ids.length === 0) {
+        return { items: [], truncated: false };
+      }
+
+      const workItems = await this.getWorkItemsInBatches(witApi, ids, [
+        'System.Id',
+        'System.Title',
+        'System.State',
+        'System.WorkItemType',
+      ]);
+
+      return {
+        truncated: ids.length >= top,
+        items: workItems
+          .filter((wi) => typeof wi.id === 'number')
+          .map((wi) => ({
+            id: wi.id as number,
+            title: String(wi.fields?.['System.Title'] ?? ''),
+            state: String(wi.fields?.['System.State'] ?? ''),
+            workItemType: String(wi.fields?.['System.WorkItemType'] ?? ''),
+          })),
+      };
+    });
+  }
+
   async getWorkItems(from?: string, to?: string): Promise<WorkItem[]> {
     return retryWithBackoff(async () => {
       const witApi = await this.connection.getWorkItemTrackingApi();
@@ -511,6 +559,73 @@ export class AzureDevOpsService {
           design: wi.fields['Custom.Design'] || '',
           discussions: wi.fields['System.History'] || '',
         }));
+    });
+  }
+
+  /**
+   * Capture the requirement context used to generate QA cases from an
+   * ADO-native work item. PBIs and Bugs own cases; TBIs are context only.
+   */
+  async getQaTestGenerationContext(
+    rootId: number,
+  ): Promise<import('../../shared/types/qaLab').QaAdoGenerationContext | null> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const wiql = `SELECT [System.Id] FROM WorkItemLinks WHERE ([Source].[System.Id] = ${rootId}) AND ([System.Links.LinkType] = 'System.LinkTypes.Hierarchy-Forward') MODE (Recursive)`;
+      const queryResult = await witApi.queryByWiql(
+        { query: wiql },
+        { project: this.project },
+      );
+
+      const parentMap = new Map<number, number | null>([[rootId, null]]);
+      for (const relation of queryResult?.workItemRelations ?? []) {
+        if (typeof relation.source?.id === 'number' && typeof relation.target?.id === 'number') {
+          parentMap.set(relation.target.id, relation.source.id);
+        }
+      }
+
+      const fields = [
+        'System.Id',
+        'System.Title',
+        'System.State',
+        'System.WorkItemType',
+        'System.AreaPath',
+        'System.Description',
+        'Microsoft.VSTS.Common.AcceptanceCriteria',
+        'Microsoft.VSTS.TCM.ReproSteps',
+      ];
+      const rawItems = await this.getWorkItemsInBatches(
+        witApi,
+        Array.from(parentMap.keys()),
+        fields,
+      );
+
+      const items: import('../../shared/types/qaLab').QaAdoGenerationItem[] = rawItems
+        .filter((item) => typeof item?.id === 'number' && !!item.fields)
+        .map((item) => ({
+          id: item.id as number,
+          parentId: parentMap.get(item.id as number) ?? null,
+          workItemType: String(item.fields?.['System.WorkItemType'] ?? ''),
+          title: String(item.fields?.['System.Title'] ?? ''),
+          state: String(item.fields?.['System.State'] ?? ''),
+          areaPath: String(item.fields?.['System.AreaPath'] ?? ''),
+          description: String(item.fields?.['System.Description'] ?? ''),
+          acceptanceCriteria: String(
+            item.fields?.['Microsoft.VSTS.Common.AcceptanceCriteria'] ?? '',
+          ),
+          reproSteps: String(item.fields?.['Microsoft.VSTS.TCM.ReproSteps'] ?? ''),
+        }));
+
+      const root = items.find((item) => item.id === rootId);
+      if (!root) return null;
+
+      const targets = items.filter((item) =>
+        item.workItemType === 'Product Backlog Item' || item.workItemType === 'Bug',
+      );
+      const technicalContext = items.filter(
+        (item) => item.workItemType === 'Technical Backlog Item',
+      );
+      return { root, targets, technicalContext };
     });
   }
 
@@ -5915,14 +6030,16 @@ export class AzureDevOpsService {
   }
 
   /**
-   * Create a Test Case work item linked as a child under `parentId`.
-   * Falls back to TestedBy-Reverse if hierarchy link is rejected.
+   * Create a Test Case linked to `parentId`. PRD export keeps its historical
+   * hierarchy preference; QA Lab publishing requests ADO's Tested By relation.
    */
   async createTestCaseWorkItem(spec: {
     title: string;
     stepsHtml: string;
     parentId: number;
     assignedTo?: string;
+    /** ADO-native QA publishing uses the Tested By relationship. */
+    linkType?: 'hierarchy' | 'tested-by';
   }): Promise<{ id: number; url: string }> {
     const witApi = await this.connection.getWorkItemTrackingApi();
     const orgUrl = this.organization.replace(/\/$/, '');
@@ -5952,25 +6069,33 @@ export class AzureDevOpsService {
       return patch;
     };
 
+    const preferredLink = spec.linkType === 'tested-by'
+      ? 'Microsoft.VSTS.Common.TestedBy-Reverse'
+      : 'System.LinkTypes.Hierarchy-Reverse';
+    const fallbackLink = preferredLink === 'System.LinkTypes.Hierarchy-Reverse'
+      ? 'Microsoft.VSTS.Common.TestedBy-Reverse'
+      : 'System.LinkTypes.Hierarchy-Reverse';
+
     let wi: any;
     try {
-      wi = await witApi.createWorkItem({}, buildPatch('System.LinkTypes.Hierarchy-Reverse', true), this.project, 'Test Case');
+      wi = await witApi.createWorkItem({}, buildPatch(preferredLink, true), this.project, 'Test Case');
     } catch (firstErr: any) {
-      // Identity errors: retry without assignee. Other 400s: hierarchy likely rejected → TestedBy.
+      // Identity errors retry without assignee. Other 400s retry the alternate
+      // relation because ADO process templates differ in their allowed links.
       if (/identity/i.test(String(firstErr?.message))) {
         try {
-          wi = await witApi.createWorkItem({}, buildPatch('System.LinkTypes.Hierarchy-Reverse', false), this.project, 'Test Case');
+          wi = await witApi.createWorkItem({}, buildPatch(preferredLink, false), this.project, 'Test Case');
         } catch (noAssigneeErr: any) {
           if (noAssigneeErr?.status === 400) {
-            console.warn(`[ADO] createTestCaseWorkItem: hierarchy link rejected for PBI ${spec.parentId}, falling back to TestedBy-Reverse`);
-            wi = await witApi.createWorkItem({}, buildPatch('Microsoft.VSTS.Common.TestedBy-Reverse', false), this.project, 'Test Case');
+            console.warn(`[ADO] createTestCaseWorkItem: preferred link rejected for work item ${spec.parentId}, trying alternate relation`);
+            wi = await witApi.createWorkItem({}, buildPatch(fallbackLink, false), this.project, 'Test Case');
           } else {
             throw noAssigneeErr;
           }
         }
       } else if (firstErr?.status === 400) {
-        console.warn(`[ADO] createTestCaseWorkItem: hierarchy link rejected for PBI ${spec.parentId}, falling back to TestedBy-Reverse`);
-        wi = await witApi.createWorkItem({}, buildPatch('Microsoft.VSTS.Common.TestedBy-Reverse', true), this.project, 'Test Case');
+        console.warn(`[ADO] createTestCaseWorkItem: preferred link rejected for work item ${spec.parentId}, trying alternate relation`);
+        wi = await witApi.createWorkItem({}, buildPatch(fallbackLink, true), this.project, 'Test Case');
       } else {
         throw firstErr;
       }

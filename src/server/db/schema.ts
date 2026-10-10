@@ -2,6 +2,7 @@ import { bigint, bigserial, boolean, check, date, index, integer, jsonb, numeric
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type { RepoProvider, RepoRole, RunType } from '../../shared/types/runGrounding';
+import type { QaAdoGenerationContext } from '../../shared/types/qaLab';
 import type {
   OverlayTextBox,
   PageManifestEntry,
@@ -617,6 +618,42 @@ export const testCases = pgTable('test_cases', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   prdIdx: index('test_cases_prd_id_idx').on(t.prdId),
+}));
+
+/**
+ * QA suites generated from Azure DevOps work items that do not belong to an
+ * Apex PRD. Each generation is retained so QA can review history and publish
+ * selected cases back to ADO without creating duplicate Test Case work items.
+ */
+export const qaAdoTestSuites = pgTable('qa_ado_test_suites', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  rootWorkItemId: integer('root_work_item_id').notNull(),
+  rootWorkItemType: text('root_work_item_type').notNull(),
+  rootTitle: text('root_title').notNull(),
+  status: text('status').notNull().default('generating'),
+  chatThreadId: uuid('chat_thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+  sourceSnapshot: jsonb('source_snapshot').$type<QaAdoGenerationContext>().notNull(),
+  testCasesJson: jsonb('test_cases_json'),
+  testCasesMd: text('test_cases_md'),
+  coverageSummary: jsonb('coverage_summary').$type<TestCaseCoverageSummary>(),
+  publishedCases: jsonb('published_cases').$type<Array<{
+    localCaseId: string;
+    adoTestCaseId: number;
+    adoTestCaseUrl: string;
+    parentWorkItemId: number;
+    publishedAt: string;
+  }>>().notNull().default(sql`'[]'::jsonb`),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectRootIdx: index('qa_ado_test_suites_project_root_idx').on(
+    t.project,
+    t.rootWorkItemId,
+    t.createdAt,
+  ),
+  statusIdx: index('qa_ado_test_suites_status_idx').on(t.status),
 }));
 
 export const designDocs = pgTable('design_docs', {

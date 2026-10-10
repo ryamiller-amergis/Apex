@@ -9,6 +9,7 @@ import type {
   TestCaseSummary,
   TestCaseStatus,
 } from '../../shared/types/interview';
+import type { EffortLevel } from '../../shared/types/effort';
 import { getDefaultModel } from './appSettingsService';
 import {
   createThread,
@@ -661,6 +662,23 @@ export async function failGeneratingTestCasesForThread(
   await markTestCaseFailed(row.id, row.prdId, row.chatThreadId);
 }
 
+async function readQaLabScopePbiIds(
+  threadId: string,
+  workspaceDirOverride?: string,
+): Promise<string[] | null> {
+  const outputDir = await resolveOutputDir(threadId, workspaceDirOverride);
+  if (!outputDir) return null;
+  const file = path.join(outputDir, QA_LAB_SCOPE_FILE);
+  if (!fs.existsSync(file)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf-8')) as { pbiIds?: unknown };
+    const pbiIds = normalizePbiIds(Array.isArray(parsed.pbiIds) ? parsed.pbiIds.filter((id): id is string => typeof id === 'string') : []);
+    return pbiIds.length > 0 ? pbiIds : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function readOutputTestCases(
   threadId: string,
   workspaceDirOverride?: string,
@@ -714,6 +732,59 @@ export async function readOutputTestCasesMd(
 
 const TEST_CASE_GENERATION_KICKOFF =
   'Generate QA test cases for the provided PRD and backlog. Use the configured skill instructions and write the required output files.';
+
+const QA_LAB_SCOPE_FILE = 'qa-lab-scope.json';
+const PBI_ID_PATTERN = /^PBI-\d+$/i;
+
+export interface TestCaseGenerationScope {
+  pbiIds: string[];
+  matchLevel?: 'pbi' | 'feature' | 'epic';
+  matchedTitle?: string;
+}
+
+function normalizePbiIds(pbiIds: string[] | undefined): string[] {
+  return (pbiIds ?? []).filter((id) => PBI_ID_PATTERN.test(id));
+}
+
+function buildTestCaseKickoff(scope?: TestCaseGenerationScope): string {
+  const pbiIds = normalizePbiIds(scope?.pbiIds);
+  if (pbiIds.length === 0) return TEST_CASE_GENERATION_KICKOFF;
+
+  if (scope?.matchLevel === 'feature' && scope.matchedTitle?.trim()) {
+    const title = scope.matchedTitle.replace(/"/g, '');
+    return `Generate QA test cases for the feature "${title}" only. Use --feature "${title}". Do not write cases for PBIs outside this feature. Write the required output files.`;
+  }
+  if (pbiIds.length === 1) {
+    return `Generate QA test cases for backlog item ${pbiIds[0]} only. Use --pbi ${pbiIds[0]}. Do not write cases for any other PBI. Write the required output files.`;
+  }
+  return `Generate QA test cases only for these backlog items: ${pbiIds.join(', ')}. Do not write cases for any other PBI. Write the required output files.`;
+}
+
+/** Keep suites for PBIs outside the requested scope when a scoped run finishes. */
+export function mergeScopedTestCaseJson(
+  previous: unknown,
+  incoming: unknown,
+  pbiIds: string[],
+): unknown {
+  const scope = new Set(normalizePbiIds(pbiIds));
+  if (scope.size === 0) return incoming;
+
+  const previousRoot = asRecord(previous);
+  const incomingRoot = asRecord(incoming) ?? {};
+  const previousSuites = Array.isArray(previousRoot?.suites) ? previousRoot.suites : [];
+  const incomingSuites = Array.isArray(incomingRoot.suites) ? incomingRoot.suites : [];
+  const kept = previousSuites.filter((suite) => {
+    const record = asRecord(suite);
+    const pbiId = typeof record?.pbiId === 'string'
+      ? record.pbiId
+      : typeof record?.pbi_id === 'string'
+        ? record.pbi_id
+        : '';
+    return pbiId.length > 0 && !scope.has(pbiId);
+  });
+
+  return { ...incomingRoot, suites: [...kept, ...incomingSuites] };
+}
 
 export async function routeTestCaseGenerationKickoff(opts: {
   testCaseId: string;
@@ -790,6 +861,10 @@ export async function triggerTestCaseGeneration(
   prdId: string,
   sourceThreadId: string,
   actorUserId?: string,
+  /** Per-run overrides from the QA Lab model picker; fall back to project skill config. */
+  overrides?: { model?: string; effort?: EffortLevel },
+  /** When set, the skill writes cases only for these backlog PBIs. */
+  scope?: TestCaseGenerationScope,
 ): Promise<boolean> {
   const prdRow = await db.query.prds.findFirst({
     where: eq(prds.id, prdId),
@@ -829,7 +904,8 @@ export async function triggerTestCaseGeneration(
   }
 
   const defaultModel = await getDefaultModel();
-  const model = skillConfig.testCaseModel ?? defaultModel;
+  const model = overrides?.model ?? skillConfig.testCaseModel ?? defaultModel;
+  const effort = overrides?.effort ?? skillConfig.testCaseEffort ?? undefined;
   const slug = sanitizeSlug(prdRow.title);
   const backlogJson = prdRow.backlogJson ?? {};
   const context = [
@@ -870,6 +946,7 @@ export async function triggerTestCaseGeneration(
       skillPath: skillConfig.testCaseSkillPath,
       freeformContext: context,
       model,
+      effort,
     },
     { skipAutoKickoff: true }
   );
@@ -891,6 +968,14 @@ export async function triggerTestCaseGeneration(
     context,
     'utf-8'
   );
+  const scopedPbiIds = normalizePbiIds(scope?.pbiIds);
+  if (scopedPbiIds.length > 0) {
+    fs.writeFileSync(
+      path.join(outputDir, QA_LAB_SCOPE_FILE),
+      JSON.stringify({ pbiIds: scopedPbiIds }),
+      'utf-8',
+    );
+  }
   updateThreadKickoffContext(thread.id, context);
 
   const [testCaseRow] = await db
@@ -913,7 +998,7 @@ export async function triggerTestCaseGeneration(
     project: prdRow.project,
     threadId: thread.id,
     sourceThreadId,
-    kickoffMessage: TEST_CASE_GENERATION_KICKOFF,
+    kickoffMessage: buildTestCaseKickoff(scope),
   });
 
   if (routedSuccessfully) {
@@ -1045,19 +1130,37 @@ export async function syncTestCaseOutput(
     chatThreadId,
     workspaceDirOverride,
   );
+  const scopePbiIds = await readQaLabScopePbiIds(chatThreadId, workspaceDirOverride);
+  let storedTestCasesJson: unknown = testCasesJson;
+  if (scopePbiIds && scopePbiIds.length > 0) {
+    const [previousReady] = await db
+      .select({ testCasesJson: testCases.testCasesJson })
+      .from(testCases)
+      .where(and(eq(testCases.prdId, prdId), eq(testCases.status, 'ready')))
+      .orderBy(desc(testCases.createdAt))
+      .limit(1);
+    const previousJson: unknown = previousReady?.testCasesJson;
+    if (previousJson) {
+      storedTestCasesJson = mergeScopedTestCaseJson(
+        previousJson,
+        testCasesJson,
+        scopePbiIds,
+      );
+    }
+  }
   const patchedBacklog = await readOutputBacklog(
     chatThreadId,
     workspaceDirOverride,
   );
   const backlogWithTestCaseCounts = applyTestCaseCountsToBacklog(
     patchedBacklog ?? prdRow?.backlogJson,
-    testCasesJson
+    storedTestCasesJson
   );
-  const coverageSummary = extractCoverageSummary(testCasesJson);
+  const coverageSummary = extractCoverageSummary(storedTestCasesJson);
   const readyAt = new Date().toISOString();
   const updates: Partial<typeof testCases.$inferInsert> = {
     status: 'ready',
-    testCasesJson: testCasesJson as any,
+    testCasesJson: storedTestCasesJson as any,
     testCasesMd: testCasesMd ?? null,
     coverageSummary: coverageSummary ?? null,
     updatedAt: readyAt,
