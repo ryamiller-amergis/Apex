@@ -110,6 +110,59 @@ describe('AzureDevOpsService', () => {
     });
   });
 
+  describe('listProjectBacklogWorkItems', () => {
+    it('loads every epic, feature, PBI, TBI, and bug in the project without the calendar filters', async () => {
+      mockWitApi.queryByWiql.mockResolvedValue({
+        workItems: [{ id: 90441 }, { id: 12 }],
+      });
+      mockWitApi.getWorkItems.mockResolvedValue([
+        {
+          id: 90441,
+          fields: {
+            'System.Title': 'A backlog item',
+            'System.State': 'New',
+            'System.WorkItemType': 'Product Backlog Item',
+          },
+        },
+        {
+          id: 12,
+          fields: {
+            'System.Title': 'A bug',
+            'System.State': 'Active',
+            'System.WorkItemType': 'Bug',
+          },
+        },
+      ]);
+
+      const service = new AzureDevOpsService('MaxView', 'MaxView\\MaxView Infra Team');
+      const result = await service.listProjectBacklogWorkItems();
+
+      const wiql = mockWitApi.queryByWiql.mock.calls[0][0].query as string;
+      expect(wiql).toContain("[System.TeamProject] = 'MaxView'");
+      expect(wiql).toContain("[System.WorkItemType] = 'Epic'");
+      expect(wiql).toContain("[System.WorkItemType] = 'Feature'");
+      expect(wiql).toContain("[System.WorkItemType] = 'Product Backlog Item'");
+      expect(wiql).toContain("[System.WorkItemType] = 'Technical Backlog Item'");
+      expect(wiql).toContain("[System.WorkItemType] = 'Bug'");
+      expect(wiql).not.toContain('AreaPath');
+      expect(wiql).not.toContain('DueDate');
+      expect(wiql).not.toContain('TargetDate');
+      expect(mockWitApi.queryByWiql).toHaveBeenCalledWith(
+        expect.objectContaining({ query: wiql }),
+        { project: 'MaxView' },
+        undefined,
+        20000,
+      );
+      expect(result).toEqual({
+        truncated: false,
+        items: [
+          { id: 90441, title: 'A backlog item', state: 'New', workItemType: 'Product Backlog Item' },
+          { id: 12, title: 'A bug', state: 'Active', workItemType: 'Bug' },
+        ],
+      });
+    });
+  });
+
   describe('getWorkItems', () => {
     it('should fetch work items without date range', async () => {
       const service = new AzureDevOpsService();

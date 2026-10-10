@@ -71,6 +71,20 @@ export interface QaLabWorkItemTestCases {
   totalCases: number;
 }
 
+/** A work item shown in the QA Lab picker. Slimmer than the calendar work item. */
+export interface QaLabWorkItemSummary {
+  id: number;
+  title: string;
+  state: string;
+  workItemType: string;
+}
+
+export interface QaLabWorkItemList {
+  items: QaLabWorkItemSummary[];
+  /** True when Azure DevOps returned its 20,000-item cap and older items were left out. */
+  truncated: boolean;
+}
+
 export interface QaLabGenerateRequest {
   /** Model override for this run; falls back to the project skill config default. */
   model?: string;

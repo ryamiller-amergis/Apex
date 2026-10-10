@@ -102,6 +102,7 @@ import {
 } from '../services/designDocService';
 import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, getThreadAsync, updateThreadKickoffContext, sendMessage } from '../services/chatAgentService';
 import { propagatePipelineGrounding } from '../services/runGroundingService';
+import { AzureDevOpsService } from '../services/azureDevOps';
 import { getApproverPoolForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import { assignApprovers, getAssignments, getAvailableApprovers, isApprovalComplete, isAssignedApprover, reassignApprovers, recordApproverResponse } from '../services/documentApprovalService';
@@ -352,6 +353,30 @@ router.get('/prds/:prdId/test-cases', requirePermission('interviews:view'), asyn
     }
     const testCaseRecord = await getTestCases(req.params.prdId);
     res.json(testCaseRecord);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * QA Lab picker: every Epic, Feature, PBI, TBI, and Bug in the selected
+ * Azure DevOps project. Not the calendar list, which is limited to this
+ * month and one exact area path.
+ */
+router.get('/work-items', requirePermission('planning:qa'), async (req, res, next) => {
+  try {
+    const project = typeof req.query.project === 'string' ? req.query.project.trim() : '';
+    if (!project) {
+      res.status(400).json({ error: 'A project query parameter is required' });
+      return;
+    }
+    if (project.toLowerCase() === 'apex') {
+      res.json({ items: [], truncated: false });
+      return;
+    }
+
+    const adoService = new AzureDevOpsService(project);
+    res.json(await adoService.listProjectBacklogWorkItems());
   } catch (err) {
     next(err);
   }

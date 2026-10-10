@@ -294,6 +294,54 @@ export class AzureDevOpsService {
     });
   }
 
+  /**
+   * Every Epic, Feature, PBI, TBI, and Bug in the project.
+   * No area-path and no due-date filter — those belong to the calendar query.
+   */
+  async listProjectBacklogWorkItems(): Promise<{
+    items: Array<{ id: number; title: string; state: string; workItemType: string }>;
+    truncated: boolean;
+  }> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const project = this.project.replace(/'/g, "''");
+      const wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${project}' AND ([System.WorkItemType] = 'Epic' OR [System.WorkItemType] = 'Feature' OR [System.WorkItemType] = 'Product Backlog Item' OR [System.WorkItemType] = 'Technical Backlog Item' OR [System.WorkItemType] = 'Bug') ORDER BY [System.ChangedDate] DESC`;
+      const top = 20_000;
+      const queryResult = await witApi.queryByWiql(
+        { query: wiql },
+        { project: this.project },
+        undefined,
+        top,
+      );
+
+      const ids = (queryResult.workItems ?? [])
+        .map((wi: { id?: number }) => wi.id)
+        .filter((id: number | undefined): id is number => typeof id === 'number');
+      if (ids.length === 0) {
+        return { items: [], truncated: false };
+      }
+
+      const workItems = await this.getWorkItemsInBatches(witApi, ids, [
+        'System.Id',
+        'System.Title',
+        'System.State',
+        'System.WorkItemType',
+      ]);
+
+      return {
+        truncated: ids.length >= top,
+        items: workItems
+          .filter((wi) => typeof wi.id === 'number')
+          .map((wi) => ({
+            id: wi.id as number,
+            title: String(wi.fields?.['System.Title'] ?? ''),
+            state: String(wi.fields?.['System.State'] ?? ''),
+            workItemType: String(wi.fields?.['System.WorkItemType'] ?? ''),
+          })),
+      };
+    });
+  }
+
   async getWorkItems(from?: string, to?: string): Promise<WorkItem[]> {
     return retryWithBackoff(async () => {
       const witApi = await this.connection.getWorkItemTrackingApi();

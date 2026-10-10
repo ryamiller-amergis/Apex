@@ -244,7 +244,7 @@ function App() {
     favicon.href = IS_BETA_RELEASE ? '/favicon-beta.svg' : '/favicon.svg';
   }, []);
 
-  const needsWorkItems = currentView === 'calendar' || currentView === 'planning' || currentView === 'qa-lab';
+  const needsWorkItems = currentView === 'calendar' || currentView === 'planning';
 
   const {
     isAuthenticated,
@@ -1329,11 +1329,7 @@ function App() {
           ) : currentView === 'qa-lab' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
-                <QaLabView
-                  workItems={workItems}
-                  project={selectedProject}
-                  areaPath={selectedAreaPath}
-                />
+                <QaLabView project={selectedProject} />
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'pdf-tools' ? (

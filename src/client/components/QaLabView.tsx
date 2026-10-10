@@ -1,14 +1,11 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import type { WorkItem } from '../../shared/types/workitem';
 import type { QaLabSuite, QaLabTestCase } from '../../shared/types/qaLab';
-import { useWorkItemTestCases, useGenerateTestCasesForPrd } from '../hooks/useQaLab';
+import { useQaLabWorkItems, useWorkItemTestCases, useGenerateTestCasesForPrd } from '../hooks/useQaLab';
 import { QaLabAssistantPanel } from './QaLabAssistantPanel';
 import styles from './QaLabView.module.css';
 
 export interface QaLabViewProps {
-  workItems: WorkItem[];
   project: string;
-  areaPath?: string;
 }
 
 /** Work item types that can own or roll up generated test cases. */
@@ -19,6 +16,14 @@ const TESTABLE_TYPES = new Set([
   'Technical Backlog Item',
   'Bug',
 ]);
+
+const WORK_ITEM_TYPE_OPTIONS: { value: string; label: string }[] = [
+  { value: 'Epic', label: 'Epic' },
+  { value: 'Feature', label: 'Feature' },
+  { value: 'Product Backlog Item', label: 'PBI' },
+  { value: 'Technical Backlog Item', label: 'TBI' },
+  { value: 'Bug', label: 'Bug' },
+];
 
 type FilterKey = 'tier' | 'type' | 'persona' | 'automationTier';
 
@@ -226,13 +231,21 @@ const SuiteGroup: React.FC<SuiteGroupProps> = ({ suite, cases, expandedIds, onTo
 
 /* ── QA Lab ──────────────────────────────────────────────────────────────── */
 
-export const QaLabView: React.FC<QaLabViewProps> = ({ workItems, project }) => {
+export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
   const [selectedWorkItemId, setSelectedWorkItemId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
+  const [workItemType, setWorkItemType] = useState('');
+  const [workItemState, setWorkItemState] = useState('');
   const [filters, setFilters] = useState<Partial<Record<FilterKey, string>>>({});
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [assistantOpen, setAssistantOpen] = useState(false);
 
+  const {
+    data: workItemList,
+    isLoading: isLoadingWorkItems,
+    isError: isWorkItemListError,
+    error: workItemListError,
+  } = useQaLabWorkItems(project);
   const { data, isLoading, isError, error, refetch } = useWorkItemTestCases(
     project,
     selectedWorkItemId,
@@ -240,22 +253,30 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ workItems, project }) => {
   const generateTestCases = useGenerateTestCasesForPrd();
 
   const testableItems = useMemo(
-    () => workItems.filter((item) => TESTABLE_TYPES.has(item.workItemType)),
-    [workItems],
+    () => (workItemList?.items ?? []).filter((item) => TESTABLE_TYPES.has(item.workItemType)),
+    [workItemList?.items],
   );
+
+  const stateOptions = useMemo(() => {
+    const source = workItemType
+      ? testableItems.filter((item) => item.workItemType === workItemType)
+      : testableItems;
+    return Array.from(new Set(source.map((item) => item.state).filter(Boolean))).sort();
+  }, [testableItems, workItemType]);
 
   const visibleWorkItems = useMemo(() => {
     const term = search.trim().toLowerCase();
-    if (!term) return testableItems;
-    return testableItems.filter(
-      (item) =>
-        item.title.toLowerCase().includes(term) || String(item.id).includes(term),
-    );
-  }, [testableItems, search]);
+    return testableItems.filter((item) => {
+      if (workItemType && item.workItemType !== workItemType) return false;
+      if (workItemState && item.state !== workItemState) return false;
+      if (!term) return true;
+      return item.title.toLowerCase().includes(term) || String(item.id).includes(term);
+    });
+  }, [testableItems, search, workItemType, workItemState]);
 
   const selectedWorkItem = useMemo(
-    () => workItems.find((item) => item.id === selectedWorkItemId) ?? null,
-    [workItems, selectedWorkItemId],
+    () => testableItems.find((item) => item.id === selectedWorkItemId) ?? null,
+    [testableItems, selectedWorkItemId],
   );
 
   const allCases = useMemo(
@@ -320,6 +341,41 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ workItems, project }) => {
           <h2 className={styles.sidebarTitle}>Work items</h2>
           <span className={styles.sidebarCount}>{visibleWorkItems.length}</span>
         </div>
+        <div className={styles.sidebarFilters}>
+          <label className={styles.sidebarFilterLabel}>
+            Type
+            <select
+              className={styles.sidebarFilterSelect}
+              value={workItemType}
+              onChange={(event) => {
+                setWorkItemType(event.target.value);
+                setWorkItemState('');
+              }}
+              aria-label="Filter by work item type"
+              {...{ 'data-testid': 'qa-lab-filter-work-item-type' }}
+            >
+              <option value="">All types</option>
+              {WORK_ITEM_TYPE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className={styles.sidebarFilterLabel}>
+            State
+            <select
+              className={styles.sidebarFilterSelect}
+              value={workItemState}
+              onChange={(event) => setWorkItemState(event.target.value)}
+              aria-label="Filter by work item state"
+              {...{ 'data-testid': 'qa-lab-filter-work-item-state' }}
+            >
+              <option value="">All states</option>
+              {stateOptions.map((state) => (
+                <option key={state} value={state}>{state}</option>
+              ))}
+            </select>
+          </label>
+        </div>
         <input
           type="search"
           className={styles.search}
@@ -349,8 +405,27 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ workItems, project }) => {
               </button>
             </li>
           ))}
-          {visibleWorkItems.length === 0 && (
-            <li className={styles.sidebarEmpty}>No matching work items.</li>
+          {isLoadingWorkItems && (
+            <li className={styles.sidebarEmpty} {...{ 'data-testid': 'qa-lab-work-items-loading' }}>
+              Loading work items…
+            </li>
+          )}
+          {isWorkItemListError && (
+            <li className={`${styles.sidebarEmpty} ${styles.statusError}`} {...{ 'data-testid': 'qa-lab-work-items-error' }}>
+              {workItemListError instanceof Error ? workItemListError.message : 'Could not load work items.'}
+            </li>
+          )}
+          {!isLoadingWorkItems && !isWorkItemListError && visibleWorkItems.length === 0 && (
+            <li className={styles.sidebarEmpty}>
+              {search.trim() || workItemType || workItemState
+                ? 'No matching work items.'
+                : 'No work items in this project.'}
+            </li>
+          )}
+          {!isLoadingWorkItems && workItemList?.truncated && (
+            <li className={styles.sidebarEmpty}>
+              Showing the 20,000 most recently changed items.
+            </li>
           )}
         </ul>
       </aside>

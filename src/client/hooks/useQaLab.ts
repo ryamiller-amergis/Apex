@@ -2,8 +2,28 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '../utils/apiFetch';
 import type {
   QaLabGenerateRequest,
+  QaLabWorkItemList,
   QaLabWorkItemTestCases,
 } from '../../shared/types/qaLab';
+
+export const qaLabWorkItemListKey = (project: string | null) =>
+  ['qa-lab', 'work-items', project] as const;
+
+/**
+ * Every Epic, Feature, PBI, TBI, and Bug in the selected Azure DevOps project.
+ */
+export function useQaLabWorkItems(project: string | null) {
+  const isAdoProject = !!project && project.toLowerCase() !== 'apex';
+  return useQuery<QaLabWorkItemList>({
+    queryKey: qaLabWorkItemListKey(project),
+    queryFn: () =>
+      apiFetch(
+        `/api/interviews/work-items?project=${encodeURIComponent(project ?? '')}`,
+      ),
+    enabled: isAdoProject,
+    staleTime: 60_000,
+  });
+}
 
 export const qaLabWorkItemKey = (project: string | null, workItemId: number | null) =>
   ['qa-lab', 'work-item-test-cases', project, workItemId] as const;
