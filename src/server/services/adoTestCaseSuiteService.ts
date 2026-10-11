@@ -370,48 +370,74 @@ export async function triggerAdoTestCaseGeneration(
     .returning({ id: qaAdoTestSuites.id });
   if (!inserted) throw new Error('Failed to persist the ADO test suite');
 
+  // Repository preparation can outlast the App Service request. The suite row
+  // is already saved, so the page can poll while the worker starts.
+  void dispatchAdoTestSuite({
+    suiteId: inserted.id,
+    threadId: thread.id,
+    workspaceDir: thread.workspaceDir,
+    userId,
+    project,
+    sourceThreadId: input.sourceThreadId,
+    kickoffMessage,
+  });
+  console.log(
+    `[adoTestSuite] Queued generation — suiteId=${inserted.id} rootWorkItemId=${context.root.id} threadId=${thread.id}`,
+  );
+  return { started: true, suiteId: inserted.id, threadId: thread.id };
+}
+
+async function dispatchAdoTestSuite(input: {
+  suiteId: string;
+  threadId: string;
+  workspaceDir: string;
+  userId: string;
+  project: string;
+  sourceThreadId?: string;
+  kickoffMessage: string;
+}): Promise<void> {
   const destinationRun: RunRef = {
     runType: 'chat',
-    runId: thread.id,
-    project,
+    runId: input.threadId,
+    project: input.project,
   };
   const reportPreparationFailure = async (): Promise<void> => {
     await runGroundingService.persistThenMarkTerminalInactive(
       destinationRun,
-      () => markAdoTestSuiteFailed(inserted.id, thread.id, thread.workspaceDir),
+      () => markAdoTestSuiteFailed(input.suiteId, input.threadId, input.workspaceDir),
     );
   };
 
   try {
     await routeBackgroundWorkflow({
-      userId,
+      userId: input.userId,
       workflowClass: 'test-cases',
       destinationRun,
-      threadId: thread.id,
+      threadId: input.threadId,
       prepareWorker: async () => {
         if (input.sourceThreadId) {
           try {
             await propagatePipelineGrounding(
-              { runType: 'chat', runId: input.sourceThreadId, project },
+              { runType: 'chat', runId: input.sourceThreadId, project: input.project },
               destinationRun,
-              userId,
+              input.userId,
               { deferMaterialization: true },
             );
           } catch {
             console.warn(
-              `[adoTestSuite] Grounding propagation unavailable (suiteId=${inserted.id})`,
+              `[adoTestSuite] Grounding propagation unavailable (suiteId=${input.suiteId})`,
             );
           }
         }
-        const prepared = await prepareBackgroundWorkflowTurn(thread.id, kickoffMessage);
+        const prepared = await prepareBackgroundWorkflowTurn(input.threadId, input.kickoffMessage);
         const targetGrounding = (
           await runGroundingService.getGroundings(destinationRun)
         ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
         return { ...prepared, targetGrounding };
       },
       runInProcess: () => sendMessage(
-        thread.id,
-        kickoffMessage,
+        input.threadId,
+        input.kickoffMessage,
         undefined,
         [],
         { hidden: true },
@@ -420,18 +446,14 @@ export async function triggerAdoTestCaseGeneration(
     });
   } catch (error) {
     console.error(
-      `[adoTestSuite] Routing failed (suiteId=${inserted.id})`,
+      `[adoTestSuite] Routing failed (suiteId=${input.suiteId})`,
       error,
     );
     await reportPreparationFailure();
-    return { started: false, reason: 'routing-failed', suiteId: inserted.id };
+    return;
   }
 
-  startAdoTestSuiteWatcher(inserted.id, thread.id);
-  console.log(
-    `[adoTestSuite] Started generation — suiteId=${inserted.id} rootWorkItemId=${context.root.id} threadId=${thread.id}`,
-  );
-  return { started: true, suiteId: inserted.id, threadId: thread.id };
+  startAdoTestSuiteWatcher(input.suiteId, input.threadId);
 }
 
 export async function getLatestAdoTestSuite(

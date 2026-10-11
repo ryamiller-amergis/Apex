@@ -192,6 +192,10 @@ function generationContext(): QaAdoGenerationContext {
   };
 }
 
+async function settleBackgroundDispatch(): Promise<void> {
+  for (let i = 0; i < 20; i += 1) await Promise.resolve();
+}
+
 function pbiItem(backlog: ReturnType<typeof buildSyntheticAdoBacklog>, id: string): SyntheticAdoPbiItem {
   const found = backlog.epics[0].features[0].items.find((entry) => entry.id === id);
   if (!found || found.type !== 'PBI') throw new Error(`Missing PBI ${id}`);
@@ -390,6 +394,7 @@ describe('ADO test suite generation and publish', () => {
       model: 'override-model',
       ado,
     });
+    await settleBackgroundDispatch();
 
     expect(result).toEqual({
       started: true,
@@ -464,11 +469,12 @@ describe('ADO test suite generation and publish', () => {
       userId: 'user-1',
       ado,
     });
+    await settleBackgroundDispatch();
 
     expect(result).toEqual({
-      started: false,
-      reason: 'routing-failed',
+      started: true,
       suiteId: 'suite-new',
+      threadId: 'thread-ado',
     });
     expect(dbMock.state.updates).toContainEqual(expect.objectContaining({ status: 'failed' }));
     expect(isAdoTestSuiteWatcherActive('suite-new')).toBe(false);
@@ -496,6 +502,7 @@ describe('ADO test suite generation and publish', () => {
       ado,
     });
     expect(result).toEqual(expect.objectContaining({ started: true }));
+    await settleBackgroundDispatch();
 
     jest.advanceTimersByTime(ADO_TEST_SUITE_WATCHER_INTERVAL_MS);
     for (let i = 0; i < 20; i += 1) await Promise.resolve();

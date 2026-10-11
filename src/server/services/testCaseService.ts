@@ -991,22 +991,28 @@ export async function triggerTestCaseGeneration(
   // materialization can take longer than WATCHER_INTERVAL_MS, and the thread
   // stays idle until the worker begins — an early watcher would delete the
   // scratch workspace mid-prep and force workspace-preparation-failed.
-  const routedSuccessfully = await routeTestCaseGenerationKickoff({
-    testCaseId: testCaseRow.id,
+  // The HTTP caller returns now; preparation continues after the response.
+  const testCaseId = testCaseRow.id;
+  const threadId = thread.id;
+  void routeTestCaseGenerationKickoff({
+    testCaseId,
     prdId,
     userId: actorUserId ?? prdRow.authorId,
     project: prdRow.project,
-    threadId: thread.id,
+    threadId,
     sourceThreadId,
     kickoffMessage: buildTestCaseKickoff(scope),
+  }).then((routedSuccessfully) => {
+    if (routedSuccessfully) startTestCaseWatcher(testCaseId, threadId);
+  }).catch((error: unknown) => {
+    console.error(
+      `[testCase] Routing failed — testCaseId=${testCaseId} prdId=${prdId}`,
+      error,
+    );
   });
 
-  if (routedSuccessfully) {
-    startTestCaseWatcher(testCaseRow.id, thread.id);
-  }
-
   console.log(
-    `[testCase] Started generation — testCaseId=${testCaseRow.id} prdId=${prdId} threadId=${thread.id}`
+    `[testCase] Queued generation — testCaseId=${testCaseId} prdId=${prdId} threadId=${threadId}`
   );
   return true;
 }

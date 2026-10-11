@@ -421,6 +421,7 @@ describe('testCaseService', () => {
 
       try {
         await expect(triggerTestCaseGeneration('prd-1', 'source-thread')).resolves.toBe(true);
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
 
         expect(mockCreateThread).toHaveBeenCalledWith(
           'user-1',
@@ -509,6 +510,7 @@ describe('testCaseService', () => {
         await expect(
           triggerTestCaseGeneration('prd-1', 'source-thread'),
         ).resolves.toBe(true);
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
 
         expect(mockSendMessage).not.toHaveBeenCalled();
         expect(mockRouteBackgroundWorkflow).toHaveBeenCalledWith(
@@ -560,6 +562,7 @@ describe('testCaseService', () => {
 
       try {
         await triggerTestCaseGeneration('prd-1', 'source-thread');
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
 
         expect(mockUpdateChains.some(
           (chain) => chain.set.mock.calls.some(
@@ -622,6 +625,7 @@ describe('testCaseService', () => {
 
       try {
         await triggerTestCaseGeneration('prd-1', 'source-thread');
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
 
         expect(mockUpdateChains.some(
           (chain) => chain.set.mock.calls.some(
