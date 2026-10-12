@@ -68,6 +68,13 @@ function badgeClass(status: InterviewStatus): string {
   }
 }
 
+function renderOptionText(text: string): React.ReactNode {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, index) => {
+    const bold = part.match(/^\*\*([^*]+)\*\*$/);
+    return bold ? <strong key={index}>{bold[1]}</strong> : part;
+  });
+}
+
 function badgeLabel(status: InterviewStatus): string {
   switch (status) {
     case 'in_progress': return 'In Progress';
@@ -86,65 +93,75 @@ interface ChoiceBlockUIProps {
   locked: boolean;
   onSelect: (letter: string) => void;
   onFreeform: (text: string) => void;
+  footer?: React.ReactNode;
 }
 
 const InterviewChoiceBlockUI: React.FC<ChoiceBlockUIProps> = ({
-  block, questionNumber, selection, freeform, locked, onSelect, onFreeform,
-}) => (
-  <div className={`${styles.choiceBlock} ${locked ? styles.choiceBlockLocked : ''}`}>
-    {block.question && (
-      <div className={styles.choiceQuestion}>
-        <span className={styles.choiceQNum}>Q{questionNumber}</span>
-        <div className={styles.markdownBody} style={{ flex: 1 }}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.question}</ReactMarkdown>
+  block, questionNumber, selection, freeform, locked, onSelect, onFreeform, footer,
+}) => {
+  const options = block.options.filter((opt) => !isAgentOtherOptionText(opt.text));
+  const otherSelected = selection === 'other';
+  return (
+    <div className={`${styles.choiceBlock} ${locked ? styles.choiceBlockLocked : ''}`}>
+      {block.question && (
+        <div className={styles.choiceQuestion}>
+          <span className={styles.choiceQNum}>Question {questionNumber}</span>
+          <div className={styles.markdownBody}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.question}</ReactMarkdown>
+          </div>
         </div>
+      )}
+      <div className={styles.choiceOptions} role="radiogroup">
+        {options.map((opt) => {
+          const isSelected = selection === opt.letter;
+          return (
+            <button
+              key={opt.letter}
+              className={`${styles.choiceOption} ${isSelected ? styles.choiceOptionSelected : ''}`}
+              onClick={() => !locked && onSelect(opt.letter)}
+              disabled={locked}
+              type="button"
+              role="radio"
+              aria-checked={isSelected}
+              {...{ 'data-testid': `interview-choice-${opt.letter}` }}
+            >
+              <span className={styles.choiceOptionLetter}>
+                {isSelected && locked ? '✓' : opt.letter.toUpperCase()}
+              </span>
+              <span className={styles.choiceOptionText}>{renderOptionText(opt.text)}</span>
+            </button>
+          );
+        })}
       </div>
-    )}
-    <div className={styles.choiceOptions}>
-      {block.options
-        .filter((opt) => !isAgentOtherOptionText(opt.text))
-        .map((opt) => {
-        const isSelected = selection === opt.letter;
-        return (
-          <button
-            key={opt.letter}
-            className={`${styles.choiceOption} ${isSelected ? styles.choiceOptionSelected : ''}`}
-            onClick={() => !locked && onSelect(opt.letter)}
-            disabled={locked}
-            type="button"
-            {...{ 'data-testid': `interview-choice-${opt.letter}` }}
-          >
-            <span className={styles.choiceOptionLetter}>{opt.letter.toUpperCase()}</span>
-            <span className={styles.choiceOptionText}>{opt.text}</span>
-          </button>
-        );
-      })}
-      <button
-        className={`${styles.choiceOption} ${selection === 'other' ? styles.choiceOptionSelected : ''}`}
-        onClick={() => !locked && onSelect('other')}
-        disabled={locked}
-        type="button"
-        {...{ 'data-testid': 'interview-choice-other' }}
-      >
-        <span className={styles.choiceOptionLetter}>✎</span>
-        <span className={styles.choiceOptionText}>Other / free-form</span>
-      </button>
+      {!locked && (
+        <button
+          className={`${styles.choiceOtherLink} ${otherSelected ? styles.choiceOtherLinkActive : ''}`}
+          onClick={() => onSelect('other')}
+          type="button"
+          aria-pressed={otherSelected}
+          {...{ 'data-testid': 'interview-choice-other' }}
+        >
+          ✎ Something else? Write your own answer
+        </button>
+      )}
+      {otherSelected && !locked && (
+        <textarea
+          className={styles.choiceFreeform}
+          placeholder="Type your answer here…"
+          value={freeform}
+          onChange={(e) => onFreeform(e.target.value)}
+          rows={2}
+          autoFocus
+          {...{ 'data-testid': 'interview-choice-freeform' }}
+        />
+      )}
+      {locked && freeform && (
+        <div className={styles.choiceFreeformLocked}>{freeform}</div>
+      )}
+      {footer && <div className={styles.choiceFooter}>{footer}</div>}
     </div>
-    {(selection === 'other') && !locked && (
-      <textarea
-        className={styles.choiceFreeform}
-        placeholder="Type your answer here…"
-        value={freeform}
-        onChange={(e) => onFreeform(e.target.value)}
-        rows={2}
-        {...{ 'data-testid': 'interview-choice-freeform' }}
-      />
-    )}
-    {locked && freeform && (
-      <div className={styles.choiceFreeformLocked}>{freeform}</div>
-    )}
-  </div>
-);
+  );
+};
 
 // ── Assistant message with interactive choices ────────────────────────────────
 
@@ -158,9 +175,10 @@ interface InterviewAgentMessageProps {
   interviewLocked?: boolean;
   alreadyAnswered?: boolean;
   fullWidth?: boolean;
+  anchorRef?: React.Ref<HTMLDivElement>;
 }
 
-export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onSend, isRunning, questionOffset = 0, interviewLocked = false, alreadyAnswered = false, fullWidth = false }) => {
+export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onSend, isRunning, questionOffset = 0, interviewLocked = false, alreadyAnswered = false, fullWidth = false, anchorRef }) => {
   const visibleText = stripInterviewPhaseMarkers(text);
   const parts = parseAgentMessage(visibleText);
   const choiceBlocks = parts.filter((p): p is ChoiceBlock => p.type === 'choices');
@@ -218,7 +236,10 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
 
   if (choiceBlocks.length === 0) {
     return (
-      <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant} ${fullWidth ? styles.assistantBubbleFullWidth : ''}`}>
+      <div
+        ref={anchorRef}
+        className={`${styles.messageBubble} ${styles.messageBubbleAssistant} ${fullWidth ? styles.assistantBubbleFullWidth : ''}`}
+      >
         <div className={styles.bubbleActions}>
           <ReadAloudButton
             text={visibleText}
@@ -230,9 +251,42 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
     );
   }
 
+  const multipleQuestions = choiceBlocks.length > 1;
+  const lastBlockId = choiceBlocks[choiceBlocks.length - 1].id;
+  let footer: React.ReactNode = null;
+  if (sent) {
+    footer = (
+      <span className={styles.choiceSentLabel}>
+        ✓ {multipleQuestions ? 'Answers sent' : 'Answer sent'}
+      </span>
+    );
+  } else if (!interviewLocked) {
+    footer = (
+      <>
+        <span className={styles.choiceFooterHint}>
+          {allAnswered
+            ? 'Ready to send'
+            : multipleQuestions ? 'Answer each question to continue' : 'Choose an option to continue'}
+        </span>
+        <button
+          className={styles.choiceSendBtn}
+          onClick={handleSubmit}
+          disabled={!allAnswered || isRunning}
+          type="button"
+          {...{ 'data-testid': 'interview-submit-answers' }}
+        >
+          {isRunning ? 'Agent is thinking…' : multipleQuestions ? 'Submit answers' : 'Submit answer'}
+        </button>
+      </>
+    );
+  }
+
   let questionCounter = questionOffset;
   return (
-    <div className={`${styles.assistantBubble} ${fullWidth ? styles.assistantBubbleFullWidth : ''}`}>
+    <div
+      ref={anchorRef}
+      className={`${styles.assistantBubble} ${fullWidth ? styles.assistantBubbleFullWidth : ''}`}
+    >
       <div className={styles.bubbleActions}>
         <ReadAloudButton
           text={visibleText}
@@ -260,21 +314,10 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
             locked={sent}
             onSelect={(letter) => handleSelect(part.id, letter)}
             onFreeform={(t) => handleFreeform(part.id, t)}
+            footer={part.id === lastBlockId ? footer : null}
           />
         );
       })}
-      {!sent && !interviewLocked && (
-        <button
-          className={styles.choiceSendBtn}
-          onClick={handleSubmit}
-          disabled={!allAnswered || isRunning}
-          type="button"
-          {...{ 'data-testid': 'interview-submit-answers' }}
-        >
-          {isRunning ? 'Agent is thinking…' : 'Submit answers ↑'}
-        </button>
-      )}
-      {sent && <div className={styles.choiceSentLabel}>✓ Answers sent</div>}
     </div>
   );
 };
@@ -1000,6 +1043,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     Boolean(linkedContextLocationState?.openLinkedContext),
   );
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const activeQuestionRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1097,7 +1141,17 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   }, [chatThread?.id, interview?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (streamingText) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      return;
+    }
+    // Keep the open question at the top of the transcript so its options use
+    // the pane, instead of pinning the bottom of a tall card under the composer.
+    if (activeQuestionRef.current) {
+      activeQuestionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages.length, streamingText]);
 
   useEffect(() => {
@@ -1415,13 +1469,17 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               </span>
             </div>
             <div className={styles.titleMeta}>
-              <span>{interview.project}</span>
-              <span className={styles.titleMetaSep}>·</span>
               <span>{interview.repo}</span>
+              {interview.project !== interview.repo && (
+                <>
+                  <span className={styles.titleMetaSep}>/</span>
+                  <span>{interview.project}</span>
+                </>
+              )}
               {interview.model && (
                 <>
                   <span className={styles.titleMetaSep}>·</span>
-                  <span>Model: {interview.model}</span>
+                  <span>{interview.model} model</span>
                 </>
               )}
               {interview.effort && (
@@ -1732,6 +1790,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 interviewLocked={isChatLocked}
                 alreadyAnswered={msgIndex < lastUserMsgIndex}
                 fullWidth={msgIndex > lastUserMsgIndex}
+                anchorRef={msgIndex === visibleMessages.length - 1 ? activeQuestionRef : undefined}
               />
             );
           })}

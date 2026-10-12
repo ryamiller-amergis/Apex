@@ -893,7 +893,7 @@ describe('ExistingInterviewView — choice block submit gating', () => {
       messages: [choiceMessage],
     });
     renderExistingInterview();
-    expect(screen.queryByRole('button', { name: /Submit answers/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Submit answer/i })).not.toBeInTheDocument();
   });
 
   it('hides the "Submit answers" button when the interview is archived', () => {
@@ -907,7 +907,7 @@ describe('ExistingInterviewView — choice block submit gating', () => {
       messages: [choiceMessage],
     });
     renderExistingInterview();
-    expect(screen.queryByRole('button', { name: /Submit answers/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Submit answer/i })).not.toBeInTheDocument();
   });
 
   it('shows the "Submit answers" button when the interview is in_progress', () => {
@@ -921,7 +921,7 @@ describe('ExistingInterviewView — choice block submit gating', () => {
       messages: [choiceMessage],
     });
     renderExistingInterview();
-    expect(screen.getByRole('button', { name: /Submit answers/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Submit answer/i })).toBeInTheDocument();
   });
 });
 

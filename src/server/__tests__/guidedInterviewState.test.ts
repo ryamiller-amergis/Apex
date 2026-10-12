@@ -26,9 +26,10 @@ describe('guided interview state', () => {
     expect(turn).toMatchObject({
       phase: 'discovery',
       question: 1,
-      topic: 'Problem and who has it',
+      topic: 'Current situation, problem, and impact',
       marker: '[[interview-phase:discovery:1:6]]',
     });
+    expect(turn.instruction).toContain('recent concrete example');
   });
 
   it('offers one Discovery follow-up, and moves on when that follow-up is already used', () => {
@@ -40,10 +41,11 @@ describe('guided interview state', () => {
     expect(afterPrimary).toMatchObject({
       phase: 'discovery',
       question: 2,
-      topic: 'What success looks like',
+      topic: 'Observable success criteria',
       marker: '[[interview-phase:discovery:2:6]]',
       followUpMarker: '[[interview-phase:discovery:1:6:followup]]',
     });
+    expect(afterPrimary.instruction).toContain('Define success early');
 
     const afterFollowUp = deriveGuidedInterviewTurn(
       messages('[[interview-phase:discovery:1:6:followup]]'),
@@ -66,7 +68,7 @@ describe('guided interview state', () => {
     expect(turn).toMatchObject({
       marker: '[[interview-phase:delivery:1:5]]',
       followUpMarker: '[[interview-phase:discovery:6:6:followup]]',
-      topic: 'Who can do each action',
+      topic: 'Actor and action confirmation',
     });
 
     const afterFollowUp = deriveGuidedInterviewTurn(
@@ -84,7 +86,7 @@ describe('guided interview state', () => {
   it('requires the Technical-or-PRD choice after Delivery', () => {
     const turn = deriveGuidedInterviewTurn(
       messages('[[interview-phase:delivery:5:5]]'),
-      'We need test cases and a design doc.',
+      'The Delivery brief is correct.',
     );
 
     expect(turn.marker).toBe('[[interview-phase:delivery:done]]');
@@ -93,7 +95,7 @@ describe('guided interview state', () => {
 
     const afterFollowUp = deriveGuidedInterviewTurn(
       messages('[[interview-phase:delivery:5:5:followup]]'),
-      'The first release only needs the prototype.',
+      'Correct the blocked-user recovery path.',
     );
     expect(afterFollowUp.phase).toBe('delivery-choice');
     expect(afterFollowUp.marker).toBe('[[interview-phase:delivery:done]]');
@@ -157,6 +159,9 @@ describe('guided interview state', () => {
     expect(prompt).toContain('First line when one follow-up is needed: [[interview-phase:discovery:1:6:followup]]');
     expect(prompt).toContain('Ask exactly one question');
     expect(prompt).toContain('The Q&A below is authoritative');
+    expect(prompt).toContain('Use a broad, neutral question before narrowing');
+    expect(prompt).toContain('Skip — decide later');
+    expect(prompt).toContain('Never turn an inference or assumption into a confirmed requirement');
     expect(prompt).toContain('Who has the problem?');
     expect(prompt).toContain('Any signed-in user.');
   });
@@ -176,7 +181,7 @@ describe('guided interview state', () => {
     expect(saved).toMatchObject({
       phase: 'discovery',
       question: 1,
-      topic: 'Problem and who has it',
+      topic: 'Current situation, problem, and impact',
       expectedMarker: '[[interview-phase:discovery:1:6]]',
       followUpMarker: null,
     });
@@ -194,7 +199,7 @@ describe('guided interview state', () => {
         turn,
       ),
     ).toBe(
-      '[[interview-phase:discovery:2:6]]\n\nWhat outcome shows success?',
+      '[[interview-phase:discovery:2:6]]\n\nWhat outcome shows success?\n\nSkip — decide later',
     );
   });
 
@@ -210,8 +215,32 @@ describe('guided interview state', () => {
         turn,
       ),
     ).toBe(
-      '[[interview-phase:discovery:1:6:followup]]\n\nWhich of those users feels this first?',
+      '[[interview-phase:discovery:1:6:followup]]\n\nWhich of those users feels this first?\n\nSkip — decide later',
     );
+  });
+
+  it('does not duplicate an existing skip option', () => {
+    const turn = deriveGuidedInterviewTurn([], 'Build a todo list.');
+
+    expect(
+      normalizeGuidedInterviewResponse(
+        'Tell me about the last time this happened.\n\nSkip — decide later',
+        turn,
+      ).match(/Skip — decide later/g),
+    ).toHaveLength(1);
+  });
+
+  it('uses Delivery topic five to confirm the brief, not choose artifacts', () => {
+    const turn = deriveGuidedInterviewTurn(
+      messages('[[interview-phase:delivery:4:5]]'),
+      'No additional dependency.',
+    );
+
+    expect(turn).toMatchObject({
+      question: 5,
+      topic: 'Delivery brief confirmation',
+    });
+    expect(turn.instruction).toContain('Do not ask which artifacts to generate');
   });
 
   it('offers one follow-up on each fixed Technical topic', () => {

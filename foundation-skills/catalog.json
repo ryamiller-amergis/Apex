@@ -152,7 +152,7 @@
     },
     {
       "name": "grill-with-docs",
-      "summary": "Relentless interview that stress-tests a plan against the codebase and product context.",
+      "summary": "Structured three-phase requirements interview for product needs, delivery rules, and optional technical decisions.",
       "scanScope": "full-repo",
       "foundationFiles": [
         "SKILL.md"

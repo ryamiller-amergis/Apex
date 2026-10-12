@@ -31,20 +31,20 @@ export interface GuidedInterviewTurn {
 }
 
 const DISCOVERY_TOPICS = [
-  'Problem and who has it',
-  'What success looks like',
-  'Who uses it and what they can do',
-  'What is in scope and what is out',
-  'Main scenarios and obvious exceptions',
-  'Acceptance criteria in plain language',
+  'Current situation, problem, and impact',
+  'Observable success criteria',
+  'Users and business rules',
+  'Release-one scope and boundaries',
+  'Concrete scenarios and exceptions',
+  'Discovery brief confirmation',
 ] as const;
 
 const DELIVERY_TOPICS = [
-  'Who can do each action',
-  'What a blocked user sees',
-  'Sensitive information and what must be hidden',
-  'Done for release 1 versus later',
-  'Follow-on outputs: prototype, test cases, and design doc',
+  'Actor and action confirmation',
+  'Failure and recovery behavior',
+  'Information visibility and sensitivity',
+  'Release-one dependencies and deferred scope',
+  'Delivery brief confirmation',
 ] as const;
 
 const TECHNICAL_TOPICS = [
@@ -60,6 +60,36 @@ const MARKER_RE =
 
 const DEEPER_TECHNICAL_QUESTIONS = 3;
 const DEEPER_TECHNICAL_TOTAL = TECHNICAL_TOPICS.length + DEEPER_TECHNICAL_QUESTIONS;
+
+function productTopicInstruction(
+  phase: 'discovery' | 'delivery',
+  question: number,
+  topic: string,
+): string {
+  const discoveryGuidance = [
+    'Ask for a recent concrete example of the current situation: what triggers it, what the person does today, what goes wrong, and who feels the impact. Start from the problem, not the proposed feature.',
+    'Define success early. Ask for the observable user or business outcome that would prove this change worked. Seek a measurable signal when one is practical, but do not invent a metric.',
+    'Use what is already known to identify the people involved and the business rules that govern their actions. Ask only for the most important missing actor or rule; do not repeat the success or scope question.',
+    'Summarize the likely release-one boundary from prior answers, including what is explicitly out. Ask the person to confirm or correct that boundary instead of offering competing solution bundles.',
+    'Ask for one concrete main-path or exception example that tests an agreed business rule. Do not introduce several unrelated edge cases or implementation failure modes.',
+    'Synthesize a short Discovery brief with the problem, affected users, observable success criteria, business rules, release-one scope, one or two examples, and unresolved items. Clearly distinguish stated facts from assumptions. Ask the person to confirm or correct the brief; do not present alternative requirement packages.',
+  ] as const;
+  const deliveryGuidance = [
+    'Carry the confirmed Discovery brief forward. Summarize the actor-to-action rules already established and ask only for corrections or one missing action. Do not ask the person to repeat who the users are.',
+    'Ask what the person should see and be able to do when the main action cannot be completed. Focus on the business outcome and recovery path, not technical errors.',
+    'Summarize who can see the information already discussed, then ask what must be hidden or limited and from whom. Ask one visibility decision only.',
+    'Summarize the release-one slice and deferred work already established. Ask about one unresolved business dependency or boundary that could prevent that release from delivering the success criteria.',
+    'Synthesize a short Delivery brief with actor/action rules, failure and recovery behavior, information visibility, release-one dependencies, deferred scope, acceptance outcomes, and unresolved items. Ask the person to confirm or correct the brief. Do not ask which artifacts to generate; project configuration decides prototypes, test cases, and design documents.',
+  ] as const;
+  const guidance = phase === 'discovery'
+    ? discoveryGuidance[question - 1]
+    : deliveryGuidance[question - 1];
+  return [
+    `Ask exactly one question about: ${topic}.`,
+    guidance,
+    'Write for a Business Analyst or Product Owner and describe observable behavior and outcomes, not how the feature is built.',
+  ].filter(Boolean).join(' ');
+}
 
 function numberedTurn(
   phase: 'discovery' | 'delivery' | 'technical',
@@ -81,7 +111,7 @@ function numberedTurn(
     ? deeper
       ? `Ask exactly one question about: ${topic}. Pick a decision that changes how the feature is built, not an edge-case state rule. Implementation detail is allowed in this phase.`
       : `Ask exactly one question about: ${topic}. Implementation detail is allowed in this phase.`
-    : `Ask exactly one question about: ${topic}. Write it for a Business Analyst or Product Owner. Describe what a person can see and do, including what belongs in the first release versus later. Do not describe how it is built.`;
+    : productTopicInstruction(phase, question, topic);
   return {
     phase,
     question,
@@ -100,7 +130,7 @@ function deliveryChoiceTurn(): GuidedInterviewTurn {
     topic: 'Choose Technical or Generate PRD',
     marker: '[[interview-phase:delivery:done]]',
     instruction:
-      'Briefly recap Discovery and Delivery, then ask only this choice: a. Continue to technical decisions; b. Generate the PRD.',
+      'Acknowledge the confirmed Discovery and Delivery brief in one sentence, then ask only this choice: a. Continue to technical decisions; b. Generate the PRD.',
   };
 }
 
@@ -346,8 +376,13 @@ export function buildGuidedInterviewTurnPrompt(
           'This turn is for a Business Analyst or Product Owner.',
           'Use the words a person would use for what they can see and do.',
           'Do not mention persistence, CRUD, databases, APIs, schemas, MCP, skills, agent context, routes, components, endpoints, or permission keys.',
-          'Use product names such as Home, My Work, and Work Board.',
-          'Each option is one short plain sentence, without markdown bold.',
+          'Use only product names established by the application brief or prior Q&A. Do not import screen names from another project.',
+          'Use a broad, neutral question before narrowing. Do not lead with a proposed solution or a list of answer packages.',
+          'Prefer an open question about a real example. Use choices only to confirm or narrow a decision already supported by the prior Q&A or application brief.',
+          'If choices are needed, each choice must decide one thing, remain mutually exclusive, and use one short plain sentence without markdown bold.',
+          'If the prior Q&A already answers this topic, state the concise recommendation and offer Confirm, Change, and Skip — decide later.',
+          'End every numbered Discovery or Delivery topic with the literal option "Skip — decide later".',
+          'Never turn an inference or assumption into a confirmed requirement. Name it as an assumption in a confirmation brief.',
         ]),
     'Do not combine topics, add quick clarifications, preview later questions, or renumber the topic.',
     'Do not reopen a decision already recorded below.',
@@ -370,12 +405,19 @@ export function normalizeGuidedInterviewResponse(
   text: string,
   turn: GuidedInterviewTurn,
 ): string {
-  const withoutMarkers = text
+  let withoutMarkers = text
     .replace(
       /\[\[interview-phase:(?:discovery|delivery|technical):(?:done|stopped|skipped|wrapup|\d+)(?::\d+)?(?::followup)?\]\][ \t]*\n?/g,
       '',
     )
     .trimStart();
+  if (
+    (turn.phase === 'discovery' || turn.phase === 'delivery') &&
+    turn.question != null &&
+    !/skip\s*[—-]\s*decide later/i.test(withoutMarkers)
+  ) {
+    withoutMarkers = `${withoutMarkers.trimEnd()}\n\nSkip — decide later`;
+  }
   const marker = turn.followUpMarker && text.includes(turn.followUpMarker)
     ? turn.followUpMarker
     : turn.marker;
