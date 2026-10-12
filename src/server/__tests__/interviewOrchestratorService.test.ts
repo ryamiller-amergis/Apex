@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Lead + Requirements assisted interview turn.
  *
  * VT-ASSIST-1 ordinary and human-led threads prepare nothing.
@@ -20,12 +20,16 @@ jest.mock('drizzle-orm', () => {
 });
 
 const mockFindFirst = jest.fn();
+const mockFindReviews = jest.fn();
 const mockInsert = jest.fn();
 jest.mock('../db/drizzle', () => ({
   db: {
     query: {
       interviews: {
         findFirst: (...args: unknown[]) => mockFindFirst(...args),
+      },
+      interviewSpecialistReviews: {
+        findMany: (...args: unknown[]) => mockFindReviews(...args),
       },
     },
     insert: (...args: unknown[]) => mockInsert(...args),
@@ -48,6 +52,12 @@ jest.mock('../services/chatAgentService', () => ({
 import {
   draftInterviewBriefSections,
   prepareAssistedInterviewTurn,
+  prepareAutonomousInterviewTurn,
+  selectNextInterviewAction,
+  type LeadSynthesis,
+  INTERVIEW_MAX_HUMAN_CLARIFICATIONS,
+  INTERVIEW_MAX_INQUIRIES,
+  usageFromMessages,
 } from '../services/interviewOrchestratorService';
 
 const REQUIREMENTS_SKILL = '.cursor/skills/interview-requirements-review/SKILL.md';
@@ -143,6 +153,7 @@ beforeEach(() => {
   mockCreateThread.mockResolvedValue({ id: 'specialist-1' });
   mockSendMessage.mockResolvedValue(undefined);
   mockFindFirst.mockResolvedValue(assistedInterview(null));
+  mockFindReviews.mockResolvedValue([]);
 });
 
 describe('VT-ASSIST-1 — ordinary and human-led turns prepare nothing', () => {
@@ -389,6 +400,230 @@ it('drafts the editable brief from the visible interview transcript', async () =
   );
 });
 
+function leadSynthesis(overrides: Partial<LeadSynthesis> = {}): LeadSynthesis {
+  return {
+    status: 'complete',
+    humanQuestion: null,
+    specialistFollowUps: [],
+    summary: 'Cashiers need a faster close.',
+    decisions: ['Close stays on the register'],
+    assumptions: ['One store closes each night'],
+    gaps: [],
+    conflicts: [],
+    readinessScore: 82,
+    recommendation: 'ready_with_assumptions',
+    sections: {
+      problemAndOutcome: 'Faster close',
+      users: 'Cashiers',
+      scope: 'Nightly close',
+      businessRules: '',
+      scenarios: 'Cashier closes a drawer',
+      acceptanceCriteria: 'Close completes within five minutes',
+      assumptions: 'One store',
+      unresolvedItems: [],
+    },
+    ...overrides,
+  };
+}
+
+describe('interview budget', () => {
+  const synthesis = leadSynthesis({
+    status: 'clarify',
+    humanQuestion: 'Who counts the drawer?',
+    specialistFollowUps: [{ gapId: 'scope', specialist: 'product', question: 'Which close is in release one?' }],
+  });
+
+  it('counts visible Lead questions and human answers after the kickoff', () => {
+    expect(usageFromMessages([
+      { id: '1', role: 'user', text: 'Begin.', ts: '1' },
+      { id: '2', role: 'user', text: 'Scope', ts: '2' },
+      { id: '3', role: 'agent', text: 'Question?', ts: '3' },
+      { id: '4', role: 'user', text: 'Answer', ts: '4' },
+      { id: '5', role: 'agent', text: '', ts: '5', hidden: true },
+    ])).toEqual({ inquiries: 1, humanClarifications: 1 });
+  });
+
+  it('runs a specialist follow-up before asking the human, and stops at the caps', () => {
+    expect(selectNextInterviewAction(synthesis, {
+      inquiries: 2,
+      humanClarifications: 0,
+      followUpsByGap: {},
+    }).specialistFollowUps).toHaveLength(1);
+
+    expect(selectNextInterviewAction(synthesis, {
+      inquiries: 2,
+      humanClarifications: 0,
+      followUpsByGap: { scope: 2 },
+    })).toEqual({
+      humanQuestion: 'Who counts the drawer?',
+      specialistFollowUps: [],
+      close: false,
+    });
+
+    expect(selectNextInterviewAction(synthesis, {
+      inquiries: INTERVIEW_MAX_INQUIRIES,
+      humanClarifications: 0,
+      followUpsByGap: {},
+    }).close).toBe(true);
+
+    expect(selectNextInterviewAction(synthesis, {
+      inquiries: 2,
+      humanClarifications: INTERVIEW_MAX_HUMAN_CLARIFICATIONS,
+      followUpsByGap: { scope: 2 },
+    })).toEqual({ humanQuestion: null, specialistFollowUps: [], close: true });
+  });
+
+  it('ignores a follow-up for a specialist that is not registered', () => {
+    const unknown = leadSynthesis({
+      humanQuestion: 'Who counts the drawer?',
+      specialistFollowUps: [{ gapId: 'ux', specialist: 'designer', question: 'Which layout?' }],
+    });
+    expect(selectNextInterviewAction(unknown, {
+      inquiries: 2,
+      humanClarifications: 0,
+      followUpsByGap: {},
+    })).toEqual({ humanQuestion: 'Who counts the drawer?', specialistFollowUps: [], close: false });
+  });
+});
+
+const validEvaluation = {
+  peerEvaluations: [{
+    specialistId: 'technical',
+    agreements: ['Close stays on the register'],
+    challenges: ['The drawer count is still open'],
+    proposedChanges: ['Name who counts the drawer'],
+  }],
+  confidence: 0.7,
+};
+
+describe('autonomous interview — Lead and specialists', () => {
+  function stubSpecialistThreads(): void {
+    const threads = new Map<string, { text: string; idle: boolean; orchestrator: boolean }>();
+    mockCreateThread.mockImplementation(async (_user: unknown, kickoff: { skillPath: string }) => {
+      const id = `specialist-${threads.size + 1}`;
+      const orchestrator = kickoff.skillPath.includes('orchestrator');
+      threads.set(id, {
+        text: orchestrator ? JSON.stringify(leadSynthesis()) : JSON.stringify(validReview),
+        idle: false,
+        orchestrator,
+      });
+      return { id };
+    });
+    mockSendMessage.mockImplementation(async (id: string, prompt: string) => {
+      const thread = threads.get(id);
+      if (!thread) return;
+      if (!thread.orchestrator && prompt.includes('Evaluate the other specialists')) {
+        thread.text = JSON.stringify(validEvaluation);
+      } else if (!thread.orchestrator && prompt.includes('Revise your scorecard')) {
+        thread.text = JSON.stringify({ ...validReview, revisions: ['Kept the close on the register'] });
+      }
+      thread.idle = true;
+    });
+    mockIsThreadIdle.mockImplementation((id: string) => threads.get(id)?.idle ?? false);
+    mockGetThread.mockImplementation(async (id: string) => {
+      if (id === 'thread-main') {
+        return {
+          id,
+          status: 'idle',
+          messages: [{ id: 'scope', role: 'user', text: BA_ANSWER, ts: '1' }],
+        };
+      }
+      const thread = threads.get(id);
+      return {
+        id,
+        status: thread?.idle ? 'idle' : 'running',
+        messages: thread?.text ? [{ id: 'answer', role: 'agent', text: thread.text, ts: '2' }] : [],
+      };
+    });
+  }
+
+  it('asks the Lead to present the review after the specialists revise', async () => {
+    stubSpecialistThreads();
+    const result = await prepareAutonomousInterviewTurn({
+      mainThreadId: 'thread-main',
+      answerText: BA_ANSWER,
+      timeoutMs: 1_000,
+      pollIntervalMs: 1,
+      now: () => 10_000,
+      sleep: async () => undefined,
+    });
+
+    expect(mockCreateThread).toHaveBeenCalledTimes(7);
+    expect(inserts.map((row) => row.values.specialist)).toEqual([
+      'product', 'technical', 'product', 'technical', 'product', 'technical', 'lead',
+    ]);
+    expect(inserts.map((row) => (row.values.result as { phase?: string }).phase)).toEqual([
+      'initial', 'initial', 'evaluation', 'evaluation', 'revision', 'revision', undefined,
+    ]);
+    const prompts = mockSendMessage.mock.calls.map((call) => String(call[1]));
+    expect(prompts[0]).toContain('Write your initial scorecard');
+    expect(prompts[0]).not.toContain('Other initial scorecards');
+    expect(prompts[2]).toContain('Evaluate the other specialists');
+    expect(prompts[2]).toContain('Close is slow at the register');
+    expect(prompts[4]).toContain('Revise your scorecard');
+    expect(prompts[4]).toContain('Peer evaluations:');
+    expect(prompts[6]).toContain('Revised scorecards:');
+    expect(result.internalContext).toContain('Do not ask a question');
+    expect(result.internalContext).toContain('82');
+    expect(result.internalContext).not.toContain(CHAIN_OF_THOUGHT);
+  });
+
+  it('gives the next initial scorecard the prior brief and the other specialist decision', async () => {
+    stubSpecialistThreads();
+    mockFindReviews.mockResolvedValue([
+      {
+        specialist: 'lead',
+        status: 'succeeded',
+        createdAt: '2026-10-12T00:00:00.000Z',
+        result: { decisions: ['Close stays on the register'], assumptions: [], gaps: [], conflicts: [] },
+      },
+      {
+        specialist: 'technical',
+        status: 'succeeded',
+        createdAt: '2026-10-12T00:01:00.000Z',
+        result: { ...validReview, confirmedDecisions: ['Use the existing drawer service'], phase: 'revision' },
+      },
+    ]);
+
+    await prepareAutonomousInterviewTurn({
+      mainThreadId: 'thread-main',
+      answerText: BA_ANSWER,
+      timeoutMs: 1_000,
+      pollIntervalMs: 1,
+      now: () => 10_000,
+      sleep: async () => undefined,
+    });
+
+    const productInitial = String(mockSendMessage.mock.calls[0][1]);
+    expect(productInitial).toContain('Close stays on the register');
+    expect(productInitial).toContain('Use the existing drawer service');
+  });
+
+  it('does not open specialists once the inquiry budget is nearly spent', async () => {
+    mockGetThread.mockResolvedValue({
+      id: 'thread-main',
+      status: 'idle',
+      messages: Array.from({ length: INTERVIEW_MAX_INQUIRIES - 1 }, (_unused, index) => ({
+        id: `q-${index}`,
+        role: 'agent',
+        text: `Question ${index}`,
+        ts: String(index),
+      })),
+    });
+
+    const result = await prepareAutonomousInterviewTurn({
+      mainThreadId: 'thread-main',
+      answerText: BA_ANSWER,
+      now: () => 10_000,
+      sleep: async () => undefined,
+    });
+
+    expect(mockCreateThread).not.toHaveBeenCalled();
+    expect(result.internalContext).toContain('budget is exhausted');
+    expect(result.internalContext).toContain('Do not ask a question');
+  });
+});
+
 describe('assisted interview skills', () => {
   it('the Requirements skill returns only the structured findings', () => {
     const skill = fs.readFileSync(
@@ -421,5 +656,18 @@ describe('assisted interview skills', () => {
     expect(skill).toContain('INTERNAL_SPECIALIST_CONTEXT');
     expect(skill.toLowerCase()).toContain('problem and outcome');
     expect(skill.toLowerCase()).toContain('acceptance criteria');
+    expect(skill).toContain('revised scorecard');
+  });
+
+  it('the specialist skills evaluate one another and then revise', () => {
+    for (const skillPath of [
+      '.cursor/skills/interview-product-analyst/SKILL.md',
+      '.cursor/skills/interview-technical-analyst/SKILL.md',
+    ]) {
+      const skill = fs.readFileSync(path.join(process.cwd(), skillPath), 'utf8');
+      expect(skill).toContain('peerEvaluations');
+      expect(skill).toContain('revisions');
+      expect(skill.toLowerCase()).toContain('initial scorecard');
+    }
   });
 });

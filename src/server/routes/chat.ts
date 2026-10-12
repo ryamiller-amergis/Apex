@@ -38,7 +38,7 @@ import type {
 import type { ThreadAccess } from '../services/threadAccessService';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import { requirePermission } from '../middleware/rbac';
-import { prepareAssistedInterviewTurn } from '../services/interviewOrchestratorService';
+import { prepareAutonomousInterviewTurn } from '../services/interviewOrchestratorService';
 import { writeSseEvent, startSseHeartbeat } from '../utils/sseResponse';
 import {
   replayRunEvents,
@@ -691,10 +691,9 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
     let internalContext: string | undefined;
     if (isMultiAgentAssistedThread(thread)) {
       try {
-        const prepared = await prepareAssistedInterviewTurn({
+        const prepared = await prepareAutonomousInterviewTurn({
           mainThreadId: threadId,
           answerText: body.text ?? '',
-          specialists: ['requirements'],
         });
         if (prepared.internalContext) internalContext = prepared.internalContext;
       } catch (err: unknown) {

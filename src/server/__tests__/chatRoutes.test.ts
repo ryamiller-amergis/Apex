@@ -120,9 +120,11 @@ jest.mock('../services/groupService', () => ({
 const mockResolveThreadAccess = jest.fn();
 const mockCanWriteThread = jest.fn();
 const mockPrepareAssistedInterviewTurn = jest.fn().mockResolvedValue({ internalContext: null });
+const mockPrepareAutonomousInterviewTurn = jest.fn().mockResolvedValue({ internalContext: null });
 
 jest.mock('../services/interviewOrchestratorService', () => ({
   prepareAssistedInterviewTurn: (...args: unknown[]) => mockPrepareAssistedInterviewTurn(...args),
+  prepareAutonomousInterviewTurn: (...args: unknown[]) => mockPrepareAutonomousInterviewTurn(...args),
 }));
 
 jest.mock('../services/threadAccessService', () => ({
@@ -1224,6 +1226,7 @@ describe('VT-ASSIST-6 — assisted messages stay 202 and prepare before sendMess
     mockPermissionGranted = true;
     jest.clearAllMocks();
     mockPrepareAssistedInterviewTurn.mockResolvedValue({ internalContext: null });
+    mockPrepareAutonomousInterviewTurn.mockResolvedValue({ internalContext: null });
     mockResolveThreadAccess.mockResolvedValue({
       thread: idleThread,
       access: 'owner',
@@ -1234,7 +1237,7 @@ describe('VT-ASSIST-6 — assisted messages stay 202 and prepare before sendMess
 
   it('returns 202 before preparation finishes, then sends the exact BA text with internal context', async () => {
     let release: (value: { internalContext: string }) => void = () => {};
-    mockPrepareAssistedInterviewTurn.mockReturnValue(
+    mockPrepareAutonomousInterviewTurn.mockReturnValue(
       new Promise((resolve) => {
         release = resolve;
       }),
@@ -1250,11 +1253,11 @@ describe('VT-ASSIST-6 — assisted messages stay 202 and prepare before sendMess
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ ok: true });
-    expect(mockPrepareAssistedInterviewTurn).toHaveBeenCalledWith({
+    expect(mockPrepareAutonomousInterviewTurn).toHaveBeenCalledWith({
       mainThreadId: threadId,
       answerText: baText,
-      specialists: ['requirements'],
     });
+    expect(mockPrepareAssistedInterviewTurn).not.toHaveBeenCalled();
     expect(mockChatService.sendMessage).not.toHaveBeenCalled();
 
     const internalContext = [
@@ -1286,6 +1289,7 @@ describe('VT-ASSIST-6 — assisted messages stay 202 and prepare before sendMess
       .send({ text: baText });
 
     expect(res.status).toBe(202);
+    expect(mockPrepareAutonomousInterviewTurn).not.toHaveBeenCalled();
     expect(mockPrepareAssistedInterviewTurn).not.toHaveBeenCalled();
     expect(mockChatService.sendMessage).toHaveBeenCalledWith(
       threadId,
