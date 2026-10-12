@@ -26,6 +26,7 @@ import {
   publishAdoTestCases,
   resetAdoTestSuiteWatchersForTests,
   syncAdoTestSuiteOutput,
+  syncAdoTestSuiteRunOutput,
   triggerAdoTestCaseGeneration,
   type SyntheticAdoPbiItem,
   type SyntheticAdoTbiItem,
@@ -548,6 +549,47 @@ describe('ADO test suite generation and publish', () => {
     expect(dbMock.state.updates[0].testCasesJson).toEqual(testCasesJson);
     expect(AzureDevOpsService).not.toHaveBeenCalled();
     expect(adoWriteForRequest).not.toHaveBeenCalled();
+  });
+
+  it('syncs worker-harvested output from a workspace other than the thread workspace', async () => {
+    const harvestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ado-suite-harvest-'));
+    try {
+      const outputDir = path.join(harvestDir, '.ai-pilot', 'output');
+      fs.mkdirSync(outputDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(outputDir, 'notifications.test-cases.json'),
+        JSON.stringify({ suites: [{ pbiId: 'PBI-18452', testCases: [{ id: 'TC-1', title: 'Saves' }] }] }),
+      );
+      fs.writeFileSync(path.join(outputDir, 'notifications.test-cases.md'), '# harvested');
+      dbMock.state.threadRow = { workspaceDir };
+      dbMock.state.suiteRow = { id: 'suite-1', chatThreadId: 'thread-ado', status: 'generating' };
+
+      await expect(syncAdoTestSuiteRunOutput('thread-ado', harvestDir)).resolves.toBe(true);
+
+      expect(dbMock.state.updates[0]).toEqual(expect.objectContaining({
+        status: 'ready',
+        testCasesMd: '# harvested',
+      }));
+    } finally {
+      fs.rmSync(harvestDir, { recursive: true, force: true });
+    }
+  });
+
+  it('marks the suite failed when a finished run left no output', async () => {
+    dbMock.state.threadRow = { workspaceDir };
+    dbMock.state.suiteRow = { id: 'suite-1', chatThreadId: 'thread-ado', status: 'generating' };
+
+    await expect(syncAdoTestSuiteRunOutput('thread-ado', workspaceDir)).resolves.toBe(true);
+
+    expect(dbMock.state.updates).toContainEqual(expect.objectContaining({ status: 'failed' }));
+  });
+
+  it('ignores threads that do not belong to an ADO suite', async () => {
+    dbMock.state.suiteRow = null;
+
+    await expect(syncAdoTestSuiteRunOutput('thread-other', workspaceDir)).resolves.toBe(false);
+
+    expect(dbMock.state.updates).toHaveLength(0);
   });
 
   it('creates linked test cases once and skips those local ids on retry', async () => {

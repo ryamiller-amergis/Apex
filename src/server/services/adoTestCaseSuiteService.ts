@@ -568,11 +568,38 @@ export async function publishAdoTestCases(
   return { published, skippedLocalCaseIds, failures };
 }
 
+/**
+ * Post-run hook for agent output, including V2 worker harvests whose files
+ * live in a temporary workspace instead of the thread workspace.
+ * Returns true when the thread belongs to an ADO-native suite.
+ */
+export async function syncAdoTestSuiteRunOutput(
+  chatThreadId: string,
+  workspaceDir?: string,
+): Promise<boolean> {
+  const row = await db.query.qaAdoTestSuites.findFirst({
+    where: eq(qaAdoTestSuites.chatThreadId, chatThreadId),
+    columns: { id: true, status: true },
+  });
+  if (!row) return false;
+  if (row.status !== 'generating') return true;
+
+  if (await syncAdoTestSuiteOutput(row.id, chatThreadId, workspaceDir)) {
+    stopAdoTestSuiteWatcher(row.id);
+    return true;
+  }
+  console.warn(`[adoTestSuite] Agent run produced no test-case output (suiteId=${row.id})`);
+  stopAdoTestSuiteWatcher(row.id);
+  await markAdoTestSuiteFailed(row.id, chatThreadId);
+  return true;
+}
+
 export async function syncAdoTestSuiteOutput(
   suiteId: string,
   chatThreadId: string,
+  workspaceDirOverride?: string,
 ): Promise<boolean> {
-  const testCasesJson = await readOutputTestCases(chatThreadId);
+  const testCasesJson = await readOutputTestCases(chatThreadId, workspaceDirOverride);
   if (testCasesJson === null) return false;
 
   const row = await db.query.qaAdoTestSuites.findFirst({
@@ -584,7 +611,7 @@ export async function syncAdoTestSuiteOutput(
     return false;
   }
 
-  const testCasesMd = await readOutputTestCasesMd(chatThreadId);
+  const testCasesMd = await readOutputTestCasesMd(chatThreadId, workspaceDirOverride);
   const coverageSummary = summarizeCoverage(testCasesJson);
   const updated = await db
     .update(qaAdoTestSuites)
@@ -1154,8 +1181,11 @@ function buildTestCaseStepsXml(
   return `<steps id="0" last="${steps.length}">${stepElements.join('')}</steps>`;
 }
 
-async function readOutputTestCases(threadId: string): Promise<unknown | null> {
-  const file = await findOutputFile(threadId, /\.test-cases\.json$/i);
+async function readOutputTestCases(
+  threadId: string,
+  workspaceDirOverride?: string,
+): Promise<unknown | null> {
+  const file = await findOutputFile(threadId, /\.test-cases\.json$/i, workspaceDirOverride);
   if (!file) return null;
   try {
     return JSON.parse(fs.readFileSync(file, 'utf-8')) as unknown;
@@ -1164,13 +1194,20 @@ async function readOutputTestCases(threadId: string): Promise<unknown | null> {
   }
 }
 
-async function readOutputTestCasesMd(threadId: string): Promise<string | null> {
-  const file = await findOutputFile(threadId, /\.test-cases\.md$/i);
+async function readOutputTestCasesMd(
+  threadId: string,
+  workspaceDirOverride?: string,
+): Promise<string | null> {
+  const file = await findOutputFile(threadId, /\.test-cases\.md$/i, workspaceDirOverride);
   return file ? fs.readFileSync(file, 'utf-8') : null;
 }
 
-async function findOutputFile(threadId: string, pattern: RegExp): Promise<string | null> {
-  const workspaceDir = await resolveWorkspaceDir(threadId);
+async function findOutputFile(
+  threadId: string,
+  pattern: RegExp,
+  workspaceDirOverride?: string,
+): Promise<string | null> {
+  const workspaceDir = workspaceDirOverride ?? await resolveWorkspaceDir(threadId);
   if (!workspaceDir) return null;
   const outputDir = path.join(workspaceDir, '.ai-pilot', 'output');
   return findFirstFile(outputDir, pattern) ?? findFirstFile(workspaceDir, pattern);

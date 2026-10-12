@@ -800,6 +800,56 @@ describe('testCaseService', () => {
         fs.rmSync(workspaceDir, { recursive: true, force: true });
       }
     });
+
+    it('keeps other PBIs when a worker harvest omits the scope file', async () => {
+      const harvestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-pilot-tc-harvest-'));
+      const threadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-pilot-tc-thread-'));
+      fs.mkdirSync(path.join(harvestDir, '.ai-pilot', 'output'), { recursive: true });
+      fs.mkdirSync(path.join(threadDir, '.ai-pilot', 'output'), { recursive: true });
+      fs.writeFileSync(
+        path.join(harvestDir, '.ai-pilot', 'output', 'feature.test-cases.json'),
+        JSON.stringify({ suites: [{ pbiId: 'PBI-2', testCases: [{ id: 'TC-new' }] }] }),
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(threadDir, '.ai-pilot', 'output', 'qa-lab-scope.json'),
+        JSON.stringify({ pbiIds: ['PBI-2'] }),
+        'utf8',
+      );
+      mockDb.query.chatThreads.findFirst.mockResolvedValue({ workspaceDir: threadDir });
+      mockDb.query.testCases.findFirst.mockResolvedValue({
+        chatThreadId: 'thread-tc',
+        status: 'generating',
+      });
+      mockDb.query.prds.findFirst.mockResolvedValue({
+        title: 'Feature',
+        chatThreadId: 'source-thread',
+        backlogJson: { items: [] },
+      });
+      (mockDb.select as jest.Mock).mockReturnValue({
+        from: () => ({
+          where: () => ({
+            orderBy: () => ({
+              limit: () => Promise.resolve([{
+                testCasesJson: { suites: [{ pbiId: 'PBI-1', testCases: [{ id: 'TC-old' }] }] },
+              }]),
+            }),
+          }),
+        }),
+      });
+
+      try {
+        await syncTestCaseOutput('tc-1', 'prd-1', 'thread-tc', harvestDir);
+
+        const stored = mockUpdateChains[0].set.mock.calls[0][0].testCasesJson as {
+          suites: Array<{ pbiId: string }>;
+        };
+        expect(stored.suites.map((suite) => suite.pbiId).sort()).toEqual(['PBI-1', 'PBI-2']);
+      } finally {
+        fs.rmSync(harvestDir, { recursive: true, force: true });
+        fs.rmSync(threadDir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('readOutputTestCases — fallback workspace search', () => {

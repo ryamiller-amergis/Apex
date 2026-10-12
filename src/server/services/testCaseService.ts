@@ -666,10 +666,17 @@ async function readQaLabScopePbiIds(
   threadId: string,
   workspaceDirOverride?: string,
 ): Promise<string[] | null> {
-  const outputDir = await resolveOutputDir(threadId, workspaceDirOverride);
-  if (!outputDir) return null;
-  const file = path.join(outputDir, QA_LAB_SCOPE_FILE);
-  if (!fs.existsSync(file)) return null;
+  // A V2 worker harvest does not carry the scope file back, so fall back to
+  // the thread workspace where triggerTestCaseGeneration wrote it.
+  const candidates = [
+    await resolveOutputDir(threadId, workspaceDirOverride),
+    workspaceDirOverride ? await resolveOutputDir(threadId) : null,
+  ];
+  const file = candidates
+    .filter((dir): dir is string => dir !== null)
+    .map((dir) => path.join(dir, QA_LAB_SCOPE_FILE))
+    .find((candidate) => fs.existsSync(candidate));
+  if (!file) return null;
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf-8')) as { pbiIds?: unknown };
     const pbiIds = normalizePbiIds(Array.isArray(parsed.pbiIds) ? parsed.pbiIds.filter((id): id is string => typeof id === 'string') : []);

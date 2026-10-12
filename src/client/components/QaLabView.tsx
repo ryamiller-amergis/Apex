@@ -558,7 +558,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
 
             {(generation?.testCaseStatus === 'failed' || externalSuite?.status === 'failed') && (
               <p className={`${styles.status} ${styles.statusError}`} {...{ 'data-testid': 'qa-lab-generation-failed' }}>
-                Test-case generation did not finish. Check that this project has a Test Cases skill and repository, then try again.
+                The last test-case generation did not produce any cases. Try generating again.
               </p>
             )}
 

@@ -101,6 +101,7 @@ import {
   syncTestCaseOutput,
   triggerTestCaseGeneration,
 } from './testCaseService';
+import { syncAdoTestSuiteRunOutput } from './adoTestCaseSuiteService';
 import type { Prd } from '../../shared/types/interview';
 import { NO_SCORECARD_REASON } from '../../shared/utils/validationReport';
 import { ingestValidationScorecard } from './documentValidationService';
@@ -3315,6 +3316,8 @@ async function syncOutputToDbFromWorkspace(
     }
     return;
   }
+
+  if (await syncAdoTestSuiteRunOutput(threadId, workspaceDir)) return;
 
   // Check if this thread belongs to a PRD
   const prdRow = await db.query.prds.findFirst({
