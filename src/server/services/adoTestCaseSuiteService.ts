@@ -6,7 +6,11 @@ import { db } from '../db/drizzle';
 import { chatThreads, qaAdoTestSuites } from '../db/schema';
 import type { EffortLevel } from '../../shared/types/effort';
 import type { TestCaseCoverageSummary } from '../../shared/types/interview';
-import type { QaAdoGenerationContext, QaAdoGenerationItem } from '../../shared/types/qaLab';
+import type {
+  QaAdoGenerationContext,
+  QaAdoGenerationItem,
+  QaLabGenerationCandidates,
+} from '../../shared/types/qaLab';
 import type { RunRef } from '../../shared/types/runGrounding';
 import { getDefaultModel } from './appSettingsService';
 import {
@@ -77,6 +81,8 @@ export interface TriggerAdoTestCaseGenerationInput {
   model?: string;
   effort?: EffortLevel;
   skillSettingsId?: string;
+  /** ADO ids of the PBIs/Bugs to generate. Omit for every PBI/Bug beneath the root. */
+  targetIds?: number[];
   /** Reader override. Defaults to AzureDevOpsService for the project. */
   ado?: AdoQaContextReader;
 }
@@ -270,6 +276,36 @@ export function resetAdoTestSuiteWatchersForTests(): void {
   activeAdoTestSuiteWatchers.clear();
 }
 
+/** Keeps only the chosen PBIs/Bugs. TBIs stay as context for whatever remains. */
+function narrowGenerationTargets(
+  context: QaAdoGenerationContext,
+  targetIds: number[] | undefined,
+): QaAdoGenerationContext {
+  if (!targetIds) return context;
+  const wanted = new Set(targetIds);
+  return { ...context, targets: context.targets.filter((target) => wanted.has(target.id)) };
+}
+
+/** PBIs and Bugs beneath the root, for the QA Lab scope picker. */
+export async function listAdoGenerationCandidates(
+  project: string,
+  rootWorkItemId: number,
+  ado: AdoQaContextReader = new AzureDevOpsService(project),
+): Promise<QaLabGenerationCandidates | null> {
+  const context = await ado.getQaTestGenerationContext(rootWorkItemId);
+  if (!context) return null;
+  return {
+    rootWorkItemId,
+    items: context.targets.map((target) => ({
+      id: target.id,
+      parentId: target.parentId,
+      title: target.title,
+      state: target.state,
+      workItemType: target.workItemType,
+    })),
+  };
+}
+
 export async function triggerAdoTestCaseGeneration(
   input: TriggerAdoTestCaseGenerationInput,
 ): Promise<TriggerAdoTestCaseGenerationResult> {
@@ -302,8 +338,9 @@ export async function triggerAdoTestCaseGeneration(
   }
 
   const reader = input.ado ?? new AzureDevOpsService(project);
-  const context = await reader.getQaTestGenerationContext(input.rootWorkItemId);
-  if (!context) return { started: false, reason: 'root-not-found' };
+  const fullContext = await reader.getQaTestGenerationContext(input.rootWorkItemId);
+  if (!fullContext) return { started: false, reason: 'root-not-found' };
+  const context = narrowGenerationTargets(fullContext, input.targetIds);
   if (context.targets.length === 0) return { started: false, reason: 'no-targets' };
 
   const backlog = buildSyntheticAdoBacklog(context);

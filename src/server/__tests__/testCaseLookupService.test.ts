@@ -157,6 +157,7 @@ describe('findBacklogMatch', () => {
       level: 'pbi',
       title: 'Pay by card',
       pbiIds: ['PBI-001'],
+      pbiTargets: [{ pbiId: 'PBI-001', title: 'Pay by card' }],
     });
   });
 
@@ -165,6 +166,10 @@ describe('findBacklogMatch', () => {
       level: 'feature',
       title: 'Payments',
       pbiIds: ['PBI-001', 'PBI-002'],
+      pbiTargets: [
+        { pbiId: 'PBI-001', title: 'Pay by card' },
+        { pbiId: 'PBI-002', title: 'Pay by wallet' },
+      ],
     });
   });
 
@@ -173,6 +178,11 @@ describe('findBacklogMatch', () => {
       level: 'epic',
       title: 'Checkout Epic',
       pbiIds: ['PBI-001', 'PBI-002', 'PBI-003'],
+      pbiTargets: [
+        { pbiId: 'PBI-001', title: 'Pay by card' },
+        { pbiId: 'PBI-002', title: 'Pay by wallet' },
+        { pbiId: 'PBI-003', title: 'Email receipt' },
+      ],
     });
   });
 
@@ -328,6 +338,7 @@ describe('getTestCasesForWorkItem', () => {
       matchLevel: 'pbi',
       matchedTitle: 'Pay by card',
       pbiIds: ['PBI-001'],
+      pbiTargets: [{ pbiId: 'PBI-001', title: 'Pay by card' }],
       testCaseStatus: null,
     });
   });

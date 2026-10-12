@@ -23,6 +23,7 @@ import {
   buildSyntheticAdoBacklog,
   getLatestAdoTestSuite,
   isAdoTestSuiteWatcherActive,
+  listAdoGenerationCandidates,
   publishAdoTestCases,
   resetAdoTestSuiteWatchersForTests,
   syncAdoTestSuiteOutput,
@@ -458,6 +459,56 @@ describe('ADO test suite generation and publish', () => {
     );
     expect(ado.createTestCaseWorkItem).not.toHaveBeenCalled();
     expect(isAdoTestSuiteWatcherActive('suite-new')).toBe(true);
+  });
+
+  it('generates only the chosen targets and keeps TBIs as context', async () => {
+    const ado = { getQaTestGenerationContext: jest.fn().mockResolvedValue(generationContext()) };
+
+    const result = await triggerAdoTestCaseGeneration({
+      project: 'Apex',
+      rootWorkItemId: 100,
+      userId: 'user-1',
+      targetIds: [18499],
+      ado,
+    });
+    await settleBackgroundDispatch();
+
+    expect(result).toEqual(expect.objectContaining({ started: true }));
+    const inserted = dbMock.state.inserts[0] as { sourceSnapshot: QaAdoGenerationContext };
+    expect(inserted.sourceSnapshot.targets.map((target) => target.id)).toEqual([18499]);
+    expect(inserted.sourceSnapshot.technicalContext.map((item) => item.id)).toEqual([18500]);
+    expect(JSON.parse(fs.readFileSync(
+      path.join(workspaceDir, '.ai-pilot', 'output', 'qa-lab-scope.json'),
+      'utf-8',
+    ))).toEqual({ pbiIds: ['PBI-18499'] });
+  });
+
+  it('returns no-targets when none of the chosen ids are under the root', async () => {
+    const ado = { getQaTestGenerationContext: jest.fn().mockResolvedValue(generationContext()) };
+
+    const result = await triggerAdoTestCaseGeneration({
+      project: 'Apex',
+      rootWorkItemId: 100,
+      userId: 'user-1',
+      targetIds: [999],
+      ado,
+    });
+
+    expect(result).toEqual({ started: false, reason: 'no-targets' });
+    expect(dbMock.state.inserts).toHaveLength(0);
+  });
+
+  it('lists PBI and Bug candidates beneath the root', async () => {
+    const ado = { getQaTestGenerationContext: jest.fn().mockResolvedValue(generationContext()) };
+
+    const candidates = await listAdoGenerationCandidates('Apex', 100, ado);
+
+    expect(candidates?.rootWorkItemId).toBe(100);
+    expect(candidates?.items.map((item) => item.id)).toEqual([18452, 18499]);
+    expect(candidates?.items[0]).toEqual(expect.objectContaining({
+      title: expect.any(String),
+      workItemType: expect.any(String),
+    }));
   });
 
   it('marks the suite failed when workflow routing throws', async () => {

@@ -152,6 +152,18 @@ Set `automation` on every case:
 
 `automation.candidate: false` requires a one-line `automation.rationale`.
 
+### Manual execution coverage
+
+QA engineers run these cases by hand. QA Lab shows them on the **Manual** tab, which holds every case with `recommendedTier` `manual` or `e2e-playwright`. `unit` and `integration` cases are developer checks and do not count toward manual coverage.
+
+1. **Every AC gets all four scenarios a person can run.** For each acceptance criterion, author at least one manual-runnable case for each `tier`: `happy`, `error`, `edge`, and `negative`. If a scenario cannot apply (for example, no permission boundary exists), record why in `coverageMatrix.gaps` instead of skipping it silently.
+2. **E2E cases are still manual scripts.** A case tagged `e2e-playwright` must be complete enough for a person to run without automation. Do not shorten steps because a script will exist later.
+3. **User-visible behavior needs a manual case.** When an `api` or `integration` case verifies something a user can see, add a manual case that checks the same outcome on screen.
+4. **Concrete test data.** Put real example values in `testData` (for example `email` = `qa.user+1@example.com`). Never write "a valid value" or "some text".
+5. **Exact UI words.** Name screens, buttons, fields, and messages exactly as the user sees them. Each step has one action and its own `expected`.
+6. **Clean up.** When a case creates or changes data, end with a step that removes or restores it, and say what the tester should see afterwards.
+7. **Bugs.** For a Bug item, write a `happy` case that follows the original repro steps and expects the fixed behavior, plus `edge` cases for nearby inputs that could bring the bug back.
+
 ### Count test cases per PBI
 
 After deriving all cases, compute `testCaseCount` for each in-scope PBI:
@@ -234,6 +246,8 @@ Ensure `.ai-pilot/output/` exists. Write **in this order**:
 - [ ] Every in-scope PBI acceptance criterion has ≥1 mapped test case
 - [ ] Every in-scope PBI business rule (`BR-NNN`) appears in at least one case
 - [ ] Four AC scenario types represented across each PBI suite
+- [ ] Every AC has manual-runnable (`manual` or `e2e-playwright`) `happy`, `error`, `edge`, and `negative` cases, or a gap explaining why not
+- [ ] Every manual-runnable case has concrete `testData`, exact UI labels, and a cleanup step when it changes data
 - [ ] Feature flag on/off covered when `featureFlag.name` is present
 - [ ] No test cases authored for `outOfScope` items
 - [ ] Persona names match Apex groups enum verbatim

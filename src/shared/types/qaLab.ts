@@ -75,8 +75,29 @@ export interface QaLabGenerationTarget {
   matchedTitle: string;
   /** Backlog-local ids, e.g. `PBI-001`. */
   pbiIds: string[];
+  /** Same PBIs as `pbiIds`, with titles for the scope picker. */
+  pbiTargets: QaLabBacklogPbiTarget[];
   /** Latest test-case row for the PRD, when one exists. */
   testCaseStatus?: TestCaseStatus | null;
+}
+
+export interface QaLabBacklogPbiTarget {
+  pbiId: string;
+  title: string;
+}
+
+/** A PBI or Bug that can receive cases when generating from an ADO work item. */
+export interface QaLabGenerationCandidate {
+  id: number;
+  parentId: number | null;
+  title: string;
+  state: string;
+  workItemType: string;
+}
+
+export interface QaLabGenerationCandidates {
+  rootWorkItemId: number;
+  items: QaLabGenerationCandidate[];
 }
 
 export interface QaLabPublishedCase {
@@ -147,6 +168,8 @@ export interface QaLabGenerateRequest {
   effort?: string;
   /** Backlog PBI ids to generate. Omit to generate the whole PRD. */
   pbiIds?: string[];
+  /** ADO ids of the PBIs/Bugs to generate. Omit to generate every PBI/Bug beneath the root. */
+  targetIds?: number[];
   matchLevel?: QaLabMatchLevel;
   matchedTitle?: string;
 }

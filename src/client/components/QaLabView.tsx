@@ -1,6 +1,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import type { QaLabSuite, QaLabTestCase } from '../../shared/types/qaLab';
 import {
+  useAdoGenerationCandidates,
   useGenerateTestCasesForAdoWorkItem,
   useGenerateTestCasesForPrd,
   usePublishAdoTestSuite,
@@ -31,14 +32,50 @@ const WORK_ITEM_TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: 'Bug', label: 'Bug' },
 ];
 
-type FilterKey = 'tier' | 'type' | 'persona' | 'automationTier';
+type FilterKey = 'tier' | 'type' | 'persona';
 
 const FILTER_LABELS: Record<FilterKey, string> = {
   tier: 'Tier',
   type: 'Type',
   persona: 'Persona',
-  automationTier: 'Automation',
 };
+
+/**
+ * Manual holds every scenario a QA person runs by hand, including the ones
+ * also tagged for Playwright. Automated holds unit and integration checks.
+ */
+type CaseKind = 'manual' | 'e2e' | 'automated';
+
+const CASE_TABS: { key: CaseKind; label: string; hint: string }[] = [
+  { key: 'manual', label: 'Manual', hint: 'Scenarios QA runs by hand, including those also marked for E2E' },
+  { key: 'e2e', label: 'E2E', hint: 'User-facing paths marked for Playwright automation' },
+  { key: 'automated', label: 'Automated', hint: 'Unit and integration checks for developers' },
+];
+
+const COVERAGE_TIERS = ['happy', 'error', 'edge', 'negative'] as const;
+
+function isOnTab(testCase: QaLabTestCase, tab: CaseKind): boolean {
+  const tier = testCase.automationTier;
+  const isAutomatedOnly = tier === 'unit' || tier === 'integration';
+  switch (tab) {
+    case 'manual':
+      return !isAutomatedOnly;
+    case 'e2e':
+      return tier === 'e2e-playwright';
+    case 'automated':
+      return isAutomatedOnly;
+    default: {
+      const unhandled: never = tab;
+      throw new Error(`Unknown case tab: ${String(unhandled)}`);
+    }
+  }
+}
+
+interface ScopeOption {
+  key: string;
+  label: string;
+  meta: string;
+}
 
 function uniqueValues(cases: QaLabTestCase[], key: FilterKey): string[] {
   const values = new Set<string>();
@@ -80,10 +117,9 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
         <span className={styles.caseBadges}>
           {testCase.tier && <span className={styles.badge}>{testCase.tier}</span>}
           {testCase.type && <span className={styles.badge}>{testCase.type}</span>}
-          {testCase.automationTier && (
-            <span className={`${styles.badge} ${styles.badgeAutomation}`}>
-              {testCase.automationTier}
-            </span>
+          {testCase.persona && <span className={styles.badge}>{testCase.persona}</span>}
+          {testCase.automationTier === 'e2e-playwright' && (
+            <span className={`${styles.badge} ${styles.badgeAutomation}`}>E2E</span>
           )}
         </span>
         <span className={`${styles.chevron} ${expanded ? styles.chevronOpen : ''}`} aria-hidden="true">
@@ -186,11 +222,50 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
 interface SuiteGroupProps {
   suite: QaLabSuite;
   cases: QaLabTestCase[];
+  /** Manual-tab cases for this suite, used for the coverage strip. */
+  manualCases: QaLabTestCase[] | null;
   expandedIds: Set<string>;
   onToggleCase: (id: string) => void;
 }
 
-const SuiteGroup: React.FC<SuiteGroupProps> = ({ suite, cases, expandedIds, onToggleCase }) => {
+const ManualCoverage: React.FC<{ suiteId: string; cases: QaLabTestCase[] }> = ({ suiteId, cases }) => {
+  const tiers = new Set(cases.map((entry) => entry.tier).filter(Boolean));
+  const acIndices = Array.from(new Set(
+    cases
+      .map((entry) => entry.acceptanceCriteriaIndex)
+      .filter((index): index is number => typeof index === 'number'),
+  )).sort((left, right) => left - right);
+  const missing = COVERAGE_TIERS.filter((tier) => !tiers.has(tier));
+
+  return (
+    <div className={styles.coverage} {...{ 'data-testid': `qa-lab-coverage-${suiteId}` }}>
+      {COVERAGE_TIERS.map((tier) => (
+        <span
+          key={tier}
+          className={`${styles.coverageChip} ${tiers.has(tier) ? styles.coverageChipOn : styles.coverageChipOff}`}
+        >
+          {tiers.has(tier) ? '✓' : '–'} {tier}
+        </span>
+      ))}
+      <span className={styles.coverageAc}>
+        {acIndices.length > 0
+          ? `AC covered: ${acIndices.map((index) => index + 1).join(', ')}`
+          : 'No acceptance criteria traced'}
+      </span>
+      {missing.length > 0 && (
+        <span className={styles.coverageWarn}>Missing {missing.join(', ')} scenarios</span>
+      )}
+    </div>
+  );
+};
+
+const SuiteGroup: React.FC<SuiteGroupProps> = ({
+  suite,
+  cases,
+  manualCases,
+  expandedIds,
+  onToggleCase,
+}) => {
   if (cases.length === 0) return null;
 
   return (
@@ -218,6 +293,7 @@ const SuiteGroup: React.FC<SuiteGroupProps> = ({ suite, cases, expandedIds, onTo
             </a>
           )}
         </div>
+        {manualCases && <ManualCoverage suiteId={suite.pbiId} cases={manualCases} />}
       </header>
 
       <div className={styles.caseList}>
@@ -245,6 +321,9 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
   const [filters, setFilters] = useState<Partial<Record<FilterKey, string>>>({});
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<CaseKind>('manual');
+  const [scopeOpen, setScopeOpen] = useState(false);
+  const [scopeSelection, setScopeSelection] = useState<Set<string> | null>(null);
 
   const {
     data: workItemList,
@@ -292,13 +371,26 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
     [data?.suites],
   );
 
+  const tabCounts = useMemo(() => {
+    const counts: Record<CaseKind, number> = { manual: 0, e2e: 0, automated: 0 };
+    for (const tab of CASE_TABS) {
+      counts[tab.key] = allCases.filter((entry) => isOnTab(entry, tab.key)).length;
+    }
+    return counts;
+  }, [allCases]);
+
+  const tabCases = useMemo(
+    () => allCases.filter((entry) => isOnTab(entry, activeTab)),
+    [allCases, activeTab],
+  );
+
   const filterOptions = useMemo(
     () =>
       (Object.keys(FILTER_LABELS) as FilterKey[]).map((key) => ({
         key,
-        values: uniqueValues(allCases, key),
+        values: uniqueValues(tabCases, key),
       })),
-    [allCases],
+    [tabCases],
   );
 
   const matchesFilters = useCallback(
@@ -310,8 +402,8 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
   );
 
   const filteredCount = useMemo(
-    () => allCases.filter(matchesFilters).length,
-    [allCases, matchesFilters],
+    () => tabCases.filter(matchesFilters).length,
+    [tabCases, matchesFilters],
   );
 
   const primarySource = data?.sources?.[0] ?? null;
@@ -330,6 +422,37 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
   );
   const unpublishedCount = allCases.filter((entry) => !publishedCaseIds.has(entry.id)).length;
 
+  const adoCandidates = useAdoGenerationCandidates(
+    project,
+    selectedWorkItemId,
+    scopeOpen && generation == null && canGenerateExternally,
+  );
+
+  const scopeOptions = useMemo<ScopeOption[]>(() => {
+    if (generation) {
+      return generation.pbiTargets.map((target) => ({
+        key: target.pbiId,
+        label: target.title,
+        meta: target.pbiId,
+      }));
+    }
+    return (adoCandidates.data?.items ?? []).map((item) => ({
+      key: String(item.id),
+      label: item.title,
+      meta: `${item.workItemType === 'Product Backlog Item' ? 'PBI' : item.workItemType} #${item.id} · ${item.state}`,
+    }));
+  }, [generation, adoCandidates.data?.items]);
+
+  const defaultScope = useMemo(() => {
+    const keys = scopeOptions.map((option) => option.key);
+    const rootKey = selectedWorkItemId ? String(selectedWorkItemId) : null;
+    if (!generation && rootKey && keys.includes(rootKey)) return new Set([rootKey]);
+    return new Set(keys);
+  }, [scopeOptions, generation, selectedWorkItemId]);
+
+  const activeScope = scopeSelection ?? defaultScope;
+  const isLoadingScope = generation == null && adoCandidates.isLoading;
+
   const toggleCase = useCallback((id: string) => {
     setExpandedIds((previous) => {
       const next = new Set(previous);
@@ -343,18 +466,31 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
     setSelectedWorkItemId(id);
     setFilters({});
     setExpandedIds(new Set());
+    setScopeOpen(false);
+    setScopeSelection(null);
   }, []);
 
   const handleExpandAll = useCallback(() => {
-    setExpandedIds(new Set(allCases.filter(matchesFilters).map((entry) => entry.id)));
-  }, [allCases, matchesFilters]);
+    setExpandedIds(new Set(tabCases.filter(matchesFilters).map((entry) => entry.id)));
+  }, [tabCases, matchesFilters]);
+
+  const toggleScopeKey = useCallback((key: string) => {
+    setScopeSelection((previous) => {
+      const next = new Set(previous ?? defaultScope);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, [defaultScope]);
 
   const handleGenerate = useCallback(async () => {
+    const chosen = scopeOptions.map((option) => option.key).filter((key) => activeScope.has(key));
+    if (chosen.length === 0) return;
     try {
       if (generation) {
         await generateTestCases.mutateAsync({
           prdId: generation.prdId,
-          pbiIds: generation.pbiIds,
+          pbiIds: chosen,
           matchLevel: generation.matchLevel,
           matchedTitle: generation.matchedTitle,
         });
@@ -362,15 +498,20 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
         await generateAdoTestCases.mutateAsync({
           project,
           workItemId: selectedWorkItemId,
+          targetIds: chosen.map(Number),
         });
       } else {
         return;
       }
+      setScopeOpen(false);
+      setScopeSelection(null);
       await refetch();
     } catch {
       // Mutation state renders the server error below the work-item header.
     }
   }, [
+    scopeOptions,
+    activeScope,
     generation,
     generateTestCases,
     selectedWorkItemId,
@@ -541,20 +682,103 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
                     <button
                       type="button"
                       className={styles.primaryBtn}
-                      onClick={() => void handleGenerate()}
+                      onClick={() => setScopeOpen((open) => !open)}
                       disabled={isGenerating}
+                      aria-expanded={scopeOpen}
                       {...{ 'data-testid': 'qa-lab-regenerate' }}
                     >
                       {isGenerating
                         ? 'Generating…'
                         : allCases.length > 0
-                          ? 'Regenerate suite'
-                          : 'Generate test cases'}
+                          ? 'Regenerate…'
+                          : 'Generate test cases…'}
                     </button>
                   </>
                 )}
               </div>
             </header>
+
+            {scopeOpen && !isGenerating && (
+              <section className={styles.scopePanel} aria-label="Choose items to generate" {...{ 'data-testid': 'qa-lab-scope-panel' }}>
+                <div className={styles.scopeHeader}>
+                  <h3 className={styles.scopeTitle}>Which items should get test cases?</h3>
+                  <span className={styles.scopeHint}>
+                    PBIs and Bugs under this item. TBIs are read as technical context only.
+                  </span>
+                </div>
+                {isLoadingScope && <p className={styles.status}>Loading items…</p>}
+                {adoCandidates.isError && (
+                  <p className={`${styles.status} ${styles.statusError}`}>
+                    {adoCandidates.error instanceof Error ? adoCandidates.error.message : 'Could not load items.'}
+                  </p>
+                )}
+                {!isLoadingScope && scopeOptions.length === 0 && !adoCandidates.isError && (
+                  <p className={styles.status}>There are no PBIs or Bugs under this item to test.</p>
+                )}
+                {scopeOptions.length > 0 && (
+                  <>
+                    <div className={styles.scopeBulk}>
+                      <button
+                        type="button"
+                        className={styles.linkBtn}
+                        onClick={() => setScopeSelection(new Set(scopeOptions.map((option) => option.key)))}
+                        {...{ 'data-testid': 'qa-lab-scope-select-all' }}
+                      >
+                        Select all
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.linkBtn}
+                        onClick={() => setScopeSelection(new Set())}
+                        {...{ 'data-testid': 'qa-lab-scope-select-none' }}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    <ul className={styles.scopeList}>
+                      {scopeOptions.map((option) => (
+                        <li key={option.key}>
+                          <label className={styles.scopeOption}>
+                            <input
+                              type="checkbox"
+                              checked={activeScope.has(option.key)}
+                              onChange={() => toggleScopeKey(option.key)}
+                              {...{ 'data-testid': `qa-lab-scope-option-${option.key}` }}
+                            />
+                            <span className={styles.scopeOptionText}>
+                              <span className={styles.scopeOptionLabel}>{option.label}</span>
+                              <span className={styles.scopeOptionMeta}>{option.meta}</span>
+                            </span>
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                <div className={styles.scopeActions}>
+                  <button
+                    type="button"
+                    className={styles.secondaryBtn}
+                    onClick={() => {
+                      setScopeOpen(false);
+                      setScopeSelection(null);
+                    }}
+                    {...{ 'data-testid': 'qa-lab-scope-cancel' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.primaryBtn}
+                    onClick={() => void handleGenerate()}
+                    disabled={activeScope.size === 0 || scopeOptions.length === 0}
+                    {...{ 'data-testid': 'qa-lab-scope-generate' }}
+                  >
+                    Generate for {activeScope.size} {activeScope.size === 1 ? 'item' : 'items'}
+                  </button>
+                </div>
+              </section>
+            )}
 
             {(generation?.testCaseStatus === 'failed' || externalSuite?.status === 'failed') && (
               <p className={`${styles.status} ${styles.statusError}`} {...{ 'data-testid': 'qa-lab-generation-failed' }}>
@@ -598,6 +822,29 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
             )}
 
             {allCases.length > 0 && (
+              <div className={styles.tabs} role="tablist" aria-label="Test case kind">
+                {CASE_TABS.map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTab === tab.key}
+                    title={tab.hint}
+                    className={`${styles.tab} ${activeTab === tab.key ? styles.tabActive : ''}`}
+                    onClick={() => {
+                      setActiveTab(tab.key);
+                      setFilters({});
+                    }}
+                    {...{ 'data-testid': `qa-lab-tab-${tab.key}` }}
+                  >
+                    {tab.label}
+                    <span className={styles.tabCount}>{tabCounts[tab.key]}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {allCases.length > 0 && (
               <div className={styles.toolbar} {...{ 'data-testid': 'qa-lab-toolbar' }}>
                 {filterOptions.map(({ key, values }) =>
                   values.length > 1 ? (
@@ -624,7 +871,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
                 )}
                 <span className={styles.toolbarSpacer} />
                 <span className={styles.resultCount}>
-                  {filteredCount} of {allCases.length} shown
+                  {filteredCount} of {tabCases.length} shown
                 </span>
                 <button
                   type="button"
@@ -670,11 +917,22 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
               </div>
             )}
 
+            {allCases.length > 0 && tabCases.length === 0 && (
+              <p className={styles.status} {...{ 'data-testid': 'qa-lab-tab-empty' }}>
+                No {CASE_TABS.find((tab) => tab.key === activeTab)?.label} cases in this suite.
+              </p>
+            )}
+
             {(data?.suites ?? []).map((suite) => (
               <SuiteGroup
                 key={`${suite.pbiId}-${suite.adoWorkItemId ?? 'unlinked'}`}
                 suite={suite}
-                cases={suite.testCases.filter(matchesFilters)}
+                cases={suite.testCases.filter(
+                  (entry) => isOnTab(entry, activeTab) && matchesFilters(entry),
+                )}
+                manualCases={activeTab === 'manual'
+                  ? suite.testCases.filter((entry) => isOnTab(entry, 'manual'))
+                  : null}
                 expandedIds={expandedIds}
                 onToggleCase={toggleCase}
               />

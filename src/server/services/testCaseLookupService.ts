@@ -3,6 +3,7 @@ import { db } from '../db/drizzle';
 import { prds } from '../db/schema';
 import type {
   QaAdoGenerationContext,
+  QaLabBacklogPbiTarget,
   QaLabGenerationTarget,
   QaLabMatchLevel,
   QaLabSource,
@@ -44,6 +45,7 @@ interface BacklogMatch {
   title: string;
   /** Backlog-local PBI ids covered by this node. */
   pbiIds: string[];
+  pbiTargets: QaLabBacklogPbiTarget[];
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -72,10 +74,23 @@ function isPbiNode(node: BacklogNode): boolean {
   return node.type === undefined || node.type === 'PBI';
 }
 
-function collectPbiIds(nodes: BacklogNode[] | undefined): string[] {
+function collectPbiTargets(nodes: BacklogNode[] | undefined): QaLabBacklogPbiTarget[] {
   return (nodes ?? []).flatMap((item) =>
-    isPbiNode(item) && item.id ? [item.id] : [],
+    isPbiNode(item) && item.id ? [{ pbiId: item.id, title: item.title ?? item.id }] : [],
   );
+}
+
+function toMatch(
+  level: QaLabMatchLevel,
+  title: string | undefined,
+  pbiTargets: QaLabBacklogPbiTarget[],
+): BacklogMatch {
+  return {
+    level,
+    title: title ?? '',
+    pbiIds: pbiTargets.map((target) => target.pbiId),
+    pbiTargets,
+  };
 }
 
 /**
@@ -91,26 +106,22 @@ export function findBacklogMatch(
 
   for (const epic of root.epics) {
     if (epic.adoWorkItemId === adoWorkItemId) {
-      const pbiIds = (epic.features ?? []).flatMap((feature) =>
-        collectPbiIds(feature.items),
+      const pbiTargets = (epic.features ?? []).flatMap((feature) =>
+        collectPbiTargets(feature.items),
       );
-      return { level: 'epic', title: epic.title ?? '', pbiIds };
+      return toMatch('epic', epic.title, pbiTargets);
     }
 
     for (const feature of epic.features ?? []) {
       if (feature.adoWorkItemId === adoWorkItemId) {
-        return {
-          level: 'feature',
-          title: feature.title ?? '',
-          pbiIds: collectPbiIds(feature.items),
-        };
+        return toMatch('feature', feature.title, collectPbiTargets(feature.items));
       }
 
       for (const item of feature.items ?? []) {
         if (item.adoWorkItemId === adoWorkItemId && item.id) {
           // A TBI can carry an ADO id too, but only PBIs own suites.
           if (!isPbiNode(item)) continue;
-          return { level: 'pbi', title: item.title ?? '', pbiIds: [item.id] };
+          return toMatch('pbi', item.title, [{ pbiId: item.id, title: item.title ?? item.id }]);
         }
       }
     }
@@ -317,6 +328,7 @@ export async function getTestCasesForWorkItem(
       matchLevel: match.level,
       matchedTitle: match.title,
       pbiIds: match.pbiIds,
+      pbiTargets: match.pbiTargets,
       testCaseStatus: testCaseRecord?.status ?? null,
     };
     if (!result.generation) result.generation = target;

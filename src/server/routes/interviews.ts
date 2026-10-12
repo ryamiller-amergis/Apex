@@ -119,6 +119,7 @@ import {
 } from '../services/testCaseLookupService';
 import {
   getLatestAdoTestSuite,
+  listAdoGenerationCandidates,
   publishAdoTestCases,
   triggerAdoTestCaseGeneration,
 } from '../services/adoTestCaseSuiteService';
@@ -439,6 +440,35 @@ router.get('/work-items/:workItemId/test-cases', requirePermission('planning:qa'
   }
 });
 
+/** PBIs and Bugs beneath an ADO work item that can receive generated cases. */
+router.get('/work-items/:workItemId/test-cases/candidates', requirePermission('planning:qa'), async (req, res, next) => {
+  try {
+    const workItemId = Number(req.params.workItemId);
+    if (!Number.isInteger(workItemId) || workItemId <= 0) {
+      res.status(400).json({ error: 'A positive integer work item ID is required' });
+      return;
+    }
+    const project = typeof req.query.project === 'string' ? req.query.project.trim() : '';
+    if (!project) {
+      res.status(400).json({ error: 'A project query parameter is required' });
+      return;
+    }
+    if (project.toLowerCase() === 'apex') {
+      res.json({ rootWorkItemId: workItemId, items: [] });
+      return;
+    }
+
+    const candidates = await listAdoGenerationCandidates(project, workItemId);
+    if (!candidates) {
+      res.status(404).json({ error: 'The Azure DevOps work item was not found' });
+      return;
+    }
+    res.json(candidates);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post('/work-items/:workItemId/test-cases/generate', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const workItemId = Number(req.params.workItemId);
@@ -446,11 +476,20 @@ router.post('/work-items/:workItemId/test-cases/generate', requirePermission('in
       res.status(400).json({ error: 'A positive integer work item ID is required' });
       return;
     }
-    const { project, model, effort } = (req.body ?? {}) as QaLabGenerateRequest & {
+    const { project, model, effort, targetIds } = (req.body ?? {}) as QaLabGenerateRequest & {
       project?: string;
     };
     if (typeof project !== 'string' || !project.trim()) {
       res.status(400).json({ error: 'A project is required' });
+      return;
+    }
+    if (
+      targetIds !== undefined
+      && (!Array.isArray(targetIds)
+        || targetIds.length === 0
+        || !targetIds.every((id) => Number.isInteger(id) && id > 0))
+    ) {
+      res.status(400).json({ error: 'targetIds must be a non-empty list of work item IDs' });
       return;
     }
 
@@ -460,6 +499,7 @@ router.post('/work-items/:workItemId/test-cases/generate', requirePermission('in
       userId: getUserId(req),
       model,
       effort: effort as EffortLevel | undefined,
+      ...(targetIds ? { targetIds } : {}),
     });
     if (started.started) {
       res.json(started);

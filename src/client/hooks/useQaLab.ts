@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '../utils/apiFetch';
 import type {
   QaLabGenerateRequest,
+  QaLabGenerationCandidates,
   QaLabPublishedCase,
   QaLabWorkItemList,
   QaLabWorkItemTestCases,
@@ -54,6 +55,23 @@ export function useWorkItemTestCases(
   });
 }
 
+/** PBIs and Bugs beneath an ADO work item, for choosing what to generate. */
+export function useAdoGenerationCandidates(
+  project: string | null,
+  workItemId: number | null,
+  enabled: boolean,
+) {
+  return useQuery<QaLabGenerationCandidates>({
+    queryKey: ['qa-lab', 'generation-candidates', project, workItemId],
+    queryFn: () =>
+      apiFetch(
+        `/api/interviews/work-items/${workItemId}/test-cases/candidates?project=${encodeURIComponent(project ?? '')}`,
+      ),
+    enabled: enabled && !!project && !!workItemId,
+    staleTime: 60_000,
+  });
+}
+
 /**
  * Kicks off on-demand test-case generation for a PRD, optionally overriding the
  * model and effort chosen in the QA Lab composer.
@@ -86,11 +104,11 @@ export function useGenerateTestCasesForAdoWorkItem() {
     Error,
     { project: string; workItemId: number } & QaLabGenerateRequest
   >({
-    mutationFn: ({ project, workItemId, model, effort }) =>
+    mutationFn: ({ project, workItemId, model, effort, targetIds }) =>
       apiFetch(`/api/interviews/work-items/${workItemId}/test-cases/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project, model, effort }),
+        body: JSON.stringify({ project, model, effort, targetIds }),
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['qa-lab'] });
