@@ -92,7 +92,7 @@
 }
 
 .primary {
-  color: var(--bg-primary);
+  color: var(--on-accent);
   background: var(--accent-color);
   border: 1px solid var(--accent-color);
   box-shadow: var(--glow-accent);
