@@ -9,6 +9,10 @@ Conduct a structured requirements interview before PRD generation. Discovery
 and Delivery use product language for a Business Analyst or Product Owner.
 Technical is optional and comes last.
 
+## Linked context pre-read
+
+If `.ai-pilot/linked-context.md` is present in the workspace, read it before proceeding. Treat its provenance-labeled sections as authoritative project grounding. If it is absent, proceed normally.
+
 ## Grounding
 
 If `.ai-pilot/linked-context.md` is present, read it and treat its

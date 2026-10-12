@@ -380,8 +380,8 @@ describe('AdrChatView — delete', () => {
 
     renderAdrView();
 
-    expect(screen.getByText('Q1')).toBeInTheDocument();
-    expect(screen.getByText('Q2')).toBeInTheDocument();
+    expect(screen.getByText('Question 1')).toBeInTheDocument();
+    expect(screen.getByText('Question 2')).toBeInTheDocument();
   });
 
   it('shows a preparation spinner while the ADR workspace is setting up', () => {

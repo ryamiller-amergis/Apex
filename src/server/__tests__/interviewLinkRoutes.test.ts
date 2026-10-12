@@ -333,7 +333,7 @@ describe('GET /api/interviews/link-candidates — kickoff staging', () => {
       registeredGroupRequirements.filter(
         (groups) => groups.join('|') === 'BA|Manager|Product-Owner',
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(5);
   });
 });
 

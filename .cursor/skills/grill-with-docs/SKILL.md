@@ -7,6 +7,10 @@ description: Three-phase feature interview. Discovery and Delivery come first in
 
 This interview uses the Guided Interview plan until a project phase plan says otherwise. Discovery and Delivery are required. Technical is optional. A Business Analyst can generate a PRD once those two phases are done. Do not edit this skill during the interview.
 
+## Linked context pre-read
+
+If `.ai-pilot/linked-context.md` is present in the workspace, read it before proceeding. Treat its provenance-labeled sections as authoritative project grounding. If it is absent, proceed normally.
+
 ## When to load this skill
 
 Load immediately when any of the following are true:
