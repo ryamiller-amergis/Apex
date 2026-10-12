@@ -154,6 +154,29 @@ describe('VT-03 — a project with zero runs shows an empty state, not an error'
 });
 
 describe('VT-06 — suspension cause and deadline, in both forms', () => {
+  it('links an interview suspension to the BA workspace', async () => {
+    const deadline = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    stubFetch(
+      { runs: [{ ...SUMMARY, status: 'suspended' }], total: 1 },
+      {
+        ...SUMMARY,
+        status: 'suspended',
+        steps: [step({ stepId: 'interview', stepType: 'interview', status: 'suspended', expiresAt: deadline })],
+        currentStepId: 'interview',
+        suspension: { stepId: 'interview', reason: 'interview', deadline, actionId: 'interview-1' },
+      },
+    );
+
+    renderView();
+    await expandRun();
+
+    expect(await screen.findByTestId('playbook-suspension-cause')).toHaveTextContent(/brief/i);
+    expect(screen.getByTestId('playbook-open-interview')).toHaveAttribute(
+      'href',
+      '/backlog/interview/interview-1',
+    );
+  });
+
   it('shows the cause and the deadline in absolute and relative form', async () => {
     // Deliberately off the exact 2-hour boundary. The formatter floors, which is the right
     // direction for a deadline — it never claims more time remains than does — but it means an

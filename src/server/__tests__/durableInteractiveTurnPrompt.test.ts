@@ -56,6 +56,9 @@ async function admittedSpecification(
     kickoff?: Partial<ChatThread['kickoff']>;
     turnSkill?: ChatTurnSkill;
     effort?: null;
+    guided?: boolean;
+    repositoryContext?: { contextContent: string | null; agentsContent: string | null };
+    adoToolGrant?: boolean;
   } = {},
 ): Promise<PreparedDurableInteractiveTurn['specification']> {
   const repositoryAdmit = jest.fn(async (input: PreparedDurableInteractiveTurn) => ({
@@ -83,7 +86,9 @@ async function admittedSpecification(
       sha: 'abc123',
       profileId: 'profile-1',
     }),
-    loadRepositoryContext: jest.fn().mockResolvedValue(null),
+    loadRepositoryContext: jest.fn().mockResolvedValue(options.repositoryContext ?? null),
+    isGuidedInterviewEnabled: jest.fn().mockResolvedValue(options.guided ?? false),
+    loadInterviewContext: jest.fn().mockResolvedValue(null),
     resolveMaxviewCapability: jest.fn().mockResolvedValue('disabled'),
     resolveDeadlines: jest.fn(() => ({
       absoluteTurnMs: 1_200_000,
@@ -104,6 +109,7 @@ async function admittedSpecification(
     attachments: [],
     turnSkill: options.turnSkill,
     ...('effort' in options ? { effort: options.effort } : {}),
+    ...(options.adoToolGrant ? { toolGrant: { allowedOperations: ['ado:read'], delegatedAdoToken: null } } : {}),
   });
   expect(repositoryAdmit).toHaveBeenCalledTimes(1);
   return repositoryAdmit.mock.calls[0][0].specification;
@@ -240,4 +246,76 @@ describe('durable interactive turn prompt', () => {
     expect(interview.currentPrompt).not.toContain('# Conversational turn contract');
   });
 
+});
+
+describe('durable guided interview turn', () => {
+  const repositoryContext = {
+    contextContent: '## Product\n\nManagers approve timesheets.',
+    agentsContent: '# AGENTS\nSee `src/server/index.ts`.',
+  };
+
+  it('keeps the open-ended prompt when the Playbook interview step is off', async () => {
+    const specification = await admittedSpecification([], { repositoryContext });
+
+    expect(specification.guidedInterview).toBeUndefined();
+    expect(specification.currentPrompt).not.toContain('# Server-controlled interview turn');
+  });
+
+  it('sends the controlled first Discovery turn with the application brief only', async () => {
+    const specification = await admittedSpecification([], {
+      guided: true,
+      repositoryContext,
+      adoToolGrant: true,
+    });
+
+    expect(specification.guidedInterview).toMatchObject({
+      phase: 'product',
+      turn: { phase: 'discovery', question: 1 },
+    });
+    expect(specification.currentPrompt).toContain(SKILL_CONTENT);
+    expect(specification.currentPrompt).toContain('# Server-controlled interview turn');
+    expect(specification.currentPrompt).toContain('# Application brief');
+    expect(specification.currentPrompt).toContain('Managers approve timesheets.');
+    expect(specification.recreationPrompt).not.toContain('## context.md');
+    expect(specification.mcpServers).not.toContainEqual(
+      expect.objectContaining({ serverName: 'ado-skills' }),
+    );
+  });
+
+  it('replaces the answer recap with the guided Q&A on later turns', async () => {
+    const specification = await admittedSpecification(
+      [
+        message('user', 'Begin.', 1),
+        message('agent', '[[interview-phase:discovery:1:6]]\nWhat happens today?', 2),
+      ],
+      { guided: true, repositoryContext },
+    );
+
+    expect(specification.currentPrompt).not.toContain('# Answers so far');
+    expect(specification.currentPrompt).toContain('# Prior interview Q&A');
+    expect(specification.currentPrompt).toContain('What happens today?');
+  });
+
+  it('opens repository context once the interview enters Technical', async () => {
+    const specification = await admittedSpecification(
+      [
+        message('user', 'Begin.', 1),
+        message('agent', '[[interview-phase:technical:1:5]]\nFrontend, backend, or both?', 2),
+      ],
+      { guided: true, repositoryContext, adoToolGrant: true },
+    );
+
+    expect(specification.guidedInterview?.phase).toBe('technical');
+    expect(specification.currentPrompt).toContain('# Technical phase');
+    expect(specification.recreationPrompt).toContain('## context.md');
+    expect(specification.mcpServers).toContainEqual(
+      expect.objectContaining({ serverName: 'ado-skills' }),
+    );
+  });
+
+  it('tells the interviewer to ask the person when no context.md is available', async () => {
+    const specification = await admittedSpecification([], { guided: true });
+
+    expect(specification.currentPrompt).toContain('No application brief was available');
+  });
 });

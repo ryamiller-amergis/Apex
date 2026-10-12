@@ -69,6 +69,10 @@ const mockUpdateStatus = jest.fn();
 jest.mock('../../hooks/useInterviews', () => ({
   useCreateInterview: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useInterview: jest.fn(),
+  useInterviewBrief: jest.fn(() => ({ data: null, isLoading: false })),
+  useDraftInterviewBrief: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false, error: null })),
+  useSaveInterviewBrief: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false, error: null })),
+  useApproveInterviewBrief: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false, error: null })),
   useUpdateInterviewStatus: jest.fn(() => ({ mutateAsync: mockUpdateStatus, isPending: false })),
   useUpdateInterviewTitle: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useCreatePrd: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
@@ -580,6 +584,52 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
+  it('shows Discovery, Delivery, and Technical for a grill-with-docs interview', () => {
+    (useChatThread as jest.Mock).mockReturnValue({
+      data: {
+        id: 'thread-iv-1',
+        status: 'idle',
+        kickoff: {
+          skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+          model: 'composer-2',
+        },
+        messages: [],
+      },
+    });
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      messages: [{
+        id: 'm1',
+        role: 'agent',
+        text: '[[interview-phase:discovery:2:6]]\nWhat does success look like?\n\na. Confirm\nb. Change it\nc. Skip — decide later',
+        ts: '2026-01-01T00:00:00Z',
+      }],
+    });
+
+    renderExistingInterview();
+
+    expect(screen.getByTestId('interview-phase-discovery')).toHaveTextContent('Topic 2 of 6');
+    expect(screen.getByTestId('interview-phase-delivery')).toHaveTextContent('Later');
+    expect(screen.getByTestId('interview-phase-technical')).toHaveTextContent('Optional');
+    expect(screen.getByText(/What does success look like/)).toBeInTheDocument();
+    expect(screen.queryByText(/interview-phase/)).not.toBeInTheDocument();
+  });
+
+  it('hides the phase bar when the interview skill is not grill-with-docs', () => {
+    (useChatThread as jest.Mock).mockReturnValue({
+      data: {
+        id: 'thread-iv-1',
+        status: 'idle',
+        kickoff: { skillPath: '.cursor/skills/grill-design/SKILL.md' },
+        messages: [],
+      },
+    });
+
+    renderExistingInterview();
+
+    expect(screen.queryByTestId('interview-phase-bar')).not.toBeInTheDocument();
+  });
+
   it('shows a recoverable error when repository preparation fails', () => {
     (useChatThread as jest.Mock).mockReturnValue({
       data: {
@@ -846,7 +896,7 @@ describe('ExistingInterviewView — choice block submit gating', () => {
       messages: [choiceMessage],
     });
     renderExistingInterview();
-    expect(screen.queryByRole('button', { name: /Submit answers/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Submit answer/i })).not.toBeInTheDocument();
   });
 
   it('hides the "Submit answers" button when the interview is archived', () => {
@@ -860,7 +910,7 @@ describe('ExistingInterviewView — choice block submit gating', () => {
       messages: [choiceMessage],
     });
     renderExistingInterview();
-    expect(screen.queryByRole('button', { name: /Submit answers/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Submit answer/i })).not.toBeInTheDocument();
   });
 
   it('shows the "Submit answers" button when the interview is in_progress', () => {
@@ -874,7 +924,7 @@ describe('ExistingInterviewView — choice block submit gating', () => {
       messages: [choiceMessage],
     });
     renderExistingInterview();
-    expect(screen.getByRole('button', { name: /Submit answers/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Submit answer/i })).toBeInTheDocument();
   });
 });
 

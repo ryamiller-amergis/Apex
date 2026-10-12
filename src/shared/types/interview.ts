@@ -1,6 +1,7 @@
 import type { PrdReadinessOverride } from '../utils/prdReadiness';
 import type { ValidationOverrideAuditEntry } from '../utils/validationOverride';
 import type { EffortLevel } from './effort';
+import type { InterviewProfileSnapshot, InterviewStepMode } from './playbook';
 
 export type { PrdReadinessOverride };
 
@@ -41,6 +42,11 @@ export interface InterviewSummary {
 
 export interface Interview extends InterviewSummary {
   prds: PrdSummary[];
+  playbookRunId?: string | null;
+  playbookStepRunId?: string | null;
+  playbookInterviewMode?: InterviewStepMode | null;
+  playbookProfileKey?: string | null;
+  playbookProfileSnapshot?: InterviewProfileSnapshot | null;
 }
 
 export type PrdStatus = 'generating' | 'draft' | 'validating' | 'pending_review' | 'reviewer_approved' | 'approved' | 'revision_requested';
@@ -155,6 +161,81 @@ export interface CreateInterviewResponse {
   interviewId: string;
   threadId: string;
 }
+
+/** Design section names, in interview order. `key` is the stored JSON field. */
+export const INTERVIEW_BRIEF_SECTIONS = [
+  { key: 'problemAndOutcome', label: 'problem and outcome' },
+  { key: 'users', label: 'users' },
+  { key: 'scope', label: 'scope' },
+  { key: 'businessRules', label: 'business rules' },
+  { key: 'scenarios', label: 'scenarios' },
+  { key: 'acceptanceCriteria', label: 'acceptance criteria' },
+  { key: 'assumptions', label: 'assumptions' },
+  { key: 'unresolvedItems', label: 'unresolved items' },
+] as const;
+
+export type InterviewBriefSectionKey = (typeof INTERVIEW_BRIEF_SECTIONS)[number]['key'];
+
+export interface InterviewBriefSections {
+  problemAndOutcome: string;
+  users: string;
+  scope: string;
+  businessRules: string;
+  scenarios: string;
+  acceptanceCriteria: string;
+  assumptions: string;
+  unresolvedItems: string[];
+}
+
+export type InterviewBriefStatus = 'draft' | 'approved';
+
+export type InterviewSpecialistReviewStatus = 'succeeded' | 'failed';
+
+export interface InterviewBriefRecord {
+  id: string;
+  interviewId: string;
+  status: InterviewBriefStatus;
+  version: number;
+  sections: InterviewBriefSections;
+  approvedBy: string | null;
+  approvedAt: string | null;
+}
+
+export type GuidedInterviewStepPhase =
+  | 'discovery'
+  | 'delivery'
+  | 'delivery-choice'
+  | 'technical'
+  | 'technical-choice'
+  | 'complete';
+
+export const GUIDED_INTERVIEW_STEP_PHASES: readonly GuidedInterviewStepPhase[] = [
+  'discovery',
+  'delivery',
+  'delivery-choice',
+  'technical',
+  'technical-choice',
+  'complete',
+];
+
+export interface GuidedInterviewTurn {
+  phase: GuidedInterviewStepPhase;
+  question: number | null;
+  total: number | null;
+  topic: string;
+  /** Marker used when the answer is sufficient and the interview moves on. */
+  marker: string;
+  /**
+   * Marker for the one allowed follow-up on the topic just answered.
+   * Absent once that follow-up has been asked, and absent for the optional
+   * deeper Technical questions.
+   */
+  followUpMarker?: string;
+  instruction: string;
+}
+
+/** Discovery and Delivery read the application brief only; Technical may read known files. */
+export type InterviewRepositoryPhase = 'product' | 'technical';
 
 export interface CreatePrdRequest {
   model?: string;

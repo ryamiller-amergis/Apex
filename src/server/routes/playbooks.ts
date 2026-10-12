@@ -29,6 +29,7 @@ import {
   PlaybookDraftConflictError,
   PlaybookDraftNotFoundError,
   PlaybookVersionImmutableError,
+  PlaybookInterviewProfilePublishError,
   PlaybookVersionNotFoundError,
   PlaybookVersionTransitionError,
   createDefinition,
@@ -75,6 +76,12 @@ import {
   isProductionGateStepRun,
 } from '../services/playbookGateService';
 import { getUserPermissions } from '../services/rbacService';
+import {
+  PlaybookTemplateAlreadyPublishedError,
+  PlaybookTemplateInvalidError,
+  PlaybookTemplateNotFoundError,
+  installPlaybookTemplate,
+} from '../services/playbookTemplateService';
 
 const router = express.Router();
 
@@ -86,6 +93,10 @@ type RequestBody = Record<string, unknown>;
 
 function isNonBlankString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function isPlaybookGraph(value: unknown): value is {
@@ -144,10 +155,16 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
     return true;
   }
 
+  if (error instanceof PlaybookInterviewProfilePublishError || error instanceof PlaybookTemplateInvalidError) {
+    res.status(400).json({ error: error.message });
+    return true;
+  }
+
   if (
     error instanceof PlaybookLifecycleDefinitionNotFoundError ||
     error instanceof PlaybookDraftNotFoundError ||
-    error instanceof PlaybookVersionNotFoundError
+    error instanceof PlaybookVersionNotFoundError ||
+    error instanceof PlaybookTemplateNotFoundError
   ) {
     res.status(404).json({ error: error.message });
     return true;
@@ -157,6 +174,7 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
     error instanceof PlaybookDraftConflictError ||
     error instanceof PlaybookVersionImmutableError ||
     error instanceof PlaybookVersionTransitionError ||
+    error instanceof PlaybookTemplateAlreadyPublishedError ||
     isUniqueViolation(error)
   ) {
     res.status(409).json({
@@ -266,6 +284,40 @@ router.patch(
     }
     // @feature-flag:playbooks-production-adapters enabled-end
     // @feature-flag:playbooks-production-adapters end
+  },
+);
+
+router.post(
+  '/templates/:templateKey/install',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const enabled = await isFeatureEnabled('playbook-interview-step', {
+      userId: getUserId(req),
+      project,
+    });
+
+    // @feature-flag:playbook-interview-step start winner=enabled
+    if (!enabled) {
+      // @feature-flag:playbook-interview-step disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbook-interview-step disabled-end
+    }
+
+    // @feature-flag:playbook-interview-step enabled-start
+    try {
+      const installed = await installPlaybookTemplate({
+        project,
+        templateKey: req.params.templateKey,
+        createdByUserId: getUserId(req),
+      });
+      res.status(installed.created ? 201 : 200).json(installed.detail);
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+    // @feature-flag:playbook-interview-step enabled-end
+    // @feature-flag:playbook-interview-step end
   },
 );
 
@@ -382,13 +434,17 @@ router.post(
   '/definitions/:definitionId/publish',
   requirePermission('playbooks:author'),
   async (req: Request, res: Response): Promise<void> => {
-    const { project, expectedDraftUpdatedAt } = (req.body ?? {}) as RequestBody;
+    const { project, expectedDraftUpdatedAt, sampleRunInput } = (req.body ?? {}) as RequestBody;
     if (!isNonBlankString(project)) {
       res.status(400).json({ error: 'project is required' });
       return;
     }
     if (!isNonBlankString(expectedDraftUpdatedAt)) {
       res.status(400).json({ error: 'expectedDraftUpdatedAt is required' });
+      return;
+    }
+    if (sampleRunInput !== undefined && !isPlainRecord(sampleRunInput)) {
+      res.status(400).json({ error: 'sampleRunInput must be an object' });
       return;
     }
 
@@ -418,6 +474,7 @@ router.post(
         definitionId: req.params.definitionId,
         publishedByUserId,
         expectedDraftUpdatedAt,
+        ...(isPlainRecord(sampleRunInput) ? { sampleRunInput } : {}),
       });
       res.status(201).json(result);
     } catch (error) {
@@ -562,7 +619,7 @@ router.post(
   '/runs',
   requirePermission('playbooks:run'),
   async (req: Request, res: Response): Promise<void> => {
-    const { project, definitionId, definitionVersionId, versionPinReason } = (req.body ??
+    const { project, definitionId, definitionVersionId, versionPinReason, runInput } = (req.body ??
       {}) as RequestBody;
 
     if (typeof project !== 'string' || !project.trim()) {
@@ -589,6 +646,10 @@ router.post(
       res.status(400).json({ error: 'versionPinReason must be a non-blank string' });
       return;
     }
+    if (runInput !== undefined && !isPlainRecord(runInput)) {
+      res.status(400).json({ error: 'runInput must be an object' });
+      return;
+    }
 
     const initiatorUserId = getUserId(req);
     if (!initiatorUserId) {
@@ -604,6 +665,7 @@ router.post(
         ...(definitionVersionId !== undefined
           ? { definitionVersionId, versionPinReason: versionPinReason as string }
           : {}),
+        ...(isPlainRecord(runInput) ? { runInput } : {}),
         initiatorUserId,
         ...(spendAdmissionEnabled ? { spendAdmissionEnabled: true } : {}),
       });

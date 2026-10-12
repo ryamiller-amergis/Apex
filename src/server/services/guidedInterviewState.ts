@@ -1,0 +1,470 @@
+import fs from 'fs';
+import path from 'path';
+import type {
+  GuidedInterviewStepPhase,
+  GuidedInterviewTurn,
+  InterviewRepositoryPhase,
+} from '../../shared/types/interview';
+
+export type { GuidedInterviewStepPhase, GuidedInterviewTurn };
+
+export interface GuidedInterviewMessage {
+  role: string;
+  text: string;
+}
+
+export function usesGuidedInterview(skillPath: string | null | undefined): boolean {
+  if (!skillPath) return false;
+  return skillPath.replace(/\\/g, '/').toLowerCase().includes('grill-with-docs');
+}
+
+export function wrapGuidedInterviewPrompt(
+  promptText: string,
+  phase: InterviewRepositoryPhase,
+  brief: string,
+): string {
+  const rules = phase === 'product'
+    ? [
+        '# Application brief',
+        'This brief is the application context for Discovery and Delivery. It was prepared before this turn.',
+        'Repository search is closed. Do not call grep, glob, read, search_repo_code, get_skill_file, or list_repo_dir.',
+        'If the brief does not cover the question, ask the person or record the gap as unresolved.',
+      ]
+    : [
+        '# Technical phase',
+        'Repository search is closed. You may read at most two known files with get_skill_file.',
+        'Do not call grep, glob, or search_repo_code.',
+        'The application brief below is the product language for this interview.',
+      ];
+  return [...rules, '', brief, '', '# Continue the interview', promptText].join('\n');
+}
+
+/** Technical turns may read known files; every other step stays on the application brief. */
+export function guidedInterviewRepositoryPhase(
+  turn: GuidedInterviewTurn,
+): InterviewRepositoryPhase {
+  return turn.phase === 'technical' ? 'technical' : 'product';
+}
+
+const DISCOVERY_TOPICS = [
+  'Current situation, problem, and impact',
+  'Observable success criteria',
+  'Users and business rules',
+  'Release-one scope and boundaries',
+  'Concrete scenarios and exceptions',
+  'Discovery brief confirmation',
+] as const;
+
+const DELIVERY_TOPICS = [
+  'Actor and action confirmation',
+  'Failure and recovery behavior',
+  'Information visibility and sensitivity',
+  'Release-one dependencies and deferred scope',
+  'Delivery brief confirmation',
+] as const;
+
+const TECHNICAL_TOPICS = [
+  'Surface: frontend, backend, or both',
+  'Existing pattern to follow, extend, or replace',
+  'Data model and existing storage to extend',
+  'Performance bounds',
+  'Rollout and feature-flag behavior',
+] as const;
+
+const MARKER_RE =
+  /\[\[interview-phase:(discovery|delivery|technical):(done|stopped|skipped|wrapup|\d+)(?::(\d+))?(?::(followup))?\]\]/g;
+
+const DEEPER_TECHNICAL_QUESTIONS = 3;
+const DEEPER_TECHNICAL_TOTAL = TECHNICAL_TOPICS.length + DEEPER_TECHNICAL_QUESTIONS;
+
+function productTopicInstruction(
+  phase: 'discovery' | 'delivery',
+  question: number,
+  topic: string,
+): string {
+  const discoveryGuidance = [
+    'Ask for a recent concrete example of the current situation: what triggers it, what the person does today, what goes wrong, and who feels the impact. Start from the problem, not the proposed feature.',
+    'Define success early. Ask for the observable user or business outcome that would prove this change worked. Seek a measurable signal when one is practical, but do not invent a metric.',
+    'Use what is already known to identify the people involved and the business rules that govern their actions. Ask only for the most important missing actor or rule; do not repeat the success or scope question.',
+    'Summarize the likely release-one boundary from prior answers, including what is explicitly out. Ask the person to confirm or correct that boundary instead of offering competing solution bundles.',
+    'Ask for one concrete main-path or exception example that tests an agreed business rule. Do not introduce several unrelated edge cases or implementation failure modes.',
+    'Synthesize a short Discovery brief with the problem, affected users, observable success criteria, business rules, release-one scope, one or two examples, and unresolved items. Clearly distinguish stated facts from assumptions. Ask the person to confirm or correct the brief; do not present alternative requirement packages.',
+  ] as const;
+  const deliveryGuidance = [
+    'Carry the confirmed Discovery brief forward. Summarize the actor-to-action rules already established and ask only for corrections or one missing action. Do not ask the person to repeat who the users are.',
+    'Ask what the person should see and be able to do when the main action cannot be completed. Focus on the business outcome and recovery path, not technical errors.',
+    'Summarize who can see the information already discussed, then ask what must be hidden or limited and from whom. Ask one visibility decision only.',
+    'Summarize the release-one slice and deferred work already established. Ask about one unresolved business dependency or boundary that could prevent that release from delivering the success criteria.',
+    'Synthesize a short Delivery brief with actor/action rules, failure and recovery behavior, information visibility, release-one dependencies, deferred scope, acceptance outcomes, and unresolved items. Ask the person to confirm or correct the brief. Do not ask which artifacts to generate; project configuration decides prototypes, test cases, and design documents.',
+  ] as const;
+  const guidance = phase === 'discovery'
+    ? discoveryGuidance[question - 1]
+    : deliveryGuidance[question - 1];
+  return [
+    `Ask exactly one question about: ${topic}.`,
+    guidance,
+    'Write for a Business Analyst or Product Owner and describe observable behavior and outcomes, not how the feature is built.',
+  ].filter(Boolean).join(' ');
+}
+
+function numberedTurn(
+  phase: 'discovery' | 'delivery' | 'technical',
+  question: number,
+): GuidedInterviewTurn {
+  const topics =
+    phase === 'discovery'
+      ? DISCOVERY_TOPICS
+      : phase === 'delivery'
+        ? DELIVERY_TOPICS
+        : TECHNICAL_TOPICS;
+  const deeper = phase === 'technical' && question > TECHNICAL_TOPICS.length;
+  const total = deeper ? DEEPER_TECHNICAL_TOTAL : topics.length;
+  const topic =
+    topics[question - 1] ??
+    'The highest-impact technical decision still unresolved';
+  const marker = `[[interview-phase:${phase}:${question}:${total}]]`;
+  const instruction = phase === 'technical'
+    ? deeper
+      ? `Ask exactly one question about: ${topic}. Pick a decision that changes how the feature is built, not an edge-case state rule. Implementation detail is allowed in this phase.`
+      : `Ask exactly one question about: ${topic}. Implementation detail is allowed in this phase.`
+    : productTopicInstruction(phase, question, topic);
+  return {
+    phase,
+    question,
+    total,
+    topic,
+    marker,
+    instruction,
+  };
+}
+
+function deliveryChoiceTurn(): GuidedInterviewTurn {
+  return {
+    phase: 'delivery-choice',
+    question: null,
+    total: null,
+    topic: 'Choose Technical or Generate PRD',
+    marker: '[[interview-phase:delivery:done]]',
+    instruction:
+      'Acknowledge the confirmed Discovery and Delivery brief in one sentence, then ask only this choice: a. Continue to technical decisions; b. Generate the PRD.',
+  };
+}
+
+function technicalWrapUpTurn(): GuidedInterviewTurn {
+  return {
+    phase: 'technical-choice',
+    question: null,
+    total: null,
+    topic: 'Finish Technical or go deeper',
+    marker: '[[interview-phase:technical:wrapup]]',
+    instruction: [
+      'Briefly recap the Technical decisions.',
+      'Then list, in one short bulleted section titled "Left for the design doc", any edge cases or state rules you noticed but did not ask about.',
+      `Then ask only this choice: a. Finish Technical; b. Go deeper (up to ${DEEPER_TECHNICAL_QUESTIONS} more questions).`,
+    ].join(' '),
+  };
+}
+
+function technicalDoneTurn(): GuidedInterviewTurn {
+  return completedTurn(
+    '[[interview-phase:technical:done]]',
+    'Write the transcript. Record every edge case not asked about under Unresolved items as "decide in design doc". Tell the person they can generate the PRD.',
+  );
+}
+
+function completedTurn(marker: string, instruction: string): GuidedInterviewTurn {
+  return {
+    phase: 'complete',
+    question: null,
+    total: null,
+    topic: 'Close the interview',
+    marker,
+    instruction,
+  };
+}
+
+function lastMarker(messages: GuidedInterviewMessage[]): {
+  phase: 'discovery' | 'delivery' | 'technical';
+  token: string;
+  total: number | null;
+  followUp: boolean;
+} | null {
+  let result: {
+    phase: 'discovery' | 'delivery' | 'technical';
+    token: string;
+    total: number | null;
+    followUp: boolean;
+  } | null = null;
+  for (const message of messages) {
+    if (message.role !== 'agent') continue;
+    for (const match of message.text.matchAll(MARKER_RE)) {
+      result = {
+        phase: match[1] as 'discovery' | 'delivery' | 'technical',
+        token: match[2],
+        total: match[3] ? Number(match[3]) : null,
+        followUp: match[4] === 'followup',
+      };
+    }
+  }
+  return result;
+}
+
+function withOptionalFollowUp(
+  current: GuidedInterviewTurn,
+  advance: GuidedInterviewTurn,
+): GuidedInterviewTurn {
+  const followUpMarker = `${current.marker.slice(0, -2)}:followup]]`;
+  return {
+    ...advance,
+    phase: current.phase,
+    instruction: [
+      `The person just answered topic ${current.question} of ${current.total}: ${current.topic}.`,
+      'If that answer is clear enough to record, move on and do not add a follow-up.',
+      advance.instruction,
+      'If it is unclear, contradictory, or reveals an important exception, ask one follow-up about this same topic and nothing else.',
+      'A topic gets at most one follow-up. Do not ask a follow-up when the answer is already sufficient.',
+    ].join(' '),
+    followUpMarker,
+  };
+}
+
+function choseTechnical(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (/^(a|option a)\b/.test(normalized)) return true;
+  return normalized.includes('continue') && normalized.includes('technical');
+}
+
+function wantsPrd(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return (
+    /^(b|option b)\b/.test(normalized) ||
+    normalized.includes('generate prd') ||
+    normalized.includes('generate the prd')
+  );
+}
+
+function wantsDeeperTechnical(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return /^(b|option b)\b/.test(normalized) || normalized.includes('deeper');
+}
+
+function wantsToFinishTechnical(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return (
+    /^(a|option a)\b/.test(normalized) ||
+    normalized.includes('finish') ||
+    wantsPrd(text)
+  );
+}
+
+function wantsToStop(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return (
+    normalized === 'done' ||
+    normalized.includes('stop the interview') ||
+    normalized.includes('finish the interview')
+  );
+}
+
+/**
+ * Selects the turn the model may produce. The latest valid marker is the
+ * durable record of the topic that was asked. Each numbered topic allows one
+ * follow-up, then the next topic. Technical ends at a wrap-up choice after its
+ * fixed topics; choosing to go deeper allows a few more questions, then ends.
+ */
+export function deriveGuidedInterviewTurn(
+  messagesBeforeCurrentUser: GuidedInterviewMessage[],
+  currentUserText: string,
+): GuidedInterviewTurn {
+  const marker = lastMarker(messagesBeforeCurrentUser);
+  if (!marker) return numberedTurn('discovery', 1);
+
+  if (wantsToStop(currentUserText)) {
+    const stoppedPhase =
+      marker.phase === 'technical' ? 'technical' : marker.phase;
+    return completedTurn(
+      `[[interview-phase:${stoppedPhase}:stopped]]`,
+      'Mark all remaining topics unresolved, write the transcript, and tell the person they can generate the PRD.',
+    );
+  }
+
+  if (marker.token === 'stopped' || marker.token === 'skipped') {
+    return completedTurn(
+      `[[interview-phase:${marker.phase}:${marker.token}]]`,
+      'The interview is closed. Do not ask another question.',
+    );
+  }
+  if (marker.phase === 'technical' && marker.token === 'done') {
+    return completedTurn(
+      '[[interview-phase:technical:done]]',
+      'Write the transcript and tell the person they can generate the PRD.',
+    );
+  }
+  if (marker.phase === 'technical' && marker.token === 'wrapup') {
+    if (wantsDeeperTechnical(currentUserText)) {
+      return numberedTurn('technical', TECHNICAL_TOPICS.length + 1);
+    }
+    if (wantsToFinishTechnical(currentUserText)) return technicalDoneTurn();
+    return technicalWrapUpTurn();
+  }
+  if (marker.phase === 'delivery' && marker.token === 'done') {
+    if (choseTechnical(currentUserText)) return numberedTurn('technical', 1);
+    if (wantsPrd(currentUserText)) {
+      return completedTurn(
+        '[[interview-phase:technical:skipped]]',
+        'Leave Technical as unresolved, write the transcript, and tell the person to use Generate PRD.',
+      );
+    }
+    return deliveryChoiceTurn();
+  }
+
+  const question = Number(marker.token);
+  if (!Number.isInteger(question)) return numberedTurn('discovery', 1);
+
+  if (marker.phase === 'technical') {
+    if (marker.total === DEEPER_TECHNICAL_TOTAL) {
+      return question < DEEPER_TECHNICAL_TOTAL
+        ? numberedTurn('technical', question + 1)
+        : technicalDoneTurn();
+    }
+    // Older open-ended interviews have no total; past the fixed topics they wrap up.
+    if (question > TECHNICAL_TOPICS.length) return technicalWrapUpTurn();
+  }
+
+  const advance = marker.phase === 'discovery'
+    ? (question < DISCOVERY_TOPICS.length
+      ? numberedTurn('discovery', question + 1)
+      : numberedTurn('delivery', 1))
+    : marker.phase === 'delivery'
+      ? (question < DELIVERY_TOPICS.length
+        ? numberedTurn('delivery', question + 1)
+        : deliveryChoiceTurn())
+      : question < TECHNICAL_TOPICS.length
+        ? numberedTurn('technical', question + 1)
+        : technicalWrapUpTurn();
+
+  if (!marker.followUp) {
+    return withOptionalFollowUp(numberedTurn(marker.phase, question), advance);
+  }
+  return advance;
+}
+
+function transcriptExcerpt(messages: GuidedInterviewMessage[]): string {
+  const relevant = messages.filter(
+    (message) => message.role === 'user' || message.role === 'agent',
+  );
+  const parts = relevant.map((message) => {
+    const text =
+      message.text.length > 2_500
+        ? `${message.text.slice(0, 2_500).trimEnd()}\n[message truncated]`
+        : message.text;
+    return `### ${message.role === 'agent' ? 'Interviewer' : 'Person'}\n${text}`;
+  });
+  let excerpt = parts.join('\n\n');
+  if (excerpt.length > 20_000) {
+    excerpt = `[Earlier messages omitted]\n\n${excerpt.slice(-20_000)}`;
+  }
+  return excerpt || 'No prior Q&A. The current user message describes the feature.';
+}
+
+export function buildGuidedInterviewTurnPrompt(
+  messagesBeforeCurrentUser: GuidedInterviewMessage[],
+  currentUserPrompt: string,
+  turn: GuidedInterviewTurn,
+): string {
+  return [
+    '# Server-controlled interview turn',
+    '',
+    `Phase: ${turn.phase}`,
+    `Topic: ${turn.topic}`,
+    turn.followUpMarker
+      ? `First line when the answer is sufficient: ${turn.marker}`
+      : `Required first line: ${turn.marker}`,
+    ...(turn.followUpMarker
+      ? [`First line when one follow-up is needed: ${turn.followUpMarker}`]
+      : []),
+    '',
+    turn.instruction,
+    'Ask exactly one question and then stop.',
+    ...(turn.phase === 'technical'
+      ? []
+      : [
+          'This turn is for a Business Analyst or Product Owner.',
+          'Use the words a person would use for what they can see and do.',
+          'Do not mention persistence, CRUD, databases, APIs, schemas, MCP, skills, agent context, routes, components, endpoints, or permission keys.',
+          'Use only product names established by the application brief or prior Q&A. Do not import screen names from another project.',
+          'Use a broad, neutral question before narrowing. Do not lead with a proposed solution or a list of answer packages.',
+          'Prefer an open question about a real example. Use choices only to confirm or narrow a decision already supported by the prior Q&A or application brief.',
+          'If choices are needed, each choice must decide one thing, remain mutually exclusive, and use one short plain sentence without markdown bold.',
+          'If the prior Q&A already answers this topic, state the concise recommendation and offer Confirm, Change, and Skip — decide later.',
+          'End every numbered Discovery or Delivery topic with the literal option "Skip — decide later".',
+          'Never turn an inference or assumption into a confirmed requirement. Name it as an assumption in a confirmation brief.',
+        ]),
+    'Do not combine topics, add quick clarifications, preview later questions, or renumber the topic.',
+    'Do not reopen a decision already recorded below.',
+    'The Q&A below is authoritative. Never claim that prior context or choices are missing.',
+    turn.followUpMarker
+      ? 'Use exactly one of the two first lines above. The server and interview UI use it to record the turn.'
+      : 'Use the exact required first line. The server and interview UI use it to advance the state.',
+    '',
+    '# Prior interview Q&A',
+    '',
+    transcriptExcerpt(messagesBeforeCurrentUser),
+    '',
+    '# Current user message',
+    '',
+    currentUserPrompt,
+  ].join('\n');
+}
+
+export function normalizeGuidedInterviewResponse(
+  text: string,
+  turn: GuidedInterviewTurn,
+): string {
+  let withoutMarkers = text
+    .replace(
+      /\[\[interview-phase:(?:discovery|delivery|technical):(?:done|stopped|skipped|wrapup|\d+)(?::\d+)?(?::followup)?\]\][ \t]*\n?/g,
+      '',
+    )
+    .trimStart();
+  if (
+    (turn.phase === 'discovery' || turn.phase === 'delivery') &&
+    turn.question != null &&
+    !/skip\s*[—-]\s*decide later/i.test(withoutMarkers)
+  ) {
+    withoutMarkers = `${withoutMarkers.trimEnd()}\n\nSkip — decide later`;
+  }
+  const marker = turn.followUpMarker && text.includes(turn.followUpMarker)
+    ? turn.followUpMarker
+    : turn.marker;
+  return `${marker}\n\n${withoutMarkers}`;
+}
+
+export function writeGuidedInterviewState(
+  workspaceDir: string,
+  turn: GuidedInterviewTurn,
+): void {
+  const statePath = path.join(
+    workspaceDir,
+    '.ai-pilot',
+    'guided-interview-state.json',
+  );
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  fs.writeFileSync(
+    statePath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        phase: turn.phase,
+        question: turn.question,
+        total: turn.total,
+        topic: turn.topic,
+        expectedMarker: turn.marker,
+        followUpMarker: turn.followUpMarker ?? null,
+        updatedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}

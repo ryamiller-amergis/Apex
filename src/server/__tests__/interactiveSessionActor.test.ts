@@ -672,6 +672,86 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     expect(dispose).not.toHaveBeenCalled();
   });
 
+  it('marks guided interview replies and rebuilds the Agent when the phase changes', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const acquireDurableAgent = jest.fn(async (bootstrap, checkout) => ({
+      mode: 'recreated' as const,
+      handle: {
+        ...makeAgentHandle({
+          tokens: ['What happens today?'],
+          agentId: 'agent-1',
+          workspaceRef: checkout.workspacePath,
+        }),
+        interviewPhase: bootstrap.specification.guidedInterview?.phase ?? null,
+      },
+    }));
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(),
+      acquireDurableAgent,
+      materializeWorkspace: async (_b, destination) => ({ workspacePath: destination }),
+      uploadAttemptArtifacts: async () => ({ container: 'artifacts', key: 'manifest.json' }),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+    });
+    const guidedTurn = (phase: 'product' | 'technical') => {
+      const base = makeDurableBootstrap();
+      return {
+        ...base,
+        specification: {
+          ...base.specification,
+          workflowClass: 'interview' as const,
+          guidedInterview: {
+            phase,
+            turn: {
+              phase: phase === 'product' ? ('discovery' as const) : ('technical' as const),
+              question: 1,
+              total: phase === 'product' ? 6 : 5,
+              topic: 'Topic',
+              marker: phase === 'product'
+                ? '[[interview-phase:discovery:1:6]]'
+                : '[[interview-phase:technical:1:5]]',
+              instruction: 'Ask one question.',
+            },
+          },
+        },
+      };
+    };
+
+    await actor.handleDurableTurn({ threadId: THREAD_ID, bootstrap: guidedTurn('product') });
+    await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: {
+        ...guidedTurn('product'),
+        attemptId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        dispatchMessageId: 'dispatch-durable-2',
+        runId: 'run-durable-2',
+      },
+    });
+    await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: {
+        ...guidedTurn('technical'),
+        attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        dispatchMessageId: 'dispatch-durable-3',
+        runId: 'run-durable-3',
+      },
+    });
+
+    expect(acquireDurableAgent).toHaveBeenCalledTimes(2);
+    const replies = posted.flatMap((body) =>
+      body.kind === 'progress' && body.event?.type === 'message'
+        ? [body.event.message.text]
+        : [],
+    );
+    expect(replies[0]).toBe(
+      '[[interview-phase:discovery:1:6]]\n\nWhat happens today?\n\nSkip — decide later',
+    );
+    expect(replies[2]).toBe('[[interview-phase:technical:1:5]]\n\nWhat happens today?');
+  });
+
   describe('idle thread workspaces', () => {
     const OTHER_THREAD_ID = '10000000-0000-4000-8000-000000000009';
 

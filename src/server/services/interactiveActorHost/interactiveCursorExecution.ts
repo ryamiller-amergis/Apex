@@ -18,12 +18,14 @@ import type {
   McpServerConfig,
 } from '@cursor/sdk/dist/cjs/options.js';
 import type { EffortLevel } from '../../../shared/types/effort';
+import type { InterviewRepositoryPhase } from '../../../shared/types/interview';
 import type { RepoReader } from '../../../shared/types/repoReader';
 import type {
   WorkerCursorExecution,
   WorkerCursorExecutionRun,
 } from '../aiRunsWorker/cursorExecution';
 import { createNativeReadTools } from '../nativeReadToolAdapter';
+import { guidedInterviewRepositoryTools } from '../interviewGroundingPolicy';
 import { buildCursorModelSelection } from '../agentEffortResolver';
 
 /**
@@ -43,6 +45,8 @@ export interface InteractiveCursorAgentHandle {
   agentId: string | null;
   model: string;
   workspaceRef: string;
+  /** Guided interview phase the agent's repository tools were built for. */
+  interviewPhase?: InterviewRepositoryPhase | null;
   send(
     prompt: string,
     options?: { onDelta?(update: unknown): Promise<void> | void },
@@ -63,6 +67,8 @@ export type InteractiveCursorAcquireInput = Readonly<{
   model: string;
   effort: EffortLevel | null;
   workspaceRef: string;
+  /** Null outside guided interviews; selects the phase's repository tools. */
+  interviewPhase: InterviewRepositoryPhase | null;
 }>;
 
 export type InteractiveCursorAcquireOptions = Readonly<{
@@ -85,6 +91,7 @@ function wrapHandle(
     agentId,
     model: input.model,
     workspaceRef: input.workspaceRef,
+    interviewPhase: input.interviewPhase,
     async send(
       prompt: string,
       options?: { onDelta?(update: unknown): Promise<void> | void },
@@ -120,7 +127,12 @@ export async function acquireInteractiveCursorAgent(
   const local = {
     cwd: input.workspaceRef,
     settingSources: [],
-    customTools: createNativeReadTools(checkout),
+    ...(input.interviewPhase
+      ? {
+          customTools: guidedInterviewRepositoryTools(input.interviewPhase, checkout),
+          sandboxOptions: { enabled: false },
+        }
+      : { customTools: createNativeReadTools(checkout) }),
   } satisfies LocalAgentOptions;
   const agentOptions = {
     apiKey,

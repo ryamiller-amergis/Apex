@@ -337,6 +337,99 @@ describe('createInterview', () => {
   });
 });
 
+describe('VT-BRIEF-2 — createInterview persists optional Playbook linkage', () => {
+  const snapshot = {
+    mode: 'human_led' as const,
+    key: 'ba-discovery',
+    skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+    model: 'claude-sonnet',
+    effort: 'high' as const,
+    wantsDesignPrototype: false,
+    wantsTestCases: true,
+  };
+
+  beforeEach(() => jest.clearAllMocks());
+
+  function mockInsert() {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'interview-playbook' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+    return valuesMock;
+  }
+
+  it('VT-BRIEF-2 stores the run, step run, mode, profile key, and profile snapshot', async () => {
+    const valuesMock = mockInsert();
+
+    const result = await createInterview({
+      userId: 'user-1',
+      project: 'Apex',
+      repo: 'org/apex',
+      title: 'BA discovery',
+      chatThreadId: 'thread-abc',
+      playbookRunId: 'run-1',
+      playbookStepRunId: 'step-run-1',
+      playbookInterviewMode: 'human_led',
+      playbookProfileKey: 'ba-discovery',
+      playbookProfileSnapshot: snapshot,
+    });
+
+    expect(result).toEqual({ interviewId: 'interview-playbook', threadId: 'thread-abc' });
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorId: 'user-1',
+        project: 'Apex',
+        chatThreadId: 'thread-abc',
+        status: 'in_progress',
+        playbookRunId: 'run-1',
+        playbookStepRunId: 'step-run-1',
+        playbookInterviewMode: 'human_led',
+        playbookProfileKey: 'ba-discovery',
+        playbookProfileSnapshot: snapshot,
+      }),
+    );
+  });
+
+  it('VT-BRIEF-2 leaves Playbook columns null for an ordinary interview', async () => {
+    const valuesMock = mockInsert();
+
+    await createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      chatThreadId: 'thread-abc',
+      title: 'Sprint Planning',
+    });
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Sprint Planning',
+        status: 'in_progress',
+        playbookRunId: null,
+        playbookStepRunId: null,
+        playbookInterviewMode: null,
+        playbookProfileKey: null,
+        playbookProfileSnapshot: null,
+      }),
+    );
+  });
+
+  it('VT-BRIEF-2 rejects a partial Playbook snapshot before inserting', async () => {
+    const valuesMock = mockInsert();
+
+    await expect(
+      createInterview({
+        userId: 'user-1',
+        project: 'Apex',
+        repo: 'org/apex',
+        chatThreadId: 'thread-abc',
+        playbookRunId: 'run-1',
+      }),
+    ).rejects.toThrow(/Playbook interview linkage/);
+
+    expect(valuesMock).not.toHaveBeenCalled();
+  });
+});
+
 // ── listInterviews ─────────────────────────────────────────────────────────────
 
 describe('listInterviews', () => {

@@ -154,6 +154,13 @@ jest.mock('../services/groupService', () => ({
 
 const mockResolveThreadAccess = jest.fn();
 const mockCanWriteThread = jest.fn();
+const mockPrepareAssistedInterviewTurn = jest.fn().mockResolvedValue({ internalContext: null });
+const mockPrepareAutonomousInterviewTurn = jest.fn().mockResolvedValue({ internalContext: null });
+
+jest.mock('../services/interviewOrchestratorService', () => ({
+  prepareAssistedInterviewTurn: (...args: unknown[]) => mockPrepareAssistedInterviewTurn(...args),
+  prepareAutonomousInterviewTurn: (...args: unknown[]) => mockPrepareAutonomousInterviewTurn(...args),
+}));
 
 jest.mock('../services/threadAccessService', () => ({
   resolveThreadAccess: (...args: unknown[]) => mockResolveThreadAccess(...args),
@@ -1277,6 +1284,115 @@ describe('POST /api/chat/threads/:id/messages — cached grounding delegation', 
   });
 });
 
+describe('VT-ASSIST-6 — assisted messages prepare specialist context before sendMessage', () => {
+  const threadId = 'assisted-interview-thread';
+  const baText = 'Cashiers need a faster close.';
+  const idleThread = {
+    id: threadId,
+    userId: 'user-1',
+    kickoff: {
+      project: 'Apex',
+      repo: 'AI-Pilot',
+      skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+    },
+    messages: [],
+    status: 'idle',
+    workspaceDir: '/tmp/ws',
+    flagged: false,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    lastActivityAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  function threadWithMode(mode: 'human_led' | 'multi_agent_assisted' | null) {
+    return {
+      ...idleThread,
+      kickoff: {
+        ...idleThread.kickoff,
+        ...(mode
+          ? { playbookInterview: { snapshot: { mode } } }
+          : {}),
+      },
+    };
+  }
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+    mockPrepareAssistedInterviewTurn.mockResolvedValue({ internalContext: null });
+    mockPrepareAutonomousInterviewTurn.mockResolvedValue({ internalContext: null });
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: idleThread,
+      access: 'owner',
+    });
+    mockCanWriteThread.mockResolvedValue(true);
+    mockChatService.sendMessage.mockResolvedValue({ route: 'legacy' });
+  });
+
+  it('prepares a multi-agent interview and sends the BA text with internal context', async () => {
+    const internalContext = [
+      '<<<INTERNAL_SPECIALIST_CONTEXT>>>',
+      '{"findings":["Close is slow"]}',
+      '<<<END_INTERNAL_SPECIALIST_CONTEXT>>>',
+    ].join('\n');
+    mockPrepareAutonomousInterviewTurn.mockResolvedValue({ internalContext });
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: threadWithMode('multi_agent_assisted'),
+      access: 'owner',
+    });
+
+    const res = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: baText });
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ ok: true });
+    expect(mockPrepareAutonomousInterviewTurn).toHaveBeenCalledWith({
+      mainThreadId: threadId,
+      answerText: baText,
+    });
+    expect(mockPrepareAssistedInterviewTurn).not.toHaveBeenCalled();
+    expect(mockChatService.sendMessage).toHaveBeenCalledWith(
+      threadId,
+      baText,
+      undefined,
+      [],
+      expect.objectContaining({
+        internalContext,
+        turnIdPolicy: 'required',
+        legacyCompletion: 'detach',
+      }),
+    );
+  });
+
+  it('sends an ordinary or human-led message immediately and does not prepare a review', async () => {
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: threadWithMode('human_led'),
+      access: 'owner',
+    });
+
+    const res = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: baText });
+
+    expect(res.status).toBe(202);
+    expect(mockPrepareAutonomousInterviewTurn).not.toHaveBeenCalled();
+    expect(mockPrepareAssistedInterviewTurn).not.toHaveBeenCalled();
+    expect(mockChatService.sendMessage).toHaveBeenCalledWith(
+      threadId,
+      baText,
+      undefined,
+      [],
+      expect.objectContaining({
+        turnSkill: undefined,
+        turnIdPolicy: 'required',
+        legacyCompletion: 'detach',
+      }),
+    );
+    const sentOptions = mockChatService.sendMessage.mock.calls[0]?.[4] as { internalContext?: string } | undefined;
+    expect(sentOptions?.internalContext).toBeUndefined();
+  });
+});
+
 describe('POST /api/chat/threads/:id/messages — durable admission boundary', () => {
   const threadId = '10000000-0000-4000-8000-000000000001';
   const turnId = '20000000-0000-4000-8000-000000000001';
@@ -1598,5 +1714,6 @@ describe('POST /api/chat/threads/:id/runs/:runId/retry', () => {
       userId: 'user-1',
       toolGrant: undefined,
     });
+
   });
 });
