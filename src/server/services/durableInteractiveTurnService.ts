@@ -10,6 +10,7 @@ import type { EffortLevel } from '../../shared/types/effort';
 import type { InteractiveWorkflowClass } from '../../shared/types/interactiveWorkflow';
 import type {
   DurableInteractiveTurnSpecification,
+  FrozenGuidedInterview,
   FrozenInteractiveMcpDescriptor,
   FrozenInteractiveToolGrant,
   InteractiveCapability,
@@ -63,8 +64,19 @@ import {
   encryptInteractiveToolGrant,
   type EncryptInteractiveToolGrantInput,
 } from './interactiveToolGrantCrypto';
+import { readInterviewBaBrief } from './interviewBaBrief';
+import {
+  buildGuidedInterviewTurnPrompt,
+  deriveGuidedInterviewTurn,
+  guidedInterviewRepositoryPhase,
+  usesGuidedInterview,
+  wrapGuidedInterviewPrompt,
+} from './guidedInterviewState';
+import { getSkillFile } from './skillCatalogFacade';
 import { db } from '../db/drizzle';
 import { sql } from 'drizzle-orm';
+
+const PLAYBOOK_INTERVIEW_STEP_FLAG = 'playbook-interview-step';
 
 const DEFAULT_MODEL = 'composer-2.5';
 const MAX_TRANSCRIPT_CHARS = 120_000;
@@ -234,6 +246,11 @@ type ServiceDependencies = Readonly<{
   loadRetrySource: (
     input: Readonly<{ threadId: string; runId: string }>,
   ) => Promise<DurableInteractiveRetrySource | null>;
+  isGuidedInterviewEnabled: (
+    input: Readonly<{ userId: string; project: string }>,
+  ) => Promise<boolean>;
+  /** Raw `context.md` for the application brief when the grounded read had none. */
+  loadInterviewContext: (thread: ChatThread) => Promise<string | null>;
   now: () => Date;
 }>;
 
@@ -1045,6 +1062,48 @@ export async function resolveDurableMaxviewCapability(
   return dependencies.isConfigured() ? 'enabled' : 'unavailable';
 }
 
+/**
+ * Guided interviews run on V2 only where the Playbook interview step is on;
+ * elsewhere V2 interviews keep the open-ended prompt.
+ */
+async function defaultIsGuidedInterviewEnabled(
+  input: Readonly<{ userId: string; project: string }>,
+): Promise<boolean> {
+  try {
+    return await isFeatureEnabled(PLAYBOOK_INTERVIEW_STEP_FLAG, input);
+  } catch {
+    return false;
+  }
+}
+
+async function defaultLoadInterviewContext(
+  thread: ChatThread,
+): Promise<string | null> {
+  const { kickoff } = thread;
+  return getSkillFile(
+    kickoff.project,
+    kickoff.repo,
+    'context.md',
+    kickoff.skillBranch ?? kickoff.branch ?? 'main',
+    kickoff.skillProvider ?? 'ado',
+  );
+}
+
+async function resolveGuidedInterview(
+  thread: ChatThread,
+  input: Readonly<{ userId: string; text: string }>,
+  deps: ServiceDependencies,
+): Promise<FrozenGuidedInterview | null> {
+  if (!usesGuidedInterview(thread.kickoff.skillPath)) return null;
+  const enabled = await deps.isGuidedInterviewEnabled({
+    userId: input.userId,
+    project: thread.kickoff.project,
+  });
+  if (!enabled) return null;
+  const turn = deriveGuidedInterviewTurn(thread.messages, input.text);
+  return { phase: guidedInterviewRepositoryPhase(turn), turn };
+}
+
 let resolvedDefaultAttachmentStore: InteractiveAttachmentStore | null = null;
 
 const lazyDefaultAttachmentStore: InteractiveAttachmentStore = {
@@ -1069,6 +1128,8 @@ function defaultDependencies(): ServiceDependencies {
     resolveDeadlines: resolveInteractiveDeadlinePolicy,
     encryptToolGrant: encryptInteractiveToolGrant,
     loadRetrySource: loadDurableInteractiveRetrySource,
+    isGuidedInterviewEnabled: defaultIsGuidedInterviewEnabled,
+    loadInterviewContext: defaultLoadInterviewContext,
     now: () => new Date(),
   };
 }
@@ -1205,7 +1266,24 @@ export function createDurableInteractiveTurnService(
         grounding && deps.loadRepositoryContext
           ? await deps.loadRepositoryContext(grounding).catch(() => null)
           : null;
-      const repositoryContextPack = repositoryContext
+      const guidedInterview = await resolveGuidedInterview(thread, input, deps);
+      // Discovery and Delivery carry the application brief instead of AGENTS.md.
+      const productPhaseInterview = guidedInterview?.phase === 'product';
+      const promptText = guidedInterview
+        ? wrapGuidedInterviewPrompt(
+            buildGuidedInterviewTurnPrompt(
+              thread.messages,
+              input.text,
+              guidedInterview.turn,
+            ),
+            guidedInterview.phase,
+            await readInterviewBaBrief(async () =>
+              repositoryContext?.contextContent ??
+              deps.loadInterviewContext(thread),
+            ),
+          )
+        : input.text;
+      const repositoryContextPack = repositoryContext && !productPhaseInterview
         ? buildRepositoryContextPack({
             project: thread.kickoff.project,
             repo: thread.kickoff.repo,
@@ -1275,7 +1353,7 @@ export function createDurableInteractiveTurnService(
       const messageText =
         input.text.trim() || 'Uploaded files for context.';
       const firstTurnPrompt = currentPrompt(
-        input.text,
+        promptText,
         skill,
         frozenSkill,
         immutableAttachments,
@@ -1288,13 +1366,14 @@ export function createDurableInteractiveTurnService(
       // restart their procedure and repeat answered questions.
       const threadSkillAlreadyLoaded =
         !input.turnSkill && transcript.some((entry) => entry.role === 'agent');
+      // A guided turn already carries the full prior Q&A.
       const preparedCurrentPrompt = threadSkillAlreadyLoaded
         ? currentPrompt(
-            input.text,
+            promptText,
             null,
             null,
             immutableAttachments,
-            answersSoFar(transcript, input.workflowClass),
+            guidedInterview ? [] : answersSoFar(transcript, input.workflowClass),
             'session',
             input.internalContext,
           )
@@ -1327,6 +1406,9 @@ export function createDurableInteractiveTurnService(
           hasAdoCapability,
           maxviewEnabled,
           grounding,
+        ).filter(
+          (descriptor) =>
+            !productPhaseInterview || descriptor.serverName !== 'ado-skills',
         ),
         toolGrant,
         currentPrompt: preparedCurrentPrompt,
@@ -1337,6 +1419,7 @@ export function createDurableInteractiveTurnService(
           repositoryContextPack,
         }),
         deadlines,
+        ...(guidedInterview ? { guidedInterview } : {}),
       };
       const admitted = await deps.repository.admit({
         turnId: input.turnId,

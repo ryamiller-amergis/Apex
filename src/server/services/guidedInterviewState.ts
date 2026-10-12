@@ -1,33 +1,49 @@
 import fs from 'fs';
 import path from 'path';
+import type {
+  GuidedInterviewStepPhase,
+  GuidedInterviewTurn,
+  InterviewRepositoryPhase,
+} from '../../shared/types/interview';
 
-export type GuidedInterviewStepPhase =
-  | 'discovery'
-  | 'delivery'
-  | 'delivery-choice'
-  | 'technical'
-  | 'technical-choice'
-  | 'complete';
+export type { GuidedInterviewStepPhase, GuidedInterviewTurn };
 
 export interface GuidedInterviewMessage {
   role: string;
   text: string;
 }
 
-export interface GuidedInterviewTurn {
-  phase: GuidedInterviewStepPhase;
-  question: number | null;
-  total: number | null;
-  topic: string;
-  /** Marker used when the answer is sufficient and the interview moves on. */
-  marker: string;
-  /**
-   * Marker for the one allowed follow-up on the topic just answered.
-   * Absent once that follow-up has been asked, and absent for the optional
-   * deeper Technical questions.
-   */
-  followUpMarker?: string;
-  instruction: string;
+export function usesGuidedInterview(skillPath: string | null | undefined): boolean {
+  if (!skillPath) return false;
+  return skillPath.replace(/\\/g, '/').toLowerCase().includes('grill-with-docs');
+}
+
+export function wrapGuidedInterviewPrompt(
+  promptText: string,
+  phase: InterviewRepositoryPhase,
+  brief: string,
+): string {
+  const rules = phase === 'product'
+    ? [
+        '# Application brief',
+        'This brief is the application context for Discovery and Delivery. It was prepared before this turn.',
+        'Repository search is closed. Do not call grep, glob, read, search_repo_code, get_skill_file, or list_repo_dir.',
+        'If the brief does not cover the question, ask the person or record the gap as unresolved.',
+      ]
+    : [
+        '# Technical phase',
+        'Repository search is closed. You may read at most two known files with get_skill_file.',
+        'Do not call grep, glob, or search_repo_code.',
+        'The application brief below is the product language for this interview.',
+      ];
+  return [...rules, '', brief, '', '# Continue the interview', promptText].join('\n');
+}
+
+/** Technical turns may read known files; every other step stays on the application brief. */
+export function guidedInterviewRepositoryPhase(
+  turn: GuidedInterviewTurn,
+): InterviewRepositoryPhase {
+  return turn.phase === 'technical' ? 'technical' : 'product';
 }
 
 const DISCOVERY_TOPICS = [

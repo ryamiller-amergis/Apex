@@ -4222,6 +4222,10 @@ async function tryDispatchInteractiveTurn(
       if (isInteractiveWorkspaceBoundSkill(turnSkillPath)) {
         return bypass('workspace-bound-skill');
       }
+      // This lane sends neither the guided turn prompt nor its phase tools.
+      if (usesGuidedInterview(state.thread.kickoff.skillPath)) {
+        return bypass('guided-interview');
+      }
       // Custom MCP pills are arbitrary by design and cannot execute in the
       // actor while its MCP map is intentionally empty.
       if (state.thread.kickoff.mcpPill) {

@@ -4,6 +4,11 @@ import {
   INTERACTIVE_WORKFLOW_CLASSES,
   type InteractiveWorkflowClass,
 } from './interactiveWorkflow';
+import {
+  GUIDED_INTERVIEW_STEP_PHASES,
+  type GuidedInterviewTurn,
+  type InterviewRepositoryPhase,
+} from './interview';
 
 export const DURABLE_INTERACTIVE_SPEC_VERSION = 1 as const;
 
@@ -65,6 +70,15 @@ export type FrozenInteractiveToolGrant = Readonly<{
   }>;
 }>;
 
+/**
+ * Server-controlled interview turn resolved on App Service. The worker uses
+ * `phase` to choose repository tools and `turn` to normalize the reply.
+ */
+export type FrozenGuidedInterview = Readonly<{
+  phase: InterviewRepositoryPhase;
+  turn: Readonly<GuidedInterviewTurn>;
+}>;
+
 export type DurableInteractiveTurnSpecification = Readonly<{
   schemaVersion: typeof DURABLE_INTERACTIVE_SPEC_VERSION;
   kind: 'interactive-turn';
@@ -108,6 +122,8 @@ export type DurableInteractiveTurnSpecification = Readonly<{
   currentPrompt: string;
   recreationPrompt: string;
   deadlines: InteractiveDeadlinePolicy;
+  /** Present only for guided interview turns. */
+  guidedInterview?: FrozenGuidedInterview;
 }>;
 
 export type InteractiveDispatchOutboxPayload = Readonly<{
@@ -351,6 +367,27 @@ function isToolGrant(value: unknown): value is FrozenInteractiveToolGrant {
   );
 }
 
+function isNullableNonNegativeInteger(value: unknown): value is number | null {
+  return value === null || isNonNegativeInteger(value);
+}
+
+function isGuidedInterview(value: unknown): value is FrozenGuidedInterview {
+  if (!isRecord(value) || !isRecord(value.turn)) return false;
+  const turn = value.turn;
+  return (
+    (value.phase === 'product' || value.phase === 'technical') &&
+    typeof turn.phase === 'string' &&
+    (GUIDED_INTERVIEW_STEP_PHASES as readonly string[]).includes(turn.phase) &&
+    isNullableNonNegativeInteger(turn.question) &&
+    isNullableNonNegativeInteger(turn.total) &&
+    typeof turn.topic === 'string' &&
+    isNonEmptyString(turn.marker) &&
+    (turn.followUpMarker === undefined ||
+      isNonEmptyString(turn.followUpMarker)) &&
+    typeof turn.instruction === 'string'
+  );
+}
+
 function isDeadlinePolicy(
   value: unknown,
   interactiveClass: InteractiveClass
@@ -458,7 +495,9 @@ export function isDurableInteractiveTurnSpecification(
     (value.toolGrant === null || isToolGrant(value.toolGrant)) &&
     typeof value.currentPrompt === 'string' &&
     typeof value.recreationPrompt === 'string' &&
-    isDeadlinePolicy(value.deadlines, value.interactiveClass)
+    isDeadlinePolicy(value.deadlines, value.interactiveClass) &&
+    (value.guidedInterview === undefined ||
+      isGuidedInterview(value.guidedInterview))
   );
 }
 

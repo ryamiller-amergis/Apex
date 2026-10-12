@@ -347,6 +347,7 @@ export async function main(): Promise<void> {
           model: snapshot.model,
           effort: snapshot.effort ?? null,
           workspaceRef: snapshot.workspaceRef,
+          interviewPhase: null,
         },
         (checkout as ReaderCheckout).reader,
         {
@@ -360,6 +361,7 @@ export async function main(): Promise<void> {
           model: bootstrap.specification.model,
           effort: bootstrap.specification.effort,
           workspaceRef: checkout.workspacePath,
+          interviewPhase: bootstrap.specification.guidedInterview?.phase ?? null,
         },
         (checkout as ReaderCheckout).reader,
         {

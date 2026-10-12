@@ -116,6 +116,38 @@ describe('durable interactive turn contracts', () => {
     },
   );
 
+  it('accepts a guided interview turn and rejects a malformed one', () => {
+    const guidedInterview = {
+      phase: 'product',
+      turn: {
+        phase: 'discovery',
+        question: 1,
+        total: 6,
+        topic: 'Current situation, problem, and impact',
+        marker: '[[interview-phase:discovery:1:6]]',
+        instruction: 'Ask for a recent concrete example.',
+      },
+    };
+    expect(
+      isDurableInteractiveTurnSpecification({ ...validSpecification, guidedInterview }),
+    ).toBe(true);
+    expect(
+      isDurableInteractiveTurnSpecification({
+        ...validSpecification,
+        guidedInterview: { ...guidedInterview, phase: 'delivery' },
+      }),
+    ).toBe(false);
+    expect(
+      isDurableInteractiveTurnSpecification({
+        ...validSpecification,
+        guidedInterview: {
+          ...guidedInterview,
+          turn: { ...guidedInterview.turn, marker: '' },
+        },
+      }),
+    ).toBe(false);
+  });
+
   it('accepts a complete frozen turn specification', () => {
     expect(isDurableInteractiveTurnSpecification(validSpecification)).toBe(
       true

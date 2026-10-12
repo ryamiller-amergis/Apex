@@ -2,19 +2,17 @@ import fs from 'fs';
 import path from 'path';
 import type { SDKCustomTool, SDKJsonValue } from '@cursor/sdk';
 import type { LocalAgentOptions, McpServerConfig } from '@cursor/sdk/dist/cjs/options.js';
+import type { InterviewRepositoryPhase } from '../../shared/types/interview';
 import type { RepoReader } from '../../shared/types/repoReader';
 import { createNativeReadTools } from './nativeReadToolAdapter';
+import { usesGuidedInterview } from './guidedInterviewState';
 
-export type InterviewRepositoryPhase = 'product' | 'technical';
+export type { InterviewRepositoryPhase };
+export { usesGuidedInterview, wrapGuidedInterviewPrompt } from './guidedInterviewState';
 
 const MARKER_RE = /\[\[interview-phase:(discovery|delivery|technical):(done|stopped|skipped|wrapup|\d+)(?::\d+)?(?::followup)?\]\]/g;
 const CLOSED_TOOL_TEXT = 'Repository tools are closed during Discovery and Delivery. Use the application brief in this message. If it does not cover the question, ask the person or record the gap as unresolved.';
 const TECHNICAL_SEARCH_TEXT = 'Repository search is closed. Read at most two known files with get_skill_file, or ask the person.';
-
-export function usesGuidedInterview(skillPath: string | null | undefined): boolean {
-  if (!skillPath) return false;
-  return skillPath.replace(/\\/g, '/').toLowerCase().includes('grill-with-docs');
-}
 
 function userChoseTechnical(userText: string): boolean {
   const text = userText.trim().toLowerCase();
@@ -82,25 +80,13 @@ export function technicalRepositoryTools(
   return { ...reads, search_repo_code: search };
 }
 
-export function wrapGuidedInterviewPrompt(
-  promptText: string,
+export function guidedInterviewRepositoryTools(
   phase: InterviewRepositoryPhase,
-  brief: string,
-): string {
-  const rules = phase === 'product'
-    ? [
-        '# Application brief',
-        'This brief is the application context for Discovery and Delivery. It was prepared before this turn.',
-        'Repository search is closed. Do not call grep, glob, read, search_repo_code, get_skill_file, or list_repo_dir.',
-        'If the brief does not cover the question, ask the person or record the gap as unresolved.',
-      ]
-    : [
-        '# Technical phase',
-        'Repository search is closed. You may read at most two known files with get_skill_file.',
-        'Do not call grep, glob, or search_repo_code.',
-        'The application brief below is the product language for this interview.',
-      ];
-  return [...rules, '', brief, '', '# Continue the interview', promptText].join('\n');
+  repoReader: RepoReader | undefined,
+): Record<string, SDKCustomTool> {
+  return phase === 'product'
+    ? closedRepositoryTools()
+    : technicalRepositoryTools(repoReader);
 }
 
 export interface GuidedRuntime {
@@ -127,9 +113,7 @@ export function applyGuidedInterviewRuntime<T extends GuidedRuntime>(
       // This environment has no local sandbox. enabled: false also overrides
       // ~/.cursor/sandbox.json, which otherwise requests sandboxing and fails the turn.
       sandboxOptions: { enabled: false },
-      customTools: phase === 'product'
-        ? closedRepositoryTools()
-        : technicalRepositoryTools(runtime.repoReader),
+      customTools: guidedInterviewRepositoryTools(phase, runtime.repoReader),
     },
   };
 }

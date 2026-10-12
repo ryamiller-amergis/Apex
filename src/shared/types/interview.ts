@@ -201,6 +201,42 @@ export interface InterviewBriefRecord {
   approvedAt: string | null;
 }
 
+export type GuidedInterviewStepPhase =
+  | 'discovery'
+  | 'delivery'
+  | 'delivery-choice'
+  | 'technical'
+  | 'technical-choice'
+  | 'complete';
+
+export const GUIDED_INTERVIEW_STEP_PHASES: readonly GuidedInterviewStepPhase[] = [
+  'discovery',
+  'delivery',
+  'delivery-choice',
+  'technical',
+  'technical-choice',
+  'complete',
+];
+
+export interface GuidedInterviewTurn {
+  phase: GuidedInterviewStepPhase;
+  question: number | null;
+  total: number | null;
+  topic: string;
+  /** Marker used when the answer is sufficient and the interview moves on. */
+  marker: string;
+  /**
+   * Marker for the one allowed follow-up on the topic just answered.
+   * Absent once that follow-up has been asked, and absent for the optional
+   * deeper Technical questions.
+   */
+  followUpMarker?: string;
+  instruction: string;
+}
+
+/** Discovery and Delivery read the application brief only; Technical may read known files. */
+export type InterviewRepositoryPhase = 'product' | 'technical';
+
 export interface CreatePrdRequest {
   model?: string;
 }

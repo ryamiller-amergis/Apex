@@ -46,6 +46,7 @@ import {
   type CursorExecutionResult,
 } from '../cursorExecutionCore';
 import type { WorkerCursorExecutionRun } from '../aiRunsWorker/cursorExecution';
+import { normalizeGuidedInterviewResponse } from '../guidedInterviewState';
 import {
   AiRunCallbackError,
   AiRunFenceConflictError,
@@ -1034,7 +1035,9 @@ export function createInteractiveSessionActor(
       const cacheCompatible =
         cached &&
         cached.handle.model === specification.model &&
-        cached.handle.workspaceRef === checkout.workspacePath;
+        cached.handle.workspaceRef === checkout.workspacePath &&
+        (cached.handle.interviewPhase ?? null) ===
+          (specification.guidedInterview?.phase ?? null);
 
       let acquisitionMode: 'warm' | 'resumed' | 'recreated' = 'warm';
       if (cacheCompatible && cached) {
@@ -1317,7 +1320,12 @@ export function createInteractiveSessionActor(
           const finalMessage: ChatMessage = {
             id: randomUUID(),
             role: 'agent',
-            text: finalText,
+            text: specification.guidedInterview
+              ? normalizeGuidedInterviewResponse(
+                  finalText,
+                  specification.guidedInterview.turn,
+                )
+              : finalText,
             ts: new Date(now()).toISOString(),
           };
           await post({
