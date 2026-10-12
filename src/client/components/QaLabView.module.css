@@ -260,6 +260,27 @@
   color: var(--text-secondary);
 }
 
+/* ── Work item details ───────────────────────────────────────────────────── */
+
+.workItemLinks {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  font-size: 0.78rem;
+}
+
+.detailsPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+}
+
 /* ── Scope picker ────────────────────────────────────────────────────────── */
 
 .scopePanel {

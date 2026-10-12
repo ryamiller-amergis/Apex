@@ -5,10 +5,13 @@ import {
   useGenerateTestCasesForAdoWorkItem,
   useGenerateTestCasesForPrd,
   usePublishAdoTestSuite,
+  useQaLabWorkItemDetail,
   useQaLabWorkItems,
   useWorkItemTestCases,
 } from '../hooks/useQaLab';
+import { env } from '../config/env';
 import { QaLabAssistantPanel } from './QaLabAssistantPanel';
+import { RichTextField } from './RichTextField';
 import styles from './QaLabView.module.css';
 
 export interface QaLabViewProps {
@@ -324,6 +327,12 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
   const [activeTab, setActiveTab] = useState<CaseKind>('manual');
   const [scopeOpen, setScopeOpen] = useState(false);
   const [scopeSelection, setScopeSelection] = useState<Set<string> | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+
+  const workItemDetail = useQaLabWorkItemDetail(project, selectedWorkItemId, detailsOpen);
+  const adoWorkItemUrl = selectedWorkItemId
+    ? `https://dev.azure.com/${encodeURIComponent(env.VITE_ADO_ORG)}/${encodeURIComponent(project)}/_workitems/edit/${selectedWorkItemId}`
+    : null;
 
   const {
     data: workItemList,
@@ -468,6 +477,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
     setExpandedIds(new Set());
     setScopeOpen(false);
     setScopeSelection(null);
+    setDetailsOpen(false);
   }, []);
 
   const handleExpandAll = useCallback(() => {
@@ -648,6 +658,29 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
                 <span className={styles.contentSubtitle}>
                   #{selectedWorkItemId}
                   {selectedWorkItem?.workItemType ? ` · ${selectedWorkItem.workItemType}` : ''}
+                  {selectedWorkItem?.state ? ` · ${selectedWorkItem.state}` : ''}
+                </span>
+                <span className={styles.workItemLinks}>
+                  <button
+                    type="button"
+                    className={styles.linkBtn}
+                    onClick={() => setDetailsOpen((open) => !open)}
+                    aria-expanded={detailsOpen}
+                    {...{ 'data-testid': 'qa-lab-toggle-work-item-details' }}
+                  >
+                    {detailsOpen ? 'Hide details' : 'View details'}
+                  </button>
+                  {adoWorkItemUrl && (
+                    <a
+                      href={adoWorkItemUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className={styles.adoLink}
+                      {...{ 'data-testid': 'qa-lab-open-work-item-ado' }}
+                    >
+                      Open in Azure DevOps ↗
+                    </a>
+                  )}
                 </span>
               </div>
 
@@ -697,6 +730,64 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
                 )}
               </div>
             </header>
+
+            {detailsOpen && (
+              <section className={styles.detailsPanel} aria-label="Work item details" {...{ 'data-testid': 'qa-lab-work-item-details' }}>
+                {workItemDetail.isLoading && <p className={styles.status}>Loading work item…</p>}
+                {workItemDetail.isError && (
+                  <p className={`${styles.status} ${styles.statusError}`}>
+                    {workItemDetail.error instanceof Error ? workItemDetail.error.message : 'Could not load the work item.'}
+                  </p>
+                )}
+                {workItemDetail.data && (
+                  <>
+                    <dl className={styles.metaGrid}>
+                      <dt>Assigned to</dt>
+                      <dd>{workItemDetail.data.assignedTo ?? 'Unassigned'}</dd>
+                      {workItemDetail.data.iterationPath && (
+                        <>
+                          <dt>Iteration</dt>
+                          <dd>{workItemDetail.data.iterationPath}</dd>
+                        </>
+                      )}
+                      {workItemDetail.data.areaPath && (
+                        <>
+                          <dt>Area</dt>
+                          <dd>{workItemDetail.data.areaPath}</dd>
+                        </>
+                      )}
+                      {workItemDetail.data.tags && (
+                        <>
+                          <dt>Tags</dt>
+                          <dd>{workItemDetail.data.tags}</dd>
+                        </>
+                      )}
+                    </dl>
+                    <RichTextField
+                      label="Description"
+                      content={workItemDetail.data.description}
+                      defaultExpanded
+                      {...{ 'data-testid': 'qa-lab-work-item-description' }}
+                    />
+                    {workItemDetail.data.workItemType === 'Bug' ? (
+                      <RichTextField
+                        label="Repro steps"
+                        content={workItemDetail.data.reproSteps}
+                        defaultExpanded
+                        {...{ 'data-testid': 'qa-lab-work-item-repro-steps' }}
+                      />
+                    ) : (
+                      <RichTextField
+                        label="Acceptance criteria"
+                        content={workItemDetail.data.acceptanceCriteria}
+                        defaultExpanded
+                        {...{ 'data-testid': 'qa-lab-work-item-acceptance-criteria' }}
+                      />
+                    )}
+                  </>
+                )}
+              </section>
+            )}
 
             {scopeOpen && !isGenerating && (
               <section className={styles.scopePanel} aria-label="Choose items to generate" {...{ 'data-testid': 'qa-lab-scope-panel' }}>

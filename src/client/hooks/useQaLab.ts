@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '../utils/apiFetch';
+import type { WorkItem } from '../types/workitem';
 import type {
   QaLabGenerateRequest,
   QaLabGenerationCandidates,
@@ -52,6 +53,21 @@ export function useWorkItemTestCases(
       || query.state.data?.externalSuite?.status === 'generating'
         ? 5_000
         : false,
+  });
+}
+
+/** Full fields of the selected work item, for the QA Lab details panel. */
+export function useQaLabWorkItemDetail(
+  project: string | null,
+  workItemId: number | null,
+  enabled: boolean,
+) {
+  return useQuery<WorkItem>({
+    queryKey: ['qa-lab', 'work-item-detail', project, workItemId],
+    queryFn: () =>
+      apiFetch(`/api/workitems/${workItemId}?project=${encodeURIComponent(project ?? '')}`),
+    enabled: enabled && !!project && !!workItemId,
+    staleTime: 60_000,
   });
 }
 
