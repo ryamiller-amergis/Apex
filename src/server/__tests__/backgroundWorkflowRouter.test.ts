@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,7 +29,9 @@ jest.mock('../services/telemetry', () => ({
 
 import {
   createBackgroundWorkflowRouter,
+  errorMessage,
   prepareBackgroundWorkflowWorkspace,
+  readDocumentScratchInputs,
   workerCanReadWithoutWorkingTree,
   type BackgroundWorkflowRouteInput,
   type BackgroundWorkflowRouterDependencies,
@@ -61,6 +64,7 @@ const targetGrounding: RunGrounding = {
 function makeInput(
   overrides: Partial<BackgroundWorkflowRouteInput> = {},
 ): BackgroundWorkflowRouteInput {
+  const skillContent = '# Frozen to-prd skill';
   return {
     userId: 'user-1',
     workflowClass: 'prd',
@@ -72,6 +76,8 @@ function makeInput(
       prompt: 'confidential generation prompt',
       model: 'claude-4',
       skillPath: '.cursor/skills/to-prd/SKILL.md',
+      skillContent,
+      skillSha256: createHash('sha256').update(skillContent).digest('hex'),
       projectId: 'project-1',
     }),
     runInProcess: jest.fn().mockResolvedValue(undefined),
@@ -84,7 +90,11 @@ function makeDependencies(
   overrides: Partial<BackgroundWorkflowRouterDependencies> = {},
 ): BackgroundWorkflowRouterDependencies {
   return {
-    isFeatureEnabled: jest.fn().mockResolvedValue(true),
+    // Worker routing on, V2 transport off — the shipped default.
+    isFeatureEnabled: jest
+      .fn()
+      .mockImplementation(async (key: string) => key === 'ai-runs-background'),
+    admitV2Run: jest.fn(),
     materializeRunGroundingWithPath: jest.fn().mockResolvedValue({
       state: 'materialized',
       workspacePath: 'C:\\grounding-workspaces\\opaque',
@@ -97,11 +107,18 @@ function makeDependencies(
     clearGenerationOutput: jest.fn().mockResolvedValue(undefined),
     enqueue: jest.fn().mockResolvedValue({ runId: 'run-1' }),
     resolveHardLimitMs: jest.fn().mockReturnValue(60_000),
+    resolveModelChoice: jest.fn(async (model: string, effort?: string) => ({ model, effort })),
     now: jest.fn().mockReturnValue(1_000),
     trackEvent: jest.fn(),
     isUsableBareMirror: jest.fn().mockReturnValue(false),
+    readDocumentScratchInputs: jest.fn().mockResolvedValue([
+      {
+        path: '.ai-pilot/kickoff-transcript.md',
+        content: '# Interview transcript',
+      },
+    ]),
     ...overrides,
-  };
+  } as BackgroundWorkflowRouterDependencies;
 }
 
 describe('workerCanReadWithoutWorkingTree', () => {
@@ -342,7 +359,9 @@ describe('background workflow routing', () => {
     const clearGenerationOutput = jest.fn().mockResolvedValue(undefined);
     const enqueue = jest.fn().mockResolvedValue({ runId: 'run-1' });
     const dependencies = makeDependencies({
-      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      isFeatureEnabled: jest
+        .fn()
+        .mockImplementation(async (key: string) => key === 'ai-runs-background'),
       sharedReadCheckout: { getReady, retain: jest.fn() },
       clearGenerationOutput,
       enqueue,
@@ -413,7 +432,8 @@ describe('background workflow routing', () => {
     const evaluations: Array<{ project: string; caller?: string }> = [];
     const dependencies = makeDependencies({
       isFeatureEnabled: jest.fn().mockImplementation(
-        async (_key: string, context: { project: string; caller?: string }) => {
+        async (key: string, context: { project: string; caller?: string }) => {
+          if (key !== 'ai-runs-background') return false;
           evaluations.push(context);
           return context.caller !== 'validation';
         },
@@ -463,6 +483,446 @@ describe('background workflow routing', () => {
     ]);
   });
 
+  it('keeps the V1 transport while the V2 flag is off', async () => {
+    const dependencies = makeDependencies();
+
+    await createBackgroundWorkflowRouter(dependencies).route(makeInput());
+
+    expect(dependencies.enqueue).toHaveBeenCalledTimes(1);
+    expect(dependencies.admitV2Run).not.toHaveBeenCalled();
+    expect(dependencies.isFeatureEnabled).toHaveBeenCalledWith(
+      'ai-runs-v2-transport',
+      { userId: 'user-1', project: 'Apex', caller: 'prd' },
+    );
+  });
+
+  it.each([
+    {
+      name: 'V2 enabled and legacy disabled admits V2',
+      v2: 'enabled',
+      legacy: 'disabled',
+      expectedTransport: 'v2',
+      expectedFlagKeys: ['ai-runs-v2-transport'],
+    },
+    {
+      name: 'V2 disabled and legacy enabled retains V1',
+      v2: 'disabled',
+      legacy: 'enabled',
+      expectedTransport: 'v1',
+      expectedFlagKeys: ['ai-runs-v2-transport', 'ai-runs-background'],
+    },
+    {
+      name: 'both flags disabled runs in process',
+      v2: 'disabled',
+      legacy: 'disabled',
+      expectedTransport: 'in-process',
+      expectedFlagKeys: ['ai-runs-v2-transport', 'ai-runs-background'],
+    },
+    {
+      name: 'unreadable V2 and enabled legacy retains V1',
+      v2: 'error',
+      legacy: 'enabled',
+      expectedTransport: 'v1',
+      expectedFlagKeys: ['ai-runs-v2-transport', 'ai-runs-background'],
+    },
+  ] as const)(
+    '$name',
+    async ({
+      v2,
+      legacy,
+      expectedTransport,
+      expectedFlagKeys,
+    }) => {
+      const isFeatureEnabled = jest.fn(
+        async (key: string): Promise<boolean> => {
+          const outcome =
+            key === 'ai-runs-v2-transport'
+              ? v2
+              : key === 'ai-runs-background'
+                ? legacy
+                : 'disabled';
+          if (outcome === 'error') {
+            throw new Error('flag store unavailable');
+          }
+          return outcome === 'enabled';
+        },
+      );
+      const admitV2Run = jest.fn().mockResolvedValue({
+        status: 'dispatched',
+        runId: 'run-1',
+        attemptId: 'attempt-1',
+        attemptNumber: 1,
+        dispatchMessageId: 'dispatch-1',
+        outboxId: 'outbox-1',
+      });
+      const dependencies = makeDependencies({
+        isFeatureEnabled,
+        admitV2Run,
+      });
+      const input = makeInput();
+
+      const decision = await createBackgroundWorkflowRouter(dependencies).route(
+        input,
+      );
+
+      expect(isFeatureEnabled.mock.calls.map(([key]) => key)).toEqual(
+        expectedFlagKeys,
+      );
+      expect(admitV2Run).toHaveBeenCalledTimes(
+        expectedTransport === 'v2' ? 1 : 0,
+      );
+      expect(dependencies.enqueue).toHaveBeenCalledTimes(
+        expectedTransport === 'v1' ? 1 : 0,
+      );
+      expect(input.runInProcess).toHaveBeenCalledTimes(
+        expectedTransport === 'in-process' ? 1 : 0,
+      );
+      expect(decision.route).toBe(
+        expectedTransport === 'in-process' ? 'in-process' : 'worker',
+      );
+    },
+  );
+
+  it('admits onto the V2 transport instead of V1 when the flag is on', async () => {
+    const admitV2Run = jest.fn().mockResolvedValue({
+      status: 'dispatched',
+      runId: 'run-1',
+      attemptId: 'attempt-1',
+      attemptNumber: 1,
+      dispatchMessageId: 'dispatch-1',
+      outboxId: 'outbox-1',
+    });
+    const dependencies = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      admitV2Run,
+    });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(
+      makeInput(),
+    );
+
+    expect(decision).toEqual<WorkflowRouteDecision>({
+      route: 'worker',
+      workspacePath: 'C:\\grounding-workspaces\\opaque',
+      runId: 'run-1',
+    });
+    expect(dependencies.enqueue).not.toHaveBeenCalled();
+    expect(admitV2Run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: 'run-1',
+        threadId: 'thread-1',
+        projectId: 'project-1',
+        workloadLane: 'document',
+        capacityClass: 'batch',
+        specification: expect.objectContaining({ workflowClass: 'prd' }),
+      }),
+    );
+  });
+
+  it('admits under the caller agent run id when one is given', async () => {
+    const admitV2Run = jest.fn().mockResolvedValue({
+      status: 'dispatched',
+      runId: 'fresh-run',
+      attemptId: 'attempt-1',
+      attemptNumber: 1,
+      dispatchMessageId: 'dispatch-1',
+      outboxId: 'outbox-1',
+    });
+    const dependencies = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      admitV2Run,
+    });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route({
+      ...makeInput(),
+      agentRunId: 'fresh-run',
+    });
+
+    expect(decision).toEqual(expect.objectContaining({ route: 'worker', runId: 'fresh-run' }));
+    expect(admitV2Run).toHaveBeenCalledWith(expect.objectContaining({ runId: 'fresh-run' }));
+  });
+
+  describe('when the Skill read hit a syncing mirror', () => {
+    const syncingPreparation = {
+      targetGrounding,
+      threadWorkspacePath: 'C:\\threads\\thread-1',
+      prompt: 'confidential generation prompt',
+      model: 'claude-4',
+      skillPath: '.cursor/skills/to-prd/SKILL.md',
+      skillRepositorySyncing: true,
+      projectId: 'project-1',
+    };
+    const admitted = {
+      status: 'dispatched',
+      runId: 'run-1',
+      attemptId: 'attempt-1',
+      attemptNumber: 1,
+      dispatchMessageId: 'dispatch-1',
+      outboxId: 'outbox-1',
+    };
+
+    it('waits and re-prepares until the Skill is frozen, then admits', async () => {
+      const ready = await makeInput().prepareWorker();
+      const prepareWorker = jest.fn()
+        .mockResolvedValueOnce(syncingPreparation)
+        .mockResolvedValueOnce(syncingPreparation)
+        .mockResolvedValueOnce(ready);
+      const sleep = jest.fn().mockResolvedValue(undefined);
+      const admitV2Run = jest.fn().mockResolvedValue(admitted);
+      const dependencies = makeDependencies({
+        isFeatureEnabled: jest.fn().mockResolvedValue(true),
+        admitV2Run,
+        sleep,
+      });
+
+      const decision = await createBackgroundWorkflowRouter(dependencies).route(
+        makeInput({ prepareWorker }),
+      );
+
+      expect(decision).toEqual(expect.objectContaining({ route: 'worker', runId: 'run-1' }));
+      expect(prepareWorker).toHaveBeenCalledTimes(3);
+      expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([5_000, 10_000]);
+      expect(admitV2Run).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses the run once the retries are spent', async () => {
+      const prepareWorker = jest.fn().mockResolvedValue(syncingPreparation);
+      const sleep = jest.fn().mockResolvedValue(undefined);
+      const admitV2Run = jest.fn();
+      const dependencies = makeDependencies({
+        isFeatureEnabled: jest.fn().mockResolvedValue(true),
+        admitV2Run,
+        sleep,
+      });
+
+      const decision = await createBackgroundWorkflowRouter(dependencies).route(
+        makeInput({ prepareWorker }),
+      );
+
+      expect(decision.route).not.toBe('worker');
+      expect(prepareWorker).toHaveBeenCalledTimes(5);
+      expect(sleep).toHaveBeenCalledTimes(4);
+      expect(admitV2Run).not.toHaveBeenCalled();
+    });
+
+    it('does not retry when the Skill is missing for another reason', async () => {
+      const { skillRepositorySyncing: _syncing, ...missingSkill } = syncingPreparation;
+      const prepareWorker = jest.fn().mockResolvedValue(missingSkill);
+      const sleep = jest.fn().mockResolvedValue(undefined);
+      const dependencies = makeDependencies({
+        isFeatureEnabled: jest.fn().mockResolvedValue(true),
+        admitV2Run: jest.fn(),
+        sleep,
+      });
+
+      await createBackgroundWorkflowRouter(dependencies).route(makeInput({ prepareWorker }));
+
+      expect(prepareWorker).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    });
+
+    it('does not retry on the V1 worker path', async () => {
+      const prepareWorker = jest.fn().mockResolvedValue(syncingPreparation);
+      const sleep = jest.fn().mockResolvedValue(undefined);
+      const dependencies = makeDependencies({ sleep });
+
+      await createBackgroundWorkflowRouter(dependencies).route(makeInput({ prepareWorker }));
+
+      expect(prepareWorker).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    });
+  });
+
+  it('sends the resolved model and effort to both transports', async () => {
+    const resolveModelChoice = jest
+      .fn()
+      .mockResolvedValue({ model: 'claude-opus-5-5', effort: undefined });
+    const prepareWorker = jest.fn().mockResolvedValue({
+      targetGrounding,
+      threadWorkspacePath: 'C:\\threads\\thread-1',
+      prompt: 'confidential generation prompt',
+      model: 'claude-opus-4-6',
+      effort: 'high',
+      skillPath: '.cursor/skills/to-prd/SKILL.md',
+      skillContent: '# Frozen to-prd skill',
+      skillSha256: createHash('sha256').update('# Frozen to-prd skill').digest('hex'),
+      projectId: 'project-1',
+    });
+
+    const v1 = makeDependencies({ resolveModelChoice });
+    await createBackgroundWorkflowRouter(v1).route(makeInput({ prepareWorker }));
+    expect(resolveModelChoice).toHaveBeenCalledWith('claude-opus-4-6', 'high');
+    expect((v1.enqueue as jest.Mock).mock.calls[0][0].snapshot).toMatchObject({
+      model: 'claude-opus-5-5',
+      effort: undefined,
+    });
+
+    const admitV2Run = jest.fn().mockResolvedValue({
+      status: 'dispatched',
+      runId: 'run-1',
+      attemptId: 'attempt-1',
+      attemptNumber: 1,
+      dispatchMessageId: 'dispatch-1',
+      outboxId: 'outbox-1',
+    });
+    const v2 = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      admitV2Run,
+      resolveModelChoice,
+    });
+    await createBackgroundWorkflowRouter(v2).route(makeInput({ prepareWorker }));
+    expect(admitV2Run.mock.calls[0][0].specification).toMatchObject({
+      model: 'claude-opus-5-5',
+      effort: null,
+    });
+  });
+
+  it('freezes every worker input into the V2 document specification', async () => {
+    const admitV2Run = jest.fn().mockResolvedValue({
+      status: 'dispatched',
+      runId: 'run-1',
+      attemptId: 'attempt-1',
+      attemptNumber: 1,
+      dispatchMessageId: 'dispatch-1',
+      outboxId: 'outbox-1',
+    });
+    const readDocumentScratchInputs = jest.fn().mockResolvedValue([
+      {
+        path: '.ai-pilot/kickoff-transcript.md',
+        content: '# Interview transcript',
+      },
+    ]);
+    const dependencies = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      admitV2Run,
+      readDocumentScratchInputs,
+    } as Partial<BackgroundWorkflowRouterDependencies>);
+
+    await createBackgroundWorkflowRouter(dependencies).route(makeInput());
+
+    expect(readDocumentScratchInputs).toHaveBeenCalledWith(
+      'C:\\threads\\thread-1',
+      'prd',
+    );
+    const admission = admitV2Run.mock.calls[0][0] as {
+      specification: Record<string, unknown>;
+      executionSnapshot?: Record<string, unknown>;
+      timeoutAt: string;
+    };
+    expect(admission.timeoutAt).toBe('1970-01-01T00:01:01.000Z');
+    expect(admission.specification).toMatchObject({
+      prompt: 'confidential generation prompt',
+      model: 'claude-4',
+      effort: null,
+      skillPath: '.cursor/skills/to-prd/SKILL.md',
+      skillContent: '# Frozen to-prd skill',
+      skillSha256: createHash('sha256')
+        .update('# Frozen to-prd skill')
+        .digest('hex'),
+      workflowClass: 'prd',
+      projectId: 'project-1',
+      threadId: 'thread-1',
+      deadlineMs: 60_000,
+      groundedSha: 'abc123',
+      repository: 'apex/ai-pilot',
+      provider: 'github',
+      scratchInputs: [
+        {
+          path: '.ai-pilot/kickoff-transcript.md',
+          content: '# Interview transcript',
+        },
+      ],
+    });
+    expect(admission.executionSnapshot).toEqual(admission.specification);
+    expect(admission.specification).not.toHaveProperty('workspaceRef');
+    expect(admission.specification).not.toHaveProperty('checkoutRef');
+    expect(admission.specification).not.toHaveProperty('mirrorRef');
+  });
+
+  it('admits an Azure DevOps grounded document with the skill provider name', async () => {
+    const admitV2Run = jest.fn().mockResolvedValue({
+      status: 'dispatched',
+      runId: 'run-1',
+      attemptId: 'attempt-1',
+      attemptNumber: 1,
+      dispatchMessageId: 'dispatch-1',
+      outboxId: 'outbox-1',
+    });
+    const dependencies = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      admitV2Run,
+      readDocumentScratchInputs: jest.fn().mockResolvedValue([
+        {
+          path: '.ai-pilot/kickoff-transcript.md',
+          content: '# Interview transcript',
+        },
+      ]),
+    } as Partial<BackgroundWorkflowRouterDependencies>);
+    const input = makeInput();
+    const prepared = await (input.prepareWorker as jest.Mock)();
+    input.prepareWorker = jest.fn().mockResolvedValue({
+      ...prepared,
+      targetGrounding: {
+        ...targetGrounding,
+        provider: 'azure_devops',
+        repository: 'MaxView/MaxView',
+      },
+    });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(input);
+
+    expect(decision.route).toBe('worker');
+    expect(admitV2Run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        specification: expect.objectContaining({
+          provider: 'ado',
+          repository: 'MaxView/MaxView',
+        }),
+      }),
+    );
+  });
+
+  it('recovers in-process when V2 admission refuses or throws', async () => {
+    const conflict = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      admitV2Run: jest.fn().mockResolvedValue({
+        status: 'active_run_conflict',
+        existingRunId: 'run-0',
+        existingTransportVersion: 'http-files-v1',
+        existingStatus: 'running',
+      }),
+    });
+    const conflictInput = makeInput();
+
+    await createBackgroundWorkflowRouter(conflict).route(conflictInput);
+    expect(conflictInput.runInProcess).toHaveBeenCalledTimes(1);
+
+    const thrown = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      admitV2Run: jest.fn().mockRejectedValue(new Error('blob unavailable')),
+    });
+    const thrownInput = makeInput();
+
+    await createBackgroundWorkflowRouter(thrown).route(thrownInput);
+    expect(thrownInput.runInProcess).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the V1 transport when the V2 flag cannot be read', async () => {
+    const dependencies = makeDependencies({
+      isFeatureEnabled: jest
+        .fn()
+        .mockImplementation(async (key: string) => {
+          if (key === 'ai-runs-background') return true;
+          throw new Error('flag store unavailable');
+        }),
+    });
+
+    await createBackgroundWorkflowRouter(dependencies).route(makeInput());
+
+    expect(dependencies.enqueue).toHaveBeenCalledTimes(1);
+    expect(dependencies.admitV2Run).not.toHaveBeenCalled();
+  });
+
   it('TBI-007 DoD-2 / DoD-4 / PBI-006 AC-1 / VT-04: Given the flag is disabled, runs only the unchanged in-process callback', async () => {
     const dependencies = makeDependencies({
       isFeatureEnabled: jest.fn().mockResolvedValue(false),
@@ -503,7 +963,11 @@ describe('background workflow routing', () => {
   it('TBI-007 DoD-2 / DoD-4 / PBI-006 AC-2 / BR-011 / VT-05: disable affects only a new route while an already-dispatched run drains independently', async () => {
     let enabled = true;
     const dependencies = makeDependencies({
-      isFeatureEnabled: jest.fn().mockImplementation(async () => enabled),
+      isFeatureEnabled: jest
+        .fn()
+        .mockImplementation(async (key: string) =>
+          key === 'ai-runs-background' ? enabled : false,
+        ),
     });
     const router = createBackgroundWorkflowRouter(dependencies);
     const activeInput = makeInput();
@@ -712,6 +1176,110 @@ describe('background workspace preparation', () => {
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
+  it('copies only the allowlisted PRD scratch inputs into a V2 specification', async () => {
+    const aiPilot = path.join(tempRoot, '.ai-pilot');
+    await fs.mkdir(path.join(aiPilot, 'output'), { recursive: true });
+    await fs.writeFile(
+      path.join(aiPilot, 'kickoff-transcript.md'),
+      '# Transcript',
+      'utf8',
+    );
+    await fs.writeFile(
+      path.join(aiPilot, 'kickoff-context.md'),
+      '# Context',
+      'utf8',
+    );
+    await fs.writeFile(
+      path.join(aiPilot, 'session.json'),
+      '{"threadId":"thread-1"}',
+      'utf8',
+    );
+    await fs.writeFile(path.join(aiPilot, 'secret.env'), 'TOKEN=secret', 'utf8');
+    await fs.writeFile(
+      path.join(aiPilot, 'output', 'leftover.prd.md'),
+      '# Stale output',
+      'utf8',
+    );
+
+    await expect(readDocumentScratchInputs(tempRoot, 'prd')).resolves.toEqual([
+      {
+        path: '.ai-pilot/kickoff-context.md',
+        content: '# Context',
+      },
+      {
+        path: '.ai-pilot/kickoff-transcript.md',
+        content: '# Transcript',
+      },
+      {
+        path: '.ai-pilot/session.json',
+        content: '{"threadId":"thread-1"}',
+      },
+    ]);
+  });
+
+  it('carries the PRD and backlog scratch files needed by test-case generation', async () => {
+    const aiPilot = path.join(tempRoot, '.ai-pilot');
+    const output = path.join(aiPilot, 'output');
+    await fs.mkdir(output, { recursive: true });
+    await fs.writeFile(
+      path.join(aiPilot, 'kickoff-context.md'),
+      '# Test context',
+      'utf8',
+    );
+    await fs.writeFile(path.join(output, 'feature.prd.md'), '# PRD', 'utf8');
+    await fs.writeFile(
+      path.join(output, 'feature.backlog.json'),
+      '{"epics":[]}',
+      'utf8',
+    );
+    await fs.writeFile(
+      path.join(output, 'stale.test-cases.json'),
+      '{"suites":[]}',
+      'utf8',
+    );
+
+    await expect(
+      readDocumentScratchInputs(tempRoot, 'test-cases'),
+    ).resolves.toEqual([
+      {
+        path: '.ai-pilot/kickoff-context.md',
+        content: '# Test context',
+      },
+      {
+        path: '.ai-pilot/output/feature.backlog.json',
+        content: '{"epics":[]}',
+      },
+      {
+        path: '.ai-pilot/output/feature.prd.md',
+        content: '# PRD',
+      },
+    ]);
+  });
+
+  it('does not copy a transcript into scratch-only validation work', async () => {
+    const aiPilot = path.join(tempRoot, '.ai-pilot');
+    await fs.mkdir(aiPilot, { recursive: true });
+    await fs.writeFile(
+      path.join(aiPilot, 'kickoff-context.md'),
+      '# Validation context',
+      'utf8',
+    );
+    await fs.writeFile(
+      path.join(aiPilot, 'kickoff-transcript.md'),
+      '# Unused transcript',
+      'utf8',
+    );
+
+    await expect(
+      readDocumentScratchInputs(tempRoot, 'validation'),
+    ).resolves.toEqual([
+      {
+        path: '.ai-pilot/kickoff-context.md',
+        content: '# Validation context',
+      },
+    ]);
+  });
+
   it('BR-007 / VT-01: merges .ai-pilot inputs/outputs and drops destination-only leftovers', async () => {
     const source = path.join(tempRoot, 'thread');
     const destination = path.join(tempRoot, 'pinned');
@@ -792,5 +1360,34 @@ describe('background workspace preparation', () => {
     await expect(
       prepareBackgroundWorkflowWorkspace(source, destination),
     ).rejects.toThrow(/symbolic link/i);
+  });
+});
+
+describe('background route error messages', () => {
+  it('leads with the database cause and drops query parameters', () => {
+    const cause = Object.assign(new Error('duplicate key value violates unique constraint'), {
+      code: '23505',
+      constraint: 'uq_agent_runs_v2_active_thread',
+    });
+    const wrapped = Object.assign(
+      new Error(
+        `Failed query: INSERT INTO agent_runs (id) VALUES ($1)\nparams: ${'secret document text '.repeat(50)}`,
+      ),
+      { cause },
+    );
+
+    const message = errorMessage(wrapped);
+
+    expect(message).toMatch(
+      /^cause: duplicate key value violates unique constraint \(code=23505, constraint=uq_agent_runs_v2_active_thread\) \| Failed query: INSERT INTO agent_runs/,
+    );
+    expect(message.length).toBeLessThan(500);
+  });
+
+  it('keeps plain errors unchanged', () => {
+    expect(errorMessage(new Error('Document execution specification is incomplete'))).toBe(
+      'Document execution specification is incomplete',
+    );
+    expect(errorMessage('boom')).toBe('boom');
   });
 });

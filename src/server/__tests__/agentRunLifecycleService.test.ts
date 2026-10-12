@@ -721,6 +721,33 @@ describe('requestCancel (BR-002)', () => {
     });
   });
 
+  it('cancels a queued run that already stored a dispatch fence', async () => {
+    mockFindFirst
+      .mockResolvedValueOnce(baseRow({
+        status: 'queued',
+        dispatchMessageId: 'cursor-run-1',
+        cloudAgentIdentity: 'bc-1',
+      }))
+      .mockResolvedValueOnce(baseRow({
+        status: 'queued',
+        dispatchMessageId: 'cursor-run-1',
+        cloudAgentIdentity: 'bc-1',
+      }))
+      .mockResolvedValueOnce(baseRow({
+        status: 'cancelled',
+        terminalReason: 'forced_cancel',
+        dispatchMessageId: 'cursor-run-1',
+      }));
+
+    const result = await requestCancel('run-1');
+
+    expect(result.ok).toBe(true);
+    expect(finalizeReconciledAgentRun).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'cancelled',
+      dispatchMessageId: 'cursor-run-1',
+    }));
+  });
+
   it('TBI-008 DoD-2/security: successful queued cancellation emits only allowlisted identifiers', async () => {
     mockFindFirst
       .mockResolvedValueOnce(baseRow({

@@ -5,8 +5,9 @@
  * to the transport-agnostic {@link attachInteractiveThreadStream} core. The
  * upgrade is authenticated by replaying the SAME express-session + passport
  * chain the HTTP routes use, then authorized against thread access and the
- * `ai-runs-interactive` feature flag. Fail-closed: any auth/flag failure
- * destroys the socket without leaking thread existence (BR-017, BR-019).
+ * canonical `ai-runs-v2-transport` flag or the interim legacy
+ * `ai-runs-interactive` flag. Fail-closed: any auth/flag failure destroys the
+ * socket without leaking thread existence (BR-017, BR-019).
  *
  * The mount is only attached when {@link isInteractiveGatewayEnabled} is true,
  * so default deployments keep the existing SSE transport unchanged.
@@ -26,6 +27,7 @@ import {
 } from './interactiveGatewayService';
 
 const GATEWAY_PATH = /^\/api\/interactive\/threads\/([^/]+)\/stream$/;
+const V2_TRANSPORT_FLAG = 'ai-runs-v2-transport';
 
 /** Off by default — flip on per environment during interactive rollout. */
 export function isInteractiveGatewayEnabled(): boolean {
@@ -93,10 +95,18 @@ export function mountInteractiveGateway(
         }
 
         const project = access.thread.kickoff?.project;
-        const enabled = await isFeatureEnabled(INTERACTIVE_WORKFLOW_FLAG, {
+        const flagContext = {
           userId,
           project,
-        }).catch(() => false);
+        };
+        const v2Enabled = await isFeatureEnabled(
+          V2_TRANSPORT_FLAG,
+          flagContext,
+        ).catch(() => false);
+        const enabled = v2Enabled || await isFeatureEnabled(
+          INTERACTIVE_WORKFLOW_FLAG,
+          flagContext,
+        ).catch(() => false);
         if (!enabled) {
           socket.destroy();
           return;

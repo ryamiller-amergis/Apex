@@ -24,6 +24,7 @@ import {
   isTerminalAgentRunStatus,
   isThreadRunAlive,
 } from './agentRunReaperService';
+import { isDocumentHarvestPendingForRun } from './aiRunV2/finishedAttemptReader';
 import { createNotification } from './notificationService';
 import { resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
@@ -623,10 +624,20 @@ function readOutput(workspaceDir: string): string | null {
 async function loadThreadForUser(
   threadId: string,
   userId: string
-): Promise<{ userId: string; workspaceDir: string | null; status: string }> {
+): Promise<{
+  userId: string;
+  workspaceDir: string | null;
+  status: string;
+  lastError: string | null;
+}> {
   const row = await db.query.chatThreads.findFirst({
     where: eq(chatThreads.id, threadId),
-    columns: { userId: true, workspaceDir: true, status: true },
+    columns: {
+      userId: true,
+      workspaceDir: true,
+      status: true,
+      lastError: true,
+    },
   });
   if (!row || row.userId !== userId) {
     throw new WalkthroughAnchorSmartTaggingOrchestrationError(
@@ -647,6 +658,87 @@ function failedResponse(
     warning: REVIEWABLE_WARNING,
     provenance,
   };
+}
+
+/**
+ * Apply a verified V2 artifact without relying on the in-memory poll watcher.
+ * The pending-row update is the compare-and-set: a replay sees no rows changed,
+ * so it cannot reapply tags or emit a second completion notification.
+ */
+export async function applyV2SmartTaggingResult(input: {
+  threadId: string;
+  runId: string;
+  rawJson: string;
+}): Promise<boolean> {
+  const thread = await db.query.chatThreads.findFirst({
+    where: eq(chatThreads.id, input.threadId),
+    columns: { userId: true, kickoff: true },
+  });
+  if (!thread) {
+    throw new WalkthroughAnchorSmartTaggingOrchestrationError(
+      'NOT_FOUND',
+      'Smart-tagging thread not found.',
+    );
+  }
+
+  const parsed = parseWalkthroughAnchorSmartTaggingOutput(input.rawJson);
+  const testIds = parsed.suggestions.map((suggestion) => suggestion.testId);
+  const provenanceBase: WalkthroughAnchorSmartTagMergeProvenanceBase = {
+    provider: 'cursor',
+    model: thread.kickoff.model?.trim() || 'unknown',
+    skillPath:
+      thread.kickoff.skillPath?.trim()
+      || DEFAULT_WALKTHROUGH_ANCHOR_SMART_TAGGING_SKILL_PATH,
+    generatedAt: new Date().toISOString(),
+    threadId: input.threadId,
+    runId: input.runId,
+  };
+  const updated =
+    await walkthroughAnchorRegistryService.applySmartTagSuggestionsToPending({
+      testIds,
+      result: parsed,
+      provenanceBase,
+      actor: { id: thread.userId },
+    });
+  if (updated.length === 0) {
+    const existing = await Promise.all(
+      testIds.map((testId) =>
+        walkthroughAnchorRegistryService.getAnchorByTestId(testId)),
+    );
+    return (
+      existing.length > 0
+      && existing.every(
+        (row) => row?.aiProvenance?.runId === input.runId,
+      )
+    );
+  }
+
+  await createNotification(thread.userId, {
+    type: 'ai',
+    title: 'Walkthrough tags refined',
+    body: 'Background AI finished refining uncertain walkthrough anchors.',
+    link: '/platform-admin',
+  }).catch((err) => {
+    console.warn(
+      '[walkthroughAnchorSmartTagging] notify failed:',
+      err instanceof Error ? err.message : String(err),
+    );
+  });
+  return true;
+}
+
+export async function markV2SmartTaggingFailure(input: {
+  threadId: string;
+  reason: string;
+}): Promise<void> {
+  await db
+    .update(chatThreads)
+    .set({
+      status: 'idle',
+      lastError: input.reason,
+      lastActivityAt: new Date().toISOString(),
+    })
+    .where(eq(chatThreads.id, input.threadId));
 }
 
 function chunkCandidates(
@@ -858,6 +950,14 @@ export async function getSmartTaggingResult(
     if (latest && !isTerminalAgentRunStatus(latest.status)) {
       return { status: 'pending', provenance };
     }
+    if (
+      latest?.id
+      && latest.transportVersion === 'servicebus-blob-v2'
+      && isTerminalAgentRunStatus(latest.status)
+      && await isDocumentHarvestPendingForRun(latest.id).catch(() => true)
+    ) {
+      return { status: 'pending', provenance };
+    }
     // skipAutoKickoff leaves the in-process thread idle; a background worker
     // (or in-process sendMessage fallback) may still be starting. Stay pending
     // until a run row exists or the in-memory agent is gone.
@@ -868,7 +968,8 @@ export async function getSmartTaggingResult(
       taggingInFlight.delete(threadId);
       return failedResponse(
         provenance,
-        'Agent completed without generating smart-tagging output.'
+        row.lastError
+        || 'Agent completed without generating smart-tagging output.'
       );
     }
     // After a server restart the in-memory agent is gone but DB may still say

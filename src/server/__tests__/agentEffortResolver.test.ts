@@ -3,6 +3,7 @@ import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import {
   buildCursorModelSelection,
   deriveAgentModule,
+  effortParameterFor,
   resolveEffort,
 } from '../services/agentEffortResolver';
 
@@ -27,21 +28,6 @@ describe('agentEffortResolver', () => {
     });
     expect(buildCursorModelSelection('composer-2', 'high')).toEqual({
       id: 'composer-2',
-    });
-  });
-
-  it('uses the reasoning parameter name advertised by each model family', () => {
-    expect(buildCursorModelSelection('claude-opus-5-5', 'medium')).toEqual({
-      id: 'claude-opus-5-5',
-      params: [{ id: 'effort', value: 'medium' }],
-    });
-    expect(buildCursorModelSelection('claude-sonnet-5-5', 'high')).toEqual({
-      id: 'claude-sonnet-5-5',
-      params: [{ id: 'reasoning_effort', value: 'high' }],
-    });
-    expect(buildCursorModelSelection('gpt-5.6-sol', 'low')).toEqual({
-      id: 'gpt-5.6-sol',
-      params: [{ id: 'reasoning', value: 'low' }],
     });
   });
 
@@ -299,5 +285,54 @@ describe('agentEffortResolver', () => {
         skillConfig
       )
     ).toBe('designDocValidation');
+  });
+});
+
+describe('buildCursorModelSelection', () => {
+  const levels = (...values: string[]) => values.map((value) => ({ value }));
+
+  it('sends effort under the parameter name the model lists', () => {
+    expect(
+      buildCursorModelSelection('grok-4.7', 'high', [
+        { id: 'context', values: levels('256k', '500k') },
+        { id: 'reasoning_effort', values: levels('low', 'medium', 'high') },
+      ]),
+    ).toEqual({ id: 'grok-4.7', params: [{ id: 'reasoning_effort', value: 'high' }] });
+    expect(
+      buildCursorModelSelection('gpt-5.6-sol', 'low', [
+        { id: 'reasoning', values: levels('none', 'low', 'high') },
+      ]),
+    ).toEqual({ id: 'gpt-5.6-sol', params: [{ id: 'reasoning', value: 'low' }] });
+  });
+
+  it('omits effort when no listed parameter accepts the level', () => {
+    expect(buildCursorModelSelection('default', 'high', [])).toEqual({ id: 'default' });
+    expect(
+      buildCursorModelSelection('glm-5.2', 'low', [{ id: 'reasoning', values: levels('high', 'max') }]),
+    ).toEqual({ id: 'glm-5.2' });
+  });
+
+  it('sends `effort` when the catalog was not read, except for Composer', () => {
+    expect(buildCursorModelSelection('claude-opus-5-5', 'medium')).toEqual({
+      id: 'claude-opus-5-5',
+      params: [{ id: 'effort', value: 'medium' }],
+    });
+    expect(buildCursorModelSelection('composer-2.5', 'medium')).toEqual({ id: 'composer-2.5' });
+    expect(
+      buildCursorModelSelection('composer-2.5', 'medium', [{ id: 'effort', values: levels('medium') }]),
+    ).toEqual({ id: 'composer-2.5' });
+    expect(buildCursorModelSelection('claude-opus-5-5')).toEqual({ id: 'claude-opus-5-5' });
+  });
+
+  it('prefers `effort` when a model lists more than one effort parameter', () => {
+    expect(
+      effortParameterFor(
+        [
+          { id: 'reasoning', values: levels('low') },
+          { id: 'effort', values: levels('low') },
+        ],
+        'low',
+      ),
+    ).toBe('effort');
   });
 });

@@ -2,6 +2,13 @@ import * as appInsights from 'applicationinsights';
 
 const connectionString = process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
 
+// Container Apps set CONTAINER_APP_NAME; without a service name every app
+// reports as `unknown_service:node`. The SDK reads it once, at setup.
+const containerAppName = process.env.CONTAINER_APP_NAME?.trim();
+if (containerAppName && !process.env.OTEL_SERVICE_NAME) {
+  process.env.OTEL_SERVICE_NAME = containerAppName;
+}
+
 if (connectionString) {
   appInsights
     .setup(connectionString)

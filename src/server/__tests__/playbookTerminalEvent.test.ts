@@ -47,6 +47,10 @@ jest.mock('../services/chatAgentService', () => ({
   readOutputValidationScorecardMd: jest.fn().mockReturnValue(null),
 }));
 
+jest.mock('../services/playbookSteps/v2StepArtifacts', () => ({
+  readV2ScorecardFiles: jest.fn().mockResolvedValue(undefined),
+}));
+
 import type {
   AgentRunEventEnvelope,
   AgentRunEventStatus,
@@ -61,6 +65,7 @@ import {
   readOutputValidationScorecard,
   readOutputValidationScorecardMd,
 } from '../services/chatAgentService';
+import { readV2ScorecardFiles } from '../services/playbookSteps/v2StepArtifacts';
 
 const AGENT_RUN_ID = 'agent-run-42';
 const STEP_RUN_ID = 'step-run-7';
@@ -200,6 +205,38 @@ describe('VT-01 — a terminal success event resumes the correlated step', () =>
         scorecard: { is_ready: true },
         reportMd: '# report',
       }),
+    });
+  });
+
+  it('reads a V2 run scorecard from its artifacts, not the workspace', async () => {
+    (readV2ScorecardFiles as jest.Mock).mockResolvedValueOnce({
+      scorecard: '{"is_ready":true}',
+      reportMd: '# v2 report',
+    });
+
+    await expect(handleTerminalAgentRunEvent(event('completed'))).resolves.toEqual({
+      handled: 'resumed',
+      stepRunId: STEP_RUN_ID,
+    });
+    expect(readV2ScorecardFiles).toHaveBeenCalledWith(AGENT_RUN_ID);
+    expect(isOutputWorkspaceReadable).not.toHaveBeenCalled();
+    expect(resumeStepRun).toHaveBeenCalledWith({
+      stepRunId: STEP_RUN_ID,
+      output: expect.objectContaining({
+        scorecard: '{"is_ready":true}',
+        reportMd: '# v2 report',
+      }),
+    });
+  });
+
+  it('resumes a V2 run without a scorecard when its manifest has none', async () => {
+    (readV2ScorecardFiles as jest.Mock).mockResolvedValueOnce({ scorecard: null, reportMd: null });
+
+    await handleTerminalAgentRunEvent(event('completed'));
+
+    expect(resumeStepRun).toHaveBeenCalledWith({
+      stepRunId: STEP_RUN_ID,
+      output: { agentRunId: AGENT_RUN_ID, completedAt: '2026-09-19T12:00:00.000Z', threadId: 'thread-1' },
     });
   });
 

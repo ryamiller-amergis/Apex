@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm';
 import { useAppShell } from '../hooks/useAppShell';
 import { useStartChat, useChatThread, useSkillList, useSkillRepos } from '../hooks/useChatThreads';
 import { useProjectSkillConfig, useGlobalDefaultModel, useAvailableModels } from '../hooks/useProjectSkillConfig';
+import { useAvailableModelSelection } from '../hooks/useAvailableModelSelection';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatAttachments, formatAttachmentSize } from '../hooks/useChatAttachments';
 import { useProjectRepositoryReadiness } from '../hooks/useProjectRepositoryReadiness';
@@ -19,6 +20,7 @@ import { useContextEstimate } from '../hooks/useContextEstimate';
 import { useLinkFeatureRequestInterview } from '../hooks/useFeatureRequests';
 import { usePersistStagedLinks } from '../hooks/useLinkedContext';
 import { DEFAULT_MODEL_ID } from '../config/models';
+import { resolveAvailableModelId } from '../../shared/utils/modelAvailability';
 import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 import {
   useInterview,
@@ -34,6 +36,7 @@ import {
 } from '../hooks/useInterviews';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { InterviewBriefReview } from './InterviewBriefReview';
+import { ChatRunProgressLabel } from './ChatRunProgressLabel';
 import { SectionOwnerModal } from './SectionOwnerModal';
 import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
 import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
@@ -49,6 +52,8 @@ import {
   usesGuidedInterviewPhases,
 } from '../utils/interviewPhaseProgress';
 import { InterviewPhaseBar } from './InterviewPhaseBar';
+import { formatChoiceAnswers } from '../utils/formatChoiceAnswers';
+import { createChatTurnId } from '../utils/chatTurnId';
 import { trackEvent, trackException } from '../services/telemetry';
 import { ReadAloudButton } from './ReadAloudButton';
 import {
@@ -216,21 +221,7 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
 
   const handleSubmit = () => {
     if (!allAnswered || sent) return;
-    const lines: string[] = [];
-    let qNum = questionOffset + 1;
-    for (const block of choiceBlocks) {
-      const s = selections[block.id];
-      if (!s) continue;
-      if (s.selected === 'other') {
-        lines.push(`Q${qNum}: ${s.freeform.trim()}`);
-      } else if (s.selected) {
-        const opt = block.options.find((o) => o.letter === s.selected);
-        lines.push(`Q${qNum}: ${s.selected.toUpperCase()} — ${opt?.text ?? s.selected}`);
-        if (s.freeform.trim()) lines.push(`  Notes: ${s.freeform.trim()}`);
-      }
-      qNum++;
-    }
-    onSend(lines.join('\n'));
+    onSend(formatChoiceAnswers(choiceBlocks, selections, questionOffset));
     setSent(true);
   };
 
@@ -389,6 +380,7 @@ const NewInterviewCompose: React.FC = () => {
   const repoReadiness = useProjectRepositoryReadiness(skillConfig?.id, selectedProject || null);
   const { data: globalDefaultModel } = useGlobalDefaultModel();
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
+  useAvailableModelSelection(model, setModel, availableModels);
 
   const interviewSkillOptions = skillConfig?.interviewSkillOptions ?? [];
 
@@ -490,11 +482,14 @@ const NewInterviewCompose: React.FC = () => {
   }, [input]);
 
   useEffect(() => {
-    const newDefault = selectedSkillOption?.model ?? skillConfig?.interviewModel ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID;
+    const newDefault = resolveAvailableModelId(
+      selectedSkillOption?.model?.trim() || skillConfig?.interviewModel?.trim() || globalDefaultModel?.value?.trim() || DEFAULT_MODEL_ID,
+      availableModels ?? [],
+    );
     const prevDefault = prevEffectiveDefaultRef.current;
     prevEffectiveDefaultRef.current = newDefault;
     setModel((current) => current === prevDefault ? newDefault : current);
-  }, [selectedSkillOption?.model, skillConfig?.interviewModel, globalDefaultModel?.value]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedSkillOption?.model, skillConfig?.interviewModel, globalDefaultModel?.value, availableModels]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSend = useCallback(() => {
     const text = input.trim();
@@ -605,7 +600,12 @@ const NewInterviewCompose: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ text: text || 'Please use the attached files as context.', attachments, model }),
+        body: JSON.stringify({
+          turnId: createChatTurnId(),
+          text: text || 'Please use the attached files as context.',
+          attachments,
+          model,
+        }),
       });
       clearAttachments();
       if (linkedContextInitialErrorText) {
@@ -1113,6 +1113,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     retryReason,
     progressLabel,
     progressPhase,
+    toolProgress,
     isPreparing: isPreparingInterview,
     hasPreparationError,
     isInteractionBusy,
@@ -1136,9 +1137,9 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   useEffect(() => {
     const resolved = chatThread?.kickoff.model ?? interview?.model;
     if (resolved) {
-      setModel(resolved);
+      setModel(resolveAvailableModelId(resolved, availableModels ?? []));
     }
-  }, [chatThread?.id, interview?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [chatThread?.id, interview?.id, availableModels]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (streamingText) {
@@ -1260,7 +1261,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   }, [attachments.length, input, sendMessageToAgent]);
 
   const handleRetryLast = useCallback(() => {
-    session.retryLast();
+    void session.retryFailedRun();
   }, [session]);
 
   const handleAttachmentChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1716,11 +1717,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               >
                 {progressPhase === 'queued' ? (
                   <span {...{ 'data-testid': 'agent-run-status-queued' }}>
-                    {friendlyChatProgressLabel(progressLabel, 'queued')}
+                    Queued
                   </span>
                 ) : progressPhase === 'dispatched' ? (
                   <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
-                    {friendlyChatProgressLabel(progressLabel, 'dispatched')}
+                    Dispatched
                   </span>
                 ) : progressLabel ? (
                   friendlyChatProgressLabel(progressLabel, progressPhase)
@@ -1759,7 +1760,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                     <button
                       className={styles.retryBtn}
                       onClick={() => handleRetryLast()}
-                      disabled={isInteractionBusy}
+                      disabled={isInteractionBusy || !session.retryableRunId}
                       type="button"
                       {...{ 'data-testid': 'interview-retry-message' }}
                     >
@@ -1815,7 +1816,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               <span className={styles.typingDot} />
               <span className={styles.typingDot} />
               <span className={styles.typingProgressLabel} {...{ 'data-testid': 'interview-progress-label' }}>
-                {friendlyChatProgressLabel(progressLabel, progressPhase)}
+                <ChatRunProgressLabel
+                  fallbackLabel={friendlyChatProgressLabel(progressLabel, progressPhase)}
+                  progressPhase={progressPhase}
+                  toolProgress={toolProgress}
+                />
               </span>
             </div>
           )}

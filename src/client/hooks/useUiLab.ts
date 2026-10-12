@@ -255,6 +255,8 @@ export function useUiLabStream(onComplete?: (designId: string) => void): UiLabSt
   const xhrRef = useRef<XMLHttpRequest | null>(null);
   const activeDesignId = useRef<string | null>(null);
   const bufferRef = useRef('');
+  const transportRef = useRef<'v1' | 'v2' | null>(null);
+  const seenEventIdsRef = useRef<Set<string>>(new Set());
   const qc = useQueryClient();
 
   const cancelStream = useCallback(() => {
@@ -262,6 +264,8 @@ export function useUiLabStream(onComplete?: (designId: string) => void): UiLabSt
     esRef.current = null;
     xhrRef.current?.abort();
     xhrRef.current = null;
+    transportRef.current = null;
+    seenEventIdsRef.current.clear();
     setPhase('idle');
   }, []);
 
@@ -276,6 +280,8 @@ export function useUiLabStream(onComplete?: (designId: string) => void): UiLabSt
       cancelStream();
       activeDesignId.current = designId;
       bufferRef.current = '';
+      transportRef.current = null;
+      seenEventIdsRef.current.clear();
       setStreamedHtml('');
       setError(null);
       setPhase('streaming');
@@ -288,8 +294,24 @@ export function useUiLabStream(onComplete?: (designId: string) => void): UiLabSt
         es.onmessage = (e) => {
           try {
             const chunk = JSON.parse(e.data) as UiLabStreamChunk;
-            if (chunk.type === 'token' && chunk.text) {
-              bufferRef.current += chunk.text;
+            if (chunk.type === 'transport' && chunk.transport) {
+              transportRef.current = chunk.transport;
+            } else if (
+              (chunk.type === 'token' || chunk.type === 'snapshot')
+              && chunk.text
+            ) {
+              if (
+                e.lastEventId
+                && seenEventIdsRef.current.has(e.lastEventId)
+              ) {
+                return;
+              }
+              if (e.lastEventId) {
+                seenEventIdsRef.current.add(e.lastEventId);
+              }
+              bufferRef.current = chunk.type === 'snapshot'
+                ? chunk.text
+                : bufferRef.current + chunk.text;
               setStreamedHtml(bufferRef.current);
             } else if (chunk.type === 'complete') {
               es.close();
@@ -309,6 +331,11 @@ export function useUiLabStream(onComplete?: (designId: string) => void): UiLabSt
         };
 
         es.onerror = () => {
+          if (transportRef.current === 'v2') {
+            // Native EventSource reconnect preserves Last-Event-ID. The server
+            // replays durable V2 deltas while this buffer stays on screen.
+            return;
+          }
           es.close();
           esRef.current = null;
           setPhase('error');

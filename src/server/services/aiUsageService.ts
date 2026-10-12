@@ -164,33 +164,47 @@ export async function computeCost(opts: {
   );
 }
 
+function usageInsertValues(
+  input: RecordUsageInput,
+): typeof aiUsageEvents.$inferInsert {
+  return {
+    provider: input.provider,
+    modelId: input.modelId,
+    effort: input.effort ?? null,
+    feature: input.feature,
+    project: input.project,
+    skillPath: input.skillPath ?? null,
+    threadId: input.threadId ?? null,
+    runId: input.runId ?? null,
+    entityType: input.entityType ?? null,
+    entityId: input.entityId ?? null,
+    workItemId: input.workItemId ?? null,
+    userId: input.userId ?? null,
+    inputTokens: input.inputTokens,
+    outputTokens: input.outputTokens,
+    cacheReadTokens: input.cacheReadTokens ?? 0,
+    cacheWriteTokens: input.cacheWriteTokens ?? 0,
+    tokenSource: input.tokenSource,
+    costUsd: String(input.costUsd.toFixed(8)),
+    costSource: input.costSource,
+    durationMs: input.durationMs ?? null,
+    status: input.status,
+  };
+}
+
+export async function recordAiUsageAwaited(
+  input: RecordUsageInput,
+  insertUsage: (
+    values: typeof aiUsageEvents.$inferInsert,
+  ) => PromiseLike<unknown> = (values) =>
+    db.insert(aiUsageEvents).values(values),
+): Promise<void> {
+  await insertUsage(usageInsertValues(input));
+}
+
 /** Fire-and-forget insert — never throws. */
 export function recordAiUsage(input: RecordUsageInput): void {
-  db.insert(aiUsageEvents)
-    .values({
-      provider: input.provider,
-      modelId: input.modelId,
-      effort: input.effort ?? null,
-      feature: input.feature,
-      project: input.project,
-      skillPath: input.skillPath ?? null,
-      threadId: input.threadId ?? null,
-      runId: input.runId ?? null,
-      entityType: input.entityType ?? null,
-      entityId: input.entityId ?? null,
-      workItemId: input.workItemId ?? null,
-      userId: input.userId ?? null,
-      inputTokens: input.inputTokens,
-      outputTokens: input.outputTokens,
-      cacheReadTokens: input.cacheReadTokens ?? 0,
-      cacheWriteTokens: input.cacheWriteTokens ?? 0,
-      tokenSource: input.tokenSource,
-      costUsd: String(input.costUsd.toFixed(8)),
-      costSource: input.costSource,
-      durationMs: input.durationMs ?? null,
-      status: input.status,
-    })
-    .catch((err) => {
+  void recordAiUsageAwaited(input).catch((err) => {
       console.error('[aiUsageService] Failed to record usage event:', err);
     });
 }

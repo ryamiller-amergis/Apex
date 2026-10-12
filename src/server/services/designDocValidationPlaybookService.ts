@@ -3,7 +3,7 @@ import { db } from '../db/drizzle';
 import { designDocs, playbookDefinitions, playbookDefinitionVersions, playbookRuns } from '../db/schema';
 import type { PlaybookGraph } from '../../shared/types/playbook';
 import { isFeatureEnabled } from './featureFlagService';
-import { createThread } from './chatAgentService';
+import { createThread, getThread } from './chatAgentService';
 import { getDesignDoc } from './designDocService';
 import { stopDocumentValidationWatcher } from './documentValidationService';
 import { createDefinition, publishDraft } from './playbookDefinitionService';
@@ -203,8 +203,9 @@ export async function startDesignDocValidationPlaybook(input: {
     );
   }
 
-  const validationThreadId = await ensureValidationThread(document.id, document.ownerId);
-  const existing = await findActiveCanonicalRun(input.project, definition.id, validationThreadId);
+  // Looked up by document before the thread: a closed thread is replaced below, and a run
+  // still waiting at a gate would otherwise go unnoticed and start a second scoring.
+  const existing = await findActiveCanonicalRun(input.project, definition.id, document.id);
   if (existing) {
     return {
       runId: existing.id,
@@ -213,6 +214,7 @@ export async function startDesignDocValidationPlaybook(input: {
     };
   }
 
+  const validationThreadId = await ensureValidationThread(document.id, document.ownerId);
   const started = await startRun({
     project: input.project,
     definitionId: definition.id,
@@ -236,7 +238,7 @@ export async function startDesignDocValidationPlaybook(input: {
 async function findActiveCanonicalRun(
   project: string,
   definitionId: string,
-  validationThreadId: string,
+  documentId: string,
 ): Promise<{ id: string; definitionVersionId: string } | undefined> {
   const [row] = await db
     .select({
@@ -252,7 +254,7 @@ async function findActiveCanonicalRun(
       eq(playbookRuns.project, project),
       eq(playbookDefinitionVersions.definitionId, definitionId),
       inArray(playbookRuns.status, ['running', 'suspended']),
-      sql`${playbookRuns.runInput}->>'validationThreadId' = ${validationThreadId}`,
+      sql`${playbookRuns.runInput}->>'documentId' = ${documentId}`,
     ))
     .limit(1);
 
@@ -263,8 +265,12 @@ async function ensureValidationThread(designDocId: string, ownerUserId: string):
   const document = await getDesignDoc(designDocId);
   if (!document) throw new DesignDocValidationPlaybookNotFoundError(designDocId);
   if (document.validationThreadId) {
-    stopDocumentValidationWatcher(designDocId);
-    return document.validationThreadId;
+    // A closed thread fails the repository reader's reauthorization, so the Skill cannot load.
+    const saved = await getThread(document.validationThreadId);
+    if (saved && saved.status !== 'closed') {
+      stopDocumentValidationWatcher(designDocId);
+      return document.validationThreadId;
+    }
   }
 
   const skillConfig = await resolveSkillConfig({

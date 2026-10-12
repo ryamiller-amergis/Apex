@@ -2,7 +2,9 @@ import { HttpMethod, type DaprInvokerCallbackContent } from '@dapr/dapr';
 import {
   parseInteractiveDispatchRequest,
   registerInteractiveDispatchHandler,
+  registerInteractiveHealthHandler,
 } from '../services/interactiveActorHost/entrypoint';
+import { createInFlightCounter } from '../services/interactiveActorHost/shutdownDrain';
 
 describe('interactive actor host dispatch endpoint', () => {
   afterEach(() => {
@@ -36,6 +38,28 @@ describe('interactive actor host dispatch endpoint', () => {
     ).toThrow(
       'Interactive dispatch requires threadId, runId, and dispatchMessageId'
     );
+  });
+
+  it('registers GET /health for Container Apps probes', async () => {
+    let healthCallback:
+      | ((content: DaprInvokerCallbackContent) => Promise<unknown>)
+      | undefined;
+    const listen = jest.fn(
+      async (
+        methodName: string,
+        handler: (content: DaprInvokerCallbackContent) => Promise<unknown>,
+        options: { method: HttpMethod },
+      ) => {
+        if (methodName === 'health') {
+          healthCallback = handler;
+          expect(options).toEqual({ method: HttpMethod.GET });
+        }
+      },
+    );
+
+    await registerInteractiveHealthHandler({ listen });
+    expect(healthCallback).toBeDefined();
+    await expect(healthCallback!({})).resolves.toEqual({ status: 'ok' });
   });
 
   it('registers POST /dispatch and invokes the thread actor', async () => {
@@ -100,6 +124,83 @@ describe('interactive actor host dispatch endpoint', () => {
       accepted: false,
     });
     expect(resolveActor).not.toHaveBeenCalled();
+  });
+
+  it('refuses a dispatch while the host drains, so the orchestrator retries it elsewhere', async () => {
+    let callback:
+      | ((content: DaprInvokerCallbackContent) => Promise<unknown>)
+      | undefined;
+    const listen = jest.fn(
+      async (
+        _methodName: string,
+        handler: (content: DaprInvokerCallbackContent) => Promise<unknown>
+      ) => {
+        callback = handler;
+      }
+    );
+    const resolveActor = jest.fn();
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await registerInteractiveDispatchHandler({ listen }, resolveActor, undefined, {
+      isDraining: () => true,
+      track: (work) => work(),
+    });
+
+    await expect(
+      callback!({
+        body: JSON.stringify({
+          threadId: 'thread-1',
+          runId: 'run-1',
+          dispatchMessageId: 'dispatch-1',
+        }),
+      })
+    ).resolves.toEqual({ accepted: false });
+    expect(resolveActor).not.toHaveBeenCalled();
+  });
+
+  it('counts an accepted dispatch as in flight until the actor replies', async () => {
+    let callback:
+      | ((content: DaprInvokerCallbackContent) => Promise<unknown>)
+      | undefined;
+    const listen = jest.fn(
+      async (
+        _methodName: string,
+        handler: (content: DaprInvokerCallbackContent) => Promise<unknown>
+      ) => {
+        callback = handler;
+      }
+    );
+    let replyFromActor: (value: { status: 'accepted' }) => void = () => {};
+    const handleTurn = jest.fn(
+      () =>
+        new Promise<{ status: 'accepted' }>((resolve) => {
+          replyFromActor = resolve;
+        })
+    );
+    const counter = createInFlightCounter();
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    await registerInteractiveDispatchHandler(
+      { listen },
+      () => ({ handleTurn }),
+      undefined,
+      { isDraining: () => false, track: (work) => counter.track(work) }
+    );
+
+    await expect(
+      callback!({
+        body: JSON.stringify({
+          threadId: 'thread-1',
+          runId: 'run-1',
+          dispatchMessageId: 'dispatch-1',
+        }),
+      })
+    ).resolves.toEqual({ accepted: true });
+    expect(counter.count()).toBe(1);
+
+    replyFromActor({ status: 'accepted' });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(counter.count()).toBe(0);
   });
 
   it('acknowledges dispatch and durably recovers an actor invocation failure', async () => {

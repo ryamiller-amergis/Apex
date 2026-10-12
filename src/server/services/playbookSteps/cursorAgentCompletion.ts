@@ -11,6 +11,19 @@ import {
   readOutputValidationScorecardMd,
 } from '../chatAgentService';
 import { parseStepOutput } from './descriptorValidation';
+import { readV2ScorecardFiles, type StepScorecardFiles } from './v2StepArtifacts';
+
+async function readWorkspaceScorecardFiles(
+  threadId: string | null | undefined,
+): Promise<StepScorecardFiles | null> {
+  if (!threadId) return { scorecard: null, reportMd: null };
+  await hydrateThread(threadId);
+  if (!isOutputWorkspaceReadable(threadId)) return null;
+  return {
+    scorecard: readOutputValidationScorecard(threadId),
+    reportMd: readOutputValidationScorecardMd(threadId),
+  };
+}
 
 /**
  * Returns null when the thread's workspace cannot be read yet. A missing file and an
@@ -24,17 +37,15 @@ export async function cursorAgentCompletionOutput(input: {
   completedAt: string;
   threadId?: string | null;
 }): Promise<Record<string, unknown> | null> {
-  if (input.threadId) {
-    await hydrateThread(input.threadId);
-    if (!isOutputWorkspaceReadable(input.threadId)) return null;
-  }
-  const scorecard = input.threadId ? readOutputValidationScorecard(input.threadId) : null;
-  const reportMd = input.threadId ? readOutputValidationScorecardMd(input.threadId) : null;
+  const files =
+    (await readV2ScorecardFiles(input.agentRunId))
+    ?? (await readWorkspaceScorecardFiles(input.threadId));
+  if (!files) return null;
   return parseStepOutput(input.stepType, {
     agentRunId: input.agentRunId,
     completedAt: input.completedAt,
     ...(input.threadId ? { threadId: input.threadId } : {}),
-    ...(scorecard ? { scorecard } : {}),
-    ...(reportMd ? { reportMd } : {}),
+    ...(files.scorecard ? { scorecard: files.scorecard } : {}),
+    ...(files.reportMd ? { reportMd: files.reportMd } : {}),
   });
 }

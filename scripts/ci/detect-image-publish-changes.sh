@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Detect whether runner/image sources changed between BASE_SHA and HEAD_SHA.
 # Writes GitHub Actions outputs:
-#   load_test_runner, ai_runs_worker, ai_runs_interactive, repo_read_service  (true|false)
+#   load_test_runner, ai_runs_worker, ai_runs_interactive, ai_runs_documents_v2,
+#   ai_runs_visual, ai_orchestrator, repo_read_service  (true|false)
 #
 # Required env:
 #   BASE_SHA
@@ -41,7 +42,42 @@ detect ai_runs_worker \
 detect ai_runs_interactive \
   runners/ai-runs-interactive/ \
   scripts/ci/publish-ai-runs-interactive.sh \
-  src/server/services/interactiveActorHost/
+  src/server/ \
+  src/shared/ \
+  package.json \
+  package-lock.json \
+  tsconfig.server.json
+
+detect ai_runs_documents_v2 \
+  runners/ai-runs-documents-v2/ \
+  scripts/ci/publish-ai-runs-documents-v2.sh \
+  src/server/ \
+  src/shared/ \
+  package.json \
+  package-lock.json \
+  tsconfig.server.json
+
+detect ai_runs_visual \
+  runners/ai-runs-visual/ \
+  scripts/ci/publish-ai-runs-visual.sh \
+  src/server/ \
+  src/shared/ \
+  package.json \
+  package-lock.json \
+  tsconfig.server.json
+
+# The orchestrator image copies all compiled server/shared output and installs
+# production dependencies. Rebuild whenever any of those image inputs change;
+# broad source matching is safer than maintaining a fragile transitive-import
+# allow-list as the orchestrator grows.
+detect ai_orchestrator \
+  runners/ai-orchestrator/ \
+  scripts/ci/publish-ai-orchestrator.sh \
+  src/server/ \
+  src/shared/ \
+  package.json \
+  package-lock.json \
+  tsconfig.server.json
 
 # The service also serves the shared bare reader, so a change there ships too.
 # Shared modules the image embeds fall outside the repoRead/ prefix and must be

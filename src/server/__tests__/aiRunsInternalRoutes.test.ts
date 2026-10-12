@@ -1,10 +1,15 @@
 /**
  * FEAT-004 / TBI-005 session-free AI runner ingest route.
  */
-import express from 'express';
-import request from 'supertest';
-import aiRunsInternalRouter from '../routes/aiRunsInternal';
-import * as aiRunIngestService from '../services/aiRunIngestService';
+const mockDbSelect = jest.fn();
+const mockVerifyProxyToken = jest.fn();
+const mockInvokeToolProxy = jest.fn();
+
+jest.mock('../db/drizzle', () => ({
+  db: {
+    select: (...args: unknown[]) => mockDbSelect(...args),
+  },
+}));
 
 jest.mock('../services/aiRunIngestService', () => {
   class AiRunIngestError extends Error {
@@ -21,6 +26,25 @@ jest.mock('../services/aiRunIngestService', () => {
     ingest: jest.fn(),
   };
 });
+
+jest.mock('../services/interactiveToolProxyToken', () => ({
+  InteractiveToolProxyTokenError: class extends Error {},
+  verifyInteractiveToolProxyToken: (...args: unknown[]) =>
+    mockVerifyProxyToken(...args),
+}));
+
+jest.mock('../services/interactiveToolProxyService', () => ({
+  InteractiveToolProxyError: class extends Error {
+    status = 502;
+  },
+  invokeInteractiveToolProxy: (...args: unknown[]) =>
+    mockInvokeToolProxy(...args),
+}));
+
+import express from 'express';
+import request from 'supertest';
+import aiRunsInternalRouter from '../routes/aiRunsInternal';
+import * as aiRunIngestService from '../services/aiRunIngestService';
 
 const mockIngest = aiRunIngestService.ingest as jest.MockedFunction<
   typeof aiRunIngestService.ingest
@@ -39,6 +63,7 @@ function buildApp() {
 beforeEach(() => {
   jest.clearAllMocks();
   process.env.AI_RUNS_RUNNER_CALLBACK_TOKEN = 'runner-secret';
+  process.env.SESSION_SECRET = 'proxy-test-secret';
   mockIngest.mockResolvedValue({
     cancelRequested: false,
     run: {
@@ -182,5 +207,93 @@ describe('POST /api/internal/ai-runs/:projectId/:runId/ingest', () => {
 
     expect(res.status).toBe(status);
     expect(res.body.code).toBe(code);
+  });
+});
+
+describe('POST /api/internal/ai-runs/:runId/tools/:serverName active attempt', () => {
+  function chainSelect(results: unknown[][]) {
+    let call = 0;
+    mockDbSelect.mockImplementation(() => {
+      const rows = results[call] ?? [];
+      call += 1;
+      const limit = jest.fn().mockResolvedValue(rows);
+      const where = jest.fn().mockReturnValue({ limit });
+      const from = jest.fn().mockReturnValue({ where });
+      return { from };
+    });
+  }
+
+  it('returns 409 when the attempt is not queued|dispatched|running', async () => {
+    mockVerifyProxyToken.mockReturnValue({
+      runId: 'run-1',
+      attemptId: 'attempt-1',
+      dispatchMessageId: 'dispatch-1',
+      serverName: 'ado-skills',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    });
+    chainSelect([
+      [
+        {
+          id: 'run-1',
+          transportVersion: 'dapr-actor-v2',
+          dispatchMessageId: 'dispatch-1',
+        },
+      ],
+      [
+        {
+          id: 'attempt-1',
+          runId: 'run-1',
+          dispatchMessageId: 'dispatch-1',
+          status: 'completed',
+          specSnapshot: {
+            schemaVersion: 1,
+            kind: 'interactive-turn',
+            turnId: '10000000-0000-4000-8000-000000000001',
+            threadId: '10000000-0000-4000-8000-000000000002',
+            userId: '10000000-0000-4000-8000-000000000003',
+            projectId: 'project-1',
+            interactiveClass: 'fast',
+            workflowClass: 'home-chat',
+            model: 'm',
+            effort: null,
+            skill: null,
+            currentMessage: {
+              id: '10000000-0000-4000-8000-000000000001',
+              text: 'x',
+              hidden: false,
+              attachments: [],
+            },
+            transcript: [],
+            grounding: null,
+            mcpServers: [
+              {
+                kind: 'internal-proxy',
+                serverName: 'ado-skills',
+                enableRepoBrowse: true,
+              },
+            ],
+            toolGrant: null,
+            currentPrompt: 'x',
+            recreationPrompt: 'x',
+            deadlines: {
+              absoluteTurnMs: 300_000,
+              repositoryPreparationMs: null,
+              firstEventMs: 30_000,
+              toolCallMs: 60_000,
+            },
+          },
+        },
+      ],
+    ]);
+
+    const res = await request(buildApp())
+      .post('/api/internal/ai-runs/run-1/tools/ado-skills')
+      .query({ token: 'signed-token' })
+      .send({ method: 'tools/call' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('AI_RUN_DISPATCH_MISMATCH');
+    expect(res.body.error).toMatch(/active attempt/i);
+    expect(mockInvokeToolProxy).not.toHaveBeenCalled();
   });
 });

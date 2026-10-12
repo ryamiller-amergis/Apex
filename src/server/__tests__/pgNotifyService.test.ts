@@ -130,7 +130,7 @@ describe('pgNotifyService durable run events', () => {
     expect(mockPoolQuery).toHaveBeenNthCalledWith(
       2,
       expect.stringMatching(/ordinal > \$2/),
-      [envelope.threadId, 12, 500]
+      [envelope.threadId, 12, 501, null]
     );
   });
 
@@ -149,7 +149,7 @@ describe('pgNotifyService durable run events', () => {
     expect(mockPoolQuery).toHaveBeenNthCalledWith(
       2,
       expect.stringContaining('ORDER BY ordinal DESC'),
-      [envelope.threadId, 500, envelope.runId]
+      [envelope.threadId, 501, envelope.runId]
     );
   });
 
@@ -160,7 +160,47 @@ describe('pgNotifyService durable run events', () => {
 
     expect(mockPoolQuery).toHaveBeenCalledWith(
       expect.stringContaining('ORDER BY ordinal DESC'),
-      [envelope.threadId, 500, envelope.runId]
+      [envelope.threadId, 501, envelope.runId]
+    );
+  });
+
+  it('pages oldest-first for lossless domain stream replay', async () => {
+    mockPoolQuery.mockResolvedValue({ rows: [] });
+
+    await replayRunEvents(
+      envelope.threadId,
+      undefined,
+      500,
+      envelope.runId,
+      'oldest',
+    );
+
+    expect(mockPoolQuery).toHaveBeenCalledWith(
+      expect.stringContaining('ORDER BY ordinal ASC'),
+      [envelope.threadId, 501, envelope.runId],
+    );
+    expect(String(mockPoolQuery.mock.calls[0][0])).not.toContain(
+      'ORDER BY ordinal DESC',
+    );
+  });
+
+  it('keeps run filtering when paging after a durable event id', async () => {
+    mockPoolQuery
+      .mockResolvedValueOnce({ rows: [{ ordinal: 12 }] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await replayRunEvents(
+      envelope.threadId,
+      envelope.eventId,
+      500,
+      envelope.runId,
+      'oldest',
+    );
+
+    expect(mockPoolQuery).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('run_id = $4'),
+      [envelope.threadId, 12, 501, envelope.runId],
     );
   });
 
@@ -202,7 +242,7 @@ describe('pgNotifyService durable run events', () => {
 
     expect(clientQuery.mock.calls.map(([sql]) => String(sql).trim().split(/\s+/)[0])).toEqual([
       'BEGIN',
-      'UPDATE',
+      'WITH',
       'INSERT',
       'UPDATE',
       'COMMIT',
@@ -267,7 +307,10 @@ describe('pgNotifyService durable run events', () => {
     );
     expect(clientQuery.mock.calls[1][0]).not.toContain('owner_instance');
     expect(clientQuery.mock.calls.map(([sql]) => String(sql).trim().split(/\s+/)[0]))
-      .toEqual(['BEGIN', 'UPDATE', 'INSERT', 'UPDATE', 'COMMIT']);
+      .toEqual(['BEGIN', 'WITH', 'INSERT', 'UPDATE', 'COMMIT']);
+    // A durable interactive attempt left active would hold orchestrator capacity forever.
+    expect(clientQuery.mock.calls[1][0]).toContain('UPDATE ai_run_attempts');
+    expect(clientQuery.mock.calls[1][0]).toContain("transport_version = 'dapr-actor-v2'");
     expect(release).toHaveBeenCalledTimes(1);
   });
 

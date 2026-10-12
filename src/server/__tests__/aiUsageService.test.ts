@@ -4,6 +4,7 @@ import {
   resolveFeatureFromKickoff,
   resolveUsageEntityFromThread,
   computeCost,
+  recordAiUsageAwaited,
   recordCursorChatUsage,
 } from '../services/aiUsageService';
 
@@ -77,6 +78,25 @@ describe('aiUsageService', () => {
       const text = 'a'.repeat(400);
       expect(estimateTokens(text)).toBe(100);
     });
+  });
+
+  it('provides an awaited usage insert that surfaces persistence failure', async () => {
+    insertValues.mockRejectedValueOnce(new Error('usage insert failed'));
+
+    await expect(
+      recordAiUsageAwaited({
+        provider: 'bedrock',
+        modelId: 'anthropic.claude',
+        feature: 'ui-lab',
+        project: 'Apex',
+        inputTokens: 10,
+        outputTokens: 20,
+        tokenSource: 'exact',
+        costUsd: 0.01,
+        costSource: 'computed',
+        status: 'success',
+      }),
+    ).rejects.toThrow('usage insert failed');
   });
 
   describe('resolveFeatureFromKickoff', () => {

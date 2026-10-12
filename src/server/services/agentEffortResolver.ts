@@ -135,59 +135,54 @@ export function resolveEffort(input: {
     : undefined;
 }
 
+/**
+ * Cursor team policy blocks Composer variants selected through the `effort`
+ * parameter, so Composer models are sent as the plain model id.
+ */
+function acceptsEffortParameter(model: string): boolean {
+  return !model.trim().toLowerCase().startsWith('composer-');
+}
+
+/** The parameter names Cursor models use for reasoning effort. */
+const EFFORT_PARAMETER_IDS = ['effort', 'reasoning_effort', 'reasoning'] as const;
+
+export interface CursorModelParameterDefinition {
+  id: string;
+  values: ReadonlyArray<{ value: string }>;
+}
+
+/**
+ * The parameter a model takes the effort level under, or null when none of
+ * its parameters accepts that level. Cursor rejects a run whose parameter
+ * name or value the model does not list.
+ */
+export function effortParameterFor(
+  parameters: ReadonlyArray<CursorModelParameterDefinition>,
+  effort: EffortLevel,
+): string | null {
+  for (const id of EFFORT_PARAMETER_IDS) {
+    const definition = parameters.find((parameter) => parameter.id === id);
+    if (definition?.values.some((option) => option.value === effort)) return id;
+  }
+  return null;
+}
+
+/**
+ * `parameters` is the model's definition list from `Cursor.models.list()`.
+ * Without it the effort is sent as `effort`, so callers that cannot read the
+ * catalog must pass an effort the model accepts under that name.
+ */
 export function buildCursorModelSelection(
   model: string,
-  effort?: EffortLevel
+  effort?: EffortLevel,
+  parameters?: ReadonlyArray<CursorModelParameterDefinition>,
 ): {
   id: string;
-  params?: Array<{
-    id: 'effort' | 'reasoning' | 'reasoning_effort';
-    value: EffortLevel;
-  }>;
+  params?: Array<{ id: string; value: EffortLevel }>;
 } {
-  if (!effort) return { id: model };
-
-  const normalized = model.trim().toLowerCase();
-  let parameter: 'effort' | 'reasoning' | 'reasoning_effort' | undefined;
-
-  if (
-    normalized.startsWith('claude-opus-') ||
-    normalized === 'opus-latest' ||
-    normalized === 'opus' ||
-    normalized === 'opus-5.5' ||
-    normalized === 'opus-5-5' ||
-    normalized === 'grok-4.6' ||
-    normalized === 'muse-spark-1.3' ||
-    normalized === 'muse-spark' ||
-    normalized === 'muse'
-  ) {
-    parameter = 'effort';
-  } else if (
-    normalized === 'grok-4.7' ||
-    normalized === 'gemini-3.8-flash' ||
-    normalized === 'claude-sonnet-5-5' ||
-    normalized === 'claude-haiku-5-5'
-  ) {
-    parameter = 'reasoning_effort';
-  } else if (
-    normalized === 'gpt-5.6-sol' ||
-    normalized === 'gpt-latest' ||
-    normalized === 'gpt' ||
-    normalized === 'gpt-5-6-sol' ||
-    normalized === 'gpt-5.6' ||
-    normalized === 'gpt-5.6-luna' ||
-    normalized === 'gpt-5-6-luna' ||
-    normalized === 'kimi-k3' ||
-    normalized === 'glm-5.2' ||
-    normalized === 'glm-5p3' ||
-    normalized === 'glm-5p3-flash'
-  ) {
-    parameter = 'reasoning';
-  }
-
-  // Cursor rejects unknown model parameters with a detail-less run error.
-  // Omit effort for models such as Composer that do not advertise one.
-  return parameter
-    ? { id: model, params: [{ id: parameter, value: effort }] }
+  if (!effort || !acceptsEffortParameter(model)) return { id: model };
+  const parameterId = parameters ? effortParameterFor(parameters, effort) : 'effort';
+  return parameterId
+    ? { id: model, params: [{ id: parameterId, value: effort }] }
     : { id: model };
 }

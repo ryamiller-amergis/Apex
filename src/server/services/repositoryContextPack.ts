@@ -5,6 +5,8 @@ export interface RepositoryContextPackInput {
   provider: 'ado' | 'github';
   contextContent?: string | null;
   agentsContent?: string | null;
+  /** True when the agent has `search_repo_code`; interview sessions do not. */
+  searchAvailable?: boolean;
 }
 
 const REPOSITORY_PATH_PREFIXES = [
@@ -73,8 +75,16 @@ export function buildRepositoryContextPack(input: RepositoryContextPackInput): s
     'This repository context was fetched by Apex before the agent run.',
     'Do not call MCP to re-read documents included below.',
     'Use the known-path index for scoped `list_repo_dir` and `get_skill_file` calls.',
-    '`search_repo_code` is intentionally unavailable in interview sessions; if no known path applies,',
-    'state the unresolved assumption or ask the user instead of performing a broad repository search.',
+    ...(input.searchAvailable
+      ? [
+          'Answer from this pack when it is sufficient. Read only the specific files you need,',
+          'and use `search_repo_code` only when no known path applies.',
+          'Do not start subagents (the Task tool); search and read directly, then answer.',
+        ]
+      : [
+          '`search_repo_code` is intentionally unavailable in interview sessions; if no known path applies,',
+          'state the unresolved assumption or ask the user instead of performing a broad repository search.',
+        ]),
   ];
 
   if (contextContent) {

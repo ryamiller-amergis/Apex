@@ -5,6 +5,7 @@ import {
   useDeleteProjectSkillConfig,
   useAvailableModels,
   useAvailableBedrockModels,
+  useGlobalDefaultModel,
   useProjectApprovers,
   useSetProjectApprovers,
 } from '../hooks/useProjectSkillConfig';
@@ -18,6 +19,7 @@ import { useGroupsWithMembers } from '../hooks/useGroups';
 import { GroupAwarePeoplePicker } from './GroupAwarePeoplePicker';
 import { useProjectAvailableSkills } from '../hooks/useFoundationSkillAdmin';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
+import { DEFAULT_MODEL_ID } from '../config/models';
 import {
   formatRepositoryCheckoutStatusLabel,
   useAdminProjectRepositoryReadiness,
@@ -1348,6 +1350,7 @@ interface PipelineStageCardProps {
   edit: EditState;
   skillList: { id: string; path: string; name: string }[];
   availableModels: { id: string; displayName: string }[];
+  systemDefaultModelName: string;
   expanded: boolean;
   onToggle: () => void;
   onEditChange: (patch: Partial<EditState>) => void;
@@ -1361,6 +1364,7 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
   edit,
   skillList,
   availableModels,
+  systemDefaultModelName,
   expanded,
   onToggle,
   onEditChange,
@@ -1373,7 +1377,7 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
   const effortValue = stage.effortKey ? edit[stage.effortKey] : '';
   const defaultModelLabel = edit.defaultModel
     ? availableModels.find((m) => m.id === edit.defaultModel)?.displayName ?? edit.defaultModel
-    : 'system default (composer-2)';
+    : `system default (${systemDefaultModelName})`;
 
   return (
     <div className={styles.stageCard} {...{ 'data-testid': `ps-stage-${stage.skillKey}` }}>
@@ -1656,6 +1660,10 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   const upsert = useUpsertProjectSkillConfig();
   const remove = useDeleteProjectSkillConfig();
   const { data: availableModels = [], isLoading: isLoadingModels } = useAvailableModels();
+  const { data: globalDefaultModel } = useGlobalDefaultModel();
+  const systemDefaultModelId = globalDefaultModel?.value || DEFAULT_MODEL_ID;
+  const systemDefaultModelName =
+    availableModels.find((m) => m.id === systemDefaultModelId)?.displayName ?? systemDefaultModelId;
   const { data: bedrockModels = [] } = useAvailableBedrockModels();
   const { data: allUsers = [] } = useUsers(selectedProject);
 
@@ -2347,7 +2355,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, defaultModel: e.target.value } : prev)}
                     disabled={upsert.isPending || isLoadingModels}
                    {...{ 'data-testid': 'ps-defaultModel' }}>
-                    <option value="">Use system default (composer-2)</option>
+                    <option value="">Use system default ({systemDefaultModelName})</option>
                     {availableModels.map((m) => (
                       <option key={m.id} value={m.id}>{m.displayName}</option>
                     ))}
@@ -2430,6 +2438,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     edit={edit}
                     skillList={skillList}
                     availableModels={availableModels}
+                    systemDefaultModelName={systemDefaultModelName}
                     expanded={isStageExpanded(stage)}
                     onToggle={() => toggleStage(stage.id, stage)}
                     onEditChange={patchEdit}
@@ -2471,7 +2480,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     <span className={styles.modelDefault}>
                       Using: {edit.defaultModel
                         ? availableModels.find((m) => m.id === edit.defaultModel)?.displayName ?? edit.defaultModel
-                        : 'system default (composer-2)'}
+                        : `system default (${systemDefaultModelName})`}
                     </span>
                   )}
                 </div>
@@ -2501,6 +2510,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     edit={edit}
                     skillList={skillList}
                     availableModels={availableModels}
+                    systemDefaultModelName={systemDefaultModelName}
                     expanded={isStageExpanded(stage)}
                     onToggle={() => toggleStage(stage.id, stage)}
                     onEditChange={patchEdit}
@@ -2529,6 +2539,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     edit={edit}
                     skillList={skillList}
                     availableModels={availableModels}
+                    systemDefaultModelName={systemDefaultModelName}
                     expanded={isStageExpanded(stage)}
                     onToggle={() => toggleStage(stage.id, stage)}
                     onEditChange={patchEdit}

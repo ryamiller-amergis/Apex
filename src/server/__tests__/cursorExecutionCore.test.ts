@@ -5,6 +5,7 @@ import {
   CursorExecutionWaitError,
   executeCursorExecutionCore,
   type CursorExecutionRun,
+  type CursorExecutionWaitResult,
 } from '../services/cursorExecutionCore';
 
 const snapshot: Readonly<ExecutionSnapshot> = Object.freeze({
@@ -173,6 +174,52 @@ describe('TBI-004 shared Cursor execution core', () => {
     expect(wait).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ['FINISHED', undefined],
+    ['ERROR', 'Custom tool schema is invalid'],
+  ] as const)('keeps the %s status message only for unsuccessful endings', async (status, expected) => {
+    const run: CursorExecutionRun = {
+      supports: (capability) => capability === 'stream',
+      stream: async function* () {
+        yield { type: 'status', status, message: 'Custom tool schema is invalid' };
+      },
+      wait: jest.fn().mockResolvedValue({ status: 'error' }),
+    };
+
+    const result = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-status-message', sourceInstance: 'status-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+    });
+
+    expect(result.terminalStatusMessage).toBe(expected);
+  });
+
+  it('keeps the stream error message when wait throws', async () => {
+    const run: CursorExecutionRun = {
+      supports: (capability) => capability === 'stream',
+      stream: async function* () {
+        yield { type: 'status', status: 'ERROR', message: 'Custom tool schema is invalid' };
+      },
+      wait: jest.fn().mockRejectedValue(new Error('socket hang up')),
+    };
+
+    const failure = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-wait-throws', sourceInstance: 'status-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(CursorExecutionWaitError);
+    expect((failure as CursorExecutionWaitError).terminalStatusMessage).toBe(
+      'Custom tool schema is invalid',
+    );
+  });
+
   it('completes from the authoritative turn-ended delta with full text', async () => {
     const monitor = createCursorTurnEndMonitor();
     monitor.observe({ type: 'text-delta', text: '## Home' });
@@ -180,7 +227,7 @@ describe('TBI-004 shared Cursor execution core', () => {
     monitor.observe({ type: 'turn-ended' });
 
     const cancel = jest.fn().mockResolvedValue(undefined);
-    const wait = jest.fn().mockResolvedValue({ status: 'cancelled' });
+    const wait = jest.fn().mockResolvedValue({ status: 'finished' });
     const run: CursorExecutionRun = {
       supports: (capability) =>
         capability === 'stream' || capability === 'cancel',
@@ -199,6 +246,45 @@ describe('TBI-004 shared Cursor execution core', () => {
       sink: { publish: () => {} },
       nextSequence: () => 1,
       turnEnd: monitor.completion,
+    });
+
+    expect(result.text).toBe('## Home page');
+    expect(result.completedOnTurnEnd).toBe(true);
+    // A cancelled run's turn is dropped from the agent's conversation.
+    expect(cancel).not.toHaveBeenCalled();
+    expect(wait).toHaveBeenCalledTimes(1);
+    expect(result.waitResult.status).toBe('finished');
+  });
+
+  it('cancels a run that does not settle after turn end', async () => {
+    const monitor = createCursorTurnEndMonitor();
+    monitor.observe({ type: 'text-delta', text: '## Home page' });
+    monitor.observe({ type: 'turn-ended' });
+
+    let settle!: (result: CursorExecutionWaitResult) => void;
+    const wait = jest.fn(
+      () => new Promise<CursorExecutionWaitResult>((resolve) => { settle = resolve; }),
+    );
+    const cancel = jest.fn(async () => settle({ status: 'cancelled' }));
+    const run: CursorExecutionRun = {
+      supports: (capability) =>
+        capability === 'stream' || capability === 'cancel',
+      stream: async function* () {
+        await new Promise<never>(() => {});
+        yield { type: 'status', status: 'RUNNING' };
+      },
+      wait,
+      cancel,
+    };
+
+    const result = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-turn-end-stuck', sourceInstance: 'turn-end-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+      turnEnd: monitor.completion,
+      turnEndSettleMs: 10,
     });
 
     expect(result.text).toBe('## Home page');

@@ -93,6 +93,7 @@ function addTokenUsage(
 export interface CursorExecutionWaitResult {
   status: string;
   result?: string;
+  error?: unknown;
   /** Cumulative usage across turns; absent when the runtime reported none. */
   usage?: unknown;
 }
@@ -101,6 +102,8 @@ export class CursorExecutionWaitError extends Error {
   constructor(
     public readonly cause: unknown,
     public readonly usage?: CursorTokenUsage,
+    /** Raw stream error text; sanitize before persisting or displaying. */
+    public readonly terminalStatusMessage?: string,
   ) {
     super(cause instanceof Error ? cause.message : 'Cursor run wait failed');
     this.name = 'CursorExecutionWaitError';
@@ -474,12 +477,31 @@ export interface ExecuteCursorExecutionCoreInput {
   maxIdenticalToolCalls?: number;
   /** Authoritative end-of-turn signal captured from Cursor's onDelta callback. */
   turnEnd?: Promise<CursorTurnEndResult>;
+  /** How long a run may take to settle after turn end before it is cancelled. */
+  turnEndSettleMs?: number;
+}
+
+const DEFAULT_TURN_END_SETTLE_MS = 5_000;
+
+async function settlesWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => true, () => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export interface CursorExecutionResult {
   text: string;
   waitResult: CursorExecutionWaitResult;
   completedOnTurnEnd?: boolean;
+  terminalStatusMessage?: string;
   /**
    * Real token counts from the runtime, covering the full prompt the model saw
    * (system prompt, skill, grounding, history, tool output). Absent when the
@@ -515,6 +537,8 @@ export async function executeCursorExecutionCore(
   let anonymousToolUseCount = 0;
   let streamedUsage: CursorTokenUsage | undefined;
   let completedOnTurnEnd = false;
+  let turnEndWait: Promise<CursorExecutionWaitResult> | null = null;
+  let terminalStatusMessage: string | undefined;
   const identicalToolCallCounts = new Map<string, number>();
 
   const publish = async (event: SseEvent, phase?: AgentRunPhase): Promise<void> => {
@@ -558,7 +582,14 @@ export async function executeCursorExecutionCore(
         }
         streamedUsage =
           readTokenUsage(turnEndEvent.usage) ?? streamedUsage;
-        if (run.cancel && run.supports('cancel')) {
+        // Cursor drops a cancelled run's turn from the agent's conversation, so
+        // only cancel a run that does not settle on its own after turn end.
+        turnEndWait = run.wait();
+        const settled = await settlesWithin(
+          turnEndWait,
+          input.turnEndSettleMs ?? DEFAULT_TURN_END_SETTLE_MS,
+        );
+        if (!settled && run.cancel && run.supports('cancel')) {
           try {
             await run.cancel();
           } catch {
@@ -630,10 +661,16 @@ export async function executeCursorExecutionCore(
           }
         }
       } else if (event.type === 'status') {
-        const status = String(
-          (event as { status?: unknown }).status ?? '',
-        ).toUpperCase();
+        const statusEvent = event as {
+          status?: unknown;
+          message?: unknown;
+        };
+        const status = String(statusEvent.status ?? '').toUpperCase();
         if (['FINISHED', 'ERROR', 'CANCELLED', 'EXPIRED'].includes(status)) {
+          terminalStatusMessage =
+            status !== 'FINISHED' && typeof statusEvent.message === 'string'
+              ? statusEvent.message
+              : undefined;
           break;
         }
       } else if (event.type === 'thinking') {
@@ -702,14 +739,15 @@ export async function executeCursorExecutionCore(
   await flushThinkingPhase();
   let waitResult: CursorExecutionWaitResult;
   try {
-    waitResult = await run.wait();
+    waitResult = await (turnEndWait ?? run.wait());
   } catch (error) {
-    throw new CursorExecutionWaitError(error, streamedUsage);
+    throw new CursorExecutionWaitError(error, streamedUsage, terminalStatusMessage);
   }
   return {
     text: textBuffer,
     waitResult,
     completedOnTurnEnd,
+    terminalStatusMessage,
     // `wait()` reports cumulative usage for the whole run; the summed stream
     // events are the fallback for runtimes that only emit per-turn events.
     usage: readTokenUsage(waitResult.usage) ?? streamedUsage,

@@ -96,7 +96,10 @@ jest.mock('../services/runGroundingService', () => ({
       updatedAt: '2026-08-06T00:00:00.000Z',
     }]),
     persistThenMarkTerminalInactive: jest.fn().mockImplementation(
-      async (_run: unknown, persist: () => Promise<unknown>) => persist(),
+      async (_run: unknown, persist: () => Promise<unknown>) => ({
+        persisted: await persist(),
+        deactivatedCount: 0,
+      }),
     ),
   },
 }));
@@ -255,6 +258,7 @@ import {
   revertPrdSection,
   dismissPrdFixSession,
   createPrdAdoWorkItems,
+  createPrdValidationAdapter,
 } from '../services/prdService';
 import { hashPrdValidationContent } from '../../shared/utils/prdValidationFastPath';
 
@@ -1493,6 +1497,72 @@ describe('syncPrdContent', () => {
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({ backlogJson: backlog }),
     );
+  });
+
+  it('returns false when a generation completion loses its status and thread CAS', async () => {
+    const returningMock = jest.fn().mockResolvedValue([]);
+    const whereMock = jest.fn().mockReturnValue({
+      returning: returningMock,
+    });
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await expect(
+      syncPrdContent(
+        'prd-1',
+        'content',
+        { items: [] },
+        'draft',
+        {
+          expectedStatus: 'generating',
+          expectedThreadId: 'thread-prd',
+        },
+      ),
+    ).resolves.toBe(false);
+    expect(returningMock).toHaveBeenCalled();
+  });
+});
+
+describe('createPrdValidationAdapter', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('does not record or notify when another validation thread took over the PRD', async () => {
+    const { notifyAiCompletion: mockNotifyAiCompletion } = jest.requireMock(
+      '../services/aiCompletionNotifier',
+    ) as { notifyAiCompletion: jest.Mock };
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      fixBaseline: null,
+      status: 'validating',
+      content: '# PRD',
+      backlogJson: null,
+    });
+    const returningMock = jest.fn().mockResolvedValue([]);
+    const whereMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+    const adapter = createPrdValidationAdapter(
+      makePrdRow({ status: 'validating' }) as never,
+    );
+
+    await expect(
+      adapter.updateDbForValidationResult(
+        {
+          slug: 'feature-prd',
+          generated_at: '2026-01-01T00:00:00Z',
+          review_phase: 'initial',
+          overall_score: 82,
+          ready_threshold: 90,
+          is_ready: false,
+          verdict: 'gaps',
+          files: [],
+        } as never,
+        '# Report',
+        'stale-thread',
+      ),
+    ).resolves.toBe(false);
+
+    expect(whereMock).toHaveBeenCalledTimes(2);
+    expect(mockNotifyAiCompletion).not.toHaveBeenCalled();
   });
 });
 

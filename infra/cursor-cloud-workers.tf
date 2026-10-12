@@ -43,7 +43,7 @@ resource "azurerm_role_assignment" "cursor_prompt_api_blob_contributor" {
 }
 
 resource "azurerm_role_assignment" "cursor_prompt_staging_blob_contributor" {
-  count = var.enable_staging_slot ? 1 : 0
+  count = var.enable_staging_slot && !var.staging_slot_shares_app_identity ? 1 : 0
 
   scope                = azurerm_storage_container.shared["cursor-prompts"].resource_manager_id
   role_definition_name = "Storage Blob Data Contributor"
