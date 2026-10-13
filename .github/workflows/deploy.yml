@@ -23,6 +23,8 @@ jobs:
     outputs:
       ai_orchestrator: ${{ steps.image_publish.outputs.ai_orchestrator }}
       ai_runs_interactive: ${{ steps.image_publish.outputs.ai_runs_interactive }}
+      ai_runs_documents_v2: ${{ steps.image_publish.outputs.ai_runs_documents_v2 }}
+      ai_runs_visual: ${{ steps.image_publish.outputs.ai_runs_visual }}
 
     steps:
       - name: Checkout code
@@ -30,14 +32,24 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Diff against the last deploy that reached production, not the previous
+      # push: a cancelled or failed deploy must not strand its image changes.
       - name: Detect runner image source changes
         id: image_publish
         env:
-          BASE_SHA: ${{ github.event.before }}
+          GH_TOKEN: ${{ github.token }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
           HEAD_SHA: ${{ github.sha }}
         run: |
-          if [ -z "${BASE_SHA}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
-            BASE_SHA="$(git rev-parse HEAD~1)"
+          BASE_SHA="$(gh run list --repo "${{ github.repository }}" --workflow deploy.yml --branch main --status success --limit 1 --json headSha --jq '.[0].headSha' 2>/dev/null || true)"
+          if [ -n "${BASE_SHA}" ] && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "Base: last successful deploy ${BASE_SHA}"
+          else
+            echo "::warning::Last successful deploy not found; diffing against the previous push."
+            BASE_SHA="${PUSH_BEFORE_SHA}"
+            if [ -z "${BASE_SHA}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
+              BASE_SHA="$(git rev-parse HEAD~1)"
+            fi
           fi
           export BASE_SHA
           bash scripts/ci/detect-image-publish-changes.sh
@@ -486,6 +498,26 @@ jobs:
           SKIP_APP_UPDATE: true
         run: bash scripts/ci/publish-ai-runs-interactive.sh
 
+      - name: Publish AI-runs V2 document worker image
+        if: >-
+          steps.image_publish.outputs.ai_runs_documents_v2 == 'true' &&
+          hashFiles('runners/ai-runs-documents-v2/Dockerfile') != ''
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+          SKIP_APP_UPDATE: true
+        run: bash scripts/ci/publish-ai-runs-documents-v2.sh
+
+      - name: Publish AI-runs V2 visual worker image
+        if: >-
+          steps.image_publish.outputs.ai_runs_visual == 'true' &&
+          hashFiles('runners/ai-runs-visual/Dockerfile') != ''
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+          SKIP_APP_UPDATE: true
+        run: bash scripts/ci/publish-ai-runs-visual.sh
+
       - name: Publish AI orchestrator image to staging
         if: >-
           steps.image_publish.outputs.ai_orchestrator == 'true' &&
@@ -584,6 +616,26 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
           SKIP_IMAGE_PUBLISH: true
         run: bash scripts/ci/publish-ai-runs-interactive.sh
+
+      - name: Promote V2 document worker image to production
+        if: needs.deploy-staging.outputs.ai_runs_documents_v2 == 'true'
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_RUNS_DOCUMENTS_V2_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_DOCUMENTS_V2_CONTAINER_APP_NAME || 'ca-apex-ai-runs-documents-v2-prd' }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+          SKIP_IMAGE_PUBLISH: true
+        run: bash scripts/ci/publish-ai-runs-documents-v2.sh
+
+      - name: Promote V2 visual worker image to production
+        if: needs.deploy-staging.outputs.ai_runs_visual == 'true'
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_RUNS_VISUAL_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_VISUAL_CONTAINER_APP_NAME || 'ca-apex-ai-runs-visual-v2-prd' }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+          SKIP_IMAGE_PUBLISH: true
+        run: bash scripts/ci/publish-ai-runs-visual.sh
 
       - name: Smoke test production
         id: smoke
