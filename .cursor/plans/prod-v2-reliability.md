@@ -51,8 +51,14 @@ Fix the four prod failures from Oct 12–13 and make the next one page Aneesh in
 - [x] Disk-full cold-clone test in repoCacheService.test.ts; retry no longer re-runs on `RepoCacheDiskFullError`.
 - [x] Full suite: 3 git-heavy suites time out under full parallel load only (pass alone).
 
+- [x] Work was pushed to main by mistake (7a4f2139); deploy cancelled before swap, main force-reset to 9afd20b6, work now on PR #212 (https://github.com/ryamiller-amergis/Apex/pull/212).
+- [x] Alerts applied in prd (28 rules + action group). `cursor-prompts` container imported (it already existed). main.tf logging now matches prod portal settings (no drift).
+- [x] Email hours: `alert_email_hours` → alert processing rule suppresses emails outside 08:00–18:00 Eastern daily (filter: rule ID contains `/rg-apex-prd-data/`).
+- [x] Storage web test trimmed to 1 location every 15 min (~$1/month); total alert cost ~$11/month.
+
 ## Next
-1. User deploys app + workers; applies alerts with the `-target` list (a full apply would also revert portal-enabled App Service file logging and create the `cursor-prompts` container — drift).
+1. After #212 merges and deploys: `terraform apply -target=azurerm_application_insights_standard_web_test.storage -target=azurerm_monitor_metric_alert.storage_availability` (prd workspace, terraform.prd.tfvars). Prod returns 401 for /api/health/storage until then.
+1a. Done: `migrations/20261013120200_adr-thread-bundled-skill-flag.sql` flags existing ADR assistant/finalize threads (match on skill name; fallback only runs after the project read fails). Dry-run locally: valid, idempotent; local DB has no such threads.
 2. Staging check: kill the agentic app container, confirm `/health` goes degraded → 503 and the sidecar restarts.
 3. Optional: repair 0-byte refs in the prod Apex mirror (ask first); look at the StandupScheduler query error (App Service only, not V2; separate fix).
 
