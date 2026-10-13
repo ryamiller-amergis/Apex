@@ -54,6 +54,7 @@ const V2_WORKLOAD_LANE = 'document' as const;
 /** Generation workflows that reuse the interview's shared SHA checkout (no full clone). */
 const SHARED_READ_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new Set([
   'prd',
+  'adr',
   'design-doc',
   'test-cases',
 ]);

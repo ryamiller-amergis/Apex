@@ -1,5 +1,36 @@
 [
   {
+    "version": "1.39.1",
+    "date": "2026-10-13",
+    "title": "Production Reliability",
+    "changes": [
+      {
+        "type": "bugfix",
+        "description": "The ADR Apex Assistant and ADR generation work again in every project, even when the ADR skill lives in a different skills folder or only ships with Apex"
+      },
+      {
+        "type": "bugfix",
+        "description": "A failed ADR generation returns the ADR to In Progress and notifies the author instead of staying stuck on Generating"
+      },
+      {
+        "type": "improvement",
+        "description": "ADR generation runs on the background agent lane and no longer waits on the repository readiness check when V2 is on"
+      },
+      {
+        "type": "bugfix",
+        "description": "Interview questions without choices show a short skip hint instead of a lone \"Skip — decide later\" option"
+      },
+      {
+        "type": "improvement",
+        "description": "A chat or interview turn that never starts is retried once automatically, and agent workers restart a broken Dapr sidecar on their own"
+      },
+      {
+        "type": "improvement",
+        "description": "Repository storage removes abandoned clones, refuses a clone when the disk is nearly full with a clear message, and reports its health at /api/health/storage"
+      }
+    ]
+  },
+  {
     "version": "1.39.0",
     "date": "2026-09-22",
     "title": "First Real Playbook",

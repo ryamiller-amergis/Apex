@@ -83,6 +83,10 @@ jest.mock('../services/cloudAgentQueueScheduler', () => ({
   startCloudAgentQueueScheduler: jest.fn(),
   stopCloudAgentQueueScheduler: jest.fn(),
 }));
+jest.mock('../services/durableInteractiveTurnService', () => ({
+  durableInteractiveTurnService: { retry: jest.fn() },
+  loadDurableInteractiveRetrySource: jest.fn(),
+}));
 
 import {
   assessAgentRunHealth,
@@ -1094,6 +1098,67 @@ describe('reapOrphanedRuns', () => {
           detail: 'Interactive agent did not start. Please retry.',
         }),
       );
+    });
+
+    it('retries a never-started turn once when it is eligible', async () => {
+      mockFindMany.mockResolvedValue([durableRow({
+        status: 'dispatched',
+        dispatchedAt: timestamp(60_001),
+        requestedByUserId: 'user-1',
+      })]);
+      const neverStartedTurnRetry = {
+        isEligible: jest.fn().mockResolvedValue(true),
+        retry: jest.fn().mockResolvedValue(undefined),
+      };
+
+      await reapOrphanedRuns({ now: () => now, config, neverStartedTurnRetry });
+
+      const turn = { runId: 'run-durable', threadId: 'thread-durable', userId: 'user-1' };
+      expect(neverStartedTurnRetry.isEligible).toHaveBeenCalledWith(turn);
+      expect(mockMarkTerminal).toHaveBeenCalledWith(
+        'run-durable',
+        expect.objectContaining({
+          terminalReason: 'worker_lost',
+          detail: 'Interactive agent did not start. Retrying automatically.',
+        }),
+      );
+      expect(neverStartedTurnRetry.retry).toHaveBeenCalledWith(turn);
+    });
+
+    it('asks the user to retry when the turn is not eligible for an automatic retry', async () => {
+      mockFindMany.mockResolvedValue([durableRow({
+        status: 'dispatched',
+        dispatchedAt: timestamp(60_001),
+        requestedByUserId: 'user-1',
+      })]);
+      const neverStartedTurnRetry = {
+        isEligible: jest.fn().mockResolvedValue(false),
+        retry: jest.fn(),
+      };
+
+      await reapOrphanedRuns({ now: () => now, config, neverStartedTurnRetry });
+
+      expect(mockMarkTerminal).toHaveBeenCalledWith(
+        'run-durable',
+        expect.objectContaining({ detail: 'Interactive agent did not start. Please retry.' }),
+      );
+      expect(neverStartedTurnRetry.retry).not.toHaveBeenCalled();
+    });
+
+    it('does not retry a running turn whose heartbeat went silent', async () => {
+      mockFindMany.mockResolvedValue([durableRow({
+        status: 'running',
+        dispatchedAt: timestamp(5 * 60_000),
+        startedAt: timestamp(5 * 60_000),
+        heartbeatAt: timestamp(60_001),
+        requestedByUserId: 'user-1',
+      })]);
+      const neverStartedTurnRetry = { isEligible: jest.fn(), retry: jest.fn() };
+
+      await reapOrphanedRuns({ now: () => now, config, neverStartedTurnRetry });
+
+      expect(neverStartedTurnRetry.isEligible).not.toHaveBeenCalled();
+      expect(neverStartedTurnRetry.retry).not.toHaveBeenCalled();
     });
 
     it('fails a running turn whose heartbeat went silent', async () => {

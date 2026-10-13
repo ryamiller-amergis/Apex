@@ -61,6 +61,9 @@ function isExpectedOutputPath(
         || /\.prd\.md$/i.test(name)
         || /\.backlog\.json$/i.test(name)
       );
+    case 'adr':
+      if (segments.length !== 1) return false;
+      return /\.adr\.md$/i.test(name);
     case 'design-doc':
       if (
         segments.length > 2
@@ -153,6 +156,9 @@ function assertExpectedOutputSet(
     case 'prd':
       assertSingleMatch(names, /(?:^PRD\.md$|\.prd\.md$)/i, 'PRD markdown');
       assertSingleMatch(names, /\.backlog\.json$/i, 'backlog JSON');
+      return;
+    case 'adr':
+      assertSingleMatch(names, /\.adr\.md$/i, 'ADR markdown');
       return;
     case 'design-doc':
       assertCompleteDesignTriplets(names);

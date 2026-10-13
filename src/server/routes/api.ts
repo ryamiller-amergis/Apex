@@ -64,6 +64,7 @@ import {
   RejectProposalRequestSchema,
 } from '../../shared/types/calendarWorkItemAssistant';
 
+import { checkStorageHealth } from '../services/storageHealthService';
 import runGroundingsRouter from './runGroundings';
 import diagramsRouter from './diagrams';
 import playbooksRouter from './playbooks';
@@ -75,6 +76,7 @@ const publicHealthPaths = new Set([
   '/health/dependencies',
   '/health/db',
   '/health/agents',
+  '/health/storage',
 ]);
 
 export function isPublicHealthPath(path: string): boolean {
@@ -434,6 +436,12 @@ router.get('/health/ready', (_req: Request, res: Response) => sendDatabaseReadin
 
 // GET /api/health/db - Database readiness compatibility alias
 router.get('/health/db', (_req: Request, res: Response) => sendDatabaseReadinessHealth(res));
+
+// GET /api/health/storage - Data root, Azure Files workspace mount, and free disk space
+router.get('/health/storage', async (_req: Request, res: Response) => {
+  const report = await checkStorageHealth();
+  res.status(report.status === 'ok' ? 200 : 503).json(report);
+});
 
 // GET /api/health/dependencies - External dependency health
 router.get('/health/dependencies', async (_req: Request, res: Response) => {

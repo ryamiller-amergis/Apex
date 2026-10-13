@@ -15,6 +15,7 @@
  */
 export type BackgroundWorkflowClass =
   | 'prd'
+  | 'adr'
   | 'design-doc'
   | 'validation'
   | 'test-cases'

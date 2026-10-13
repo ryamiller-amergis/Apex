@@ -403,6 +403,7 @@ router.post('/threads', async (req: Request, res: Response) => {
     const {
       effort: _clientEffort,
       agentModule: _clientAgentModule,
+      skillPathIsAppDefault: _clientSkillPathIsAppDefault,
       ...clientKickoff
     } = body.kickoff;
     const skillConfig = await resolveSkillConfig({

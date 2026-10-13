@@ -7,8 +7,8 @@
  * run can still be abandoned when its worker heartbeat stops.
  */
 import { db } from '../db/drizzle';
-import { agentRuns, chatThreads } from '../db/schema';
-import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
+import { agentRuns, aiRunAttempts, chatThreads } from '../db/schema';
+import { and, count, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import { randomUUID } from 'crypto';
 import type {
   AgentRunEventEnvelope,
@@ -41,6 +41,10 @@ import {
   withRepoCacheLease,
 } from './repoCacheLeaseService';
 import { isDocumentHarvestPendingForRun } from './aiRunV2/finishedAttemptReader';
+import {
+  durableInteractiveTurnService,
+  loadDurableInteractiveRetrySource,
+} from './durableInteractiveTurnService';
 
 const REAP_INTERVAL_MS = 60_000;
 export const RETIRE_REAP_INTERVAL_MS = 5 * 60_000;
@@ -186,7 +190,36 @@ export interface ReaperOptions {
   eventDrivenTerminationEnabled?: (threadId: string) => Promise<boolean>;
   retireReconcileDue?: boolean;
   signal?: AbortSignal;
+  neverStartedTurnRetry?: NeverStartedTurnRetry;
 }
+
+export interface NeverStartedTurn {
+  runId: string;
+  threadId: string;
+  userId: string;
+}
+
+/** Retries, once, a durable interactive turn whose worker never picked it up. */
+export interface NeverStartedTurnRetry {
+  isEligible(turn: NeverStartedTurn): Promise<boolean>;
+  retry(turn: NeverStartedTurn): Promise<void>;
+}
+
+const defaultNeverStartedTurnRetry: NeverStartedTurnRetry = {
+  async isEligible(turn) {
+    const [attempts] = await db
+      .select({ total: count() })
+      .from(aiRunAttempts)
+      .where(eq(aiRunAttempts.runId, turn.runId));
+    if (Number(attempts?.total ?? 0) !== 1) return false;
+    const source = await loadDurableInteractiveRetrySource(turn);
+    // A delegated Azure DevOps token cannot be re-issued without the user.
+    return source !== null && source.specification.toolGrant === null;
+  },
+  async retry(turn) {
+    await durableInteractiveTurnService.retry(turn);
+  },
+};
 
 function positiveDuration(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
@@ -829,6 +862,8 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
     const workerProgressTimeoutMs =
       config.workerProgressTimeoutMs ?? DEFAULT_WORKER_PROGRESS_TIMEOUT_MS;
     const cancelGraceMs = config.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
+    const neverStartedTurnRetry =
+      options.neverStartedTurnRetry ?? defaultNeverStartedTurnRetry;
     const nowMs = options.now?.() ?? Date.now();
     const updatedAt = new Date(nowMs).toISOString();
     throwIfAborted(signal);
@@ -904,12 +939,21 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
         && (row.status === 'dispatched' || (durableInteractive && row.status === 'running'))
       ) {
         let detail: string | null = null;
+        let retryTurn: NeverStartedTurn | null = null;
         if (row.status === 'dispatched') {
           const startBudgetMs = durableInteractive
             ? config.durableInteractiveStartTimeoutMs ?? DEFAULT_DURABLE_INTERACTIVE_START_TIMEOUT_MS
             : dispatchColdStartMs;
           if (ageMs(row.dispatchedAt, nowMs) >= startBudgetMs) {
-            detail = 'Interactive agent did not start. Please retry.';
+            const candidate = durableInteractive && row.requestedByUserId
+              ? { runId: row.id, threadId: row.threadId, userId: row.requestedByUserId }
+              : null;
+            if (candidate && await neverStartedTurnRetry.isEligible(candidate).catch(() => false)) {
+              retryTurn = candidate;
+            }
+            detail = retryTurn
+              ? 'Interactive agent did not start. Retrying automatically.'
+              : 'Interactive agent did not start. Please retry.';
           }
         } else if (
           ageMs(row.heartbeatAt ?? row.startedAt ?? row.dispatchedAt, nowMs)
@@ -944,6 +988,19 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
                 workerTelemetryContext(row),
               );
             });
+          }
+          if (terminal.ok && retryTurn) {
+            try {
+              await neverStartedTurnRetry.retry(retryTurn);
+              console.log(
+                `[reaper] Retried interactive run that never started (id=${row.id}, threadId=${row.threadId})`,
+              );
+            } catch (error) {
+              console.warn(
+                `[reaper] Automatic retry failed (id=${row.id}, threadId=${row.threadId}):`,
+                error instanceof Error ? error.message : error,
+              );
+            }
           }
         }
         continue;

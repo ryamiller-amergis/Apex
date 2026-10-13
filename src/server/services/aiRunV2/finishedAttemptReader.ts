@@ -201,6 +201,7 @@ export function createFinishedAttemptReader(deps?: {
             AND a.status IN ('completed', 'failed', 'cancelled')
             AND r.execution_snapshot->>'workflowClass' IN (
               'prd',
+              'adr',
               'design-doc',
               'validation',
               'test-cases',
@@ -272,6 +273,7 @@ export function createFinishedAttemptReader(deps?: {
           AND latest_attempt.status IN ('completed', 'failed', 'cancelled')
           AND r.execution_snapshot->>'workflowClass' IN (
             'prd',
+            'adr',
             'design-doc',
             'validation',
             'test-cases',

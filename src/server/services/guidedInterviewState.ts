@@ -397,7 +397,7 @@ export function buildGuidedInterviewTurnPrompt(
           'Prefer an open question about a real example. Use choices only to confirm or narrow a decision already supported by the prior Q&A or application brief.',
           'If choices are needed, each choice must decide one thing, remain mutually exclusive, and use one short plain sentence without markdown bold.',
           'If the prior Q&A already answers this topic, state the concise recommendation and offer Confirm, Change, and Skip — decide later.',
-          'End every numbered Discovery or Delivery topic with the literal option "Skip — decide later".',
+          'For an open question, do not list any choices. When you list lettered choices, make the last one the literal choice "Skip — decide later".',
           'Never turn an inference or assumption into a confirmed requirement. Name it as an assumption in a confirmation brief.',
         ]),
     'Do not combine topics, add quick clarifications, preview later questions, or renumber the topic.',
@@ -417,6 +417,41 @@ export function buildGuidedInterviewTurnPrompt(
   ].join('\n');
 }
 
+// Matches the client's choice parser (parseAgentMessage.ts): letters a–e, and
+// it renders choice buttons only for two or more options.
+const LETTERED_CHOICE_RE = /^[\s\-*]*([a-eA-E])[.)]\s+(.+)$/;
+const SKIP_TEXT_RE = /^\**\s*skip\s*[—-]\s*decide later\b/i;
+const OPEN_QUESTION_SKIP_HINT = '_Not sure yet? Reply "skip" to decide later._';
+
+function withSkipAffordance(text: string): string {
+  const lines = text.trimEnd().split('\n');
+  const choiceLetters: string[] = [];
+  let hasSkipChoice = false;
+  let lastChoiceIndex = -1;
+  lines.forEach((line, index) => {
+    const match = line.match(LETTERED_CHOICE_RE);
+    if (!match) return;
+    lastChoiceIndex = index;
+    if (SKIP_TEXT_RE.test(match[2].trim())) hasSkipChoice = true;
+    else choiceLetters.push(match[1].toLowerCase());
+  });
+
+  if (choiceLetters.length === 0) {
+    const kept = lines.filter((line) => {
+      const choice = line.match(LETTERED_CHOICE_RE);
+      return !SKIP_TEXT_RE.test((choice ? choice[2] : line).trim());
+    });
+    return `${kept.join('\n').trimEnd()}\n\n${OPEN_QUESTION_SKIP_HINT}`;
+  }
+  if (hasSkipChoice) return lines.join('\n');
+
+  const lastLetter = choiceLetters.reduce((max, letter) => (letter > max ? letter : max));
+  if (lastLetter >= 'e') return `${lines.join('\n')}\n\n${OPEN_QUESTION_SKIP_HINT}`;
+  const nextLetter = String.fromCharCode(lastLetter.charCodeAt(0) + 1);
+  lines.splice(lastChoiceIndex + 1, 0, `${nextLetter}. Skip — decide later`);
+  return lines.join('\n');
+}
+
 export function normalizeGuidedInterviewResponse(
   text: string,
   turn: GuidedInterviewTurn,
@@ -429,10 +464,9 @@ export function normalizeGuidedInterviewResponse(
     .trimStart();
   if (
     (turn.phase === 'discovery' || turn.phase === 'delivery') &&
-    turn.question != null &&
-    !/skip\s*[—-]\s*decide later/i.test(withoutMarkers)
+    turn.question != null
   ) {
-    withoutMarkers = `${withoutMarkers.trimEnd()}\n\nSkip — decide later`;
+    withoutMarkers = withSkipAffordance(withoutMarkers);
   }
   const marker = turn.followUpMarker && text.includes(turn.followUpMarker)
     ? turn.followUpMarker

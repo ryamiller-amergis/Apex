@@ -10,7 +10,13 @@ import {
 } from '../db/schema';
 import type { Adr, AdrStatus, AdrSummary } from '../../shared/types/adr';
 import type { EffortLevel } from '../../shared/types/effort';
-import { cancelRun, markAsInterviewThread, readOutputAdr, hydrateThread } from './chatAgentService';
+import {
+  cancelRun,
+  hydrateThread,
+  markAsInterviewThread,
+  readOutputAdr,
+} from './chatAgentService';
+import { createNotification } from './notificationService';
 import { getApproverUserIdsForProject, getSkillSettingsName } from './projectSettingsService';
 import { assignApprovers, isApprovalComplete } from './documentApprovalService';
 import { getUnresolvedCount } from './reviewCommentService';
@@ -343,9 +349,17 @@ export async function deleteAdr(id: string, userId: string): Promise<void> {
   });
 }
 
-export async function markAdrGenerating(id: string, userId: string): Promise<void> {
+export async function markAdrGenerating(
+  id: string,
+  userId: string,
+  generationThreadId: string,
+): Promise<void> {
   await requireAuthor(id, userId);
-  await db.update(adrs).set({ status: 'generating', updatedAt: new Date().toISOString() }).where(eq(adrs.id, id));
+  await db.update(adrs).set({
+    status: 'generating',
+    generationThreadId,
+    updatedAt: new Date().toISOString(),
+  }).where(eq(adrs.id, id));
 }
 
 export async function syncAdrContent(id: string, content: string): Promise<void> {
@@ -358,9 +372,75 @@ export async function syncAdrContent(id: string, content: string): Promise<void>
   }).where(eq(adrs.id, id));
 }
 
-export function startAdrWatcher(adrId: string, generationThreadId: string): void {
+async function notifyAdrAuthor(
+  adr: { id: string; authorId: string; title: string },
+  outcome: 'generated' | 'failed',
+  detail?: string,
+): Promise<void> {
+  const payload = outcome === 'generated'
+    ? {
+      title: 'ADR generated',
+      body: `"${adr.title}" is ready for review.`,
+    }
+    : {
+      title: 'ADR generation failed',
+      body: `"${adr.title}" could not be generated${detail ? `: ${detail}` : '.'} Open the ADR and generate again.`,
+    };
+  await createNotification(adr.authorId, {
+    type: 'ai',
+    ...payload,
+    link: `/adr/${adr.id}`,
+  }).catch((error) => {
+    console.error(`[adr] notification failed (adrId=${adr.id}):`, error);
+  });
+}
+
+/**
+ * Applies the result of an ADR generation thread. Returns false when the thread
+ * does not belong to an ADR generation so callers can try other owners.
+ */
+export async function applyAdrGenerationResult(
+  generationThreadId: string,
+  content: string | null,
+  failureDetail?: string,
+): Promise<boolean> {
+  const adr = await db.query.adrs.findFirst({
+    where: eq(adrs.generationThreadId, generationThreadId),
+    columns: { id: true, authorId: true, title: true, status: true },
+  });
+  if (!adr) return false;
+  if (adr.status !== 'generating') return true;
+
+  stopAdrWatcher(adr.id);
+  if (content) {
+    await syncAdrContent(adr.id, content);
+    await notifyAdrAuthor(adr, 'generated');
+    return true;
+  }
+
+  await db.update(adrs)
+    .set({ status: 'in_progress', updatedAt: new Date().toISOString() })
+    .where(and(
+      eq(adrs.id, adr.id),
+      eq(adrs.status, 'generating'),
+      eq(adrs.generationThreadId, generationThreadId),
+    ));
+  console.warn(
+    `[adr] generation produced no ADR (adrId=${adr.id}, threadId=${generationThreadId}): ${failureDetail ?? 'no output file'}`,
+  );
+  await notifyAdrAuthor(adr, 'failed', failureDetail);
+  return true;
+}
+
+function stopAdrWatcher(adrId: string): void {
   const existing = activeAdrWatchers.get(adrId);
-  if (existing) clearInterval(existing);
+  if (!existing) return;
+  clearInterval(existing);
+  activeAdrWatchers.delete(adrId);
+}
+
+export function startAdrWatcher(adrId: string, generationThreadId: string): void {
+  stopAdrWatcher(adrId);
   let attempts = 0;
   void hydrateThread(generationThreadId).catch((err) => {
     console.warn(
@@ -371,21 +451,33 @@ export function startAdrWatcher(adrId: string, generationThreadId: string): void
 
   const interval = setInterval(async () => {
     attempts += 1;
+    const row = await db.query.adrs.findFirst({
+      where: eq(adrs.id, adrId),
+      columns: { status: true, generationThreadId: true },
+    });
+    if (
+      !row
+      || row.status !== 'generating'
+      || (row.generationThreadId !== null && row.generationThreadId !== generationThreadId)
+    ) {
+      stopAdrWatcher(adrId);
+      return;
+    }
     if (attempts > WATCHER_MAX_ATTEMPTS) {
-      clearInterval(interval);
-      activeAdrWatchers.delete(adrId);
-      await db.update(adrs)
-        .set({ status: 'in_progress', updatedAt: new Date().toISOString() })
-        .where(and(eq(adrs.id, adrId), eq(adrs.status, 'generating')));
+      stopAdrWatcher(adrId);
+      await applyAdrGenerationResult(
+        generationThreadId,
+        null,
+        'generation timed out',
+      );
       return;
     }
 
     const content = readOutputAdr(generationThreadId);
     if (!content) return;
-    clearInterval(interval);
-    activeAdrWatchers.delete(adrId);
+    stopAdrWatcher(adrId);
     try {
-      await syncAdrContent(adrId, content);
+      await applyAdrGenerationResult(generationThreadId, content);
     } catch (error) {
       console.error(`[adrWatcher] Failed to sync ADR ${adrId}:`, error);
     }

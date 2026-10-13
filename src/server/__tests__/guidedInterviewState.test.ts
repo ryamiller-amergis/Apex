@@ -199,7 +199,7 @@ describe('guided interview state', () => {
         turn,
       ),
     ).toBe(
-      '[[interview-phase:discovery:2:6]]\n\nWhat outcome shows success?\n\nSkip — decide later',
+      '[[interview-phase:discovery:2:6]]\n\nWhat outcome shows success?\n\n_Not sure yet? Reply "skip" to decide later._',
     );
   });
 
@@ -215,16 +215,41 @@ describe('guided interview state', () => {
         turn,
       ),
     ).toBe(
-      '[[interview-phase:discovery:1:6:followup]]\n\nWhich of those users feels this first?\n\nSkip — decide later',
+      '[[interview-phase:discovery:1:6:followup]]\n\nWhich of those users feels this first?\n\n_Not sure yet? Reply "skip" to decide later._',
     );
   });
 
-  it('does not duplicate an existing skip option', () => {
+  it('replaces a lone Skip option on an open question with a plain hint', () => {
+    const turn = deriveGuidedInterviewTurn([], 'Build a todo list.');
+
+    const normalized = normalizeGuidedInterviewResponse(
+      'Tell me about the last time this happened.\n\na. Skip — decide later',
+      turn,
+    );
+
+    expect(normalized).not.toMatch(/^a\. Skip/m);
+    expect(normalized).toContain('_Not sure yet? Reply "skip" to decide later._');
+  });
+
+  it('adds Skip as the next lettered choice right after the existing choices', () => {
     const turn = deriveGuidedInterviewTurn([], 'Build a todo list.');
 
     expect(
       normalizeGuidedInterviewResponse(
-        'Tell me about the last time this happened.\n\nSkip — decide later',
+        'Who feels this first?\n\na. Recruiters\nb. Clinicians\n\nPick the closest.',
+        turn,
+      ),
+    ).toBe(
+      '[[interview-phase:discovery:1:6]]\n\nWho feels this first?\n\na. Recruiters\nb. Clinicians\nc. Skip — decide later\n\nPick the closest.',
+    );
+  });
+
+  it('does not duplicate an existing Skip choice', () => {
+    const turn = deriveGuidedInterviewTurn([], 'Build a todo list.');
+
+    expect(
+      normalizeGuidedInterviewResponse(
+        'Who feels this first?\n\na. Recruiters\nb. Skip — decide later',
         turn,
       ).match(/Skip — decide later/g),
     ).toHaveLength(1);

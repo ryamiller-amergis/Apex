@@ -4,8 +4,11 @@ import type { RunGrounding } from '../../shared/types/runGrounding';
 import { resolveDataRoot } from '../utils/dataDir';
 import { withRepoCacheLease } from './repoCacheLeaseService';
 import {
+  COLD_CACHE_TIMEOUT_MS,
+  REPO_CACHE_MIN_FREE_BYTES,
   getRepoCacheDir,
   getRepoCacheLeaseKey,
+  readRepoCacheFreeBytes,
   readRepoCacheIdentity,
   readRepoCacheLastUsed,
   type RepoCacheIdentity,
@@ -34,13 +37,18 @@ export const REPO_CACHE_MIN_IDLE_MS = 30 * 60 * 1000;
  */
 export const DEFAULT_REPO_CACHE_MAX_BYTES = 6.5 * 1024 * 1024 * 1024;
 
+/** A cold clone writes into `<mirror>.tmp-<uuid>`; one killed mid-clone is never renamed or removed. */
+const ABANDONED_CLONE_RE = /\.tmp-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export interface RepoCacheEvictionResult {
   scanned: number;
   evicted: number;
   protected: number;
+  abandonedClonesRemoved: number;
   bytesBefore: number;
   bytesAfter: number;
   maxBytes: number;
+  freeBytes: number | null;
 }
 
 export interface RepoCacheEvictionService {
@@ -51,6 +59,7 @@ export interface RepoCacheEvictionDependencies {
   dataRoot?: string;
   maxBytes?: number;
   now?: () => number;
+  readFreeBytes?: (dir: string) => Promise<number>;
   listActiveGroundings?: () => Promise<RunGrounding[]>;
   withLease?: typeof withRepoCacheLease;
   telemetry?: typeof trackEvent;
@@ -115,7 +124,32 @@ export function createRepoCacheEvictionService(
     (() => runGroundingRepository.listActiveGroundings());
   const withLease = dependencies.withLease ?? withRepoCacheLease;
   const telemetry = dependencies.telemetry ?? trackEvent;
+  const readFreeBytes = dependencies.readFreeBytes ?? readRepoCacheFreeBytes;
   const cacheRoot = path.join(dataRoot, 'repo-cache');
+
+  async function finish(result: RepoCacheEvictionResult): Promise<RepoCacheEvictionResult> {
+    result.freeBytes = await readFreeBytes(cacheRoot).catch(() => null);
+    if (result.freeBytes !== null && result.freeBytes < REPO_CACHE_MIN_FREE_BYTES) {
+      console.error(
+        `[repo-cache] disk-low freeBytes=${result.freeBytes} requiredBytes=${REPO_CACHE_MIN_FREE_BYTES} dir=${cacheRoot}`,
+      );
+    }
+    telemetry(
+      'repo-cache.eviction',
+      {},
+      {
+        scanned: result.scanned,
+        evicted: result.evicted,
+        protected: result.protected,
+        abandonedClonesRemoved: result.abandonedClonesRemoved,
+        bytesBefore: result.bytesBefore,
+        bytesAfter: result.bytesAfter,
+        maxBytes: result.maxBytes,
+        ...(result.freeBytes !== null ? { freeBytes: result.freeBytes } : {}),
+      },
+    );
+    return result;
+  }
 
   return {
     async evictOverBudget() {
@@ -124,9 +158,11 @@ export function createRepoCacheEvictionService(
         scanned: 0,
         evicted: 0,
         protected: 0,
+        abandonedClonesRemoved: 0,
         bytesBefore: 0,
         bytesAfter: 0,
         maxBytes,
+        freeBytes: null,
       };
 
       let entries;
@@ -161,6 +197,16 @@ export function createRepoCacheEvictionService(
         if (!entry.isDirectory()) continue;
         result.scanned += 1;
         const dir = path.join(cacheRoot, entry.name);
+        if (ABANDONED_CLONE_RE.test(entry.name)) {
+          // The clone's own timeout has passed, so no live git process owns it.
+          const stats = await fsp.stat(dir).catch(() => null);
+          if (stats && now() - stats.mtimeMs > COLD_CACHE_TIMEOUT_MS) {
+            await fsp.rm(dir, { recursive: true, force: true });
+            result.abandonedClonesRemoved += 1;
+            console.warn(`[repo-cache] removed abandoned clone ${entry.name}`);
+            continue;
+          }
+        }
         let bytes: number;
         let lastUsedMs: number;
         try {
@@ -185,21 +231,7 @@ export function createRepoCacheEvictionService(
       }
 
       result.bytesAfter = result.bytesBefore;
-      if (result.bytesAfter <= maxBytes) {
-        telemetry(
-          'repo-cache.eviction',
-          {},
-          {
-            scanned: result.scanned,
-            evicted: result.evicted,
-            protected: result.protected,
-            bytesBefore: result.bytesBefore,
-            bytesAfter: result.bytesAfter,
-            maxBytes,
-          },
-        );
-        return result;
-      }
+      if (result.bytesAfter <= maxBytes) return finish(result);
 
       // Least recently used first: the mirror nobody has touched in the
       // longest goes before one that is merely large.
@@ -221,19 +253,7 @@ export function createRepoCacheEvictionService(
         );
       }
 
-      telemetry(
-        'repo-cache.eviction',
-        {},
-        {
-          scanned: result.scanned,
-          evicted: result.evicted,
-          protected: result.protected,
-          bytesBefore: result.bytesBefore,
-          bytesAfter: result.bytesAfter,
-          maxBytes,
-        },
-      );
-      return result;
+      return finish(result);
     },
   };
 }

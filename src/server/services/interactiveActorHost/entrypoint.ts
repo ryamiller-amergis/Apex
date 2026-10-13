@@ -22,6 +22,7 @@ import {
   HttpMethod,
   type DaprInvokerCallbackContent,
 } from '@dapr/dapr';
+import express from 'express';
 import { promises as fs } from 'fs';
 import path from 'path';
 // Side-effect: initialize Application Insights when the connection string is set.
@@ -58,6 +59,11 @@ import {
 import { collectInteractiveArtifacts } from './interactiveArtifactCollector';
 import { materializeInteractiveWorkspace } from './interactiveWorkspaceMaterializer';
 import { createPerThreadTurnQueue } from './perThreadTurnQueue';
+import {
+  createDaprSidecarClient,
+  createSidecarHealthMonitor,
+  interactiveHealthRoute,
+} from './sidecarHealth';
 import {
   createInteractiveShutdownDrain,
   interactiveInFlightInvocations,
@@ -180,16 +186,6 @@ export function parseInteractiveDispatchRequest(
     runId: payload.runId,
     dispatchMessageId: payload.dispatchMessageId,
   };
-}
-
-export async function registerInteractiveHealthHandler(
-  invoker: InteractiveDispatchInvoker,
-): Promise<void> {
-  await invoker.listen(
-    'health',
-    async () => ({ status: 'ok' }),
-    { method: HttpMethod.GET },
-  );
 }
 
 export interface InteractiveDispatchDrain {
@@ -492,18 +488,27 @@ export async function main(): Promise<void> {
   process.on('SIGTERM', () => shutdownDrain.shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdownDrain.shutdown('SIGINT'));
 
-  const server = new DaprServer({
-    serverPort,
-    communicationProtocol: CommunicationProtocolEnum.HTTP,
-  });
-
   const actorClass = interactiveSessionActorClassFor(
     process.env.AI_RUNS_INTERACTIVE_DAPR_APP_ID,
   );
+  const sidecar = createDaprSidecarClient(process.env.DAPR_HTTP_PORT?.trim() || '3500');
+  const sidecarHealth = createSidecarHealthMonitor({
+    actorType: actorClass.name,
+    fetchMetadata: sidecar.fetchMetadata,
+    requestSidecarShutdown: sidecar.requestSidecarShutdown,
+    now: Date.now,
+  });
+  const httpApp = express();
+  httpApp.get('/health', interactiveHealthRoute(() => sidecarHealth.check()));
+
+  const server = new DaprServer({
+    serverPort,
+    communicationProtocol: CommunicationProtocolEnum.HTTP,
+    serverHttp: httpApp,
+  });
+
   await server.actor.init();
   await server.actor.registerActor(actorClass);
-
-  await registerInteractiveHealthHandler(server.invoker);
 
   const proxyBuilder = new ActorProxyBuilder<IInteractiveSessionActor>(
     actorClass,
