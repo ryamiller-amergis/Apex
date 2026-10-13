@@ -324,11 +324,20 @@ function App() {
     homeFlags['playbooks-production-adapters'] === true &&
     (isSuperAdmin || can('playbooks:view'));
   const documentLink = useDocumentDeepLinkProject(location.pathname, location.search);
-  const { data: selectableProjectList = [], isLoading: selectableProjectsLoading } = useProjects();
+  const {
+    data: selectableProjectList = [],
+    isLoading: selectableProjectsLoading,
+    isError: selectableProjectsError,
+  } = useProjects();
   const selectableProjectNames = selectableProjectList.map((project) => project.name);
   const queryProject = new URLSearchParams(location.search).get('project') ?? undefined;
   const recordOwnsProject = Boolean(documentLink.link) && !documentLink.failed;
-  const documentAccessPending = !permissionsLoaded || selectableProjectsLoading;
+  // A settled catalog error has isLoading === false and no data. Treat that as
+  // unresolved, not an empty accessible list, or the opening overlay drops and
+  // the document stays on the current project.
+  const documentAccessPending = !permissionsLoaded
+    || selectableProjectsLoading
+    || selectableProjectsError;
   const documentProjectTarget = documentProjectSwitchTarget(
     recordOwnsProject ? documentLink.project : (documentLink.project ?? queryProject),
     selectedProject,
