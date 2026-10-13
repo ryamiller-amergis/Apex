@@ -60,10 +60,22 @@ Fix the four prod failures from Oct 12–13 and make the next one page Aneesh in
 - [x] Router: with V2 on, any worker-preparation/admission failure calls reportRecoverablePreparationFailure and returns `{ route: 'failed' }` (no App Service fallback). V1/flag-off unchanged.
 - [x] V2 tool proxy: internal MCP fetch lacked `Accept: application/json, text/event-stream` → every internal-proxy tool call (update_adr/prd/design_doc, ADO, calendar, maxview) got 406. `postLocalMcp` in interactiveToolProxyService sends it and reads SSE replies; tested against a real SDK server.
 
+- [x] Audit 2026-10-13 (afternoon):
+  - Prod App Service had none of AI_RUNS_APEX_CALLBACK_BASE_URL / APEX_CALLBACK_URL / PUBLIC_APP_URL, so tool URLs were `http://localhost:8080/...` (unreachable from the worker). Fixed: the resolver also reads the sticky per-slot `APEX_URL` (deploy.yml writes it) and throws on App Service when none is set. Terraform ignores app_settings, so no infra change.
+  - External MCP servers (`relayExternalHttp`) had the same missing Accept/SSE bug. Fixed: it shares `postMcp` with `postLocalMcp`.
+  - Transcript progress posts (those with an `eventId`) now retry like terminal posts; the server drops duplicate event IDs. Timer heartbeats were already fire-and-forget.
+  - Image skew: interactive/orchestrator at cec66520, documents/visual at dacf6553, App Service at 9afd20b6 (a35bd66e guided-interview V2 never reached workers; its deploy was cancelled). Causes: deploy.yml diffed against `github.event.before`, and it never published documents/visual at all. Fixed: base = last successful deploy (gh run list; falls back to the previous push); documents/visual are pushed before the swap and switched after it (publish scripts gained SKIP_IMAGE_PUBLISH).
+  - Healthy: Service Bus queues 0 active / 0 dead-letter; SESSION_SECRET, SB, Blob, repo-read, dispatch URL set; `ai-runs-v2-transport` is on for Apex and MaxView (per user).
+  - Left out on purpose: flag-eval error → legacy (only when DB is down); tool-proxy deadline signal (45s MCP timeout already wins); SB-namespace-missing noop (set in prod).
+  - Prod DB from this machine: the connection resets even with a temp firewall rule (network/VPN). Temp rules removed.
+
 ## Next
+0. User watches the dev deploy from PR #212 and reports back. Then: merge, let the prod deploy finish (all 5 worker images rebuild; ~20–25 min staging), approve the swap at a quiet time.
+0a. After the prod deploy: confirm all container apps run the new SHA; try an ADR assistant edit in prod; check App Insights requests for `/api/internal/ai-runs/*/tools/`.
 1. After #212 merges and deploys: `terraform apply -target=azurerm_application_insights_standard_web_test.storage -target=azurerm_monitor_metric_alert.storage_availability` (prd workspace, terraform.prd.tfvars). Prod returns 401 for /api/health/storage until then.
 1a. Done: `migrations/20261013120200_adr-thread-bundled-skill-flag.sql` flags existing ADR assistant/finalize threads (match on skill name; fallback only runs after the project read fails). Dry-run locally: valid, idempotent; local DB has no such threads.
 2. Staging check: kill the agentic app container, confirm `/health` goes degraded → 503 and the sidecar restarts.
+2a. Follow-ups after this release: delete or add probes to the unused `ca-apex-ai-interactive-prd`; block main bypass in GitHub branch rules; the PDF poller spins on DB timeouts (944 errors in 2s at 17:29 UTC Oct 13).
 3. Prod Apex mirror: re-checked 2026-10-13, all 162 refs are 41 bytes (rewritten 2026-10-12 20:03 UTC), main matches GitHub, no temp clones in repo-cache. No repair needed. look at the StandupScheduler query error (App Service only, not V2; separate fix).
 
 ## Mistakes to avoid (learned in earlier chats)

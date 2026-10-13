@@ -26,7 +26,7 @@ export class InteractiveToolProxyError extends Error {
 }
 
 // The MCP Streamable HTTP transport answers 406 unless the client accepts both.
-const LOCAL_MCP_ACCEPT = 'application/json, text/event-stream';
+const MCP_ACCEPT = 'application/json, text/event-stream';
 
 function lastServerSentEventData(text: string): string {
   let last = '';
@@ -41,17 +41,19 @@ function lastServerSentEventData(text: string): string {
   return last;
 }
 
-/** Posts one JSON-RPC message to an Apex MCP endpoint on this host. */
-export async function postLocalMcp(
+async function postMcp(
+  label: 'Internal' | 'External',
   url: string,
+  headers: Readonly<Record<string, string>>,
   body: unknown,
-  options: { signal?: AbortSignal; fetchImpl?: typeof fetch } = {},
+  options: { signal?: AbortSignal; fetchImpl?: typeof fetch },
 ): Promise<unknown> {
   const response = await (options.fetchImpl ?? fetch)(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Accept: LOCAL_MCP_ACCEPT,
+      Accept: MCP_ACCEPT,
+      ...headers,
     },
     body: JSON.stringify(body ?? {}),
     signal: options.signal,
@@ -59,7 +61,7 @@ export async function postLocalMcp(
   const text = await response.text();
   if (!response.ok) {
     throw new InteractiveToolProxyError(
-      `Internal MCP failed (${response.status})`,
+      `${label} MCP failed (${response.status})`,
       502,
     );
   }
@@ -70,8 +72,17 @@ export async function postLocalMcp(
   try {
     return JSON.parse(payload);
   } catch {
-    throw new InteractiveToolProxyError('Internal MCP returned non-JSON', 502);
+    throw new InteractiveToolProxyError(`${label} MCP returned non-JSON`, 502);
   }
+}
+
+/** Posts one JSON-RPC message to an Apex MCP endpoint on this host. */
+export function postLocalMcp(
+  url: string,
+  body: unknown,
+  options: { signal?: AbortSignal; fetchImpl?: typeof fetch } = {},
+): Promise<unknown> {
+  return postMcp('Internal', url, {}, body, options);
 }
 
 export type InteractiveToolProxyRequest = Readonly<{
@@ -121,9 +132,7 @@ function resolveHeaderEnvRefs(
   headerEnvRefs: Readonly<Record<string, string>>,
   resolveHeaderEnv: (envRef: string) => string | undefined,
 ): Record<string, string> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
+  const headers: Record<string, string> = {};
   for (const [header, envRef] of Object.entries(headerEnvRefs)) {
     const value = resolveHeaderEnv(envRef);
     if (!value?.trim()) {
@@ -162,34 +171,13 @@ async function relayExternalHttp(
     );
   }
 
-  const response = await options.fetchImpl(descriptor.url, {
-    method: 'POST',
-    headers: resolveHeaderEnvRefs(
-      descriptor.headerEnvRefs,
-      options.resolveHeaderEnv,
-    ),
-    body: JSON.stringify(body ?? {}),
-    signal: options.signal,
-  });
-  const text = await response.text();
-  let parsedBody: unknown = {};
-  if (text) {
-    try {
-      parsedBody = JSON.parse(text);
-    } catch {
-      throw new InteractiveToolProxyError(
-        'External MCP returned non-JSON',
-        502,
-      );
-    }
-  }
-  if (!response.ok) {
-    throw new InteractiveToolProxyError(
-      `External MCP failed (${response.status})`,
-      502,
-    );
-  }
-  return parsedBody;
+  return postMcp(
+    'External',
+    descriptor.url,
+    resolveHeaderEnvRefs(descriptor.headerEnvRefs, options.resolveHeaderEnv),
+    body,
+    options,
+  );
 }
 
 /**

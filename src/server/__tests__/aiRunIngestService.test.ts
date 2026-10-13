@@ -1012,6 +1012,76 @@ describe('dapr-actor-v2 bootstrap + terminal remediation', () => {
     });
   });
 
+  describe('interactive tool proxy base URL on App Service', () => {
+    const CALLBACK_ENV_KEYS = [
+      'WEBSITE_SITE_NAME',
+      'AI_RUNS_APEX_CALLBACK_BASE_URL',
+      'APEX_CALLBACK_URL',
+      'PUBLIC_APP_URL',
+      'APEX_URL',
+    ] as const;
+    let saved: Record<string, string | undefined>;
+
+    beforeEach(() => {
+      saved = Object.fromEntries(CALLBACK_ENV_KEYS.map((key) => [key, process.env[key]]));
+      for (const key of CALLBACK_ENV_KEYS) delete process.env[key];
+      process.env.WEBSITE_SITE_NAME = 'app-apex-prd';
+      mockFindFirst.mockResolvedValue(
+        baseRow({
+          transportVersion: 'dapr-actor-v2',
+          timeoutAt: new Date(Date.now() + 120_000).toISOString(),
+          lane: 'ai-runs-interactive',
+          status: 'dispatched',
+        }),
+      );
+      chainSelect([
+        {
+          id: 'attempt-1',
+          runId: 'run-1',
+          attemptNumber: 1,
+          status: 'dispatched',
+          dispatchMessageId: 'dispatch-current',
+          specSnapshot: {
+            ...durableSpec,
+            mcpServers: [
+              { kind: 'internal-proxy', serverName: 'ado-skills', enableRepoBrowse: true },
+            ],
+          },
+        },
+      ]);
+    });
+
+    afterEach(() => {
+      for (const key of CALLBACK_ENV_KEYS) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+    });
+
+    it('refuses localhost tool URLs when no public base URL is configured', async () => {
+      await expect(
+        getBootstrap('run-1', 'dispatch-current'),
+      ).rejects.toMatchObject({
+        code: 'AI_RUN_ILLEGAL_TRANSITION',
+        message: expect.stringMatching(/APEX_URL/),
+      });
+    });
+
+    it('builds tool URLs from the slot APEX_URL', async () => {
+      process.env.APEX_URL = 'https://app-apex-prd.azurewebsites.net/';
+      const bootstrap = await getBootstrap('run-1', 'dispatch-current');
+      expect(bootstrap).toMatchObject({
+        mcpServers: {
+          'ado-skills': {
+            url: expect.stringMatching(
+              /^https:\/\/app-apex-prd\.azurewebsites\.net\/api\/internal\/ai-runs\/run-1\/tools\/ado-skills\?token=/,
+            ),
+          },
+        },
+      });
+    });
+  });
+
   it('runs dapr-actor-v2 terminal writes inside one db.transaction after fence', async () => {
     mockFindFirst.mockResolvedValue(
       baseRow({

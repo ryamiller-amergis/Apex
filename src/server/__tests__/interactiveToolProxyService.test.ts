@@ -94,6 +94,7 @@ describe('interactiveToolProxyService', () => {
   it('relays external-http-proxy only to the frozen HTTPS URL with resolved headers', async () => {
     const fetchImpl = jest.fn().mockResolvedValue({
       ok: true,
+      headers: new Headers({ 'content-type': 'application/json' }),
       text: async () => JSON.stringify({ result: 'pong' }),
     });
     const result = await invokeInteractiveToolProxy({
@@ -117,9 +118,32 @@ describe('interactiveToolProxyService', () => {
         method: 'POST',
         headers: expect.objectContaining({
           Authorization: 'secret-token',
+          Accept: 'application/json, text/event-stream',
         }),
       }),
     );
+  });
+
+  it('reads an external MCP reply sent as server-sent events', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ 'content-type': 'text/event-stream' }),
+      text: async () => `event: message\ndata: ${JSON.stringify({ result: 'pong' })}\n\n`,
+    });
+    const result = await invokeInteractiveToolProxy({
+      claims: {
+        runId: 'run-1',
+        attemptId: 'attempt-1',
+        dispatchMessageId: 'fence-1',
+        serverName: 'ext-mcp',
+        expiresAt: '2026-09-23T16:00:00.000Z',
+      },
+      specification: baseSpec(),
+      body: { method: 'tools/call' },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      resolveHeaderEnv: () => 'secret-token',
+    });
+    expect(result).toEqual({ result: 'pong' });
   });
 
   it('rejects non-HTTPS external MCP URLs', async () => {
