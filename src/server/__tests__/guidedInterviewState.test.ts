@@ -199,7 +199,7 @@ describe('guided interview state', () => {
         turn,
       ),
     ).toBe(
-      '[[interview-phase:discovery:2:6]]\n\nWhat outcome shows success?',
+      '[[interview-phase:discovery:2:6]]\n\nWhat outcome shows success?\n\nSkip — decide later',
     );
   });
 
@@ -215,42 +215,16 @@ describe('guided interview state', () => {
         turn,
       ),
     ).toBe(
-      '[[interview-phase:discovery:1:6:followup]]\n\nWhich of those users feels this first?',
+      '[[interview-phase:discovery:1:6:followup]]\n\nWhich of those users feels this first?\n\nSkip — decide later',
     );
   });
 
-  it('drops a lone Skip option from an open question', () => {
-    const turn = deriveGuidedInterviewTurn([], 'Build a todo list.');
-
-    const normalized = normalizeGuidedInterviewResponse(
-      'Tell me about the last time this happened.\n\na. Skip — decide later',
-      turn,
-    );
-
-    expect(normalized).toBe(
-      '[[interview-phase:discovery:1:6]]\n\nTell me about the last time this happened.',
-    );
-  });
-
-  it('adds Skip as the next lettered choice right after the existing choices', () => {
+  it('does not duplicate an existing skip option', () => {
     const turn = deriveGuidedInterviewTurn([], 'Build a todo list.');
 
     expect(
       normalizeGuidedInterviewResponse(
-        'Who feels this first?\n\na. Recruiters\nb. Clinicians\n\nPick the closest.',
-        turn,
-      ),
-    ).toBe(
-      '[[interview-phase:discovery:1:6]]\n\nWho feels this first?\n\na. Recruiters\nb. Clinicians\nc. Skip — decide later\n\nPick the closest.',
-    );
-  });
-
-  it('does not duplicate an existing Skip choice', () => {
-    const turn = deriveGuidedInterviewTurn([], 'Build a todo list.');
-
-    expect(
-      normalizeGuidedInterviewResponse(
-        'Who feels this first?\n\na. Recruiters\nb. Skip — decide later',
+        'Tell me about the last time this happened.\n\nSkip — decide later',
         turn,
       ).match(/Skip — decide later/g),
     ).toHaveLength(1);

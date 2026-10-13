@@ -789,7 +789,7 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
         : [],
     );
     expect(replies[0]).toBe(
-      '[[interview-phase:discovery:1:6]]\n\nWhat happens today?',
+      '[[interview-phase:discovery:1:6]]\n\nWhat happens today?\n\nSkip — decide later',
     );
     expect(replies[2]).toBe('[[interview-phase:technical:1:5]]\n\nWhat happens today?');
   });

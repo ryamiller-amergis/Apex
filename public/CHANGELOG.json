@@ -37,10 +37,6 @@
         "description": "ADR generation runs on the background agent lane and no longer waits on the repository readiness check when V2 is on"
       },
       {
-        "type": "bugfix",
-        "description": "Interview questions without choices no longer show a lone \"Skip — decide later\" option"
-      },
-      {
         "type": "improvement",
         "description": "A chat or interview turn that never starts is retried once automatically, and agent workers restart a broken Dapr sidecar on their own"
       },

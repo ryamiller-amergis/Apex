@@ -53,7 +53,7 @@ c. Skip — decide later
 
 If choices are needed, each choice decides one thing, choices are mutually exclusive, and each is one short plain sentence. Never bundle actors, scope, visibility, exceptions, and release timing into one option.
 
-When a phase question lists lettered choices, the last one is `Skip — decide later`. An open question lists no choices; the user can still reply "skip". A skip is recorded as unresolved. Do not ask that question again.
+The last option on every numbered phase question is `Skip — decide later`. An open question may show only that skip option beneath it. A skip is recorded as unresolved. Do not ask that question again.
 
 Ask at most one follow-up when an answer is unclear, conflicts with an earlier decision, or needs one concrete example. Quote conflicting decisions without judgment and ask which one is authoritative. Do not create contradictions by introducing a new bundle of choices.
 
