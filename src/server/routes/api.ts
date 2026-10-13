@@ -24,6 +24,7 @@ import { getWorkerTierHealthStats } from '../services/workerTierHealthService';
 import { isFeatureEnabled } from '../services/featureFlagService';
 import { getUserId } from '../utils/requestUser';
 import { ensureUserProjectAssignment, getAssignmentsForUser } from '../services/userProjectAssignmentService';
+import { resolveLinkProject } from '../services/linkProjectService';
 import {
   filterProjectCatalogByNames,
   listProjectCatalog,
@@ -117,6 +118,27 @@ function requireAuthenticatedUserId(req: Request, res: Response): string | null 
 function isStringArrayOfNonEmptyItems(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string' && item.trim().length > 0);
 }
+
+// GET /api/links/project?kind=&id= — the project that owns a shared record.
+router.get('/links/project', async (req: Request, res: Response) => {
+  const kind = typeof req.query.kind === 'string' ? req.query.kind : '';
+  const id = typeof req.query.id === 'string' ? req.query.id : '';
+  if (!kind || !id) {
+    res.status(400).json({ error: 'kind and id are required' });
+    return;
+  }
+  try {
+    const project = await resolveLinkProject(kind, id);
+    if (!project) {
+      res.status(404).json({ error: 'Link not found' });
+      return;
+    }
+    res.json({ project });
+  } catch (err) {
+    console.error('[links] project lookup failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to resolve link project' });
+  }
+});
 
 // GET /api/projects - List projects available to the current user.
 // Super admins see the full catalog; everyone else sees the union of:

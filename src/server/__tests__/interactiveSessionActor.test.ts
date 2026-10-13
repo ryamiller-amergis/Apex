@@ -61,7 +61,9 @@ interface FakeAgentOptions {
   agentId?: string | null;
   waitGate?: Promise<void>;
   onCancel?: () => void;
-  onSend?: () => void;
+  onSend?: (sendOptions?: {
+    mcpServers?: Readonly<Record<string, { url: string }>>;
+  }) => void;
   model?: string;
   workspaceRef?: string;
   waitStatus?: string;
@@ -108,7 +110,7 @@ function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgent
     model: options.model ?? 'auto',
     workspaceRef: options.workspaceRef ?? '/warm/checkout',
     send: async (_prompt, sendOptions) => {
-      options.onSend?.();
+      options.onSend?.(sendOptions);
       for (const text of options.tokens ?? []) {
         await sendOptions?.onDelta?.({ type: 'text-delta', text });
       }
@@ -670,6 +672,58 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     expect(destinations[0]).toContain(THREAD_ID);
     expect(acquireAgent).toHaveBeenCalledTimes(1);
     expect(dispose).not.toHaveBeenCalled();
+  });
+
+  it('sends each durable turn its own MCP servers on a warm Agent', async () => {
+    const sentMcpServers: Array<Readonly<Record<string, { url: string }>> | undefined> = [];
+    const acquireAgent = jest.fn(async (_snapshot, checkout) =>
+      makeAgentHandle({
+        tokens: ['ok'],
+        agentId: 'agent-1',
+        workspaceRef: checkout.workspacePath,
+        onSend: (sendOptions) => {
+          sentMcpServers.push(sendOptions?.mcpServers);
+        },
+      }),
+    );
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent,
+      materializeWorkspace: async (_bootstrap, destination: string) => ({
+        workspacePath: destination,
+      }),
+      uploadAttemptArtifacts: async () => ({
+        container: 'artifacts',
+        key: 'manifest.json',
+      }),
+      postIngest: async () => ({ ok: true, cancelRequested: false }),
+    });
+    const firstServers = {
+      'ado-skills': { url: 'https://apex.example/tools/ado-skills?token=turn-1' },
+    };
+    const secondServers = {
+      'ado-skills': { url: 'https://apex.example/tools/ado-skills?token=turn-2' },
+    };
+
+    await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        mcpServers: firstServers,
+      }),
+    });
+    await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        attemptId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        dispatchMessageId: 'dispatch-durable-2',
+        runId: 'run-durable-2',
+        mcpServers: secondServers,
+      }),
+    });
+
+    expect(acquireAgent).toHaveBeenCalledTimes(1);
+    expect(sentMcpServers).toEqual([firstServers, secondServers]);
   });
 
   it('marks guided interview replies and rebuilds the Agent when the phase changes', async () => {

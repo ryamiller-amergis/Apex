@@ -1199,6 +1199,9 @@ export function createInteractiveSessionActor(
         const turnEndMonitor = createCursorTurnEndMonitor();
         activeRunRef = await untilAborted(
           agentHandle.send(prompt, {
+            // The proxy token is valid only for this attempt. A warm Agent
+            // still holds the previous attempt's servers unless send replaces them.
+            mcpServers,
             onDelta: (update) => {
               if (!firstEventSeen) {
                 firstEventSeen = true;

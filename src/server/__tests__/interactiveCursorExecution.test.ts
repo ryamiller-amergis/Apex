@@ -206,6 +206,16 @@ describe('interactive Cursor execution repository tools', () => {
       expect(send).toHaveBeenCalledTimes(2);
       expect(send).toHaveBeenNthCalledWith(1, 'turn-1');
       expect(send).toHaveBeenNthCalledWith(2, 'turn-2');
+      await acquired.handle.send('turn-3', {
+        mcpServers: {
+          'ado-skills': { url: 'https://apex.example/tools?token=turn-3' },
+        },
+      });
+      expect(send).toHaveBeenNthCalledWith(3, 'turn-3', {
+        mcpServers: {
+          'ado-skills': { url: 'https://apex.example/tools?token=turn-3' },
+        },
+      });
       await acquired.handle.dispose();
       expect(dispose).toHaveBeenCalled();
     } finally {
