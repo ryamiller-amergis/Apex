@@ -199,7 +199,7 @@ describe('guided interview state', () => {
         turn,
       ),
     ).toBe(
-      '[[interview-phase:discovery:2:6]]\n\nWhat outcome shows success?\n\n_Not sure yet? Reply "skip" to decide later._',
+      '[[interview-phase:discovery:2:6]]\n\nWhat outcome shows success?',
     );
   });
 
@@ -215,11 +215,11 @@ describe('guided interview state', () => {
         turn,
       ),
     ).toBe(
-      '[[interview-phase:discovery:1:6:followup]]\n\nWhich of those users feels this first?\n\n_Not sure yet? Reply "skip" to decide later._',
+      '[[interview-phase:discovery:1:6:followup]]\n\nWhich of those users feels this first?',
     );
   });
 
-  it('replaces a lone Skip option on an open question with a plain hint', () => {
+  it('drops a lone Skip option from an open question', () => {
     const turn = deriveGuidedInterviewTurn([], 'Build a todo list.');
 
     const normalized = normalizeGuidedInterviewResponse(
@@ -227,8 +227,9 @@ describe('guided interview state', () => {
       turn,
     );
 
-    expect(normalized).not.toMatch(/^a\. Skip/m);
-    expect(normalized).toContain('_Not sure yet? Reply "skip" to decide later._');
+    expect(normalized).toBe(
+      '[[interview-phase:discovery:1:6]]\n\nTell me about the last time this happened.',
+    );
   });
 
   it('adds Skip as the next lettered choice right after the existing choices', () => {

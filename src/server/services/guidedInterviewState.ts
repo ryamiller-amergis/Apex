@@ -421,7 +421,6 @@ export function buildGuidedInterviewTurnPrompt(
 // it renders choice buttons only for two or more options.
 const LETTERED_CHOICE_RE = /^[\s\-*]*([a-eA-E])[.)]\s+(.+)$/;
 const SKIP_TEXT_RE = /^\**\s*skip\s*[—-]\s*decide later\b/i;
-const OPEN_QUESTION_SKIP_HINT = '_Not sure yet? Reply "skip" to decide later._';
 
 function withSkipAffordance(text: string): string {
   const lines = text.trimEnd().split('\n');
@@ -441,12 +440,12 @@ function withSkipAffordance(text: string): string {
       const choice = line.match(LETTERED_CHOICE_RE);
       return !SKIP_TEXT_RE.test((choice ? choice[2] : line).trim());
     });
-    return `${kept.join('\n').trimEnd()}\n\n${OPEN_QUESTION_SKIP_HINT}`;
+    return kept.join('\n').trimEnd();
   }
   if (hasSkipChoice) return lines.join('\n');
 
   const lastLetter = choiceLetters.reduce((max, letter) => (letter > max ? letter : max));
-  if (lastLetter >= 'e') return `${lines.join('\n')}\n\n${OPEN_QUESTION_SKIP_HINT}`;
+  if (lastLetter >= 'e') return lines.join('\n');
   const nextLetter = String.fromCharCode(lastLetter.charCodeAt(0) + 1);
   lines.splice(lastChoiceIndex + 1, 0, `${nextLetter}. Skip — decide later`);
   return lines.join('\n');

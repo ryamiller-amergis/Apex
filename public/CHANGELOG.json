@@ -38,7 +38,7 @@
       },
       {
         "type": "bugfix",
-        "description": "Interview questions without choices show a short skip hint instead of a lone \"Skip — decide later\" option"
+        "description": "Interview questions without choices no longer show a lone \"Skip — decide later\" option"
       },
       {
         "type": "improvement",
