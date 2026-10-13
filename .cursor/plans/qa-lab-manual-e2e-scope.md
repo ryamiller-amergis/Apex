@@ -27,6 +27,9 @@ Phase 2 (design only, later): Playwright playground inside Apex to run E2E cases
 - [x] UI scope picker, Manual/E2E/Automated tabs, manual coverage strip (QaLabView.tsx/.module.css).
 - [x] Skill: "Manual execution coverage" section + checklist items (.cursor/skills/create-test-case/SKILL.md).
 - [x] Focused jest, tsc client/server, eslint all green.
+- [x] Header link + details panel for the work item.
+- [x] User types: `inferUserTypes` reads ADO text ("As an X…", "external users"), fallback `User`; synthetic backlog personas + "## User types" context section. User-type tabs ("All users" first) on Manual and E2E when >1 type.
+- [x] Granular steps: step table with Step / Action / Expected / blank Actual (Actual recorded in ADO Test Plans). Skill: "Granular step script" section + ADO persona exception + checklist items. Uncommitted.
 
 ## Next
 1. User reviews in dev; copy skill section into MaxView repo `development` branch.

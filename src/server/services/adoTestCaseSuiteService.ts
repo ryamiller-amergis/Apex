@@ -113,7 +113,7 @@ export interface SyntheticAdoPbiItem {
   priority: 'Must Have';
   dependsOn: string[];
   parallelGroup: null;
-  userStory: { persona: 'QA'; iWant: string; soThat: string };
+  userStory: { persona: string; iWant: string; soThat: string };
   businessRules: string[];
   nonFunctionalRequirements: {
     performance: string;
@@ -138,7 +138,7 @@ export interface SyntheticAdoTbiItem {
 }
 
 export interface SyntheticAdoBacklog {
-  personas: Array<{ name: 'QA'; type: 'Internal'; description: string }>;
+  personas: Array<{ name: string; type: 'Internal' | 'Admin'; description: string }>;
   businessRules: [];
   epics: Array<{
     title: string;
@@ -153,7 +153,7 @@ export interface SyntheticAdoBacklog {
       title: string;
       priority: 'Must Have';
       description: string;
-      affectedPersonas: ['QA'];
+      affectedPersonas: string[];
       outOfScope: string[];
       dependsOn: [];
       items: Array<SyntheticAdoPbiItem | SyntheticAdoTbiItem>;
@@ -222,15 +222,25 @@ export function buildSyntheticAdoBacklog(
     `Azure DevOps ${context.root.workItemType} ${context.root.id}.`,
   );
 
-  const pbiItems = targets.map((target) => toSyntheticPbi(target, technicalContext));
+  const rootUserTypes = inferUserTypes(
+    [context.root.title, context.root.description, context.root.acceptanceCriteria].join('\n'),
+  );
+  const pbiItems = targets.map((target) =>
+    toSyntheticPbi(target, technicalContext, rootUserTypes[0] ?? DEFAULT_USER_TYPE),
+  );
   const tbiItems = technicalContext.map(toSyntheticTbi);
+  const userTypes = Array.from(new Set([
+    ...rootUserTypes,
+    ...targets.flatMap((target) => inferUserTypes(itemText(target))),
+  ]));
+  if (userTypes.length === 0) userTypes.push(DEFAULT_USER_TYPE);
 
   return {
-    personas: [{
-      name: 'QA',
-      type: 'Internal',
-      description: 'Quality engineer verifying the Azure DevOps work items in this suite.',
-    }],
+    personas: userTypes.map((name) => ({
+      name,
+      type: /admin/i.test(name) ? 'Admin' : 'Internal',
+      description: `${name} as named in the Azure DevOps work items.`,
+    })),
     businessRules: [],
     epics: [{
       title: epicTitle,
@@ -249,7 +259,7 @@ export function buildSyntheticAdoBacklog(
         title: featureTitle,
         priority: 'Must Have',
         description: rootDescription,
-        affectedPersonas: ['QA'],
+        affectedPersonas: userTypes,
         outOfScope: ['Work items outside this Azure DevOps hierarchy'],
         dependsOn: [],
         items: [...pbiItems, ...tbiItems],
@@ -672,9 +682,50 @@ export async function syncAdoTestSuiteOutput(
   return true;
 }
 
+const DEFAULT_USER_TYPE = 'User';
+
+/** Phrases like "external user" or "internal users" that name a user type. */
+const USER_TYPE_PHRASE = /\b((?:external|internal|guest|anonymous|logged[- ]in|authenticated|unauthenticated|admin|super admin)\s+users?)\b/gi;
+/** "As a recruiter, I want…" / "As an external user I can…" */
+const AS_A_PHRASE = /\bas an?\s+([a-z][a-z-]*(?:\s+[a-z][a-z-]*){0,3}?)\s*(?:,|\bi\b|\bwho\b|\bwith\b|\bi'd\b)/gi;
+
+/** "As a result," and similar phrases that are not user types. */
+const NOT_USER_TYPES = new Set([
+  'result', 'example', 'rule', 'default', 'whole', 'minimum', 'maximum',
+  'fallback', 'workaround', 'reminder', 'side effect', 'precaution', 'consequence',
+]);
+
+function toTitleCase(value: string): string {
+  return value
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/\busers\b/i, 'user')
+    .replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
+}
+
+function itemText(item: QaAdoGenerationItem): string {
+  return [item.title, item.description, item.acceptanceCriteria, item.reproSteps].join('\n');
+}
+
+/** User types named in work item text, in first-seen order. */
+export function inferUserTypes(raw: string): string[] {
+  const text = plainText(raw);
+  const found: Array<{ index: number; name: string }> = [];
+  for (const pattern of [USER_TYPE_PHRASE, AS_A_PHRASE]) {
+    for (const match of text.matchAll(pattern)) {
+      if (NOT_USER_TYPES.has(match[1].trim().toLowerCase())) continue;
+      found.push({ index: match.index ?? 0, name: toTitleCase(match[1]) });
+    }
+  }
+  return Array.from(new Set(
+    found.sort((left, right) => left.index - right.index).map((entry) => entry.name),
+  )).slice(0, 8);
+}
+
 function toSyntheticPbi(
   target: QaAdoGenerationItem,
   technicalContext: QaAdoGenerationItem[],
+  fallbackUserType: string,
 ): SyntheticAdoPbiItem {
   const sourceText = target.workItemType === 'Bug'
     ? target.acceptanceCriteria || target.reproSteps || target.description
@@ -690,7 +741,7 @@ function toSyntheticPbi(
       .map((item) => adoBacklogTbiId(item.id)),
     parallelGroup: null,
     userStory: {
-      persona: 'QA',
+      persona: inferUserTypes(itemText(target))[0] ?? fallbackUserType,
       iWant: `confirm "${nonEmpty(target.title, `work item ${target.id}`)}" behaves as specified in Azure DevOps`,
       soThat: nonEmpty(description, `Azure DevOps work item ${target.id} is verified`),
     },
@@ -837,6 +888,14 @@ function renderGenerationContext(input: {
     `1. \`.ai-pilot/output/${input.slug}.test-cases.json\` — the test cases in JSON format`,
     `2. \`.ai-pilot/output/${input.slug}.test-cases.md\` — the test cases in markdown format`,
     `3. Patch \`.ai-pilot/output/${input.slug}.backlog.json\` with \`testCaseCount\` for each PBI`,
+    '',
+    '## User types',
+    '',
+    'This backlog comes from Azure DevOps, not from an Apex PRD. Its personas are the',
+    "product's own user types, read from the work item text. Use them verbatim as each",
+    "case's `persona` instead of the Apex persona list. When a requirement applies to",
+    'several user types, write a separate case for each one. Use `User` only when the',
+    'work items name no user type.',
     '',
     '## Synthetic PRD',
     input.prdMarkdown,

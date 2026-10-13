@@ -411,6 +411,42 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ── User-type tabs ──────────────────────────────────────────────────────── */
+
+.userTypeTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.userTypeTab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.userTypeTab:hover {
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+}
+
+.userTypeTabActive {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+}
+
 /* ── Manual coverage strip ───────────────────────────────────────────────── */
 
 .coverage {
@@ -708,27 +744,47 @@
   color: var(--text-primary);
 }
 
-.stepList {
-  margin: 0;
-  padding-left: 18px;
+.stepTable {
+  width: 100%;
+  border-collapse: collapse;
   font-size: 0.8rem;
-  line-height: 1.55;
+  line-height: 1.5;
 }
 
-.stepList li {
-  margin-bottom: 7px;
+.stepTable th {
+  text-align: left;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.stepTable td {
+  vertical-align: top;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.stepNumberCol {
+  width: 44px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .stepAction {
-  display: block;
   color: var(--text-primary);
 }
 
 .stepExpected {
-  display: block;
   color: var(--text-secondary);
-  font-style: italic;
-  margin-top: 1px;
+}
+
+.stepActualCol {
+  width: 18%;
+  background: color-mix(in srgb, var(--bg-tertiary) 50%, transparent);
 }
 
 .expectedResult {

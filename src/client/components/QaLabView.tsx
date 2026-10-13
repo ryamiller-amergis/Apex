@@ -35,13 +35,18 @@ const WORK_ITEM_TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: 'Bug', label: 'Bug' },
 ];
 
-type FilterKey = 'tier' | 'type' | 'persona';
+type FilterKey = 'tier' | 'type';
 
 const FILTER_LABELS: Record<FilterKey, string> = {
   tier: 'Tier',
   type: 'Type',
-  persona: 'Persona',
 };
+
+const ALL_USER_TYPES = '';
+
+function userTypeOf(testCase: QaLabTestCase): string {
+  return testCase.persona?.trim() || 'Unspecified';
+}
 
 /**
  * Manual holds every scenario a QA person runs by hand, including the ones
@@ -189,16 +194,26 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
           {testCase.steps.length > 0 && (
             <section className={styles.section}>
               <h4 className={styles.sectionLabel}>Steps</h4>
-              <ol className={styles.stepList}>
-                {testCase.steps.map((step) => (
-                  <li key={`${testCase.id}-step-${step.order}`}>
-                    <span className={styles.stepAction}>{step.action}</span>
-                    {step.expected && (
-                      <span className={styles.stepExpected}>{step.expected}</span>
-                    )}
-                  </li>
-                ))}
-              </ol>
+              <table className={styles.stepTable}>
+                <thead>
+                  <tr>
+                    <th scope="col" className={styles.stepNumberCol}>Step</th>
+                    <th scope="col">Action</th>
+                    <th scope="col">Expected</th>
+                    <th scope="col" className={styles.stepActualCol}>Actual</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {testCase.steps.map((step, index) => (
+                    <tr key={`${testCase.id}-step-${step.order}`}>
+                      <td className={styles.stepNumberCol}>{index + 1}</td>
+                      <td className={styles.stepAction}>{step.action}</td>
+                      <td className={styles.stepExpected}>{step.expected}</td>
+                      <td className={styles.stepActualCol} aria-label="Recorded when the case is run" />
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </section>
           )}
 
@@ -325,6 +340,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<CaseKind>('manual');
+  const [activeUserType, setActiveUserType] = useState(ALL_USER_TYPES);
   const [scopeOpen, setScopeOpen] = useState(false);
   const [scopeSelection, setScopeSelection] = useState<Set<string> | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -388,9 +404,32 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
     return counts;
   }, [allCases]);
 
-  const tabCases = useMemo(
+  const kindCases = useMemo(
     () => allCases.filter((entry) => isOnTab(entry, activeTab)),
     [allCases, activeTab],
+  );
+
+  const userTypeCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const entry of kindCases) {
+      const userType = userTypeOf(entry);
+      counts.set(userType, (counts.get(userType) ?? 0) + 1);
+    }
+    return Array.from(counts.entries()).sort(([left], [right]) => left.localeCompare(right));
+  }, [kindCases]);
+
+  const showUserTypeTabs = activeTab !== 'automated' && userTypeCounts.length > 1;
+  const effectiveUserType = showUserTypeTabs ? activeUserType : ALL_USER_TYPES;
+
+  const matchesUserType = useCallback(
+    (testCase: QaLabTestCase) =>
+      effectiveUserType === ALL_USER_TYPES || userTypeOf(testCase) === effectiveUserType,
+    [effectiveUserType],
+  );
+
+  const tabCases = useMemo(
+    () => kindCases.filter(matchesUserType),
+    [kindCases, matchesUserType],
   );
 
   const filterOptions = useMemo(
@@ -478,6 +517,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
     setScopeOpen(false);
     setScopeSelection(null);
     setDetailsOpen(false);
+    setActiveUserType(ALL_USER_TYPES);
   }, []);
 
   const handleExpandAll = useCallback(() => {
@@ -924,12 +964,35 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
                     className={`${styles.tab} ${activeTab === tab.key ? styles.tabActive : ''}`}
                     onClick={() => {
                       setActiveTab(tab.key);
+                      setActiveUserType(ALL_USER_TYPES);
                       setFilters({});
                     }}
                     {...{ 'data-testid': `qa-lab-tab-${tab.key}` }}
                   >
                     {tab.label}
                     <span className={styles.tabCount}>{tabCounts[tab.key]}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {allCases.length > 0 && showUserTypeTabs && (
+              <div className={styles.userTypeTabs} role="tablist" aria-label="User type">
+                {[[ALL_USER_TYPES, kindCases.length] as const, ...userTypeCounts].map(([userType, count]) => (
+                  <button
+                    key={userType || 'all'}
+                    type="button"
+                    role="tab"
+                    aria-selected={effectiveUserType === userType}
+                    className={`${styles.userTypeTab} ${effectiveUserType === userType ? styles.userTypeTabActive : ''}`}
+                    onClick={() => {
+                      setActiveUserType(userType);
+                      setFilters({});
+                    }}
+                    {...{ 'data-testid': `qa-lab-user-type-${userType ? userType.toLowerCase().replace(/[^a-z0-9]+/g, '-') : 'all'}` }}
+                  >
+                    {userType || 'All users'}
+                    <span className={styles.tabCount}>{count}</span>
                   </button>
                 ))}
               </div>
@@ -1019,10 +1082,10 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
                 key={`${suite.pbiId}-${suite.adoWorkItemId ?? 'unlinked'}`}
                 suite={suite}
                 cases={suite.testCases.filter(
-                  (entry) => isOnTab(entry, activeTab) && matchesFilters(entry),
+                  (entry) => isOnTab(entry, activeTab) && matchesUserType(entry) && matchesFilters(entry),
                 )}
                 manualCases={activeTab === 'manual'
-                  ? suite.testCases.filter((entry) => isOnTab(entry, 'manual'))
+                  ? suite.testCases.filter((entry) => isOnTab(entry, 'manual') && matchesUserType(entry))
                   : null}
                 expandedIds={expandedIds}
                 onToggleCase={toggleCase}

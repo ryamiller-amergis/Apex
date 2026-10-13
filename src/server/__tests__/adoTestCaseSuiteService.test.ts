@@ -22,6 +22,7 @@ import {
   adoBacklogTbiId,
   buildSyntheticAdoBacklog,
   getLatestAdoTestSuite,
+  inferUserTypes,
   isAdoTestSuiteWatcherActive,
   listAdoGenerationCandidates,
   publishAdoTestCases,
@@ -237,6 +238,38 @@ describe('buildSyntheticAdoBacklog', () => {
     const tbi = items.find((entry) => entry.id === 'TBI-18500') as SyntheticAdoTbiItem;
     expect(tbi.description).toBe('Create the table');
     expect(tbi.definitionOfDone).toHaveLength(3);
+  });
+
+  it('falls back to a generic User when the work items name no user type', () => {
+    const backlog = buildSyntheticAdoBacklog(generationContext());
+
+    expect(backlog.personas.map((persona) => persona.name)).toEqual(['User']);
+    expect(backlog.epics[0].features[0].affectedPersonas).toEqual(['User']);
+    expect(pbiItem(backlog, 'PBI-18452').userStory.persona).toBe('User');
+  });
+
+  it('uses the user types named in the work items as personas', () => {
+    const context = generationContext();
+    context.targets[0].description = '<p>As an External User, I want to toggle alerts.</p>';
+    context.targets[1].reproSteps = '<div>Internal users see the toggle reset after reload.</div>';
+
+    const backlog = buildSyntheticAdoBacklog(context);
+
+    expect(backlog.personas.map((persona) => persona.name)).toEqual(['External User', 'Internal User']);
+    expect(backlog.epics[0].features[0].affectedPersonas).toEqual(['External User', 'Internal User']);
+    expect(pbiItem(backlog, 'PBI-18452').userStory.persona).toBe('External User');
+    expect(pbiItem(backlog, 'PBI-18499').userStory.persona).toBe('Internal User');
+  });
+});
+
+describe('inferUserTypes', () => {
+  it('reads "As a …" stories and user-type phrases in order', () => {
+    expect(inferUserTypes('As a recruiter, I want to post jobs. Guest users can only browse.'))
+      .toEqual(['Recruiter', 'Guest User']);
+  });
+
+  it('ignores phrases that are not user types', () => {
+    expect(inferUserTypes('As a result, the list refreshes. As an example, I click Save.')).toEqual([]);
   });
 });
 
