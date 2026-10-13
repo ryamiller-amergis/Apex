@@ -20,8 +20,16 @@ if (connectionString) {
     // first, the SDK collects third-party loggers (winston/bunyan) and this
     // app's console output never reaches the `traces` table.
     .setAutoCollectConsole(true, true)
-    .setDistributedTracingMode(appInsights.DistributedTracingModes.AI_AND_W3C)
-    .start();
+    .setDistributedTracingMode(appInsights.DistributedTracingModes.AI_AND_W3C);
+  // The SDK defaults to keeping 5 traces per second, which overrides the 100%
+  // sampling ratio. Requests past that limit are dropped along with every
+  // console line written while serving them, so alerts on those logs never fire.
+  const config = appInsights.defaultClient.config;
+  config.azureMonitorOpenTelemetryOptions = {
+    ...config.azureMonitorOpenTelemetryOptions,
+    tracesPerSecond: 0,
+  };
+  appInsights.start();
 }
 
 export const telemetryClient = connectionString

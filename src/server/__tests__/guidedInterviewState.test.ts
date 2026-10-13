@@ -29,7 +29,7 @@ describe('guided interview state', () => {
       topic: 'Current situation, problem, and impact',
       marker: '[[interview-phase:discovery:1:6]]',
     });
-    expect(turn.instruction).toContain('recent concrete example');
+    expect(turn.instruction).toContain('offer the likeliest problems as the example answers');
   });
 
   it('offers one Discovery follow-up, and moves on when that follow-up is already used', () => {
@@ -159,8 +159,8 @@ describe('guided interview state', () => {
     expect(prompt).toContain('First line when one follow-up is needed: [[interview-phase:discovery:1:6:followup]]');
     expect(prompt).toContain('Ask exactly one question');
     expect(prompt).toContain('The Q&A below is authoritative');
-    expect(prompt).toContain('Use a broad, neutral question before narrowing');
-    expect(prompt).toContain('Skip — decide later');
+    expect(prompt).toContain('list 3 or 4 lettered example answers');
+    expect(prompt).toContain('Make the last lettered choice the literal "Skip — decide later"');
     expect(prompt).toContain('Never turn an inference or assumption into a confirmed requirement');
     expect(prompt).toContain('Who has the problem?');
     expect(prompt).toContain('Any signed-in user.');
@@ -216,6 +216,32 @@ describe('guided interview state', () => {
       ),
     ).toBe(
       '[[interview-phase:discovery:1:6:followup]]\n\nWhich of those users feels this first?\n\nSkip — decide later',
+    );
+  });
+
+  it('adds Skip as the next lettered choice so it renders with the other options', () => {
+    const turn = deriveGuidedInterviewTurn([], 'Build a todo list.');
+
+    expect(
+      normalizeGuidedInterviewResponse(
+        'What goes wrong today?\n\na. Forms get lost\nb. Data is re-keyed\nc. Approvals stall\n\nPick the closest one.',
+        turn,
+      ),
+    ).toBe(
+      '[[interview-phase:discovery:1:6]]\n\nWhat goes wrong today?\n\na. Forms get lost\nb. Data is re-keyed\nc. Approvals stall\nd. Skip — decide later\n\nPick the closest one.',
+    );
+  });
+
+  it('appends Skip as plain text when all five choice letters are used', () => {
+    const turn = deriveGuidedInterviewTurn([], 'Build a todo list.');
+
+    expect(
+      normalizeGuidedInterviewResponse(
+        'Which one?\n\na. One\nb. Two\nc. Three\nd. Four\ne. Five',
+        turn,
+      ),
+    ).toBe(
+      '[[interview-phase:discovery:1:6]]\n\nWhich one?\n\na. One\nb. Two\nc. Three\nd. Four\ne. Five\n\nSkip — decide later',
     );
   });
 

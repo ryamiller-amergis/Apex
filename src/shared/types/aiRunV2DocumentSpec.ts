@@ -7,6 +7,7 @@ import type { SkillProvider } from './projectSettings';
 
 export const AI_RUN_V2_DOCUMENT_WORKFLOW_CLASSES = [
   'prd',
+  'adr',
   'design-doc',
   'validation',
   'test-cases',
@@ -61,6 +62,7 @@ export function documentWorkflowRequiresRepository(
 ): boolean {
   switch (workflowClass) {
     case 'prd':
+    case 'adr':
     case 'design-doc':
     case 'test-cases':
       return true;
@@ -97,6 +99,7 @@ export function isAllowedDocumentScratchInputPath(
 
   switch (workflowClass) {
     case 'prd':
+    case 'adr':
       return value === '.ai-pilot/kickoff-transcript.md';
     case 'test-cases':
       return (
@@ -122,6 +125,7 @@ function hasRequiredScratchInputs(
   const paths = inputs.map((input) => input.path);
   switch (workflowClass) {
     case 'prd':
+    case 'adr':
       return paths.includes('.ai-pilot/kickoff-transcript.md');
     case 'design-doc':
     case 'validation':

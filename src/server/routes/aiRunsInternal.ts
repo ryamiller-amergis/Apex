@@ -21,6 +21,7 @@ import {
 import {
   InteractiveToolProxyError,
   invokeInteractiveToolProxy,
+  postLocalMcp,
 } from '../services/interactiveToolProxyService';
 import { isDurableInteractiveTurnSpecification } from '../../shared/types/durableInteractiveTurn';
 
@@ -230,32 +231,10 @@ router.post(
         claims,
         specification: attempt.specSnapshot,
         body: req.body,
-        invokeInternal: async (name, descriptor, body) => {
-          const response = await fetch(localMcpUrl(name, descriptor), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body ?? {}),
-          });
-          const text = await response.text();
-          let parsed: unknown = {};
-          if (text) {
-            try {
-              parsed = JSON.parse(text);
-            } catch {
-              throw new InteractiveToolProxyError(
-                'Internal MCP returned non-JSON',
-                502,
-              );
-            }
-          }
-          if (!response.ok) {
-            throw new InteractiveToolProxyError(
-              `Internal MCP failed (${response.status})`,
-              502,
-            );
-          }
-          return parsed;
-        },
+        invokeInternal: (name, descriptor, body, context) =>
+          postLocalMcp(localMcpUrl(name, descriptor), body, {
+            signal: context.signal,
+          }),
       });
       res.status(200).json(result);
     } catch (error) {

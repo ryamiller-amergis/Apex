@@ -41,7 +41,7 @@ Repository tools are closed during Discovery and Delivery. Do not call grep, glo
 
 Ask one question per message, then stop and wait.
 
-Use a broad-to-narrow interview pattern. Start each new topic with an open, neutral question about a real situation or observable outcome. Do not begin by proposing solutions or several detailed answer packages. Use choices only to confirm or narrow a decision already supported by the conversation or application brief.
+Ask one short plain-language question per topic, then list 3 or 4 lettered example answers, each on its own line (`a. ...`, `b. ...`). Draw them from the application brief and the conversation so far. They are starting points the person can pick, not confirmed requirements.
 
 If the topic is already answered, state the concise recommendation and use:
 
@@ -51,9 +51,9 @@ b. Change it
 c. Skip — decide later
 ```
 
-If choices are needed, each choice decides one thing, choices are mutually exclusive, and each is one short plain sentence. Never bundle actors, scope, visibility, exceptions, and release timing into one option.
+Each choice decides one thing, choices are mutually exclusive, and each is one short plain sentence. Never bundle actors, scope, visibility, exceptions, and release timing into one option.
 
-The last option on every numbered phase question is `Skip — decide later`. An open question may show only that skip option beneath it. A skip is recorded as unresolved. Do not ask that question again.
+The last option on every numbered phase question is `Skip — decide later`. A skip is recorded as unresolved. Do not ask that question again.
 
 Ask at most one follow-up when an answer is unclear, conflicts with an earlier decision, or needs one concrete example. Quote conflicting decisions without judgment and ask which one is authoritative. Do not create contradictions by introducing a new bundle of choices.
 

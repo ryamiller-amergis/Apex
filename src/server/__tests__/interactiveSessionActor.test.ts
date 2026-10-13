@@ -672,6 +672,48 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     expect(dispose).not.toHaveBeenCalled();
   });
 
+  it('sends each turn its own tool proxy URLs when the warm Agent is reused', async () => {
+    const handle = makeAgentHandle({ tokens: ['ok'], agentId: 'agent-1' });
+    const send = jest.spyOn(handle, 'send');
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) => {
+        handle.workspaceRef = checkout.workspacePath;
+        return handle;
+      }),
+      materializeWorkspace: jest.fn(async (_bootstrap, destination: string) => ({
+        workspacePath: destination,
+        dispose: async () => {},
+      })),
+      uploadAttemptArtifacts: jest.fn(async () => ({
+        container: 'artifacts',
+        key: 'runs/r/attempts/1/manifest.json',
+      })),
+      postIngest: async () => ({ ok: true, cancelRequested: false }),
+    });
+    const toolsFor = (token: string) => ({
+      'ado-skills': { url: `https://apex.example/api/internal/ai-runs/r/tools/ado-skills?token=${token}` },
+    });
+
+    await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({ mcpServers: toolsFor('first') }),
+    });
+    await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        attemptId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        dispatchMessageId: 'dispatch-durable-2',
+        runId: 'run-durable-2',
+        mcpServers: toolsFor('second'),
+      }),
+    });
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls[0][1]).toMatchObject({ mcpServers: toolsFor('first') });
+    expect(send.mock.calls[1][1]).toMatchObject({ mcpServers: toolsFor('second') });
+  });
+
   it('marks guided interview replies and rebuilds the Agent when the phase changes', async () => {
     const posted: AiRunIngestBody[] = [];
     const acquireDurableAgent = jest.fn(async (bootstrap, checkout) => ({

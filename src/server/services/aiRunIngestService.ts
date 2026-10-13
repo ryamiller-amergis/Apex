@@ -172,6 +172,8 @@ async function consumeCompletedArtifacts(
 async function failGeneratingArtifacts(threadId: string): Promise<void> {
   const { failGeneratingTestCasesForThread } = await import('./testCaseService');
   await failGeneratingTestCasesForThread(threadId);
+  const { applyAdrGenerationResult } = await import('./adrService');
+  await applyAdrGenerationResult(threadId, null, 'the agent run failed');
 }
 
 async function reflectFailedGeneration(
@@ -496,8 +498,16 @@ function resolveInteractiveCallbackBaseUrl(): string {
   const configured =
     process.env.AI_RUNS_APEX_CALLBACK_BASE_URL?.trim() ||
     process.env.APEX_CALLBACK_URL?.trim() ||
-    process.env.PUBLIC_APP_URL?.trim();
+    process.env.PUBLIC_APP_URL?.trim() ||
+    process.env.APEX_URL?.trim();
   if (configured) return configured.replace(/\/+$/, '');
+  // Actor hosts run in other containers, where localhost is not App Service.
+  if (process.env.WEBSITE_SITE_NAME?.trim()) {
+    throw new AiRunIngestError(
+      'APEX_URL or AI_RUNS_APEX_CALLBACK_BASE_URL is required for interactive tool proxy URLs',
+      'AI_RUN_ILLEGAL_TRANSITION',
+    );
+  }
   const port = process.env.PORT?.trim() || '3001';
   return `http://localhost:${port}`;
 }

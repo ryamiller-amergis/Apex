@@ -8,6 +8,7 @@ import type {
 } from '../../shared/types/chat';
 import type { EffortLevel } from '../../shared/types/effort';
 import type { InteractiveWorkflowClass } from '../../shared/types/interactiveWorkflow';
+import { skillNameFromPath, skillPathCandidates } from '../../shared/skillPaths';
 import type {
   DurableInteractiveTurnSpecification,
   FrozenGuidedInterview,
@@ -448,6 +449,8 @@ export async function loadDurableInteractiveSkill(
     path: string;
     registration: DurableInteractiveSkillRegistration;
     pinnedReader: RepoReader | null;
+    /** The path is Apex's default, so the bundled copy may stand in for a missing repo copy. */
+    bundledFallback?: boolean;
   }>,
   options: Readonly<{
     builtInRoots: ReadonlyArray<BuiltInSkillRoot>;
@@ -476,47 +479,73 @@ export async function loadDurableInteractiveSkill(
       warnSkillUnavailable(normalized, 'no pinned repository reader');
       throw unavailableSkill();
     }
-    let content: unknown;
-    try {
-      content = await readPinnedSkill(
-        input.pinnedReader,
-        normalized,
-        options.syncWait ?? DEFAULT_SKILL_SYNC_WAIT,
-      );
-    } catch (error) {
-      warnSkillUnavailable(normalized, describeSkillLoadError(error));
-      throw unavailableSkill();
+    // Stored paths can name a root the repository does not use (for example
+    // `.agents/skills` in a repo that keeps skills under `.cursor/skills`),
+    // so try every discovery root, as the in-process path does.
+    const skillName = skillNameFromPath(normalized);
+    const candidates = skillName
+      ? skillPathCandidates(skillName, normalized)
+      : [normalized];
+    const failures: string[] = [];
+    for (const candidate of candidates) {
+      try {
+        const content = await readPinnedSkill(
+          input.pinnedReader,
+          candidate,
+          options.syncWait ?? DEFAULT_SKILL_SYNC_WAIT,
+        );
+        if (typeof content === 'string') return { path: candidate, content };
+        failures.push(`repository returned no file content (${candidate})`);
+      } catch (error) {
+        failures.push(`${describeSkillLoadError(error)} (${candidate})`);
+        if (isRepositorySyncingError(error)) break;
+      }
     }
-    if (typeof content !== 'string') {
-      warnSkillUnavailable(normalized, 'repository returned no file content');
-      throw unavailableSkill();
+    if (input.bundledFallback) {
+      for (const candidate of candidates) {
+        const bundled = readBuiltInSkill(candidate, options.builtInRoots);
+        if (bundled) {
+          console.warn(
+            `[durable-interactive] using bundled skill path=${candidate}; repository copy unavailable: ${failures.join('; ')}`,
+          );
+          return bundled;
+        }
+      }
     }
-    return { path: normalized, content };
+    warnSkillUnavailable(normalized, failures.join('; '));
+    throw unavailableSkill();
   }
 
-  for (const root of options.builtInRoots) {
+  const builtIn = readBuiltInSkill(normalized, options.builtInRoots);
+  if (!builtIn) throw unavailableSkill();
+  return builtIn;
+}
+
+function readBuiltInSkill(
+  normalized: string,
+  builtInRoots: ReadonlyArray<BuiltInSkillRoot>,
+): { path: string; content: string } | null {
+  for (const root of builtInRoots) {
     const prefix = strictPortableSkillPath(root.requestPrefix);
     if (!normalized.startsWith(`${prefix}/`)) continue;
     const suffix = normalized.slice(prefix.length + 1);
     try {
       const realRoot = fs.realpathSync(root.absolutePath);
       const candidate = path.resolve(realRoot, ...suffix.split('/'));
-      if (!isContainedPath(realRoot, candidate)) throw unavailableSkill();
+      if (!isContainedPath(realRoot, candidate)) return null;
       const metadata = fs.lstatSync(candidate);
-      if (metadata.isSymbolicLink() || !metadata.isFile()) {
-        throw unavailableSkill();
-      }
+      if (metadata.isSymbolicLink() || !metadata.isFile()) return null;
       const realCandidate = fs.realpathSync(candidate);
-      if (!isContainedPath(realRoot, realCandidate)) throw unavailableSkill();
+      if (!isContainedPath(realRoot, realCandidate)) return null;
       return {
         path: normalized,
         content: fs.readFileSync(realCandidate, 'utf8'),
       };
     } catch {
-      throw unavailableSkill();
+      return null;
     }
   }
-  throw unavailableSkill();
+  return null;
 }
 
 const DEFAULT_BUILT_IN_SKILL_ROOTS: ReadonlyArray<BuiltInSkillRoot> = [
@@ -858,6 +887,25 @@ async function defaultLoadRepositoryContext(
   return { contextContent, agentsContent };
 }
 
+/** ADR authoring never calls MaxView tools, so `maxview-mcp` cannot block it. */
+export function workflowUsesMaxview(
+  workflowClass: InteractiveWorkflowClass,
+): boolean {
+  switch (workflowClass) {
+    case 'adr':
+      return false;
+    case 'interview':
+    case 'home-chat':
+    case 'ask-apex':
+    case 'assistant':
+      return true;
+    default: {
+      const unhandled: never = workflowClass;
+      throw new Error(`Unhandled workflow class: ${String(unhandled)}`);
+    }
+  }
+}
+
 /**
  * Interview sessions (including ADR interviews, which classify as `interview`)
  * avoid broad repository search, matching the in-process path.
@@ -988,11 +1036,15 @@ async function defaultLoadSkill(
     );
     throw unavailableSkill();
   }
+  const kickoffSkillPath = normalizePath(input.thread.kickoff.skillPath ?? '');
   return loadDurableInteractiveSkill(
     {
       path: input.skill.path,
       registration: input.registration,
       pinnedReader,
+      bundledFallback:
+        input.thread.kickoff.skillPathIsAppDefault === true &&
+        kickoffSkillPath.toLowerCase() === normalizePath(input.skill.path).toLowerCase(),
     },
     { builtInRoots: input.builtInRoots },
   );
@@ -1185,10 +1237,12 @@ export function createDurableInteractiveTurnService(
           422,
         );
       }
-      const maxviewCapability = await deps.resolveMaxviewCapability({
-        userId: input.userId,
-        project: thread.kickoff.project,
-      });
+      const maxviewCapability = workflowUsesMaxview(input.workflowClass)
+        ? await deps.resolveMaxviewCapability({
+          userId: input.userId,
+          project: thread.kickoff.project,
+        })
+        : 'disabled';
       if (maxviewCapability === 'unavailable') {
         throw new DurableInteractiveTurnError(
           'INTERACTIVE_V2_MAXVIEW_UNAVAILABLE',

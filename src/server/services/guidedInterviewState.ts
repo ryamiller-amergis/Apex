@@ -83,7 +83,7 @@ function productTopicInstruction(
   topic: string,
 ): string {
   const discoveryGuidance = [
-    'Ask for a recent concrete example of the current situation: what triggers it, what the person does today, what goes wrong, and who feels the impact. Start from the problem, not the proposed feature.',
+    'Ask what goes wrong today in the current situation, and offer the likeliest problems as the example answers. Start from the problem, not the proposed feature.',
     'Define success early. Ask for the observable user or business outcome that would prove this change worked. Seek a measurable signal when one is practical, but do not invent a metric.',
     'Use what is already known to identify the people involved and the business rules that govern their actions. Ask only for the most important missing actor or rule; do not repeat the success or scope question.',
     'Summarize the likely release-one boundary from prior answers, including what is explicitly out. Ask the person to confirm or correct that boundary instead of offering competing solution bundles.',
@@ -393,11 +393,11 @@ export function buildGuidedInterviewTurnPrompt(
           'Use the words a person would use for what they can see and do.',
           'Do not mention persistence, CRUD, databases, APIs, schemas, MCP, skills, agent context, routes, components, endpoints, or permission keys.',
           'Use only product names established by the application brief or prior Q&A. Do not import screen names from another project.',
-          'Use a broad, neutral question before narrowing. Do not lead with a proposed solution or a list of answer packages.',
-          'Prefer an open question about a real example. Use choices only to confirm or narrow a decision already supported by the prior Q&A or application brief.',
-          'If choices are needed, each choice must decide one thing, remain mutually exclusive, and use one short plain sentence without markdown bold.',
-          'If the prior Q&A already answers this topic, state the concise recommendation and offer Confirm, Change, and Skip — decide later.',
-          'End every numbered Discovery or Delivery topic with the literal option "Skip — decide later".',
+          'Ask one short plain-language question, then list 3 or 4 lettered example answers, each on its own line ("a. ...", "b. ...").',
+          'Draw the example answers from the application brief and prior Q&A. They are starting points the person can pick, not confirmed requirements.',
+          'Each choice must decide one thing, remain mutually exclusive, and use one short plain sentence without markdown bold.',
+          'If the prior Q&A already answers this topic, state the concise recommendation and offer "a. Confirm" and "b. Change it".',
+          'Make the last lettered choice the literal "Skip — decide later". The person may type their own answer instead of picking one.',
           'Never turn an inference or assumption into a confirmed requirement. Name it as an assumption in a confirmation brief.',
         ]),
     'Do not combine topics, add quick clarifications, preview later questions, or renumber the topic.',
@@ -417,6 +417,28 @@ export function buildGuidedInterviewTurnPrompt(
   ].join('\n');
 }
 
+// Matches the client's choice parser (parseAgentMessage.ts): letters a–e, and a
+// line renders as a button only inside a block of two or more choices.
+const LETTERED_CHOICE_RE = /^[\s\-*]*([a-eA-E])[.)]\s+\S/;
+
+function withSkipChoice(text: string): string {
+  const lines = text.trimEnd().split('\n');
+  let lastChoiceIndex = -1;
+  let lastLetter = '';
+  lines.forEach((line, index) => {
+    const match = line.match(LETTERED_CHOICE_RE);
+    if (!match) return;
+    lastChoiceIndex = index;
+    lastLetter = match[1].toLowerCase();
+  });
+  if (lastChoiceIndex === -1 || lastLetter >= 'e') {
+    return `${lines.join('\n')}\n\nSkip — decide later`;
+  }
+  const nextLetter = String.fromCharCode(lastLetter.charCodeAt(0) + 1);
+  lines.splice(lastChoiceIndex + 1, 0, `${nextLetter}. Skip — decide later`);
+  return lines.join('\n');
+}
+
 export function normalizeGuidedInterviewResponse(
   text: string,
   turn: GuidedInterviewTurn,
@@ -432,7 +454,7 @@ export function normalizeGuidedInterviewResponse(
     turn.question != null &&
     !/skip\s*[—-]\s*decide later/i.test(withoutMarkers)
   ) {
-    withoutMarkers = `${withoutMarkers.trimEnd()}\n\nSkip — decide later`;
+    withoutMarkers = withSkipChoice(withoutMarkers);
   }
   const marker = turn.followUpMarker && text.includes(turn.followUpMarker)
     ? turn.followUpMarker

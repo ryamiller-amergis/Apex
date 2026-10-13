@@ -466,6 +466,42 @@ function isTransientGitError(error: unknown): boolean {
   ].some((fragment) => message.includes(fragment));
 }
 
+/** Room a cold clone needs; the largest mirror (MaxView) is about 6.8 GiB. */
+export const REPO_CACHE_MIN_FREE_BYTES = 10 * 1024 ** 3;
+
+function gibibytes(bytes: number): string {
+  return (bytes / 1024 ** 3).toFixed(1);
+}
+
+export class RepoCacheDiskFullError extends Error {
+  constructor(readonly freeBytes: number, readonly requiredBytes: number) {
+    super(
+      `Repository storage is full: ${gibibytes(freeBytes)} GiB free, ` +
+        `a clone needs ${gibibytes(requiredBytes)} GiB.`,
+    );
+    this.name = 'RepoCacheDiskFullError';
+  }
+}
+
+export async function readRepoCacheFreeBytes(dir = REPO_CACHE_BASE): Promise<number> {
+  const stats = await fs.promises.statfs(dir);
+  return stats.bavail * stats.bsize;
+}
+
+async function assertRoomForColdClone(): Promise<void> {
+  let freeBytes: number;
+  try {
+    freeBytes = await readRepoCacheFreeBytes();
+  } catch {
+    return;
+  }
+  if (freeBytes >= REPO_CACHE_MIN_FREE_BYTES) return;
+  console.error(
+    `[repo-cache] disk-low freeBytes=${freeBytes} requiredBytes=${REPO_CACHE_MIN_FREE_BYTES} dir=${REPO_CACHE_BASE}`,
+  );
+  throw new RepoCacheDiskFullError(freeBytes, REPO_CACHE_MIN_FREE_BYTES);
+}
+
 async function populateColdCache(
   cacheDir: string,
   options: RepoCacheOptions,
@@ -475,6 +511,7 @@ async function populateColdCache(
 ): Promise<void> {
   const tempDir = `${cacheDir}.tmp-${uuidv4()}`;
   fs.mkdirSync(REPO_CACHE_BASE, { recursive: true });
+  await assertRoomForColdClone();
 
   try {
     await git([
@@ -505,6 +542,9 @@ async function populateColdCache(
     fs.renameSync(tempDir, cacheDir);
   } catch (err) {
     fs.rmSync(tempDir, { recursive: true, force: true });
+    if (err instanceof Error && /no space left on device/i.test(err.message)) {
+      console.error(`[repo-cache] disk-low clone ran out of space dir=${REPO_CACHE_BASE}`);
+    }
     throw err;
   }
 }
@@ -519,7 +559,7 @@ async function populateColdCacheWithRetry(
   try {
     await populateColdCache(cacheDir, options, remote, abortSignal, assertLeaseOwned);
   } catch (firstError) {
-    if (abortSignal.aborted) throw firstError;
+    if (abortSignal.aborted || firstError instanceof RepoCacheDiskFullError) throw firstError;
     console.warn(
       `[repo-cache] cold initialization failed; retrying ${options.provider}/${options.repo}@${options.branch}:`,
       (firstError as Error).message,
