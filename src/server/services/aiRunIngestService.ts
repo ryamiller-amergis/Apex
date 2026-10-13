@@ -172,6 +172,8 @@ async function consumeCompletedArtifacts(
 async function failGeneratingArtifacts(threadId: string): Promise<void> {
   const { failGeneratingTestCasesForThread } = await import('./testCaseService');
   await failGeneratingTestCasesForThread(threadId);
+  const { applyAdrGenerationResult } = await import('./adrService');
+  await applyAdrGenerationResult(threadId, null, 'the agent run failed');
 }
 
 async function reflectFailedGeneration(

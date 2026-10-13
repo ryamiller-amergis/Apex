@@ -1199,6 +1199,7 @@ export function createInteractiveSessionActor(
         const turnEndMonitor = createCursorTurnEndMonitor();
         activeRunRef = await untilAborted(
           agentHandle.send(prompt, {
+            mcpServers,
             onDelta: (update) => {
               if (!firstEventSeen) {
                 firstEventSeen = true;

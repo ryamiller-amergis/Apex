@@ -754,6 +754,17 @@ async function logMyWorkHealth(
   }, level);
 }
 
+/** A reaped generation run must release its document, which no later callback will do. */
+async function reflectReapedGeneration(threadId: string, detail: string): Promise<void> {
+  try {
+    // Loaded lazily: adrService imports chatAgentService, which imports this module.
+    const { applyAdrGenerationResult } = await import('./adrService');
+    await applyAdrGenerationResult(threadId, null, detail);
+  } catch (err) {
+    console.error(`[reaper] Failed to release ADR for thread ${threadId}:`, err);
+  }
+}
+
 async function failRun(
   id: string,
   threadId: string,
@@ -776,6 +787,7 @@ async function failRun(
         isNull(chatThreads.activeRunId),
       ),
     ));
+  await reflectReapedGeneration(threadId, message);
 }
 
 async function publishCancelSignal(threadId: string, runId: string, timestamp: string): Promise<void> {
@@ -1054,6 +1066,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
               console.log(
                 `[reaper] Reaped queued background run (id=${row.id}, threadId=${row.threadId}) — queue TTL expired`,
               );
+              await reflectReapedGeneration(row.threadId, detail);
               emitWorkerTelemetry(() => {
                 workerTierTelemetry.reaperAction(
                   workerTelemetryContext(row),
@@ -1103,6 +1116,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
             `[reaper] Forced background cancellation (id=${row.id}, threadId=${row.threadId})`,
           );
           if (terminal.ok) {
+            await reflectReapedGeneration(row.threadId, detail);
             emitWorkerTelemetry(() => {
               workerTierTelemetry.reaperAction(
                 workerTelemetryContext(row),
@@ -1142,6 +1156,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
               `[reaper] Reaped background run (id=${row.id}, threadId=${row.threadId}) — dispatch TTL expired`,
             );
             if (terminal.ok) {
+              await reflectReapedGeneration(row.threadId, detail);
               emitWorkerTelemetry(() => {
                 workerTierTelemetry.reaperAction(
                   workerTelemetryContext(row),
@@ -1185,6 +1200,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
             `[reaper] Reaped background run (id=${row.id}, threadId=${row.threadId}) — heartbeat expired`,
           );
           if (terminal.ok) {
+            await reflectReapedGeneration(row.threadId, detail);
             emitWorkerTelemetry(() => {
               workerTierTelemetry.reaperAction(
                 workerTelemetryContext(row),
@@ -1221,6 +1237,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
             `[reaper] Reaped background run (id=${row.id}, threadId=${row.threadId}) — progress expired`,
           );
           if (terminal.ok) {
+            await reflectReapedGeneration(row.threadId, detail);
             emitWorkerTelemetry(() => {
               workerTierTelemetry.reaperAction(
                 workerTelemetryContext(row),

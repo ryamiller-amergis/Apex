@@ -87,6 +87,10 @@ jest.mock('../services/durableInteractiveTurnService', () => ({
   durableInteractiveTurnService: { retry: jest.fn() },
   loadDurableInteractiveRetrySource: jest.fn(),
 }));
+const mockApplyAdrGenerationResult = jest.fn().mockResolvedValue(false);
+jest.mock('../services/adrService', () => ({
+  applyAdrGenerationResult: (...args: unknown[]) => mockApplyAdrGenerationResult(...args),
+}));
 
 import {
   assessAgentRunHealth,
@@ -859,6 +863,11 @@ describe('reapOrphanedRuns', () => {
       dispatchMessageId: 'dispatch-current',
       lane: 'background',
     });
+    expect(mockApplyAdrGenerationResult).toHaveBeenCalledWith(
+      'thread-worker',
+      null,
+      'Background worker heartbeat expired',
+    );
   });
 
   it('TBI-005 DoD-3 / PBI-004 AC-1 / VT-03 terminalizes stale progress while heartbeat is fresh', async () => {

@@ -11,6 +11,7 @@ const mockMarkTerminal = jest.fn();
 const mockNotifyRunEvent = jest.fn();
 const mockConsumeCompletedArtifacts = jest.fn();
 const mockFailGeneratingTestCasesForThread = jest.fn();
+const mockApplyAdrGenerationResult = jest.fn();
 const mockWorkerColdStart = jest.fn();
 const mockSelect = jest.fn();
 const mockTransaction = jest.fn();
@@ -79,6 +80,10 @@ jest.mock('../services/testCaseService', () => ({
     mockFailGeneratingTestCasesForThread(...args),
 }));
 
+jest.mock('../services/adrService', () => ({
+  applyAdrGenerationResult: (...args: unknown[]) => mockApplyAdrGenerationResult(...args),
+}));
+
 import {
   AiRunIngestError,
   getBootstrap,
@@ -124,6 +129,7 @@ beforeEach(() => {
   mockNotifyRunEvent.mockResolvedValue(undefined);
   mockConsumeCompletedArtifacts.mockResolvedValue(undefined);
   mockFailGeneratingTestCasesForThread.mockResolvedValue(undefined);
+  mockApplyAdrGenerationResult.mockResolvedValue(false);
   mockWorkerColdStart.mockReset();
   mockTransition.mockImplementation(async (_runId, status) => ({
     ok: true,
@@ -693,7 +699,7 @@ describe('aiRunIngestService durable terminal completion', () => {
     );
   });
 
-  it('retries a failed terminal and still flips generating test-case rows', async () => {
+  it('retries a failed terminal and still flips generating test-case rows and ADRs', async () => {
     mockFindFirst.mockResolvedValue(baseRow({
       status: 'failed',
       executionSnapshot,
@@ -710,6 +716,7 @@ describe('aiRunIngestService durable terminal completion', () => {
 
     expect(mockConsumeCompletedArtifacts).not.toHaveBeenCalled();
     expect(mockFailGeneratingTestCasesForThread).toHaveBeenCalledWith('thread-1');
+    expect(mockApplyAdrGenerationResult).toHaveBeenCalledWith('thread-1', null, expect.any(String));
   });
 
   it('PBI-004 AC-3 regression: stale completed callback consumes nothing', async () => {

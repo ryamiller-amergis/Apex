@@ -20,6 +20,9 @@ jobs:
   deploy-staging:
     runs-on: ubuntu-latest
     environment: prd
+    permissions:
+      actions: read
+      contents: read
     outputs:
       ai_orchestrator: ${{ steps.image_publish.outputs.ai_orchestrator }}
       ai_runs_interactive: ${{ steps.image_publish.outputs.ai_runs_interactive }}
@@ -34,22 +37,19 @@ jobs:
 
       # Diff against the last deploy that reached production, not the previous
       # push: a cancelled or failed deploy must not strand its image changes.
+      # Without that base, diff against the empty tree so every image rebuilds.
       - name: Detect runner image source changes
         id: image_publish
         env:
           GH_TOKEN: ${{ github.token }}
-          PUSH_BEFORE_SHA: ${{ github.event.before }}
           HEAD_SHA: ${{ github.sha }}
         run: |
-          BASE_SHA="$(gh run list --repo "${{ github.repository }}" --workflow deploy.yml --branch main --status success --limit 1 --json headSha --jq '.[0].headSha' 2>/dev/null || true)"
+          BASE_SHA="$(gh run list --repo "${{ github.repository }}" --workflow deploy.yml --branch main --status success --limit 1 --json headSha --jq '.[0].headSha' || true)"
           if [ -n "${BASE_SHA}" ] && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
             echo "Base: last successful deploy ${BASE_SHA}"
           else
-            echo "::warning::Last successful deploy not found; diffing against the previous push."
-            BASE_SHA="${PUSH_BEFORE_SHA}"
-            if [ -z "${BASE_SHA}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
-              BASE_SHA="$(git rev-parse HEAD~1)"
-            fi
+            echo "::warning::Last successful deploy not found; publishing every runner image."
+            BASE_SHA="$(git hash-object -t tree /dev/null)"
           fi
           export BASE_SHA
           bash scripts/ci/detect-image-publish-changes.sh
