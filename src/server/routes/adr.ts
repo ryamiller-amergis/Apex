@@ -18,7 +18,6 @@ import {
   rejectAdrProposedContent,
   setAdrAssistantThread,
   stageAdrReviewFix,
-  startAdrWatcher,
   updateAdrStatus,
   updateAdrTitle,
 } from '../services/adrService';
@@ -307,7 +306,6 @@ router.post('/:id/generate', requirePermission('adr:edit'), async (req, res, nex
     }, { skipAutoKickoff: true });
 
     await markAdrGenerating(adr.id, userId, thread.id);
-    startAdrWatcher(adr.id, thread.id);
     res.status(201).json({ adrId: adr.id, threadId: thread.id });
 
     void routeAdrGenerationKickoff({

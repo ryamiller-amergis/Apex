@@ -1,4 +1,4 @@
-import { applyAdrGenerationResult } from './adrService';
+import { applyAdrGenerationResult, startAdrWatcher } from './adrService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
 import { prepareBackgroundWorkflowTurn, sendMessage } from './chatAgentService';
 import { propagatePipelineGrounding, runGroundingService } from './runGroundingService';
@@ -59,8 +59,12 @@ export async function routeAdrGenerationKickoff(opts: {
         ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
         return { ...prepared, targetGrounding };
       },
-      runInProcess: () =>
-        sendMessage(opts.threadId, opts.kickoffMessage, undefined, [], { hidden: true }),
+      // The watcher polls the App Service workspace, which only an in-process
+      // run writes to. V2 results and failures arrive through the harvest.
+      runInProcess: () => {
+        startAdrWatcher(opts.adrId, opts.threadId);
+        return sendMessage(opts.threadId, opts.kickoffMessage, undefined, [], { hidden: true });
+      },
       reportRecoverablePreparationFailure: () =>
         reportFailure('the agent run could not start'),
     });

@@ -47,9 +47,11 @@ jest.mock('../services/documentApprovalService', () => ({
 jest.mock('../services/reviewCommentService', () => ({ getUnresolvedCount: jest.fn() }));
 jest.mock('../services/ownerApprovalService', () => ({ recordOwnerApproval: jest.fn() }));
 
+import * as adrService from '../services/adrService';
 import { applyAdrGenerationResult } from '../services/adrService';
 import { routeAdrGenerationKickoff } from '../services/adrGenerationService';
 import { routeBackgroundWorkflow } from '../services/backgroundWorkflowRouter';
+import { sendMessage } from '../services/chatAgentService';
 import { createNotification } from '../services/notificationService';
 import { propagatePipelineGrounding } from '../services/runGroundingService';
 
@@ -144,6 +146,36 @@ describe('routeAdrGenerationKickoff', () => {
       threadId: 'thread-finalize',
     }));
     expect(order).toEqual(['propagate', 'route']);
+  });
+
+  it('does not watch the App Service workspace when the V2 lane takes the run', async () => {
+    const watcher = jest.spyOn(adrService, 'startAdrWatcher').mockImplementation(() => undefined);
+    (routeBackgroundWorkflow as jest.Mock).mockResolvedValue(undefined);
+
+    await routeAdrGenerationKickoff(kickoff);
+
+    expect(watcher).not.toHaveBeenCalled();
+    watcher.mockRestore();
+  });
+
+  it('watches the App Service workspace when the run stays in process', async () => {
+    const watcher = jest.spyOn(adrService, 'startAdrWatcher').mockImplementation(() => undefined);
+    (routeBackgroundWorkflow as jest.Mock).mockImplementation(
+      async (input: { runInProcess: () => Promise<void> }) => input.runInProcess(),
+    );
+    (sendMessage as jest.Mock).mockResolvedValue(undefined);
+
+    await routeAdrGenerationKickoff(kickoff);
+
+    expect(watcher).toHaveBeenCalledWith('adr-1', 'thread-finalize');
+    expect(sendMessage).toHaveBeenCalledWith(
+      'thread-finalize',
+      'Generate the ADR.',
+      undefined,
+      [],
+      { hidden: true },
+    );
+    watcher.mockRestore();
   });
 
   it('resets the ADR and notifies the author when routing throws', async () => {
