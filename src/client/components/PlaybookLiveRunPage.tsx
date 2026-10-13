@@ -1,6 +1,13 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { PlaybookStepRunStatus } from '../../shared/types/playbook';
+import { ArrowLeft } from 'lucide-react';
+import type {
+  PlaybookGraph,
+  PlaybookLayoutPositions,
+  PlaybookStepRunStatus,
+} from '../../shared/types/playbook';
+import { layoutPlaybookGraph, positionsOverlap } from '../utils/playbookCanvasLayout';
+import { relativeTime, runStatusLabel } from './playbookStatusFormat';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import { usePlaybookRun } from '../hooks/usePlaybookRuns';
 import { usePlaybookRunInvalidation } from '../hooks/usePlaybookRunInvalidation';
@@ -14,6 +21,8 @@ import { PlaybookRunActions } from './PlaybookRunActions';
 import { PlaybookGateReviewPanel } from './PlaybookGateReviewPanel';
 import { PlaybookCanvas } from './PlaybookCanvas';
 import styles from './PlaybookCanvas.module.css';
+
+const EMPTY_GRAPH: PlaybookGraph = { nodes: [], edges: [] };
 
 interface PlaybookLiveRunPageProps {
   project: string;
@@ -30,6 +39,7 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
   const graphQuery = usePlaybookVersionGraph(project, definitionId, versionId, canvasEnabled);
   const layoutQuery = usePlaybookVersionLayout(project, definitionId, versionId, canvasEnabled);
   const palette = usePlaybookStepPalette(project, canvasEnabled);
+  const [tidiedPositions, setTidiedPositions] = useState<PlaybookLayoutPositions | null>(null);
 
   const stepLabels = useMemo(() => {
     const map: Record<string, string> = {};
@@ -47,6 +57,20 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
     return map;
   }, [run.data?.steps]);
 
+  const savedPositions = layoutQuery.data?.positions;
+  const versionGraph = graphQuery.data?.graph;
+  useEffect(() => {
+    setTidiedPositions(null);
+    if (!savedPositions || !versionGraph || !positionsOverlap(savedPositions)) return undefined;
+    let cancelled = false;
+    void layoutPlaybookGraph(versionGraph).then((next) => {
+      if (!cancelled) setTidiedPositions(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [savedPositions, versionGraph]);
+
   if (!canvasEnabled) {
     return (
       <p className={styles.error} {...{ 'data-testid': 'playbook-live-run-flag-off' }}>
@@ -63,44 +87,52 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
     return <p className={styles.error}>Could not load this run.</p>;
   }
 
-  const graph = graphQuery.data?.graph ?? { nodes: [], edges: [] };
-  const positions = layoutQuery.data?.positions ?? {};
+  const graph = graphQuery.data?.graph ?? EMPTY_GRAPH;
+  const positions = tidiedPositions ?? layoutQuery.data?.positions ?? {};
 
   return (
-    <div {...{ 'data-testid': 'playbook-live-run-page' }}>
-      <div className={styles.headerRow}>
+    <div className={styles.livePage} {...{ 'data-testid': 'playbook-live-run-page' }}>
+      <header className={styles.liveHeader}>
+        <Link
+          to={`/playbooks/${run.data.definitionId}`}
+          className={styles.liveBack}
+          aria-label="Back to playbook dashboard"
+          {...{ 'data-testid': 'playbook-live-run-back' }}
+        >
+          <ArrowLeft size={16} aria-hidden />
+        </Link>
         <div>
-          <Link to="/playbooks" {...{ 'data-testid': 'playbook-live-run-back' }}>← Playbooks</Link>
-          <h1>{run.data.definitionName}</h1>
-          <p className={styles.nodeMeta}>
-            Run {run.data.runId} · pinned v{run.data.versionNumber} · {run.data.status}
+          <h1 className={styles.liveTitle}>{run.data.definitionName}</h1>
+          <p className={styles.liveMeta}>
+            {runStatusLabel(run.data.status)} · version {run.data.versionNumber} · started{' '}
+            {relativeTime(run.data.startedAt)} by {run.data.initiatorUserId}
           </p>
         </div>
+      </header>
+
+      <div className={styles.liveFrame}>
+        {graphQuery.isPending ? (
+          <p className={styles.loading}>Loading graph…</p>
+        ) : (
+          <PlaybookCanvas
+            graph={graph}
+            positions={positions}
+            stepLabels={stepLabels}
+            readOnly
+            stepStatusByNodeId={stepStatusByNodeId}
+          />
+        )}
       </div>
 
-      <div className={styles.shell}>
-        <div style={{ gridColumn: '1 / -1' }}>
-          {graphQuery.isPending ? (
-            <p className={styles.loading}>Loading graph…</p>
-          ) : (
-            <PlaybookCanvas
-              graph={graph}
-              positions={positions}
-              stepLabels={stepLabels}
-              readOnly
-              stepStatusByNodeId={stepStatusByNodeId}
-            />
-          )}
-        </div>
-      </div>
-
-      <PlaybookRunStepList run={run.data} id={`playbook-live-steps-${runId}`} />
-      <PlaybookGateReviewPanel
-        project={project}
-        run={run.data}
-        {...{ 'data-testid': 'playbook-gate-review-panel' }}
-      />
-      <PlaybookRunActions run={run.data} />
+      <section className={styles.liveSection}>
+        <PlaybookRunStepList run={run.data} id={`playbook-live-steps-${runId}`} />
+        <PlaybookGateReviewPanel
+          project={project}
+          run={run.data}
+          {...{ 'data-testid': 'playbook-gate-review-panel' }}
+        />
+        <PlaybookRunActions run={run.data} />
+      </section>
     </div>
   );
 };

@@ -97,6 +97,8 @@ const DesignModuleView = lazy(() => import('./components/DesignModuleView'));
 const PlaybookStatusView = lazy(() => import('./components/PlaybookStatusView'));
 const PlaybookCanvasPage = lazy(() => import('./components/PlaybookCanvasPage'));
 const PlaybookLiveRunPage = lazy(() => import('./components/PlaybookLiveRunPage'));
+const PlaybooksManagePage = lazy(() => import('./components/PlaybooksManagePage'));
+const PlaybookDashboardPage = lazy(() => import('./components/PlaybookDashboardPage'));
 const LoadTestsListPage = lazy(() => import('./components/LoadTestsListPage').then(m => ({ default: m.LoadTestsListPage })));
 const LoadTestDefinitionBuilderView = lazy(() =>
   import('./components/LoadTestDefinitionBuilderView').then((m) => ({ default: m.LoadTestDefinitionBuilderView })),
@@ -1370,7 +1372,21 @@ function App() {
                       />
                     );
                   }
-                  return <PlaybookStatusView selectedProject={selectedProject} />;
+                  if (segments[0] === 'playbooks' && segments[1] && !segments[2]) {
+                    return (
+                      <PlaybookDashboardPage
+                        project={selectedProject}
+                        definitionId={segments[1]}
+                      />
+                    );
+                  }
+                  // Run lists keep the status view: links from notifications and Home carry
+                  // `?filter=assigned-to-me` or `?run=<id>` and expect that run expanded.
+                  const params = new URLSearchParams(location.search);
+                  if (params.get('view') === 'runs' || params.has('filter') || params.has('run')) {
+                    return <PlaybookStatusView selectedProject={selectedProject} />;
+                  }
+                  return <PlaybooksManagePage project={selectedProject} />;
                 })()}
               </Suspense>
             </ErrorBoundary>

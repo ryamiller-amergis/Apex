@@ -3,6 +3,26 @@ import type { PlaybookGraph, PlaybookLayoutPositions } from '../../shared/types/
 
 const elk = new ELK();
 
+/** Upper bound of a rendered step node; `.flowNode` caps its width at 260px. */
+export const PLAYBOOK_NODE_WIDTH = 260;
+export const PLAYBOOK_NODE_HEIGHT = 64;
+
+/** True when any two nodes would draw on top of each other. */
+export function positionsOverlap(positions: PlaybookLayoutPositions): boolean {
+  const points = Object.values(positions);
+  for (let i = 0; i < points.length; i += 1) {
+    for (let j = i + 1; j < points.length; j += 1) {
+      if (
+        Math.abs(points[i].x - points[j].x) < PLAYBOOK_NODE_WIDTH
+        && Math.abs(points[i].y - points[j].y) < PLAYBOOK_NODE_HEIGHT
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 export async function layoutPlaybookGraph(
   graph: PlaybookGraph
 ): Promise<PlaybookLayoutPositions> {
@@ -13,12 +33,13 @@ export async function layoutPlaybookGraph(
     layoutOptions: {
       'elk.algorithm': 'layered',
       'elk.direction': 'RIGHT',
-      'elk.spacing.nodeNode': '48',
+      'elk.spacing.nodeNode': '40',
+      'elk.layered.spacing.nodeNodeBetweenLayers': '72',
     },
     children: graph.nodes.map((node) => ({
       id: node.id,
-      width: 180,
-      height: 56,
+      width: PLAYBOOK_NODE_WIDTH,
+      height: PLAYBOOK_NODE_HEIGHT,
     })),
     edges: graph.edges.map((edge, index) => ({
       id: `e-${index}`,

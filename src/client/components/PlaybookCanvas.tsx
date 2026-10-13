@@ -4,14 +4,17 @@ import {
   ReactFlow,
   ReactFlowProvider,
   Background,
+  BackgroundVariant,
   Controls,
   Handle,
+  MarkerType,
   Position,
   addEdge,
   useNodesState,
   useEdgesState,
   useReactFlow,
   type Connection,
+  type Edge,
   type Node,
   type NodeProps,
 } from '@xyflow/react';
@@ -23,7 +26,17 @@ import {
   positionsFromNodes,
   type PlaybookFlowNodeData,
 } from '../utils/playbookCanvasGraph';
+import { nodeSubtitle, nodeSummary, stepMeta } from './playbookStepCatalog';
+import { stepStatusLabel } from './playbookStatusFormat';
 import styles from './PlaybookCanvas.module.css';
+
+function decorateEdges<T extends Edge>(edges: T[]): T[] {
+  return edges.map((edge) => ({
+    ...edge,
+    type: 'smoothstep',
+    markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: 'var(--text-muted)' },
+  }));
+}
 
 const nodeTypes = {
   playbookStep: PlaybookStepNode,
@@ -44,16 +57,29 @@ type PlaybookCanvasProps = {
 
 function PlaybookStepNode({ data, selected }: NodeProps<Node<PlaybookFlowNodeData>>) {
   const statusClass = data.runStatus ? styles[`status_${data.runStatus}`] : '';
+  const meta = stepMeta(data.stepType);
+  const Icon = meta.icon;
+  const summary = nodeSummary({ config: data.config });
+  const subtitle = nodeSubtitle({ id: data.label, config: data.config });
   return (
     <div
       className={`${styles.flowNode} ${selected ? styles.flowNodeSelected : ''} ${statusClass}`}
-      {...{ 'data-testid': `playbook-canvas-node-${data.stepType}` }}
+      {...{ 'data-testid': `playbook-canvas-node-${data.stepType}`, 'data-group': meta.group }}
     >
-      <Handle type="target" position={Position.Left} isConnectable={!data.readOnly} />
-      <div className={styles.nodeLabel}>{data.label}</div>
-      <div className={styles.nodeMeta}>{data.stepType}</div>
-      {data.runStatus ? <div className={styles.nodeMeta}>{data.runStatus}</div> : null}
-      <Handle type="source" position={Position.Right} isConnectable={!data.readOnly} />
+      <Handle className={styles.handle} type="target" position={Position.Left} isConnectable={!data.readOnly} />
+      <span className={styles.nodeIcon} aria-hidden>
+        <Icon size={16} strokeWidth={2} />
+      </span>
+      <span className={styles.nodeText}>
+        <span className={styles.nodeLabel}>{meta.title}</span>
+        <span className={summary || subtitle !== data.label ? styles.nodeMeta : styles.nodeId}>{subtitle}</span>
+      </span>
+      {data.runStatus ? (
+        <span className={styles.nodeStatus} {...{ 'data-status': data.runStatus }}>
+          {stepStatusLabel(data.runStatus as PlaybookStepRunStatus)}
+        </span>
+      ) : null}
+      <Handle className={styles.handle} type="source" position={Position.Right} isConnectable={!data.readOnly} />
     </div>
   );
 }
@@ -78,12 +104,12 @@ function PlaybookCanvasInner({
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<PlaybookFlowNodeData>>(
     initial.nodes as Node<PlaybookFlowNodeData>[],
   );
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(decorateEdges(initial.edges));
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const graphRevision = useRef('');
 
   useEffect(() => {
-    const revision = JSON.stringify({ graph, positions });
+    const revision = JSON.stringify({ graph, positions, selectedNodeId });
     if (revision === graphRevision.current) return;
     graphRevision.current = revision;
     const next = graphToFlow(graph, positions, stepLabels);
@@ -98,7 +124,7 @@ function PlaybookCanvasInner({
         selected: node.id === selectedNodeId,
       })),
     );
-    setEdges(next.edges);
+    setEdges(decorateEdges(next.edges));
   }, [graph, positions, stepLabels, readOnly, stepStatusByNodeId, selectedNodeId, setNodes, setEdges]);
 
   const syncGraph = useCallback(
@@ -129,7 +155,7 @@ function PlaybookCanvasInner({
     async (connection: Connection) => {
       if (readOnly || !connection.source || !connection.target) return;
       setConnectionError(null);
-      const nextEdges = addEdge(connection, edges);
+      const nextEdges = decorateEdges(addEdge(connection, edges));
       const nextNodes = nodes;
       const candidate = flowToGraph(
         nextNodes.map((n) => ({
@@ -175,7 +201,7 @@ function PlaybookCanvasInner({
       const label = event.dataTransfer.getData('application/playbook-step-label');
       if (!stepType) return;
       const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      const id = newPlaybookNodeId();
+      const id = newPlaybookNodeId(stepType, nodes.map((node) => node.id));
       const newNode: Node<PlaybookFlowNodeData> = {
         id,
         type: 'playbookStep',
@@ -195,18 +221,24 @@ function PlaybookCanvasInner({
     event.dataTransfer.dropEffect = 'move';
   }, []);
 
-  const onNodesDelete = useCallback(
-    (deleted: Node<PlaybookFlowNodeData>[]) => {
+  // One handler for nodes and edges: a node deletion also removes its edges, and two callbacks
+  // reading the same stale state would each write back what the other removed.
+  const onDelete = useCallback(
+    ({ nodes: deletedNodes, edges: deletedEdges }: { nodes: Node[]; edges: Edge[] }) => {
       if (readOnly) return;
-      const deletedIds = new Set(deleted.map((node) => node.id));
-      const nextNodes = nodes.filter((node) => !deletedIds.has(node.id));
+      const deletedNodeIds = new Set(deletedNodes.map((node) => node.id));
+      const deletedEdgeIds = new Set(deletedEdges.map((edge) => edge.id));
+      const nextNodes = nodes.filter((node) => !deletedNodeIds.has(node.id));
       const nextEdges = edges.filter(
-        (edge) => !deletedIds.has(edge.source) && !deletedIds.has(edge.target),
+        (edge) =>
+          !deletedEdgeIds.has(edge.id)
+          && !deletedNodeIds.has(edge.source)
+          && !deletedNodeIds.has(edge.target),
       );
       setNodes(nextNodes);
       setEdges(nextEdges);
       syncGraph(nextNodes, nextEdges);
-      if (selectedNodeId && deletedIds.has(selectedNodeId)) onSelectNode?.(null);
+      if (selectedNodeId && deletedNodeIds.has(selectedNodeId)) onSelectNode?.(null);
     },
     [readOnly, nodes, edges, selectedNodeId, setNodes, setEdges, syncGraph, onSelectNode],
   );
@@ -214,9 +246,19 @@ function PlaybookCanvasInner({
   return (
     <div className={styles.canvasPane} {...{ 'data-testid': 'playbook-canvas-pane' }}>
       {connectionError ? (
-        <p className={styles.error} role="alert" {...{ 'data-testid': 'playbook-canvas-connection-error' }}>
-          {connectionError}
-        </p>
+        <div className={styles.connectionBanner} role="alert" {...{ 'data-testid': 'playbook-canvas-connection-error' }}>
+          <p className={styles.connectionTitle}>Connection not allowed</p>
+          <p className={styles.connectionBody}>{connectionError}</p>
+          <button
+            type="button"
+            className={styles.connectionDismiss}
+            onClick={() => setConnectionError(null)}
+            aria-label="Dismiss"
+            {...{ 'data-testid': 'playbook-canvas-connection-dismiss' }}
+          >
+            ×
+          </button>
+        </div>
       ) : null}
       <ReactFlow
         className={styles.canvas}
@@ -229,18 +271,20 @@ function PlaybookCanvasInner({
         onNodeDragStop={readOnly ? undefined : onNodeDragStop}
         onDrop={onDrop}
         onDragOver={onDragOver}
-        onNodesDelete={onNodesDelete}
+        onDelete={onDelete}
         nodesDraggable={!readOnly}
         nodesConnectable={!readOnly}
         elementsSelectable={!readOnly}
-        deleteKeyCode={readOnly ? null : 'Delete'}
+        deleteKeyCode={readOnly ? null : ['Delete', 'Backspace']}
         fitView
+        fitViewOptions={{ padding: 0.35, maxZoom: 1 }}
+        attributionPosition="top-right"
         onNodeClick={(_, node) => onSelectNode?.(node.id)}
         onPaneClick={() => onSelectNode?.(null)}
         {...{ 'data-testid': 'playbook-canvas' }}
       >
-        <Background />
-        <Controls showInteractive={!readOnly} />
+        <Background variant={BackgroundVariant.Dots} gap={20} size={1.4} />
+        <Controls showInteractive={false} position="bottom-left" />
       </ReactFlow>
     </div>
   );

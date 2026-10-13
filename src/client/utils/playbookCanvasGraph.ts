@@ -26,17 +26,17 @@ const NODE_TYPE = 'playbookStep';
 export function graphToFlow(
   graph: PlaybookGraph,
   positions: PlaybookLayoutPositions,
-  labels: Record<string, string>,
+  _labels: Record<string, string>,
 ): { nodes: PlaybookFlowNode[]; edges: PlaybookFlowEdge[] } {
   const nodes: PlaybookFlowNode[] = graph.nodes.map((node, index) => {
-    const position = positions[node.id] ?? { x: 40 + (index % 4) * 200, y: 40 + Math.floor(index / 4) * 100 };
+    const position = positions[node.id] ?? { x: 40 + (index % 4) * 340, y: 40 + Math.floor(index / 4) * 140 };
     return {
       id: node.id,
       type: NODE_TYPE,
       position,
       data: {
         stepType: node.stepType,
-        label: labels[node.stepType] ?? node.stepType,
+        label: node.id,
         config: node.config ?? {},
       },
     };
@@ -73,6 +73,10 @@ export function positionsFromNodes(nodes: PlaybookFlowNode[]): PlaybookLayoutPos
   return positions;
 }
 
-export function newPlaybookNodeId(): string {
-  return `step-${crypto.randomUUID()}`;
+/** `notify-1`, `notify-2`, … — the lowest suffix not already used in the graph. */
+export function newPlaybookNodeId(stepType: string, existingIds: Iterable<string>): string {
+  const taken = new Set(existingIds);
+  let suffix = 1;
+  while (taken.has(`${stepType}-${suffix}`)) suffix += 1;
+  return `${stepType}-${suffix}`;
 }

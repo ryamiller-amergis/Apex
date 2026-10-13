@@ -344,12 +344,11 @@ function assertGraphTopologyGuards(graph: PlaybookGraph): void {
   });
   if (invalidFanOut) {
     const fanOut = graph.edges.filter((edge) => edge.from === invalidFanOut.id).length;
-    throw new PlaybookGuardViolationError(
-      'max-fan-out',
-      `Step "${invalidFanOut.id}" branches to ${fanOut} next steps. Only a branch step may fan ` +
-        `out; other steps have a limit of ${maxFanOutWidth}. A branch must select exactly one ` +
-        'of at most two named continuations.'
-    );
+    const step = `${invalidFanOut.stepType} step "${invalidFanOut.id}"`;
+    const message = isBranchStepType(invalidFanOut.stepType)
+      ? `A branch can lead to at most two next steps. The ${step} already leads to ${fanOut}.`
+      : `The ${step} can lead to at most ${maxFanOutWidth} next step. Only a branch step can connect to more than one.`;
+    throw new PlaybookGuardViolationError('max-fan-out', message);
   }
 
   const inboundCounts = new Map<string, number>();
