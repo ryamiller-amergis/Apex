@@ -23,7 +23,15 @@ import {
   PlaybookVersionPinReasonRequiredError,
   startRun,
 } from '../services/playbookRunService';
-import { PlaybookGuardViolationError } from '../services/playbookGuardService';
+import {
+  PlaybookGuardViolationError,
+  assertCanvasConnection,
+} from '../services/playbookGuardService';
+import { listPlaybookStepPaletteItems } from '../services/playbookStepPaletteService';
+import {
+  getVersionLayout,
+  replaceDraftVersionLayout,
+} from '../services/playbookVersionLayoutService';
 import {
   PlaybookDefinitionNotFoundError as PlaybookLifecycleDefinitionNotFoundError,
   PlaybookDraftConflictError,
@@ -35,10 +43,16 @@ import {
   createDefinition,
   deprecateVersion,
   getDefinitionDetail,
+  getVersionGraph,
   listDefinitions,
   publishDraft,
   updateDraft,
 } from '../services/playbookDefinitionService';
+import { dryRunPlaybookDraft } from '../services/playbookDryRunService';
+import {
+  ensurePlaybookRunNotifyListener,
+  subscribePlaybookRunEvents,
+} from '../services/playbookRunNotifyService';
 import { PlaybookStepSchemaError } from '../services/playbookSteps/descriptorValidation';
 import {
   PlaybookStepTypeError,
@@ -88,6 +102,7 @@ const router = express.Router();
 /** The display cap. A larger `limit` is clamped rather than refused; `total` reports the truth. */
 const MAX_RUN_PAGE = 50;
 const PRODUCTION_ADAPTERS_FLAG = 'playbooks-production-adapters';
+const AUTHORING_CANVAS_FLAG = 'playbooks-authoring-canvas';
 
 type RequestBody = Record<string, unknown>;
 
@@ -205,6 +220,13 @@ router.use(requirePlaybooksProject);
 
 async function productionAdaptersFlagEnabled(req: Request, project: string): Promise<boolean> {
   return isFeatureEnabled(PRODUCTION_ADAPTERS_FLAG, {
+    userId: getUserId(req),
+    project,
+  });
+}
+
+async function authoringCanvasFlagEnabled(req: Request, project: string): Promise<boolean> {
+  return isFeatureEnabled(AUTHORING_CANVAS_FLAG, {
     userId: getUserId(req),
     project,
   });
@@ -505,6 +527,239 @@ router.post(
       if (!sendDefinitionError(error, res)) throw error;
     }
   }
+);
+
+router.get(
+  '/step-types',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const enabled = await authoringCanvasFlagEnabled(req, project);
+
+    // @feature-flag:playbooks-authoring-canvas start winner=enabled
+    if (!enabled) {
+      // @feature-flag:playbooks-authoring-canvas disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbooks-authoring-canvas disabled-end
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-start
+    res.json({ items: listPlaybookStepPaletteItems() });
+    // @feature-flag:playbooks-authoring-canvas enabled-end
+    // @feature-flag:playbooks-authoring-canvas end
+  },
+);
+
+router.post(
+  '/graph/validate-connection',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const { project, graph } = (req.body ?? {}) as RequestBody;
+    if (!isNonBlankString(project)) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    if (!isPlaybookGraph(graph)) {
+      res.status(400).json({ error: 'graph must contain valid nodes and edges arrays' });
+      return;
+    }
+
+    const enabled = await authoringCanvasFlagEnabled(req, project);
+    // @feature-flag:playbooks-authoring-canvas start winner=enabled
+    if (!enabled) {
+      // @feature-flag:playbooks-authoring-canvas disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbooks-authoring-canvas disabled-end
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-start
+    try {
+      assertCanvasConnection(graph);
+      res.json({ ok: true });
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-end
+    // @feature-flag:playbooks-authoring-canvas end
+  },
+);
+
+router.get(
+  '/definitions/:definitionId/versions/:versionId/layout',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const enabled = await authoringCanvasFlagEnabled(req, project);
+
+    // @feature-flag:playbooks-authoring-canvas start winner=enabled
+    if (!enabled) {
+      // @feature-flag:playbooks-authoring-canvas disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbooks-authoring-canvas disabled-end
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-start
+    try {
+      res.json(
+        await getVersionLayout(project, req.params.definitionId, req.params.versionId)
+      );
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-end
+    // @feature-flag:playbooks-authoring-canvas end
+  },
+);
+
+router.get(
+  '/definitions/:definitionId/versions/:versionId/graph',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const enabled = await authoringCanvasFlagEnabled(req, project);
+    // @feature-flag:playbooks-authoring-canvas start winner=enabled
+    if (!enabled) {
+      // @feature-flag:playbooks-authoring-canvas disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbooks-authoring-canvas disabled-end
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-start
+    try {
+      res.json({
+        graph: await getVersionGraph(project, req.params.definitionId, req.params.versionId),
+      });
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-end
+    // @feature-flag:playbooks-authoring-canvas end
+  },
+);
+
+router.post(
+  '/definitions/:definitionId/dry-run',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const { project, stubs } = (req.body ?? {}) as RequestBody;
+    if (!isNonBlankString(project)) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    const stubMap =
+      stubs && typeof stubs === 'object' && !Array.isArray(stubs)
+        ? (stubs as Record<string, unknown>)
+        : {};
+    const enabled = await authoringCanvasFlagEnabled(req, project);
+    // @feature-flag:playbooks-authoring-canvas start winner=enabled
+    if (!enabled) {
+      // @feature-flag:playbooks-authoring-canvas disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbooks-authoring-canvas disabled-end
+    }
+    const userId = getUserId(req);
+    if (!userId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-start
+    try {
+      res.json(
+        await dryRunPlaybookDraft({
+          project,
+          definitionId: req.params.definitionId,
+          stubs: stubMap,
+          userId,
+        })
+      );
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-end
+    // @feature-flag:playbooks-authoring-canvas end
+  },
+);
+
+router.get(
+  '/runs/:runId/events',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const enabled = await authoringCanvasFlagEnabled(req, project);
+    // @feature-flag:playbooks-authoring-canvas start winner=enabled
+    if (!enabled) {
+      // @feature-flag:playbooks-authoring-canvas disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbooks-authoring-canvas disabled-end
+    }
+    const run = await getRun(project, req.params.runId);
+    if (!run) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-start
+    await ensurePlaybookRunNotifyListener();
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const unsubscribe = subscribePlaybookRunEvents(req.params.runId, () => {
+      res.write(`event: invalidated\ndata: ${JSON.stringify({ runId: req.params.runId })}\n\n`);
+    });
+
+    req.on('close', () => {
+      unsubscribe();
+    });
+    // @feature-flag:playbooks-authoring-canvas enabled-end
+    // @feature-flag:playbooks-authoring-canvas end
+  },
+);
+
+router.put(
+  '/definitions/:definitionId/versions/:versionId/layout',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const { project, positions } = (req.body ?? {}) as RequestBody;
+    if (!isNonBlankString(project)) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    if (
+      !positions ||
+      typeof positions !== 'object' ||
+      Array.isArray(positions)
+    ) {
+      res.status(400).json({ error: 'positions must be an object' });
+      return;
+    }
+
+    const enabled = await authoringCanvasFlagEnabled(req, project);
+    // @feature-flag:playbooks-authoring-canvas start winner=enabled
+    if (!enabled) {
+      // @feature-flag:playbooks-authoring-canvas disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbooks-authoring-canvas disabled-end
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-start
+    try {
+      res.json(
+        await replaceDraftVersionLayout({
+          project,
+          definitionId: req.params.definitionId,
+          versionId: req.params.versionId,
+          positions: positions as Record<string, { x: number; y: number }>,
+        })
+      );
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-end
+    // @feature-flag:playbooks-authoring-canvas end
+  },
 );
 
 /**

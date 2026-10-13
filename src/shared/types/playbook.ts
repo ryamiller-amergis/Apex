@@ -150,6 +150,47 @@ export interface PlaybookGraph {
   edges: PlaybookGraphEdge[];
 }
 
+/** Node id → canvas coordinates for one definition version. Not part of `PlaybookGraph`. */
+export type PlaybookLayoutPositions = Record<string, { x: number; y: number }>;
+
+export interface PlaybookVersionLayout {
+  versionId: string;
+  positions: PlaybookLayoutPositions;
+  updatedAt: string;
+}
+
+/** Registry metadata for the authoring canvas step palette. */
+export interface PlaybookStepTypePaletteItem {
+  stepType: string;
+  label: string;
+  sideEffect: PlaybookStepSideEffect;
+  requiredPermissions: readonly string[];
+  inputJsonSchema: Record<string, unknown>;
+  outputJsonSchema: Record<string, unknown>;
+  canSuspend: boolean;
+}
+
+export type PlaybookDryRunIssueKind = 'graph' | 'stub' | 'branch';
+
+export interface PlaybookDryRunIssue {
+  nodeId: string;
+  kind: PlaybookDryRunIssueKind;
+  message: string;
+}
+
+export interface PlaybookDryRunResult {
+  verdict: 'passed' | 'failed';
+  limit: string;
+  manifest: string[];
+  authorFootnote: { held: string[]; missing: string[] };
+  issues: PlaybookDryRunIssue[];
+}
+
+export const PLAYBOOK_DRY_RUN_LIMIT =
+  'This check covers structure, classification, authority, and branch reachability. ' +
+  'It cannot tell you whether an agent step will produce usable output, whether an ingested ' +
+  'artifact will parse, or whether an approver pool will still have members when a run reaches it.';
+
 // ── Row shapes (mirror the four Apex-owned tables) ────────────────────────────
 
 /** A definition has identity that outlives any single version, which is why it is its own row. */
@@ -240,6 +281,7 @@ export interface PlaybookStepRun {
 export interface PlaybookRunSummary {
   runId: string;
   project: string;
+  definitionId: string;
   definitionName: string;
   definitionVersionId: string;
   versionNumber: number;

@@ -330,29 +330,13 @@ export function assertGraphStepsResolvable(
 }
 
 /**
- * The publish-time guards, in the order an author most likely tripped.
+ * Topology checks shared by publish and the authoring canvas.
  *
- * Checked at publish rather than per run because a published version's graph cannot change —
- * BR-006 makes it immutable — so re-deriving the same answer on every start would be waste that
- * also puts a graph walk on the run-start latency path.
+ * Step budgets and gate/MCP rules stay on the publish path only. The canvas must allow a
+ * `cursor-agent` → `notify` draft with no gate while the author is still composing.
  */
-export function assertGraphWithinGuards(graph: PlaybookGraph): void {
-  const { maxStepsPerRun, maxAgentStepsPerRun, maxFanOutWidth } = PLAYBOOK_GUARD_LIMITS;
-
-  if (graph.nodes.length > maxStepsPerRun) {
-    throw new PlaybookGuardViolationError(
-      'max-steps',
-      `This Playbook has ${graph.nodes.length} steps, above the limit of ${maxStepsPerRun} per run.`
-    );
-  }
-
-  const agentSteps = countAgentSteps(graph);
-  if (agentSteps > maxAgentStepsPerRun) {
-    throw new PlaybookGuardViolationError(
-      'max-agent-steps',
-      `This Playbook has ${agentSteps} agent steps, above the limit of ${maxAgentStepsPerRun} per run.`
-    );
-  }
+function assertGraphTopologyGuards(graph: PlaybookGraph): void {
+  const { maxFanOutWidth } = PLAYBOOK_GUARD_LIMITS;
 
   const invalidFanOut = graph.nodes.find((node) => {
     const outbound = graph.edges.filter((edge) => edge.from === node.id);
@@ -388,6 +372,57 @@ export function assertGraphWithinGuards(graph: PlaybookGraph): void {
         'Loops are not permitted; a Playbook must reach an end.'
     );
   }
+}
+
+/**
+ * Authoring-time check when a connection is dropped or the canvas validates the current draft.
+ *
+ * Publish still runs the full guard set, including ungated `leaves-apex` and read-only MCP.
+ */
+export function assertCanvasConnection(graph: PlaybookGraph): void {
+  const nodeIds = new Set(graph.nodes.map((node) => node.id));
+  for (const node of graph.nodes) {
+    if (!isRegisteredStepType(node.stepType)) {
+      throw new PlaybookGraphStepTypeError(node.id, node.stepType);
+    }
+  }
+  for (const edge of graph.edges) {
+    if (!nodeIds.has(edge.from) || !nodeIds.has(edge.to)) {
+      throw new PlaybookGuardViolationError(
+        'join',
+        `Connection from "${edge.from}" to "${edge.to}" references a step that is not on the canvas.`
+      );
+    }
+  }
+  assertGraphTopologyGuards(graph);
+}
+
+/**
+ * The publish-time guards, in the order an author most likely tripped.
+ *
+ * Checked at publish rather than per run because a published version's graph cannot change —
+ * BR-006 makes it immutable — so re-deriving the same answer on every start would be waste that
+ * also puts a graph walk on the run-start latency path.
+ */
+export function assertGraphWithinGuards(graph: PlaybookGraph): void {
+  const { maxStepsPerRun, maxAgentStepsPerRun } = PLAYBOOK_GUARD_LIMITS;
+
+  if (graph.nodes.length > maxStepsPerRun) {
+    throw new PlaybookGuardViolationError(
+      'max-steps',
+      `This Playbook has ${graph.nodes.length} steps, above the limit of ${maxStepsPerRun} per run.`
+    );
+  }
+
+  const agentSteps = countAgentSteps(graph);
+  if (agentSteps > maxAgentStepsPerRun) {
+    throw new PlaybookGuardViolationError(
+      'max-agent-steps',
+      `This Playbook has ${agentSteps} agent steps, above the limit of ${maxAgentStepsPerRun} per run.`
+    );
+  }
+
+  assertGraphTopologyGuards(graph);
 
   assertGraphStepsResolvable(graph);
 

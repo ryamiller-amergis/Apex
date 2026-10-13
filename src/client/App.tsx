@@ -95,6 +95,8 @@ const ApryseWebViewerPoc = lazy(() => import('./components/ApryseWebViewerPoc').
 const NutrientWebSdkPoc = lazy(() => import('./components/NutrientWebSdkPoc').then(m => ({ default: m.NutrientWebSdkPoc })));
 const DesignModuleView = lazy(() => import('./components/DesignModuleView'));
 const PlaybookStatusView = lazy(() => import('./components/PlaybookStatusView'));
+const PlaybookCanvasPage = lazy(() => import('./components/PlaybookCanvasPage'));
+const PlaybookLiveRunPage = lazy(() => import('./components/PlaybookLiveRunPage'));
 const LoadTestsListPage = lazy(() => import('./components/LoadTestsListPage').then(m => ({ default: m.LoadTestsListPage })));
 const LoadTestDefinitionBuilderView = lazy(() =>
   import('./components/LoadTestDefinitionBuilderView').then((m) => ({ default: m.LoadTestDefinitionBuilderView })),
@@ -1350,7 +1352,26 @@ function App() {
             // Only reachable when the flag is on; the off case returned the not-found surface above.
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
-                <PlaybookStatusView selectedProject={selectedProject} />
+                {(() => {
+                  const segments = location.pathname.split('/').filter(Boolean);
+                  if (segments[0] === 'playbooks' && segments[1] === 'definitions' && segments[2]) {
+                    return (
+                      <PlaybookCanvasPage
+                        project={selectedProject}
+                        definitionId={segments[2]}
+                      />
+                    );
+                  }
+                  if (segments[0] === 'playbooks' && segments[1] === 'runs' && segments[2]) {
+                    return (
+                      <PlaybookLiveRunPage
+                        project={selectedProject}
+                        runId={segments[2]}
+                      />
+                    );
+                  }
+                  return <PlaybookStatusView selectedProject={selectedProject} />;
+                })()}
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'load-tests' ? (

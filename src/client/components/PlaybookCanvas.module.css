@@ -1,0 +1,140 @@
+.heading {
+  font-size: 1rem;
+  margin: 0 0 0.5rem;
+}
+
+.loading {
+  color: var(--text-muted, #57606a);
+}
+
+.label {
+  display: block;
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: 220px 1fr 280px;
+  gap: 1rem;
+  min-height: 520px;
+}
+
+.palette,
+.sidebar {
+  border: 1px solid var(--border-subtle, #d0d7de);
+  border-radius: 8px;
+  padding: 0.75rem;
+  background: var(--surface-elevated, #fff);
+}
+
+.canvasPane {
+  border: 1px solid var(--border-subtle, #d0d7de);
+  border-radius: 8px;
+  min-height: 520px;
+  background: var(--surface-muted, #f6f8fa);
+}
+
+.canvas {
+  width: 100%;
+  height: 520px;
+}
+
+.paletteItem {
+  display: block;
+  width: 100%;
+  margin-bottom: 0.5rem;
+  padding: 0.5rem;
+  text-align: left;
+  border: 1px solid var(--border-subtle, #d0d7de);
+  border-radius: 6px;
+  background: #fff;
+  cursor: grab;
+}
+
+.toolbar {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.button {
+  padding: 0.4rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle, #d0d7de);
+  background: #fff;
+  cursor: pointer;
+}
+
+.button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.error {
+  color: var(--danger-text, #b42318);
+  margin: 0.5rem 0;
+}
+
+.nodeLabel {
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.nodeMeta {
+  font-size: 0.7rem;
+  color: var(--text-muted, #57606a);
+}
+
+.configField {
+  width: 100%;
+  min-height: 160px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+}
+
+.dryRunPanel {
+  margin-top: 1rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border-subtle, #d0d7de);
+  border-radius: 8px;
+}
+
+.headerRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.flowNode {
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle, #d0d7de);
+  background: #fff;
+  min-width: 140px;
+}
+
+.flowNodeSelected {
+  border-color: var(--accent, #0969da);
+  box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.2);
+}
+
+.status_running {
+  border-color: #0969da;
+}
+
+.status_completed {
+  border-color: #1a7f37;
+}
+
+.status_failed,
+.status_failed_retryable {
+  border-color: #cf222e;
+}
+
+.status_suspended {
+  border-color: #bf8700;
+}
