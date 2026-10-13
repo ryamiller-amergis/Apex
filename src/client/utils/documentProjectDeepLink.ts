@@ -87,16 +87,18 @@ export function parseDocumentDeepLink(pathname: string, search = ''): DocumentDe
 }
 
 /**
- * The project name from the user's project list that owns this document.
- * Null when the document is already in the selected project, or the user
- * has no matching project to switch to.
+ * The project name from the user's accessible project list (GET /api/projects)
+ * that owns this document.
+ * Null when the document is already in the selected project, the user is
+ * restricted, or the user has no matching project to switch to.
  */
 export function documentProjectSwitchTarget(
   documentProject: string | undefined,
   selectedProject: string,
   availableProjects: readonly string[],
+  options?: { isRestricted?: boolean },
 ): string | null {
-  if (!documentProject) return null;
+  if (!documentProject || options?.isRestricted) return null;
   const canonical = availableProjects.find(
     (project) => project.toLowerCase() === documentProject.toLowerCase(),
   );

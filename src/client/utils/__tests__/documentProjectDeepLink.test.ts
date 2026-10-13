@@ -55,6 +55,14 @@ describe('document project deep links', () => {
     expect(documentProjectSwitchTarget('Unknown', 'Nurses', ['Apex', 'Nurses'])).toBeNull();
   });
 
+  it('does not switch onto a project missing from the accessible list', () => {
+    expect(documentProjectSwitchTarget('Nurses', 'Apex', ['Apex'])).toBeNull();
+  });
+
+  it('does not switch restricted users onto a foreign document project', () => {
+    expect(documentProjectSwitchTarget('Nurses', 'Apex', ['Apex', 'Nurses'], { isRestricted: true })).toBeNull();
+  });
+
   it('holds the route guard while the owning project is still unresolved', () => {
     const link = parseDocumentDeepLink('/adr/adr-1');
     expect(shouldHoldDocumentRoute({

@@ -119,7 +119,39 @@ function isStringArrayOfNonEmptyItems(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string' && item.trim().length > 0);
 }
 
+/**
+ * Project names the user may open: manual assignments plus ADO team membership.
+ * Super-admin catalog access is handled separately.
+ */
+async function loadSelectableProjectNames(req: Request): Promise<string[]> {
+  const userId: string | undefined = (req.user as any)?.profile?.oid;
+  const email = getUserEmail(req);
+
+  const [assignedProjects, adoProjects] = await Promise.all([
+    userId ? getAssignmentsForUser(userId) : Promise.resolve([] as string[]),
+    email ? getUserProjects(email).catch((err) => {
+      console.warn('[api/projects] ADO membership lookup failed, falling back to manual assignments:', err);
+      return [];
+    }) : Promise.resolve([]),
+  ]);
+
+  return [...new Set([...assignedProjects, ...adoProjects.map((project) => project.name)])];
+}
+
+function projectNamesInclude(names: readonly string[], project: string): boolean {
+  const lower = project.toLowerCase();
+  return names.some((name) => name.toLowerCase() === lower);
+}
+
+async function canSelectProject(req: Request, project: string): Promise<boolean> {
+  if (!project.trim()) return false;
+  if (isSuperAdminRequest(req)) return true;
+  const names = await loadSelectableProjectNames(req);
+  return projectNamesInclude(names, project);
+}
+
 // GET /api/links/project?kind=&id= — the project that owns a shared record.
+// Only returns a project the caller can already open (assignment or ADO membership).
 router.get('/links/project', async (req: Request, res: Response) => {
   const kind = typeof req.query.kind === 'string' ? req.query.kind : '';
   const id = typeof req.query.id === 'string' ? req.query.id : '';
@@ -129,7 +161,7 @@ router.get('/links/project', async (req: Request, res: Response) => {
   }
   try {
     const project = await resolveLinkProject(kind, id);
-    if (!project) {
+    if (!project || !(await canSelectProject(req, project))) {
       res.status(404).json({ error: 'Link not found' });
       return;
     }
@@ -151,20 +183,7 @@ router.get('/projects', async (req: Request, res: Response) => {
       return;
     }
 
-    const userId: string | undefined = (req.user as any)?.profile?.oid;
-    const email = getUserEmail(req);
-
-    const [assignedProjects, adoProjects] = await Promise.all([
-      userId ? getAssignmentsForUser(userId) : Promise.resolve([]),
-      email ? getUserProjects(email).catch((err) => {
-        console.warn('[api/projects] ADO membership lookup failed, falling back to manual assignments:', err);
-        return [];
-      }) : Promise.resolve([]),
-    ]);
-
-    const adoProjectNames = adoProjects.map((p) => p.name);
-    const merged = [...new Set([...assignedProjects, ...adoProjectNames])];
-
+    const merged = await loadSelectableProjectNames(req);
     if (merged.length === 0) {
       res.json([]);
       return;
@@ -248,11 +267,17 @@ router.get('/projects/:project/area-paths', async (req: Request, res: Response) 
 
 // POST /api/projects/:project/select - Record that the user selected this project.
 // Inserts into user_project_assignments if no row exists yet (idempotent).
+// Callers must already be allowed to open the project (picker or ADO membership);
+// a shared-link UUID must not grant a lasting assignment.
 router.post('/projects/:project/select', async (req: Request, res: Response): Promise<void> => {
   const userId = requireAuthenticatedUserId(req, res);
   if (!userId) return;
 
   try {
+    if (!(await canSelectProject(req, req.params.project))) {
+      res.status(403).json({ error: 'Forbidden: not assigned to this project' });
+      return;
+    }
     await ensureUserProjectAssignment(userId, req.params.project, 'auto-select');
     res.status(204).end();
   } catch (error: any) {

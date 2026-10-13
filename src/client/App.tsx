@@ -37,6 +37,7 @@ import { DesktopOnlyGate } from './components/DesktopOnlyGate';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
 import { useDocumentDeepLinkProject } from './hooks/useDocumentDeepLinkProject';
+import { useProjects } from './hooks/useProjects';
 import {
   documentProjectSwitchTarget,
   shouldHoldDocumentRoute,
@@ -323,12 +324,16 @@ function App() {
     homeFlags['playbooks-production-adapters'] === true &&
     (isSuperAdmin || can('playbooks:view'));
   const documentLink = useDocumentDeepLinkProject(location.pathname, location.search);
+  const { data: selectableProjectList = [], isLoading: selectableProjectsLoading } = useProjects();
+  const selectableProjectNames = selectableProjectList.map((project) => project.name);
   const queryProject = new URLSearchParams(location.search).get('project') ?? undefined;
   const recordOwnsProject = Boolean(documentLink.link) && !documentLink.failed;
+  const documentAccessPending = !permissionsLoaded || selectableProjectsLoading;
   const documentProjectTarget = documentProjectSwitchTarget(
     recordOwnsProject ? documentLink.project : (documentLink.project ?? queryProject),
     selectedProject,
-    availableProjects,
+    selectableProjectNames,
+    { isRestricted: isRestricted || !permissionsLoaded },
   );
   // The chat stream transport follows the selected project's flags. A shared
   // document URL must switch projects, and the document view must wait until
@@ -345,7 +350,7 @@ function App() {
   }, [documentProjectTarget, changeProject, changeAreaPath]);
   const holdLinkedProjectRoute = shouldHoldDocumentRoute({
     link: documentLink.link,
-    lookupPending: documentLink.pending,
+    lookupPending: documentLink.pending || documentAccessPending,
     switchTarget: documentProjectTarget,
   });
   const documentProjectOpening = documentProjectTarget !== null
@@ -354,6 +359,7 @@ function App() {
       && !documentLink.failed
       && (
         documentLink.pending
+        || documentAccessPending
         || homeFlagsLoading
         || streamAlignedProject !== selectedProject
       )
