@@ -13,6 +13,14 @@
         "description": "A failed ADR generation returns the ADR to In Progress and notifies the author instead of staying stuck on Generating"
       },
       {
+        "type": "bugfix",
+        "description": "ADR, PRD and design doc assistants can stage edits again on V2, and Azure DevOps, calendar and MaxView tools work from V2 chats"
+      },
+      {
+        "type": "improvement",
+        "description": "With V2 on, a document that cannot reach a V2 worker fails with a clear message instead of running on the App Service"
+      },
+      {
         "type": "improvement",
         "description": "ADR generation runs on the background agent lane and no longer waits on the repository readiness check when V2 is on"
       },

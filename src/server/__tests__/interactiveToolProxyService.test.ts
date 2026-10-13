@@ -3,9 +3,14 @@ import { join } from 'node:path';
 import {
   encryptInteractiveToolGrant,
 } from '../services/interactiveToolGrantCrypto';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   InteractiveToolProxyError,
   invokeInteractiveToolProxy,
+  postLocalMcp,
 } from '../services/interactiveToolProxyService';
 import type { DurableInteractiveTurnSpecification } from '../../shared/types/durableInteractiveTurn';
 import { DURABLE_INTERACTIVE_SPEC_VERSION } from '../../shared/types/durableInteractiveTurn';
@@ -181,5 +186,70 @@ describe('interactiveToolProxyService', () => {
     );
     expect(source).not.toMatch(/@cursor\/sdk/);
     expect(source).not.toMatch(/agentEffortResolver|modelsService|Agent\.create/);
+  });
+});
+
+describe('postLocalMcp', () => {
+  const initialize = {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2025-03-26',
+      capabilities: {},
+      clientInfo: { name: 'proxy-test', version: '1' },
+    },
+  };
+
+  async function startMcpServer(enableJsonResponse: boolean): Promise<{ url: string; server: Server }> {
+    const server = createServer((req, res) => {
+      let raw = '';
+      req.on('data', (chunk) => { raw += chunk; });
+      req.on('end', async () => {
+        const mcp = new McpServer({ name: 'local', version: '1' });
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: undefined,
+          enableJsonResponse,
+        });
+        await mcp.connect(transport);
+        await transport.handleRequest(req, res, JSON.parse(raw));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    return { url: `http://127.0.0.1:${port}/`, server };
+  }
+
+  it.each([
+    ['JSON', true],
+    ['server-sent event', false],
+  ])('reads a %s reply from an Apex MCP endpoint', async (_label, enableJsonResponse) => {
+    const { url, server } = await startMcpServer(enableJsonResponse);
+    try {
+      await expect(postLocalMcp(url, initialize)).resolves.toMatchObject({
+        jsonrpc: '2.0',
+        id: 1,
+        result: { serverInfo: { name: 'local' } },
+      });
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('reports a failed MCP response as a proxy error', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue(
+      new Response('{"error":"nope"}', { status: 500 }),
+    );
+
+    await expect(postLocalMcp('http://127.0.0.1/mcp', initialize, { fetchImpl }))
+      .rejects.toMatchObject({ status: 502, message: 'Internal MCP failed (500)' });
+  });
+
+  it('returns an empty object for an accepted notification', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue(new Response(null, { status: 202 }));
+
+    await expect(
+      postLocalMcp('http://127.0.0.1/mcp', { jsonrpc: '2.0', method: 'notifications/initialized' }, { fetchImpl }),
+    ).resolves.toEqual({});
   });
 });

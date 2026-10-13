@@ -56,11 +56,15 @@ Fix the four prod failures from Oct 12–13 and make the next one page Aneesh in
 - [x] Email hours: `alert_email_hours` → alert processing rule suppresses emails outside 08:00–18:00 Eastern daily (filter: rule ID contains `/rg-apex-prd-data/`).
 - [x] Storage web test trimmed to 1 location every 15 min (~$1/month); total alert cost ~$11/month.
 
+- [x] Bugbot: ADR watcher now starts only for in-process generation (adrGenerationService runInProcess).
+- [x] Router: with V2 on, any worker-preparation/admission failure calls reportRecoverablePreparationFailure and returns `{ route: 'failed' }` (no App Service fallback). V1/flag-off unchanged.
+- [x] V2 tool proxy: internal MCP fetch lacked `Accept: application/json, text/event-stream` → every internal-proxy tool call (update_adr/prd/design_doc, ADO, calendar, maxview) got 406. `postLocalMcp` in interactiveToolProxyService sends it and reads SSE replies; tested against a real SDK server.
+
 ## Next
 1. After #212 merges and deploys: `terraform apply -target=azurerm_application_insights_standard_web_test.storage -target=azurerm_monitor_metric_alert.storage_availability` (prd workspace, terraform.prd.tfvars). Prod returns 401 for /api/health/storage until then.
 1a. Done: `migrations/20261013120200_adr-thread-bundled-skill-flag.sql` flags existing ADR assistant/finalize threads (match on skill name; fallback only runs after the project read fails). Dry-run locally: valid, idempotent; local DB has no such threads.
 2. Staging check: kill the agentic app container, confirm `/health` goes degraded → 503 and the sidecar restarts.
-3. Optional: repair 0-byte refs in the prod Apex mirror (ask first); look at the StandupScheduler query error (App Service only, not V2; separate fix).
+3. Prod Apex mirror: re-checked 2026-10-13, all 162 refs are 41 bytes (rewritten 2026-10-12 20:03 UTC), main matches GitHub, no temp clones in repo-cache. No repair needed. look at the StandupScheduler query error (App Service only, not V2; separate fix).
 
 ## Mistakes to avoid (learned in earlier chats)
 - Local branch was 14 commits behind main, so read prod code from origin/main, not the old branch.

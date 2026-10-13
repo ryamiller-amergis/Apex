@@ -25,6 +25,55 @@ export class InteractiveToolProxyError extends Error {
   }
 }
 
+// The MCP Streamable HTTP transport answers 406 unless the client accepts both.
+const LOCAL_MCP_ACCEPT = 'application/json, text/event-stream';
+
+function lastServerSentEventData(text: string): string {
+  let last = '';
+  for (const event of text.split(/\r?\n\r?\n/)) {
+    const data = event
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart())
+      .join('\n');
+    if (data) last = data;
+  }
+  return last;
+}
+
+/** Posts one JSON-RPC message to an Apex MCP endpoint on this host. */
+export async function postLocalMcp(
+  url: string,
+  body: unknown,
+  options: { signal?: AbortSignal; fetchImpl?: typeof fetch } = {},
+): Promise<unknown> {
+  const response = await (options.fetchImpl ?? fetch)(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: LOCAL_MCP_ACCEPT,
+    },
+    body: JSON.stringify(body ?? {}),
+    signal: options.signal,
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new InteractiveToolProxyError(
+      `Internal MCP failed (${response.status})`,
+      502,
+    );
+  }
+  const payload = (response.headers.get('content-type') ?? '').includes('text/event-stream')
+    ? lastServerSentEventData(text)
+    : text;
+  if (!payload) return {};
+  try {
+    return JSON.parse(payload);
+  } catch {
+    throw new InteractiveToolProxyError('Internal MCP returned non-JSON', 502);
+  }
+}
+
 export type InteractiveToolProxyRequest = Readonly<{
   claims: InteractiveToolProxyTokenClaims;
   specification: DurableInteractiveTurnSpecification;
