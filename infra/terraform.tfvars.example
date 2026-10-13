@@ -315,3 +315,4 @@ pdf_blob_container_name = "pdf-artifacts"
 # app_service_storage_quota_gb            = 250
 # alert_container_app_names               = ["ca-apex-ai-agentic-prd", "ca-apex-repo-read-d4-prd"]
 # alert_container_app_resource_group_name = "rg-apex-prd-app"
+# alert_email_hours                       = { start = "08:00:00", end = "18:00:00", time_zone = "Eastern Standard Time" }

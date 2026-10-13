@@ -182,9 +182,9 @@ resource "azurerm_application_insights_standard_web_test" "storage" {
   resource_group_name     = azurerm_resource_group.main.name
   location                = azurerm_application_insights.main.location
   application_insights_id = azurerm_application_insights.main.id
-  frequency               = 300
+  frequency               = 900
   timeout                 = 30
-  geo_locations           = ["us-va-ash-azr", "us-tx-sn1-azr", "us-il-ch1-azr"]
+  geo_locations           = ["us-va-ash-azr"]
   retry_enabled           = true
 
   request {
@@ -214,13 +214,13 @@ resource "azurerm_monitor_metric_alert" "storage_availability" {
   ]
   description = "The storage health check is failing: the data root is not writable, the workspace share is not mounted, or the disk is nearly full."
   severity    = 1
-  frequency   = "PT1M"
-  window_size = "PT5M"
+  frequency   = "PT5M"
+  window_size = "PT15M"
 
   application_insights_web_test_location_availability_criteria {
     web_test_id           = azurerm_application_insights_standard_web_test.storage[0].id
     component_id          = azurerm_application_insights.main.id
-    failed_location_count = 2
+    failed_location_count = 1
   }
 
   action {
@@ -353,6 +353,43 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "app_logs" {
 
   action {
     action_groups = [azurerm_monitor_action_group.alerts[0].id]
+  }
+
+  tags = merge(var.tags, { Environment = var.environment })
+}
+
+# ── Email hours ─────────────────────────────────────────────────────────────
+
+# An alert that fires while suppressed does not email when the window opens.
+resource "azurerm_monitor_alert_processing_rule_suppression" "outside_email_hours" {
+  count = local.alerts_enabled && var.alert_email_hours != null ? 1 : 0
+
+  name                = "apr-apex-${var.environment}-outside-email-hours"
+  resource_group_name = azurerm_resource_group.main.name
+  scopes              = ["/subscriptions/${data.azurerm_client_config.current.subscription_id}"]
+  description         = "Suppress Apex alert emails outside ${var.alert_email_hours.start}-${var.alert_email_hours.end} ${var.alert_email_hours.time_zone}."
+
+  # Every rule in this file lives in the main resource group.
+  condition {
+    alert_rule_id {
+      operator = "Contains"
+      values   = ["/${azurerm_resource_group.main.name}/"]
+    }
+  }
+
+  schedule {
+    time_zone = var.alert_email_hours.time_zone
+
+    recurrence {
+      daily {
+        start_time = "00:00:00"
+        end_time   = var.alert_email_hours.start
+      }
+      daily {
+        start_time = var.alert_email_hours.end
+        end_time   = "23:59:59"
+      }
+    }
   }
 
   tags = merge(var.tags, { Environment = var.environment })

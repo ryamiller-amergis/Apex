@@ -912,7 +912,7 @@ Contracts: `infra/ai-platform-v2-contracts.json` (asserted by
 | Alert | Fires when |
 |-------|-----------|
 | `http-5xx`, `health-check` | App Service returns server errors or an instance fails `/api/health` |
-| `storage-health` | The availability test on `/api/health/storage` fails from two locations: the data root is not writable, the Azure Files workspace share is not mounted, or less than 10 GiB is free |
+| `storage-health` | The availability test on `/api/health/storage` (one location, every 15 minutes) fails: the data root is not writable, the Azure Files workspace share is not mounted, or less than 10 GiB is free |
 | `disk-warning`, `disk-critical` | App Service storage (shared by prod and staging) passes 70% / 85% of `app_service_storage_quota_gb`. Azure reports this every six hours, so treat it as an early warning |
 | `postgres-down`, `-cpu`, `-storage` | PostgreSQL stops responding, or CPU or storage stays high |
 | `<app>-down`, `<app>-restarts` | A Container App in `alert_container_app_names` has no replica, or keeps restarting |
@@ -931,7 +931,10 @@ Container Apps are looked up by name, because some are managed outside this stat
 alert_email_receivers                   = ["anedunur@amergis.com"]
 alert_container_app_names               = ["ca-apex-ai-agentic-prd", "ca-apex-ai-fast-interactive-prd", "..."]
 alert_container_app_resource_group_name = "rg-apex-prd-app"
+alert_email_hours                       = { start = "08:00:00", end = "18:00:00", time_zone = "Eastern Standard Time" }
 ```
+
+`alert_email_hours` adds an alert processing rule that suppresses emails outside the window, every day. The rules still run and bill around the clock. An alert that fires overnight does not email at 08:00; check **Monitor → Alerts** in the morning.
 
 ---
 

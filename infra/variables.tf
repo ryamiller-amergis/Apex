@@ -1432,3 +1432,13 @@ variable "alert_container_app_resource_group_name" {
     error_message = "alert_container_app_resource_group_name is required when alert_container_app_names is set."
   }
 }
+
+variable "alert_email_hours" {
+  description = "Daily window (HH:MM:SS, Windows time zone name) when alert emails go out. Outside it they are suppressed; rules still evaluate and still bill. Null emails around the clock."
+  type = object({
+    start     = string
+    end       = string
+    time_zone = string
+  })
+  default = null
+}
