@@ -28,6 +28,7 @@ import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle'
 import type {
   AiRunIngestBody,
   AiRunIngestResponse,
+  InteractiveTurnStageTimings,
 } from '../../../shared/types/aiRunIngest';
 import type { AiRunBlobRef } from '../../../shared/types/aiRunV2';
 import type {
@@ -953,6 +954,25 @@ export function createInteractiveSessionActor(
     let firstEventSeen = false;
     let firstEventTimer: ReturnType<typeof setTimeout> | undefined;
     let silenceTimer: ReturnType<typeof setTimeout> | undefined;
+    let workspaceMs: number | undefined;
+    let agentAcquireMs: number | undefined;
+    let agentMode: InteractiveTurnStageTimings['agentMode'];
+    let sendStartedAt: number | undefined;
+    let firstEventAt: number | undefined;
+    let firstTokenAt: number | undefined;
+
+    const stageTimings = (): InteractiveTurnStageTimings => ({
+      ...(workspaceMs !== undefined ? { workspaceMs } : {}),
+      ...(agentAcquireMs !== undefined ? { agentAcquireMs } : {}),
+      ...(agentMode ? { agentMode } : {}),
+      ...(sendStartedAt !== undefined && firstEventAt !== undefined
+        ? { firstEventMs: Math.max(0, firstEventAt - sendStartedAt) }
+        : {}),
+      ...(sendStartedAt !== undefined && firstTokenAt !== undefined
+        ? { firstTokenMs: Math.max(0, firstTokenAt - sendStartedAt) }
+        : {}),
+      workerTurnMs: Math.max(0, now() - nowMs),
+    });
 
     const stopRun = async (): Promise<void> => {
       if (activeRunRef?.cancel) await activeRunRef.cancel().catch(() => {});
@@ -999,6 +1019,7 @@ export function createInteractiveSessionActor(
     const observeEvent = (): void => {
       if (!firstEventSeen) {
         firstEventSeen = true;
+        firstEventAt = now();
         if (firstEventTimer !== undefined) clearTimeout(firstEventTimer);
         firstEventTimer = undefined;
       }
@@ -1113,6 +1134,7 @@ export function createInteractiveSessionActor(
       if (cachedForThread && cachedForThread.handle.workspaceRef !== destination) {
         await disposeAgentEntry(threadId);
       }
+      const workspaceStartedAt = now();
       try {
         attemptCheckout = await dependencies.materializeWorkspace(
           bootstrap,
@@ -1127,6 +1149,7 @@ export function createInteractiveSessionActor(
         if (prepTimer) clearTimeout(prepTimer);
         absoluteAbort.signal.removeEventListener('abort', onAbsoluteAbort);
       }
+      workspaceMs = now() - workspaceStartedAt;
       // A repository-preparation timeout falls back to the remote reader; an
       // expired absolute deadline ends the turn.
       if (absoluteAbort.signal.aborted) throw absoluteAbort.signal.reason;
@@ -1166,6 +1189,7 @@ export function createInteractiveSessionActor(
       if (cacheCompatible && cached) {
         agentHandle = cached.handle;
         acquisitionMode = 'warm';
+        agentAcquireMs = 0;
       } else {
         if (cached) await disposeAgentEntry(threadId);
         const knownAgentId =
@@ -1205,6 +1229,7 @@ export function createInteractiveSessionActor(
           const acquired = await untilAborted(acquisition, absoluteAbort.signal);
           agentHandle = acquired.handle;
           acquisitionMode = acquired.mode;
+          agentAcquireMs = now() - acquireStartedAt;
           logInteractiveAgentStep('InteractiveAgentAcquired', {
             runId,
             threadId,
@@ -1234,6 +1259,7 @@ export function createInteractiveSessionActor(
       if (agentHandle.agentId) {
         agentIdByThread.set(threadId, agentHandle.agentId);
       }
+      agentMode = acquisitionMode;
 
       const prompt =
         acquisitionMode === 'recreated'
@@ -1334,6 +1360,7 @@ export function createInteractiveSessionActor(
 
       try {
         const turnEndMonitor = createCursorTurnEndMonitor();
+        sendStartedAt = now();
         activeRunRef = await untilAborted(
           agentHandle.send(prompt, {
             mcpServers,
@@ -1382,6 +1409,7 @@ export function createInteractiveSessionActor(
                 }
               }
               if (event.type === 'token') {
+                firstTokenAt ??= now();
                 await publishLiveTokenBatches(
                   liveBatcher.push(event.text, now()),
                 );
@@ -1510,6 +1538,7 @@ export function createInteractiveSessionActor(
           artifactsFlushed: true,
           artifactManifestRef,
           cursorAgentId: reusableAgentId,
+          stageTimings: stageTimings(),
         });
 
         if (result.runLeftUnsettled) {
@@ -1599,6 +1628,7 @@ export function createInteractiveSessionActor(
         detail,
         artifactsFlushed: false,
         ...(code ? { failureCategory: code } : {}),
+        stageTimings: stageTimings(),
       }).catch(() => {});
       if (code) {
         return { status: 'failed', failureCategory: code };

@@ -1,6 +1,9 @@
 import type { ChatMessage, ChatThread, ChatTurnSkill } from '../../shared/types/chat';
 import type { InteractiveWorkflowClass } from '../../shared/types/interactiveWorkflow';
-import { createDurableInteractiveTurnService } from '../services/durableInteractiveTurnService';
+import {
+  createDurableInteractiveTurnService,
+  GroundingStillPreparingError,
+} from '../services/durableInteractiveTurnService';
 import type { PreparedDurableInteractiveTurn } from '../services/durableInteractiveTurnRepository';
 
 jest.mock('../db/drizzle', () => ({ db: {} }));
@@ -71,6 +74,9 @@ async function admittedSpecification(
     resolveGrounding?: jest.Mock;
     loadSkill?: jest.Mock;
     resolveDeadlines?: jest.Mock;
+    hasPinnedGrounding?: boolean;
+    optionalGroundingWaitMs?: number;
+    trackEvent?: jest.Mock;
   } = {},
 ): Promise<PreparedDurableInteractiveTurn['specification']> {
   const repositoryAdmit = jest.fn(async (input: PreparedDurableInteractiveTurn) => ({
@@ -95,6 +101,9 @@ async function admittedSpecification(
       jest.fn().mockResolvedValue({ path: SKILL_PATH, content: SKILL_CONTENT }),
     resolveGrounding:
       options.resolveGrounding ?? jest.fn().mockResolvedValue(GROUNDING),
+    hasPinnedGrounding: jest.fn().mockResolvedValue(options.hasPinnedGrounding ?? false),
+    optionalGroundingWaitMs: options.optionalGroundingWaitMs ?? 3_000,
+    trackEvent: options.trackEvent ?? jest.fn(),
     loadRepositoryContext: jest.fn().mockResolvedValue(options.repositoryContext ?? null),
     isGuidedInterviewEnabled: jest.fn().mockResolvedValue(options.guided ?? false),
     isBackgroundGroundingEnabled: jest
@@ -342,6 +351,63 @@ describe('durable guided interview turn', () => {
 
     expect(specification.grounding).toMatchObject({ sha: 'abc123' });
     expect(resolveGrounding).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('durable interactive turn admission', () => {
+  const delayedGrounding = () =>
+    jest.fn(
+      () => new Promise((resolve) => setTimeout(() => resolve(GROUNDING), 30)),
+    );
+
+  it('records admission stage timings', async () => {
+    const trackEvent = jest.fn();
+    await admittedSpecification([], { trackEvent });
+
+    expect(trackEvent).toHaveBeenCalledWith(
+      'InteractiveTurnAdmission',
+      expect.objectContaining({ status: 'queued', workflowClass: 'interview' }),
+      expect.objectContaining({
+        setupMs: expect.any(Number),
+        groundingMs: expect.any(Number),
+        promptMs: expect.any(Number),
+        persistMs: expect.any(Number),
+        totalMs: expect.any(Number),
+      }),
+    );
+  });
+
+  it('tells the user the code is still being prepared when the wait runs out', async () => {
+    await expect(
+      admittedSpecification([], {
+        resolveGrounding: jest
+          .fn()
+          .mockRejectedValue(new GroundingStillPreparingError()),
+      }),
+    ).rejects.toMatchObject({ code: 'INTERACTIVE_V2_GROUNDING_PREPARING' });
+  });
+
+  it('gives an unpinned home chat only the short grounding wait', async () => {
+    const specification = await admittedSpecification([], {
+      workflowClass: 'home-chat',
+      kickoff: { skillPath: undefined },
+      resolveGrounding: delayedGrounding(),
+      optionalGroundingWaitMs: 5,
+    });
+
+    expect(specification.grounding).toBeNull();
+  });
+
+  it('keeps a pinned home chat grounded past the short wait', async () => {
+    const specification = await admittedSpecification([], {
+      workflowClass: 'home-chat',
+      kickoff: { skillPath: undefined },
+      resolveGrounding: delayedGrounding(),
+      optionalGroundingWaitMs: 5,
+      hasPinnedGrounding: true,
+    });
+
+    expect(specification.grounding).toMatchObject({ sha: 'abc123' });
   });
 });
 

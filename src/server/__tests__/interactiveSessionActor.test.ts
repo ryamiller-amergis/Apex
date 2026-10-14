@@ -1054,6 +1054,12 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
       status: 'completed',
       artifactsFlushed: true,
       artifactManifestRef: manifestRef,
+      stageTimings: {
+        workspaceMs: expect.any(Number),
+        agentAcquireMs: expect.any(Number),
+        agentMode: 'recreated',
+        workerTurnMs: expect.any(Number),
+      },
     });
   });
 
