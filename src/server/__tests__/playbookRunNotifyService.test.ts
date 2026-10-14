@@ -31,7 +31,9 @@ function mockClient(query: jest.Mock) {
 function loadService() {
   let loaded: typeof import('../services/playbookRunNotifyService') | undefined;
   jest.isolateModules(() => {
-    loaded = jest.requireActual('../services/playbookRunNotifyService');
+    loaded = jest.requireActual<typeof import('../services/playbookRunNotifyService')>(
+      '../services/playbookRunNotifyService',
+    );
   });
   return loaded!;
 }

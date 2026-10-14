@@ -243,7 +243,9 @@ describe('TBI-016 VT-04 — the registry is the only place a step type is declar
           file !== 'src/server/routes/e2eSetup.ts' &&
           file !== 'src/server/services/designDocValidationPlaybookService.ts' &&
           file !== 'src/server/services/playbookMcpCapabilityService.ts' &&
-          file !== 'src/server/services/playbookReconciliationService.ts'
+          file !== 'src/server/services/playbookReconciliationService.ts' &&
+          // Display names for the canvas library. The registry remains the declaration.
+          file !== 'src/client/components/playbookStepCatalog.ts'
       )
       .filter((file) => {
         const code = stripComments(fs.readFileSync(path.join(REPO_ROOT, file), 'utf8'));
