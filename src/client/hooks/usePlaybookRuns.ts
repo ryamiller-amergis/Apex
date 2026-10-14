@@ -20,6 +20,7 @@ import type {
   RetryPlaybookStepResponse,
   PlaybookGateDetail,
   PlaybookRunFilter,
+  StartRunResult,
 } from '../../shared/types/playbook';
 
 /** How often a live run is re-read. Frequent enough to watch, slow enough not to be a load test. */
@@ -157,6 +158,20 @@ async function invalidateRunQueries(
     queryClient.invalidateQueries({ queryKey: ['playbook-runs', project] }),
     queryClient.invalidateQueries({ queryKey: ['playbook-run', project, runId] }),
   ]);
+}
+
+/** Starts a run on the definition's current published version. */
+export function useStartPlaybookRun(project: string, definitionId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<StartRunResult, PlaybookRunApiError, void>({
+    mutationFn: () =>
+      apiFetch('/api/playbooks/runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project, definitionId }),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['playbook-runs', project] }),
+  });
 }
 
 export function useCancelPlaybookRun(project: string, runId: string) {

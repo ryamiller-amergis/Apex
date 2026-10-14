@@ -101,6 +101,10 @@ const ApryseWebViewerPoc = lazy(() => import('./components/ApryseWebViewerPoc').
 const NutrientWebSdkPoc = lazy(() => import('./components/NutrientWebSdkPoc').then(m => ({ default: m.NutrientWebSdkPoc })));
 const DesignModuleView = lazy(() => import('./components/DesignModuleView'));
 const PlaybookStatusView = lazy(() => import('./components/PlaybookStatusView'));
+const PlaybookCanvasPage = lazy(() => import('./components/PlaybookCanvasPage'));
+const PlaybookLiveRunPage = lazy(() => import('./components/PlaybookLiveRunPage'));
+const PlaybooksManagePage = lazy(() => import('./components/PlaybooksManagePage'));
+const PlaybookDashboardPage = lazy(() => import('./components/PlaybookDashboardPage'));
 const LoadTestsListPage = lazy(() => import('./components/LoadTestsListPage').then(m => ({ default: m.LoadTestsListPage })));
 const LoadTestDefinitionBuilderView = lazy(() =>
   import('./components/LoadTestDefinitionBuilderView').then((m) => ({ default: m.LoadTestDefinitionBuilderView })),
@@ -319,10 +323,6 @@ function App() {
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
   const interactiveWsEnabled = homeFlags['ai-runs-v2-transport'] === true;
-  const canAccessPlaybooks =
-    !homeFlagsLoading &&
-    homeFlags['playbooks-production-adapters'] === true &&
-    (isSuperAdmin || can('playbooks:view'));
   const documentLink = useDocumentDeepLinkProject(location.pathname, location.search);
   const {
     data: selectableProjectList = [],
@@ -373,6 +373,8 @@ function App() {
         || streamAlignedProject !== selectedProject
       )
     );
+  const playbooksEnabled =
+    !homeFlagsLoading && homeFlags['playbooks-production-adapters'] === true;
   // Prefer the WebSocket agent gateway when the durable interactive transport
   // flag is enabled; SSE remains the stream-transport fallback only.
   // Wait until flags resolve so we do not open SSE first, then leave it stuck
@@ -398,6 +400,10 @@ function App() {
   );
   const effectiveEnabledViews = isRestricted ? restrictedModules : enabledViews;
   const menuConfigReady = isRestricted || !menuConfigLoading;
+  const canAccessPlaybooks =
+    playbooksEnabled &&
+    menuConfigReady &&
+    (isSuperAdmin || (effectiveEnabledViews.includes('playbooks') && can('playbooks:view')));
   const restrictedSkipRef = useRef(false);
 
   // UI Lab members read the whole project list; everyone else only reaches
@@ -888,7 +894,7 @@ function App() {
     );
   }
 
-  if (currentView === 'playbooks' && homeFlagsLoading) {
+  if (currentView === 'playbooks' && (homeFlagsLoading || !menuConfigReady)) {
     return <ViewSkeleton />;
   }
 
@@ -937,6 +943,8 @@ function App() {
             workBoardEnabled={workBoardEnabled}
             onNavigateLoadTests={() => navigate('/load-tests')}
             onNavigateDiagrams={() => navigate('/diagrams')}
+            onNavigatePlaybooks={() => navigate('/playbooks')}
+            playbooksEnabled={playbooksEnabled}
             onNavigateAdmin={() => navigate('/admin/roles')}
           />
           <div className={`app-main ${sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}>
@@ -991,6 +999,8 @@ function App() {
             onNavigateDiagrams={() => navigate('/diagrams')}
             onNavigateWorkBoard={() => navigate('/work-board')}
             workBoardEnabled={workBoardEnabled}
+            onNavigatePlaybooks={() => navigate('/playbooks')}
+            playbooksEnabled={playbooksEnabled}
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
             onLogout={handleLogout}
@@ -1414,7 +1424,40 @@ function App() {
             // Only reachable when the flag is on; the off case returned the not-found surface above.
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
-                <PlaybookStatusView selectedProject={selectedProject} />
+                {(() => {
+                  const segments = location.pathname.split('/').filter(Boolean);
+                  if (segments[0] === 'playbooks' && segments[1] === 'definitions' && segments[2]) {
+                    return (
+                      <PlaybookCanvasPage
+                        project={selectedProject}
+                        definitionId={segments[2]}
+                      />
+                    );
+                  }
+                  if (segments[0] === 'playbooks' && segments[1] === 'runs' && segments[2]) {
+                    return (
+                      <PlaybookLiveRunPage
+                        project={selectedProject}
+                        runId={segments[2]}
+                      />
+                    );
+                  }
+                  if (segments[0] === 'playbooks' && segments[1] && !segments[2]) {
+                    return (
+                      <PlaybookDashboardPage
+                        project={selectedProject}
+                        definitionId={segments[1]}
+                      />
+                    );
+                  }
+                  // Run lists keep the status view: links from notifications and Home carry
+                  // `?filter=assigned-to-me` or `?run=<id>` and expect that run expanded.
+                  const params = new URLSearchParams(location.search);
+                  if (params.get('view') === 'runs' || params.has('filter') || params.has('run')) {
+                    return <PlaybookStatusView selectedProject={selectedProject} />;
+                  }
+                  return <PlaybooksManagePage project={selectedProject} />;
+                })()}
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'load-tests' ? (

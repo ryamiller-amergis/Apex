@@ -60,6 +60,9 @@ interface AppHeaderProps {
   onNavigateDiagrams?: () => void;
   onNavigateWorkBoard?: () => void;
   workBoardEnabled?: boolean;
+  onNavigatePlaybooks?: () => void;
+  /** Playbooks stays hidden until the production-adapters flag is on for the project. */
+  playbooksEnabled?: boolean;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
   onThemeChange: (theme: ThemeMode) => void;
@@ -100,6 +103,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateDiagrams,
   onNavigateWorkBoard,
   workBoardEnabled = true,
+  onNavigatePlaybooks,
+  playbooksEnabled = false,
   onNavigateAdmin,
   onOpenChangelog,
   onThemeChange,
@@ -143,6 +148,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Design Module', view: 'design-module', permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
     { label: 'Diagrams', view: 'diagrams', permission: 'diagram:view', onNavigate: onNavigateDiagrams ?? (() => {}) },
     { label: 'Load Tests', view: 'load-tests', permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}) },
+    { label: 'Playbooks', view: 'playbooks', permission: 'playbooks:view', onNavigate: onNavigatePlaybooks ?? (() => {}) },
     { label: 'Work Board', view: 'work-board', permission: 'work-board:view', onNavigate: onNavigateWorkBoard ?? (() => {}) },
     { label: 'Admin', view: 'admin', permission: 'admin:roles', onNavigate: onNavigateAdmin },
   ];
@@ -167,6 +173,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       if (!workBoardEnabled) return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('work-board')) return false;
       return isSuperAdmin || can('work-board:view');
+    }
+    if (item.view === 'playbooks') {
+      if (!playbooksEnabled) return false;
+      if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;
+      return isSuperAdmin || can('playbooks:view');
     }
     if (item.view === 'ui-lab') {
       if (!isSuperAdmin && !menuEnabledViews.includes('ui-lab')) return false;

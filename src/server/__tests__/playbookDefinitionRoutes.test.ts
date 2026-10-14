@@ -41,6 +41,17 @@ jest.mock('../services/playbookDefinitionService', () => ({
   deprecateVersion: (...args: unknown[]) => deprecateVersion(...args),
 }));
 
+const dryRunPlaybookDraft = jest.fn();
+jest.mock('../services/playbookDryRunService', () => ({
+  dryRunPlaybookDraft: (...args: unknown[]) => dryRunPlaybookDraft(...args),
+}));
+
+const replaceDraftVersionLayout = jest.fn();
+jest.mock('../services/playbookVersionLayoutService', () => ({
+  getVersionLayout: jest.fn(),
+  replaceDraftVersionLayout: (...args: unknown[]) => replaceDraftVersionLayout(...args),
+}));
+
 import express from 'express';
 import request from 'supertest';
 import playbooksRouter from '../routes/playbooks';
@@ -374,5 +385,66 @@ describe('TBI-031 AC-2 / VT-13 and lifecycle error mapping', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/notify.*invalid input.*title/i);
     expect(res.body).not.toHaveProperty('violation');
+  });
+});
+
+describe('playbook project binding', () => {
+  const positions = { step: { x: 1, y: 2 } };
+
+  beforeEach(() => {
+    dryRunPlaybookDraft.mockResolvedValue({ issues: [] });
+    replaceDraftVersionLayout.mockResolvedValue({
+      versionId: 'ver-1',
+      positions,
+      updatedAt: '2026-10-14T00:00:00.000Z',
+    });
+  });
+
+  it('rejects a dry run whose body project differs from the authorized project', async () => {
+    const res = await request(buildApp())
+      .post('/api/playbooks/definitions/def-1/dry-run')
+      .query({ project: PROJECT })
+      .send({ project: 'Other', stubs: {} });
+
+    expect(res.status).toBe(400);
+    expect(dryRunPlaybookDraft).not.toHaveBeenCalled();
+  });
+
+  it('dry-runs the project named in the body when that is the only project', async () => {
+    const res = await request(buildApp())
+      .post('/api/playbooks/definitions/def-1/dry-run')
+      .send({ project: PROJECT, stubs: { draft: { ok: true } } });
+
+    expect(res.status).toBe(200);
+    expect(dryRunPlaybookDraft).toHaveBeenCalledWith({
+      project: PROJECT,
+      definitionId: 'def-1',
+      stubs: { draft: { ok: true } },
+      userId: USER_OID,
+    });
+  });
+
+  it('rejects a layout save whose body project differs from the query project', async () => {
+    const res = await request(buildApp())
+      .put('/api/playbooks/definitions/def-1/versions/ver-1/layout')
+      .query({ project: PROJECT })
+      .send({ project: 'Other', positions });
+
+    expect(res.status).toBe(400);
+    expect(replaceDraftVersionLayout).not.toHaveBeenCalled();
+  });
+
+  it('saves a layout against the body project when query and header are absent', async () => {
+    const res = await request(buildApp())
+      .put('/api/playbooks/definitions/def-1/versions/ver-1/layout')
+      .send({ project: PROJECT, positions });
+
+    expect(res.status).toBe(200);
+    expect(replaceDraftVersionLayout).toHaveBeenCalledWith({
+      project: PROJECT,
+      definitionId: 'def-1',
+      versionId: 'ver-1',
+      positions,
+    });
   });
 });
