@@ -426,8 +426,8 @@ describe('useAvailableModels', () => {
   it('fetches /api/available-models and returns the models array', async () => {
     mockFetchOk({
       models: [
-        { id: 'composer-2', displayName: 'Composer 2' },
         { id: 'gpt-4o', displayName: 'GPT-4o' },
+        { id: 'composer-2', displayName: 'Composer 2' },
       ],
     });
     const { wrapper } = createWrapper();
@@ -436,7 +436,10 @@ describe('useAvailableModels', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(result.current.data).toHaveLength(2);
+    expect(result.current.data?.map((model) => model.displayName)).toEqual([
+      'Composer 2',
+      'GPT-4o',
+    ]);
     expect(global.fetch).toHaveBeenCalledWith('/api/available-models', expect.any(Object));
   });
 });

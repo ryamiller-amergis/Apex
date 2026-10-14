@@ -39,6 +39,22 @@ jest.mock('../hooks/useProjectRepoConfigs', () => ({
   useProjectRepoConfigs: jest.fn().mockReturnValue({ data: [], isLoading: false, isSuccess: true }),
 }));
 
+jest.mock('../hooks/useDocumentDeepLinkProject', () => ({
+  useDocumentDeepLinkProject: () => ({
+    link: null,
+    project: undefined,
+    pending: false,
+    failed: false,
+  }),
+}));
+
+jest.mock('../hooks/useProjects', () => ({
+  useProjects: jest.fn().mockReturnValue({
+    data: [{ id: '1', name: 'MaxView', description: '' }],
+    isLoading: false,
+  }),
+}));
+
 jest.mock('../hooks/useProjectSkillConfig', () => ({
   useProjectSkillConfig: jest.fn().mockReturnValue({ data: null }),
 }));

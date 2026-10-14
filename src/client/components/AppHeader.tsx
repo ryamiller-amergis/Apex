@@ -10,6 +10,7 @@ import { canAccessMyWork } from '../utils/canAccessMyWork';
 import type { ThemeMode } from '../hooks/useAppShell';
 import type { ProjectRepoConfigSummary } from '../../shared/types/projectSettings';
 import type { WorkItemType } from '../../shared/types/featureRequest';
+import { sortByLabel } from '../utils/sortByLabel';
 import styles from './AppHeader.module.css';
 
 interface NavItem {
@@ -253,7 +254,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               onChange={(e) => onChangeSkillSettings(e.target.value)}
               {...{ 'data-testid': 'app-header-repo-switcher' }}
             >
-              {repoConfigs.map((cfg) => (
+              {sortByLabel(repoConfigs, (cfg) => cfg.friendlyName).map((cfg) => (
                 <option key={cfg.id} value={cfg.id}>
                   {cfg.friendlyName}
                 </option>

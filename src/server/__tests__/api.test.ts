@@ -8,12 +8,19 @@ import * as userProjectAssignmentService from '../services/userProjectAssignment
 import * as projectCatalogService from '../services/projectCatalogService';
 import * as projectAccessRequestService from '../services/projectAccessRequestService';
 import * as workerTierHealthService from '../services/workerTierHealthService';
+import * as adoMembershipService from '../services/adoMembershipService';
+import * as linkProjectService from '../services/linkProjectService';
+
+const mockResolveThreadAccess = jest.fn();
+const mockGetDiagram = jest.fn();
+const mockResolveDesignAccess = jest.fn();
 
 // Mock the AzureDevOpsService
 jest.mock('../services/azureDevOps');
 jest.mock('../db/drizzle', () => ({
   db: {
     execute: jest.fn(),
+    select: jest.fn(),
   },
 }));
 
@@ -49,6 +56,26 @@ jest.mock('../services/workerTierHealthService', () => ({
   getWorkerTierHealthStats: jest.fn(),
 }));
 
+jest.mock('../services/adoMembershipService', () => ({
+  getUserProjects: jest.fn().mockResolvedValue([]),
+}));
+
+jest.mock('../services/linkProjectService', () => ({
+  resolveLinkProject: jest.fn(),
+}));
+
+jest.mock('../services/threadAccessService', () => ({
+  resolveThreadAccess: (...args: unknown[]) => mockResolveThreadAccess(...args),
+}));
+
+jest.mock('../services/diagramService', () => ({
+  getDiagram: (...args: unknown[]) => mockGetDiagram(...args),
+}));
+
+jest.mock('../services/uiLabService', () => ({
+  resolveDesignAccess: (...args: unknown[]) => mockResolveDesignAccess(...args),
+}));
+
 jest.mock('../db', () => ({
   getDbPoolStats: jest.fn(),
 }));
@@ -57,6 +84,8 @@ const mockAssignmentService = userProjectAssignmentService as jest.Mocked<typeof
 const mockProjectCatalogService = projectCatalogService as jest.Mocked<typeof projectCatalogService>;
 const mockProjectAccessRequestService = projectAccessRequestService as jest.Mocked<typeof projectAccessRequestService>;
 const mockWorkerTierHealthService = workerTierHealthService as jest.Mocked<typeof workerTierHealthService>;
+const mockAdoMembershipService = adoMembershipService as jest.Mocked<typeof adoMembershipService>;
+const mockLinkProjectService = linkProjectService as jest.Mocked<typeof linkProjectService>;
 const mockGetDbPoolStats = jest.mocked(getDbPoolStats);
 
 describe('API Routes', () => {
@@ -65,6 +94,10 @@ describe('API Routes', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockAdoMembershipService.getUserProjects.mockResolvedValue([]);
+    mockResolveThreadAccess.mockResolvedValue(null);
+    mockGetDiagram.mockRejectedValue(new Error('Diagram not found'));
+    mockResolveDesignAccess.mockRejectedValue(new Error('Forbidden'));
     mockWorkerTierHealthService.getWorkerTierHealthStats.mockResolvedValue({
       workerTierSaturation: 0.5,
       oldestQueuedAgeMs: 90_000,
@@ -273,6 +306,7 @@ describe('API Routes', () => {
     const profile = { oid: 'user-1', upn: 'user@example.com' };
 
     it('records the project selection and returns 204', async () => {
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['MaxView']);
       mockAssignmentService.ensureUserProjectAssignment.mockResolvedValue(undefined);
 
       await request(buildAppWithUser(profile))
@@ -287,6 +321,7 @@ describe('API Routes', () => {
     });
 
     it('handles URL-encoded project names', async () => {
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Support Ops']);
       mockAssignmentService.ensureUserProjectAssignment.mockResolvedValue(undefined);
 
       await request(buildAppWithUser(profile))
@@ -300,6 +335,51 @@ describe('API Routes', () => {
       );
     });
 
+    it('records selection when the user has ADO membership but no assignment yet', async () => {
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue([]);
+      mockAdoMembershipService.getUserProjects.mockResolvedValue([
+        { name: 'Nurses', id: 'nurses', description: '' },
+      ]);
+      mockAssignmentService.ensureUserProjectAssignment.mockResolvedValue(undefined);
+
+      await request(buildAppWithUser(profile))
+        .post('/api/projects/Nurses/select')
+        .expect(204);
+
+      expect(mockAssignmentService.ensureUserProjectAssignment).toHaveBeenCalledWith(
+        'user-1',
+        'Nurses',
+        'auto-select',
+      );
+    });
+
+    it('does not auto-assign a project the user cannot open', async () => {
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Apex']);
+      mockAdoMembershipService.getUserProjects.mockResolvedValue([]);
+
+      const response = await request(buildAppWithUser(profile))
+        .post('/api/projects/Nurses/select')
+        .expect(403);
+
+      expect(response.body).toEqual({ error: 'Forbidden: not assigned to this project' });
+      expect(mockAssignmentService.ensureUserProjectAssignment).not.toHaveBeenCalled();
+    });
+
+    it('lets super admins record a selection without a prior assignment', async () => {
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue([]);
+      mockAssignmentService.ensureUserProjectAssignment.mockResolvedValue(undefined);
+
+      await request(buildAppWithUser({ oid: 'admin-oid', upn: 'ryamiller@amergis.com' }))
+        .post('/api/projects/Nurses/select')
+        .expect(204);
+
+      expect(mockAssignmentService.ensureUserProjectAssignment).toHaveBeenCalledWith(
+        'admin-oid',
+        'Nurses',
+        'auto-select',
+      );
+    });
+
     it('returns 401 when unauthenticated', async () => {
       await request(app)
         .post('/api/projects/MaxView/select')
@@ -309,11 +389,145 @@ describe('API Routes', () => {
     });
 
     it('returns 500 when the service throws', async () => {
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['MaxView']);
       mockAssignmentService.ensureUserProjectAssignment.mockRejectedValue(new Error('DB error'));
 
       await request(buildAppWithUser(profile))
         .post('/api/projects/MaxView/select')
         .expect(500);
+    });
+  });
+
+  describe('GET /api/links/project', () => {
+    const profile = { oid: 'user-1', upn: 'user@example.com' };
+    const adrId = 'a9272fb9-0d59-4881-85f2-181f35c249b0';
+
+    it('returns the owning project when the caller can open it', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+
+      const response = await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'adr', id: adrId })
+        .expect(200);
+
+      expect(response.body).toEqual({ project: 'Nurses' });
+      expect(mockLinkProjectService.resolveLinkProject).toHaveBeenCalledWith('adr', adrId);
+    });
+
+    it('does not disclose a project the caller cannot open', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Apex']);
+      mockAdoMembershipService.getUserProjects.mockResolvedValue([]);
+
+      const response = await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'adr', id: adrId })
+        .expect(404);
+
+      expect(response.body).toEqual({ error: 'Link not found' });
+    });
+
+    it('does not disclose a chat thread the caller may not read', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+      mockResolveThreadAccess.mockResolvedValue(null);
+
+      await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'chat-thread', id: adrId })
+        .expect(404);
+
+      expect(mockResolveThreadAccess).toHaveBeenCalledWith(profile.oid, adrId);
+    });
+
+    it('returns a chat thread project when the caller has thread access', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+      mockResolveThreadAccess.mockResolvedValue({ access: 'owner', thread: { id: adrId } });
+
+      const response = await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'chat-thread', id: adrId })
+        .expect(200);
+
+      expect(response.body).toEqual({ project: 'Nurses' });
+    });
+
+    it('does not disclose a dev session owned by another user', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+      const limit = jest.fn().mockResolvedValue([{ authorId: 'other-user' }]);
+      const where = jest.fn().mockReturnValue({ limit });
+      const from = jest.fn().mockReturnValue({ where });
+      (db.select as jest.Mock).mockReturnValue({ from });
+
+      await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'dev-session', id: adrId })
+        .expect(404);
+    });
+
+    it('returns a dev session project to its author', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+      const limit = jest.fn().mockResolvedValue([{ authorId: profile.oid }]);
+      const where = jest.fn().mockReturnValue({ limit });
+      const from = jest.fn().mockReturnValue({ where });
+      (db.select as jest.Mock).mockReturnValue({ from });
+
+      await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'dev-session', id: adrId })
+        .expect(200);
+    });
+
+    it('does not disclose a diagram the caller may not read', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+      mockGetDiagram.mockRejectedValue(new Error('Forbidden'));
+
+      await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'diagram', id: adrId })
+        .expect(404);
+
+      expect(mockGetDiagram).toHaveBeenCalledWith('Nurses', adrId, profile.oid);
+    });
+
+    it('returns a diagram project when its read check succeeds', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+      mockGetDiagram.mockResolvedValue({ id: adrId });
+
+      await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'diagram', id: adrId })
+        .expect(200);
+    });
+
+    it('does not disclose a UI Lab design the caller may not read', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+      mockResolveDesignAccess.mockRejectedValue(new Error('Forbidden'));
+
+      await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'ui-lab', id: adrId })
+        .expect(404);
+
+      expect(mockResolveDesignAccess).toHaveBeenCalledWith(adrId, profile.oid, { isSuperAdmin: false });
+    });
+
+    it('returns a UI Lab project when its read check succeeds', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+      mockResolveDesignAccess.mockResolvedValue({ id: adrId });
+
+      await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'ui-lab', id: adrId })
+        .expect(200);
     });
   });
 

@@ -14,7 +14,10 @@
 import { AiRunCallbackError, AiRunFenceConflictError } from '../services/aiRunsWorker/callbackClient';
 import type { WorkerCursorExecutionRun } from '../services/aiRunsWorker/cursorExecution';
 import type { CursorStreamEvent } from '../services/cursorExecutionCore';
-import type { InteractiveCursorAgentHandle } from '../services/interactiveActorHost/interactiveCursorExecution';
+import type {
+  InteractiveCursorAgentHandle,
+  InteractiveSendOptions,
+} from '../services/interactiveActorHost/interactiveCursorExecution';
 import {
   createInteractiveSessionActor,
   INTERACTIVE_STARTING_DETAIL,
@@ -61,7 +64,7 @@ interface FakeAgentOptions {
   agentId?: string | null;
   waitGate?: Promise<void>;
   onCancel?: () => void;
-  onSend?: () => void;
+  onSend?: (sendOptions?: InteractiveSendOptions) => void;
   model?: string;
   workspaceRef?: string;
   waitStatus?: string;
@@ -108,7 +111,7 @@ function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgent
     model: options.model ?? 'auto',
     workspaceRef: options.workspaceRef ?? '/warm/checkout',
     send: async (_prompt, sendOptions) => {
-      options.onSend?.();
+      options.onSend?.(sendOptions);
       for (const text of options.tokens ?? []) {
         await sendOptions?.onDelta?.({ type: 'text-delta', text });
       }
