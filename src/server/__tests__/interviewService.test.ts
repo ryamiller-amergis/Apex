@@ -784,6 +784,54 @@ describe('updateInterviewPhaseAssignments', () => {
     expect(mockCreateNotification).toHaveBeenCalledTimes(2);
   });
 
+  it('leaves unspecified phase assignees unchanged', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      discoveryAssigneeId: 'discovery-1',
+      deliveryAssigneeId: 'delivery-1',
+      technicalAssigneeId: null,
+    });
+    mockGetActiveUsers.mockResolvedValue([
+      { oid: 'technical-1', displayName: 'Technical User' },
+    ]);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await updateInterviewPhaseAssignments('interview-1', 'user-1', {
+      technicalAssigneeId: 'technical-1',
+    });
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({
+      discoveryAssigneeId: 'discovery-1',
+      deliveryAssigneeId: 'delivery-1',
+      technicalAssigneeId: 'technical-1',
+    }));
+  });
+
+  it('clears a phase when the client sends null without touching the others', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      discoveryAssigneeId: 'discovery-1',
+      deliveryAssigneeId: 'delivery-1',
+      technicalAssigneeId: 'technical-1',
+    });
+    mockGetActiveUsers.mockResolvedValue([]);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await updateInterviewPhaseAssignments('interview-1', 'user-1', {
+      discoveryAssigneeId: null,
+    });
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({
+      discoveryAssigneeId: null,
+      deliveryAssigneeId: 'delivery-1',
+      technicalAssigneeId: 'technical-1',
+    }));
+  });
+
   it('rejects a user who is not active in the interview project', async () => {
     mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
     mockGetActiveUsers.mockResolvedValue([]);

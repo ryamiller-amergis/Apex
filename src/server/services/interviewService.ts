@@ -479,14 +479,22 @@ export async function updateInterviewTitle(
 }
 
 export interface InterviewPhaseAssignments {
-  discoveryAssigneeId?: string;
-  deliveryAssigneeId?: string;
-  technicalAssigneeId?: string;
+  discoveryAssigneeId?: string | null;
+  deliveryAssigneeId?: string | null;
+  technicalAssigneeId?: string | null;
 }
 
-function assigneeOrNull(id: string | undefined): string | null {
+function assigneeOrNull(id: string | null | undefined): string | null {
   const trimmed = id?.trim();
   return trimmed ? trimmed : null;
+}
+
+function nextAssigneeId(
+  assignments: InterviewPhaseAssignments,
+  key: keyof InterviewPhaseAssignments,
+  current: string | null,
+): string | null {
+  return key in assignments ? assigneeOrNull(assignments[key]) : current;
 }
 
 /**
@@ -515,12 +523,17 @@ export async function updateInterviewPhaseAssignments(
   }
 
   const next = {
-    discoveryAssigneeId: assigneeOrNull(assignments.discoveryAssigneeId),
-    deliveryAssigneeId: assigneeOrNull(assignments.deliveryAssigneeId),
-    technicalAssigneeId: assigneeOrNull(assignments.technicalAssigneeId),
+    discoveryAssigneeId: nextAssigneeId(assignments, 'discoveryAssigneeId', row.discoveryAssigneeId),
+    deliveryAssigneeId: nextAssigneeId(assignments, 'deliveryAssigneeId', row.deliveryAssigneeId),
+    technicalAssigneeId: nextAssigneeId(assignments, 'technicalAssigneeId', row.technicalAssigneeId),
   };
+  const incomingIds = [
+    'discoveryAssigneeId' in assignments ? next.discoveryAssigneeId : null,
+    'deliveryAssigneeId' in assignments ? next.deliveryAssigneeId : null,
+    'technicalAssigneeId' in assignments ? next.technicalAssigneeId : null,
+  ];
   const activeUserIds = new Set((await getActiveUsers(row.project)).map((user) => user.oid));
-  const invalidAssignee = Object.values(next).find(
+  const invalidAssignee = incomingIds.find(
     (assigneeId) => assigneeId && !activeUserIds.has(assigneeId),
   );
   if (invalidAssignee) {

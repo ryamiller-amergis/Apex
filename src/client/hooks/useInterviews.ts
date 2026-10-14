@@ -489,9 +489,9 @@ export function useUpdateInterviewPhaseAssignments() {
   return useMutation<void, Error, {
     id: string;
     phaseAssignments: {
-      discoveryAssigneeId?: string;
-      deliveryAssigneeId?: string;
-      technicalAssigneeId?: string;
+      discoveryAssigneeId?: string | null;
+      deliveryAssigneeId?: string | null;
+      technicalAssigneeId?: string | null;
     };
   }>({
     mutationFn: ({ id, phaseAssignments }) =>
