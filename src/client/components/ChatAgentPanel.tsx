@@ -663,7 +663,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     streamingText ? 'Agent is responding…'
     : isRunning ? 'Agent is thinking…'
     : status === 'error' ? 'Error occurred'
-    : status === 'closed' ? 'Thread closed'
+    : status === 'closed' ? 'Inactive — send a message to continue'
     : isStartingConversation ? 'Agent is thinking…'
     : isLoadingConversation ? 'Loading conversation…'
     : hasEmptyTranscript ? 'No messages'
@@ -1113,9 +1113,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                   </p>
                 ) : null}
                 <p className={styles.transcriptEmptyHint}>
-                  {status === 'closed'
-                    ? 'This thread is closed, so nothing was saved to it.'
-                    : 'Send a message to start it.'}
+                  Send a message to start it.
                 </p>
               </div>
             )}
@@ -1296,10 +1294,9 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             }}
             onSend={() => void doSend(input, attachments)}
             onCancel={() => void session.cancel()}
-            disabled={status === 'closed'}
             isRunning={canStop}
             isCancelling={isCancelling}
-            isBusy={isInteractionBusy || status === 'closed'}
+            isBusy={isInteractionBusy}
             placeholder={
               isRunning
                 ? 'Agent is thinking…'
@@ -1331,7 +1328,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 multiple
                 className={styles.fileInput}
                 onChange={handleAttachmentChange}
-                disabled={isRunning || status === 'closed'}
+                disabled={isRunning}
               />
             )}
             before={skillPickerOpen ? (
