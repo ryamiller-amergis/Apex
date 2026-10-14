@@ -253,6 +253,19 @@ describe('AppHeader — Work Board visibility', () => {
     expect(onNavigateWorkBoard).toHaveBeenCalled();
   });
 
+  it('hides Playbooks until the flag is on and the project enables the module', () => {
+    const can = (key: string) => key === 'playbooks:view';
+    const { rerender } = render(
+      <AppHeader {...baseProps} can={can} menuEnabledViews={['playbooks']} playbooksEnabled={false} />,
+    );
+    expect(screen.queryByRole('button', { name: 'Playbooks' })).not.toBeInTheDocument();
+
+    rerender(
+      <AppHeader {...baseProps} can={can} menuEnabledViews={['playbooks']} playbooksEnabled />,
+    );
+    expect(screen.getByRole('button', { name: 'Playbooks' })).toBeInTheDocument();
+  });
+
   it('hides Work Board for a super admin when the feature flag is off', () => {
     render(
       <AppHeader

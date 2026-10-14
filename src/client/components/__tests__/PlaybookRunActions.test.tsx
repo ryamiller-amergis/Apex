@@ -12,6 +12,7 @@ jest.mock('../../hooks/useAppShell', () => ({
 const RUN: PlaybookRunDetail = {
   runId: 'run-1',
   project: 'Apex',
+  definitionId: 'def-1',
   definitionName: 'Validate design',
   definitionVersionId: 'version-2',
   versionNumber: 2,

@@ -686,6 +686,8 @@ describe('VT-02 — the playbook migrations roll back cleanly', () => {
     for (const file of [
       '20261007143000_playbook-interview-template.sql',
       '20261007124500_playbook-interview-brief.sql',
+      '20261005153100_seed-playbooks-authoring-canvas-flag.sql',
+      '20261005153000_playbook-version-layouts.sql',
     ]) {
       const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
       const marker = '-- Down Migration';

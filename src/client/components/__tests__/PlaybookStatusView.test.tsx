@@ -49,6 +49,7 @@ function step(overrides: Partial<PlaybookStepRun> & { stepId: string }): Playboo
 const SUMMARY = {
   runId: 'run-1',
   project: PROJECT,
+  definitionId: 'def-1',
   definitionName: 'Demo A — Ask, Approve, Notify',
   definitionVersionId: 'ver-1',
   versionNumber: 3,

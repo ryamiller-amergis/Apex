@@ -34,6 +34,7 @@ type RunRow = typeof playbookRuns.$inferSelect & {
   definitionVersion: {
     id: string;
     versionNumber: number;
+    definitionId: string;
     definition: { name: string };
   };
   steps?: Array<Record<string, unknown>>;
@@ -43,6 +44,7 @@ function toSummary(run: RunRow): PlaybookRunSummary {
   return {
     runId: run.id,
     project: run.project,
+    definitionId: run.definitionVersion.definitionId,
     definitionName: run.definitionVersion.definition.name,
     definitionVersionId: run.definitionVersion.id,
     versionNumber: run.definitionVersion.versionNumber,
@@ -113,7 +115,7 @@ export async function listRuns(
     limit,
     with: {
       definitionVersion: {
-        columns: { id: true, versionNumber: true },
+        columns: { id: true, versionNumber: true, definitionId: true },
         with: { definition: { columns: { name: true } } },
       },
     },
@@ -143,7 +145,7 @@ export async function getRun(project: string, runId: string): Promise<PlaybookRu
     where: and(eq(playbookRuns.id, runId), eq(playbookRuns.project, project)),
     with: {
       definitionVersion: {
-        columns: { id: true, versionNumber: true },
+        columns: { id: true, versionNumber: true, definitionId: true },
         with: { definition: { columns: { name: true } } },
       },
       steps: true,
