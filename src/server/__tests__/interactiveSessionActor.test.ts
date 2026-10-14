@@ -1509,6 +1509,62 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     });
   }, 15_000);
 
+  it('keeps the answer but drops an Agent whose run never stopped', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const acquireDurableAgent = jest
+      .fn()
+      .mockImplementationOnce(async (_b, checkout) => ({
+        mode: 'recreated' as const,
+        handle: makeAgentHandle({
+          tokens: ['First answer'],
+          agentId: 'agent-unsettled',
+          waitGate: new Promise<void>(() => {}),
+          workspaceRef: checkout.workspacePath,
+        }),
+      }))
+      .mockImplementationOnce(async (_b, checkout) => ({
+        mode: 'recreated' as const,
+        handle: makeAgentHandle({
+          tokens: ['Second answer'],
+          agentId: 'agent-new',
+          workspaceRef: checkout.workspacePath,
+        }),
+      }));
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(),
+      acquireDurableAgent,
+      materializeWorkspace: async (_b, destination) => ({ workspacePath: destination }),
+      uploadAttemptArtifacts: async () => ({ container: 'artifacts', key: 'manifest.json' }),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+    });
+
+    const first = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap(),
+    });
+    expect(first).toEqual({ status: 'completed', cursorAgentId: null });
+    expect(posted.find((b) => b.kind === 'terminal')).toMatchObject({
+      status: 'completed',
+      cursorAgentId: null,
+    });
+
+    const next = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        attemptId: '20000000-0000-4000-8000-000000000011',
+        dispatchMessageId: 'dispatch-durable-4',
+        cursorAgentId: 'agent-unsettled',
+      }),
+    });
+    expect(next.status).toBe('completed');
+    expect(acquireDurableAgent).toHaveBeenCalledTimes(2);
+    expect(acquireDurableAgent.mock.calls[1][2]).toEqual({ resumeAgentId: null });
+  }, 25_000);
+
   it('recreates instead of resuming an Agent whose turn went silent', async () => {
     const silentRun: WorkerCursorExecutionRun = {
       supports: (capability: string) =>

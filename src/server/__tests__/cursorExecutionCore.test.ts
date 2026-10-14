@@ -425,6 +425,7 @@ describe('cursor execution core stream closed before turn end', () => {
     });
 
     expect(result.completedOnTurnEnd).toBe(true);
+    expect(result.runLeftUnsettled).toBe(true);
     expect(result.text).toBe('Partial answer');
     expect(cancel).toHaveBeenCalledTimes(1);
   });

@@ -1487,6 +1487,21 @@ export function createInteractiveSessionActor(
           );
         }
 
+        // A run that may still be live must not be warmed or resumed next turn.
+        const reusableAgentId = result.runLeftUnsettled
+          ? null
+          : agentHandle.agentId ?? null;
+        if (result.runLeftUnsettled) {
+          if (agentHandle.agentId) {
+            unresumableAgentIds.add(agentHandle.agentId);
+            agentIdByThread.delete(threadId);
+          }
+          logInteractiveAgentStep('InteractiveRunLeftUnsettled', {
+            runId,
+            threadId,
+          });
+        }
+
         await post({
           dispatchMessageId,
           attemptId,
@@ -1494,8 +1509,15 @@ export function createInteractiveSessionActor(
           status: 'completed',
           artifactsFlushed: true,
           artifactManifestRef,
-          cursorAgentId: agentHandle.agentId ?? null,
+          cursorAgentId: reusableAgentId,
         });
+
+        if (result.runLeftUnsettled) {
+          if (agentCache.get(threadId)?.handle === agentHandle) {
+            await disposeAgentEntry(threadId);
+          }
+          return { status: 'completed', cursorAgentId: null };
+        }
 
         agentCache.set(threadId, {
           handle: agentHandle,

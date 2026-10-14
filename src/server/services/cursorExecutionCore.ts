@@ -523,6 +523,11 @@ export interface CursorExecutionResult {
   text: string;
   waitResult: CursorExecutionWaitResult;
   completedOnTurnEnd?: boolean;
+  /**
+   * The turn completed but neither cancel() nor wait() settled, so the run
+   * may still be live on Cursor's side.
+   */
+  runLeftUnsettled?: boolean;
   terminalStatusMessage?: string;
   /**
    * Real token counts from the runtime, covering the full prompt the model saw
@@ -559,6 +564,7 @@ export async function executeCursorExecutionCore(
   let anonymousToolUseCount = 0;
   let streamedUsage: CursorTokenUsage | undefined;
   let completedOnTurnEnd = false;
+  let runLeftUnsettled = false;
   let turnEndWait: Promise<CursorExecutionWaitResult> | null = null;
   let terminalStatusMessage: string | undefined;
   const identicalToolCallCounts = new Map<string, number>();
@@ -630,6 +636,7 @@ export async function executeCursorExecutionCore(
           }
           if (!(await settlesWithin(turnEndWait, turnEndSettleMs))) {
             turnEndWait = Promise.resolve({ status: 'cancelled' });
+            runLeftUnsettled = true;
           }
         } else if (!settled && run.cancel && run.supports('cancel')) {
           try {
@@ -803,6 +810,7 @@ export async function executeCursorExecutionCore(
     text: textBuffer,
     waitResult,
     completedOnTurnEnd,
+    ...(runLeftUnsettled ? { runLeftUnsettled } : {}),
     terminalStatusMessage,
     // `wait()` reports cumulative usage for the whole run; the summed stream
     // events are the fallback for runtimes that only emit per-turn events.
