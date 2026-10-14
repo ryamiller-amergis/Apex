@@ -734,7 +734,7 @@ describe('ExistingInterviewView — read-only viewer', () => {
     });
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
-      can: jest.fn((permission: string) => permission === 'interviews:manage'),
+      can: jest.fn((permission: string) => permission === 'interviews:view' || permission === 'interviews:manage'),
       userId: 'viewer-2',
       isAdmin: false,
     });
@@ -743,7 +743,7 @@ describe('ExistingInterviewView — read-only viewer', () => {
     expect(screen.getByText(/viewing another user's interview \(read-only\)/i)).toBeInTheDocument();
   });
 
-  it('lets a project admin answer another user’s interview', () => {
+  it('lets a project admin answer another author\'s interview', () => {
     (useInterview as jest.Mock).mockReturnValue({
       data: makeInterview({ authorId: 'author-1', status: 'in_progress' }),
       isLoading: false,
@@ -751,16 +751,17 @@ describe('ExistingInterviewView — read-only viewer', () => {
     });
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
-      can: jest.fn((permission: string) =>
-        permission === 'interviews:manage' || permission === 'admin:roles'),
+      can: jest.fn((permission: string) => (
+        permission === 'admin:roles'
+        || permission === 'interviews:view'
+        || permission === 'interviews:manage'
+      )),
       userId: 'project-admin-1',
       isAdmin: false,
     });
-
     renderExistingInterview();
-
-    expect(screen.getByPlaceholderText(/Continue the interview/i)).toBeEnabled();
     expect(screen.queryByText(/viewing another user's interview \(read-only\)/i)).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Continue the interview/i)).toBeEnabled();
   });
 });
 

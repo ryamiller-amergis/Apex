@@ -1708,14 +1708,14 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             canAssign: canAssignPhases,
             pending: updatePhaseAssignments.isPending,
             error: updatePhaseAssignments.error?.message,
-            onAssign: (phase, userId) => {
+            onAssign: (phase, assignedUserId) => {
               updatePhaseAssignments.mutate({
                 id: interview.id,
                 phaseAssignments: phase === 'discovery'
-                  ? { discoveryAssigneeId: userId || null }
+                  ? { discoveryAssigneeId: assignedUserId || null }
                   : phase === 'delivery'
-                    ? { deliveryAssigneeId: userId || null }
-                    : { technicalAssigneeId: userId || null },
+                    ? { deliveryAssigneeId: assignedUserId || null }
+                    : { technicalAssigneeId: assignedUserId || null },
               });
             },
           }}
