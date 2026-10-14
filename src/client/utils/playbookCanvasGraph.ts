@@ -19,6 +19,7 @@ export type PlaybookFlowEdge = {
   id: string;
   source: string;
   target: string;
+  data?: { condition?: string };
 };
 
 const NODE_TYPE = 'playbookStep';
@@ -46,6 +47,7 @@ export function graphToFlow(
     id: `edge-${edge.from}-${edge.to}-${index}`,
     source: edge.from,
     target: edge.to,
+    ...(edge.condition ? { data: { condition: edge.condition } } : {}),
   }));
 
   return { nodes, edges };
@@ -61,8 +63,52 @@ export function flowToGraph(
       stepType: node.data.stepType,
       ...(Object.keys(node.data.config).length ? { config: node.data.config } : {}),
     })),
-    edges: edges.map((edge) => ({ from: edge.source, to: edge.target })),
+    edges: edges.map((edge) => {
+      const source = nodes.find((node) => node.id === edge.source);
+      const condition = continuationCondition(source?.data, edge.target, edge.data?.condition);
+      return {
+        from: edge.source,
+        to: edge.target,
+        ...(condition ? { condition } : {}),
+      };
+    }),
   };
+}
+
+/**
+ * Branch validation requires each outbound edge's `condition` to equal `whenTrue` or `whenFalse`.
+ * The picker stores those as the target step id, so the edge condition is that same id.
+ */
+function continuationCondition(
+  data: PlaybookFlowNodeData | undefined,
+  target: string,
+  existing: string | undefined,
+): string | undefined {
+  if (data?.stepType === 'branch') {
+    if (data.config.whenTrue === target) return String(data.config.whenTrue);
+    if (data.config.whenFalse === target) return String(data.config.whenFalse);
+    return undefined;
+  }
+  return existing;
+}
+
+/** Make a branch step's chosen targets real outbound edges with those continuation names. */
+export function syncBranchEdges(graph: PlaybookGraph): PlaybookGraph {
+  const edges = graph.edges.filter((edge) => {
+    const source = graph.nodes.find((node) => node.id === edge.from);
+    return source?.stepType !== 'branch';
+  });
+  for (const node of graph.nodes) {
+    if (node.stepType !== 'branch') continue;
+    const seen = new Set<string>();
+    for (const key of ['whenTrue', 'whenFalse'] as const) {
+      const target = node.config?.[key];
+      if (typeof target !== 'string' || !target || seen.has(target)) continue;
+      seen.add(target);
+      edges.push({ from: node.id, to: target, condition: target });
+    }
+  }
+  return { ...graph, edges };
 }
 
 export function positionsFromNodes(nodes: PlaybookFlowNode[]): PlaybookLayoutPositions {

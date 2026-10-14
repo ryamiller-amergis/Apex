@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   PlaybookDryRunResult,
   PlaybookGraph,
@@ -79,6 +79,7 @@ export function useSavePlaybookLayout(
   definitionId: string,
   versionId: string,
 ) {
+  const queryClient = useQueryClient();
   return useMutation<PlaybookVersionLayout, PlaybookApiError, PlaybookLayoutPositions>({
     mutationFn: (positions) =>
       apiRequest(
@@ -89,6 +90,12 @@ export function useSavePlaybookLayout(
           body: JSON.stringify({ project, positions }),
         },
       ),
+    onSuccess: (layout) => {
+      queryClient.setQueryData(
+        ['playbook-version-layout', project, definitionId, versionId],
+        layout,
+      );
+    },
   });
 }
 

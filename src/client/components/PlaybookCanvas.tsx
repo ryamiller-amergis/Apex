@@ -24,11 +24,31 @@ import {
   graphToFlow,
   newPlaybookNodeId,
   positionsFromNodes,
+  type PlaybookFlowEdge,
+  type PlaybookFlowNode,
   type PlaybookFlowNodeData,
 } from '../utils/playbookCanvasGraph';
 import { nodeSubtitle, nodeSummary, stepMeta } from './playbookStepCatalog';
 import { stepStatusLabel } from './playbookStatusFormat';
 import styles from './PlaybookCanvas.module.css';
+
+function asFlowNodes(nodes: Node<PlaybookFlowNodeData>[]): PlaybookFlowNode[] {
+  return nodes.map((node) => ({
+    id: node.id,
+    type: node.type ?? 'playbookStep',
+    position: node.position,
+    data: node.data,
+  }));
+}
+
+function asFlowEdges(edges: Edge[]): PlaybookFlowEdge[] {
+  return edges.map((edge) => ({
+    id: edge.id,
+    source: edge.source,
+    target: edge.target,
+    data: edge.data as PlaybookFlowEdge['data'],
+  }));
+}
 
 function decorateEdges<T extends Edge>(edges: T[]): T[] {
   return edges.map((edge) => ({
@@ -107,11 +127,36 @@ function PlaybookCanvasInner({
   const [edges, setEdges, onEdgesChange] = useEdgesState(decorateEdges(initial.edges));
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const graphRevision = useRef('');
+  const overlayRevision = useRef('');
+  const nodesRef = useRef(nodes);
+  const edgesRef = useRef(edges);
+  useEffect(() => {
+    nodesRef.current = nodes;
+    edgesRef.current = edges;
+  }, [nodes, edges]);
 
   useEffect(() => {
     const revision = JSON.stringify({ graph, positions, selectedNodeId });
-    if (revision === graphRevision.current) return;
+    const overlay = JSON.stringify({ readOnly, stepStatusByNodeId: stepStatusByNodeId ?? null });
+    // Status arrives on its own. Rebuilding the nodes from props would drop a drag still in progress.
+    if (revision === graphRevision.current) {
+      if (overlay === overlayRevision.current) return;
+      overlayRevision.current = overlay;
+      setNodes((current) =>
+        current.map((node) => ({
+          ...node,
+          selected: node.id === selectedNodeId,
+          data: {
+            ...node.data,
+            readOnly,
+            runStatus: stepStatusByNodeId?.[node.id],
+          },
+        })),
+      );
+      return;
+    }
     graphRevision.current = revision;
+    overlayRevision.current = overlay;
     const next = graphToFlow(graph, positions, stepLabels);
     setNodes(
       next.nodes.map((node) => ({
@@ -129,15 +174,7 @@ function PlaybookCanvasInner({
 
   const syncGraph = useCallback(
     (nextNodes: typeof nodes, nextEdges: typeof edges) => {
-      const nextGraph = flowToGraph(
-        nextNodes.map((n) => ({
-          id: n.id,
-          type: n.type ?? 'playbookStep',
-          position: n.position,
-          data: n.data,
-        })),
-        nextEdges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
-      );
+      const nextGraph = flowToGraph(asFlowNodes(nextNodes), asFlowEdges(nextEdges));
       onGraphChange?.(nextGraph);
       onPositionsChange?.(positionsFromNodes(
         nextNodes.map((n) => ({
@@ -154,18 +191,11 @@ function PlaybookCanvasInner({
   const onConnect = useCallback(
     async (connection: Connection) => {
       if (readOnly || !connection.source || !connection.target) return;
+      const source = connection.source;
+      const target = connection.target;
       setConnectionError(null);
-      const nextEdges = decorateEdges(addEdge(connection, edges));
-      const nextNodes = nodes;
-      const candidate = flowToGraph(
-        nextNodes.map((n) => ({
-          id: n.id,
-          type: n.type ?? 'playbookStep',
-          position: n.position,
-          data: n.data,
-        })),
-        nextEdges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
-      );
+      const candidateEdges = decorateEdges(addEdge(connection, edgesRef.current));
+      const candidate = flowToGraph(asFlowNodes(nodesRef.current), asFlowEdges(candidateEdges));
       if (onValidateConnection) {
         try {
           await onValidateConnection(candidate);
@@ -174,24 +204,24 @@ function PlaybookCanvasInner({
           return;
         }
       }
+      // Validation awaited a server round trip. Apply the edge onto whatever the canvas is now,
+      // so a drop or delete during that wait is not replaced by the pre-request snapshot.
+      const latestNodes = nodesRef.current;
+      const latestEdges = edgesRef.current;
+      if (!latestNodes.some((node) => node.id === source) || !latestNodes.some((node) => node.id === target)) {
+        return;
+      }
+      const alreadyConnected = latestEdges.some((edge) => edge.source === source && edge.target === target);
+      const nextEdges = alreadyConnected ? latestEdges : decorateEdges(addEdge(connection, latestEdges));
       setEdges(nextEdges);
-      syncGraph(nextNodes, nextEdges);
+      syncGraph(latestNodes, nextEdges);
     },
-    [readOnly, edges, nodes, onValidateConnection, setEdges, syncGraph],
+    [readOnly, onValidateConnection, setEdges, syncGraph],
   );
 
-  const onNodeDragStop = useCallback(() => {
-    onPositionsChange?.(
-      positionsFromNodes(
-        nodes.map((n) => ({
-          id: n.id,
-          type: n.type ?? 'playbookStep',
-          position: n.position,
-          data: n.data,
-        })),
-      ),
-    );
-  }, [nodes, onPositionsChange]);
+  const onNodeDragStop = useCallback((_event: unknown, _node: Node, dragged: Node[]) => {
+    onPositionsChange?.(positionsFromNodes(asFlowNodes(dragged as Node<PlaybookFlowNodeData>[])));
+  }, [onPositionsChange]);
 
   const onDrop = useCallback(
     (event: React.DragEvent) => {

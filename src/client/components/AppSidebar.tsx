@@ -50,6 +50,9 @@ interface AppSidebarProps {
   workBoardEnabled?: boolean;
   onNavigateLoadTests?: () => void;
   onNavigateDiagrams?: () => void;
+  onNavigatePlaybooks?: () => void;
+  /** Playbooks stays hidden until the production-adapters flag is on for the project. */
+  playbooksEnabled?: boolean;
   onNavigateAdmin: () => void;
 }
 
@@ -160,6 +163,15 @@ const IconLoadTests: React.FC = () => (
   </svg>
 );
 
+const IconPlaybooks: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="4" cy="10" r="1.6" />
+    <circle cx="10" cy="10" r="1.6" />
+    <circle cx="16" cy="10" r="1.6" />
+    <path d="M5.6 10h2.8M11.6 10h2.8" />
+  </svg>
+);
+
 const IconDiagrams: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <rect x="3" y="4" width="14" height="12" rx="2" />
@@ -220,6 +232,8 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   workBoardEnabled = true,
   onNavigateLoadTests,
   onNavigateDiagrams,
+  onNavigatePlaybooks,
+  playbooksEnabled = false,
   onNavigateAdmin,
 }) => {
   const { isMobile } = useBreakpoint();
@@ -262,6 +276,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         { label: 'UI Lab', view: 'ui-lab', icon: <IconUiLab />, permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
         { label: 'PDF Assembly Tool', view: 'pdf-tools', icon: <IconPdfTools />, permission: 'pdf-assembly:use', onNavigate: onNavigatePdfTools ?? (() => {}) },
         { label: 'Load Tests', view: 'load-tests', icon: <IconLoadTests />, permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}), testId: 'nav-load-tests' },
+        { label: 'Playbooks', view: 'playbooks', icon: <IconPlaybooks />, permission: 'playbooks:view', onNavigate: onNavigatePlaybooks ?? (() => {}) },
         { label: 'Apex Backlog', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
         { label: 'Work Board', view: 'work-board', icon: <IconWorkBoard />, permission: 'work-board:view', onNavigate: onNavigateWorkBoard ?? (() => {}) },
       ],
@@ -286,6 +301,11 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       if (!workBoardEnabled) return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('work-board')) return false;
       return isSuperAdmin || can('work-board:view');
+    }
+    if (item.view === 'playbooks') {
+      if (!playbooksEnabled) return false;
+      if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;
+      return isSuperAdmin || can('playbooks:view');
     }
     if (item.view === 'pdf-tools') {
       if (!isSuperAdmin && !menuEnabledViews.includes('pdf-tools')) return false;

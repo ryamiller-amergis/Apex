@@ -201,6 +201,20 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
   return false;
 }
 
+/**
+ * Query, body, and `x-apex-project` must name one project. Permission checks use the first of
+ * those that is present, so a second, different value would run the handler in another project.
+ */
+function requestProjectsDisagree(req: Request): boolean {
+  const resolved = resolveRequestProject(req);
+  const named = [
+    req.query?.project,
+    (req.body as { project?: unknown } | undefined)?.project,
+    req.get?.('x-apex-project') ?? req.headers?.['x-apex-project'],
+  ];
+  return named.some((value) => typeof value === 'string' && value.length > 0 && value !== resolved);
+}
+
 /** Reject project-scoped requests that do not name a project. */
 const requirePlaybooksProject: express.RequestHandler = async (req, res, next) => {
   try {
@@ -641,11 +655,12 @@ router.post(
   '/definitions/:definitionId/dry-run',
   requirePermission('playbooks:author'),
   async (req: Request, res: Response): Promise<void> => {
-    const { project, stubs } = (req.body ?? {}) as RequestBody;
-    if (!isNonBlankString(project)) {
-      res.status(400).json({ error: 'project is required' });
+    if (requestProjectsDisagree(req)) {
+      res.status(400).json({ error: 'project does not match the request project' });
       return;
     }
+    const project = resolveRequestProject(req)!;
+    const { stubs } = (req.body ?? {}) as RequestBody;
     const stubMap =
       stubs && typeof stubs === 'object' && !Array.isArray(stubs)
         ? (stubs as Record<string, unknown>)
@@ -722,11 +737,12 @@ router.put(
   '/definitions/:definitionId/versions/:versionId/layout',
   requirePermission('playbooks:author'),
   async (req: Request, res: Response): Promise<void> => {
-    const { project, positions } = (req.body ?? {}) as RequestBody;
-    if (!isNonBlankString(project)) {
-      res.status(400).json({ error: 'project is required' });
+    if (requestProjectsDisagree(req)) {
+      res.status(400).json({ error: 'project does not match the request project' });
       return;
     }
+    const project = resolveRequestProject(req)!;
+    const { positions } = (req.body ?? {}) as RequestBody;
     if (
       !positions ||
       typeof positions !== 'object' ||

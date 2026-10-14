@@ -17,7 +17,7 @@ import {
   useValidatePlaybookConnection,
 } from '../hooks/usePlaybookCanvas';
 import { layoutPlaybookGraph, positionsOverlap } from '../utils/playbookCanvasLayout';
-import { newPlaybookNodeId } from '../utils/playbookCanvasGraph';
+import { newPlaybookNodeId, syncBranchEdges } from '../utils/playbookCanvasGraph';
 import { PlaybookCanvas } from './PlaybookCanvas';
 import { PlaybookDryRunPanel } from './PlaybookDryRunPanel';
 import { PlaybookStepInspector } from './PlaybookStepInspector';
@@ -76,7 +76,12 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
   );
   const savedRevision = useRef('');
   const graphRef = useRef(graph);
-  graphRef.current = graph;
+  const layoutDirtyRef = useRef(layoutDirty);
+  const appliedLayout = useRef<string | null>(null);
+  useEffect(() => {
+    graphRef.current = graph;
+    layoutDirtyRef.current = layoutDirty;
+  }, [graph, layoutDirty]);
 
   // Re-read the server draft only when it changed underneath us; our own saves record their
   // revision first, so the refetch that follows a save does not overwrite edits made since.
@@ -88,23 +93,31 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
     setSavedGraphJson(JSON.stringify(draft.graph));
   }, [detail.data?.draft]);
 
-  // A layout saved before nodes grew to their current size can stack them; lay those out again.
+  // Apply a server layout once per saved revision. A draft save changes the graph identity while
+  // the layout query can still be the previous map; reapplying that map would undo a drag.
   const savedPositions = layoutQuery.data?.positions;
+  const layoutUpdatedAt = layoutQuery.data?.updatedAt ?? '';
   const draftGraph = detail.data?.draft.graph;
   useEffect(() => {
-    if (!savedPositions || !draftGraph) return undefined;
+    if (!savedPositions || !draftGraph || layoutDirty) return undefined;
     if (!positionsOverlap(savedPositions)) {
+      if (appliedLayout.current === layoutUpdatedAt) return undefined;
+      appliedLayout.current = layoutUpdatedAt;
       setPositions(savedPositions);
       return undefined;
     }
+    if (appliedLayout.current === `tidy:${layoutUpdatedAt}`) return undefined;
     let cancelled = false;
     void layoutPlaybookGraph(draftGraph).then((next) => {
-      if (!cancelled) setPositions(next);
+      if (cancelled || layoutDirtyRef.current) return;
+      appliedLayout.current = `tidy:${layoutUpdatedAt}`;
+      setPositions(next);
+      setLayoutDirty(true);
     });
     return () => {
       cancelled = true;
     };
-  }, [savedPositions, draftGraph]);
+  }, [savedPositions, draftGraph, layoutUpdatedAt, layoutDirty]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -184,7 +197,7 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
 
   const updateNodeConfig = (config: Record<string, unknown>) => {
     if (!selectedNodeId) return;
-    setGraph((current) => ({
+    setGraph((current) => syncBranchEdges({
       ...current,
       nodes: current.nodes.map((node) => {
         if (node.id !== selectedNodeId) return node;

@@ -11,7 +11,9 @@ const RECONNECT_DELAY_MS = 3_000;
 type RunCallback = (payload: { runId: string }) => void;
 
 const subscribersByRun = new Map<string, Set<RunCallback>>();
+const releasedClients = new WeakSet<PoolClient>();
 let listenClient: PoolClient | null = null;
+let starting: Promise<void> | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let shutdownRequested = false;
 
@@ -23,33 +25,62 @@ function dispatch(runId: string): void {
   }
 }
 
+function scheduleReconnect(): void {
+  if (shutdownRequested || reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    void ensurePlaybookRunNotifyListener();
+  }, RECONNECT_DELAY_MS);
+}
+
+/** Return a checked-out client to the pool exactly once, including after a failed LISTEN. */
+function releaseListenClient(client: PoolClient): void {
+  if (releasedClients.has(client)) return;
+  releasedClients.add(client);
+  if (listenClient === client) listenClient = null;
+  client.removeAllListeners('error');
+  client.removeAllListeners('notification');
+  client.release();
+}
+
 async function startListening(): Promise<void> {
   if (listenClient || shutdownRequested) return;
   const client = await pool.connect();
-  listenClient = client;
-  client.on('error', () => {
-    listenClient = null;
-    if (!shutdownRequested && !reconnectTimer) {
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = null;
-        void startListening();
-      }, RECONNECT_DELAY_MS);
+  try {
+    client.on('error', () => {
+      releaseListenClient(client);
+      scheduleReconnect();
+    });
+    client.on('notification', (message) => {
+      if (message.channel !== CHANNEL || !message.payload) return;
+      try {
+        const parsed = JSON.parse(message.payload) as { runId?: string };
+        if (parsed.runId) dispatch(parsed.runId);
+      } catch {
+        // ignore malformed payloads
+      }
+    });
+    await client.query(`LISTEN ${CHANNEL}`);
+    if (shutdownRequested) {
+      await client.query(`UNLISTEN ${CHANNEL}`).catch(() => undefined);
+      releaseListenClient(client);
+      return;
     }
-  });
-  client.on('notification', (message) => {
-    if (message.channel !== CHANNEL || !message.payload) return;
-    try {
-      const parsed = JSON.parse(message.payload) as { runId?: string };
-      if (parsed.runId) dispatch(parsed.runId);
-    } catch {
-      // ignore malformed payloads
-    }
-  });
-  await client.query(`LISTEN ${CHANNEL}`);
+    listenClient = client;
+  } catch (error) {
+    releaseListenClient(client);
+    throw error;
+  }
 }
 
 export async function ensurePlaybookRunNotifyListener(): Promise<void> {
-  await startListening();
+  if (listenClient || shutdownRequested) return;
+  if (!starting) {
+    starting = startListening().finally(() => {
+      starting = null;
+    });
+  }
+  await starting;
 }
 
 export async function notifyPlaybookRunChanged(runId: string): Promise<void> {
@@ -76,9 +107,9 @@ export function subscribePlaybookRunEvents(
 export async function shutdownPlaybookRunNotify(): Promise<void> {
   shutdownRequested = true;
   if (reconnectTimer) clearTimeout(reconnectTimer);
-  if (listenClient) {
-    await listenClient.query(`UNLISTEN ${CHANNEL}`);
-    listenClient.release();
-    listenClient = null;
-  }
+  reconnectTimer = null;
+  const client = listenClient;
+  if (!client) return;
+  await client.query(`UNLISTEN ${CHANNEL}`).catch(() => undefined);
+  releaseListenClient(client);
 }
