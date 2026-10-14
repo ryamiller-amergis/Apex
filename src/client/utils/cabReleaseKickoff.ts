@@ -26,12 +26,12 @@ export function normalizeReleaseBranch(value: string): string {
   return `Release/${trimmed}`;
 }
 
-export function defaultPreviousReleaseBranch(sortedVersions: string[], targetVersion: string): string {
-  const index = sortedVersions.findIndex((version) => version === targetVersion);
-  if (index > 0) return normalizeReleaseBranch(sortedVersions[index - 1]);
-  if (sortedVersions.length > 0 && sortedVersions[0] !== targetVersion) {
-    return normalizeReleaseBranch(sortedVersions[sortedVersions.length - 1]);
-  }
+export function defaultPreviousReleaseBranch(versions: string[], targetVersion: string): string {
+  const ordered = [...versions].sort((left, right) =>
+    left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' }),
+  );
+  const index = ordered.findIndex((version) => version === targetVersion);
+  if (index > 0) return normalizeReleaseBranch(ordered[index - 1]);
   return '';
 }
 

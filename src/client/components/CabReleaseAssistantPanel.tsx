@@ -54,7 +54,7 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
 
   const startChat = useStartChat();
   const { data: skillConfig } = useProjectSkillConfig(project);
-  const session = useAgentChatSession(threadId, { enablePreparationState: true });
+  const session = useAgentChatSession(threadId);
 
   useEffect(() => {
     if (open) return;
@@ -107,7 +107,7 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
   const sendKickoff = session.send;
 
   useEffect(() => {
-    if (!threadId || kickoffSentRef.current) return;
+    if (!threadId || kickoffSentRef.current || session.isPreparing) return;
     kickoffSentRef.current = true;
     const text = buildCabReleaseKickoffMessage({
       targetVersion,
@@ -129,6 +129,7 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
     snowMode,
     cutReleaseBranch,
     sendKickoff,
+    session.isPreparing,
   ]);
 
   const handleResizeMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {

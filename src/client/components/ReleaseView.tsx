@@ -1031,18 +1031,16 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
     values: CreateCabRequestFormValues,
   ) => {
     let relatedIds = (childItems.get(epic.id) ?? []).map((item) => item.id);
-    if (relatedIds.length === 0) {
-      try {
-        const response = await fetch(
-          `/api/releases/${epic.id}/related-items?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`,
-        );
-        if (response.ok) {
-          const children = await response.json() as WorkItem[];
-          relatedIds = children.map((item) => item.id);
-        }
-      } catch {
-        relatedIds = [];
+    try {
+      const response = await fetch(
+        `/api/releases/${epic.id}/related-items?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`,
+      );
+      if (response.ok) {
+        const children = await response.json() as WorkItem[];
+        relatedIds = children.map((item) => item.id);
       }
+    } catch {
+      // Keep the expanded-row cache when the refresh fails.
     }
 
     setCabPanel({

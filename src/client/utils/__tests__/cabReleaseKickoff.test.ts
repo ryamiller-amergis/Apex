@@ -25,6 +25,12 @@ describe('defaultPreviousReleaseBranch', () => {
     ).toBe('Release/2026.12.0');
   });
 
+  it('ignores the table sort and still picks the prior version', () => {
+    expect(
+      defaultPreviousReleaseBranch(['2026.13.0', '2026.11.0.1', '2026.12.0'], '2026.13.0'),
+    ).toBe('Release/2026.12.0');
+  });
+
   it('returns empty when the target is the only version', () => {
     expect(defaultPreviousReleaseBranch(['2026.13.0'], '2026.13.0')).toBe('');
   });
