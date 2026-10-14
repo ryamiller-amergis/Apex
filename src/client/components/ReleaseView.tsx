@@ -188,6 +188,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
   const [showReport, setShowReport] = useState(false);
   const [cabModalEpic, setCabModalEpic] = useState<{ id: number; version: string } | null>(null);
   const [cabPanel, setCabPanel] = useState<{
+    requestId: number;
     epicId: number;
     version: string;
     relatedWorkItemIds: number[];
@@ -195,6 +196,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
     snowMode: CreateCabRequestFormValues['snowMode'];
     cutReleaseBranch: boolean;
   } | null>(null);
+  const cabRequestGenerationRef = useRef(0);
 
   // Inline rename state
   const [inlineEditEpicId, setInlineEditEpicId] = useState<number | null>(null);
@@ -1030,6 +1032,8 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
     epic: { id: number; version: string },
     values: CreateCabRequestFormValues,
   ) => {
+    const requestId = cabRequestGenerationRef.current + 1;
+    cabRequestGenerationRef.current = requestId;
     let relatedIds = (childItems.get(epic.id) ?? []).map((item) => item.id);
     try {
       const response = await fetch(
@@ -1043,7 +1047,10 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
       // Keep the expanded-row cache when the refresh fails.
     }
 
+    if (cabRequestGenerationRef.current !== requestId) return;
+
     setCabPanel({
+      requestId,
       epicId: epic.id,
       version: epic.version,
       relatedWorkItemIds: relatedIds,
@@ -1053,6 +1060,11 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
     });
     setCabModalEpic(null);
   }, [areaPath, childItems, project]);
+
+  const dismissCabModal = useCallback(() => {
+    cabRequestGenerationRef.current += 1;
+    setCabModalEpic(null);
+  }, []);
 
   const healthStatus = getHealthStatus();
   const completionPercentage = calculateCompletionPercentage();
@@ -2036,13 +2048,14 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
             sortedEpics.map((epic) => epic.version as string),
             cabModalEpic.version,
           )}
-          onCancel={() => setCabModalEpic(null)}
+          onCancel={dismissCabModal}
           onConfirm={(values) => { void handleConfirmCabRequest(cabModalEpic, values); }}
         />
       )}
 
       {cabPanel && (
         <CabReleaseAssistantPanel
+          key={cabPanel.requestId}
           {...{ 'data-testid': 'cab-release-assistant-panel' }}
           open
           onClose={() => setCabPanel(null)}

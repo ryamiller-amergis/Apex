@@ -117,4 +117,41 @@ describe('ReleaseView - Create CAB request', () => {
       expect(screen.getByTestId('cab-release-assistant-panel')).toHaveTextContent('CAB 2026.13.0');
     });
   });
+
+  it('does not start the panel when confirm is cancelled before related items return', async () => {
+    const user = userEvent.setup();
+    let releaseRelated: (() => void) | undefined;
+    (global.fetch as jest.Mock).mockImplementation((input: unknown) => {
+      const url = String(input);
+      if (url.startsWith('/api/releases/epics')) return okResponse(mockEpics);
+      if (url.includes('/related-items')) {
+        return new Promise((resolve) => {
+          releaseRelated = () => resolve({
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+            json: async () => [{ id: 53247, title: 'Item' }],
+          });
+        });
+      }
+      return okResponse([]);
+    });
+
+    render(
+      <ReleaseView workItems={[]} project="MaxView" areaPath="MaxView" />,
+      { wrapper: createWrapper() },
+    );
+
+    const menus = await screen.findAllByTitle('Actions');
+    await user.click(menus[1]);
+    await user.click(screen.getByTestId('release-create-cab-101'));
+    await user.click(screen.getByTestId('create-cab-confirm'));
+    await user.click(screen.getByTestId('create-cab-cancel'));
+    releaseRelated?.();
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('create-cab-request-modal')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('cab-release-assistant-panel')).not.toBeInTheDocument();
+  });
 });

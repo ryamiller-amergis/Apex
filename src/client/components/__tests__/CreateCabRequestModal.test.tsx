@@ -56,4 +56,15 @@ describe('CreateCabRequestModal', () => {
     expect(onCancel).toHaveBeenCalled();
     expect(onConfirm).not.toHaveBeenCalled();
   });
+
+  it('rejects a whitespace-only previous branch', async () => {
+    const user = userEvent.setup();
+    renderModal();
+    const input = screen.getByTestId('create-cab-previous-branch');
+    await user.clear(input);
+    await user.type(input, '   ');
+    await user.click(screen.getByTestId('create-cab-confirm'));
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(screen.getByText('Previous shipped release branch is required')).toBeInTheDocument();
+  });
 });
