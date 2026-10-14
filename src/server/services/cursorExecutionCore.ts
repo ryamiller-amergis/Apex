@@ -622,7 +622,16 @@ export async function executeCursorExecutionCore(
         // only cancel a run that does not settle on its own after turn end.
         turnEndWait = streamEnd.wait ?? run.wait();
         const settled = await settlesWithin(turnEndWait, turnEndSettleMs);
-        if (!settled && run.cancel && run.supports('cancel')) {
+        if (!settled && input.failIfStreamEndsBeforeTurnEnd) {
+          // On a dropped connection neither cancel() nor wait() may ever
+          // settle; the turn already has its answer, so stop waiting on them.
+          if (run.cancel && run.supports('cancel')) {
+            await settlesWithin(run.cancel(), turnEndSettleMs);
+          }
+          if (!(await settlesWithin(turnEndWait, turnEndSettleMs))) {
+            turnEndWait = Promise.resolve({ status: 'cancelled' });
+          }
+        } else if (!settled && run.cancel && run.supports('cancel')) {
           try {
             await run.cancel();
           } catch {

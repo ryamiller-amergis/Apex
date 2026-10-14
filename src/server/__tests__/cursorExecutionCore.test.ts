@@ -403,6 +403,32 @@ describe('cursor execution core stream closed before turn end', () => {
     expect(wait).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps a late turn end answer when cancel() and wait() never settle', async () => {
+    const monitor = createCursorTurnEndMonitor();
+    const { run, cancel } = closedStreamRun(
+      jest.fn(() => new Promise<CursorExecutionWaitResult>(() => {})),
+    );
+    setTimeout(() => {
+      monitor.observe({ type: 'text-delta', text: 'Partial answer' });
+      monitor.observe({ type: 'turn-ended' });
+    }, 5);
+
+    const result = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-late-end-stuck', sourceInstance: 'closed-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+      turnEnd: monitor.completion,
+      turnEndSettleMs: 50,
+      failIfStreamEndsBeforeTurnEnd: true,
+    });
+
+    expect(result.completedOnTurnEnd).toBe(true);
+    expect(result.text).toBe('Partial answer');
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it('completes normally when wait() settles after the stream closes', async () => {
     const wait = jest.fn().mockResolvedValue({ status: 'finished' });
     const { run, cancel } = closedStreamRun(wait);
