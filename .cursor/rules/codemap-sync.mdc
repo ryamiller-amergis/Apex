@@ -1,0 +1,13 @@
+---
+description: Keep .cursor/CODEMAP.md in sync when repo structure, example files, or dev commands change
+alwaysApply: true
+---
+# Codemap sync
+
+Update `.cursor/CODEMAP.md` in the same change when you:
+- add, rename, move, or delete a top-level folder or a folder under `src/`
+- rename, move, or delete any file path listed in the codemap
+- change a test, lint, typecheck, or migration command it lists
+
+Keep entries to one line with full repo-relative paths. No file counts or line numbers.
+`scripts/ci/check-codemap-paths.mjs` (run by `npm run lint:check`) fails if a listed path no longer exists.

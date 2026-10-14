@@ -17,9 +17,11 @@ import {
 import type { ChatMessage } from '../../shared/types/chat';
 import type { ConflictedFile } from '../../shared/types/devWorkbench';
 import { parseAgentMessage, type ChoiceBlock } from '../utils/parseAgentMessage';
+import { formatChoiceAnswers } from '../utils/formatChoiceAnswers';
 import { parseAgentTodos } from '../utils/parseAgentTodos';
 import { AgentChecklist } from './AgentChecklist';
 import { AgentActivityTimeline } from './AgentActivityTimeline';
+import { LeftoverWorkList } from './LeftoverWorkList';
 import styles from './DevSessionView.module.css';
 
 function isActivityMsg(m: ChatMessage): boolean {
@@ -277,21 +279,7 @@ const AgentBubble: React.FC<{
 
   const handleSubmit = () => {
     if (!allAnswered || sent || !onSend) return;
-    const lines: string[] = [];
-    let qNum = 1;
-    for (const block of choiceBlocks) {
-      const s = selections[block.id];
-      if (!s) continue;
-      if (s.selected === 'other') {
-        lines.push(`Q${qNum}: ${s.freeform.trim()}`);
-      } else if (s.selected) {
-        const opt = block.options.find((o) => o.letter === s.selected);
-        lines.push(`Q${qNum}: ${s.selected.toUpperCase()} — ${opt?.text ?? s.selected}`);
-        if (s.freeform.trim()) lines.push(`  Additional notes: ${s.freeform.trim()}`);
-      }
-      qNum++;
-    }
-    onSend(lines.join('\n'));
+    onSend(formatChoiceAnswers(choiceBlocks, selections));
     setSent(true);
   };
 
@@ -1011,6 +999,13 @@ export const DevSessionView: React.FC = () => {
               sessionId={sessionId}
               branchPushed={session.branchPushed ?? false}
               existingPrUrl={session.prUrl}
+            />
+          )}
+
+          {sessionId && (
+            <LeftoverWorkList
+              sessionId={sessionId}
+              summary={session?.leftoverWork}
             />
           )}
 

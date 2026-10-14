@@ -637,7 +637,7 @@ describe('Foundation Skills Consumer Endpoints (skills router)', () => {
         .get('/api/skills/foundation-releases/latest');
       expect(res.status).toBe(200);
       expect(res.body.release.version).toBe('1.0.0');
-      expect(mockRelease.getLatestPublishedRelease).toHaveBeenCalledWith(null);
+      expect(mockRelease.getLatestPublishedRelease).toHaveBeenCalledWith(null, null);
     });
 
     it('passes ?project to the service for targeted filtering', async () => {
@@ -645,7 +645,21 @@ describe('Foundation Skills Consumer Endpoints (skills router)', () => {
       const res = await request(buildSkillsApp())
         .get('/api/skills/foundation-releases/latest?project=MaxView');
       expect(res.status).toBe(200);
-      expect(mockRelease.getLatestPublishedRelease).toHaveBeenCalledWith('MaxView');
+      expect(mockRelease.getLatestPublishedRelease).toHaveBeenCalledWith('MaxView', null);
+    });
+
+    it('passes the repository so a sibling repo is not offered the release', async () => {
+      mockRelease.getLatestPublishedRelease.mockResolvedValue(sampleRelease);
+      const res = await request(buildSkillsApp())
+        .get('/api/skills/foundation-releases/latest?project=MaxView&repo=MaxView.Infra&repoProject=MaxView&provider=ado&branch=development');
+      expect(res.status).toBe(200);
+      expect(mockRelease.getLatestPublishedRelease).toHaveBeenCalledWith('MaxView', {
+        apexProject: 'MaxView',
+        provider: 'ado',
+        project: 'MaxView',
+        repo: 'MaxView.Infra',
+        branch: 'development',
+      });
     });
 
     it('returns null when no published release is visible to the project', async () => {

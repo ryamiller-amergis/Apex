@@ -223,7 +223,7 @@ describe('autoStartDocumentValidation background routing', () => {
     getSkillPath: () => '/skills/validate.md',
     getModel: () => 'validation-model',
     updateDbForValidationStart: jest.fn().mockResolvedValue(undefined),
-    updateDbForValidationResult: jest.fn().mockResolvedValue(undefined),
+    updateDbForValidationResult: jest.fn().mockResolvedValue(true),
     updateDbForValidationTimeout: jest.fn().mockResolvedValue(undefined),
     updateDbForValidationError: jest.fn().mockResolvedValue(undefined),
     isCurrentValidationThread: jest.fn().mockResolvedValue(true),

@@ -44,7 +44,7 @@ import * as githubCatalog from './skillCatalogGitHub';
 import {
   getRelease,
   getLatestPublishedRelease,
-  isReleaseVisibleToProject,
+  isReleaseVisibleToRepo,
   listRollbackTargets,
   semverGreaterThan,
   appendAudit,
@@ -812,7 +812,13 @@ export async function updateRepoWithFoundationSkills(
   try {
     release = opts.releaseId
       ? await getRelease(opts.releaseId)
-      : await getLatestPublishedRelease(apexProject);
+      : await getLatestPublishedRelease(apexProject, {
+          apexProject,
+          provider,
+          project,
+          repo,
+          branch: opts.defaultBranch ?? 'main',
+        });
   } catch (e: unknown) {
     errors.push(`Failed to resolve release: ${(e as Error).message}`);
   }
@@ -842,9 +848,15 @@ export async function updateRepoWithFoundationSkills(
       errors,
     };
   }
-  if (!isReleaseVisibleToProject(release, apexProject)) {
+  if (!isReleaseVisibleToRepo(release, {
+    apexProject,
+    provider,
+    project,
+    repo,
+    branch: opts.defaultBranch ?? 'main',
+  })) {
     errors.push(
-      `Release ${release.version} is not targeted at Apex project "${apexProject}" — update the release targeting or use a different release`
+      `Release ${release.version} is not targeted at ${apexProject} / ${repo} — update the release targeting or use a different release`
     );
     return {
       status: 'error',
@@ -1178,8 +1190,14 @@ export async function rollbackRepoWithFoundationSkills(
       errors: [msg],
     };
   }
-  if (!isReleaseVisibleToProject(target, opts.apexProject)) {
-    const msg = `Release v${target.version} is not targeted at Apex project "${opts.apexProject}"`;
+  if (!isReleaseVisibleToRepo(target, {
+    apexProject: opts.apexProject,
+    provider: opts.provider,
+    project: opts.project,
+    repo: opts.repo,
+    branch: opts.defaultBranch,
+  })) {
+    const msg = `Release v${target.version} is not targeted at ${opts.apexProject} / ${opts.repo}`;
     return {
       status: 'error',
       prUrl: null,

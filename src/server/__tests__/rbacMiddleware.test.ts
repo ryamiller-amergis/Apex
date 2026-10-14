@@ -62,6 +62,45 @@ function makeRes() {
 describe('requirePermission', () => {
   beforeEach(() => jest.clearAllMocks());
 
+  describe.each([
+    'playbooks:view',
+    'playbooks:run',
+    'playbooks:author',
+    'playbooks:admin',
+  ])('TBI-036 DoD-2 / VT-04 / VT-05 — %s', (permission) => {
+    it('allows an in-project grant and resolves against that project', async () => {
+      const req = makeReq(
+        { profile: { oid: 'playbook-user' } },
+        { body: { project: 'Apex' } },
+      );
+      const res = makeRes();
+      const next = jest.fn() as NextFunction;
+      mockGetUserPermissions.mockResolvedValue(new Set([permission]));
+
+      await requirePermission(permission)(req, res, next);
+
+      expect(mockGetUserPermissions).toHaveBeenCalledWith('playbook-user', 'Apex');
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(res.status).not.toHaveBeenCalled();
+    });
+
+    it('denies a missing in-project grant with the exact key', async () => {
+      const req = makeReq(
+        { profile: { oid: 'playbook-user' } },
+        { body: { project: 'Apex' } },
+      );
+      const res = makeRes();
+      const next = jest.fn() as NextFunction;
+      mockGetUserPermissions.mockResolvedValue(new Set());
+
+      await requirePermission(permission)(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith({ error: 'Forbidden', missing: [permission] });
+    });
+  });
+
   it('returns 401 when req.user is missing', async () => {
     const req = makeReq(undefined);
     const res = makeRes();

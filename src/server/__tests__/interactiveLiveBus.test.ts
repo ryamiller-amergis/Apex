@@ -14,7 +14,9 @@ import {
   type RedisLike,
   type ResolvedRedisConfig,
 } from '../services/interactiveLiveBus';
+import { buildOffsetLiveTokenEvent } from '../services/interactiveDurableStreamBatcher';
 import type { AgentRunEventEnvelope } from '../../shared/types/chat';
+import { createCursorRunEventEnvelope } from '../services/cursorExecutionCore';
 
 function envelope(
   eventId: string,
@@ -220,6 +222,62 @@ describe('interactiveLiveBus', () => {
     expect(received).toEqual([]);
     expect(created).toEqual([]);
     expect(() => unsub()).not.toThrow();
+  });
+
+  it('publishes offset-aware token envelopes and reuses a durable event id', async () => {
+    const { bus } = makeBus();
+    const received: AgentRunEventEnvelope[] = [];
+    bus.subscribe('t1', (env) => received.push(env));
+
+    const token = buildOffsetLiveTokenEvent({
+      text: 'hello',
+      streamOffset: 0,
+      streamEndOffset: 5,
+    });
+    const live = createCursorRunEventEnvelope({
+      eventId: 'durable-event-1',
+      threadId: 't1',
+      runId: 'run-1',
+      sourceInstance: 'ai-runs-interactive-actor',
+      sequence: 1,
+      timestamp: '2026-08-07T00:00:00.000Z',
+      event: token,
+    });
+    await bus.publish('t1', live);
+
+    expect(received).toHaveLength(1);
+    expect(received[0].eventId).toBe('durable-event-1');
+    expect(received[0].event).toEqual(token);
+  });
+
+  it('pings both connections before the Redis idle timeout and stops on shutdown', async () => {
+    jest.useFakeTimers();
+    try {
+      const pings: string[] = [];
+      const hub = new FakeRedisHub();
+      const bus = createInteractiveLiveBus({
+        config: { host: 'h', port: 6380, password: 'k', tls: true },
+        createClient: (role) =>
+          Object.assign(new FakeRedis(hub, role), {
+            ping: async () => {
+              pings.push(role);
+              return 'PONG';
+            },
+          }),
+        logger: () => {},
+        keepAliveMs: 1_000,
+      });
+      await bus.init();
+
+      jest.advanceTimersByTime(1_000);
+      expect(pings.sort()).toEqual(['pub', 'sub']);
+
+      await bus.shutdown();
+      jest.advanceTimersByTime(5_000);
+      expect(pings).toHaveLength(2);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 

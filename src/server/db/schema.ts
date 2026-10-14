@@ -1,4 +1,4 @@
-import { bigserial, boolean, check, date, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigint, bigserial, boolean, check, date, index, integer, jsonb, numeric, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type { RepoProvider, RepoRole, RunType } from '../../shared/types/runGrounding';
@@ -29,19 +29,33 @@ import type {
 } from '../../shared/types/chat';
 import type {
   AgentRunCancelState,
+  AgentRunExecutionSnapshot,
   AgentRunLane,
   AgentRunStatus,
   AgentRunTerminalReason,
-  ExecutionSnapshot,
+  AgentRunWorkflowClass,
+  RunCheckResult,
 } from '../../shared/types/agentRunLifecycle';
+import type {
+  DurableInteractiveTurnSpecification,
+  InteractiveClass,
+} from '../../shared/types/durableInteractiveTurn';
+import type {
+  AiControlPlaneLeaseKey,
+  AiRunArtifactStatus,
+  AiRunBlobRef,
+  AiRunTransportVersion,
+  AiRunV2AttemptStatus,
+  AiRunV2FailureCategory,
+} from '../../shared/types/aiRunV2';
 import type { ContentSnapshot, DesignDocValidationOverride, PrdReadinessOverride, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
 import type { UiLabHistoryEntry } from '../../shared/types/uiLab';
-import type { DevSessionSetupPhase } from '../../shared/types/devWorkbench';
+import type { DevSessionSetupPhase, LeftoverWorkSummary } from '../../shared/types/devWorkbench';
 import type { DesignPlanFeature, DesignPlanHistoryEntry } from '../../shared/types/designPlan';
 import type { QuickSkillPill, QuickMcpPill, InterviewSkillOption, PrototypeEngine } from '../../shared/types/projectSettings';
 import type { EffortLevel } from '../../shared/types/effort';
-import type { ApprovalMode, OwnerApprovalStatus } from '../../shared/types/approvals';
+import type { ApprovalMode, OwnerApprovalStatus, ReviewerDocumentType } from '../../shared/types/approvals';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { ArtifactDoneEventType } from '../../shared/types/homeDashboard';
 import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmin';
@@ -65,6 +79,19 @@ import type {
   DiagramShareAccess,
   ExcalidrawScene,
 } from '../../shared/types/diagram';
+import type {
+  InterviewProfileSnapshot,
+  InterviewStepMode,
+  PlaybookGraph,
+  PlaybookRunStatus,
+  PlaybookStepRunStatus,
+  PlaybookVersionStatus,
+} from '../../shared/types/playbook';
+import type {
+  InterviewBriefSections,
+  InterviewBriefStatus,
+  InterviewSpecialistReviewStatus,
+} from '../../shared/types/interview';
 import type { ApiKeyCadence, ApiKeyScope } from '../../shared/types/apiKey';
 import type { SafeTraceDetails, TraceEventType } from '../../shared/types/observability';
 import type {
@@ -121,7 +148,14 @@ export const chatMessageAttachments = pgTable('chat_message_attachments', {
   type: text('type').notNull().default('text/plain'),
   size: integer('size').notNull(),
   path: text('path'),
-});
+  blobRef: jsonb('blob_ref').$type<AiRunBlobRef>(),
+  sha256: text('sha256'),
+}, (t) => ({
+  sha256Check: check(
+    'chat_message_attachments_sha256_check',
+    sql`${t.sha256} IS NULL OR ${t.sha256} ~ '^[0-9a-f]{64}$'`,
+  ),
+}));
 
 // ── Relations (enable db.query.* relational API) ──────────────────────────────
 
@@ -171,7 +205,18 @@ export const devSessions = pgTable('dev_sessions', {
   branchPushed: boolean('branch_pushed').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
-});
+  // Soft pointer to agent_runs.id (text). No FK — avoids a circular reference
+  // with agent_runs.dev_session_id.
+  currentRunId: text('current_run_id'),
+  currentRunPrUrl: text('current_run_pr_url'),
+  currentRunPrStatus: text('current_run_pr_status').$type<'none' | 'open' | 'abandoned' | 'merged'>().default('none'),
+  leftoverWork: jsonb('leftover_work').$type<LeftoverWorkSummary>(),
+}, (t) => ({
+  currentRunPrStatusCheck: check(
+    'dev_sessions_current_run_pr_status_check',
+    sql`${t.currentRunPrStatus} IS NULL OR ${t.currentRunPrStatus} IN ('none', 'open', 'abandoned', 'merged')`,
+  ),
+}));
 
 export const devSessionsRelations = relations(devSessions, ({ one }) => ({
   chatThread: one(chatThreads, {
@@ -396,6 +441,15 @@ export const restrictedUserAccessRelations = relations(restrictedUserAccess, ({ 
   }),
 }));
 
+// Emails a platform admin has approved to sign in on the dev site.
+// Platform admins themselves are admitted from the super-admin list and are not stored here.
+export const devEnvAllowlist = pgTable('dev_env_allowlist', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email').notNull().unique(),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
 export const projectAccessRequests = pgTable('project_access_requests', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
@@ -476,9 +530,44 @@ export const interviews = pgTable('interviews', {
   prototypeStageEnabled: boolean('prototype_stage_enabled').notNull().default(true),
   testCasesEnabled: boolean('test_cases_enabled').notNull().default(true),
   status: text('status').notNull().default('in_progress'),
+  /** Set together when a Playbook interview step started this interview. Ordinary interviews leave them null. */
+  playbookRunId: uuid('playbook_run_id').references(() => playbookRuns.id, { onDelete: 'restrict' }),
+  playbookStepRunId: uuid('playbook_step_run_id').references(() => playbookStepRuns.id, { onDelete: 'restrict' }),
+  playbookInterviewMode: text('playbook_interview_mode').$type<InterviewStepMode>(),
+  playbookProfileKey: text('playbook_profile_key'),
+  playbookProfileSnapshot: jsonb('playbook_profile_snapshot').$type<InterviewProfileSnapshot>(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
-});
+}, (t) => ({
+  playbookStepRunUq: uniqueIndex('uq_interviews_playbook_step_run')
+    .on(t.playbookStepRunId)
+    .where(sql`${t.playbookStepRunId} IS NOT NULL`),
+  playbookRunIdx: index('idx_interviews_playbook_run')
+    .on(t.playbookRunId)
+    .where(sql`${t.playbookRunId} IS NOT NULL`),
+  playbookInterviewModeCheck: check(
+    'interviews_playbook_interview_mode_check',
+    sql`${t.playbookInterviewMode} IS NULL OR ${t.playbookInterviewMode} IN ('human_led', 'multi_agent_assisted')`,
+  ),
+  playbookLinkageCheck: check(
+    'interviews_playbook_linkage_check',
+    sql`(
+      (${t.playbookRunId} IS NULL
+        AND ${t.playbookStepRunId} IS NULL
+        AND ${t.playbookInterviewMode} IS NULL
+        AND ${t.playbookProfileKey} IS NULL
+        AND ${t.playbookProfileSnapshot} IS NULL)
+      OR
+      (${t.playbookRunId} IS NOT NULL
+        AND ${t.playbookStepRunId} IS NOT NULL
+        AND ${t.playbookInterviewMode} IS NOT NULL
+        AND ${t.playbookProfileKey} IS NOT NULL
+        AND length(btrim(${t.playbookProfileKey})) > 0
+        AND ${t.playbookProfileSnapshot} IS NOT NULL
+        AND jsonb_typeof(${t.playbookProfileSnapshot}) = 'object')
+    )`,
+  ),
+}));
 
 /** Typed Interview ↔ ADR grounding links (FEAT-001). */
 export const interviewAdrLinks = pgTable('interview_adr_links', {
@@ -504,10 +593,113 @@ export const interviewDesignModuleLinks = pgTable('interview_design_module_links
   interviewIdx: index('idx_interview_design_module_links_interview_id').on(t.interviewId),
 }));
 
+function briefSectionsCheck(sections: AnyPgColumn) {
+  return sql`
+    jsonb_typeof(${sections}) = 'object'
+    AND ${sections} ?& ARRAY['problemAndOutcome','users','scope','businessRules','scenarios','acceptanceCriteria','assumptions','unresolvedItems']
+    AND (${sections} - ARRAY['problemAndOutcome','users','scope','businessRules','scenarios','acceptanceCriteria','assumptions','unresolvedItems']) = '{}'::jsonb
+    AND jsonb_typeof(${sections} -> 'problemAndOutcome') = 'string'
+    AND jsonb_typeof(${sections} -> 'users') = 'string'
+    AND jsonb_typeof(${sections} -> 'scope') = 'string'
+    AND jsonb_typeof(${sections} -> 'businessRules') = 'string'
+    AND jsonb_typeof(${sections} -> 'scenarios') = 'string'
+    AND jsonb_typeof(${sections} -> 'acceptanceCriteria') = 'string'
+    AND jsonb_typeof(${sections} -> 'assumptions') = 'string'
+    AND jsonb_typeof(${sections} -> 'unresolvedItems') = 'array'
+  `;
+}
+
+/** Current brief for an interview. Revisions keep every prior save. */
+export const interviewBriefs = pgTable('interview_briefs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  interviewId: uuid('interview_id').notNull().references(() => interviews.id, { onDelete: 'cascade' }),
+  status: text('status').$type<InterviewBriefStatus>().notNull().default('draft'),
+  version: integer('version').notNull(),
+  sections: jsonb('sections').$type<InterviewBriefSections>().notNull(),
+  approvedBy: text('approved_by').references(() => appUsers.oid, { onDelete: 'restrict' }),
+  approvedAt: timestamp('approved_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  interviewUq: unique('uq_interview_briefs_interview').on(t.interviewId),
+  statusCheck: check(
+    'interview_briefs_status_check',
+    sql`${t.status} IN ('draft', 'approved')`,
+  ),
+  versionCheck: check('interview_briefs_version_check', sql`${t.version} >= 1`),
+  approvalCheck: check(
+    'interview_briefs_approval_check',
+    sql`(
+      (${t.status} = 'draft' AND ${t.approvedBy} IS NULL AND ${t.approvedAt} IS NULL)
+      OR
+      (${t.status} = 'approved' AND ${t.approvedBy} IS NOT NULL AND ${t.approvedAt} IS NOT NULL)
+    )`,
+  ),
+  sectionsCheck: check('interview_briefs_sections_check', briefSectionsCheck(t.sections)),
+}));
+
+/** Immutable copy of the brief at each save and at approval. No updated_at. */
+export const interviewBriefRevisions = pgTable('interview_brief_revisions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  briefId: uuid('brief_id').notNull().references(() => interviewBriefs.id, { onDelete: 'cascade' }),
+  interviewId: uuid('interview_id').notNull().references(() => interviews.id, { onDelete: 'cascade' }),
+  version: integer('version').notNull(),
+  status: text('status').$type<InterviewBriefStatus>().notNull(),
+  sections: jsonb('sections').$type<InterviewBriefSections>().notNull(),
+  createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  briefVersionUq: unique('uq_interview_brief_revisions_brief_version').on(t.briefId, t.version),
+  interviewIdx: index('idx_interview_brief_revisions_interview').on(t.interviewId, t.version),
+  statusCheck: check(
+    'interview_brief_revisions_status_check',
+    sql`${t.status} IN ('draft', 'approved')`,
+  ),
+  versionCheck: check('interview_brief_revisions_version_check', sql`${t.version} >= 1`),
+  sectionsCheck: check('interview_brief_revisions_sections_check', briefSectionsCheck(t.sections)),
+}));
+
+/** One row per specialist attempt. `result` is structured JSON; chain-of-thought is not stored. */
+export const interviewSpecialistReviews = pgTable('interview_specialist_reviews', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  interviewId: uuid('interview_id').notNull().references(() => interviews.id, { onDelete: 'cascade' }),
+  briefVersion: integer('brief_version').notNull(),
+  specialist: text('specialist').notNull(),
+  status: text('status').$type<InterviewSpecialistReviewStatus>().notNull(),
+  result: jsonb('result').$type<Record<string, unknown>>().notNull(),
+  model: text('model'),
+  durationMs: integer('duration_ms').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  interviewVersionIdx: index('idx_interview_specialist_reviews_interview_version').on(t.interviewId, t.briefVersion),
+  specialistIdx: index('idx_interview_specialist_reviews_specialist').on(t.specialist),
+  specialistCheck: check(
+    'interview_specialist_reviews_specialist_check',
+    sql`length(btrim(${t.specialist})) > 0`,
+  ),
+  statusCheck: check(
+    'interview_specialist_reviews_status_check',
+    sql`${t.status} IN ('succeeded', 'failed')`,
+  ),
+  resultCheck: check(
+    'interview_specialist_reviews_result_check',
+    sql`jsonb_typeof(${t.result}) = 'object'`,
+  ),
+  briefVersionCheck: check(
+    'interview_specialist_reviews_brief_version_check',
+    sql`${t.briefVersion} >= 1`,
+  ),
+  durationCheck: check(
+    'interview_specialist_reviews_duration_check',
+    sql`${t.durationMs} >= 0`,
+  ),
+}));
+
 export const adrs = pgTable('adrs', {
   id: uuid('id').primaryKey().defaultRandom(),
   chatThreadId: uuid('chat_thread_id').notNull().unique().references(() => chatThreads.id, { onDelete: 'cascade' }),
   adrAssistantThreadId: uuid('adr_assistant_thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+  generationThreadId: uuid('generation_thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
   authorId: text('author_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
   reviewerIds: jsonb('reviewer_ids').$type<string[]>(),
   title: text('title').notNull().default('Untitled ADR'),
@@ -610,6 +802,9 @@ export const designDocs = pgTable('design_docs', {
   directFeatureUq: uniqueIndex('uq_design_docs_prd_direct_feature')
     .on(t.prdId, t.featureIndex)
     .where(sql`${t.designPrototypeId} IS NULL AND ${t.featureIndex} IS NOT NULL`),
+  transientUpdatedIdx: index('idx_design_docs_transient_updated')
+    .on(t.status, t.updatedAt, t.id)
+    .where(sql`${t.status} IN ('generating', 'validating')`),
 }));
 
 // ── Interview Relations ────────────────────────────────────────────────────────
@@ -642,6 +837,20 @@ export const interviewsRelations = relations(interviews, ({ one, many }) => ({
   prds: many(prds),
   adrLinks: many(interviewAdrLinks),
   designModuleLinks: many(interviewDesignModuleLinks),
+  playbookRun: one(playbookRuns, {
+    fields: [interviews.playbookRunId],
+    references: [playbookRuns.id],
+  }),
+  playbookStepRun: one(playbookStepRuns, {
+    fields: [interviews.playbookStepRunId],
+    references: [playbookStepRuns.id],
+  }),
+  brief: one(interviewBriefs, {
+    fields: [interviews.id],
+    references: [interviewBriefs.interviewId],
+  }),
+  briefRevisions: many(interviewBriefRevisions),
+  specialistReviews: many(interviewSpecialistReviews),
 }));
 
 export const interviewAdrLinksRelations = relations(interviewAdrLinks, ({ one }) => ({
@@ -663,6 +872,32 @@ export const interviewDesignModuleLinksRelations = relations(interviewDesignModu
   designModule: one(designModules, {
     fields: [interviewDesignModuleLinks.designModuleId],
     references: [designModules.id],
+  }),
+}));
+
+export const interviewBriefsRelations = relations(interviewBriefs, ({ one, many }) => ({
+  interview: one(interviews, {
+    fields: [interviewBriefs.interviewId],
+    references: [interviews.id],
+  }),
+  revisions: many(interviewBriefRevisions),
+}));
+
+export const interviewBriefRevisionsRelations = relations(interviewBriefRevisions, ({ one }) => ({
+  brief: one(interviewBriefs, {
+    fields: [interviewBriefRevisions.briefId],
+    references: [interviewBriefs.id],
+  }),
+  interview: one(interviews, {
+    fields: [interviewBriefRevisions.interviewId],
+    references: [interviews.id],
+  }),
+}));
+
+export const interviewSpecialistReviewsRelations = relations(interviewSpecialistReviews, ({ one }) => ({
+  interview: one(interviews, {
+    fields: [interviewSpecialistReviews.interviewId],
+    references: [interviews.id],
   }),
 }));
 
@@ -1660,16 +1895,56 @@ export const agentRuns = pgTable('agent_runs', {
   queuedAt: timestamp('queued_at', { withTimezone: true, mode: 'string' }),
   dispatchedAt: timestamp('dispatched_at', { withTimezone: true, mode: 'string' }),
   dispatchMessageId: text('dispatch_message_id'),
-  executionSnapshot: jsonb('execution_snapshot').$type<ExecutionSnapshot>(),
+  executionSnapshot: jsonb('execution_snapshot').$type<AgentRunExecutionSnapshot>(),
   cancelRequested: boolean('cancel_requested').notNull().default(false),
   cancelState: text('cancel_state').$type<AgentRunCancelState>(),
   terminalReason: text('terminal_reason').$type<AgentRunTerminalReason>(),
+  // Durable protocol: V1 default; background and interactive V2 write explicit transports.
+  transportVersion: text('transport_version').$type<AiRunTransportVersion>().notNull().default('http-files-v1'),
+  requestedByUserId: text('requested_by_user_id'),
+  interactiveClass: text('interactive_class').$type<InteractiveClass>(),
+  clientTurnId: uuid('client_turn_id'),
+  clientTurnHash: text('client_turn_hash'),
+  devSessionId: uuid('dev_session_id').references(() => devSessions.id, { onDelete: 'set null' }),
+  workflowClass: text('workflow_class').$type<AgentRunWorkflowClass>(),
+  cloudAgentIdentity: text('cloud_agent_identity'),
+  cloudAgentManaged: boolean('cloud_agent_managed').notNull().default(false),
+  cloudJobName: text('cloud_job_name'),
+  cloudJobExecutionName: text('cloud_job_execution_name'),
+  cloudBranchName: text('cloud_branch_name'),
+  cloudPrUrl: text('cloud_pr_url'),
+  cloudPrStatus: text('cloud_pr_status')
+    .$type<'none' | 'open' | 'abandoned' | 'merged'>()
+    .default('none'),
+  // FEAT-003 TBI-005: suite-level unit/e2e/WCAG outcomes reported at terminal write time.
+  // NULL means the run reported nothing; never gates PR creation or run completion.
+  checkResults: jsonb('check_results').$type<RunCheckResult[]>(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   statusHeartbeatIdx: index('idx_agent_runs_status_heartbeat').on(t.status, t.heartbeatAt),
   statusLaneIdx: index('idx_agent_runs_status_lane').on(t.status, t.lane),
   projectStatusIdx: index('idx_agent_runs_project_status').on(t.projectId, t.status),
+  threadCreatedIdx: index('idx_agent_runs_thread_created').on(t.threadId, t.createdAt),
+  threadActiveIdx: index('idx_agent_runs_thread_active')
+    .on(t.threadId, t.createdAt)
+    .where(sql`${t.status} IN ('queued', 'dispatched', 'running')`),
+  v2ActiveThreadIdx: uniqueIndex('uq_agent_runs_v2_active_thread')
+    .on(t.threadId)
+    .where(sql`${t.transportVersion} = 'servicebus-blob-v2' AND ${t.status} IN ('queued', 'dispatched', 'running')`),
+  clientTurnUniq: uniqueIndex('uq_agent_runs_client_turn')
+    .on(t.threadId, t.clientTurnId)
+    .where(sql`${t.clientTurnId} IS NOT NULL`),
+  interactiveActiveThreadUniq: uniqueIndex('uq_agent_runs_interactive_active_thread')
+    .on(t.threadId)
+    .where(sql`${t.lane} = 'ai-runs-interactive' AND ${t.status} IN ('queued', 'dispatched', 'running')`),
+  interactiveUserActiveIdx: index('idx_agent_runs_interactive_user_active')
+    .on(t.requestedByUserId, t.interactiveClass, t.createdAt)
+    .where(sql`${t.lane} = 'ai-runs-interactive' AND ${t.status} IN ('queued', 'dispatched', 'running')`),
+  cloudPrStatusCheck: check(
+    'agent_runs_cloud_pr_status_check',
+    sql`${t.cloudPrStatus} IS NULL OR ${t.cloudPrStatus} IN ('none', 'open', 'abandoned', 'merged')`,
+  ),
   queuedWorkerIdx: index('idx_agent_runs_queued_at_worker')
     .on(t.queuedAt)
     .where(sql`${t.lane} = 'background'`),
@@ -1687,12 +1962,43 @@ export const agentRuns = pgTable('agent_runs', {
     .where(sql`${t.lane} = 'background' AND ${t.status} = 'queued'`),
   laneCheck: check(
     'agent_runs_lane_check',
-    sql`${t.lane} IS NULL OR ${t.lane} IN ('background', 'ai-runs-interactive')`,
+    sql`${t.lane} IS NULL OR ${t.lane} IN ('background', 'ai-runs-interactive', 'cloud-agent')`,
   ),
   terminalReasonCheck: check(
     'agent_runs_terminal_reason_check',
-    sql`${t.terminalReason} IS NULL OR ${t.terminalReason} IN ('worker_lost', 'progress_timeout', 'queue_ttl', 'forced_cancel', 'dispatch_ttl')`,
+    sql`${t.terminalReason} IS NULL OR ${t.terminalReason} IN ('worker_lost', 'progress_timeout', 'queue_ttl', 'forced_cancel', 'dispatch_ttl', 'cloud_agent_timeout')`,
   ),
+  transportVersionCheck: check(
+    'agent_runs_transport_version_check',
+    sql`${t.transportVersion} IN ('http-files-v1', 'servicebus-blob-v2', 'dapr-actor-v2')`,
+  ),
+  interactiveClassCheck: check(
+    'agent_runs_interactive_class_check',
+    sql`${t.interactiveClass} IS NULL OR ${t.interactiveClass} IN ('fast', 'agentic')`,
+  ),
+  clientTurnHashCheck: check(
+    'agent_runs_client_turn_hash_check',
+    sql`${t.clientTurnHash} IS NULL OR ${t.clientTurnHash} ~ '^[0-9a-f]{64}$'`,
+  ),
+  requestedByUserIdCheck: check(
+    'agent_runs_requested_by_user_id_check',
+    sql`${t.requestedByUserId} IS NULL OR (${t.requestedByUserId} = btrim(${t.requestedByUserId}) AND char_length(${t.requestedByUserId}) BETWEEN 1 AND 256)`,
+  ),
+  daprActorRequiredFieldsCheck: check(
+    'agent_runs_dapr_actor_v2_required_fields_check',
+    sql`${t.transportVersion} <> 'dapr-actor-v2' OR (${t.requestedByUserId} IS NOT NULL AND ${t.interactiveClass} IS NOT NULL AND ${t.clientTurnId} IS NOT NULL AND ${t.clientTurnHash} IS NOT NULL)`,
+  ),
+  workflowClassCheck: check(
+    'agent_runs_workflow_class_check',
+    sql`${t.workflowClass} IS NULL OR ${t.workflowClass} IN ('generation', 'implementation')`,
+  ),
+  cloudAgentManagedIdentityCheck: check(
+    'agent_runs_cloud_agent_managed_identity_check',
+    sql`${t.cloudAgentManaged} = false OR ${t.cloudAgentIdentity} IS NOT NULL`,
+  ),
+  oneLiveImplementationPerSession: uniqueIndex('uq_agent_runs_one_live_per_session')
+    .on(t.devSessionId)
+    .where(sql`${t.workflowClass} = 'implementation' AND ${t.status} IN ('queued', 'dispatched', 'running') AND ${t.devSessionId} IS NOT NULL`),
   nonTerminalTimeoutCheck: check(
     'agent_runs_non_terminal_timeout_at_check',
     sql`${t.status} NOT IN ('queued', 'running') OR ${t.timeoutAt} IS NOT NULL`,
@@ -1717,6 +2023,125 @@ export const agentRunEvents = pgTable('agent_run_events', {
   sourceSequenceUniq: unique('agent_run_events_source_sequence_key').on(t.runId, t.sourceInstance, t.sequence),
   threadOrdinalIdx: index('idx_agent_run_events_thread_ordinal').on(t.threadId, t.ordinal),
   runSequenceIdx: index('idx_agent_run_events_run_sequence').on(t.runId, t.sequence),
+}));
+
+// ── AI Run V2 control plane (Task 3 persistence contracts) ─────────────────────
+
+export const aiRunAttempts = pgTable('ai_run_attempts', {
+  id: text('id').primaryKey().default(sql`gen_random_uuid()::text`),
+  runId: text('run_id').notNull().references(() => agentRuns.id, { onDelete: 'cascade' }),
+  attemptNumber: integer('attempt_number').notNull(),
+  dispatchMessageId: text('dispatch_message_id').notNull(),
+  status: text('status').$type<AiRunV2AttemptStatus>().notNull().default('queued'),
+  artifactStatus: text('artifact_status').$type<AiRunArtifactStatus>().notNull().default('pending'),
+  lastCheckpointSequence: integer('last_checkpoint_sequence').notNull().default(0),
+  lastCheckpointAt: timestamp('last_checkpoint_at', { withTimezone: true, mode: 'string' }),
+  specRef: jsonb('spec_ref').$type<AiRunBlobRef>(),
+  specSnapshot: jsonb('spec_snapshot').$type<DurableInteractiveTurnSpecification>(),
+  manifestRef: jsonb('manifest_ref').$type<AiRunBlobRef>(),
+  failureCategory: text('failure_category').$type<AiRunV2FailureCategory>(),
+  failureDetail: text('failure_detail'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  runAttemptUniq: unique('uq_ai_run_attempts_run_number').on(t.runId, t.attemptNumber),
+  dispatchMessageUniq: unique('uq_ai_run_attempts_dispatch_message_id').on(t.dispatchMessageId),
+  activeAttemptUniq: uniqueIndex('uq_ai_run_attempts_active_run')
+    .on(t.runId)
+    .where(sql`${t.status} IN ('queued', 'dispatched', 'running', 'checking_worker', 'finalizing')`),
+  runCreatedIdx: index('idx_ai_run_attempts_run_created').on(t.runId, t.createdAt),
+  statusCheck: check(
+    'ai_run_attempts_status_check',
+    sql`${t.status} IN ('queued', 'dispatched', 'running', 'checking_worker', 'finalizing', 'completed', 'failed', 'cancelled')`,
+  ),
+  artifactStatusCheck: check(
+    'ai_run_attempts_artifact_status_check',
+    sql`${t.artifactStatus} IN ('pending', 'uploading', 'manifest_written', 'verified', 'failed')`,
+  ),
+  failureCategoryCheck: check(
+    'ai_run_attempts_failure_category_check',
+    sql`${t.failureCategory} IS NULL OR ${t.failureCategory} IN ('worker_lost', 'progress_timeout', 'queue_ttl', 'dispatch_ttl', 'forced_cancel', 'poison_message', 'artifact_verification_failed', 'lease_lost', 'internal_error', 'hard_timeout', 'tool_timeout', 'worker_start_failed', 'validation_failed')`,
+  ),
+  attemptNumberCheck: check(
+    'ai_run_attempts_attempt_number_check',
+    sql`${t.attemptNumber} > 0`,
+  ),
+  checkpointSequenceCheck: check(
+    'ai_run_attempts_checkpoint_sequence_check',
+    sql`${t.lastCheckpointSequence} >= 0`,
+  ),
+}));
+
+export const aiRunOutbox = pgTable('ai_run_outbox', {
+  id: text('id').primaryKey().default(sql`gen_random_uuid()::text`),
+  idempotencyKey: text('idempotency_key').notNull(),
+  kind: text('kind').notNull(),
+  runId: text('run_id').notNull(),
+  attemptId: text('attempt_id'),
+  payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+  availableAt: timestamp('available_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  claimedBy: text('claimed_by'),
+  claimedAt: timestamp('claimed_at', { withTimezone: true, mode: 'string' }),
+  claimExpiresAt: timestamp('claim_expires_at', { withTimezone: true, mode: 'string' }),
+  publishAttempts: integer('publish_attempts').notNull().default(0),
+  lastError: text('last_error'),
+  publishedAt: timestamp('published_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  idempotencyUniq: unique('uq_ai_run_outbox_idempotency_key').on(t.idempotencyKey),
+  dueIdx: index('idx_ai_run_outbox_due')
+    .on(t.availableAt, t.createdAt)
+    .where(sql`${t.publishedAt} IS NULL`),
+  interactiveDueIdx: index('idx_ai_run_outbox_interactive_due')
+    .on(t.createdAt, t.id)
+    .where(sql`${t.kind} = 'interactive_dispatch' AND ${t.publishedAt} IS NULL`),
+  interactiveClassDueIdx: index('idx_ai_run_outbox_interactive_class_due')
+    .on(sql`(${t.payload}->>'interactiveClass')`, t.createdAt, t.id)
+    .where(sql`${t.kind} = 'interactive_dispatch' AND ${t.publishedAt} IS NULL`),
+  publishAttemptsCheck: check(
+    'ai_run_outbox_publish_attempts_check',
+    sql`${t.publishAttempts} >= 0`,
+  ),
+}));
+
+export const aiRunInbox = pgTable('ai_run_inbox', {
+  eventId: text('event_id').primaryKey(),
+  kind: text('kind').notNull(),
+  runId: text('run_id').notNull(),
+  attemptId: text('attempt_id').notNull(),
+  dispatchMessageId: text('dispatch_message_id').notNull(),
+  checkpointSequence: integer('checkpoint_sequence'),
+  payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+  receivedAt: timestamp('received_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  processedAt: timestamp('processed_at', { withTimezone: true, mode: 'string' }),
+}, (t) => ({
+  attemptCheckpointUniq: uniqueIndex('uq_ai_run_inbox_attempt_checkpoint')
+    .on(t.attemptId, t.checkpointSequence)
+    .where(sql`${t.checkpointSequence} IS NOT NULL`),
+  unprocessedIdx: index('idx_ai_run_inbox_unprocessed')
+    .on(t.receivedAt)
+    .where(sql`${t.processedAt} IS NULL`),
+  checkpointSequenceCheck: check(
+    'ai_run_inbox_checkpoint_sequence_check',
+    sql`${t.checkpointSequence} IS NULL OR ${t.checkpointSequence} > 0`,
+  ),
+}));
+
+export const aiControlPlaneLeases = pgTable('ai_control_plane_leases', {
+  leaseKey: text('lease_key').$type<AiControlPlaneLeaseKey>().primaryKey(),
+  holderId: text('holder_id'),
+  fencingToken: bigint('fencing_token', { mode: 'bigint' }).notNull().default(sql`0`),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull().default(sql`'epoch'`),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  leaseKeyCheck: check(
+    'ai_control_plane_leases_key_check',
+    sql`${t.leaseKey} IN ('admission', 'recovery', 'reaper', 'outbox')`,
+  ),
+  fencingTokenCheck: check(
+    'ai_control_plane_leases_fencing_token_check',
+    sql`${t.fencingToken} >= 0`,
+  ),
 }));
 
 // ── AI Cost Analytics ─────────────────────────────────────────────────────────
@@ -2522,6 +2947,7 @@ import type {
   FoundationSkillCompatibilityStatus,
   FoundationSkillArtifactManifest,
   FoundationSkillProjectNotes,
+  FoundationSkillTargetRepo,
 } from '../../shared/types/foundationSkills';
 
 export const foundationSkillReleases = pgTable('foundation_skill_releases', {
@@ -2535,6 +2961,7 @@ export const foundationSkillReleases = pgTable('foundation_skill_releases', {
   contractApiVersion:  integer('contract_api_version').notNull().default(1),
   selectedSkills:      jsonb('selected_skills').$type<string[]>().notNull().default([]),
   targetProjects:      jsonb('target_projects').$type<string[]>().notNull().default([]),
+  targetRepos:         jsonb('target_repos').$type<FoundationSkillTargetRepo[]>().notNull().default([]),
   skillTargets:        jsonb('skill_targets').$type<Record<string, string[]>>().notNull().default({}),
   manifestSnapshot:    jsonb('manifest_snapshot').$type<FoundationSkillArtifactManifest>(),
   releaseNotes:        text('release_notes'),
@@ -2737,4 +3164,247 @@ export const artifactDoneEvents = pgTable('artifact_done_events', {
     'artifact_done_events_artifact_type_check',
     sql`${t.artifactType} IN ('interview', 'prd', 'test_case', 'design_prototype', 'design_doc')`,
   ),
+}));
+
+// ── Playbook orchestration (Apex-owned run truth) ─────────────────────────────
+
+export const playbookSpendPolicies = pgTable('playbook_spend_policies', {
+  project: text('project').primaryKey(),
+  enabled: boolean('enabled').notNull().default(false),
+  baselineCostUsd: numeric('baseline_cost_usd', { precision: 18, scale: 6 }).notNull(),
+  capUsd: numeric('cap_usd', { precision: 18, scale: 6 }).notNull(),
+  warningActive: boolean('warning_active').notNull().default(false),
+  warningGeneration: integer('warning_generation').notNull().default(0),
+  warningCrossedAt: timestamp('warning_crossed_at', { withTimezone: true, mode: 'string' }),
+  warningRecipientUserIds: jsonb('warning_recipient_user_ids').$type<string[]>().notNull().default([]),
+  overrideByUserId: text('override_by_user_id').references(() => appUsers.oid, {
+    onDelete: 'set null',
+  }),
+  overrideToUsd: numeric('override_to_usd', { precision: 18, scale: 6 }),
+  overrideAt: timestamp('override_at', { withTimezone: true, mode: 'string' }),
+  overrideReason: text('override_reason'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  enabledIdx: index('idx_playbook_spend_policies_enabled').on(t.enabled),
+  baselineNonnegative: check(
+    'playbook_spend_policies_baseline_nonnegative',
+    sql`${t.baselineCostUsd} >= 0`,
+  ),
+  capPositive: check('playbook_spend_policies_cap_positive', sql`${t.capUsd} > 0`),
+  warningGenerationNonnegative: check(
+    'playbook_spend_policies_warning_generation_nonnegative',
+    sql`${t.warningGeneration} >= 0`,
+  ),
+  warningStateComplete: check(
+    'playbook_spend_policies_warning_state_complete',
+    sql`(${t.warningActive} = false AND ${t.warningCrossedAt} IS NULL)
+      OR (${t.warningActive} = true AND ${t.warningCrossedAt} IS NOT NULL)`,
+  ),
+}));
+
+// These four tables are the whole of what Apex needs to answer "what happened, and what happens
+// next" for a Playbook run. The engine's own tables live in the `playbook_engine` schema and are a
+// disposable execution cache — nothing here references them, and exit criterion E4 drops them
+// mid-run to prove it.
+
+export const playbookDefinitions = pgTable('playbook_definitions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  name: text('name').notNull(),
+  description: text('description'),
+  /** Null for definitions that were not installed from a shipped template. */
+  templateKey: text('template_key'),
+  /** Null when templateKey is null. Monotonic shipped template version at install. */
+  templateVersion: integer('template_version'),
+  createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectCreatedIdx: index('idx_playbook_definitions_project_created').on(t.project, t.createdAt),
+  projectNameUq: uniqueIndex('uq_playbook_definitions_project_name')
+    .on(t.project, sql`lower(btrim(${t.name}))`),
+  nameNotBlank: check(
+    'playbook_definitions_name_not_blank',
+    sql`length(btrim(${t.name})) > 0`,
+  ),
+  templateMetadata: check(
+    'playbook_definitions_template_metadata_check',
+    sql`(
+      (${t.templateKey} IS NULL AND ${t.templateVersion} IS NULL)
+      OR (
+        ${t.templateKey} IS NOT NULL
+        AND length(btrim(${t.templateKey})) > 0
+        AND ${t.templateVersion} IS NOT NULL
+        AND ${t.templateVersion} >= 1
+      )
+    )`,
+  ),
+  templateKeyUq: uniqueIndex('uq_playbook_definitions_project_template')
+    .on(t.project, t.templateKey)
+    .where(sql`${t.templateKey} IS NOT NULL`),
+}));
+
+export const playbookDefinitionVersions = pgTable('playbook_definition_versions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  definitionId: uuid('definition_id').notNull()
+    .references(() => playbookDefinitions.id, { onDelete: 'cascade' }),
+  versionNumber: integer('version_number').notNull(),
+  graph: jsonb('graph').$type<PlaybookGraph>().notNull(),
+  status: text('status').$type<PlaybookVersionStatus>().notNull().default('draft'),
+  publishedBy: text('published_by').references(() => appUsers.oid, { onDelete: 'set null' }),
+  publishedAt: timestamp('published_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  // Optimistic draft concurrency and auditable working-copy revision (FEAT-007).
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  definitionVersionUq: unique('uq_playbook_definition_versions_number')
+    .on(t.definitionId, t.versionNumber),
+  definitionIdx: index('idx_playbook_definition_versions_definition')
+    .on(t.definitionId, t.versionNumber),
+  statusIdx: index('idx_playbook_definition_versions_status').on(t.definitionId, t.status),
+  // Database enforcement of exactly one retained draft per definition (FEAT-007 user decision).
+  oneDraftUq: uniqueIndex('uq_playbook_definition_versions_one_draft')
+    .on(t.definitionId)
+    .where(sql`${t.status} = 'draft'`),
+  statusCheck: check(
+    'playbook_definition_versions_status_check',
+    sql`${t.status} IN ('draft', 'published', 'deprecated', 'archived')`,
+  ),
+  versionNumberCheck: check(
+    'playbook_definition_versions_version_number_check',
+    sql`${t.versionNumber} >= 1`,
+  ),
+}));
+
+export const playbookRuns = pgTable('playbook_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  // Restrict, not cascade: a version a run pinned is never hard-deleted, so BR-006 has a database
+  // backstop even though version immutability itself is enforced in the service.
+  definitionVersionId: uuid('definition_version_id').notNull()
+    .references(() => playbookDefinitionVersions.id, { onDelete: 'restrict' }),
+  initiatorUserId: text('initiator_user_id').notNull()
+    .references(() => appUsers.oid, { onDelete: 'restrict' }),
+  status: text('status').$type<PlaybookRunStatus>().notNull().default('running'),
+  // Null for current-version resolution; required and trimmed for explicit older pins (TBI-031).
+  versionPinReason: text('version_pin_reason'),
+  // Canonical Playbook start bindings. Null for Phase 0/1 runs that had no bound artifact.
+  runInput: jsonb('run_input').$type<Record<string, unknown>>(),
+  // Incremented by the runtime, never computed on read — the structural guards that read them are
+  // synchronous, and an aggregate scan in an admission check is how guards get disabled.
+  stepCount: integer('step_count').notNull().default(0),
+  agentStepCount: integer('agent_step_count').notNull().default(0),
+  startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectStartedIdx: index('idx_playbook_runs_project_started').on(t.project, t.startedAt),
+  projectStatusIdx: index('idx_playbook_runs_project_status').on(t.project, t.status),
+  definitionVersionIdx: index('idx_playbook_runs_definition_version').on(t.definitionVersionId),
+  statusCheck: check(
+    'playbook_runs_status_check',
+    sql`${t.status} IN ('running', 'suspended', 'completed', 'cancelled', 'failed', 'expired')`,
+  ),
+  stepCountCheck: check('playbook_runs_step_count_check', sql`${t.stepCount} >= 0`),
+  agentStepCountCheck: check('playbook_runs_agent_step_count_check', sql`${t.agentStepCount} >= 0`),
+}));
+
+export const playbookStepRuns = pgTable('playbook_step_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  runId: uuid('run_id').notNull().references(() => playbookRuns.id, { onDelete: 'cascade' }),
+  // The node id inside the pinned version's graph, which is jsonb — so this is not a foreign key.
+  stepId: text('step_id').notNull(),
+  stepType: text('step_type').notNull(),
+  status: text('status').$type<PlaybookStepRunStatus>().notNull().default('pending'),
+  // Null for approval-gate and notify steps, which correlate to no agent run.
+  agentRunId: text('agent_run_id').references(() => agentRuns.id, { onDelete: 'set null' }),
+  resumeToken: text('resume_token'),
+  inputInline: jsonb('input_inline').$type<Record<string, unknown>>(),
+  gatePoolKey: text('gate_pool_key').$type<ReviewerDocumentType>(),
+  gateApprovalMode: text('gate_approval_mode').$type<ApprovalMode>(),
+  outputInline: jsonb('output_inline').$type<Record<string, unknown>>(),
+  outputBlobRef: jsonb('output_blob_ref').$type<ArtifactRef>(),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }),
+  startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
+  completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  runStepUq: unique('uq_playbook_step_runs_run_step').on(t.runId, t.stepId),
+  runIdx: index('idx_playbook_step_runs_run').on(t.runId, t.createdAt),
+  // Partial over open statuses so a reconciliation pass costs time proportional to outstanding
+  // suspensions rather than to all run history.
+  expiresAtIdx: index('idx_playbook_step_runs_expires_at')
+    .on(t.expiresAt)
+    .where(sql`${t.expiresAt} IS NOT NULL AND ${t.status} IN ('pending', 'running', 'suspended')`),
+  agentRunIdx: index('idx_playbook_step_runs_agent_run')
+    .on(t.agentRunId)
+    .where(sql`${t.agentRunId} IS NOT NULL`),
+  statusCheck: check(
+    'playbook_step_runs_status_check',
+    sql`${t.status} IN ('pending', 'running', 'suspended', 'completed', 'failed', 'failed_retryable', 'cancelled', 'expired')`,
+  ),
+}));
+
+export const playbookGateApprovers = pgTable('playbook_gate_approvers', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  stepRunId: uuid('step_run_id').notNull()
+    .references(() => playbookStepRuns.id, { onDelete: 'cascade' }),
+  approverUserId: text('approver_user_id').notNull()
+    .references(() => appUsers.oid, { onDelete: 'restrict' }),
+  sourceGroupIds: jsonb('source_group_ids').$type<string[]>().notNull().default([]),
+  decision: text('decision').$type<'approved' | 'rejected'>(),
+  comment: text('comment'),
+  decidedAt: timestamp('decided_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  stepUserUq: unique('uq_playbook_gate_approvers_step_user').on(t.stepRunId, t.approverUserId),
+  userDecisionIdx: index('idx_playbook_gate_approvers_user_decision')
+    .on(t.approverUserId, t.decision),
+  stepIdx: index('idx_playbook_gate_approvers_step').on(t.stepRunId),
+}));
+
+// Relations exist so the projection can load a run with its steps and pinned version in one
+// round trip through db.query.*, per .cursor/rules/postgresql-db.mdc.
+
+export const playbookDefinitionsRelations = relations(playbookDefinitions, ({ many }) => ({
+  versions: many(playbookDefinitionVersions),
+}));
+
+export const playbookDefinitionVersionsRelations = relations(
+  playbookDefinitionVersions,
+  ({ one, many }) => ({
+    definition: one(playbookDefinitions, {
+      fields: [playbookDefinitionVersions.definitionId],
+      references: [playbookDefinitions.id],
+    }),
+    runs: many(playbookRuns),
+  }),
+);
+
+export const playbookRunsRelations = relations(playbookRuns, ({ one, many }) => ({
+  definitionVersion: one(playbookDefinitionVersions, {
+    fields: [playbookRuns.definitionVersionId],
+    references: [playbookDefinitionVersions.id],
+  }),
+  steps: many(playbookStepRuns),
+  interviews: many(interviews),
+}));
+
+export const playbookStepRunsRelations = relations(playbookStepRuns, ({ one, many }) => ({
+  run: one(playbookRuns, {
+    fields: [playbookStepRuns.runId],
+    references: [playbookRuns.id],
+  }),
+  gateApprovers: many(playbookGateApprovers),
+  interviews: many(interviews),
+}));
+
+export const playbookGateApproversRelations = relations(playbookGateApprovers, ({ one }) => ({
+  stepRun: one(playbookStepRuns, {
+    fields: [playbookGateApprovers.stepRunId],
+    references: [playbookStepRuns.id],
+  }),
 }));

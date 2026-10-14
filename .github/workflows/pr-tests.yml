@@ -45,6 +45,7 @@ jobs:
       load_test_runner: ${{ steps.image_publish.outputs.load_test_runner }}
       ai_runs_worker: ${{ steps.image_publish.outputs.ai_runs_worker }}
       ai_runs_interactive: ${{ steps.image_publish.outputs.ai_runs_interactive }}
+      ai_orchestrator: ${{ steps.image_publish.outputs.ai_orchestrator }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -231,6 +232,15 @@ jobs:
           TEST_DATABASE_URL: postgresql://test:test@localhost:5432/aipilot_e2e
         run: npm run test:integration
 
+      - name: Run Playbook lifecycle tests without worker recycling
+        env:
+          TEST_DATABASE_URL: postgresql://test:test@localhost:5432/aipilot_e2e
+          NODE_OPTIONS: --experimental-vm-modules
+        run: >-
+          npx jest --config jest.config.integration.js --runInBand
+          tests/integration/playbook-run-advance.integration.test.ts
+          tests/integration/playbook-exit-criteria.integration.test.ts
+
   # TEMP: pre-deploy local Playwright e2e (e2e-smoke / e2e-interview-flow) removed.
   # Vite/esbuild was panicking mid-suite on Linux CI and blocking deploy-dev.
   # Re-enable once the webServer/esbuild path is stabilized. Post-deploy
@@ -306,7 +316,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: dev
     concurrency:
-      group: pr-dev-${{ github.head_ref || github.ref_name }}
+      group: quick-dev-deploy
       cancel-in-progress: true
 
     steps:
@@ -325,6 +335,9 @@ jobs:
         # Native production dependencies (including sqlite3) require lifecycle
         # scripts to install their Linux bindings. prepare tolerates omitted Husky.
         run: npm ci --omit=dev
+
+      - name: Verify Playbook runtime dependencies
+        run: node -e "Promise.all([import('@mastra/core'), import('@mastra/core/workflows'), import('@mastra/pg')]).then(() => console.log('Playbook engine dependencies loaded'))"
 
       - name: Download build output
         uses: actions/download-artifact@v4
@@ -378,6 +391,7 @@ jobs:
         env:
           APP_NAME: app-scrum-dev
           RG_NAME: rg-scrum-dev
+          E2E_TEST_USER: ${{ secrets.E2E_TEST_USER }}
         run: |
           # Resolve the interactive live-bus (Redis) connection at deploy time so
           # the WS gateway subscribes to the same pub/sub the actor host publishes
@@ -489,6 +503,7 @@ jobs:
               AZURE_ARTIFACTS_ORG="${{ secrets.AZURE_ARTIFACTS_ORG }}" \
               AZURE_ARTIFACTS_FEED="${{ secrets.AZURE_ARTIFACTS_FEED }}" \
               AZURE_ARTIFACTS_PAT="${{ secrets.AZURE_ARTIFACTS_PAT }}" \
+              E2E_TEST_USER="$E2E_TEST_USER" \
               APEX_URL="https://app-scrum-dev.azurewebsites.net"
 
           # The Azure Node/Linux image ships without git, and the Dev Workbench
@@ -618,10 +633,24 @@ jobs:
         env:
           AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
           AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME }}
+          AI_PLATFORM_V2_FAST_INTERACTIVE_CONTAINER_APP_NAME: ${{ vars.AI_PLATFORM_V2_FAST_INTERACTIVE_CONTAINER_APP_NAME || 'ca-apex-ai-fast-interactive-dev' }}
+          AI_PLATFORM_V2_AGENTIC_CONTAINER_APP_NAME: ${{ vars.AI_PLATFORM_V2_AGENTIC_CONTAINER_APP_NAME || 'ca-apex-ai-agentic-dev' }}
           AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || 'rg-scrum-dev' }}
           AI_RUNS_INTERACTIVE_IMAGE_REPO: ${{ vars.AI_RUNS_INTERACTIVE_IMAGE_REPO }}
           IMAGE_TAG: ${{ github.sha }}
         run: bash scripts/ci/publish-ai-runs-interactive.sh
+
+      - name: Publish AI orchestrator image
+        if: >-
+          needs.detect-changes.outputs.ai_orchestrator == 'true' &&
+          hashFiles('runners/ai-orchestrator/Dockerfile') != ''
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_ORCHESTRATOR_CONTAINER_APP_NAME: ${{ vars.AI_ORCHESTRATOR_CONTAINER_APP_NAME || 'ca-apex-ai-orchestrator-dev' }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || 'rg-scrum-dev' }}
+          AI_ORCHESTRATOR_IMAGE_REPO: ${{ vars.AI_ORCHESTRATOR_IMAGE_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: bash scripts/ci/publish-ai-orchestrator.sh
 
       - name: Azure logout
         run: az logout

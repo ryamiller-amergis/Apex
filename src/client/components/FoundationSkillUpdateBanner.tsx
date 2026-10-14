@@ -4,6 +4,7 @@ import {
   getVisibleSkillsForProject,
   withAlwaysInstallSkills,
 } from '../../shared/types/foundationSkills';
+import { semverGt } from '../../shared/utils/semverStrict';
 import { BrandLogo } from './BrandLogo';
 import styles from './FoundationSkillUpdateBanner.module.css';
 
@@ -365,23 +366,26 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
   const [notesOpen, setNotesOpen] = useState(false);
   const [stepsOpen, setStepsOpen] = useState(false);
   const [firstTimeTab, setFirstTimeTab] = useState<FirstTimeSetupKey>('feed');
-  const { data: latest } = useLatestFoundationSkillRelease(project);
+  const { data: latest } = useLatestFoundationSkillRelease(project, {
+    provider,
+    project,
+    repo,
+    branch,
+  });
   const { data: repoStatus } = useFoundationSkillRepoStatus(provider, project, repo, branch);
 
-  const availableVersion =
-    repoStatus?.availableVersion ?? latest?.version ?? null;
   const installedVersion = repoStatus?.installedVersion ?? null;
   const isFirstInstall = !installedVersion;
   const updatePending =
-    !!availableVersion && availableVersion !== installedVersion;
+    !!latest &&
+    (isFirstInstall || (!!installedVersion && semverGt(latest.version, installedVersion)));
 
   const shouldShow =
     !dismissed &&
     !!latest &&
     !!project &&
     !!repo &&
-    updatePending &&
-    (isFirstInstall || !!repoStatus?.updateAvailable);
+    updatePending;
 
   if (!shouldShow || !latest) return null;
 

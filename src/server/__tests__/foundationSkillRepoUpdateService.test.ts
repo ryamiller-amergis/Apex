@@ -5,17 +5,20 @@ import { createHash } from 'crypto';
 import {
   buildArtifactCliArgs,
   resolveReleasedSkillsForProject,
+  updateRepoWithFoundationSkills,
   validateGeneratedDiff,
   reconcileRollbackWorkspace,
   buildGeneratedCliEnv,
   resolveWorkspaceSkillRoot,
 } from '../services/foundationSkillRepoUpdateService';
+import { getLatestPublishedRelease } from '../services/foundationSkillReleaseService';
 import type { FoundationSkillRelease } from '../../shared/types/foundationSkills';
 
 jest.mock('../services/foundationSkillReleaseService', () => ({
   getRelease: jest.fn(),
   getLatestPublishedRelease: jest.fn(),
   isReleaseVisibleToProject: jest.fn(),
+  isReleaseVisibleToRepo: jest.fn(() => true),
   getVisibleSkillsForProject: jest.fn(),
   listRollbackTargets: jest.fn(),
   semverGreaterThan: jest.fn(),
@@ -528,5 +531,31 @@ describe('reconcileRollbackWorkspace', () => {
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }
+  });
+});
+
+describe('updateRepoWithFoundationSkills release resolution', () => {
+  it('asks for the newest release this repository is allowed to install', async () => {
+    const getLatest = getLatestPublishedRelease as jest.Mock;
+    getLatest.mockResolvedValue(null);
+
+    const result = await updateRepoWithFoundationSkills({
+      project: 'MaxView',
+      repo: 'MaxView',
+      provider: 'ado',
+      defaultBranch: 'development',
+      apexProject: 'MaxView',
+      apexUrl: 'https://apex.example',
+    });
+
+    expect(getLatest).toHaveBeenCalledWith('MaxView', {
+      apexProject: 'MaxView',
+      provider: 'ado',
+      project: 'MaxView',
+      repo: 'MaxView',
+      branch: 'development',
+    });
+    expect(result.status).toBe('error');
+    expect(result.errors.join(' ')).toMatch(/No published foundation skills release/);
   });
 });

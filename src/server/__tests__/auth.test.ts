@@ -36,6 +36,10 @@ jest.mock('../services/pendingAssignmentService', () => ({
   resolvePendingAssignments: jest.fn().mockResolvedValue(undefined),
 }));
 
+jest.mock('../services/devEnvAllowlistService', () => ({
+  isDevEnvironmentAllowed: jest.fn().mockResolvedValue(true),
+}));
+
 const originalEnv = process.env;
 
 function loadAuthRouter() {
@@ -163,6 +167,19 @@ describe('GET /auth/status', () => {
 
     const res = await request(app).get('/auth/status').expect(200);
     expect(res.body).toEqual({ authenticated: false });
+  });
+});
+
+describe('GET /auth/dev-access-denied', () => {
+  it('explains that a platform admin must approve the email', async () => {
+    process.env = { ...originalEnv, NODE_ENV: 'test' };
+    const authRouter = loadAuthRouter();
+    const app = express();
+    app.use('/auth', authRouter);
+
+    const res = await request(app).get('/auth/dev-access-denied').expect(403);
+    expect(res.text).toContain('Dev access required');
+    expect(res.text).toContain('platform admin');
   });
 });
 

@@ -9,7 +9,7 @@ import passport from 'passport';
 // Load environment variables BEFORE importing routes
 dotenv.config();
 
-import apiRoutes from './routes/api';
+import apiRoutes, { isPublicHealthPath } from './routes/api';
 import authRoutes from './routes/auth';
 import azureCostRoutes from './routes/azureCost';
 import skillsRoutes from './routes/skills';
@@ -39,6 +39,10 @@ import {
   stopObservabilityOperations,
 } from './services/observabilityOperationsService';
 import {
+  startDbPoolTelemetryScheduler,
+  stopDbPoolTelemetryScheduler,
+} from './services/dbPoolTelemetry';
+import {
   startJourneyAggregation,
   stopJourneyAggregation,
 } from './services/journeyAggregationScheduler';
@@ -59,6 +63,10 @@ import {
   startAdmissionGovernorScheduler,
   stopAdmissionGovernorScheduler,
 } from './services/admissionGovernorScheduler';
+import {
+  startPlaybookReconciliation,
+  stopPlaybookReconciliation,
+} from './services/playbookReconciliationScheduler';
 import { initPgNotify, shutdownPgNotify } from './services/pgNotifyService';
 import {
   initInteractiveLiveBus,
@@ -178,10 +186,6 @@ const internalOnlyPaths = [
   '/backlog/mock-html',
 ];
 
-// Health check paths are unauthenticated — used by Azure slot-swap warmup and
-// external monitoring. req.path is relative to /api (prefix is stripped by Express).
-const unauthenticatedPaths = ['/health', '/health/db', '/health/agents'];
-
 // Load-test runner ingest/validate — session-free; auth is requireLoadTestRunnerAuth
 // on loadTestRunsInternalRoutes (LT_RUNNER_CALLBACK_TOKEN or runner MI JWT).
 const loadTestRunnerCallbackPaths = ['/internal/load-test-runs'];
@@ -201,7 +205,8 @@ app.use('/api', observabilityCaptureMiddleware);
 app.use('/api', (req, res, next) => {
   const isLocalhost = req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1';
   const isInternalPath = internalOnlyPaths.some(p => req.path.startsWith(p));
-  const isHealthPath = unauthenticatedPaths.some(p => req.path === p);
+  // Public health probes must bypass session auth before ensureAuthenticated.
+  const isHealthPath = isPublicHealthPath(req.path);
   const isLoadTestRunnerCallback = loadTestRunnerCallbackPaths.some((p) =>
     req.path.startsWith(p),
   );
@@ -433,6 +438,9 @@ const server = app.listen(PORT, () => {
   groundingMaintenanceScheduler.start();
   console.log('Grounding maintenance scheduler started');
 
+  startDbPoolTelemetryScheduler();
+  server.once('close', stopDbPoolTelemetryScheduler);
+
   workBoardScheduler.start();
   console.log('Work board due-soon scheduler started');
 
@@ -446,6 +454,9 @@ const server = app.listen(PORT, () => {
   startReaper();
   startAdmissionGovernorScheduler();
   server.once('close', stopAdmissionGovernorScheduler);
+  // Phase 0/1 runs are not behind playbooks-production-adapters, so recovery always starts.
+  void startPlaybookReconciliation();
+  server.once('close', stopPlaybookReconciliation);
   startLoadTestRunReaper();
   initPgNotify().catch((err) => console.error('[startup] initPgNotify failed:', err.message));
 

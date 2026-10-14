@@ -106,7 +106,16 @@ export async function checkCompatibility(
   // Resolve candidate version — respect project targeting when auto-resolving
   let candidateVersion: string | null | undefined = req.candidateVersion;
   if (!candidateVersion) {
-    const latest = await getLatestPublishedRelease(req.apexProject ?? null);
+    const latest = await getLatestPublishedRelease(
+      req.apexProject ?? null,
+      {
+        apexProject: req.apexProject ?? null,
+        provider,
+        project,
+        repo,
+        branch,
+      },
+    );
     candidateVersion = latest?.version ?? null;
   }
 

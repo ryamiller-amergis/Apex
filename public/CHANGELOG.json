@@ -1,5 +1,98 @@
 [
   {
+    "version": "1.39.1",
+    "date": "2026-10-13",
+    "title": "Production Reliability",
+    "changes": [
+      {
+        "type": "bugfix",
+        "description": "The ADR Apex Assistant and ADR generation work again in every project, even when the ADR skill lives in a different skills folder or only ships with Apex"
+      },
+      {
+        "type": "bugfix",
+        "description": "A failed ADR generation returns the ADR to In Progress and notifies the author instead of staying stuck on Generating"
+      },
+      {
+        "type": "bugfix",
+        "description": "ADR, PRD and design doc assistants can stage edits again on V2, and Azure DevOps, calendar and MaxView tools work from V2 chats"
+      },
+      {
+        "type": "bugfix",
+        "description": "MCP servers added to a project work from V2 chats"
+      },
+      {
+        "type": "improvement",
+        "description": "A V2 chat keeps going through a brief server restart instead of failing mid-answer"
+      },
+      {
+        "type": "improvement",
+        "description": "Every release now updates all V2 workers, so they always match the app, even after a cancelled deploy"
+      },
+      {
+        "type": "improvement",
+        "description": "With V2 on, a document that cannot reach a V2 worker fails with a clear message instead of running on the App Service"
+      },
+      {
+        "type": "improvement",
+        "description": "ADR generation runs on the background agent lane and no longer waits on the repository readiness check when V2 is on"
+      },
+      {
+        "type": "improvement",
+        "description": "A chat or interview turn that never starts is retried once automatically, and agent workers restart a broken Dapr sidecar on their own"
+      },
+      {
+        "type": "improvement",
+        "description": "Repository storage removes abandoned clones, refuses a clone when the disk is nearly full with a clear message, and reports its health at /api/health/storage"
+      }
+    ]
+  },
+  {
+    "version": "1.39.0",
+    "date": "2026-09-22",
+    "title": "First Real Playbook",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Design doc owners can start a validation Playbook that scores, ingests, and routes a ready result to review or a not-ready result to the owner"
+      },
+      {
+        "type": "feature",
+        "description": "Playbook authors cannot publish a cursor-agent step unless its MCP profile is read-only"
+      },
+      {
+        "type": "feature",
+        "description": "Project Admins can set a Playbook spend cap, warn at 75%, and override a blocked project so a run can start"
+      },
+      {
+        "type": "feature",
+        "description": "Home shows an assigned-to-me tile of pending Playbook gates ordered by deadline"
+      }
+    ]
+  },
+  {
+    "version": "1.38.0",
+    "date": "2026-09-22",
+    "title": "Playbook Definition and Governance",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Playbook authors can create project-scoped drafts, publish immutable numbered versions, deprecate versions, and inspect version history"
+      },
+      {
+        "type": "feature",
+        "description": "Playbook publishing and execution now validate step schemas, required permissions, and approval gates before actions can leave Apex"
+      },
+      {
+        "type": "feature",
+        "description": "Project Admins can grant Playbook author and administrator access with warnings when an author cannot run what they create"
+      },
+      {
+        "type": "feature",
+        "description": "Run initiators and Playbook administrators can cancel eligible runs or retry the current retryable step from the run view"
+      }
+    ]
+  },
+  {
     "version": "1.37.0",
     "date": "2026-08-13",
     "title": "Canonical Agent Skills Roots",

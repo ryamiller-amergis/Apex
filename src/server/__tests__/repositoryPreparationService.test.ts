@@ -187,7 +187,7 @@ describe('cold external-project repository preparation contract', () => {
 
       expect(mirrorStarted).toHaveBeenCalledTimes(1);
       expect(prepared.identity.sha).toBe(sha);
-      expect(repositoryContent).toBe('# External project\n');
+      expect(repositoryContent.replace(/\r\n/g, '\n')).toBe('# External project\n');
       await expect(fs.readFile(statusPath, 'utf8')).resolves.toBe('completed');
       expect(
         service.getReadyReadOnly({ repository, workflowClass, sha })

@@ -11,6 +11,7 @@ jest.mock('../../hooks/useProjectSkillConfig', () => ({
   useDeleteProjectSkillConfig: jest.fn(),
   useAvailableModels: jest.fn(),
   useAvailableBedrockModels: jest.fn(),
+  useGlobalDefaultModel: jest.fn().mockReturnValue({ data: { key: 'defaultModel', value: 'composer-2.5' } }),
   useProjectApprovers: jest.fn(),
   useSetProjectApprovers: jest.fn(),
 }));
@@ -39,6 +40,12 @@ jest.mock('../../hooks/useFoundationSkillAdmin', () => ({
 
 jest.mock('../../hooks/useFeatureFlags', () => ({
   useFeatureFlag: jest.fn().mockReturnValue(false),
+}));
+
+// Keep the real spend-policy card in this parent integration suite while
+// isolating the unrelated application shell (which reaches Vite import.meta.env).
+jest.mock('../../hooks/useAppShell', () => ({
+  useAppShell: () => ({ can: () => false }),
 }));
 
 jest.mock('../GroupAwarePeoplePicker', () => ({

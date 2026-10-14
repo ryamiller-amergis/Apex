@@ -378,6 +378,14 @@ function mapSearchRow(row: SearchThreadRow, term: string): ChatThreadSearchResul
 
 // ── loadFullThread ────────────────────────────────────────────────────────────
 
+export async function listMessageIds(threadId: string): Promise<string[]> {
+  const rows = await db
+    .select({ id: chatMessages.id })
+    .from(chatMessages)
+    .where(eq(chatMessages.threadId, threadId));
+  return rows.map((row) => row.id);
+}
+
 export async function loadFullThread(threadId: string): Promise<ChatThread | null> {
   const result = await db.query.chatThreads.findFirst({
     where: eq(chatThreads.id, threadId),

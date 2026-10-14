@@ -228,7 +228,7 @@ describe('PUT /api/admin/roles/:id', () => {
 describe('PUT /api/admin/roles/:id/permissions', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('returns 204 on success', async () => {
+  it('preserves the established 204 contract when permissions are saved', async () => {
     mockService.updateRolePermissions.mockResolvedValue(undefined);
 
     const res = await request(buildApp())
@@ -236,6 +236,7 @@ describe('PUT /api/admin/roles/:id/permissions', () => {
       .send({ permissionIds: ['perm-1', 'perm-2'] });
 
     expect(res.status).toBe(204);
+    expect(res.body).toEqual({});
     expect(mockService.updateRolePermissions).toHaveBeenCalledWith('role-admin', ['perm-1', 'perm-2']);
   });
 
@@ -248,7 +249,7 @@ describe('PUT /api/admin/roles/:id/permissions', () => {
     expect(mockService.updateRolePermissions).not.toHaveBeenCalled();
   });
 
-  it('returns 204 for an empty permissionIds array (clears all perms)', async () => {
+  it('returns 204 when clearing permissions', async () => {
     mockService.updateRolePermissions.mockResolvedValue(undefined);
 
     const res = await request(buildApp())
@@ -256,6 +257,7 @@ describe('PUT /api/admin/roles/:id/permissions', () => {
       .send({ permissionIds: [] });
 
     expect(res.status).toBe(204);
+    expect(res.body).toEqual({});
   });
 
   it('returns 500 when updateRolePermissions throws', async () => {
@@ -266,6 +268,17 @@ describe('PUT /api/admin/roles/:id/permissions', () => {
       .send({ permissionIds: [] });
 
     expect(res.status).toBe(500);
+  });
+
+  it('PBI-008 AC-3 / VT-11 rejects permission changes without admin:roles', async () => {
+    mockPermissions = new Set();
+
+    const res = await request(buildApp('non-admin'))
+      .put('/api/admin/roles/role-author/permissions')
+      .send({ permissionIds: ['perm-author'] });
+
+    expect(res.status).toBe(403);
+    expect(mockService.updateRolePermissions).not.toHaveBeenCalled();
   });
 });
 
@@ -1428,7 +1441,7 @@ describe('POST /api/admin/groups/seed/:project', () => {
 describe('POST /api/admin/users/:oid/project-roles', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('returns 200 with { ok: true } on successful assignment', async () => {
+  it('preserves the established assignment response', async () => {
     mockService.assignProjectRole.mockResolvedValue(undefined);
 
     const res = await request(buildApp('admin-oid'))
@@ -1486,6 +1499,17 @@ describe('POST /api/admin/users/:oid/project-roles', () => {
       .send({ project: 'MyProject', roleId: 'role-admin' });
 
     expect(res.status).toBe(500);
+  });
+
+  it('PBI-008 AC-3 / VT-11 rejects project-role grants without admin:roles', async () => {
+    mockPermissions = new Set();
+
+    const res = await request(buildApp('non-admin'))
+      .post('/api/admin/users/user-1/project-roles')
+      .send({ project: 'MyProject', roleId: 'role-author' });
+
+    expect(res.status).toBe(403);
+    expect(mockService.assignProjectRole).not.toHaveBeenCalled();
   });
 });
 

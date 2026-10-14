@@ -14,6 +14,7 @@ import type {
   FoundationSkillReleaseValidationErrorResponse,
   FoundationSkillReleaseValidationIssue,
   FoundationSkillProjectNotes,
+  FoundationSkillTargetRepo,
 } from '../../shared/types/foundationSkills';
 
 // ── Fetch helper ──────────────────────────────────────────────────────────────
@@ -65,8 +66,8 @@ export const foundationSkillAdminKeys = {
   audit:          (id: string) => ['foundation-skills-admin', 'audit', id] as const,
   repoStatuses:   ['foundation-skills-admin', 'repo-statuses']  as const,
   teams:          ['foundation-skills-admin', 'teams']          as const,
-  rollbackTargets:(apexProject: string, installedVersion: string) =>
-    ['foundation-skills-admin', 'rollback-targets', apexProject, installedVersion] as const,
+  rollbackTargets:(apexProject: string, installedVersion: string, repoKey = '') =>
+    ['foundation-skills-admin', 'rollback-targets', apexProject, installedVersion, repoKey] as const,
   catalog:        ['foundation-skills-admin', 'catalog']        as const,
   skillsMatrix:   ['foundation-skills-admin', 'skills-matrix']  as const,
   projectSkills:  (project: string) => ['foundation-skills-admin', 'project-skills', project] as const,
@@ -160,6 +161,8 @@ export interface UpdateReleasePayload {
   /** Per-project notes; replaces the whole map. */
   projectNotes?:    Record<string, FoundationSkillProjectNotes>;
   targetProjects?:  string[];
+  /** Repositories under the selected projects. Empty means every repository. */
+  targetRepos?:     FoundationSkillTargetRepo[];
   /** Per-skill project targeting overrides. */
   skillTargets?:    Record<string, string[]>;
   selectedSkills?:  string[];
@@ -280,14 +283,22 @@ export function useScanAllFoundationSkillRepos() {
 export function useFoundationSkillRollbackTargets(
   apexProject: string | null | undefined,
   installedVersion: string | null | undefined,
+  repo?: { provider: string; project: string; repo: string; branch: string } | null,
 ) {
+  const repoKey = repo ? `${repo.provider}|${repo.project}|${repo.repo}|${repo.branch}` : '';
   return useQuery<FoundationSkillRelease[]>({
-    queryKey: foundationSkillAdminKeys.rollbackTargets(apexProject ?? '', installedVersion ?? ''),
+    queryKey: foundationSkillAdminKeys.rollbackTargets(apexProject ?? '', installedVersion ?? '', repoKey),
     queryFn: async () => {
       const params = new URLSearchParams({
         apexProject: apexProject!,
         installedVersion: installedVersion!,
       });
+      if (repo) {
+        params.set('provider', repo.provider);
+        params.set('repoProject', repo.project);
+        params.set('repo', repo.repo);
+        params.set('branch', repo.branch);
+      }
       const data = await adminFetch<{ releases: FoundationSkillRelease[] }>(
         `/api/platform-admin/foundation-skills/rollback-targets?${params.toString()}`,
       );

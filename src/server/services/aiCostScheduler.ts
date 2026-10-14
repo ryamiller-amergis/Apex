@@ -11,11 +11,14 @@
 import { runCursorBillingSync } from './cursorBillingSyncService';
 import { runCostAllocation } from './aiCostAllocationService';
 import { generateBriefForAllProjects } from './aiCostDailyBriefService';
+import { aiCostUndercountReportService } from './aiCostUndercountReportService';
+import { isFeatureOperational } from './featureFlagService';
 
 export class AiCostSchedulerService {
   private intervalId: NodeJS.Timeout | null = null;
   private isRunning: boolean = false;
   private lastBriefRun: Date | null = null;
+  private lastUndercountReportDate: string | null = null;
   private readonly CHECK_INTERVAL = 60 * 60 * 1000; // 1 hour
 
   start(): void {
@@ -57,6 +60,32 @@ export class AiCostSchedulerService {
       const hour = now.getHours();
       const isMorning = hour === 8;
       const isAfternoon = hour === 14;
+
+      // Playbook reporting is isolated from the established billing allocation
+      // and brief schedule: flag/report failures must not skip existing jobs.
+      try {
+        const productionAdaptersEnabled = await isFeatureOperational('playbooks-production-adapters');
+        // @feature-flag:playbooks-production-adapters start winner=enabled
+        if (productionAdaptersEnabled) {
+          // @feature-flag:playbooks-production-adapters enabled-start
+          const utcDate = now.toISOString().slice(0, 10);
+          if (this.lastUndercountReportDate !== utcDate) {
+            await aiCostUndercountReportService.run();
+            this.lastUndercountReportDate = utcDate;
+          }
+          // @feature-flag:playbooks-production-adapters enabled-end
+        } else {
+          // @feature-flag:playbooks-production-adapters disabled-start
+          // Preserve the existing scheduler: no Playbook spend report reads or writes.
+          // @feature-flag:playbooks-production-adapters disabled-end
+        }
+        // @feature-flag:playbooks-production-adapters end
+      } catch (err) {
+        console.error(
+          '[AiCostScheduler] Playbook spend undercount report failed:',
+          (err as Error).message,
+        );
+      }
 
       if (isMorning && (!this.lastBriefRun || now.getDate() !== this.lastBriefRun.getDate())) {
         try {

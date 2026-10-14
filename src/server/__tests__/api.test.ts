@@ -1,7 +1,9 @@
 import request from 'supertest';
 import express from 'express';
-import apiRouter from '../routes/api';
+import apiRouter, { isPublicHealthPath } from '../routes/api';
 import { AzureDevOpsService } from '../services/azureDevOps';
+import { getDbPoolStats } from '../db';
+import { db } from '../db/drizzle';
 import * as userProjectAssignmentService from '../services/userProjectAssignmentService';
 import * as projectCatalogService from '../services/projectCatalogService';
 import * as projectAccessRequestService from '../services/projectAccessRequestService';
@@ -9,6 +11,11 @@ import * as workerTierHealthService from '../services/workerTierHealthService';
 
 // Mock the AzureDevOpsService
 jest.mock('../services/azureDevOps');
+jest.mock('../db/drizzle', () => ({
+  db: {
+    execute: jest.fn(),
+  },
+}));
 
 jest.mock('../services/projectSettingsService', () => {
   const getSkillConfig = jest.fn();
@@ -42,10 +49,15 @@ jest.mock('../services/workerTierHealthService', () => ({
   getWorkerTierHealthStats: jest.fn(),
 }));
 
+jest.mock('../db', () => ({
+  getDbPoolStats: jest.fn(),
+}));
+
 const mockAssignmentService = userProjectAssignmentService as jest.Mocked<typeof userProjectAssignmentService>;
 const mockProjectCatalogService = projectCatalogService as jest.Mocked<typeof projectCatalogService>;
 const mockProjectAccessRequestService = projectAccessRequestService as jest.Mocked<typeof projectAccessRequestService>;
 const mockWorkerTierHealthService = workerTierHealthService as jest.Mocked<typeof workerTierHealthService>;
+const mockGetDbPoolStats = jest.mocked(getDbPoolStats);
 
 describe('API Routes', () => {
   let app: express.Application;
@@ -56,6 +68,14 @@ describe('API Routes', () => {
     mockWorkerTierHealthService.getWorkerTierHealthStats.mockResolvedValue({
       workerTierSaturation: 0.5,
       oldestQueuedAgeMs: 90_000,
+    });
+    mockGetDbPoolStats.mockReturnValue({
+      max: 5,
+      total: 3,
+      idle: 1,
+      active: 2,
+      waiting: 0,
+      saturation: 0.4,
     });
     
     // Create Express app with the API router
@@ -100,6 +120,14 @@ describe('API Routes', () => {
         uptime: expect.any(Number),
         workerTierSaturation: 0.5,
         oldestQueuedAgeMs: 90_000,
+        databasePool: {
+          max: 5,
+          total: 3,
+          idle: 1,
+          active: 2,
+          waiting: 0,
+          saturation: 0.4,
+        },
       }));
     });
 
@@ -116,6 +144,14 @@ describe('API Routes', () => {
         status: 'ok',
         workerTierSaturation: 0,
         oldestQueuedAgeMs: 0,
+        databasePool: {
+          max: 5,
+          total: 3,
+          idle: 1,
+          active: 2,
+          waiting: 0,
+          saturation: 0.4,
+        },
       }));
       expect(JSON.stringify(response.body)).not.toMatch(
         /password=secret|private-db/i,
@@ -513,9 +549,7 @@ describe('API Routes', () => {
   });
 
   describe('GET /api/health', () => {
-    it('should return healthy status', async () => {
-      mockAdoService.healthCheck.mockResolvedValue(true);
-
+    it('returns 200 process health without calling Azure DevOps or the database', async () => {
       const response = await request(app)
         .get('/api/health')
         .expect(200);
@@ -524,19 +558,86 @@ describe('API Routes', () => {
         healthy: true,
         timestamp: expect.any(String),
       });
+      expect(AzureDevOpsService).not.toHaveBeenCalled();
+      expect(db.execute).not.toHaveBeenCalled();
     });
+  });
 
-    it('should return unhealthy status', async () => {
-      mockAdoService.healthCheck.mockRejectedValue(new Error('Service unavailable'));
-
+  describe('GET /api/health/live', () => {
+    it('returns 200 process health without calling Azure DevOps or the database', async () => {
       const response = await request(app)
-        .get('/api/health')
-        .expect(503);
+        .get('/api/health/live')
+        .expect(200);
 
       expect(response.body).toMatchObject({
-        healthy: false,
-        error: 'Service unavailable',
+        healthy: true,
+        timestamp: expect.any(String),
       });
+      expect(AzureDevOpsService).not.toHaveBeenCalled();
+      expect(db.execute).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /api/health/dependencies', () => {
+    it('returns 200 only when Azure DevOps is healthy', async () => {
+      mockAdoService.healthCheck.mockResolvedValue(true);
+
+      const response = await request(app)
+        .get('/api/health/dependencies')
+        .expect(200);
+
+      expect(response.body).toMatchObject({
+        healthy: true,
+        timestamp: expect.any(String),
+      });
+      expect(mockAdoService.healthCheck).toHaveBeenCalledTimes(1);
+      expect(db.execute).not.toHaveBeenCalled();
+    });
+
+    it('returns 503 when Azure DevOps reports unhealthy', async () => {
+      mockAdoService.healthCheck.mockResolvedValue(false);
+
+      const response = await request(app)
+        .get('/api/health/dependencies')
+        .expect(503);
+
+      expect(response.body).toEqual({
+        healthy: false,
+        error: 'Dependencies unavailable',
+      });
+    });
+
+    it('returns 503 when Azure DevOps throws without exposing details', async () => {
+      mockAdoService.healthCheck.mockRejectedValue(new Error('Azure DevOps PAT expired'));
+
+      const response = await request(app)
+        .get('/api/health/dependencies')
+        .expect(503);
+
+      expect(response.body).toEqual({
+        healthy: false,
+        error: 'Dependencies unavailable',
+      });
+      expect(JSON.stringify(response.body)).not.toMatch(/PAT expired|Azure DevOps/i);
+    });
+  });
+
+  describe('public health allowlist predicate', () => {
+    it('returns true for each exact public health path', () => {
+      expect(isPublicHealthPath('/health')).toBe(true);
+      expect(isPublicHealthPath('/health/live')).toBe(true);
+      expect(isPublicHealthPath('/health/ready')).toBe(true);
+      expect(isPublicHealthPath('/health/dependencies')).toBe(true);
+      expect(isPublicHealthPath('/health/db')).toBe(true);
+      expect(isPublicHealthPath('/health/agents')).toBe(true);
+    });
+
+    it('returns false for non-exact matches and neighboring paths', () => {
+      expect(isPublicHealthPath('/health/live/extra')).toBe(false);
+      expect(isPublicHealthPath('/healthz')).toBe(false);
+      expect(isPublicHealthPath('/health/dependencies/private')).toBe(false);
+      expect(isPublicHealthPath('/health/agent')).toBe(false);
+      expect(isPublicHealthPath('/status')).toBe(false);
     });
   });
 

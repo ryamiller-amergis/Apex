@@ -96,7 +96,10 @@ jest.mock('../services/runGroundingService', () => ({
       updatedAt: '2026-08-06T00:00:00.000Z',
     }]),
     persistThenMarkTerminalInactive: jest.fn().mockImplementation(
-      async (_run: unknown, persist: () => Promise<unknown>) => persist(),
+      async (_run: unknown, persist: () => Promise<unknown>) => ({
+        persisted: await persist(),
+        deactivatedCount: 0,
+      }),
     ),
   },
 }));
@@ -143,6 +146,29 @@ jest.mock('../services/documentValidationService', () => ({
   autoStartDocumentValidation: jest.fn().mockResolvedValue(undefined),
   cancelDocumentValidation: jest.fn().mockResolvedValue(undefined),
   generateFallbackReport: jest.fn().mockReturnValue('# Fallback validation report'),
+  ingestValidationScorecard: jest.fn().mockImplementation(
+    async (
+      adapter: {
+        isCurrentValidationThread(threadId: string): Promise<boolean>;
+        updateDbForValidationResult(
+          scorecard: Record<string, unknown>,
+          reportMd: string,
+        ): Promise<void>;
+      },
+      threadId: string,
+      outcome: { kind: string; scorecardRaw?: string; reportMd?: string },
+    ) => {
+      if (!(await adapter.isCurrentValidationThread(threadId))) {
+        return { disposition: 'discarded_stale' };
+      }
+      const scorecard = JSON.parse(outcome.scorecardRaw ?? '{}');
+      await adapter.updateDbForValidationResult(
+        scorecard,
+        outcome.reportMd ?? '# Fallback validation report',
+      );
+      return { disposition: 'applied', scorecard };
+    },
+  ),
   isDocumentValidationWatcherActive: jest.fn().mockReturnValue(false),
   startDocumentValidationWatcher: jest.fn(),
   stopDocumentValidationWatcher: jest.fn(),
@@ -232,6 +258,7 @@ import {
   revertPrdSection,
   dismissPrdFixSession,
   createPrdAdoWorkItems,
+  createPrdValidationAdapter,
 } from '../services/prdService';
 import { hashPrdValidationContent } from '../../shared/utils/prdValidationFastPath';
 
@@ -1471,6 +1498,72 @@ describe('syncPrdContent', () => {
       expect.objectContaining({ backlogJson: backlog }),
     );
   });
+
+  it('returns false when a generation completion loses its status and thread CAS', async () => {
+    const returningMock = jest.fn().mockResolvedValue([]);
+    const whereMock = jest.fn().mockReturnValue({
+      returning: returningMock,
+    });
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await expect(
+      syncPrdContent(
+        'prd-1',
+        'content',
+        { items: [] },
+        'draft',
+        {
+          expectedStatus: 'generating',
+          expectedThreadId: 'thread-prd',
+        },
+      ),
+    ).resolves.toBe(false);
+    expect(returningMock).toHaveBeenCalled();
+  });
+});
+
+describe('createPrdValidationAdapter', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('does not record or notify when another validation thread took over the PRD', async () => {
+    const { notifyAiCompletion: mockNotifyAiCompletion } = jest.requireMock(
+      '../services/aiCompletionNotifier',
+    ) as { notifyAiCompletion: jest.Mock };
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      fixBaseline: null,
+      status: 'validating',
+      content: '# PRD',
+      backlogJson: null,
+    });
+    const returningMock = jest.fn().mockResolvedValue([]);
+    const whereMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+    const adapter = createPrdValidationAdapter(
+      makePrdRow({ status: 'validating' }) as never,
+    );
+
+    await expect(
+      adapter.updateDbForValidationResult(
+        {
+          slug: 'feature-prd',
+          generated_at: '2026-01-01T00:00:00Z',
+          review_phase: 'initial',
+          overall_score: 82,
+          ready_threshold: 90,
+          is_ready: false,
+          verdict: 'gaps',
+          files: [],
+        } as never,
+        '# Report',
+        'stale-thread',
+      ),
+    ).resolves.toBe(false);
+
+    expect(whereMock).toHaveBeenCalledTimes(2);
+    expect(mockNotifyAiCompletion).not.toHaveBeenCalled();
+  });
 });
 
 // ── updatePrdBacklog ──────────────────────────────────────────────────────────
@@ -1997,6 +2090,13 @@ describe('PRD validation lifecycle', () => {
 
   it('syncs a validation scorecard and moves ready PRDs to pending review', async () => {
     mockPrdSelectForGetPrd({ status: 'validating', validationThreadId: 'validation-thread-1' });
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      validationThreadId: 'validation-thread-1',
+      fixBaseline: null,
+      status: 'validating',
+      content: '# PRD',
+      backlogJson: {},
+    });
     const scorecard = {
       slug: 'feature-prd',
       generated_at: '2026-01-01T00:00:00Z',
@@ -2009,8 +2109,10 @@ describe('PRD validation lifecycle', () => {
     };
     mockReadOutputValidationScorecard.mockReturnValue(JSON.stringify(scorecard));
     mockReadOutputValidationScorecardMd.mockReturnValue('# Validation Report');
-    const whereMock = jest.fn().mockResolvedValue(undefined);
-    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'prd-1' }]);
+    const setMock = jest.fn().mockReturnValue({
+      where: jest.fn().mockReturnValue({ returning: returningMock }),
+    });
     mockDb.update.mockReturnValue({ set: setMock });
 
     const result = await syncPrdValidationResult('prd-1');

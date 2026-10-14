@@ -4,6 +4,7 @@ import { interviews, prds } from '../db/schema';
 import type { Interview, InterviewStatus, InterviewSummary, PrdSummary } from '../../shared/types/interview';
 import type { PrdStatus } from '../../shared/types/interview';
 import type { EffortLevel } from '../../shared/types/effort';
+import type { InterviewProfileSnapshot, InterviewStepMode } from '../../shared/types/playbook';
 import { cancelRun, markAsInterviewThread } from './chatAgentService';
 import { createNotification } from './notificationService';
 import { getSkillSettingsName } from './projectSettingsService';
@@ -18,6 +19,66 @@ function assertValidInterviewStatus(status: string): asserts status is Interview
     (err as any).status = 400;
     throw err;
   }
+}
+
+const PLAYBOOK_LINKAGE_ERROR =
+  'Playbook interview linkage requires a run, step run, mode, profile key, and snapshot.';
+
+function playbookInterviewColumns(opts: {
+  playbookRunId?: string | null;
+  playbookStepRunId?: string | null;
+  playbookInterviewMode?: InterviewStepMode | null;
+  playbookProfileKey?: string | null;
+  playbookProfileSnapshot?: InterviewProfileSnapshot | null;
+}): {
+  playbookRunId: string | null;
+  playbookStepRunId: string | null;
+  playbookInterviewMode: InterviewStepMode | null;
+  playbookProfileKey: string | null;
+  playbookProfileSnapshot: InterviewProfileSnapshot | null;
+} {
+  const provided = [
+    opts.playbookRunId,
+    opts.playbookStepRunId,
+    opts.playbookInterviewMode,
+    opts.playbookProfileKey,
+    opts.playbookProfileSnapshot,
+  ];
+  const anySet = provided.some((value) => value != null);
+  const allSet = provided.every((value) => value != null);
+  if (!anySet) {
+    return {
+      playbookRunId: null,
+      playbookStepRunId: null,
+      playbookInterviewMode: null,
+      playbookProfileKey: null,
+      playbookProfileSnapshot: null,
+    };
+  }
+  if (!allSet) {
+    throw new Error(PLAYBOOK_LINKAGE_ERROR);
+  }
+
+  const mode = opts.playbookInterviewMode;
+  const profileKey = opts.playbookProfileKey?.trim() ?? '';
+  const snapshot = opts.playbookProfileSnapshot;
+  if (
+    (mode !== 'human_led' && mode !== 'multi_agent_assisted') ||
+    profileKey.length === 0 ||
+    !snapshot ||
+    snapshot.mode !== mode ||
+    snapshot.key !== profileKey
+  ) {
+    throw new Error(PLAYBOOK_LINKAGE_ERROR);
+  }
+
+  return {
+    playbookRunId: opts.playbookRunId ?? null,
+    playbookStepRunId: opts.playbookStepRunId ?? null,
+    playbookInterviewMode: mode,
+    playbookProfileKey: profileKey,
+    playbookProfileSnapshot: snapshot,
+  };
 }
 
 export async function createInterview(opts: {
@@ -39,9 +100,15 @@ export async function createInterview(opts: {
   testCaseApproverIds?: string[];
   prototypeStageEnabled?: boolean;
   testCasesEnabled?: boolean;
+  playbookRunId?: string | null;
+  playbookStepRunId?: string | null;
+  playbookInterviewMode?: InterviewStepMode | null;
+  playbookProfileKey?: string | null;
+  playbookProfileSnapshot?: InterviewProfileSnapshot | null;
 }): Promise<{ interviewId: string; threadId: string }> {
   const prototypeStageEnabled = opts.prototypeStageEnabled !== false;
   const testCasesEnabled = opts.testCasesEnabled !== false;
+  const playbook = playbookInterviewColumns(opts);
 
   const [row] = await db
     .insert(interviews)
@@ -65,6 +132,11 @@ export async function createInterview(opts: {
       testCaseApproverIds: testCasesEnabled ? (opts.testCaseApproverIds ?? null) : null,
       prototypeStageEnabled,
       testCasesEnabled,
+      playbookRunId: playbook.playbookRunId,
+      playbookStepRunId: playbook.playbookStepRunId,
+      playbookInterviewMode: playbook.playbookInterviewMode,
+      playbookProfileKey: playbook.playbookProfileKey,
+      playbookProfileSnapshot: playbook.playbookProfileSnapshot,
     })
     .returning({ id: interviews.id });
 
@@ -299,6 +371,11 @@ export async function getInterview(id: string): Promise<Interview | null> {
     designDocApproverIds: row.designDocApproverIds ?? undefined,
     designPrototypeApproverIds: row.designPrototypeApproverIds ?? undefined,
     testCaseApproverIds: row.testCaseApproverIds ?? undefined,
+    playbookRunId: row.playbookRunId,
+    playbookStepRunId: row.playbookStepRunId,
+    playbookInterviewMode: row.playbookInterviewMode,
+    playbookProfileKey: row.playbookProfileKey,
+    playbookProfileSnapshot: row.playbookProfileSnapshot,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     prds: prdSummaries,

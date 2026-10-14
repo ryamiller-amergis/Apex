@@ -1,4 +1,5 @@
 export const WORK_BOARD_FLAG = 'work-board';
+export const MY_WORK_CLOUD_AGENT_FLAG = 'my-work-cloud-agent';
 
 export type FlagLifecycle = 'active' | 'stale' | 'archived';
 

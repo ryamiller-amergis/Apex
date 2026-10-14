@@ -5,6 +5,7 @@ import {
   useDeleteProjectSkillConfig,
   useAvailableModels,
   useAvailableBedrockModels,
+  useGlobalDefaultModel,
   useProjectApprovers,
   useSetProjectApprovers,
 } from '../hooks/useProjectSkillConfig';
@@ -18,12 +19,14 @@ import { useGroupsWithMembers } from '../hooks/useGroups';
 import { GroupAwarePeoplePicker } from './GroupAwarePeoplePicker';
 import { useProjectAvailableSkills } from '../hooks/useFoundationSkillAdmin';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
+import { DEFAULT_MODEL_ID } from '../config/models';
 import {
   formatRepositoryCheckoutStatusLabel,
   useAdminProjectRepositoryReadiness,
   useCloneProjectRepository,
 } from '../hooks/useProjectRepositoryReadiness';
 import styles from './AdminProjectSettings.module.css';
+import { PlaybookSpendPolicyCard } from './PlaybookSpendPolicyCard';
 
 // ── BranchCombobox ─────────────────────────────────────────────────────────────
 
@@ -573,8 +576,10 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
         type="button"
         className={styles.btnAction}
         onClick={() => onChange([...options, {
+          key: '',
           path: '',
           friendlyName: '',
+          enabled: true,
           wantsDesignPrototype: true,
           wantsTestCases: true,
         }])}
@@ -621,6 +626,25 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
             Remove
           </button>
         </div>
+        <div className={styles.field}>
+          <label className={styles.label} htmlFor={`iso-key-${idx}`}>Playbook key</label>
+          <input
+            id={`iso-key-${idx}`}
+            className={styles.input}
+            placeholder="e.g. ba-discovery"
+            value={opt.key ?? ''}
+            onChange={(e) => {
+              const next = [...options];
+              next[idx] = { ...next[idx], key: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-') };
+              onChange(next);
+            }}
+            disabled={disabled}
+            {...{ 'data-testid': `ps-interview-option-key-${idx}` }}
+          />
+          <span className={styles.skillDescription}>
+            Lowercase letters, numbers, and dashes. Playbooks use this key to pick this interview option.
+          </span>
+        </div>
         <div className={styles.interviewOptionRow}>
           <select
             className={styles.select}
@@ -650,6 +674,21 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
            {...{ 'data-testid': `ps-interview-option-effort-${idx}` }} />
         </div>
         <div className={styles.interviewOptionFlags}>
+          <label className={styles.interviewOptionFlag} htmlFor={`iso-enabled-${idx}`}>
+            <input
+              id={`iso-enabled-${idx}`}
+              type="checkbox"
+              checked={opt.enabled !== false}
+              onChange={(e) => {
+                const next = [...options];
+                next[idx] = { ...next[idx], enabled: e.target.checked };
+                onChange(next);
+              }}
+              disabled={disabled}
+              {...{ 'data-testid': `ps-interview-option-enabled-${idx}` }}
+            />
+            Available to Playbooks
+          </label>
           <label className={styles.interviewOptionFlag} htmlFor={`iso-proto-${idx}`}>
             <input
               id={`iso-proto-${idx}`}
@@ -1311,6 +1350,7 @@ interface PipelineStageCardProps {
   edit: EditState;
   skillList: { id: string; path: string; name: string }[];
   availableModels: { id: string; displayName: string }[];
+  systemDefaultModelName: string;
   expanded: boolean;
   onToggle: () => void;
   onEditChange: (patch: Partial<EditState>) => void;
@@ -1324,6 +1364,7 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
   edit,
   skillList,
   availableModels,
+  systemDefaultModelName,
   expanded,
   onToggle,
   onEditChange,
@@ -1336,7 +1377,7 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
   const effortValue = stage.effortKey ? edit[stage.effortKey] : '';
   const defaultModelLabel = edit.defaultModel
     ? availableModels.find((m) => m.id === edit.defaultModel)?.displayName ?? edit.defaultModel
-    : 'system default (composer-2)';
+    : `system default (${systemDefaultModelName})`;
 
   return (
     <div className={styles.stageCard} {...{ 'data-testid': `ps-stage-${stage.skillKey}` }}>
@@ -1619,6 +1660,10 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   const upsert = useUpsertProjectSkillConfig();
   const remove = useDeleteProjectSkillConfig();
   const { data: availableModels = [], isLoading: isLoadingModels } = useAvailableModels();
+  const { data: globalDefaultModel } = useGlobalDefaultModel();
+  const systemDefaultModelId = globalDefaultModel?.value || DEFAULT_MODEL_ID;
+  const systemDefaultModelName =
+    availableModels.find((m) => m.id === systemDefaultModelId)?.displayName ?? systemDefaultModelId;
   const { data: bedrockModels = [] } = useAvailableBedrockModels();
   const { data: allUsers = [] } = useUsers(selectedProject);
 
@@ -2198,6 +2243,11 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           )}
         </div>
 
+        <PlaybookSpendPolicyCard
+          project={selectedProject}
+          {...{ 'data-testid': 'playbook-spend-policy-card-entry' }}
+        />
+
         {/* ── Edit form (accordion layout) ────────────────────────────── */}
         {edit && (
           <div className={styles.formCard}>
@@ -2305,7 +2355,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, defaultModel: e.target.value } : prev)}
                     disabled={upsert.isPending || isLoadingModels}
                    {...{ 'data-testid': 'ps-defaultModel' }}>
-                    <option value="">Use system default (composer-2)</option>
+                    <option value="">Use system default ({systemDefaultModelName})</option>
                     {availableModels.map((m) => (
                       <option key={m.id} value={m.id}>{m.displayName}</option>
                     ))}
@@ -2388,6 +2438,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     edit={edit}
                     skillList={skillList}
                     availableModels={availableModels}
+                    systemDefaultModelName={systemDefaultModelName}
                     expanded={isStageExpanded(stage)}
                     onToggle={() => toggleStage(stage.id, stage)}
                     onEditChange={patchEdit}
@@ -2429,7 +2480,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     <span className={styles.modelDefault}>
                       Using: {edit.defaultModel
                         ? availableModels.find((m) => m.id === edit.defaultModel)?.displayName ?? edit.defaultModel
-                        : 'system default (composer-2)'}
+                        : `system default (${systemDefaultModelName})`}
                     </span>
                   )}
                 </div>
@@ -2459,6 +2510,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     edit={edit}
                     skillList={skillList}
                     availableModels={availableModels}
+                    systemDefaultModelName={systemDefaultModelName}
                     expanded={isStageExpanded(stage)}
                     onToggle={() => toggleStage(stage.id, stage)}
                     onEditChange={patchEdit}
@@ -2487,6 +2539,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     edit={edit}
                     skillList={skillList}
                     availableModels={availableModels}
+                    systemDefaultModelName={systemDefaultModelName}
                     expanded={isStageExpanded(stage)}
                     onToggle={() => toggleStage(stage.id, stage)}
                     onEditChange={patchEdit}

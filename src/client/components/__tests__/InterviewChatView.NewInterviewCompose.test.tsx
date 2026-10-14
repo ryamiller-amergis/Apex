@@ -263,6 +263,14 @@ describe('NewInterviewCompose — title required', () => {
     expect(screen.getByPlaceholderText(/describe what you'd like/i)).toBeInTheDocument();
   });
 
+  it('shows the three interview phases before the conversation starts', () => {
+    renderCompose();
+    expect(screen.getByTestId('interview-phase-bar')).toBeInTheDocument();
+    expect(screen.getByTestId('interview-phase-discovery')).toHaveTextContent('6 topics');
+    expect(screen.getByTestId('interview-phase-delivery')).toHaveTextContent('5 topics');
+    expect(screen.getByTestId('interview-phase-technical')).toHaveTextContent('Optional');
+  });
+
   it('opens staged ADR and Design Module selection from a compact composer control', async () => {
     renderCompose();
 
@@ -504,6 +512,9 @@ describe('NewInterviewCompose — title required', () => {
     expect(messageCall).toBeDefined();
     const body = JSON.parse(messageCall![1].body);
     expect(body.text).toBe('Tell me about the architecture');
+    expect(body.turnId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
   });
 
   it('PBI-003 AC-0 / VT-05 Given staged links, When creation resolves, Then persistence finishes before the first message posts', async () => {

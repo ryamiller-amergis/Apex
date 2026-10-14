@@ -18,10 +18,10 @@ import {
   rejectAdrProposedContent,
   setAdrAssistantThread,
   stageAdrReviewFix,
-  startAdrWatcher,
   updateAdrStatus,
   updateAdrTitle,
 } from '../services/adrService';
+import { routeAdrGenerationKickoff } from '../services/adrGenerationService';
 import { createThread, getThread, getThreadAsync, updateThreadKickoffContext } from '../services/chatAgentService';
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
@@ -42,13 +42,24 @@ import { fixAdrContentWithBedrock, regenerateMarkdownRegionWithBedrock, BedrockM
 import { adrUsageCtx, uniqueThreadIds } from '../services/artifactUsageContext';
 import { getEntityUsageRollup } from '../services/aiCostAnalyticsService';
 import type { OwnerApproveRequest } from '../../shared/types/approvals';
-import { isProjectRepositoryCheckoutReadinessEnabled } from '../services/featureFlagService';
+import {
+  isFeatureEnabled,
+  isProjectRepositoryCheckoutReadinessEnabled,
+} from '../services/featureFlagService';
 import {
   assertResolvedProjectRepositoryReady,
   ProjectRepositoryNotReady,
 } from '../services/projectRepositoryReadinessService';
-import { propagatePipelineGrounding } from '../services/runGroundingService';
 import { resolveReviewerAvailability } from '../services/reviewerAvailabilityService';
+
+const ADR_GENERATION_KICKOFF =
+  'Generate the ADR from `.ai-pilot/kickoff-transcript.md`. Do not ask questions. Write exactly one `.ai-pilot/output/{slug}.adr.md` file.';
+
+/** V2 prepares the repository itself and reports failure on the ADR, so it skips the readiness pre-check. */
+function isV2TransportEnabled(userId: string, project: string): Promise<boolean> {
+  return isFeatureEnabled('ai-runs-v2-transport', { userId, project, caller: 'adr' })
+    .catch(() => false);
+}
 
 const router = Router();
 
@@ -123,11 +134,12 @@ router.post('/', requirePermission('adr:create'), async (req, res, next) => {
       return;
     }
     const userId = getUserId(req);
-    const enabled = await isProjectRepositoryCheckoutReadinessEnabled({
-      userId,
-      project,
-      caller: 'adr-interview',
-    });
+    const enabled = !(await isV2TransportEnabled(userId, project))
+      && await isProjectRepositoryCheckoutReadinessEnabled({
+        userId,
+        project,
+        caller: 'adr-interview',
+      });
     // @feature-flag:project-repository-checkout-readiness start winner=enabled
     if (enabled) {
       // @feature-flag:project-repository-checkout-readiness enabled-start
@@ -236,11 +248,12 @@ router.post('/:id/generate', requirePermission('adr:edit'), async (req, res, nex
       return;
     }
 
-    const enabled = await isProjectRepositoryCheckoutReadinessEnabled({
-      userId,
-      project: adr.project,
-      caller: 'adr-finalize',
-    });
+    const enabled = !(await isV2TransportEnabled(userId, adr.project))
+      && await isProjectRepositoryCheckoutReadinessEnabled({
+        userId,
+        project: adr.project,
+        caller: 'adr-finalize',
+      });
     // @feature-flag:project-repository-checkout-readiness start winner=enabled
     if (enabled) {
       // @feature-flag:project-repository-checkout-readiness enabled-start
@@ -286,40 +299,23 @@ router.post('/:id/generate', requirePermission('adr:edit'), async (req, res, nex
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider,
       skillPath: skillConfig?.adrFinalizeSkillPath ?? skillPathFor(AGENT_SKILL_ROOT, 'adr-finalize'),
+      skillPathIsAppDefault: !skillConfig?.adrFinalizeSkillPath,
       transcript,
       model,
       skillSettingsId: skillConfig?.id ?? adr.skillSettingsId ?? undefined,
-    }, {
-      kickoffMessage: 'Generate the ADR from `.ai-pilot/kickoff-transcript.md`. Do not ask questions. Write exactly one `.ai-pilot/output/{slug}.adr.md` file.',
-    });
+    }, { skipAutoKickoff: true });
 
-    // Inherit the ADR interview's pinned SHA + grounding binding onto the
-    // finalize thread — descendants must not fetch or repin.
-    try {
-      await propagatePipelineGrounding(
-        {
-          runType: 'chat',
-          runId: adr.chatThreadId,
-          project: adr.project,
-        },
-        {
-          runType: 'chat',
-          runId: thread.id,
-          project: adr.project,
-        },
-        userId,
-        { deferMaterialization: true },
-      );
-    } catch (err) {
-      console.warn(
-        `[adr] finalize grounding propagation unavailable (adrId=${adr.id}):`,
-        err instanceof Error ? err.message : err,
-      );
-    }
-
-    await markAdrGenerating(adr.id, userId);
-    startAdrWatcher(adr.id, thread.id);
+    await markAdrGenerating(adr.id, userId, thread.id);
     res.status(201).json({ adrId: adr.id, threadId: thread.id });
+
+    void routeAdrGenerationKickoff({
+      adrId: adr.id,
+      userId,
+      project: adr.project,
+      threadId: thread.id,
+      sourceThreadId: adr.chatThreadId,
+      kickoffMessage: ADR_GENERATION_KICKOFF,
+    });
   } catch (error) {
     next(error);
   }
@@ -555,6 +551,7 @@ router.post('/:id/assistant-thread', requirePermission('adr:view'), requirePermi
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider,
       skillPath: skillConfig?.adrAssistantSkillPath ?? skillPathFor(AGENT_SKILL_ROOT, 'adr-assistant'),
+      skillPathIsAppDefault: !skillConfig?.adrAssistantSkillPath,
       freeformContext: buildContext('__THREAD_ID__'),
       model,
       assistantType: 'adr',

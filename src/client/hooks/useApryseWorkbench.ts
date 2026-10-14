@@ -94,7 +94,7 @@ function downloadBuffer(
   filename: string,
   mime: string
 ): void {
-  const blob = new Blob([buffer], { type: mime });
+  const blob = new Blob([buffer] as BlobPart[], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -646,7 +646,7 @@ export function useApryseWorkbench({
       const formData = new FormData();
       formData.append(
         'file',
-        new Blob([pdfBytes], { type: PDF_MIME }),
+        new Blob([pdfBytes] as BlobPart[], { type: PDF_MIME }),
         fileNameValue
       );
       const response = await fetch('/api/pdf/apryse/convert-to-word', {

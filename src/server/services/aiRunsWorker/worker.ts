@@ -1,5 +1,8 @@
 import type { DispatchMessage } from '../../../shared/types/agentRunAdmission';
-import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
+import type {
+  AgentRunExecutionSnapshot,
+  ExecutionSnapshot,
+} from '../../../shared/types/agentRunLifecycle';
 import type {
   AiRunBootstrapResponse,
   AiRunIngestBody,
@@ -10,6 +13,7 @@ import {
   executeCursorExecutionCore,
   tokenFieldsForTerminalIngest,
   type CursorExecutionResult,
+  type CursorExecutionWaitResult,
   type CursorTokenUsage,
 } from '../cursorExecutionCore';
 import type { WorkerCursorExecution } from './cursorExecution';
@@ -52,10 +56,33 @@ export type AiRunsWorker = {
   execute(dispatch: DispatchMessage): Promise<void>;
 };
 
+function isDurableInteractiveSnapshot(
+  snapshot: AgentRunExecutionSnapshot,
+): snapshot is Extract<
+  AgentRunExecutionSnapshot,
+  { kind: 'interactive-turn' }
+> {
+  return 'kind' in snapshot && snapshot.kind === 'interactive-turn';
+}
+
 function isSuccessfulWait(result: CursorExecutionResult): boolean {
   return result.waitResult.status === 'finished'
     || result.waitResult.status === 'completed'
     || result.waitResult.status === 'success';
+}
+
+/**
+ * The SDK's wait payload is the only record of why a turn did not finish. `usage` is dropped
+ * because it is large and says nothing about the outcome; everything else is kept so a later
+ * ingest row can name the actual runtime error, not just the word `error`.
+ */
+function describeWaitFailure(waitResult: CursorExecutionWaitResult): string {
+  const { usage: _usage, ...rest } = waitResult;
+  try {
+    return JSON.stringify(rest);
+  } catch {
+    return waitResult.status || 'no status';
+  }
 }
 
 /** Keep failure details short, single-line, and safe for ingest/UI. */
@@ -101,7 +128,15 @@ export function createAiRunsWorker(
       // Bootstrap precedes every project-scoped callback or workspace access.
       const bootstrap = await dependencies.getBootstrap(dispatch);
       const { projectId, run: bootstrapRun } = bootstrap;
-      const snapshot = Object.freeze({ ...bootstrapRun.executionSnapshot });
+      const persistedSnapshot = bootstrapRun.executionSnapshot;
+      if (isDurableInteractiveSnapshot(persistedSnapshot)) {
+        throw new Error(
+          'Background worker cannot execute a durable interactive turn',
+        );
+      }
+      const snapshot: Readonly<ExecutionSnapshot> = Object.freeze({
+        ...persistedSnapshot,
+      });
 
       if (
         bootstrapRun.dispatchMessageId !== dispatch.dispatchMessageId
@@ -248,7 +283,9 @@ export function createAiRunsWorker(
         capturedUsage = result.usage ?? capturedUsage;
 
         if (!isSuccessfulWait(result)) {
-          throw new Error('Cursor execution did not finish successfully');
+          throw new Error(
+            `Cursor execution did not finish successfully (${describeWaitFailure(result.waitResult)})`
+          );
         }
         if (cancellationRequested) {
           throw new AiRunCancellationObservedError();

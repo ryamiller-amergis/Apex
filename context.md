@@ -164,7 +164,7 @@ A personal work view for managing assigned intake items, approved features, and 
 - **Assigned Backlog** lists Apex Backlog items (Feature, Issue, or Technical) assigned to the signed-in user in the current project. **View Context** opens in intake mode: type, title, request, advantage, status, and linked ADRs — not PRD or design-doc tabs. Feature and Technical items can start or resume a design interview from this page when the user may start interviews; Issues show details only.
 - **Apex and Amego Feature Backlog** appears as PRD → Epic → Feature rows from approved in-app PRDs, **only when the signed-in user is the Design Doc Owner** for that work. Each feature offers **View Context** in development mode (read-only PRD, backlog, design doc, tech spec, assumptions, and sandboxed prototype), **Start Local Development**, **Mark Complete**, and **Clear Progress** when in progress. Their requirements remain in Apex and are not loaded from Azure DevOps.
 - **Work Board assignments** remain a separate section from Assigned Backlog.
-- **Other projects** continue to list ADO assigned work items with Start Development / Resume Session / local development actions unchanged.
+- **Other projects** list ADO assigned work items with **Start Local Development** and the Cloud Agent run controls (start, cancel, resume run).
 
 ### 13. What's New / Changelog
 

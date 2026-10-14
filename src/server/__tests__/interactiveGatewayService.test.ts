@@ -173,8 +173,9 @@ describe('attachInteractiveThreadStream', () => {
     expect(deps.replayRunEvents).toHaveBeenCalledWith(
       't1',
       undefined,
-      500,
+      501,
       'run-current',
+      'oldest',
     );
   });
 
@@ -269,8 +270,9 @@ describe('attachInteractiveThreadStream', () => {
     expect(deps.replayRunEvents).toHaveBeenCalledWith(
       't1',
       'e0',
-      500,
+      501,
       undefined,
+      'oldest',
     );
   });
 
@@ -360,5 +362,75 @@ describe('attachInteractiveThreadStream', () => {
     // Idempotent: calling the returned detach again does not double-unsubscribe.
     detach();
     expect(deps.threadUnsub).toHaveBeenCalledTimes(1);
+  });
+
+  it('pages through 1,201 durable events and flushes live only after the final page', async () => {
+    const allEvents = Array.from({ length: 1_201 }, (_value, index) =>
+      envelope(`event-${index + 1}`, index + 1)
+    );
+    const pageTwoStarted = deferred<void>();
+    const pageTwoGate = deferred<void>();
+    let pageCalls = 0;
+    const replayRunEventPage = jest.fn(
+      async (
+        _threadId: string,
+        options: {
+          afterEventId?: string;
+          limit?: number;
+          runId?: string;
+          coldStart?: 'recent' | 'oldest';
+        } = {}
+      ) => {
+        pageCalls += 1;
+        if (pageCalls === 2) {
+          pageTwoStarted.resolve();
+          await pageTwoGate.promise;
+        }
+        const start = options.afterEventId
+          ? allEvents.findIndex((item) => item.eventId === options.afterEventId) +
+            1
+          : 0;
+        const limit = options.limit ?? 500;
+        const slice = allEvents.slice(start, start + limit);
+        const hasMore = start + limit < allEvents.length;
+        return {
+          events: slice,
+          nextEventId: slice.length > 0 ? slice[slice.length - 1]!.eventId : null,
+          hasMore,
+        };
+      }
+    );
+
+    const deps = makeDeps({
+      loadThreadSnapshot: jest.fn(async () => ({
+        messages: [],
+        status: 'running' as const,
+        eventDrivenTermination: true,
+        activeRunId: 'run-1',
+      })),
+      replayRunEventPage,
+      replayRunEvents: undefined,
+    });
+    const { socket, frames } = makeSocket();
+
+    const attachPromise = attachInteractiveThreadStream(socket, 't1', {}, deps);
+    await pageTwoStarted.promise;
+    deps.emitLive(envelope('live-during-page-two', 9_999));
+    expect(frames.some((frame) => frame.id === 'live-during-page-two')).toBe(
+      false
+    );
+    pageTwoGate.resolve();
+    await attachPromise;
+
+    expect(
+      replayRunEventPage.mock.calls.map((call) => call[1]?.afterEventId)
+    ).toEqual([undefined, 'event-500', 'event-1000']);
+    const sentDurableIds = frames
+      .map((frame) => frame.id)
+      .filter((id) => id.startsWith('event-'));
+    expect(sentDurableIds).toEqual(
+      Array.from({ length: 1_201 }, (_value, index) => `event-${index + 1}`)
+    );
+    expect(frames[frames.length - 1]?.id).toBe('live-during-page-two');
   });
 });

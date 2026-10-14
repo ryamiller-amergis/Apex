@@ -96,6 +96,8 @@ export interface MyPermissionsResponse {
   groups: string[];
   userId: string;
   isSuperAdmin: boolean;
+  /** True when this email is on the dev access list. Skips the production popup. */
+  devAccessAllowlisted?: boolean;
   /** @deprecated Prefer `whatsNew.unread` — kept for one compatibility window. */
   changelogUnread: boolean;
   /** @deprecated Prefer `whatsNew.currentVersion`. */

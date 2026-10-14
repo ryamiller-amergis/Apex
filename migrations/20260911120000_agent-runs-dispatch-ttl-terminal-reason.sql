@@ -16,7 +16,8 @@ ALTER TABLE agent_runs
         'progress_timeout',
         'queue_ttl',
         'forced_cancel',
-        'dispatch_ttl'
+        'dispatch_ttl',
+        'cloud_agent_timeout'
       )
     );
 
@@ -37,6 +38,7 @@ ALTER TABLE agent_runs
         'worker_lost',
         'progress_timeout',
         'queue_ttl',
-        'forced_cancel'
+        'forced_cancel',
+        'cloud_agent_timeout'
       )
     );

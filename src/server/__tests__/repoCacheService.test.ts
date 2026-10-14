@@ -33,6 +33,8 @@ import {
   ensureRepoCache,
   fetchPinnedCommit,
   fetchRepositoryTip,
+  REPO_CACHE_MIN_FREE_BYTES,
+  RepoCacheDiskFullError,
   getRepoCacheDir,
   readRemoteBranchTip,
   repairRepoCache,
@@ -293,6 +295,35 @@ describe('repoCacheService', () => {
       expect.stringContaining('.tmp-'),
       { recursive: true, force: true },
     );
+  });
+
+  it('refuses a cold clone when the repository disk is nearly full', async () => {
+    const statfs = jest.fn().mockResolvedValue({ bavail: 1024, bsize: 1024 * 1024 });
+    const originalPromises = Object.getOwnPropertyDescriptor(mockFs, 'promises');
+    Object.defineProperty(mockFs, 'promises', { value: { statfs }, configurable: true });
+    const errorLog = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const result = ensureRepoCache({
+        provider: 'ado',
+        project: 'MaxView',
+        repo: 'MaxView',
+        branch: 'development',
+      });
+
+      await expect(result).rejects.toBeInstanceOf(RepoCacheDiskFullError);
+      await expect(result).rejects.toMatchObject({
+        freeBytes: 1024 ** 3,
+        requiredBytes: REPO_CACHE_MIN_FREE_BYTES,
+      });
+      expect(statfs).toHaveBeenCalledTimes(1);
+      expect(mockGit.mock.calls.some(([args]) => (args as string[]).includes('clone'))).toBe(false);
+      expect(errorLog).toHaveBeenCalledWith(expect.stringContaining('[repo-cache] disk-low'));
+    } finally {
+      errorLog.mockRestore();
+      if (originalPromises) Object.defineProperty(mockFs, 'promises', originalPromises);
+      else delete (mockFs as { promises?: unknown }).promises;
+    }
   });
 
   it('does not publish a cold cache that fails connectivity verification', async () => {
