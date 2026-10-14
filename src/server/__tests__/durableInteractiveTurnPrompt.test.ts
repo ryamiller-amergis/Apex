@@ -14,6 +14,13 @@ const TURN_ID = '20000000-0000-4000-8000-000000000001';
 const USER_ID = '40000000-0000-4000-8000-000000000001';
 const SKILL_PATH = '.cursor/skills/grill-with-docs/SKILL.md';
 const SKILL_CONTENT = '# Grill with docs\nAsk opening questions Q1 to Q5.';
+const GROUNDING = {
+  provider: 'github',
+  project: 'project-1',
+  repository: 'repo-1',
+  sha: 'abc123',
+  profileId: 'profile-1',
+};
 
 function message(role: 'user' | 'agent', text: string, index: number): ChatMessage {
   return {
@@ -59,6 +66,11 @@ async function admittedSpecification(
     guided?: boolean;
     repositoryContext?: { contextContent: string | null; agentsContent: string | null };
     adoToolGrant?: boolean;
+    backgroundGrounding?: boolean;
+    interviewContext?: string | null;
+    resolveGrounding?: jest.Mock;
+    loadSkill?: jest.Mock;
+    resolveDeadlines?: jest.Mock;
   } = {},
 ): Promise<PreparedDurableInteractiveTurn['specification']> {
   const repositoryAdmit = jest.fn(async (input: PreparedDurableInteractiveTurn) => ({
@@ -78,24 +90,26 @@ async function admittedSpecification(
     resolveSkillConfig: jest.fn().mockResolvedValue({
       interviewSkillOptions: [{ path: SKILL_PATH, friendlyName: 'Grill with docs' }],
     }),
-    loadSkill: jest.fn().mockResolvedValue({ path: SKILL_PATH, content: SKILL_CONTENT }),
-    resolveGrounding: jest.fn().mockResolvedValue({
-      provider: 'github',
-      project: 'project-1',
-      repository: 'repo-1',
-      sha: 'abc123',
-      profileId: 'profile-1',
-    }),
+    loadSkill:
+      options.loadSkill ??
+      jest.fn().mockResolvedValue({ path: SKILL_PATH, content: SKILL_CONTENT }),
+    resolveGrounding:
+      options.resolveGrounding ?? jest.fn().mockResolvedValue(GROUNDING),
     loadRepositoryContext: jest.fn().mockResolvedValue(options.repositoryContext ?? null),
     isGuidedInterviewEnabled: jest.fn().mockResolvedValue(options.guided ?? false),
-    loadInterviewContext: jest.fn().mockResolvedValue(null),
+    isBackgroundGroundingEnabled: jest
+      .fn()
+      .mockResolvedValue(options.backgroundGrounding ?? false),
+    loadInterviewContext: jest.fn().mockResolvedValue(options.interviewContext ?? null),
     resolveMaxviewCapability: jest.fn().mockResolvedValue('disabled'),
-    resolveDeadlines: jest.fn(() => ({
-      absoluteTurnMs: 1_200_000,
-      repositoryPreparationMs: 120_000,
-      firstEventMs: 45_000,
-      toolCallMs: 60_000,
-    })),
+    resolveDeadlines:
+      options.resolveDeadlines ??
+      jest.fn(() => ({
+        absoluteTurnMs: 1_200_000,
+        repositoryPreparationMs: 120_000,
+        firstEventMs: 45_000,
+        toolCallMs: 60_000,
+      })),
     encryptToolGrant: jest.fn(),
     now: () => new Date('2026-10-07T15:30:00.000Z'),
   });
@@ -317,5 +331,93 @@ describe('durable guided interview turn', () => {
     const specification = await admittedSpecification([], { guided: true });
 
     expect(specification.currentPrompt).toContain('No application brief was available');
+  });
+
+  it('waits for grounding in Discovery while background grounding is off', async () => {
+    const resolveGrounding = jest.fn().mockResolvedValue(GROUNDING);
+    const specification = await admittedSpecification([], {
+      guided: true,
+      resolveGrounding,
+    });
+
+    expect(specification.grounding).toMatchObject({ sha: 'abc123' });
+    expect(resolveGrounding).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('durable guided interview turn with background grounding', () => {
+  const discoveryTurn = [
+    message('user', 'Begin.', 1),
+    message('agent', '[[interview-phase:discovery:1:6]]\nWhat happens today?', 2),
+  ];
+
+  it('admits a Discovery turn without waiting for the repository', async () => {
+    const resolveGrounding = jest.fn(() => new Promise<never>(() => {}));
+    const loadSkill = jest
+      .fn()
+      .mockResolvedValue({ path: SKILL_PATH, content: SKILL_CONTENT });
+    const resolveDeadlines = jest.fn(() => ({
+      absoluteTurnMs: 1_200_000,
+      repositoryPreparationMs: null,
+      firstEventMs: 45_000,
+      toolCallMs: 60_000,
+    }));
+
+    const specification = await admittedSpecification([], {
+      guided: true,
+      backgroundGrounding: true,
+      interviewContext: '## Product\n\nManagers approve timesheets.',
+      resolveGrounding,
+      loadSkill,
+      resolveDeadlines,
+    });
+
+    expect(specification.grounding).toBeNull();
+    expect(resolveGrounding).toHaveBeenCalledTimes(1);
+    expect(resolveDeadlines).toHaveBeenCalledWith(
+      expect.objectContaining({ requiresRepositoryPreparation: false }),
+    );
+    expect(loadSkill).toHaveBeenCalledWith(
+      expect.objectContaining({ grounding: null, readBranchTip: true }),
+    );
+    expect(specification.currentPrompt).toContain('Managers approve timesheets.');
+  });
+
+  it('still admits the turn when background preparation fails', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const resolveGrounding = jest.fn().mockRejectedValue(new Error('fetch failed'));
+
+    const specification = await admittedSpecification(discoveryTurn, {
+      guided: true,
+      backgroundGrounding: true,
+      resolveGrounding,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(specification.grounding).toBeNull();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('InteractiveBackgroundGroundingFailed'),
+    );
+    warn.mockRestore();
+  });
+
+  it('waits for grounding once the interview enters Technical', async () => {
+    const resolveGrounding = jest.fn().mockResolvedValue(GROUNDING);
+    const loadSkill = jest
+      .fn()
+      .mockResolvedValue({ path: SKILL_PATH, content: SKILL_CONTENT });
+
+    const specification = await admittedSpecification(
+      [
+        message('user', 'Begin.', 1),
+        message('agent', '[[interview-phase:technical:1:5]]\nFrontend, backend, or both?', 2),
+      ],
+      { guided: true, backgroundGrounding: true, resolveGrounding, loadSkill },
+    );
+
+    expect(specification.grounding).toMatchObject({ sha: 'abc123' });
+    expect(loadSkill).toHaveBeenCalledWith(
+      expect.objectContaining({ readBranchTip: false }),
+    );
   });
 });
