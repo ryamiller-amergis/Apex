@@ -1,4 +1,4 @@
-import { flowToGraph, graphToFlow, syncBranchEdges } from '../playbookCanvasGraph';
+import { flowToGraph, graphToFlow, positionsAfterDrag, syncBranchEdges } from '../playbookCanvasGraph';
 import type { PlaybookGraph } from '../../../shared/types/playbook';
 
 const graph: PlaybookGraph = {
@@ -12,6 +12,25 @@ const graph: PlaybookGraph = {
     { from: 'branch-1', to: 'notify-2' },
   ],
 };
+
+describe('positions after a drag', () => {
+  const node = (id: string, x: number, y: number) => ({
+    id,
+    type: 'playbookStep',
+    position: { x, y },
+    data: { stepType: 'notify', label: id, config: {} },
+  });
+
+  it('keeps siblings when only the dropped node is reported', () => {
+    expect(positionsAfterDrag(
+      [node('a', 10, 20), node('b', 400, 20)],
+      [node('a', 80, 90)],
+    )).toEqual({
+      a: { x: 80, y: 90 },
+      b: { x: 400, y: 20 },
+    });
+  });
+});
 
 describe('playbook canvas branch edges', () => {
   it('stamps continuation names onto edges when the branch picker targets them', () => {

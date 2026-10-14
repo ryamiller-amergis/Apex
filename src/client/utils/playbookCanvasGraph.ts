@@ -119,6 +119,22 @@ export function positionsFromNodes(nodes: PlaybookFlowNode[]): PlaybookLayoutPos
   return positions;
 }
 
+/**
+ * React Flow's drag-stop callback lists only the nodes that moved. Their new coordinates have to
+ * be written over the full canvas, or every other step loses its saved position.
+ */
+export function positionsAfterDrag(
+  existing: PlaybookFlowNode[],
+  dragged: PlaybookFlowNode[],
+): PlaybookLayoutPositions {
+  const draggedById = new Map(dragged.map((node) => [node.id, node]));
+  const merged = existing.map((node) => draggedById.get(node.id) ?? node);
+  for (const node of dragged) {
+    if (!existing.some((current) => current.id === node.id)) merged.push(node);
+  }
+  return positionsFromNodes(merged);
+}
+
 /** `notify-1`, `notify-2`, … — the lowest suffix not already used in the graph. */
 export function newPlaybookNodeId(stepType: string, existingIds: Iterable<string>): string {
   const taken = new Set(existingIds);

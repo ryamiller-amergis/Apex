@@ -23,6 +23,7 @@ import {
   flowToGraph,
   graphToFlow,
   newPlaybookNodeId,
+  positionsAfterDrag,
   positionsFromNodes,
   type PlaybookFlowEdge,
   type PlaybookFlowNode,
@@ -220,7 +221,10 @@ function PlaybookCanvasInner({
   );
 
   const onNodeDragStop = useCallback((_event: unknown, _node: Node, dragged: Node[]) => {
-    onPositionsChange?.(positionsFromNodes(asFlowNodes(dragged as Node<PlaybookFlowNodeData>[])));
+    onPositionsChange?.(positionsAfterDrag(
+      asFlowNodes(nodesRef.current),
+      asFlowNodes(dragged as Node<PlaybookFlowNodeData>[]),
+    ));
   }, [onPositionsChange]);
 
   const onDrop = useCallback(
