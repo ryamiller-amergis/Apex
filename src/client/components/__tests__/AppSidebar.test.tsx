@@ -316,6 +316,64 @@ describe('AppSidebar — Work Board flag', () => {
   });
 });
 
+describe('AppSidebar — Playbooks visibility', () => {
+  it('hides Playbooks for a super admin when the feature flag is off', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        isSuperAdmin
+        selectedProject="Apex"
+        playbooksEnabled={false}
+        onNavigatePlaybooks={jest.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Playbooks' })).not.toBeInTheDocument();
+  });
+
+  it('renders Playbooks for a super admin when the feature flag is on', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        isSuperAdmin
+        selectedProject="Apex"
+        playbooksEnabled
+        onNavigatePlaybooks={jest.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Playbooks' })).toBeInTheDocument();
+  });
+
+  it('hides Playbooks when Platform Admin has not enabled it for the project', () => {
+    const can = (key: string) => key === 'playbooks:view';
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={[]}
+        playbooksEnabled
+        onNavigatePlaybooks={jest.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Playbooks' })).not.toBeInTheDocument();
+  });
+
+  it('renders Playbooks when the project enables it and the user can view playbooks', () => {
+    const can = (key: string) => key === 'playbooks:view';
+    const onNavigatePlaybooks = jest.fn();
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['playbooks']}
+        playbooksEnabled
+        onNavigatePlaybooks={onNavigatePlaybooks}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Playbooks' }));
+    expect(onNavigatePlaybooks).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('AppSidebar — grouped sections', () => {
   const allViews = [
     'calendar', 'planning', 'cloudcost', 'backlog', 'adr',

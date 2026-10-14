@@ -72,9 +72,12 @@ beforeEach(() => {
 
 it('renders independent loading, error/retry, and author-aware empty states', async () => {
   let resolveFetch!: (value: Response) => void;
-  (global.fetch as jest.Mock).mockReturnValueOnce(
-    new Promise((resolve) => { resolveFetch = resolve; }),
-  );
+  (global.fetch as jest.Mock).mockImplementation((url: string) => {
+    if (url.includes('/api/feature-flags/')) {
+      return Promise.resolve(jsonResponse({ flags: {} }));
+    }
+    return new Promise((resolve) => { resolveFetch = resolve; });
+  });
   const loading = renderPanel();
   expect(screen.getByTestId('playbook-definitions-loading')).toBeInTheDocument();
   resolveFetch(jsonResponse({ definitions: [] }));
@@ -82,7 +85,12 @@ it('renders independent loading, error/retry, and author-aware empty states', as
   expect(screen.getByTestId('playbook-definition-create')).toBeInTheDocument();
   loading.unmount();
 
-  (global.fetch as jest.Mock).mockResolvedValueOnce(jsonResponse({ error: 'List unavailable' }, 500));
+  (global.fetch as jest.Mock).mockImplementation((url: string) => {
+    if (url.includes('/api/feature-flags/')) {
+      return Promise.resolve(jsonResponse({ flags: {} }));
+    }
+    return Promise.resolve(jsonResponse({ error: 'List unavailable' }, 500));
+  });
   renderPanel();
   expect(await screen.findByTestId('playbook-definitions-error')).toHaveTextContent('List unavailable');
   expect(screen.getByTestId('playbook-definitions-retry')).toBeInTheDocument();

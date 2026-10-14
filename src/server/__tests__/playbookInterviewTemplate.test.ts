@@ -36,11 +36,19 @@ function selectChain(): Record<string, unknown> {
 function makeTransactionDb() {
   return {
     select: (...args: unknown[]) => selectMock(...args),
+    query: {
+      playbookVersionLayouts: {
+        findFirst: jest.fn().mockResolvedValue(undefined),
+      },
+    },
     insert: (table: unknown) => {
       insertMock(table);
       return {
         values: (values: unknown) => ({
           returning: async () => {
+            if (table === playbookVersionLayouts) {
+              return [{ versionId: 'layout-copy', positions: {}, updatedAt: REVISION }];
+            }
             committedWrites.push({ kind: 'insert', table, values });
             return nextResult(insertResults);
           },
@@ -78,6 +86,7 @@ jest.mock('../services/projectSettingsService', () => ({
 }));
 
 import { publishDraft } from '../services/playbookDefinitionService';
+import { playbookVersionLayouts } from '../db/schema';
 import {
   PlaybookTemplateAlreadyPublishedError,
   installPlaybookTemplate,

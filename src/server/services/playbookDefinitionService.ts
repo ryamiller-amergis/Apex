@@ -15,6 +15,7 @@ import { db } from '../db/drizzle';
 import { playbookDefinitions, playbookDefinitionVersions } from '../db/schema';
 import { assertGraphWithinGuards } from './playbookGuardService';
 import { assertCursorAgentsUseReadOnlyMcp } from './playbookMcpCapabilityService';
+import { copyLayoutToPublishedVersion } from './playbookVersionLayoutService';
 import type {
   PlaybookDefinition,
   PlaybookDefinitionDetail,
@@ -533,6 +534,12 @@ export async function publishDraft(
       })
       .returning();
 
+    await copyLayoutToPublishedVersion(tx, {
+      fromVersionId: draft.id,
+      toVersionId: publishedVersion.id,
+      graph: draft.graph as PlaybookGraph,
+    });
+
     return {
       publishedVersion: toPublishedSummary(publishedVersion),
       draft: toDraft(advancedDraft),
@@ -542,6 +549,29 @@ export async function publishDraft(
 }
 
 /** Returns project-scoped definition identity, retained draft, and complete immutable history. */
+export async function getVersionGraph(
+  project: string,
+  definitionId: string,
+  versionId: string
+): Promise<PlaybookGraph> {
+  const [row] = await db
+    .select({ graph: playbookDefinitionVersions.graph })
+    .from(playbookDefinitionVersions)
+    .innerJoin(
+      playbookDefinitions,
+      eq(playbookDefinitions.id, playbookDefinitionVersions.definitionId)
+    )
+    .where(
+      and(
+        eq(playbookDefinitionVersions.id, versionId),
+        eq(playbookDefinitions.id, definitionId),
+        eq(playbookDefinitions.project, project)
+      )
+    );
+  if (!row) throw new PlaybookVersionNotFoundError(versionId);
+  return row.graph as PlaybookGraph;
+}
+
 export async function getDefinitionDetail(
   project: string,
   definitionId: string

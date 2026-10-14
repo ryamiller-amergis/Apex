@@ -83,6 +83,7 @@ import type {
   InterviewProfileSnapshot,
   InterviewStepMode,
   PlaybookGraph,
+  PlaybookLayoutPositions,
   PlaybookRunStatus,
   PlaybookStepRunStatus,
   PlaybookVersionStatus,
@@ -3277,6 +3278,18 @@ export const playbookDefinitionVersions = pgTable('playbook_definition_versions'
   ),
 }));
 
+export const playbookVersionLayouts = pgTable('playbook_version_layouts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  versionId: uuid('version_id')
+    .notNull()
+    .unique()
+    .references(() => playbookDefinitionVersions.id, { onDelete: 'cascade' }),
+  positions: jsonb('positions').$type<PlaybookLayoutPositions>().notNull().default({}),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  versionIdx: index('idx_playbook_version_layouts_version').on(t.versionId),
+}));
+
 export const playbookRuns = pgTable('playbook_runs', {
   id: uuid('id').primaryKey().defaultRandom(),
   project: text('project').notNull(),
@@ -3380,9 +3393,20 @@ export const playbookDefinitionVersionsRelations = relations(
       fields: [playbookDefinitionVersions.definitionId],
       references: [playbookDefinitions.id],
     }),
+    layout: one(playbookVersionLayouts, {
+      fields: [playbookDefinitionVersions.id],
+      references: [playbookVersionLayouts.versionId],
+    }),
     runs: many(playbookRuns),
   }),
 );
+
+export const playbookVersionLayoutsRelations = relations(playbookVersionLayouts, ({ one }) => ({
+  version: one(playbookDefinitionVersions, {
+    fields: [playbookVersionLayouts.versionId],
+    references: [playbookDefinitionVersions.id],
+  }),
+}));
 
 export const playbookRunsRelations = relations(playbookRuns, ({ one, many }) => ({
   definitionVersion: one(playbookDefinitionVersions, {
