@@ -49,6 +49,10 @@
   overflow: hidden;
 }
 
+.stepWithAssignee {
+  grid-template-columns: 22px auto minmax(0, 1fr) auto;
+}
+
 .track {
   display: grid;
   place-items: center;
@@ -130,6 +134,96 @@
   border: 0;
 }
 
+.assignee,
+.assigneeReadOnly {
+  justify-self: start;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.assignee {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  cursor: pointer;
+}
+
+.assignee svg {
+  width: 10px;
+  height: 10px;
+  margin-left: auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+}
+
+.assigneeName,
+.assigneeReadOnly {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assigneeReadOnly {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+.assigneeMenu {
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-md);
+}
+
+.assigneeSearch,
+.assigneeOption {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  text-align: left;
+}
+
+.assigneeSearch {
+  margin-bottom: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.assigneeOption {
+  padding: 7px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.assigneeOption:hover,
+.assigneeOption[aria-selected="true"] {
+  background: var(--bg-secondary);
+}
+
+.assignmentError {
+  margin: 6px 0 0;
+  color: var(--danger-color);
+  font-size: 0.72rem;
+}
+
 .stepSkipped .label,
 .stepSkipped .detail {
   color: var(--text-muted);
@@ -147,6 +241,10 @@
   .step {
     grid-template-columns: 20px minmax(0, 1fr);
     padding: 5px 8px;
+  }
+
+  .stepWithAssignee {
+    grid-template-columns: 20px auto minmax(0, 1fr);
   }
 
   .detail {

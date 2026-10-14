@@ -13,6 +13,7 @@ import type { ProjectSkillConfig, UpsertProjectSkillConfigRequest, QuickSkillPil
 import type { ApprovalMode, ModuleApprovalModes, ReviewerDocumentType } from '../../shared/types/approvals';
 import { EFFORT_LEVELS, type EffortLevel } from '../../shared/types/effort';
 import { effortLabel } from '../../shared/utils/effort';
+import { sortByLabel } from '../utils/sortByLabel';
 import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
 import { useUsers } from '../hooks/useRbac';
 import { useGroupsWithMembers } from '../hooks/useGroups';
@@ -47,9 +48,10 @@ const BranchCombobox: React.FC<BranchComboboxProps> = ({ value, branches, isLoad
   const listRef = useRef<HTMLDivElement>(null);
 
   const filtered = useMemo(() => {
-    if (!query.trim()) return branches;
+    const ordered = sortByLabel(branches, (branch) => branch);
+    if (!query.trim()) return ordered;
     const q = query.toLowerCase();
-    return branches.filter((b) => b.toLowerCase().includes(q));
+    return ordered.filter((branch) => branch.toLowerCase().includes(q));
   }, [query, branches]);
 
   useEffect(() => {

@@ -74,6 +74,12 @@ jest.mock('../../hooks/useInterviews', () => ({
   useSaveInterviewBrief: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false, error: null })),
   useApproveInterviewBrief: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false, error: null })),
   useUpdateInterviewStatus: jest.fn(() => ({ mutateAsync: mockUpdateStatus, isPending: false })),
+  useUpdateInterviewPhaseAssignments: jest.fn(() => ({
+    mutate: jest.fn(),
+    isPending: false,
+    error: null,
+  })),
+  useActiveUsers: jest.fn(() => ({ data: [], isLoading: false })),
   useUpdateInterviewTitle: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useCreatePrd: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useDeleteInterview: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
