@@ -54,6 +54,7 @@ const V2_WORKLOAD_LANE = 'document' as const;
 /** Generation workflows that reuse the interview's shared SHA checkout (no full clone). */
 const SHARED_READ_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new Set([
   'prd',
+  'adr',
   'design-doc',
   'test-cases',
 ]);
@@ -488,16 +489,51 @@ export function createBackgroundWorkflowRouter(
     };
   };
 
+  // With V2 on, a run that cannot reach a worker fails visibly instead of
+  // running on App Service, the same as the interactive lane.
+  const refusePreparation = async (
+    input: BackgroundWorkflowRouteInput,
+    reason: string,
+    startedAt: number,
+    error?: unknown,
+  ): Promise<WorkflowRouteDecision> => {
+    console.warn(
+      `[background-route] V2 run not started: ${reason} (workflow=${input.workflowClass}, runId=${input.destinationRun.runId})`
+      + (error !== undefined ? `: ${errorMessage(error)}` : ''),
+    );
+    safeTrack(
+      'background.materialization.outcome',
+      {
+        workflowClass: input.workflowClass,
+        project: input.destinationRun.project,
+        route: 'failed',
+        reason,
+      },
+      { durationMs: Math.max(0, now() - startedAt) },
+    );
+    routeDecision(input, 'failed', reason);
+    await Promise.resolve(
+      input.reportRecoverablePreparationFailure({
+        reason: 'materialization-unavailable',
+        workflowClass: input.workflowClass,
+        project: input.destinationRun.project,
+        runId: input.destinationRun.runId,
+      }),
+    ).catch(() => undefined);
+    return { route: 'failed', reason };
+  };
+
   const routeWorker = async (
     input: BackgroundWorkflowRouteInput,
     useV2Transport: boolean,
   ): Promise<WorkflowRouteDecision> => {
+    const recover = useV2Transport ? refusePreparation : recoverPreparation;
     const preparationStartedAt = now();
     let prepared: PreparedBackgroundWorkflowWorker;
     try {
       prepared = await input.prepareWorker();
     } catch (error) {
-      return recoverPreparation(
+      return recover(
         input,
         'worker-preparation-failed',
         preparationStartedAt,
@@ -521,7 +557,7 @@ export function createBackgroundWorkflowRouter(
         try {
           prepared = await input.prepareWorker();
         } catch (error) {
-          return recoverPreparation(
+          return recover(
             input,
             'worker-preparation-failed',
             preparationStartedAt,
@@ -539,7 +575,7 @@ export function createBackgroundWorkflowRouter(
           input.workflowClass,
         );
       } catch {
-        return recoverPreparation(
+        return recover(
           input,
           'workspace-preparation-failed',
           preparationStartedAt,
@@ -630,7 +666,7 @@ export function createBackgroundWorkflowRouter(
       try {
         await clearGenerationOutput(prepared.threadWorkspacePath);
       } catch {
-        return recoverPreparation(
+        return recover(
           input,
           'workspace-preparation-failed',
           preparationStartedAt,
@@ -665,7 +701,7 @@ export function createBackgroundWorkflowRouter(
       try {
         dispatchedRunId = await dispatch(snapshot);
       } catch (error) {
-        return recoverPreparation(
+        return recover(
           input,
           'worker-enqueue-failed',
           preparationStartedAt,
@@ -681,7 +717,7 @@ export function createBackgroundWorkflowRouter(
     }
 
     if (!isUsableTargetGrounding(prepared.targetGrounding, input.destinationRun)) {
-      return recoverPreparation(
+      return recover(
         input,
         'grounding-unavailable',
         preparationStartedAt,
@@ -764,7 +800,7 @@ export function createBackgroundWorkflowRouter(
           repository: prepared.repository,
         });
       } catch {
-        return recoverPreparation(
+        return recover(
           input,
           'materialization-failed',
           preparationStartedAt,
@@ -775,7 +811,7 @@ export function createBackgroundWorkflowRouter(
         materialized.state !== 'materialized'
         || !materialized.workspacePath
       ) {
-        return recoverPreparation(
+        return recover(
           input,
           'materialization-unavailable',
           preparationStartedAt,
@@ -788,7 +824,7 @@ export function createBackgroundWorkflowRouter(
           materialized.workspacePath,
         );
       } catch {
-        return recoverPreparation(
+        return recover(
           input,
           'workspace-preparation-failed',
           preparationStartedAt,
@@ -829,7 +865,7 @@ export function createBackgroundWorkflowRouter(
     try {
       dispatchedRunId = await dispatch(snapshot, prepared.targetGrounding);
     } catch (error) {
-      return recoverPreparation(
+      return recover(
         input,
         'worker-enqueue-failed',
         preparationStartedAt,

@@ -36,6 +36,10 @@ jest.mock('../services/adrService', () => ({
   stageAdrReviewFix: jest.fn(),
 }));
 
+jest.mock('../services/adrGenerationService', () => ({
+  routeAdrGenerationKickoff: jest.fn().mockResolvedValue(undefined),
+}));
+
 jest.mock('../services/chatAgentService', () => ({
   createThread: jest.fn(),
   getThread: jest.fn(),
@@ -86,6 +90,7 @@ jest.mock('../services/bedrockService', () => ({
 }));
 
 jest.mock('../services/featureFlagService', () => ({
+  isFeatureEnabled: jest.fn().mockResolvedValue(false),
   isProjectRepositoryCheckoutReadinessEnabled: jest.fn().mockResolvedValue(false),
 }));
 
@@ -555,13 +560,16 @@ describe('VT-15 — ADR finalize inherits interview grounding', () => {
     startAdrWatcher.mockReturnValue(undefined);
   });
 
-  it('copies ADR interview grounding onto the finalize thread', async () => {
+  it('creates the finalize thread without auto-kickoff and routes generation from the interview thread', async () => {
     const { createThread } = jest.requireMock('../services/chatAgentService') as {
       createThread: jest.Mock;
     };
-    const { propagatePipelineGrounding } = jest.requireMock('../services/runGroundingService') as {
-      propagatePipelineGrounding: jest.Mock;
+    const { markAdrGenerating } = jest.requireMock('../services/adrService') as {
+      markAdrGenerating: jest.Mock;
     };
+    const { routeAdrGenerationKickoff } = jest.requireMock(
+      '../services/adrGenerationService',
+    ) as { routeAdrGenerationKickoff: jest.Mock };
 
     const response = await request(buildApp()).post('/adr-1/generate');
 
@@ -572,13 +580,32 @@ describe('VT-15 — ADR finalize inherits interview grounding', () => {
         agentModule: 'adr',
         skillSettingsId: 'adr-skill-settings',
       }),
-      expect.any(Object),
+      { skipAutoKickoff: true },
     );
-    expect(propagatePipelineGrounding).toHaveBeenCalledWith(
-      { runType: 'chat', runId: 'thread-1', project: 'Apex' },
-      { runType: 'chat', runId: 'thread-finalize', project: 'Apex' },
-      'reviewer-1',
-      { deferMaterialization: true },
+    expect(markAdrGenerating).toHaveBeenCalledWith('adr-1', 'reviewer-1', 'thread-finalize');
+    expect(routeAdrGenerationKickoff).toHaveBeenCalledWith(expect.objectContaining({
+      adrId: 'adr-1',
+      userId: 'reviewer-1',
+      project: 'Apex',
+      threadId: 'thread-finalize',
+      sourceThreadId: 'thread-1',
+    }));
+  });
+
+  it('skips the checkout-readiness pre-check when V2 transport is on', async () => {
+    const { isFeatureEnabled, isProjectRepositoryCheckoutReadinessEnabled } = jest.requireMock(
+      '../services/featureFlagService',
+    ) as { isFeatureEnabled: jest.Mock; isProjectRepositoryCheckoutReadinessEnabled: jest.Mock };
+    isFeatureEnabled.mockResolvedValueOnce(true);
+    isProjectRepositoryCheckoutReadinessEnabled.mockClear();
+
+    const response = await request(buildApp()).post('/adr-1/generate');
+
+    expect(response.status).toBe(201);
+    expect(isFeatureEnabled).toHaveBeenCalledWith(
+      'ai-runs-v2-transport',
+      expect.objectContaining({ project: 'Apex' }),
     );
+    expect(isProjectRepositoryCheckoutReadinessEnabled).not.toHaveBeenCalled();
   });
 });

@@ -49,22 +49,16 @@ export interface InteractiveCursorAgentHandle {
   interviewPhase?: InterviewRepositoryPhase | null;
   send(
     prompt: string,
-    options?: {
-      onDelta?(update: unknown): Promise<void> | void;
-      /**
-       * This turn's MCP endpoints. A warm Agent keeps the servers from the
-       * turn that created it unless send replaces them.
-       */
-      mcpServers?: Readonly<
-        Record<
-          string,
-          Readonly<{ url: string; headers?: Readonly<Record<string, string>> }>
-        >
-      >;
-    },
+    options?: InteractiveSendOptions,
   ): Promise<WorkerCursorExecutionRun>;
   dispose(): Promise<void>;
 }
+
+export type InteractiveSendOptions = {
+  onDelta?(update: unknown): Promise<void> | void;
+  /** Tool proxy URLs carry a per-attempt token, so a reused agent needs this turn's set. */
+  mcpServers?: Readonly<Record<string, McpServerConfig>>;
+};
 
 /**
  * Acquisition outcome. The session actor owns `warm` for a compatible cache
@@ -106,40 +100,17 @@ function wrapHandle(
     interviewPhase: input.interviewPhase,
     async send(
       prompt: string,
-      options?: {
-        onDelta?(update: unknown): Promise<void> | void;
-        mcpServers?: Readonly<
-          Record<
-            string,
-            Readonly<{ url: string; headers?: Readonly<Record<string, string>> }>
-          >
-        >;
-      },
+      options?: InteractiveSendOptions,
     ): Promise<WorkerCursorExecutionRun> {
       if (disposed) throw new Error('Interactive Cursor agent is disposed');
       const onDelta = options?.onDelta;
-      const mcpServers = options?.mcpServers
-        ? Object.fromEntries(
-            Object.entries(options.mcpServers).map(([name, server]) => [
-              name,
-              {
-                url: server.url,
-                ...(server.headers
-                  ? { headers: { ...server.headers } }
-                  : {}),
-              },
-            ]),
-          )
-        : undefined;
-      const run =
-        onDelta || mcpServers
-          ? await agent.send(prompt, {
-              ...(onDelta
-                ? { onDelta: ({ update }) => onDelta(update) }
-                : {}),
-              ...(mcpServers ? { mcpServers } : {}),
-            })
-          : await agent.send(prompt);
+      const mcpServers = options?.mcpServers;
+      const run = onDelta || mcpServers
+        ? await agent.send(prompt, {
+            ...(onDelta ? { onDelta: ({ update }) => onDelta(update) } : {}),
+            ...(mcpServers ? { mcpServers: { ...mcpServers } } : {}),
+          })
+        : await agent.send(prompt);
       return run as unknown as WorkerCursorExecutionRun;
     },
     async dispose(): Promise<void> {

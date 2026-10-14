@@ -41,6 +41,7 @@ import {
   createCursorTurnEndMonitor,
   createCursorRunEventEnvelope,
   CursorExecutionWaitError,
+  CursorStreamClosedBeforeTurnEndError,
   executeCursorExecutionCore,
   sanitizeCursorTerminalDetail,
   type CursorExecutionResult,
@@ -79,6 +80,12 @@ export const INTERACTIVE_AGENT_CACHE_IDLE_MS = 10 * 60_000;
 
 /** Hard cap on live Agent handles retained in this process. */
 export const INTERACTIVE_AGENT_CACHE_MAX = 32;
+
+/**
+ * Disposing an Agent is cleanup, so a turn stops waiting on it after this long.
+ * A dispose over a dropped Cursor connection can stay pending forever.
+ */
+export const INTERACTIVE_AGENT_DISPOSE_WAIT_MS = 5_000;
 
 /** Home-facing live phase detail before checkout / SDK work. */
 export const INTERACTIVE_STARTING_DETAIL = 'Starting agent…';
@@ -336,6 +343,31 @@ function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
+function logInteractiveAgentStep(
+  event: string,
+  fields: Record<string, unknown>,
+): void {
+  console.log(JSON.stringify({ event, ...fields }));
+}
+
+/** Waits for `dispose` up to `ms`; reports whether it finished in time. */
+async function disposeWithin(
+  dispose: () => Promise<void>,
+  ms: number,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      dispose().then(() => true, () => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function unsuccessfulWaitDetail(result: CursorExecutionResult): string {
   const status = result.waitResult.status
     .trim()
@@ -382,6 +414,8 @@ export function createInteractiveSessionActor(
   const warmCheckouts = new Map<string, WarmThreadCheckout>();
   const agentCache = new Map<string, CachedAgentEntry>();
   const agentIdByThread = new Map<string, string | null>();
+  // Agents whose resume stalled; the next turn recreates instead of resuming.
+  const unresumableAgentIds = new Set<string>();
 
   const emitStage = (
     context: {
@@ -400,11 +434,28 @@ export function createInteractiveSessionActor(
     }
   };
 
+  const disposeAgentHandle = async (
+    threadId: string,
+    handle: InteractiveCursorAgentHandle,
+  ): Promise<void> => {
+    const disposed = await disposeWithin(
+      () => handle.dispose(),
+      INTERACTIVE_AGENT_DISPOSE_WAIT_MS,
+    );
+    if (!disposed) {
+      logInteractiveAgentStep('InteractiveAgentDisposeTimedOut', {
+        threadId,
+        agentId: handle.agentId,
+        waitedMs: INTERACTIVE_AGENT_DISPOSE_WAIT_MS,
+      });
+    }
+  };
+
   const disposeAgentEntry = async (threadId: string): Promise<void> => {
     const entry = agentCache.get(threadId);
     if (!entry) return;
     agentCache.delete(threadId);
-    await entry.handle.dispose().catch(() => {});
+    await disposeAgentHandle(threadId, entry.handle);
     await entry.releaseWorkspace?.().catch(() => {});
   };
 
@@ -898,9 +949,60 @@ export function createInteractiveSessionActor(
     let cancellationRequested = false;
     let failureCategory: 'hard_timeout' | 'tool_timeout' | null = null;
     let firstEventTimedOut = false;
+    let silenceTimedOut = false;
+    let firstEventSeen = false;
+    let firstEventTimer: ReturnType<typeof setTimeout> | undefined;
+    let silenceTimer: ReturnType<typeof setTimeout> | undefined;
 
     const stopRun = async (): Promise<void> => {
       if (activeRunRef?.cancel) await activeRunRef.cancel().catch(() => {});
+    };
+
+    const clearEventTimers = (): void => {
+      if (firstEventTimer !== undefined) {
+        clearTimeout(firstEventTimer);
+        firstEventTimer = undefined;
+      }
+      if (silenceTimer !== undefined) {
+        clearTimeout(silenceTimer);
+        silenceTimer = undefined;
+      }
+    };
+
+    // After the first event, the same budget bounds each gap between events.
+    // A running tool has its own deadline, so silence during one is expected.
+    const armSilenceTimer = (): void => {
+      if (silenceTimer !== undefined) clearTimeout(silenceTimer);
+      silenceTimer = undefined;
+      const silenceMs = effectiveDeadlines.firstEventMs;
+      if (!(silenceMs > 0) || silenceMs >= absoluteMs - now()) return;
+      silenceTimer = setTimeout(() => {
+        silenceTimer = undefined;
+        if (toolTimer !== undefined) {
+          armSilenceTimer();
+          return;
+        }
+        failureCategory = 'hard_timeout';
+        silenceTimedOut = true;
+        logInteractiveAgentStep('InteractiveTurnWentSilent', {
+          runId,
+          threadId,
+          silentMs: silenceMs,
+        });
+        absoluteAbort.abort(
+          Object.assign(new Error('hard_timeout'), { code: 'hard_timeout' }),
+        );
+        void stopRun();
+      }, silenceMs);
+    };
+
+    const observeEvent = (): void => {
+      if (!firstEventSeen) {
+        firstEventSeen = true;
+        if (firstEventTimer !== undefined) clearTimeout(firstEventTimer);
+        firstEventTimer = undefined;
+      }
+      armSilenceTimer();
     };
     absoluteAbort.signal.addEventListener(
       'abort',
@@ -1031,6 +1133,27 @@ export function createInteractiveSessionActor(
 
       const checkout = attemptCheckout;
 
+      const firstEventMs = Math.min(
+        effectiveDeadlines.firstEventMs,
+        absoluteMs - now(),
+      );
+      if (!(firstEventMs > 0)) {
+        throw Object.assign(new Error('hard_timeout'), { code: 'hard_timeout' });
+      }
+
+      // The first-event budget covers starting or resuming the Agent as well as
+      // its first reply.
+      firstEventTimer = setTimeout(() => {
+        if (!firstEventSeen) {
+          failureCategory = 'hard_timeout';
+          firstEventTimedOut = true;
+          absoluteAbort.abort(
+            Object.assign(new Error('hard_timeout'), { code: 'hard_timeout' }),
+          );
+          void stopRun();
+        }
+      }, firstEventMs);
+
       const cached = agentCache.get(threadId);
       const cacheCompatible =
         cached &&
@@ -1045,32 +1168,66 @@ export function createInteractiveSessionActor(
         acquisitionMode = 'warm';
       } else {
         if (cached) await disposeAgentEntry(threadId);
-        const resumeAgentId =
+        const knownAgentId =
           cursorAgentId ?? agentIdByThread.get(threadId) ?? null;
-        if (dependencies.acquireDurableAgent) {
-          const acquired = await dependencies.acquireDurableAgent(
-            bootstrap,
-            checkout,
-            { resumeAgentId },
-          );
+        const resumeAgentId =
+          knownAgentId && !unresumableAgentIds.has(knownAgentId)
+            ? knownAgentId
+            : null;
+        const acquireStartedAt = now();
+        const acquisition: Promise<{
+          handle: InteractiveCursorAgentHandle;
+          mode: 'warm' | 'resumed' | 'recreated';
+        }> = dependencies.acquireDurableAgent
+          ? dependencies.acquireDurableAgent(bootstrap, checkout, {
+              resumeAgentId,
+            })
+          : dependencies
+              .acquireAgent(
+                {
+                  prompt: specification.currentPrompt,
+                  model: specification.model,
+                  effort: specification.effort ?? undefined,
+                  workspaceRef: checkout.workspacePath,
+                  workflowClass: 'agent_home_chat',
+                  skillPath: specification.skill?.path ?? '',
+                  projectId: specification.projectId,
+                  threadId: specification.threadId,
+                },
+                checkout,
+                { resumeAgentId, mcpServers },
+              )
+              .then((handle) => ({
+                handle,
+                mode: resumeAgentId ? 'resumed' as const : 'recreated' as const,
+              }));
+        try {
+          const acquired = await untilAborted(acquisition, absoluteAbort.signal);
           agentHandle = acquired.handle;
           acquisitionMode = acquired.mode;
-        } else {
-          agentHandle = await dependencies.acquireAgent(
-            {
-              prompt: specification.currentPrompt,
-              model: specification.model,
-              effort: specification.effort ?? undefined,
-              workspaceRef: checkout.workspacePath,
-              workflowClass: 'agent_home_chat',
-              skillPath: specification.skill?.path ?? '',
-              projectId: specification.projectId,
-              threadId: specification.threadId,
-            },
-            checkout,
-            { resumeAgentId, mcpServers },
-          );
-          acquisitionMode = resumeAgentId ? 'resumed' : 'recreated';
+          logInteractiveAgentStep('InteractiveAgentAcquired', {
+            runId,
+            threadId,
+            mode: acquired.mode,
+            durationMs: now() - acquireStartedAt,
+          });
+        } catch (error) {
+          if (absoluteAbort.signal.aborted) {
+            void acquisition
+              .then((late) => disposeAgentHandle(threadId, late.handle))
+              .catch(() => {});
+            if (resumeAgentId) {
+              unresumableAgentIds.add(resumeAgentId);
+              agentIdByThread.delete(threadId);
+            }
+            logInteractiveAgentStep('InteractiveAgentAcquireTimedOut', {
+              runId,
+              threadId,
+              resumed: resumeAgentId !== null,
+              waitedMs: now() - acquireStartedAt,
+            });
+          }
+          throw error;
         }
       }
 
@@ -1082,26 +1239,6 @@ export function createInteractiveSessionActor(
         acquisitionMode === 'recreated'
           ? specification.recreationPrompt
           : specification.currentPrompt;
-
-      const firstEventMs = Math.min(
-        effectiveDeadlines.firstEventMs,
-        absoluteMs - now(),
-      );
-      if (!(firstEventMs > 0)) {
-        throw Object.assign(new Error('hard_timeout'), { code: 'hard_timeout' });
-      }
-
-      let firstEventSeen = false;
-      const firstEventTimer = setTimeout(() => {
-        if (!firstEventSeen) {
-          failureCategory = 'hard_timeout';
-          firstEventTimedOut = true;
-          absoluteAbort.abort(
-            Object.assign(new Error('hard_timeout'), { code: 'hard_timeout' }),
-          );
-          void stopRun();
-        }
-      }, firstEventMs);
 
       const liveBatcher = createIncrementalTokenBatcher({
         maxBytes: batchMaxBytes,
@@ -1199,14 +1336,9 @@ export function createInteractiveSessionActor(
         const turnEndMonitor = createCursorTurnEndMonitor();
         activeRunRef = await untilAborted(
           agentHandle.send(prompt, {
-            // The proxy token is valid only for this attempt. A warm Agent
-            // still holds the previous attempt's servers unless send replaces them.
             mcpServers,
             onDelta: (update) => {
-              if (!firstEventSeen) {
-                firstEventSeen = true;
-                clearTimeout(firstEventTimer);
-              }
+              observeEvent();
               turnEndMonitor.observe(update);
             },
           }),
@@ -1239,10 +1371,7 @@ export function createInteractiveSessionActor(
                       code: 'hard_timeout',
                     });
               }
-              if (!firstEventSeen) {
-                firstEventSeen = true;
-                clearTimeout(firstEventTimer);
-              }
+              observeEvent();
               if (event.type === 'tool_call') {
                 armToolTimer();
               } else if (event.type === 'tool_status') {
@@ -1279,7 +1408,9 @@ export function createInteractiveSessionActor(
           },
           nextSequence: () => 1,
           turnEnd: turnEndMonitor.completion,
+          failIfStreamEndsBeforeTurnEnd: true,
         }), absoluteAbort.signal);
+        clearEventTimers();
 
         const liveTail = liveBatcher.flush();
         if (liveTail) {
@@ -1356,6 +1487,21 @@ export function createInteractiveSessionActor(
           );
         }
 
+        // A run that may still be live must not be warmed or resumed next turn.
+        const reusableAgentId = result.runLeftUnsettled
+          ? null
+          : agentHandle.agentId ?? null;
+        if (result.runLeftUnsettled) {
+          if (agentHandle.agentId) {
+            unresumableAgentIds.add(agentHandle.agentId);
+            agentIdByThread.delete(threadId);
+          }
+          logInteractiveAgentStep('InteractiveRunLeftUnsettled', {
+            runId,
+            threadId,
+          });
+        }
+
         await post({
           dispatchMessageId,
           attemptId,
@@ -1363,8 +1509,15 @@ export function createInteractiveSessionActor(
           status: 'completed',
           artifactsFlushed: true,
           artifactManifestRef,
-          cursorAgentId: agentHandle.agentId ?? null,
+          cursorAgentId: reusableAgentId,
         });
+
+        if (result.runLeftUnsettled) {
+          if (agentCache.get(threadId)?.handle === agentHandle) {
+            await disposeAgentEntry(threadId);
+          }
+          return { status: 'completed', cursorAgentId: null };
+        }
 
         agentCache.set(threadId, {
           handle: agentHandle,
@@ -1378,7 +1531,7 @@ export function createInteractiveSessionActor(
           cursorAgentId: agentHandle.agentId ?? null,
         };
       } finally {
-        clearTimeout(firstEventTimer);
+        clearEventTimers();
         clearToolTimer();
       }
     } catch (error) {
@@ -1402,6 +1555,15 @@ export function createInteractiveSessionActor(
       }
 
       await disposeAgentEntry(threadId);
+      const streamClosedEarly =
+        error instanceof CursorExecutionWaitError &&
+        error.cause instanceof CursorStreamClosedBeforeTurnEndError;
+      if (streamClosedEarly) {
+        logInteractiveAgentStep('InteractiveStreamClosedBeforeTurnEnd', {
+          runId,
+          threadId,
+        });
+      }
       const code =
         failureCategory ||
         (error &&
@@ -1411,14 +1573,24 @@ export function createInteractiveSessionActor(
           (error as { code?: string }).code === 'tool_timeout')
           ? ((error as { code: 'hard_timeout' | 'tool_timeout' }).code)
           : null);
+      // The run may still be live on Cursor's side, so the next turn
+      // recreates the Agent instead of resuming into the same stuck run.
+      if ((code === 'hard_timeout' || streamClosedEarly) && agentHandle?.agentId) {
+        unresumableAgentIds.add(agentHandle.agentId);
+        agentIdByThread.delete(threadId);
+      }
       const detail =
         code === 'tool_timeout'
           ? 'Interactive tool deadline exceeded'
           : code === 'hard_timeout'
             ? firstEventTimedOut
               ? 'Interactive first event deadline exceeded'
-              : 'Interactive absolute deadline exceeded'
-            : describeInteractiveFailure(error).reason;
+              : silenceTimedOut
+                ? 'Interactive turn went silent'
+                : 'Interactive absolute deadline exceeded'
+            : streamClosedEarly
+              ? 'Interactive turn failed: Cursor stream closed before the turn finished'
+              : describeInteractiveFailure(error).reason;
       await post({
         dispatchMessageId,
         attemptId,
@@ -1445,11 +1617,12 @@ export function createInteractiveSessionActor(
       clearInterval(heartbeatTimer);
       clearTimeout(absoluteTimer);
       clearToolTimer();
+      clearEventTimers();
       if (!retainAgent && attemptCheckout?.dispose) {
         await attemptCheckout.dispose().catch(() => {});
       }
       if (!retainAgent && agentHandle && !agentCache.has(threadId)) {
-        await agentHandle.dispose().catch(() => {});
+        await disposeAgentHandle(threadId, agentHandle);
       }
     }
   }

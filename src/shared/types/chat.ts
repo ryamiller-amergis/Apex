@@ -66,6 +66,11 @@ export interface ChatThreadKickoff {
   skillProvider?: import('./projectSettings').SkillProvider;
   /** Optional — omit for a free-chat session with no skill pre-loaded */
   skillPath?: string;
+  /**
+   * Server-set when `skillPath` is Apex's default rather than a project setting.
+   * The copy bundled with Apex may stand in when the project repository lacks it.
+   */
+  skillPathIsAppDefault?: boolean;
   /** Cursor SDK model ID to use for this thread (e.g. "claude-opus-4-6") */
   model?: string;
   /** Server-set module identity. Client-supplied values are discarded by client-facing routes. */

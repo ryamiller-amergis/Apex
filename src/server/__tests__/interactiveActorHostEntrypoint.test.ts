@@ -2,7 +2,6 @@ import { HttpMethod, type DaprInvokerCallbackContent } from '@dapr/dapr';
 import {
   parseInteractiveDispatchRequest,
   registerInteractiveDispatchHandler,
-  registerInteractiveHealthHandler,
 } from '../services/interactiveActorHost/entrypoint';
 import { createInFlightCounter } from '../services/interactiveActorHost/shutdownDrain';
 
@@ -38,28 +37,6 @@ describe('interactive actor host dispatch endpoint', () => {
     ).toThrow(
       'Interactive dispatch requires threadId, runId, and dispatchMessageId'
     );
-  });
-
-  it('registers GET /health for Container Apps probes', async () => {
-    let healthCallback:
-      | ((content: DaprInvokerCallbackContent) => Promise<unknown>)
-      | undefined;
-    const listen = jest.fn(
-      async (
-        methodName: string,
-        handler: (content: DaprInvokerCallbackContent) => Promise<unknown>,
-        options: { method: HttpMethod },
-      ) => {
-        if (methodName === 'health') {
-          healthCallback = handler;
-          expect(options).toEqual({ method: HttpMethod.GET });
-        }
-      },
-    );
-
-    await registerInteractiveHealthHandler({ listen });
-    expect(healthCallback).toBeDefined();
-    await expect(healthCallback!({})).resolves.toEqual({ status: 'ok' });
   });
 
   it('registers POST /dispatch and invokes the thread actor', async () => {

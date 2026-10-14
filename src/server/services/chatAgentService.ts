@@ -90,6 +90,7 @@ import {
   skillPathCandidates,
 } from '../../shared/skillPaths';
 import { createPrdValidationAdapter, syncPrdContent } from './prdService';
+import { applyAdrGenerationResult } from './adrService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import {
   createDesignDocValidationAdapter,
@@ -2003,7 +2004,7 @@ async function buildNewAgentTurnPrompt(
       }
     }
 
-    if (!skillContent && !options?.repoReader) {
+    if (!skillContent && (!options?.repoReader || kickoff.skillPathIsAppDefault)) {
       for (const candidate of candidates) {
         const localPath = path.join(process.cwd(), candidate);
         if (!fs.existsSync(localPath)) continue;
@@ -3326,6 +3327,17 @@ async function syncOutputToDbFromWorkspace(
   agentText?: string
 ): Promise<void> {
   let fullySynced = false;
+
+  const adrContent = readOutputAdr(threadId);
+  if (
+    await applyAdrGenerationResult(
+      threadId,
+      adrContent,
+      adrContent ? undefined : 'the agent did not produce an ADR file',
+    )
+  ) {
+    return;
+  }
 
   // Check if this thread belongs to a test-case generation run
   const testCaseRow = await db.query.testCases.findFirst({

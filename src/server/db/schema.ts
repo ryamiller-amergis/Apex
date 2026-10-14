@@ -699,6 +699,7 @@ export const adrs = pgTable('adrs', {
   id: uuid('id').primaryKey().defaultRandom(),
   chatThreadId: uuid('chat_thread_id').notNull().unique().references(() => chatThreads.id, { onDelete: 'cascade' }),
   adrAssistantThreadId: uuid('adr_assistant_thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+  generationThreadId: uuid('generation_thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
   authorId: text('author_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
   reviewerIds: jsonb('reviewer_ids').$type<string[]>(),
   title: text('title').notNull().default('Untitled ADR'),

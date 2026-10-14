@@ -188,7 +188,7 @@ resource "azurerm_linux_web_app" "main" {
     failed_request_tracing  = true
 
     dynamic "application_logs" {
-      for_each = var.environment == "dev" ? [1] : []
+      for_each = contains(["dev", "prd"], var.environment) ? [1] : []
 
       content {
         file_system_level = "Information"
@@ -197,8 +197,8 @@ resource "azurerm_linux_web_app" "main" {
 
     http_logs {
       file_system {
-        retention_in_days = 7
-        retention_in_mb   = 35
+        retention_in_days = var.environment == "prd" ? 3 : 7
+        retention_in_mb   = var.environment == "prd" ? 100 : 35
       }
     }
   }

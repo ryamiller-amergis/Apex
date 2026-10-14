@@ -3,6 +3,7 @@ import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
 import {
   createCursorTurnEndMonitor,
   CursorExecutionWaitError,
+  CursorStreamClosedBeforeTurnEndError,
   executeCursorExecutionCore,
   type CursorExecutionRun,
   type CursorExecutionWaitResult,
@@ -323,6 +324,130 @@ describe('TBI-004 shared Cursor execution core', () => {
     expect(result.text).toBe('## Home page');
     expect(result.completedOnTurnEnd).toBe(true);
     expect(wait).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('cursor execution core stream closed before turn end', () => {
+  function closedStreamRun(wait: CursorExecutionRun['wait']): {
+    run: CursorExecutionRun;
+    cancel: jest.Mock;
+  } {
+    const cancel = jest.fn(() => new Promise<void>(() => {}));
+    return {
+      cancel,
+      run: {
+        supports: (capability) =>
+          capability === 'stream' || capability === 'cancel',
+        stream: async function* () {
+          yield {
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: 'Partial' }] },
+          };
+        },
+        wait,
+        cancel,
+      },
+    };
+  }
+
+  it('fails when the stream closes and wait() never settles', async () => {
+    const { run, cancel } = closedStreamRun(
+      jest.fn(() => new Promise<CursorExecutionWaitResult>(() => {})),
+    );
+
+    const failure = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-closed', sourceInstance: 'closed-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+      turnEnd: createCursorTurnEndMonitor().completion,
+      turnEndSettleMs: 10,
+      failIfStreamEndsBeforeTurnEnd: true,
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(CursorExecutionWaitError);
+    expect((failure as CursorExecutionWaitError).cause).toBeInstanceOf(
+      CursorStreamClosedBeforeTurnEndError,
+    );
+    // A cancel that never settles must not hold the turn open.
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('completes when the turn end arrives just after the stream closes', async () => {
+    const monitor = createCursorTurnEndMonitor();
+    const wait = jest.fn(
+      () => new Promise<CursorExecutionWaitResult>((resolve) => {
+        setTimeout(() => resolve({ status: 'finished' }), 20);
+      }),
+    );
+    const { run } = closedStreamRun(wait);
+    setTimeout(() => {
+      monitor.observe({ type: 'text-delta', text: 'Partial answer' });
+      monitor.observe({ type: 'turn-ended' });
+    }, 5);
+
+    const result = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-late-end', sourceInstance: 'closed-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+      turnEnd: monitor.completion,
+      turnEndSettleMs: 50,
+      failIfStreamEndsBeforeTurnEnd: true,
+    });
+
+    expect(result.completedOnTurnEnd).toBe(true);
+    expect(result.text).toBe('Partial answer');
+    expect(wait).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a late turn end answer when cancel() and wait() never settle', async () => {
+    const monitor = createCursorTurnEndMonitor();
+    const { run, cancel } = closedStreamRun(
+      jest.fn(() => new Promise<CursorExecutionWaitResult>(() => {})),
+    );
+    setTimeout(() => {
+      monitor.observe({ type: 'text-delta', text: 'Partial answer' });
+      monitor.observe({ type: 'turn-ended' });
+    }, 5);
+
+    const result = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-late-end-stuck', sourceInstance: 'closed-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+      turnEnd: monitor.completion,
+      turnEndSettleMs: 50,
+      failIfStreamEndsBeforeTurnEnd: true,
+    });
+
+    expect(result.completedOnTurnEnd).toBe(true);
+    expect(result.runLeftUnsettled).toBe(true);
+    expect(result.text).toBe('Partial answer');
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('completes normally when wait() settles after the stream closes', async () => {
+    const wait = jest.fn().mockResolvedValue({ status: 'finished' });
+    const { run, cancel } = closedStreamRun(wait);
+
+    const result = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-settles', sourceInstance: 'closed-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+      turnEnd: createCursorTurnEndMonitor().completion,
+      turnEndSettleMs: 10,
+      failIfStreamEndsBeforeTurnEnd: true,
+    });
+
+    expect(result.waitResult.status).toBe('finished');
+    expect(wait).toHaveBeenCalledTimes(1);
+    expect(cancel).not.toHaveBeenCalled();
   });
 });
 

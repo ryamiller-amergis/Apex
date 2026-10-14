@@ -317,6 +317,16 @@
   color: var(--on-accent);
 }
 
+.actions .actionBtnPrimary {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+}
+
+.actions .actionBtnPrimary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
 .actionBtnDanger {
   composes: actionBtn;
   border-color: color-mix(in srgb, var(--error-color) 60%, var(--border-color));
