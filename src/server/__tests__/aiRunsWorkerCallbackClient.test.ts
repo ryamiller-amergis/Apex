@@ -79,6 +79,32 @@ describe('aiRunsWorker callback client', () => {
     expect(sleepImpl.mock.calls.map(([ms]) => ms)).toEqual([500, 1000]);
   });
 
+  it('retries a bootstrap request that hangs past the request timeout', async () => {
+    const hangUntilAborted = (_url: string, init: RequestInit): Promise<Response> =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+      });
+    const fetchImpl = jest.fn()
+      .mockImplementationOnce(hangUntilAborted)
+      .mockResolvedValueOnce(response(200, {
+        projectId: 'project-1',
+        run: { id: 'run-1' },
+      }));
+    const client = createAiRunsCallbackClient({
+      callbackBaseUrl: 'https://apex.example',
+      getToken: jest.fn().mockResolvedValue('token'),
+      fetchImpl: fetchImpl as never,
+      sleepImpl: jest.fn().mockResolvedValue(undefined),
+      requestTimeoutMs: 10,
+    });
+
+    await expect(client.getBootstrap({
+      runId: 'run-1',
+      dispatchMessageId: 'dispatch-1',
+    })).resolves.toEqual({ projectId: 'project-1', run: { id: 'run-1' } });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it('gives up on a bootstrap failure that stays transient, rather than retrying forever', async () => {
     const fetchImpl = jest.fn().mockResolvedValue(response(500, { error: 'down' }));
     const client = createAiRunsCallbackClient({

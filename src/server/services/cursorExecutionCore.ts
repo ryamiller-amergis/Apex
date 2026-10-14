@@ -175,16 +175,25 @@ export function createCursorTurnEndMonitor(): CursorTurnEndMonitor {
 async function* streamUntilTurnEnd(
   stream: AsyncIterable<CursorStreamEvent>,
   turnEnd: Promise<CursorTurnEndResult>,
+  /** After the stream ends, a late turn end is accepted until this settles. */
+  afterStreamEnd?: () => Promise<unknown>,
 ): AsyncGenerator<CursorStreamEvent> {
   const iterator = stream[Symbol.asyncIterator]();
   let next = iterator.next();
   let streamedText = '';
   try {
     while (true) {
-      const outcome = await Promise.race([
+      let outcome = await Promise.race([
         next.then((result) => ({ kind: 'stream' as const, result })),
         turnEnd.then((result) => ({ kind: 'turn-end' as const, result })),
       ]);
+      if (outcome.kind === 'stream' && outcome.result.done && afterStreamEnd) {
+        const late = await Promise.race([
+          turnEnd,
+          afterStreamEnd().then(() => null),
+        ]);
+        if (late) outcome = { kind: 'turn-end' as const, result: late };
+      }
       if (outcome.kind === 'turn-end') {
         const remainingText = outcome.result.text.startsWith(streamedText)
           ? outcome.result.text.slice(streamedText.length)
@@ -479,6 +488,19 @@ export interface ExecuteCursorExecutionCoreInput {
   turnEnd?: Promise<CursorTurnEndResult>;
   /** How long a run may take to settle after turn end before it is cancelled. */
   turnEndSettleMs?: number;
+  /**
+   * Fail when the stream ends and, within `turnEndSettleMs`, neither a turn
+   * end arrives nor `wait()` settles. A dropped Cursor connection can leave
+   * `wait()` pending forever.
+   */
+  failIfStreamEndsBeforeTurnEnd?: boolean;
+}
+
+export class CursorStreamClosedBeforeTurnEndError extends Error {
+  constructor() {
+    super('Cursor stream closed before the turn finished');
+    this.name = 'CursorStreamClosedBeforeTurnEndError';
+  }
 }
 
 const DEFAULT_TURN_END_SETTLE_MS = 5_000;
@@ -560,9 +582,23 @@ export async function executeCursorExecutionCore(
     if (phaseEvent) await publish(phaseEvent);
   };
 
+  const turnEndSettleMs = input.turnEndSettleMs ?? DEFAULT_TURN_END_SETTLE_MS;
+  const streamEnd: {
+    wait?: Promise<CursorExecutionWaitResult>;
+    settled?: boolean;
+  } = {};
+  const waitAfterStreamEnd = async (): Promise<void> => {
+    streamEnd.wait ??= run.wait();
+    streamEnd.settled = await settlesWithin(streamEnd.wait, turnEndSettleMs);
+  };
+
   if (run.supports('stream')) {
     const stream = input.turnEnd
-      ? streamUntilTurnEnd(run.stream(), input.turnEnd)
+      ? streamUntilTurnEnd(
+          run.stream(),
+          input.turnEnd,
+          input.failIfStreamEndsBeforeTurnEnd ? waitAfterStreamEnd : undefined,
+        )
       : run.stream();
     for await (const event of stream) {
       await hooks.beforeStreamEvent?.();
@@ -584,11 +620,8 @@ export async function executeCursorExecutionCore(
           readTokenUsage(turnEndEvent.usage) ?? streamedUsage;
         // Cursor drops a cancelled run's turn from the agent's conversation, so
         // only cancel a run that does not settle on its own after turn end.
-        turnEndWait = run.wait();
-        const settled = await settlesWithin(
-          turnEndWait,
-          input.turnEndSettleMs ?? DEFAULT_TURN_END_SETTLE_MS,
-        );
+        turnEndWait = streamEnd.wait ?? run.wait();
+        const settled = await settlesWithin(turnEndWait, turnEndSettleMs);
         if (!settled && run.cancel && run.supports('cancel')) {
           try {
             await run.cancel();
@@ -737,6 +770,20 @@ export async function executeCursorExecutionCore(
   }
 
   await flushThinkingPhase();
+  if (!turnEndWait && input.failIfStreamEndsBeforeTurnEnd) {
+    if (streamEnd.settled === undefined) await waitAfterStreamEnd();
+    turnEndWait = streamEnd.wait ?? null;
+    if (!streamEnd.settled) {
+      if (run.cancel && run.supports('cancel')) {
+        void run.cancel().catch(() => {});
+      }
+      throw new CursorExecutionWaitError(
+        new CursorStreamClosedBeforeTurnEndError(),
+        streamedUsage,
+        terminalStatusMessage,
+      );
+    }
+  }
   let waitResult: CursorExecutionWaitResult;
   try {
     waitResult = await (turnEndWait ?? run.wait());

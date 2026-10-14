@@ -74,6 +74,8 @@ import {
   type IInteractiveSessionActor,
 } from './interactiveSessionActorClass';
 
+const INTERACTIVE_CALLBACK_REQUEST_TIMEOUT_MS = 12_000;
+
 /** Warm checkout carrying the reader the execution factory needs. */
 type ReaderCheckout = WarmThreadCheckout & { reader: RepoReader };
 
@@ -314,9 +316,13 @@ export async function main(): Promise<void> {
     process.env.PORT?.trim() ||
     '8080';
 
+  // Bootstrap is fetched before the execution specification exists, so this
+  // limit cannot come from it. Four attempts plus backoff stay under the
+  // reaper's 60s start timeout.
   const callback = createAiRunsCallbackClient({
     callbackBaseUrl,
     getToken: getAiRunnerCallbackToken,
+    requestTimeoutMs: INTERACTIVE_CALLBACK_REQUEST_TIMEOUT_MS,
   });
 
   const repositoryCheckout = createGroundedRepositoryCheckout();

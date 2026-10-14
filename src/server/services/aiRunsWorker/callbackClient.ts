@@ -146,6 +146,8 @@ export function createAiRunsCallbackClient(options: {
   fetchImpl?: typeof fetch;
   /** Injectable delay so retry backoff does not slow tests down. */
   sleepImpl?: (ms: number) => Promise<void>;
+  /** Per-request limit; a timed-out request is retried like a network error. */
+  requestTimeoutMs?: number;
 }): AiRunsCallbackClient {
   const fetchImpl = options.fetchImpl ?? fetch;
   const sleepImpl = options.sleepImpl
@@ -162,6 +164,9 @@ export function createAiRunsCallbackClient(options: {
     );
     return fetchImpl(url, {
       ...init,
+      ...(options.requestTimeoutMs
+        ? { signal: AbortSignal.timeout(options.requestTimeoutMs) }
+        : {}),
       headers: {
         Authorization: `Bearer ${token}`,
         ...(init.headers ?? {}),
