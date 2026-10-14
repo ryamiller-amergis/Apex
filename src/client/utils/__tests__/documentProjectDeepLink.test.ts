@@ -1,4 +1,5 @@
 import {
+  documentProjectForSwitch,
   documentProjectSwitchTarget,
   parseDocumentDeepLink,
   shouldHoldDocumentRoute,
@@ -46,6 +47,16 @@ describe('document project deep links', () => {
     expect(parseDocumentDeepLink('/load-tests/new')).toBeNull();
     expect(parseDocumentDeepLink('/ui-lab/design-1')?.kind).toBe('ui-lab');
     expect(parseDocumentDeepLink('/my-work/session/session-1')?.kind).toBe('dev-session');
+  });
+
+  it('does not use ?project= when a record lookup failed or is still pending', () => {
+    const link = parseDocumentDeepLink('/home', '?thread=thread-1&project=Apex');
+    expect(documentProjectForSwitch(link, undefined, 'Apex')).toBeUndefined();
+    expect(documentProjectForSwitch(link, 'Nurses', 'Apex')).toBe('Nurses');
+  });
+
+  it('keeps ?project= on non-record routes', () => {
+    expect(documentProjectForSwitch(null, undefined, 'Apex')).toBe('Apex');
   });
 
   it('switches to the owning project when the open project is different', () => {

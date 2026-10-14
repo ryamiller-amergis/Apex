@@ -87,6 +87,20 @@ export function parseDocumentDeepLink(pathname: string, search = ''): DocumentDe
 }
 
 /**
+ * Record URLs switch only from GET /api/links/project. A 404 (missing or
+ * unauthorized record) must not fall back to ?project=, or a notification
+ * link still moves the user into that project. Non-record routes keep using
+ * the query param.
+ */
+export function documentProjectForSwitch(
+  link: DocumentDeepLink | null,
+  recordProject: string | undefined,
+  queryProject: string | undefined,
+): string | undefined {
+  return link ? recordProject : queryProject;
+}
+
+/**
  * The project name from the user's accessible project list (GET /api/projects)
  * that owns this document.
  * Null when the document is already in the selected project, the user is

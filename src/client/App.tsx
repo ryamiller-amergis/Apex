@@ -39,6 +39,7 @@ import { resolveAccessibleRoute } from './utils/accessibleRoute';
 import { useDocumentDeepLinkProject } from './hooks/useDocumentDeepLinkProject';
 import { useProjects } from './hooks/useProjects';
 import {
+  documentProjectForSwitch,
   documentProjectSwitchTarget,
   shouldHoldDocumentRoute,
 } from './utils/documentProjectDeepLink';
@@ -331,7 +332,6 @@ function App() {
   } = useProjects();
   const selectableProjectNames = selectableProjectList.map((project) => project.name);
   const queryProject = new URLSearchParams(location.search).get('project') ?? undefined;
-  const recordOwnsProject = Boolean(documentLink.link) && !documentLink.failed;
   // A settled catalog error has isLoading === false and no data. Treat that as
   // unresolved, not an empty accessible list, or the opening overlay drops and
   // the document stays on the current project.
@@ -339,7 +339,7 @@ function App() {
     || selectableProjectsLoading
     || selectableProjectsError;
   const documentProjectTarget = documentProjectSwitchTarget(
-    recordOwnsProject ? documentLink.project : (documentLink.project ?? queryProject),
+    documentProjectForSwitch(documentLink.link, documentLink.project, queryProject),
     selectedProject,
     selectableProjectNames,
     { isRestricted: isRestricted || !permissionsLoaded },
