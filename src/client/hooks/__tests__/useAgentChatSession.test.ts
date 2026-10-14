@@ -762,4 +762,63 @@ describe('useAgentChatSession', () => {
     expect(result.current.progressPhase).toBe('dispatched');
     expect(result.current.progressLabel).toBe('Dispatched');
   });
+
+  it('stays awaiting after sending from an idle-closed thread while status is still closed', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        turnId: TURN_ID_1,
+        runId: '50000000-0000-4000-8000-000000000001',
+        status: 'queued',
+        interactiveClass: 'fast',
+      }),
+    });
+    currentStreamReturn = { ...mockStreamReturn, status: 'closed' };
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', { createTurnId: () => TURN_ID_1 }),
+    );
+
+    await act(async () => {
+      await result.current.send('Back again');
+    });
+
+    expect(result.current.isSending).toBe(false);
+    expect(result.current.isAwaitingAgentResponse).toBe(true);
+    expect(result.current.isInteractionBusy).toBe(true);
+  });
+
+  it('clears awaiting when a reopened thread closes again after leaving closed', async () => {
+    currentStreamReturn = { ...mockStreamReturn, status: 'closed' };
+    const { result, rerender } = renderHook(() =>
+      useAgentChatSession('thread-1'),
+    );
+
+    await act(async () => {
+      await result.current.send('Back again');
+    });
+    expect(result.current.isAwaitingAgentResponse).toBe(true);
+
+    currentStreamReturn = { ...mockStreamReturn, status: 'running' };
+    rerender();
+    expect(result.current.isAwaitingAgentResponse).toBe(true);
+
+    currentStreamReturn = { ...mockStreamReturn, status: 'closed' };
+    rerender();
+    expect(result.current.isAwaitingAgentResponse).toBe(false);
+  });
+
+  it('clears awaiting when the thread closes after a send started from idle', async () => {
+    const { result, rerender } = renderHook(() =>
+      useAgentChatSession('thread-1'),
+    );
+
+    await act(async () => {
+      await result.current.send('Hello');
+    });
+    expect(result.current.isAwaitingAgentResponse).toBe(true);
+
+    currentStreamReturn = { ...mockStreamReturn, status: 'closed' };
+    rerender();
+    expect(result.current.isAwaitingAgentResponse).toBe(false);
+  });
 });
