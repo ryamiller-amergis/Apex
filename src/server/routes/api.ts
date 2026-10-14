@@ -27,6 +27,7 @@ import { ensureUserProjectAssignment, getAssignmentsForUser } from '../services/
 import { resolveLinkProject } from '../services/linkProjectService';
 import { resolveThreadAccess } from '../services/threadAccessService';
 import { getDiagram } from '../services/diagramService';
+import { resolveDesignAccess } from '../services/uiLabService';
 import {
   filterProjectCatalogByNames,
   listProjectCatalog,
@@ -159,6 +160,7 @@ async function canReadLinkedRecord(
   id: string,
   project: string,
   userId: string,
+  isSuperAdmin = false,
 ): Promise<boolean> {
   if (kind === 'chat-thread') {
     return Boolean(await resolveThreadAccess(userId, id));
@@ -174,6 +176,14 @@ async function canReadLinkedRecord(
   if (kind === 'diagram') {
     try {
       await getDiagram(project, id, userId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  if (kind === 'ui-lab') {
+    try {
+      await resolveDesignAccess(id, userId, { isSuperAdmin });
       return true;
     } catch {
       return false;
@@ -198,7 +208,7 @@ router.get('/links/project', async (req: Request, res: Response) => {
       !project
       || !userId
       || !(await canSelectProject(req, project))
-      || !(await canReadLinkedRecord(kind, id, project, userId))
+      || !(await canReadLinkedRecord(kind, id, project, userId, isSuperAdminRequest(req)))
     ) {
       res.status(404).json({ error: 'Link not found' });
       return;

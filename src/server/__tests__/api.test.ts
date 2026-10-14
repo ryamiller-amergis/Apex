@@ -13,6 +13,7 @@ import * as linkProjectService from '../services/linkProjectService';
 
 const mockResolveThreadAccess = jest.fn();
 const mockGetDiagram = jest.fn();
+const mockResolveDesignAccess = jest.fn();
 
 // Mock the AzureDevOpsService
 jest.mock('../services/azureDevOps');
@@ -71,6 +72,10 @@ jest.mock('../services/diagramService', () => ({
   getDiagram: (...args: unknown[]) => mockGetDiagram(...args),
 }));
 
+jest.mock('../services/uiLabService', () => ({
+  resolveDesignAccess: (...args: unknown[]) => mockResolveDesignAccess(...args),
+}));
+
 jest.mock('../db', () => ({
   getDbPoolStats: jest.fn(),
 }));
@@ -92,6 +97,7 @@ describe('API Routes', () => {
     mockAdoMembershipService.getUserProjects.mockResolvedValue([]);
     mockResolveThreadAccess.mockResolvedValue(null);
     mockGetDiagram.mockRejectedValue(new Error('Diagram not found'));
+    mockResolveDesignAccess.mockRejectedValue(new Error('Forbidden'));
     mockWorkerTierHealthService.getWorkerTierHealthStats.mockResolvedValue({
       workerTierSaturation: 0.5,
       oldestQueuedAgeMs: 90_000,
@@ -497,6 +503,30 @@ describe('API Routes', () => {
       await request(buildAppWithUser(profile))
         .get('/api/links/project')
         .query({ kind: 'diagram', id: adrId })
+        .expect(200);
+    });
+
+    it('does not disclose a UI Lab design the caller may not read', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+      mockResolveDesignAccess.mockRejectedValue(new Error('Forbidden'));
+
+      await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'ui-lab', id: adrId })
+        .expect(404);
+
+      expect(mockResolveDesignAccess).toHaveBeenCalledWith(adrId, profile.oid, { isSuperAdmin: false });
+    });
+
+    it('returns a UI Lab project when its read check succeeds', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+      mockResolveDesignAccess.mockResolvedValue({ id: adrId });
+
+      await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'ui-lab', id: adrId })
         .expect(200);
     });
   });
