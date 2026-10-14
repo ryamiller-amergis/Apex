@@ -775,7 +775,7 @@ export async function executeCursorExecutionCore(
     turnEndWait = streamEnd.wait ?? null;
     if (!streamEnd.settled) {
       if (run.cancel && run.supports('cancel')) {
-        void run.cancel().catch(() => {});
+        await settlesWithin(run.cancel(), turnEndSettleMs);
       }
       throw new CursorExecutionWaitError(
         new CursorStreamClosedBeforeTurnEndError(),

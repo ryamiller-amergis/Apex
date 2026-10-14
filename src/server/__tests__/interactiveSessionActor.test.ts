@@ -1509,6 +1509,68 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     });
   }, 15_000);
 
+  it('recreates instead of resuming an Agent whose turn went silent', async () => {
+    const silentRun: WorkerCursorExecutionRun = {
+      supports: (capability: string) =>
+        capability === 'stream' || capability === 'cancel',
+      async *stream(): AsyncIterable<CursorStreamEvent> {
+        yield { type: 'assistant', message: { content: [{ type: 'text', text: 'Thinking' }] } };
+        await new Promise<never>(() => {});
+      },
+      wait: () => new Promise<never>(() => {}),
+      cancel: async () => {},
+    };
+    const acquireDurableAgent = jest
+      .fn()
+      .mockImplementationOnce(async (_b, checkout) => ({
+        mode: 'resumed' as const,
+        handle: {
+          ...makeAgentHandle({ agentId: 'agent-quiet', workspaceRef: checkout.workspacePath }),
+          send: async () => silentRun,
+        },
+      }))
+      .mockImplementationOnce(async (_b, checkout) => ({
+        mode: 'recreated' as const,
+        handle: makeAgentHandle({
+          tokens: ['Back again'],
+          agentId: 'agent-new',
+          workspaceRef: checkout.workspacePath,
+        }),
+      }));
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(),
+      acquireDurableAgent,
+      materializeWorkspace: async (_b, destination) => ({ workspacePath: destination }),
+      uploadAttemptArtifacts: async () => ({ container: 'artifacts', key: 'manifest.json' }),
+      postIngest: async () => ({ ok: true, cancelRequested: false }),
+    });
+
+    const silent = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        cursorAgentId: 'agent-quiet',
+        effectiveDeadlines: {
+          repositoryPreparationMs: null,
+          firstEventMs: 100,
+          toolCallMs: 60_000,
+        },
+      }),
+    });
+    expect(silent).toEqual({ status: 'failed', failureCategory: 'hard_timeout' });
+
+    const next = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        attemptId: '20000000-0000-4000-8000-000000000010',
+        dispatchMessageId: 'dispatch-durable-3',
+        cursorAgentId: 'agent-quiet',
+      }),
+    });
+    expect(next.status).toBe('completed');
+    expect(acquireDurableAgent.mock.calls[1][2]).toEqual({ resumeAgentId: null });
+  }, 15_000);
+
   it('fails when the Cursor stream closes before the turn finishes, even if dispose hangs', async () => {
     const posted: AiRunIngestBody[] = [];
     const closedRun: WorkerCursorExecutionRun = {

@@ -1551,6 +1551,12 @@ export function createInteractiveSessionActor(
           (error as { code?: string }).code === 'tool_timeout')
           ? ((error as { code: 'hard_timeout' | 'tool_timeout' }).code)
           : null);
+      // The run may still be live on Cursor's side, so the next turn
+      // recreates the Agent instead of resuming into the same stuck run.
+      if ((code === 'hard_timeout' || streamClosedEarly) && agentHandle?.agentId) {
+        unresumableAgentIds.add(agentHandle.agentId);
+        agentIdByThread.delete(threadId);
+      }
       const detail =
         code === 'tool_timeout'
           ? 'Interactive tool deadline exceeded'
