@@ -756,7 +756,7 @@ describe('updateInterviewPhaseAssignments', () => {
     mockCreateNotification.mockResolvedValue({ id: 'notif-1' });
   });
 
-  it('assigns Discovery, Delivery, and Technical independently', async () => {
+  it('updates only the supplied phase assignments', async () => {
     mockDb.query.interviews.findFirst.mockResolvedValue({
       ...interviewRow,
       discoveryAssigneeId: null,
@@ -776,12 +776,36 @@ describe('updateInterviewPhaseAssignments', () => {
       technicalAssigneeId: 'technical-1',
     });
 
-    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({
+    expect(setMock).toHaveBeenCalledWith({
+      discoveryAssigneeId: 'discovery-1',
+      technicalAssigneeId: 'technical-1',
+      updatedAt: expect.any(String),
+    });
+    expect(mockCreateNotification).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not clear an existing phase when another phase is assigned', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
       discoveryAssigneeId: 'discovery-1',
       deliveryAssigneeId: null,
-      technicalAssigneeId: 'technical-1',
-    }));
-    expect(mockCreateNotification).toHaveBeenCalledTimes(2);
+      technicalAssigneeId: null,
+    });
+    mockGetActiveUsers.mockResolvedValue([
+      { oid: 'delivery-1', displayName: 'Delivery User' },
+    ]);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await updateInterviewPhaseAssignments('interview-1', 'user-1', {
+      deliveryAssigneeId: 'delivery-1',
+    });
+
+    expect(setMock).toHaveBeenCalledWith({
+      deliveryAssigneeId: 'delivery-1',
+      updatedAt: expect.any(String),
+    });
   });
 
   it('rejects a user who is not active in the interview project', async () => {

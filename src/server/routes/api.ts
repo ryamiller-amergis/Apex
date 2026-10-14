@@ -25,6 +25,8 @@ import { isFeatureEnabled } from '../services/featureFlagService';
 import { getUserId } from '../utils/requestUser';
 import { ensureUserProjectAssignment, getAssignmentsForUser } from '../services/userProjectAssignmentService';
 import { resolveLinkProject } from '../services/linkProjectService';
+import { resolveThreadAccess } from '../services/threadAccessService';
+import { getDiagram } from '../services/diagramService';
 import {
   filterProjectCatalogByNames,
   listProjectCatalog,
@@ -47,7 +49,7 @@ import {
   pruneStaleOrders,
 } from '../services/releaseOrderService';
 import { assignWorkItemsToRelease, renameRelease } from '../services/releaseManagementService';
-import { chatThreads as chatThreadsSchema } from '../db/schema';
+import { chatThreads as chatThreadsSchema, devSessions } from '../db/schema';
 import {
   createOrReuseSession,
   setSessionThread,
@@ -152,8 +154,36 @@ async function canSelectProject(req: Request, project: string): Promise<boolean>
   return projectNamesInclude(names, project);
 }
 
+async function canReadLinkedRecord(
+  kind: string,
+  id: string,
+  project: string,
+  userId: string,
+): Promise<boolean> {
+  if (kind === 'chat-thread') {
+    return Boolean(await resolveThreadAccess(userId, id));
+  }
+  if (kind === 'dev-session') {
+    const rows = await db
+      .select({ authorId: devSessions.authorId })
+      .from(devSessions)
+      .where(drizzleEq(devSessions.id, id))
+      .limit(1);
+    return rows[0]?.authorId === userId;
+  }
+  if (kind === 'diagram') {
+    try {
+      await getDiagram(project, id, userId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
 // GET /api/links/project?kind=&id= — the project that owns a shared record.
-// Only returns a project the caller can already open (assignment or ADO membership).
+// Only returns a project the caller can open and may read for private record kinds.
 router.get('/links/project', async (req: Request, res: Response) => {
   const kind = typeof req.query.kind === 'string' ? req.query.kind : '';
   const id = typeof req.query.id === 'string' ? req.query.id : '';
@@ -163,7 +193,13 @@ router.get('/links/project', async (req: Request, res: Response) => {
   }
   try {
     const project = await resolveLinkProject(kind, id);
-    if (!project || !(await canSelectProject(req, project))) {
+    const userId = getProfileOid(req);
+    if (
+      !project
+      || !userId
+      || !(await canSelectProject(req, project))
+      || !(await canReadLinkedRecord(kind, id, project, userId))
+    ) {
       res.status(404).json({ error: 'Link not found' });
       return;
     }

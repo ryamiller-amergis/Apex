@@ -3257,9 +3257,9 @@ router.patch('/:id', requirePermission('interviews:manage'), async (req, res, ne
       status?: string;
       title?: string;
       phaseAssignments?: {
-        discoveryAssigneeId?: string;
-        deliveryAssigneeId?: string;
-        technicalAssigneeId?: string;
+        discoveryAssigneeId?: string | null;
+        deliveryAssigneeId?: string | null;
+        technicalAssigneeId?: string | null;
       };
     };
     if (status) await updateInterviewStatus(req.params.id, userId, status as InterviewStatus);

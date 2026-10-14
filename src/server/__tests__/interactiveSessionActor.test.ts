@@ -14,7 +14,10 @@
 import { AiRunCallbackError, AiRunFenceConflictError } from '../services/aiRunsWorker/callbackClient';
 import type { WorkerCursorExecutionRun } from '../services/aiRunsWorker/cursorExecution';
 import type { CursorStreamEvent } from '../services/cursorExecutionCore';
-import type { InteractiveCursorAgentHandle } from '../services/interactiveActorHost/interactiveCursorExecution';
+import type {
+  InteractiveCursorAgentHandle,
+  InteractiveSendOptions,
+} from '../services/interactiveActorHost/interactiveCursorExecution';
 import {
   createInteractiveSessionActor,
   INTERACTIVE_STARTING_DETAIL,
@@ -61,9 +64,7 @@ interface FakeAgentOptions {
   agentId?: string | null;
   waitGate?: Promise<void>;
   onCancel?: () => void;
-  onSend?: (sendOptions?: {
-    mcpServers?: Readonly<Record<string, { url: string }>>;
-  }) => void;
+  onSend?: (sendOptions?: InteractiveSendOptions) => void;
   model?: string;
   workspaceRef?: string;
   waitStatus?: string;

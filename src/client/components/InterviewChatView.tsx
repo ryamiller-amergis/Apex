@@ -1405,8 +1405,9 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     interview.deliveryAssigneeId,
     interview.technicalAssigneeId,
   ].includes(userId);
-  const isReadOnlyViewer = !isAuthor && !isInterviewParticipant && !isAdmin;
-  const canAssignPhases = isAuthor || isAdmin;
+  const isInterviewAdmin = isAdmin || can('admin:roles');
+  const isReadOnlyViewer = !isAuthor && !isInterviewParticipant && !isInterviewAdmin;
+  const canAssignPhases = isAuthor || isInterviewAdmin;
   const isStatusLocked = interview.status !== 'in_progress';
   const isChatLocked = isReadOnlyViewer || isStatusLocked;
   const isGuidedInterview = usesGuidedInterviewPhases(
@@ -1710,11 +1711,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             onAssign: (phase, userId) => {
               updatePhaseAssignments.mutate({
                 id: interview.id,
-                phaseAssignments: {
-                  discoveryAssigneeId: phase === 'discovery' ? (userId || undefined) : interview.discoveryAssigneeId,
-                  deliveryAssigneeId: phase === 'delivery' ? (userId || undefined) : interview.deliveryAssigneeId,
-                  technicalAssigneeId: phase === 'technical' ? (userId || undefined) : interview.technicalAssigneeId,
-                },
+                phaseAssignments: phase === 'discovery'
+                  ? { discoveryAssigneeId: userId || null }
+                  : phase === 'delivery'
+                    ? { deliveryAssigneeId: userId || null }
+                    : { technicalAssigneeId: userId || null },
               });
             },
           }}

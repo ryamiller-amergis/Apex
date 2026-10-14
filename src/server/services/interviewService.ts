@@ -479,14 +479,21 @@ export async function updateInterviewTitle(
 }
 
 export interface InterviewPhaseAssignments {
-  discoveryAssigneeId?: string;
-  deliveryAssigneeId?: string;
-  technicalAssigneeId?: string;
+  discoveryAssigneeId?: string | null;
+  deliveryAssigneeId?: string | null;
+  technicalAssigneeId?: string | null;
 }
 
-function assigneeOrNull(id: string | undefined): string | null {
+function assigneeOrNull(id: string | null | undefined): string | null {
   const trimmed = id?.trim();
   return trimmed ? trimmed : null;
+}
+
+function hasAssignment(
+  assignments: InterviewPhaseAssignments,
+  key: keyof InterviewPhaseAssignments,
+): boolean {
+  return Object.prototype.hasOwnProperty.call(assignments, key);
 }
 
 /**
@@ -515,23 +522,48 @@ export async function updateInterviewPhaseAssignments(
   }
 
   const next = {
-    discoveryAssigneeId: assigneeOrNull(assignments.discoveryAssigneeId),
-    deliveryAssigneeId: assigneeOrNull(assignments.deliveryAssigneeId),
-    technicalAssigneeId: assigneeOrNull(assignments.technicalAssigneeId),
+    discoveryAssigneeId: hasAssignment(assignments, 'discoveryAssigneeId')
+      ? assigneeOrNull(assignments.discoveryAssigneeId)
+      : row.discoveryAssigneeId,
+    deliveryAssigneeId: hasAssignment(assignments, 'deliveryAssigneeId')
+      ? assigneeOrNull(assignments.deliveryAssigneeId)
+      : row.deliveryAssigneeId,
+    technicalAssigneeId: hasAssignment(assignments, 'technicalAssigneeId')
+      ? assigneeOrNull(assignments.technicalAssigneeId)
+      : row.technicalAssigneeId,
   };
   const activeUserIds = new Set((await getActiveUsers(row.project)).map((user) => user.oid));
-  const invalidAssignee = Object.values(next).find(
-    (assigneeId) => assigneeId && !activeUserIds.has(assigneeId),
-  );
+  const assignmentKeys: Array<keyof InterviewPhaseAssignments> = [
+    'discoveryAssigneeId',
+    'deliveryAssigneeId',
+    'technicalAssigneeId',
+  ];
+  const invalidAssignee = assignmentKeys
+    .filter((key) => hasAssignment(assignments, key))
+    .map((key) => next[key])
+    .find((assigneeId) => assigneeId && !activeUserIds.has(assigneeId));
   if (invalidAssignee) {
     const err = new Error('Phase assignees must be active users in this project');
     (err as any).status = 400;
     throw err;
   }
 
+  const updates: Partial<typeof next> & { updatedAt: string } = {
+    updatedAt: new Date().toISOString(),
+  };
+  if (hasAssignment(assignments, 'discoveryAssigneeId')) {
+    updates.discoveryAssigneeId = next.discoveryAssigneeId;
+  }
+  if (hasAssignment(assignments, 'deliveryAssigneeId')) {
+    updates.deliveryAssigneeId = next.deliveryAssigneeId;
+  }
+  if (hasAssignment(assignments, 'technicalAssigneeId')) {
+    updates.technicalAssigneeId = next.technicalAssigneeId;
+  }
+
   await db
     .update(interviews)
-    .set({ ...next, updatedAt: new Date().toISOString() })
+    .set(updates)
     .where(eq(interviews.id, id));
 
   const interviewTitle = row.title ?? 'Untitled Interview';
