@@ -73,6 +73,7 @@ jest.mock('../services/chatThreadRepository', () => ({
   loadFullThread: jest.fn().mockResolvedValue(null),
   listMessageIds: jest.fn().mockResolvedValue([]),
   deleteThread: jest.fn().mockResolvedValue(undefined),
+  reopenClosedThread: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('../services/prdService', () => ({ syncPrdContent: jest.fn() }));
@@ -1504,6 +1505,55 @@ describe('canonical durable send wrapper', () => {
       expect(Agent.resume).not.toHaveBeenCalled();
     } finally {
       await closeThread(thread.id);
+    }
+  });
+
+  it('reopens an idle-closed thread when its owner sends a message', async () => {
+    const accepted = {
+      turnId,
+      runId,
+      status: 'queued' as const,
+      interactiveClass: 'fast' as const,
+    };
+    mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: { admitDurable(): Promise<typeof accepted> }) => ({
+        route: 'durable',
+        response: await input.admitDurable(),
+      }),
+    );
+    const { reopenClosedThread: mockReopenClosedThread } = jest.requireMock(
+      '../services/chatThreadRepository',
+    ) as { reopenClosedThread: jest.Mock };
+    mockReopenClosedThread.mockClear();
+    const closedId = '30000000-0000-4000-8000-000000000077';
+    const now = new Date().toISOString();
+    mockPgLoadFullThread.mockResolvedValue({
+      id: closedId,
+      userId: 'developer-1',
+      status: 'closed',
+      kickoff: baseKickoff(),
+      workspaceDir: '',
+      messages: [],
+      createdAt: now,
+      lastActivityAt: now,
+    });
+
+    try {
+      await expect(
+        sendMessage(closedId, 'Picking this back up', undefined, [], {
+          turnId,
+          turnIdPolicy: 'required',
+        }),
+      ).resolves.toEqual({ route: 'durable', response: accepted });
+      expect(mockReopenClosedThread).toHaveBeenCalledWith(closedId);
+      expect((await getThread(closedId))?.status).not.toBe('closed');
+      expect(mockDurableInteractiveAdmit).toHaveBeenCalledWith(
+        expect.objectContaining({ threadId: closedId, text: 'Picking this back up' }),
+      );
+    } finally {
+      mockPgLoadFullThread.mockResolvedValue(null);
+      await closeThread(closedId);
     }
   });
 

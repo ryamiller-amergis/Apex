@@ -28,6 +28,8 @@ import {
   useDraftInterviewBrief,
   useSaveInterviewBrief,
   useApproveInterviewBrief,
+  useActiveUsers,
+  useUpdateInterviewPhaseAssignments,
   useUpdateInterviewStatus,
   useUpdateInterviewTitle,
   useCreatePrd,
@@ -1053,6 +1055,8 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
   const updateStatus = useUpdateInterviewStatus();
   const updateTitle = useUpdateInterviewTitle();
+  const updatePhaseAssignments = useUpdateInterviewPhaseAssignments();
+  const { data: phaseUsers = [] } = useActiveUsers(interview?.project);
   const startChat = useStartChat();
   const createPrd = useCreatePrd();
   const deleteInterview = useDeleteInterview();
@@ -1392,7 +1396,18 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   );
   const canManage = can('interviews:manage');
   const isAuthor = interview.authorId === userId;
-  const isReadOnlyViewer = !isAuthor && !isAdmin;
+  const isInterviewParticipant = [
+    interview.prdOwnerId,
+    interview.designDocOwnerId,
+    interview.designPrototypeOwnerId,
+    interview.testCaseOwnerId,
+    interview.discoveryAssigneeId,
+    interview.deliveryAssigneeId,
+    interview.technicalAssigneeId,
+  ].includes(userId);
+  const isInterviewAdmin = isAdmin || can('admin:roles');
+  const isReadOnlyViewer = !isAuthor && !isInterviewParticipant && !isInterviewAdmin;
+  const canAssignPhases = isAuthor || isInterviewAdmin;
   const isStatusLocked = interview.status !== 'in_progress';
   const isChatLocked = isReadOnlyViewer || isStatusLocked;
   const isGuidedInterview = usesGuidedInterviewPhases(
@@ -1494,7 +1509,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               endpoint={`/api/interviews/${interview.id}/usage`}
               visible={interview.status === 'complete'}
             />
-            {(interview.prdOwnerName || interview.designDocOwnerName || interview.designPrototypeOwnerName) && (
+            {(interview.prdOwnerName || interview.designDocOwnerName || interview.designPrototypeOwnerName || interview.testCaseOwnerName) && (
               <div className={styles.ownerChips} {...{ 'data-testid': 'interview-owner-chips' }}>
                 {interview.prdOwnerName && (
                   <span className={styles.ownerChip} {...{ 'data-testid': 'interview-owner-chip-prd' }}>
@@ -1509,6 +1524,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 {interview.designPrototypeOwnerName && (
                   <span className={styles.ownerChip} {...{ 'data-testid': 'interview-owner-chip-prototype' }}>
                     Design Prototype: {interview.designPrototypeOwnerName}
+                  </span>
+                )}
+                {interview.testCaseOwnerName && (
+                  <span className={styles.ownerChip} {...{ 'data-testid': 'interview-owner-chip-qa' }}>
+                    QA: {interview.testCaseOwnerName}
                   </span>
                 )}
               </div>
@@ -1673,6 +1693,32 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             ...messages.filter((message) => message.role === 'agent').map((message) => message.text),
             streamingText,
           ])}
+          assignment={{
+            users: phaseUsers,
+            selectedIds: {
+              discovery: interview.discoveryAssigneeId,
+              delivery: interview.deliveryAssigneeId,
+              technical: interview.technicalAssigneeId,
+            },
+            selectedNames: {
+              discovery: interview.discoveryAssigneeName,
+              delivery: interview.deliveryAssigneeName,
+              technical: interview.technicalAssigneeName,
+            },
+            canAssign: canAssignPhases,
+            pending: updatePhaseAssignments.isPending,
+            error: updatePhaseAssignments.error?.message,
+            onAssign: (phase, assignedUserId) => {
+              updatePhaseAssignments.mutate({
+                id: interview.id,
+                phaseAssignments: phase === 'discovery'
+                  ? { discoveryAssigneeId: assignedUserId || null }
+                  : phase === 'delivery'
+                    ? { deliveryAssigneeId: assignedUserId || null }
+                    : { technicalAssigneeId: assignedUserId || null },
+              });
+            },
+          }}
         />
       )}
 

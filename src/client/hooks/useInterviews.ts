@@ -484,6 +484,29 @@ export function useUpdateInterviewStatus() {
   });
 }
 
+export function useUpdateInterviewPhaseAssignments() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, {
+    id: string;
+    phaseAssignments: {
+      discoveryAssigneeId?: string | null;
+      deliveryAssigneeId?: string | null;
+      technicalAssigneeId?: string | null;
+    };
+  }>({
+    mutationFn: ({ id, phaseAssignments }) =>
+      apiFetch(`/api/interviews/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phaseAssignments }),
+      }),
+    onSuccess: (_data, { id }) => {
+      qc.invalidateQueries({ queryKey: ['interviews'] });
+      qc.invalidateQueries({ queryKey: ['interview', id] });
+    },
+  });
+}
+
 export function useUpdateInterviewTitle() {
   const qc = useQueryClient();
   return useMutation<void, Error, { id: string; title: string }>({

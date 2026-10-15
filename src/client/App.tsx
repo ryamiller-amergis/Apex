@@ -36,6 +36,13 @@ import { PdfToolsRouteGuard } from './components/PdfToolsRouteGuard';
 import { DesktopOnlyGate } from './components/DesktopOnlyGate';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
+import { useDocumentDeepLinkProject } from './hooks/useDocumentDeepLinkProject';
+import { useProjects } from './hooks/useProjects';
+import {
+  documentProjectForSwitch,
+  documentProjectSwitchTarget,
+  shouldHoldDocumentRoute,
+} from './utils/documentProjectDeepLink';
 import { canAccessMyWork } from './utils/canAccessMyWork';
 import { setInteractiveWsEnabled } from './utils/threadEventStream';
 import { createChatTurnId } from './utils/chatTurnId';
@@ -135,6 +142,17 @@ const PLANNING_TAB_PERMISSIONS: Record<PlanningTab, string> = {
 const isPlanningTab = (value: string | undefined): value is PlanningTab => (
   value !== undefined && PLANNING_TABS.includes(value as PlanningTab)
 );
+
+function DocumentProjectOpening({ label }: { label: string }) {
+  return (
+    <div className="loading-overlay" role="status" aria-live="polite" data-testid="document-project-opening">
+      <div className="loading-spinner-container">
+        <ApexLoader size={72} />
+        <p>{label}</p>
+      </div>
+    </div>
+  );
+}
 
 function App() {
   const navigate = useNavigate();
@@ -302,29 +320,59 @@ function App() {
     handleDismissBetaAnnouncement,
   } = useAppShell({ workItemsEnabled: needsWorkItems });
 
-  // Deep-link from API key expiry notifications: /admin/api-keys?project=…
-  useEffect(() => {
-    if (location.pathname !== '/admin/api-keys') return;
-    const project = new URLSearchParams(location.search).get('project');
-    if (!project || project === selectedProject) return;
-    if (!availableProjects.includes(project)) return;
-    changeProject(project);
-  }, [location.pathname, location.search, selectedProject, availableProjects, changeProject]);
-
-  // Deep-link from UI Lab share notifications: /ui-lab/:id?project=…
-  useEffect(() => {
-    const match = /^\/ui-lab\/([^/?#]+)/.exec(location.pathname);
-    if (!match) return;
-    const project = new URLSearchParams(location.search).get('project');
-    if (!project || project === selectedProject) return;
-    if (!availableProjects.includes(project)) return;
-    changeProject(project);
-  }, [location.pathname, location.search, selectedProject, availableProjects, changeProject]);
-
   const showBetaAnnouncement = useFeatureFlag('beta-to-prod-announcement', selectedProject);
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
   const interactiveWsEnabled = homeFlags['ai-runs-v2-transport'] === true;
+  const documentLink = useDocumentDeepLinkProject(location.pathname, location.search);
+  const {
+    data: selectableProjectList = [],
+    isLoading: selectableProjectsLoading,
+    isError: selectableProjectsError,
+  } = useProjects();
+  const selectableProjectNames = selectableProjectList.map((project) => project.name);
+  const queryProject = new URLSearchParams(location.search).get('project') ?? undefined;
+  // A settled catalog error has isLoading === false and no data. Treat that as
+  // unresolved, not an empty accessible list, or the opening overlay drops and
+  // the document stays on the current project.
+  const documentAccessPending = !permissionsLoaded
+    || selectableProjectsLoading
+    || selectableProjectsError;
+  const documentProjectTarget = documentProjectSwitchTarget(
+    documentProjectForSwitch(documentLink.link, documentLink.project, queryProject),
+    selectedProject,
+    selectableProjectNames,
+    { isRestricted: isRestricted || !permissionsLoaded },
+  );
+  // The chat stream transport follows the selected project's flags. A shared
+  // document URL must switch projects, and the document view must wait until
+  // that project's flag is applied, or the stream opens on the old project and sticks.
+  const [streamAlignedProject, setStreamAlignedProject] = useState<string | null>(null);
+  useEffect(() => {
+    if (!documentProjectTarget) return;
+    changeProject(documentProjectTarget);
+    changeAreaPath(documentProjectTarget);
+    fetch(`/api/projects/${encodeURIComponent(documentProjectTarget)}/select`, {
+      method: 'POST',
+      credentials: 'include',
+    }).catch(() => {});
+  }, [documentProjectTarget, changeProject, changeAreaPath]);
+  const holdLinkedProjectRoute = shouldHoldDocumentRoute({
+    link: documentLink.link,
+    lookupPending: documentLink.pending || documentAccessPending,
+    switchTarget: documentProjectTarget,
+  });
+  const documentProjectOpening = documentProjectTarget !== null
+    || (
+      Boolean(documentLink.link)
+      && !documentLink.failed
+      && (
+        documentLink.pending
+        || documentAccessPending
+        || homeFlagsLoading
+        || streamAlignedProject !== selectedProject
+      )
+    );
   const playbooksEnabled =
     !homeFlagsLoading && homeFlags['playbooks-production-adapters'] === true;
   // Prefer the WebSocket agent gateway when the durable interactive transport
@@ -334,7 +382,8 @@ function App() {
   useEffect(() => {
     if (homeFlagsLoading) return;
     setInteractiveWsEnabled(interactiveWsEnabled);
-  }, [homeFlagsLoading, interactiveWsEnabled]);
+    setStreamAlignedProject(selectedProject);
+  }, [homeFlagsLoading, interactiveWsEnabled, selectedProject]);
 
   const canAccessHome =
     !isRestricted &&
@@ -451,7 +500,7 @@ function App() {
   // Wait for permissionsLoaded and homeFlagsLoading to avoid redirecting before
   // the permissions and flag fetches complete.
   useEffect(() => {
-    if (!permissionsLoaded || !menuConfigReady || homeFlagsLoading) return;
+    if (!permissionsLoaded || !menuConfigReady || homeFlagsLoading || holdLinkedProjectRoute) return;
     // Restricted users are redirected away from the selector by a dedicated effect.
     if (isRestricted && currentView === 'project-selector') return;
 
@@ -526,7 +575,7 @@ function App() {
         navigate(firstAccessible ? `/planning/${firstAccessible}` : fallback);
       }
     }
-  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, availableProjects, workBoardEnabled, hasUiLabShares, uiLabSharesLoading, uiLabSharesProject, navigate, location.pathname, location.search]);
+  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, availableProjects, workBoardEnabled, hasUiLabShares, uiLabSharesLoading, uiLabSharesProject, navigate, location.pathname, location.search, holdLinkedProjectRoute]);
 
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
@@ -570,6 +619,18 @@ function App() {
     const projectChanged = previousHomeProjectRef.current !== selectedProject;
     previousHomeProjectRef.current = selectedProject;
     if (projectChanged && currentView === 'home') {
+      const urlThreadId = new URLSearchParams(location.search).get('thread');
+      const urlThreadMatchesProject = Boolean(
+        urlThreadId
+        && documentLink.link?.kind === 'chat-thread'
+        && documentLink.project
+        && documentLink.project.toLowerCase() === selectedProject.toLowerCase(),
+      );
+      if (urlThreadMatchesProject) {
+        setActiveThreadId(urlThreadId);
+        setActiveThreadProject(selectedProject);
+        return;
+      }
       // Runs after AgentHome's effect, which still saw the outgoing project's
       // ?thread= and rebound it; replace that with the destination's last thread.
       const storedThreadId = sessionStorage.getItem(`agentHomeThreadId:${selectedProject}`);
@@ -577,7 +638,7 @@ function App() {
       setActiveThreadProject(storedThreadId ? selectedProject : null);
       syncHomeThreadUrl(storedThreadId);
     }
-  }, [currentView, selectedProject, syncHomeThreadUrl]);
+  }, [currentView, selectedProject, syncHomeThreadUrl, location.search, documentLink.link, documentLink.project]);
 
   const handleStartPanelChat = useCallback(async (options?: StartPanelChatOptions) => {
     if (!can('chat:view') || !can('chat:create')) return;
@@ -980,18 +1041,18 @@ function App() {
             <div
               className="agent-home-keepalive"
               style={
-                currentView === 'home'
+                currentView === 'home' && !documentProjectOpening
                   ? undefined
                   : { display: 'none' }
               }
-              aria-hidden={currentView !== 'home'}
+              aria-hidden={currentView !== 'home' || documentProjectOpening}
             >
               <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                 {/* Top-level split: demo component gated by "example-flag-demo" flag */}
                 <FeatureFlagDemo project={selectedProject} />
                 <AgentHome
                   selectedProject={selectedProject}
-                  isActive={currentView === 'home'}
+                  isActive={currentView === 'home' && !documentProjectOpening}
                   onHomeViewChange={handleHomeViewChange}
                   onRestoreThread={(id) => {
                     setActiveThreadId(id);
@@ -1035,7 +1096,9 @@ function App() {
             /* Access controls still loading — withhold content to avoid a flash */
             null
           ) : null}
-          {currentView === 'home' ? null : currentView === 'calendar' ? (
+          {documentProjectOpening ? (
+            <DocumentProjectOpening label={documentProjectTarget ? `Opening ${documentProjectTarget}…` : 'Loading…'} />
+          ) : currentView === 'home' ? null : currentView === 'calendar' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 {error && !isLoading && (
@@ -1147,7 +1210,8 @@ function App() {
                     <InterviewChatView />
                   ) : location.pathname.startsWith('/backlog/prd/') ? (
                     <PrdReviewView />
-                  ) : location.pathname.startsWith('/backlog/design-prototypes/') ? (
+                  ) : location.pathname.startsWith('/backlog/design-prototypes/')
+                    || location.pathname.startsWith('/backlog/design-prototype/') ? (
                     <DesignPrototypeReviewView />
                   ) : location.pathname.startsWith('/backlog/design-plan/') ? (
                     <DesignPlanReviewView />

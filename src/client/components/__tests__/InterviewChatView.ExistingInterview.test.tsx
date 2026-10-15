@@ -66,6 +66,7 @@ jest.mock('../../hooks/useProjectRepositoryReadiness', () => ({
 }));
 
 const mockUpdateStatus = jest.fn();
+const mockUpdatePhaseAssignments = jest.fn();
 jest.mock('../../hooks/useInterviews', () => ({
   useCreateInterview: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useInterview: jest.fn(),
@@ -74,6 +75,12 @@ jest.mock('../../hooks/useInterviews', () => ({
   useSaveInterviewBrief: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false, error: null })),
   useApproveInterviewBrief: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false, error: null })),
   useUpdateInterviewStatus: jest.fn(() => ({ mutateAsync: mockUpdateStatus, isPending: false })),
+  useUpdateInterviewPhaseAssignments: jest.fn(() => ({
+    mutate: mockUpdatePhaseAssignments,
+    isPending: false,
+    error: null,
+  })),
+  useActiveUsers: jest.fn(() => ({ data: [], isLoading: false })),
   useUpdateInterviewTitle: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useCreatePrd: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useDeleteInterview: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
@@ -200,7 +207,12 @@ jest.mock('../../hooks/useGroundingResumeGate', () => ({
 
 import { within } from '@testing-library/react';
 import { useAppShell } from '../../hooks/useAppShell';
-import { useInterview, useUpdateInterviewStatus, useCreatePrd } from '../../hooks/useInterviews';
+import {
+  useActiveUsers,
+  useCreatePrd,
+  useInterview,
+  useUpdateInterviewStatus,
+} from '../../hooks/useInterviews';
 import { useStartChat, useChatThread } from '../../hooks/useChatThreads';
 import { useProjectSkillConfig, useGlobalDefaultModel, useAvailableModels } from '../../hooks/useProjectSkillConfig';
 
@@ -615,6 +627,42 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
     expect(screen.queryByText(/interview-phase/)).not.toBeInTheDocument();
   });
 
+  it('updates only the selected interview phase assignment', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ deliveryAssigneeId: 'delivery-1' }),
+      isLoading: false,
+      isError: false,
+    });
+    (useActiveUsers as jest.Mock).mockReturnValue({
+      data: [
+        { oid: 'alice-1', displayName: 'Alice User', email: 'alice@example.com' },
+        { oid: 'delivery-1', displayName: 'Delivery User', email: 'delivery@example.com' },
+      ],
+      isLoading: false,
+    });
+    (useChatThread as jest.Mock).mockReturnValue({
+      data: {
+        id: 'thread-iv-1',
+        status: 'idle',
+        kickoff: {
+          skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+          model: 'composer-2',
+        },
+        messages: [],
+      },
+    });
+
+    renderExistingInterview();
+
+    fireEvent.click(screen.getByTestId('interview-phase-assignee-discovery'));
+    fireEvent.mouseDown(screen.getByTestId('interview-phase-assignee-option-discovery-alice-1'));
+
+    expect(mockUpdatePhaseAssignments).toHaveBeenCalledWith({
+      id: 'iv-1',
+      phaseAssignments: { discoveryAssigneeId: 'alice-1' },
+    });
+  });
+
   it('hides the phase bar when the interview skill is not grill-with-docs', () => {
     (useChatThread as jest.Mock).mockReturnValue({
       data: {
@@ -686,13 +734,34 @@ describe('ExistingInterviewView — read-only viewer', () => {
     });
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
-      can: jest.fn(() => true),
+      can: jest.fn((permission: string) => permission === 'interviews:view' || permission === 'interviews:manage'),
       userId: 'viewer-2',
       isAdmin: false,
     });
     renderExistingInterview();
     expect(screen.queryByPlaceholderText(/Continue the interview/i)).not.toBeInTheDocument();
     expect(screen.getByText(/viewing another user's interview \(read-only\)/i)).toBeInTheDocument();
+  });
+
+  it('lets a project admin answer another author\'s interview', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ authorId: 'author-1', status: 'in_progress' }),
+      isLoading: false,
+      isError: false,
+    });
+    (useAppShell as jest.Mock).mockReturnValue({
+      selectedProject: 'MaxView',
+      can: jest.fn((permission: string) => (
+        permission === 'admin:roles'
+        || permission === 'interviews:view'
+        || permission === 'interviews:manage'
+      )),
+      userId: 'project-admin-1',
+      isAdmin: false,
+    });
+    renderExistingInterview();
+    expect(screen.queryByText(/viewing another user's interview \(read-only\)/i)).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Continue the interview/i)).toBeEnabled();
   });
 });
 

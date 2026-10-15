@@ -6,6 +6,7 @@ import {
   useUiLabShareTargets,
   useUiLabShares,
 } from '../hooks/useUiLab';
+import { sortByLabel } from '../utils/sortByLabel';
 import dialogShell from './DiagramDialog.module.css';
 import styles from './ShareUiLabDialog.module.css';
 
@@ -117,7 +118,10 @@ export const ShareUiLabDialog: React.FC<ShareUiLabDialogProps> = ({
   };
 
   const shares = sharesQuery.data ?? [];
-  const targets = targetsQuery.data ?? [];
+  const targets = sortByLabel(
+    targetsQuery.data ?? [],
+    (target) => target.displayName ?? target.email ?? target.userId,
+  );
 
   return (
     <div

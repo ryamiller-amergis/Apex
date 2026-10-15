@@ -45,6 +45,22 @@ jest.mock('../hooks/useUiLab', () => ({
   useUiLabSharedDesigns: jest.fn().mockReturnValue({ data: [], isLoading: false }),
 }));
 
+jest.mock('../hooks/useDocumentDeepLinkProject', () => ({
+  useDocumentDeepLinkProject: () => ({
+    link: null,
+    project: undefined,
+    pending: false,
+    failed: false,
+  }),
+}));
+
+jest.mock('../hooks/useProjects', () => ({
+  useProjects: jest.fn().mockReturnValue({
+    data: [{ id: '1', name: 'MaxView', description: '' }],
+    isLoading: false,
+  }),
+}));
+
 jest.mock('../components/AppHeader', () => ({
   AppHeader: () => <div data-testid="app-header" />,
 }));

@@ -1284,16 +1284,14 @@
   background: transparent;
 }
 
-.assistantBubbleFullWidth {
-  position: relative;
-}
-
 .assistantBubbleFullWidth .bubbleActions {
-  position: absolute;
-  top: 14px;
-  right: 18px;
-  z-index: 1;
+  position: static;
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  z-index: auto;
   min-height: 0;
+  margin: 0 0 8px;
   padding: 0;
 }
 
@@ -1323,10 +1321,6 @@
   flex-direction: column;
   gap: 6px;
   margin-bottom: 12px;
-}
-
-.assistantBubbleFullWidth .choiceQuestion {
-  padding-right: 132px;
 }
 
 .choiceQuestion .markdownBody {
