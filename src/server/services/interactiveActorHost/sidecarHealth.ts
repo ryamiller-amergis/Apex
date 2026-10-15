@@ -3,7 +3,8 @@ import type { Request, Response } from 'express';
 export type SidecarProblem =
   | 'sidecar-unreachable'
   | 'placement-disconnected'
-  | 'actor-type-missing';
+  | 'actor-type-missing'
+  | 'actor-invocations-stalled';
 
 export type SidecarCheck =
   | { healthy: true }
@@ -54,9 +55,43 @@ export function evaluateSidecarMetadata(metadata: unknown, actorType: string): S
   return { healthy: true };
 }
 
+/**
+ * Consecutive actor invocations that hit the invoke timeout before the host is
+ * treated as stalled. Metadata can still report placement connected and the
+ * actor type registered while every actor call hangs.
+ */
+export const ACTOR_INVOKE_STALL_THRESHOLD = 3;
+
+export interface ActorInvocationStallTracker {
+  recordCompleted(): void;
+  recordTimedOut(): void;
+  /** Non-null once the threshold of consecutive timeouts is reached. */
+  stalledDetail(): string | null;
+}
+
+export function createActorInvocationStallTracker(
+  threshold: number = ACTOR_INVOKE_STALL_THRESHOLD,
+): ActorInvocationStallTracker {
+  let consecutiveTimeouts = 0;
+  return {
+    recordCompleted() {
+      consecutiveTimeouts = 0;
+    },
+    recordTimedOut() {
+      consecutiveTimeouts += 1;
+    },
+    stalledDetail() {
+      return consecutiveTimeouts >= threshold
+        ? `${consecutiveTimeouts} consecutive actor invocations timed out`
+        : null;
+    },
+  };
+}
+
 export interface SidecarHealthMonitorDeps {
   actorType: string;
   fetchMetadata: () => Promise<unknown>;
+  invocationStall?: () => string | null;
   requestSidecarShutdown: () => Promise<void>;
   now: () => number;
   graceMs?: number;
@@ -74,7 +109,12 @@ export function createSidecarHealthMonitor(deps: SidecarHealthMonitorDeps) {
 
   async function inspect(): Promise<SidecarCheck> {
     try {
-      return evaluateSidecarMetadata(await deps.fetchMetadata(), deps.actorType);
+      const metadataCheck = evaluateSidecarMetadata(await deps.fetchMetadata(), deps.actorType);
+      if (!metadataCheck.healthy) return metadataCheck;
+      const stalled = deps.invocationStall?.() ?? null;
+      return stalled
+        ? { healthy: false, problem: 'actor-invocations-stalled', detail: stalled }
+        : metadataCheck;
     } catch (error) {
       return {
         healthy: false,

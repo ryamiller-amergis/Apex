@@ -1,5 +1,6 @@
 import { AzureDevOpsService } from './azureDevOps';
 import { parseAutoCheckTeams } from './adoTeamConfig';
+import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
 
 /**
  * Background service that automatically updates work items from "UAT - Test Done" 
@@ -7,10 +8,13 @@ import { parseAutoCheckTeams } from './adoTeamConfig';
  */
 export class UatAutoReleaseService {
   private intervalId: NodeJS.Timeout | null = null;
-  private isRunning: boolean = false;
   private readonly SOURCE_STATE = 'UAT - Test Done';
   private readonly TARGET_STATE = 'Ready For Release';
   private readonly CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes in milliseconds
+  private readonly runGuard = createSingleFlight({
+    name: 'UatAutoRelease',
+    stuckAfterMs: stuckAfterForInterval(this.CHECK_INTERVAL),
+  });
 
   /**
    * Start the background service
@@ -47,12 +51,12 @@ export class UatAutoReleaseService {
    * Main method to check and update work items
    */
   private async checkAndUpdateWorkItems(): Promise<void> {
-    if (this.isRunning) {
+    const runToken = this.runGuard.tryEnter();
+    if (runToken === null) {
       console.log('[UatAutoRelease] Previous check still running, skipping...');
       return;
     }
 
-    this.isRunning = true;
     const startTime = Date.now();
     console.log(`[UatAutoRelease] Starting work item check at ${new Date().toISOString()}`);
 
@@ -86,7 +90,7 @@ export class UatAutoReleaseService {
     } catch (error) {
       console.error('[UatAutoRelease] Error during work item check:', error);
     } finally {
-      this.isRunning = false;
+      this.runGuard.exit(runToken);
     }
   }
 

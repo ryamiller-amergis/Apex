@@ -60,9 +60,11 @@ import { collectInteractiveArtifacts } from './interactiveArtifactCollector';
 import { materializeInteractiveWorkspace } from './interactiveWorkspaceMaterializer';
 import { createPerThreadTurnQueue } from './perThreadTurnQueue';
 import {
+  createActorInvocationStallTracker,
   createDaprSidecarClient,
   createSidecarHealthMonitor,
   interactiveHealthRoute,
+  type ActorInvocationStallTracker,
 } from './sidecarHealth';
 import {
   createInteractiveShutdownDrain,
@@ -75,6 +77,29 @@ import {
 } from './interactiveSessionActorClass';
 
 const INTERACTIVE_CALLBACK_REQUEST_TIMEOUT_MS = 12_000;
+
+/**
+ * The actor replies once the dispatch fence is verified, and that bootstrap
+ * call is bounded by INTERACTIVE_CALLBACK_REQUEST_TIMEOUT_MS. A Dapr actor call
+ * still open past this has stalled in the sidecar and will not start the turn.
+ */
+export const INTERACTIVE_ACTOR_INVOKE_TIMEOUT_MS = 30_000;
+
+export class ActorInvokeTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Interactive actor invocation timed out after ${timeoutMs}ms`);
+    this.name = 'ActorInvokeTimeoutError';
+  }
+}
+
+function withinActorInvokeTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new ActorInvokeTimeoutError(timeoutMs)), timeoutMs);
+    timer.unref?.();
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+}
 
 /** Warm checkout carrying the reader the execution factory needs. */
 type ReaderCheckout = WarmThreadCheckout & { reader: RepoReader };
@@ -207,7 +232,9 @@ export async function registerInteractiveDispatchHandler(
     payload: InteractiveDispatchRequest,
     error: unknown
   ) => Promise<void>,
-  drain: InteractiveDispatchDrain = NO_DISPATCH_DRAIN
+  drain: InteractiveDispatchDrain = NO_DISPATCH_DRAIN,
+  actorInvokeTimeoutMs: number = INTERACTIVE_ACTOR_INVOKE_TIMEOUT_MS,
+  invocationStall?: Pick<ActorInvocationStallTracker, 'recordCompleted' | 'recordTimedOut'>
 ): Promise<void> {
   await invoker.listen(
     'dispatch',
@@ -248,12 +275,16 @@ export async function registerInteractiveDispatchHandler(
       const actor = resolveActor(payload.threadId);
       void drain
         .track(() =>
-          actor.handleTurn({
-            runId: payload.runId,
-            dispatchMessageId: payload.dispatchMessageId,
-          })
+          withinActorInvokeTimeout(
+            actor.handleTurn({
+              runId: payload.runId,
+              dispatchMessageId: payload.dispatchMessageId,
+            }),
+            actorInvokeTimeoutMs
+          )
         )
         .then((outcome) => {
+          invocationStall?.recordCompleted();
           console.log(
             JSON.stringify({
               event: 'InteractiveDispatchCompleted',
@@ -265,6 +296,7 @@ export async function registerInteractiveDispatchHandler(
           );
         })
         .catch(async (error) => {
+          if (error instanceof ActorInvokeTimeoutError) invocationStall?.recordTimedOut();
           console.error(
             JSON.stringify({
               event: 'InteractiveDispatchFailed',
@@ -498,9 +530,11 @@ export async function main(): Promise<void> {
     process.env.AI_RUNS_INTERACTIVE_DAPR_APP_ID,
   );
   const sidecar = createDaprSidecarClient(process.env.DAPR_HTTP_PORT?.trim() || '3500');
+  const invocationStall = createActorInvocationStallTracker();
   const sidecarHealth = createSidecarHealthMonitor({
     actorType: actorClass.name,
     fetchMetadata: sidecar.fetchMetadata,
+    invocationStall: () => invocationStall.stalledDetail(),
     requestSidecarShutdown: sidecar.requestSidecarShutdown,
     now: Date.now,
   });
@@ -560,7 +594,9 @@ export async function main(): Promise<void> {
     {
       isDraining: () => shutdownDrain.isDraining(),
       track: (work) => interactiveInFlightInvocations.track(work),
-    }
+    },
+    INTERACTIVE_ACTOR_INVOKE_TIMEOUT_MS,
+    invocationStall
   );
 
   await server.start();

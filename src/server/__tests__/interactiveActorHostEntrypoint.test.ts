@@ -214,7 +214,7 @@ describe('interactive actor host dispatch endpoint', () => {
         }),
       })
     ).resolves.toEqual({ accepted: true });
-    await Promise.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(errorSpy).toHaveBeenCalledWith(
       expect.stringContaining('"event":"InteractiveDispatchFailed"')
@@ -227,5 +227,62 @@ describe('interactive actor host dispatch endpoint', () => {
       },
       expect.objectContaining({ message: 'actor unavailable' })
     );
+  });
+
+  it('recovers a stalled actor invocation after the invoke timeout', async () => {
+    jest.useFakeTimers();
+    try {
+      let callback:
+        | ((content: DaprInvokerCallbackContent) => Promise<unknown>)
+        | undefined;
+      const listen = jest.fn(
+        async (
+          _methodName: string,
+          handler: (content: DaprInvokerCallbackContent) => Promise<unknown>
+        ) => {
+          callback = handler;
+        }
+      );
+      const handleTurn = jest.fn(() => new Promise<never>(() => {}));
+      const recoverActorFailure = jest.fn().mockResolvedValue(undefined);
+      const invocationStall = { recordCompleted: jest.fn(), recordTimedOut: jest.fn() };
+      jest.spyOn(console, 'log').mockImplementation(() => {});
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      await registerInteractiveDispatchHandler(
+        { listen },
+        () => ({ handleTurn }),
+        recoverActorFailure,
+        undefined,
+        1_000,
+        invocationStall
+      );
+
+      await expect(
+        callback!({
+          body: JSON.stringify({
+            threadId: 'thread-1',
+            runId: 'run-1',
+            dispatchMessageId: 'dispatch-1',
+          }),
+        })
+      ).resolves.toEqual({ accepted: true });
+      await jest.advanceTimersByTimeAsync(999);
+      expect(recoverActorFailure).not.toHaveBeenCalled();
+
+      await jest.advanceTimersByTimeAsync(1);
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('"event":"InteractiveDispatchFailed"')
+      );
+      expect(recoverActorFailure).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: 'run-1' }),
+        expect.objectContaining({ message: expect.stringContaining('timed out after 1000ms') })
+      );
+      expect(invocationStall.recordTimedOut).toHaveBeenCalledTimes(1);
+      expect(invocationStall.recordCompleted).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

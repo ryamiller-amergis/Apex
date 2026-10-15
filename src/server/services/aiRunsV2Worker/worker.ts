@@ -42,6 +42,11 @@ import {
 export const NORMAL_PHASE_DEADLINE_MS = 15 * 60_000;
 export const LARGE_PHASE_DEADLINE_MS = 45 * 60_000;
 
+/** A receive long-polls for 30s, so an idle pass that takes this long has hung. */
+export const LOOP_PROGRESS_BUDGET_MS = 5 * 60_000;
+/** Time past a job's deadline for the abort, artifact upload, and terminal publish. */
+export const JOB_PROGRESS_GRACE_MS = 15 * 60_000;
+
 export type ExecutionOutcome = Readonly<{
   files: ReadonlyArray<ArtifactFile>;
   detail?: string;
@@ -72,6 +77,8 @@ export type WorkerDeps = Readonly<{
   signal?: AbortSignal;
   /** Aborts the run in flight; lets shutdown stop receiving while the current run finishes. */
   executionSignal?: AbortSignal;
+  /** Called whenever the loop makes progress, with the time by which it must progress again. */
+  onProgress?: (nextWithinMs: number) => void;
 }>;
 
 export type WorkerRunOutcome =
@@ -206,6 +213,7 @@ export function createV2Worker(deps: WorkerDeps): V2Worker {
       shutdownSignal?.addEventListener('abort', abortForShutdown, { once: true });
     }
     scheduleDeadline(activeDeadlineMs);
+    deps.onProgress?.(activeDeadlineMs + JOB_PROGRESS_GRACE_MS);
     let heartbeatTimer: ReturnType<typeof setInterval> | null = setInterval(
       () => {
         void checkpoints.publishHeartbeat().catch(() => undefined);
@@ -298,6 +306,7 @@ export function createV2Worker(deps: WorkerDeps): V2Worker {
     processOnce,
     async runLoop(): Promise<void> {
       while (!deps.signal?.aborted) {
+        deps.onProgress?.(LOOP_PROGRESS_BUDGET_MS);
         try {
           const outcome = await processOnce();
           if (outcome === 'idle') await sleep(1_000);

@@ -1,7 +1,11 @@
 import { AI_RUN_V2_SCHEMA_VERSION } from '../../../shared/types/aiRunV2';
 import { VisualModelTruncatedError } from '../../services/aiRunsV2Worker/bedrockVisualClient';
 import { CursorExecutionWaitError } from '../../services/cursorExecutionCore';
-import { createV2Worker } from '../../services/aiRunsV2Worker/worker';
+import {
+  createV2Worker,
+  JOB_PROGRESS_GRACE_MS,
+  LOOP_PROGRESS_BUDGET_MS,
+} from '../../services/aiRunsV2Worker/worker';
 import type { WorkerServiceBusClient } from '../../services/aiRunsV2Worker/serviceBusClient';
 
 const specRef = { container: 'ai-run-artifacts', key: 'specs/run-1.json' };
@@ -466,6 +470,40 @@ describe('V2 worker run loop', () => {
     });
 
     await expect(worker.processOnce()).resolves.toBe('idle');
+  });
+
+  it('reports progress with the loop budget and with the job deadline plus grace', async () => {
+    const { bus } = fakeBus(command());
+    const stop = new AbortController();
+    const progress: number[] = [];
+    const worker = createV2Worker({
+      bus,
+      execute: async () => ({ files: [] }),
+      artifactContainer: 'ai-run-artifacts',
+      containerAppsExecutionId: 'exec-7',
+      specifications: {
+        read: async () => ({
+          runId: 'run-1',
+          attemptId: 'attempt-1',
+          attemptNumber: 1,
+          workloadLane: 'document',
+        }),
+      },
+      resolveCommandDeadlineMs: () => 60_000,
+      signal: stop.signal,
+      sleep: async () => {
+        stop.abort();
+      },
+      onProgress: (nextWithinMs) => progress.push(nextWithinMs),
+    });
+
+    await worker.runLoop();
+
+    expect(progress).toEqual([
+      LOOP_PROGRESS_BUDGET_MS,
+      60_000 + JOB_PROGRESS_GRACE_MS,
+      LOOP_PROGRESS_BUDGET_MS,
+    ]);
   });
 
   describe('shutdown with a separate execution signal', () => {

@@ -2,11 +2,15 @@
  * Daily scan for API keys approaching expiry (30 / 7 / 1 day reminders).
  */
 import { runApiKeyExpiryNotifications } from './apiKeyExpiryNotificationService';
+import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
 
 export class ApiKeyExpiryNotificationSchedulerService {
   private intervalId: NodeJS.Timeout | null = null;
-  private isRunning = false;
   private readonly CHECK_INTERVAL_MS = 60 * 60 * 1000; // hourly; run body is cheap + deduped
+  private readonly runGuard = createSingleFlight({
+    name: 'ApiKeyExpiryNotificationScheduler',
+    stuckAfterMs: stuckAfterForInterval(this.CHECK_INTERVAL_MS),
+  });
   private lastRunDayKey: string | null = null;
 
   start(): void {
@@ -49,8 +53,8 @@ export class ApiKeyExpiryNotificationSchedulerService {
   }
 
   private async execute(now: Date): Promise<void> {
-    if (this.isRunning) return;
-    this.isRunning = true;
+    const runToken = this.runGuard.tryEnter();
+    if (runToken === null) return;
     try {
       const result = await runApiKeyExpiryNotifications(now);
       this.lastRunDayKey = this.dayKey(now);
@@ -63,7 +67,7 @@ export class ApiKeyExpiryNotificationSchedulerService {
         (err as Error).message,
       );
     } finally {
-      this.isRunning = false;
+      this.runGuard.exit(runToken);
     }
   }
 }
