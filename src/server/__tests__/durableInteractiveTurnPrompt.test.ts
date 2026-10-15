@@ -199,6 +199,24 @@ describe('durable interactive turn prompt', () => {
     expect(specification.currentPrompt).not.toContain('# Answers so far');
   });
 
+  it('gives an ADR assistant the staging tool and its edit guidance', async () => {
+    const specification = await admittedSpecification([], {
+      workflowClass: 'adr',
+      kickoff: {
+        assistantType: 'adr',
+        skillPath: '.cursor/skills/adr-assistant/SKILL.md',
+        freeformContext: 'adr_id: adr-1\nthread_id: thread-1',
+      },
+    });
+
+    expect(specification.mcpServers).toContainEqual(
+      expect.objectContaining({ kind: 'internal-proxy', serverName: 'ado-skills' }),
+    );
+    expect(specification.currentPrompt).toContain('update_adr');
+    expect(specification.currentPrompt).toContain('adr_id:    adr-1');
+    expect(specification.currentPrompt).toContain('thread_id: thread-1');
+  });
+
   it('gives a PRD assistant the staging tool and its edit guidance', async () => {
     const specification = await admittedSpecification([], {
       workflowClass: 'assistant',

@@ -18,9 +18,7 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>;
 
-export const DevEnvAllowlistPanel: React.FC<{ 'data-testid'?: string }> = ({
-  'data-testid': dataTestId = 'platform-admin-dev-access-panel',
-}) => {
+export const DevEnvAllowlistPanel: React.FC = () => {
   const [deleteTarget, setDeleteTarget] = useState<DevEnvAllowlistEntry | null>(null);
   const { register, handleSubmit, reset, formState: { errors } } = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -45,7 +43,7 @@ export const DevEnvAllowlistPanel: React.FC<{ 'data-testid'?: string }> = ({
   };
 
   return (
-    <section className={styles.section} aria-labelledby="dev-access-title" {...{ 'data-testid': dataTestId }}>
+    <section className={styles.section} aria-labelledby="dev-access-title">
       <div className={styles.sectionHeader}>
         <div>
           <h2 id="dev-access-title" className={styles.sectionTitle}>Dev access</h2>

@@ -27,6 +27,12 @@ export interface InterviewSummary {
   designPrototypeOwnerName?: string;
   testCaseOwnerId?: string;
   testCaseOwnerName?: string;
+  discoveryAssigneeId?: string;
+  discoveryAssigneeName?: string;
+  deliveryAssigneeId?: string;
+  deliveryAssigneeName?: string;
+  technicalAssigneeId?: string;
+  technicalAssigneeName?: string;
   /** Kick-off approver selections, inherited at submit-for-review. User OIDs. */
   skillSettingsId?: string | null;
   skillSettingsName?: string | null;
@@ -36,6 +42,8 @@ export interface InterviewSummary {
   testCaseApproverIds?: string[];
   /** Kick-off snapshot; resolved with project skill config via `resolvePrototypeStageEnabled`. */
   prototypeStageEnabled?: boolean;
+  /** Kick-off snapshot; when false, the QA owner is not assigned. */
+  testCasesEnabled?: boolean;
   createdAt: string;
   updatedAt: string;
 }

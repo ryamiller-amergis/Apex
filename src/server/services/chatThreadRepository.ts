@@ -499,6 +499,14 @@ export async function clearStaleRun(threadId: string): Promise<void> {
     .where(eq(chatThreads.id, threadId));
 }
 
+/** Move an idle-closed thread back to 'idle'; other columns are left as stored. */
+export async function reopenClosedThread(threadId: string): Promise<void> {
+  await db
+    .update(chatThreads)
+    .set({ status: 'idle' })
+    .where(and(eq(chatThreads.id, threadId), eq(chatThreads.status, 'closed')));
+}
+
 /** Lightweight read of the thread's persisted Cursor agent id (interactive resume). */
 export async function getCursorAgentId(
   threadId: string,

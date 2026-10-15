@@ -27,6 +27,7 @@ import {
   deleteInterview,
   getInterview,
   listInterviews,
+  updateInterviewPhaseAssignments,
   updateInterviewStatus,
   updateInterviewTitle,
 } from '../services/interviewService';
@@ -3252,9 +3253,20 @@ router.get('/:id', requirePermission('interviews:view'), async (req, res, next) 
 router.patch('/:id', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const { status, title } = req.body as { status?: string; title?: string };
+    const { status, title, phaseAssignments } = req.body as {
+      status?: string;
+      title?: string;
+      phaseAssignments?: {
+        discoveryAssigneeId?: string | null;
+        deliveryAssigneeId?: string | null;
+        technicalAssigneeId?: string | null;
+      };
+    };
     if (status) await updateInterviewStatus(req.params.id, userId, status as InterviewStatus);
     if (title) await updateInterviewTitle(req.params.id, userId, title);
+    if (phaseAssignments) {
+      await updateInterviewPhaseAssignments(req.params.id, userId, phaseAssignments);
+    }
     res.json({ ok: true });
   } catch (err) {
     next(err);
