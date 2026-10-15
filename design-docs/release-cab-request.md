@@ -84,7 +84,7 @@ react-hook-form + zod. Confirm before any thread is created.
 
 ### Component: `src/client/components/ReleaseCabRequestAction.tsx`
 
-Feature entry. Flag `release-cab-request` top-level split. Also requires `planning:releases`, `chat:create`, BA group, and the project skill list to include cab-release.
+Feature entry. Flag `release-cab-request` top-level split. Also requires `planning:releases`, `chat:create`, and the BA group. The action does not wait for `cab-release` to appear in the project skill list.
 
 ### Component: `src/client/components/CabReleaseAssistantPanel.tsx`
 
