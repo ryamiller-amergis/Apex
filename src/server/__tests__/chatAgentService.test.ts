@@ -257,6 +257,35 @@ describe('turn skill prompts', () => {
     );
   });
 
+  it('grants the CAB skill only its requested wiki, snow, and release-branch writes', () => {
+    const prompt = buildTurnPrompt('Run the confirmed dry-run', {
+      name: 'cab-release',
+      path: '/.cursor/skills/cab-release/SKILL.md',
+    });
+
+    expect(prompt).toContain('explicitly requested CAB release workflow');
+    expect(prompt).toContain('update only `/Manual Release/{version}`');
+    expect(prompt).toContain('pipeline 670 for Dry-run or 595 for Run');
+    expect(prompt).toContain('only after the snow run succeeds');
+    expect(prompt).not.toContain('repository checkout as read-only');
+  });
+
+  it('keeps the CAB write grant without repeating the session skill on follow-up turns', () => {
+    const cabSkill = {
+      name: 'cab-release',
+      path: '/.cursor/skills/cab-release/SKILL.md',
+    };
+    const prompt = buildTurnPrompt(
+      'Retry the failed queue',
+      undefined,
+      undefined,
+      cabSkill,
+    );
+
+    expect(prompt).toContain('explicitly requested CAB release workflow');
+    expect(prompt).not.toContain('Run skill: cab-release');
+  });
+
   it('VT-ASSIST-5 keeps the visible user request exact when internal specialist context is added to the prompt', () => {
     const baText = 'Cashiers need a faster close.';
     const internalContext = [

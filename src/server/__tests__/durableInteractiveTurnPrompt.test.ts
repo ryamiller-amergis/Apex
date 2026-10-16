@@ -205,6 +205,44 @@ describe('durable interactive turn prompt', () => {
     expect(specification.skill?.content).toContain('# cab-release');
   });
 
+  it('grants only CAB wiki, snow, and conditional release-branch writes to the CAB skill', async () => {
+    const cabPath = '.cursor/skills/cab-release/SKILL.md';
+    const specification = await admittedSpecification([], {
+      workflowClass: 'home-chat',
+      kickoff: { skillPath: cabPath, pillLabel: 'Create CAB request' },
+      turnSkill: { name: 'cab-release', path: cabPath },
+      skillConfig: null,
+      loadSkill: jest.fn().mockResolvedValue({ path: cabPath, content: '# cab-release' }),
+    });
+
+    expect(specification.currentPrompt).toContain('explicitly requested CAB release workflow');
+    expect(specification.currentPrompt).toContain('update only `/Manual Release/{version}`');
+    expect(specification.currentPrompt).toContain('pipeline 670 for Dry-run or 595 for Run');
+    expect(specification.currentPrompt).toContain('only after the snow run succeeds');
+    expect(specification.currentPrompt).not.toContain(
+      'Treat the repository checkout as read-only',
+    );
+  });
+
+  it('keeps the narrow CAB write grant on follow-up turns without reloading the skill', async () => {
+    const cabPath = '.cursor/skills/cab-release/SKILL.md';
+    const specification = await admittedSpecification(
+      [
+        message('user', 'Run the CAB dry-run', 1),
+        message('agent', 'The ADO request failed.', 2),
+      ],
+      {
+        workflowClass: 'home-chat',
+        kickoff: { skillPath: cabPath, pillLabel: 'Create CAB request' },
+        skillConfig: null,
+        loadSkill: jest.fn().mockResolvedValue({ path: cabPath, content: '# cab-release' }),
+      },
+    );
+
+    expect(specification.currentPrompt).toContain('explicitly requested CAB release workflow');
+    expect(specification.currentPrompt).not.toContain('# cab-release');
+  });
+
   it('scopes a skill picked mid-thread to that turn only', async () => {
     const specification = await admittedSpecification(
       [

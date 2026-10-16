@@ -100,6 +100,9 @@ Actions item opens the modal; confirm opens the panel.
 2. Pre-answer dry-run/run and cut-branch in the first message so confirmation lives in Apex UI; remaining skill asks stay in the thread.
 3. Flag only the Releases button, not Agent Home skill pills.
 4. Skill repo and branch come from admin `project_skill_settings` only. Do not hardcode `tbi/55352-phase-3-service-now-cab-ticket`.
+5. Normalize Apex titles such as `MV 2026.15.0` to version `2026.15.0` and ref `Release/2026.15.0` before the kickoff reaches the skill.
+6. A `cab-release` thread receives a narrow write exception for its Manual Release wiki page, selected snow pipeline, and explicitly confirmed post-snow release branch only.
+7. The interactive actor image includes PowerShell and receives the existing `ADO_PAT` Terraform secret. The agent does not use its managed identity for Azure DevOps.
 
 ## Feature Flag
 
@@ -143,5 +146,9 @@ Phase 1 tasks have no dependencies on each other. Phase 2 starts after Phase 1 t
 | Create | `src/client/components/CabReleaseAssistantPanel.tsx` |
 | Create | `src/client/components/CabReleaseAssistantPanel.module.css` |
 | Create | `src/client/components/__tests__/CabReleaseAssistantPanel.test.tsx` |
+| Edit | `src/server/services/chatAgentService.ts` |
+| Edit | `src/server/services/durableInteractiveTurnService.ts` |
+| Edit | `runners/ai-runs-interactive/Dockerfile` |
+| Edit | `infra/ai-runs-interactive.tf` |
 | Edit | `src/client/components/ReleaseView.tsx` |
 | Edit | `src/client/components/__tests__/ReleaseView.delete.test.tsx` (and related if needed) |

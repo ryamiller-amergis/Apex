@@ -19,23 +19,37 @@ export interface CreateCabRequestFormValues {
   cutReleaseBranch: boolean;
 }
 
+export function normalizeReleaseVersion(value: string): string {
+  return value.match(/\d+\.\d+\.\d+(?:\.\d+)?/)?.[0] ?? '';
+}
+
 export function normalizeReleaseBranch(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  if (trimmed.toLowerCase().startsWith('release/')) return `Release/${trimmed.slice('release/'.length)}`;
-  return `Release/${trimmed}`;
+  const version = normalizeReleaseVersion(value);
+  return version ? `Release/${version}` : '';
 }
 
 export function defaultPreviousReleaseBranch(versions: string[], targetVersion: string): string {
-  const ordered = [...versions].sort((left, right) =>
+  const normalizedTarget = normalizeReleaseVersion(targetVersion);
+  const ordered = versions
+    .map(normalizeReleaseVersion)
+    .filter(Boolean)
+    .sort((left, right) =>
     left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' }),
   );
-  const index = ordered.findIndex((version) => version === targetVersion);
+  const index = ordered.findIndex((version) => version === normalizedTarget);
   if (index > 0) return normalizeReleaseBranch(ordered[index - 1]);
   return '';
 }
 
 export function buildCabReleaseKickoffMessage(input: CabReleaseKickoffInput): string {
+  const targetVersion = normalizeReleaseVersion(input.targetVersion);
+  if (!targetVersion) {
+    throw new Error(`Invalid CAB release version: ${input.targetVersion}`);
+  }
+  const previousReleaseBranch = normalizeReleaseBranch(input.previousReleaseBranch);
+  if (!previousReleaseBranch) {
+    throw new Error(`Invalid previous release branch: ${input.previousReleaseBranch}`);
+  }
   const relatedIds = input.relatedWorkItemIds.filter((id) => Number.isFinite(id) && id > 0);
   const relatedLine = relatedIds.length > 0
     ? relatedIds.join(',')
@@ -48,14 +62,14 @@ export function buildCabReleaseKickoffMessage(input: CabReleaseKickoffInput): st
     : 'No — do not create or push the git branch after snow succeeds';
 
   return [
-    `Run /cab-release for Apex release ${input.targetVersion}.`,
+    `Run /cab-release for Apex release ${targetVersion}.`,
     '',
-    `Target version: ${input.targetVersion}`,
-    `Previous shipped release branch: ${input.previousReleaseBranch}`,
+    `Target version: ${targetVersion}`,
+    `Previous shipped release branch: ${previousReleaseBranch}`,
     `Apex Release Epic id: ${input.apexReleaseEpicId}`,
     `Apex Related work item IDs: ${relatedLine}`,
     `Snow mode: ${snowChoice}`,
-    `Cut Release/${input.targetVersion} from development after snow succeeds: ${cutChoice}`,
+    `Cut Release/${targetVersion} from development after snow succeeds: ${cutChoice}`,
     '',
     'Treat the snow mode and cut-branch answers as already confirmed. Do not create the git branch before snow succeeds.',
     'Print skill script stdout back to me: draft path, wiki URL, snow run URL, CHG, Teams paste, and any git cut output.',
