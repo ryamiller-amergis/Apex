@@ -8,6 +8,7 @@ const mutateAsync = jest.fn();
 const send = jest.fn();
 const cancel = jest.fn();
 let sessionIsPreparing = false;
+let skillConfigPending = false;
 
 jest.mock('../../hooks/useChatThreads', () => ({
   useStartChat: () => ({ mutateAsync, isPending: false }),
@@ -15,12 +16,15 @@ jest.mock('../../hooks/useChatThreads', () => ({
 
 jest.mock('../../hooks/useProjectSkillConfig', () => ({
   useProjectSkillConfig: () => ({
-    data: {
+    data: skillConfigPending ? undefined : {
       id: 'settings-1',
       skillRepo: 'MaxView',
       skillBranch: 'main',
       skillProvider: 'ado',
     },
+    isPending: skillConfigPending,
+    isError: false,
+    error: null,
   }),
 }));
 
@@ -72,6 +76,7 @@ describe('CabReleaseAssistantPanel', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     sessionIsPreparing = false;
+    skillConfigPending = false;
     mutateAsync.mockResolvedValue({ threadId: 'thread-cab-1' });
     send.mockResolvedValue(undefined);
   });
@@ -106,6 +111,52 @@ describe('CabReleaseAssistantPanel', () => {
 
     expect(screen.getByTestId('cab-release-assistant-panel')).toBeInTheDocument();
     expect(screen.getByText(/Wiki URL/)).toBeInTheDocument();
+  });
+
+  it('waits for skill settings before reporting a missing skill repo', async () => {
+    skillConfigPending = true;
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <CabReleaseAssistantPanel
+          open
+          onClose={jest.fn()}
+          project="MaxView"
+          targetVersion="2026.13.0"
+          apexReleaseEpicId={12345}
+          relatedWorkItemIds={[53247]}
+          previousReleaseBranch="Release/2026.12.0"
+          snowMode="dry-run"
+          cutReleaseBranch={false}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.queryByTestId('cab-release-assistant-error')).not.toBeInTheDocument();
+    expect(mutateAsync).not.toHaveBeenCalled();
+    expect(screen.getByText('Starting cab-release…')).toBeInTheDocument();
+
+    skillConfigPending = false;
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <CabReleaseAssistantPanel
+          open
+          onClose={jest.fn()}
+          project="MaxView"
+          targetVersion="2026.13.0"
+          apexReleaseEpicId={12345}
+          relatedWorkItemIds={[53247]}
+          previousReleaseBranch="Release/2026.12.0"
+          snowMode="dry-run"
+          cutReleaseBranch={false}
+        />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalled();
+    });
+    expect(screen.queryByTestId('cab-release-assistant-error')).not.toBeInTheDocument();
   });
 
   it('holds the kickoff until the session is no longer preparing', async () => {

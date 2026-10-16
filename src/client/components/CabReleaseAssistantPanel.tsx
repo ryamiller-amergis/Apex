@@ -53,7 +53,12 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
   const dragStartWidthRef = useRef(DEFAULT_WIDTH);
 
   const startChat = useStartChat();
-  const { data: skillConfig } = useProjectSkillConfig(project);
+  const {
+    data: skillConfig,
+    isPending: skillConfigPending,
+    isError: skillConfigFailed,
+    error: skillConfigError,
+  } = useProjectSkillConfig(project);
   const session = useAgentChatSession(threadId);
 
   useEffect(() => {
@@ -69,6 +74,15 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
 
   useEffect(() => {
     if (!open || threadId) return;
+    if (skillConfigPending) return;
+    if (skillConfigFailed) {
+      setCreateError(
+        skillConfigError instanceof Error
+          ? skillConfigError.message
+          : 'Failed to load project skill settings.',
+      );
+      return;
+    }
     if (!skillConfig?.skillRepo) {
       setCreateError('Project skill settings are missing a skill repo.');
       return;
@@ -102,7 +116,16 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
     return () => {
       cancelled = true;
     };
-  }, [open, threadId, skillConfig, project, startChatMutate]);
+  }, [
+    open,
+    threadId,
+    skillConfig,
+    skillConfigPending,
+    skillConfigFailed,
+    skillConfigError,
+    project,
+    startChatMutate,
+  ]);
 
   const sendKickoff = session.send;
 
@@ -186,7 +209,7 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
             isRunning={session.isRunning}
             isSending={session.isSending}
             placeholder={
-              isCreating ? 'Starting cab-release…'
+              isCreating || skillConfigPending ? 'Starting cab-release…'
                 : session.isRunning ? 'Agent is working…'
                   : 'Reply to cab-release… (Enter to send)'
             }
@@ -195,7 +218,7 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
           />
         )}
       >
-        {isCreating && (
+        {(isCreating || skillConfigPending) && (
           <div className={styles.starting}>Starting cab-release…</div>
         )}
         {createError && (
