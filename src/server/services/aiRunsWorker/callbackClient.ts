@@ -56,6 +56,15 @@ const RETRYABLE_CALLBACK_STATUSES: ReadonlySet<number> = new Set([
 const MAX_CALLBACK_ATTEMPTS = 4;
 const CALLBACK_RETRY_BASE_DELAY_MS = 500;
 
+/** Longest a retried callback (such as the bootstrap read) can take before it gives up. */
+export function retriedCallbackBudgetMs(requestTimeoutMs: number): number {
+  let backoffMs = 0;
+  for (let attempt = 1; attempt < MAX_CALLBACK_ATTEMPTS; attempt += 1) {
+    backoffMs += CALLBACK_RETRY_BASE_DELAY_MS * (2 ** (attempt - 1));
+  }
+  return MAX_CALLBACK_ATTEMPTS * requestTimeoutMs + backoffMs;
+}
+
 /**
  * A fence conflict means this worker has been superseded, so a replay can only
  * earn the same rejection. Failures that never reached HTTP (dropped socket,

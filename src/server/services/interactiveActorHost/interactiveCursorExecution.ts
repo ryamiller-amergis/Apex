@@ -12,7 +12,7 @@
  * caller from the frozen bootstrap. This module does not resolve model, effort,
  * deadline, skill, or MCP policy locally.
  */
-import { Agent } from '@cursor/sdk';
+import { Agent, type ToolName } from '@cursor/sdk';
 import type {
   LocalAgentOptions,
   McpServerConfig,
@@ -39,7 +39,6 @@ function isAgentNotFound(error: unknown): boolean {
   const { code, name } = error as { code?: unknown; name?: unknown };
   return code === 'agent_not_found' || name === 'AgentNotFoundError';
 }
-
 /** Live Cursor Agent handle that can serve multiple serialized `send` calls. */
 export interface InteractiveCursorAgentHandle {
   agentId: string | null;
@@ -142,11 +141,15 @@ export async function acquireInteractiveCursorAgent(
         }
       : { customTools: createNativeReadTools(checkout) }),
   } satisfies LocalAgentOptions;
+  // A run waits for its background subagents, which would hold a chat turn
+  // open after the reply. The SDK does not persist this, so resume passes it too.
+  const disallowedTools: ToolName[] = ['task'];
   const agentOptions = {
     apiKey,
     model: buildCursorModelSelection(input.model, input.effort ?? undefined),
     local,
     mcpServers: { ...options.mcpServers },
+    disallowedTools,
   };
 
   if (resumeAgentId) {

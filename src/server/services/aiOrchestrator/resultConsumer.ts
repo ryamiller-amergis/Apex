@@ -24,6 +24,8 @@ export type ResultConsumerDeps = Readonly<{
   maxDeliveryCount?: number;
   applyTerminalRunEffects?: typeof defaultTerminalEffects;
   recordTerminalUsage?: typeof defaultRecordTerminalUsage;
+  /** Called at the start of every loop pass. */
+  onProgress?: () => void;
 }>;
 
 export type ResultConsumer = {
@@ -170,6 +172,7 @@ export function createResultConsumer(deps: ResultConsumerDeps): ResultConsumer {
     processOnce,
     async runLoop(): Promise<void> {
       while (!deps.signal?.aborted) {
+        deps.onProgress?.();
         try {
           const outcome = await processOnce();
           if (outcome === 'idle') await clock.sleep(250);

@@ -28,6 +28,7 @@ import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle'
 import type {
   AiRunIngestBody,
   AiRunIngestResponse,
+  InteractiveTurnStageTimings,
 } from '../../../shared/types/aiRunIngest';
 import type { AiRunBlobRef } from '../../../shared/types/aiRunV2';
 import type {
@@ -62,6 +63,7 @@ import {
   buildOffsetLiveTokenEvent,
 } from '../interactiveDurableStreamBatcher';
 import type { InteractiveCursorAgentHandle } from './interactiveCursorExecution';
+import { isRetryableCursorConnectionError } from './cursorConnectionError';
 import type { InteractiveActorBootstrap } from '../../../shared/types/aiRunIngest';
 import { createPerThreadTurnQueue, type PerThreadTurnQueue } from './perThreadTurnQueue';
 
@@ -89,6 +91,10 @@ export const INTERACTIVE_AGENT_DISPOSE_WAIT_MS = 5_000;
 
 /** Home-facing live phase detail before checkout / SDK work. */
 export const INTERACTIVE_STARTING_DETAIL = 'Starting agent…';
+/** Shown while a grounded turn downloads the project code. */
+export const INTERACTIVE_LOADING_CODE_DETAIL = 'Preparing project repository…';
+/** Shown once the Agent is ready and the prompt is going to the model. */
+export const INTERACTIVE_THINKING_DETAIL = 'Thinking…';
 
 /**
  * Thread-scoped durable workspace keyed by the pinned grounding SHA. A stable
@@ -953,6 +959,25 @@ export function createInteractiveSessionActor(
     let firstEventSeen = false;
     let firstEventTimer: ReturnType<typeof setTimeout> | undefined;
     let silenceTimer: ReturnType<typeof setTimeout> | undefined;
+    let workspaceMs: number | undefined;
+    let agentAcquireMs: number | undefined;
+    let agentMode: InteractiveTurnStageTimings['agentMode'];
+    let sendStartedAt: number | undefined;
+    let firstEventAt: number | undefined;
+    let firstTokenAt: number | undefined;
+
+    const stageTimings = (): InteractiveTurnStageTimings => ({
+      ...(workspaceMs !== undefined ? { workspaceMs } : {}),
+      ...(agentAcquireMs !== undefined ? { agentAcquireMs } : {}),
+      ...(agentMode ? { agentMode } : {}),
+      ...(sendStartedAt !== undefined && firstEventAt !== undefined
+        ? { firstEventMs: Math.max(0, firstEventAt - sendStartedAt) }
+        : {}),
+      ...(sendStartedAt !== undefined && firstTokenAt !== undefined
+        ? { firstTokenMs: Math.max(0, firstTokenAt - sendStartedAt) }
+        : {}),
+      workerTurnMs: Math.max(0, now() - nowMs),
+    });
 
     const stopRun = async (): Promise<void> => {
       if (activeRunRef?.cancel) await activeRunRef.cancel().catch(() => {});
@@ -999,6 +1024,7 @@ export function createInteractiveSessionActor(
     const observeEvent = (): void => {
       if (!firstEventSeen) {
         firstEventSeen = true;
+        firstEventAt = now();
         if (firstEventTimer !== undefined) clearTimeout(firstEventTimer);
         firstEventTimer = undefined;
       }
@@ -1067,20 +1093,27 @@ export function createInteractiveSessionActor(
     const heartbeatTimer = setInterval(heartbeat, durableHeartbeatMs);
     activeDurableThreads.add(threadId);
 
-    try {
-      await publishLive(threadId, createCursorRunEventEnvelope({
+    let startupSequence = 0;
+    const publishStartupPhase = (
+      phase: 'setup' | 'analysis',
+      detail: string,
+    ): Promise<void> =>
+      publishLive(threadId, createCursorRunEventEnvelope({
         threadId,
         runId,
         sourceInstance,
-        sequence: 1,
+        sequence: (startupSequence += 1),
         timestamp: new Date(now()).toISOString(),
-        event: {
-          type: 'phase',
-          phase: 'setup',
-          status: 'running',
-          detail: INTERACTIVE_STARTING_DETAIL,
-        },
+        event: { type: 'phase', phase, status: 'running', detail },
       })).catch(() => {});
+
+    try {
+      await publishStartupPhase(
+        'setup',
+        specification.grounding?.sha
+          ? INTERACTIVE_LOADING_CODE_DETAIL
+          : INTERACTIVE_STARTING_DETAIL,
+      );
 
       const destination = resolveInteractiveThreadWorkspacePath(
         threadId,
@@ -1113,6 +1146,7 @@ export function createInteractiveSessionActor(
       if (cachedForThread && cachedForThread.handle.workspaceRef !== destination) {
         await disposeAgentEntry(threadId);
       }
+      const workspaceStartedAt = now();
       try {
         attemptCheckout = await dependencies.materializeWorkspace(
           bootstrap,
@@ -1127,6 +1161,7 @@ export function createInteractiveSessionActor(
         if (prepTimer) clearTimeout(prepTimer);
         absoluteAbort.signal.removeEventListener('abort', onAbsoluteAbort);
       }
+      workspaceMs = now() - workspaceStartedAt;
       // A repository-preparation timeout falls back to the remote reader; an
       // expired absolute deadline ends the turn.
       if (absoluteAbort.signal.aborted) throw absoluteAbort.signal.reason;
@@ -1162,23 +1197,13 @@ export function createInteractiveSessionActor(
         (cached.handle.interviewPhase ?? null) ===
           (specification.guidedInterview?.phase ?? null);
 
-      let acquisitionMode: 'warm' | 'resumed' | 'recreated' = 'warm';
-      if (cacheCompatible && cached) {
-        agentHandle = cached.handle;
-        acquisitionMode = 'warm';
-      } else {
-        if (cached) await disposeAgentEntry(threadId);
-        const knownAgentId =
-          cursorAgentId ?? agentIdByThread.get(threadId) ?? null;
-        const resumeAgentId =
-          knownAgentId && !unresumableAgentIds.has(knownAgentId)
-            ? knownAgentId
-            : null;
-        const acquireStartedAt = now();
-        const acquisition: Promise<{
-          handle: InteractiveCursorAgentHandle;
-          mode: 'warm' | 'resumed' | 'recreated';
-        }> = dependencies.acquireDurableAgent
+      const startAcquisition = (
+        resumeAgentId: string | null,
+      ): Promise<{
+        handle: InteractiveCursorAgentHandle;
+        mode: 'warm' | 'resumed' | 'recreated';
+      }> =>
+        dependencies.acquireDurableAgent
           ? dependencies.acquireDurableAgent(bootstrap, checkout, {
               resumeAgentId,
             })
@@ -1201,10 +1226,30 @@ export function createInteractiveSessionActor(
                 handle,
                 mode: resumeAgentId ? 'resumed' as const : 'recreated' as const,
               }));
+
+      let acquisitionMode: 'warm' | 'resumed' | 'recreated' = 'warm';
+      if (cacheCompatible && cached) {
+        agentHandle = cached.handle;
+        acquisitionMode = 'warm';
+        agentAcquireMs = 0;
+      } else {
+        if (cached) await disposeAgentEntry(threadId);
+        if (specification.grounding?.sha) {
+          await publishStartupPhase('setup', INTERACTIVE_STARTING_DETAIL);
+        }
+        const knownAgentId =
+          cursorAgentId ?? agentIdByThread.get(threadId) ?? null;
+        const resumeAgentId =
+          knownAgentId && !unresumableAgentIds.has(knownAgentId)
+            ? knownAgentId
+            : null;
+        const acquireStartedAt = now();
+        const acquisition = startAcquisition(resumeAgentId);
         try {
           const acquired = await untilAborted(acquisition, absoluteAbort.signal);
           agentHandle = acquired.handle;
           acquisitionMode = acquired.mode;
+          agentAcquireMs = now() - acquireStartedAt;
           logInteractiveAgentStep('InteractiveAgentAcquired', {
             runId,
             threadId,
@@ -1234,8 +1279,10 @@ export function createInteractiveSessionActor(
       if (agentHandle.agentId) {
         agentIdByThread.set(threadId, agentHandle.agentId);
       }
+      agentMode = acquisitionMode;
+      await publishStartupPhase('analysis', INTERACTIVE_THINKING_DETAIL);
 
-      const prompt =
+      let prompt =
         acquisitionMode === 'recreated'
           ? specification.recreationPrompt
           : specification.currentPrompt;
@@ -1334,16 +1381,65 @@ export function createInteractiveSessionActor(
 
       try {
         const turnEndMonitor = createCursorTurnEndMonitor();
-        activeRunRef = await untilAborted(
-          agentHandle.send(prompt, {
-            mcpServers,
-            onDelta: (update) => {
-              observeEvent();
-              turnEndMonitor.observe(update);
-            },
-          }),
-          absoluteAbort.signal,
-        );
+        const sendTurn = (handle: InteractiveCursorAgentHandle) =>
+          untilAborted(
+            handle.send(prompt, {
+              mcpServers,
+              onDelta: (update) => {
+                observeEvent();
+                turnEndMonitor.observe(update);
+              },
+            }),
+            absoluteAbort.signal,
+          );
+        sendStartedAt = now();
+        try {
+          activeRunRef = await sendTurn(agentHandle);
+        } catch (error) {
+          // No run exists yet, so nothing was shown and no tool ran.
+          if (
+            !isRetryableCursorConnectionError(error) ||
+            firstEventSeen ||
+            absoluteAbort.signal.aborted ||
+            cancellationRequested ||
+            fenceConflict
+          ) {
+            throw error;
+          }
+          const dropped = agentHandle;
+          logInteractiveAgentStep('InteractiveAgentReconnecting', {
+            runId,
+            threadId,
+            mode: agentMode,
+            code: (error as { code?: unknown }).code ?? null,
+          });
+          await publishLiveEnvelope({
+            type: 'retrying',
+            attempt: 1,
+            maxAttempts: 1,
+            reason: 'reconnecting',
+          });
+          if (dropped.agentId) {
+            unresumableAgentIds.add(dropped.agentId);
+            agentIdByThread.delete(threadId);
+          }
+          // This turn's workspace stays; only the Agent is replaced.
+          if (agentCache.get(threadId)?.handle === dropped) {
+            agentCache.delete(threadId);
+          }
+          await disposeAgentHandle(threadId, dropped);
+          const reacquired = await untilAborted(
+            startAcquisition(null),
+            absoluteAbort.signal,
+          );
+          agentHandle = reacquired.handle;
+          agentMode = 'recreated';
+          prompt = specification.recreationPrompt;
+          if (agentHandle.agentId) {
+            agentIdByThread.set(threadId, agentHandle.agentId);
+          }
+          activeRunRef = await sendTurn(agentHandle);
+        }
 
         const result = await untilAborted(executeCursorExecutionCore({
           snapshot: {
@@ -1382,6 +1478,7 @@ export function createInteractiveSessionActor(
                 }
               }
               if (event.type === 'token') {
+                firstTokenAt ??= now();
                 await publishLiveTokenBatches(
                   liveBatcher.push(event.text, now()),
                 );
@@ -1510,6 +1607,7 @@ export function createInteractiveSessionActor(
           artifactsFlushed: true,
           artifactManifestRef,
           cursorAgentId: reusableAgentId,
+          stageTimings: stageTimings(),
         });
 
         if (result.runLeftUnsettled) {
@@ -1599,6 +1697,7 @@ export function createInteractiveSessionActor(
         detail,
         artifactsFlushed: false,
         ...(code ? { failureCategory: code } : {}),
+        stageTimings: stageTimings(),
       }).catch(() => {});
       if (code) {
         return { status: 'failed', failureCategory: code };

@@ -13,13 +13,17 @@ import { runCostAllocation } from './aiCostAllocationService';
 import { generateBriefForAllProjects } from './aiCostDailyBriefService';
 import { aiCostUndercountReportService } from './aiCostUndercountReportService';
 import { isFeatureOperational } from './featureFlagService';
+import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
 
 export class AiCostSchedulerService {
   private intervalId: NodeJS.Timeout | null = null;
-  private isRunning: boolean = false;
   private lastBriefRun: Date | null = null;
   private lastUndercountReportDate: string | null = null;
   private readonly CHECK_INTERVAL = 60 * 60 * 1000; // 1 hour
+  private readonly runGuard = createSingleFlight({
+    name: 'AiCostScheduler',
+    stuckAfterMs: stuckAfterForInterval(this.CHECK_INTERVAL),
+  });
 
   start(): void {
     if (this.intervalId) {
@@ -43,8 +47,8 @@ export class AiCostSchedulerService {
   }
 
   private async run(): Promise<void> {
-    if (this.isRunning) return;
-    this.isRunning = true;
+    const runToken = this.runGuard.tryEnter();
+    if (runToken === null) return;
 
     try {
       // Step 1: Sync Cursor billing events
@@ -108,7 +112,7 @@ export class AiCostSchedulerService {
     } catch (err) {
       console.error('[AiCostScheduler] Error during run:', (err as Error).message);
     } finally {
-      this.isRunning = false;
+      this.runGuard.exit(runToken);
     }
   }
 
