@@ -668,17 +668,18 @@ function registeredSkillName(
 
 function skillRegistration(
   thread: ChatThread,
-  turnSkill: ChatTurnSkill | undefined,
   skill: ChatTurnSkill | null,
   config: ProjectSkillConfigResponse | null,
   builtInRoots: ReadonlyArray<BuiltInSkillRoot>,
 ): DurableInteractiveSkillRegistration | null {
   if (!skill) return null;
   const normalized = strictPortableSkillPath(skill.path).toLowerCase();
-  const frozenOnThread =
-    !turnSkill &&
+  // The thread skill stays a project skill when the turn repeats that same path.
+  // A path under `.cursor/skills` is otherwise a built-in Apex skill, which would
+  // miss a skill that exists only in the project repository.
+  const matchesThreadSkill =
     normalizePath(thread.kickoff.skillPath ?? '').toLowerCase() === normalized;
-  if (frozenOnThread || configuredSkillPaths(config).has(normalized)) {
+  if (matchesThreadSkill || configuredSkillPaths(config).has(normalized)) {
     return 'project';
   }
   if (isAllowlistedBuiltInSkillPath(skill.path, builtInRoots)) {
@@ -1358,7 +1359,6 @@ export function createDurableInteractiveTurnService(
           : initiallySelectedSkill;
       const registration = skillRegistration(
         thread,
-        input.turnSkill,
         skill,
         config,
         deps.builtInSkillRoots,

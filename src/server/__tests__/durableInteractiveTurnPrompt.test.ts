@@ -74,6 +74,7 @@ async function admittedSpecification(
     interviewContext?: string | null;
     resolveGrounding?: jest.Mock;
     loadSkill?: jest.Mock;
+    skillConfig?: Record<string, unknown> | null;
     resolveDeadlines?: jest.Mock;
     hasPinnedGrounding?: boolean;
     optionalGroundingWaitMs?: number;
@@ -102,9 +103,11 @@ async function admittedSpecification(
         access: 'owner',
         thread: thread(messages, options.kickoff),
       }),
-    resolveSkillConfig: jest.fn().mockResolvedValue({
-      interviewSkillOptions: [{ path: SKILL_PATH, friendlyName: 'Grill with docs' }],
-    }),
+    resolveSkillConfig: jest.fn().mockResolvedValue(
+      'skillConfig' in options
+        ? options.skillConfig
+        : { interviewSkillOptions: [{ path: SKILL_PATH, friendlyName: 'Grill with docs' }] },
+    ),
     loadSkill:
       options.loadSkill ??
       jest.fn().mockResolvedValue({ path: SKILL_PATH, content: SKILL_CONTENT }),
@@ -181,6 +184,25 @@ describe('durable interactive turn prompt', () => {
     expect(specification.currentPrompt).toContain('governs this whole session, not only this turn');
     expect(specification.currentPrompt).not.toContain('Follow it for this turn');
     expect(specification.recreationPrompt).toContain('governs this whole session, not only this turn');
+  });
+
+  it('loads the thread skill from the project repo when the turn names that same path', async () => {
+    const cabPath = '.cursor/skills/cab-release/SKILL.md';
+    const loadSkill = jest.fn().mockResolvedValue({ path: cabPath, content: '# cab-release' });
+
+    const specification = await admittedSpecification([], {
+      workflowClass: 'home-chat',
+      kickoff: { skillPath: cabPath, pillLabel: 'Create CAB request' },
+      turnSkill: { name: 'cab-release', path: cabPath },
+      skillConfig: null,
+      loadSkill,
+    });
+
+    expect(loadSkill).toHaveBeenCalledWith(expect.objectContaining({
+      registration: 'project',
+      skill: expect.objectContaining({ path: cabPath }),
+    }));
+    expect(specification.skill?.content).toContain('# cab-release');
   });
 
   it('scopes a skill picked mid-thread to that turn only', async () => {
