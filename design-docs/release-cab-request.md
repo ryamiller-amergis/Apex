@@ -102,7 +102,7 @@ Actions item opens the modal; confirm opens the panel.
 4. Skill repo and branch come from admin `project_skill_settings` only. Do not hardcode `tbi/55352-phase-3-service-now-cab-ticket`.
 5. Normalize Apex titles such as `MV 2026.15.0` to version `2026.15.0` and ref `Release/2026.15.0` before the kickoff reaches the skill.
 6. A `cab-release` thread receives a narrow write exception for its Manual Release wiki page, selected snow pipeline, and explicitly confirmed post-snow release branch only.
-7. The interactive actor image includes PowerShell and receives the existing `ADO_PAT` Terraform secret. The agent does not use its managed identity for Azure DevOps.
+7. The interactive actor image includes PowerShell. Both the legacy interactive Container App and the v2 fast-interactive and agentic apps receive the existing `ADO_PAT` Terraform secret. `REPO_READ_SERVICE_TOKEN` is not an Azure DevOps credential. The agent does not use its managed identity for Azure DevOps.
 
 ## Feature Flag
 
