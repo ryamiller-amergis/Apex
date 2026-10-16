@@ -10,6 +10,7 @@ import { isAiRunV2DocumentSpecification } from '../../../shared/types/aiRunV2Doc
 import { createDocumentExecute } from './documentExecution';
 import { createV2Worker } from './worker';
 import { createShutdownController, resolveShutdownDrainMs } from './shutdownDrain';
+import { createProgressWatchdog, exitWhenStalled } from '../../utils/progressWatchdog';
 
 export const executeDocumentWorkload = createDocumentExecute();
 
@@ -17,6 +18,7 @@ export async function startDocumentWorker(): Promise<void> {
   const env = resolveWorkerEnvironment('document');
   const drainMs = resolveShutdownDrainMs(process.env.AI_RUNS_V2_SHUTDOWN_DRAIN_MS);
   const shutdownController = createShutdownController(drainMs);
+  const watchdog = createProgressWatchdog();
 
   const worker = createV2Worker({
     bus: createWorkerServiceBusClient({
@@ -47,6 +49,7 @@ export async function startDocumentWorker(): Promise<void> {
     },
     signal: shutdownController.receiveSignal,
     executionSignal: shutdownController.executionSignal,
+    onProgress: (nextWithinMs) => watchdog.beat('job-loop', nextWithinMs),
   });
 
   const shutdown = (signal: string): void => {
@@ -63,7 +66,12 @@ export async function startDocumentWorker(): Promise<void> {
       env.noop ? 'noop' : env.namespace
     })`,
   );
-  await worker.runLoop();
+  const stopWatchdog = exitWhenStalled('ai-runs-documents-v2', watchdog);
+  try {
+    await worker.runLoop();
+  } finally {
+    stopWatchdog();
+  }
 }
 
 const isMain =

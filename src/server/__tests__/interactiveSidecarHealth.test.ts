@@ -1,4 +1,5 @@
 import {
+  createActorInvocationStallTracker,
   createSidecarHealthMonitor,
   evaluateSidecarMetadata,
   interactiveHealthRoute,
@@ -88,6 +89,37 @@ describe('createSidecarHealthMonitor', () => {
     advance(70_000);
     await expect(health.check()).resolves.toEqual({ status: 'ok' });
     await expect(health.check()).resolves.toMatchObject({ status: 'degraded' });
+  });
+
+  it('treats repeated actor-invoke timeouts as unhealthy even when metadata looks right', async () => {
+    let now = 0;
+    const tracker = createActorInvocationStallTracker(3);
+    const requestSidecarShutdown = jest.fn().mockResolvedValue(undefined);
+    const health = createSidecarHealthMonitor({
+      actorType: ACTOR,
+      fetchMetadata: async () => healthyMetadata,
+      invocationStall: () => tracker.stalledDetail(),
+      requestSidecarShutdown,
+      now: () => now,
+      graceMs: 60_000,
+    });
+
+    tracker.recordTimedOut();
+    tracker.recordTimedOut();
+    await expect(health.check()).resolves.toEqual({ status: 'ok' });
+
+    tracker.recordTimedOut();
+    await expect(health.check()).resolves.toMatchObject({
+      status: 'degraded',
+      problem: 'actor-invocations-stalled',
+      detail: '3 consecutive actor invocations timed out',
+    });
+    now = 60_000;
+    await expect(health.check()).resolves.toMatchObject({ status: 'unhealthy' });
+    expect(requestSidecarShutdown).toHaveBeenCalledTimes(1);
+
+    tracker.recordCompleted();
+    await expect(health.check()).resolves.toEqual({ status: 'ok' });
   });
 });
 

@@ -20,6 +20,12 @@ import {
 import { createInteractiveActorDispatchClient } from './interactiveActorDispatchClient';
 import { resolveProviderCapacityFromEnvironment } from './capacityConfig';
 import type { ExecutionProbe } from './ports';
+import { createProgressWatchdog, exitWhenStalled } from '../../utils/progressWatchdog';
+
+/** Consumers long-poll for 5s, so a pass this slow has hung. */
+const CONSUMER_PROGRESS_BUDGET_MS = 5 * 60_000;
+/** The drainer sweeps every 30s and the reconciler runs every 30s. */
+const SWEEP_PROGRESS_BUDGET_MS = 10 * 60_000;
 
 const executor = { execute: (query: unknown) => db.execute(query as never) };
 
@@ -83,6 +89,8 @@ async function main(): Promise<void> {
 
   const metrics = createOrchestratorMetrics();
   const abort = new AbortController();
+  const watchdog = createProgressWatchdog();
+  const beat = (loop: string, nextWithinMs: number) => () => watchdog.beat(loop, nextWithinMs);
   const capacityConfig = resolveProviderCapacityFromEnvironment();
 
   const reconciler = createReconciler({
@@ -104,6 +112,7 @@ async function main(): Promise<void> {
     metrics,
     enableNotify: process.env.NODE_ENV !== 'test',
     config: capacityConfig,
+    onProgress: beat('outbox-drainer', SWEEP_PROGRESS_BUDGET_MS),
   });
 
   const checkpointConsumer = createCheckpointConsumer({
@@ -111,12 +120,14 @@ async function main(): Promise<void> {
     attempts: runAttemptRepository,
     metrics,
     signal: abort.signal,
+    onProgress: beat('checkpoint-consumer', CONSUMER_PROGRESS_BUDGET_MS),
   });
   const resultConsumer = createResultConsumer({
     consumer: resultConsumerPort,
     attempts: runAttemptRepository,
     metrics,
     signal: abort.signal,
+    onProgress: beat('result-consumer', CONSUMER_PROGRESS_BUDGET_MS),
   });
 
   const orchestrator = createOrchestrator({
@@ -126,10 +137,13 @@ async function main(): Promise<void> {
     reconciler,
     metrics,
     signal: abort.signal,
+    onReconcilerPass: beat('reconciler', SWEEP_PROGRESS_BUDGET_MS),
   });
 
+  const stopWatchdog = exitWhenStalled('ai-orchestrator', watchdog);
   const shutdown = async (signal: string) => {
     console.log(`[aiOrchestrator] shutting down on ${signal}`);
+    stopWatchdog();
     abort.abort();
     await orchestrator.stop();
     process.exit(0);

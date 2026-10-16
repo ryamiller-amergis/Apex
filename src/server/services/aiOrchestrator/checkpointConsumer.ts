@@ -16,6 +16,8 @@ export type CheckpointConsumerDeps = Readonly<{
   metrics?: OrchestratorMetrics;
   signal?: AbortSignal;
   maxDeliveryCount?: number;
+  /** Called at the start of every loop pass. */
+  onProgress?: () => void;
 }>;
 
 export type CheckpointConsumer = {
@@ -90,6 +92,7 @@ export function createCheckpointConsumer(
     processOnce,
     async runLoop(): Promise<void> {
       while (!deps.signal?.aborted) {
+        deps.onProgress?.();
         try {
           const outcome = await processOnce();
           if (outcome === 'idle') {

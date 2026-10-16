@@ -22,6 +22,7 @@ import {
   startPlaybookTerminalEventListener,
   stopPlaybookTerminalEventListener,
 } from './playbookTerminalEventService';
+import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
 
 const MAX_SWEEP_DELAY_MS = 60_000;
 const DOWNWARD_JITTER_MS = 12_000;
@@ -57,7 +58,10 @@ export function createPlaybookReconciliationScheduler(
 
   let timer: ReturnType<typeof setInterval> | null = null;
   let started = false;
-  let running = false;
+  const runGuard = createSingleFlight({
+    name: 'playbook-reconciliation',
+    stuckAfterMs: stuckAfterForInterval(MAX_SWEEP_DELAY_MS),
+  });
 
   /**
    * The in-process guard, separate from the advisory lock and not redundant with it.
@@ -67,8 +71,8 @@ export function createPlaybookReconciliationScheduler(
    * without it, a slow pass compounds into a queue of passes all waiting on the same lock.
    */
   const runNow = async (): Promise<boolean> => {
-    if (running) return false;
-    running = true;
+    const runToken = runGuard.tryEnter();
+    if (runToken === null) return false;
     try {
       await runPass({});
       return true;
@@ -80,7 +84,7 @@ export function createPlaybookReconciliationScheduler(
       );
       return false;
     } finally {
-      running = false;
+      runGuard.exit(runToken);
     }
   };
 

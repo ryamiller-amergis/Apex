@@ -139,6 +139,8 @@ export function friendlyToolActivityLabel(toolName: string, args?: unknown): str
 const CHAT_ERROR_BY_CODE: Record<string, string> = {
   INTERACTIVE_V2_GROUNDING_UNAVAILABLE:
     "Apex couldn't load this project's repository for the chat. Try again in a minute.",
+  INTERACTIVE_V2_GROUNDING_PREPARING:
+    'Apex is still getting the latest project code. Send your message again in a minute.',
   INTERACTIVE_V2_SKILL_UNAVAILABLE:
     "This skill couldn't be loaded from the project's repository. Check the skill in Project Settings, or try again.",
   INTERACTIVE_V2_STDIO_MCP_UNSUPPORTED:

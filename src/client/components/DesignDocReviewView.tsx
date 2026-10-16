@@ -50,6 +50,7 @@ import { effortLabel } from '../../shared/utils/effort';
 import {
   collectValidationGaps,
   designDocFeatureSectionScore,
+  isUnusableValidationScorecard,
 } from '../../shared/utils/validationReport';
 import {
   designDocHasProposedChanges,
@@ -1930,6 +1931,9 @@ export const DesignDocReviewView: React.FC = () => {
     doc.validationScore !== undefined &&
     doc.validationScore !== null &&
     doc.validationScore < validationThreshold;
+  const validationScoreMissing = isUnusableValidationScorecard(doc.validationScorecard);
+  const displayedValidationScore = validationScoreMissing ? null : doc.validationScore;
+  const validationScoreLabel = validationScoreMissing ? 'not recorded' : `${doc.validationScore}%`;
   const hasValidationOverride = !!doc.validationOverride;
   const validationBlocking = scoreBelowThreshold && !hasValidationOverride;
   const canManage = can('interviews:manage');
@@ -2161,10 +2165,10 @@ export const DesignDocReviewView: React.FC = () => {
               </span>
               {doc.validationScore !== null && doc.validationScore !== undefined && (
                 <span
-                  className={`${styles.validationBadge} ${doc.validationScore >= validationThreshold ? styles.validationBadgeGood : doc.validationScore >= 70 ? styles.validationBadgeMid : styles.validationBadgeBad}`}
+                  className={`${styles.validationBadge} ${validationScoreMissing ? styles.validationBadgeBad : doc.validationScore >= validationThreshold ? styles.validationBadgeGood : doc.validationScore >= 70 ? styles.validationBadgeMid : styles.validationBadgeBad}`}
                   {...{ 'data-testid': 'dd-validation-badge' }}
                 >
-                  {doc.validationScore}% validated
+                  {validationScoreMissing ? 'Score not recorded' : `${doc.validationScore}% validated`}
                 </span>
               )}
               {doc.reviewerId && doc.reviewedAt && (
@@ -2328,7 +2332,7 @@ export const DesignDocReviewView: React.FC = () => {
                       : unresolvedCount > 0
                         ? 'Resolve all comments before approving'
                         : validationBlocking
-                          ? `Validation score must be ≥ ${validationThreshold}% (current: ${doc.validationScore}%)`
+                          ? `Validation score must be ≥ ${validationThreshold}% (current: ${validationScoreLabel})`
                           : undefined
                   }
                   type="button"
@@ -2356,7 +2360,7 @@ export const DesignDocReviewView: React.FC = () => {
                       : unresolvedCount > 0
                         ? 'Resolve all comments before approving'
                         : validationBlocking
-                          ? `Validation score must be ≥ ${validationThreshold}% (current: ${doc.validationScore}%)`
+                          ? `Validation score must be ≥ ${validationThreshold}% (current: ${validationScoreLabel})`
                           : undefined
                   }
                   type="button"
@@ -2638,7 +2642,7 @@ export const DesignDocReviewView: React.FC = () => {
                 <div className={styles.failureBannerTitle}>
                   Validation needs attention
                   <span className={bannerSeverity === 'red' ? styles.failureBannerScoreBadgeRed : styles.failureBannerScoreBadgeAmber}>
-                    {doc.validationScore}%
+                    {validationScoreMissing ? 'No score' : `${doc.validationScore}%`}
                   </span>
                 </div>
                 <div className={styles.failureBannerSummary}>
@@ -2922,7 +2926,7 @@ export const DesignDocReviewView: React.FC = () => {
                     onToggleComments={toggleCommentsPanel}
                     onToggleValidation={toggleValidationPanel}
                     openCommentCount={reviewComments.filter((c) => c.status === 'open').length}
-                    validationScore={doc.validationScore}
+                    validationScore={displayedValidationScore}
                     isValidating={doc.status === 'validating'}
                     commentsPanel={
                       <CommentsSidePanel
@@ -2952,7 +2956,7 @@ export const DesignDocReviewView: React.FC = () => {
                     }
                     validationPanel={
                       <ValidationSidePanel
-                        score={doc.validationScore}
+                        score={displayedValidationScore}
                         scorecard={doc.validationScorecard}
                         reportMarkdown={validationReport?.markdown ?? doc.validationReportMd}
                         isValidating={doc.status === 'validating'}
