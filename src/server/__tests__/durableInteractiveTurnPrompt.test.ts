@@ -14,6 +14,7 @@ jest.mock('../services/telemetry', () => ({ trackEvent: jest.fn() }));
 
 const THREAD_ID = '10000000-0000-4000-8000-000000000001';
 const TURN_ID = '20000000-0000-4000-8000-000000000001';
+const PRIOR_TURN_ID = '20000000-0000-4000-8000-000000000002';
 const USER_ID = '40000000-0000-4000-8000-000000000001';
 const SKILL_PATH = '.cursor/skills/grill-with-docs/SKILL.md';
 const SKILL_CONTENT = '# Grill with docs\nAsk opening questions Q1 to Q5.';
@@ -77,6 +78,8 @@ async function admittedSpecification(
     hasPinnedGrounding?: boolean;
     optionalGroundingWaitMs?: number;
     trackEvent?: jest.Mock;
+    /** Admits a turn with these messages first, on the same service. */
+    priorTurnMessages?: ChatMessage[];
   } = {},
 ): Promise<PreparedDurableInteractiveTurn['specification']> {
   const repositoryAdmit = jest.fn(async (input: PreparedDurableInteractiveTurn) => ({
@@ -89,10 +92,16 @@ async function admittedSpecification(
   const service = createDurableInteractiveTurnService({
     repository: { admit: repositoryAdmit, retry: jest.fn() },
     attachmentStore: { upload: jest.fn() },
-    resolveThreadAccess: jest.fn().mockResolvedValue({
-      access: 'owner',
-      thread: thread(messages, options.kickoff),
-    }),
+    resolveThreadAccess: jest
+      .fn()
+      .mockResolvedValueOnce({
+        access: 'owner',
+        thread: thread(options.priorTurnMessages ?? messages, options.kickoff),
+      })
+      .mockResolvedValue({
+        access: 'owner',
+        thread: thread(messages, options.kickoff),
+      }),
     resolveSkillConfig: jest.fn().mockResolvedValue({
       interviewSkillOptions: [{ path: SKILL_PATH, friendlyName: 'Grill with docs' }],
     }),
@@ -123,6 +132,17 @@ async function admittedSpecification(
     now: () => new Date('2026-10-07T15:30:00.000Z'),
   });
 
+  if (options.priorTurnMessages) {
+    await service.admit({
+      threadId: THREAD_ID,
+      userId: USER_ID,
+      workflowClass: options.workflowClass ?? 'interview',
+      turnId: PRIOR_TURN_ID,
+      text: 'begin',
+      attachments: [],
+    });
+    repositoryAdmit.mockClear();
+  }
   await service.admit({
     threadId: THREAD_ID,
     userId: USER_ID,
@@ -503,5 +523,34 @@ describe('durable guided interview turn with background grounding', () => {
     expect(loadSkill).toHaveBeenCalledWith(
       expect.objectContaining({ readBranchTip: false }),
     );
+  });
+
+  it('does not wait a second time when background preparation outlived its wait', async () => {
+    const resolveGrounding = jest
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            setTimeout(() => reject(new GroundingStillPreparingError()), 50);
+          }),
+      )
+      .mockResolvedValue(GROUNDING);
+
+    await expect(
+      admittedSpecification(
+        [
+          ...discoveryTurn,
+          message('user', 'Done with product.', 3),
+          message('agent', '[[interview-phase:technical:1:5]]\nFrontend, backend, or both?', 4),
+        ],
+        {
+          guided: true,
+          backgroundGrounding: true,
+          priorTurnMessages: discoveryTurn,
+          resolveGrounding,
+        },
+      ),
+    ).rejects.toMatchObject({ code: 'INTERACTIVE_V2_GROUNDING_PREPARING' });
+    expect(resolveGrounding).toHaveBeenCalledTimes(1);
   });
 });

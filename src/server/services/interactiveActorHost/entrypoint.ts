@@ -34,7 +34,10 @@ import {
 } from '../../../shared/types/aiRunIngest';
 import type { RepoReader, RepositoryIdentity } from '../../../shared/types/repoReader';
 import { getAiRunnerCallbackToken } from '../aiRunsCallbackToken';
-import { createAiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
+import {
+  createAiRunsCallbackClient,
+  retriedCallbackBudgetMs,
+} from '../aiRunsWorker/callbackClient';
 import {
   artifactContainerName,
   resolveArtifactContainerClient,
@@ -79,11 +82,12 @@ import {
 const INTERACTIVE_CALLBACK_REQUEST_TIMEOUT_MS = 12_000;
 
 /**
- * The actor replies once the dispatch fence is verified, and that bootstrap
- * call is bounded by INTERACTIVE_CALLBACK_REQUEST_TIMEOUT_MS. A Dapr actor call
- * still open past this has stalled in the sidecar and will not start the turn.
+ * The actor replies once the dispatch fence is verified. This must outlast the
+ * bootstrap read with all its retries: the timed-out call is not cancelled, so
+ * a shorter limit fails a turn the actor is still about to start.
  */
-export const INTERACTIVE_ACTOR_INVOKE_TIMEOUT_MS = 30_000;
+export const INTERACTIVE_ACTOR_INVOKE_TIMEOUT_MS =
+  retriedCallbackBudgetMs(INTERACTIVE_CALLBACK_REQUEST_TIMEOUT_MS) + 10_000;
 
 export class ActorInvokeTimeoutError extends Error {
   constructor(timeoutMs: number) {
@@ -296,7 +300,7 @@ export async function registerInteractiveDispatchHandler(
           );
         })
         .catch(async (error) => {
-          if (error instanceof ActorInvokeTimeoutError) invocationStall?.recordTimedOut();
+          const timedOut = error instanceof ActorInvokeTimeoutError;
           console.error(
             JSON.stringify({
               event: 'InteractiveDispatchFailed',
@@ -306,9 +310,15 @@ export async function registerInteractiveDispatchHandler(
               ...describeError(error),
             })
           );
-          if (!recoverActorFailure) return;
+          if (!recoverActorFailure) {
+            if (timedOut) invocationStall?.recordTimedOut();
+            return;
+          }
           try {
             await recoverActorFailure(payload, error);
+            // Recovery reached App Service, so the actor call itself is what
+            // stalled; an App Service outage must not restart healthy replicas.
+            if (timedOut) invocationStall?.recordTimedOut();
             console.log(
               JSON.stringify({
                 event: 'InteractiveDispatchFailureRecovered',

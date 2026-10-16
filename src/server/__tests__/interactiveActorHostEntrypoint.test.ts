@@ -1,5 +1,7 @@
 import { HttpMethod, type DaprInvokerCallbackContent } from '@dapr/dapr';
+import { retriedCallbackBudgetMs } from '../services/aiRunsWorker/callbackClient';
 import {
+  INTERACTIVE_ACTOR_INVOKE_TIMEOUT_MS,
   parseInteractiveDispatchRequest,
   registerInteractiveDispatchHandler,
 } from '../services/interactiveActorHost/entrypoint';
@@ -284,5 +286,49 @@ describe('interactive actor host dispatch endpoint', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it('does not count a timeout as a stall when recovery cannot reach App Service', async () => {
+    jest.useFakeTimers();
+    try {
+      let callback: ((content: DaprInvokerCallbackContent) => Promise<unknown>) | undefined;
+      const listen = jest.fn(
+        async (
+          _methodName: string,
+          handler: (content: DaprInvokerCallbackContent) => Promise<unknown>
+        ) => {
+          callback = handler;
+        }
+      );
+      const handleTurn = jest.fn(() => new Promise<never>(() => {}));
+      const recoverActorFailure = jest.fn().mockRejectedValue(new Error('App Service unavailable'));
+      const invocationStall = { recordCompleted: jest.fn(), recordTimedOut: jest.fn() };
+      jest.spyOn(console, 'log').mockImplementation(() => {});
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      await registerInteractiveDispatchHandler(
+        { listen },
+        () => ({ handleTurn }),
+        recoverActorFailure,
+        undefined,
+        1_000,
+        invocationStall
+      );
+      await callback!({
+        body: JSON.stringify({ threadId: 'thread-1', runId: 'run-1', dispatchMessageId: 'dispatch-1' }),
+      });
+      await jest.advanceTimersByTimeAsync(1_000);
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('"event":"InteractiveDispatchFailureRecoveryFailed"')
+      );
+      expect(invocationStall.recordTimedOut).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('outlasts the retried bootstrap read so a slow start is not failed early', () => {
+    expect(INTERACTIVE_ACTOR_INVOKE_TIMEOUT_MS).toBeGreaterThan(retriedCallbackBudgetMs(12_000));
   });
 });

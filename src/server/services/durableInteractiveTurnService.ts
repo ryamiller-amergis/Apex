@@ -1261,7 +1261,10 @@ export function createDurableInteractiveTurnService(
   dependencies: Partial<ServiceDependencies> = {},
 ): DurableInteractiveTurnService {
   const deps = { ...defaultDependencies(), ...dependencies };
-  const backgroundGrounding = new Map<string, Promise<void>>();
+  const backgroundGrounding = new Map<
+    string,
+    Promise<'ready' | 'still-preparing' | 'failed'>
+  >();
 
   const prepareGroundingInBackground = (input: ResolveGroundingInput): void => {
     const threadId = input.thread.id;
@@ -1269,8 +1272,11 @@ export function createDurableInteractiveTurnService(
     const preparation = deps
       .resolveGrounding(input)
       .then(
-        () => undefined,
+        () => 'ready' as const,
         (error: unknown) => {
+          if (error instanceof GroundingStillPreparingError) {
+            return 'still-preparing' as const;
+          }
           console.warn(
             JSON.stringify({
               event: 'InteractiveBackgroundGroundingFailed',
@@ -1278,6 +1284,7 @@ export function createDurableInteractiveTurnService(
               reason: error instanceof Error ? error.message : String(error),
             }),
           );
+          return 'failed' as const;
         },
       )
       .finally(() => {
@@ -1424,7 +1431,14 @@ export function createDurableInteractiveTurnService(
           prepareGroundingInBackground({ thread, userId: input.userId });
         }
       } else if (requiresRepositoryPreparation) {
-        await backgroundGrounding.get(thread.id);
+        // The background preparation already spent the admission wait; waiting
+        // again would let one admit block for twice the bound.
+        if ((await backgroundGrounding.get(thread.id)) === 'still-preparing') {
+          throw new DurableInteractiveTurnError(
+            'INTERACTIVE_V2_GROUNDING_PREPARING',
+            422,
+          );
+        }
         try {
           grounding = await deps.resolveGrounding({
             thread,
