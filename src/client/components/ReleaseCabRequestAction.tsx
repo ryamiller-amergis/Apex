@@ -15,7 +15,7 @@ export const ReleaseCabRequestAction: React.FC<ReleaseCabRequestActionProps> = (
   'data-testid': dataTestId = 'release-create-cab-action',
 }) => {
   const flagEnabled = useFeatureFlag(RELEASE_CAB_REQUEST_FLAG, project);
-  const { can, isInAnyGroup, permissionsLoaded } = useAppShell();
+  const { can, permissionsLoaded } = useAppShell();
 
   // @feature-flag:release-cab-request start winner=enabled
   if (!flagEnabled) {
@@ -27,7 +27,6 @@ export const ReleaseCabRequestAction: React.FC<ReleaseCabRequestActionProps> = (
   // @feature-flag:release-cab-request enabled-start
   if (!permissionsLoaded) return null;
   if (!can('planning:releases') || !can('chat:create')) return null;
-  if (!isInAnyGroup(['BA'])) return null;
 
   return (
     <button

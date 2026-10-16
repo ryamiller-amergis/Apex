@@ -15,10 +15,9 @@ jest.mock('../../hooks/useAppShell', () => ({
 const mockFlag = useFeatureFlag as jest.Mock;
 const mockShell = useAppShell as jest.Mock;
 
-function stubShell(overrides?: { can?: (key: string) => boolean; isInAnyGroup?: () => boolean }) {
+function stubShell(overrides?: { can?: (key: string) => boolean }) {
   mockShell.mockReturnValue({
     can: overrides?.can ?? ((key: string) => key === 'planning:releases' || key === 'chat:create'),
-    isInAnyGroup: overrides?.isInAnyGroup ?? (() => true),
     permissionsLoaded: true,
   });
 }
@@ -41,13 +40,6 @@ describe('ReleaseCabRequestAction', () => {
   it('renders nothing without chat:create', () => {
     mockFlag.mockReturnValue(true);
     stubShell({ can: (key) => key === 'planning:releases' });
-    const { container } = render(<ReleaseCabRequestAction project="MaxView" onClick={onClick} />);
-    expect(container).toBeEmptyDOMElement();
-  });
-
-  it('renders nothing when the operator is not in BA', () => {
-    mockFlag.mockReturnValue(true);
-    stubShell({ isInAnyGroup: () => false });
     const { container } = render(<ReleaseCabRequestAction project="MaxView" onClick={onClick} />);
     expect(container).toBeEmptyDOMElement();
   });
