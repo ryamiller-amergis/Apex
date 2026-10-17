@@ -1113,6 +1113,7 @@ async function defaultResolveGrounding(
       reauthorize: async () => true,
       readOnlyShareable: true,
       sandboxCwd: input.thread.workspaceDir,
+      shareAcrossInstances: true,
     });
   let selection = await start();
   if (selection.mode === 'preparing') {
@@ -1124,6 +1125,7 @@ async function defaultResolveGrounding(
     selection = await start();
   }
   if (selection.mode !== 'local') return null;
+  await groundingProfileResolver.whenShared(selection.profileId);
   return {
     provider: repository.provider,
     project: input.thread.kickoff.project,

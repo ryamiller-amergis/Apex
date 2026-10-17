@@ -19,6 +19,10 @@ import {
   resolveRepoReadServiceUrl,
 } from './repoRead/repoServiceReader';
 import { createRepoReader, RepoReaderError } from './repoReader';
+import {
+  groundingProfileStore,
+  type GroundingProfileStore,
+} from './groundingProfileStore';
 
 const PROFILE_FLAG = 'repo-grounding-workspace-profile';
 const DEFAULT_PROFILE_TTL_MS = 60 * 60 * 1_000;
@@ -30,6 +34,12 @@ export interface GroundingProfileRegistration extends RepositoryIdentity {
   mirrorPath?: string;
   caller?: string;
   ttlMs?: number;
+  /**
+   * Also save the profile so another App Service instance can resolve it.
+   * Other instances rebuild the owner without the caller's reauthorize
+   * callback, so set this only when that callback always allows.
+   */
+  shareAcrossInstances?: boolean;
 }
 
 export interface GroundingCallerContext {
@@ -62,6 +72,7 @@ export interface GroundingProfileResolverOptions {
   isRemoteSearchConvergenceEnabled?: typeof evaluateConvergence;
   isRepoReadServiceEnabledForCaller?: typeof evaluateRepoReadService;
   now?: () => number;
+  store?: GroundingProfileStore;
 }
 
 export type GroundingProfileReauthorization = () => Promise<boolean>;
@@ -93,9 +104,12 @@ export class GroundingProfileResolver {
   private readonly convergenceEnabled: typeof evaluateConvergence;
   private readonly repoReadEnabled: typeof evaluateRepoReadService;
   private readonly now: () => number;
+  private readonly store?: GroundingProfileStore;
+  private readonly pendingShares = new Map<GroundingProfileId, Promise<void>>();
 
   constructor(options: GroundingProfileResolverOptions) {
     this.authorization = options.authorization;
+    this.store = options.store;
     this.featureEnabled = options.isFeatureEnabled ?? evaluateFeatureFlag;
     this.convergenceEnabled =
       options.isRemoteSearchConvergenceEnabled ?? evaluateConvergence;
@@ -131,26 +145,101 @@ export class GroundingProfileResolver {
       caller: { ...caller },
       reauthorize,
     });
+    if (input.shareAcrossInstances && this.store) {
+      this.shareProfile(profile.id, caller, this.store);
+    }
     return profile;
+  }
+
+  /** Resolves once a shared profile is saved (or the save failed and was logged). */
+  async whenShared(profileId: GroundingProfileId): Promise<void> {
+    await this.pendingShares.get(profileId);
   }
 
   revokeProfile(profileId: GroundingProfileId): void {
     this.profiles.delete(profileId);
     this.connectionOwners.delete(profileId);
+    if (this.pendingShares.delete(profileId) && this.store) {
+      this.store.remove(profileId).catch((error: unknown) => {
+        console.warn(
+          '[grounding-profile] shared profile removal failed; expiry will clear it:',
+          error instanceof Error ? error.message : String(error)
+        );
+      });
+    }
   }
 
-  async resolveConnectionProfile(
+  private shareProfile(
+    profileId: GroundingProfileId,
+    caller: GroundingCallerContext,
+    store: GroundingProfileStore
+  ): void {
+    const stored = this.profiles.get(profileId);
+    if (!stored) return;
+    const save = store
+      .save(profileId, {
+        runRef: stored.runRef,
+        provider: stored.provider,
+        project: stored.project,
+        repo: stored.repo,
+        sha: stored.sha,
+        checkoutPath: stored.checkoutPath,
+        mirrorPath: stored.mirrorPath,
+        caller: stored.caller,
+        owner: { ...caller },
+        expiresAt: stored.expiresAt,
+      })
+      .catch((error: unknown) => {
+        console.warn(
+          '[grounding-profile] share failed; other instances cannot resolve this profile:',
+          error instanceof Error ? error.message : String(error)
+        );
+      });
+    this.pendingShares.set(profileId, save);
+  }
+
+  /**
+   * Shared profiles are read from the store on every call and never cached, so
+   * a revoke on the registering instance takes effect everywhere.
+   */
+  private async resolveSharedOwner(
     profileId: GroundingProfileId
-  ): Promise<RepoReader> {
-    const owner = this.connectionOwners.get(profileId);
-    if (!owner || !(await owner.reauthorize())) {
+  ): Promise<{ owner: ConnectionProfileOwner; profile: StoredGroundingProfile }> {
+    const shared = this.store ? await this.store.load(profileId) : null;
+    if (!shared || this.now() >= shared.expiresAt) {
       throw new RepoReaderError(
         'ACCESS_DENIED',
         'Grounding profile access denied',
         false
       );
     }
-    const profile = await this.getAuthorizedProfile(profileId, owner.caller);
+    const { owner, ...profile } = shared;
+    return {
+      owner: { caller: owner, reauthorize: async () => true },
+      profile,
+    };
+  }
+
+  async resolveConnectionProfile(
+    profileId: GroundingProfileId
+  ): Promise<RepoReader> {
+    const localOwner = this.connectionOwners.get(profileId);
+    let owner: ConnectionProfileOwner;
+    let profile: StoredGroundingProfile;
+    if (localOwner) {
+      if (!(await localOwner.reauthorize())) {
+        throw new RepoReaderError(
+          'ACCESS_DENIED',
+          'Grounding profile access denied',
+          false
+        );
+      }
+      owner = localOwner;
+      profile = await this.getAuthorizedProfile(profileId, owner.caller);
+    } else {
+      ({ owner, profile } = await this.resolveSharedOwner(profileId));
+      await this.authorizeProfile(profile, owner.caller);
+    }
     const identity: RepositoryIdentity = {
       provider: profile.provider,
       project: profile.project,
@@ -222,7 +311,14 @@ export class GroundingProfileResolver {
         false
       );
     }
+    await this.authorizeProfile(profile, caller);
+    return profile;
+  }
 
+  private async authorizeProfile(
+    profile: StoredGroundingProfile,
+    caller: GroundingCallerContext
+  ): Promise<void> {
     if (
       caller.runRef !== profile.runRef ||
       caller.project !== profile.project
@@ -250,7 +346,6 @@ export class GroundingProfileResolver {
         false
       );
     }
-    return profile;
   }
 
   async resolveProfile(
@@ -326,7 +421,8 @@ export class GroundingProfileResolver {
 /**
  * Process-local registry used by MCP connections. Each registered profile also
  * carries a caller-owned reauthorization callback, so resolving an opaque ID
- * never relies on the URL as authorization.
+ * never relies on the URL as authorization. Profiles registered with
+ * `shareAcrossInstances` are also saved to Postgres for other instances.
  */
 export const groundingProfileResolver = new GroundingProfileResolver({
   authorization: {
@@ -334,4 +430,5 @@ export const groundingProfileResolver = new GroundingProfileResolver({
       input.callerRunRef === input.ownerRunRef &&
       input.callerProject === input.ownerProject,
   },
+  store: groundingProfileStore,
 });
