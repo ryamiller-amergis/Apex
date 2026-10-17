@@ -88,6 +88,8 @@ export interface StartCallerGroundingInput {
    * working-tree materialization and serves reads from the bare mirror.
    */
   sandboxCwd?: string;
+  /** See `GroundingProfileRegistration.shareAcrossInstances`. */
+  shareAcrossInstances?: boolean;
 }
 
 export interface LocalCallerGrounding {
@@ -453,6 +455,7 @@ export function createCallerGroundingService(
               branch: input.repository.branch,
             }),
             caller: input.caller,
+            shareAcrossInstances: input.shareAcrossInstances,
           },
           callerContext,
           input.reauthorize
@@ -572,6 +575,7 @@ export function createCallerGroundingService(
             checkoutPath: cwd,
             mirrorPath,
             caller: input.caller,
+            shareAcrossInstances: input.shareAcrossInstances,
           },
           callerContext,
           input.reauthorize
@@ -897,6 +901,7 @@ export function createCallerGroundingService(
             branch: input.repository.branch,
           }),
           caller: input.caller,
+          shareAcrossInstances: input.shareAcrossInstances,
         },
         callerContext,
         input.reauthorize

@@ -34,7 +34,11 @@ export function mountGitHubMcp(app: Application, basePath = '/mcp/github-repo'):
       repoReader = profileId
         ? await groundingProfileResolver.resolveConnectionProfile(profileId)
         : undefined;
-    } catch {
+    } catch (error) {
+      console.warn(
+        '[mcp/github] grounding profile unavailable:',
+        error instanceof Error ? error.message : String(error),
+      );
       res.status(404).json({ error: 'Grounding profile is unavailable' });
       return;
     }
