@@ -1,4 +1,4 @@
-# Local Development Context — Permission by skill — Configure Home Pill Allow-Lists
+# Local Development Context — Agent scoring and refinement within interview and prd - phase 1 — Evaluation Data Model and Contracts
 
 These files belong under your **repository root** at:
 

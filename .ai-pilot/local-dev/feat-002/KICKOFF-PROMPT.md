@@ -1,7 +1,7 @@
 Implement the following work item locally in this repository.
 
-Title: Permission by skill — Enforce Home Pill Access
-ID: feature FEAT-002 (PRD 585c4383-51bd-466a-849b-547bf82ded1c)
+Title: Agent scoring and refinement within interview and prd - phase 1 — Evaluation Permissions and Rollout Gate
+ID: feature FEAT-002 (PRD 081cc963-14bd-427a-9d9a-6264a9810464)
 Type: Apex Feature
 
 Context files have been extracted under `.ai-pilot/local-dev/feat-002/`. Read them before coding:
@@ -14,9 +14,11 @@ Context files have been extracted under `.ai-pilot/local-dev/feat-002/`. Read th
 
 ## Development skill
 
-This project is configured to use the `/.cursor/skills/dev-orchestrator/SKILL.md` skill. Begin by invoking:
+This project is configured to use the `/.cursor/skills/dev-orchestrator/SKILL.md` skill.
 
-  //.cursor/skills/dev-orchestrator/SKILL.md feature feat-002 FEAT-002
+Begin by invoking:
+
+  /dev-orchestrator feature feat-002 FEAT-002
 
 ### Local execution policy (overrides Dev Workbench defaults)
 

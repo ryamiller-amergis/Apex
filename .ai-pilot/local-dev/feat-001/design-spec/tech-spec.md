@@ -1,32 +1,35 @@
-# Technical Specification — Configure Home Pill Allow-Lists
+# Technical Specification — Evaluation Data Model and Contracts
 
-> **PRD slug:** `home-pill-access-control` | **Owning layer:** `src/shared/types/` + `src/client/components/AdminProjectSettings.tsx` | **Surface:** Full stack (shared type + existing route/service pass-through + React admin editor)
+> **PRD slug:** `human-workflow-evaluation-for-interviews-and-prds` | **Owning layer:** `migrations/` and `src/shared/types/` (with `src/server/db/schema.ts`) | **Surface:** Backend only (database and shared types)
 > **Verification builds:** `npx tsc -p tsconfig.server.json --noEmit` and `npx tsc -p tsconfig.client.json --noEmit`
-> **Open items:** See [configure-home-pill-allow-lists-assumptions.md](configure-home-pill-allow-lists-assumptions.md) (2 unresolved)
-> **Design doc:** [configure-home-pill-allow-lists-design.md](configure-home-pill-allow-lists-design.md)
+> **Open items:** See [design-doc-assumptions.md](design-doc-assumptions.md) (4 unresolved)
+> **Design doc:** [design-doc-design.md](design-doc-design.md)
+
+Rules applied: `.cursor/rules/postgresql-db.mdc` and the `postgresql-migrations` skill. This Feature changes no React code and adds no route, so the React rules and `rbac-governance.mdc` do not apply beyond the note in Security Enforcement.
 
 ---
 
 ## System Boundary and Owning Layer
 
-**Owning layer:** `src/shared/types/projectSettings.ts` (extended) and `src/client/components/AdminProjectSettings.tsx` (extended). No new files, no new services, no new routes, no migration.
+**Owning layer:** `migrations/` (two SQL files), `src/server/db/schema.ts` (three `pgTable` entries) and `src/shared/types/workflowEvaluation.ts` (one new module).
 
-**Rationale:** The two new fields live inside pill arrays that are already stored as opaque `jsonb` on `project_skill_settings` and already round-trip unchanged through the existing admin read/write path (`admin.ts` spreads the full request body into `projectSettingsService.upsertSkillConfig`, which persists `quickSkillPills`/`quickMcpPills` verbatim). The only code that needs to exist is (1) the shared-type fields so TypeScript and the React editor can see and bind to them, and (2) the picker UI on each pill row. Pulling read-path filtering or thread-creation enforcement into this Feature would duplicate work chartered to **Enforce Home Pill Access** (`FEAT-002`, which `dependsOn: ["FEAT-001"]`) and violate the backlog's own dependency ordering.
+**Rationale:** The Feature defines storage and contracts and nothing that runs per request. The evaluation service, repository, router, hooks and screens all arrive in FEAT-003 and later. Putting the tables, the guards and the types in one Feature lets those Features import a fixed contract. The shared module lives in `src/shared/types/` because the client form and the server router must read the same field names (the TBI-003 non-functional requirement).
 
 **Ownership answers:**
-- New or existing Express service in `src/server/services/`? **No** — `projectSettingsService.ts`'s `upsertSkillConfig`/`getSkillConfig`/`getSkillConfigById` already pass `quickSkillPills`/`quickMcpPills` through unchanged (line 301: `quickSkillPills: opts.quickSkillPills ?? null`). No new service, no modified function signature.
-- New or existing route in `src/server/routes/`? **No** — `POST /api/admin/project-settings` and `PUT /api/admin/project-settings/:id` (`admin.ts`) already accept and persist the full pill arrays. `GET /api/admin/project-settings` already spreads `...cfg` (including `quickSkillPills`/`quickMcpPills`) into its response. Zero route code changes.
-- New React component in `src/client/components/`? **No** — reuses `GroupAwarePeoplePicker` (`src/client/components/GroupAwarePeoplePicker.tsx`), the same component `renderApproverSection` already binds for design-doc/PRD/prototype/test-case/ADR reviewer pools. Only `AdminProjectSettings.tsx`'s pill-row JSX is extended, not a new component file.
-- New shared type in `src/shared/types/`? **Yes** — additive-only: `allowedUserIds?: string[] | null` and `allowedGroupIds?: string[] | null` added to `QuickSkillPill` and `QuickMcpPillBase` in `src/shared/types/projectSettings.ts`.
-- Database migration needed? **No** — both fields live inside the existing `quick_skill_pills`/`quick_mcp_pills` `jsonb` columns (`src/server/db/schema.ts`, lines 823–824), which are untyped-at-the-database-level JSON blobs already carrying every other optional pill field (`model`, `effort`, `description`, `bypassScopePolicy`, etc.).
+- New or existing Express service in `src/server/services/`? **No.** The evaluation service and its repository (following `chatThreadRepository.ts`) are FEAT-003. This Feature writes no service code.
+- New or existing route in `src/server/routes/`? **No.** The dedicated workflow evaluations router is FEAT-003.
+- New React component in `src/client/components/`? **No.** Feedback components are FEAT-004 and later.
+- New shared type in `src/shared/types/`? **Yes.** `workflowEvaluation.ts` holds the contracts. It follows `aiRunV2.ts`: `as const` arrays, derived union types and `isX` guard functions.
+- Database migration needed? **Yes.** Two migrations: tables and guards (TBI-001), then seeds (TBI-002). They ship in the same pull request because the seed depends on the tables.
 
 ---
 
 ## Security Enforcement
 
-- **Authorization mechanism:** `router.use(requirePermission('admin:roles'))` at the top of `src/server/routes/admin.ts` (line ~87) already gates every route in this router, including `POST /project-settings` and `PUT /project-settings/:id`. No new middleware, no new permission key — satisfies BR-001's write-gate requirement and the PRD's Access Control table ("Configure a Home pill's allow-list — Project Admin (existing `admin:roles` gate)"). This is the identical pattern the `rbac-governance.mdc` catalog documents for `admin:roles`.
-- **Layer that enforces scope:** Route middleware only, at the router level — unchanged by this Feature. Project scoping of the underlying row (`project_skill_settings.project`) is unchanged; the settings ID path param (`/project-settings/:id`) already resolves to a single project's row via existing `upsertSkillConfig`/`getSkillConfigById` lookups.
-- **Sensitive data handling:** `allowedUserIds`/`allowedGroupIds` reference the same internal user/group identifiers a Project Admin can already see via `GET /api/admin/groups` and `GET /api/admin/users` (per the PRD, "the same internal user and group identifiers a Project Admin can already see in Project Settings and the reviewer/approver pools"). **Important boundary this Feature does *not* close:** `GET /api/skill-config` (`api.ts`, ~line 4283) already returns `quickSkillPills`/`quickMcpPills` verbatim to any session-authenticated caller with no field-level filtering. Once TBI-001 ships, the two new fields are exposed on that response until FEAT-002's TBI-004 adds stripping — see the deployment-sequencing risk in the assumptions file and in Rollback and Deployment below.
+- **Authorization mechanism:** None in this Feature, because it adds no route. The permission keys `workflow-evaluation:view` and `workflow-evaluation:submit` come from FEAT-002 (TBI-004), added with the `rbac-management` skill's Add a Permission workflow, and are enforced with `requirePermission` on the FEAT-003 router. No key is added here, so `rbac-governance.mdc`'s permission catalog stays unchanged in this Feature.
+- **Layer that enforces scope:** The database carries the scope key. `workflow_evaluation_events.project` is `NOT NULL`, and jobs inherit scope through their event. The FEAT-003 repository takes `project` from the session on every read and write. Definitions hold no project data and are shared across projects.
+- **Integrity guards in the database:** A `BEFORE UPDATE OR DELETE` trigger on events raises `integrity_constraint_violation`, so no code path can alter a stored human judgment (BR-001). A `BEFORE UPDATE` trigger on definitions rejects a change to any column except `active`. Both follow the trigger in `20260901160000_cloud-agent-run-foundations.sql`.
+- **Sensitive data handling:** Comments and corrected artifacts hold PRD and Interview text, classified like PRDs and Interviews. Nothing in this Feature adds redaction or retention. Large corrections go to Blob and the row stores only an `AiRunBlobRef`. The PRD sets no retention rule for v1.
 
 ---
 
@@ -36,31 +39,57 @@
 
 | Layer | Changed | Notes |
 |-------|---------|-------|
-| Server services (`src/server/services/`) | No | `projectSettingsService.ts` already passes pill arrays through unchanged |
-| Server routes (`src/server/routes/`) | No | `admin.ts` project-settings routes already accept/return full pill arrays |
-| Server middleware (`src/server/middleware/`) | No | Reuses the existing `requirePermission('admin:roles')` guard |
-| Client components (`src/client/components/`) | Yes | `AdminProjectSettings.tsx` — add a `GroupAwarePeoplePicker` control to each skill-pill row (~lines 2899–2993) and each MCP-pill row (~lines 3023–3140) |
-| Client hooks (`src/client/hooks/`) | No | No new data-fetching hook — `groupsWithMembers`/`allUsers` are already fetched for the reviewer/approver sections and are reused as-is |
-| Shared types (`src/shared/types/`) | Yes | `QuickSkillPill` and `QuickMcpPillBase` in `projectSettings.ts` gain `allowedUserIds?: string[] | null` and `allowedGroupIds?: string[] | null` |
-| Database (`migrations/`) | No | No migration — additive JSON fields inside existing `jsonb` columns |
-| Drizzle schema (`src/server/db/schema.ts`) | No | `quickSkillPills`/`quickMcpPills` columns are already typed as `$type<QuickSkillPill[]>()`/`$type<QuickMcpPill[]>()`; the interface change flows through automatically with zero schema edits |
+| Server services (`src/server/services/`) | No | The evaluation service and repository are FEAT-003. |
+| Server routes (`src/server/routes/`) | No | The router is FEAT-003. |
+| Server middleware (`src/server/middleware/`) | No | Permission middleware constants are FEAT-002. |
+| Client components (`src/client/components/`) | No | Feedback UI is FEAT-004 and later. |
+| Client hooks (`src/client/hooks/`) | No | TanStack Query hooks are FEAT-004. |
+| Shared types (`src/shared/types/`) | Yes | New `workflowEvaluation.ts` (TBI-003). |
+| Database (migrations/) | Yes | Tables, indexes, constraints and two guard triggers (TBI-001). Seed rows (TBI-002). |
+| Drizzle schema (`src/server/db/schema.ts`) | Yes | `workflowEvaluationDefinitions`, `workflowEvaluationEvents`, `workflowEvaluationJobs` and their `relations()`. |
 
 ### Per-work-item design decisions
 
-**TBI-001 — Add allow-list fields to Home pill storage and shared types**
-- Pattern followed: identical to how `effort?: EffortLevel | null` was added to the same three interfaces (`InterviewSkillOption`, `QuickSkillPill`, `QuickMcpPillBase`) in the prior `per-module-agent-effort-defaults` epic — purely additive optional fields, no schema or route change required because the column is untyped JSON at the database layer.
+**TBI-001 — Create evaluation definitions, events and jobs tables**
+- Pattern followed: `20261007143000_playbook-interview-template.sql` for CHECK constraints and a partial unique index; `20260901160000_cloud-agent-run-foundations.sql` for the immutability trigger; `playbook_definitions` and `ai_usage_events` in `schema.ts` for `uuid` keys, `project text`, `timestamptz` strings and `index()` declarations.
+- Allocate filenames with `node scripts/next-migration-timestamp.mjs workflow-evaluation-tables` and again for the seed. Do not run `migrate:create`.
 - Key decisions:
-  - **Two separate fields, not one combined "principals" array.** Mirrors `SetApproversRequest`'s existing `designDocApprovers`/`designDocApproverGroups` split (individual user IDs vs. group IDs kept as separate arrays) rather than a single mixed-type array — keeps the resolver FEAT-002 builds (`homePillAccessResolver` or equivalent) able to do a cheap `Set.has(userId)` check and a separate group-membership expansion, exactly like the existing approver-pool read path does.
-  - **`allowedUserIds`/`allowedGroupIds` added only to `QuickMcpPillBase`, not duplicated on `QuickMcpPillHttp`/`QuickMcpPillStdio`.** Both variants extend `QuickMcpPillBase`, so the fields are automatically available on both transports without duplication — same placement `effort` and `systemPromptHint` already use on that base interface.
-  - **No field added to `InterviewSkillOption`.** The PRD and backlog scope allow-lists to Home skill and MCP pills only ("Restricting Interview, ADR, or any other non-Home skill selector" is explicitly out of scope); `InterviewSkillOption` backs the Interview module's skill selector, not Home.
+  - **Criteria scores as one `jsonb` object.** Later processes reuse the table and may use other criteria, so five fixed columns would force a migration per process. The database checks only that the value is an object. The FEAT-003 service validates keys and the 1 to 5 range against the definition. Rejected alternative: five `smallint` columns with range checks. They give stronger database guarantees but tie the table to one rubric.
+  - **Database-level immutability, not only a missing repository method.** The backlog asks that the data access layer expose no update or delete path. The trigger enforces the same rule against ad hoc SQL and future code. Test helpers must clear the table with `TRUNCATE`.
+  - **Lineage columns are real, indexed columns and nullable.** A lineage gap must not drop feedback, and the PRD lists them as indexed. The service writes them whenever it can resolve them.
+  - **Subject and lineage coherence by CHECK.** A `prd` subject has `phase_index` null and `prd_id = subject_id`. An `interview_phase` subject has `phase_index` from 1 to 3 and `interview_id = subject_id`. This catches a mixed-up write at insert time.
+  - **Inline correction column beside the Blob reference.** See the assumptions file. At most one of the two is set.
+  - **Jobs reference `agent_runs` loosely.** `run_id` is nullable `TEXT` with `ON DELETE SET NULL`, so a job exists before admission and an enqueue failure leaves a `pending` job and an intact event.
+  - **No columns on `prds` or `interviews`.** History lives only in the events table.
 
-**TBI-002 — Extend Admin Project Settings pill editor with allow-list controls**
-- Pattern followed: `renderApproverSection` (`AdminProjectSettings.tsx`, ~line 2153) — the existing function that renders a `GroupAwarePeoplePicker` bound to a `userIds`/`setUserIds`/`groupIds`/`setGroupIds` tuple for each reviewer document type (`design_doc`, `prd`, `design_prototype`, `test_case`, `adr`).
+**TBI-002 — Seed platform evaluation definitions**
+- Pattern followed: the idempotent `INSERT ... ON CONFLICT ... DO NOTHING` seeds in `20261005120000_seed-ai-runs-interactive-user-queue-flag.sql` and `20261007143000_playbook-interview-template.sql`.
 - Key decisions:
-  - **Per-pill-row picker, not a per-module section.** Unlike reviewer pools (one picker per document type, backed by top-level component state), each pill needs its *own* independent allow-list, so the picker is rendered inline inside the existing `edit.quickSkillPills.map((pill, idx) => ...)` / `edit.quickMcpPills.map((pill, idx) => ...)` loops, with `onUserIdsChange`/`onGroupIdsChange` writing directly into `pills[idx].allowedUserIds`/`allowedGroupIds` via the same `[...edit.quickSkillPills]; pills[idx] = { ...pills[idx], ... }; setEdit(...)` pattern every other per-pill field (`description`, `model`, `effort`) already uses.
-  - **Placed in the pill list, not the Add form.** `SkillPillAddForm`/`McpPillAddForm` stay minimal (label, skill/server, model, effort) — consistent with `description` and `bypassScopePolicy`, which are also edit-list-only fields. An admin adds the pill first, then configures its allow-list in the same edit session before saving the form.
-  - **`groupsWithMembers`/`allUsers` are the exact same arrays already loaded for `renderApproverSection`.** No new query, no new hook — the picker's `groups`/`availableUsers` props are wired to the same component-level values.
-  - **No new validation function.** `handleSave`'s existing `upsert` mutation already sends the entire `edit` object (including `quickSkillPills`/`quickMcpPills`) in one `PUT`/`POST`; a failure fails the whole request and leaves the DB row untouched, which already satisfies AC (b) ("previously saved allow-list remains in effect... error indicating the save did not succeed") for free, identical to how a failed save today already protects every other pill field.
+  - **Four rows, one migration.** Process `orchestrated_workflow`; stages `prd_human_review`, `interview_phase_1`, `interview_phase_2`, `interview_phase_3`; evaluator `human_review`; benchmark `baseline`; version 1; `active = true`. The key values are subject to the first unresolved item.
+  - **Rubric JSON shape** (`WorkflowEvaluationRubric` in the shared module): `scale` (labels for 1 to 5), `criteria` (array of `{ key, label, helpText }` with the five keys), `reasonCodes` (array of `{ key, label }`), `outcomes`, `allowedReviewerRoles`, `lowScoreThreshold` (2) and `minLowScoreCommentLength` (20).
+  - **Uniqueness.** A unique constraint on (process, stage, evaluator, benchmark, version) makes re-runs idempotent. A partial unique index on (process, stage, evaluator, benchmark) where `active` allows one active row per key set.
+  - **Versioning.** A rubric change is a new migration that inserts version 2 and updates version 1 to `active = false`. The definitions trigger allows that update, and it rejects any rubric edit.
+  - **Keep the seed and the shared constants in step with a parity test** (VT-13). The SQL holds JSON literals, and the TypeScript holds the same lists. The test reads the migration file and compares them. Rejected alternative: generate the SQL from TypeScript at build time. That adds build tooling for a four-row seed.
+  - **Promptfoo suite reference** is an opaque text key, `orchestrated_workflow/{stage_key}/structural@1`. It is not resolved here.
+  - **Judge output schema** is the output of `z.toJSONSchema` for the shared zod schema, pasted into the seed and pinned by VT-16.
+
+**TBI-003 — Define shared evaluation types**
+- Pattern followed: `src/shared/types/aiRunV2.ts` (`as const` arrays, derived unions, `isX` guards, `AiRunBlobRef`).
+- Exports (all in `src/shared/types/workflowEvaluation.ts`):
+  - `WORKFLOW_EVALUATION_OUTCOMES`: `accept_unchanged`, `accept_after_edits`, `regenerate`, `reject`.
+  - `WORKFLOW_EVALUATION_CRITERIA_KEYS`: `intent_alignment`, `requirements_coverage`, `scope_alignment`, `acceptance_criteria`, `readiness`.
+  - `WORKFLOW_EVALUATION_REASON_CODES`: `missing_requirement`, `invented_requirement`, `incorrect_interpretation`, `too_vague`, `wrong_scope`, `acceptance_criteria_not_testable`, `prd_backlog_inconsistency`.
+  - `WORKFLOW_EVALUATION_REVIEWER_ROLE_KEYS`: `product_owner`, `ba`, `manager`, `developer`, `qa`, `other`.
+  - `WORKFLOW_EVALUATION_SUBJECT_TYPES`: `interview_phase`, `prd`.
+  - `WORKFLOW_EVALUATION_JOB_EVALUATORS`: `promptfoo`, `llm_judge`.
+  - `WORKFLOW_EVALUATION_JOB_STATUSES`: `pending`, `running`, `ready`, `failed`.
+  - Types: `WorkflowEvaluationScore` (1 to 5), `WorkflowEvaluationCriteriaScores`, `WorkflowEvaluationRubric`, `WorkflowEvaluationDefinition`, `HumanEvaluationEvent`, `CreateHumanEvaluationRequest`, `WorkflowEvaluationJob`, `HumanEvaluationEventWithJobs`, `WorkflowEvaluationJudgeOutput`.
+  - A zod schema `workflowEvaluationJudgeOutputSchema`, and guards `isWorkflowEvaluationOutcome`, `isWorkflowEvaluationReasonCode`, `isWorkflowEvaluationCriteriaScores`, `isWorkflowEvaluationJobStatus` and `isWorkflowEvaluationJudgeOutput`.
+- Key decisions:
+  - **`CreateHumanEvaluationRequest` lists its fields explicitly** and holds no lineage or hash field: `subjectType`, `subjectId`, `stageKey`, `criteria`, `outcome`, `reasonCodes`, `comment?`, `reviewerRoleKey?` (only when ambiguous) and `correctedArtifact?`. It is not built with `Omit` from the event type, so a new lineage column on the event can never leak into the request.
+  - **`HumanEvaluationEvent` mirrors the row**, including lineage and `artifactHash`, with `createdAt` as an ISO string.
+  - **The module imports no server or client code**, so it compiles in both builds. `zod` is already a dependency.
+  - **The module defines contracts only.** Request validation rules (low-score reasons, accept-after-edits correction, role derivation) are FEAT-003 service behavior.
 
 ---
 
@@ -70,154 +99,156 @@
 
 | Method | Route | Request shape | Response shape | Auth |
 |--------|-------|--------------|----------------|------|
-| POST | `/api/admin/project-settings` | `UpsertProjectSkillConfigRequest` — `quickSkillPills[].allowedUserIds`/`allowedGroupIds` and `quickMcpPills[].allowedUserIds`/`allowedGroupIds` now recognized fields inside the existing pill array shape | `201` `ProjectSkillConfigResponse & { approvalModes }` (unchanged shape; new fields flow through automatically as part of the pill objects) | `requirePermission('admin:roles')` |
-| PUT | `/api/admin/project-settings/:id` | Same as above | `200` `ProjectSkillConfigResponse & { approvalModes }` | `requirePermission('admin:roles')` |
-| GET | `/api/admin/project-settings` | — | `200` `Array<ProjectSkillConfig & { approvalModes, ...ApproverCounts }>` — already spreads all columns; allow-list fields included automatically once the shared type and pill objects carry them | `requirePermission('admin:roles')` |
-| GET | `/api/skill-config?project=\|settingsId=` | Query params only | `200` explicit field-by-field JSON (`api.ts`, ~line 4297) — `quickSkillPills`/`quickMcpPills` returned **verbatim**, meaning `allowedUserIds`/`allowedGroupIds` are exposed on this response until FEAT-002's TBI-004 strips them (see Rollback and Deployment) | Session-scoped, unauthenticated-but-logged-in pattern (existing, unchanged by this Feature) |
+| — | None in this Feature | — | — | — |
+
+The router that serves these contracts is FEAT-003. It imports `CreateHumanEvaluationRequest`, `HumanEvaluationEvent`, `HumanEvaluationEventWithJobs` and `WorkflowEvaluationDefinition` from the shared module.
 
 ### Schema / storage changes
 
 | Target | Change | Reason |
 |--------|--------|--------|
-| `project_skill_settings.quick_skill_pills` (`jsonb`) | No DDL change — two new optional keys appear inside individual pill objects in the existing array | Column is already untyped JSON at the database layer; only the TypeScript shape changes |
-| `project_skill_settings.quick_mcp_pills` (`jsonb`) | No DDL change — same as above | Same reasoning |
+| `workflow_evaluation_definitions` | New table. Columns: `id` (uuid), `process_key`, `stage_key`, `evaluator_key`, `benchmark_key`, `version` (integer, at least 1), `rubric` (jsonb), `promptfoo_suite_ref` (text, not blank), `judge_output_schema` (jsonb), `active` (boolean, default true), `created_at`. Unique on (process, stage, evaluator, benchmark, version). Partial unique on (process, stage, evaluator, benchmark) where `active`. Trigger: only `active` may change. | Platform-seeded, versioned rubric that events point at (BR-015). |
+| `workflow_evaluation_events` | New table, append-only. Columns: `id` (uuid), `project` (text, not null), `definition_id` (uuid, references definitions, restrict), `subject_type`, `subject_id` (uuid), `stage_key`, `phase_index` (smallint, nullable), `reviewer_user_id` (text, references `app_users(oid)`, restrict), `reviewer_role_key`, `reviewer_role_label`, `skill_path`, `skill_version`, `model` (all nullable text), `interview_id`, `prd_id` (nullable uuid, no foreign key so deleting a PRD or Interview never touches history), `artifact_hash` (text), `criteria_scores` (jsonb object), `outcome`, `reason_codes` (jsonb array, default empty), `comment` (text, nullable), `corrected_artifact_text` (text, nullable), `corrected_artifact_blob_ref` (jsonb `AiRunBlobRef`, nullable), `created_at`. CHECKs: subject type and outcome value sets; phase and lineage coherence per subject type; `artifact_hash` is 64 lowercase hex; role key and label not blank; at most one of the two correction fields. Trigger rejects `UPDATE` and `DELETE`. | One immutable row per human submission (BR-001, BR-006, BR-007). |
+| `workflow_evaluation_events` indexes | (project, subject_type, subject_id, created_at DESC) for the newest-first history list; (project, subject_type, subject_id, artifact_hash) for the live-artifact filter; (project, created_at DESC) for the admin list and hub; (skill_path, skill_version); (model); partial on `interview_id` and on `prd_id` where not null. | The PRD requires lookup by project, subject type, subject id and artifact hash, and indexed lineage. |
+| `workflow_evaluation_jobs` | New table. Columns: `id` (uuid), `event_id` (uuid, references events, restrict), `evaluator_key` (`promptfoo` or `llm_judge`), `status` (`pending`, `running`, `ready`, `failed`; default `pending`), `run_id` (text, nullable, references `agent_runs(id)` set null), `specification_hash` (text, nullable), `summary` (jsonb, nullable), `result_blob_refs` (jsonb, nullable, `{ output?, appendix? }` of `AiRunBlobRef`), `error_detail` (text, nullable), `created_at`, `updated_at`. Unique on (`event_id`, `evaluator_key`). Partial index on `status` where `pending` or `running`. | Two diagnostic jobs per event, unique per pair (BR-010). Jobs are mutable state, events are not (BR-011). |
+| `prds`, `interviews` | None. | History lives in the events table only. |
+| Seed rows in `workflow_evaluation_definitions` | Four version-1 rows (see TBI-002 decisions). | Reviewers need a rubric on day one. |
+| `src/server/db/schema.ts` | Three `pgTable` entries with `.$type<>()` on jsonb columns, indexes, CHECK and unique declarations, and `relations()` for event → definition, job → event. | Required by `postgresql-db.mdc` after any migration. |
 
-**Extended shared types (`src/shared/types/projectSettings.ts`, additive only):**
+### Shared type contracts
 
-```typescript
-export interface QuickSkillPill {
-  label: string;
-  skillPath: string;
-  model?: string | null;
-  effort?: EffortLevel | null;
-  description?: string | null;
-  bypassScopePolicy?: boolean | null;
-  /** Individual user OIDs allowed to see/start this pill on Home. Empty/omitted means everyone with Home access (BR-001). */
-  allowedUserIds?: string[] | null;
-  /** Group IDs allowed to see/start this pill on Home, expanded to live members at read time (mirrors the reviewer/approver pool pattern). */
-  allowedGroupIds?: string[] | null;
-}
-
-interface QuickMcpPillBase {
-  label: string;
-  description?: string | null;
-  mcpServerName: string;
-  model?: string | null;
-  effort?: EffortLevel | null;
-  systemPromptHint?: string | null;
-  /** Individual user OIDs allowed to see/start this pill on Home. Empty/omitted means everyone with Home access (BR-001). */
-  allowedUserIds?: string[] | null;
-  /** Group IDs allowed to see/start this pill on Home, expanded to live members at read time. */
-  allowedGroupIds?: string[] | null;
-}
-```
-
-No changes to `QuickMcpPillHttp`, `QuickMcpPillStdio`, `ProjectSkillConfig`, `UpsertProjectSkillConfigRequest`, or `ProjectSkillConfigResponse` themselves — all four already type `quickSkillPills?: QuickSkillPill[] | null` / `quickMcpPills?: QuickMcpPill[] | null` and inherit the new fields automatically.
+| Type | Used by | Notes |
+|------|---------|-------|
+| `CreateHumanEvaluationRequest` | FEAT-004 form, FEAT-003 router | No lineage or hash field. |
+| `HumanEvaluationEvent`, `HumanEvaluationEventWithJobs` | FEAT-003 router, FEAT-004 history, admin screens | Mirror the row and attach job status. |
+| `WorkflowEvaluationDefinition`, `WorkflowEvaluationRubric` | Form, service, executors | The form renders from the rubric. |
+| `WorkflowEvaluationJudgeOutput` and its zod schema | Judge executor, service, drawer | Pinned to the seeded `judge_output_schema`. |
+| `WorkflowEvaluationJob` and status and evaluator unions | Orchestrator, admin retry control | Mirror the job row. |
 
 ---
 
 ## Testing Strategy
 
 **Unit tests:**
-- `src/server/__tests__/projectSettingsService.test.ts` — extend the existing mocked `upsertSkillConfig` round-trip assertions with a pill object containing `allowedUserIds`/`allowedGroupIds`, proving the fields pass through unchanged (same style as the existing effort-field round-trip coverage in this file).
-- `src/client/components/__tests__/AdminProjectSettings.test.tsx` — extend the existing "reviewer pools and module approval modes" describe block (or add a sibling) to cover: selecting a user/group on a skill-pill row updates `edit.quickSkillPills[idx].allowedUserIds`/`allowedGroupIds`; the same for an MCP-pill row; saving submits the updated pill array through the mocked `upsert` mutation (mirrors the existing `quickMcpPills: [expect.objectContaining({ mcpServerName: 'sendgrid', effort: 'low' })]` assertion pattern at line 322, extended with `allowedUserIds`/`allowedGroupIds`).
+- `src/server/__tests__/workflowEvaluationMigration.test.ts` (Jest, SQL read as text, following `playbookInterviewTemplateMigration.test.ts`). Proves both migrations have Up and Down sections, create the three tables with the unique job constraint and the two triggers, contain no `ALTER TABLE prds` or `ALTER TABLE interviews`, and that the seed contains no `UPDATE` of rubric content and uses `ON CONFLICT DO NOTHING`. Proves Drizzle `getTableColumns` names and nullability match the migration.
+- `src/server/__tests__/workflowEvaluationSeedParity.test.ts`. Parses the JSON literals in the seed migration and compares criteria keys, reason codes, outcomes and reviewer roles with the shared constants. Asserts every row has a non-blank suite reference.
+- `src/server/__tests__/workflowEvaluationTypes.test.ts`, following `aiRunV2Types.test.ts`. Covers the guards, the judge output boundaries, the schema parity (`z.toJSONSchema` equals the seeded JSON), and the type-level check that the create request rejects lineage and hash fields with `@ts-expect-error`.
+- `src/server/__tests__/workflowEvaluationNoMutation.test.ts`. A source scan, following the import-graph approach of `noDatabaseImports.test.ts`: no file under `src/server` outside `__tests__` calls `update` or `delete` on `workflowEvaluationEvents`.
 
 **Integration tests:**
-- `src/server/__tests__/apiRoutes.skillConfig.test.ts` — add a case confirming `GET /api/skill-config` currently returns `allowedUserIds`/`allowedGroupIds` verbatim when present (documents the exposure window called out in Rollback and Deployment; this assertion should be updated to assert *stripping* once FEAT-002's TBI-004 ships, not deleted).
-- `src/server/__tests__/rbacMiddleware.test.ts` / `src/server/__tests__/superAdmin.test.ts` pattern — confirm a request without `admin:roles` calling `PUT /project-settings/:id` with an `allowedUserIds` change is rejected before `upsertSkillConfig` runs (AC (d) for both PBI-001 and PBI-002).
+- `src/server/__tests__/workflowEvaluationSchema.integration.test.ts`, run with `npm run test:integration` against a test Postgres. Applies the migrations up, down and up. Exercises the guards, constraints and seeds (VT-02 to VT-12). If CI has no database, record a manual `npm run migrate:local:up`, `migrate:local:down` and `migrate:local:up` run in the pull request instead.
 
-**E2E tests:** Not required for this Feature — no new Home-facing behavior exists yet to exercise end-to-end. E2E coverage of allow-list *effect* (pill visibility, thread-creation denial) belongs to **Enforce Home Pill Access**.
+**E2E tests (if applicable):**
+- Not applicable. No user-visible surface ships here.
 
 ---
 
 ## Observability
 
-- **Custom events/metrics:** None beyond standard telemetry. Saving a pill's allow-list flows through the same `PUT /api/admin/project-settings/:id` request already logged/traced like every other project-settings edit; no new event is warranted for a data-model-only change with no runtime consumer yet.
+- **Custom events/metrics:** None beyond standard request telemetry. This Feature runs no code at request time. Token and cost logging for the diagnostic jobs belongs to the orchestrator Feature.
+- **Alerts:** None.
 
 ---
 
 ## Rollback and Deployment
 
-- **Schema changes backward compatible:** **Yes.** Both new fields are optional and nullable inside an already-untyped JSON column; existing pills with no allow-list fields round-trip unchanged (TBI-001 DoD).
-- **Rollback procedure:** Revert the shared-type and `AdminProjectSettings.tsx` changes. Any `allowedUserIds`/`allowedGroupIds` values already saved on pills remain harmlessly in the JSON blob (ignored by every reader that predates this Feature) — no data cleanup required.
-- **Deployment dependencies:** **This Feature must not ship to production ahead of FEAT-002's TBI-004** (public skill-config filtering) without an explicit, confirmed exception. Because `GET /api/skill-config` already returns `quickSkillPills`/`quickMcpPills` verbatim to any session-authenticated caller, shipping TBI-001 alone creates a live window where `allowedUserIds`/`allowedGroupIds` — private admin configuration data — are visible on an existing public-ish endpoint with no flag to hide behind. Coordinate the FEAT-001/FEAT-002 release train accordingly (see the assumptions file's primary ⚠ item).
-- **Feature flag gates deployment:** **No** — consistent with the epic ("Flag required: No"). The deployment-sequencing risk above is a release-process concern, not something a flag can mitigate cleanly, since the exposure lives in an existing unflagged endpoint.
+- **Schema changes backward compatible:** Yes. Both migrations only add tables, indexes, functions, triggers and rows. No existing table or column changes, so the running application is unaffected whether the migration has run or not.
+- **Rollback procedure:** Use the feature flag for any rollback after pilot data exists: turn `workflow-human-evaluation` off (a Platform Admin action once FEAT-002 ships). `npm run migrate:down` drops the three tables and deletes every stored evaluation event, so run it only on test databases or before the first pilot submission. The seed Down section deletes the four seeded rows, and the tables Down section drops the triggers, functions, indexes and tables in reverse dependency order (jobs, events, definitions).
+- **Deployment dependencies:** None. No manual provisioning. Apply with `npm run migrate:up` in the pipeline before `npm start`. Local order: `migrate:local:up`, then update `schema.ts`, then both `tsc` builds.
+- **Feature flag gates deployment:** No. The flag does not exist in this Feature, and the tables are inert until FEAT-003 writes to them.
 
 ---
 
 ## Verification Test Matrix
 
+"Integration" rows need a real Postgres (see Testing Strategy for the fallback).
+
 | ID | Layer | Arrange | Act | Assert | Linked |
 |----|-------|---------|-----|--------|--------|
-| VT-01 | Jest / tsc (compile) | `allowedUserIds?: string[] \| null` and `allowedGroupIds?: string[] \| null` added to `QuickSkillPill` and `QuickMcpPillBase` | Run `npx tsc -p tsconfig.server.json --noEmit` and `npx tsc -p tsconfig.client.json --noEmit` | Zero compile errors; `schema.ts`'s `$type<QuickSkillPill[]>()`/`$type<QuickMcpPill[]>()` columns typecheck unmodified | TBI-001 (a) |
-| VT-02 | Jest (unit/service) | Mocked `upsertSkillConfig` call with a `quickSkillPills` entry containing `allowedUserIds: ['u1']`, `allowedGroupIds: ['g1']` | Call `upsertSkillConfig(opts)` | Returned/persisted pill object includes both fields unchanged | TBI-001 (a), PBI-001 (a) |
-| VT-03 | Jest (unit/service) | Existing pill row with no allow-list fields (legacy data) | Call `getSkillConfigById`/`getSkillConfig` | Pill round-trips with `allowedUserIds`/`allowedGroupIds` simply absent — no error, no coercion | TBI-001 (a) |
-| VT-04 | Jest / RTL (component) | `AdminProjectSettings` rendered with one existing skill pill and a mocked `groupsWithMembers`/`allUsers` | Select a user and a group via `ps-skill-pill-allowlist-0`'s `GroupAwarePeoplePicker` | `edit.quickSkillPills[0].allowedUserIds`/`allowedGroupIds` update; the picker chip list reflects the selection | PBI-001 (a), TBI-002 |
-| VT-05 | Jest / RTL (component) | Same as VT-04, for an MCP pill row (`ps-mcp-pill-allowlist-0`) | Select a user and a group | `edit.quickMcpPills[0].allowedUserIds`/`allowedGroupIds` update | PBI-002 (a), TBI-002 |
-| VT-06 | Jest / RTL (component) | `edit.quickSkillPills[0]` has `allowedUserIds`/`allowedGroupIds` set; mocked `upsert` mutation | Click Save | Mutation payload's `quickSkillPills[0]` includes `expect.objectContaining({ allowedUserIds: [...], allowedGroupIds: [...] })` | PBI-001 (a) |
-| VT-07 | Jest / RTL (component) | Mocked `upsert` mutation configured to reject | Click Save after editing a pill's allow-list | Form shows the existing save-error state; `edit.quickSkillPills`/`quickMcpPills` in local state are unchanged from before the failed save | PBI-001 (b), PBI-002 (b) |
-| VT-08 | Jest (unit/service) | A skill pill and an MCP pill both with `allowedUserIds`/`allowedGroupIds` omitted | Read the config (any consumer) | Both pills are treated identically to today's pre-Feature shape — no default value is written in, consistent with BR-001's "everyone" default living in the *absence* of the fields | PBI-001 (c), PBI-002 (c) |
-| VT-09 | Jest (route/middleware) | Request without `admin:roles` | `PUT /api/admin/project-settings/:id` with a body changing a pill's `allowedUserIds` | `403`; no DB write occurs (`requirePermission('admin:roles')` short-circuits before `upsertSkillConfig` runs) | PBI-001 (d), PBI-002 (d) |
-| VT-10 | Jest (route) | A pill with `allowedUserIds`/`allowedGroupIds` set, requested via `GET /api/skill-config?project=X` (session-authenticated, non-admin) | Inspect the response body | **Currently** returns `allowedUserIds`/`allowedGroupIds` verbatim (documents the exposure window in Rollback and Deployment; this assertion is expected to change to "stripped" once FEAT-002's TBI-004 ships) | Assumptions ⚠-1 |
+| VT-01 | Jest (SQL text and Drizzle) | Read the tables migration and import the Drizzle tables | Parse Up and Down; call `getTableColumns` on each table | Three tables, unique (`event_id`, `evaluator_key`), both triggers and the expected indexes appear in Up; Down reverses them; Drizzle column names and nullability match | TBI-001 (a) |
+| VT-02 | Integration | Clean test database | Run the tables migration up, down, then up | Tables exist after up, are gone after down (with functions and triggers), and exist again after the second up; no error | TBI-001 (a), (c) |
+| VT-03 | Integration | One event row inserted | Run `UPDATE` and `DELETE` on it | Both raise SQLSTATE `23000` (`integrity_constraint_violation`); the row is unchanged | TBI-001 (b) |
+| VT-04 | Integration | One event row | Insert two jobs for the same event with `promptfoo`, then a duplicate `promptfoo`, then `llm_judge` | The duplicate raises unique violation `23505`; `promptfoo` and `llm_judge` rows both exist | TBI-001 (b) |
+| VT-05 | Integration | A seeded definition and a valid event template | Insert events with `phase_index` 0, 1, 3, 4; a `prd` subject with phase 2; hash of 63 chars, 64 uppercase and 64 lowercase hex chars; `prd_id` not equal to `subject_id` on a `prd` subject; both correction fields set | Phase 1 and 3 and the valid hash are accepted; every other row is rejected by a CHECK | TBI-001 (c) |
+| VT-06 | Integration | Column lists of `prds` and `interviews` captured before the migration | Run the migration | The column lists are identical | TBI-001 (d) |
+| VT-07 | Jest (source scan) | Walk `src/server` excluding `__tests__` | Search for `update` or `delete` on `workflowEvaluationEvents` | No match | TBI-001 (d) |
+| VT-08 | Integration | Both migrations applied | Select from definitions | Four active rows under `orchestrated_workflow` with the four stage keys, each with five criteria, seven reason codes, four outcomes, six roles, a non-blank suite reference and a judge schema | TBI-002 (a) |
+| VT-09 | Integration | Seeded rows | Insert a second active row with the same process, stage, evaluator and benchmark | Rejected by the partial unique index | TBI-002 (b) |
+| VT-10 | Integration | Seed already applied | Execute the seed Up statements again | Row count stays four; no error | TBI-002 (c) |
+| VT-11 | Integration | Seeded rows and one event pointing at `interview_phase_1` version 1 | Insert version 2 for that stage and set version 1 `active = false` | One active row for the stage; version 1 still exists; the event still joins to version 1 | TBI-002 (c) |
+| VT-12 | Integration | Seeded rows | Update `rubric` on a row; update only `active` on a row | The rubric update raises `23000`; the `active` update succeeds | TBI-002 (b) |
+| VT-13 | Jest | Seed migration text and shared constants | Parse JSON literals; compare lists | Criteria keys, reason codes, outcomes and roles equal the shared constants in order for all four rows; every `promptfoo_suite_ref` is non-blank | TBI-002 (a) |
+| VT-14 | Jest (SQL text) | Both migrations | Inspect the definitions columns and the seed statements | No `project` column on definitions; no `UPDATE` of an existing row's rubric in the seed | TBI-002 (d) |
+| VT-15 | tsc | The shared module and one import from a server file and one from a client file | Run both `tsc -p` commands | Both exit with code 0 | TBI-003 (a) |
+| VT-16 | Jest | The zod schema and the seeded `judge_output_schema` | Compare `z.toJSONSchema` output with the seed JSON; validate a sample judge output | The two are equal; the sample is valid | TBI-003 (a) |
+| VT-17 | Jest | Judge outputs missing `confidence`, with `alignmentScore` 7, and with a non-array finding list | Call `isWorkflowEvaluationJudgeOutput` | Each returns false | TBI-003 (b) |
+| VT-18 | Jest | Judge outputs with empty arrays and no score; with scores 0, 1, 5, 6 | Call the guard | Empty output valid; 1 and 5 valid; 0 and 6 invalid | TBI-003 (c) |
+| VT-19 | Jest (type-level) | A literal `CreateHumanEvaluationRequest` with `skillPath`, `skillVersion`, `model`, `interviewId`, `prdId` or `artifactHash` | Compile with `@ts-expect-error` on each | Compilation passes only because each assignment is an error | TBI-003 (d) |
 
 ---
 
 ## Implementation Plan
 
-- [ ] S1 — Add `allowedUserIds?: string[] | null` and `allowedGroupIds?: string[] | null` to `QuickSkillPill` and `QuickMcpPillBase` in `src/shared/types/projectSettings.ts` _(no blockers)_
+- [ ] S1 — Allocate the tables migration filename with `scripts/next-migration-timestamp.mjs` and write the Up and Down SQL: three tables, constraints, indexes, both guard functions and triggers _(no blockers)_
+  - Covers: `VT-01`, `VT-02`, `VT-03`, `VT-04`, `VT-05`, `VT-06`
+- [ ] S2 — Add the three `pgTable` entries and `relations()` to `src/server/db/schema.ts` to match S1 _(blocked by S1)_
   - Covers: `VT-01`
-- [ ] S2 — Run `npx tsc -p tsconfig.server.json --noEmit` and `npx tsc -p tsconfig.client.json --noEmit` to confirm the additive fields compile cleanly through `schema.ts` and every existing consumer _(blocked by S1)_
-  - Covers: `VT-01`
-- [ ] S3 — Add a `GroupAwarePeoplePicker`-backed allow-list control to each skill-pill row in `AdminProjectSettings.tsx` (`edit.quickSkillPills.map(...)`, ~lines 2899–2993), wired to `pills[idx].allowedUserIds`/`allowedGroupIds` via the existing `groupsWithMembers`/`allUsers` state; add `data-testid="ps-skill-pill-allowlist-{idx}"` _(blocked by S1; can run in parallel with S4)_
-  - Covers: `VT-04`
-- [ ] S4 — Same for each MCP-pill row (`edit.quickMcpPills.map(...)`, ~lines 3023–3140); add `data-testid="ps-mcp-pill-allowlist-{idx}"` _(blocked by S1; can run in parallel with S3)_
-  - Covers: `VT-05`
-- [ ] S5 — Extend `src/client/components/__tests__/AdminProjectSettings.test.tsx` with allow-list selection, save-payload, and save-failure coverage for both pill types _(blocked by S3, S4)_
-  - Covers: `VT-06`, `VT-07`
-- [ ] S6 — Extend `src/server/__tests__/projectSettingsService.test.ts` with an allow-list round-trip case, and add the legacy-pill-shape regression case _(blocked by S1; can run in parallel with S3, S4)_
-  - Covers: `VT-02`, `VT-03`, `VT-08`
-- [ ] S7 — Add the `admin:roles` rejection case for a pill allow-list write to the existing RBAC middleware test suite, and add the documentation-of-exposure case to `apiRoutes.skillConfig.test.ts` _(blocked by S1; can run in parallel with S3, S4, S6)_
-  - Covers: `VT-09`, `VT-10`
+- [ ] S3 — Write `src/shared/types/workflowEvaluation.ts`: constants, types, zod judge schema and guards _(no blockers; can parallel with S1)_
+  - Covers: `VT-15`, `VT-17`, `VT-18`, `VT-19`
+- [ ] S4 — Allocate the seed filename and write the seed migration with four version-1 rows and their Down _(blocked by S1; apply the open-item defaults if the ⚠ items are unanswered)_
+  - Covers: `VT-08`, `VT-09`, `VT-10`, `VT-11`, `VT-12`
+- [ ] S5 — Write the Jest tests: migration shape, seed parity, types, source scan _(blocked by S2, S3, S4)_
+  - Covers: `VT-01`, `VT-07`, `VT-13`, `VT-14`, `VT-16`, `VT-17`, `VT-18`, `VT-19`
+- [ ] S6 — Write the integration test and run the full check: `npm run migrate:local:up`, `migrate:local:down`, `migrate:local:up`, both `tsc` builds, `npx jest workflowEvaluation`, `npm run test:integration` _(blocked by S2, S4, S5)_
+  - Covers: `VT-02` to `VT-06`, `VT-08` to `VT-12`, `VT-15`
 
 **Execution lanes:**
-- Lane 1 (start immediately): S1
-- Lane 2 (after S1): S2, S3, S4, S6, S7 — all run in parallel
-- Lane 3 (after S3 + S4): S5
+- Lane 1 (start immediately): S1, S3
+- Lane 2 (after S1): S2, S4
+- Lane 3 (after S2, S3, S4): S5
+- Lane 4 (after S5): S6
 
 ---
 
 ## Diagram 1 — Code Execution Flow
 
+This Feature ships tables and types only. The diagram traces the first runtime path that uses them, a reviewer submission handled by FEAT-003 and FEAT-004, to show where each contract and database guard sits. Nothing above the database is built in this Feature.
+
 ```mermaid
 sequenceDiagram
-  actor ProjectAdmin
-  participant Picker as GroupAwarePeoplePicker
-  participant Settings as AdminProjectSettings.tsx
-  participant Route as PUT /api/admin/project-settings/:id
-  participant Service as projectSettingsService.upsertSkillConfig
-  participant DB as project_skill_settings (jsonb)
+  actor Reviewer
+  participant Form as Feedback form (FEAT-004)
+  participant Hook as useCreateEvaluation hook (FEAT-004)
+  participant Router as Evaluation router (FEAT-003)
+  participant Service as Evaluation service and repository (FEAT-003)
+  participant DB as Postgres
 
-  ProjectAdmin->>Picker: select user/group on a pill row
-  Picker->>Settings: onUserIdsChange / onGroupIdsChange
-  Settings->>Settings: setEdit — pills[idx].allowedUserIds/allowedGroupIds updated
-  ProjectAdmin->>Settings: click Save
-  Settings->>+Route: PUT { quickSkillPills / quickMcpPills, ...rest }
-  Route->>Route: requirePermission('admin:roles')
-  Route->>+Service: upsertSkillConfig({ id, quickSkillPills, quickMcpPills, ... })
-  Service->>+DB: UPDATE project_skill_settings SET quick_skill_pills = $1, quick_mcp_pills = $2
-  DB-->>-Service: updated row
-  Service-->>-Route: ProjectSkillConfig
-  Route-->>-Settings: 200 { ...config, approvalModes }
-  Settings-->>ProjectAdmin: form closes / shows saved state
+  Reviewer->>Form: score five criteria and pick an outcome
+  Form->>Hook: mutate(CreateHumanEvaluationRequest)
+  Hook->>+Router: POST create evaluation
+  Router->>+Service: createEvent(project from session, request, user)
+  Service->>+DB: select active definition (stage_key, active)
+  DB-->>-Service: WorkflowEvaluationDefinition
+  Service->>Service: validate request against rubric, resolve lineage and artifact hash
+  Service->>+DB: insert into workflow_evaluation_events
+  DB-->>-Service: HumanEvaluationEvent
+  Service->>+DB: insert two rows into workflow_evaluation_jobs
+  DB-->>-Service: promptfoo and llm_judge jobs, status pending
+  Service-->>-Router: HumanEvaluationEventWithJobs
+  Router-->>-Hook: 201 Created
+  Hook-->>Form: isSuccess
+  Form-->>Reviewer: submitted, history shows the new event
 
-  alt admin:roles missing
-    Route-->>Settings: 403 Forbidden
-    Settings-->>ProjectAdmin: save rejected before reaching Service/DB
+  alt request fails rubric validation
+    Service-->>Router: validation error
+    Router-->>Hook: 400 BadRequest
+    Hook-->>Form: isError
+    Form-->>Reviewer: inline error shown
   end
 
-  alt save request fails (network/500)
-    Route-->>Settings: non-2xx / mutation error
-    Settings-->>ProjectAdmin: previously saved allow-list unchanged; error message shown (AC PBI-001/002 (b))
+  alt anything tries to change a stored event
+    Service->>DB: update or delete on workflow_evaluation_events
+    DB-->>Service: integrity_constraint_violation, row unchanged
   end
 ```
 
@@ -227,27 +258,33 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-  S1["S1 — Add allowedUserIds/allowedGroupIds to shared types"]
-  S2["S2 — tsc verification (server + client)"]
-  S3("S3 — Skill-pill row allow-list picker")
-  S4("S4 — MCP-pill row allow-list picker")
-  S5(["S5 — Component tests: selection, save, save-failure"])
-  S6{{"S6 — projectSettingsService round-trip tests"}}
-  S7{{"S7 — RBAC rejection + skill-config exposure test"}}
+  S1["S1 — Tables migration with guards"]
+  S2["S2 — Drizzle schema entries"]
+  S3["S3 — Shared types module"]
+  S4["S4 — Seed migration"]
+  S5("S5 — Jest tests")
+  S6["S6 — Integration run and builds"]
+  T_unit{{"VT-01, VT-07, VT-13 to VT-19 — Jest and type tests"}}
+  T_int(["VT-02 to VT-06, VT-08 to VT-12 — Integration"])
 
   S1 --> S2
-  S1 --> S3
   S1 --> S4
-  S1 --> S6
-  S1 --> S7
+  S2 --> S5
   S3 --> S5
   S4 --> S5
+  S5 --> S6
+  S5 -.->|"unit tests"| T_unit
+  S6 --> T_int
 
-  subgraph parallel1 ["Can run in parallel (after S1)"]
-    S2 & S3 & S4 & S6 & S7
+  subgraph parallel1 ["Can run in parallel: start of work"]
+    S1 & S3
+  end
+
+  subgraph parallel2 ["Can run in parallel: after S1"]
+    S2 & S4
   end
 
   subgraph legend ["Legend"]
-    L1["Backend/Shared type"] --- L2("Frontend") --- L3{{"Backend test"}} --- L4(["Frontend test"])
+    L1["Database or backend step"] --- L2("Test authoring step") --- L3{{"Unit test"}} --- L4(["Integration test"])
   end
 ```

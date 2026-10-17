@@ -2541,3 +2541,60 @@ export async function rehydratePrdValidationWatcher(prdId: string, validationThr
   const adapter = createPrdValidationAdapter(prd);
   startDocumentValidationWatcher(adapter, validationThreadId);
 }
+
+export type PrdEvaluationInputs = {
+  id: string;
+  project: string;
+  status: string;
+  interviewId: string | null;
+  model: string | null;
+  skillPath: string | null;
+  skillVersion: string | null;
+  content: string;
+  backlogJson: unknown;
+};
+
+/** Read-only lineage and live PRD content for an evaluation. Does not call getPrd. */
+export async function getPrdEvaluationInputs(prdId: string): Promise<PrdEvaluationInputs | null> {
+  const row = await db.query.prds.findFirst({
+    where: eq(prds.id, prdId),
+    columns: {
+      id: true,
+      project: true,
+      status: true,
+      interviewId: true,
+      model: true,
+      content: true,
+      backlogJson: true,
+      chatThreadId: true,
+    },
+  });
+  if (!row) return null;
+
+  let skillPath: string | null = null;
+  let skillVersion: string | null = null;
+  let model = row.model ?? null;
+  if (row.chatThreadId) {
+    const thread = await db.query.chatThreads.findFirst({
+      where: eq(chatThreads.id, row.chatThreadId),
+      columns: { kickoff: true, groundedSha: true },
+    });
+    if (thread) {
+      skillPath = thread.kickoff?.skillPath ?? null;
+      skillVersion = thread.groundedSha ?? null;
+      model = row.model ?? thread.kickoff?.model ?? null;
+    }
+  }
+
+  return {
+    id: row.id,
+    project: row.project,
+    status: row.status,
+    interviewId: row.interviewId,
+    model,
+    skillPath,
+    skillVersion,
+    content: row.content,
+    backlogJson: normalizeBacklogUserStories(row.backlogJson),
+  };
+}

@@ -1,56 +1,49 @@
-# Design — Enforce Home Pill Access
+# Design — Evaluation Permissions and Rollout Gate
 
-> **PRD slug:** `home-pill-access-control` | **Priority:** Must Have | **Feature flag:** `None`
-> **Parent Epic:** Home Pill Access Control | **Affected personas:** Authenticated User, Project Admin, Platform Admin
-> **Open items:** See [design-doc-assumptions.md](design-doc-assumptions.md) (2 unresolved)
+> **PRD slug:** `human-workflow-evaluation-for-interviews-and-prds` | **Priority:** Must Have | **Feature flag:** `workflow-human-evaluation`
+> **Parent Epic:** Evaluation Foundations | **Affected personas:** Platform Admin, Product-Owner, BA, Manager, Developer
+> **Open items:** See [design-doc-assumptions.md](design-doc-assumptions.md) (4 unresolved)
 
 ---
 
 ## Feature Summary
 
-**Description:** Every Home skill and MCP pill is visible and startable by anyone with Home access today, with no way to point a single user at one skill without handing them every other shortcut on the project. This Feature closes that gap on the *consuming* side of Home: once a Project Admin configures a per-pill allow-list (delivered by the companion Feature, "Configure Home Pill Allow-Lists"), Authenticated Users see and can start only the pills their allow-list permits, Platform Admin continues to see and start every configured pill to verify configuration, and Project Admin — outside the pill editor itself — follows the same allow-lists as anyone else. Enforcement closes every path a restricted user could otherwise reach a skill through: the visible pill list, direct thread-creation calls that bypass the Home composer, and free-form pill-less chat when a project's pills leave the caller with nothing they're allowed to start.
+**Description:** Human workflow evaluation is optional feedback on AI-generated Interview and PRD output. This Feature decides who can use it and where it is on. Two new RBAC permissions (`workflow-evaluation:view`, `workflow-evaluation:submit`) control who reads and submits feedback, and a Feature Flag (`workflow-human-evaluation`) lets a Platform Admin turn the whole capability on or off per project. When the flag is off, no evaluation screen, route or background job exists for that project, and Interview and PRD work run as they do today.
 
 **Work items:**
 
 | ID | Type | Title | Priority |
 |----|------|-------|----------|
-| PBI-003 | PBI | See only the Home pills I'm allowed to use | Must Have |
-| PBI-004 | PBI | See every Home pill as Platform Admin | Must Have |
-| PBI-005 | PBI | Home thread creation denies an unauthorized pill | Must Have |
-| PBI-006 | PBI | Blocked from starting a Home thread with no allowed pills | Must Have |
-| PBI-007 | PBI | Continue using a Home thread after losing pill access | Must Have |
-| TBI-003 | TBI | Build a pill access resolver for live allow-list evaluation | Must Have |
-| TBI-004 | TBI | Filter and strip Home pills on the public skill-config read path | Must Have |
-| TBI-005 | TBI | Enforce pill access on Home thread creation | Must Have |
-| TBI-006 | TBI | Update Home composer for filtered pills and blocked-start state | Must Have |
+| TBI-004 | TBI | Add workflow-evaluation view and submit permissions | Must Have |
+| TBI-005 | TBI | Gate evaluation routes and UI on the workflow-human-evaluation flag | Must Have |
+
+This Feature has no PBIs. Acceptance criteria below are written per TBI.
 
 ---
 
 ## Scope and Out-of-Scope
 
 **In scope:**
-- Filtering the Home skill-pill and MCP-pill arrays returned by the public skill-config read path down to the pills the requesting caller is allowed to use, with allow-list identifiers never present on that response.
-- Platform Admin (Super Admin) seeing and starting every configured Home pill unfiltered, verified against the existing super-admin identity check.
-- Denying Home thread creation when a kickoff names a pill the caller isn't allowed on, or when the caller is allowed on none of a project's configured pills and sends a pill-less kickoff.
-- Allowing pill-less Home thread creation unchanged when a project has no configured pills at all.
-- Leaving an already-created thread's read/write access, and the thread-creation resolver's one-time-at-creation scope, untouched — access changes never interrupt an in-progress conversation.
+- Create the permission keys `workflow-evaluation:view` and `workflow-evaluation:submit` (migration, documented catalog entry, shared key constants, route guards, listing in Admin → Roles) and grant both to the `admin` and `member` roles by default.
+- Register the `workflow-human-evaluation` flag, targeted at the Apex (project) by default, with a Platform Admin kill switch.
+- Server guards that every evaluation route, retry, export and hub route mounts: reject a body that names a project, check permission, check project assignment, check the flag.
+- A client access hook that combines the flag, `can()` and the selected project so each feedback surface, the Workflow evaluations page and the hub can hide themselves when access is missing.
+- A warning in Admin → Roles when a role holds submit without view.
 
 **Out of scope:**
-- Bulk-editing allow-lists across multiple pills at once (companion Feature, "Configure Home Pill Allow-Lists").
-- Filtering any skill-config field other than the Home pill arrays — Interview, ADR, and other consumers of the same read path are unaffected.
-- Re-checking pill access on every follow-up message of an existing thread — access is enforced only at thread creation.
-- Hiding or blocking a user's access to their own thread history when their pill access is later removed.
-- A new RBAC permission key — enforcement layers on the existing `home:view` and `chat:create` gates.
-- A feature flag or staged rollout — this ships GA directly.
-- Extending the Platform Admin bypass to the admin pill-editor experience, which already shows every pill to Project Admin regardless of this Feature.
+- A separate workflow-evaluation admin permission. Project Admin access reuses the existing `admin:roles` permission; Platform Admin reuses the super-admin check.
+- Project-setting toggles for required stages.
+- The evaluation service, router, jobs, feedback form, Workflow evaluations page, hub and alerts. Those belong to other Features, which mount the guards this Feature supplies.
+- Denormalized latest-review columns on PRDs or Interviews, and project-specific definition overrides (Epic-level exclusions).
+- Per-project rubric forks, Teams or digest notifications, and any gate on Interview phase advance, PRD generation or approval.
 
 ---
 
 ## Target Surface
 
-**Primary surface:** Full-stack (both client and server)
+**Primary surface:** Full-stack
 
-**Experience notes:** Home is the only surface affected. The Home composer (`ChatAgentPanel.tsx`) gains a new blocked-start state; Interview, ADR, and every other skill-selection surface that shares the skill-config read path are unchanged. The Admin Project Settings pill editor is out of scope here — it belongs to the companion "Configure Home Pill Allow-Lists" Feature and already shows every pill to Project Admin.
+**Experience notes:** Almost all of this Feature is invisible when it works. Users see it in three places: the Admin → Roles screen lists and grants the two new permissions; every feedback surface (Quality feedback tab, panel, modal, banner), the Workflow evaluations page and the Platform Admin hub appear only when the flag is on and the user holds the permission; and a role that holds submit without view shows a warning. Feedback is always optional and skippable.
 
 ---
 
@@ -58,62 +51,41 @@
 
 | Action | Who can perform it | Data scope |
 |--------|--------------------|-----------|
-| View Home pills | Authenticated User (`home:view`) | Project-scoped |
-| Start a Home thread | Authenticated User (`chat:view` + `chat:create`) | Project-scoped |
-| Bypass Home pill allow-lists on Home | Platform Admin (Super Admin) | Global |
-| See every pill unfiltered while editing (unaffected by this Feature) | Project Admin, via the existing pill editor | Project-scoped |
+| View definitions, event history and job diagnostics on an artifact | Holders of `workflow-evaluation:view` (default: `admin` and `member` roles, which cover Product-Owner, BA, Manager and Developer users) | Project-scoped |
+| Submit a human evaluation | Holders of both `workflow-evaluation:submit` and `workflow-evaluation:view` (default: `admin` and `member` roles). Help text names the Interview initiator and PRD owner as expected submitters; the server does not enforce it | Project-scoped |
+| Open the Workflow evaluations page, filter events, read judge recommendations | Anyone who can open Project Admin for the project (`admin:roles`), or a Platform Admin | Project-scoped |
+| Export events as JSON or CSV | Anyone who can open Project Admin for the project, or a Platform Admin | Project-scoped |
+| Retry a failed diagnostic job | Anyone who can open Project Admin for the project, or a Platform Admin | Project-scoped |
+| View the cross-project hub | Platform Admin | Global |
+| Receive regenerate and reject alerts | Project Admins of the project | Project-scoped |
+| Grant or revoke the two permission keys | Project Admin through Admin → Roles (`admin:roles`) | Project-scoped through project roles, or global |
+| Turn the flag on or off, add or remove pilot projects | Platform Admin through Platform Admin → Feature Flags | Global |
 
-**Feature flag:** `None` — GA from launch.
-**Behavior when flag is off:** Not applicable — no flag gates this Feature.
+**Feature flag:** `workflow-human-evaluation` — rollout: Internal → Beta → GA. On first for the Apex (project), then named pilot projects, then widened through Platform Admin targeting. Kill switch owner: Platform Admin.
+
+**Behavior when flag is off:** No Quality feedback tab, panel, modal or banner appears. The Workflow evaluations page and the Platform Admin hub are hidden. Evaluation routes answer `404 Not found` and no jobs start. Interview, PRD review and approval work as they do today. Permissions still apply when the flag is on. A Platform Admin does not bypass the flag. A diagnostic job already running when the flag goes off finishes and stores its result; no new job starts.
 
 ---
 
 ## Acceptance Criteria
 
-### PBI-003 — See only the Home pills I'm allowed to use
+### TBI-004 — Add workflow-evaluation view and submit permissions
 
 | # | Given | When | Then |
 |---|-------|------|------|
-| (a) Happy path | A project has pills with different allow-lists and I am on some but not all of them | I load Home | I see only the pills whose allow-list includes me directly or through a group I belong to, or that have no allow-list at all |
-| (b) Error/failure | A pill's allow-list references a group that no longer exists | Pill visibility is evaluated for me | That group grants no access rather than the request failing |
-| (c) Edge case/boundary | A project has no configured Home pills at all | I load Home | I see the existing pill-less Home experience, unchanged |
-| (d) Negative scenario | I am allowed on zero of the project's configured pills | I load Home | Both the skill pill and MCP pill arrays returned to me are empty, and no allow-list identifiers appear anywhere in the response |
+| (a) Happy path | Both migrations are applied. A user in project Apex holds the `member` role | The user calls an evaluation read route with `?project=Apex`. A Project Admin opens Admin → Roles | The read route passes the permission guard. Admin → Roles lists `workflow-evaluation:view` and `workflow-evaluation:submit`, shows the `admin` and `member` roles holding both, and lets the Project Admin grant and revoke each key |
+| (b) Error/failure | A user holds only the `viewer` role, or a custom role with `workflow-evaluation:submit` but not `workflow-evaluation:view` | The user calls a read route, or posts a new evaluation | The server answers `403 { error: 'Forbidden', missing: [...] }` naming the missing key, and no evaluation service code runs |
+| (c) Edge case/boundary | A user's global role is `member` but the user has a project-specific role for project Beta that holds neither key | The same user calls an evaluation route for Beta, then for Apex | Beta answers 403, because the project role replaces the global role for that project. Apex answers as allowed when the user's roles for Apex hold the keys |
+| (d) Negative scenario | A user holds both keys in project Apex and is not assigned to project Beta | The user sends `x-apex-project: Beta`, or sends `x-apex-project: Beta` with `project: "Apex"` in the JSON body | The first request answers 403 (not assigned). The second answers 400 and nothing runs, because a body that names a project is rejected |
 
-### PBI-004 — See every Home pill as Platform Admin
-
-| # | Given | When | Then |
-|---|-------|------|------|
-| (a) Happy path | I am a Platform Admin (Super Admin) and a project has pills with non-empty allow-lists I am not on | I load Home | I see every configured skill and MCP pill for that project, unfiltered |
-| (b) Error/failure | My session cannot be verified as a Platform Admin (Super Admin) identity | Home pills are resolved for me | I am treated as a regular user subject to allow-lists, not granted the bypass |
-| (c) Edge case/boundary | A project has no configured Home pills at all | I load Home as a Platform Admin | I see the same pill-less Home experience as any other user |
-| (d) Negative scenario | I am a Project Admin, not a Platform Admin, and I am not on a pill's allow-list | I load Home | That pill is not shown to me, even though I can see and edit it in Project Settings |
-
-### PBI-005 — Home thread creation denies an unauthorized pill
+### TBI-005 — Gate evaluation routes and UI on the workflow-human-evaluation flag
 
 | # | Given | When | Then |
 |---|-------|------|------|
-| (a) Happy path | I am allowed on a specific configured Home skill pill | I start a Home thread naming that pill's skillPath | The thread is created |
-| (b) Error/failure | I am not allowed on a specific configured Home MCP pill | I call the thread-creation endpoint directly naming that pill's MCP identity, bypassing the Home composer | The request is denied and no thread is created |
-| (c) Edge case/boundary | A kickoff names a skillPath that does not match any pill configured for the project | I attempt to start a Home thread with it and I am not allowed on any configured pill | The request is denied |
-| (d) Negative scenario | I am a Platform Admin (Super Admin) | I start a Home thread against any configured pill | The thread is created regardless of that pill's allow-list |
-
-### PBI-006 — Blocked from starting a Home thread with no allowed pills
-
-| # | Given | When | Then |
-|---|-------|------|------|
-| (a) Happy path | A project has configured Home pills and I am allowed on none of them | I try to start a new Home thread with no pill selected | The request is denied and I see an explanation that I have no available Home skills |
-| (b) Error/failure | I bypass the disabled Home composer and call the create endpoint directly with no skillPath and no MCP identity | The project has pills and I am allowed on none | The server still denies the request |
-| (c) Edge case/boundary | A project has no configured Home pills at all | I start a new Home thread with no pill selected | The thread is created as pill-less chat, unchanged from today |
-| (d) Negative scenario | I am allowed on at least one configured pill | I try to start a new Home thread with no pill selected | The pill-less request is still evaluated on its own terms and is not denied purely because other pills exist |
-
-### PBI-007 — Continue using a Home thread after losing pill access
-
-| # | Given | When | Then |
-|---|-------|------|------|
-| (a) Happy path | I started a Home thread on a pill I was allowed on at the time | An admin later removes me from that pill's allow-list and I send another message on the same thread | My message is accepted and the conversation continues |
-| (b) Error/failure | A thread is owned by someone else | I attempt to open or write to it | Access is denied by the existing thread-ownership rules, unrelated to pill access |
-| (c) Edge case/boundary | My access to a pill was removed after I started a thread on it | I click New Chat and try to start a fresh thread on that same pill | The new thread creation is denied, even though my existing thread on that pill still works |
-| (d) Negative scenario | My access to a pill was removed | I reopen my existing thread on that pill from Thread History | I can view the full prior conversation and send new messages without being blocked |
+| (a) Happy path | The flag is enabled with a `project` rule for Apex. The user holds the keys and is assigned to Apex | The user opens a PRD review view or an Interview chat view in Apex, and an evaluation route is called | The feedback surfaces render, and the route passes the flag check |
+| (b) Error/failure | The flag service throws while evaluating (for example the database is unreachable) | A client calls an evaluation route, and the browser asks for flags | The route answers 500 and starts nothing. The client receives no flags and renders no evaluation UI. Interview and PRD pages stay usable |
+| (c) Edge case/boundary | The flag was on a few seconds ago and a Platform Admin has just turned it off. The browser still holds the flag value for up to 60 seconds | A user submits or lists feedback in that window | The server answers 404 and no job starts. The client clears its cached flag value on that 404 and hides the surface. A diagnostic job already running finishes and stores its result |
+| (d) Negative scenario | The flag has no rule for project Beta (or is disabled) and the caller is a Platform Admin in Beta | The caller opens a Beta Interview or PRD and calls an evaluation route | No evaluation UI renders, the route answers 404, and Interview, PRD review and approval requests answer exactly as before |
 
 ---
 
@@ -123,24 +95,32 @@
 
 | Route | Screen | Action | New or extend existing |
 |-------|--------|--------|----------------------|
-| `/home` | `ChatAgentPanel.tsx` (Home compose view) | Pill selection renders only the caller's filtered pills; free-form send is disabled with an explanatory message when the project has pills and the caller's filtered lists are both empty | Extend existing |
+| `/admin/roles` | Admin → Roles (`AdminRoles`) | Project Admin grants or revokes `workflow-evaluation:view` and `workflow-evaluation:submit` on a role; sees a warning when a role holds submit without view | Extend existing |
+| `/platform-admin` | Platform Admin → Feature Flags (`PlatformAdmin`) | Platform Admin adds pilot project rules and toggles the `workflow-human-evaluation` kill switch. No code change: the flag appears in the existing list once seeded | Extend existing (no change) |
+
+All other screens that depend on this gate (PRD review tab, Interview panel, Workflow evaluations page, hub) are built by other Features. They call the access hook below at their entry point and render nothing when it reports no access.
 
 **Component breakdown:**
 
 | Component | Purpose | Loading state | Error state | Empty state |
 |-----------|---------|--------------|-------------|-------------|
-| `ChatAgentPanel.tsx` (Home compose branch) | Renders `quickSkillPills`/`quickMcpPills` from the already-filtered `skill-config` response; blocks pill-less send when the caller is allowed on none of the project's configured pills | Existing `useProjectSkillConfig` loading state — composer defaults to the disabled/blocked state (fail-safe) while the query is in flight | Existing skill-config fetch error handling — composer defaults to the disabled/blocked state rather than an unchecked send | New: "You don't have access to any Home skills on this project. Ask a Project Admin to add you to a pill's allow-list." message when the caller is allowed on zero configured pills |
+| `AdminRoles` → `PermissionsModal` and `RoleMembersModal` (existing) | The permissions dialog lists the two keys under a `workflow-evaluation` group with no code change, because it groups every permission by `category`. It also shows the submit-without-view warning, live while the box states conflict and again after save. The members dialog shows the same warning after a user is added to such a role | Existing "Loading roles…" text | Existing inline error box | Not applicable |
+| `useWorkflowEvaluationAccess(project)` (new hook, no markup) | Returns `{ flagEnabled, canView, canSubmit, canAdmin, isPlatformAdmin, ready }` for feedback surfaces to branch on | `ready = false`: surfaces render nothing | Flag query error: `flagEnabled = false`: surfaces render nothing | Not applicable |
 
 **Validation rules:**
-- Free-form send in the empty-composer view is disabled whenever `homePillsConfigured` is `true` and the caller's filtered `quickSkillPills` and `quickMcpPills` are both empty — mirroring the existing `needsSkillSelection` gate already applied when pills exist and none is selected.
-- The existing `needsSkillSelection` gate (a pill exists but none is selected yet) and the new blocked-state gate are mutually exclusive: the blocked state only applies when the caller's filtered pill arrays are empty, which by definition means there is nothing to select.
+- Permissions dialog: while `workflow-evaluation:submit` is checked and `workflow-evaluation:view` is not, an inline warning shows: "Submit permission is present without view permission; members can submit feedback but the form cannot load its definitions." Saving is not blocked, because a Project Admin may intend it. After save, the dialog stays open on the warning with an "Acknowledge and Close" button, the same flow `playbooks:author` without `playbooks:run` uses today. Adding a user to such a role in the members dialog shows the warning too.
+- Server: any evaluation request whose JSON body contains a `project` field answers 400 `{ error: 'project must not be sent in the request body' }`. The project comes from the `?project=` query or the `x-apex-project` header only.
 
 **Accessibility:**
-- The blocked-state message renders through the composer's existing `role="status"`/`aria-live` pattern already used for other inline explanatory text (e.g. `chat-agent-empty-transcript`), so screen readers announce it without additional wiring.
-- No new interactive controls are introduced — the composer's existing `AgentComposer` `disabled`/`canSend` props already drive both keyboard and screen-reader affordances.
+- The live warning in the permissions dialog uses `role="status"` with `aria-live="polite"`; the after-save warning and the members dialog warning use `role="alert"`. This matches the playbook warning.
+- The keys render as checkboxes inside the existing `permRow` label: key name plus description, reachable by keyboard.
+- The Save button gets `aria-describedby` pointing at the warning while it shows.
+- Feedback surfaces that depend on this gate render nothing when it denies access, so there is no focusable element and no empty landmark to announce.
 
 **data-testid attributes:**
-- `data-testid="chat-agent-home-blocked-notice"` — the new explanatory message shown when the caller has no allowed Home pills on a project that has configured pills.
+- `data-testid="role-permission-workflow-evaluation-view-checkbox"` — view-key checkbox in the permissions dialog (generated by the existing `AdminRoles` rule from the key; no code needed)
+- `data-testid="role-permission-workflow-evaluation-submit-checkbox"` — submit-key checkbox in the permissions dialog (same rule)
+- `data-testid="workflow-evaluation-submit-without-view-warning"` — the submit-without-view warning, in both the permissions dialog and the members dialog
 
 ---
 

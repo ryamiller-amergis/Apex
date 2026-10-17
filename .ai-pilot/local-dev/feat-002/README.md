@@ -1,4 +1,4 @@
-# Local Development Context — Permission by skill — Enforce Home Pill Access
+# Local Development Context — Agent scoring and refinement within interview and prd - phase 1 — Evaluation Permissions and Rollout Gate
 
 These files belong under your **repository root** at:
 
