@@ -668,17 +668,18 @@ function registeredSkillName(
 
 function skillRegistration(
   thread: ChatThread,
-  turnSkill: ChatTurnSkill | undefined,
   skill: ChatTurnSkill | null,
   config: ProjectSkillConfigResponse | null,
   builtInRoots: ReadonlyArray<BuiltInSkillRoot>,
 ): DurableInteractiveSkillRegistration | null {
   if (!skill) return null;
   const normalized = strictPortableSkillPath(skill.path).toLowerCase();
-  const frozenOnThread =
-    !turnSkill &&
+  // The thread skill stays a project skill when the turn repeats that same path.
+  // A path under `.cursor/skills` is otherwise a built-in Apex skill, which would
+  // miss a skill that exists only in the project repository.
+  const matchesThreadSkill =
     normalizePath(thread.kickoff.skillPath ?? '').toLowerCase() === normalized;
-  if (frozenOnThread || configuredSkillPaths(config).has(normalized)) {
+  if (matchesThreadSkill || configuredSkillPaths(config).has(normalized)) {
     return 'project';
   }
   if (isAllowlistedBuiltInSkillPath(skill.path, builtInRoots)) {
@@ -838,10 +839,23 @@ function currentPrompt(
   instructions: ReadonlyArray<string>,
   skillScope: 'turn' | 'session',
   internalContext?: string,
+  policySkill: ChatTurnSkill | null = skill,
 ): string {
   const context = internalContext?.trim();
+  const cabReleaseSelected =
+    policySkill?.path.toLowerCase().endsWith('.cursor/skills/cab-release/skill.md') === true;
+  const writePolicyLines = cabReleaseSelected
+    ? [
+        '# Repository and Azure DevOps write policy',
+        '- This is the explicitly requested CAB release workflow.',
+        '- You may run the pre-loaded cab-release scripts, write their temporary files, update only `/Manual Release/{version}`, and queue only snow pipeline 670 for Dry-run or 595 for Run.',
+        '- You may create and push only `Release/{version}`, only when the kickoff says to cut it, and only after the snow run succeeds.',
+        '- Do not make any other repository or Azure DevOps write.',
+        '',
+      ]
+    : CHAT_WRITE_POLICY_LINES;
   return [
-    ...CHAT_WRITE_POLICY_LINES,
+    ...writePolicyLines,
     ...instructions,
     ...(context ? [context, ''] : []),
     ...(skill ? [`Run skill: ${skill.name} (\`${skill.path}\`)`, ''] : []),
@@ -1360,7 +1374,6 @@ export function createDurableInteractiveTurnService(
           : initiallySelectedSkill;
       const registration = skillRegistration(
         thread,
-        input.turnSkill,
         skill,
         config,
         deps.builtInSkillRoots,
@@ -1599,6 +1612,7 @@ export function createDurableInteractiveTurnService(
             guidedInterview ? [] : answersSoFar(transcript, input.workflowClass),
             'session',
             input.internalContext,
+            skill,
           )
         : firstTurnPrompt;
       const specification: DurableInteractiveTurnSpecification = {

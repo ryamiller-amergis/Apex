@@ -28,7 +28,7 @@ Apex is an internal product-building and project-management platform. It central
 | AI Cost Analytics | — | — | `aiCostAnalyticsService.ts`, `aiUsageService.ts`, `aiCostScheduler.ts` | `AiCostAnalytics.tsx`, `AiCostComparison.tsx` |
 | Design Module | — | `.cursor/skills/design-module-scoping/SKILL.md`, `.cursor/skills/design-module-doc/SKILL.md` | `designModuleScopingService.ts` | `DesignModuleView.tsx`, `DesignModuleFormModal.tsx`, `DesignModuleFileTree.tsx` |
 | Load Testing | — | `.cursor/skills/k6-load-test-generation/SKILL.md` | `loadTestService.ts`, `loadTestAiGenerationService.ts` | `LoadTestsListPage.tsx`, `LoadTestDefinitionBuilderView.tsx`, `LoadTestRunDetailView.tsx` |
-| Planning & Analytics | — | — | `cursorAnalyticsService.ts` | `DevStats.tsx`, `QAMetrics.tsx`, `AIAnalysis.tsx`, `RoadmapView.tsx`, `ReleaseView.tsx` |
+| Planning & Analytics | — | — | `cursorAnalyticsService.ts` | `DevStats.tsx`, `QAMetrics.tsx`, `AIAnalysis.tsx`, `RoadmapView.tsx`, `ReleaseView.tsx`, `CreateCabRequestModal.tsx`, `CabReleaseAssistantPanel.tsx` |
 | Cloud Cost | — | — | `azureCost.ts` | `CloudCost.tsx` |
 | My Work (Dev Workbench) | `design-docs/my-work-feature-context-viewer.md` | — | `devWorkbenchFeatureContextService.ts`, `localDevContextService.ts` | `DevWorkbenchView.tsx`, `DevSessionView.tsx`, `FeatureContextModal.tsx`, `StartLocalDevModal.tsx` |
 | Document Approvals | `design-docs/document-approver-assignments.md`, `design-docs/interview-section-owners.md` | — | `documentApprovalService.ts`, `ownerApprovalService.ts` | `ApproverSelectModal.tsx`, `SectionOwnerModal.tsx` |
@@ -67,6 +67,7 @@ Apex is an internal product-building and project-management platform. It central
 | **Smart tags** | AI-suggested classification metadata (tags, route, confidence) applied only to newly discovered pending anchors during sync review; placements always allow all sides — preferred side is chosen per walkthrough step |
 | **Design Module** | A project-scoped slice of the repository (source globs + docs) used to ground AI agents on a specific area of the codebase |
 | **Load Test Definition** | A k6 script and threshold profile stored per project; runs are executed against allowlisted targets with prod-safety guards |
+| **CAB request** | ServiceNow change request drafted by the MaxView `cab-release` skill from an Apex release epic; Operators can start it from Planning → Releases Actions when flag `release-cab-request` is on |
 | **Playbook** | A saved, versioned sequence of typed steps that Apex runs on a project's behalf. A step is a `cursor-agent` turn, an `approval-gate` that waits for a person, a `notify`, a `branch`, or an `ingest-artifact`. Steps that leave Apex sit behind a gate, so nothing reaches an external agent unapproved |
 | **Playbook definition / version** | A Playbook is edited as a retained draft and published as an immutable version. A run pins the version it started on, so editing a Playbook never changes a run already in flight |
 | **Playbook run** | One execution of a published version. It suspends at an approval gate or while waiting on an agent run, and resumes when the gate is decided or the agent finishes — a restart mid-run does not lose it, because the state is in Apex's own tables rather than in memory |
