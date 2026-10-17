@@ -1,693 +1,724 @@
 {
   "epics": [
     {
-      "title": "Home Pill Access Control",
+      "title": "ATS Phase 1 MVP Discovery",
       "features": [
         {
           "id": "FEAT-001",
           "items": [
             {
-              "id": "PBI-001",
-              "type": "PBI",
-              "title": "Restrict a Home skill pill to specific users or groups",
-              "priority": "Must Have",
-              "dependsOn": [
-                "TBI-001",
-                "TBI-002"
-              ],
-              "userStory": {
-                "iWant": "restrict a Home skill pill to specific users or groups",
-                "soThat": "only the people who need that skill see and can start it from Home",
-                "persona": "Project Admin"
-              },
-              "userTypes": [
-                "Project Admin"
-              ],
-              "outOfScope": [
-                "Bulk-editing allow-lists across multiple pills at once"
-              ],
-              "businessRules": [
-                "BR-001: Empty allow-list means everyone with Home access"
-              ],
-              "parallelGroup": null,
-              "acceptanceCriteria": [
-                {
-                  "then": "the allow-list is persisted, and only those users (directly or via group membership) see and can start that pill on Home",
-                  "when": "I add one or more users or groups to the pill's allow-list and save",
-                  "given": "I am a Project Admin editing a Home skill pill in Project Settings"
-                },
-                {
-                  "then": "the previously saved allow-list remains in effect and I see an error indicating the save did not succeed",
-                  "when": "I submit the change",
-                  "given": "I am a Project Admin editing a pill's allow-list and the save request fails"
-                },
-                {
-                  "then": "that pill is visible to them, matching today's behavior",
-                  "when": "any user with Home access loads Home",
-                  "given": "a Home skill pill has no users or groups on its allow-list"
-                },
-                {
-                  "then": "the request is denied and no allow-list change is persisted",
-                  "when": "they call the admin write endpoint directly to change a pill's allow-list",
-                  "given": "a caller without Project Admin access to project settings"
-                }
-              ],
-              "nonFunctionalRequirements": {
-                "security": "Only callers passing the existing admin write gate can persist an allow-list change",
-                "performance": "Saving an allow-list completes within the same time as any other pill edit in Project Settings today",
-                "accessibility": "The user/group selection control is keyboard-navigable and screen-reader labeled, matching the existing pill editor fields"
-              }
-            },
-            {
-              "id": "PBI-002",
-              "type": "PBI",
-              "title": "Restrict a Home MCP pill to specific users or groups",
-              "priority": "Must Have",
-              "dependsOn": [
-                "TBI-001",
-                "TBI-002"
-              ],
-              "userStory": {
-                "iWant": "restrict a Home MCP pill to specific users or groups",
-                "soThat": "an MCP shortcut can't be used as a way around a restricted skill pill",
-                "persona": "Project Admin"
-              },
-              "userTypes": [
-                "Project Admin"
-              ],
-              "outOfScope": [
-                "Bulk-editing allow-lists across multiple pills at once"
-              ],
-              "businessRules": [
-                "BR-001: Empty allow-list means everyone with Home access"
-              ],
-              "parallelGroup": null,
-              "acceptanceCriteria": [
-                {
-                  "then": "the allow-list is persisted, and only those users (directly or via group membership) see and can start that MCP pill on Home",
-                  "when": "I add one or more users or groups to the pill's allow-list and save",
-                  "given": "I am a Project Admin editing a Home MCP pill in Project Settings"
-                },
-                {
-                  "then": "the previously saved allow-list remains in effect and I see an error indicating the save did not succeed",
-                  "when": "I submit the change",
-                  "given": "I am a Project Admin editing an MCP pill's allow-list and the save request fails"
-                },
-                {
-                  "then": "that MCP pill is visible to them, matching today's behavior",
-                  "when": "any user with Home access loads Home",
-                  "given": "a Home MCP pill has no users or groups on its allow-list"
-                },
-                {
-                  "then": "the request is denied and no allow-list change is persisted",
-                  "when": "they call the admin write endpoint directly to change an MCP pill's allow-list",
-                  "given": "a caller without Project Admin access to project settings"
-                }
-              ],
-              "nonFunctionalRequirements": {
-                "security": "Only callers passing the existing admin write gate can persist an allow-list change",
-                "performance": "Saving an allow-list completes within the same time as any other MCP pill edit in Project Settings today",
-                "accessibility": "The user/group selection control is keyboard-navigable and screen-reader labeled, matching the existing pill editor fields"
-              }
-            },
-            {
               "id": "TBI-001",
               "type": "TBI",
-              "title": "Add allow-list fields to Home pill storage and shared types",
+              "title": "Author the ATS discovery Skill definition and interview flow",
               "priority": "Must Have",
               "dependsOn": [],
-              "description": "Add optional allowedUserIds and allowedGroupIds fields to the shared skill-pill and MCP-pill types, and extend the admin project-settings read and write path so the full pill list — including these new fields — is returned and persisted exactly as every other pill attribute is today. No new tables or columns: both fields live inside the existing JSON-backed pill arrays on the project's skill settings row.",
+              "description": "Write the standalone ATS discovery Skill so it plugs into the existing guided-interview flow. It opens with leadership's vision, asks one question per reply, covers each stage of the staffing lifecycle, uses research only to test decisions, and narrows Phase 1 to the smallest usable end-to-end workflow. Unanswered topics are recorded as unresolved, not skipped silently.",
               "parallelGroup": null,
               "definitionOfDone": [
-                "Skill-pill and MCP-pill shared types carry optional allowedUserIds and allowedGroupIds fields",
-                "Admin project-settings GET returns the full pill list including allow-list fields",
-                "Admin project-settings PUT persists allow-list fields on both skill and MCP pills without a database migration",
-                "Existing pills with no allow-list fields continue to round-trip unchanged"
+                "Skill document exists, follows the repository's Skill format, and is selectable as an interview Skill option",
+                "Skill opens with leadership's vision before any market research",
+                "Skill lists every staffing lifecycle area and requires each to be covered or labeled unresolved",
+                "Skill states the rule that Phase 1 is the smallest usable end-to-end workflow and everything else is deferred",
+                "A scripted session confirms the Skill asks one question per reply"
               ],
               "technicalDependencies": [
-                "Existing project skill settings persistence for quick skill and MCP pills"
+                "Existing guided-interview flow loads the Skill selected in project skill settings",
+                "ATS ADR (research-grounded-ats-discovery-skill) supplies the lifecycle areas and scope decisions"
               ],
               "nonFunctionalRequirements": [
-                "Admin read/write path continues to return the full pill list unfiltered for authorized editors"
+                "Skill must work with the existing interview streaming and thread persistence without runtime changes",
+                "Each reply asks exactly one question"
               ]
             },
             {
               "id": "TBI-002",
               "type": "TBI",
-              "title": "Extend Admin Project Settings pill editor with allow-list controls",
+              "title": "Define decision ledger rules and conflict handling",
               "priority": "Must Have",
               "dependsOn": [
                 "TBI-001"
               ],
-              "description": "Add a user/group selection control to each pill row (skill and MCP) in the Admin Project Settings pill editor, following the existing project user/group picker pattern used for reviewer and approver pools, so a Project Admin can set or clear an allow-list without leaving the editor.",
-              "parallelGroup": null,
+              "description": "Add the ledger section to the Skill. It defines the four decision states, requires each reply to show the current ledger, requires the interview to pause on a conflict until the leader names the authoritative decision, and requires the final ledger to be written into the standard interview transcript. The ledger uses reply text and existing persistence only.",
+              "parallelGroup": "rules-authoring",
               "definitionOfDone": [
-                "Each skill pill row exposes a user/group selection control bound to its allow-list fields",
-                "Each MCP pill row exposes the same user/group selection control bound to its allow-list fields",
-                "Saving the pill editor persists allow-list changes alongside existing pill attributes",
-                "Clearing a pill's allow-list back to empty restores the everyone-with-Home-access default"
+                "Skill defines confirmed, assumed, unresolved, and superseded with one example each",
+                "Skill requires a visible ledger update in each reply that changes a decision",
+                "Skill requires a pause and a question when two decisions conflict",
+                "Skill requires the final ledger in the transcript used for PRD generation",
+                "Scripted sessions cover confirm, assume, skip, supersede, and conflict cases"
               ],
               "technicalDependencies": [
-                "TBI-001 allow-list fields on skill and MCP pill types"
+                "Existing chat thread and interview transcript persistence hold the ledger text",
+                "TBI-001 interview flow defines where a ledger update appears in a reply"
               ],
               "nonFunctionalRequirements": [
-                "Selection control is keyboard-navigable and screen-reader labeled",
-                "Editing one pill's allow-list does not require reloading the full pill list"
+                "Ledger must survive thread resume with no loss of state",
+                "Ledger must stay short enough to show in every reply"
               ]
-            }
-          ],
-          "route": "/home",
-          "title": "Configure Home Pill Allow-Lists",
-          "priority": "Must Have",
-          "dependsOn": [],
-          "userTypes": [
-            "Project Admin"
-          ],
-          "outOfScope": [
-            "Restricting Interview, ADR, or any other non-Home skill selector",
-            "Validating that an allow-listed user or group belongs to the project being configured"
-          ],
-          "description": "Project Admins configure per-pill allow-lists — specific users or groups — on Home skill and MCP pills for any Apex project, so only intended people see and can start those shortcuts.",
-          "dependencies": [
-            "None"
-          ],
-          "affectedPersonas": [
-            "Project Admin"
-          ],
-          "personaBehaviors": [
-            {
-              "behavior": "Configure per-pill allow-lists for Home skill and MCP pills, specifying which users or groups can see and start each pill",
-              "userTypes": [
-                "Project Admin"
-              ]
-            }
-          ]
-        },
-        {
-          "id": "FEAT-002",
-          "items": [
-            {
-              "id": "PBI-003",
-              "type": "PBI",
-              "title": "See only the Home pills I'm allowed to use",
-              "priority": "Must Have",
-              "dependsOn": [
-                "TBI-003",
-                "TBI-004"
-              ],
-              "userStory": {
-                "iWant": "see only the Home skill and MCP pills I'm allowed to use",
-                "soThat": "I'm not tempted to start a skill I don't have access to",
-                "persona": "Authenticated User"
-              },
-              "userTypes": [
-                "Authenticated User"
-              ],
-              "outOfScope": [
-                "Filtering any field on skill-config other than the Home pill arrays"
-              ],
-              "businessRules": [
-                "BR-001: Empty allow-list means everyone with Home access",
-                "BR-002: Group membership is evaluated live",
-                "BR-004: Project Admin follows allow-lists on Home"
-              ],
-              "parallelGroup": null,
-              "acceptanceCriteria": [
-                {
-                  "then": "I see only the pills whose allow-list includes me directly or through a group I belong to, or that have no allow-list at all",
-                  "when": "I load Home",
-                  "given": "a project has pills with different allow-lists and I am on some but not all of them"
-                },
-                {
-                  "then": "that group grants no access rather than the request failing",
-                  "when": "pill visibility is evaluated for me",
-                  "given": "a pill's allow-list references a group that no longer exists"
-                },
-                {
-                  "then": "I see the existing pill-less Home experience, unchanged",
-                  "when": "I load Home",
-                  "given": "a project has no configured Home pills at all"
-                },
-                {
-                  "then": "both the skill pill and MCP pill arrays returned to me are empty, and no allow-list identifiers appear anywhere in the response",
-                  "when": "I load Home",
-                  "given": "I am allowed on zero of the project's configured pills"
-                }
-              ],
-              "nonFunctionalRequirements": {
-                "security": "The public skill-config response never includes allowedUserIds or allowedGroupIds for any pill",
-                "performance": "Pill filtering adds only in-memory list evaluation and existing membership lookups to the current skill-config read",
-                "accessibility": "The filtered pill row renders through the same accessible pill components already used on Home"
-              }
-            },
-            {
-              "id": "PBI-004",
-              "type": "PBI",
-              "title": "See every Home pill as Platform Admin",
-              "priority": "Must Have",
-              "dependsOn": [
-                "TBI-003",
-                "TBI-004"
-              ],
-              "userStory": {
-                "iWant": "see and start every configured Home pill regardless of allow-lists",
-                "soThat": "I can verify pill configuration and test restricted skills without being added to every allow-list",
-                "persona": "Platform Admin"
-              },
-              "userTypes": [
-                "Platform Admin"
-              ],
-              "outOfScope": [
-                "Extending the bypass to the admin pill-editor experience, which already shows every pill to Project Admin"
-              ],
-              "businessRules": [
-                "BR-003: Platform Admin bypasses allow-lists on Home",
-                "BR-004: Project Admin does not get this bypass"
-              ],
-              "parallelGroup": null,
-              "acceptanceCriteria": [
-                {
-                  "then": "I see every configured skill and MCP pill for that project, unfiltered",
-                  "when": "I load Home",
-                  "given": "I am a Platform Admin (Super Admin) and a project has pills with non-empty allow-lists I am not on"
-                },
-                {
-                  "then": "I am treated as a regular user subject to allow-lists, not granted the bypass",
-                  "when": "Home pills are resolved for me",
-                  "given": "my session cannot be verified as a Platform Admin (Super Admin) identity"
-                },
-                {
-                  "then": "I see the same pill-less Home experience as any other user",
-                  "when": "I load Home as a Platform Admin",
-                  "given": "a project has no configured Home pills at all"
-                },
-                {
-                  "then": "that pill is not shown to me, even though I can see and edit it in Project Settings",
-                  "when": "I load Home",
-                  "given": "I am a Project Admin, not a Platform Admin, and I am not on a pill's allow-list"
-                }
-              ],
-              "nonFunctionalRequirements": {
-                "security": "The bypass relies on the existing super-admin identity check already used elsewhere in Apex; it is not a new privilege boundary",
-                "performance": "The bypass check adds only a single identity check to the existing skill-config read",
-                "accessibility": "Pills render through the same accessible pill components already used on Home"
-              }
-            },
-            {
-              "id": "PBI-005",
-              "type": "PBI",
-              "title": "Home thread creation denies an unauthorized pill",
-              "priority": "Must Have",
-              "dependsOn": [
-                "TBI-003",
-                "TBI-005"
-              ],
-              "userStory": {
-                "iWant": "start Home threads only on pills I'm allowed to use",
-                "soThat": "a restricted skill can't be reached by calling the create endpoint directly instead of clicking a hidden pill",
-                "persona": "Authenticated User"
-              },
-              "userTypes": [
-                "Authenticated User"
-              ],
-              "outOfScope": [
-                "Changing the error response shape returned by thread creation for unrelated failures"
-              ],
-              "businessRules": [
-                "BR-007: Thread creation must match an allowed configured pill or be eligible pill-less"
-              ],
-              "parallelGroup": null,
-              "acceptanceCriteria": [
-                {
-                  "then": "the thread is created",
-                  "when": "I start a Home thread naming that pill's skillPath",
-                  "given": "I am allowed on a specific configured Home skill pill"
-                },
-                {
-                  "then": "the request is denied and no thread is created",
-                  "when": "I call the thread-creation endpoint directly naming that pill's MCP identity, bypassing the Home composer",
-                  "given": "I am not allowed on a specific configured Home MCP pill"
-                },
-                {
-                  "then": "the request is denied",
-                  "when": "I attempt to start a Home thread with it and I am not allowed on any configured pill",
-                  "given": "a kickoff names a skillPath that does not match any pill configured for the project"
-                },
-                {
-                  "then": "the thread is created regardless of that pill's allow-list",
-                  "when": "I start a Home thread against any configured pill",
-                  "given": "I am a Platform Admin (Super Admin)"
-                }
-              ],
-              "nonFunctionalRequirements": {
-                "security": "Enforcement runs server-side even when the request bypasses the Home composer entirely",
-                "performance": "The allow-list check adds only an in-memory lookup to the existing thread-creation call",
-                "accessibility": "Not applicable — this is a server-enforced request check with no direct UI surface beyond the existing error message"
-              }
-            },
-            {
-              "id": "PBI-006",
-              "type": "PBI",
-              "title": "Blocked from starting a Home thread with no allowed pills",
-              "priority": "Must Have",
-              "dependsOn": [
-                "TBI-003",
-                "TBI-005",
-                "TBI-006"
-              ],
-              "userStory": {
-                "iWant": "start a Home conversation only when I have at least one pill I'm allowed to use",
-                "soThat": "I can't work around a single-skill restriction by starting a free-form Home chat instead",
-                "persona": "Authenticated User"
-              },
-              "userTypes": [
-                "Authenticated User"
-              ],
-              "outOfScope": [
-                "Blocking access to threads the user already owns"
-              ],
-              "businessRules": [
-                "BR-005: Zero allowed pills blocks Home thread start, including pill-less",
-                "BR-006: No configured pills at all keeps pill-less chat allowed"
-              ],
-              "parallelGroup": null,
-              "acceptanceCriteria": [
-                {
-                  "then": "the request is denied and I see an explanation that I have no available Home skills",
-                  "when": "I try to start a new Home thread with no pill selected",
-                  "given": "a project has configured Home pills and I am allowed on none of them"
-                },
-                {
-                  "then": "the server still denies the request",
-                  "when": "the project has pills and I am allowed on none",
-                  "given": "I bypass the disabled Home composer and call the create endpoint directly with no skillPath and no MCP identity"
-                },
-                {
-                  "then": "the thread is created as pill-less chat, unchanged from today",
-                  "when": "I start a new Home thread with no pill selected",
-                  "given": "a project has no configured Home pills at all"
-                },
-                {
-                  "then": "the pill-less request is still evaluated on its own terms and is not denied purely because other pills exist",
-                  "when": "I try to start a new Home thread with no pill selected",
-                  "given": "I am allowed on at least one configured pill"
-                }
-              ],
-              "nonFunctionalRequirements": {
-                "security": "The block is enforced server-side on thread creation, not only by disabling the composer",
-                "performance": "The zero-allowed-pills check reuses the same resolver call already made for pill filtering",
-                "accessibility": "The Home composer visibly disables sending in this state with an explanatory message"
-              }
-            },
-            {
-              "id": "PBI-007",
-              "type": "PBI",
-              "title": "Continue using a Home thread after losing pill access",
-              "priority": "Must Have",
-              "dependsOn": [
-                "TBI-005"
-              ],
-              "userStory": {
-                "iWant": "keep messaging in a Home thread I already started, even after an admin removes me from that pill's allow-list",
-                "soThat": "an access change doesn't interrupt work I'm already in the middle of",
-                "persona": "Authenticated User"
-              },
-              "userTypes": [
-                "Authenticated User"
-              ],
-              "outOfScope": [
-                "Re-checking pill access on follow-up messages"
-              ],
-              "businessRules": [
-                "BR-007: Access is enforced only at thread creation"
-              ],
-              "parallelGroup": null,
-              "acceptanceCriteria": [
-                {
-                  "then": "my message is accepted and the conversation continues",
-                  "when": "an admin later removes me from that pill's allow-list and I send another message on the same thread",
-                  "given": "I started a Home thread on a pill I was allowed on at the time"
-                },
-                {
-                  "then": "access is denied by the existing thread-ownership rules, unrelated to pill access",
-                  "when": "I attempt to open or write to it",
-                  "given": "a thread is owned by someone else"
-                },
-                {
-                  "then": "the new thread creation is denied, even though my existing thread on that pill still works",
-                  "when": "I click New Chat and try to start a fresh thread on that same pill",
-                  "given": "my access to a pill was removed after I started a thread on it"
-                },
-                {
-                  "then": "I can view the full prior conversation and send new messages without being blocked",
-                  "when": "I reopen my existing thread on that pill from Thread History",
-                  "given": "my access to a pill was removed"
-                }
-              ],
-              "nonFunctionalRequirements": {
-                "security": "Existing thread-ownership checks continue to gate who may read or write a thread; this PBI does not loosen them",
-                "performance": "Not specified — reopening and sending messages on an existing thread involves no new checks",
-                "accessibility": "Not applicable — no UI change to the existing conversation view"
-              }
             },
             {
               "id": "TBI-003",
               "type": "TBI",
-              "title": "Build a pill access resolver for live allow-list evaluation",
+              "title": "Define research, source, and redaction rules",
               "priority": "Must Have",
-              "dependsOn": [],
-              "description": "Build a resolver that, given a project's configured Home pills (skill and MCP) and a caller's identity, returns the subset of pills that caller may use and whether that caller may start a Home thread at all under the project's current pill configuration. The resolver applies the empty-allow-list-means-everyone default, evaluates group membership live against current project group data, and exempts the Platform Admin (Super Admin) identity from every check. It is the single source of truth consumed by both the skill-config read path and Home thread creation.",
-              "parallelGroup": null,
+              "dependsOn": [
+                "TBI-001"
+              ],
+              "description": "Add the research section to the Skill. It sets when research is allowed, lists the identifier types to redact before any query, defines acceptable sources, requires source and date on every recorded claim, requires citations on claims that influence scope, and requires corroboration for material claims. It includes a short benchmark seed list for the product owner to review during the pilot.",
+              "parallelGroup": "rules-authoring",
               "definitionOfDone": [
-                "Resolver returns the allowed subset of skill and MCP pills for a given caller and pill configuration",
-                "Resolver returns whether a caller may start a pill-less Home thread given the project's pill configuration",
-                "Resolver treats a Platform Admin (Super Admin) identity as allowed on every pill",
-                "Resolver treats a missing or deleted group reference in an allow-list as granting no access",
-                "Unit tests cover the empty-allow-list default, non-empty allow-list matching by user and by group, and the Platform Admin bypass"
+                "Skill lists the identifier types to redact and the step that redacts them before each query",
+                "Skill defines source rules and requires source and date for every recorded claim",
+                "Skill defines material claim and corroboration in the terms of the PRD",
+                "Skill includes a benchmark seed list marked for review during the pilot",
+                "Seeded test inputs with identifiers produce research queries with no leaked identifiers"
               ],
               "technicalDependencies": [
-                "TBI-001 allow-list fields on skill and MCP pill types",
-                "Existing project group membership lookups"
+                "Project-configured web research access is enabled for the pilot project",
+                "TBI-001 interview flow defines when a decision is ready to test"
               ],
               "nonFunctionalRequirements": [
-                "Resolver evaluation is a pure function of its inputs (pills, caller identity, membership) with no direct HTTP or database coupling of its own"
+                "Research queries must contain no personal, client, commercial, or internal identifiers",
+                "Research must not leave a reply without visible status"
               ]
             },
             {
               "id": "TBI-004",
               "type": "TBI",
-              "title": "Filter and strip Home pills on the public skill-config read path",
+              "title": "Define completion rubric and PRD-ready output contract",
               "priority": "Must Have",
               "dependsOn": [
+                "TBI-002",
                 "TBI-003"
               ],
-              "description": "Extend the public skill-config read path to run its Home skill and MCP pill arrays through the pill access resolver for the requesting caller, returning only the pills that caller may use with allowedUserIds and allowedGroupIds omitted from each. Every other field on that response is left exactly as it is today, so Interview, ADR, and other consumers of the same read path see no change in behavior.",
+              "description": "Add the completion section to the Skill. It states when a session may finish, requires a Phase 1 brief, deferred roadmap, and research notes in the interview transcript in a form PRD generation reads, and keeps incomplete sessions as drafts.",
               "parallelGroup": null,
               "definitionOfDone": [
-                "Public skill-config response includes only pills the caller may use",
-                "allowedUserIds and allowedGroupIds never appear in the public response",
-                "Platform Admin callers receive every configured pill on the public response",
-                "Interview, ADR, and other skill-config fields unrelated to Home pills are unchanged in the response"
+                "Skill states the completion checks: coverage or unresolved labels, no open conflict, citations and corroboration present",
+                "Skill defines the structure of the Phase 1 brief, deferred roadmap, and research notes",
+                "Skill states that an incomplete session remains a draft",
+                "A finished test transcript is accepted by PRD generation and yields a usable PRD"
               ],
               "technicalDependencies": [
-                "TBI-003 pill access resolver"
+                "PRD generation reads the finished interview transcript",
+                "Decision ledger and research rules from TBI-002 and TBI-003"
               ],
               "nonFunctionalRequirements": [
-                "No new fields are added to the public response beyond the existing pill shape minus the two allow-list fields",
-                "Non-Home-pill fields on the response are unaffected"
+                "Output must be readable by PRD generation without manual rewriting",
+                "Deferred scope must be kept apart from Phase 1 scope"
               ]
             },
             {
               "id": "TBI-005",
               "type": "TBI",
-              "title": "Enforce pill access on Home thread creation",
+              "title": "Configure the pilot project and fallback",
               "priority": "Must Have",
               "dependsOn": [
-                "TBI-003"
+                "TBI-004"
               ],
-              "description": "Extend Home thread creation to call the pill access resolver before persisting a new thread: accept the kickoff only when it names an allowed configured pill (skill or MCP) or carries no pill and the caller is allowed to start Home chat at all under the project's pill configuration, otherwise deny with an explicit error. Platform Admin (Super Admin) is exempt. This check runs only on thread creation — reopening a thread the caller owns and sending further messages on it are untouched.",
+              "description": "Write the pilot runbook and the configuration values for one project: register the ATS discovery Skill as an interview Skill option in project skill settings, enable web research and set the model, and confirm the existing interview Skill still starts. Describe how to remove the option.",
               "parallelGroup": null,
               "definitionOfDone": [
-                "Thread creation denies a kickoff naming a pill the caller is not allowed on",
-                "Thread creation denies a pill-less kickoff when the project has pills and the caller is allowed on none",
-                "Thread creation allows a pill-less kickoff when the project has no configured pills",
-                "Thread creation allows any kickoff from a Platform Admin (Super Admin) caller",
-                "Sending a message on an existing thread the caller owns is unaffected by this check"
+                "Runbook names the settings to change and the values to use for the pilot project",
+                "ATS discovery Skill appears as an interview option only in the pilot project",
+                "Existing interview Skill still starts in the pilot project",
+                "Runbook describes how a Project Admin removes the option"
               ],
               "technicalDependencies": [
-                "TBI-003 pill access resolver"
+                "Existing project skill settings support interview Skill options, web research, and model selection per project",
+                "Completed Skill from TBI-001 through TBI-004"
               ],
               "nonFunctionalRequirements": [
-                "The check runs before a new thread row is persisted, so a denied kickoff creates no thread",
-                "The check does not run on existing-thread read or message-send paths"
+                "Configuration must affect only the pilot project",
+                "Removing the option must leave in-progress threads readable"
               ]
             },
             {
               "id": "TBI-006",
               "type": "TBI",
-              "title": "Update Home composer for filtered pills and blocked-start state",
+              "title": "Define pilot scenarios and acceptance checklist",
               "priority": "Must Have",
               "dependsOn": [
-                "TBI-004",
-                "TBI-005"
+                "TBI-004"
               ],
-              "description": "Update the Home composer to render only the pill arrays already filtered by the skill-config read path, and to disable sending a pill-less message when the project has pills configured and the caller's filtered arrays are both empty, with an explanatory message. This mirrors the server-side rule client-side for a clear experience; the server-side check remains the actual enforcement boundary.",
+              "description": "Write the pilot scenarios and a checklist that maps each pass condition to an observable check: lifecycle coverage, decision retention, citations, corroboration, resume, permissions, and Product-Owner acceptance. Record where results are kept and what counts as a runtime gap.",
               "parallelGroup": null,
               "definitionOfDone": [
-                "Composer renders only the filtered pill arrays from skill-config",
-                "Composer disables pill-less send when the project has pills and the caller's filtered arrays are both empty",
-                "Composer allows pill-less send unchanged when the project has no configured pills",
-                "Existing pill selection and send flow for allowed pills is unaffected"
+                "Checklist has one observable check per pass condition",
+                "Scenarios cover a normal run, a conflict, a resume after a break, and a run with seeded identifiers",
+                "Checklist includes a permission check for view-only users",
+                "Document states which findings count as a runtime gap needing a separate PRD"
               ],
               "technicalDependencies": [
-                "TBI-004 filtered skill-config response",
-                "TBI-005 server-side thread-creation enforcement"
+                "Completion rubric from TBI-004",
+                "Existing interview resume and permission behavior"
               ],
               "nonFunctionalRequirements": [
-                "Composer disabled-state message is screen-reader accessible",
-                "Composer behavior degrades safely if the skill-config response is slow or errors, defaulting to disabled rather than allowing an unchecked send"
-              ]
-            }
-          ],
-          "route": "/home",
-          "title": "Enforce Home Pill Access",
-          "priority": "Must Have",
-          "dependsOn": [
-            "FEAT-001"
-          ],
-          "userTypes": [
-            "Authenticated User",
-            "Project Admin",
-            "Platform Admin"
-          ],
-          "outOfScope": [
-            "Re-checking pill access on every follow-up message of an existing thread",
-            "Hiding a user's own thread history when their pill access is later removed"
-          ],
-          "description": "Authenticated Users see and can start only the Home skill and MCP pills their allow-list permits, Platform Admin sees and can start every configured pill to verify configuration, and Project Admin follows the same allow-lists as any other user on Home — closing every path (visible pills, thread creation, and pill-less chat) a restricted user could otherwise use to reach a skill they aren't allowed on.",
-          "dependencies": [
-            "Requires the allow-list fields and admin editor from Configure Home Pill Allow-Lists"
-          ],
-          "affectedPersonas": [
-            "Authenticated User",
-            "Project Admin",
-            "Platform Admin"
-          ],
-          "personaBehaviors": [
-            {
-              "behavior": "See only Home skill and MCP pills in their allow-list; blocked from creating threads with unauthorized pills or when no pills are allowed; can continue existing threads even after losing pill access",
-              "userTypes": [
-                "Authenticated User"
+                "Checklist must use pass or fail checks with no numeric score",
+                "Scenarios must run without production client data"
               ]
             },
             {
-              "behavior": "See and can start every configured Home pill regardless of allow-lists to verify configuration",
+              "id": "PBI-001",
+              "type": "PBI",
+              "title": "Shape a Phase 1 MVP through a guided leadership interview",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-001"
+              ],
+              "userStory": {
+                "iWant": "describe leadership's vision and be guided through the staffing lifecycle to a Phase 1 MVP",
+                "soThat": "leadership agrees on the smallest usable end-to-end workflow for the replacement ATS",
+                "persona": "Manager"
+              },
               "userTypes": [
-                "Platform Admin"
-              ]
+                "Manager"
+              ],
+              "outOfScope": [
+                "Feature-parity checklist against eRecruit or the market",
+                "Changes to the interview UI"
+              ],
+              "businessRules": [
+                "BR-006: Cover the full lifecycle, narrow Phase 1 to the smallest usable workflow",
+                "BR-008: Existing project scope and interview permissions apply"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "The Skill opens by asking for leadership's vision, asks one question per reply, and works through every staffing lifecycle area before proposing Phase 1",
+                  "when": "The Manager starts an ATS discovery Interview",
+                  "given": "A Manager with interview manage permission has the ATS discovery Skill enabled in the project"
+                },
+                {
+                  "then": "The user sees an error in the chat, the thread keeps all earlier messages, and the user can resend or continue",
+                  "when": "A reply cannot be generated because the model or research step fails",
+                  "given": "An ATS discovery Interview is in progress"
+                },
+                {
+                  "then": "The area is recorded as unresolved and the interview moves on without asking again",
+                  "when": "The Manager chooses to skip it",
+                  "given": "Leadership cannot answer a lifecycle area"
+                },
+                {
+                  "then": "The Skill tests it against the smallest usable end-to-end workflow, and items outside that workflow go to the deferred roadmap rather than a parity checklist",
+                  "when": "The Manager submits that request",
+                  "given": "Leadership asks to include every feature of the old system or the market in Phase 1"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Only users who pass the existing interview permission checks for the project can start or continue the interview",
+                "performance": "Replies stream through the existing interview chat with no added delay beyond research steps, which show a visible status",
+                "accessibility": "The interview uses the existing chat view, so keyboard and screen reader behavior stay as they are"
+              }
             },
             {
-              "behavior": "Follow the same allow-lists as any other user; subject to pill visibility and thread creation restrictions",
+              "id": "PBI-002",
+              "type": "PBI",
+              "title": "Keep a visible ledger of decisions",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-002"
+              ],
+              "userStory": {
+                "iWant": "see which decisions are confirmed, assumed, unresolved, or superseded",
+                "soThat": "leadership knows what is settled and what still needs an answer",
+                "persona": "Manager"
+              },
+              "userTypes": [
+                "Manager"
+              ],
+              "outOfScope": [
+                "A separate ledger table or screen",
+                "Export of the ledger to another system"
+              ],
+              "businessRules": [
+                "BR-001: Four decision states",
+                "BR-002: Pause on conflict until the authoritative decision is named"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "The reply shows the decision with its state, and earlier decisions keep their states",
+                  "when": "The Skill replies",
+                  "given": "A decision has just been made in the interview"
+                },
+                {
+                  "then": "The Manager can correct it in chat and the Skill restores the correct state in the next reply",
+                  "when": "The model drops or misstates an earlier decision",
+                  "given": "The ledger is being rebuilt from a long conversation"
+                },
+                {
+                  "then": "The Skill quotes both without judgment, pauses, asks which is authoritative, and marks the other superseded",
+                  "when": "The Manager gives a new answer that conflicts with an earlier one",
+                  "given": "Two decisions are recorded for the same topic"
+                },
+                {
+                  "then": "The superseded decision stays visible as superseded and is never counted as confirmed",
+                  "when": "The ledger is shown again",
+                  "given": "A decision was marked superseded"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The ledger is stored only in the existing project-scoped thread and transcript",
+                "performance": "The ledger is part of the reply text and adds no separate request",
+                "accessibility": "The ledger is plain text in the chat so assistive technology reads it like any other message"
+              }
+            },
+            {
+              "id": "PBI-003",
+              "type": "PBI",
+              "title": "Test Phase 1 decisions with cited research",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-003"
+              ],
+              "userStory": {
+                "iWant": "see the cited sources behind claims that change Phase 1 scope",
+                "soThat": "I can trust the scope decisions and check them",
+                "persona": "Product-Owner"
+              },
+              "userTypes": [
+                "Product-Owner"
+              ],
+              "outOfScope": [
+                "Research on topics unrelated to a Phase 1 decision",
+                "Automatic scoring of vendors"
+              ],
+              "businessRules": [
+                "BR-004: Research only when it informs a decision",
+                "BR-005: Citations on influential claims, corroboration on material claims"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "Each claim that influences scope shows a source and date, and each material claim shows a second independent source",
+                  "when": "The Skill researches it",
+                  "given": "A decision about Phase 1 scope is ready to test and research is enabled for the project"
+                },
+                {
+                  "then": "The Skill says so, labels the decision as assumed or unresolved, and does not state an uncited claim as fact",
+                  "when": "The Skill tries to test a decision",
+                  "given": "Web research is unavailable or returns nothing useful"
+                },
+                {
+                  "then": "The claim is marked uncorroborated and cannot support a confirmed decision until a second independent source is found",
+                  "when": "The Skill prepares to rely on it",
+                  "given": "A material claim has only one source"
+                },
+                {
+                  "then": "The Skill makes no research call and does not add a parity item from the market",
+                  "when": "The interview reaches that topic",
+                  "given": "A topic has no bearing on any open decision"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Research uses the project-configured web research access and only redacted queries",
+                "performance": "Research runs only when a decision needs it, and the reply shows a status while it runs",
+                "accessibility": "Citations appear as plain text with source name and date so assistive technology reads them"
+              }
+            },
+            {
+              "id": "PBI-004",
+              "type": "PBI",
+              "title": "Keep sensitive ATS details out of web research",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-003"
+              ],
+              "userStory": {
+                "iWant": "share real ATS context in the interview without it reaching public web searches",
+                "soThat": "leadership can be candid without exposing people, clients, or commercial terms",
+                "persona": "Manager"
+              },
+              "userTypes": [
+                "Manager"
+              ],
+              "outOfScope": [
+                "Automated scanning tools outside the Skill instructions",
+                "Redaction of the stored interview conversation"
+              ],
+              "businessRules": [
+                "BR-003: Redact before any research query"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "The query uses generic descriptions in place of every one of those identifiers",
+                  "when": "The Skill runs a research query about a related decision",
+                  "given": "The Manager has named a client, a contract price, a person, and an internal system in the interview"
+                },
+                {
+                  "then": "It treats the term as an identifier, generalizes it, or asks the Manager before searching",
+                  "when": "It prepares a research query containing that term",
+                  "given": "The Skill cannot tell whether a term is an identifier"
+                },
+                {
+                  "then": "Only the generalized idea is searched and no part of the passage is copied",
+                  "when": "The Skill builds a query from that passage",
+                  "given": "An identifier appears inside a longer quoted passage"
+                },
+                {
+                  "then": "It declines to search with the name, explains why, and offers a generic search instead",
+                  "when": "The Skill receives the request",
+                  "given": "The Manager asks the Skill to search for a named client or person directly"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "No personal, client, commercial, or internal identifier appears in a research query, and research notes keep only sources and dates",
+                "performance": "Redaction happens inside the reply that triggers research and adds no separate step for the user",
+                "accessibility": "Any notice about redaction is shown as plain chat text"
+              }
+            },
+            {
+              "id": "PBI-005",
+              "type": "PBI",
+              "title": "Pause and resume an ATS interview without losing decisions",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-002"
+              ],
+              "userStory": {
+                "iWant": "pause an ATS discovery interview and resume it later",
+                "soThat": "leaders can decide over several sittings without repeating earlier answers",
+                "persona": "Manager"
+              },
+              "userTypes": [
+                "Manager"
+              ],
+              "outOfScope": [
+                "Resume across projects",
+                "Merging two interviews"
+              ],
+              "businessRules": [
+                "BR-001: Decision states persist",
+                "BR-008: Existing interview resume and permissions apply"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "The Skill shows the ledger with every decision in its earlier state and asks the next open question",
+                  "when": "The Manager returns later and resumes the interview",
+                  "given": "An ATS discovery Interview is in progress with several decisions recorded"
+                },
+                {
+                  "then": "The user sees an error with a way to retry, and no earlier decisions are lost from storage",
+                  "when": "The Manager opens the interview",
+                  "given": "The thread cannot be loaded on resume"
+                },
+                {
+                  "then": "The Skill labels the affected decision as assumed or unresolved until it can be tested again",
+                  "when": "The Manager resumes",
+                  "given": "The interview ended mid-research on the previous sitting"
+                },
+                {
+                  "then": "The message is refused and the interview content stays unchanged",
+                  "when": "The user tries to send a message",
+                  "given": "A user with interview view permission only opens the interview"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Only users with access to the project and the interview can resume it",
+                "performance": "Resuming opens the existing thread and continues in the next reply with no reload of earlier questions",
+                "accessibility": "Resume uses the existing interview list and chat view"
+              }
+            },
+            {
+              "id": "PBI-006",
+              "type": "PBI",
+              "title": "Receive a PRD-ready Phase 1 brief, deferred roadmap, and research notes",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-004"
+              ],
+              "userStory": {
+                "iWant": "receive a Phase 1 brief, a deferred roadmap, and research notes when the interview ends",
+                "soThat": "I can generate a PRD without rewriting the interview",
+                "persona": "Product-Owner"
+              },
+              "userTypes": [
+                "Product-Owner"
+              ],
+              "outOfScope": [
+                "Automatic PRD approval",
+                "Export of the outputs outside Apex"
+              ],
+              "businessRules": [
+                "BR-006: Phase 1 is the smallest usable workflow, the rest is deferred",
+                "BR-007: Incomplete sessions remain drafts"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "The transcript holds a Phase 1 brief, a deferred roadmap, and research notes, and PRD generation can read it",
+                  "when": "The Manager confirms the final brief and the interview is completed",
+                  "given": "Every lifecycle area is covered or labeled unresolved and no conflict is open"
+                },
+                {
+                  "then": "The Skill names the gap and the session stays a draft until it is covered or labeled unresolved",
+                  "when": "The Manager asks to finish",
+                  "given": "A lifecycle area is neither covered nor labeled unresolved"
+                },
+                {
+                  "then": "The unresolved items are listed in the brief and the deferred roadmap, not stated as decided",
+                  "when": "The interview completes",
+                  "given": "Leadership stops with several decisions unresolved but all areas labeled"
+                },
+                {
+                  "then": "The Skill refuses to produce a completed brief and asks which decision is authoritative",
+                  "when": "The Manager asks to finish",
+                  "given": "An open conflict exists between two decisions"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The outputs contain sources and dates, not redacted identifiers, and follow existing project scope",
+                "performance": "The outputs are produced in the closing reply of the interview with no separate job",
+                "accessibility": "The outputs are structured text in the transcript, readable in the existing interview and PRD views"
+              }
+            },
+            {
+              "id": "PBI-007",
+              "type": "PBI",
+              "title": "Enable the ATS discovery Skill for the pilot project",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-005"
+              ],
+              "userStory": {
+                "iWant": "turn on the ATS discovery Skill for the pilot project in project skill settings",
+                "soThat": "the pilot runs in one project while the existing interview Skill stays available",
+                "persona": "Project Admin"
+              },
               "userTypes": [
                 "Project Admin"
-              ]
+              ],
+              "outOfScope": [
+                "A new settings screen",
+                "Enabling the Skill in all projects at once"
+              ],
+              "businessRules": [
+                "BR-009: Fallback stays available and release is through project skill configuration",
+                "BR-008: No new permission, API, table, or UI"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "A Manager in that project can choose it when starting an interview, and the existing interview Skill is still listed",
+                  "when": "The admin adds the ATS discovery Skill as an interview option and enables web research",
+                  "given": "A Project Admin is in project skill settings for the pilot project"
+                },
+                {
+                  "then": "The user sees a clear error and can start the existing interview Skill instead",
+                  "when": "A Manager starts an interview with that option",
+                  "given": "The admin enters a Skill path that does not exist in the configured repository"
+                },
+                {
+                  "then": "The in-progress threads remain readable and new interviews no longer offer the option",
+                  "when": "The admin removes the option",
+                  "given": "Interviews are already in progress with the ATS discovery Skill"
+                },
+                {
+                  "then": "The change is refused and the settings stay unchanged",
+                  "when": "The user tries to add the ATS discovery Skill",
+                  "given": "A user without Project Admin rights opens project skill settings"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Only a Project Admin can change project skill settings, and the change applies to one project",
+                "performance": "Saving the setting takes effect for new interviews without a deployment",
+                "accessibility": "The change uses the existing project settings screen"
+              }
+            },
+            {
+              "id": "PBI-008",
+              "type": "PBI",
+              "title": "Accept or reject the ATS discovery pilot",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-006",
+                "PBI-006"
+              ],
+              "userStory": {
+                "iWant": "check the pilot against the agreed pass conditions and accept or reject it",
+                "soThat": "wider use of the Skill rests on evidence and not on opinion alone",
+                "persona": "Product-Owner"
+              },
+              "userTypes": [
+                "Product-Owner"
+              ],
+              "outOfScope": [
+                "A quantitative score threshold",
+                "Automated pilot scoring"
+              ],
+              "businessRules": [
+                "BR-010: All pass conditions must hold and no numeric score is used"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "The pilot is recorded as passed and wider use may be planned",
+                  "when": "All six pass conditions are met and the Product-Owner accepts the PRD-ready output",
+                  "given": "A pilot interview has finished and the checklist is filled in"
+                },
+                {
+                  "then": "The pilot is recorded as not passed, the failure is named, and the Skill is revised before another pilot run",
+                  "when": "The Product-Owner reviews the checklist",
+                  "given": "A pass condition fails, such as a missing citation or a failed resume"
+                },
+                {
+                  "then": "It is logged as a runtime gap for a separate PRD and is not added to this scope",
+                  "when": "The Product-Owner records the finding",
+                  "given": "The pilot shows a requirement the existing runtime cannot meet"
+                },
+                {
+                  "then": "The pilot is not passed, because acceptance cannot be replaced by a score or by the other conditions",
+                  "when": "The Product-Owner records the result",
+                  "given": "Five conditions pass but the Product-Owner does not accept the output"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Pilot records contain no redacted identifiers and stay within the project",
+                "performance": "Not applicable: the pilot review is a manual check against the checklist",
+                "accessibility": "The checklist is a plain document usable with any reader"
+              }
             }
+          ],
+          "title": "ATS Discovery Interview Skill",
+          "priority": "Must Have",
+          "dependsOn": [],
+          "userTypes": [
+            "Manager",
+            "Product-Owner",
+            "Project Admin"
+          ],
+          "outOfScope": [
+            "Building the ATS itself",
+            "New UI, API endpoints, database tables, or server services",
+            "Feature-parity checklist against eRecruit or the market",
+            "Quantitative pilot score threshold"
+          ],
+          "description": "Gives the Manager and Product-Owner personas a guided, research-backed Interview that turns leadership's vision into a Phase 1 MVP brief, a deferred roadmap, and research notes. Gives the Project Admin persona a way to enable it for a pilot project while the existing interview Skill stays as fallback.",
+          "affectedPersonas": [
+            "Manager",
+            "Product-Owner",
+            "Project Admin"
           ]
         }
       ],
       "priority": "Must Have",
       "outOfScope": [
-        "Applying allow-lists to Interview, ADR, or any other skill/model selector outside Home pills",
-        "A separate project-level restricted-Home-users list independent of any specific pill"
+        "Building, buying, or migrating to the replacement ATS itself",
+        "New UI, new API endpoints, database tables or migrations, or an ATS-specific server service",
+        "Adding ATS logic to the existing general interview Skill",
+        "A new interview approach or an external system to store decisions",
+        "A feature-parity checklist against eRecruit or the market",
+        "A quantitative score threshold for pilot acceptance",
+        "Runtime changes to the interview flow, unless the pilot shows the current flow cannot meet a requirement (needs its own PRD)",
+        "Changes to Azure DevOps work items"
       ],
       "assumptions": [
-        "\"Super Admin\" in the originating conversation maps to the Platform Admin persona; the bypass behavior is scoped to Apex's existing super-admin bypass and does not extend to every Project Admin",
-        "Group allow-list membership reuses the existing project groups membership model; no new group type or membership table is introduced",
-        "No database migration is required — allow-list fields are added inside the existing JSON-backed pill arrays already stored on the project's skill settings row"
+        "Existing project skill settings can register an additional interview Skill option and turn on web research per project",
+        "Redaction through Skill instructions reduces risk but cannot guarantee that no identifier reaches a research query",
+        "The pilot project is chosen by the Project Admin and Product-Owner before the pilot starts"
       ],
-      "description": "Project Admins currently cannot limit which users see or start a given Home skill or MCP pill — every pill is visible to everyone with Home access. This blocks projects that want to hand a narrow group of users a single-purpose entry point (for example, a Knowledge-only shortcut for BI & Analytics) without exposing every other shortcut on the project. This epic adds per-pill user/group allow-lists, configurable for any project, and enforces them everywhere a Home thread can start.",
+      "description": "Leadership wants to replace the eRecruit ATS to save money and gain control, but has no agreed Phase 1. This epic delivers one standalone ATS discovery Skill that guides a Manager through a research-backed interview, tracks decisions, protects sensitive details, and produces PRD-ready output. It reuses Apex's existing guided-interview runtime, so it needs no UI, API, or database change.",
       "dependencies": [
-        "None"
+        "Existing Apex guided-interview runtime: project skill settings, chat persistence and resume, web research access, and interview permissions"
       ],
       "successMetrics": [
-        "A Project Admin can restrict at least one Home skill or MCP pill to a defined set of users or groups without engineering involvement",
-        "Zero reported incidents of a user starting a Home skill outside their configured pill allow-list within 30 days of rollout"
+        "The pilot interview passes all six pass conditions: coverage or unresolved labels, correct decision retention, cited influential claims, corroborated material claims, successful resume, and Product-Owner acceptance of the PRD-ready output",
+        "The pilot completes with no change to the UI, API, database, or server services",
+        "The existing interview Skill still starts normally in the pilot project after the ATS discovery Skill is enabled"
       ]
     }
   ],
   "personas": [
     {
-      "name": "Authenticated User",
+      "name": "Manager",
       "type": "Internal",
-      "description": "Any logged-in Apex user with Home access who sees and starts Home skill/MCP pill conversations"
+      "description": "Leader (stands in for the COO and directors) who runs the ATS discovery Interview and decides what belongs in Phase 1"
+    },
+    {
+      "name": "Product-Owner",
+      "type": "Internal",
+      "description": "Owner of the ATS replacement outcome who reviews research evidence and accepts the PRD-ready output at the end of the pilot"
     },
     {
       "name": "Project Admin",
       "type": "Admin",
-      "description": "Per-project admin who configures Home pill allow-lists in Project Settings and, on Home itself, follows the same allow-lists as any other user"
-    },
-    {
-      "name": "Platform Admin",
-      "type": "Admin",
-      "description": "Platform-level administrator (Super Admin) who bypasses Home pill allow-lists to see and start every configured pill"
+      "description": "Administrator who enables the ATS discovery Skill for the pilot project through project skill settings and keeps the existing interview Skill as fallback"
     }
   ],
   "businessRules": [
     {
       "id": "BR-001",
-      "rule": "An empty or omitted allowedUserIds and allowedGroupIds on a Home pill (skill or MCP) means every user with Home access may see and start that pill.",
-      "appliesTo": "Configure Home Pill Allow-Lists"
+      "rule": "Every decision in the ledger has exactly one state: confirmed, assumed, unresolved, or superseded.",
+      "appliesTo": "ATS Discovery Interview Skill (Feature)"
     },
     {
       "id": "BR-002",
-      "rule": "Group allow-list membership is evaluated against live project group membership at the moment of the request; no membership snapshot is stored on the pill.",
-      "appliesTo": "Enforce Home Pill Access"
+      "rule": "When a new answer conflicts with an earlier decision, the interview pauses and asks which decision is authoritative before it moves on.",
+      "appliesTo": "Keep a visible ledger of decisions (PBI)"
     },
     {
       "id": "BR-003",
-      "rule": "Platform Admin (Super Admin) sees and may start every configured Home pill regardless of allow-lists.",
-      "appliesTo": "See every Home pill as Platform Admin"
+      "rule": "Personal, client, commercial, and internal identifiers are redacted before any web research query is made.",
+      "appliesTo": "Keep sensitive ATS details out of web research (PBI)"
     },
     {
       "id": "BR-004",
-      "rule": "Project Admin's own Home pill visibility and thread-start eligibility follow the same allow-lists as any other user; the unrestricted view of all pills is limited to the Project Settings pill editor, not Home itself.",
-      "appliesTo": "See only the Home pills I'm allowed to use"
+      "rule": "Research is used only when it informs a decision under discussion, and it tests leadership's decisions rather than driving a feature-parity checklist.",
+      "appliesTo": "Test Phase 1 decisions with cited research (PBI)"
     },
     {
       "id": "BR-005",
-      "rule": "When a project has one or more configured Home pills and the current caller is allowed on zero of them, Home thread creation is denied, including a pill-less kickoff.",
-      "appliesTo": "Blocked from starting a Home thread with no allowed pills"
+      "rule": "A claim that influences scope carries a citation with source and date, and a material claim (one that adds, removes, or defers a Phase 1 item) needs corroboration from at least one additional independent source.",
+      "appliesTo": "Test Phase 1 decisions with cited research (PBI)"
     },
     {
       "id": "BR-006",
-      "rule": "When a project has no configured Home pills at all, pill-less Home thread creation remains allowed, unchanged from today.",
-      "appliesTo": "Blocked from starting a Home thread with no allowed pills"
+      "rule": "The Skill covers the full staffing lifecycle, but Phase 1 contains only the smallest usable end-to-end workflow. All other scope goes to the deferred roadmap.",
+      "appliesTo": "Shape a Phase 1 MVP through a guided leadership interview (PBI)"
     },
     {
       "id": "BR-007",
-      "rule": "Home thread creation must reference an allowed configured pill (skill or MCP) or be pill-less when the caller is allowed to start Home chat at all; access is enforced only at thread creation, so the owner of an existing thread may keep messaging even after later losing access to that thread's pill.",
-      "appliesTo": "Continue using a Home thread after losing pill access"
+      "rule": "A session is complete only when every lifecycle area is covered or explicitly labeled unresolved and no conflict is open. Otherwise it remains a draft.",
+      "appliesTo": "Receive a PRD-ready Phase 1 brief, deferred roadmap, and research notes (PBI)"
     },
     {
       "id": "BR-008",
-      "rule": "Home pill allow-list enforcement applies only to Home skill and MCP pills; Interview, ADR, and other consumers of the shared skill-config read path are unaffected.",
-      "appliesTo": "Enforce Home Pill Access"
+      "rule": "Access to ATS discovery Interviews follows existing project scope and the interview view and manage permissions. The Skill adds no new permission, API, table, or UI.",
+      "appliesTo": "ATS Discovery Interview Skill (Feature)"
+    },
+    {
+      "id": "BR-009",
+      "rule": "The existing interview Skill remains available in every project as the fallback, and the ATS discovery Skill is released through project skill configuration, pilot project first.",
+      "appliesTo": "Enable the ATS discovery Skill for the pilot project (PBI)"
+    },
+    {
+      "id": "BR-010",
+      "rule": "The pilot passes only when all pass conditions hold: coverage or unresolved labels, correct decision retention, cited influential claims, corroborated material claims, successful resume, and product owner acceptance of the PRD-ready output. No numeric score is used.",
+      "appliesTo": "Accept or reject the ATS discovery pilot (PBI)"
     }
   ],
   "assumptionsMade": [
-    "\"Super Admin\" in the originating conversation maps to the Platform Admin persona for backlog and persona classification; the bypass behavior described (seeing and starting every Home pill) is scoped to Apex's existing super-admin bypass, and does not extend to every user holding the Project Admin role — Project Admin follows the same allow-lists as any other user on Home.",
-    "Group allow-list membership reuses the existing project groups membership model; no new group type or membership table is introduced.",
-    "A configured Home pill \"match\" for enforcement purposes is a skillPath equal to a configured skill pill's skillPath, or an MCP kickoff whose server identity equals a configured MCP pill's mcpServerName; any other kickoff is treated as pill-less for enforcement purposes.",
-    "Admin-side allow-list entries are validated only for being well-formed identifiers; validating that a referenced user or group actually belongs to the project being configured is not required by this PRD and should be confirmed with the admin experience owner.",
-    "No database migration is required — the allow-list fields are added inside the existing JSON-backed pill arrays already stored on the project's skill settings row."
+    "The Manager persona stands in for the COO and directors who take part in the leadership interview, because Apex has no separate executive group.",
+    "The Product-Owner persona accepts the pilot output, as the transcript names the product owner as the acceptor.",
+    "The ADR \"ATS System - product interview full scope (research-grounded-ats-discovery-skill)\" is accepted, and its decisions are those in the kickoff transcript. Its full text was not available during synthesis.",
+    "Existing project skill settings can already register an additional interview Skill option and turn on web research per project, and the chat service passes that research access to the Skill.",
+    "Redaction is done by the Skill's instructions to the model. It reduces risk but cannot guarantee that no identifier reaches a research query.",
+    "\"Benchmark seeds\" means a short starting list of ATS products and public sources the Skill uses to begin research, reviewed by the product owner during the pilot.",
+    "\"Material claim\" means a claim that would add, remove, or defer a Phase 1 scope item. \"Corroboration\" means support from at least one additional independent source.",
+    "The \"full staffing lifecycle\" areas are defined inside the Skill from the ADR and kickoff; the PRD does not list them.",
+    "The pilot project is chosen by the Project Admin and product owner before the pilot starts.",
+    "Incomplete sessions stay as drafts in the existing in-progress interview state, and the existing mark-complete action is used only after the completion rubric is met."
   ],
   "implementationPhases": [
     {
       "epics": [
-        "Home Pill Access Control"
+        "ATS Phase 1 MVP Discovery"
       ],
       "phase": 1,
-      "rationale": "The PRD scopes exactly one epic. Within it, Feature-level dependsOn (Enforce Home Pill Access depends on Configure Home Pill Allow-Lists) sequences building the allow-list data and admin editor before the read-path filtering and thread-creation enforcement that consume them."
+      "rationale": "The backlog has one epic, so there is one phase. Inside the feature, the Skill definition (TBI-001) comes first, the ledger and research rules (TBI-002, TBI-003) follow in parallel, then the completion contract (TBI-004), and last the pilot configuration and acceptance checklist (TBI-005, TBI-006) that need the finished Skill."
     }
   ]
 }

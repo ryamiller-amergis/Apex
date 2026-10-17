@@ -1,4 +1,4 @@
-# Local Development Context — Permission by skill — Configure Home Pill Allow-Lists
+# Local Development Context — Create ats skill — ATS Discovery Interview Skill
 
 These files belong under your **repository root** at:
 

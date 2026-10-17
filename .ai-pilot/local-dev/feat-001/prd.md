@@ -1,53 +1,88 @@
-<!-- apex-grounded-sha:e61f44bb9a311b601902eb8db3c9f49b42b50f93 -->
+<!-- apex-grounded-sha:f8b864fa49786a06963750a6327ed42db8e3eeaf -->
 
-> Based on the **Apex** project, **main** branch, as of Sep 14, 2026.
+> Based on the **Apex** project, **main** branch, as of Oct 17, 2026.
 ---
-title: Home Pill Access Control
-slug: home-pill-access-control
-created: 2026-09-14
+title: ATS Discovery Interview Skill
+slug: ats-discovery-interview-skill
+created: 2026-10-17
 triage-status: needs-triage
 glossary-terms-used:
-  - Skill Pill
-  - Agent Home
-  - RBAC
+  - Interview
+  - PRD
+  - Backlog
+  - Skill
+  - PBI
+  - TBI
+  - Feature Flag
   - Project Admin
-  - Platform Admin
-  - Super Admin
 ---
 
-# Home Pill Access Control
+# ATS Discovery Interview Skill
 
 ## Problem Statement
 
-Every Home skill and MCP pill is visible and usable by anyone with Home access, with no way to point a user at a single skill without also handing them every other shortcut on the project. A team that wants to give some users a narrow, single-purpose entry point — for example, letting analysts ask the Knowledge skill about measure definitions without exposing PRD generation, design tooling, or any other pill — has no configuration lever today, and admins cannot restrict access by user or group on a per-pill basis.
+Leadership wants to replace the current ATS (the eRecruit system) to save money and gain control. No one has agreed what the first release of a replacement should contain. Without a guided process, leaders may default to copying every feature of the old system or the market, and the decisions they reach are hard to trace or turn into a PRD.
 
 ## Solution
 
-Project Admins can configure an allow-list of users and/or groups on any Home skill pill or MCP pill, for any Apex project. A pill with no allow-list stays visible to everyone with Home access, exactly as it behaves today; a pill with an allow-list is only shown to, and only startable by, the users and groups on that list, evaluated live against current project membership. Home enforces the same rule when a thread is created — including blocking a user from starting a free-form Home chat when a project has pills configured and that user is allowed on none of them — while Platform Admin (Super Admin) always sees and can start every pill, and a user who already has a thread open keeps using it even if their access to that pill changes later.
+Apex gets one new Skill, the ATS discovery interview, that a Manager can run as a project-scoped Interview. It starts from leadership's vision, then uses focused market research to test each decision. It covers the full staffing lifecycle but narrows Phase 1 to the smallest usable end-to-end workflow. The Skill keeps a visible ledger of decisions, redacts sensitive detail before any research, cites the sources behind scope decisions, and ends with a Phase 1 brief, a deferred roadmap, and research notes that feed PRD generation. A Project Admin enables it for a pilot project through project skill settings, and the existing interview Skill stays available as the fallback.
+
+This work delivers the Skill, not the ATS itself.
 
 ## Implementation Decisions
 
-- A pill access resolver (deep module) computes, for a given project's configured Home pills and a given caller's identity, (a) the subset of skill and MCP pills that caller may use, and (b) whether that caller may start a Home thread at all given the project's pill configuration. It encapsulates the "empty allow-list means everyone" default, live user and group membership evaluation, and the Platform Admin (Super Admin) bypass in one place so every caller of this logic gets the same answer instead of re-implementing the rule.
-- The existing per-project pill records (skill pills and MCP pills) gain two optional allow-list fields each — one for individual user identifiers and one for group identifiers. These live inside the same JSON-backed pill arrays already stored on the project's skill settings row; no new tables and no new columns are introduced.
-- The public skill-config read path runs every Home pill it would otherwise return through the pill access resolver, keeps only the pills the caller may use, and omits the allow-list fields from each returned pill so a non-admin caller can never see who else is allowed on a pill. Every other field on that response — interview options, model selections, and all non-Home-pill configuration — is unchanged, so Interview, ADR, and other consumers of the same read path are unaffected.
-- The admin project-settings read and write path is intentionally left returning and persisting the full pill list, including allow-list fields, exactly as it does today for every other pill attribute — only the public read path is filtered.
-- Home thread creation runs the same pill access resolver before a thread is persisted: a kickoff is accepted only when it names an allowed configured pill (skill or MCP), or carries no pill and the caller is allowed to start Home chat at all under the project's current pill configuration; every other kickoff is denied with an explicit error. Platform Admin (Super Admin) is exempt from this check. The resolver is invoked only at creation — reopening or continuing a thread the caller already owns, and sending further messages on it, are explicitly untouched, so access changes never interrupt an in-progress conversation.
-- The Admin Project Settings pill editor gains a user/group selection control on each pill row (skill and MCP), following the same picker pattern already used to build reviewer and approver pools elsewhere in project settings, so an admin sets or clears an allow-list without leaving the pill editor.
-- The Home composer reads the already-filtered pill arrays from the skill-config response and mirrors the "project has pills, caller allowed on none" rule client-side, disabling send in that state for a clear experience; the server-side check in thread creation remains the actual enforcement boundary.
+**Approach.** Extend Apex's existing guided-interview pattern. A project setting already selects the interview Skill and turns on web research; the chat service loads that Skill; the interview service and chat threads store and resume the conversation. The ATS discovery Skill plugs into that pattern. Runtime work happens only if the pilot shows the current flow cannot meet a requirement.
+
+**Modules to build**
+
+- **ATS discovery Skill definition (deep module).** One Skill document that owns the whole procedure behind a single entry point: the user starts it like any other interview Skill. It reads the conversation so far, asks one question at a time, and returns the next question plus an updated ledger. It opens with leadership's vision, covers each stage of the staffing lifecycle, tests decisions with research, and narrows Phase 1 to the smallest usable end-to-end workflow. It does not drive a feature-parity checklist.
+- **Decision ledger rules.** A section of the Skill that defines four decision states (confirmed, assumed, unresolved, superseded), how each reply shows the current ledger, and how a conflict between two decisions pauses the interview until the leader names the authoritative one. The ledger lives in the reply text and is written into the standard interview transcript at the end. No separate store.
+- **Research and redaction rules.** A section that sets when research is allowed (only when it informs a decision under discussion), what must be redacted first (personal, client, commercial, and internal identifiers), which sources count, and what to record (source and date). Claims that influence scope carry a citation. Material claims need corroboration. Benchmark seeds (starting examples for research) are reviewed during the pilot.
+- **Completion rubric and output contract.** A section that decides when the session can finish and what it produces: a Phase 1 brief, a deferred roadmap, and research notes, written in the form PRD generation reads. A session with an uncovered lifecycle area that is not labeled unresolved, or with unresolved conflicts, stays a draft.
+- **Pilot configuration and acceptance checklist.** A runbook that registers the Skill as an interview Skill option for one pilot project through existing project skill settings, enables web research for that project, keeps the existing interview Skill as fallback, and lists the pass conditions below.
+
+**Existing modules reused without change**
+
+- Guided-interview flow and streaming chat (create, stream, resume, complete).
+- Interview and chat thread persistence, which hold the transcript and the ledger text.
+- Project skill settings, which choose the interview Skill, the model, and web research per project.
+- Authentication, project scope, and the existing interview view and manage permissions.
+- PRD generation, which reads the finished transcript.
+
+**Interfaces**
+
+- Input: the interview conversation, project-configured model, and project-configured web research access.
+- Output: streamed replies that end with one question and the current ledger; at completion, a transcript containing the Phase 1 brief, deferred roadmap, and research notes.
+- Side effects: none beyond existing thread and transcript writes. No schema, API, UI, or server service changes.
+
+**Pilot acceptance.** The pilot passes only if all of these hold:
+
+1. Every lifecycle area is covered or carries an explicit unresolved label.
+2. Decisions are retained correctly across the session.
+3. Influential claims are cited.
+4. Material claims are corroborated.
+5. A session resumes successfully after a break.
+6. The product owner accepts the PRD-ready output.
+
+There is no numeric score threshold.
+
+**Risk mitigations.** The ADR's negative consequences cannot be removed, but each has a control: research only when relevant; source and date recorded; redaction required; benchmark seeds reviewed in the pilot; sessions resumable; completion tied to the acceptance checks. Research variability and imperfect redaction remain open risks.
 
 ## Testing Decisions
 
-- **What makes a good test here:** Assert on the visible pill set and on thread-creation accept/deny outcomes for a given caller and allow-list configuration, not on which internal helper was called or in what order.
+- **What makes a good test here:** Test what a leader or product owner sees in a session, not how the Skill text is organized. Tests should prove that decisions keep their state across turns and after resume, that conflicts pause the interview, that redacted text never reaches a research query, that scope-changing claims show a citation, and that an incomplete session produces a draft while a complete one produces the three outputs.
 - **Modules to test:**
-  - Pill access resolver — the empty-list-means-everyone default, live user and group membership evaluation, and the Platform Admin bypass, each exercised directly through its inputs and outputs.
-  - Skill-config read path — that only allowed pills are returned and that allow-list fields never appear on the public response, across Authenticated User, Project Admin, and Platform Admin callers.
-  - Home thread-creation path — the full accept/deny matrix across an allowed pill, a disallowed pill, no pill on a project with no configured pills, and no pill on a project where the caller is allowed on none.
-- **Prior art:** Follows the existing pattern used for reviewer and approver pools, which store group references and expand them to current members at read time rather than snapshotting membership when a pool is saved.
+  - ATS discovery Skill definition — run scripted sessions against the existing interview flow and check each reply.
+  - Decision ledger rules — scripted sessions that confirm, assume, skip, supersede, and contradict decisions.
+  - Research and redaction rules — seeded inputs containing personal, client, commercial, and internal identifiers; inspect the research queries for leaks.
+  - Completion rubric and output contract — feed the finished transcript to PRD generation and check the PRD is usable.
+  - Pilot configuration — confirm the Skill appears only in the pilot project and the fallback Skill still starts.
+- **Prior art:** Existing interview Skills are exercised through the guided-interview flow, and PRD generation is exercised from a finished interview transcript. Reuse those paths. Permission checks follow the existing view versus manage pattern.
 
 ## Target Surface
 
-- **Primary surface:** Full-stack (both client and server)
-- **Experience notes:** Home is the only surface affected; the pill editor in Admin Project Settings and the Home composer both gain visible changes, but Interview, ADR, and other skill-selection surfaces are unchanged.
+- **Primary surface:** Skill content only. The Skill runs inside the existing interview experience, so there is no new frontend, backend, shared type, or database work. Project skill settings configuration is a data change by a Project Admin.
+- **Experience notes:** Leaders use the existing interview chat. Each reply ends with one question and a visible decision ledger.
 
 ---
 
@@ -55,26 +90,27 @@ Project Admins can configure an allow-list of users and/or groups on any Home sk
 
 | Action | Required group(s) / role(s) | Data scope |
 |--------|---------------------------|-----------|
-| Configure a Home pill's allow-list | Project Admin (existing `admin:roles` gate) | Project-scoped |
-| View Home pills | Authenticated User (`home:view`) | Project-scoped |
-| Start a Home thread | Authenticated User (`chat:create`) | Project-scoped |
-| Bypass Home pill allow-lists on Home | Platform Admin (Super Admin) | Global |
+| Start and run an ATS discovery Interview | Existing interview rules: BA, Manager, or Product-Owner group, with the interview manage permission | Project-scoped |
+| Read an ATS discovery Interview and its outputs | Interview view permission | Project-scoped |
+| Resume an in-progress ATS discovery Interview | Same as start | Project-scoped |
+| Enable or remove the ATS discovery Skill option for a project | Project Admin | Project-scoped |
+| Accept or reject the pilot output | Product-Owner | Project-scoped |
 
 ---
 
 ## Security and Data Sensitivity
 
-- **Sensitive fields:** None. Allow-lists reference the same internal user and group identifiers a Project Admin can already see in Project Settings and the reviewer/approver pools.
-- **Handling requirements:** Exclude `allowedUserIds` and `allowedGroupIds` from the public `GET /api/skill-config` response for every pill it returns; the admin read/write path keeps the full lists, reachable only through the existing admin gate.
-- **Data scope enforcement:** Pill configuration and allow-list evaluation are always scoped to the selected project's skill settings row, the same scoping already used for every other per-project skill and model setting.
+- **Sensitive fields:** ATS context may include personal data (candidates, staff), client names, commercial terms (pricing, contracts), and internal identifiers (system names, vendor account details). Treat all of it as potentially sensitive.
+- **Handling requirements:** Redact personal, client, commercial, and internal identifiers before any web research query. Stored conversation follows existing interview storage handling. Research notes record sources and dates, not redacted details.
+- **Data scope enforcement:** The Skill uses existing project scope and interview permissions. An interview belongs to one project, and the Skill adds no new data path.
 
 ---
 
 ## Non-Functional Requirements
 
-- **Response time:** Not specified — no new external calls are introduced; the resolver adds only in-memory list checks and existing membership lookups to calls that already run today.
-- **Concurrency:** Not specified — pill counts and allow-list sizes remain small (single digits), consistent with existing Home usage.
-- **Data volume:** Not specified — each pill's allow-lists are expected to hold a handful of user or group identifiers.
+- **Response time:** Not specified — agent assumed the existing interview streaming behavior is acceptable, and research must not stall a reply without a visible status.
+- **Concurrency:** Not specified — the pilot runs one project-scoped leadership interview at a time.
+- **Data volume:** Not specified — the ledger and research notes must stay small enough to carry through one interview thread and resume without loss.
 
 ---
 
@@ -82,25 +118,32 @@ Project Admins can configure an allow-list of users and/or groups on any Home sk
 
 - **Flag required:** No
 - **Flag name:** None
-- **Rollout sequence:** GA from launch
-- **Kill switch owner:** Not applicable
-- **Behavior when disabled:** Not applicable
+- **Rollout sequence:** Not applicable. Release is controlled by project skill configuration: pilot project first, then wider use after acceptance.
+- **Kill switch owner:** Project Admin, by removing the ATS discovery Skill option from project skill settings.
+- **Behavior when disabled:** The ATS discovery option does not appear for the project, and the existing interview Skill works as before.
 
 ---
 
 ## Out of Scope
 
-- Applying allow-lists to Interview, ADR, or any other skill/model selector outside Home pills.
-- A separate project-level "restricted Home users" list that limits a user to only their explicitly allow-listed pills, independent of any specific pill (considered during the interview and deferred to keep this within one epic and two features).
-- Re-checking pill access on every follow-up message of an existing thread — access is enforced only at thread creation.
-- Hiding or blocking a user's access to their own thread history when their pill access is later removed.
-- A new RBAC permission key — enforcement layers on the existing `home:view` and `chat:create` gates.
-- A feature flag or staged rollout — this ships GA directly.
+- Building, buying, or migrating to the replacement ATS itself.
+- New UI, new API endpoints, database tables or migrations, or an ATS-specific server service.
+- Adding ATS logic to the existing general interview Skill.
+- A new interview approach or an external system to store decisions.
+- A feature-parity checklist against eRecruit or the market.
+- A quantitative score threshold for pilot acceptance.
+- Runtime changes to the interview flow, unless the pilot shows the current flow cannot meet a requirement. Those would need their own PRD.
+- Changes to Azure DevOps work items.
 
 ## Assumptions Made
 
-- "Super Admin" in the originating conversation maps to the Platform Admin persona for backlog and persona classification; the bypass behavior described (seeing and starting every Home pill) is scoped to Apex's existing super-admin bypass, and does not extend to every user holding the Project Admin role — Project Admin follows the same allow-lists as any other user on Home.
-- Group allow-list membership reuses the existing project groups membership model; no new group type or membership table is introduced.
-- A configured Home pill "match" for enforcement purposes is a `skillPath` equal to a configured skill pill's `skillPath`, or an MCP kickoff whose server identity equals a configured MCP pill's `mcpServerName`; any other kickoff is treated as pill-less for enforcement purposes.
-- Admin-side allow-list entries are validated only for being well-formed identifiers; validating that a referenced user or group actually belongs to the project being configured is not required by this PRD and should be confirmed with the admin experience owner.
-- No database migration is required — the allow-list fields are added inside the existing JSON-backed pill arrays already stored on the project's skill settings row.
+- The Manager persona stands in for the COO and directors who take part in the leadership interview, because Apex has no separate executive group.
+- The Product-Owner persona accepts the pilot output, as the transcript names the product owner as the acceptor.
+- The ADR "ATS System - product interview full scope (research-grounded-ats-discovery-skill)" is accepted, and its decisions are those in the kickoff transcript. Its full text was not available during synthesis.
+- Existing project skill settings can already register an additional interview Skill option and turn on web research per project, and the chat service passes that research access to the Skill.
+- Redaction is done by the Skill's instructions to the model. It reduces risk but cannot guarantee that no identifier reaches a research query.
+- "Benchmark seeds" means a short starting list of ATS products and public sources the Skill uses to begin research, reviewed by the product owner during the pilot.
+- "Material claim" means a claim that would add, remove, or defer a Phase 1 scope item. "Corroboration" means support from at least one additional independent source.
+- The "full staffing lifecycle" areas are defined inside the Skill from the ADR and kickoff; the PRD does not list them.
+- The pilot project is chosen by the Project Admin and product owner before the pilot starts.
+- Incomplete sessions stay as drafts in the existing in-progress interview state, and the existing mark-complete action is used only after the completion rubric is met.

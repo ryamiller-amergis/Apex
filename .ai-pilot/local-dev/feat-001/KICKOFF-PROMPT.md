@@ -1,7 +1,7 @@
 Implement the following work item locally in this repository.
 
-Title: Permission by skill — Configure Home Pill Allow-Lists
-ID: feature FEAT-001 (PRD 585c4383-51bd-466a-849b-547bf82ded1c)
+Title: Create ats skill — ATS Discovery Interview Skill
+ID: feature FEAT-001 (PRD f4a0a7db-750d-4b13-9f7c-b7b3ca677517)
 Type: Apex Feature
 
 Context files have been extracted under `.ai-pilot/local-dev/feat-001/`. Read them before coding:
@@ -14,9 +14,11 @@ Context files have been extracted under `.ai-pilot/local-dev/feat-001/`. Read th
 
 ## Development skill
 
-This project is configured to use the `/.cursor/skills/dev-orchestrator/SKILL.md` skill. Begin by invoking:
+This project is configured to use the `/.cursor/skills/dev-orchestrator/SKILL.md` skill.
 
-  //.cursor/skills/dev-orchestrator/SKILL.md feature feat-001 FEAT-001
+Begin by invoking:
+
+  /dev-orchestrator feature feat-001 FEAT-001
 
 ### Local execution policy (overrides Dev Workbench defaults)
 
