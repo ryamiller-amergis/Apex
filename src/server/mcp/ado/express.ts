@@ -41,7 +41,11 @@ export function mountAdoMcp(app: Application, basePath = '/mcp/ado-skills'): voi
       repoReader = profileId
         ? await groundingProfileResolver.resolveConnectionProfile(profileId)
         : undefined;
-    } catch {
+    } catch (error) {
+      console.warn(
+        '[mcp/ado] grounding profile unavailable:',
+        error instanceof Error ? error.message : String(error),
+      );
       res.status(404).json({ error: 'Grounding profile is unavailable' });
       return;
     }
