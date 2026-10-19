@@ -191,7 +191,7 @@ const internalOnlyPaths = [
 // on loadTestRunsInternalRoutes (LT_RUNNER_CALLBACK_TOKEN or runner MI JWT).
 const loadTestRunnerCallbackPaths = ['/internal/load-test-runs'];
 // AI runner ingest — session-free; requireAiRunnerAuth validates callback identity.
-const aiRunnerCallbackPaths = ['/internal/ai-runs'];
+const aiRunnerCallbackPaths = ['/internal/ai-runs', '/internal/cab-release'];
 
 // @apex/skills CLI entitlement lookup — session-free because the CLI runs on
 // developer machines and in CI with no Apex session. Read-only and returns no

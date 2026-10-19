@@ -208,6 +208,30 @@ describe('CabReleaseAssistantPanel', () => {
     });
   });
 
+  it('shows a kickoff error instead of sending when the previous branch is not a release', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CabReleaseAssistantPanel
+          open
+          onClose={jest.fn()}
+          project="MaxView"
+          targetVersion="2026.13.0"
+          apexReleaseEpicId={12345}
+          relatedWorkItemIds={[53247]}
+          previousReleaseBranch="development"
+          snowMode="dry-run"
+          cutReleaseBranch={false}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByTestId('cab-release-assistant-error')).toHaveTextContent(
+      'Invalid previous release branch: development',
+    );
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('closes from the panel close control', async () => {
     const user = userEvent.setup();
     const { onClose } = renderPanel(true);

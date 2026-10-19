@@ -128,11 +128,10 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
   ]);
 
   const sendKickoff = session.send;
-
-  useEffect(() => {
-    if (!threadId || kickoffSentRef.current || session.isPreparing) return;
-    kickoffSentRef.current = true;
-    const text = buildCabReleaseKickoffMessage({
+  let kickoffText: string | null = null;
+  let kickoffError: string | null = null;
+  try {
+    kickoffText = buildCabReleaseKickoffMessage({
       targetVersion,
       apexReleaseEpicId,
       relatedWorkItemIds,
@@ -140,7 +139,15 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
       snowMode,
       cutReleaseBranch,
     });
-    void sendKickoff(text, {
+  } catch (err: unknown) {
+    kickoffError = err instanceof Error ? err.message : 'Could not start cab-release.';
+  }
+  const shownError = createError ?? (threadId ? kickoffError : null);
+
+  useEffect(() => {
+    if (!threadId || kickoffSentRef.current || session.isPreparing || !kickoffText) return;
+    kickoffSentRef.current = true;
+    void sendKickoff(kickoffText, {
       skill: { name: CAB_RELEASE_SKILL_NAME, path: CAB_RELEASE_SKILL_PATH },
     });
   }, [
@@ -151,6 +158,7 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
     previousReleaseBranch,
     snowMode,
     cutReleaseBranch,
+    kickoffText,
     sendKickoff,
     session.isPreparing,
   ]);
@@ -221,9 +229,9 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
         {(isCreating || skillConfigPending) && (
           <div className={styles.starting}>Starting cab-release…</div>
         )}
-        {createError && (
+        {shownError && (
           <div className={styles.error} {...{ 'data-testid': 'cab-release-assistant-error' }}>
-            {createError}
+            {shownError}
           </div>
         )}
         <AgentTranscript

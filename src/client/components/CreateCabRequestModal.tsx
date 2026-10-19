@@ -7,7 +7,10 @@ import { normalizeReleaseBranch } from '../utils/cabReleaseKickoff';
 import styles from './CreateCabRequestModal.module.css';
 
 const schema = z.object({
-  previousReleaseBranch: z.string().trim().min(1, 'Previous shipped release branch is required'),
+  previousReleaseBranch: z.string().trim().min(1, 'Previous shipped release branch is required').refine(
+    (value) => normalizeReleaseBranch(value) !== '',
+    'Previous branch must be a release version such as Release/2026.14.0',
+  ),
   snowMode: z.enum(['dry-run', 'run']),
   cutReleaseBranch: z.boolean(),
 });

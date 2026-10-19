@@ -83,32 +83,30 @@ function assertWikiQuery(url: URL): void {
 }
 
 function assertRefQuery(url: URL): void {
-  const filter = queryValue(url, 'filter');
-  if (!filter) return;
   assertPattern(
-    filter,
+    queryValue(url, 'filter'),
     new RegExp(String.raw`^heads/(?:${RELEASE_BRANCH}|development)$`),
     'Ref lookup is limited to Release/{version} and development',
   );
 }
 
-function assertBuildQuery(url: URL): void {
-  const branch = queryValue(url, 'branchName');
-  if (branch) {
-    assertPattern(
-      branch,
-      new RegExp(String.raw`^refs/heads/(?:${RELEASE_BRANCH}|development)$`),
-      'Build lookup is limited to Release/{version} and development',
-    );
+function assertBuildQuery(url: URL, relativePath: string): void {
+  if (relativePath.endsWith('/definitions')) {
+    if (queryValue(url, 'name') !== 'mv-prod-cd') {
+      throw new CabReleaseBrokerError(
+        'Build definition lookup is limited to mv-prod-cd',
+        403,
+        'CAB_BROKER_FORBIDDEN',
+      );
+    }
+    return;
   }
-  const name = queryValue(url, 'name');
-  if (name && name !== 'mv-prod-cd') {
-    throw new CabReleaseBrokerError(
-      'Build definition lookup is limited to mv-prod-cd',
-      403,
-      'CAB_BROKER_FORBIDDEN',
-    );
-  }
+  if (!relativePath.endsWith('/builds')) return;
+  assertPattern(
+    queryValue(url, 'branchName'),
+    new RegExp(String.raw`^refs/heads/(?:${RELEASE_BRANCH}|development)$`),
+    'Build lookup is limited to Release/{version} and development',
+  );
 }
 
 function assertPipelineBody(body: unknown): void {
@@ -209,7 +207,7 @@ export function assertCabAdoRequestAllowed(request: CabAdoForwardRequest, env: N
 
   if (relativePath.includes('/wiki/')) assertWikiQuery(url);
   if (relativePath.endsWith('/refs') && method === 'GET') assertRefQuery(url);
-  if (relativePath.includes('/_apis/build/')) assertBuildQuery(url);
+  if (relativePath.includes('/_apis/build/')) assertBuildQuery(url, relativePath);
   if (method === 'POST' && relativePath.includes('/pipelines/')) assertPipelineBody(request.body);
   if (method === 'POST' && relativePath.endsWith('/refs')) assertCreateRefBody(request.body);
   if (method === 'PUT' && relativePath.includes('/wiki/')) assertWikiBody(request.body);

@@ -50,6 +50,17 @@ describe('CreateCabRequestModal', () => {
     });
   });
 
+  it('rejects a previous branch that is not a release version', async () => {
+    const user = userEvent.setup();
+    renderModal();
+    const input = screen.getByTestId('create-cab-previous-branch');
+    await user.clear(input);
+    await user.type(input, 'development');
+    await user.click(screen.getByTestId('create-cab-confirm'));
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(screen.getByText('Previous branch must be a release version such as Release/2026.14.0')).toBeInTheDocument();
+  });
+
   it('cancels without confirming', () => {
     renderModal();
     fireEvent.click(screen.getByTestId('create-cab-cancel'));

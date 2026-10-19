@@ -86,6 +86,21 @@ describe('cabReleaseBrokerService', () => {
     )).toThrow(/cannot update an existing ref/);
   });
 
+  it('rejects an unfiltered ref list, definition list, and build list', () => {
+    expect(() => assertCabAdoRequestAllowed(
+      request('https://dev.azure.com/Amergis/MaxView/_apis/git/repositories/MaxView/refs?api-version=7.1'),
+      env,
+    )).toThrow(/Release\/\{version\}/);
+    expect(() => assertCabAdoRequestAllowed(
+      request('https://dev.azure.com/Amergis/MaxView/_apis/build/definitions?api-version=7.1'),
+      env,
+    )).toThrow(/mv-prod-cd/);
+    expect(() => assertCabAdoRequestAllowed(
+      request('https://dev.azure.com/Amergis/MaxView/_apis/build/builds?api-version=7.1'),
+      env,
+    )).toThrow(/Release\/\{version\}/);
+  });
+
   it('fails when the server has no PAT', async () => {
     await expect(forwardCabAdoRequest(
       request('https://dev.azure.com/Amergis/MaxView/_apis/git/repositories/MaxView/refs?filter=heads/development'),
