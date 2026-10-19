@@ -857,66 +857,63 @@ const CloudAgentEnabledRowAction: React.FC<{
 
   if (!currentRun) {
     return (
-      <>
+      <div className={styles['cloud-slot']}>
+        {/* Sits immediately left of the button it explains, so the button stays
+            the rightmost control and keeps its column aligned across rows. */}
         {!eligibility.allowed && eligibility.reason ? (
-          // Own line above the row's buttons so it never changes their height.
-          <div className={styles['cloud-reason-row']}>
-            <span
-              ref={reasonRef}
-              className={styles['cloud-reason']}
-              data-pinned={reasonPinned ? 'true' : undefined}
-            >
-              <button
-                type="button"
-                className={styles['cloud-reason-trigger']}
-                aria-expanded={reasonPinned}
-                aria-controls={reasonId}
-                onClick={() => setReasonPinned((pinned) => !pinned)}
-                {...{ 'data-testid': `my-work-cloud-reason-toggle-${item.id}` }}
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">
-                  <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2" />
-                  <path
-                    d="M12 11v5M12 7.5v.5"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                  />
-                </svg>
-                Why can&apos;t I start this?
-              </button>
-              <span
-                id={reasonId}
-                role="tooltip"
-                className={styles['cloud-reason-popover']}
-                {...{ 'data-testid': reasonId }}
-              >
-                {eligibility.reason}
-              </span>
-            </span>
-          </div>
-        ) : null}
-        <div className={styles['cloud-slot']}>
-          <button
-            className={styles['cloud-dev-btn']}
-            type="button"
-            disabled={!eligibility.allowed || startCloud.isPending}
-            title={eligibility.allowed ? 'Start a Cloud Agent on this work item' : eligibility.reason}
-            aria-describedby={eligibility.allowed ? undefined : reasonId}
-            onClick={() => void handleStartOrResume()}
-            {...{ 'data-testid': 'my-work-start-cloud-dev-btn' }}
+          <span
+            ref={reasonRef}
+            className={styles['cloud-reason']}
+            data-pinned={reasonPinned ? 'true' : undefined}
           >
-            <span className={styles['cloud-button-icon']} aria-hidden="true">✦</span>
-            {startCloud.isPending ? 'Starting cloud agent…' : 'Start cloud agent'}
-          </button>
-          {actionError ? (
-            <span className={styles['cloud-run-error']} role="alert">
-              {actionError}
+            <button
+              type="button"
+              className={styles['cloud-reason-trigger']}
+              aria-expanded={reasonPinned}
+              aria-controls={reasonId}
+              onClick={() => setReasonPinned((pinned) => !pinned)}
+              {...{ 'data-testid': `my-work-cloud-reason-toggle-${item.id}` }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2" />
+                <path
+                  d="M12 11v5M12 7.5v.5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                />
+              </svg>
+              Why can&apos;t I start this?
+            </button>
+            <span
+              id={reasonId}
+              role="tooltip"
+              className={styles['cloud-reason-popover']}
+              {...{ 'data-testid': reasonId }}
+            >
+              {eligibility.reason}
             </span>
-          ) : null}
-        </div>
-      </>
+          </span>
+        ) : null}
+        <button
+          className={styles['cloud-dev-btn']}
+          type="button"
+          disabled={!eligibility.allowed || startCloud.isPending}
+          title={eligibility.allowed ? 'Start a Cloud Agent on this work item' : eligibility.reason}
+          aria-describedby={eligibility.allowed ? undefined : reasonId}
+          onClick={() => void handleStartOrResume()}
+          {...{ 'data-testid': 'my-work-start-cloud-dev-btn' }}
+        >
+          <span className={styles['cloud-button-icon']} aria-hidden="true">✦</span>
+          {startCloud.isPending ? 'Starting cloud agent…' : 'Start cloud agent'}
+        </button>
+        {actionError ? (
+          <span className={styles['cloud-run-error']} role="alert">
+            {actionError}
+          </span>
+        ) : null}
+      </div>
     );
   }
 

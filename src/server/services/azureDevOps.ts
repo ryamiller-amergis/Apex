@@ -6062,8 +6062,10 @@ export class AzureDevOpsService {
     title: string;
     description: string;
     workItemId?: number;
+    /** Cloud Agent pull requests stay drafts until a person publishes them. */
+    isDraft?: boolean;
   }): Promise<string> {
-    const { repo, project, sourceBranch, targetBranch, title, description, workItemId } = opts;
+    const { repo, project, sourceBranch, targetBranch, title, description, workItemId, isDraft } = opts;
     const gitApi = await this.connection.getGitApi();
 
     const prPayload: any = {
@@ -6072,6 +6074,10 @@ export class AzureDevOpsService {
       sourceRefName: `refs/heads/${sourceBranch}`,
       targetRefName: `refs/heads/${targetBranch}`,
     };
+
+    if (isDraft) {
+      prPayload.isDraft = true;
+    }
 
     if (workItemId) {
       prPayload.workItemRefs = [{ id: String(workItemId) }];
@@ -6110,6 +6116,60 @@ export class AzureDevOpsService {
     const pullRequestId = matches?.[0]?.pullRequestId;
     if (!pullRequestId) return null;
     return `${this.organization}/${project}/_git/${repo}/pullrequest/${pullRequestId}`;
+  }
+
+  /**
+   * Sets title, description, and draft on an existing pull request.
+   * Used when Cloud Agent adopts a pull request the run already opened.
+   */
+  async updatePullRequest(opts: {
+    repo: string;
+    project: string;
+    pullRequestId: number;
+    title: string;
+    /** Omitted to keep the pull request's current description. */
+    description?: string;
+    isDraft: boolean;
+  }): Promise<void> {
+    const gitApi = await this.connection.getGitApi();
+    await gitApi.updatePullRequest(
+      {
+        title: opts.title,
+        ...(opts.description !== undefined ? { description: opts.description } : {}),
+        isDraft: opts.isDraft,
+      },
+      opts.repo,
+      opts.pullRequestId,
+      opts.project,
+    );
+  }
+
+  /**
+   * Adds a label to a pull request. Azure DevOps shows these on the pull request.
+   * Skips the create call when the same name is already present.
+   */
+  async addPullRequestLabel(opts: {
+    repo: string;
+    project: string;
+    pullRequestId: number;
+    name: string;
+  }): Promise<void> {
+    const gitApi = await this.connection.getGitApi();
+    const existing = await gitApi.getPullRequestLabels(
+      opts.repo,
+      opts.pullRequestId,
+      opts.project,
+    );
+    const alreadyPresent = (existing ?? []).some(
+      (label) => label.name?.trim().toLowerCase() === opts.name.trim().toLowerCase(),
+    );
+    if (alreadyPresent) return;
+    await gitApi.createPullRequestLabel(
+      { name: opts.name },
+      opts.repo,
+      opts.pullRequestId,
+      opts.project,
+    );
   }
 
   /**

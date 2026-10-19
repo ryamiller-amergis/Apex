@@ -7,7 +7,8 @@ const mockUpdateSet = jest.fn();
 const mockUpdateWhere = jest.fn();
 const mockLinkWorkItemToPullRequest = jest.fn();
 const mockAddAdoWorkItemHyperlink = jest.fn();
-const mockTransitionWorkItemForPullRequest = jest.fn();
+const mockPrepareCloudAgentKickoff = jest.fn();
+const mockAlignCloudAgentPullRequest = jest.fn();
 const mockGetAdoPullRequestStatus = jest.fn();
 const mockGetGithubPullRequestStatus = jest.fn();
 const mockTrackEvent = jest.fn();
@@ -260,7 +261,8 @@ function makeDeps(overrides: Partial<CloudAgentServiceDeps> = {}): CloudAgentSer
     cancelCursorCloudAgentRun: mockVendorCancel,
     linkWorkItemToPullRequest: mockLinkWorkItemToPullRequest,
     addAdoWorkItemHyperlink: mockAddAdoWorkItemHyperlink,
-    transitionWorkItemForPullRequest: mockTransitionWorkItemForPullRequest,
+    prepareCloudAgentKickoff: mockPrepareCloudAgentKickoff,
+    alignCloudAgentPullRequest: mockAlignCloudAgentPullRequest,
     getAdoPullRequestStatus: mockGetAdoPullRequestStatus,
     getGithubPullRequestStatus: mockGetGithubPullRequestStatus,
     retryWithBackoff: async <T>(fn: () => Promise<T>) => fn(),
@@ -285,17 +287,80 @@ describe('getCloudAgentActivityStream', () => {
     })();
     const streamCloudAgentRun = jest.fn().mockReturnValue(stream);
 
-    await expect(getCloudAgentActivityStream(
+    const activity = await getCloudAgentActivityStream(
       SESSION_ID,
       USER_ID,
       RUN_ID,
       makeDeps({ streamCloudAgentRun }),
-    )).resolves.toBe(stream);
+    );
+    const events = [];
+    for await (const event of activity) events.push(event);
+    expect(events).toEqual([{
+      id: '1:status:RUNNING',
+      kind: 'status',
+      title: 'Cloud agent running',
+    }]);
     expect(streamCloudAgentRun).toHaveBeenCalledWith({
       project: 'MaxView',
       cloudAgentId: 'bc-agent-1',
       cursorRunId: 'cursor-run-1',
     });
+  });
+
+  it('opens the draft pull request when the streamed agent completes', async () => {
+    mockDevSessionFindFirst.mockResolvedValue(session({ workItemId: 42, currentRunPrUrl: null }));
+    mockAgentRunFindFirst.mockResolvedValue(run({
+      status: 'running',
+      executionSnapshot: {
+        provider: 'ado',
+        repository: 'MaxView',
+        cloudAgent: {
+          workItemId: 42,
+          workItemTitle: 'Implement login',
+          baseBranch: 'development',
+          initiatorName: 'Jane Developer',
+          initiatorEmail: 'jane@example.com',
+        },
+      },
+    }));
+    mockMarkTerminal.mockResolvedValue({ ok: true, run: run({ status: 'completed' }) });
+    const opened = 'https://dev.azure.com/amergis/MaxView/_git/MaxView/pullrequest/9';
+    const openCloudAgentPullRequest = jest.fn().mockResolvedValue(opened);
+    const stream = (async function* () {
+      yield {
+        id: 'status:finished',
+        kind: 'status' as const,
+        title: 'Finished',
+        status: 'completed' as const,
+      };
+    })();
+
+    const activity = await getCloudAgentActivityStream(
+      SESSION_ID,
+      USER_ID,
+      RUN_ID,
+      makeDeps({
+        streamCloudAgentRun: jest.fn().mockReturnValue(stream),
+        getCloudAgentRun: jest.fn().mockResolvedValue({
+          status: 'finished',
+          prUrl: null,
+          resultText: null,
+          branchName: 'feature/apex-42-abc',
+          summary: 'Added the login form.',
+          settled: true,
+        }),
+        openCloudAgentPullRequest,
+      }),
+      'user-token',
+    );
+    const events = [];
+    for await (const event of activity) events.push(event);
+
+    expect(events).toEqual([expect.objectContaining({ status: 'completed' })]);
+    expect(openCloudAgentPullRequest).toHaveBeenCalledWith(expect.objectContaining({
+      sourceBranch: 'feature/apex-42-abc',
+      adoUserToken: 'user-token',
+    }));
   });
 
   it('does not expose a stream for another user or a replaced run', async () => {
@@ -398,6 +463,12 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
     }));
 
     expect(result).toEqual({ sessionId: SESSION_ID, runId: 'run-resume' });
+    expect(mockPrepareCloudAgentKickoff).toHaveBeenCalledWith({
+      project: 'MaxView',
+      workItemId: 42,
+      workItemType: 'Feature',
+      state: 'Committed',
+    });
     expect(mockEnqueue).toHaveBeenCalledWith(expect.objectContaining({
       snapshot: expect.objectContaining({
         prompt: expect.stringMatching(
@@ -406,6 +477,7 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
         skillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
         cloudAgent: expect.objectContaining({
           skillName: 'dev-orchestrator',
+          branchName: 'feature/apex-42-wi-42',
         }),
       }),
     }));
@@ -629,13 +701,31 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
     mockGetGithubPullRequestStatus.mockResolvedValue('open');
   });
 
-  it('AC-0 / DoD-0: instructs GitHub runs to include the AB# mention', async () => {
-    await expect(buildCloudAgentPrompt({
+  it('AC-0 / DoD-0: tells the agent the branch, draft pull request, and AB# mention', async () => {
+    const prompt = await buildCloudAgentPrompt({
       project: 'MaxView',
       workItemId: 123,
-    })).resolves.toContain(
-      'When the repository is hosted on GitHub, include AB#123 in the pull request title or body.',
-    );
+      workItemTitle: 'Shift Scheduler',
+    });
+
+    expect(prompt).toContain('Work on branch `feature/apex-123-shift-scheduler` and no other branch.');
+    expect(prompt).toContain('Apex opens a draft pull request titled `[APEX] apex-123-shift-scheduler`');
+    expect(prompt).toContain('Name the work item as AB#123');
+    expect(prompt).toContain('Do not move this work item or its backlog items to In Pull Request.');
+    expect(prompt).not.toContain('Open a pull request when the implementation is ready.');
+  });
+
+  it('asks the agent to return pr-description.md filled in between pr-description tags', async () => {
+    const prompt = await buildCloudAgentPrompt({
+      project: 'MaxView',
+      workItemId: 123,
+      workItemTitle: 'Shift Scheduler',
+    });
+
+    expect(prompt).toContain('uses the description from your final message');
+    expect(prompt).toContain('wrapped between <pr-description> and </pr-description>');
+    expect(prompt).toContain('#### What does this PR do?');
+    expect(prompt).toContain('#### How should this be manually tested?');
   });
 
   it('includes project development skill and model defaults in the kickoff prompt', async () => {
@@ -689,7 +779,7 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
       currentRunPrUrl: null,
     }));
     expect(mockLinkWorkItemToPullRequest).not.toHaveBeenCalled();
-    expect(mockTransitionWorkItemForPullRequest).not.toHaveBeenCalled();
+    expect(mockAlignCloudAgentPullRequest).not.toHaveBeenCalled();
   });
 
   it('uses the frozen run repository context to link a reported PR', async () => {
@@ -722,7 +812,7 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
       runId: RUN_ID,
       sessionId: SESSION_ID,
     });
-    expect(mockTransitionWorkItemForPullRequest).toHaveBeenCalledWith('MaxView', 123);
+    expect(mockAlignCloudAgentPullRequest).not.toHaveBeenCalled();
   });
 
   it('does not roll back terminal persistence when external linking fails', async () => {
@@ -1125,6 +1215,7 @@ describe('getCloudAgentRunStatus check projection (TBI-005 DoD-0/DoD-1/DoD-2; PB
       project: 'MaxView',
       repo: 'MaxView',
       sourceBranch: 'feature/apex-42-abc',
+      titleBranch: 'feature/apex-42-abc',
       targetBranch: 'development',
       workItemId: 42,
       workItemTitle: 'Implement login',
@@ -1614,7 +1705,7 @@ describe('reconcileRunningCloudAgentRuns', () => {
     mockDevSessionFindFirst.mockResolvedValue(session({ workItemId: 123 }));
     mockPersistLeftoverWork.mockResolvedValue({ firstWrite: true });
     mockLinkWorkItemToPullRequest.mockResolvedValue({ mechanism: 'native-link', verified: true });
-    mockTransitionWorkItemForPullRequest.mockResolvedValue(undefined);
+    mockAlignCloudAgentPullRequest.mockResolvedValue(undefined);
     mockGetAdoPullRequestStatus.mockResolvedValue('open');
   });
 

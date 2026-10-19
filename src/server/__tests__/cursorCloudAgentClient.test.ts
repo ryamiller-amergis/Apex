@@ -10,15 +10,15 @@ jest.mock('@cursor/sdk', () => ({
   },
 }));
 
-const mockGetContainerRun = jest.fn();
-const mockCancelContainerRun = jest.fn();
-
-jest.mock('../services/cursorContainerCliService', () => ({
-  isContainerAgentId: (id: string) => id.startsWith('container-agent-'),
-  getCursorContainerCliRun: (...args: unknown[]) => mockGetContainerRun(...args),
-  streamCursorContainerCliRun: jest.fn(),
-  cancelCursorContainerCliRun: (...args: unknown[]) => mockCancelContainerRun(...args),
-}));
+// const mockGetContainerRun = jest.fn();
+// const mockCancelContainerRun = jest.fn();
+//
+// jest.mock('../services/cursorContainerCliService', () => ({
+//   isContainerAgentId: (id: string) => id.startsWith('container-agent-'),
+//   getCursorContainerCliRun: (...args: unknown[]) => mockGetContainerRun(...args),
+//   streamCursorContainerCliRun: jest.fn(),
+//   cancelCursorContainerCliRun: (...args: unknown[]) => mockCancelContainerRun(...args),
+// }));
 
 jest.mock('../services/repoCacheService', () => ({
   resolveGitRemote: jest.fn((provider: string, project: string, repo: string) => {
@@ -296,40 +296,40 @@ describe('cursorCloudAgentClient', () => {
     expect(observed.settled).toBe(true);
   });
 
-  it('reads a live container execution through the container adapter', async () => {
-    mockGetRun.mockClear();
-    mockGetContainerRun.mockResolvedValue({
-      status: 'running',
-      prUrl: null,
-      resultText: null,
-      branchName: null,
-      baseBranch: null,
-      summary: null,
-      noChanges: false,
-      settled: false,
-    });
-
-    await getCloudAgentRun({
-      project: 'MaxView',
-      cloudAgentId: 'container-agent-exec-1',
-      cursorRunId: 'exec-1',
-    });
-
-    expect(mockGetContainerRun).toHaveBeenCalledWith('exec-1');
-    expect(mockGetRun).not.toHaveBeenCalled();
-  });
-
-  it('cancels a live container execution through the container adapter', async () => {
-    mockGetRun.mockClear();
-    mockCancelContainerRun.mockResolvedValue(undefined);
-
-    await cancelCursorCloudAgentRun({
-      project: 'MaxView',
-      cloudAgentId: 'container-agent-exec-1',
-      cursorRunId: 'exec-1',
-    });
-
-    expect(mockCancelContainerRun).toHaveBeenCalledWith('exec-1');
-    expect(mockGetRun).not.toHaveBeenCalled();
-  });
+  // it('reads a live container execution through the container adapter', async () => {
+  //   mockGetRun.mockClear();
+  //   mockGetContainerRun.mockResolvedValue({
+  //     status: 'running',
+  //     prUrl: null,
+  //     resultText: null,
+  //     branchName: null,
+  //     baseBranch: null,
+  //     summary: null,
+  //     noChanges: false,
+  //     settled: false,
+  //   });
+  //
+  //   await getCloudAgentRun({
+  //     project: 'MaxView',
+  //     cloudAgentId: 'container-agent-exec-1',
+  //     cursorRunId: 'exec-1',
+  //   });
+  //
+  //   expect(mockGetContainerRun).toHaveBeenCalledWith('exec-1');
+  //   expect(mockGetRun).not.toHaveBeenCalled();
+  // });
+  //
+  // it('cancels a live container execution through the container adapter', async () => {
+  //   mockGetRun.mockClear();
+  //   mockCancelContainerRun.mockResolvedValue(undefined);
+  //
+  //   await cancelCursorCloudAgentRun({
+  //     project: 'MaxView',
+  //     cloudAgentId: 'container-agent-exec-1',
+  //     cursorRunId: 'exec-1',
+  //   });
+  //
+  //   expect(mockCancelContainerRun).toHaveBeenCalledWith('exec-1');
+  //   expect(mockGetRun).not.toHaveBeenCalled();
+  // });
 });

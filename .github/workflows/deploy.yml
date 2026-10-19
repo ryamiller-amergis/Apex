@@ -106,6 +106,7 @@ jobs:
           mkdir -p deploy/dist
           cp -r dist/* deploy/dist/
           cp package*.json deploy/
+          cp pr-description.md deploy/
           cp server.js deploy/ 2>/dev/null || true
           cp -r scripts deploy/
           # Platform Admin APEX Skills reads this at runtime for the skill picker /

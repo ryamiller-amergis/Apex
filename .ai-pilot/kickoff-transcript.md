@@ -1,159 +1,193 @@
-# Kickoff Transcript — My Work Assigned Backlog and View Context
+# ADR interview transcript — Cloud Agent launch and delivery contract
 
-> Status: ready for `/to-prd`.
-> Interview type: feature building (`/grill-with-docs`).
-> Remaining grill questions were closed with the interviewer's recommended answers at the user's request.
+Date: 2026-10-12
+Status: ready for ADR generation
+Proposed slug: `cloud-agent-skill-launch`
 
----
+## Problem and scope
 
-## Feature Description
+Apex Cloud Agent runs start from My Work with one project development skill and a delivery contract that does not match the existing My Work session path. Users, including people who are not developers, also need a guided way to start from Agent Home.
 
-Add a personal **Assigned Backlog** section on **My Work** for Apex Backlog items (Feature Requests of type Feature, Issue, or Technical) assigned to the signed-in user in the current project — **not** Work Board items.
+This ADR decides how a run is chosen and confirmed, and how an implementation run names its branch, writes its pull request, links the work item, moves its state, and tags `ai-code`.
 
-From that section the assignee can open **View Context** in **intake** mode, read the request details, and kick off (or resume) a design interview when allowed.
+### In scope
 
-Assignment notifications for Apex Backlog items navigate to My Work and open that item.
+- My Work confirmation before Start. Show the work item title, id, and type, the auto-selected skill, and the model. The skill is a dropdown of the project's skill-catalog skills. The user may change it. Do not show why the skill was selected.
+- Built-in work-item-type skill selection. No new administrator mapping screen and no user-configurable naming workflow.
+- Agent Home guided launcher with plain-language choices: Investigate a problem, Draft or review content, Analyze information, Implement a change, Run a project-specific workflow.
+- One shared server helper for branch name, pull-request title, pull-request description, work-item link, state transition, and the `ai-code` tag. Cloud Agent calls that helper. The agent does not invent those values.
+- The same status, activity, cancellation, and results experience for both entry points.
+- Resume and retry keep the skill and model from the started run.
 
-On the same page, **Feature Backlog** (Approved PRD features) lists only features whose **Design Doc Owner** is the signed-in user.
+### Out of scope
 
-This is full-stack (React My Work + Express listing/filter + notification link). No feature flag.
+- A settings screen for skill mappings, branch patterns, pull-request text, or tags.
+- A user-visible explanation of why a skill was chosen.
+- Asking the Cloud Agent to choose the branch name, pull-request title, or pull-request description.
+- New skill names for Draft or Analyze.
 
----
+## Repository evidence
 
-## Opening Questions (Q1–Q5)
+Facts verified in this repo:
 
-### Q1 — Surface
+- `POST /api/dev-workbench/cloud-agent/start` in `src/server/routes/devWorkbench.ts` requires `workItemId` and `project`. It loads `System.WorkItemType` and passes it into `startCloudAgentRun` for eligibility. It does not use the type to choose a skill.
+- `resolveDevelopmentSettings` in `src/shared/utils/developmentKickoff.ts` uses `developmentSkillPath`, or `.cursor/skills/dev-orchestrator/SKILL.md` when that is empty, and `developmentModel`, or `composer-2.5`.
+- `buildCloudAgentPrompt` in `src/server/services/cloudAgentService.ts` already loads work-item context through `buildLocalDevContext`, then prefixes that single development skill.
+- The queued run stores `skillPath`, `model`, and `skillName` on `agent_runs.execution_snapshot`. It does not store an override flag. A new start resolves the project development skill again.
+- Local My Work branches come from `createFeatureBranch` in `src/server/services/repoCheckoutService.ts`: `feature/apex-<workItemId>-<title-slug>`.
+- Cloud Agent branches come from `branchNameFor` in `src/server/services/cursorContainerCliService.ts`: `feature/apex-<workItemId>-<random hex>`.
+- Local pull requests come from `createSessionPr` in `src/server/routes/devWorkbench.ts`. Title: `[APEX] <branch without the feature/ prefix>`. Description: `Automated implementation via APEX dev workbench.` plus the `AB#` work-item reference. It then transitions the work item and adds the pull-request hyperlink.
+- Cloud pull requests come from `buildCloudAgentPullRequestText` in `src/server/services/cloudAgentPullRequest.ts`. Title: `AB#<id>: <title>`. Description starts with `Automated implementation via Apex cloud development.`
+- Neither path calls `addTagToWorkItem` with `ai-code`. That tag is read for analytics in `src/server/services/aiCapabilityLadderService.ts` and `src/server/services/azureDevOps.ts`.
+- Project skills are the catalog from the configured skill repo (`listSkills` in `src/server/services/skillCatalog.ts`). There is no second approval list.
+- Agent Home has no Cloud Agent launcher. The existing flag is `my-work-cloud-agent`.
 
-- **Asked:** Frontend vs backend vs full-stack.
-- **Answer:** Full-stack (client and server). Confirmed by user.
+## Constraints
 
-### Q2 — Access control
+- Server-side rules. The user said not to add a new UI or a user-configurable workflow for naming, tags, or skill mapping.
+- The confirmation screen and the Agent Home launcher are start screens, not settings.
+- The user does not want a "why this skill" explanation. The dropdown is the override.
+- Implementation runs must use the existing My Work branch and pull-request contract. Apex computes the values and passes them in.
+- Non-development guided workflows must use plain language and must be able to start without a work item.
+- Implementation launches, from My Work or from Implement a change, require a work item so the shared helper can run.
+- Security and assignment checks already on Cloud Agent start stay in place (assigned-to caller, Azure DevOps project, feature flag).
 
-- **Asked:** Who can see the Assigned Backlog section; data scope.
-- **Answer (user):** Keep My Work for **Developer**, **Platform Admin (Super Admin)**, and **Project Admin**. Items are **project-scoped and self-only** (assigned to that user in the current project).
-- **Recommendation accepted for interview kickoff:** Start Interview still requires `interviews:manage` plus BA, Manager, or Product-Owner (same as today). Assignees who cannot start interviews can still view details.
-- **RBAC:** Reuse `dev-workbench:view`. No new permission. Super Admin already bypasses group checks on the API; users with `admin:roles` (Project Admin) already bypass Developer group on `/api/dev-workbench`. Client nav currently also requires Developer group — **align nav and route fallback** so Super Admin and Project Admin can open `/my-work` without Developer membership (matches API).
-- **Triage stays on Apex Backlog:** `feature-requests:manage` is not required to see one's own Assigned Backlog items.
+## Decision drivers
 
-### Q3 — Data sensitivity
+- A person should get the project's skill without knowing skill paths or maintaining a mapping table.
+- Developers should keep the work-item context, branch name, pull-request text, link, state change, and `ai-code` tag that My Work already uses.
+- Non-development work should not require Azure DevOps knowledge.
+- The two implementation paths must not keep two copies of the branch and pull-request rules.
+- The user's dropdown choice must be what starts, and what resume and retry use.
 
-- **Asked:** Credentials, tokens, PII.
-- **Answer:** No. Same Feature Request payload already shown on Apex Backlog. No extra encrypt-at-rest, log masking, or API exclusion.
+## Considered options
 
-### Q4 — Non-functional requirements
+### Pre-launch only, leave Cloud Agent branch and pull-request builders as they are
 
-- **Asked:** Performance bounds for loading My Work Assigned Backlog (and notification deep-link).
-- **Answer:** Defaults accepted.
-  - List API P95 ≤ 2 seconds.
-  - Up to 100 concurrent users.
-  - Up to 100 assigned items per user per project; no pagination below that.
+Rejected. The user said kickoff must follow the current process. Branch names, pull-request titles, and descriptions already differ, and `ai-code` is never written. Prompt instructions cannot fix values Apex already sets.
 
-### Q5 — Feature flag rollout
+### Prompt-only delivery rules
 
-- **Asked:** Gate behind a flag?
-- **Answer:** No flag — ship directly.
+Rejected for the same reason. `branchNameFor` and `buildCloudAgentPullRequestText` already own those strings.
 
----
+### Copy the My Work strings into `cloudAgentService` and leave `createSessionPr` alone
 
-## Grilling Decisions
+Rejected. The user said to extract the existing functions and call them from both paths so the rules are not duplicated.
 
-Closed with recommended answers (user: wrap remaining questions).
+### Require a work item for every guided launch
 
-### Canonical item (user-confirmed)
+The user selected this, then reversed it after the conflict with the request was called out. Rejected. Investigate, Draft, and Analyze must be able to start with no work item.
 
-An **Apex Backlog item** is a Feature Request of type **Feature**, **Issue**, or **Technical** assigned on Apex Backlog (`/feature-requests`). It is not a Work Board item and not a PRD Feature/PBI/TBI.
+### Never require a work item
 
-### Page layout
+Rejected. Implement a change and My Work need a work item for the shared delivery helper.
 
-My Work section order for app-native projects:
+### Invent guided skill names (`content-review`, `technical-analysis`) or reuse project-settings pipeline slots as a new map
 
-1. **Assigned Backlog** — heading “Assigned Backlog”, subtitle “Apex Backlog items assigned to you”.
-2. **Work Board** — existing assigned board items (unchanged, still not mixed into Assigned Backlog).
-3. **Feature Backlog** — heading stays “Feature Backlog”, subtitle “Approved PRD features”; **filtered to Design Doc Owner**.
+Rejected. The user said to auto-find the skill and to stay with current skill configuration for the fallback. Do not add skill names that are not in the work-item map.
 
-Empty Assigned Backlog still renders the section with copy: “No Apex Backlog items assigned to you.”
+### Re-resolve the skill on every retry
 
-Card row shows: type badge (Feature / Issue / Technical), title, status, team priority if set, truncated request text. Primary action: **View Context**. Secondary: **Start Interview** or **Open Interview** when eligible.
+Rejected. The acceptance criteria say resume and retry preserve the original configuration. The dropdown choice would be lost.
 
-### Which statuses appear
+### New `agent_runs` columns for the skill choice
 
-Default list: `new`, `under-review`, `in-interview`, `planned`.
+Not selected. The execution snapshot already freezes `skillPath` and `model` for the run. New columns would widen the schema for the same fact.
 
-Exclude `declined` and `done`. Exclude Apex-as-assignee (`assignedToApex`). Exclude items assigned to someone else.
+### Show a selection reason on the confirmation screen
 
-### View Context — two modes, one shell
+Rejected by the user. The original request asked for it. This decision drops that visible reason.
 
-Reuse the existing View Context modal. Do not delete development tabs from the codebase. Drive visibility with a **view mode**:
+## Selected option
 
-| Mode | Opened from | Visible content | Hidden (not removed) |
-|------|-------------|-----------------|----------------------|
-| **intake** | Assigned Backlog (and assignment notification) | Request tab: type, title, status, request, advantage, submitter, linked ADRs, Start/Open Interview | PRD, Backlog (PRD hierarchy), Design Doc, Tech Spec, Assumptions, Prototype; Start Local Dev / Mark Complete / Clear Progress |
-| **development** | Feature Backlog “View Context” | Existing tabs: PRD, Backlog, Design Doc, Tech Spec, Assumptions, Prototype | Intake request tab; Start Interview |
+### Skill selection
 
-Chrome (title, type, close) stays. Intake mode should feel like reading a request, not a development briefing.
+My Work auto-selects one skill from the work-item type Apex already loaded:
 
-Do not send the user to `/feature-requests` to read their own assignment.
+| Work item type | Skill name |
+| --- | --- |
+| Bug | `bug-fix` |
+| Product Backlog Item (PBI) | `development` |
+| Technical Backlog Item (TBI) | `technical-development` |
+| Feature | `development-orchestrator` |
 
-### Interview kickoff from My Work
+Resolve the name against the project skill catalog. If the type is unknown, or that skill is not in the catalog, use today's development skill: `developmentSkillPath`, or `.cursor/skills/dev-orchestrator/SKILL.md` when unset. The model is `developmentModel`, or `composer-2.5` when unset.
 
-Reuse the existing Feature Request interview prefill and kickoff path (same as the Apex Backlog detail drawer).
+The confirmation screen shows the work item title, id, and type, the skill, and the model. The skill control is a dropdown of catalog skills. Changing it is optional. There is no reason text.
 
-- **Feature** and **Technical** (`isInterviewableWorkItemType`): if no `interviewId` and user may start interviews → **Start Interview**. If `interviewId` exists → **Open Interview** (`/backlog/interview/{id}`).
-- **Issue:** details only. No Start Interview. Helper text: “Issues are not interviewed from My Work.”
-- After a successful start, status follows the existing Apex Backlog interview-link behavior (`in-interview` / `interviewId`).
+Guided launches that have no work item propose today's development skill and use the same dropdown. Implement a change requires an existing work item first; once that item is attached, selection uses the type map above. Run a project-specific workflow does not auto-select; the user picks from the catalog.
 
-Users who can see Assigned Backlog but cannot start interviews still get View Context; Start Interview is hidden.
+The server accepts only a skill from that catalog. One skill per run.
 
-### Assignment notification
+Save the chosen skill path, skill name, model, and an override flag on the existing `agent_runs.execution_snapshot`. Resume and retry copy that snapshot. They do not re-read project skill settings. Do not persist a user-facing reason.
 
-Today the link is `/feature-requests?tab={type}&id={id}`. Change it to My Work:
+Both entry points stay behind the existing `my-work-cloud-agent` flag.
 
-`/my-work?section=backlog&itemId={id}`
+### Delivery contract
 
-On load, if the item is in the user's Assigned Backlog, scroll to Assigned Backlog and open View Context in **intake** mode. If the item is missing (unassigned, wrong project, declined/done, Apex-assigned), show a toast and leave My Work as-is — do not bounce to Apex Backlog.
+Extract the My Work branch name and pull-request metadata from `createFeatureBranch` and `createSessionPr` into one shared helper. `cloudAgentService` calls it. Do not leave a second copy in `branchNameFor` or `buildCloudAgentPullRequestText`.
 
-Notification copy can stay “Work item assigned to you” / `{actor} assigned "{title}" to you`.
+For a run with a work item, Apex computes and passes:
 
-Self-assignment still does not notify (existing rule).
+- Branch: `feature/apex-<workItemId>-<title-slug>`
+- Pull-request title: `[APEX] <branch without the feature/ prefix>`
+- Pull-request description: the current dev-workbench description, including the `AB#` reference
+- Work-item link and state transition, as `createSessionPr` does today
+- The `ai-code` tag, via the existing `addTagToWorkItem` API
 
-### Feature Backlog owner filter
+The Cloud Agent does not invent those values. This tag write is new. No current server path adds `ai-code`.
 
-`GET /api/dev-workbench/backlog-features` must return only features the signed-in user **owns as Design Doc Owner**.
+Investigate a problem, Draft or review content, and Analyze information do not call the helper. They do not open a pull request, link a work item, change state, or add `ai-code`. They still use the Cloud Agent run status, activity, cancellation, and results experience.
 
-Canonical owner field: the interview's **design-doc owner** (`designDocOwnerId` on the interview that produced the PRD). Super Admin and Project Admin get the **same self-only filter** on this list (they do not see every approved feature here).
+## Positive consequences
 
-If design-doc owner is unset, **exclude** the feature (do not show unowned work).
+- My Work starts on a skill that matches the work-item type, and the user can change it without an admin screen.
+- Implementation runs from My Work and from Implement a change produce the same branch, pull request, link, state, and `ai-code` tag.
+- Non-development workflows can start from Agent Home in plain language, without a work item.
+- Retry cannot silently switch skills if project settings change later.
 
-View Context in development mode, Start Local Dev, Mark Complete, and Clear Progress are unchanged for features that remain on the list.
+## Negative consequences
 
-### Assigned Backlog data
+- The visible "why this skill" line from the original request is dropped.
+- `ai-code` becomes a new write on every implementation pull request, including local My Work once it uses the shared helper. Analytics that count that tag will include these runs.
+- Cloud Agent branch names change shape. A rerun of the same work item continues `feature/apex-<id>-<slug>` instead of a new random suffix. That matches local My Work and can collide with an existing branch on purpose, because local checkout already continues an existing remote branch.
+- Guided non-implementation runs have no pull request. Their result lives in the run activity and results view.
+- Projects whose catalogs do not contain `bug-fix`, `development`, `technical-development`, or `development-orchestrator` will fall back to the development skill until those skills exist.
+- Implement a change cannot start until the user attaches a work item. The picker itself is not specified beyond "an existing work item."
 
-New (or extended) My Work API lists Feature Requests where:
+## Unresolved risks
 
-- `sourceProject` = selected project
-- `assignedToOid` = current user
-- `assignedToApex` = false
-- status in `new` | `under-review` | `in-interview` | `planned`
+- The work-item picker on Agent Home for Implement a change is unspecified. It must not become a new admin screen.
+- Guided non-implementation runs still need a prompt and a place to put the user's goal and optional context. They do not get the implementation delivery helper.
+- Adding `ai-code` on the local My Work path changes analytics input. Confirm that local sessions should be tagged too, because the shared helper serves both callers.
+- Skill-name matching is by catalog skill name. A project that stores the same procedure under a different folder name will fall back.
 
-Requires `dev-workbench:view` (same router). Does not require `feature-requests:manage`.
+## User statements (material)
 
----
+- Cloud Agent kickoff should follow the current process: reach ADO for the work item, and make branch names, pull-request titles, and descriptions match the current flow. It should add the `ai-code` tag.
+- Do not add a new UI or a user-configurable workflow for this. Keep it server-side. Reuse the existing My Work naming and pull-request functions. Call them from `cloudAgentService`. Apex computes the values. The agent does not invent them. Do not duplicate the rules.
+- Keep the My Work confirmation screen and the Agent Home guided launcher. No admin or naming settings UI.
+- Investigate, Draft, and Analyze can start with no work item and do not open a pull request or tag anything. Implement a change, and every My Work launch, require a work item and use the shared helper.
+- My Work auto-finds the skill. The user may override it from a dropdown. Do not show why the skill was selected.
 
-## Unresolved Assumptions
+## Assumptions
 
-- **Per-feature vs interview-level owner:** Design docs are per feature; owner lives on the **interview** (`designDocOwnerId`). Until a per-feature owner exists, every feature under that PRD shares the interview design-doc owner. Treat that as the product rule, not a gap to invent around.
-- **Assigned Backlog on ADO-backed projects:** Ship Assigned Backlog on every project that has Apex Backlog menu/items, including projects that still use ADO work items below. If Apex Backlog is unused in that project, the section is empty.
-- **Issue interviews:** Product already blocks Issue types from interview kickoff. This feature does not add a new interview skill for Issues.
+- "Approved project skill" means a skill returned by the project skill catalog, not a new allow-list and not a project-settings pipeline slot.
+- Guided launches without a work item propose the current development skill.
+- The model stays on the confirmation screen because the original request includes it. The user did not reject it. They rejected the reason text.
+- One skill is selected per run.
+- Storage is the existing execution snapshot because that object already freezes the skill and model. The user did not choose between snapshot fields and new columns. They required that the dropdown choice be the one that runs.
 
----
+## References
 
-## Key Design Decisions
-
-1. Assigned Backlog is personal intake on My Work; Apex Backlog remains the team triage queue; Work Board remains execution assignments.
-2. View Context is mode-driven (`intake` vs `development`); development tabs stay in code and hide in intake mode.
-3. Notification deep-link is My Work, not Apex Backlog.
-4. Feature Backlog is Design Doc Owner only, enforced on the server.
-5. No feature flag. NFRs: P95 ≤ 2s, 100 concurrent users, ≤ 100 assigned items, no pagination in v1.
-6. Interview start authorization is unchanged (BA / Manager / Product-Owner + `interviews:manage`).
-7. Client My Work visibility must match API: Developer **or** Super Admin **or** Project Admin (`admin:roles`).
-)
+- `src/server/routes/devWorkbench.ts` — Cloud Agent start, `createSessionPr`, `createFeatureBranch` call
+- `src/server/services/cloudAgentService.ts` — `buildCloudAgentPrompt`, `persistQueuedRun`
+- `src/server/services/cloudAgentPullRequest.ts` — current Cloud Agent pull-request text
+- `src/server/services/cursorContainerCliService.ts` — `branchNameFor`
+- `src/server/services/repoCheckoutService.ts` — `createFeatureBranch`
+- `src/shared/utils/developmentKickoff.ts` — `resolveDevelopmentSettings`
+- `src/server/services/localDevContextService.ts` — work-item context pack
+- `src/server/services/skillCatalog.ts` — `listSkills`
+- `src/server/services/azureDevOps.ts` — `addTagToWorkItem`
+- `src/server/db/schema.ts` — `agent_runs.execution_snapshot`
+- Feature flag `my-work-cloud-agent`

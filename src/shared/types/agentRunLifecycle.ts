@@ -92,6 +92,8 @@ export interface ExecutionSnapshot {
   cloudAgent?: {
     workItemId: number;
     workItemTitle?: string;
+    /** My Work branch: feature/apex-<workItemId>-<title-slug>. */
+    branchName?: string;
     baseBranch: string;
     initiatorName?: string;
     initiatorEmail?: string;

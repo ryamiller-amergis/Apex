@@ -20,6 +20,7 @@ Jest + Testing Library, Playwright E2E, Terraform on Azure.
 - `scripts/`: CI checks (`scripts/ci/`), E2E helpers (`scripts/e2e/`), changelog, dev→prod migration.
 - `design-docs/`: feature design docs. `docs/`: setup and ops (auth, Azure cost, release, security).
 - `public/`: static assets; `public/CHANGELOG.json` is the release record.
+- `pr-description.md`: pull request description skeleton. My Work fills the Work items line; the cursor pool worker copies it for the agent.
 - `teams-app/`: Teams manifests (`teams-app/dev/`, `teams-app/prod/`). `.ai-pilot/`: kickoff transcripts and generated PRD output.
 - `.github/workflows/`: `.github/workflows/pr-tests.yml`, `.github/workflows/deploy.yml`, `.github/workflows/deploy-dev-quick.yml`, `.github/workflows/e2e-nightly.yml`, `.github/workflows/e2e-triage.yml`.
 - Config: `vite.config.ts`, `server.js`, `tsconfig.{client,server,e2e,node,jest.client,jest.server}.json`, `jest.config.js`,
