@@ -22,6 +22,7 @@ import type {
   PlaybookRunFilter,
   StartRunResult,
 } from '../../shared/types/playbook';
+import type { AtsBoardAuditTurn } from '../../shared/atsBoard';
 
 /** How often a live run is re-read. Frequent enough to watch, slow enough not to be a load test. */
 const POLL_INTERVAL_MS = 5_000;
@@ -33,7 +34,10 @@ const POLL_INTERVAL_MS = 5_000;
  * default only if it is genuinely one of these two — anything new reads as finished, and a view
  * that stops polling too early is recoverable by reloading, while one that never stops is not.
  */
-const LIVE_RUN_STATUSES: ReadonlySet<PlaybookRunStatus> = new Set(['running', 'suspended']);
+const LIVE_RUN_STATUSES: ReadonlySet<PlaybookRunStatus> = new Set([
+  'running',
+  'suspended',
+]);
 
 /**
  * Derived from the shared constant rather than re-listed here. `PLAYBOOK_STEP_RUN_OPEN_STATUSES` is
@@ -59,7 +63,8 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new PlaybookRunApiError(
-      (body as { error?: string }).error ?? `Request failed: ${response.status}`,
+      (body as { error?: string }).error ??
+        `Request failed: ${response.status}`,
       response.status
     );
   }
@@ -74,13 +79,16 @@ export function hasLiveStep(run: PlaybookRunDetail | undefined): boolean {
   if (!run) return false;
   // The run's own status is not enough: a run can read `running` while its steps are all done, in
   // the moment between the last step finishing and the run being closed out.
-  return isRunLive(run.status) || run.steps.some((s) => OPEN_STEP_STATUSES.has(s.status));
+  return (
+    isRunLive(run.status) ||
+    run.steps.some((s) => OPEN_STEP_STATUSES.has(s.status))
+  );
 }
 
 /** Runs in a project, most recent first. Polls while any of them is still going. */
 export function usePlaybookRuns(
   project: string | undefined,
-  filter?: PlaybookRunFilter,
+  filter?: PlaybookRunFilter
 ) {
   return useQuery<PlaybookRunListResult>({
     queryKey: ['playbook-runs', project, filter],
@@ -91,52 +99,71 @@ export function usePlaybookRuns(
     enabled: !!project,
     staleTime: 0,
     refetchInterval: (result) =>
-      result.state.data?.runs.some((run) => isRunLive(run.status)) ? POLL_INTERVAL_MS : false,
+      result.state.data?.runs.some((run) => isRunLive(run.status))
+        ? POLL_INTERVAL_MS
+        : false,
   });
 }
 
 export function usePlaybookGate(
   project: string | undefined,
   runId: string | null,
-  stepRunId: string | null,
+  stepRunId: string | null
 ) {
   return useQuery<PlaybookGateDetail>({
     queryKey: ['playbook-gate', project, runId, stepRunId],
-    queryFn: () => apiFetch(
-      `/api/playbooks/runs/${encodeURIComponent(runId!)}/steps/${encodeURIComponent(stepRunId!)}`
-        + `/gate?project=${encodeURIComponent(project!)}`,
-    ),
+    queryFn: () =>
+      apiFetch(
+        `/api/playbooks/runs/${encodeURIComponent(runId!)}/steps/${encodeURIComponent(stepRunId!)}` +
+          `/gate?project=${encodeURIComponent(project!)}`
+      ),
     enabled: Boolean(project && runId && stepRunId),
     retry: false,
   });
 }
 
-export function usePlaybookGateDecision(project: string, runId: string, stepRunId: string) {
+export function usePlaybookGateDecision(
+  project: string,
+  runId: string,
+  stepRunId: string
+) {
   const queryClient = useQueryClient();
-  return useMutation<unknown, PlaybookRunApiError, {
-    decision: 'approved' | 'rejected';
-    comment?: string;
-  }>({
-    mutationFn: (decision) => apiFetch(
-      `/api/playbooks/runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepRunId)}/decision`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project, ...decision }),
-      },
-    ),
+  return useMutation<
+    unknown,
+    PlaybookRunApiError,
+    {
+      decision: 'approved' | 'rejected';
+      comment?: string;
+    }
+  >({
+    mutationFn: (decision) =>
+      apiFetch(
+        `/api/playbooks/runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepRunId)}/decision`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project, ...decision }),
+        }
+      ),
     onSuccess: async () => {
       await Promise.all([
         invalidateRunQueries(queryClient, project, runId),
-        queryClient.invalidateQueries({ queryKey: ['playbook-gate', project, runId, stepRunId] }),
-        queryClient.invalidateQueries({ queryKey: ['home-dashboard', project] }),
+        queryClient.invalidateQueries({
+          queryKey: ['playbook-gate', project, runId, stepRunId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['home-dashboard', project],
+        }),
       ]);
     },
   });
 }
 
 /** One run with its steps. Polls while any step is non-terminal, then stops. */
-export function usePlaybookRun(project: string | undefined, runId: string | null) {
+export function usePlaybookRun(
+  project: string | undefined,
+  runId: string | null
+) {
   return useQuery<PlaybookRunDetail>({
     queryKey: ['playbook-run', project, runId],
     queryFn: () =>
@@ -145,7 +172,25 @@ export function usePlaybookRun(project: string | undefined, runId: string | null
       ),
     enabled: !!project && !!runId,
     staleTime: 0,
-    refetchInterval: (result) => (hasLiveStep(result.state.data) ? POLL_INTERVAL_MS : false),
+    refetchInterval: (result) =>
+      hasLiveStep(result.state.data) ? POLL_INTERVAL_MS : false,
+  });
+}
+
+export function useAtsBoardAudit(
+  project: string | undefined,
+  runId: string | null,
+  enabled: boolean
+) {
+  return useQuery<{ charter: string | null; turns: AtsBoardAuditTurn[] }>({
+    queryKey: ['ats-board-audit', project, runId],
+    queryFn: () =>
+      apiFetch(
+        `/api/playbooks/runs/${encodeURIComponent(runId!)}` +
+          `/deliberation?project=${encodeURIComponent(project!)}`
+      ),
+    enabled: Boolean(project && runId && enabled),
+    staleTime: 0,
   });
 }
 
@@ -156,21 +201,34 @@ async function invalidateRunQueries(
 ): Promise<void> {
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: ['playbook-runs', project] }),
-    queryClient.invalidateQueries({ queryKey: ['playbook-run', project, runId] }),
+    queryClient.invalidateQueries({
+      queryKey: ['playbook-run', project, runId],
+    }),
   ]);
 }
 
 /** Starts a run on the definition's current published version. */
 export function useStartPlaybookRun(project: string, definitionId: string) {
   const queryClient = useQueryClient();
-  return useMutation<StartRunResult, PlaybookRunApiError, void>({
-    mutationFn: () =>
+  return useMutation<
+    StartRunResult,
+    PlaybookRunApiError,
+    { runInput?: Record<string, unknown> } | void
+  >({
+    mutationFn: (variables) =>
       apiFetch('/api/playbooks/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project, definitionId }),
+        body: JSON.stringify({
+          project,
+          definitionId,
+          ...(variables && typeof variables === 'object' && variables.runInput
+            ? { runInput: variables.runInput }
+            : {}),
+        }),
       }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['playbook-runs', project] }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['playbook-runs', project] }),
   });
 }
 
@@ -189,7 +247,8 @@ export function useCancelPlaybookRun(project: string, runId: string) {
       }),
     onSuccess: () => invalidateRunQueries(queryClient, project, runId),
     onError: (error) => {
-      if (error.status === 403) void invalidateRunQueries(queryClient, project, runId);
+      if (error.status === 403)
+        void invalidateRunQueries(queryClient, project, runId);
     },
   });
 }
@@ -212,7 +271,8 @@ export function useRetryPlaybookStep(project: string, runId: string) {
       ),
     onSuccess: () => invalidateRunQueries(queryClient, project, runId),
     onError: (error) => {
-      if (error.status === 403) void invalidateRunQueries(queryClient, project, runId);
+      if (error.status === 403)
+        void invalidateRunQueries(queryClient, project, runId);
     },
   });
 }

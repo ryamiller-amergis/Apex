@@ -134,6 +134,8 @@ export async function submitApprovalDecision(input: {
   decision: ApprovalDecision;
   /** When given, the step must belong to this run. The route passes the id from its path. */
   runId?: string;
+  /** Kept on the step output so a ratification note survives after the gate closes. */
+  comment?: string;
 }): Promise<ApprovalSubmissionResult> {
   const [row] = await db
     .select({
@@ -196,9 +198,11 @@ export async function submitApprovalDecision(input: {
    * the two, the gate may have been decided or swept. `resumeStepRun` only moves a row still marked
    * suspended, so the second of two concurrent submissions moves nothing and is told so.
    */
+  const comment = input.comment?.trim();
   const output = parseStepOutput(STEP_TYPE, {
     decision: input.decision,
     decidedBy: input.deciderUserId,
+    ...(comment ? { comment } : {}),
   });
   const moved = await resumeStepRun({
     stepRunId: input.stepRunId,

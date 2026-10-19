@@ -9,6 +9,7 @@ Live scenarios have not been run. This file is the place the Product-Owner recor
 | Checkout SHA | Not refreshed |
 | Web research | Not configured in this session |
 | Result | Not run |
+| Skill contract | Direction pass, then Phase 1 requirements packets and measurable differentiators. Live scenarios have not been run against this contract. |
 
 ## Checklist
 

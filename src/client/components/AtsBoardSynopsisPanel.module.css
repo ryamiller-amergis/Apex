@@ -1,0 +1,72 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  margin-top: 1rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.75rem;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.status {
+  margin: 0;
+  font-weight: 650;
+}
+
+.waiting {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.list {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.decision {
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.meta {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.detailGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1rem;
+}
+
+.audit {
+  padding: 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  background: var(--bg-primary);
+}
+
+.audit > summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.auditTurn {
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-color-light);
+}
+
+.auditCharter {
+  white-space: pre-wrap;
+  color: var(--text-secondary);
+}
+
+.transcript {
+  white-space: pre-wrap;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+}

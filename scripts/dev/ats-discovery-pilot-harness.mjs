@@ -79,7 +79,13 @@ function checkSkill() {
 
   check('TBI-001 DoD-0', /^---\nname: ats-discovery-interview\n/.test(text), 'frontmatter name is ats-discovery-interview');
   check('VT-01 path', !SKILL_PATH.toLowerCase().includes('grill-with-docs'), 'skill path does not contain grill-with-docs');
-  check('TBI-001 DoD-1', /leadership's vision/i.test(text) && text.indexOf('## Opening') < text.indexOf('## Research and redaction rules'), 'opens with vision before research rules');
+  check(
+    'TBI-001 DoD-1',
+    /leadership's vision/i.test(text) &&
+      text.indexOf('## Opening') < text.indexOf('## Market benchmark') &&
+      text.indexOf('## Market benchmark') < text.indexOf('## Research and redaction rules'),
+    'opens with vision, then market benchmark, then research rules'
+  );
   check('TBI-001 DoD-1 Begin', text.includes('Begin.'), 'treats Begin. as the vision opening');
 
   for (const [id, name] of AREAS) {
@@ -95,30 +101,58 @@ function checkSkill() {
     check(`TBI-002 DoD-0 ${state}`, new RegExp(`\\*\\*${state}\\*\\*`).test(text), `defines ${state}`);
   }
   check('TBI-002 DoD-0 examples', /web form only for requisitions/.test(text) && /email intake stays out of Phase 1/.test(text), 'state examples present');
-  check('TBI-002 DoD-1', /full ledger/i.test(text) && /Decision ledger — changed this reply/.test(text), 'visible ledger header on every reply');
+  check('TBI-002 DoD-1', /\*\*What we've decided\*\* — updated this reply/.test(text) && /on every reply/i.test(text), 'visible decision summary on every reply');
+  check(
+    'TBI-002 plain language',
+    /## Plain language/.test(text) && /never its code/i.test(text) && /Never show a URL path/i.test(text) && !/^R\d+ · L\d{2} ·/m.test(text),
+    'summaries use area names, plain labels, and page titles'
+  );
   check('TBI-002 DoD-2', /which is authoritative/i.test(text) && /no skip/i.test(text), 'conflict pauses and asks which is authoritative');
   check('TBI-002 DoD-3', text.includes('.ai-pilot/kickoff-transcript.md') && text.includes('## Final Decision Ledger'), 'final ledger is written for PRD generation');
-  check('PBI-002 AC-1', /D04 should be confirmed/.test(text), 'leader can correct a misstated row');
-  check('PBI-002 AC-3', /never counted as confirmed/.test(text), 'superseded rows stay visible and are not confirmed');
-  check('TBI-002 NFR cap', /40 rows/.test(text) && /160 characters/.test(text), 'ledger cap is 40 rows and 160 characters');
+  check('PBI-002 AC-1', /Decision 4 is decided/.test(text), 'leader can correct a misstated decision');
+  check('PBI-002 AC-3', /never counted as decided/.test(text), 'replaced decisions stay visible and are not decided');
+  check('TBI-002 NFR cap', /40 decisions/.test(text) && /two short lines/.test(text), 'decision cap is 40 items of two short lines');
 
   for (const kind of ['Personal', 'Client', 'Commercial', 'Internal']) {
     check(`TBI-003 DoD-0 ${kind}`, text.includes(`${kind}:`), `lists ${kind} identifiers`);
   }
   check('TBI-003 DoD-0 step', /Research status: searching/.test(text), 'prints the redacted query before search');
   check('TBI-003 DoD-1', /source, page, and date/i.test(text), 'source and date on every recorded claim');
-  check('TBI-003 DoD-2', /material claim/i.test(text) && /second independent source/i.test(text) && /uncorroborated/.test(text), 'material claim and corroboration defined');
-  check('TBI-003 DoD-3', /Pilot review/.test(text) && /Bullhorn/.test(text) && /JobDiva/.test(text), 'benchmark seeds marked for pilot review');
+  check('TBI-003 DoD-2', /material claim/i.test(text) && /second independent source/i.test(text) && /— one source\./.test(text) && /two vendors agree/.test(text), 'material claim and corroboration defined');
+  check('TBI-003 DoD-3', /Benchmark catalog/.test(text) && /Bullhorn/.test(text) && /JobDiva/.test(text), 'benchmark catalog lists public staffing ATS products');
+  check(
+    'TBI-003 market ref',
+    /\*\*What leading staffing systems do\*\* — new this reply/.test(text) && /- \*\*Finding \d+ · /.test(text),
+    'market findings summary with numbered findings'
+  );
   check('PBI-003 AC-1', /unavailable or returns nothing useful/i.test(text), 'unavailable research labels assumed or unresolved');
-  check('PBI-003 AC-3', /no open decision/i.test(text), 'no research when no decision is open');
+  check('PBI-003 AC-3', /Market benchmark/i.test(text) && /open scope decision/i.test(text), 'research on benchmark pass, area refresh, or open scope');
   check('PBI-004 AC-1', /generalize it/i.test(text), 'uncertain terms are generalized or asked');
   check('PBI-004 AC-3', /decline/i.test(text) && /generic search/i.test(text), 'direct name search is declined');
   check('PBI-005 AC-2', /research interrupted/.test(text), 'interrupted research is labeled');
 
-  for (const heading of ['## Phase 1 Brief', '## Deferred Roadmap', '## Research Notes', '## Final Decision Ledger']) {
+  for (const heading of [
+    '## Phase 1 Brief',
+    '## Deferred Roadmap',
+    '## Research Notes',
+    '## Market Reference',
+    '## Final Decision Ledger',
+  ]) {
     check(`TBI-004 DoD-1 ${heading}`, text.includes(heading), heading);
   }
-  check('TBI-004 DoD-0', /Completion rubric: PASS/.test(text) && /Completion rubric: FAIL/.test(text) && /C1\./.test(text) && /C5\./.test(text), 'completion checks C1–C5');
+  check('TBI-004 DoD-0', /Completion rubric: PASS/.test(text) && /Completion rubric: FAIL/.test(text) && /C1\./.test(text) && /C6\./.test(text) && /C7\./.test(text) && /C8\./.test(text) && /C9\./.test(text), 'completion checks C1–C9');
+  check('TBI-004 packets', text.includes('## Phase 1 Requirements') && text.includes('## Experience Differentiators') && /at most \*\*two\*\*/i.test(text), 'requirements packets, differentiators, and a two-search area benchmark');
+  check(
+    'TBI-004 UX and context refinements',
+    /Progress: Direction pass/.test(text) &&
+      /Current-turn context only/.test(text) &&
+      /Baseline context \(Decision 2\)/.test(text) &&
+      /proactive "beat the market" proposal/i.test(text) &&
+      /Draft-first rule/.test(text) &&
+      /Day-1 cutover and data migration rule \(L12\)/.test(text) &&
+      /Role and Persona Mapping/.test(text),
+    'scannable replies, baseline context, proactive beat-the-market option, draft-first steps, Day-1 migration, and persona mapping'
+  );
   check('TBI-004 DoD-2', /Status: DRAFT/.test(text) && /Do not mark this interview complete/.test(text), 'incomplete session stays a draft');
   check('PBI-006 AC-0', /Status: COMPLETE/.test(text), 'complete brief status line');
   check('PBI-006 AC-2', /not stated as decided/i.test(text), 'unresolved items are not stated as decided');
@@ -134,7 +168,7 @@ function checkSkill() {
   check('TBI-005 DoD-2', /existing option still runs/i.test(runbook), 'fallback skill still starts');
   check('TBI-005 DoD-3', /## Removal/.test(runbook) && /no longer offer the ATS option/i.test(runbook), 'runbook describes removal');
   check('PBI-007 AC-3', /403/.test(runbook), 'non-admin save is refused');
-  check('TBI-006 DoD-0', ['| 1 |', '| 2 |', '| 3 |', '| 4 |', '| 5 |', '| 6 |'].every((row) => checklist.includes(row)), 'one check per pass condition');
+  check('TBI-006 DoD-0', ['| 1 |', '| 2 |', '| 3 |', '| 4 |', '| 5 |', '| 6 |', '| 7 |', '| 8 |', '| 9 |', '| 10 |'].every((row) => checklist.includes(row)), 'one check per pass condition');
   check('TBI-006 DoD-1', ['S-A', 'S-B', 'S-C', 'S-D'].every((id) => checklist.includes(id)), 'scenarios cover normal, conflict, resume, and seeded identifiers');
   check('TBI-006 DoD-2', /View-only user/.test(checklist), 'checklist includes a view-only permission check');
   check('TBI-006 DoD-3', /Runtime gap/.test(checklist) && /separate PRD/i.test(checklist), 'runtime gaps need a separate PRD');
@@ -145,13 +179,13 @@ function checkSkill() {
 }
 
 function ledgerRows(text) {
-  return text.split('\n').filter((line) => /^D\d+\s+·/.test(line.trim()));
+  return text.split('\n').filter((line) => /^- \*\*Decision \d+ · /.test(line.trim()));
 }
 
 function confirmedIds(text) {
   return ledgerRows(text)
-    .filter((line) => /·\s+confirmed\s+·/.test(line))
-    .map((line) => line.trim().slice(0, 3));
+    .filter((line) => /· Decided\.\*\*/.test(line))
+    .map((line) => line.match(/Decision (\d+)/)[1]);
 }
 
 function queriesFromReply(reply, toolEvents = []) {
@@ -263,22 +297,27 @@ function runGuidedInterviewCheck() {
 }
 
 const FIXTURE_LEDGER = [
-  'Decision ledger — changed this reply: D07 — 3 rows',
-  'D01 · confirmed · Vision · Replace the current ATS with a smaller workflow · L01 · basis leader',
-  'D04 · assumed · Phase 1 workflow · Email intake stays out until tested · L01 · basis research · uncorroborated',
-  'D05 · superseded by D12 · Phase 1 workflow',
-  'D07 · unresolved · Interview coordination · Leader skipped this area · L06 · basis leader',
+  "**What we've decided** — updated this reply: Decision 7",
+  '',
+  '- **Decision 1 · Leadership vision · Decided.** Replace the current system with a smaller workflow. *From: leadership.*',
+  '- **Decision 4 · Requisition intake · Proposed — waiting on you.** Email intake stays out until tested. *From: market research — one source.*',
+  '- **Decision 5 · Requisition intake · Replaced by Decision 12.**',
+  '- **Decision 7 · Interview coordination · Open — decide later.** The leaders skipped this area. *From: leadership.*',
 ].join('\n');
+
+const STATE_LABELS = ['Decided', 'Proposed — waiting on you', 'Open — decide later', 'Replaced by Decision'];
+const CODE_PATTERN = /\b[LDRXP]\d{2}\b|\bbasis (leader|market|research)\b|\buncorroborated\b|\blandscape\b/;
 
 function selfTest() {
   const rows = ledgerRows(FIXTURE_LEDGER);
-  check('PBI-002 AC-0', rows.length === 4 && confirmedIds(FIXTURE_LEDGER).join(',') === 'D01', 'new and earlier states stay distinct');
-  check('PBI-002 AC-3 fixture', FIXTURE_LEDGER.includes('D05 · superseded by D12') && !confirmedIds(FIXTURE_LEDGER).includes('D05'), 'superseded row is not confirmed');
-  check('TBI-002 DoD-4 states', ['confirmed', 'assumed', 'unresolved', 'superseded'].every((s) => FIXTURE_LEDGER.includes(`· ${s}`) || FIXTURE_LEDGER.includes(`· superseded`)), 'fixture covers the four states');
+  check('PBI-002 AC-0', rows.length === 4 && confirmedIds(FIXTURE_LEDGER).join(',') === '1', 'new and earlier states stay distinct');
+  check('PBI-002 AC-3 fixture', FIXTURE_LEDGER.includes('Decision 5 · Requisition intake · Replaced by Decision 12') && !confirmedIds(FIXTURE_LEDGER).includes('5'), 'replaced decision is not decided');
+  check('TBI-002 DoD-4 states', STATE_LABELS.every((label) => FIXTURE_LEDGER.includes(label)), 'fixture covers the four state labels');
+  check('TBI-002 plain fixture', !CODE_PATTERN.test(FIXTURE_LEDGER), 'fixture summary shows no internal codes');
 
-  const longRow = `D02 · confirmed · Topic · ${'word '.repeat(40)} · L02 · basis leader`;
-  check('VT-15 row length', longRow.length > 160, 'over-long row is detectable');
-  check('VT-15 fixture rows', rows.every((row) => row.length <= 160) && rows.length <= 40, 'fixture ledger is within the cap');
+  const codedRow = 'D01 · confirmed · Vision · Smaller workflow · landscape · basis leader';
+  check('TBI-002 plain catch', CODE_PATTERN.test(codedRow), 'a coded row is detectable');
+  check('VT-15 fixture rows', rows.length <= 40, 'fixture summary is within the cap');
 
   const badQuery = 'Zephyr Health Staffing Dana Whitfield ProjectHeron $41.37';
   const goodQuery = 'staffing requisition web form common practice';
@@ -290,41 +329,41 @@ function selfTest() {
   const generalized = 'how staffing firms take requisitions from clients';
   check('PBI-004 AC-2 clean', leakHits(generalized).length === 0, 'generalized passage query is clean');
 
-  const decline = 'I will not search for that client. A public search of a client name can expose them. I can search for staffing agency client submission workflow instead.\n\nDecision ledger — changed this reply: none — 1 rows\nD01 · confirmed · Vision · Smaller workflow · L01 · basis leader\n\nWhich generic search should I run?\n\na. Staffing agency client submission workflow\nb. Requisition intake common practice\nc. Skip — decide later';
+  const decline = 'I will not search for that client. A public search of a client name can expose them. I can search for staffing agency client submission workflow instead.\n\n**What we\'ve decided** — no changes this reply\n\n- **Decision 1 · Leadership vision · Decided.** Smaller workflow. *From: leadership.*\n\nWhich generic search should I run?\n\na. Staffing agency client submission workflow\nb. Requisition intake common practice\nc. Skip — decide later';
   check('PBI-004 AC-3 fixture', /will not search/i.test(decline) && /generic search|search for staffing/i.test(decline) && !decline.includes(SEEDED.client), 'decline explains and offers a generic search');
 
-  const conflict = 'Earlier decision: requisitions enter by web form only. New answer: requisitions also enter by email.\n\nDecision ledger — changed this reply: none — 1 rows\nD05 · confirmed · Phase 1 workflow · Requisitions enter by web form only · L01 · basis leader · [conflict with new answer]\n\nWhich decision is authoritative?\n\na. Keep the earlier decision\nb. Use the new answer\nc. Restate it';
+  const conflict = 'Earlier decision: requisitions enter by web form only. New answer: requisitions also enter by email.\n\n**What we\'ve decided** — no changes this reply\n\n- **Decision 5 · Requisition intake · Decided.** Requisitions enter by web form only (conflicts with the new answer). *From: leadership.*\n\nWhich decision is authoritative?\n\na. Keep the earlier decision\nb. Use the new answer\nc. Restate it';
   check('PBI-002 AC-2 fixture', /web form only/.test(conflict) && /also enter by email/.test(conflict) && /authoritative/.test(conflict) && !/Research status: searching/.test(conflict), 'conflict quotes both and does not search');
 
-  const correction = 'Decision ledger — changed this reply: D04 — 1 rows\nD04 · confirmed · Phase 1 workflow · Email intake stays out · L01 · basis leader';
-  check('PBI-002 AC-1 fixture', /changed this reply: D04/.test(correction) && /D04 · confirmed/.test(correction), 'correction names D04 and restores confirmed');
+  const correction = "**What we've decided** — updated this reply: Decision 4\n\n- **Decision 4 · Requisition intake · Decided.** Email intake stays out. *From: leadership.*";
+  check('PBI-002 AC-1 fixture', /updated this reply: Decision 4/.test(correction) && confirmedIds(correction).join(',') === '4', 'correction names Decision 4 and restores it as decided');
 
-  const interrupted = 'D09 · unresolved · Offer · research interrupted · L07 · basis research';
-  check('PBI-005 AC-2 fixture', /research interrupted/.test(interrupted) && /unresolved/.test(interrupted), 'interrupted research is unresolved');
+  const interrupted = '- **Decision 9 · Offer and placement · Open — decide later.** Research interrupted. *From: market research.*';
+  check('PBI-005 AC-2 fixture', /research interrupted/i.test(interrupted) && /Open — decide later/.test(interrupted), 'interrupted research is open');
 
   const complete = [
     'Completion rubric: PASS',
-    'C1. pass',
+    'Pass — every lifecycle area has a decision or is marked open.',
     '## Phase 1 Brief',
     'Status: COMPLETE',
     '## Deferred Roadmap',
-    'L11 reporting — deferred — revisit after Phase 1 — D20',
+    'Reporting — deferred — revisit after Phase 1 — Decision 20',
     '## Research Notes',
-    'Web forms are common. D03. Vendor docs, pricing page, 2025-04. Corroborated.',
+    'Web forms are common. Decision 3. Bullhorn help, "Jobs", Oct 2026; Ceipal, "Client portal", Dec 2025 — two vendors agree.',
     '## Final Decision Ledger',
+    '- **Decision 8 · Reporting · Open — decide later.** The leaders skipped this area. *From: leadership.*',
     'This ledger overrides every earlier ledger in this conversation.',
-    'D08 · unresolved · Reporting · Leader skipped · L11 · basis leader',
   ].join('\n');
-  check('PBI-006 AC-0 fixture', complete.includes('Completion rubric: PASS') && complete.includes('Status: COMPLETE') && complete.includes('## Research Notes'), 'complete reply has rubric and sections');
-  check('PBI-006 AC-2 fixture', complete.includes('D08 · unresolved') && complete.includes('## Deferred Roadmap') && !/D08 · confirmed/.test(complete), 'unresolved item is listed and not confirmed');
+  check('PBI-006 AC-0 fixture', complete.includes('Completion rubric: PASS') && complete.includes('Status: COMPLETE') && complete.includes('## Research Notes') && !/^C\d\./m.test(complete), 'complete reply has rubric in plain sentences and sections');
+  check('PBI-006 AC-2 fixture', complete.includes('Decision 8 · Reporting · Open') && complete.includes('## Deferred Roadmap') && !confirmedIds(complete).includes('8'), 'open item is listed and not decided');
 
-  const failFinish = 'Completion rubric: FAIL\nC1. L08 has no decision and no unresolved row.\n\nWhich label should L08 carry?\n\na. Unresolved\nb. Covered by a decision I will type\nc. Skip — decide later';
-  check('PBI-006 AC-1 fixture', /Completion rubric: FAIL/.test(failFinish) && /L08/.test(failFinish) && !/Status: COMPLETE/.test(failFinish), 'gap names L08 and does not complete');
+  const failFinish = 'Completion rubric: FAIL\nFail — onboarding and compliance has no decision and is not marked open.\n\nHow should we handle onboarding and compliance?\n\na. Mark it open — decide later\nb. I will type the decision\nc. Skip — decide later';
+  check('PBI-006 AC-1 fixture', /Completion rubric: FAIL/.test(failFinish) && /onboarding and compliance/.test(failFinish) && !/Status: COMPLETE/.test(failFinish) && !CODE_PATTERN.test(failFinish), 'gap names the area in plain words and does not complete');
 
-  const conflictFinish = 'Completion rubric: FAIL\nC2. Open conflict on requisition intake.\n\nWhich decision is authoritative?\n\na. Keep the earlier decision\nb. Use the new answer\nc. Restate it';
+  const conflictFinish = 'Completion rubric: FAIL\nFail — there is an open conflict on requisition intake.\n\nWhich decision is authoritative?\n\na. Keep the earlier decision\nb. Use the new answer\nc. Restate it';
   check('PBI-006 AC-3 fixture', /FAIL/.test(conflictFinish) && /authoritative/.test(conflictFinish) && !/Status: COMPLETE/.test(conflictFinish), 'open conflict refuses a completed brief');
 
-  const oneQuestion = 'Vision recorded.\n\nDecision ledger — changed this reply: D01 — 1 rows\nD01 · confirmed · Vision · Smaller workflow · L01 · basis leader\n\nHow should a requisition enter?\n\na. Web form only\nb. Recruiter enters it\nc. Email and web form\nd. Skip — decide later';
+  const oneQuestion = "Vision recorded.\n\n**What we've decided** — updated this reply: Decision 1\n\n- **Decision 1 · Leadership vision · Decided.** Smaller workflow. *From: leadership.*\n\n**What leading staffing systems do** — new this reply: Finding 1\n\n- **Finding 1 · Requisition intake.** A job order holds the client's role, requirements, and location. *Bullhorn help, \"Jobs\", Oct 2026 — one source.*\n\nHow should a requisition enter?\n\na. Web form only\nb. Recruiter enters it\nc. Email and web form\nd. Skip — decide later";
   const parsed = choiceBlocksViaParser(oneQuestion);
   if (parsed.error) {
     check('PBI-001 AC-0 parse', false, parsed.error);
@@ -332,9 +371,9 @@ function selfTest() {
     check('PBI-001 AC-0 parse', parsed.choiceCount === 1 && parsed.lastIsChoice, `choice blocks=${parsed.choiceCount} lastIsChoice=${parsed.lastIsChoice}`);
   }
 
-  const researchReply = 'Research status: searching "staffing requisition intake common practice"\nResearch status: done, 2 sources\n\nDecision ledger — changed this reply: D03 — 1 rows\nD03 · confirmed · Phase 1 workflow · Web form intake is common · L01 · basis research · cite: Staffing Industry Analysts, public summary, 2025-06 + American Staffing Association, public note, 2025-03';
+  const researchReply = 'Research status: searching "staffing requisition intake common practice"\nResearch status: done, 2 sources\n\n**What we\'ve decided** — updated this reply: Decision 3\n\n- **Decision 3 · Requisition intake · Decided.** Requisitions enter by web form. *From: market research — Staffing Industry Analysts, "Public summary", Jun 2025; American Staffing Association, "Public note", Mar 2025 — two sources agree.*';
   const found = queriesFromReply(researchReply, [{ type: 'tool_call', input: { keys: ['query'] } }]);
-  check('PBI-003 AC-0 fixture', leakHits(found.printed.join(' ')).length === 0 && /cite:/.test(researchReply) && /\+ American Staffing Association/.test(researchReply), 'cited corroborated claim uses a generic printed query');
+  check('PBI-003 AC-0 fixture', leakHits(found.printed.join(' ')).length === 0 && /From: market research —/.test(researchReply) && /two sources agree/.test(researchReply) && !CODE_PATTERN.test(researchReply), 'cited corroborated claim uses a generic printed query and plain labels');
   check('VT-16 stream shape', found.fromTools[0].includes('keys') && !found.fromTools[0].includes('staffing requisition'), 'summarized tool events do not carry the query string');
 }
 

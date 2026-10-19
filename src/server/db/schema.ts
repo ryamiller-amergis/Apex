@@ -3379,6 +3379,85 @@ export const playbookStepRuns = pgTable('playbook_step_runs', {
   ),
 }));
 
+export const playbookDeliberationSessions = pgTable('playbook_deliberation_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  stepRunId: uuid('step_run_id').notNull().unique()
+    .references(() => playbookStepRuns.id, { onDelete: 'cascade' }),
+  status: text('status').$type<'running' | 'completed' | 'failed'>().notNull().default('running'),
+  phase: text('phase')
+    .$type<'agenda' | 'response' | 'rebuttal' | 'synthesis' | 'completed'>()
+    .notNull()
+    .default('agenda'),
+  charter: text('charter').notNull(),
+  sourceReports: jsonb('source_reports').$type<Record<string, string>>().notNull().default({}),
+  agenda: jsonb('agenda').$type<Record<string, unknown>>(),
+  summary: jsonb('summary').$type<Record<string, unknown>>(),
+  maxTopics: integer('max_topics').notNull().default(5),
+  maxRounds: integer('max_rounds').notNull().default(2),
+  inquiryBudget: integer('inquiry_budget').notNull().default(16),
+  inquiryCount: integer('inquiry_count').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  statusCheck: check(
+    'playbook_deliberation_sessions_status_check',
+    sql`${t.status} IN ('running', 'completed', 'failed')`,
+  ),
+  phaseCheck: check(
+    'playbook_deliberation_sessions_phase_check',
+    sql`${t.phase} IN ('agenda', 'response', 'rebuttal', 'synthesis', 'completed')`,
+  ),
+  maxTopicsCheck: check(
+    'playbook_deliberation_sessions_max_topics_check',
+    sql`${t.maxTopics} BETWEEN 1 AND 5`,
+  ),
+  maxRoundsCheck: check(
+    'playbook_deliberation_sessions_max_rounds_check',
+    sql`${t.maxRounds} BETWEEN 1 AND 2`,
+  ),
+  inquiryBudgetCheck: check(
+    'playbook_deliberation_sessions_inquiry_budget_check',
+    sql`${t.inquiryBudget} BETWEEN 3 AND 32`,
+  ),
+}));
+
+export const playbookDeliberationTurns = pgTable('playbook_deliberation_turns', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').notNull()
+    .references(() => playbookDeliberationSessions.id, { onDelete: 'cascade' }),
+  sequence: integer('sequence').notNull(),
+  phase: text('phase').$type<'agenda' | 'response' | 'rebuttal' | 'synthesis'>().notNull(),
+  topicId: text('topic_id'),
+  specialist: text('specialist').notNull(),
+  status: text('status')
+    .$type<'pending' | 'running' | 'completed' | 'failed'>()
+    .notNull()
+    .default('pending'),
+  agentRunId: text('agent_run_id').references(() => agentRuns.id, { onDelete: 'set null' }),
+  threadId: uuid('thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+  result: jsonb('result').$type<Record<string, unknown>>(),
+  error: text('error'),
+  startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
+  completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  sessionSequenceUq: unique('uq_playbook_deliberation_turn_sequence').on(t.sessionId, t.sequence),
+  sessionStatusIdx: index('idx_playbook_deliberation_turns_session_status')
+    .on(t.sessionId, t.status, t.sequence),
+  agentRunUq: uniqueIndex('uq_playbook_deliberation_turn_agent_run')
+    .on(t.agentRunId)
+    .where(sql`${t.agentRunId} IS NOT NULL`),
+  phaseCheck: check(
+    'playbook_deliberation_turns_phase_check',
+    sql`${t.phase} IN ('agenda', 'response', 'rebuttal', 'synthesis')`,
+  ),
+  statusCheck: check(
+    'playbook_deliberation_turns_status_check',
+    sql`${t.status} IN ('pending', 'running', 'completed', 'failed')`,
+  ),
+}));
+
 export const playbookGateApprovers = pgTable('playbook_gate_approvers', {
   id: uuid('id').primaryKey().defaultRandom(),
   stepRunId: uuid('step_run_id').notNull()
@@ -3441,8 +3520,38 @@ export const playbookStepRunsRelations = relations(playbookStepRuns, ({ one, man
     references: [playbookRuns.id],
   }),
   gateApprovers: many(playbookGateApprovers),
+  deliberationSession: one(playbookDeliberationSessions),
   interviews: many(interviews),
 }));
+
+export const playbookDeliberationSessionsRelations = relations(
+  playbookDeliberationSessions,
+  ({ one, many }) => ({
+    stepRun: one(playbookStepRuns, {
+      fields: [playbookDeliberationSessions.stepRunId],
+      references: [playbookStepRuns.id],
+    }),
+    turns: many(playbookDeliberationTurns),
+  }),
+);
+
+export const playbookDeliberationTurnsRelations = relations(
+  playbookDeliberationTurns,
+  ({ one }) => ({
+    session: one(playbookDeliberationSessions, {
+      fields: [playbookDeliberationTurns.sessionId],
+      references: [playbookDeliberationSessions.id],
+    }),
+    agentRun: one(agentRuns, {
+      fields: [playbookDeliberationTurns.agentRunId],
+      references: [agentRuns.id],
+    }),
+    thread: one(chatThreads, {
+      fields: [playbookDeliberationTurns.threadId],
+      references: [chatThreads.id],
+    }),
+  }),
+);
 
 export const playbookGateApproversRelations = relations(playbookGateApprovers, ({ one }) => ({
   stepRun: one(playbookStepRuns, {

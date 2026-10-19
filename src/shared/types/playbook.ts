@@ -122,7 +122,11 @@ export type PlaybookStepRunStatus = (typeof PLAYBOOK_STEP_RUN_STATUSES)[number];
 export const PLAYBOOK_STEP_RUN_OPEN_STATUSES = ['pending', 'running', 'suspended'] as const;
 
 /** Why a run is parked. Every kind resumes through the same path, per BR-008. */
-export type PlaybookSuspendReason = 'approval_gate' | 'agent_run' | 'interview';
+export type PlaybookSuspendReason =
+  | 'approval_gate'
+  | 'agent_run'
+  | 'interview'
+  | 'board_deliberation';
 
 // ── Definition graph ──────────────────────────────────────────────────────────
 
@@ -445,6 +449,30 @@ export interface CursorAgentStepConfig {
   deadlineMs?: number;
   /** Existing validation thread to enqueue onto instead of creating one. */
   threadId?: string;
+}
+
+export interface BoardDeliberationStepConfig {
+  charter: string;
+  reports: Record<string, string>;
+  maxTopics?: number;
+  maxRounds?: number;
+  inquiryBudget?: number;
+  deadlineMs?: number;
+}
+
+export interface BoardDeliberationStepOutput {
+  sessionId: string;
+  completedAt: string;
+  topics: Array<{
+    id: string;
+    title: string;
+    participants: string[];
+    outcome: string;
+    status: 'resolved' | 'unresolved' | 'leadership_required';
+  }>;
+  unresolved: string[];
+  evidenceQuality: 'strong' | 'moderate' | 'weak';
+  reportMd: string;
 }
 
 export interface ApprovalGateStepConfig {

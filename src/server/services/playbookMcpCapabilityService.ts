@@ -55,6 +55,9 @@ export function resolvePlaybookMcpCapability(profile: unknown): PlaybookMcpCapab
 export function isReadOnlyCursorAgentNode(
   node: PlaybookGraph['nodes'][number],
 ): boolean {
+  // board-deliberation is a server-owned composite agent step. Its adapter fixes every internal
+  // turn to repository-read-only; graph authors cannot supply a different profile.
+  if (node.stepType === 'board-deliberation') return true;
   return node.stepType === 'cursor-agent'
     && resolvePlaybookMcpCapability(node.config?.mcpProfile).mode === 'read';
 }

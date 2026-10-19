@@ -93,6 +93,20 @@ function useInvalidateDefinitions(project: string, definitionId?: string) {
   };
 }
 
+export function useInstallPlaybookTemplate(project: string) {
+  const queryClient = useQueryClient();
+  return useMutation<PlaybookDefinitionDetail, PlaybookApiError, string>({
+    mutationFn: (templateKey) =>
+      apiRequest(
+        `/api/playbooks/templates/${encodeURIComponent(templateKey)}/install`,
+        jsonRequest('POST', { project }),
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: playbookDefinitionKeys.list(project) });
+    },
+  });
+}
+
 export function useCreatePlaybookDefinition(project: string) {
   const invalidate = useInvalidateDefinitions(project);
   return useMutation<PlaybookDefinitionDetail, PlaybookApiError, DefinitionInput>({

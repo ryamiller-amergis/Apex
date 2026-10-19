@@ -15,7 +15,10 @@
  * whatever shape it takes.
  */
 jest.mock('../db/drizzle', () => ({ db: {} }));
-jest.mock('../db', () => ({ __esModule: true, default: { end: jest.fn(), on: jest.fn() } }));
+jest.mock('../db', () => ({
+  __esModule: true,
+  default: { end: jest.fn(), on: jest.fn() },
+}));
 
 const getUserPermissions = jest.fn();
 jest.mock('../services/rbacService', () => ({
@@ -34,6 +37,12 @@ const getRun = jest.fn();
 jest.mock('../services/playbookRunProjectionService', () => ({
   listRuns: (...a: unknown[]) => listRuns(...a),
   getRun: (...a: unknown[]) => getRun(...a),
+}));
+
+const mockListBoardDeliberationAudit = jest.fn();
+jest.mock('../services/boardDeliberationService', () => ({
+  listBoardDeliberationAudit: (...a: unknown[]) =>
+    mockListBoardDeliberationAudit(...a),
 }));
 
 import express from 'express';
@@ -56,8 +65,9 @@ function buildApp() {
 
 /** Grants the named permissions, but only in the named project. */
 function grantIn(project: string, ...keys: string[]): void {
-  getUserPermissions.mockImplementation(async (_userId: string, requested?: string) =>
-    requested === project ? new Set(keys) : new Set<string>()
+  getUserPermissions.mockImplementation(
+    async (_userId: string, requested?: string) =>
+      requested === project ? new Set(keys) : new Set<string>()
   );
 }
 
@@ -84,14 +94,57 @@ beforeEach(() => {
   jest.clearAllMocks();
   grantIn(PROJECT, 'playbooks:view');
   listRuns.mockResolvedValue(PROJECTION_RESULT);
-  getRun.mockResolvedValue({ ...PROJECTION_RESULT.runs[0], steps: [], currentStepId: null, suspension: null });
+  getRun.mockResolvedValue({
+    ...PROJECTION_RESULT.runs[0],
+    steps: [],
+    currentStepId: null,
+    suspension: null,
+  });
+  mockListBoardDeliberationAudit.mockResolvedValue({
+    charter: null,
+    turns: [],
+  });
+});
+
+describe('ATS board deliberation audit', () => {
+  it('returns only the structured audit for the project-scoped run', async () => {
+    getRun.mockResolvedValue({
+      ...PROJECTION_RESULT.runs[0],
+      steps: [{ id: 'step-delib', stepType: 'board-deliberation' }],
+      currentStepId: null,
+      suspension: null,
+    });
+    const turns = [
+      {
+        sequence: 1,
+        phase: 'response',
+        topicId: 'T1',
+        specialist: 'compliance',
+        status: 'completed',
+        result: { position: 'Clear before start.', evidence: ['Policy'] },
+        completedAt: '2026-10-18T12:00:00.000Z',
+      },
+    ];
+    const audit = { charter: 'Objective: Replace the ATS.', turns };
+    mockListBoardDeliberationAudit.mockResolvedValue(audit);
+
+    const res = await request(buildApp())
+      .get('/api/playbooks/runs/run-1/deliberation')
+      .query({ project: PROJECT });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(audit);
+    expect(mockListBoardDeliberationAudit).toHaveBeenCalledWith('step-delib');
+  });
 });
 
 describe('VT-04 — a caller without playbooks:view is refused, and gets no run data', () => {
   it('returns 403 with no run rows in the body', async () => {
     grantIn(PROJECT, 'playbooks:run');
 
-    const res = await request(buildApp()).get('/api/playbooks/runs').query({ project: PROJECT });
+    const res = await request(buildApp())
+      .get('/api/playbooks/runs')
+      .query({ project: PROJECT });
 
     expect(res.status).toBe(403);
     // The criterion is emphatic that no run data from that project is returned, so assert on the
@@ -103,14 +156,18 @@ describe('VT-04 — a caller without playbooks:view is refused, and gets no run 
   it('refuses a caller who holds the permission only in another project', async () => {
     grantIn('SomeOtherProject', 'playbooks:view');
 
-    const res = await request(buildApp()).get('/api/playbooks/runs').query({ project: PROJECT });
+    const res = await request(buildApp())
+      .get('/api/playbooks/runs')
+      .query({ project: PROJECT });
 
     expect(res.status).toBe(403);
     expect(listRuns).not.toHaveBeenCalled();
   });
 
   it('checks the permission in the project the request names', async () => {
-    await request(buildApp()).get('/api/playbooks/runs').query({ project: PROJECT });
+    await request(buildApp())
+      .get('/api/playbooks/runs')
+      .query({ project: PROJECT });
 
     expect(getUserPermissions).toHaveBeenCalledWith(USER_OID, PROJECT);
   });
@@ -126,7 +183,9 @@ describe('VT-04 — a caller without playbooks:view is refused, and gets no run 
 
 describe('VT-10 — the response is the projection, unreshaped', () => {
   it('returns the list projection verbatim', async () => {
-    const res = await request(buildApp()).get('/api/playbooks/runs').query({ project: PROJECT });
+    const res = await request(buildApp())
+      .get('/api/playbooks/runs')
+      .query({ project: PROJECT });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual(PROJECTION_RESULT);
@@ -135,9 +194,20 @@ describe('VT-10 — the response is the projection, unreshaped', () => {
   it('returns the detail projection verbatim', async () => {
     const detail = {
       ...PROJECTION_RESULT.runs[0],
-      steps: [{ id: 's1', stepId: 'draft', stepType: 'cursor-agent', status: 'completed' }],
+      steps: [
+        {
+          id: 's1',
+          stepId: 'draft',
+          stepType: 'cursor-agent',
+          status: 'completed',
+        },
+      ],
       currentStepId: 'gate',
-      suspension: { stepId: 'gate', reason: 'awaiting-approval', deadline: '2026-09-21T10:00:00.000Z' },
+      suspension: {
+        stepId: 'gate',
+        reason: 'awaiting-approval',
+        deadline: '2026-09-21T10:00:00.000Z',
+      },
     };
     getRun.mockResolvedValue(detail);
 
@@ -150,7 +220,9 @@ describe('VT-10 — the response is the projection, unreshaped', () => {
   });
 
   it('passes the project through to the projection, which scopes on it', async () => {
-    await request(buildApp()).get('/api/playbooks/runs/run-9').query({ project: PROJECT });
+    await request(buildApp())
+      .get('/api/playbooks/runs/run-9')
+      .query({ project: PROJECT });
 
     expect(getRun).toHaveBeenCalledWith(PROJECT, 'run-9');
   });
@@ -168,13 +240,19 @@ describe('VT-10 — the response is the projection, unreshaped', () => {
   it('clamps limit to the display cap and defaults when it is absent or junk', async () => {
     const app = buildApp();
 
-    await request(app).get('/api/playbooks/runs').query({ project: PROJECT, limit: '5000' });
+    await request(app)
+      .get('/api/playbooks/runs')
+      .query({ project: PROJECT, limit: '5000' });
     expect(listRuns).toHaveBeenLastCalledWith(PROJECT, 50);
 
-    await request(app).get('/api/playbooks/runs').query({ project: PROJECT, limit: 'abc' });
+    await request(app)
+      .get('/api/playbooks/runs')
+      .query({ project: PROJECT, limit: 'abc' });
     expect(listRuns).toHaveBeenLastCalledWith(PROJECT, 50);
 
-    await request(app).get('/api/playbooks/runs').query({ project: PROJECT, limit: '10' });
+    await request(app)
+      .get('/api/playbooks/runs')
+      .query({ project: PROJECT, limit: '10' });
     expect(listRuns).toHaveBeenLastCalledWith(PROJECT, 10);
   });
 });
@@ -198,7 +276,10 @@ describe('VT-11 — the route module reaches no engine table', () => {
     const path = require('path') as typeof import('path');
     /* eslint-enable @typescript-eslint/no-require-imports */
 
-    const source = fs.readFileSync(path.join(__dirname, '..', 'routes', 'playbooks.ts'), 'utf8');
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'routes', 'playbooks.ts'),
+      'utf8'
+    );
 
     expect(source).not.toContain('drizzle-orm');
     expect(source).not.toContain('db/schema');

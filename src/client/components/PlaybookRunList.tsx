@@ -15,6 +15,7 @@ import { Link } from 'react-router-dom';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import { PlaybookRunStepList } from './PlaybookRunStepList';
 import { PlaybookRunActions } from './PlaybookRunActions';
+import { AtsBoardSynopsisPanel } from './AtsBoardSynopsisPanel';
 import { PlaybookGateReviewPanel } from './PlaybookGateReviewPanel';
 import { usePlaybookRun } from '../hooks/usePlaybookRuns';
 import { absoluteTime, runStatusLabel } from './playbookStatusFormat';
@@ -100,11 +101,15 @@ const PlaybookRunRow: React.FC<PlaybookRunRowProps> = ({ run, project }) => {
             </p>
           ) : detail.data ? (
             <>
+              <AtsBoardSynopsisPanel
+                run={detail.data}
+                {...{ 'data-testid': `ats-board-synopsis-${detail.data.runId}` }}
+              />
               <PlaybookRunStepList run={detail.data} id={stepListId} />
               <PlaybookGateReviewPanel
                 project={project}
                 run={detail.data}
-                data-testid="playbook-gate-review-panel"
+                {...{ 'data-testid': 'playbook-gate-review-panel' }}
               />
               <PlaybookRunActions run={detail.data} />
             </>

@@ -8,7 +8,7 @@ The pilot project name is chosen by the Project Admin and the Product-Owner befo
 
 1. Merge `.cursor/skills/ats-discovery-interview/SKILL.md` to the branch named on the pilot project's skill settings row.
 2. In Project Settings for `PILOT_PROJECT`, run Clone or Refresh. Wait until `repositoryCheckoutStatus` is `ready` and `repositoryCheckoutSha` is the merge commit.
-3. Confirm a web-search MCP pill already used by another project. The repository does not store that pill. If none exists, stop. Research scenarios cannot pass without `interviewWebMcp`.
+3. Confirm a web-search MCP pill already used by another project. The repository does not store that pill. If none exists, stop. Research scenarios cannot pass without `interviewWebMcp`. The ATS skill asks vision (Decision 1) and baseline staffing model/system boundary (Decision 2), then runs a **market benchmark** for the next lifecycle area only (at most two searches). The market findings grow as later areas are asked. Without web research, C6 on the completion rubric fails unless every market row is marked unavailable.
 4. One Manager owns each interview thread and types for the leaders in the room. Other people may attend. They cannot send messages on a thread they do not own.
 
 ## Settings on the default row

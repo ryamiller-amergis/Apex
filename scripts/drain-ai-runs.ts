@@ -27,6 +27,8 @@
  *   npx ts-node --project tsconfig.server.json scripts/drain-ai-runs.ts [--project Apex] [--interval 3000]
  */
 import 'dotenv/config';
+import fs from 'fs/promises';
+import path from 'path';
 import { and, asc, eq } from 'drizzle-orm';
 import { db } from '../src/server/db/drizzle';
 import pool from '../src/server/db';
@@ -41,6 +43,46 @@ import {
 } from '../src/server/services/aiRunsWorker';
 
 const DEFAULT_INTERVAL_MS = 3000;
+const SCORECARD_NAMES = ['review-scorecard.json', 'review-scorecard.md'];
+
+/**
+ * A deployed agent finds its skill through `.ai-pilot/session.json` in the run
+ * workspace. This agent's cwd is the repository, which holds every skill and no
+ * session file for the run, so the prompt has to name the skill.
+ */
+function promptWithSkill(prompt: string, skillPath: string | null | undefined): string {
+  const skill = skillPath?.trim();
+  if (!skill) return prompt;
+  return `Read \`${skill}\` first and follow only that skill. Ignore every other skill in this repository.\n\n${prompt}`;
+}
+
+/**
+ * The local agent runs with this repository as its cwd, so a skill that writes
+ * `.ai-pilot/output` lands in the repo, not in the run's scratch workspace.
+ * Apex reads the scratch workspace when it stores the step output. Copy the
+ * scorecard there, then remove the repo copy so the next step cannot ingest it.
+ */
+async function stageLocalScorecards(workspaceRef: string): Promise<void> {
+  const destination = path.join(workspaceRef, '.ai-pilot', 'output');
+  const sourceDirs = [
+    path.join(process.cwd(), '.ai-pilot', 'output'),
+    path.join(process.cwd(), 'output'),
+  ];
+  for (const sourceDir of sourceDirs) {
+    for (const name of SCORECARD_NAMES) {
+      const source = path.join(sourceDir, name);
+      try {
+        await fs.access(source);
+      } catch {
+        continue;
+      }
+      await fs.mkdir(destination, { recursive: true });
+      await fs.copyFile(source, path.join(destination, name));
+      await fs.unlink(source);
+      console.log(`  staged ${name} into the run workspace`);
+    }
+  }
+}
 
 function argValue(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);
@@ -127,7 +169,20 @@ async function main(): Promise<void> {
     getToken: getAiRunnerCallbackToken,
   });
   const worker = createAiRunsWorker({
-    getBootstrap: (message) => callback.getBootstrap(message),
+    getBootstrap: async (message) => {
+      const bootstrap = await callback.getBootstrap(message);
+      if (
+        bootstrap &&
+        typeof bootstrap === 'object' &&
+        'kind' in bootstrap &&
+        bootstrap.kind === 'interactive-actor-v2'
+      ) {
+        throw new Error(
+          'Interactive actor bootstrap is not supported by the background worker',
+        );
+      }
+      return bootstrap as import('../src/shared/types/aiRunIngest').AiRunBootstrapResponse;
+    },
     /*
      * Rooted at this repository rather than left to resolve itself.
      *
@@ -148,16 +203,23 @@ async function main(): Promise<void> {
      * question correctly and then ended ~3 minutes later with `[internal] unable to open database
      * file`. That error names a SQLite open, and the scratch folder has no git metadata and no
      * `.cursor` layout for the SDK to put that file in. Pointing `cwd` at this working tree is
-     * local-drainer-only: `flushArtifacts` still uses the original scratch path, so a confused
-     * write does not get ingested from the real repo.
+     * local-drainer-only. `stageLocalScorecards` copies the scorecard from this
+     * working tree into the scratch workspace before flush, which is the copy Apex stores.
      */
     createExecution: (snapshot, checkout) =>
       createLocalCursorExecution(
-        { ...snapshot, workspaceRef: process.cwd() },
+        {
+          ...snapshot,
+          workspaceRef: process.cwd(),
+          prompt: promptWithSkill(snapshot.prompt, snapshot.skillPath),
+        },
         checkout as Awaited<ReturnType<typeof openLocalCheckout>>,
       ),
     postIngest: (projectId, runId, body) => callback.postIngest(projectId, runId, body),
-    flushArtifacts: flushWorkspaceArtifacts,
+    flushArtifacts: async (workspaceRef) => {
+      await stageLocalScorecards(workspaceRef);
+      await flushWorkspaceArtifacts(workspaceRef);
+    },
   });
 
   let stopping = false;

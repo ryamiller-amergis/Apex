@@ -1,6 +1,6 @@
 # ATS Discovery Pilot Checklist
 
-Pass or fail only. No numeric score. A pilot passes only when every check below is Pass and the Product-Owner accepts the PRD-ready output. Five passes and a missing acceptance is a fail.
+Pass or fail only. No numeric score. A pilot passes only when every check below is Pass and the Product-Owner accepts the PRD-ready output. Every numbered condition must pass; missing Product-Owner acceptance is a fail.
 
 Record the filled checklist and the decision in `design-docs/ats-discovery-pilot-results.md`. Do not put client names, prices, people, or internal system names in that file.
 
@@ -8,12 +8,16 @@ Record the filled checklist and the decision in `design-docs/ats-discovery-pilot
 
 | # | Condition | Observable check | Result |
 |---|-----------|------------------|--------|
-| 1 | Every lifecycle area is covered or labeled unresolved | Ledger has a row for each of L01–L12, either a decision or `unresolved` | |
+| 1 | Baseline context and every lifecycle area are covered or marked open | "What we've decided" has Decision 2 (staffing model and system boundary) and a decision for each of the twelve lifecycle areas (including Day-1 data migration in area 12), either decided or `Open — decide later` | |
 | 2 | Decisions are retained | States match across later replies and after a resume | |
-| 3 | Influential claims are cited | Each scope-influencing row has source, page, and month | |
-| 4 | Material claims are corroborated | Each material claim has a second independent publisher, or is `uncorroborated` and not the basis of a `confirmed` row | |
-| 5 | A session resumes after a break | After a server restart the next reply shows the same states and asks the next open question | |
-| 6 | Product-Owner accepts the PRD-ready output | Product-Owner writes Accept or Reject. Reject fails the pilot even if 1–5 pass | |
+| 3 | Influential claims are cited | Each scope-influencing decision has publisher, page title, and month; market-based decisions cite the same sources as their findings | |
+| 4 | Material claims are corroborated | Each material claim has a second independent publisher, or shows `one source` and is not the basis of a decided item | |
+| 7 | Market benchmark ran | After vision and baseline context are recorded, the next reply shows at most two `Research status: searching` lines for one lifecycle area, then that area's question. "What leading staffing systems do" grows across areas, and choice `c` proposes a concrete way to beat the market. Closing output includes `## Market Reference` | |
+| 5 | A session resumes after a break | After a server restart the next reply shows the same decisions, findings, advantages, and steps, and asks the next open question | |
+| 8 | Phase 1 behavior is specified | Closing output includes `## Phase 1 Requirements` with a Role and Persona Mapping table and a decided step for each part of the Phase 1 workflow (drafted first, then confirmed in 1–2 turns) | |
+| 9 | Differentiators are measurable | Closing output includes `## Experience Differentiators`. Each advantage names a user and a time, a count, or a removed step | |
+| 10 | Leaders can read every reply | Each turn shows a one-line `Progress:` bar, full decisions, and only the current turn's findings/advantages/step; no reply shows an internal code (such as L01, D01, or R03), a URL path as a citation, or an unexplained acronym | |
+| 6 | Product-Owner accepts the PRD-ready output | Product-Owner writes Accept or Reject. Reject fails the pilot even if every other condition passes | |
 
 ## Extra checks
 
@@ -30,15 +34,15 @@ Use synthetic data only. No production client data.
 
 ### S-A Normal run
 
-Walk all twelve areas to a brief. Skip at least one area so an `unresolved` row exists. Finish only when the rubric is PASS. Generate a PRD from the interview and confirm the PRD is usable. Map the result to conditions 1, 2, 3, 4, and 6.
+Walk all twelve areas, then confirm a requirements packet for each Phase 1 step. Include one differentiator with a user and a measurable outcome. Skip at least one area so an `Open — decide later` decision exists. Finish only when the rubric is PASS. Generate a PRD from the interview and confirm the PRD uses the packets rather than inventing behavior. Map the result to conditions 1, 2, 3, 4, 6, 8, 9, and 10.
 
 ### S-B Conflict
 
-Confirm a decision, then answer the same topic differently. The reply quotes both with no judgment, asks which is authoritative, and does not search. After the answer, the other row is `superseded` and stays visible.
+Confirm a decision, then answer the same topic differently. The reply quotes both with no judgment, asks which is authoritative, and does not search. After the answer, the other decision shows `Replaced by Decision N` and stays visible.
 
 ### S-C Resume
 
-Record several decisions. Restart the dev server. Send the next message. The ledger shows every earlier state and asks the next open question. This covers condition 5.
+Record several decisions, and at least one step if the direction pass has finished. Restart the dev server. Send the next message. The decisions, findings, advantages, and steps show every earlier state and the reply asks the next open question. This covers condition 5.
 
 ### S-D Seeded identifiers
 
@@ -60,7 +64,7 @@ These four records show how to fill the results file. They are illustrations, no
 
 ### Example A — all conditions pass
 
-Conditions 1–5 Pass. Product-Owner writes Accept. View-only check Pass. Mark complete happened after `Completion rubric: PASS`. Record: **Passed.** Wider use may be planned.
+Conditions 1–10 Pass. Product-Owner writes Accept. View-only check Pass. Mark complete happened after `Completion rubric: PASS`. Record: **Passed.** Wider use may be planned.
 
 ### Example B — one condition fails
 

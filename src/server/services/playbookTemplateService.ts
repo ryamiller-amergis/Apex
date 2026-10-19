@@ -1,5 +1,5 @@
 /**
- * Installs the one shipped Playbook template as a project-owned draft.
+ * Installs a shipped Playbook template as a project-owned draft.
  *
  * The source file is not a shared definition row. Install copies its graph into
  * the target project and records which template version that copy came from.
@@ -15,6 +15,7 @@ import { playbookDefinitions } from '../db/schema';
 import { createDefinition, getDefinitionDetail } from './playbookDefinitionService';
 
 export const CORE_INTERVIEW_TEMPLATE_KEY = 'core-interview';
+export const ATS_AGENT_BOARD_TEMPLATE_KEY = 'ats-agent-board';
 
 interface ShippedPlaybookTemplate {
   templateKey: string;
@@ -51,6 +52,7 @@ export class PlaybookTemplateAlreadyPublishedError extends Error {
 
 const TEMPLATE_FILES: Record<string, string> = {
   [CORE_INTERVIEW_TEMPLATE_KEY]: 'interview.json',
+  [ATS_AGENT_BOARD_TEMPLATE_KEY]: 'ats-agent-board.json',
 };
 
 function isUniqueViolation(error: unknown): boolean {

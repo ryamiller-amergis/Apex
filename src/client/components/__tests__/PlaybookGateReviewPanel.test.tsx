@@ -111,4 +111,23 @@ describe('PlaybookGateReviewPanel', () => {
     fireEvent.click(screen.getByTestId('playbook-gate-approve'));
     expect(mutate).toHaveBeenCalledWith({ decision: 'approved' });
   });
+
+  it('labels the board gate Ratify and keeps the note with the decision', () => {
+    const boardRun: PlaybookRunDetail = {
+      ...unpooledRun,
+      suspension: { ...unpooledRun.suspension!, stepId: 'ratify' },
+      steps: [{
+        ...unpooledRun.steps[0],
+        stepId: 'ratify',
+        inputInline: { subject: 'Ratify the ATS board synopsis' },
+      }],
+    };
+    render(<PlaybookGateReviewPanel project="Apex" run={boardRun} />);
+    expect(screen.getByTestId('playbook-gate-approve')).toHaveTextContent('Ratify');
+    fireEvent.change(screen.getByTestId('playbook-gate-comment'), {
+      target: { value: 'Phase 1 only.' },
+    });
+    fireEvent.click(screen.getByTestId('playbook-gate-approve'));
+    expect(mutate).toHaveBeenCalledWith({ decision: 'approved', comment: 'Phase 1 only.' });
+  });
 });

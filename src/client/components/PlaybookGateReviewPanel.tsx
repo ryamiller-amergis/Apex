@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type { PlaybookRunDetail, PlaybookStepRun } from '../../shared/types/playbook';
 import {
   PlaybookRunApiError,
@@ -8,33 +8,53 @@ import {
 
 type DecisionMutation = ReturnType<typeof usePlaybookGateDecision>;
 
-const GateDecisionButtons: React.FC<{ decision: DecisionMutation }> = ({ decision }) => (
-  <>
-    <div role="group" aria-label="Approval decision">
-      <button
-        type="button"
-        onClick={() => decision.mutate({ decision: 'approved' })}
-        disabled={decision.isPending}
-        data-testid="playbook-gate-approve"
-      >
-        Approve
-      </button>
-      <button
-        type="button"
-        onClick={() => decision.mutate({ decision: 'rejected' })}
-        disabled={decision.isPending}
-        data-testid="playbook-gate-reject"
-      >
-        Reject
-      </button>
-    </div>
-    {decision.isError && (
-      <p role="alert" data-testid="playbook-gate-decision-error">
-        {decision.error.message}
-      </p>
-    )}
-  </>
-);
+const GateDecisionButtons: React.FC<{
+  decision: DecisionMutation;
+  approveLabel?: string;
+}> = ({ decision, approveLabel = 'Approve' }) => {
+  const [note, setNote] = useState('');
+  const submit = (value: 'approved' | 'rejected') => {
+    const comment = note.trim();
+    decision.mutate(comment ? { decision: value, comment } : { decision: value });
+  };
+
+  return (
+    <>
+      <label>
+        Note
+        <textarea
+          value={note}
+          onChange={(event) => setNote(event.target.value)}
+          maxLength={2000}
+          {...{ 'data-testid': 'playbook-gate-comment' }}
+        />
+      </label>
+      <div role="group" aria-label="Approval decision">
+        <button
+          type="button"
+          onClick={() => submit('approved')}
+          disabled={decision.isPending}
+          data-testid="playbook-gate-approve"
+        >
+          {approveLabel}
+        </button>
+        <button
+          type="button"
+          onClick={() => submit('rejected')}
+          disabled={decision.isPending}
+          data-testid="playbook-gate-reject"
+        >
+          Reject
+        </button>
+      </div>
+      {decision.isError && (
+        <p role="alert" data-testid="playbook-gate-decision-error">
+          {decision.error.message}
+        </p>
+      )}
+    </>
+  );
+};
 
 /**
  * A gate with no resolved approver pool, decided by the run's initiator.
@@ -60,7 +80,10 @@ const UnpooledGateReview: React.FC<{
       {gateStep.expiresAt && (
         <p data-testid="playbook-gate-deadline">Deadline {gateStep.expiresAt}</p>
       )}
-      <GateDecisionButtons decision={decision} />
+      <GateDecisionButtons
+        decision={decision}
+        approveLabel={gateStep.stepId === 'ratify' ? 'Ratify' : 'Approve'}
+      />
     </section>
   );
 };

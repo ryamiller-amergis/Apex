@@ -5,6 +5,7 @@
 import React, { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, PenLine, Play } from 'lucide-react';
+import { ATS_AGENT_BOARD_TEMPLATE_KEY } from '../../shared/atsBoard';
 import type { PlaybookDefinitionDetail } from '../../shared/types/playbook';
 import { useAppShell } from '../hooks/useAppShell';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
@@ -12,6 +13,7 @@ import { usePlaybookDefinition } from '../hooks/usePlaybookDefinitions';
 import { useProfileCard } from '../hooks/useProfile';
 import { usePlaybookVersionGraph } from '../hooks/usePlaybookCanvas';
 import { usePlaybookRuns, useStartPlaybookRun } from '../hooks/usePlaybookRuns';
+import { AtsBoardLaunchForm } from './AtsBoardLaunchForm';
 import { PlaybookDraftEditor } from './PlaybookDraftEditor';
 import { PlaybookRunList } from './PlaybookRunList';
 import { PlaybookVersionList } from './PlaybookVersionList';
@@ -168,6 +170,7 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
   const publishedVersionId = detail.data?.currentPublishedVersionId ?? null;
   const publishedGraph = usePlaybookVersionGraph(project, definitionId, publishedVersionId, canvasEnabled);
   const [runError, setRunError] = useState<string | null>(null);
+  const [charterOpen, setCharterOpen] = useState(false);
 
   const definitionRuns = useMemo(
     () => (runs.data?.runs ?? []).filter((run) => run.definitionId === definitionId),
@@ -195,11 +198,15 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
     : data.draft.graph.nodes.length > 0;
   const truncated = runs.data ? runs.data.total > runs.data.runs.length : false;
 
-  const runNow = async () => {
+  const isBoard = data.definition.templateKey === ATS_AGENT_BOARD_TEMPLATE_KEY;
+
+  const runNow = async (runInput?: Record<string, unknown>) => {
     setRunError(null);
     try {
-      const result = await start.mutateAsync();
+      const result = await start.mutateAsync(runInput ? { runInput } : undefined);
+      setCharterOpen(false);
       if (canvasEnabled) navigate(`/playbooks/runs/${result.runId}`);
+      else if (runInput) navigate(`/playbooks?run=${result.runId}`);
     } catch (error) {
       setRunError(error instanceof Error ? error.message : 'Could not start the run.');
     }
@@ -260,14 +267,25 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
               className={styles.primaryButton}
               disabled={!publishedVersionId || start.isPending}
               title={publishedVersionId ? 'Start a run on the current version' : 'Publish a version first'}
-              onClick={() => void runNow()}
+              onClick={() => {
+                if (isBoard) setCharterOpen(true);
+                else void runNow();
+              }}
               {...{ 'data-testid': 'playbook-dashboard-run' }}
             >
-              <Play size={15} aria-hidden /> {start.isPending ? 'Starting…' : 'Run now'}
+              <Play size={15} aria-hidden /> {start.isPending ? 'Starting…' : isBoard ? 'Start board review' : 'Run now'}
             </button>
           ) : null}
         </div>
       </header>
+      {charterOpen ? (
+        <AtsBoardLaunchForm
+          pending={start.isPending}
+          onCancel={() => setCharterOpen(false)}
+          onStart={(runInput) => void runNow(runInput)}
+          {...{ 'data-testid': 'ats-board-launch-form' }}
+        />
+      ) : null}
       {runError ? <p className={styles.errorBanner} role="alert">{runError}</p> : null}
       {start.isSuccess && !canvasEnabled ? (
         <p className={styles.successBanner} role="status">Run started.</p>

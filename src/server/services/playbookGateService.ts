@@ -244,9 +244,14 @@ export async function decideGate(input: {
     || eligible.every((decision) => decision.decision === 'approved');
   if (!complete) return { outcome: 'recorded', advanced: false };
 
+  const comment = input.comment?.trim();
   const moved = await resumeStepRun({
     stepRunId: gate.stepRunId,
-    output: { decision: input.decision, decidedBy: input.userId },
+    output: {
+      decision: input.decision,
+      decidedBy: input.userId,
+      ...(comment ? { comment } : {}),
+    },
   });
   return moved
     ? { outcome: 'recorded', advanced: true, stepId: gate.stepId }

@@ -17,11 +17,12 @@
  */
 import { eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { playbookStepRuns } from '../db/schema';
+import { playbookRuns, playbookStepRuns } from '../db/schema';
 import { subscribeAllRunEvents } from './pgNotifyService';
 import { advanceRun } from './playbookAdvanceService';
 import { cursorAgentCompletionOutput } from './playbookSteps/cursorAgentCompletion';
 import { failStepRun, resumeStepRun } from './playbookSteps/stepRuns';
+import { handleBoardDeliberationTerminal } from './boardDeliberationService';
 import type {
   AgentRunEventEnvelope,
   AgentRunEventStatus,
@@ -56,6 +57,8 @@ export type TerminalEventOutcome =
   | { handled: 'failed'; stepRunId: string }
   /** A step was found but had already moved — a duplicate delivery, which is ordinary. */
   | { handled: 'already-moved'; stepRunId: string }
+  /** A deliberation turn moved and another bounded turn is now running. */
+  | { handled: 'continued'; stepRunId: string }
   /** The scorecard workspace is not on this instance yet. The sweep retries it. */
   | { handled: 'deferred'; stepRunId: string }
   /** No Playbook step is waiting on this agent run. Most events are this: ordinary chat traffic. */
@@ -97,6 +100,31 @@ export async function handleTerminalAgentRunEvent(
     .limit(1);
 
   if (!step) return { handled: 'not-correlated' };
+
+  if (step.stepType === 'board-deliberation') {
+    const [run] = await db.select({
+      project: playbookRuns.project,
+      initiatorUserId: playbookRuns.initiatorUserId,
+    }).from(playbookRuns).where(eq(playbookRuns.id, step.runId)).limit(1);
+    if (!run) return { handled: 'not-correlated' };
+    const result = await handleBoardDeliberationTerminal({
+      agentRunId: event.runId,
+      status: event.status as 'completed' | 'failed' | 'cancelled',
+      completedAt: event.timestamp,
+      threadId: event.threadId,
+      project: run.project,
+      userId: run.initiatorUserId,
+    });
+    if (!result.handled) return { handled: 'not-correlated' };
+    if (result.deferred) return { handled: 'deferred', stepRunId: step.id };
+    if (result.completed) {
+      await advanceRun(step.runId, step.stepId);
+      return { handled: 'resumed', stepRunId: step.id };
+    }
+    return event.status === 'completed'
+      ? { handled: 'continued', stepRunId: step.id }
+      : { handled: 'failed', stepRunId: step.id };
+  }
 
   if (event.status === 'completed') {
     const output = await cursorAgentCompletionOutput({

@@ -46,6 +46,12 @@ const KNOWN_STEPS: Record<string, Omit<PlaybookStepMeta, 'stepType'>> = {
     group: 'AI',
     icon: Bot,
   },
+  'board-deliberation': {
+    title: 'Board deliberation',
+    description: 'Run a bounded specialist discussion and preserve its decision audit.',
+    group: 'AI',
+    icon: MessagesSquare,
+  },
   interview: {
     title: 'Interview',
     description: 'Run a requirements interview and wait for the approved brief.',

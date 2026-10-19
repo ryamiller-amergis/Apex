@@ -1,0 +1,137 @@
+{
+  "templateKey": "ats-agent-board",
+  "templateVersion": 2,
+  "name": "ATS agent board",
+  "description": "Independent board members propose a Phase 1 ATS. Leadership ratifies the synopsis before it can become a requirement.",
+  "graph": {
+    "nodes": [
+      {
+        "id": "authorize",
+        "stepType": "approval-gate",
+        "config": {
+          "subject": "Authorize public research and a Phase 1 proposal"
+        }
+      },
+      {
+        "id": "operations",
+        "stepType": "cursor-agent",
+        "config": {
+          "skillPath": ".cursor/skills/ats-board-operations/SKILL.md",
+          "mcpProfile": "repository-read-only",
+          "prompt": "Follow your skill. Decide only from this charter. Do not use another member's recommendation.\n\n${input.charter}"
+        }
+      },
+      {
+        "id": "recruiting",
+        "stepType": "cursor-agent",
+        "config": {
+          "skillPath": ".cursor/skills/ats-board-recruiting/SKILL.md",
+          "mcpProfile": "repository-read-only",
+          "prompt": "Follow your skill. Decide only from this charter. Do not use another member's recommendation.\n\n${input.charter}"
+        }
+      },
+      {
+        "id": "client",
+        "stepType": "cursor-agent",
+        "config": {
+          "skillPath": ".cursor/skills/ats-board-client/SKILL.md",
+          "mcpProfile": "repository-read-only",
+          "prompt": "Follow your skill. Decide only from this charter. Do not use another member's recommendation.\n\n${input.charter}"
+        }
+      },
+      {
+        "id": "compliance",
+        "stepType": "cursor-agent",
+        "config": {
+          "skillPath": ".cursor/skills/ats-board-compliance/SKILL.md",
+          "mcpProfile": "repository-read-only",
+          "prompt": "Follow your skill. Decide only from this charter. Do not use another member's recommendation.\n\n${input.charter}"
+        }
+      },
+      {
+        "id": "data",
+        "stepType": "cursor-agent",
+        "config": {
+          "skillPath": ".cursor/skills/ats-board-data/SKILL.md",
+          "mcpProfile": "repository-read-only",
+          "prompt": "Follow your skill. Decide only from this charter. Do not use another member's recommendation.\n\n${input.charter}"
+        }
+      },
+      {
+        "id": "product",
+        "stepType": "cursor-agent",
+        "config": {
+          "skillPath": ".cursor/skills/ats-board-product/SKILL.md",
+          "mcpProfile": "repository-read-only",
+          "prompt": "Follow your skill. Decide only from this charter. Do not use another member's recommendation.\n\n${input.charter}"
+        }
+      },
+      {
+        "id": "market",
+        "stepType": "cursor-agent",
+        "config": {
+          "skillPath": ".cursor/skills/ats-board-market/SKILL.md",
+          "mcpProfile": "repository-read-only",
+          "prompt": "Follow your skill. Decide only from this charter. Do not use another member's recommendation.\n\n${input.charter}"
+        }
+      },
+      {
+        "id": "deliberation",
+        "stepType": "board-deliberation",
+        "config": {
+          "charter": "${input.charter}",
+          "reports": {
+            "operations": "${steps.operations.reportMd}",
+            "recruiting": "${steps.recruiting.reportMd}",
+            "client": "${steps.client.reportMd}",
+            "compliance": "${steps.compliance.reportMd}",
+            "data": "${steps.data.reportMd}",
+            "product": "${steps.product.reportMd}",
+            "market": "${steps.market.reportMd}"
+          },
+          "maxTopics": 5,
+          "maxRounds": 2,
+          "inquiryBudget": 16
+        }
+      },
+      {
+        "id": "chair",
+        "stepType": "cursor-agent",
+        "config": {
+          "skillPath": ".cursor/skills/ats-board-chair/SKILL.md",
+          "mcpProfile": "repository-read-only",
+          "prompt": "Follow your skill. Write the version 2 leadership synopsis. A blank report means that domain is not settled. Do not settle compliance or data migration if that report is blank or objects.\n\nCharter:\n${input.charter}\n\nOperations:\n${steps.operations.reportMd}\n\nRecruiting:\n${steps.recruiting.reportMd}\n\nClient:\n${steps.client.reportMd}\n\nCompliance:\n${steps.compliance.reportMd}\n\nData:\n${steps.data.reportMd}\n\nProduct:\n${steps.product.reportMd}\n\nMarket:\n${steps.market.reportMd}\n\nStructured deliberation:\n${steps.deliberation.reportMd}"
+        }
+      },
+      {
+        "id": "notify-ready",
+        "stepType": "notify",
+        "config": {
+          "title": "ATS board synopsis is ready",
+          "body": "The board has a synopsis waiting for leadership. Nothing in it is a requirement until you ratify it.",
+          "link": "/playbooks?view=runs"
+        }
+      },
+      {
+        "id": "ratify",
+        "stepType": "approval-gate",
+        "config": {
+          "subject": "Ratify the ATS board synopsis"
+        }
+      }
+    ],
+    "edges": [
+      { "from": "authorize", "to": "operations" },
+      { "from": "operations", "to": "recruiting" },
+      { "from": "recruiting", "to": "client" },
+      { "from": "client", "to": "compliance" },
+      { "from": "compliance", "to": "data" },
+      { "from": "data", "to": "product" },
+      { "from": "product", "to": "market" },
+      { "from": "market", "to": "deliberation" },
+      { "from": "deliberation", "to": "chair" },
+      { "from": "chair", "to": "notify-ready" },
+      { "from": "notify-ready", "to": "ratify" }
+    ]
+  }
+}

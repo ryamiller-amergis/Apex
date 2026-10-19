@@ -123,6 +123,7 @@ describe('TBI-016 VT-02 — the three production step types', () => {
   it('registers the Phase 1 and production adapter step types', () => {
     expect(listStepTypeDescriptors().map((d) => d.stepType).sort()).toEqual([
       'approval-gate',
+      'board-deliberation',
       'branch',
       'cursor-agent',
       'ingest-artifact',

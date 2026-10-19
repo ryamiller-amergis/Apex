@@ -5,7 +5,15 @@ describe('listPlaybookStepPaletteItems', () => {
     const items = listPlaybookStepPaletteItems();
     const stepTypes = items.map((item) => item.stepType).sort();
     expect(stepTypes).toEqual(
-      ['approval-gate', 'branch', 'cursor-agent', 'ingest-artifact', 'interview', 'notify'].sort()
+      [
+        'approval-gate',
+        'board-deliberation',
+        'branch',
+        'cursor-agent',
+        'ingest-artifact',
+        'interview',
+        'notify',
+      ].sort()
     );
     for (const item of items) {
       expect(item.inputJsonSchema).toBeTruthy();

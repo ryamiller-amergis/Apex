@@ -8,11 +8,13 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { ListChecks, Plus, Workflow, X } from 'lucide-react';
+import { ATS_AGENT_BOARD_TEMPLATE_KEY } from '../../shared/atsBoard';
 import type { PlaybookDefinitionSummary, PlaybookRunSummary } from '../../shared/types/playbook';
 import { useAppShell } from '../hooks/useAppShell';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import {
   useCreatePlaybookDefinition,
+  useInstallPlaybookTemplate,
   usePlaybookDefinition,
   usePlaybookDefinitions,
 } from '../hooks/usePlaybookDefinitions';
@@ -278,6 +280,8 @@ export const PlaybooksManagePage: React.FC<PlaybooksManagePageProps> = ({ projec
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<StateFilter>('all');
   const [creating, setCreating] = useState(false);
+  const [installError, setInstallError] = useState<string | null>(null);
+  const installBoard = useInstallPlaybookTemplate(project);
 
   const allRuns = useMemo(() => runs.data?.runs ?? [], [runs.data]);
   const runsByDefinition = useMemo(() => groupRunsByDefinition(allRuns), [allRuns]);
@@ -325,9 +329,28 @@ export const PlaybooksManagePage: React.FC<PlaybooksManagePageProps> = ({ projec
           >
             <ListChecks size={15} aria-hidden /> All runs
           </Link>
+          {canAuthor ? (
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              disabled={installBoard.isPending}
+              onClick={() => {
+                setInstallError(null);
+                void installBoard.mutateAsync(ATS_AGENT_BOARD_TEMPLATE_KEY)
+                  .then((detail) => navigate(`/playbooks/${detail.definition.id}`))
+                  .catch((error: unknown) => {
+                    setInstallError(error instanceof Error ? error.message : 'Could not install the ATS board.');
+                  });
+              }}
+              {...{ 'data-testid': 'playbook-install-ats-board' }}
+            >
+              {installBoard.isPending ? 'Installing…' : 'ATS agent board'}
+            </button>
+          ) : null}
           {newButton}
         </div>
       </header>
+      {installError ? <p className={styles.installError} role="alert">{installError}</p> : null}
 
       <dl className={styles.pulse} {...{ 'data-testid': 'playbooks-pulse' }}>
         <div>

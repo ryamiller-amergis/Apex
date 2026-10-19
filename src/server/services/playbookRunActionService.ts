@@ -2,6 +2,8 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import {
   interviews,
+  playbookDeliberationSessions,
+  playbookDeliberationTurns,
   playbookRuns,
   playbookStepRuns,
 } from '../db/schema';
@@ -24,7 +26,9 @@ export class PlaybookRunActionNotFoundError extends Error {
 
 export class PlaybookRunActionForbiddenError extends Error {
   constructor() {
-    super('Only the run initiator or a Playbook administrator may perform this action.');
+    super(
+      'Only the run initiator or a Playbook administrator may perform this action.'
+    );
     this.name = 'PlaybookRunActionForbiddenError';
   }
 }
@@ -60,7 +64,11 @@ interface ActionDependencies {
   cancelRows(runId: string): Promise<boolean>;
   prepareRetry(runId: string, stepRunId: string): Promise<boolean>;
   retryEngine(input: PlaybookRetryInput): Promise<playbookEngine.EngineOutcome>;
-  restoreRetryable(runId: string, stepRunId: string, reason: string): Promise<void>;
+  restoreRetryable(
+    runId: string,
+    stepRunId: string,
+    reason: string
+  ): Promise<void>;
 }
 
 export interface PlaybookRunActionActor {
@@ -84,7 +92,10 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-async function loadContext(project: string, runId: string): Promise<ActionContext | null> {
+async function loadContext(
+  project: string,
+  runId: string
+): Promise<ActionContext | null> {
   const row = await db.query.playbookRuns.findFirst({
     where: and(eq(playbookRuns.id, runId), eq(playbookRuns.project, project)),
     with: {
@@ -110,7 +121,9 @@ async function loadContext(project: string, runId: string): Promise<ActionContex
     definitionVersionId: typed.definitionVersionId,
     status: typed.status,
     graph: typed.definitionVersion.graph,
-    steps: [...typed.steps].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    steps: [...typed.steps].sort((a, b) =>
+      a.createdAt.localeCompare(b.createdAt)
+    ),
   };
 }
 
@@ -120,7 +133,10 @@ async function cancelRows(runId: string): Promise<boolean> {
       .update(playbookRuns)
       .set({ status: 'cancelled', completedAt: nowIso(), updatedAt: nowIso() })
       .where(
-        and(eq(playbookRuns.id, runId), inArray(playbookRuns.status, ['running', 'suspended']))
+        and(
+          eq(playbookRuns.id, runId),
+          inArray(playbookRuns.status, ['running', 'suspended'])
+        )
       )
       .returning({ id: playbookRuns.id });
     if (moved.length === 0) return false;
@@ -142,15 +158,52 @@ async function cancelRows(runId: string): Promise<boolean> {
     await tx
       .update(interviews)
       .set({ status: 'archived', updatedAt: nowIso() })
-      .where(and(
-        eq(interviews.playbookRunId, runId),
-        eq(interviews.status, 'in_progress'),
-      ));
+      .where(
+        and(
+          eq(interviews.playbookRunId, runId),
+          eq(interviews.status, 'in_progress')
+        )
+      );
+    const cancelledSessions = await tx
+      .update(playbookDeliberationSessions)
+      .set({ status: 'failed', updatedAt: nowIso() })
+      .where(
+        inArray(
+          playbookDeliberationSessions.stepRunId,
+          tx
+            .select({ id: playbookStepRuns.id })
+            .from(playbookStepRuns)
+            .where(eq(playbookStepRuns.runId, runId))
+        )
+      )
+      .returning({ id: playbookDeliberationSessions.id });
+    if (cancelledSessions.length > 0) {
+      await tx
+        .update(playbookDeliberationTurns)
+        .set({
+          status: 'failed',
+          error: 'Playbook run was cancelled.',
+          completedAt: nowIso(),
+          updatedAt: nowIso(),
+        })
+        .where(
+          and(
+            inArray(
+              playbookDeliberationTurns.sessionId,
+              cancelledSessions.map((session) => session.id)
+            ),
+            inArray(playbookDeliberationTurns.status, ['pending', 'running'])
+          )
+        );
+    }
     return true;
   });
 }
 
-async function prepareRetry(runId: string, stepRunId: string): Promise<boolean> {
+async function prepareRetry(
+  runId: string,
+  stepRunId: string
+): Promise<boolean> {
   const stale = new Error('retry-state-changed');
   try {
     return await db.transaction(async (tx) => {
@@ -181,7 +234,10 @@ async function prepareRetry(runId: string, stepRunId: string): Promise<boolean> 
         .update(playbookRuns)
         .set({ status: 'running', completedAt: null, updatedAt: nowIso() })
         .where(
-          and(eq(playbookRuns.id, runId), inArray(playbookRuns.status, ['running', 'suspended']))
+          and(
+            eq(playbookRuns.id, runId),
+            inArray(playbookRuns.status, ['running', 'suspended'])
+          )
         )
         .returning({ id: playbookRuns.id });
       if (runMoved.length === 0) throw stale;
@@ -217,7 +273,9 @@ async function restoreRetryable(
     await tx
       .update(playbookRuns)
       .set({ status: 'suspended', completedAt: null, updatedAt: nowIso() })
-      .where(and(eq(playbookRuns.id, runId), eq(playbookRuns.status, 'running')));
+      .where(
+        and(eq(playbookRuns.id, runId), eq(playbookRuns.status, 'running'))
+      );
   });
 }
 
@@ -231,7 +289,9 @@ const productionDependencies: ActionDependencies = {
   restoreRetryable,
 };
 
-export function createPlaybookRunActionService(dependencies: ActionDependencies) {
+export function createPlaybookRunActionService(
+  dependencies: ActionDependencies
+) {
   async function authorizedContext(
     project: string,
     runId: string,
@@ -240,11 +300,11 @@ export function createPlaybookRunActionService(dependencies: ActionDependencies)
     const context = await dependencies.loadContext(project, runId);
     if (!context) throw new PlaybookRunActionNotFoundError();
 
-    if (
-      actor.actorUserId !== context.initiatorUserId &&
-      !actor.isSuperAdmin
-    ) {
-      const permissions = await dependencies.getUserPermissions(actor.actorUserId, context.project);
+    if (actor.actorUserId !== context.initiatorUserId && !actor.isSuperAdmin) {
+      const permissions = await dependencies.getUserPermissions(
+        actor.actorUserId,
+        context.project
+      );
       if (!permissions.has('playbooks:admin')) {
         throw new PlaybookRunActionForbiddenError();
       }
@@ -253,10 +313,20 @@ export function createPlaybookRunActionService(dependencies: ActionDependencies)
   }
 
   return {
-    async cancel(input: CancelPlaybookRunInput): Promise<CancelPlaybookRunResponse> {
-      const context = await authorizedContext(input.project, input.runId, input);
+    async cancel(
+      input: CancelPlaybookRunInput
+    ): Promise<CancelPlaybookRunResponse> {
+      const context = await authorizedContext(
+        input.project,
+        input.runId,
+        input
+      );
       if (context.status === 'cancelled') {
-        return { runId: context.runId, status: 'cancelled', outcome: 'already-cancelled' };
+        return {
+          runId: context.runId,
+          status: 'cancelled',
+          outcome: 'already-cancelled',
+        };
       }
       if (!['running', 'suspended'].includes(context.status)) {
         throw new PlaybookRunActionConflictError(
@@ -273,7 +343,9 @@ export function createPlaybookRunActionService(dependencies: ActionDependencies)
         ...(input.reason ? { reason: input.reason } : {}),
       });
       if (!(await dependencies.cancelRows(context.runId))) {
-        throw new PlaybookRunActionConflictError('The run changed before cancellation completed.');
+        throw new PlaybookRunActionConflictError(
+          'The run changed before cancellation completed.'
+        );
       }
 
       console.info('playbook.run.cancelled', {
@@ -281,14 +353,26 @@ export function createPlaybookRunActionService(dependencies: ActionDependencies)
         runId: context.runId,
         actorUserId: input.actorUserId,
         authorization:
-          input.actorUserId === context.initiatorUserId ? 'initiator' : 'administrator',
+          input.actorUserId === context.initiatorUserId
+            ? 'initiator'
+            : 'administrator',
         reason: input.reason,
       });
-      return { runId: context.runId, status: 'cancelled', outcome: 'cancelled' };
+      return {
+        runId: context.runId,
+        status: 'cancelled',
+        outcome: 'cancelled',
+      };
     },
 
-    async retry(input: RetryPlaybookStepInput): Promise<RetryPlaybookStepResponse> {
-      const context = await authorizedContext(input.project, input.runId, input);
+    async retry(
+      input: RetryPlaybookStepInput
+    ): Promise<RetryPlaybookStepResponse> {
+      const context = await authorizedContext(
+        input.project,
+        input.runId,
+        input
+      );
       // Linear graphs create rows in execution order, so only the newest row can be current.
       const current = context.steps[context.steps.length - 1];
       if (
@@ -302,7 +386,9 @@ export function createPlaybookRunActionService(dependencies: ActionDependencies)
         );
       }
       if (!(await dependencies.prepareRetry(context.runId, current.id))) {
-        throw new PlaybookRunActionConflictError('The step changed before retry started.');
+        throw new PlaybookRunActionConflictError(
+          'The step changed before retry started.'
+        );
       }
 
       console.info('playbook.step.retry_started', {
@@ -311,7 +397,9 @@ export function createPlaybookRunActionService(dependencies: ActionDependencies)
         stepRunId: current.id,
         actorUserId: input.actorUserId,
         authorization:
-          input.actorUserId === context.initiatorUserId ? 'initiator' : 'administrator',
+          input.actorUserId === context.initiatorUserId
+            ? 'initiator'
+            : 'administrator',
       });
 
       let outcome: playbookEngine.EngineOutcome;
@@ -327,15 +415,20 @@ export function createPlaybookRunActionService(dependencies: ActionDependencies)
           retriedByUserId: input.actorUserId,
         });
       } catch (error) {
-        const reason = error instanceof Error ? error.message : 'The retry failed.';
+        const reason =
+          error instanceof Error ? error.message : 'The retry failed.';
         await dependencies.restoreRetryable(context.runId, current.id, reason);
         throw error;
       }
       if (outcome.endedAs === 'failed') {
         const reason =
-          outcome.error instanceof Error ? outcome.error.message : 'The retry failed.';
+          outcome.error instanceof Error
+            ? outcome.error.message
+            : 'The retry failed.';
         await dependencies.restoreRetryable(context.runId, current.id, reason);
-        throw outcome.error instanceof Error ? outcome.error : new Error(reason);
+        throw outcome.error instanceof Error
+          ? outcome.error
+          : new Error(reason);
       }
 
       return {

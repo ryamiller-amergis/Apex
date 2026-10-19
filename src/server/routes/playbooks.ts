@@ -10,6 +10,10 @@
  * project the caller names rather than to the platform.
  */
 import express, { Request, Response } from 'express';
+import {
+  AtsBoardCharterError,
+  prepareAtsBoardRunInput,
+} from '../../shared/atsBoard';
 import { requirePermission, resolveRequestProject } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
 import { isSuperAdminRequest } from '../utils/superAdmin';
@@ -91,11 +95,13 @@ import {
 } from '../services/playbookGateService';
 import { getUserPermissions } from '../services/rbacService';
 import {
+  ATS_AGENT_BOARD_TEMPLATE_KEY,
   PlaybookTemplateAlreadyPublishedError,
   PlaybookTemplateInvalidError,
   PlaybookTemplateNotFoundError,
   installPlaybookTemplate,
 } from '../services/playbookTemplateService';
+import { listBoardDeliberationAudit } from '../services/boardDeliberationService';
 
 const router = express.Router();
 
@@ -115,7 +121,11 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isPlaybookGraph(value: unknown): value is {
-  nodes: Array<{ id: string; stepType: string; config?: Record<string, unknown> }>;
+  nodes: Array<{
+    id: string;
+    stepType: string;
+    config?: Record<string, unknown>;
+  }>;
   edges: Array<{ from: string; to: string; condition?: string }>;
 } {
   if (!value || typeof value !== 'object') return false;
@@ -125,7 +135,11 @@ function isPlaybookGraph(value: unknown): value is {
   const nodesAreValid = graph.nodes.every((node) => {
     if (!node || typeof node !== 'object') return false;
     const candidate = node as Record<string, unknown>;
-    if (!isNonBlankString(candidate.id) || !isNonBlankString(candidate.stepType)) return false;
+    if (
+      !isNonBlankString(candidate.id) ||
+      !isNonBlankString(candidate.stepType)
+    )
+      return false;
     return (
       candidate.config === undefined ||
       (candidate.config !== null &&
@@ -139,7 +153,8 @@ function isPlaybookGraph(value: unknown): value is {
     return (
       isNonBlankString(candidate.from) &&
       isNonBlankString(candidate.to) &&
-      (candidate.condition === undefined || typeof candidate.condition === 'string')
+      (candidate.condition === undefined ||
+        typeof candidate.condition === 'string')
     );
   });
 
@@ -170,7 +185,10 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
     return true;
   }
 
-  if (error instanceof PlaybookInterviewProfilePublishError || error instanceof PlaybookTemplateInvalidError) {
+  if (
+    error instanceof PlaybookInterviewProfilePublishError ||
+    error instanceof PlaybookTemplateInvalidError
+  ) {
     res.status(400).json({ error: error.message });
     return true;
   }
@@ -193,7 +211,10 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
     isUniqueViolation(error)
   ) {
     res.status(409).json({
-      error: error instanceof Error ? error.message : 'A conflicting Playbook definition exists.',
+      error:
+        error instanceof Error
+          ? error.message
+          : 'A conflicting Playbook definition exists.',
     });
     return true;
   }
@@ -212,11 +233,18 @@ function requestProjectsDisagree(req: Request): boolean {
     (req.body as { project?: unknown } | undefined)?.project,
     req.get?.('x-apex-project') ?? req.headers?.['x-apex-project'],
   ];
-  return named.some((value) => typeof value === 'string' && value.length > 0 && value !== resolved);
+  return named.some(
+    (value) =>
+      typeof value === 'string' && value.length > 0 && value !== resolved
+  );
 }
 
 /** Reject project-scoped requests that do not name a project. */
-const requirePlaybooksProject: express.RequestHandler = async (req, res, next) => {
+const requirePlaybooksProject: express.RequestHandler = async (
+  req,
+  res,
+  next
+) => {
   try {
     const project = resolveRequestProject(req);
     if (!project) {
@@ -232,14 +260,20 @@ const requirePlaybooksProject: express.RequestHandler = async (req, res, next) =
 
 router.use(requirePlaybooksProject);
 
-async function productionAdaptersFlagEnabled(req: Request, project: string): Promise<boolean> {
+async function productionAdaptersFlagEnabled(
+  req: Request,
+  project: string
+): Promise<boolean> {
   return isFeatureEnabled(PRODUCTION_ADAPTERS_FLAG, {
     userId: getUserId(req),
     project,
   });
 }
 
-async function authoringCanvasFlagEnabled(req: Request, project: string): Promise<boolean> {
+async function authoringCanvasFlagEnabled(
+  req: Request,
+  project: string
+): Promise<boolean> {
   return isFeatureEnabled(AUTHORING_CANVAS_FLAG, {
     userId: getUserId(req),
     project,
@@ -264,7 +298,7 @@ router.get(
     res.json(await playbookSpendPolicyService.getPolicy(project));
     // @feature-flag:playbooks-production-adapters enabled-end
     // @feature-flag:playbooks-production-adapters end
-  },
+  }
 );
 
 router.patch(
@@ -282,7 +316,11 @@ router.patch(
       // @feature-flag:playbooks-production-adapters disabled-end
     }
     // @feature-flag:playbooks-production-adapters enabled-start
-    const { reason, capUsd, enabled: policyEnabled } = (req.body ?? {}) as RequestBody;
+    const {
+      reason,
+      capUsd,
+      enabled: policyEnabled,
+    } = (req.body ?? {}) as RequestBody;
     if (!isNonBlankString(reason)) {
       res.status(400).json({ error: 'reason is required' });
       return;
@@ -301,13 +339,15 @@ router.patch(
       return;
     }
     try {
-      res.json(await playbookSpendPolicyService.updatePolicy({
-        project,
-        actorUserId,
-        reason,
-        ...(capUsd !== undefined ? { capUsd } : {}),
-        ...(policyEnabled !== undefined ? { enabled: policyEnabled } : {}),
-      }));
+      res.json(
+        await playbookSpendPolicyService.updatePolicy({
+          project,
+          actorUserId,
+          reason,
+          ...(capUsd !== undefined ? { capUsd } : {}),
+          ...(policyEnabled !== undefined ? { enabled: policyEnabled } : {}),
+        })
+      );
     } catch (error) {
       if (
         error instanceof PlaybookSpendPolicyValidationError ||
@@ -320,7 +360,7 @@ router.patch(
     }
     // @feature-flag:playbooks-production-adapters enabled-end
     // @feature-flag:playbooks-production-adapters end
-  },
+  }
 );
 
 router.post(
@@ -328,6 +368,19 @@ router.post(
   requirePermission('playbooks:author'),
   async (req: Request, res: Response): Promise<void> => {
     const project = resolveRequestProject(req)!;
+    if (req.params.templateKey === ATS_AGENT_BOARD_TEMPLATE_KEY) {
+      try {
+        const installed = await installPlaybookTemplate({
+          project,
+          templateKey: req.params.templateKey,
+          createdByUserId: getUserId(req),
+        });
+        res.status(installed.created ? 201 : 200).json(installed.detail);
+      } catch (error) {
+        if (!sendDefinitionError(error, res)) throw error;
+      }
+      return;
+    }
     const enabled = await isFeatureEnabled('playbook-interview-step', {
       userId: getUserId(req),
       project,
@@ -354,7 +407,7 @@ router.post(
     }
     // @feature-flag:playbook-interview-step enabled-end
     // @feature-flag:playbook-interview-step end
-  },
+  }
 );
 
 router.get(
@@ -370,7 +423,8 @@ router.post(
   '/definitions',
   requirePermission('playbooks:author'),
   async (req: Request, res: Response): Promise<void> => {
-    const { project, name, description, graph } = (req.body ?? {}) as RequestBody;
+    const { project, name, description, graph } = (req.body ??
+      {}) as RequestBody;
     if (!isNonBlankString(project)) {
       res.status(400).json({ error: 'project is required' });
       return;
@@ -384,7 +438,9 @@ router.post(
       return;
     }
     if (!isPlaybookGraph(graph)) {
-      res.status(400).json({ error: 'graph must contain valid nodes and edges arrays' });
+      res
+        .status(400)
+        .json({ error: 'graph must contain valid nodes and edges arrays' });
       return;
     }
 
@@ -426,8 +482,8 @@ router.put(
   '/definitions/:definitionId/draft',
   requirePermission('playbooks:author'),
   async (req: Request, res: Response): Promise<void> => {
-    const { project, name, description, graph, expectedDraftUpdatedAt } = (req.body ??
-      {}) as RequestBody;
+    const { project, name, description, graph, expectedDraftUpdatedAt } =
+      (req.body ?? {}) as RequestBody;
     if (!isNonBlankString(project)) {
       res.status(400).json({ error: 'project is required' });
       return;
@@ -441,7 +497,9 @@ router.put(
       return;
     }
     if (!isPlaybookGraph(graph)) {
-      res.status(400).json({ error: 'graph must contain valid nodes and edges arrays' });
+      res
+        .status(400)
+        .json({ error: 'graph must contain valid nodes and edges arrays' });
       return;
     }
     if (!isNonBlankString(expectedDraftUpdatedAt)) {
@@ -470,7 +528,8 @@ router.post(
   '/definitions/:definitionId/publish',
   requirePermission('playbooks:author'),
   async (req: Request, res: Response): Promise<void> => {
-    const { project, expectedDraftUpdatedAt, sampleRunInput } = (req.body ?? {}) as RequestBody;
+    const { project, expectedDraftUpdatedAt, sampleRunInput } = (req.body ??
+      {}) as RequestBody;
     if (!isNonBlankString(project)) {
       res.status(400).json({ error: 'project is required' });
       return;
@@ -491,11 +550,17 @@ router.post(
     }
 
     try {
-      const productionAdaptersEnabled = await productionAdaptersFlagEnabled(req, project);
+      const productionAdaptersEnabled = await productionAdaptersFlagEnabled(
+        req,
+        project
+      );
       if (!productionAdaptersEnabled) {
-        const detail = await getDefinitionDetail(project, req.params.definitionId);
-        const usesProductionAdapters = detail.draft.graph.nodes.some(
-          (node) => isProductionAdapterStep(node.stepType, node.config),
+        const detail = await getDefinitionDetail(
+          project,
+          req.params.definitionId
+        );
+        const usesProductionAdapters = detail.draft.graph.nodes.some((node) =>
+          isProductionAdapterStep(node.stepType, node.config)
         );
         if (usesProductionAdapters) {
           res.status(409).json({
@@ -561,7 +626,7 @@ router.get(
     res.json({ items: listPlaybookStepPaletteItems() });
     // @feature-flag:playbooks-authoring-canvas enabled-end
     // @feature-flag:playbooks-authoring-canvas end
-  },
+  }
 );
 
 router.post(
@@ -574,7 +639,9 @@ router.post(
       return;
     }
     if (!isPlaybookGraph(graph)) {
-      res.status(400).json({ error: 'graph must contain valid nodes and edges arrays' });
+      res
+        .status(400)
+        .json({ error: 'graph must contain valid nodes and edges arrays' });
       return;
     }
 
@@ -595,7 +662,7 @@ router.post(
     }
     // @feature-flag:playbooks-authoring-canvas enabled-end
     // @feature-flag:playbooks-authoring-canvas end
-  },
+  }
 );
 
 router.get(
@@ -615,14 +682,18 @@ router.get(
     // @feature-flag:playbooks-authoring-canvas enabled-start
     try {
       res.json(
-        await getVersionLayout(project, req.params.definitionId, req.params.versionId)
+        await getVersionLayout(
+          project,
+          req.params.definitionId,
+          req.params.versionId
+        )
       );
     } catch (error) {
       if (!sendDefinitionError(error, res)) throw error;
     }
     // @feature-flag:playbooks-authoring-canvas enabled-end
     // @feature-flag:playbooks-authoring-canvas end
-  },
+  }
 );
 
 router.get(
@@ -641,14 +712,18 @@ router.get(
     // @feature-flag:playbooks-authoring-canvas enabled-start
     try {
       res.json({
-        graph: await getVersionGraph(project, req.params.definitionId, req.params.versionId),
+        graph: await getVersionGraph(
+          project,
+          req.params.definitionId,
+          req.params.versionId
+        ),
       });
     } catch (error) {
       if (!sendDefinitionError(error, res)) throw error;
     }
     // @feature-flag:playbooks-authoring-canvas enabled-end
     // @feature-flag:playbooks-authoring-canvas end
-  },
+  }
 );
 
 router.post(
@@ -656,7 +731,9 @@ router.post(
   requirePermission('playbooks:author'),
   async (req: Request, res: Response): Promise<void> => {
     if (requestProjectsDisagree(req)) {
-      res.status(400).json({ error: 'project does not match the request project' });
+      res
+        .status(400)
+        .json({ error: 'project does not match the request project' });
       return;
     }
     const project = resolveRequestProject(req)!;
@@ -693,7 +770,7 @@ router.post(
     }
     // @feature-flag:playbooks-authoring-canvas enabled-end
     // @feature-flag:playbooks-authoring-canvas end
-  },
+  }
 );
 
 router.get(
@@ -722,7 +799,9 @@ router.get(
     res.flushHeaders();
 
     const unsubscribe = subscribePlaybookRunEvents(req.params.runId, () => {
-      res.write(`event: invalidated\ndata: ${JSON.stringify({ runId: req.params.runId })}\n\n`);
+      res.write(
+        `event: invalidated\ndata: ${JSON.stringify({ runId: req.params.runId })}\n\n`
+      );
     });
 
     req.on('close', () => {
@@ -730,7 +809,7 @@ router.get(
     });
     // @feature-flag:playbooks-authoring-canvas enabled-end
     // @feature-flag:playbooks-authoring-canvas end
-  },
+  }
 );
 
 router.put(
@@ -738,7 +817,9 @@ router.put(
   requirePermission('playbooks:author'),
   async (req: Request, res: Response): Promise<void> => {
     if (requestProjectsDisagree(req)) {
-      res.status(400).json({ error: 'project does not match the request project' });
+      res
+        .status(400)
+        .json({ error: 'project does not match the request project' });
       return;
     }
     const project = resolveRequestProject(req)!;
@@ -775,7 +856,7 @@ router.put(
     }
     // @feature-flag:playbooks-authoring-canvas enabled-end
     // @feature-flag:playbooks-authoring-canvas end
-  },
+  }
 );
 
 /**
@@ -797,7 +878,9 @@ router.get(
 
     const requested = Number.parseInt(String(req.query.limit ?? ''), 10);
     const limit =
-      Number.isFinite(requested) && requested > 0 ? Math.min(requested, MAX_RUN_PAGE) : MAX_RUN_PAGE;
+      Number.isFinite(requested) && requested > 0
+        ? Math.min(requested, MAX_RUN_PAGE)
+        : MAX_RUN_PAGE;
 
     const filter = req.query.filter;
     if (filter !== undefined && filter !== 'assigned-to-me') {
@@ -845,6 +928,27 @@ router.get(
 );
 
 router.get(
+  '/runs/:runId/deliberation',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const run = await getRun(project, req.params.runId);
+    if (!run) {
+      res.status(404).json({ error: 'No such Playbook run in this project.' });
+      return;
+    }
+    const step = run.steps.find(
+      (item) => item.stepType === 'board-deliberation'
+    );
+    if (!step) {
+      res.json({ charter: null, turns: [] });
+      return;
+    }
+    res.json(await listBoardDeliberationAudit(step.id));
+  }
+);
+
+router.get(
   '/runs/:runId/steps/:stepRunId/gate',
   requirePermission('playbooks:view'),
   async (req: Request, res: Response): Promise<void> => {
@@ -859,12 +963,14 @@ router.get(
       return;
     }
     try {
-      res.json(await getGateDetail({
-        project,
-        runId: req.params.runId,
-        stepRunId: req.params.stepRunId,
-        userId,
-      }));
+      res.json(
+        await getGateDetail({
+          project,
+          runId: req.params.runId,
+          stepRunId: req.params.stepRunId,
+          userId,
+        })
+      );
     } catch (error) {
       if (error instanceof PlaybookGateForbiddenError) {
         res.status(403).json({ error: error.message });
@@ -875,23 +981,28 @@ router.get(
         return;
       }
       if (
-        error instanceof PlaybookGateInputRenderError
-        || error instanceof PlaybookGateEmptyPoolError
+        error instanceof PlaybookGateInputRenderError ||
+        error instanceof PlaybookGateEmptyPoolError
       ) {
         res.status(409).json({ error: error.message, code: error.name });
         return;
       }
       throw error;
     }
-  },
+  }
 );
 
 router.post(
   '/runs',
   requirePermission('playbooks:run'),
   async (req: Request, res: Response): Promise<void> => {
-    const { project, definitionId, definitionVersionId, versionPinReason, runInput } = (req.body ??
-      {}) as RequestBody;
+    const {
+      project,
+      definitionId,
+      definitionVersionId,
+      versionPinReason,
+      runInput,
+    } = (req.body ?? {}) as RequestBody;
 
     if (typeof project !== 'string' || !project.trim()) {
       res.status(400).json({ error: 'project is required' });
@@ -905,16 +1016,21 @@ router.post(
     const hasPinReason = versionPinReason !== undefined;
     if (hasVersionId !== hasPinReason) {
       res.status(400).json({
-        error: 'definitionVersionId and versionPinReason must be provided together',
+        error:
+          'definitionVersionId and versionPinReason must be provided together',
       });
       return;
     }
     if (hasVersionId && !isNonBlankString(definitionVersionId)) {
-      res.status(400).json({ error: 'definitionVersionId must be a non-blank string' });
+      res
+        .status(400)
+        .json({ error: 'definitionVersionId must be a non-blank string' });
       return;
     }
     if (hasPinReason && !isNonBlankString(versionPinReason)) {
-      res.status(400).json({ error: 'versionPinReason must be a non-blank string' });
+      res
+        .status(400)
+        .json({ error: 'versionPinReason must be a non-blank string' });
       return;
     }
     if (runInput !== undefined && !isPlainRecord(runInput)) {
@@ -929,14 +1045,22 @@ router.post(
     }
 
     try {
-      const spendAdmissionEnabled = await productionAdaptersFlagEnabled(req, project);
+      const spendAdmissionEnabled = await productionAdaptersFlagEnabled(
+        req,
+        project
+      );
       const result = await startRun({
         project,
         definitionId,
         ...(definitionVersionId !== undefined
-          ? { definitionVersionId, versionPinReason: versionPinReason as string }
+          ? {
+              definitionVersionId,
+              versionPinReason: versionPinReason as string,
+            }
           : {}),
-        ...(isPlainRecord(runInput) ? { runInput } : {}),
+        ...(isPlainRecord(runInput)
+          ? { runInput: prepareAtsBoardRunInput(runInput) }
+          : {}),
         initiatorUserId,
         ...(spendAdmissionEnabled ? { spendAdmissionEnabled: true } : {}),
       });
@@ -950,7 +1074,8 @@ router.post(
       if (
         error instanceof PlaybookNoPublishedVersionError ||
         error instanceof PlaybookEmptyGraphError ||
-        error instanceof PlaybookVersionPinReasonRequiredError
+        error instanceof PlaybookVersionPinReasonRequiredError ||
+        error instanceof AtsBoardCharterError
       ) {
         res.status(400).json({ error: error.message });
         return;
@@ -985,7 +1110,9 @@ router.post(
       if (error instanceof PlaybookGuardViolationError) {
         // Refused by a structural guard. 400 because the graph or the project's concurrency is the
         // problem, and `kind` lets a caller tell "too many steps" from "too many runs".
-        res.status(400).json({ error: error.message, violation: error.violation });
+        res
+          .status(400)
+          .json({ error: error.message, violation: error.violation });
         return;
       }
 
@@ -1090,7 +1217,9 @@ router.post(
     const { decision, comment } = (req.body ?? {}) as Record<string, unknown>;
 
     if (decision !== 'approved' && decision !== 'rejected') {
-      res.status(400).json({ error: "decision must be 'approved' or 'rejected'" });
+      res
+        .status(400)
+        .json({ error: "decision must be 'approved' or 'rejected'" });
       return;
     }
 
@@ -1102,16 +1231,23 @@ router.post(
 
     try {
       const project = resolveRequestProject(req)!;
-      const productionAdaptersEnabled = await productionAdaptersFlagEnabled(req, project);
-      const useProductionGate = productionAdaptersEnabled
-        && await isProductionGateStepRun(stepRunId);
+      const productionAdaptersEnabled = await productionAdaptersFlagEnabled(
+        req,
+        project
+      );
+      const useProductionGate =
+        productionAdaptersEnabled && (await isProductionGateStepRun(stepRunId));
       if (!useProductionGate) {
         const permissions = await getUserPermissions(deciderUserId, project);
         if (!permissions.has('playbooks:run')) {
-          res.status(403).json({ error: 'Missing required permission: playbooks:run' });
+          res
+            .status(403)
+            .json({ error: 'Missing required permission: playbooks:run' });
           return;
         }
       }
+      const note =
+        typeof comment === 'string' ? comment.trim().slice(0, 2000) : '';
       const result = useProductionGate
         ? await decideGate({
             project,
@@ -1119,13 +1255,14 @@ router.post(
             runId,
             userId: deciderUserId,
             decision,
-            ...(typeof comment === 'string' ? { comment } : {}),
+            ...(note ? { comment: note } : {}),
           })
         : await submitApprovalDecision({
             stepRunId,
             runId,
             deciderUserId,
             decision,
+            ...(note ? { comment: note } : {}),
           });
 
       /*
@@ -1140,7 +1277,11 @@ router.post(
        * already durably recorded, and failing this response would tell the caller their approval
        * did not happen when it did.
        */
-      if (result.outcome === 'recorded' && 'stepId' in result && result.stepId) {
+      if (
+        result.outcome === 'recorded' &&
+        'stepId' in result &&
+        result.stepId
+      ) {
         await advanceRun(runId, result.stepId);
       }
 

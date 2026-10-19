@@ -18,6 +18,7 @@ import {
 import { usePlaybookStepPalette } from '../hooks/usePlaybookCanvas';
 import { PlaybookRunStepList } from './PlaybookRunStepList';
 import { PlaybookRunActions } from './PlaybookRunActions';
+import { AtsBoardSynopsisPanel } from './AtsBoardSynopsisPanel';
 import { PlaybookGateReviewPanel } from './PlaybookGateReviewPanel';
 import { PlaybookCanvas } from './PlaybookCanvas';
 import styles from './PlaybookCanvas.module.css';
@@ -125,6 +126,10 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
       </div>
 
       <section className={styles.liveSection}>
+        <AtsBoardSynopsisPanel
+          run={run.data}
+          {...{ 'data-testid': `ats-board-synopsis-${run.data.runId}` }}
+        />
         <PlaybookRunStepList run={run.data} id={`playbook-live-steps-${runId}`} />
         <PlaybookGateReviewPanel
           project={project}

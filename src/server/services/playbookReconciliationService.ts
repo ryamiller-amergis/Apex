@@ -22,18 +22,36 @@
  */
 import { and, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { agentRuns, interviews, playbookRuns, playbookStepRuns } from '../db/schema';
+import {
+  agentRuns,
+  interviews,
+  playbookDeliberationSessions,
+  playbookDeliberationTurns,
+  playbookRuns,
+  playbookStepRuns,
+} from '../db/schema';
 import { advanceStalledRuns } from './playbookAdvanceService';
 import { cursorAgentCompletionOutput } from './playbookSteps/cursorAgentCompletion';
 import { failStepRun, resumeStepRun } from './playbookSteps/stepRuns';
 import type { PlaybookSweepOutcome } from '../../shared/types/playbook';
 import { failGatesWithEmptyCurrentPools } from './playbookGateService';
-import { createDesignDocValidationAdapter, getDesignDoc } from './designDocService';
+import {
+  createDesignDocValidationAdapter,
+  getDesignDoc,
+} from './designDocService';
 import { ingestValidationScorecard } from './documentValidationService';
 import { VALIDATION_TIMEOUT_REASON } from '../../shared/utils/validationReport';
+import {
+  handleBoardDeliberationTerminal,
+  recoverInterruptedBoardDispatches,
+} from './boardDeliberationService';
 
 /** Agent-run statuses that mean the turn is over, one way or another. */
-const TERMINAL_AGENT_RUN_STATUSES = ['completed', 'failed', 'cancelled'] as const;
+const TERMINAL_AGENT_RUN_STATUSES = [
+  'completed',
+  'failed',
+  'cancelled',
+] as const;
 
 export type Clock = () => Date;
 
@@ -75,7 +93,11 @@ async function resumeMissedTerminalEvents(): Promise<number> {
   const stranded = await db
     .select({
       stepRunId: playbookStepRuns.id,
+      runId: playbookStepRuns.runId,
+      stepId: playbookStepRuns.stepId,
       stepType: playbookStepRuns.stepType,
+      project: playbookRuns.project,
+      initiatorUserId: playbookRuns.initiatorUserId,
       agentRunStatus: agentRuns.status,
       agentRunId: agentRuns.id,
       threadId: agentRuns.threadId,
@@ -83,6 +105,7 @@ async function resumeMissedTerminalEvents(): Promise<number> {
     })
     .from(playbookStepRuns)
     .innerJoin(agentRuns, eq(playbookStepRuns.agentRunId, agentRuns.id))
+    .innerJoin(playbookRuns, eq(playbookStepRuns.runId, playbookRuns.id))
     .where(
       and(
         eq(playbookStepRuns.status, 'suspended'),
@@ -92,6 +115,18 @@ async function resumeMissedTerminalEvents(): Promise<number> {
 
   let moved = 0;
   for (const row of stranded) {
+    if (row.stepType === 'board-deliberation') {
+      const result = await handleBoardDeliberationTerminal({
+        agentRunId: row.agentRunId,
+        status: row.agentRunStatus as 'completed' | 'failed' | 'cancelled',
+        completedAt: row.completedAt,
+        threadId: row.threadId,
+        project: row.project,
+        userId: row.initiatorUserId,
+      });
+      if (result.handled && !result.deferred) moved += 1;
+      continue;
+    }
     if (row.agentRunStatus === 'completed') {
       // Same output and conditional update the event path uses, so a missed NOTIFY still
       // hands ingest-artifact a scorecard instead of an empty payload.
@@ -104,10 +139,13 @@ async function resumeMissedTerminalEvents(): Promise<number> {
       // Unreadable here means this instance does not have the workspace. Leave the row
       // suspended so the instance that does, or a later pass, can record the scorecard.
       if (!output) continue;
-      if (await resumeStepRun({
-        stepRunId: row.stepRunId,
-        output,
-      })) moved += 1;
+      if (
+        await resumeStepRun({
+          stepRunId: row.stepRunId,
+          output,
+        })
+      )
+        moved += 1;
     } else {
       await failStepRun({
         stepRunId: row.stepRunId,
@@ -159,14 +197,46 @@ async function expireOverdueSuspensions(now: Date): Promise<number> {
       await db
         .update(interviews)
         .set({ status: 'archived', updatedAt: now.toISOString() })
-        .where(and(
-          eq(interviews.playbookRunId, step.runId),
-          eq(interviews.status, 'in_progress'),
-        ));
+        .where(
+          and(
+            eq(interviews.playbookRunId, step.runId),
+            eq(interviews.status, 'in_progress')
+          )
+        );
+    }
+    if (step.stepType === 'board-deliberation') {
+      const sessions = await db
+        .update(playbookDeliberationSessions)
+        .set({ status: 'failed', updatedAt: now.toISOString() })
+        .where(eq(playbookDeliberationSessions.stepRunId, step.id))
+        .returning({ id: playbookDeliberationSessions.id });
+      if (sessions.length > 0) {
+        await db
+          .update(playbookDeliberationTurns)
+          .set({
+            status: 'failed',
+            error: 'Playbook suspension expired.',
+            completedAt: now.toISOString(),
+            updatedAt: now.toISOString(),
+          })
+          .where(
+            and(
+              inArray(
+                playbookDeliberationTurns.sessionId,
+                sessions.map((session) => session.id)
+              ),
+              inArray(playbookDeliberationTurns.status, ['pending', 'running'])
+            )
+          );
+      }
     }
     await db
       .update(playbookRuns)
-      .set({ status: 'expired', completedAt: now.toISOString(), updatedAt: now.toISOString() })
+      .set({
+        status: 'expired',
+        completedAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+      })
       .where(
         and(
           eq(playbookRuns.id, step.runId),
@@ -186,7 +256,11 @@ async function applyExpiredValidationTimeout(runId: string): Promise<void> {
     .where(eq(playbookRuns.id, runId))
     .limit(1);
   const input = (run?.runInput ?? {}) as Record<string, unknown>;
-  if (input.documentType !== 'design_doc' || typeof input.documentId !== 'string') return;
+  if (
+    input.documentType !== 'design_doc' ||
+    typeof input.documentId !== 'string'
+  )
+    return;
   if (typeof input.validationThreadId !== 'string') return;
 
   const document = await getDesignDoc(input.documentId);
@@ -194,7 +268,7 @@ async function applyExpiredValidationTimeout(runId: string): Promise<void> {
   await ingestValidationScorecard(
     createDesignDocValidationAdapter(input.documentId, document),
     input.validationThreadId,
-    { kind: 'timeout', reason: VALIDATION_TIMEOUT_REASON },
+    { kind: 'timeout', reason: VALIDATION_TIMEOUT_REASON }
   );
 }
 
@@ -236,7 +310,8 @@ export async function runReconciliationPass(
   const startedAt = clock().toISOString();
 
   try {
-    const resumed = await resumeMissedTerminalEvents();
+    const recovered = await recoverInterruptedBoardDispatches(clock());
+    const resumed = recovered + (await resumeMissedTerminalEvents());
     await failGatesWithEmptyCurrentPools();
     const expired = await expireOverdueSuspensions(clock());
     const orphaned = await countOrphans();
@@ -285,7 +360,9 @@ export async function runReconciliationPassLocked(
   options: { clock?: Clock } = {}
 ): Promise<PlaybookSweepOutcome> {
   return db.transaction(async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${RECONCILIATION_LOCK_KEY}))`);
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext(${RECONCILIATION_LOCK_KEY}))`
+    );
     return runReconciliationPass(options);
   });
 }

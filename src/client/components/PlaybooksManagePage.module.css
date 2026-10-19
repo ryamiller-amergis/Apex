@@ -43,6 +43,11 @@
   gap: 0.5rem;
 }
 
+.installError {
+  margin: 0;
+  color: var(--error-color);
+}
+
 .primaryButton,
 .secondaryButton {
   display: inline-flex;

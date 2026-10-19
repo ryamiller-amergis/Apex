@@ -22,6 +22,7 @@ import { z } from 'zod';
 import { PLAYBOOK_STEP_SIDE_EFFECTS } from '../../../shared/types/playbook';
 import type {
   ApprovalGateStepConfig,
+  BoardDeliberationStepConfig,
   BranchStepConfig,
   CursorAgentStepConfig,
   IngestArtifactStepConfig,
@@ -34,6 +35,8 @@ import type {
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
+export const CURSOR_AGENT_STEP_TYPE = 'cursor-agent';
+export const BOARD_DELIBERATION_STEP_TYPE = 'board-deliberation';
 
 /**
  * Skills a `cursor-agent` step may run in Phase 0.
@@ -49,10 +52,27 @@ const HOUR_MS = 60 * MINUTE_MS;
  * `app-knowledge` is here because answering questions from repo documentation is its whole job.
  * FEAT-006 chooses what the seeded demo definitions actually run and may add to this list
  * deliberately; nothing is added to it by accident.
+ *
+ * The ATS board skills are the shipped `ats-agent-board` template. They stay on this list
+ * because that graph names them and every one of those steps is repository-read-only.
  */
+export const ATS_BOARD_AGENT_SKILLS: readonly string[] = [
+  '.cursor/skills/ats-board-operations/SKILL.md',
+  '.cursor/skills/ats-board-recruiting/SKILL.md',
+  '.cursor/skills/ats-board-client/SKILL.md',
+  '.cursor/skills/ats-board-compliance/SKILL.md',
+  '.cursor/skills/ats-board-data/SKILL.md',
+  '.cursor/skills/ats-board-product/SKILL.md',
+  '.cursor/skills/ats-board-market/SKILL.md',
+  '.cursor/skills/ats-board-moderator/SKILL.md',
+  '.cursor/skills/ats-board-challenger/SKILL.md',
+  '.cursor/skills/ats-board-chair/SKILL.md',
+];
+
 export const PHASE_0_ALLOWED_AGENT_SKILLS: readonly string[] = [
   '.cursor/skills/app-knowledge/SKILL.md',
   '.cursor/skills/design-doc-validation/SKILL.md',
+  ...ATS_BOARD_AGENT_SKILLS,
 ];
 
 /**
@@ -67,6 +87,7 @@ export const PHASE_0_ALLOWED_AGENT_SKILLS: readonly string[] = [
  * want hours rather than days.
  */
 export const CURSOR_AGENT_DEADLINE_MS = 60 * MINUTE_MS;
+export const BOARD_DELIBERATION_DEADLINE_MS = 2 * HOUR_MS;
 export const APPROVAL_GATE_DEADLINE_MS = 48 * HOUR_MS;
 
 /**
@@ -117,6 +138,32 @@ const CURSOR_AGENT_OUTPUT_SCHEMA = z.object({
   reportMd: z.string().optional(),
 });
 
+const BOARD_DELIBERATION_INPUT_SCHEMA = z.object({
+  charter: z.string().min(1),
+  reports: z.record(z.string(), z.string().min(1)),
+  maxTopics: z.number().int().min(1).max(5).optional(),
+  maxRounds: z.number().int().min(1).max(2).optional(),
+  inquiryBudget: z.number().int().min(3).max(32).optional(),
+  deadlineMs: z.number().positive().max(BOARD_DELIBERATION_DEADLINE_MS).optional(),
+});
+
+const BOARD_DELIBERATION_TOPIC_SCHEMA = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  participants: z.array(z.string().min(1)),
+  outcome: z.string(),
+  status: z.enum(['resolved', 'unresolved', 'leadership_required']),
+});
+
+const BOARD_DELIBERATION_OUTPUT_SCHEMA = z.object({
+  sessionId: z.string().min(1),
+  completedAt: READABLE_TIMESTAMP,
+  topics: z.array(BOARD_DELIBERATION_TOPIC_SCHEMA).max(5),
+  unresolved: z.array(z.string()),
+  evidenceQuality: z.enum(['strong', 'moderate', 'weak']),
+  reportMd: z.string(),
+});
+
 const APPROVAL_GATE_INPUT_SCHEMA = z.object({
   // `positive()` also excludes NaN and Infinity, which is the whole requirement: a deadline that
   // never arrives is the thing BR-005 exists to prevent.
@@ -130,6 +177,7 @@ const APPROVAL_GATE_INPUT_SCHEMA = z.object({
 const APPROVAL_GATE_OUTPUT_SCHEMA = z.object({
   decision: z.enum(['approved', 'rejected']),
   decidedBy: z.string(),
+  comment: z.string().min(1).max(2000).optional(),
 });
 
 const NOTIFY_INPUT_SCHEMA = z.object({
@@ -223,6 +271,19 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
     requiredPermissions: ['playbooks:run'],
     inputSchema: CURSOR_AGENT_INPUT_SCHEMA,
     outputSchema: CURSOR_AGENT_OUTPUT_SCHEMA,
+  },
+  {
+    stepType: 'board-deliberation',
+    canSuspend: true,
+    defaultDeadlineMs: BOARD_DELIBERATION_DEADLINE_MS,
+    deadlineOverridable: true,
+    suspendReason: 'board_deliberation',
+    allowedSkillPaths: ATS_BOARD_AGENT_SKILLS,
+    isAgentStep: true,
+    sideEffect: 'leaves-apex',
+    requiredPermissions: ['playbooks:run'],
+    inputSchema: BOARD_DELIBERATION_INPUT_SCHEMA,
+    outputSchema: BOARD_DELIBERATION_OUTPUT_SCHEMA,
   },
   {
     stepType: 'ingest-artifact',
@@ -481,7 +542,10 @@ export function resolveDeadlineMs(stepType: string, overrideMs?: number): number
     );
   }
 
-  if (stepType === 'cursor-agent' && overrideMs > descriptor.defaultDeadlineMs) {
+  if (
+    (stepType === 'cursor-agent' || stepType === 'board-deliberation')
+    && overrideMs > descriptor.defaultDeadlineMs
+  ) {
     throw new PlaybookStepTypeError(
       `Deadline override for step type "${stepType}" may shorten the derived default but not exceed it.`
     );
@@ -576,7 +640,15 @@ export function assertSkillAllowed(stepType: string, skillPath: string): void {
  * stays generic so a fourth type can be registered by a caller without editing anything here.
  */
 export function validateStepTypeRegistry(): void {
-  const expected = ['cursor-agent', 'approval-gate', 'notify', 'ingest-artifact', 'branch', 'interview'];
+  const expected = [
+    'cursor-agent',
+    'board-deliberation',
+    'approval-gate',
+    'notify',
+    'ingest-artifact',
+    'branch',
+    'interview',
+  ];
   const missing = expected.filter((stepType) => !stepTypeRegistry.has(stepType));
 
   if (missing.length > 0) {
@@ -599,6 +671,7 @@ export function validateStepTypeRegistry(): void {
 /** Config shapes, re-exported so adapters import their contract from the registry they register with. */
 export type {
   ApprovalGateStepConfig,
+  BoardDeliberationStepConfig,
   BranchStepConfig,
   CursorAgentStepConfig,
   IngestArtifactStepConfig,

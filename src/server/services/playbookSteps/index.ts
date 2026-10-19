@@ -17,6 +17,7 @@ import { executeNotifyStep } from './notifyAdapter';
 import { executeIngestArtifactStep } from './ingestArtifactAdapter';
 import { executeBranchStep } from './branchAdapter';
 import { executeInterviewStep } from './interviewAdapter';
+import { executeBoardDeliberationStep } from './boardDeliberationAdapter';
 import { getUserPermissions } from '../rbacService';
 import { parseStepInput } from './descriptorValidation';
 import { getStepTypeDescriptor, requiredPermissionsForStep } from './registry';
@@ -32,6 +33,7 @@ import {
 
 const ADAPTERS: Readonly<Record<string, PlaybookStepAdapter>> = {
   'cursor-agent': executeCursorAgentStep,
+  'board-deliberation': executeBoardDeliberationStep,
   'approval-gate': executeApprovalGateStep,
   notify: executeNotifyStep,
   'ingest-artifact': executeIngestArtifactStep,
