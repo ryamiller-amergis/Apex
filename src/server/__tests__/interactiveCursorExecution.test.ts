@@ -46,6 +46,7 @@ describe('interactive Cursor execution repository tools', () => {
           model: 'composer-2.5',
           effort: 'high',
           workspaceRef: '/shared/grounding/checkout',
+          interviewPhase: null,
         },
         checkout,
         { mcpServers },
@@ -61,10 +62,82 @@ describe('interactive Cursor execution repository tools', () => {
           },
           mcpServers,
           model: { id: 'composer-2.5' },
+          disallowedTools: ['task'],
         }),
       );
       expect(execution.agentId).toBe('agent-1');
       expect(execution.mode).toBe('recreated');
+    } finally {
+      delete process.env.CURSOR_API_KEY;
+      jest.clearAllMocks();
+    }
+  });
+
+  it('closes repository tools for a product-phase guided interview', async () => {
+    process.env.CURSOR_API_KEY = 'test-key';
+    mockCreateAgent.mockResolvedValue({
+      id: 'agent-1',
+      send: jest.fn(),
+      [Symbol.asyncDispose]: jest.fn().mockResolvedValue(undefined),
+    });
+
+    try {
+      const acquired = await acquireInteractiveCursorAgent(
+        {
+          model: 'composer-2.5',
+          effort: null,
+          workspaceRef: '/warm',
+          interviewPhase: 'product',
+        },
+        {} as RepoReader,
+        { mcpServers: {} },
+      );
+
+      expect(mockCreateNativeReadTools).not.toHaveBeenCalled();
+      const local = mockCreateAgent.mock.calls[0][0].local;
+      expect(local.sandboxOptions).toEqual({ enabled: false });
+      expect(Object.keys(local.customTools).sort()).toEqual([
+        'get_skill_file',
+        'list_repo_dir',
+        'search_repo_code',
+      ]);
+      await expect(local.customTools.get_skill_file.execute({})).resolves.toMatchObject({
+        isError: true,
+      });
+      expect(acquired.handle.interviewPhase).toBe('product');
+    } finally {
+      delete process.env.CURSOR_API_KEY;
+      jest.clearAllMocks();
+    }
+  });
+
+  it('opens known-file reads without search for a technical-phase guided interview', async () => {
+    process.env.CURSOR_API_KEY = 'test-key';
+    mockCreateAgent.mockResolvedValue({
+      id: 'agent-1',
+      send: jest.fn(),
+      [Symbol.asyncDispose]: jest.fn().mockResolvedValue(undefined),
+    });
+    mockCreateNativeReadTools.mockReturnValue({ get_skill_file: { execute: jest.fn() } });
+    const checkout = {} as RepoReader;
+
+    try {
+      await acquireInteractiveCursorAgent(
+        {
+          model: 'composer-2.5',
+          effort: null,
+          workspaceRef: '/warm',
+          interviewPhase: 'technical',
+        },
+        checkout,
+        { mcpServers: {} },
+      );
+
+      expect(mockCreateNativeReadTools).toHaveBeenCalledWith(checkout, { allowSearch: false });
+      const local = mockCreateAgent.mock.calls[0][0].local;
+      await expect(local.customTools.search_repo_code.execute({})).resolves.toMatchObject({
+        isError: true,
+      });
     } finally {
       delete process.env.CURSOR_API_KEY;
       jest.clearAllMocks();
@@ -122,6 +195,7 @@ describe('interactive Cursor execution repository tools', () => {
           model: 'auto',
           effort: null,
           workspaceRef: '/warm',
+          interviewPhase: null,
         },
         {} as RepoReader,
         { mcpServers },
@@ -133,6 +207,9 @@ describe('interactive Cursor execution repository tools', () => {
       expect(send).toHaveBeenCalledTimes(2);
       expect(send).toHaveBeenNthCalledWith(1, 'turn-1');
       expect(send).toHaveBeenNthCalledWith(2, 'turn-2');
+      const nextTurnServers = { 'ado-skills': { url: 'https://apex.example/tools?token=turn-3' } };
+      await acquired.handle.send('turn-3', { mcpServers: nextTurnServers });
+      expect(send).toHaveBeenNthCalledWith(3, 'turn-3', { mcpServers: nextTurnServers });
       await acquired.handle.dispose();
       expect(dispose).toHaveBeenCalled();
     } finally {
@@ -163,6 +240,7 @@ describe('interactive Cursor execution repository tools', () => {
       model: 'auto',
       effort: null,
       workspaceRef: '/warm',
+      interviewPhase: null,
       currentPrompt: 'current turn only',
       recreationPrompt: 'full transcript + current',
     };
@@ -199,6 +277,7 @@ describe('interactive Cursor execution repository tools', () => {
           model: 'auto',
           effort: null,
           workspaceRef: '/warm',
+          interviewPhase: null,
         },
         {} as RepoReader,
         { resumeAgentId: 'agent-live', mcpServers },
@@ -206,6 +285,10 @@ describe('interactive Cursor execution repository tools', () => {
       expect(acquired.mode).toBe('resumed');
       expect(acquired.handle.agentId).toBe('agent-live');
       expect(mockCreateAgent).not.toHaveBeenCalled();
+      expect(mockResumeAgent).toHaveBeenCalledWith(
+        'agent-live',
+        expect.objectContaining({ disallowedTools: ['task'] }),
+      );
     } finally {
       delete process.env.CURSOR_API_KEY;
       jest.clearAllMocks();
@@ -232,6 +315,7 @@ describe('interactive Cursor execution repository tools', () => {
           model: 'auto',
           effort: null,
           workspaceRef: '/warm',
+          interviewPhase: null,
         },
         {} as RepoReader,
         { resumeAgentId: 'agent-dead', mcpServers },
@@ -266,6 +350,7 @@ describe('interactive Cursor execution repository tools', () => {
             model: 'auto',
             effort: null,
             workspaceRef: '/warm',
+            interviewPhase: null,
           },
           {} as RepoReader,
           { resumeAgentId: 'agent-live', mcpServers },

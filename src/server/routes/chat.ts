@@ -38,6 +38,7 @@ import type { InteractiveTurnAcceptedResponse } from '../../shared/types/durable
 import type { ThreadAccess } from '../services/threadAccessService';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import { requirePermission } from '../middleware/rbac';
+import { prepareAutonomousInterviewTurn } from '../services/interviewOrchestratorService';
 import { writeSseEvent, startSseHeartbeat } from '../utils/sseResponse';
 import {
   replayRunEventPage,
@@ -228,6 +229,13 @@ interface ThreadRequest extends Request {
   threadAccess?: ThreadAccess;
 }
 
+function isMultiAgentAssistedThread(thread: ChatThread): boolean {
+  const kickoff = thread.kickoff as ChatThread['kickoff'] & {
+    playbookInterview?: { snapshot?: { mode?: string } };
+  };
+  return kickoff.playbookInterview?.snapshot?.mode === 'multi_agent_assisted';
+}
+
 class HttpError extends Error {
   status: number;
 
@@ -395,6 +403,7 @@ router.post('/threads', async (req: Request, res: Response) => {
     const {
       effort: _clientEffort,
       agentModule: _clientAgentModule,
+      skillPathIsAppDefault: _clientSkillPathIsAppDefault,
       ...clientKickoff
     } = body.kickoff;
     const skillConfig = await resolveSkillConfig({
@@ -746,6 +755,21 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
     threadId,
     attachmentCount: String(attachments.length),
   });
+  let internalContext: string | undefined;
+  if (isMultiAgentAssistedThread(thread)) {
+    try {
+      const prepared = await prepareAutonomousInterviewTurn({
+        mainThreadId: threadId,
+        answerText: body.text ?? '',
+      });
+      if (prepared.internalContext) internalContext = prepared.internalContext;
+    } catch (err: unknown) {
+      console.error(
+        `[chat] assisted interview preparation failed for thread ${threadId}:`,
+        errorMessage(err),
+      );
+    }
+  }
 
   try {
     // Unified send: canonical flag-off/error runs legacy (detach); flag-on admits
@@ -764,6 +788,7 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
         requesterUserId,
         toolGrant: durableToolGrant,
         onLegacySettled: releaseAdoWriteTurn,
+        ...(internalContext ? { internalContext } : {}),
       },
     );
     if (submission?.route === 'durable') {
@@ -790,6 +815,7 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
       threadId,
       errorType: err instanceof Error ? err.name : 'UnknownError',
       errorMessage: errorMessage(err).slice(0, 200),
+
     });
     return res
       .status(errorStatus(err))

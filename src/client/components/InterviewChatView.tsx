@@ -24,6 +24,12 @@ import { resolveAvailableModelId } from '../../shared/utils/modelAvailability';
 import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 import {
   useInterview,
+  useInterviewBrief,
+  useDraftInterviewBrief,
+  useSaveInterviewBrief,
+  useApproveInterviewBrief,
+  useActiveUsers,
+  useUpdateInterviewPhaseAssignments,
   useUpdateInterviewStatus,
   useUpdateInterviewTitle,
   useCreatePrd,
@@ -31,15 +37,23 @@ import {
   useDeleteInterview,
 } from '../hooks/useInterviews';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
+import { InterviewBriefReview } from './InterviewBriefReview';
 import { ChatRunProgressLabel } from './ChatRunProgressLabel';
 import { SectionOwnerModal } from './SectionOwnerModal';
 import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
 import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
-import type { InterviewStatus } from '../../shared/types/interview';
+import type { InterviewBriefSections, InterviewStatus } from '../../shared/types/interview';
 import type { InterviewSkillOption } from '../../shared/types/projectSettings';
 import { effortLabel } from '../../shared/utils/effort';
 import { parseAgentMessage, isAgentOtherOptionText } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
+import {
+  deriveInterviewPhaseProgress,
+  previewInterviewPhaseProgress,
+  stripInterviewPhaseMarkers,
+  usesGuidedInterviewPhases,
+} from '../utils/interviewPhaseProgress';
+import { InterviewPhaseBar } from './InterviewPhaseBar';
 import { formatChoiceAnswers } from '../utils/formatChoiceAnswers';
 import { createChatTurnId } from '../utils/chatTurnId';
 import { trackEvent, trackException } from '../services/telemetry';
@@ -61,6 +75,13 @@ function badgeClass(status: InterviewStatus): string {
   }
 }
 
+function renderOptionText(text: string): React.ReactNode {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, index) => {
+    const bold = part.match(/^\*\*([^*]+)\*\*$/);
+    return bold ? <strong key={index}>{bold[1]}</strong> : part;
+  });
+}
+
 function badgeLabel(status: InterviewStatus): string {
   switch (status) {
     case 'in_progress': return 'In Progress';
@@ -79,65 +100,75 @@ interface ChoiceBlockUIProps {
   locked: boolean;
   onSelect: (letter: string) => void;
   onFreeform: (text: string) => void;
+  footer?: React.ReactNode;
 }
 
 const InterviewChoiceBlockUI: React.FC<ChoiceBlockUIProps> = ({
-  block, questionNumber, selection, freeform, locked, onSelect, onFreeform,
-}) => (
-  <div className={`${styles.choiceBlock} ${locked ? styles.choiceBlockLocked : ''}`}>
-    {block.question && (
-      <div className={styles.choiceQuestion}>
-        <span className={styles.choiceQNum}>Q{questionNumber}</span>
-        <div className={styles.markdownBody} style={{ flex: 1 }}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.question}</ReactMarkdown>
+  block, questionNumber, selection, freeform, locked, onSelect, onFreeform, footer,
+}) => {
+  const options = block.options.filter((opt) => !isAgentOtherOptionText(opt.text));
+  const otherSelected = selection === 'other';
+  return (
+    <div className={`${styles.choiceBlock} ${locked ? styles.choiceBlockLocked : ''}`}>
+      {block.question && (
+        <div className={styles.choiceQuestion}>
+          <span className={styles.choiceQNum}>Question {questionNumber}</span>
+          <div className={styles.markdownBody}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.question}</ReactMarkdown>
+          </div>
         </div>
+      )}
+      <div className={styles.choiceOptions} role="radiogroup">
+        {options.map((opt) => {
+          const isSelected = selection === opt.letter;
+          return (
+            <button
+              key={opt.letter}
+              className={`${styles.choiceOption} ${isSelected ? styles.choiceOptionSelected : ''}`}
+              onClick={() => !locked && onSelect(opt.letter)}
+              disabled={locked}
+              type="button"
+              role="radio"
+              aria-checked={isSelected}
+              {...{ 'data-testid': `interview-choice-${opt.letter}` }}
+            >
+              <span className={styles.choiceOptionLetter}>
+                {isSelected && locked ? '✓' : opt.letter.toUpperCase()}
+              </span>
+              <span className={styles.choiceOptionText}>{renderOptionText(opt.text)}</span>
+            </button>
+          );
+        })}
       </div>
-    )}
-    <div className={styles.choiceOptions}>
-      {block.options
-        .filter((opt) => !isAgentOtherOptionText(opt.text))
-        .map((opt) => {
-        const isSelected = selection === opt.letter;
-        return (
-          <button
-            key={opt.letter}
-            className={`${styles.choiceOption} ${isSelected ? styles.choiceOptionSelected : ''}`}
-            onClick={() => !locked && onSelect(opt.letter)}
-            disabled={locked}
-            type="button"
-            {...{ 'data-testid': `interview-choice-${opt.letter}` }}
-          >
-            <span className={styles.choiceOptionLetter}>{opt.letter.toUpperCase()}</span>
-            <span className={styles.choiceOptionText}>{opt.text}</span>
-          </button>
-        );
-      })}
-      <button
-        className={`${styles.choiceOption} ${selection === 'other' ? styles.choiceOptionSelected : ''}`}
-        onClick={() => !locked && onSelect('other')}
-        disabled={locked}
-        type="button"
-        {...{ 'data-testid': 'interview-choice-other' }}
-      >
-        <span className={styles.choiceOptionLetter}>✎</span>
-        <span className={styles.choiceOptionText}>Other / free-form</span>
-      </button>
+      {!locked && (
+        <button
+          className={`${styles.choiceOtherLink} ${otherSelected ? styles.choiceOtherLinkActive : ''}`}
+          onClick={() => onSelect('other')}
+          type="button"
+          aria-pressed={otherSelected}
+          {...{ 'data-testid': 'interview-choice-other' }}
+        >
+          ✎ Something else? Write your own answer
+        </button>
+      )}
+      {otherSelected && !locked && (
+        <textarea
+          className={styles.choiceFreeform}
+          placeholder="Type your answer here…"
+          value={freeform}
+          onChange={(e) => onFreeform(e.target.value)}
+          rows={2}
+          autoFocus
+          {...{ 'data-testid': 'interview-choice-freeform' }}
+        />
+      )}
+      {locked && freeform && (
+        <div className={styles.choiceFreeformLocked}>{freeform}</div>
+      )}
+      {footer && <div className={styles.choiceFooter}>{footer}</div>}
     </div>
-    {(selection === 'other') && !locked && (
-      <textarea
-        className={styles.choiceFreeform}
-        placeholder="Type your answer here…"
-        value={freeform}
-        onChange={(e) => onFreeform(e.target.value)}
-        rows={2}
-        {...{ 'data-testid': 'interview-choice-freeform' }}
-      />
-    )}
-    {locked && freeform && (
-      <div className={styles.choiceFreeformLocked}>{freeform}</div>
-    )}
-  </div>
-);
+  );
+};
 
 // ── Assistant message with interactive choices ────────────────────────────────
 
@@ -151,10 +182,12 @@ interface InterviewAgentMessageProps {
   interviewLocked?: boolean;
   alreadyAnswered?: boolean;
   fullWidth?: boolean;
+  anchorRef?: React.Ref<HTMLDivElement>;
 }
 
-export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onSend, isRunning, questionOffset = 0, interviewLocked = false, alreadyAnswered = false, fullWidth = false }) => {
-  const parts = parseAgentMessage(text);
+export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onSend, isRunning, questionOffset = 0, interviewLocked = false, alreadyAnswered = false, fullWidth = false, anchorRef }) => {
+  const visibleText = stripInterviewPhaseMarkers(text);
+  const parts = parseAgentMessage(visibleText);
   const choiceBlocks = parts.filter((p): p is ChoiceBlock => p.type === 'choices');
 
   const [selections, setSelections] = useState<Record<string, QuestionState>>(() => {
@@ -196,24 +229,60 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
 
   if (choiceBlocks.length === 0) {
     return (
-      <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant} ${fullWidth ? styles.assistantBubbleFullWidth : ''}`}>
+      <div
+        ref={anchorRef}
+        className={`${styles.messageBubble} ${styles.messageBubbleAssistant} ${fullWidth ? styles.assistantBubbleFullWidth : ''}`}
+      >
         <div className={styles.bubbleActions}>
           <ReadAloudButton
-            text={text}
+            text={visibleText}
             {...{ 'data-testid': 'interview-message-read-aloud' }}
           />
         </div>
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{visibleText}</ReactMarkdown>
       </div>
+    );
+  }
+
+  const multipleQuestions = choiceBlocks.length > 1;
+  const lastBlockId = choiceBlocks[choiceBlocks.length - 1].id;
+  let footer: React.ReactNode = null;
+  if (sent) {
+    footer = (
+      <span className={styles.choiceSentLabel}>
+        ✓ {multipleQuestions ? 'Answers sent' : 'Answer sent'}
+      </span>
+    );
+  } else if (!interviewLocked) {
+    footer = (
+      <>
+        <span className={styles.choiceFooterHint}>
+          {allAnswered
+            ? 'Ready to send'
+            : multipleQuestions ? 'Answer each question to continue' : 'Choose an option to continue'}
+        </span>
+        <button
+          className={styles.choiceSendBtn}
+          onClick={handleSubmit}
+          disabled={!allAnswered || isRunning}
+          type="button"
+          {...{ 'data-testid': 'interview-submit-answers' }}
+        >
+          {isRunning ? 'Agent is thinking…' : multipleQuestions ? 'Submit answers' : 'Submit answer'}
+        </button>
+      </>
     );
   }
 
   let questionCounter = questionOffset;
   return (
-    <div className={`${styles.assistantBubble} ${fullWidth ? styles.assistantBubbleFullWidth : ''}`}>
+    <div
+      ref={anchorRef}
+      className={`${styles.assistantBubble} ${fullWidth ? styles.assistantBubbleFullWidth : ''}`}
+    >
       <div className={styles.bubbleActions}>
         <ReadAloudButton
-          text={text}
+          text={visibleText}
           {...{ 'data-testid': 'interview-message-read-aloud' }}
         />
       </div>
@@ -238,21 +307,10 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
             locked={sent}
             onSelect={(letter) => handleSelect(part.id, letter)}
             onFreeform={(t) => handleFreeform(part.id, t)}
+            footer={part.id === lastBlockId ? footer : null}
           />
         );
       })}
-      {!sent && !interviewLocked && (
-        <button
-          className={styles.choiceSendBtn}
-          onClick={handleSubmit}
-          disabled={!allAnswered || isRunning}
-          type="button"
-          {...{ 'data-testid': 'interview-submit-answers' }}
-        >
-          {isRunning ? 'Agent is thinking…' : 'Submit answers ↑'}
-        </button>
-      )}
-      {sent && <div className={styles.choiceSentLabel}>✓ Answers sent</div>}
     </div>
   );
 };
@@ -649,6 +707,10 @@ const NewInterviewCompose: React.FC = () => {
       <div className={styles.composeInner}>
         <h1 className={styles.composeHeading}>What would you like to interview about?</h1>
 
+        {usesGuidedInterviewPhases(resolvedSkillPath ?? grillSkill?.path) && (
+          <InterviewPhaseBar progress={previewInterviewPhaseProgress()} layout="compose" />
+        )}
+
         <div className={styles.composePills}>
           {selectedProject && (
             <span className={styles.composePill}>
@@ -958,6 +1020,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     location.state as ExistingInterviewLocationState | null;
 
   const { data: interview, isLoading, isError } = useInterview(id);
+  const isPlaybookInterview = Boolean(interview?.playbookRunId);
+  const {
+    data: interviewBrief,
+    isLoading: isBriefLoading,
+  } = useInterviewBrief(id, isPlaybookInterview);
   const { data: skillConfig } = useProjectSkillConfig(interview?.project ?? null);
   const repoReadiness = useProjectRepositoryReadiness(
     skillConfig?.id ?? interview?.skillSettingsId,
@@ -978,6 +1045,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     Boolean(linkedContextLocationState?.openLinkedContext),
   );
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const activeQuestionRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -987,9 +1055,14 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
   const updateStatus = useUpdateInterviewStatus();
   const updateTitle = useUpdateInterviewTitle();
+  const updatePhaseAssignments = useUpdateInterviewPhaseAssignments();
+  const { data: phaseUsers = [] } = useActiveUsers(interview?.project);
   const startChat = useStartChat();
   const createPrd = useCreatePrd();
   const deleteInterview = useDeleteInterview();
+  const saveInterviewBrief = useSaveInterviewBrief();
+  const draftInterviewBrief = useDraftInterviewBrief();
+  const approveInterviewBrief = useApproveInterviewBrief();
 
   const { data: prdRepos = [] } = useSkillRepos(interview?.project ?? null);
   const prdRepoInfo = prdRepos.find((r) => r.name === (skillConfig?.skillRepo ?? interview?.repo));
@@ -1073,7 +1146,17 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   }, [chatThread?.id, interview?.id, availableModels]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (streamingText) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      return;
+    }
+    // Keep the open question at the top of the transcript so its options use
+    // the pane, instead of pinning the bottom of a tall card under the composer.
+    if (activeQuestionRef.current) {
+      activeQuestionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages.length, streamingText]);
 
   useEffect(() => {
@@ -1194,6 +1277,18 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     await updateStatus.mutateAsync({ id, status: newStatus });
   }, [id, updateStatus]);
 
+  const handleSaveBrief = useCallback(async (sections: InterviewBriefSections) => {
+    await saveInterviewBrief.mutateAsync({ interviewId: id, sections });
+  }, [id, saveInterviewBrief]);
+
+  const handleDraftBrief = useCallback(async () => {
+    await draftInterviewBrief.mutateAsync(id);
+  }, [draftInterviewBrief, id]);
+
+  const handleApproveBrief = useCallback(async () => {
+    await approveInterviewBrief.mutateAsync(id);
+  }, [approveInterviewBrief, id]);
+
   const startTitleEdit = useCallback(() => {
     if (!interview) return;
     setEditTitle(interview.title);
@@ -1265,7 +1360,21 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
       const msg = err instanceof Error ? err.message : 'Failed to generate PRD';
       setPrdGenError(msg);
     }
-  }, [id, interview, messages, toPrdSkill, skillConfig?.prdModel, globalDefaultModel?.value, startChat, createPrd, navigate]);
+  }, [
+    createPrd,
+    globalDefaultModel?.value,
+    id,
+    interview,
+    messages,
+    navigate,
+    resolvedPrdBranch,
+    resolvedPrdRepo,
+    skillConfig?.id,
+    skillConfig?.prdModel,
+    skillConfig?.skillProvider,
+    startChat,
+    toPrdSkill,
+  ]);
 
   const requestGeneratePrd = useCallback(() => {
     void handleGeneratePrd('inherit');
@@ -1287,9 +1396,23 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   );
   const canManage = can('interviews:manage');
   const isAuthor = interview.authorId === userId;
-  const isReadOnlyViewer = !isAuthor && !isAdmin;
+  const isInterviewParticipant = [
+    interview.prdOwnerId,
+    interview.designDocOwnerId,
+    interview.designPrototypeOwnerId,
+    interview.testCaseOwnerId,
+    interview.discoveryAssigneeId,
+    interview.deliveryAssigneeId,
+    interview.technicalAssigneeId,
+  ].includes(userId);
+  const isInterviewAdmin = isAdmin || can('admin:roles');
+  const isReadOnlyViewer = !isAuthor && !isInterviewParticipant && !isInterviewAdmin;
+  const canAssignPhases = isAuthor || isInterviewAdmin;
   const isStatusLocked = interview.status !== 'in_progress';
   const isChatLocked = isReadOnlyViewer || isStatusLocked;
+  const isGuidedInterview = usesGuidedInterviewPhases(
+    chatThread?.kickoff.skillPath,
+  );
 
   // Pre-compute cumulative question offset for each assistant message so Q-numbers
   // are globally sequential across the whole conversation rather than restarting at 1
@@ -1314,7 +1437,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
   return (
     <div className={styles.container}>
-      <div className={styles.header}>
+      <div
+        className={`${styles.header} ${
+          isGuidedInterview ? styles.headerCompact : ''
+        }`}
+      >
         <div className={styles.headerLeft}>
           <button
             className={styles.backBtn}
@@ -1325,7 +1452,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M10 3L5 8l5 5" />
             </svg>
-            Back
+            <span className={styles.backBtnLabel}>Back</span>
           </button>
 
           <div className={styles.titleBlock}>
@@ -1358,13 +1485,17 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               </span>
             </div>
             <div className={styles.titleMeta}>
-              <span>{interview.project}</span>
-              <span className={styles.titleMetaSep}>·</span>
               <span>{interview.repo}</span>
+              {interview.project !== interview.repo && (
+                <>
+                  <span className={styles.titleMetaSep}>/</span>
+                  <span>{interview.project}</span>
+                </>
+              )}
               {interview.model && (
                 <>
                   <span className={styles.titleMetaSep}>·</span>
-                  <span>Model: {interview.model}</span>
+                  <span>{interview.model} model</span>
                 </>
               )}
               {interview.effort && (
@@ -1378,7 +1509,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               endpoint={`/api/interviews/${interview.id}/usage`}
               visible={interview.status === 'complete'}
             />
-            {(interview.prdOwnerName || interview.designDocOwnerName || interview.designPrototypeOwnerName) && (
+            {(interview.prdOwnerName || interview.designDocOwnerName || interview.designPrototypeOwnerName || interview.testCaseOwnerName) && (
               <div className={styles.ownerChips} {...{ 'data-testid': 'interview-owner-chips' }}>
                 {interview.prdOwnerName && (
                   <span className={styles.ownerChip} {...{ 'data-testid': 'interview-owner-chip-prd' }}>
@@ -1393,6 +1524,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 {interview.designPrototypeOwnerName && (
                   <span className={styles.ownerChip} {...{ 'data-testid': 'interview-owner-chip-prototype' }}>
                     Design Prototype: {interview.designPrototypeOwnerName}
+                  </span>
+                )}
+                {interview.testCaseOwnerName && (
+                  <span className={styles.ownerChip} {...{ 'data-testid': 'interview-owner-chip-qa' }}>
+                    QA: {interview.testCaseOwnerName}
                   </span>
                 )}
               </div>
@@ -1437,7 +1573,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
           </button>
           {canManage && (
             <div className={styles.actions}>
-              {interview.status === 'in_progress' && (
+              {interview.status === 'in_progress' && !isPlaybookInterview && (
                 <button
                   className={styles.actionBtn}
                   onClick={() => void handleStatusChange('complete')}
@@ -1550,6 +1686,56 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         </div>
       )}
 
+      {isGuidedInterview
+        && interview.playbookInterviewMode !== 'multi_agent_assisted' && (
+        <InterviewPhaseBar
+          progress={deriveInterviewPhaseProgress([
+            ...messages.filter((message) => message.role === 'agent').map((message) => message.text),
+            streamingText,
+          ])}
+          assignment={{
+            users: phaseUsers,
+            selectedIds: {
+              discovery: interview.discoveryAssigneeId,
+              delivery: interview.deliveryAssigneeId,
+              technical: interview.technicalAssigneeId,
+            },
+            selectedNames: {
+              discovery: interview.discoveryAssigneeName,
+              delivery: interview.deliveryAssigneeName,
+              technical: interview.technicalAssigneeName,
+            },
+            canAssign: canAssignPhases,
+            pending: updatePhaseAssignments.isPending,
+            error: updatePhaseAssignments.error?.message,
+            onAssign: (phase, assignedUserId) => {
+              updatePhaseAssignments.mutate({
+                id: interview.id,
+                phaseAssignments: phase === 'discovery'
+                  ? { discoveryAssigneeId: assignedUserId || null }
+                  : phase === 'delivery'
+                    ? { deliveryAssigneeId: assignedUserId || null }
+                    : { technicalAssigneeId: assignedUserId || null },
+              });
+            },
+          }}
+        />
+      )}
+
+      {isPlaybookInterview && (
+        <InterviewBriefReview
+          brief={interviewBrief}
+          isLoading={isBriefLoading}
+          isDrafting={draftInterviewBrief.isPending}
+          isSaving={saveInterviewBrief.isPending}
+          isApproving={approveInterviewBrief.isPending}
+          error={draftInterviewBrief.error?.message ?? saveInterviewBrief.error?.message ?? approveInterviewBrief.error?.message}
+          onDraft={handleDraftBrief}
+          onSave={handleSaveBrief}
+          onApprove={handleApproveBrief}
+        />
+      )}
+
       <div className={styles.messages}>
         <div className={styles.messageList}>
           {hasPreparationError && (
@@ -1650,6 +1836,8 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 questionOffset={messageQOffsets.get(msg.id) ?? 0}
                 interviewLocked={isChatLocked}
                 alreadyAnswered={msgIndex < lastUserMsgIndex}
+                fullWidth={msgIndex > lastUserMsgIndex}
+                anchorRef={msgIndex === visibleMessages.length - 1 ? activeQuestionRef : undefined}
               />
             );
           })}
@@ -1683,9 +1871,9 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             </div>
           )}
 
-          {streamingText && (
+          {streamingText && stripInterviewPhaseMarkers(streamingText) && (
             <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{stripInterviewPhaseMarkers(streamingText)}</ReactMarkdown>
             </div>
           )}
 
@@ -1807,6 +1995,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
           />
           <AgentComposer
             className={styles.composerEmbed}
+            shellClassName={styles.interviewComposerShell}
             value={input}
             onChange={setInput}
             onSend={() => {

@@ -15,6 +15,7 @@ import type { AiRunV2Command } from '../../../shared/types/aiRunV2';
 import { createWorkerServiceBusClient } from './serviceBusClient';
 import { resolveWorkerEnvironment } from './entrypointSupport';
 import { createShutdownController, resolveShutdownDrainMs } from './shutdownDrain';
+import { createProgressWatchdog, exitWhenStalled } from '../../utils/progressWatchdog';
 import {
   buildProjectPrototypePrompt,
   buildPrototypePrompt,
@@ -299,6 +300,7 @@ export async function startVisualWorker(): Promise<void> {
   const drainMs = resolveShutdownDrainMs(process.env.AI_RUNS_V2_SHUTDOWN_DRAIN_MS);
   const shutdownController = createShutdownController(drainMs);
   const concurrency = createVisualConcurrencyController();
+  const watchdog = createProgressWatchdog();
 
   const worker = createV2Worker({
     bus: createWorkerServiceBusClient({
@@ -329,6 +331,7 @@ export async function startVisualWorker(): Promise<void> {
     resolveDeadlineMs: resolveVisualDeadlineMs,
     signal: shutdownController.receiveSignal,
     executionSignal: shutdownController.executionSignal,
+    onProgress: (nextWithinMs) => watchdog.beat('job-loop', nextWithinMs),
   });
 
   const shutdown = (signal: string): void => {
@@ -345,7 +348,12 @@ export async function startVisualWorker(): Promise<void> {
       env.noop ? 'noop' : env.namespace
     })`,
   );
-  await worker.runLoop();
+  const stopWatchdog = exitWhenStalled('ai-runs-visual-v2', watchdog);
+  try {
+    await worker.runLoop();
+  } finally {
+    stopWatchdog();
+  }
 }
 
 const isMain =

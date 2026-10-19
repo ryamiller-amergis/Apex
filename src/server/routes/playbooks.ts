@@ -23,21 +23,36 @@ import {
   PlaybookVersionPinReasonRequiredError,
   startRun,
 } from '../services/playbookRunService';
-import { PlaybookGuardViolationError } from '../services/playbookGuardService';
+import {
+  PlaybookGuardViolationError,
+  assertCanvasConnection,
+} from '../services/playbookGuardService';
+import { listPlaybookStepPaletteItems } from '../services/playbookStepPaletteService';
+import {
+  getVersionLayout,
+  replaceDraftVersionLayout,
+} from '../services/playbookVersionLayoutService';
 import {
   PlaybookDefinitionNotFoundError as PlaybookLifecycleDefinitionNotFoundError,
   PlaybookDraftConflictError,
   PlaybookDraftNotFoundError,
   PlaybookVersionImmutableError,
+  PlaybookInterviewProfilePublishError,
   PlaybookVersionNotFoundError,
   PlaybookVersionTransitionError,
   createDefinition,
   deprecateVersion,
   getDefinitionDetail,
+  getVersionGraph,
   listDefinitions,
   publishDraft,
   updateDraft,
 } from '../services/playbookDefinitionService';
+import { dryRunPlaybookDraft } from '../services/playbookDryRunService';
+import {
+  ensurePlaybookRunNotifyListener,
+  subscribePlaybookRunEvents,
+} from '../services/playbookRunNotifyService';
 import { PlaybookStepSchemaError } from '../services/playbookSteps/descriptorValidation';
 import {
   PlaybookStepTypeError,
@@ -75,17 +90,28 @@ import {
   isProductionGateStepRun,
 } from '../services/playbookGateService';
 import { getUserPermissions } from '../services/rbacService';
+import {
+  PlaybookTemplateAlreadyPublishedError,
+  PlaybookTemplateInvalidError,
+  PlaybookTemplateNotFoundError,
+  installPlaybookTemplate,
+} from '../services/playbookTemplateService';
 
 const router = express.Router();
 
 /** The display cap. A larger `limit` is clamped rather than refused; `total` reports the truth. */
 const MAX_RUN_PAGE = 50;
 const PRODUCTION_ADAPTERS_FLAG = 'playbooks-production-adapters';
+const AUTHORING_CANVAS_FLAG = 'playbooks-authoring-canvas';
 
 type RequestBody = Record<string, unknown>;
 
 function isNonBlankString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function isPlaybookGraph(value: unknown): value is {
@@ -144,10 +170,16 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
     return true;
   }
 
+  if (error instanceof PlaybookInterviewProfilePublishError || error instanceof PlaybookTemplateInvalidError) {
+    res.status(400).json({ error: error.message });
+    return true;
+  }
+
   if (
     error instanceof PlaybookLifecycleDefinitionNotFoundError ||
     error instanceof PlaybookDraftNotFoundError ||
-    error instanceof PlaybookVersionNotFoundError
+    error instanceof PlaybookVersionNotFoundError ||
+    error instanceof PlaybookTemplateNotFoundError
   ) {
     res.status(404).json({ error: error.message });
     return true;
@@ -157,6 +189,7 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
     error instanceof PlaybookDraftConflictError ||
     error instanceof PlaybookVersionImmutableError ||
     error instanceof PlaybookVersionTransitionError ||
+    error instanceof PlaybookTemplateAlreadyPublishedError ||
     isUniqueViolation(error)
   ) {
     res.status(409).json({
@@ -166,6 +199,20 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
   }
 
   return false;
+}
+
+/**
+ * Query, body, and `x-apex-project` must name one project. Permission checks use the first of
+ * those that is present, so a second, different value would run the handler in another project.
+ */
+function requestProjectsDisagree(req: Request): boolean {
+  const resolved = resolveRequestProject(req);
+  const named = [
+    req.query?.project,
+    (req.body as { project?: unknown } | undefined)?.project,
+    req.get?.('x-apex-project') ?? req.headers?.['x-apex-project'],
+  ];
+  return named.some((value) => typeof value === 'string' && value.length > 0 && value !== resolved);
 }
 
 /** Reject project-scoped requests that do not name a project. */
@@ -187,6 +234,13 @@ router.use(requirePlaybooksProject);
 
 async function productionAdaptersFlagEnabled(req: Request, project: string): Promise<boolean> {
   return isFeatureEnabled(PRODUCTION_ADAPTERS_FLAG, {
+    userId: getUserId(req),
+    project,
+  });
+}
+
+async function authoringCanvasFlagEnabled(req: Request, project: string): Promise<boolean> {
+  return isFeatureEnabled(AUTHORING_CANVAS_FLAG, {
     userId: getUserId(req),
     project,
   });
@@ -266,6 +320,40 @@ router.patch(
     }
     // @feature-flag:playbooks-production-adapters enabled-end
     // @feature-flag:playbooks-production-adapters end
+  },
+);
+
+router.post(
+  '/templates/:templateKey/install',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const enabled = await isFeatureEnabled('playbook-interview-step', {
+      userId: getUserId(req),
+      project,
+    });
+
+    // @feature-flag:playbook-interview-step start winner=enabled
+    if (!enabled) {
+      // @feature-flag:playbook-interview-step disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbook-interview-step disabled-end
+    }
+
+    // @feature-flag:playbook-interview-step enabled-start
+    try {
+      const installed = await installPlaybookTemplate({
+        project,
+        templateKey: req.params.templateKey,
+        createdByUserId: getUserId(req),
+      });
+      res.status(installed.created ? 201 : 200).json(installed.detail);
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+    // @feature-flag:playbook-interview-step enabled-end
+    // @feature-flag:playbook-interview-step end
   },
 );
 
@@ -382,13 +470,17 @@ router.post(
   '/definitions/:definitionId/publish',
   requirePermission('playbooks:author'),
   async (req: Request, res: Response): Promise<void> => {
-    const { project, expectedDraftUpdatedAt } = (req.body ?? {}) as RequestBody;
+    const { project, expectedDraftUpdatedAt, sampleRunInput } = (req.body ?? {}) as RequestBody;
     if (!isNonBlankString(project)) {
       res.status(400).json({ error: 'project is required' });
       return;
     }
     if (!isNonBlankString(expectedDraftUpdatedAt)) {
       res.status(400).json({ error: 'expectedDraftUpdatedAt is required' });
+      return;
+    }
+    if (sampleRunInput !== undefined && !isPlainRecord(sampleRunInput)) {
+      res.status(400).json({ error: 'sampleRunInput must be an object' });
       return;
     }
 
@@ -418,6 +510,7 @@ router.post(
         definitionId: req.params.definitionId,
         publishedByUserId,
         expectedDraftUpdatedAt,
+        ...(isPlainRecord(sampleRunInput) ? { sampleRunInput } : {}),
       });
       res.status(201).json(result);
     } catch (error) {
@@ -448,6 +541,241 @@ router.post(
       if (!sendDefinitionError(error, res)) throw error;
     }
   }
+);
+
+router.get(
+  '/step-types',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const enabled = await authoringCanvasFlagEnabled(req, project);
+
+    // @feature-flag:playbooks-authoring-canvas start winner=enabled
+    if (!enabled) {
+      // @feature-flag:playbooks-authoring-canvas disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbooks-authoring-canvas disabled-end
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-start
+    res.json({ items: listPlaybookStepPaletteItems() });
+    // @feature-flag:playbooks-authoring-canvas enabled-end
+    // @feature-flag:playbooks-authoring-canvas end
+  },
+);
+
+router.post(
+  '/graph/validate-connection',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const { project, graph } = (req.body ?? {}) as RequestBody;
+    if (!isNonBlankString(project)) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    if (!isPlaybookGraph(graph)) {
+      res.status(400).json({ error: 'graph must contain valid nodes and edges arrays' });
+      return;
+    }
+
+    const enabled = await authoringCanvasFlagEnabled(req, project);
+    // @feature-flag:playbooks-authoring-canvas start winner=enabled
+    if (!enabled) {
+      // @feature-flag:playbooks-authoring-canvas disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbooks-authoring-canvas disabled-end
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-start
+    try {
+      assertCanvasConnection(graph);
+      res.json({ ok: true });
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-end
+    // @feature-flag:playbooks-authoring-canvas end
+  },
+);
+
+router.get(
+  '/definitions/:definitionId/versions/:versionId/layout',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const enabled = await authoringCanvasFlagEnabled(req, project);
+
+    // @feature-flag:playbooks-authoring-canvas start winner=enabled
+    if (!enabled) {
+      // @feature-flag:playbooks-authoring-canvas disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbooks-authoring-canvas disabled-end
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-start
+    try {
+      res.json(
+        await getVersionLayout(project, req.params.definitionId, req.params.versionId)
+      );
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-end
+    // @feature-flag:playbooks-authoring-canvas end
+  },
+);
+
+router.get(
+  '/definitions/:definitionId/versions/:versionId/graph',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const enabled = await authoringCanvasFlagEnabled(req, project);
+    // @feature-flag:playbooks-authoring-canvas start winner=enabled
+    if (!enabled) {
+      // @feature-flag:playbooks-authoring-canvas disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbooks-authoring-canvas disabled-end
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-start
+    try {
+      res.json({
+        graph: await getVersionGraph(project, req.params.definitionId, req.params.versionId),
+      });
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-end
+    // @feature-flag:playbooks-authoring-canvas end
+  },
+);
+
+router.post(
+  '/definitions/:definitionId/dry-run',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    if (requestProjectsDisagree(req)) {
+      res.status(400).json({ error: 'project does not match the request project' });
+      return;
+    }
+    const project = resolveRequestProject(req)!;
+    const { stubs } = (req.body ?? {}) as RequestBody;
+    const stubMap =
+      stubs && typeof stubs === 'object' && !Array.isArray(stubs)
+        ? (stubs as Record<string, unknown>)
+        : {};
+    const enabled = await authoringCanvasFlagEnabled(req, project);
+    // @feature-flag:playbooks-authoring-canvas start winner=enabled
+    if (!enabled) {
+      // @feature-flag:playbooks-authoring-canvas disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbooks-authoring-canvas disabled-end
+    }
+    const userId = getUserId(req);
+    if (!userId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-start
+    try {
+      res.json(
+        await dryRunPlaybookDraft({
+          project,
+          definitionId: req.params.definitionId,
+          stubs: stubMap,
+          userId,
+        })
+      );
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-end
+    // @feature-flag:playbooks-authoring-canvas end
+  },
+);
+
+router.get(
+  '/runs/:runId/events',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const enabled = await authoringCanvasFlagEnabled(req, project);
+    // @feature-flag:playbooks-authoring-canvas start winner=enabled
+    if (!enabled) {
+      // @feature-flag:playbooks-authoring-canvas disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbooks-authoring-canvas disabled-end
+    }
+    const run = await getRun(project, req.params.runId);
+    if (!run) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-start
+    await ensurePlaybookRunNotifyListener();
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const unsubscribe = subscribePlaybookRunEvents(req.params.runId, () => {
+      res.write(`event: invalidated\ndata: ${JSON.stringify({ runId: req.params.runId })}\n\n`);
+    });
+
+    req.on('close', () => {
+      unsubscribe();
+    });
+    // @feature-flag:playbooks-authoring-canvas enabled-end
+    // @feature-flag:playbooks-authoring-canvas end
+  },
+);
+
+router.put(
+  '/definitions/:definitionId/versions/:versionId/layout',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    if (requestProjectsDisagree(req)) {
+      res.status(400).json({ error: 'project does not match the request project' });
+      return;
+    }
+    const project = resolveRequestProject(req)!;
+    const { positions } = (req.body ?? {}) as RequestBody;
+    if (
+      !positions ||
+      typeof positions !== 'object' ||
+      Array.isArray(positions)
+    ) {
+      res.status(400).json({ error: 'positions must be an object' });
+      return;
+    }
+
+    const enabled = await authoringCanvasFlagEnabled(req, project);
+    // @feature-flag:playbooks-authoring-canvas start winner=enabled
+    if (!enabled) {
+      // @feature-flag:playbooks-authoring-canvas disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbooks-authoring-canvas disabled-end
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-start
+    try {
+      res.json(
+        await replaceDraftVersionLayout({
+          project,
+          definitionId: req.params.definitionId,
+          versionId: req.params.versionId,
+          positions: positions as Record<string, { x: number; y: number }>,
+        })
+      );
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+    // @feature-flag:playbooks-authoring-canvas enabled-end
+    // @feature-flag:playbooks-authoring-canvas end
+  },
 );
 
 /**
@@ -562,7 +890,7 @@ router.post(
   '/runs',
   requirePermission('playbooks:run'),
   async (req: Request, res: Response): Promise<void> => {
-    const { project, definitionId, definitionVersionId, versionPinReason } = (req.body ??
+    const { project, definitionId, definitionVersionId, versionPinReason, runInput } = (req.body ??
       {}) as RequestBody;
 
     if (typeof project !== 'string' || !project.trim()) {
@@ -589,6 +917,10 @@ router.post(
       res.status(400).json({ error: 'versionPinReason must be a non-blank string' });
       return;
     }
+    if (runInput !== undefined && !isPlainRecord(runInput)) {
+      res.status(400).json({ error: 'runInput must be an object' });
+      return;
+    }
 
     const initiatorUserId = getUserId(req);
     if (!initiatorUserId) {
@@ -604,6 +936,7 @@ router.post(
         ...(definitionVersionId !== undefined
           ? { definitionVersionId, versionPinReason: versionPinReason as string }
           : {}),
+        ...(isPlainRecord(runInput) ? { runInput } : {}),
         initiatorUserId,
         ...(spendAdmissionEnabled ? { spendAdmissionEnabled: true } : {}),
       });

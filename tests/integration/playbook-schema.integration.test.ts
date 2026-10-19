@@ -681,6 +681,20 @@ describe('VT-02 — the playbook migrations roll back cleanly', () => {
     const lastPlaybook = files.findLastIndex((file) =>
       file.startsWith('20260918') || file.startsWith('20260919') || file.startsWith('20260922')
     );
+    // Interview migrations landed after the Playbook window and reference those tables.
+    // Reverse them before the windowed rollback, or playbook_step_runs cannot be dropped.
+    for (const file of [
+      '20261007143000_playbook-interview-template.sql',
+      '20261007124500_playbook-interview-brief.sql',
+      '20261005153100_seed-playbooks-authoring-canvas-flag.sql',
+      '20261005153000_playbook-version-layouts.sql',
+    ]) {
+      const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+      const marker = '-- Down Migration';
+      const start = sql.indexOf(marker);
+      if (start < 0) throw new Error(`No down section in ${file}`);
+      await rollbackClient.query(sql.slice(start + marker.length).trim());
+    }
     // Later files on main disable their down path. Un-record them so this suite can reverse the
     // Playbook files without asking node-pg-migrate to run a disabled down.
     for (const file of files.slice(lastPlaybook + 1)) {

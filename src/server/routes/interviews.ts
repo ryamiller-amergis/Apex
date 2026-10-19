@@ -27,6 +27,7 @@ import {
   deleteInterview,
   getInterview,
   listInterviews,
+  updateInterviewPhaseAssignments,
   updateInterviewStatus,
   updateInterviewTitle,
 } from '../services/interviewService';
@@ -100,7 +101,15 @@ import {
   markValidationReady,
   overrideDesignDocValidation,
 } from '../services/designDocService';
-import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, getThreadAsync, updateThreadKickoffContext, sendMessage } from '../services/chatAgentService';
+import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, getThreadAsync, updateThreadKickoffContext, updateThreadKickoffTranscript, sendMessage } from '../services/chatAgentService';
+import {
+  approveInterviewBrief,
+  formatInterviewBriefForPrd,
+  getApprovedInterviewBriefForPrd,
+  getInterviewBrief,
+  saveInterviewBrief,
+} from '../services/interviewBriefService';
+import { draftInterviewBriefSections } from '../services/interviewOrchestratorService';
 import { propagatePipelineGrounding } from '../services/runGroundingService';
 import { getApproverPoolForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
@@ -3244,9 +3253,20 @@ router.get('/:id', requirePermission('interviews:view'), async (req, res, next) 
 router.patch('/:id', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const { status, title } = req.body as { status?: string; title?: string };
+    const { status, title, phaseAssignments } = req.body as {
+      status?: string;
+      title?: string;
+      phaseAssignments?: {
+        discoveryAssigneeId?: string | null;
+        deliveryAssigneeId?: string | null;
+        technicalAssigneeId?: string | null;
+      };
+    };
     if (status) await updateInterviewStatus(req.params.id, userId, status as InterviewStatus);
     if (title) await updateInterviewTitle(req.params.id, userId, title);
+    if (phaseAssignments) {
+      await updateInterviewPhaseAssignments(req.params.id, userId, phaseAssignments);
+    }
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -3258,6 +3278,54 @@ router.delete('/:id', requirePermission('interviews:manage'), async (req, res, n
     const userId = getUserId(req);
     await deleteInterview(req.params.id, userId);
     res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/:id/brief', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const brief = await getInterviewBrief(req.params.id);
+    res.json(brief);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/:id/brief', requirePermission('interviews:manage'), requireGroupMembership('BA', 'Manager', 'Product-Owner'), async (req, res, next) => {
+  try {
+    const brief = await saveInterviewBrief({
+      interviewId: req.params.id,
+      sections: req.body?.sections,
+      savedBy: getUserId(req),
+    });
+    res.json(brief);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/brief/draft', requirePermission('interviews:manage'), requireGroupMembership('BA', 'Manager', 'Product-Owner'), async (req, res, next) => {
+  try {
+    const sections = await draftInterviewBriefSections({ interviewId: req.params.id });
+    const brief = await saveInterviewBrief({
+      interviewId: req.params.id,
+      sections,
+      savedBy: getUserId(req),
+    });
+    res.json(brief);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/brief/approve', requirePermission('interviews:manage'), requireGroupMembership('BA', 'Manager', 'Product-Owner'), async (req, res, next) => {
+  try {
+    const result = await approveInterviewBrief({
+      interviewId: req.params.id,
+      approvedBy: getUserId(req),
+    });
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -3283,6 +3351,22 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
     if (!interview) {
       res.status(404).json({ error: 'Interview not found' });
       return;
+    }
+
+    const approvedBrief = await getApprovedInterviewBriefForPrd(req.params.interviewId);
+    if (interview.playbookRunId && !approvedBrief) {
+      res.status(409).json({ error: 'Approve the interview brief before generating a PRD.' });
+      return;
+    }
+    if (approvedBrief) {
+      const updated = await updateThreadKickoffTranscript(
+        chatThreadId,
+        formatInterviewBriefForPrd(approvedBrief),
+      );
+      if (!updated) {
+        res.status(409).json({ error: 'The PRD thread could not be prepared from the approved brief.' });
+        return;
+      }
     }
 
     const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({

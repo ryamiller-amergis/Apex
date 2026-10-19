@@ -11,8 +11,9 @@
  * cache, so nothing here may depend on it being present.
  */
 import type { ZodType } from 'zod';
-import type { ArtifactRef } from './loadTest';
 import type { ApprovalMode, ReviewerDocumentType } from './approvals';
+import type { EffortLevel } from './effort';
+import type { ArtifactRef } from './loadTest';
 
 // ── Per-project spend admission ──────────────────────────────────────────────
 
@@ -120,8 +121,8 @@ export type PlaybookStepRunStatus = (typeof PLAYBOOK_STEP_RUN_STATUSES)[number];
  */
 export const PLAYBOOK_STEP_RUN_OPEN_STATUSES = ['pending', 'running', 'suspended'] as const;
 
-/** Why a run is parked. Both kinds resume through the same path, per BR-008. */
-export type PlaybookSuspendReason = 'approval_gate' | 'agent_run';
+/** Why a run is parked. Every kind resumes through the same path, per BR-008. */
+export type PlaybookSuspendReason = 'approval_gate' | 'agent_run' | 'interview';
 
 // ── Definition graph ──────────────────────────────────────────────────────────
 
@@ -149,6 +150,47 @@ export interface PlaybookGraph {
   edges: PlaybookGraphEdge[];
 }
 
+/** Node id → canvas coordinates for one definition version. Not part of `PlaybookGraph`. */
+export type PlaybookLayoutPositions = Record<string, { x: number; y: number }>;
+
+export interface PlaybookVersionLayout {
+  versionId: string;
+  positions: PlaybookLayoutPositions;
+  updatedAt: string;
+}
+
+/** Registry metadata for the authoring canvas step palette. */
+export interface PlaybookStepTypePaletteItem {
+  stepType: string;
+  label: string;
+  sideEffect: PlaybookStepSideEffect;
+  requiredPermissions: readonly string[];
+  inputJsonSchema: Record<string, unknown>;
+  outputJsonSchema: Record<string, unknown>;
+  canSuspend: boolean;
+}
+
+export type PlaybookDryRunIssueKind = 'graph' | 'stub' | 'branch';
+
+export interface PlaybookDryRunIssue {
+  nodeId: string;
+  kind: PlaybookDryRunIssueKind;
+  message: string;
+}
+
+export interface PlaybookDryRunResult {
+  verdict: 'passed' | 'failed';
+  limit: string;
+  manifest: string[];
+  authorFootnote: { held: string[]; missing: string[] };
+  issues: PlaybookDryRunIssue[];
+}
+
+export const PLAYBOOK_DRY_RUN_LIMIT =
+  'This check covers structure, classification, authority, and branch reachability. ' +
+  'It cannot tell you whether an agent step will produce usable output, whether an ingested ' +
+  'artifact will parse, or whether an approver pool will still have members when a run reaches it.';
+
 // ── Row shapes (mirror the four Apex-owned tables) ────────────────────────────
 
 /** A definition has identity that outlives any single version, which is why it is its own row. */
@@ -157,6 +199,13 @@ export interface PlaybookDefinition {
   project: string;
   name: string;
   description: string | null;
+  /**
+   * Shipped template that installed this definition. Null for definitions
+   * created in the project rather than copied from a template.
+   */
+  templateKey: string | null;
+  /** Monotonic shipped template version recorded at install. Null when templateKey is null. */
+  templateVersion: number | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -232,6 +281,7 @@ export interface PlaybookStepRun {
 export interface PlaybookRunSummary {
   runId: string;
   project: string;
+  definitionId: string;
   definitionName: string;
   definitionVersionId: string;
   versionNumber: number;
@@ -255,6 +305,8 @@ export interface PlaybookSuspensionDetail {
   stepId: string;
   reason: PlaybookSuspendReason;
   deadline: string | null;
+  /** Resource that completes the wait. Phase 1 uses this for the linked interview id. */
+  actionId?: string | null;
 }
 
 /**
@@ -412,6 +464,40 @@ export interface NotifyStepConfig {
   link?: string;
   /** Defaults to the run initiator, who is the only identity Phase 0 can resolve (BR-003). */
   recipientUserId?: string;
+}
+
+export type InterviewStepMode = 'human_led' | 'multi_agent_assisted';
+
+export interface InterviewStepConfig {
+  /** human_led opens the current interview workspace. multi_agent_assisted uses the Lead and Requirements agents. */
+  mode: InterviewStepMode;
+  /**
+   * Stable slug of an interview profile in the target project.
+   * A template stores a slug, never a settings row id or a Skill path.
+   * May be a `${input.interviewProfileKey}` binding.
+   */
+  profileKey: string;
+  deadlineMs?: number;
+}
+
+/** Profile fields copied onto the interview when the step starts. Later settings edits do not change it. */
+export interface InterviewProfileSnapshot {
+  mode: InterviewStepMode;
+  key: string;
+  skillPath: string;
+  model: string | null;
+  effort: EffortLevel | null;
+  wantsDesignPrototype: boolean;
+  wantsTestCases: boolean;
+}
+
+export interface InterviewStepOutput {
+  interviewId: string;
+  briefId: string;
+  briefVersion: number;
+  approvedBy: string;
+  approvedAt: string;
+  unresolvedCount: number;
 }
 
 export interface IngestArtifactStepConfig {

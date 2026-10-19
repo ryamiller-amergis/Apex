@@ -46,11 +46,21 @@ function makeTransactionDb(
 ) {
   return {
     select: (...args: unknown[]) => selectMock(...args),
-    insert: (...args: unknown[]) => {
-      insertMock(...args);
+    query: {
+      playbookVersionLayouts: {
+        findFirst: jest.fn().mockResolvedValue(undefined),
+      },
+    },
+    insert: (table: unknown) => {
+      insertMock(table);
       return {
         values: (values: unknown) => ({
           returning: async () => {
+            // Publish copies the canvas layout after the version insert. That write is not one of
+            // the queued version rows these tests are counting.
+            if ((table as { versionId?: string } | undefined)?.versionId === 'layouts.versionId') {
+              return [{ versionId: 'layout-copy', positions: {}, updatedAt: NEXT_REVISION }];
+            }
             stagedWrites.push({ kind: 'insert' as const, values });
             return nextResult(insertResults);
           },
@@ -107,6 +117,9 @@ jest.mock('../db/schema', () => ({
     versionNumber: 'versions.versionNumber',
     status: 'versions.status',
     updatedAt: 'versions.updatedAt',
+  },
+  playbookVersionLayouts: {
+    versionId: 'layouts.versionId',
   },
 }));
 

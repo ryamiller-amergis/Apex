@@ -12,18 +12,20 @@
  * caller from the frozen bootstrap. This module does not resolve model, effort,
  * deadline, skill, or MCP policy locally.
  */
-import { Agent } from '@cursor/sdk';
+import { Agent, type ToolName } from '@cursor/sdk';
 import type {
   LocalAgentOptions,
   McpServerConfig,
 } from '@cursor/sdk/dist/cjs/options.js';
 import type { EffortLevel } from '../../../shared/types/effort';
+import type { InterviewRepositoryPhase } from '../../../shared/types/interview';
 import type { RepoReader } from '../../../shared/types/repoReader';
 import type {
   WorkerCursorExecution,
   WorkerCursorExecutionRun,
 } from '../aiRunsWorker/cursorExecution';
 import { createNativeReadTools } from '../nativeReadToolAdapter';
+import { guidedInterviewRepositoryTools } from '../interviewGroundingPolicy';
 import { buildCursorModelSelection } from '../agentEffortResolver';
 
 /**
@@ -37,18 +39,25 @@ function isAgentNotFound(error: unknown): boolean {
   const { code, name } = error as { code?: unknown; name?: unknown };
   return code === 'agent_not_found' || name === 'AgentNotFoundError';
 }
-
 /** Live Cursor Agent handle that can serve multiple serialized `send` calls. */
 export interface InteractiveCursorAgentHandle {
   agentId: string | null;
   model: string;
   workspaceRef: string;
+  /** Guided interview phase the agent's repository tools were built for. */
+  interviewPhase?: InterviewRepositoryPhase | null;
   send(
     prompt: string,
-    options?: { onDelta?(update: unknown): Promise<void> | void },
+    options?: InteractiveSendOptions,
   ): Promise<WorkerCursorExecutionRun>;
   dispose(): Promise<void>;
 }
+
+export type InteractiveSendOptions = {
+  onDelta?(update: unknown): Promise<void> | void;
+  /** Tool proxy URLs carry a per-attempt token, so a reused agent needs this turn's set. */
+  mcpServers?: Readonly<Record<string, McpServerConfig>>;
+};
 
 /**
  * Acquisition outcome. The session actor owns `warm` for a compatible cache
@@ -63,6 +72,8 @@ export type InteractiveCursorAcquireInput = Readonly<{
   model: string;
   effort: EffortLevel | null;
   workspaceRef: string;
+  /** Null outside guided interviews; selects the phase's repository tools. */
+  interviewPhase: InterviewRepositoryPhase | null;
 }>;
 
 export type InteractiveCursorAcquireOptions = Readonly<{
@@ -85,15 +96,18 @@ function wrapHandle(
     agentId,
     model: input.model,
     workspaceRef: input.workspaceRef,
+    interviewPhase: input.interviewPhase,
     async send(
       prompt: string,
-      options?: { onDelta?(update: unknown): Promise<void> | void },
+      options?: InteractiveSendOptions,
     ): Promise<WorkerCursorExecutionRun> {
       if (disposed) throw new Error('Interactive Cursor agent is disposed');
       const onDelta = options?.onDelta;
-      const run = onDelta
+      const mcpServers = options?.mcpServers;
+      const run = onDelta || mcpServers
         ? await agent.send(prompt, {
-            onDelta: ({ update }) => onDelta(update),
+            ...(onDelta ? { onDelta: ({ update }) => onDelta(update) } : {}),
+            ...(mcpServers ? { mcpServers: { ...mcpServers } } : {}),
           })
         : await agent.send(prompt);
       return run as unknown as WorkerCursorExecutionRun;
@@ -120,13 +134,22 @@ export async function acquireInteractiveCursorAgent(
   const local = {
     cwd: input.workspaceRef,
     settingSources: [],
-    customTools: createNativeReadTools(checkout),
+    ...(input.interviewPhase
+      ? {
+          customTools: guidedInterviewRepositoryTools(input.interviewPhase, checkout),
+          sandboxOptions: { enabled: false },
+        }
+      : { customTools: createNativeReadTools(checkout) }),
   } satisfies LocalAgentOptions;
+  // A run waits for its background subagents, which would hold a chat turn
+  // open after the reply. The SDK does not persist this, so resume passes it too.
+  const disallowedTools: ToolName[] = ['task'];
   const agentOptions = {
     apiKey,
     model: buildCursorModelSelection(input.model, input.effort ?? undefined),
     local,
     mcpServers: { ...options.mcpServers },
+    disallowedTools,
   };
 
   if (resumeAgentId) {

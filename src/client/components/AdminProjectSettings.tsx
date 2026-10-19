@@ -13,6 +13,7 @@ import type { ProjectSkillConfig, UpsertProjectSkillConfigRequest, QuickSkillPil
 import type { ApprovalMode, ModuleApprovalModes, ReviewerDocumentType } from '../../shared/types/approvals';
 import { EFFORT_LEVELS, type EffortLevel } from '../../shared/types/effort';
 import { effortLabel } from '../../shared/utils/effort';
+import { sortByLabel } from '../utils/sortByLabel';
 import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
 import { useUsers } from '../hooks/useRbac';
 import { useGroupsWithMembers } from '../hooks/useGroups';
@@ -47,9 +48,10 @@ const BranchCombobox: React.FC<BranchComboboxProps> = ({ value, branches, isLoad
   const listRef = useRef<HTMLDivElement>(null);
 
   const filtered = useMemo(() => {
-    if (!query.trim()) return branches;
+    const ordered = sortByLabel(branches, (branch) => branch);
+    if (!query.trim()) return ordered;
     const q = query.toLowerCase();
-    return branches.filter((b) => b.toLowerCase().includes(q));
+    return ordered.filter((branch) => branch.toLowerCase().includes(q));
   }, [query, branches]);
 
   useEffect(() => {
@@ -576,8 +578,10 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
         type="button"
         className={styles.btnAction}
         onClick={() => onChange([...options, {
+          key: '',
           path: '',
           friendlyName: '',
+          enabled: true,
           wantsDesignPrototype: true,
           wantsTestCases: true,
         }])}
@@ -624,6 +628,25 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
             Remove
           </button>
         </div>
+        <div className={styles.field}>
+          <label className={styles.label} htmlFor={`iso-key-${idx}`}>Playbook key</label>
+          <input
+            id={`iso-key-${idx}`}
+            className={styles.input}
+            placeholder="e.g. ba-discovery"
+            value={opt.key ?? ''}
+            onChange={(e) => {
+              const next = [...options];
+              next[idx] = { ...next[idx], key: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-') };
+              onChange(next);
+            }}
+            disabled={disabled}
+            {...{ 'data-testid': `ps-interview-option-key-${idx}` }}
+          />
+          <span className={styles.skillDescription}>
+            Lowercase letters, numbers, and dashes. Playbooks use this key to pick this interview option.
+          </span>
+        </div>
         <div className={styles.interviewOptionRow}>
           <select
             className={styles.select}
@@ -653,6 +676,21 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
            {...{ 'data-testid': `ps-interview-option-effort-${idx}` }} />
         </div>
         <div className={styles.interviewOptionFlags}>
+          <label className={styles.interviewOptionFlag} htmlFor={`iso-enabled-${idx}`}>
+            <input
+              id={`iso-enabled-${idx}`}
+              type="checkbox"
+              checked={opt.enabled !== false}
+              onChange={(e) => {
+                const next = [...options];
+                next[idx] = { ...next[idx], enabled: e.target.checked };
+                onChange(next);
+              }}
+              disabled={disabled}
+              {...{ 'data-testid': `ps-interview-option-enabled-${idx}` }}
+            />
+            Available to Playbooks
+          </label>
           <label className={styles.interviewOptionFlag} htmlFor={`iso-proto-${idx}`}>
             <input
               id={`iso-proto-${idx}`}
@@ -2209,7 +2247,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
 
         <PlaybookSpendPolicyCard
           project={selectedProject}
-          data-testid="playbook-spend-policy-card-entry"
+          {...{ 'data-testid': 'playbook-spend-policy-card-entry' }}
         />
 
         {/* ── Edit form (accordion layout) ────────────────────────────── */}

@@ -22,6 +22,7 @@ import {
   HttpMethod,
   type DaprInvokerCallbackContent,
 } from '@dapr/dapr';
+import express from 'express';
 import { promises as fs } from 'fs';
 import path from 'path';
 // Side-effect: initialize Application Insights when the connection string is set.
@@ -33,7 +34,10 @@ import {
 } from '../../../shared/types/aiRunIngest';
 import type { RepoReader, RepositoryIdentity } from '../../../shared/types/repoReader';
 import { getAiRunnerCallbackToken } from '../aiRunsCallbackToken';
-import { createAiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
+import {
+  createAiRunsCallbackClient,
+  retriedCallbackBudgetMs,
+} from '../aiRunsWorker/callbackClient';
 import {
   artifactContainerName,
   resolveArtifactContainerClient,
@@ -59,6 +63,13 @@ import { collectInteractiveArtifacts } from './interactiveArtifactCollector';
 import { materializeInteractiveWorkspace } from './interactiveWorkspaceMaterializer';
 import { createPerThreadTurnQueue } from './perThreadTurnQueue';
 import {
+  createActorInvocationStallTracker,
+  createDaprSidecarClient,
+  createSidecarHealthMonitor,
+  interactiveHealthRoute,
+  type ActorInvocationStallTracker,
+} from './sidecarHealth';
+import {
   createInteractiveShutdownDrain,
   interactiveInFlightInvocations,
 } from './shutdownDrain';
@@ -67,6 +78,32 @@ import {
   setInteractiveActorRuntime,
   type IInteractiveSessionActor,
 } from './interactiveSessionActorClass';
+
+const INTERACTIVE_CALLBACK_REQUEST_TIMEOUT_MS = 12_000;
+
+/**
+ * The actor replies once the dispatch fence is verified. This must outlast the
+ * bootstrap read with all its retries: the timed-out call is not cancelled, so
+ * a shorter limit fails a turn the actor is still about to start.
+ */
+export const INTERACTIVE_ACTOR_INVOKE_TIMEOUT_MS =
+  retriedCallbackBudgetMs(INTERACTIVE_CALLBACK_REQUEST_TIMEOUT_MS) + 10_000;
+
+export class ActorInvokeTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Interactive actor invocation timed out after ${timeoutMs}ms`);
+    this.name = 'ActorInvokeTimeoutError';
+  }
+}
+
+function withinActorInvokeTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new ActorInvokeTimeoutError(timeoutMs)), timeoutMs);
+    timer.unref?.();
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+}
 
 /** Warm checkout carrying the reader the execution factory needs. */
 type ReaderCheckout = WarmThreadCheckout & { reader: RepoReader };
@@ -182,16 +219,6 @@ export function parseInteractiveDispatchRequest(
   };
 }
 
-export async function registerInteractiveHealthHandler(
-  invoker: InteractiveDispatchInvoker,
-): Promise<void> {
-  await invoker.listen(
-    'health',
-    async () => ({ status: 'ok' }),
-    { method: HttpMethod.GET },
-  );
-}
-
 export interface InteractiveDispatchDrain {
   isDraining(): boolean;
   track<T>(work: () => Promise<T>): Promise<T>;
@@ -209,7 +236,9 @@ export async function registerInteractiveDispatchHandler(
     payload: InteractiveDispatchRequest,
     error: unknown
   ) => Promise<void>,
-  drain: InteractiveDispatchDrain = NO_DISPATCH_DRAIN
+  drain: InteractiveDispatchDrain = NO_DISPATCH_DRAIN,
+  actorInvokeTimeoutMs: number = INTERACTIVE_ACTOR_INVOKE_TIMEOUT_MS,
+  invocationStall?: Pick<ActorInvocationStallTracker, 'recordCompleted' | 'recordTimedOut'>
 ): Promise<void> {
   await invoker.listen(
     'dispatch',
@@ -250,12 +279,16 @@ export async function registerInteractiveDispatchHandler(
       const actor = resolveActor(payload.threadId);
       void drain
         .track(() =>
-          actor.handleTurn({
-            runId: payload.runId,
-            dispatchMessageId: payload.dispatchMessageId,
-          })
+          withinActorInvokeTimeout(
+            actor.handleTurn({
+              runId: payload.runId,
+              dispatchMessageId: payload.dispatchMessageId,
+            }),
+            actorInvokeTimeoutMs
+          )
         )
         .then((outcome) => {
+          invocationStall?.recordCompleted();
           console.log(
             JSON.stringify({
               event: 'InteractiveDispatchCompleted',
@@ -267,6 +300,7 @@ export async function registerInteractiveDispatchHandler(
           );
         })
         .catch(async (error) => {
+          const timedOut = error instanceof ActorInvokeTimeoutError;
           console.error(
             JSON.stringify({
               event: 'InteractiveDispatchFailed',
@@ -276,9 +310,15 @@ export async function registerInteractiveDispatchHandler(
               ...describeError(error),
             })
           );
-          if (!recoverActorFailure) return;
+          if (!recoverActorFailure) {
+            if (timedOut) invocationStall?.recordTimedOut();
+            return;
+          }
           try {
             await recoverActorFailure(payload, error);
+            // Recovery reached App Service, so the actor call itself is what
+            // stalled; an App Service outage must not restart healthy replicas.
+            if (timedOut) invocationStall?.recordTimedOut();
             console.log(
               JSON.stringify({
                 event: 'InteractiveDispatchFailureRecovered',
@@ -318,9 +358,13 @@ export async function main(): Promise<void> {
     process.env.PORT?.trim() ||
     '8080';
 
+  // Bootstrap is fetched before the execution specification exists, so this
+  // limit cannot come from it. Four attempts plus backoff stay under the
+  // reaper's 60s start timeout.
   const callback = createAiRunsCallbackClient({
     callbackBaseUrl,
     getToken: getAiRunnerCallbackToken,
+    requestTimeoutMs: INTERACTIVE_CALLBACK_REQUEST_TIMEOUT_MS,
   });
 
   const repositoryCheckout = createGroundedRepositoryCheckout();
@@ -347,6 +391,7 @@ export async function main(): Promise<void> {
           model: snapshot.model,
           effort: snapshot.effort ?? null,
           workspaceRef: snapshot.workspaceRef,
+          interviewPhase: null,
         },
         (checkout as ReaderCheckout).reader,
         {
@@ -360,6 +405,7 @@ export async function main(): Promise<void> {
           model: bootstrap.specification.model,
           effort: bootstrap.specification.effort,
           workspaceRef: checkout.workspacePath,
+          interviewPhase: bootstrap.specification.guidedInterview?.phase ?? null,
         },
         (checkout as ReaderCheckout).reader,
         {
@@ -490,18 +536,29 @@ export async function main(): Promise<void> {
   process.on('SIGTERM', () => shutdownDrain.shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdownDrain.shutdown('SIGINT'));
 
-  const server = new DaprServer({
-    serverPort,
-    communicationProtocol: CommunicationProtocolEnum.HTTP,
-  });
-
   const actorClass = interactiveSessionActorClassFor(
     process.env.AI_RUNS_INTERACTIVE_DAPR_APP_ID,
   );
+  const sidecar = createDaprSidecarClient(process.env.DAPR_HTTP_PORT?.trim() || '3500');
+  const invocationStall = createActorInvocationStallTracker();
+  const sidecarHealth = createSidecarHealthMonitor({
+    actorType: actorClass.name,
+    fetchMetadata: sidecar.fetchMetadata,
+    invocationStall: () => invocationStall.stalledDetail(),
+    requestSidecarShutdown: sidecar.requestSidecarShutdown,
+    now: Date.now,
+  });
+  const httpApp = express();
+  httpApp.get('/health', interactiveHealthRoute(() => sidecarHealth.check()));
+
+  const server = new DaprServer({
+    serverPort,
+    communicationProtocol: CommunicationProtocolEnum.HTTP,
+    serverHttp: httpApp,
+  });
+
   await server.actor.init();
   await server.actor.registerActor(actorClass);
-
-  await registerInteractiveHealthHandler(server.invoker);
 
   const proxyBuilder = new ActorProxyBuilder<IInteractiveSessionActor>(
     actorClass,
@@ -547,7 +604,9 @@ export async function main(): Promise<void> {
     {
       isDraining: () => shutdownDrain.isDraining(),
       track: (work) => interactiveInFlightInvocations.track(work),
-    }
+    },
+    INTERACTIVE_ACTOR_INVOKE_TIMEOUT_MS,
+    invocationStall
   );
 
   await server.start();

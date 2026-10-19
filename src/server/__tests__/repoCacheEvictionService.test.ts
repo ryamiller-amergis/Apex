@@ -34,6 +34,7 @@ import {
   createRepoCacheEvictionService,
 } from '../services/repoCacheEvictionService';
 import {
+  COLD_CACHE_TIMEOUT_MS,
   getRepoCacheDir,
   getRepoCacheLeaseKey,
   type RepoCacheIdentity,
@@ -76,6 +77,7 @@ function service(overrides: {
   maxBytes: number;
   activeGroundings?: RunGrounding[];
   withLease?: typeof grantLease;
+  freeBytes?: number;
 }) {
   return createRepoCacheEvictionService({
     dataRoot: DATA_ROOT,
@@ -84,7 +86,20 @@ function service(overrides: {
     listActiveGroundings: async () => overrides.activeGroundings ?? [],
     withLease: (overrides.withLease ?? grantLease) as never,
     telemetry: jest.fn(),
+    readFreeBytes: async () => overrides.freeBytes ?? 100 * 1024 * MB,
   });
+}
+
+function makeAbandonedClone(ageMs: number): string {
+  const dir = path.join(
+    CACHE_ROOT,
+    'ado-maxview-maxview-main-0123456789ab.git.tmp-3f2b8c1e-9a4d-4c7e-8b21-5d6f7a8b9c0d',
+  );
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'partial.pack'), Buffer.alloc(MB));
+  const stamp = new Date(NOW - ageMs);
+  fs.utimesSync(dir, stamp, stamp);
+  return dir;
 }
 
 const ADO_MAXVIEW: RepoCacheIdentity = {
@@ -112,6 +127,35 @@ describe('repoCacheEvictionService', () => {
 
   afterAll(() => {
     fs.rmSync(DATA_ROOT, { recursive: true, force: true });
+  });
+
+  it('removes a clone abandoned past the cold-clone timeout', async () => {
+    const dir = makeAbandonedClone(COLD_CACHE_TIMEOUT_MS + 60_000);
+
+    const result = await service({ maxBytes: 100 * MB }).evictOverBudget();
+
+    expect(fs.existsSync(dir)).toBe(false);
+    expect(result).toMatchObject({ abandonedClonesRemoved: 1, bytesBefore: 0 });
+  });
+
+  it('keeps a clone that may still be running', async () => {
+    const dir = makeAbandonedClone(COLD_CACHE_TIMEOUT_MS - 60_000);
+
+    const result = await service({ maxBytes: 100 * MB }).evictOverBudget();
+
+    expect(fs.existsSync(dir)).toBe(true);
+    expect(result.abandonedClonesRemoved).toBe(0);
+  });
+
+  it('reports free space and logs when it is below what a clone needs', async () => {
+    const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const result = await service({ maxBytes: 100 * MB, freeBytes: 2 * 1024 * MB })
+      .evictOverBudget();
+
+    expect(result.freeBytes).toBe(2 * 1024 * MB);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('[repo-cache] disk-low'));
+    error.mockRestore();
   });
 
   it('returns an empty result when the cache directory does not exist', async () => {

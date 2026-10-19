@@ -14,10 +14,15 @@
 import { AiRunCallbackError, AiRunFenceConflictError } from '../services/aiRunsWorker/callbackClient';
 import type { WorkerCursorExecutionRun } from '../services/aiRunsWorker/cursorExecution';
 import type { CursorStreamEvent } from '../services/cursorExecutionCore';
-import type { InteractiveCursorAgentHandle } from '../services/interactiveActorHost/interactiveCursorExecution';
+import type {
+  InteractiveCursorAgentHandle,
+  InteractiveSendOptions,
+} from '../services/interactiveActorHost/interactiveCursorExecution';
 import {
   createInteractiveSessionActor,
+  INTERACTIVE_LOADING_CODE_DETAIL,
   INTERACTIVE_STARTING_DETAIL,
+  INTERACTIVE_THINKING_DETAIL,
   type InteractiveActorDependencies,
   type InteractiveTurnRequest,
 } from '../services/interactiveActorHost/interactiveSessionActor';
@@ -61,7 +66,7 @@ interface FakeAgentOptions {
   agentId?: string | null;
   waitGate?: Promise<void>;
   onCancel?: () => void;
-  onSend?: () => void;
+  onSend?: (sendOptions?: InteractiveSendOptions) => void;
   model?: string;
   workspaceRef?: string;
   waitStatus?: string;
@@ -108,7 +113,7 @@ function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgent
     model: options.model ?? 'auto',
     workspaceRef: options.workspaceRef ?? '/warm/checkout',
     send: async (_prompt, sendOptions) => {
-      options.onSend?.();
+      options.onSend?.(sendOptions);
       for (const text of options.tokens ?? []) {
         await sendOptions?.onDelta?.({ type: 'text-delta', text });
       }
@@ -672,6 +677,128 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     expect(dispose).not.toHaveBeenCalled();
   });
 
+  it('sends each turn its own tool proxy URLs when the warm Agent is reused', async () => {
+    const handle = makeAgentHandle({ tokens: ['ok'], agentId: 'agent-1' });
+    const send = jest.spyOn(handle, 'send');
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) => {
+        handle.workspaceRef = checkout.workspacePath;
+        return handle;
+      }),
+      materializeWorkspace: jest.fn(async (_bootstrap, destination: string) => ({
+        workspacePath: destination,
+        dispose: async () => {},
+      })),
+      uploadAttemptArtifacts: jest.fn(async () => ({
+        container: 'artifacts',
+        key: 'runs/r/attempts/1/manifest.json',
+      })),
+      postIngest: async () => ({ ok: true, cancelRequested: false }),
+    });
+    const toolsFor = (token: string) => ({
+      'ado-skills': { url: `https://apex.example/api/internal/ai-runs/r/tools/ado-skills?token=${token}` },
+    });
+
+    await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({ mcpServers: toolsFor('first') }),
+    });
+    await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        attemptId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        dispatchMessageId: 'dispatch-durable-2',
+        runId: 'run-durable-2',
+        mcpServers: toolsFor('second'),
+      }),
+    });
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls[0][1]).toMatchObject({ mcpServers: toolsFor('first') });
+    expect(send.mock.calls[1][1]).toMatchObject({ mcpServers: toolsFor('second') });
+  });
+
+  it('marks guided interview replies and rebuilds the Agent when the phase changes', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const acquireDurableAgent = jest.fn(async (bootstrap, checkout) => ({
+      mode: 'recreated' as const,
+      handle: {
+        ...makeAgentHandle({
+          tokens: ['What happens today?'],
+          agentId: 'agent-1',
+          workspaceRef: checkout.workspacePath,
+        }),
+        interviewPhase: bootstrap.specification.guidedInterview?.phase ?? null,
+      },
+    }));
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(),
+      acquireDurableAgent,
+      materializeWorkspace: async (_b, destination) => ({ workspacePath: destination }),
+      uploadAttemptArtifacts: async () => ({ container: 'artifacts', key: 'manifest.json' }),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+    });
+    const guidedTurn = (phase: 'product' | 'technical') => {
+      const base = makeDurableBootstrap();
+      return {
+        ...base,
+        specification: {
+          ...base.specification,
+          workflowClass: 'interview' as const,
+          guidedInterview: {
+            phase,
+            turn: {
+              phase: phase === 'product' ? ('discovery' as const) : ('technical' as const),
+              question: 1,
+              total: phase === 'product' ? 6 : 5,
+              topic: 'Topic',
+              marker: phase === 'product'
+                ? '[[interview-phase:discovery:1:6]]'
+                : '[[interview-phase:technical:1:5]]',
+              instruction: 'Ask one question.',
+            },
+          },
+        },
+      };
+    };
+
+    await actor.handleDurableTurn({ threadId: THREAD_ID, bootstrap: guidedTurn('product') });
+    await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: {
+        ...guidedTurn('product'),
+        attemptId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        dispatchMessageId: 'dispatch-durable-2',
+        runId: 'run-durable-2',
+      },
+    });
+    await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: {
+        ...guidedTurn('technical'),
+        attemptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        dispatchMessageId: 'dispatch-durable-3',
+        runId: 'run-durable-3',
+      },
+    });
+
+    expect(acquireDurableAgent).toHaveBeenCalledTimes(2);
+    const replies = posted.flatMap((body) =>
+      body.kind === 'progress' && body.event?.type === 'message'
+        ? [body.event.message.text]
+        : [],
+    );
+    expect(replies[0]).toBe(
+      '[[interview-phase:discovery:1:6]]\n\nWhat happens today?\n\nSkip — decide later',
+    );
+    expect(replies[2]).toBe('[[interview-phase:technical:1:5]]\n\nWhat happens today?');
+  });
+
   describe('idle thread workspaces', () => {
     const OTHER_THREAD_ID = '10000000-0000-4000-8000-000000000009';
 
@@ -932,6 +1059,150 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
       status: 'completed',
       artifactsFlushed: true,
       artifactManifestRef: manifestRef,
+      stageTimings: {
+        workspaceMs: expect.any(Number),
+        agentAcquireMs: expect.any(Number),
+        agentMode: 'recreated',
+        workerTurnMs: expect.any(Number),
+      },
+    });
+  });
+
+  it('publishes a live label for each startup step of a grounded durable turn', async () => {
+    const { publishLive, live } = captureLive();
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          tokens: ['ok'],
+          workspaceRef: checkout.workspacePath,
+        }),
+      ),
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+        dispose: async () => {},
+      }),
+      uploadAttemptArtifacts: jest.fn(async () => ({
+        container: 'artifacts',
+        key: 'runs/r/attempts/1/manifest.json',
+      })),
+      postIngest: async () => ({ ok: true, cancelRequested: false }),
+      publishLive,
+    });
+    const base = makeDurableBootstrap();
+
+    await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: {
+        ...base,
+        specification: {
+          ...base.specification,
+          grounding: {
+            provider: 'github' as const,
+            project: 'proj-1',
+            repository: 'owner/repo',
+            sha: 'a'.repeat(40),
+            profileId: 'profile-1',
+          },
+        },
+      },
+    });
+
+    const labels = live
+      .filter((e) => e.event.type === 'phase')
+      .map((e) => (e.event as { detail?: string }).detail);
+    expect(labels).toEqual([
+      INTERACTIVE_LOADING_CODE_DETAIL,
+      INTERACTIVE_STARTING_DETAIL,
+      INTERACTIVE_THINKING_DETAIL,
+    ]);
+  });
+
+  function makeSendFailureActor(sendError: Error) {
+    const { publishLive, live } = captureLive();
+    const posted: AiRunIngestBody[] = [];
+    const sentPrompts: string[] = [];
+    let acquisitions = 0;
+    const acquireAgent = jest.fn(async (_s, checkout, _options) => {
+      acquisitions += 1;
+      const handle = makeAgentHandle({
+        tokens: ['ok'],
+        agentId: `agent-${acquisitions}`,
+        workspaceRef: checkout.workspacePath,
+      });
+      const failFirst = acquisitions === 1;
+      return {
+        ...handle,
+        send: async (prompt: string, options?: Parameters<typeof handle.send>[1]) => {
+          sentPrompts.push(prompt);
+          if (failFirst) throw sendError;
+          return handle.send(prompt, options);
+        },
+      };
+    });
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent,
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+        dispose: async () => {},
+      }),
+      uploadAttemptArtifacts: jest.fn(async () => ({
+        container: 'artifacts',
+        key: 'runs/r/attempts/1/manifest.json',
+      })),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+      publishLive,
+    });
+    return { actor, acquireAgent, live, posted, sentPrompts };
+  }
+
+  it('reconnects once with a fresh Agent when send drops before any event', async () => {
+    const { actor, acquireAgent, live, posted, sentPrompts } = makeSendFailureActor(
+      Object.assign(new Error('Connection stalled'), {
+        name: 'NetworkError',
+        code: 'connection_stalled',
+        isRetryable: true,
+      }),
+    );
+
+    const outcome = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({ cursorAgentId: 'agent-prior' }),
+    });
+
+    expect(outcome.status).toBe('completed');
+    expect(acquireAgent).toHaveBeenCalledTimes(2);
+    expect(acquireAgent.mock.calls[1][2]).toMatchObject({ resumeAgentId: null });
+    expect(sentPrompts).toEqual(['Hello', 'Hello (recreated)']);
+    expect(live.some((e) => e.event.type === 'retrying')).toBe(true);
+    expect(posted.find((b) => b.kind === 'terminal')).toMatchObject({
+      status: 'completed',
+      cursorAgentId: 'agent-2',
+      stageTimings: { agentMode: 'recreated' },
+    });
+  });
+
+  it('does not retry a rate-limited send', async () => {
+    const { actor, acquireAgent, posted } = makeSendFailureActor(
+      Object.assign(new Error('Too many requests'), {
+        name: 'RateLimitError',
+        isRetryable: true,
+      }),
+    );
+
+    const outcome = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap(),
+    });
+
+    expect(outcome.status).toBe('failed');
+    expect(acquireAgent).toHaveBeenCalledTimes(1);
+    expect(posted.find((b) => b.kind === 'terminal')).toMatchObject({
+      status: 'failed',
     });
   });
 
@@ -1286,6 +1557,262 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
       failureCategory: 'hard_timeout',
     });
   }, 15_000);
+
+  it('times out a stalled Agent resume and recreates instead of resuming it next turn', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const acquireDurableAgent = jest
+      .fn()
+      .mockImplementationOnce(() => new Promise<never>(() => {}))
+      .mockImplementationOnce(async (_b, checkout) => ({
+        mode: 'recreated' as const,
+        handle: makeAgentHandle({
+          tokens: ['Back again'],
+          agentId: 'agent-new',
+          workspaceRef: checkout.workspacePath,
+        }),
+      }));
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(),
+      acquireDurableAgent,
+      materializeWorkspace: async (_b, destination) => ({ workspacePath: destination }),
+      uploadAttemptArtifacts: async () => ({ container: 'artifacts', key: 'manifest.json' }),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+    });
+    const deadlines = {
+      repositoryPreparationMs: null,
+      firstEventMs: 50,
+      toolCallMs: 60_000,
+    };
+
+    const stalled = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        cursorAgentId: 'agent-stuck',
+        effectiveDeadlines: deadlines,
+      }),
+    });
+    expect(stalled).toEqual({ status: 'failed', failureCategory: 'hard_timeout' });
+    expect(posted.find((b) => b.kind === 'terminal')).toMatchObject({
+      detail: 'Interactive first event deadline exceeded',
+    });
+
+    const next = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        attemptId: '20000000-0000-4000-8000-000000000009',
+        dispatchMessageId: 'dispatch-durable-2',
+        cursorAgentId: 'agent-stuck',
+        effectiveDeadlines: { ...deadlines, firstEventMs: 30_000 },
+      }),
+    });
+    expect(next.status).toBe('completed');
+    expect(acquireDurableAgent.mock.calls[0][2]).toEqual({ resumeAgentId: 'agent-stuck' });
+    expect(acquireDurableAgent.mock.calls[1][2]).toEqual({ resumeAgentId: null });
+  }, 15_000);
+
+  it('fails a turn that goes silent after its first event', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const silentRun: WorkerCursorExecutionRun = {
+      supports: (capability: string) =>
+        capability === 'stream' || capability === 'cancel',
+      async *stream(): AsyncIterable<CursorStreamEvent> {
+        yield { type: 'assistant', message: { content: [{ type: 'text', text: 'Thinking' }] } };
+        await new Promise<never>(() => {});
+      },
+      wait: () => new Promise<never>(() => {}),
+      cancel: async () => {},
+    };
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) => ({
+        ...makeAgentHandle({ workspaceRef: checkout.workspacePath }),
+        send: async () => silentRun,
+      })),
+      materializeWorkspace: async (_b, destination) => ({ workspacePath: destination }),
+      uploadAttemptArtifacts: jest.fn(),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+    });
+
+    const outcome = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        effectiveDeadlines: {
+          repositoryPreparationMs: null,
+          firstEventMs: 100,
+          toolCallMs: 60_000,
+        },
+      }),
+    });
+
+    expect(outcome).toEqual({ status: 'failed', failureCategory: 'hard_timeout' });
+    expect(posted.find((b) => b.kind === 'terminal')).toMatchObject({
+      detail: 'Interactive turn went silent',
+      failureCategory: 'hard_timeout',
+    });
+  }, 15_000);
+
+  it('keeps the answer but drops an Agent whose run never stopped', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const acquireDurableAgent = jest
+      .fn()
+      .mockImplementationOnce(async (_b, checkout) => ({
+        mode: 'recreated' as const,
+        handle: makeAgentHandle({
+          tokens: ['First answer'],
+          agentId: 'agent-unsettled',
+          waitGate: new Promise<void>(() => {}),
+          workspaceRef: checkout.workspacePath,
+        }),
+      }))
+      .mockImplementationOnce(async (_b, checkout) => ({
+        mode: 'recreated' as const,
+        handle: makeAgentHandle({
+          tokens: ['Second answer'],
+          agentId: 'agent-new',
+          workspaceRef: checkout.workspacePath,
+        }),
+      }));
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(),
+      acquireDurableAgent,
+      materializeWorkspace: async (_b, destination) => ({ workspacePath: destination }),
+      uploadAttemptArtifacts: async () => ({ container: 'artifacts', key: 'manifest.json' }),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+    });
+
+    const first = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap(),
+    });
+    expect(first).toEqual({ status: 'completed', cursorAgentId: null });
+    expect(posted.find((b) => b.kind === 'terminal')).toMatchObject({
+      status: 'completed',
+      cursorAgentId: null,
+    });
+
+    const next = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        attemptId: '20000000-0000-4000-8000-000000000011',
+        dispatchMessageId: 'dispatch-durable-4',
+        cursorAgentId: 'agent-unsettled',
+      }),
+    });
+    expect(next.status).toBe('completed');
+    expect(acquireDurableAgent).toHaveBeenCalledTimes(2);
+    expect(acquireDurableAgent.mock.calls[1][2]).toEqual({ resumeAgentId: null });
+  }, 25_000);
+
+  it('recreates instead of resuming an Agent whose turn went silent', async () => {
+    const silentRun: WorkerCursorExecutionRun = {
+      supports: (capability: string) =>
+        capability === 'stream' || capability === 'cancel',
+      async *stream(): AsyncIterable<CursorStreamEvent> {
+        yield { type: 'assistant', message: { content: [{ type: 'text', text: 'Thinking' }] } };
+        await new Promise<never>(() => {});
+      },
+      wait: () => new Promise<never>(() => {}),
+      cancel: async () => {},
+    };
+    const acquireDurableAgent = jest
+      .fn()
+      .mockImplementationOnce(async (_b, checkout) => ({
+        mode: 'resumed' as const,
+        handle: {
+          ...makeAgentHandle({ agentId: 'agent-quiet', workspaceRef: checkout.workspacePath }),
+          send: async () => silentRun,
+        },
+      }))
+      .mockImplementationOnce(async (_b, checkout) => ({
+        mode: 'recreated' as const,
+        handle: makeAgentHandle({
+          tokens: ['Back again'],
+          agentId: 'agent-new',
+          workspaceRef: checkout.workspacePath,
+        }),
+      }));
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(),
+      acquireDurableAgent,
+      materializeWorkspace: async (_b, destination) => ({ workspacePath: destination }),
+      uploadAttemptArtifacts: async () => ({ container: 'artifacts', key: 'manifest.json' }),
+      postIngest: async () => ({ ok: true, cancelRequested: false }),
+    });
+
+    const silent = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        cursorAgentId: 'agent-quiet',
+        effectiveDeadlines: {
+          repositoryPreparationMs: null,
+          firstEventMs: 100,
+          toolCallMs: 60_000,
+        },
+      }),
+    });
+    expect(silent).toEqual({ status: 'failed', failureCategory: 'hard_timeout' });
+
+    const next = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        attemptId: '20000000-0000-4000-8000-000000000010',
+        dispatchMessageId: 'dispatch-durable-3',
+        cursorAgentId: 'agent-quiet',
+      }),
+    });
+    expect(next.status).toBe('completed');
+    expect(acquireDurableAgent.mock.calls[1][2]).toEqual({ resumeAgentId: null });
+  }, 15_000);
+
+  it('fails when the Cursor stream closes before the turn finishes, even if dispose hangs', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const closedRun: WorkerCursorExecutionRun = {
+      supports: (capability: string) =>
+        capability === 'stream' || capability === 'cancel',
+      async *stream(): AsyncIterable<CursorStreamEvent> {
+        yield { type: 'assistant', message: { content: [{ type: 'text', text: 'Partial' }] } };
+      },
+      wait: () => new Promise<never>(() => {}),
+      cancel: async () => {},
+    };
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) => ({
+        ...makeAgentHandle({ workspaceRef: checkout.workspacePath }),
+        send: async () => closedRun,
+        dispose: () => new Promise<void>(() => {}),
+      })),
+      materializeWorkspace: async (_b, destination) => ({ workspacePath: destination }),
+      uploadAttemptArtifacts: jest.fn(),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+    });
+
+    const outcome = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap(),
+    });
+
+    expect(outcome).toEqual({ status: 'failed' });
+    expect(posted.find((b) => b.kind === 'terminal')).toMatchObject({
+      status: 'failed',
+      detail: 'Interactive turn failed: Cursor stream closed before the turn finished',
+    });
+  }, 25_000);
 
   it('dual-publishes Redis live + durable progress with shared offsets; flush before message/terminal', async () => {
     const posted: AiRunIngestBody[] = [];

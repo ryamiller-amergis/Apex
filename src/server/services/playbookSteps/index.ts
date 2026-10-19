@@ -16,6 +16,7 @@ import { executeCursorAgentStep } from './cursorAgentAdapter';
 import { executeNotifyStep } from './notifyAdapter';
 import { executeIngestArtifactStep } from './ingestArtifactAdapter';
 import { executeBranchStep } from './branchAdapter';
+import { executeInterviewStep } from './interviewAdapter';
 import { getUserPermissions } from '../rbacService';
 import { parseStepInput } from './descriptorValidation';
 import { getStepTypeDescriptor, requiredPermissionsForStep } from './registry';
@@ -35,6 +36,7 @@ const ADAPTERS: Readonly<Record<string, PlaybookStepAdapter>> = {
   notify: executeNotifyStep,
   'ingest-artifact': executeIngestArtifactStep,
   branch: executeBranchStep,
+  interview: executeInterviewStep,
 };
 
 /** The step types that can actually be executed. Compared against the registry by a test. */

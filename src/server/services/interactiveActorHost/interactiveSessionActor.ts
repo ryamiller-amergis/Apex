@@ -28,6 +28,7 @@ import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle'
 import type {
   AiRunIngestBody,
   AiRunIngestResponse,
+  InteractiveTurnStageTimings,
 } from '../../../shared/types/aiRunIngest';
 import type { AiRunBlobRef } from '../../../shared/types/aiRunV2';
 import type {
@@ -41,11 +42,13 @@ import {
   createCursorTurnEndMonitor,
   createCursorRunEventEnvelope,
   CursorExecutionWaitError,
+  CursorStreamClosedBeforeTurnEndError,
   executeCursorExecutionCore,
   sanitizeCursorTerminalDetail,
   type CursorExecutionResult,
 } from '../cursorExecutionCore';
 import type { WorkerCursorExecutionRun } from '../aiRunsWorker/cursorExecution';
+import { normalizeGuidedInterviewResponse } from '../guidedInterviewState';
 import {
   AiRunCallbackError,
   AiRunFenceConflictError,
@@ -60,6 +63,7 @@ import {
   buildOffsetLiveTokenEvent,
 } from '../interactiveDurableStreamBatcher';
 import type { InteractiveCursorAgentHandle } from './interactiveCursorExecution';
+import { isRetryableCursorConnectionError } from './cursorConnectionError';
 import type { InteractiveActorBootstrap } from '../../../shared/types/aiRunIngest';
 import { createPerThreadTurnQueue, type PerThreadTurnQueue } from './perThreadTurnQueue';
 
@@ -79,8 +83,18 @@ export const INTERACTIVE_AGENT_CACHE_IDLE_MS = 10 * 60_000;
 /** Hard cap on live Agent handles retained in this process. */
 export const INTERACTIVE_AGENT_CACHE_MAX = 32;
 
+/**
+ * Disposing an Agent is cleanup, so a turn stops waiting on it after this long.
+ * A dispose over a dropped Cursor connection can stay pending forever.
+ */
+export const INTERACTIVE_AGENT_DISPOSE_WAIT_MS = 5_000;
+
 /** Home-facing live phase detail before checkout / SDK work. */
 export const INTERACTIVE_STARTING_DETAIL = 'Starting agent…';
+/** Shown while a grounded turn downloads the project code. */
+export const INTERACTIVE_LOADING_CODE_DETAIL = 'Preparing project repository…';
+/** Shown once the Agent is ready and the prompt is going to the model. */
+export const INTERACTIVE_THINKING_DETAIL = 'Thinking…';
 
 /**
  * Thread-scoped durable workspace keyed by the pinned grounding SHA. A stable
@@ -335,6 +349,31 @@ function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
+function logInteractiveAgentStep(
+  event: string,
+  fields: Record<string, unknown>,
+): void {
+  console.log(JSON.stringify({ event, ...fields }));
+}
+
+/** Waits for `dispose` up to `ms`; reports whether it finished in time. */
+async function disposeWithin(
+  dispose: () => Promise<void>,
+  ms: number,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      dispose().then(() => true, () => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function unsuccessfulWaitDetail(result: CursorExecutionResult): string {
   const status = result.waitResult.status
     .trim()
@@ -381,6 +420,8 @@ export function createInteractiveSessionActor(
   const warmCheckouts = new Map<string, WarmThreadCheckout>();
   const agentCache = new Map<string, CachedAgentEntry>();
   const agentIdByThread = new Map<string, string | null>();
+  // Agents whose resume stalled; the next turn recreates instead of resuming.
+  const unresumableAgentIds = new Set<string>();
 
   const emitStage = (
     context: {
@@ -399,11 +440,28 @@ export function createInteractiveSessionActor(
     }
   };
 
+  const disposeAgentHandle = async (
+    threadId: string,
+    handle: InteractiveCursorAgentHandle,
+  ): Promise<void> => {
+    const disposed = await disposeWithin(
+      () => handle.dispose(),
+      INTERACTIVE_AGENT_DISPOSE_WAIT_MS,
+    );
+    if (!disposed) {
+      logInteractiveAgentStep('InteractiveAgentDisposeTimedOut', {
+        threadId,
+        agentId: handle.agentId,
+        waitedMs: INTERACTIVE_AGENT_DISPOSE_WAIT_MS,
+      });
+    }
+  };
+
   const disposeAgentEntry = async (threadId: string): Promise<void> => {
     const entry = agentCache.get(threadId);
     if (!entry) return;
     agentCache.delete(threadId);
-    await entry.handle.dispose().catch(() => {});
+    await disposeAgentHandle(threadId, entry.handle);
     await entry.releaseWorkspace?.().catch(() => {});
   };
 
@@ -897,9 +955,80 @@ export function createInteractiveSessionActor(
     let cancellationRequested = false;
     let failureCategory: 'hard_timeout' | 'tool_timeout' | null = null;
     let firstEventTimedOut = false;
+    let silenceTimedOut = false;
+    let firstEventSeen = false;
+    let firstEventTimer: ReturnType<typeof setTimeout> | undefined;
+    let silenceTimer: ReturnType<typeof setTimeout> | undefined;
+    let workspaceMs: number | undefined;
+    let agentAcquireMs: number | undefined;
+    let agentMode: InteractiveTurnStageTimings['agentMode'];
+    let sendStartedAt: number | undefined;
+    let firstEventAt: number | undefined;
+    let firstTokenAt: number | undefined;
+
+    const stageTimings = (): InteractiveTurnStageTimings => ({
+      ...(workspaceMs !== undefined ? { workspaceMs } : {}),
+      ...(agentAcquireMs !== undefined ? { agentAcquireMs } : {}),
+      ...(agentMode ? { agentMode } : {}),
+      ...(sendStartedAt !== undefined && firstEventAt !== undefined
+        ? { firstEventMs: Math.max(0, firstEventAt - sendStartedAt) }
+        : {}),
+      ...(sendStartedAt !== undefined && firstTokenAt !== undefined
+        ? { firstTokenMs: Math.max(0, firstTokenAt - sendStartedAt) }
+        : {}),
+      workerTurnMs: Math.max(0, now() - nowMs),
+    });
 
     const stopRun = async (): Promise<void> => {
       if (activeRunRef?.cancel) await activeRunRef.cancel().catch(() => {});
+    };
+
+    const clearEventTimers = (): void => {
+      if (firstEventTimer !== undefined) {
+        clearTimeout(firstEventTimer);
+        firstEventTimer = undefined;
+      }
+      if (silenceTimer !== undefined) {
+        clearTimeout(silenceTimer);
+        silenceTimer = undefined;
+      }
+    };
+
+    // After the first event, the same budget bounds each gap between events.
+    // A running tool has its own deadline, so silence during one is expected.
+    const armSilenceTimer = (): void => {
+      if (silenceTimer !== undefined) clearTimeout(silenceTimer);
+      silenceTimer = undefined;
+      const silenceMs = effectiveDeadlines.firstEventMs;
+      if (!(silenceMs > 0) || silenceMs >= absoluteMs - now()) return;
+      silenceTimer = setTimeout(() => {
+        silenceTimer = undefined;
+        if (toolTimer !== undefined) {
+          armSilenceTimer();
+          return;
+        }
+        failureCategory = 'hard_timeout';
+        silenceTimedOut = true;
+        logInteractiveAgentStep('InteractiveTurnWentSilent', {
+          runId,
+          threadId,
+          silentMs: silenceMs,
+        });
+        absoluteAbort.abort(
+          Object.assign(new Error('hard_timeout'), { code: 'hard_timeout' }),
+        );
+        void stopRun();
+      }, silenceMs);
+    };
+
+    const observeEvent = (): void => {
+      if (!firstEventSeen) {
+        firstEventSeen = true;
+        firstEventAt = now();
+        if (firstEventTimer !== undefined) clearTimeout(firstEventTimer);
+        firstEventTimer = undefined;
+      }
+      armSilenceTimer();
     };
     absoluteAbort.signal.addEventListener(
       'abort',
@@ -964,20 +1093,27 @@ export function createInteractiveSessionActor(
     const heartbeatTimer = setInterval(heartbeat, durableHeartbeatMs);
     activeDurableThreads.add(threadId);
 
-    try {
-      await publishLive(threadId, createCursorRunEventEnvelope({
+    let startupSequence = 0;
+    const publishStartupPhase = (
+      phase: 'setup' | 'analysis',
+      detail: string,
+    ): Promise<void> =>
+      publishLive(threadId, createCursorRunEventEnvelope({
         threadId,
         runId,
         sourceInstance,
-        sequence: 1,
+        sequence: (startupSequence += 1),
         timestamp: new Date(now()).toISOString(),
-        event: {
-          type: 'phase',
-          phase: 'setup',
-          status: 'running',
-          detail: INTERACTIVE_STARTING_DETAIL,
-        },
+        event: { type: 'phase', phase, status: 'running', detail },
       })).catch(() => {});
+
+    try {
+      await publishStartupPhase(
+        'setup',
+        specification.grounding?.sha
+          ? INTERACTIVE_LOADING_CODE_DETAIL
+          : INTERACTIVE_STARTING_DETAIL,
+      );
 
       const destination = resolveInteractiveThreadWorkspacePath(
         threadId,
@@ -1010,6 +1146,7 @@ export function createInteractiveSessionActor(
       if (cachedForThread && cachedForThread.handle.workspaceRef !== destination) {
         await disposeAgentEntry(threadId);
       }
+      const workspaceStartedAt = now();
       try {
         attemptCheckout = await dependencies.materializeWorkspace(
           bootstrap,
@@ -1024,61 +1161,12 @@ export function createInteractiveSessionActor(
         if (prepTimer) clearTimeout(prepTimer);
         absoluteAbort.signal.removeEventListener('abort', onAbsoluteAbort);
       }
+      workspaceMs = now() - workspaceStartedAt;
       // A repository-preparation timeout falls back to the remote reader; an
       // expired absolute deadline ends the turn.
       if (absoluteAbort.signal.aborted) throw absoluteAbort.signal.reason;
 
       const checkout = attemptCheckout;
-
-      const cached = agentCache.get(threadId);
-      const cacheCompatible =
-        cached &&
-        cached.handle.model === specification.model &&
-        cached.handle.workspaceRef === checkout.workspacePath;
-
-      let acquisitionMode: 'warm' | 'resumed' | 'recreated' = 'warm';
-      if (cacheCompatible && cached) {
-        agentHandle = cached.handle;
-        acquisitionMode = 'warm';
-      } else {
-        if (cached) await disposeAgentEntry(threadId);
-        const resumeAgentId =
-          cursorAgentId ?? agentIdByThread.get(threadId) ?? null;
-        if (dependencies.acquireDurableAgent) {
-          const acquired = await dependencies.acquireDurableAgent(
-            bootstrap,
-            checkout,
-            { resumeAgentId },
-          );
-          agentHandle = acquired.handle;
-          acquisitionMode = acquired.mode;
-        } else {
-          agentHandle = await dependencies.acquireAgent(
-            {
-              prompt: specification.currentPrompt,
-              model: specification.model,
-              effort: specification.effort ?? undefined,
-              workspaceRef: checkout.workspacePath,
-              workflowClass: 'agent_home_chat',
-              skillPath: specification.skill?.path ?? '',
-              projectId: specification.projectId,
-              threadId: specification.threadId,
-            },
-            checkout,
-            { resumeAgentId, mcpServers },
-          );
-          acquisitionMode = resumeAgentId ? 'resumed' : 'recreated';
-        }
-      }
-
-      if (agentHandle.agentId) {
-        agentIdByThread.set(threadId, agentHandle.agentId);
-      }
-
-      const prompt =
-        acquisitionMode === 'recreated'
-          ? specification.recreationPrompt
-          : specification.currentPrompt;
 
       const firstEventMs = Math.min(
         effectiveDeadlines.firstEventMs,
@@ -1088,8 +1176,9 @@ export function createInteractiveSessionActor(
         throw Object.assign(new Error('hard_timeout'), { code: 'hard_timeout' });
       }
 
-      let firstEventSeen = false;
-      const firstEventTimer = setTimeout(() => {
+      // The first-event budget covers starting or resuming the Agent as well as
+      // its first reply.
+      firstEventTimer = setTimeout(() => {
         if (!firstEventSeen) {
           failureCategory = 'hard_timeout';
           firstEventTimedOut = true;
@@ -1099,6 +1188,104 @@ export function createInteractiveSessionActor(
           void stopRun();
         }
       }, firstEventMs);
+
+      const cached = agentCache.get(threadId);
+      const cacheCompatible =
+        cached &&
+        cached.handle.model === specification.model &&
+        cached.handle.workspaceRef === checkout.workspacePath &&
+        (cached.handle.interviewPhase ?? null) ===
+          (specification.guidedInterview?.phase ?? null);
+
+      const startAcquisition = (
+        resumeAgentId: string | null,
+      ): Promise<{
+        handle: InteractiveCursorAgentHandle;
+        mode: 'warm' | 'resumed' | 'recreated';
+      }> =>
+        dependencies.acquireDurableAgent
+          ? dependencies.acquireDurableAgent(bootstrap, checkout, {
+              resumeAgentId,
+            })
+          : dependencies
+              .acquireAgent(
+                {
+                  prompt: specification.currentPrompt,
+                  model: specification.model,
+                  effort: specification.effort ?? undefined,
+                  workspaceRef: checkout.workspacePath,
+                  workflowClass: 'agent_home_chat',
+                  skillPath: specification.skill?.path ?? '',
+                  projectId: specification.projectId,
+                  threadId: specification.threadId,
+                },
+                checkout,
+                { resumeAgentId, mcpServers },
+              )
+              .then((handle) => ({
+                handle,
+                mode: resumeAgentId ? 'resumed' as const : 'recreated' as const,
+              }));
+
+      let acquisitionMode: 'warm' | 'resumed' | 'recreated' = 'warm';
+      if (cacheCompatible && cached) {
+        agentHandle = cached.handle;
+        acquisitionMode = 'warm';
+        agentAcquireMs = 0;
+      } else {
+        if (cached) await disposeAgentEntry(threadId);
+        if (specification.grounding?.sha) {
+          await publishStartupPhase('setup', INTERACTIVE_STARTING_DETAIL);
+        }
+        const knownAgentId =
+          cursorAgentId ?? agentIdByThread.get(threadId) ?? null;
+        const resumeAgentId =
+          knownAgentId && !unresumableAgentIds.has(knownAgentId)
+            ? knownAgentId
+            : null;
+        const acquireStartedAt = now();
+        const acquisition = startAcquisition(resumeAgentId);
+        try {
+          const acquired = await untilAborted(acquisition, absoluteAbort.signal);
+          agentHandle = acquired.handle;
+          acquisitionMode = acquired.mode;
+          agentAcquireMs = now() - acquireStartedAt;
+          logInteractiveAgentStep('InteractiveAgentAcquired', {
+            runId,
+            threadId,
+            mode: acquired.mode,
+            durationMs: now() - acquireStartedAt,
+          });
+        } catch (error) {
+          if (absoluteAbort.signal.aborted) {
+            void acquisition
+              .then((late) => disposeAgentHandle(threadId, late.handle))
+              .catch(() => {});
+            if (resumeAgentId) {
+              unresumableAgentIds.add(resumeAgentId);
+              agentIdByThread.delete(threadId);
+            }
+            logInteractiveAgentStep('InteractiveAgentAcquireTimedOut', {
+              runId,
+              threadId,
+              resumed: resumeAgentId !== null,
+              waitedMs: now() - acquireStartedAt,
+            });
+          }
+          throw error;
+        }
+      }
+
+      if (agentHandle.agentId) {
+        agentIdByThread.set(threadId, agentHandle.agentId);
+      }
+      agentMode = acquisitionMode;
+      await publishStartupPhase('analysis', INTERACTIVE_THINKING_DETAIL);
+
+      let prompt =
+        acquisitionMode === 'recreated'
+          ? specification.recreationPrompt
+          : specification.currentPrompt;
 
       const liveBatcher = createIncrementalTokenBatcher({
         maxBytes: batchMaxBytes,
@@ -1194,18 +1381,65 @@ export function createInteractiveSessionActor(
 
       try {
         const turnEndMonitor = createCursorTurnEndMonitor();
-        activeRunRef = await untilAborted(
-          agentHandle.send(prompt, {
-            onDelta: (update) => {
-              if (!firstEventSeen) {
-                firstEventSeen = true;
-                clearTimeout(firstEventTimer);
-              }
-              turnEndMonitor.observe(update);
-            },
-          }),
-          absoluteAbort.signal,
-        );
+        const sendTurn = (handle: InteractiveCursorAgentHandle) =>
+          untilAborted(
+            handle.send(prompt, {
+              mcpServers,
+              onDelta: (update) => {
+                observeEvent();
+                turnEndMonitor.observe(update);
+              },
+            }),
+            absoluteAbort.signal,
+          );
+        sendStartedAt = now();
+        try {
+          activeRunRef = await sendTurn(agentHandle);
+        } catch (error) {
+          // No run exists yet, so nothing was shown and no tool ran.
+          if (
+            !isRetryableCursorConnectionError(error) ||
+            firstEventSeen ||
+            absoluteAbort.signal.aborted ||
+            cancellationRequested ||
+            fenceConflict
+          ) {
+            throw error;
+          }
+          const dropped = agentHandle;
+          logInteractiveAgentStep('InteractiveAgentReconnecting', {
+            runId,
+            threadId,
+            mode: agentMode,
+            code: (error as { code?: unknown }).code ?? null,
+          });
+          await publishLiveEnvelope({
+            type: 'retrying',
+            attempt: 1,
+            maxAttempts: 1,
+            reason: 'reconnecting',
+          });
+          if (dropped.agentId) {
+            unresumableAgentIds.add(dropped.agentId);
+            agentIdByThread.delete(threadId);
+          }
+          // This turn's workspace stays; only the Agent is replaced.
+          if (agentCache.get(threadId)?.handle === dropped) {
+            agentCache.delete(threadId);
+          }
+          await disposeAgentHandle(threadId, dropped);
+          const reacquired = await untilAborted(
+            startAcquisition(null),
+            absoluteAbort.signal,
+          );
+          agentHandle = reacquired.handle;
+          agentMode = 'recreated';
+          prompt = specification.recreationPrompt;
+          if (agentHandle.agentId) {
+            agentIdByThread.set(threadId, agentHandle.agentId);
+          }
+          activeRunRef = await sendTurn(agentHandle);
+        }
 
         const result = await untilAborted(executeCursorExecutionCore({
           snapshot: {
@@ -1233,10 +1467,7 @@ export function createInteractiveSessionActor(
                       code: 'hard_timeout',
                     });
               }
-              if (!firstEventSeen) {
-                firstEventSeen = true;
-                clearTimeout(firstEventTimer);
-              }
+              observeEvent();
               if (event.type === 'tool_call') {
                 armToolTimer();
               } else if (event.type === 'tool_status') {
@@ -1247,6 +1478,7 @@ export function createInteractiveSessionActor(
                 }
               }
               if (event.type === 'token') {
+                firstTokenAt ??= now();
                 await publishLiveTokenBatches(
                   liveBatcher.push(event.text, now()),
                 );
@@ -1273,7 +1505,9 @@ export function createInteractiveSessionActor(
           },
           nextSequence: () => 1,
           turnEnd: turnEndMonitor.completion,
+          failIfStreamEndsBeforeTurnEnd: true,
         }), absoluteAbort.signal);
+        clearEventTimers();
 
         const liveTail = liveBatcher.flush();
         if (liveTail) {
@@ -1317,7 +1551,12 @@ export function createInteractiveSessionActor(
           const finalMessage: ChatMessage = {
             id: randomUUID(),
             role: 'agent',
-            text: finalText,
+            text: specification.guidedInterview
+              ? normalizeGuidedInterviewResponse(
+                  finalText,
+                  specification.guidedInterview.turn,
+                )
+              : finalText,
             ts: new Date(now()).toISOString(),
           };
           await post({
@@ -1345,6 +1584,21 @@ export function createInteractiveSessionActor(
           );
         }
 
+        // A run that may still be live must not be warmed or resumed next turn.
+        const reusableAgentId = result.runLeftUnsettled
+          ? null
+          : agentHandle.agentId ?? null;
+        if (result.runLeftUnsettled) {
+          if (agentHandle.agentId) {
+            unresumableAgentIds.add(agentHandle.agentId);
+            agentIdByThread.delete(threadId);
+          }
+          logInteractiveAgentStep('InteractiveRunLeftUnsettled', {
+            runId,
+            threadId,
+          });
+        }
+
         await post({
           dispatchMessageId,
           attemptId,
@@ -1352,8 +1606,16 @@ export function createInteractiveSessionActor(
           status: 'completed',
           artifactsFlushed: true,
           artifactManifestRef,
-          cursorAgentId: agentHandle.agentId ?? null,
+          cursorAgentId: reusableAgentId,
+          stageTimings: stageTimings(),
         });
+
+        if (result.runLeftUnsettled) {
+          if (agentCache.get(threadId)?.handle === agentHandle) {
+            await disposeAgentEntry(threadId);
+          }
+          return { status: 'completed', cursorAgentId: null };
+        }
 
         agentCache.set(threadId, {
           handle: agentHandle,
@@ -1367,7 +1629,7 @@ export function createInteractiveSessionActor(
           cursorAgentId: agentHandle.agentId ?? null,
         };
       } finally {
-        clearTimeout(firstEventTimer);
+        clearEventTimers();
         clearToolTimer();
       }
     } catch (error) {
@@ -1391,6 +1653,15 @@ export function createInteractiveSessionActor(
       }
 
       await disposeAgentEntry(threadId);
+      const streamClosedEarly =
+        error instanceof CursorExecutionWaitError &&
+        error.cause instanceof CursorStreamClosedBeforeTurnEndError;
+      if (streamClosedEarly) {
+        logInteractiveAgentStep('InteractiveStreamClosedBeforeTurnEnd', {
+          runId,
+          threadId,
+        });
+      }
       const code =
         failureCategory ||
         (error &&
@@ -1400,14 +1671,24 @@ export function createInteractiveSessionActor(
           (error as { code?: string }).code === 'tool_timeout')
           ? ((error as { code: 'hard_timeout' | 'tool_timeout' }).code)
           : null);
+      // The run may still be live on Cursor's side, so the next turn
+      // recreates the Agent instead of resuming into the same stuck run.
+      if ((code === 'hard_timeout' || streamClosedEarly) && agentHandle?.agentId) {
+        unresumableAgentIds.add(agentHandle.agentId);
+        agentIdByThread.delete(threadId);
+      }
       const detail =
         code === 'tool_timeout'
           ? 'Interactive tool deadline exceeded'
           : code === 'hard_timeout'
             ? firstEventTimedOut
               ? 'Interactive first event deadline exceeded'
-              : 'Interactive absolute deadline exceeded'
-            : describeInteractiveFailure(error).reason;
+              : silenceTimedOut
+                ? 'Interactive turn went silent'
+                : 'Interactive absolute deadline exceeded'
+            : streamClosedEarly
+              ? 'Interactive turn failed: Cursor stream closed before the turn finished'
+              : describeInteractiveFailure(error).reason;
       await post({
         dispatchMessageId,
         attemptId,
@@ -1416,6 +1697,7 @@ export function createInteractiveSessionActor(
         detail,
         artifactsFlushed: false,
         ...(code ? { failureCategory: code } : {}),
+        stageTimings: stageTimings(),
       }).catch(() => {});
       if (code) {
         return { status: 'failed', failureCategory: code };
@@ -1434,11 +1716,12 @@ export function createInteractiveSessionActor(
       clearInterval(heartbeatTimer);
       clearTimeout(absoluteTimer);
       clearToolTimer();
+      clearEventTimers();
       if (!retainAgent && attemptCheckout?.dispose) {
         await attemptCheckout.dispose().catch(() => {});
       }
       if (!retainAgent && agentHandle && !agentCache.has(threadId)) {
-        await agentHandle.dispose().catch(() => {});
+        await disposeAgentHandle(threadId, agentHandle);
       }
     }
   }

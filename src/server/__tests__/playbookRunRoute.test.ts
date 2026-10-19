@@ -203,6 +203,34 @@ describe('starting a run through the endpoint', () => {
     });
   });
 
+  it('forwards run input used by template bindings', async () => {
+    const res = await request(buildApp())
+      .post('/api/playbooks/runs')
+      .send({
+        project: 'Apex',
+        definitionId: 'def-1',
+        runInput: { interviewProfileKey: 'ba-discovery' },
+      });
+
+    expect(res.status).toBe(201);
+    expect(startRun).toHaveBeenCalledWith({
+      project: 'Apex',
+      definitionId: 'def-1',
+      runInput: { interviewProfileKey: 'ba-discovery' },
+      initiatorUserId: USER_OID,
+    });
+  });
+
+  it.each([null, [], 'ba-discovery'])('rejects non-object run input %#', async (runInput) => {
+    const res = await request(buildApp())
+      .post('/api/playbooks/runs')
+      .send({ project: 'Apex', definitionId: 'def-1', runInput });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/runInput/);
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
   it('TBI-031 AC-3 / VT-14 forwards an explicit version pin and its reason', async () => {
     const res = await request(buildApp()).post('/api/playbooks/runs').send({
       project: 'Apex',

@@ -7,6 +7,7 @@ import type {
   SetApproversRequest,
 } from '../../shared/types/projectSettings';
 import type { AppSetting } from '../../shared/types/appSettings';
+import { sortByLabel } from '../utils/sortByLabel';
 
 export function useProjectSkillConfig(project: string | null | undefined, settingsId?: string | null) {
   return useQuery<ProjectSkillConfigResponse | null>({
@@ -159,7 +160,7 @@ export function useAvailableModels() {
       const res = await fetch('/api/available-models', { credentials: 'include' });
       if (!res.ok) throw new Error('Failed to fetch available models');
       const data = (await res.json()) as { models: AvailableModel[] };
-      return data.models;
+      return sortByLabel(data.models, (model) => model.displayName || model.id);
     },
     staleTime: 5 * 60 * 1000,
   });
@@ -177,7 +178,7 @@ export function useAvailableBedrockModels() {
       const res = await fetch('/api/admin/available-bedrock-models', { credentials: 'include' });
       if (!res.ok) throw new Error('Failed to fetch available Bedrock models');
       const data = (await res.json()) as { models: BedrockModel[] };
-      return data.models;
+      return sortByLabel(data.models, (model) => model.label || model.id);
     },
     staleTime: 60 * 60 * 1000,
   });

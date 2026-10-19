@@ -18,6 +18,15 @@ jest.mock('../services/artifactDoneEventService', () => ({
   recordArtifactDoneEvent: jest.fn().mockResolvedValue(undefined),
 }));
 
+jest.mock('../utils/rbacHelpers', () => ({
+  isPlatformAdmin: jest.fn().mockResolvedValue(false),
+  isProjectAdmin: jest.fn().mockResolvedValue(false),
+}));
+
+jest.mock('../services/rbacService', () => ({
+  getActiveUsers: jest.fn().mockResolvedValue([]),
+}));
+
 // ── DB mock ────────────────────────────────────────────────────────────────────
 
 jest.mock('../db/drizzle', () => {
@@ -61,6 +70,7 @@ import {
   listInterviews,
   getInterview,
   updateInterviewStatus,
+  updateInterviewPhaseAssignments,
   updateInterviewTitle,
   deleteInterview,
 } from '../services/interviewService';
@@ -69,6 +79,9 @@ const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
 
 const { createNotification: mockCreateNotification } = jest.requireMock('../services/notificationService') as {
   createNotification: jest.Mock;
+};
+const { getActiveUsers: mockGetActiveUsers } = jest.requireMock('../services/rbacService') as {
+  getActiveUsers: jest.Mock;
 };
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -334,6 +347,99 @@ describe('createInterview', () => {
       expect.objectContaining({ title: 'Assigned as QA Reviewer' }),
     );
     expect(mockCreateNotification).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('VT-BRIEF-2 — createInterview persists optional Playbook linkage', () => {
+  const snapshot = {
+    mode: 'human_led' as const,
+    key: 'ba-discovery',
+    skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+    model: 'claude-sonnet',
+    effort: 'high' as const,
+    wantsDesignPrototype: false,
+    wantsTestCases: true,
+  };
+
+  beforeEach(() => jest.clearAllMocks());
+
+  function mockInsert() {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'interview-playbook' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+    return valuesMock;
+  }
+
+  it('VT-BRIEF-2 stores the run, step run, mode, profile key, and profile snapshot', async () => {
+    const valuesMock = mockInsert();
+
+    const result = await createInterview({
+      userId: 'user-1',
+      project: 'Apex',
+      repo: 'org/apex',
+      title: 'BA discovery',
+      chatThreadId: 'thread-abc',
+      playbookRunId: 'run-1',
+      playbookStepRunId: 'step-run-1',
+      playbookInterviewMode: 'human_led',
+      playbookProfileKey: 'ba-discovery',
+      playbookProfileSnapshot: snapshot,
+    });
+
+    expect(result).toEqual({ interviewId: 'interview-playbook', threadId: 'thread-abc' });
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorId: 'user-1',
+        project: 'Apex',
+        chatThreadId: 'thread-abc',
+        status: 'in_progress',
+        playbookRunId: 'run-1',
+        playbookStepRunId: 'step-run-1',
+        playbookInterviewMode: 'human_led',
+        playbookProfileKey: 'ba-discovery',
+        playbookProfileSnapshot: snapshot,
+      }),
+    );
+  });
+
+  it('VT-BRIEF-2 leaves Playbook columns null for an ordinary interview', async () => {
+    const valuesMock = mockInsert();
+
+    await createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      chatThreadId: 'thread-abc',
+      title: 'Sprint Planning',
+    });
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Sprint Planning',
+        status: 'in_progress',
+        playbookRunId: null,
+        playbookStepRunId: null,
+        playbookInterviewMode: null,
+        playbookProfileKey: null,
+        playbookProfileSnapshot: null,
+      }),
+    );
+  });
+
+  it('VT-BRIEF-2 rejects a partial Playbook snapshot before inserting', async () => {
+    const valuesMock = mockInsert();
+
+    await expect(
+      createInterview({
+        userId: 'user-1',
+        project: 'Apex',
+        repo: 'org/apex',
+        chatThreadId: 'thread-abc',
+        playbookRunId: 'run-1',
+      }),
+    ).rejects.toThrow(/Playbook interview linkage/);
+
+    expect(valuesMock).not.toHaveBeenCalled();
   });
 });
 
@@ -639,6 +745,124 @@ describe('updateInterviewTitle', () => {
     await expect(
       updateInterviewTitle('interview-1', 'user-other', 'Hijacked Title'),
     ).rejects.toMatchObject({ message: 'Only the author can rename the interview' });
+  });
+});
+
+// ── updateInterviewPhaseAssignments ───────────────────────────────────────────
+
+describe('updateInterviewPhaseAssignments', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockCreateNotification.mockResolvedValue({ id: 'notif-1' });
+  });
+
+  it('updates only the supplied phase assignments', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      discoveryAssigneeId: null,
+      deliveryAssigneeId: null,
+      technicalAssigneeId: null,
+    });
+    mockGetActiveUsers.mockResolvedValue([
+      { oid: 'discovery-1', displayName: 'Discovery User' },
+      { oid: 'technical-1', displayName: 'Technical User' },
+    ]);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await updateInterviewPhaseAssignments('interview-1', 'user-1', {
+      discoveryAssigneeId: 'discovery-1',
+      technicalAssigneeId: 'technical-1',
+    });
+
+    expect(setMock).toHaveBeenCalledWith({
+      discoveryAssigneeId: 'discovery-1',
+      technicalAssigneeId: 'technical-1',
+      updatedAt: expect.any(String),
+    });
+    expect(mockCreateNotification).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not clear an existing phase when another phase is assigned', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      discoveryAssigneeId: 'discovery-1',
+      deliveryAssigneeId: null,
+      technicalAssigneeId: null,
+    });
+    mockGetActiveUsers.mockResolvedValue([
+      { oid: 'delivery-1', displayName: 'Delivery User' },
+    ]);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await updateInterviewPhaseAssignments('interview-1', 'user-1', {
+      deliveryAssigneeId: 'delivery-1',
+    });
+
+    expect(setMock).toHaveBeenCalledWith({
+      deliveryAssigneeId: 'delivery-1',
+      updatedAt: expect.any(String),
+    });
+  });
+
+  it('leaves unspecified phase assignees unchanged', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      discoveryAssigneeId: 'discovery-1',
+      deliveryAssigneeId: 'delivery-1',
+      technicalAssigneeId: null,
+    });
+    mockGetActiveUsers.mockResolvedValue([
+      { oid: 'technical-1', displayName: 'Technical User' },
+    ]);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await updateInterviewPhaseAssignments('interview-1', 'user-1', {
+      technicalAssigneeId: 'technical-1',
+    });
+
+    expect(setMock).toHaveBeenCalledWith({
+      technicalAssigneeId: 'technical-1',
+      updatedAt: expect.any(String),
+    });
+  });
+
+  it('clears a phase when the client sends null without touching the others', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      discoveryAssigneeId: 'discovery-1',
+      deliveryAssigneeId: 'delivery-1',
+      technicalAssigneeId: 'technical-1',
+    });
+    mockGetActiveUsers.mockResolvedValue([]);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await updateInterviewPhaseAssignments('interview-1', 'user-1', {
+      discoveryAssigneeId: null,
+    });
+
+    expect(setMock).toHaveBeenCalledWith({
+      discoveryAssigneeId: null,
+      updatedAt: expect.any(String),
+    });
+  });
+
+  it('rejects a user who is not active in the interview project', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+    mockGetActiveUsers.mockResolvedValue([]);
+
+    await expect(updateInterviewPhaseAssignments('interview-1', 'user-1', {
+      deliveryAssigneeId: 'outside-project',
+    })).rejects.toMatchObject({
+      message: 'Phase assignees must be active users in this project',
+    });
   });
 });
 

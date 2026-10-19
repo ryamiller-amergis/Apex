@@ -72,6 +72,35 @@ describe('checkpointConsumer', () => {
     await expect(handler.processOnce()).resolves.toBe('poison');
     expect(dead).toEqual(['lock-1']);
   });
+
+  it('reports progress on every loop pass', async () => {
+    const stop = new AbortController();
+    const onProgress = jest.fn();
+    let passes = 0;
+    const consumer: QueueConsumer = {
+      receive: async () => null,
+      complete: async () => undefined,
+      abandon: async () => undefined,
+      deadLetter: async () => undefined,
+    };
+    const handler = createCheckpointConsumer({
+      consumer,
+      attempts: {} as never,
+      signal: stop.signal,
+      onProgress,
+      clock: {
+        now: () => new Date(0),
+        sleep: async () => {
+          passes += 1;
+          if (passes === 2) stop.abort();
+        },
+      } as never,
+    });
+
+    await handler.runLoop();
+
+    expect(onProgress).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('resultConsumer', () => {

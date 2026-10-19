@@ -1395,3 +1395,50 @@ variable "ai_platform_v2_interactive_repo_read_service_token" {
   sensitive   = true
   default     = null
 }
+
+# ── Alerts ──────────────────────────────────────────────────────────────────
+
+variable "alert_email_receivers" {
+  description = "Email addresses that receive production alerts. Empty creates no alerts."
+  type        = list(string)
+  default     = []
+}
+
+variable "alert_http_5xx_threshold" {
+  description = "App Service server errors in five minutes that trigger an alert."
+  type        = number
+  default     = 10
+}
+
+variable "app_service_storage_quota_gb" {
+  description = "App Service plan storage quota in GB (P1v3: 250). Prod and its staging slot share it; disk alerts fire at 70% and 85%."
+  type        = number
+  default     = 250
+}
+
+variable "alert_container_app_names" {
+  description = "Container Apps to alert on when they have no replica or keep restarting. Looked up by name, so apps managed outside this state can be listed."
+  type        = list(string)
+  default     = []
+}
+
+variable "alert_container_app_resource_group_name" {
+  description = "Resource group of alert_container_app_names."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = length(var.alert_container_app_names) == 0 || var.alert_container_app_resource_group_name != null
+    error_message = "alert_container_app_resource_group_name is required when alert_container_app_names is set."
+  }
+}
+
+variable "alert_email_hours" {
+  description = "Daily window (HH:MM:SS, Windows time zone name) when alert emails go out. Outside it they are suppressed; rules still evaluate and still bill. Null emails around the clock."
+  type = object({
+    start     = string
+    end       = string
+    time_zone = string
+  })
+  default = null
+}

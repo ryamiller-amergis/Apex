@@ -11,6 +11,8 @@
  * moment a view shows the definition's current version instead.
  */
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import { PlaybookRunStepList } from './PlaybookRunStepList';
 import { PlaybookRunActions } from './PlaybookRunActions';
 import { PlaybookGateReviewPanel } from './PlaybookGateReviewPanel';
@@ -30,6 +32,7 @@ interface PlaybookRunRowProps {
 }
 
 const PlaybookRunRow: React.FC<PlaybookRunRowProps> = ({ run, project }) => {
+  const canvasEnabled = useFeatureFlag('playbooks-authoring-canvas', project);
   const selectedRunId = typeof window !== 'undefined'
     ? new URLSearchParams(window.location.search).get('run')
     : null;
@@ -73,6 +76,16 @@ const PlaybookRunRow: React.FC<PlaybookRunRowProps> = ({ run, project }) => {
         <span className={styles.runMeta}>
           started {absoluteTime(run.startedAt)} by {run.initiatorUserId}
         </span>
+        {canvasEnabled ? (
+          <Link
+            className={styles.runMeta}
+            to={`/playbooks/runs/${run.runId}`}
+            onClick={(event) => event.stopPropagation()}
+            {...{ 'data-testid': 'playbook-run-live-canvas' }}
+          >
+            Live canvas
+          </Link>
+        ) : null}
       </button>
 
       {expanded ? (

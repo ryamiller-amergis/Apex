@@ -17,6 +17,11 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../../db/drizzle';
 import { playbookRuns, playbookStepRuns } from '../../db/schema';
 import { assertSuspendedRunCapacity } from '../playbookGuardService';
+import { notifyPlaybookRunChanged } from '../playbookRunNotifyService';
+
+function signalRunChanged(runId: string): void {
+  void notifyPlaybookRunChanged(runId).catch(() => {});
+}
 import type {
   PlaybookGraph,
   PlaybookStepRun,
@@ -181,6 +186,8 @@ export async function suspendStepRun(input: {
     .update(playbookRuns)
     .set({ status: 'suspended', updatedAt: nowIso() })
     .where(and(eq(playbookRuns.id, context.runId), eq(playbookRuns.status, 'running')));
+
+  signalRunChanged(context.runId);
 }
 
 /**
@@ -220,6 +227,7 @@ export async function resumeStepRun(input: {
     .set({ status: 'running', updatedAt: nowIso() })
     .where(and(eq(playbookRuns.id, moved[0].runId), eq(playbookRuns.status, 'suspended')));
 
+  signalRunChanged(moved[0].runId);
   return true;
 }
 
@@ -242,11 +250,12 @@ export async function completeStepRun(input: {
         inArray(playbookStepRuns.status, ['pending', 'running'])
       )
     )
-    .returning({ id: playbookStepRuns.id });
+    .returning({ id: playbookStepRuns.id, runId: playbookStepRuns.runId });
 
   if (updated.length === 0) {
     throw new PlaybookStepRunNotFoundError(input.stepRunId);
   }
+  signalRunChanged(updated[0].runId);
 }
 
 /**
@@ -279,8 +288,9 @@ export async function completeStepRunIfOpen(input: {
         inArray(playbookStepRuns.status, ['pending', 'running'])
       )
     )
-    .returning({ id: playbookStepRuns.id });
+    .returning({ id: playbookStepRuns.id, runId: playbookStepRuns.runId });
 
+  if (updated.length > 0) signalRunChanged(updated[0].runId);
   return updated.length > 0;
 }
 
@@ -299,7 +309,7 @@ export async function failStepRun(input: {
 }): Promise<void> {
   const status: PlaybookStepRunStatus = input.retryable ? 'failed_retryable' : 'failed';
 
-  await db
+  const updated = await db
     .update(playbookStepRuns)
     .set({
       status,
@@ -312,7 +322,10 @@ export async function failStepRun(input: {
         eq(playbookStepRuns.id, input.stepRunId),
         inArray(playbookStepRuns.status, ['pending', 'running', 'suspended'])
       )
-    );
+    )
+    .returning({ runId: playbookStepRuns.runId });
+
+  if (updated[0]) signalRunChanged(updated[0].runId);
 }
 
 /**

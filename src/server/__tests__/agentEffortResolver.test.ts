@@ -22,6 +22,15 @@ function config(
 }
 
 describe('agentEffortResolver', () => {
+  it('omits effort for Composer models that do not support it', () => {
+    expect(buildCursorModelSelection('composer-2.5', 'low')).toEqual({
+      id: 'composer-2.5',
+    });
+    expect(buildCursorModelSelection('composer-2', 'high')).toEqual({
+      id: 'composer-2',
+    });
+  });
+
   it('AC-0 / VT-01: resolves module effort before the project default', () => {
     expect(
       resolveEffort({

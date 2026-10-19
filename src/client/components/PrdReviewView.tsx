@@ -99,7 +99,7 @@ import {
   type PrdReadinessStageStatus,
 } from '../../shared/utils/prdReadiness';
 import { resolvePrototypeStageEnabled } from '../../shared/utils/prototypeStage';
-import { buildPassingValidationReasonsMarkdown, collectValidationGaps, normalizeCrossCuttingCheck } from '../../shared/utils/validationReport';
+import { buildPassingValidationReasonsMarkdown, collectValidationGaps, isUnusableValidationScorecard, normalizeCrossCuttingCheck } from '../../shared/utils/validationReport';
 import type {
   ReviewSectionKey,
   TextSelector,
@@ -1880,6 +1880,13 @@ export const PrdReviewView: React.FC = () => {
                     </span>
                   );
                 }
+                if (isUnusableValidationScorecard(prd.validationScorecard)) {
+                  return (
+                    <span className={`${styles.validationBadge} ${styles.badgeError}`}>
+                      ⚠ Score not recorded
+                    </span>
+                  );
+                }
                 if (prd.validationScore !== null && prd.validationScore !== undefined && prd.validationScore >= (prd.validationScoreThreshold ?? 90)) {
                   return (
                     <span className={`${styles.validationBadge} ${styles.badgePassed}`}>
@@ -2416,6 +2423,7 @@ export const PrdReviewView: React.FC = () => {
           && prd.validationScore < (prd.validationScoreThreshold ?? 90)
           && prd.status === 'draft'
           && !!prd.validationScorecard
+          && !isUnusableValidationScorecard(prd.validationScorecard)
           && prdFixFlow.phase !== 'fixing';
 
         return (
@@ -2518,7 +2526,8 @@ export const PrdReviewView: React.FC = () => {
                       prd.validationScore !== undefined &&
                       prd.validationScore < (prd.validationScoreThreshold ?? 90) &&
                       prd.status === 'draft' &&
-                      !!prd.validationScorecard
+                      !!prd.validationScorecard &&
+                      !isUnusableValidationScorecard(prd.validationScorecard)
                     );
                   const showCoverageReview =
                     prdFixFlow.phase === 'reviewing' && prdFixFlow.kind === 'coverage';
@@ -3100,7 +3109,8 @@ export const PrdReviewView: React.FC = () => {
                     const passingReasonsMarkdown = buildPassingValidationReasonsMarkdown(sc);
                     const reportAlreadyIncludesPassingReasons = /passing validation reasons|passing reasons|positive findings|strengths/i.test(reportMarkdown);
                     const effectiveThreshold = prd.validationScoreThreshold ?? 90;
-                    const scoreColor = sc.overall_score >= effectiveThreshold ? 'var(--success-color)' : sc.overall_score >= 70 ? '#e6a817' : 'var(--error-color)';
+                    const scoreMissing = isUnusableValidationScorecard(sc);
+                    const scoreColor = scoreMissing ? 'var(--text-secondary)' : sc.overall_score >= effectiveThreshold ? 'var(--success-color)' : sc.overall_score >= 70 ? '#e6a817' : 'var(--error-color)';
                     const files = sc.files ?? [];
                     const features = sc.features ?? [];
                     const allGaps = collectValidationGaps(sc);
@@ -3113,12 +3123,12 @@ export const PrdReviewView: React.FC = () => {
                         <div className={styles.scorecardHeader}>
                           <div className={styles.scorecardOverall}>
                             <div className={styles.scoreRing} style={{ '--score-color': scoreColor, '--score-pct': `${sc.overall_score}%` } as React.CSSProperties}>
-                              <span className={styles.scoreValue}>{Math.round(sc.overall_score)}</span>
+                              <span className={styles.scoreValue}>{scoreMissing ? '—' : Math.round(sc.overall_score)}</span>
                             </div>
                             <div className={styles.scoreDetails}>
                               <h3 className={styles.scorecardTitle}>PRD Spec Review</h3>
                               <div className={styles.scoreVerdict} data-verdict={sc.verdict}>
-                                {sc.verdict === 'ready' ? 'Ready for review' : sc.verdict === 'gaps' ? 'Gaps identified' : 'Significant gaps'}
+                                {scoreMissing ? 'Score not recorded — see the report below' : sc.verdict === 'ready' ? 'Ready for review' : sc.verdict === 'gaps' ? 'Gaps identified' : 'Significant gaps'}
                               </div>
                               <div className={styles.scoreMeta}>
                                 Threshold: {sc.ready_threshold}% &middot; Phase: {sc.review_phase}

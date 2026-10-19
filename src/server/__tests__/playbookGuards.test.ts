@@ -49,6 +49,7 @@ import {
   PlaybookGraphNodeConfigError,
   PlaybookGraphStepTypeError,
   PlaybookGuardViolationError,
+  assertCanvasConnection,
   assertGraphWithinGuards,
   assertStepGateSatisfied,
   countAgentSteps,
@@ -558,5 +559,27 @@ describe('FEAT-008 VT-15/VT-16 (TBI-034 / PBI-007) — publishing through the de
       PlaybookGuardViolationError
     );
     expect(mockPublishUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('assertCanvasConnection', () => {
+  it('allows cursor-agent connected to notify without a gate', () => {
+    const graph: PlaybookGraph = {
+      nodes: [
+        { id: 'agent', stepType: 'cursor-agent', config: configFor('cursor-agent', 'agent') },
+        { id: 'done', stepType: 'notify', config: configFor('notify', 'done') },
+      ],
+      edges: [{ from: 'agent', to: 'done' }],
+    };
+    expect(() => assertCanvasConnection(graph)).not.toThrow();
+  });
+
+  it('refuses a self-loop with the same loop message as publish', () => {
+    const graph: PlaybookGraph = {
+      nodes: [{ id: 'solo', stepType: 'notify', config: configFor('notify', 'solo') }],
+      edges: [{ from: 'solo', to: 'solo' }],
+    };
+    expect(() => assertCanvasConnection(graph)).toThrow(PlaybookGuardViolationError);
+    expect(() => assertCanvasConnection(graph)).toThrow(/loop/i);
   });
 });
