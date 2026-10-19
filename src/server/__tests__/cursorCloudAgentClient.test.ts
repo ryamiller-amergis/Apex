@@ -131,8 +131,7 @@ describe('cursorCloudAgentClient', () => {
             url: 'https://dev.azure.com/amergis/MaxView/_git/MaxView',
             startingRef: 'development',
           }],
-          autoCreatePR: false,
-          skipReviewerRequest: true,
+          autoCreatePR: true,
         },
       });
       expect(mockSend).toHaveBeenCalledWith('Implement the work item');
@@ -245,7 +244,7 @@ describe('cursorCloudAgentClient', () => {
     }
   });
 
-  it('lets Cursor open the pull request only for GitHub', async () => {
+  it('turns on autoCreatePR so Cursor opens the pull request', async () => {
     const previous = process.env.CURSOR_USER_LEVEL_API_KEY;
     process.env.CURSOR_USER_LEVEL_API_KEY = 'cursor-key';
     mockDispose.mockResolvedValue(undefined);

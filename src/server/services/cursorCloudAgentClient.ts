@@ -145,7 +145,7 @@ export async function launchCloudAgent(
     name: input.workItemTitle,
     cloud: {
       repos: [{ url: repoUrl, startingRef: input.skillBranch }],
-      autoCreatePR: input.skillProvider === 'github',
+      autoCreatePR: true,
     },
   });
   try {

@@ -40,13 +40,21 @@ export function loadPullRequestDescriptionTemplate(): string | null {
   return templateCache;
 }
 
-/** Prompt lines that ask the agent to fill pr-description.md in its final message. */
-export function buildPullRequestDescriptionInstructions(workItemId: number): string | null {
+/**
+ * Prompt lines that tell the agent to open the pull request.
+ * Title, description, and label are written by the agent, not by Apex after the run.
+ */
+export function buildPullRequestDescriptionInstructions(input: {
+  workItemId: number;
+  pullRequestTitle: string;
+  pullRequestLabel: string;
+}): string | null {
   const template = loadPullRequestDescriptionTemplate();
   if (!template) return null;
   return [
-    `End your final message with the pull request description, wrapped between ${DESCRIPTION_OPEN_TAG} and ${DESCRIPTION_CLOSE_TAG}.`,
-    `Use the template below. Keep every heading, and replace each HTML comment with real content for this change. Name the work item as ${buildWorkItemReferenceText(workItemId)}. Stay under ${AGENT_DESCRIPTION_TARGET} characters.`,
+    `Open a draft pull request titled \`${input.pullRequestTitle}\`.`,
+    `Use the description below. Keep every heading, and replace each HTML comment with real content for this change. Name the work item as ${buildWorkItemReferenceText(input.workItemId)}. Stay under ${AGENT_DESCRIPTION_TARGET} characters.`,
+    `Add the pull request label \`${input.pullRequestLabel}\`.`,
     '```markdown',
     template,
     '```',

@@ -307,7 +307,7 @@ describe('getCloudAgentActivityStream', () => {
     });
   });
 
-  it('opens the draft pull request when the streamed agent completes', async () => {
+  it('does not open a pull request after the streamed agent completes', async () => {
     mockDevSessionFindFirst.mockResolvedValue(session({ workItemId: 42, currentRunPrUrl: null }));
     mockAgentRunFindFirst.mockResolvedValue(run({
       status: 'running',
@@ -357,10 +357,7 @@ describe('getCloudAgentActivityStream', () => {
     for await (const event of activity) events.push(event);
 
     expect(events).toEqual([expect.objectContaining({ status: 'completed' })]);
-    expect(openCloudAgentPullRequest).toHaveBeenCalledWith(expect.objectContaining({
-      sourceBranch: 'feature/apex-42-abc',
-      adoUserToken: 'user-token',
-    }));
+    expect(openCloudAgentPullRequest).not.toHaveBeenCalled();
   });
 
   it('does not expose a stream for another user or a replaced run', async () => {
@@ -709,21 +706,22 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
     });
 
     expect(prompt).toContain('Work on branch `feature/apex-123-shift-scheduler` and no other branch.');
-    expect(prompt).toContain('Apex opens a draft pull request titled `[APEX] apex-123-shift-scheduler`');
+    expect(prompt).toContain('Open a draft pull request titled `[APEX] apex-123-shift-scheduler`');
+    expect(prompt).toContain('Add the pull request label `apex-cloud-agent`');
     expect(prompt).toContain('Name the work item as AB#123');
     expect(prompt).toContain('Do not move this work item or its backlog items to In Pull Request.');
-    expect(prompt).not.toContain('Open a pull request when the implementation is ready.');
+    expect(prompt).not.toContain('Do not open a pull request.');
   });
 
-  it('asks the agent to return pr-description.md filled in between pr-description tags', async () => {
+  it('tells the agent to open the pull request with the description skeleton', async () => {
     const prompt = await buildCloudAgentPrompt({
       project: 'MaxView',
       workItemId: 123,
       workItemTitle: 'Shift Scheduler',
     });
 
-    expect(prompt).toContain('uses the description from your final message');
-    expect(prompt).toContain('wrapped between <pr-description> and </pr-description>');
+    expect(prompt).toContain('Open a draft pull request titled `[APEX] apex-123-shift-scheduler`');
+    expect(prompt).toContain('Add the pull request label `apex-cloud-agent`');
     expect(prompt).toContain('#### What does this PR do?');
     expect(prompt).toContain('#### How should this be manually tested?');
   });
@@ -1178,7 +1176,7 @@ describe('getCloudAgentRunStatus check projection (TBI-005 DoD-0/DoD-1/DoD-2; PB
     }));
   });
 
-  it('opens the pull request as the developer who started the run once the branch is pushed', async () => {
+  it('does not open the pull request itself once the branch is pushed', async () => {
     mockDevSessionFindFirst.mockResolvedValue(linkableSession({ currentRunPrUrl: null }));
     mockAgentRunFindFirst.mockResolvedValue(linkableRun({
       status: 'running',
@@ -1211,23 +1209,10 @@ describe('getCloudAgentRunStatus check projection (TBI-005 DoD-0/DoD-1/DoD-2; PB
 
     const summary = await getCloudAgentRunStatus(SESSION_ID, USER_ID, deps, 'user-token');
 
-    expect(openCloudAgentPullRequest).toHaveBeenCalledWith({
-      project: 'MaxView',
-      repo: 'MaxView',
-      sourceBranch: 'feature/apex-42-abc',
-      titleBranch: 'feature/apex-42-abc',
-      targetBranch: 'development',
-      workItemId: 42,
-      workItemTitle: 'Implement login',
-      authorName: 'Jane Developer',
-      authorEmail: 'jane@example.com',
-      summary: 'Added the login form.',
-      adoUserToken: 'user-token',
-    });
+    expect(openCloudAgentPullRequest).not.toHaveBeenCalled();
     expect(summary).toEqual(expect.objectContaining({
-      status: 'completed',
-      prUrl: opened,
-      finishedWithoutPr: false,
+      status: 'running',
+      prUrl: null,
     }));
   });
 

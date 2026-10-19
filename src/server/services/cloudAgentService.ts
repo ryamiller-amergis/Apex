@@ -68,6 +68,7 @@ import {
 } from '../../shared/utils/developmentKickoff';
 import {
   alignCloudAgentPullRequest,
+  CLOUD_AGENT_PULL_REQUEST_LABEL,
   CloudAgentPullRequestDeferred,
   openCloudAgentPullRequest,
   type OpenCloudAgentPullRequestInput,
@@ -328,18 +329,20 @@ export async function buildCloudAgentPrompt(input: {
   const files = pack.files
     .map((file) => `### ${file.name}\n\n${file.content}`)
     .join('\n\n');
-  const descriptionInstructions = buildPullRequestDescriptionInstructions(input.workItemId);
+  const descriptionInstructions = buildPullRequestDescriptionInstructions({
+    workItemId: input.workItemId,
+    pullRequestTitle,
+    pullRequestLabel: CLOUD_AGENT_PULL_REQUEST_LABEL,
+  });
   const body = [
     `Implement this Azure DevOps work item in the project's configured repository.`,
     `Work item id: ${input.workItemId}.`,
     buildCloudDevelopmentKickoffSection(development),
     `Work on branch \`${branchName}\` and no other branch.`,
     descriptionInstructions
-      ? `Do not open a pull request. Apex opens a draft pull request titled \`${pullRequestTitle}\` and uses the description from your final message.`
-      : `Do not open a pull request. Apex opens a draft pull request titled \`${pullRequestTitle}\` and writes ${buildWorkItemReferenceText(input.workItemId)} in the description.`,
+      ?? `Open a draft pull request titled \`${pullRequestTitle}\`. Write ${buildWorkItemReferenceText(input.workItemId)} in the description. Add the pull request label \`${CLOUD_AGENT_PULL_REQUEST_LABEL}\`.`,
     `Do not change Azure DevOps work item state, due date, or due date reason.`,
     `Do not move this work item or its backlog items to In Pull Request.`,
-    ...(descriptionInstructions ? [descriptionInstructions] : []),
     files,
   ].join('\n\n');
   return prefixDevelopmentSkillInvocation(body, development);
@@ -1317,7 +1320,7 @@ export async function getCloudAgentRunStatus(
   sessionId: string,
   userId: string,
   deps: CloudAgentServiceDeps = defaultDeps,
-  adoUserToken: string | null = null,
+  _adoUserToken: string | null = null,
 ): Promise<CloudAgentRunSummary | null> {
   const session = await db.query.devSessions.findFirst({
     where: and(eq(devSessions.id, sessionId), eq(devSessions.authorId, userId)),
@@ -1352,44 +1355,6 @@ export async function getCloudAgentRunStatus(
           required: canonicalBranch,
           pushed: pushedBranch,
         }));
-      }
-      const sourceBranch = pushedBranch ?? canonicalBranch;
-      // While the job is still running, wait for APEX_RUN_SETTLED. That line
-      // follows the CLI exit, so a pushed branch cannot be recorded as success
-      // before a non-zero exit fails the run.
-      const readyForPullRequest = mapped !== 'running' || observed.settled === true;
-      if (!prUrl && sourceBranch && readyForPullRequest && mapped !== 'failed' && mapped !== 'cancelled') {
-        if (!adoUserToken && process.env.NODE_ENV === 'production') {
-          mapped = 'running';
-        } else {
-          const meta = backgroundSnapshot(run.executionSnapshot)?.cloudAgent;
-          const repository = backgroundSnapshot(run.executionSnapshot)?.repository;
-          let targetBranch = meta?.baseBranch || observed.baseBranch || null;
-          if (!targetBranch) {
-            const skill = await deps.getSkillConfig(session.project);
-            targetBranch = skill?.skillBranch ?? null;
-          }
-          const workItemId = session.workItemId ?? meta?.workItemId;
-          if (!repository || !targetBranch || !workItemId) {
-            throw new Error('Cloud Agent run is missing pull request context');
-          }
-          if (backgroundSnapshot(run.executionSnapshot)?.provider !== 'github') {
-            prUrl = await deps.openCloudAgentPullRequest({
-              project: session.project,
-              repo: repository,
-              sourceBranch,
-              titleBranch: canonicalBranch ?? sourceBranch,
-              targetBranch,
-              workItemId,
-              workItemTitle: meta?.workItemTitle,
-              authorName: meta?.initiatorName,
-              authorEmail: meta?.initiatorEmail,
-              summary: observed.summary,
-              adoUserToken,
-            });
-            mapped = 'completed';
-          }
-        }
       }
       if (mapped && isAgentRunTerminalStatus(mapped)) {
         await applyCloudAgentCompletion({
@@ -1615,9 +1580,8 @@ export async function getCloudAgentActivityStream(
 
 /**
  * The activity stream's completed status is the Cursor run finishing.
- * Opening the pull request happens after that event is yielded, so the
- * drawer sees completion before Azure DevOps is called. create, then draft,
- * lives in openCloudAgentPullRequest.
+ * Cursor opens the pull request (autoCreatePR). This refresh records that
+ * pull request after the completed event is yielded.
  */
 async function* openPullRequestWhenAgentCompletes(
   source: AsyncIterable<CloudAgentActivityEvent>,
