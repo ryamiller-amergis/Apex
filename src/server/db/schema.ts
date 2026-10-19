@@ -236,6 +236,25 @@ export const repoCacheLeases = pgTable('repo_cache_leases', {
   expiresAtIdx: index('idx_repo_cache_leases_expires_at').on(t.expiresAt),
 }));
 
+export const groundingProfiles = pgTable('grounding_profiles', {
+  idHash: text('id_hash').primaryKey(),
+  runRef: text('run_ref').notNull(),
+  provider: text('provider').notNull(),
+  project: text('project').notNull(),
+  repo: text('repo').notNull(),
+  sha: text('sha').notNull(),
+  checkoutPath: text('checkout_path').notNull(),
+  mirrorPath: text('mirror_path'),
+  caller: text('caller'),
+  ownerUserId: text('owner_user_id').notNull(),
+  ownerRunRef: text('owner_run_ref').notNull(),
+  ownerProject: text('owner_project').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  expiresAtIdx: index('idx_grounding_profiles_expires_at').on(t.expiresAt),
+}));
+
 export const runGroundings = pgTable('run_groundings', {
   id: uuid('id').primaryKey().defaultRandom(),
   runType: text('run_type').$type<RunType>().notNull(),
