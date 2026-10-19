@@ -52,7 +52,7 @@ export function buildPullRequestDescriptionInstructions(input: {
   const template = loadPullRequestDescriptionTemplate();
   if (!template) return null;
   return [
-    `Open a draft pull request titled \`${input.pullRequestTitle}\`.`,
+    `Open a pull request titled \`${input.pullRequestTitle}\`.`,
     `Use the description below. Keep every heading, and replace each HTML comment with real content for this change. Name the work item as ${buildWorkItemReferenceText(input.workItemId)}. Stay under ${AGENT_DESCRIPTION_TARGET} characters.`,
     `Add the pull request label \`${input.pullRequestLabel}\`.`,
     '```markdown',

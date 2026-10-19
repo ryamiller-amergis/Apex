@@ -145,7 +145,6 @@ async function alignExistingPullRequest(
     pullRequestId,
     title: input.title,
     ...(input.description !== undefined ? { description: input.description } : {}),
-    isDraft: true,
   });
 }
 
@@ -162,7 +161,7 @@ async function tagCloudAgentPullRequest(
 }
 
 /**
- * Sets the My Work title and draft on an already-opened Azure Repos pull request.
+ * Sets the My Work title on an already-opened Azure Repos pull request.
  * Leaves the description alone: it holds the agent's filled pr-description.md,
  * and this caller does not have the agent's final message.
  */

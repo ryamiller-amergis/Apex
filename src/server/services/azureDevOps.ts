@@ -6119,7 +6119,7 @@ export class AzureDevOpsService {
   }
 
   /**
-   * Sets title, description, and draft on an existing pull request.
+   * Sets title and description on an existing pull request.
    * Used when Cloud Agent adopts a pull request the run already opened.
    */
   async updatePullRequest(opts: {
@@ -6129,14 +6129,14 @@ export class AzureDevOpsService {
     title: string;
     /** Omitted to keep the pull request's current description. */
     description?: string;
-    isDraft: boolean;
+    isDraft?: boolean;
   }): Promise<void> {
     const gitApi = await this.connection.getGitApi();
     await gitApi.updatePullRequest(
       {
         title: opts.title,
         ...(opts.description !== undefined ? { description: opts.description } : {}),
-        isDraft: opts.isDraft,
+        ...(opts.isDraft !== undefined ? { isDraft: opts.isDraft } : {}),
       },
       opts.repo,
       opts.pullRequestId,

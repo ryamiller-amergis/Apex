@@ -340,7 +340,7 @@ export async function buildCloudAgentPrompt(input: {
     buildCloudDevelopmentKickoffSection(development),
     `Work on branch \`${branchName}\` and no other branch.`,
     descriptionInstructions
-      ?? `Open a draft pull request titled \`${pullRequestTitle}\`. Write ${buildWorkItemReferenceText(input.workItemId)} in the description. Add the pull request label \`${CLOUD_AGENT_PULL_REQUEST_LABEL}\`.`,
+      ?? `Open a pull request titled \`${pullRequestTitle}\`. Write ${buildWorkItemReferenceText(input.workItemId)} in the description. Add the pull request label \`${CLOUD_AGENT_PULL_REQUEST_LABEL}\`.`,
     `Do not change Azure DevOps work item state, due date, or due date reason.`,
     `Do not move this work item or its backlog items to In Pull Request.`,
     files,
@@ -1122,7 +1122,7 @@ async function writeWorkItemPullRequest(
         titleBranch: input.titleBranch,
       });
     } catch (err) {
-      console.warn('[cloud-agent] could not align the pull request to a draft', JSON.stringify({
+      console.warn('[cloud-agent] could not set the pull request title', JSON.stringify({
         runId: input.runId,
         sessionId: input.sessionId,
         error: err instanceof Error ? err.message : String(err),
@@ -1345,8 +1345,8 @@ export async function getCloudAgentRunStatus(
         cloudAgentId: run.cloudAgentIdentity,
         cursorRunId: run.dispatchMessageId,
       });
-      let mapped = mapObservedStatus(observed.status);
-      let prUrl = observed.prUrl;
+      const mapped = mapObservedStatus(observed.status);
+      const prUrl = observed.prUrl;
       const canonicalBranch = metaBranchName(run.executionSnapshot);
       const pushedBranch = observed.noChanges ? null : observed.branchName ?? run.cloudBranchName;
       if (canonicalBranch && pushedBranch && pushedBranch !== canonicalBranch) {

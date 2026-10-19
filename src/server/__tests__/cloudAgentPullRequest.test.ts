@@ -117,7 +117,7 @@ describe('openCloudAgentPullRequest', () => {
     ado.addPullRequestLabel.mockResolvedValue(undefined);
   });
 
-  it('creates the pull request, then marks it as a draft', async () => {
+  it('creates the pull request without marking it as a draft', async () => {
     const prUrl = await openCloudAgentPullRequest(input);
 
     expect(prUrl).toBe(PR_URL);
@@ -133,8 +133,8 @@ describe('openCloudAgentPullRequest', () => {
       pullRequestId: 9,
       title: '[APEX] apex-42-implement-login',
       description: skeletonDescription(42),
-      isDraft: true,
     });
+    expect(ado.updatePullRequest.mock.calls[0][0].isDraft).toBeUndefined();
     expect(ado.addPullRequestLabel).toHaveBeenCalledWith({
       repo: 'MaxView',
       project: 'MaxView',
@@ -152,8 +152,8 @@ describe('openCloudAgentPullRequest', () => {
     expect(ado.createPullRequest).not.toHaveBeenCalled();
     expect(ado.updatePullRequest).toHaveBeenCalledWith(expect.objectContaining({
       pullRequestId: 9,
-      isDraft: true,
     }));
+    expect(ado.updatePullRequest.mock.calls[0][0].isDraft).toBeUndefined();
     expect(ado.addPullRequestLabel).toHaveBeenCalledWith({
       repo: 'MaxView',
       project: 'MaxView',
@@ -171,7 +171,7 @@ describe('alignCloudAgentPullRequest', () => {
     ado.addPullRequestLabel.mockResolvedValue(undefined);
   });
 
-  it('sets the title and draft without replacing the description', async () => {
+  it('sets the title without replacing the description or marking a draft', async () => {
     await alignCloudAgentPullRequest({
       project: 'MaxView',
       repo: 'MaxView',
@@ -185,7 +185,7 @@ describe('alignCloudAgentPullRequest', () => {
       project: 'MaxView',
       pullRequestId: 9,
       title: '[APEX] apex-42-implement-login',
-      isDraft: true,
     });
+    expect(ado.updatePullRequest.mock.calls[0][0].isDraft).toBeUndefined();
   });
 });
