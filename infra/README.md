@@ -708,13 +708,10 @@ Service live-bus settings, and set `AI_RUNS_INTERACTIVE_DISPATCH_URL` to the
 `ai_runs_interactive_app_fqdn` HTTPS endpoint.
 
 The interactive image includes PowerShell for project-owned operational skills.
-Terraform exposes the existing sensitive `ado_pat` input as the `ADO_PAT`
-Container App secret on both the legacy interactive app and the v2
-fast-interactive and agentic apps. The MaxView `cab-release` skill uses it only
-for its confirmed Manual Release wiki update, snow queue, and optional
-release-ref push; the CAB-specific prompt policy forbids other Azure DevOps
-writes. `REPO_READ_SERVICE_TOKEN` is the repo-read callback and is not an
-Azure DevOps credential.
+CAB scripts call the Apex web app at `/api/internal/cab-release/ado`. `ADO_PAT`
+stays on the web app. The container authenticates with the runner credential
+it already uses for callbacks. `REPO_READ_SERVICE_TOKEN` is the repo-read
+callback and is not an Azure DevOps credential.
 
 ### Clustering policy (live-stream correctness)
 

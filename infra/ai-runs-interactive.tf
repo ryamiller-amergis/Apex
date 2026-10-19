@@ -246,11 +246,6 @@ resource "azurerm_container_app" "ai_runs_interactive" {
     }
   }
 
-  secret {
-    name  = "ado-pat"
-    value = var.ado_pat
-  }
-
   # Short-term static ingest bridge (same token as the background Job). Required
   # while enable_ai_runs_entra_app is false; the actor host prefers this over MI.
   dynamic "secret" {
@@ -331,10 +326,6 @@ resource "azurerm_container_app" "ai_runs_interactive" {
       env {
         name  = "AZURE_TENANT_ID"
         value = var.azure_tenant_id
-      }
-      env {
-        name        = "ADO_PAT"
-        secret_name = "ado-pat"
       }
       env {
         name  = "AI_PILOT_DATA_DIR"

@@ -103,6 +103,7 @@ import apiKeysRoutes from './routes/apiKeys';
 import publicRoutes from './routes/public';
 import loadTestRunsInternalRoutes from './routes/loadTestRunsInternal';
 import aiRunsInternalRoutes from './routes/aiRunsInternal';
+import cabReleaseBrokerRoutes from './routes/cabReleaseBroker';
 import foundationSkillsAuthorizeRoutes from './routes/foundationSkillsAuthorize';
 import profileRoutes from './routes/profile';
 import walkthroughsRoutes from './routes/walkthroughs';
@@ -278,6 +279,7 @@ app.use('/api/public', publicRoutes);
 app.use('/api/internal/load-test-runs', loadTestRunsInternalRoutes);
 // AI runner ingest — session-free; auth is runner MI + AiRun.Runner (or local test token).
 app.use('/api/internal/ai-runs', aiRunsInternalRoutes);
+app.use('/api/internal/cab-release', cabReleaseBrokerRoutes);
 // @apex/skills CLI entitlement lookup — session-free, read-only, no secrets returned.
 app.use('/api/internal/foundation-skills', foundationSkillsAuthorizeRoutes);
 app.use('/api/admin', adminRouter);

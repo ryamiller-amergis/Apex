@@ -281,11 +281,6 @@ resource "azurerm_container_app" "ai_platform_v2_interactive_class" {
     value = var.ai_platform_v2_interactive_redis_key
   }
 
-  secret {
-    name  = "ado-pat"
-    value = var.ado_pat
-  }
-
   dapr {
     app_id       = local.ai_platform_v2_interactive_dapr_app_ids[each.key]
     app_port     = var.ai_platform_v2_interactive_target_port
@@ -363,10 +358,6 @@ resource "azurerm_container_app" "ai_platform_v2_interactive_class" {
       env {
         name  = "AZURE_TENANT_ID"
         value = var.azure_tenant_id
-      }
-      env {
-        name        = "ADO_PAT"
-        secret_name = "ado-pat"
       }
       env {
         name  = "AI_PLATFORM_V2_BLOB_ACCOUNT_NAME"
