@@ -1264,6 +1264,88 @@ describe('getCloudAgentRunStatus check projection (TBI-005 DoD-0/DoD-1/DoD-2; PB
       finishedWithoutPr: true,
     }));
   });
+
+  it('waits for Cursor to open the pull request when the finished run pushed a branch', async () => {
+    mockDevSessionFindFirst.mockResolvedValue(linkableSession({ currentRunPrUrl: null }));
+    mockAgentRunFindFirst.mockResolvedValue(linkableRun({ status: 'running' }));
+    const deps = makeDeps({
+      getCloudAgentRun: jest.fn().mockResolvedValue({
+        status: 'finished',
+        prUrl: null,
+        branchName: 'feature/apex-42-abc',
+        settled: true,
+      }),
+    });
+
+    const summary = await getCloudAgentRunStatus(SESSION_ID, USER_ID, deps);
+
+    expect(mockMarkTerminal).not.toHaveBeenCalled();
+    expect(mockPersistLeftoverWork).not.toHaveBeenCalled();
+    expect(summary).toEqual(expect.objectContaining({
+      status: 'running',
+      prUrl: null,
+    }));
+  });
+
+  it('picks up the autoCreatePR url on a later poll of the same finished run', async () => {
+    mockDevSessionFindFirst.mockResolvedValue(linkableSession({ currentRunPrUrl: null }));
+    mockAgentRunFindFirst.mockResolvedValue(linkableRun({ status: 'running' }));
+    mockGetAdoPullRequestStatus.mockResolvedValue('open');
+    const deps = makeDeps({
+      getCloudAgentRun: jest.fn().mockResolvedValue({
+        status: 'finished',
+        prUrl: 'https://dev.azure.com/amergis/MaxView/_git/MaxView/pullrequest/9',
+        branchName: 'feature/apex-42-abc',
+        settled: true,
+      }),
+    });
+
+    const summary = await getCloudAgentRunStatus(SESSION_ID, USER_ID, deps);
+
+    expect(mockMarkTerminal).toHaveBeenCalledWith(RUN_ID, expect.objectContaining({
+      status: 'completed',
+    }));
+    expect(summary).toEqual(expect.objectContaining({
+      status: 'completed',
+      prUrl: 'https://dev.azure.com/amergis/MaxView/_git/MaxView/pullrequest/9',
+      finishedWithoutPr: false,
+    }));
+  });
+
+  it('completes without a pull request once the wait for Cursor runs out', async () => {
+    mockDevSessionFindFirst.mockResolvedValue(linkableSession({ currentRunPrUrl: null }));
+    mockAgentRunFindFirst.mockResolvedValue(linkableRun({
+      status: 'running',
+      executionSnapshot: {
+        provider: 'ado',
+        repository: 'MaxView',
+        cloudAgent: {
+          workItemId: 42,
+          baseBranch: 'main',
+          pullRequestPendingSince: new Date(Date.now() - 11 * 60_000).toISOString(),
+        },
+      },
+    }));
+    const deps = makeDeps({
+      getCloudAgentRun: jest.fn().mockResolvedValue({
+        status: 'finished',
+        prUrl: null,
+        branchName: 'feature/apex-42-abc',
+        settled: true,
+      }),
+    });
+
+    const summary = await getCloudAgentRunStatus(SESSION_ID, USER_ID, deps);
+
+    expect(mockMarkTerminal).toHaveBeenCalledWith(RUN_ID, expect.objectContaining({
+      status: 'completed',
+    }));
+    expect(summary).toEqual(expect.objectContaining({
+      status: 'completed',
+      prUrl: null,
+      finishedWithoutPr: true,
+    }));
+  });
 });
 
 describe('Cloud Agent PR write-back and host status (PBI-007 / TBI-006)', () => {
@@ -1743,6 +1825,32 @@ describe('reconcileRunningCloudAgentRuns', () => {
 
     expect(mockMarkTerminal).not.toHaveBeenCalled();
     expect(openCloudAgentPullRequest).not.toHaveBeenCalled();
+  });
+
+  it('completes a pushed branch with no pull request once the wait for Cursor runs out', async () => {
+    mockLiveRows([liveExecution({
+      executionSnapshot: {
+        provider: 'ado',
+        repository: 'MaxView',
+        cloudAgent: {
+          workItemId: 42,
+          baseBranch: 'main',
+          pullRequestPendingSince: new Date(Date.now() - 11 * 60_000).toISOString(),
+        },
+      },
+    })]);
+    const getCloudAgentRun = jest.fn().mockResolvedValue(observation({
+      status: 'finished',
+      prUrl: null,
+      branchName: 'feature/apex-42-abc123',
+    }));
+
+    await reconcileRunningCloudAgentRuns(makeDeps({ getCloudAgentRun }));
+
+    expect(mockMarkTerminal).toHaveBeenCalledWith(RUN_ID, expect.objectContaining({
+      status: 'completed',
+      dispatchMessageId: 'cursor-run-1',
+    }));
   });
 
   it('leaves a still-running execution alone', async () => {

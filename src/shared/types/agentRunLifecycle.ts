@@ -105,6 +105,11 @@ export interface ExecutionSnapshot {
      * as the developer.
      */
     userTokenInstance?: string;
+    /**
+     * First time the run was seen finished with a pushed branch but no
+     * autoCreatePR url. Bounds how long the run waits for that url.
+     */
+    pullRequestPendingSince?: string;
   };
   workflowClass: string;
   skillPath: string;

@@ -200,6 +200,53 @@ function metaBranchName(
   return branchName || null;
 }
 
+/** How long a finished run waits for Cursor's autoCreatePR url before it completes without one. */
+export const CLOUD_AGENT_PULL_REQUEST_WAIT_MS = 10 * 60_000;
+
+/**
+ * True while Cursor has finished the run and pushed a branch but its
+ * autoCreatePR url has not arrived. Completing on this observation is final:
+ * it stores a run with no pull request, skips the work-item link, and writes
+ * leftover work saying none was opened, so the poll and the background sweep
+ * both wait instead.
+ */
+function awaitingCloudAgentPullRequest(input: {
+  status: AgentRunStatus | null;
+  prUrl: string | null;
+  noChanges?: boolean;
+  branchName?: string | null;
+}): boolean {
+  return input.status === 'completed'
+    && !input.prUrl
+    && !input.noChanges
+    && Boolean(input.branchName);
+}
+
+/**
+ * Starts the wait for Cursor's pull request on the first such observation and
+ * reports whether it has run past CLOUD_AGENT_PULL_REQUEST_WAIT_MS. Both
+ * callers read the same stored timestamp, so neither can wait forever.
+ */
+async function cloudAgentPullRequestWaitExpired(run: {
+  id: string;
+  executionSnapshot: AgentRunExecutionSnapshot | null | undefined;
+}): Promise<boolean> {
+  const pendingSince = backgroundSnapshot(run.executionSnapshot)?.cloudAgent?.pullRequestPendingSince;
+  const startedMs = pendingSince ? Date.parse(pendingSince) : Number.NaN;
+  if (Number.isNaN(startedMs)) {
+    const nowIso = new Date().toISOString();
+    await db
+      .update(agentRuns)
+      .set({
+        executionSnapshot: sql`jsonb_set(${agentRuns.executionSnapshot}, '{cloudAgent,pullRequestPendingSince}', to_jsonb(${nowIso}::text), true)`,
+        updatedAt: nowIso,
+      })
+      .where(eq(agentRuns.id, run.id));
+    return false;
+  }
+  return Date.now() - startedMs >= CLOUD_AGENT_PULL_REQUEST_WAIT_MS;
+}
+
 function isUniqueViolation(err: unknown): boolean {
   return Boolean(
     err
@@ -947,6 +994,7 @@ export async function reconcileRunningCloudAgentRuns(
         devSessionId: agentRuns.devSessionId,
         cloudAgentIdentity: agentRuns.cloudAgentIdentity,
         dispatchMessageId: agentRuns.dispatchMessageId,
+        executionSnapshot: agentRuns.executionSnapshot,
       })
       .from(agentRuns)
       .where(and(
@@ -973,15 +1021,14 @@ export async function reconcileRunningCloudAgentRuns(
         });
         const mapped = mapObservedStatus(observed.status);
         if (!mapped || !isAgentRunTerminalStatus(mapped)) continue;
-        // The worker pushed the branch and exited 0 after the pull-request
-        // call failed. Leave the run open so the page poll can open the pull
-        // request. Marking it completed here is final, and this sweep does
-        // not have the developer's token.
         if (
-          mapped === 'completed'
-          && !observed.prUrl
-          && !observed.noChanges
-          && observed.branchName
+          awaitingCloudAgentPullRequest({
+            status: mapped,
+            prUrl: observed.prUrl,
+            noChanges: observed.noChanges,
+            branchName: observed.branchName,
+          })
+          && !(await cloudAgentPullRequestWaitExpired(row))
         ) {
           continue;
         }
@@ -1356,7 +1403,13 @@ export async function getCloudAgentRunStatus(
           pushed: pushedBranch,
         }));
       }
-      if (mapped && isAgentRunTerminalStatus(mapped)) {
+      const waitingForPullRequest = awaitingCloudAgentPullRequest({
+        status: mapped,
+        prUrl,
+        noChanges: observed.noChanges,
+        branchName: pushedBranch,
+      }) && !(await cloudAgentPullRequestWaitExpired(run));
+      if (mapped && isAgentRunTerminalStatus(mapped) && !waitingForPullRequest) {
         await applyCloudAgentCompletion({
           runId: run.id,
           sessionId,
