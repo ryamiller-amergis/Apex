@@ -1254,11 +1254,16 @@ export async function applyCloudAgentCompletion(input: {
   const terminalSnapshot = backgroundSnapshot(terminal.run.executionSnapshot);
   const provider = terminalSnapshot?.provider;
   const repository = terminalSnapshot?.repository;
-  let prStatus: HostAgnosticPrStatus = input.prUrl ? 'open' : 'none';
-  if (input.prUrl && provider && repository) {
+  // markTerminal accepts a repeat completion of an already-completed run, so a
+  // caller holding an older observation can arrive here with no pull request
+  // after another one recorded it. Keep the recorded url rather than clear it.
+  const prUrl = input.prUrl
+    ?? (session.currentRunId === input.runId ? session.currentRunPrUrl : null);
+  let prStatus: HostAgnosticPrStatus = prUrl ? 'open' : 'none';
+  if (prUrl && provider && repository) {
     try {
       prStatus = await lookupPullRequestStatus({
-        prUrl: input.prUrl,
+        prUrl,
         provider,
         repository,
         project: input.project,
@@ -1276,7 +1281,7 @@ export async function applyCloudAgentCompletion(input: {
   await db
     .update(agentRuns)
     .set({
-      cloudPrUrl: input.prUrl,
+      cloudPrUrl: prUrl,
       cloudPrStatus: prStatus,
       updatedAt: nowIso,
     })
@@ -1285,7 +1290,7 @@ export async function applyCloudAgentCompletion(input: {
   await db
     .update(devSessions)
     .set({
-      currentRunPrUrl: input.prUrl,
+      currentRunPrUrl: prUrl,
       currentRunPrStatus: prStatus,
       updatedAt: nowIso,
     })
@@ -1303,7 +1308,7 @@ export async function applyCloudAgentCompletion(input: {
 
   const summary = computeLeftoverWorkSummary({
     checkResults: terminal.run.checkResults ?? input.checkResults,
-    prUrl: input.prUrl,
+    prUrl,
     incompleteAcceptanceCriteria: input.incompleteAcceptanceCriteria,
   });
   const persisted = await deps.persistLeftoverWork({
@@ -1332,7 +1337,7 @@ export async function applyCloudAgentCompletion(input: {
     input.terminalReason ?? null,
   );
 
-  if (!input.prUrl) return;
+  if (!prUrl) return;
   try {
     if (!session.workItemId || !provider || !repository) {
       throw new Error('Cloud Agent run is missing work-item repository context');
@@ -1341,7 +1346,7 @@ export async function applyCloudAgentCompletion(input: {
       provider,
       project: input.project,
       repository,
-      prUrl: input.prUrl,
+      prUrl,
       workItemId: session.workItemId,
       runId: input.runId,
       sessionId,

@@ -1425,6 +1425,32 @@ describe('Cloud Agent PR write-back and host status (PBI-007 / TBI-006)', () => 
     errorLog.mockRestore();
   });
 
+  it('keeps the recorded pull request when a later completion observed none', async () => {
+    mockDevSessionFindFirst.mockResolvedValue(linkableSession({
+      currentRunPrUrl: adoPrUrl,
+      currentRunPrStatus: 'open',
+    }));
+
+    await applyCloudAgentCompletion({
+      runId: RUN_ID,
+      sessionId: SESSION_ID,
+      project: 'MaxView',
+      status: 'completed',
+      prUrl: null,
+    }, makeDeps());
+
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      cloudPrUrl: adoPrUrl,
+      cloudPrStatus: 'open',
+    }));
+    expect(mockUpdateSet).not.toHaveBeenCalledWith(expect.objectContaining({
+      currentRunPrUrl: null,
+    }));
+    expect(mockPersistLeftoverWork).toHaveBeenCalledWith(expect.objectContaining({
+      summary: null,
+    }));
+  });
+
   it('PBI-007 AC-1 / TBI-006 DoD-0: GitHub completion verifies AB# and retries the ADO hyperlink write', async () => {
     mockMarkTerminal.mockResolvedValue({
       ok: true,
