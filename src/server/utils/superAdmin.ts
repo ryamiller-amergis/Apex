@@ -44,11 +44,13 @@ const SUPER_ADMIN_EMAILS_BY_ENV: Record<AppEnvironment, string[]> = {
     'ryamiller@amergis.com',
     'anedunur@amergis.com',
     'mojubile@amergis.com',
+    'matalbot@amergis.com',
   ],
   prod: [
     'ryamiller@amergis.com',
     'anedunur@amergis.com',
     'mojubile@amergis.com',
+    'matalbot@amergis.com',
   ],
 };
 

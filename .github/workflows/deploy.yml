@@ -300,6 +300,8 @@ jobs:
           # to the staging host and production keeps the production host.
           # Staging DATABASE_URL tracks secrets.DATABASE_URL (set above) and is
           # sticky so a swap cannot move it onto production.
+          # ALLOW_TEST_ACCOUNT_SIGN_IN lets the MFA-exempt test accounts sign in on
+          # staging only; production holds a sticky "false".
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
@@ -310,7 +312,8 @@ jobs:
               DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS="${{ vars.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS || '600000' }}" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
-              APEX_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net"
+              APEX_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
+              ALLOW_TEST_ACCOUNT_SIGN_IN="true"
 
           # Production slot sticky callback + shared MI runner auth (not swapped away).
           # Re-mark the *existing* production DATABASE_URL as sticky — do not write
@@ -331,7 +334,8 @@ jobs:
               DATABASE_URL="$PROD_DATABASE_URL" \
               AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS="${{ vars.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS || '600000' }}" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net" \
-              APEX_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net"
+              APEX_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net" \
+              ALLOW_TEST_ACCOUNT_SIGN_IN="false"
 
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
@@ -700,6 +704,8 @@ jobs:
   #   vars.E2E_PROD_BASE_URL     (optional) prod URL; defaults to app-apex-prd.
   #   secrets.E2E_TEST_USER      dedicated Azure AD E2E test account UPN/email (staging).
   #   secrets.E2E_TEST_PASSWORD  password for that account (staging).
+  #   secrets.E2E_PERSONA_<ID>_PASSWORD (optional) per-persona apex-test-0N password;
+  #     a persona without one reuses the E2E_TEST_USER session.
   deployed-smoke-staging:
     needs: [deploy-staging]
     if: always() && !cancelled() && needs.deploy-staging.result == 'success'
@@ -729,6 +735,12 @@ jobs:
           E2E_BASE_URL: ${{ vars.E2E_STAGING_BASE_URL || format('https://{0}-{1}.azurewebsites.net', env.APP_SERVICE_NAME, env.SLOT_NAME) }}
           E2E_TEST_USER: ${{ secrets.E2E_TEST_USER }}
           E2E_TEST_PASSWORD: ${{ secrets.E2E_TEST_PASSWORD }}
+          E2E_PERSONA_DEVELOPER_PASSWORD: ${{ secrets.E2E_PERSONA_DEVELOPER_PASSWORD }}
+          E2E_PERSONA_BA_PASSWORD: ${{ secrets.E2E_PERSONA_BA_PASSWORD }}
+          E2E_PERSONA_MANAGER_PASSWORD: ${{ secrets.E2E_PERSONA_MANAGER_PASSWORD }}
+          E2E_PERSONA_PRODUCT_OWNER_PASSWORD: ${{ secrets.E2E_PERSONA_PRODUCT_OWNER_PASSWORD }}
+          E2E_PERSONA_QA_PASSWORD: ${{ secrets.E2E_PERSONA_QA_PASSWORD }}
+          E2E_PERSONA_UI_UX_PASSWORD: ${{ secrets.E2E_PERSONA_UI_UX_PASSWORD }}
         run: npx playwright test --project=deployed-smoke
 
       - name: Upload deployed-smoke results
