@@ -504,6 +504,7 @@ jobs:
               AZURE_ARTIFACTS_FEED="${{ secrets.AZURE_ARTIFACTS_FEED }}" \
               AZURE_ARTIFACTS_PAT="${{ secrets.AZURE_ARTIFACTS_PAT }}" \
               E2E_TEST_USER="$E2E_TEST_USER" \
+              ALLOW_TEST_ACCOUNT_SIGN_IN="true" \
               APEX_URL="https://app-scrum-dev.azurewebsites.net"
 
           # The Azure Node/Linux image ships without git, and the Dev Workbench
@@ -741,6 +742,12 @@ jobs:
           E2E_BASE_URL: ${{ vars.E2E_DEV_BASE_URL || 'https://app-scrum-dev.azurewebsites.net' }}
           E2E_TEST_USER: ${{ secrets.E2E_TEST_USER }}
           E2E_TEST_PASSWORD: ${{ secrets.E2E_TEST_PASSWORD }}
+          E2E_PERSONA_DEVELOPER_PASSWORD: ${{ secrets.E2E_PERSONA_DEVELOPER_PASSWORD }}
+          E2E_PERSONA_BA_PASSWORD: ${{ secrets.E2E_PERSONA_BA_PASSWORD }}
+          E2E_PERSONA_MANAGER_PASSWORD: ${{ secrets.E2E_PERSONA_MANAGER_PASSWORD }}
+          E2E_PERSONA_PRODUCT_OWNER_PASSWORD: ${{ secrets.E2E_PERSONA_PRODUCT_OWNER_PASSWORD }}
+          E2E_PERSONA_QA_PASSWORD: ${{ secrets.E2E_PERSONA_QA_PASSWORD }}
+          E2E_PERSONA_UI_UX_PASSWORD: ${{ secrets.E2E_PERSONA_UI_UX_PASSWORD }}
         run: npx playwright test --project=deployed-smoke
 
       - name: Upload deployed-smoke results

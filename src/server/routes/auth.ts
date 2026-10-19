@@ -11,8 +11,19 @@ import {
   DEV_ENV_ACCESS_DENIED_MESSAGE,
 } from '../../shared/types/devEnvAllowlist';
 import { isDevEnvironmentAllowed } from '../services/devEnvAllowlistService';
+import { isTestAccountEmail } from '../../shared/constants/testAccounts';
 
 const router = express.Router();
+
+// Test accounts skip MFA, so every deployed site refuses them unless it opts in.
+// Dev and the staging slot set this; the production slot never does (sticky setting).
+function isTestAccountSignInRefused(email: string): boolean {
+  return (
+    process.env.NODE_ENV === 'production' &&
+    process.env.ALLOW_TEST_ACCOUNT_SIGN_IN !== 'true' &&
+    isTestAccountEmail(email)
+  );
+}
 
 // Base Azure AD strategy config (everything except redirectUrl, which is resolved
 // per-request — see resolveStrategyName below).
@@ -183,6 +194,10 @@ router.get(
         user.profile?._json?.email ||
         user.profile?._json?.preferred_username ||
         '';
+      if (isTestAccountSignInRefused(userEmail)) {
+        console.warn('[auth] Refused test account sign-in on a site without ALLOW_TEST_ACCOUNT_SIGN_IN');
+        return res.redirect('/auth/login-failed');
+      }
       try {
         if (!(await isDevEnvironmentAllowed(userEmail))) {
           return res.redirect('/auth/dev-access-denied');
