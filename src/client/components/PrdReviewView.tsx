@@ -1603,7 +1603,8 @@ export const PrdReviewView: React.FC = () => {
     if (submitPrd.isPending) return;
     if (autoSubmittedPrdRef.current === id) return;
     autoSubmittedPrdRef.current = id;
-    void handleSubmit();
+    // A rejection is kept on submitPrd.error, which reveals the manual Submit button.
+    handleSubmit().catch(() => undefined);
   }, [canAutoSubmitDraft, id, prd?.status, submitPrd.isPending, handleSubmit]);
 
   if (isLoading) {
@@ -1683,9 +1684,12 @@ export const PrdReviewView: React.FC = () => {
   const canCancelValidationAction = canManage && prd.status === 'validating';
   const canManageDraftReviewAction =
     canManage && (isAuthor || isOwner || isAdmin);
-  // Drafts auto-submit when readiness clears — only revision_requested needs a manual resubmit.
+  // Drafts auto-submit when readiness clears; a manual submit is needed for
+  // revision_requested, or to retry a ready draft whose auto-submit failed.
+  const autoSubmitFailed =
+    prd.status === 'draft' && readiness.readyForReviewActions && submitPrd.isError;
   const canSubmitForReviewAction =
-    canManageDraftReviewAction && prd.status === 'revision_requested';
+    canManageDraftReviewAction && (prd.status === 'revision_requested' || autoSubmitFailed);
   const canWithdrawAction =
     canManageDraftReviewAction && prd.status === 'pending_review';
   const canDeletePrdAction = canManageDraftReviewAction;
@@ -2090,10 +2094,16 @@ export const PrdReviewView: React.FC = () => {
             </button>
           )}
 
+          {submitPrd.isError && (prd.status === 'draft' || prd.status === 'revision_requested') && (
+            <span className={styles.submitError} role="alert" {...{ 'data-testid': 'submit-review-error' }}>
+              Couldn&apos;t submit for review: {submitPrd.error.message}
+            </span>
+          )}
+
           {canSubmitForReviewAction && (
             <button
               className={styles.actionBtnPrimary}
-              onClick={handleSubmit}
+              onClick={() => { handleSubmit().catch(() => undefined); }}
               disabled={
                 submitPrd.isPending ||
                 !prd.content ||

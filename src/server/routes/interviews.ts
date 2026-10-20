@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { requirePermission, requireGroupMembership } from '../middleware/rbac';
@@ -472,7 +472,28 @@ router.put('/prds/:prdId/backlog', requirePermission('interviews:manage'), async
   }
 });
 
-router.post('/prds/:prdId/submit', requirePermission('interviews:manage'), async (req, res, next) => {
+/**
+ * `requirePermission` resolves roles for the request's project, and this route
+ * carries only the PRD id. Without the PRD's project it falls back to global
+ * roles and rejects users whose access comes from a project-scoped role, even
+ * though the PRD page (scoped to that project) offered them the action.
+ */
+async function withPrdProject(req: Request, _res: Response, next: NextFunction): Promise<void> {
+  try {
+    const row = await db.query.prds.findFirst({
+      where: eq(prdsTable.id, req.params.prdId),
+      columns: { project: true },
+    });
+    if (row?.project) {
+      req.headers['x-apex-project'] = row.project;
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
+router.post('/prds/:prdId/submit', withPrdProject, requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const { prdApproverIds, designDocApproverIds, designPrototypeApproverIds, qaApproverIds } = req.body as {
@@ -481,12 +502,17 @@ router.post('/prds/:prdId/submit', requirePermission('interviews:manage'), async
       designPrototypeApproverIds?: string[];
       qaApproverIds?: string[];
     };
-    await submitForReview(req.params.prdId, userId, {
-      prdApproverIds: prdApproverIds ?? [],
-      designDocApproverIds: designDocApproverIds ?? [],
-      designPrototypeApproverIds: designPrototypeApproverIds ?? [],
-      qaApproverIds: qaApproverIds ?? [],
-    });
+    await submitForReview(
+      req.params.prdId,
+      userId,
+      {
+        prdApproverIds: prdApproverIds ?? [],
+        designDocApproverIds: designDocApproverIds ?? [],
+        designPrototypeApproverIds: designPrototypeApproverIds ?? [],
+        qaApproverIds: qaApproverIds ?? [],
+      },
+      { isSuperAdmin: isSuperAdminRequest(req) },
+    );
     res.json({ ok: true });
   } catch (err) {
     next(err);

@@ -986,6 +986,29 @@ describe('submitForReview', () => {
     });
   });
 
+  it('allows a super admin who is neither author nor owner to submit for review', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft', content: 'some content' }));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await submitForReview('prd-1', 'super-admin-user', undefined, { isSuperAdmin: true });
+
+    expect(mockIsAdminUser).not.toHaveBeenCalled();
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending_review' }),
+    );
+  });
+
+  it('still rejects a non-author when the caller is not a super admin', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ content: 'x' }));
+
+    await expect(
+      submitForReview('prd-1', 'user-other', undefined, { isSuperAdmin: false }),
+    ).rejects.toMatchObject({ message: 'Only the author or owner can submit for review', status: 403 });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
   it('allows the document owner to submit for review', async () => {
     mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft', content: 'some content' }));
     mockDb.select.mockReturnValueOnce(makeSelectChain([{ prdOwnerId: 'owner-user' }]));
@@ -2129,6 +2152,90 @@ describe('PRD validation lifecycle', () => {
         status: 'pending_review',
       }),
     );
+  });
+
+  function mockValidationRun(overallScore: number, isReady: boolean) {
+    mockPrdSelectForGetPrd({ status: 'validating', validationThreadId: 'validation-thread-1' });
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      validationThreadId: 'validation-thread-1',
+      fixBaseline: null,
+      status: 'validating',
+      content: '# PRD',
+      backlogJson: {},
+    });
+    mockReadOutputValidationScorecard.mockReturnValue(JSON.stringify({
+      slug: 'feature-prd',
+      generated_at: '2026-01-01T00:00:00Z',
+      review_phase: 'final',
+      overall_score: overallScore,
+      ready_threshold: 90,
+      is_ready: isReady,
+      verdict: isReady ? 'ready' : 'needs_work',
+      files: [],
+    }));
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'prd-1' }]);
+    const setMock = jest.fn().mockReturnValue({
+      where: jest.fn().mockReturnValue({ returning: returningMock }),
+    });
+    mockDb.update.mockReturnValue({ set: setMock });
+    return setMock;
+  }
+
+  it('moves to pending review when the score meets the project threshold even if the skill says not ready', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      prdValidationSkillPath: '.cursor/skills/prd-spec-review/SKILL.md',
+      prdValidationScoreThreshold: 85,
+    });
+    const setMock = mockValidationRun(87, false);
+
+    await syncPrdValidationResult('prd-1');
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ validationScore: 87, status: 'pending_review' }),
+    );
+    expect(mockNotifyApproversDocumentReady).toHaveBeenCalledWith('prd-1', 'prd');
+  });
+
+  it('stays in draft when the score is below the project threshold', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      prdValidationSkillPath: '.cursor/skills/prd-spec-review/SKILL.md',
+      prdValidationScoreThreshold: 90,
+    });
+    const setMock = mockValidationRun(87, false);
+
+    await syncPrdValidationResult('prd-1');
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ validationScore: 87, status: 'draft' }),
+    );
+    expect(mockNotifyApproversDocumentReady).not.toHaveBeenCalled();
+  });
+
+  it('stays in draft at 87% when the project has no custom threshold', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      prdValidationSkillPath: '.cursor/skills/prd-spec-review/SKILL.md',
+    });
+    const setMock = mockValidationRun(87, false);
+
+    await syncPrdValidationResult('prd-1');
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'draft' }));
+  });
+
+  it('stays in draft when the score passes but test-case coverage gaps remain', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      prdValidationSkillPath: '.cursor/skills/prd-spec-review/SKILL.md',
+      prdValidationScoreThreshold: 85,
+    });
+    mockGetTestCases.mockResolvedValue({
+      ...readyTestCase,
+      coverageSummary: { ...readyTestCase.coverageSummary, acCovered: '1/2' },
+    });
+    const setMock = mockValidationRun(95, true);
+
+    await syncPrdValidationResult('prd-1');
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'draft' }));
   });
 
   it('does not overwrite validationScore while a Fix-with-Apex fixBaseline is set', async () => {

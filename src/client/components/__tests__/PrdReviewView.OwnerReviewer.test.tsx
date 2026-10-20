@@ -378,6 +378,55 @@ describe('Submit for review', () => {
     });
   });
 
+  it('shows the error and a Submit for Review retry when auto-submit fails on a ready draft', async () => {
+    const { useSubmitPrd } = jest.requireMock('../../hooks/useInterviews') as { useSubmitPrd: jest.Mock };
+    const submitError = new Error('Only the author or owner can submit for review');
+    mockSubmitPrdMutateAsync.mockRejectedValue(submitError);
+    useSubmitPrd.mockReturnValue({
+      mutateAsync: mockSubmitPrdMutateAsync,
+      isPending: false,
+      isError: true,
+      error: submitError,
+    });
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage',
+      userId: 'user-author',
+      isAdmin: false,
+    });
+    mockUsePrd.mockReturnValue({
+      data: {
+        ...basePrd,
+        backlogJson: { epics: [] },
+        latestTestCase: {
+          id: 'test-case-1',
+          prdId: 'prd-1',
+          chatThreadId: null,
+          status: 'ready',
+          coverageSummary: { totalCases: 10, pbisCovered: 1, acCovered: '4/4', brCovered: '4/4', gaps: 0 },
+          validationStatus: 'not_available',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    try {
+      renderView();
+
+      await waitFor(() => expect(mockSubmitPrdMutateAsync).toHaveBeenCalledTimes(1));
+      expect(screen.getByTestId('submit-review-error')).toHaveTextContent(
+        'Only the author or owner can submit for review',
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Submit for Review/i }));
+      await waitFor(() => expect(mockSubmitPrdMutateAsync).toHaveBeenCalledTimes(2));
+    } finally {
+      useSubmitPrd.mockImplementation(() => ({ mutateAsync: mockSubmitPrdMutateAsync, isPending: false }));
+    }
+  });
+
   it('does not show Submit for Review while validation is still pending', () => {
     mockUseAppShell.mockReturnValue({
       can: (key: string) => key === 'interviews:manage',

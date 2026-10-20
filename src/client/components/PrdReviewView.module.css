@@ -1438,6 +1438,13 @@
   text-align: right;
 }
 
+.submitError {
+  align-self: center;
+  max-width: 320px;
+  font-size: 0.8rem;
+  color: var(--error-color);
+}
+
 .readinessStages {
   display: flex;
   align-items: stretch;
