@@ -33,6 +33,7 @@ import {
   useFixPrdCoverage,
   useAcceptFixPrdCoverage,
   useOverridePrdReadiness,
+  useForceSubmitPrd,
   useRevertPrdSection,
   useDismissPrdFixSession,
   usePrdValidationReport,
@@ -648,6 +649,7 @@ export const PrdReviewView: React.FC = () => {
   const fixPrdCoverage = useFixPrdCoverage();
   const acceptFixPrdCoverage = useAcceptFixPrdCoverage();
   const overridePrdReadiness = useOverridePrdReadiness();
+  const forceSubmitPrd = useForceSubmitPrd();
   const revertPrdSection = useRevertPrdSection();
   const dismissPrdFixSession = useDismissPrdFixSession();
   const { data: validationReport } = usePrdValidationReport(
@@ -725,6 +727,8 @@ export const PrdReviewView: React.FC = () => {
   const [showApprovalsModal, setShowApprovalsModal] = useState(false);
   const [showReassignModal, setShowReassignModal] = useState(false);
   const [showOverrideModal, setShowOverrideModal] = useState(false);
+  const [showForceSubmitModal, setShowForceSubmitModal] = useState(false);
+  const [forceSubmitNotice, setForceSubmitNotice] = useState<string | null>(null);
   const [showAllDocs, setShowAllDocs] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
@@ -1284,6 +1288,22 @@ export const PrdReviewView: React.FC = () => {
     setShowOverrideModal(false);
   }, [id, overridePrdReadiness]);
 
+  const handleForceSubmit = useCallback(async (reason: string) => {
+    if (!id) return;
+    try {
+      const result = await forceSubmitPrd.mutateAsync({ prdId: id, reason });
+      setForceSubmitNotice(
+        result.reviewerAssignmentError
+          ? `Moved to Pending Review, but reviewers couldn't be assigned (${result.reviewerAssignmentError}). Use Reassign reviewers.`
+          : null,
+      );
+    } catch (err) {
+      setForceSubmitNotice(`Couldn't force submit for review: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setShowForceSubmitModal(false);
+    }
+  }, [id, forceSubmitPrd]);
+
   // Recover in-progress comment fixes after navigation.
   useEffect(() => {
     if (!prd || !id) return;
@@ -1692,6 +1712,10 @@ export const PrdReviewView: React.FC = () => {
     canManageDraftReviewAction && (prd.status === 'revision_requested' || autoSubmitFailed);
   const canWithdrawAction =
     canManageDraftReviewAction && prd.status === 'pending_review';
+  const canForceSubmitAction =
+    isSuperAdmin &&
+    !!prd.content &&
+    (prd.status === 'draft' || prd.status === 'revision_requested' || prd.status === 'validating');
   const canDeletePrdAction = canManageDraftReviewAction;
   const canReassignReviewersAction =
     !ownerOnly && prd.status === 'pending_review' && canManageDraftReviewAction;
@@ -1700,6 +1724,7 @@ export const PrdReviewView: React.FC = () => {
     canRunValidationAction ||
     canEditContent ||
     canWithdrawAction ||
+    canForceSubmitAction ||
     canDeletePrdAction ||
     canReassignReviewersAction;
 
@@ -2094,6 +2119,12 @@ export const PrdReviewView: React.FC = () => {
             </button>
           )}
 
+          {forceSubmitNotice && (
+            <span className={styles.submitError} role="alert" {...{ 'data-testid': 'force-submit-notice' }}>
+              {forceSubmitNotice}
+            </span>
+          )}
+
           {submitPrd.isError && (prd.status === 'draft' || prd.status === 'revision_requested') && (
             <span className={styles.submitError} role="alert" {...{ 'data-testid': 'submit-review-error' }}>
               Couldn&apos;t submit for review: {submitPrd.error.message}
@@ -2349,6 +2380,28 @@ export const PrdReviewView: React.FC = () => {
                         </svg>
                       </span>
                       <span className={styles.actionMenuLabel}>Withdraw</span>
+                    </button>
+                  )}
+
+                  {canForceSubmitAction && (
+                    <button
+                      className={styles.actionMenuItem}
+                      onClick={() => {
+                        setActionMenuOpen(false);
+                        setShowForceSubmitModal(true);
+                      }}
+                      disabled={forceSubmitPrd.isPending}
+                      type="button"
+                      role="menuitem"
+                      title="Super admin: move to Pending Review regardless of readiness"
+                    {...{ 'data-testid': 'prd-actions-force-submit-btn' }}>
+                      <span className={styles.actionMenuIcon}>
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <path d="M4 8h8" />
+                          <path d="M9 5l3 3-3 3" />
+                        </svg>
+                      </span>
+                      <span className={styles.actionMenuLabel}>Force submit for review</span>
                     </button>
                   )}
 
@@ -3356,6 +3409,17 @@ export const PrdReviewView: React.FC = () => {
           onConfirm={(reason) => void handleOverrideReadiness(reason)}
           onCancel={() => setShowOverrideModal(false)}
         {...{ 'data-testid': 'prd-override-readiness-modal' }}/>
+      )}
+
+      {showForceSubmitModal && (
+        <ReviewReasonModal
+          title="Force submit for review?"
+          placeholder="Why are you moving this PRD to Pending Review without its readiness checks? This is kept in the audit history."
+          confirmLabel="Force submit"
+          isPending={forceSubmitPrd.isPending}
+          onConfirm={(reason) => void handleForceSubmit(reason)}
+          onCancel={() => setShowForceSubmitModal(false)}
+        {...{ 'data-testid': 'prd-force-submit-modal' }}/>
       )}
 
       {showEditModal && (

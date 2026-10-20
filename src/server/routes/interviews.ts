@@ -74,6 +74,7 @@ import {
   triggerFixCoverageGaps,
   acceptFixCoverageGaps,
   overridePrdReadiness,
+  forceSubmitForReview,
   revertPrdSection,
   dismissPrdFixSession,
   applyProposedPrdChanges,
@@ -1608,6 +1609,22 @@ router.post('/prds/:prdId/override-readiness', requirePermission('interviews:man
     const reason = typeof req.body?.reason === 'string' ? req.body.reason : '';
     const override = await overridePrdReadiness(req.params.prdId, userId, reason, getDisplayName(req));
     res.json({ override });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /prds/:prdId/force-submit — super-admin escape hatch to pending_review, with an audited reason
+router.post('/prds/:prdId/force-submit', async (req, res, next) => {
+  try {
+    if (!isSuperAdminRequest(req)) {
+      res.status(403).json({ error: 'Only super admins can force submit a PRD for review' });
+      return;
+    }
+    const userId = getUserId(req);
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason : '';
+    const result = await forceSubmitForReview(req.params.prdId, userId, reason, getDisplayName(req));
+    res.json({ ok: true, ...result });
   } catch (err) {
     next(err);
   }

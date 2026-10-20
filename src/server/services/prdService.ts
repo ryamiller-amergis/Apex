@@ -2383,6 +2383,102 @@ export async function overridePrdReadiness(
   return override;
 }
 
+/**
+ * Super-admin escape hatch: moves a PRD to pending_review whatever its
+ * readiness, recording the reason in the readiness-override audit history.
+ * Callers must have verified the requester is a super admin.
+ */
+export async function forceSubmitForReview(
+  prdId: string,
+  userId: string,
+  reason: string,
+  userDisplayName?: string,
+): Promise<{ reviewerAssignmentError: string | null }> {
+  const trimmed = reason.trim();
+  if (!trimmed) {
+    const err = new Error('A reason is required to force submit for review');
+    (err as any).status = 400;
+    throw err;
+  }
+
+  const row = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
+  if (!row) throw notFound('PRD not found');
+  if (row.status !== 'draft' && row.status !== 'revision_requested' && row.status !== 'validating') {
+    throw conflict(`Cannot force submit PRD from status '${row.status}'`);
+  }
+  if (!row.content) throw conflict('PRD content must be non-empty before submitting for review');
+
+  // A late validation result only writes status while the PRD is still validating.
+  if (row.status === 'validating') {
+    await cancelDocumentValidation(prdId, row.validationThreadId ?? null);
+  }
+
+  const readiness = await resolvePrdReadiness(
+    { ...row, status: 'draft' },
+    {
+      validationScore: row.validationScore,
+      validationScorecard: row.validationScorecard as ValidationScorecard | null,
+    },
+  );
+
+  const prior = row.readinessOverride as PrdReadinessOverride | null;
+  const priorStates = prior?.states ?? [];
+  const states = readiness.readyForReviewActions
+    ? priorStates
+    : Array.from(new Set([...priorStates, readiness.state]));
+  const at = new Date().toISOString();
+  const trimmedName = userDisplayName?.trim();
+  const summary = `Force-submitted for review by a super admin (readiness: ${readiness.state.replace(/_/g, ' ')})`;
+  const history = buildOverrideHistory(
+    prior,
+    {
+      reason: trimmed,
+      userId,
+      ...(trimmedName ? { userDisplayName: trimmedName } : {}),
+      at,
+      summary,
+    },
+    prior
+      ? `Overrode readiness state(s): ${priorStates.join(', ').replace(/_/g, ' ')}`
+      : summary,
+  );
+  const override: PrdReadinessOverride = {
+    reason: trimmed,
+    userId,
+    ...(trimmedName ? { userDisplayName: trimmedName } : {}),
+    at,
+    states,
+    history,
+  };
+
+  // Reviewers chosen at kickoff can have left the approver pool since; the
+  // PRD still moves, and reviewers can be reassigned from Pending Review.
+  let kickoff: Awaited<ReturnType<typeof applyKickoffApproversForReview>> | null = null;
+  let reviewerAssignmentError: string | null = null;
+  try {
+    kickoff = await applyKickoffApproversForReview(prdId, row.interviewId, userId);
+  } catch (err) {
+    reviewerAssignmentError = err instanceof Error ? err.message : String(err);
+    console.error(`[forceSubmitForReview] Reviewer assignment failed (prdId=${prdId})`, err);
+  }
+
+  await db.update(prds)
+    .set({
+      status: 'pending_review',
+      reviewerId: null,
+      reviewedAt: null,
+      readinessOverride: override,
+      ...(kickoff?.designDocApproverIds ? { designDocApproverIds: kickoff.designDocApproverIds } : {}),
+      ...(kickoff?.designPrototypeApproverIds
+        ? { designPrototypeApproverIds: kickoff.designPrototypeApproverIds }
+        : {}),
+      updatedAt: at,
+    })
+    .where(eq(prds.id, prdId));
+
+  return { reviewerAssignmentError };
+}
+
 export async function triggerFixCoverageGaps(
   prdId: string,
   userId: string,
