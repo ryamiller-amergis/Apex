@@ -1396,16 +1396,19 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   );
   const canManage = can('interviews:manage');
   const isAuthor = interview.authorId === userId;
-  const isInterviewParticipant = [
+  const isSectionOwner = Boolean(userId) && [
     interview.prdOwnerId,
     interview.designDocOwnerId,
     interview.designPrototypeOwnerId,
     interview.testCaseOwnerId,
+  ].includes(userId);
+  const isInterviewParticipant = isSectionOwner || [
     interview.discoveryAssigneeId,
     interview.deliveryAssigneeId,
     interview.technicalAssigneeId,
   ].includes(userId);
   const isInterviewAdmin = isAdmin || can('admin:roles');
+  const canCompleteInterview = isAuthor || isSectionOwner || isInterviewAdmin;
   const isReadOnlyViewer = !isAuthor && !isInterviewParticipant && !isInterviewAdmin;
   const canAssignPhases = isAuthor || isInterviewAdmin;
   const isStatusLocked = interview.status !== 'in_progress';
@@ -1571,9 +1574,9 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
           >
             Linked Context
           </button>
-          {canManage && (
+          {(canManage || canCompleteInterview) && (
             <div className={styles.actions}>
-              {interview.status === 'in_progress' && !isPlaybookInterview && (
+              {canCompleteInterview && interview.status === 'in_progress' && !isPlaybookInterview && (
                 <button
                   className={styles.actionBtn}
                   onClick={() => void handleStatusChange('complete')}
@@ -1588,7 +1591,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   Complete
                 </button>
               )}
-              {interview.status === 'complete' && (
+              {canManage && interview.status === 'complete' && (
                 <button
                   className={styles.actionBtn}
                   onClick={() => void handleStatusChange('in_progress')}
@@ -1604,7 +1607,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   Reopen
                 </button>
               )}
-              {(interview.status === 'in_progress' || interview.status === 'complete') && (
+              {canManage && (interview.status === 'in_progress' || interview.status === 'complete') && (
                 <button
                   className={styles.actionBtnDanger}
                   onClick={() => void handleStatusChange('archived')}
@@ -1621,7 +1624,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   Archive
                 </button>
               )}
-              {interview.status === 'complete' && (
+              {canCompleteInterview && interview.status === 'complete' && (
                 <button
                   className={styles.actionBtnPrimary}
                   onClick={requestGeneratePrd}
@@ -1650,6 +1653,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 </button>
               )}
 
+              {canManage && (
               <button
                 className={styles.actionBtnDanger}
                 onClick={() => setShowDeleteModal(true)}
@@ -1666,6 +1670,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 </svg>
                 Delete
               </button>
+              )}
             </div>
           )}
         </div>
@@ -1931,6 +1936,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               </svg>
               <div className={styles.wrapUpBody}>
                 <strong>Context window is nearly full.</strong> To ensure all your Q&amp;A is preserved in the PRD, we strongly recommend generating now.
+                {canCompleteInterview && (
                 <div className={styles.wrapUpActions}>
                   <button
                     className={styles.wrapUpGenerateBtn}
@@ -1946,6 +1952,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                     Generate PRD Now
                   </button>
                 </div>
+                )}
               </div>
             </div>
           )}
@@ -1958,6 +1965,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               <div className={styles.wrapUpBody}>
                 You've covered a lot of ground. Consider wrapping up the interview and generating your PRD to preserve all context.
                 <div className={styles.wrapUpActions}>
+                  {canCompleteInterview && (
                   <button
                     className={styles.wrapUpGenerateBtn}
                     onClick={requestGeneratePrd}
@@ -1971,6 +1979,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                     </svg>
                     Generate PRD Now
                   </button>
+                  )}
                   <button
                     className={styles.wrapUpDismissBtn}
                     onClick={() => setWrapUpDismissed(true)}

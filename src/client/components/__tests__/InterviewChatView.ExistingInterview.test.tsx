@@ -1474,3 +1474,87 @@ describe('ExistingInterviewView — model select reflects kickoff model', () => 
     expect(modelSelect).toHaveValue('claude-opus-5-5');
   });
 });
+
+describe('ExistingInterviewView — complete and generate PRD authorization', () => {
+  function renderAs(
+    userId: string,
+    interviewOverrides: Partial<Interview>,
+    can: (permission: string) => boolean,
+    isAdmin = false,
+  ) {
+    (useAppShell as jest.Mock).mockReturnValue({
+      selectedProject: 'MaxView',
+      can: jest.fn(can),
+      userId,
+      isAdmin,
+    });
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ authorId: 'author-1', prds: [], ...interviewOverrides }),
+      isLoading: false,
+      isError: false,
+    });
+    renderExistingInterview();
+  }
+
+  it.each([
+    ['prdOwnerId', 'owner-prd'],
+    ['designDocOwnerId', 'owner-dd'],
+    ['designPrototypeOwnerId', 'owner-proto'],
+    ['testCaseOwnerId', 'owner-qa'],
+  ] as const)(
+    'shows Complete for a non-author %s and hides delete, archive, and reopen',
+    (field, userId) => {
+      renderAs(userId, { status: 'in_progress', [field]: userId }, () => false);
+
+      expect(screen.getByTestId('complete-interview-btn')).toBeInTheDocument();
+      expect(screen.queryByTestId('delete-interview-btn')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('archive-interview-btn')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('reopen-interview-btn')).not.toBeInTheDocument();
+    },
+  );
+
+  it('shows Generate PRD for a non-author section owner and hides delete, archive, and reopen', () => {
+    renderAs('owner-qa', { status: 'complete', testCaseOwnerId: 'owner-qa' }, () => false);
+
+    expect(screen.getByTestId('generate-prd-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('delete-interview-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('archive-interview-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('reopen-interview-btn')).not.toBeInTheDocument();
+  });
+
+  it('shows Complete for an interview admin who lacks interviews:manage', () => {
+    renderAs('admin-1', { status: 'in_progress' }, () => false, true);
+
+    expect(screen.getByTestId('complete-interview-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('delete-interview-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('archive-interview-btn')).not.toBeInTheDocument();
+  });
+
+  it('hides Complete and Generate PRD from a user who only has interviews:manage', () => {
+    renderAs(
+      'stranger',
+      { status: 'in_progress' },
+      (permission) => permission === 'interviews:manage',
+    );
+
+    expect(screen.queryByTestId('complete-interview-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('generate-prd-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('archive-interview-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('delete-interview-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('reopen-interview-btn')).not.toBeInTheDocument();
+  });
+
+  it('hides Generate PRD from an interviews:manage user who is not author, owner, or admin', () => {
+    renderAs(
+      'stranger',
+      { status: 'complete' },
+      (permission) => permission === 'interviews:manage',
+    );
+
+    expect(screen.queryByTestId('generate-prd-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('complete-interview-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('reopen-interview-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('archive-interview-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('delete-interview-btn')).toBeInTheDocument();
+  });
+});
