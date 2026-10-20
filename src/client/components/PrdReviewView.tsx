@@ -1296,7 +1296,7 @@ export const PrdReviewView: React.FC = () => {
         result.reviewerAssignmentError
           ? {
             prdId: id,
-            message: `Moved to Pending Review, but reviewers couldn't be assigned (${result.reviewerAssignmentError}). Use Reassign reviewers.`,
+            message: `Moved to Pending Review without reviewers (${result.reviewerAssignmentError}). It is now in owner-only review: the owner or a Super Admin can approve it.`,
           }
           : null,
       );

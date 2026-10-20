@@ -502,9 +502,10 @@ describe('Submit for review', () => {
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Stuck' } });
     fireEvent.click(screen.getByRole('button', { name: 'Force submit' }));
 
-    expect(await screen.findByTestId('force-submit-notice')).toHaveTextContent(
-      'Users not in the prd approver pool',
-    );
+    const notice = await screen.findByTestId('force-submit-notice');
+    expect(notice).toHaveTextContent('Users not in the prd approver pool');
+    expect(notice).toHaveTextContent('owner-only review');
+    expect(notice).not.toHaveTextContent('Reassign');
   });
 
   it('does not offer force submit to a non-super-admin author', () => {

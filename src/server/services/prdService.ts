@@ -2452,7 +2452,8 @@ export async function forceSubmitForReview(
   };
 
   // Reviewers chosen at kickoff can have left the approver pool since; the
-  // PRD still moves, and reviewers can be reassigned from Pending Review.
+  // PRD still moves, into owner-only review, since reviewers can't be added
+  // once a PRD is pending review with no assignments.
   let kickoff: Awaited<ReturnType<typeof applyKickoffApproversForReview>> | null = null;
   let reviewerAssignmentError: string | null = null;
   try {
