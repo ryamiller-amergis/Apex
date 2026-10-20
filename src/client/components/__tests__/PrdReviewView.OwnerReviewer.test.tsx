@@ -389,6 +389,7 @@ describe('Submit for review', () => {
       isPending: false,
       isError: true,
       error: submitError,
+      variables: { prdId: 'prd-1' },
     });
     mockUseAppShell.mockReturnValue({
       can: (key: string) => key === 'interviews:manage',
@@ -424,6 +425,35 @@ describe('Submit for review', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /Submit for Review/i }));
       await waitFor(() => expect(mockSubmitPrdMutateAsync).toHaveBeenCalledTimes(2));
+    } finally {
+      useSubmitPrd.mockImplementation(() => ({ mutateAsync: mockSubmitPrdMutateAsync, isPending: false }));
+    }
+  });
+
+  it('does not show a submit error left over from a different PRD', () => {
+    const { useSubmitPrd } = jest.requireMock('../../hooks/useInterviews') as { useSubmitPrd: jest.Mock };
+    useSubmitPrd.mockReturnValue({
+      mutateAsync: mockSubmitPrdMutateAsync,
+      isPending: false,
+      isError: true,
+      error: new Error('Only the author or owner can submit for review'),
+      variables: { prdId: 'prd-other' },
+    });
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage',
+      userId: 'user-author',
+      isAdmin: false,
+    });
+    mockUsePrd.mockReturnValue({
+      data: { ...basePrd, status: 'revision_requested' },
+      isLoading: false,
+      isError: false,
+    });
+
+    try {
+      renderView();
+
+      expect(screen.queryByTestId('submit-review-error')).not.toBeInTheDocument();
     } finally {
       useSubmitPrd.mockImplementation(() => ({ mutateAsync: mockSubmitPrdMutateAsync, isPending: false }));
     }

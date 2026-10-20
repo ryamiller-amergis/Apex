@@ -728,7 +728,7 @@ export const PrdReviewView: React.FC = () => {
   const [showReassignModal, setShowReassignModal] = useState(false);
   const [showOverrideModal, setShowOverrideModal] = useState(false);
   const [showForceSubmitModal, setShowForceSubmitModal] = useState(false);
-  const [forceSubmitNotice, setForceSubmitNotice] = useState<string | null>(null);
+  const [forceSubmitNotice, setForceSubmitNotice] = useState<{ prdId: string; message: string } | null>(null);
   const [showAllDocs, setShowAllDocs] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
@@ -1294,11 +1294,17 @@ export const PrdReviewView: React.FC = () => {
       const result = await forceSubmitPrd.mutateAsync({ prdId: id, reason });
       setForceSubmitNotice(
         result.reviewerAssignmentError
-          ? `Moved to Pending Review, but reviewers couldn't be assigned (${result.reviewerAssignmentError}). Use Reassign reviewers.`
+          ? {
+            prdId: id,
+            message: `Moved to Pending Review, but reviewers couldn't be assigned (${result.reviewerAssignmentError}). Use Reassign reviewers.`,
+          }
           : null,
       );
     } catch (err) {
-      setForceSubmitNotice(`Couldn't force submit for review: ${err instanceof Error ? err.message : String(err)}`);
+      setForceSubmitNotice({
+        prdId: id,
+        message: `Couldn't force submit for review: ${err instanceof Error ? err.message : String(err)}`,
+      });
     } finally {
       setShowForceSubmitModal(false);
     }
@@ -1706,8 +1712,10 @@ export const PrdReviewView: React.FC = () => {
     canManage && (isAuthor || isOwner || isAdmin);
   // Drafts auto-submit when readiness clears; a manual submit is needed for
   // revision_requested, or to retry a ready draft whose auto-submit failed.
+  // This view stays mounted across PRDs, so the mutation can hold another PRD's error.
+  const submitError = submitPrd.isError && submitPrd.variables?.prdId === id ? submitPrd.error : null;
   const autoSubmitFailed =
-    prd.status === 'draft' && readiness.readyForReviewActions && submitPrd.isError;
+    prd.status === 'draft' && readiness.readyForReviewActions && submitError !== null;
   const canSubmitForReviewAction =
     canManageDraftReviewAction && (prd.status === 'revision_requested' || autoSubmitFailed);
   const canWithdrawAction =
@@ -2119,15 +2127,15 @@ export const PrdReviewView: React.FC = () => {
             </button>
           )}
 
-          {forceSubmitNotice && (
+          {forceSubmitNotice?.prdId === id && (
             <span className={styles.submitError} role="alert" {...{ 'data-testid': 'force-submit-notice' }}>
-              {forceSubmitNotice}
+              {forceSubmitNotice.message}
             </span>
           )}
 
-          {submitPrd.isError && (prd.status === 'draft' || prd.status === 'revision_requested') && (
+          {submitError && (prd.status === 'draft' || prd.status === 'revision_requested') && (
             <span className={styles.submitError} role="alert" {...{ 'data-testid': 'submit-review-error' }}>
-              Couldn&apos;t submit for review: {submitPrd.error.message}
+              Couldn&apos;t submit for review: {submitError.message}
             </span>
           )}
 
