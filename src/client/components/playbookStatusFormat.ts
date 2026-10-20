@@ -58,8 +58,10 @@ export function stepStatusLabel(status: PlaybookStepRunStatus): string {
 /** Why a run is parked, in words rather than the stored token. */
 export function suspendReasonLabel(reason: string): string {
   if (reason === 'approval_gate') return 'Waiting for someone to approve this step';
+  if (reason === 'feedback_review') return 'Waiting for someone to review the AI outcome';
   if (reason === 'agent_run') return 'Waiting for the agent to finish its turn';
   if (reason === 'interview') return 'Waiting for the interview brief to be approved';
+  if (reason === 'board_deliberation') return 'Waiting for the board discussion to finish';
   return reason;
 }
 

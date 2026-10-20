@@ -55,6 +55,7 @@ const SUMMARY = {
   versionNumber: 3,
   status: 'running' as const,
   initiatorUserId: 'someone',
+  initiatorDisplayName: 'Ada Lovelace',
   startedAt: '2026-09-20T10:00:00.000Z',
   completedAt: null,
 };
@@ -105,6 +106,43 @@ afterEach(() => {
 });
 
 describe('VT-01 — each step shows its status, and the view names the pinned version', () => {
+  it('shows the initiator name and live agent activity instead of an identity GUID', async () => {
+    stubFetch(
+      { runs: [SUMMARY], total: 1 },
+      {
+        ...SUMMARY,
+        steps: [
+          step({
+            stepId: 'operations',
+            stepType: 'cursor-agent',
+            status: 'suspended',
+            completedAt: null,
+            activity: {
+              summary: 'Operations specialist is reviewing the charter.',
+              detail: 'Reviewing public evidence for the proposed workflow.',
+              updatedAt: '2026-09-20T10:00:30.000Z',
+            },
+          }),
+        ],
+        currentStepId: 'operations',
+        suspension: null,
+      },
+    );
+
+    renderView();
+
+    const toggle = await screen.findByTestId('playbook-run-expand-toggle');
+    expect(toggle).toHaveTextContent('Ada Lovelace');
+    expect(toggle).not.toHaveTextContent('someone');
+    await expandRun();
+    expect(screen.getByTestId('playbook-step-activity')).toHaveTextContent(
+      'Operations specialist is reviewing the charter.',
+    );
+    expect(screen.getByTestId('playbook-step-activity')).toHaveTextContent(
+      'Reviewing public evidence',
+    );
+  });
+
   it('renders every step status as text and the exact pinned version', async () => {
     stubFetch(
       { runs: [SUMMARY], total: 1 },

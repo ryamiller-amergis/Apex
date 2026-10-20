@@ -7,8 +7,11 @@
  */
 import React, { useState } from 'react';
 import { Trash2, X } from 'lucide-react';
-import type { PlaybookGraphNode, PlaybookStepTypePaletteItem } from '../../shared/types/playbook';
-import { stepMeta } from './playbookStepCatalog';
+import type {
+  PlaybookGraphNode,
+  PlaybookStepTypePaletteItem,
+} from '../../shared/types/playbook';
+import { AI_SOURCE_STEP_TYPES, HUMAN_REVIEW_STEP_TYPES, stepMeta } from './playbookStepCatalog';
 import styles from './PlaybookBuilder.module.css';
 
 interface JsonSchema {
@@ -22,10 +25,16 @@ interface JsonSchema {
 type Config = Record<string, unknown>;
 
 /** Render with `key={node.id}` so per-field drafts reset when the selection changes. */
+export interface PlaybookInspectorNodeRef {
+  id: string;
+  stepType: string;
+}
+
 interface PlaybookStepInspectorProps {
   node: PlaybookGraphNode;
   paletteItem: PlaybookStepTypePaletteItem | undefined;
   otherNodeIds: readonly string[];
+  otherNodes?: readonly PlaybookInspectorNodeRef[];
   canAuthor: boolean;
   onChange: (config: Config) => void;
   onDelete: () => void;
@@ -34,13 +43,23 @@ interface PlaybookStepInspectorProps {
 }
 
 /** Keys whose value names another node in the graph. */
-const NODE_REFERENCE_KEYS = new Set(['whenTrue', 'whenFalse', 'gatedStepId']);
+const NODE_REFERENCE_KEYS = new Set([
+  'whenTrue',
+  'whenFalse',
+  'gatedStepId',
+  'reviewStepId',
+  'feedbackStepId',
+]);
 const MULTILINE_KEYS = new Set(['prompt', 'body', 'reportMd']);
 
 const FIELD_LABELS: Record<string, string> = {
   deadlineMs: 'Deadline (ms)',
   mcpProfile: 'MCP profile',
   gatedStepId: 'Gated step',
+  reviewStepId: 'Review step',
+  feedbackStepId: 'Feedback review',
+  sourceStepIds: 'Selected AI steps',
+  label: 'Label',
   whenTrue: 'When true, go to',
   whenFalse: 'When false, go to',
   recipientUserId: 'Recipient',
@@ -51,6 +70,9 @@ const FIELD_HINTS: Record<string, string> = {
   deadlineMs: 'Leave blank to use the step’s default.',
   recipientUserId: 'Leave blank to notify whoever started the run.',
   gatedStepId: 'The step this approval protects.',
+  reviewStepId: 'Optional. Choose an earlier approval or feedback review.',
+  feedbackStepId: 'Optional. Store the item choices from an earlier feedback review.',
+  sourceStepIds: 'Choose the earlier AI steps. Only the ones you select are used.',
 };
 
 function humanize(key: string): string {
@@ -60,7 +82,9 @@ function humanize(key: string): string {
 }
 
 function schemaType(schema: JsonSchema): string | undefined {
-  return Array.isArray(schema.type) ? schema.type.find((t) => t !== 'null') : schema.type;
+  return Array.isArray(schema.type)
+    ? schema.type.find((t) => t !== 'null')
+    : schema.type;
 }
 
 interface FieldProps {
@@ -70,12 +94,39 @@ interface FieldProps {
   value: unknown;
   disabled: boolean;
   otherNodeIds: readonly string[];
+  otherNodes?: readonly PlaybookInspectorNodeRef[];
   onChange: (value: unknown) => void;
   'data-testid'?: string;
 }
 
-const NumberField: React.FC<FieldProps> = ({ id, value, disabled, onChange, 'data-testid': testId }) => {
-  const [text, setText] = useState(typeof value === 'number' ? String(value) : '');
+function choicesFor(
+  name: string,
+  otherNodeIds: readonly string[],
+  otherNodes: readonly PlaybookInspectorNodeRef[] | undefined
+): PlaybookInspectorNodeRef[] {
+  if (!otherNodes) return otherNodeIds.map((id) => ({ id, stepType: '' }));
+  if (name === 'sourceStepIds') {
+    return otherNodes.filter((node) => AI_SOURCE_STEP_TYPES.has(node.stepType));
+  }
+  if (name === 'reviewStepId') {
+    return otherNodes.filter((node) => HUMAN_REVIEW_STEP_TYPES.has(node.stepType));
+  }
+  if (name === 'feedbackStepId') {
+    return otherNodes.filter((node) => node.stepType === 'feedback-review');
+  }
+  return [...otherNodes];
+}
+
+const NumberField: React.FC<FieldProps> = ({
+  id,
+  value,
+  disabled,
+  onChange,
+  'data-testid': testId,
+}) => {
+  const [text, setText] = useState(
+    typeof value === 'number' ? String(value) : ''
+  );
   const [invalid, setInvalid] = useState(false);
   return (
     <>
@@ -100,13 +151,23 @@ const NumberField: React.FC<FieldProps> = ({ id, value, disabled, onChange, 'dat
         }}
         data-testid={testId}
       />
-      {invalid ? <span className={styles.fieldError}>Enter a number.</span> : null}
+      {invalid ? (
+        <span className={styles.fieldError}>Enter a number.</span>
+      ) : null}
     </>
   );
 };
 
-const JsonValueField: React.FC<FieldProps> = ({ id, value, disabled, onChange, 'data-testid': testId }) => {
-  const [text, setText] = useState(value === undefined ? '' : JSON.stringify(value, null, 2));
+const JsonValueField: React.FC<FieldProps> = ({
+  id,
+  value,
+  disabled,
+  onChange,
+  'data-testid': testId,
+}) => {
+  const [text, setText] = useState(
+    value === undefined ? '' : JSON.stringify(value, null, 2)
+  );
   const [invalid, setInvalid] = useState(false);
   return (
     <>
@@ -135,14 +196,55 @@ const JsonValueField: React.FC<FieldProps> = ({ id, value, disabled, onChange, '
         }}
         data-testid={testId}
       />
-      {invalid ? <span className={styles.fieldError}>Not valid JSON yet.</span> : null}
+      {invalid ? (
+        <span className={styles.fieldError}>Not valid JSON yet.</span>
+      ) : null}
     </>
   );
 };
 
 const SchemaField: React.FC<FieldProps> = (props) => {
-  const { id, name, schema, value, disabled, otherNodeIds, onChange } = props;
+  const { id, name, schema, value, disabled, otherNodeIds, otherNodes, onChange } = props;
   const testId = props['data-testid'] ?? `playbook-inspector-field-${name}`;
+  const choices = choicesFor(name, otherNodeIds, otherNodes);
+
+  if (name === 'sourceStepIds') {
+    const selected = Array.isArray(value)
+      ? value.filter((entry): entry is string => typeof entry === 'string')
+      : [];
+    return (
+      <div
+        id={id}
+        className={styles.sourceList}
+        role="group"
+        aria-label="Selected AI steps"
+        data-testid={testId}
+      >
+        {choices.length === 0 ? (
+          <span className={styles.fieldHint}>Add an earlier AI step first.</span>
+        ) : (
+          choices.map((node) => (
+            <label key={node.id} className={styles.sourceOption}>
+              <input
+                type="checkbox"
+                className={styles.fieldCheckbox}
+                checked={selected.includes(node.id)}
+                disabled={disabled}
+                onChange={(event) => {
+                  const next = event.target.checked
+                    ? [...selected, node.id]
+                    : selected.filter((entry) => entry !== node.id);
+                  onChange(next.length > 0 ? next : undefined);
+                }}
+                {...{ 'data-testid': `playbook-inspector-source-${node.id}` }}
+              />
+              {node.id}
+            </label>
+          ))
+        )}
+      </div>
+    );
+  }
 
   if (NODE_REFERENCE_KEYS.has(name)) {
     return (
@@ -155,8 +257,10 @@ const SchemaField: React.FC<FieldProps> = (props) => {
         data-testid={testId}
       >
         <option value="">Choose a step…</option>
-        {otherNodeIds.map((nodeId) => (
-          <option key={nodeId} value={nodeId}>{nodeId}</option>
+        {choices.map((node) => (
+          <option key={node.id} value={node.id}>
+            {node.id}
+          </option>
         ))}
       </select>
     );
@@ -174,7 +278,9 @@ const SchemaField: React.FC<FieldProps> = (props) => {
       >
         <option value="">Not set</option>
         {schema.enum.map((option) => (
-          <option key={String(option)} value={String(option)}>{String(option)}</option>
+          <option key={String(option)} value={String(option)}>
+            {String(option)}
+          </option>
         ))}
       </select>
     );
@@ -187,14 +293,18 @@ const SchemaField: React.FC<FieldProps> = (props) => {
       className: styles.fieldInput,
       value: typeof value === 'string' ? value : '',
       disabled,
-      onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-        onChange(event.target.value === '' ? undefined : event.target.value),
+      onChange: (
+        event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
+      ) => onChange(event.target.value === '' ? undefined : event.target.value),
     };
-    return MULTILINE_KEYS.has(name)
-      ? <textarea rows={4} {...common} data-testid={testId} />
-      : <input {...common} data-testid={testId} />;
+    return MULTILINE_KEYS.has(name) ? (
+      <textarea rows={4} {...common} data-testid={testId} />
+    ) : (
+      <input {...common} data-testid={testId} />
+    );
   }
-  if (type === 'number' || type === 'integer') return <NumberField {...props} data-testid={testId} />;
+  if (type === 'number' || type === 'integer')
+    return <NumberField {...props} data-testid={testId} />;
   if (type === 'boolean') {
     return (
       <input
@@ -233,7 +343,11 @@ const ConfigJsonEditor: React.FC<{
           setText(next);
           try {
             const parsed: unknown = JSON.parse(next);
-            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            if (
+              !parsed ||
+              typeof parsed !== 'object' ||
+              Array.isArray(parsed)
+            ) {
               setError('Config must be a JSON object.');
               return;
             }
@@ -254,6 +368,7 @@ export const PlaybookStepInspector: React.FC<PlaybookStepInspectorProps> = ({
   node,
   paletteItem,
   otherNodeIds,
+  otherNodes,
   canAuthor,
   onChange,
   onDelete,
@@ -266,7 +381,9 @@ export const PlaybookStepInspector: React.FC<PlaybookStepInspectorProps> = ({
   const schema = (paletteItem?.inputJsonSchema ?? {}) as JsonSchema;
   const properties = Object.entries(schema.properties ?? {});
   const required = new Set(schema.required ?? []);
-  const [mode, setMode] = useState<'form' | 'json'>(properties.length ? 'form' : 'json');
+  const [mode, setMode] = useState<'form' | 'json'>(
+    properties.length ? 'form' : 'json'
+  );
 
   const setField = (key: string, value: unknown) => {
     const next: Config = { ...config };
@@ -287,7 +404,9 @@ export const PlaybookStepInspector: React.FC<PlaybookStepInspectorProps> = ({
         </span>
         <div className={styles.inspectorTitleBlock}>
           <h2 className={styles.inspectorTitle}>{meta.title}</h2>
-          <code className={styles.inspectorId} title="Step id">{node.id}</code>
+          <code className={styles.inspectorId} title="Step id">
+            {node.id}
+          </code>
         </div>
         <button
           type="button"
@@ -333,7 +452,14 @@ export const PlaybookStepInspector: React.FC<PlaybookStepInspectorProps> = ({
               <div key={`${node.id}-${key}`} className={styles.field}>
                 <label htmlFor={fieldId} className={styles.fieldLabel}>
                   {humanize(key)}
-                  {required.has(key) ? <span className={styles.fieldRequired} aria-label="required">*</span> : null}
+                  {required.has(key) ? (
+                    <span
+                      className={styles.fieldRequired}
+                      aria-label="required"
+                    >
+                      *
+                    </span>
+                  ) : null}
                 </label>
                 <SchemaField
                   id={fieldId}
@@ -342,10 +468,13 @@ export const PlaybookStepInspector: React.FC<PlaybookStepInspectorProps> = ({
                   value={config[key]}
                   disabled={!canAuthor}
                   otherNodeIds={otherNodeIds}
+                  otherNodes={otherNodes}
                   onChange={(value) => setField(key, value)}
                   data-testid={`playbook-inspector-field-${key}`}
                 />
-                {FIELD_HINTS[key] ? <span className={styles.fieldHint}>{FIELD_HINTS[key]}</span> : null}
+                {FIELD_HINTS[key] ? (
+                  <span className={styles.fieldHint}>{FIELD_HINTS[key]}</span>
+                ) : null}
               </div>
             );
           })

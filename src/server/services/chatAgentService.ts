@@ -690,11 +690,33 @@ export function buildMcpServers(
    * repository-read tools and therefore mount no MCP server; the general ado-skills server also
    * contains mutation tools and must not be reachable from this profile.
    */
-  if (kickoff.playbookMcpProfile === 'repository-read-only') {
+  if (
+    kickoff.playbookMcpProfile === 'repository-read-only' ||
+    kickoff.playbookMcpProfile === 'repository-public-web-read-only'
+  ) {
     if (kickoff.skillProvider === 'github') {
       servers['github-repo'] = {
         url: `http://localhost:${port}/mcp/github-repo`,
       };
+    }
+    if (
+      kickoff.playbookMcpProfile === 'repository-public-web-read-only' &&
+      kickoff.mcpPill
+    ) {
+      const pill = kickoff.mcpPill;
+      if (pill.transport === 'stdio') {
+        servers[pill.mcpServerName] = {
+          type: 'stdio',
+          command: pill.command,
+          ...(pill.args ? { args: pill.args } : {}),
+          ...(pill.env ? { env: resolveEnvRefs(pill.env) } : {}),
+        };
+      } else {
+        servers[pill.mcpServerName] = {
+          url: pill.url,
+          ...(pill.headers ? { headers: resolveEnvRefs(pill.headers) } : {}),
+        };
+      }
     }
     return servers;
   }
@@ -988,7 +1010,16 @@ function buildScopePolicyLines(kickoff: ChatThreadKickoff): string[] {
   // Narrow carve-out for greenfield product-discovery interviews with live web research enabled.
   // This relaxes the "refuse web/general" rule ONLY for research in service of building this project —
   // it is not a full bypass, and unrelated general-knowledge requests are still refused.
-  if (kickoff.webResearchEnabled) {
+  if (kickoff.playbookAtsWebResearch) {
+    lines.push(
+      ``,
+      `# Public web research — ENABLED for this ATS board specialist turn`,
+      `You MAY use the configured web-search MCP only to gather **public** evidence that helps evaluate the charter for Phase 1 ATS work.`,
+      `Limits: stay within your role checklist; prefer primary vendor and regulator sources; cap lookups to what your skill allows; never paste customer identifiers, pricing from live deals, or Amergis-internal facts.`,
+      `Public web behavior is not an Amergis fact. Label corroboration honestly (one source vs multiple). Refuse to treat marketing copy as decided truth.`,
+      `If the charter forbids named vendors, do not search them even when web research is enabled.`,
+    );
+  } else if (kickoff.webResearchEnabled) {
     lines.push(
       ``,
       `# Live web research — ENABLED for this interview`,

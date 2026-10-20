@@ -16,6 +16,9 @@ const executeCursorAgent = jest.fn();
 const executeIngestArtifact = jest.fn();
 const executeBranch = jest.fn();
 const executeInterview = jest.fn();
+const executeBoardDeliberation = jest.fn();
+const executeCaptureOutcomeFeedback = jest.fn();
+const executeFeedbackReview = jest.fn();
 const isFeatureEnabled = jest.fn();
 
 jest.mock('../services/rbacService', () => ({
@@ -44,6 +47,18 @@ jest.mock('../services/playbookSteps/branchAdapter', () => ({
 
 jest.mock('../services/playbookSteps/interviewAdapter', () => ({
   executeInterviewStep: (...args: unknown[]) => executeInterview(...args),
+}));
+
+jest.mock('../services/playbookSteps/boardDeliberationAdapter', () => ({
+  executeBoardDeliberationStep: (...args: unknown[]) => executeBoardDeliberation(...args),
+}));
+
+jest.mock('../services/playbookSteps/outcomeFeedbackAdapter', () => ({
+  executeCaptureOutcomeFeedbackStep: (...args: unknown[]) => executeCaptureOutcomeFeedback(...args),
+}));
+
+jest.mock('../services/playbookSteps/feedbackReviewAdapter', () => ({
+  executeFeedbackReviewStep: (...args: unknown[]) => executeFeedbackReview(...args),
 }));
 
 jest.mock('../services/featureFlagService', () => ({
@@ -82,6 +97,18 @@ function context(stepType: string): PlaybookStepExecutionContext {
       mode: 'human_led',
       profileKey: 'ba-discovery',
     },
+    'board-deliberation': {
+      charter: 'Charter',
+      reports: { operations: 'Report' },
+    },
+    'capture-outcome-feedback': {
+      reviewStepId: 'ratify',
+      sourceStepIds: ['chair'],
+    },
+    'feedback-review': {
+      sourceStepIds: ['chair'],
+      subject: 'Review the plan',
+    },
   };
   return {
     runId: 'run-1',
@@ -108,6 +135,9 @@ beforeEach(() => {
   executeIngestArtifact.mockResolvedValue({ kind: 'completed', output: {} });
   executeBranch.mockResolvedValue({ kind: 'completed', output: {} });
   executeInterview.mockResolvedValue({ kind: 'suspended' });
+  executeBoardDeliberation.mockResolvedValue({ kind: 'suspended' });
+  executeCaptureOutcomeFeedback.mockResolvedValue({ kind: 'completed', output: {} });
+  executeFeedbackReview.mockResolvedValue({ kind: 'suspended' });
   isFeatureEnabled.mockResolvedValue(true);
 });
 

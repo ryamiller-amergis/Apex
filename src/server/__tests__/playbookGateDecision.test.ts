@@ -17,7 +17,9 @@ const recordDecision = jest.fn();
 jest.mock('../db/drizzle', () => ({
   db: {
     select: () => ({
-      from: () => ({ innerJoin: () => ({ where: () => ({ limit: () => selectLimit() }) }) }),
+      from: () => ({
+        innerJoin: () => ({ where: () => ({ limit: () => selectLimit() }) }),
+      }),
     }),
     update: () => ({ set: () => ({ where: () => recordDecision() }) }),
   },
@@ -87,8 +89,28 @@ describe('VT-22 — an approval resumes the gate', () => {
     expect(result.outcome).toBe('recorded');
     // The decision must reach the step output either way; what must not happen is a rejected gate
     // being indistinguishable from an approved one downstream.
-    const call = resumeStepRun.mock.calls[0]?.[0] as { output?: Record<string, unknown> };
+    const call = resumeStepRun.mock.calls[0]?.[0] as {
+      output?: Record<string, unknown>;
+    };
     expect(JSON.stringify(call?.output ?? {})).toContain('rejected');
+  });
+
+  it('stores structured leadership answers with a board ratification', async () => {
+    gateIs({ stepId: 'ratify' });
+    const answers = [
+      {
+        decisionId: 'D-PORTAL',
+        resolution: 'accept_recommendation',
+        response: 'Accept the board recommendation.',
+      },
+    ];
+
+    await decide({ answers });
+
+    expect(resumeStepRun).toHaveBeenCalledWith({
+      stepRunId: STEP_RUN_ID,
+      output: expect.objectContaining({ answers }),
+    });
   });
 });
 
@@ -129,9 +151,9 @@ describe('VT-24 — a step not awaiting approval is refused', () => {
   });
 
   it('refuses a decider who did not start the run', async () => {
-    await expect(decide({ deciderUserId: 'somebody-else' })).rejects.toBeInstanceOf(
-      ApprovalNotPermittedError
-    );
+    await expect(
+      decide({ deciderUserId: 'somebody-else' })
+    ).rejects.toBeInstanceOf(ApprovalNotPermittedError);
   });
 });
 

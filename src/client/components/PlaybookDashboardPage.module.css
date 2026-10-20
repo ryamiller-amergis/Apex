@@ -268,6 +268,70 @@
   color: var(--text-muted);
 }
 
+/* ── AI team ────────────────────────────────────────────────── */
+
+.teamPanel {
+  gap: 0.9rem;
+}
+
+.teamIntro {
+  max-width: 720px;
+  margin: 0.3rem 0 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.teamGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.teamCard {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border-color-light);
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+}
+
+.teamAvatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 9px;
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 14%, transparent);
+}
+
+.teamCopy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.18rem;
+}
+
+.teamName {
+  font-size: 0.79rem;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.teamSynopsis {
+  font-size: 0.71rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
 /* ── Activity chart ─────────────────────────────────────────── */
 
 .chart {
@@ -375,7 +439,7 @@
   --step-tint: var(--text-muted);
   position: relative;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.6rem;
   padding: 0.45rem 0;
 }
@@ -398,6 +462,7 @@
 
 .outlineIndex {
   width: 1.1rem;
+  margin-top: 0.2rem;
   font-size: 0.7rem;
   font-weight: 600;
   text-align: right;
@@ -419,6 +484,7 @@
 .outlineText {
   display: flex;
   flex-direction: column;
+  flex: 1;
   min-width: 0;
 }
 
@@ -429,10 +495,53 @@
 
 .outlineMeta {
   font-size: 0.72rem;
+  line-height: 1.4;
   color: var(--text-muted);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.outlineDetails {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.3rem;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--text-secondary, var(--text-primary));
+  white-space: normal;
+}
+
+.outlineExpand {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 1.65rem;
+  height: 1.65rem;
+  margin-top: 0.05rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.outlineExpand:hover,
+.outlineExpand:focus-visible {
+  border-color: var(--border-color);
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.outlineExpand svg {
+  transition: transform 0.2s ease;
+}
+
+.outlineExpand[aria-expanded='true'] svg {
+  transform: rotate(180deg);
 }
 
 /* ── History timeline ───────────────────────────────────────── */
@@ -510,6 +619,10 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .teamGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .split {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -518,5 +631,9 @@
 @media (max-width: 640px) {
   .tiles {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .teamGrid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

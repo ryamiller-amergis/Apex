@@ -104,6 +104,11 @@ export interface ChatThreadKickoff {
    * Relaxes the scope policy with a narrow web-research carve-out (does NOT fully bypass it).
    */
   webResearchEnabled?: boolean;
+  /**
+   * Server-set for ATS board specialist steps using the public-web Playbook MCP profile.
+   * Applies a charter-bound web-research scope carve-out distinct from interview discovery.
+   */
+  playbookAtsWebResearch?: boolean;
   /** Thread mode — controls system prompt behavior */
   mode?:
     | 'development'

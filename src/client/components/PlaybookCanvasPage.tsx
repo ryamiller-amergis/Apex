@@ -428,6 +428,9 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
               node={selectedNode}
               paletteItem={palette.data?.items.find((item) => item.stepType === selectedNode.stepType)}
               otherNodeIds={graph.nodes.map((node) => node.id).filter((id) => id !== selectedNode.id)}
+              otherNodes={graph.nodes
+                .filter((node) => node.id !== selectedNode.id)
+                .map((node) => ({ id: node.id, stepType: node.stepType }))}
               canAuthor={canAuthor}
               onChange={updateNodeConfig}
               onDelete={() => deleteStep(selectedNode.id)}

@@ -10,6 +10,7 @@
  * asking, and "is anything still moving" is a question the data already answers.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { AtsBoardLeadershipAnswer } from '../../shared/atsBoard';
 import { PLAYBOOK_STEP_RUN_OPEN_STATUSES } from '../../shared/types/playbook';
 import type {
   PlaybookRunDetail,
@@ -134,6 +135,7 @@ export function usePlaybookGateDecision(
     {
       decision: 'approved' | 'rejected';
       comment?: string;
+      answers?: AtsBoardLeadershipAnswer[];
     }
   >({
     mutationFn: (decision) =>
@@ -155,6 +157,41 @@ export function usePlaybookGateDecision(
           queryKey: ['home-dashboard', project],
         }),
       ]);
+    },
+  });
+}
+
+export function usePlaybookFeedbackDecision(
+  project: string,
+  runId: string,
+  stepRunId: string
+) {
+  const queryClient = useQueryClient();
+  return useMutation<
+    unknown,
+    PlaybookRunApiError,
+    {
+      stopped: boolean;
+      comment?: string;
+      items: Array<{
+        sourceStepId: string;
+        itemId: string;
+        action: 'accept' | 'question' | 'override' | 'reject' | 'defer';
+        note?: string;
+      }>;
+    }
+  >({
+    mutationFn: (decision) =>
+      apiFetch(
+        `/api/playbooks/runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepRunId)}/feedback`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project, ...decision }),
+        }
+      ),
+    onSuccess: async () => {
+      await invalidateRunQueries(queryClient, project, runId);
     },
   });
 }

@@ -1,4 +1,8 @@
 import type { PlaybookGraph } from '../../shared/types/playbook';
+import {
+  ATS_BOARD_PUBLIC_WEB_MCP_PROFILE,
+  ATS_BOARD_REPOSITORY_ONLY_MCP_PROFILE,
+} from '../../shared/atsBoardMcp';
 
 export type PlaybookMcpCapabilityMode = 'read' | 'write' | 'unknown';
 
@@ -9,11 +13,19 @@ export interface PlaybookMcpCapability {
 }
 
 const MCP_PROFILES: Readonly<Record<string, PlaybookMcpCapability>> = {
-  'repository-read-only': {
+  [ATS_BOARD_REPOSITORY_ONLY_MCP_PROFILE]: {
     mode: 'read',
     serverKeys: ['github-repo'],
     evidence: [
       'The profile is read-only: GitHub mounts github-repo only; ADO uses native repository reads and mounts no MCP server.',
+    ],
+  },
+  [ATS_BOARD_PUBLIC_WEB_MCP_PROFILE]: {
+    mode: 'read',
+    serverKeys: ['github-repo', 'web-search'],
+    evidence: [
+      'The profile is read-only: repository reads plus a project-configured web-search MCP only; ado-skills and user MCP pills are not mounted.',
+      'Public web research is charter-bound and must not be treated as Amergis-internal fact.',
     ],
   },
   'ado-skills': {

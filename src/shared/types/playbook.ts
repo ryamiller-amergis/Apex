@@ -75,7 +75,12 @@ export interface AiCostUndercountReport {
  * Lifecycle of a definition version. Only this column may move after publication; the graph itself
  * is frozen, which is what lets a run pin a version and trust it for days.
  */
-export const PLAYBOOK_VERSION_STATUSES = ['draft', 'published', 'deprecated', 'archived'] as const;
+export const PLAYBOOK_VERSION_STATUSES = [
+  'draft',
+  'published',
+  'deprecated',
+  'archived',
+] as const;
 export type PlaybookVersionStatus = (typeof PLAYBOOK_VERSION_STATUSES)[number];
 
 /**
@@ -119,14 +124,19 @@ export type PlaybookStepRunStatus = (typeof PLAYBOOK_STEP_RUN_STATUSES)[number];
  * Step states that are still waiting on something. The `expires_at` index is partial over exactly
  * this set, so the reconciliation sweep scans open suspensions rather than all run history.
  */
-export const PLAYBOOK_STEP_RUN_OPEN_STATUSES = ['pending', 'running', 'suspended'] as const;
+export const PLAYBOOK_STEP_RUN_OPEN_STATUSES = [
+  'pending',
+  'running',
+  'suspended',
+] as const;
 
 /** Why a run is parked. Every kind resumes through the same path, per BR-008. */
 export type PlaybookSuspendReason =
   | 'approval_gate'
   | 'agent_run'
   | 'interview'
-  | 'board_deliberation';
+  | 'board_deliberation'
+  | 'feedback_review';
 
 // ── Definition graph ──────────────────────────────────────────────────────────
 
@@ -278,9 +288,17 @@ export interface PlaybookStepRun {
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Business-safe progress shown while an agent-backed step is active. */
+  activity?: PlaybookStepActivity | null;
 }
 
 // ── Reconstruction projection ─────────────────────────────────────────────────
+
+export interface PlaybookStepActivity {
+  summary: string;
+  detail?: string;
+  updatedAt?: string | null;
+}
 
 export interface PlaybookRunSummary {
   runId: string;
@@ -291,6 +309,8 @@ export interface PlaybookRunSummary {
   versionNumber: number;
   status: PlaybookRunStatus;
   initiatorUserId: string;
+  /** Presentation name resolved from app_users; the ID remains the authorization identity. */
+  initiatorDisplayName?: string;
   startedAt: string;
   completedAt: string | null;
 }
@@ -408,8 +428,13 @@ interface PlaybookStepTypeDescriptorBase {
  * a system Apex does not own, which cannot be rolled back by anything here and is therefore the
  * only classification that mandates an approval gate in front of it.
  */
-export const PLAYBOOK_STEP_SIDE_EFFECTS = ['read', 'writes-apex', 'leaves-apex'] as const;
-export type PlaybookStepSideEffect = (typeof PLAYBOOK_STEP_SIDE_EFFECTS)[number];
+export const PLAYBOOK_STEP_SIDE_EFFECTS = [
+  'read',
+  'writes-apex',
+  'leaves-apex',
+] as const;
+export type PlaybookStepSideEffect =
+  (typeof PLAYBOOK_STEP_SIDE_EFFECTS)[number];
 
 export type PlaybookStepTypeDescriptor =
   | (PlaybookStepTypeDescriptorBase & {
@@ -494,6 +519,65 @@ export interface NotifyStepConfig {
   recipientUserId?: string;
 }
 
+/** Provenance for one earlier AI step. This is not the prompt or the report. */
+export interface PlaybookOutcomeFeedbackSource {
+  stepId: string;
+  stepRunId: string;
+  stepType: string;
+  agentRunId: string | null;
+  skillPath: string | null;
+  model: string | null;
+}
+
+/** One structured answer copied from the review step. */
+export interface PlaybookOutcomeFeedbackAnswer {
+  decisionId: string;
+  resolution: string;
+  response: string;
+}
+
+export interface CaptureOutcomeFeedbackStepConfig {
+  /** Earlier AI steps the author chose. Only completed ones are stored. */
+  sourceStepIds: string[];
+  /** Earlier approval or feedback review. Omit to store the AI outcome alone. */
+  reviewStepId?: string;
+  /** Earlier feedback review whose item choices should be stored with the outcome. */
+  feedbackStepId?: string;
+  /** Business name for this learning record. */
+  label?: string;
+}
+
+export interface CaptureOutcomeFeedbackStepOutput {
+  feedbackId: string;
+  decision: 'approved' | 'rejected' | 'needs_changes' | 'recorded';
+  sourceCount: number;
+  capturedAt: string;
+}
+
+export interface FeedbackReviewStepConfig {
+  /** Earlier AI steps a person reviews. The author selects these explicitly. */
+  sourceStepIds: string[];
+  /** Shown while the run is waiting. */
+  subject?: string;
+  /** Business name for this review. */
+  label?: string;
+  deadlineMs?: number;
+}
+
+export interface FeedbackReviewStepOutput {
+  decision: 'accepted' | 'needs_changes' | 'rejected';
+  decidedBy: string;
+  comment?: string;
+  items: Array<{
+    sourceStepId: string;
+    itemId: string;
+    action: 'accept' | 'question' | 'override' | 'reject' | 'defer';
+    note?: string;
+  }>;
+  /** Plain-language notes the next step can read. */
+  revisionBrief: string;
+}
+
 export type InterviewStepMode = 'human_led' | 'multi_agent_assisted';
 
 export interface InterviewStepConfig {
@@ -536,7 +620,14 @@ export interface IngestArtifactStepConfig {
   reportMd?: string;
 }
 
-export type PlaybookBranchOperator = 'eq' | 'neq' | 'in' | 'gt' | 'gte' | 'lt' | 'lte';
+export type PlaybookBranchOperator =
+  | 'eq'
+  | 'neq'
+  | 'in'
+  | 'gt'
+  | 'gte'
+  | 'lt'
+  | 'lte';
 
 export interface PlaybookBranchCondition {
   sourceStepId: string;

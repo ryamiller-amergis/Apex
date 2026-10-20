@@ -16,6 +16,7 @@ import { getSkillConfig } from './projectSettingsService';
 import { cursorAgentCompletionOutput } from './playbookSteps/cursorAgentCompletion';
 import { failStepRun, resumeStepRun } from './playbookSteps/stepRuns';
 import { CURSOR_AGENT_STEP_TYPE } from './playbookSteps/registry';
+import { validateAtsBoardMemberReport } from '../../shared/atsBoardMemberReport';
 
 const MODERATOR_SKILL = '.cursor/skills/ats-board-moderator/SKILL.md';
 const ROLE_SKILLS: Readonly<Record<string, string>> = {
@@ -34,6 +35,8 @@ export const BOARD_DELIBERATION_DEFAULT_INQUIRY_BUDGET = 16;
 const AGENT_TIMEOUT_MS = 55 * 60 * 1000;
 const DISPATCH_LEASE_MS = 5 * 60 * 1000;
 const MAX_CONTEXT_CHARS = 40_000;
+const OUTPUT_FILE_INSTRUCTION =
+  'Write that JSON to `.ai-pilot/output/review-scorecard.json` and the same JSON inside one fence to `.ai-pilot/output/review-scorecard.md`. Apex reads only those files.';
 
 class DeliberationOutputDeferredError extends Error {
   constructor() {
@@ -41,6 +44,23 @@ class DeliberationOutputDeferredError extends Error {
     this.name = 'DeliberationOutputDeferredError';
   }
 }
+
+/**
+ * Members reuse the opening report's `{ claim, source, ... }` evidence objects in deliberation
+ * turns. Flatten any object entry to one readable line rather than failing the whole turn.
+ */
+function boardTextEntry(value: unknown): unknown {
+  if (value === null || typeof value !== 'object') return value;
+  const parts = Object.entries(value as Record<string, unknown>)
+    .filter(([, part]) => part !== null && part !== undefined && String(part).trim())
+    .map(([key, part]) => {
+      const text = typeof part === 'object' ? JSON.stringify(part) : String(part).trim();
+      return key === 'claim' || key === 'text' || key === 'position' ? text : `${key}: ${text}`;
+    });
+  return parts.join(' — ');
+}
+
+const boardTextList = z.array(z.preprocess(boardTextEntry, z.string()));
 
 const agendaTopicSchema = z.object({
   id: z.string().min(1),
@@ -59,7 +79,7 @@ const agendaTopicSchema = z.object({
       ])
     )
     .min(2),
-  evidenceNeeded: z.array(z.string()),
+  evidenceNeeded: boardTextList,
 });
 
 const agendaSchema = z
@@ -67,6 +87,9 @@ const agendaSchema = z
     role: z.literal('moderator'),
     topics: z.array(agendaTopicSchema).max(BOARD_DELIBERATION_MAX_TOPICS),
     noMaterialDisagreement: z.boolean(),
+    evidenceGaps: boardTextList.optional().default([]),
+    singleSourceClaims: boardTextList.optional().default([]),
+    charterConflicts: boardTextList.optional().default([]),
   })
   .superRefine((agenda, context) => {
     const topicIds = new Set<string>();
@@ -106,9 +129,10 @@ const responseSchema = z.object({
   ]),
   topicId: z.string().min(1),
   position: z.string().min(1),
-  evidence: z.array(z.string()),
-  challenges: z.array(z.string()),
-  revisions: z.array(z.string()),
+  evidence: boardTextList,
+  challenges: boardTextList,
+  revisions: boardTextList,
+  citedEvidenceIds: z.array(z.string()).optional().default([]),
   confidence: z.number().min(0).max(1),
   newEvidence: z.boolean(),
 });
@@ -122,17 +146,33 @@ const synthesisTopicSchema = z.object({
   evidenceQuality: z.enum(['strong', 'moderate', 'weak']),
 });
 
+const evidenceAuditEntrySchema = z.object({
+  evidenceId: z.string().min(1),
+  status: z.enum(['supported', 'weak', 'unsupported', 'duplicate']),
+  note: z.string().optional(),
+});
+
 const synthesisSchema = z.object({
   role: z.literal('moderator'),
   topics: z.array(synthesisTopicSchema).max(BOARD_DELIBERATION_MAX_TOPICS),
-  unresolved: z.array(z.string()),
+  unresolved: boardTextList,
   evidenceQuality: z.enum(['strong', 'moderate', 'weak']),
+  unsupportedClaims: boardTextList.optional().default([]),
+  evidenceAudit: z.array(evidenceAuditEntrySchema).optional().default([]),
+  blockingDecisionRefs: z.array(z.string()).optional().default([]),
 });
 
 type Agenda = z.infer<typeof agendaSchema>;
 type DeliberationPhase = 'agenda' | 'response' | 'rebuttal' | 'synthesis';
 type DeliberationSession = typeof playbookDeliberationSessions.$inferSelect;
 type DeliberationTurn = typeof playbookDeliberationTurns.$inferSelect;
+
+export class BoardDeliberationInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BoardDeliberationInputError';
+  }
+}
 
 function clip(value: string): string {
   return value.length <= MAX_CONTEXT_CHARS
@@ -168,14 +208,74 @@ export function assertAtsBoardReportRoles(
   for (const role of ATS_BOARD_ROLES) {
     const report = reports[role];
     if (!report?.trim())
-      throw new Error(`ATS board ${role} report is missing.`);
+      throw new BoardDeliberationInputError(
+        `ATS board ${role} report is missing.`
+      );
     const reportedRole = parseReportRole(report);
     if (reportedRole !== role) {
-      throw new Error(
+      throw new BoardDeliberationInputError(
         `ATS board ${role} step returned role "${reportedRole ?? 'unknown'}"; expected "${role}".`
       );
     }
+    try {
+      validateAtsBoardMemberReport(role, report);
+    } catch (error) {
+      throw new BoardDeliberationInputError(
+        error instanceof Error
+          ? error.message
+          : `ATS board ${role} report is invalid.`
+      );
+    }
   }
+}
+
+const DELIBERATION_AUDIT_RESPONSE_KEYS = new Set([
+  'role',
+  'topicId',
+  'position',
+  'evidence',
+  'challenges',
+  'revisions',
+  'citedEvidenceIds',
+  'confidence',
+  'newEvidence',
+]);
+
+const DELIBERATION_AUDIT_AGENDA_KEYS = new Set([
+  'role',
+  'topics',
+  'noMaterialDisagreement',
+  'evidenceGaps',
+  'singleSourceClaims',
+  'charterConflicts',
+]);
+
+const DELIBERATION_AUDIT_SYNTHESIS_KEYS = new Set([
+  'role',
+  'topics',
+  'unresolved',
+  'evidenceQuality',
+  'unsupportedClaims',
+  'evidenceAudit',
+  'blockingDecisionRefs',
+]);
+
+function sanitizeDeliberationResult(
+  phase: string,
+  result: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  if (!result) return null;
+  const allowed =
+    phase === 'agenda'
+      ? DELIBERATION_AUDIT_AGENDA_KEYS
+      : phase === 'synthesis'
+        ? DELIBERATION_AUDIT_SYNTHESIS_KEYS
+        : DELIBERATION_AUDIT_RESPONSE_KEYS;
+  const sanitized: Record<string, unknown> = {};
+  for (const key of allowed) {
+    if (key in result) sanitized[key] = result[key];
+  }
+  return sanitized;
 }
 
 function reportsText(reports: Record<string, string>): string {
@@ -186,6 +286,12 @@ function reportsText(reports: Record<string, string>): string {
 
 export function parseBoardDeliberationAgenda(value: unknown): Agenda {
   return agendaSchema.parse(value);
+}
+
+export function parseBoardDeliberationResponse(
+  value: unknown
+): z.infer<typeof responseSchema> {
+  return responseSchema.parse(value);
 }
 
 async function outputObject(
@@ -233,7 +339,7 @@ export function shouldRunBoardRebuttal(
   });
 }
 
-function turnPrompt(
+export function turnPrompt(
   session: DeliberationSession,
   turn: DeliberationTurn,
   turns: DeliberationTurn[]
@@ -244,7 +350,29 @@ function turnPrompt(
       [
         'Build the bounded ATS board discussion agenda.',
         `Choose no more than ${session.maxTopics} material disagreements.`,
-        'Return only the agenda JSON defined by your skill.',
+        `Return only the agenda JSON defined by your skill. ${OUTPUT_FILE_INSTRUCTION}`,
+        `Charter:\n${session.charter}`,
+        `Independent reports:\n${reports}`,
+      ].join('\n\n')
+    );
+  }
+
+  if (turn.phase === 'synthesis') {
+    return clip(
+      [
+        'Synthesize the bounded ATS board discussion.',
+        `Return only the synthesis JSON defined by your skill. ${OUTPUT_FILE_INSTRUCTION}`,
+        'Do not erase dissent or convert one-source claims into decided facts.',
+        `Agenda:\n${JSON.stringify(session.agenda)}`,
+        `Discussion:\n${
+          turns
+            .filter((item) => item.result)
+            .map(
+              (item) =>
+                `${item.specialist} ${item.phase}: ${JSON.stringify(item.result)}`
+            )
+            .join('\n\n') || 'none'
+        }`,
         `Charter:\n${session.charter}`,
         `Independent reports:\n${reports}`,
       ].join('\n\n')
@@ -265,42 +393,20 @@ function turnPrompt(
     )
     .join('\n\n');
 
-  if (turn.phase === 'response' || turn.phase === 'rebuttal') {
-    return clip(
-      [
-        'DELIBERATION_ASSIGNMENT',
-        `You are the ${turn.specialist} ATS board member.`,
-        `Topic ${topic.id}: ${topic.title}`,
-        `Question: ${topic.question}`,
-        `Evidence needed: ${topic.evidenceNeeded.join('; ') || 'none named'}`,
-        turn.phase === 'rebuttal'
-          ? 'Review the peer responses below. Revise when evidence supports a challenge; otherwise preserve and explain the disagreement.'
-          : 'Respond to this material disagreement using your opening position and the other opening reports.',
-        'Return only the active-deliberation JSON defined by your skill.',
-        `Charter:\n${session.charter}`,
-        `Opening reports:\n${reports}`,
-        `Prior discussion:\n${prior || 'none'}`,
-      ].join('\n\n')
-    );
-  }
-
   return clip(
     [
-      'Synthesize the bounded ATS board discussion.',
-      'Return only the synthesis JSON defined by your skill.',
-      'Do not erase dissent or convert one-source claims into decided facts.',
-      `Agenda:\n${JSON.stringify(session.agenda)}`,
-      `Discussion:\n${
-        turns
-          .filter((item) => item.result)
-          .map(
-            (item) =>
-              `${item.specialist} ${item.phase}: ${JSON.stringify(item.result)}`
-          )
-          .join('\n\n') || 'none'
-      }`,
+      'DELIBERATION_ASSIGNMENT',
+      `You are the ${turn.specialist} ATS board member.`,
+      `Topic ${topic.id}: ${topic.title}`,
+      `Question: ${topic.question}`,
+      `Evidence needed: ${topic.evidenceNeeded.join('; ') || 'none named'}`,
+      turn.phase === 'rebuttal'
+        ? 'Review the peer responses below. Revise when evidence supports a challenge; otherwise preserve and explain the disagreement.'
+        : 'Respond to this material disagreement using your opening position and the other opening reports.',
+      `Return only the active-deliberation JSON defined by your skill. ${OUTPUT_FILE_INSTRUCTION}`,
       `Charter:\n${session.charter}`,
-      `Independent reports:\n${reports}`,
+      `Opening reports:\n${reports}`,
+      `Prior discussion:\n${prior || 'none'}`,
     ].join('\n\n')
   );
 }
@@ -779,6 +885,13 @@ export async function handleBoardDeliberationTerminal(input: {
       stepRunId: session.stepRunId,
     };
   }
+  if (turn.status === 'completed') {
+    // The step still points at this finished turn, so the next one was never dispatched
+    // (the enqueue threw after the turn completed). Dispatch it now; the reconciliation
+    // sweep lands here on every pass until it succeeds.
+    await dispatchNextTurn(session.id, input.project, input.userId);
+    return { handled: true, completed: false, stepRunId: session.stepRunId };
+  }
   if (turn.status !== 'running') {
     return {
       handled: true,
@@ -820,7 +933,7 @@ export async function handleBoardDeliberationTerminal(input: {
     if (turn.phase === 'agenda') parsed = agendaSchema.parse(raw);
     else if (turn.phase === 'synthesis') parsed = synthesisSchema.parse(raw);
     else {
-      const response = responseSchema.parse(raw);
+      const response = parseBoardDeliberationResponse(raw);
       if (
         response.role !== turn.specialist ||
         response.topicId !== turn.topicId
@@ -933,29 +1046,37 @@ export async function handleBoardDeliberationTerminal(input: {
     return { handled: true, completed: true, stepRunId: session.stepRunId };
   }
 
+  await dispatchNextTurn(session.id, input.project, input.userId);
+  return { handled: true, completed: false, stepRunId: session.stepRunId };
+}
+
+async function dispatchNextTurn(
+  sessionId: string,
+  project: string,
+  userId: string
+): Promise<void> {
   const refreshed = await db.query.playbookDeliberationSessions.findFirst({
-    where: eq(playbookDeliberationSessions.id, session.id),
+    where: eq(playbookDeliberationSessions.id, sessionId),
   });
   if (!refreshed)
-    throw new Error(`Deliberation session ${session.id} disappeared.`);
-  let turns = await sessionTurns(session.id);
+    throw new Error(`Deliberation session ${sessionId} disappeared.`);
+  let turns = await sessionTurns(sessionId);
+  if (turns.some((item) => item.status === 'running')) return;
   await prepareFollowingTurns(refreshed, turns);
-  turns = await sessionTurns(session.id);
+  turns = await sessionTurns(sessionId);
   const next = turns.find((item) => item.status === 'pending');
   if (!next)
     throw new Error(
       'ATS board deliberation could not determine its next turn.'
     );
   const nextRunId = await enqueueTurn({
-    session: { ...refreshed, inquiryCount: refreshed.inquiryCount },
+    session: refreshed,
     turn: next,
     turns,
-    project: input.project,
-    userId: input.userId,
+    project,
+    userId,
   });
-  if (!nextRunId) {
-    return { handled: true, completed: false, stepRunId: session.stepRunId };
-  }
+  if (!nextRunId) return;
   await db
     .update(playbookStepRuns)
     .set({
@@ -964,11 +1085,10 @@ export async function handleBoardDeliberationTerminal(input: {
     })
     .where(
       and(
-        eq(playbookStepRuns.id, session.stepRunId),
+        eq(playbookStepRuns.id, refreshed.stepRunId),
         eq(playbookStepRuns.status, 'suspended')
       )
     );
-  return { handled: true, completed: false, stepRunId: session.stepRunId };
 }
 
 export async function listBoardDeliberationAudit(stepRunId: string): Promise<{
@@ -996,8 +1116,13 @@ export async function listBoardDeliberationAudit(stepRunId: string): Promise<{
       topicId: turn.topicId,
       specialist: turn.specialist,
       status: turn.status,
-      result: turn.result,
+      result: sanitizeDeliberationResult(
+        turn.phase,
+        (turn.result as Record<string, unknown> | null) ?? null,
+      ),
       completedAt: turn.completedAt,
     })),
   };
 }
+
+export { sanitizeDeliberationResult };

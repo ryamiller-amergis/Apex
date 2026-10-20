@@ -574,6 +574,113 @@ describe('assertCanvasConnection', () => {
     expect(() => assertCanvasConnection(graph)).not.toThrow();
   });
 
+  it('accepts outcome feedback that points at earlier AI steps and a completed review', () => {
+    const graph: PlaybookGraph = {
+      nodes: [
+        node('chair', 'cursor-agent'),
+        {
+          id: 'deliberation',
+          stepType: 'board-deliberation',
+          config: {
+            charter: 'Phase 1 charter',
+            reports: { operations: 'Keep Phase 1 thin.' },
+          },
+        },
+        node('ratify', 'approval-gate'),
+        {
+          id: 'capture-learning',
+          stepType: 'capture-outcome-feedback',
+          config: {
+            label: 'ATS board outcome',
+            reviewStepId: 'ratify',
+            sourceStepIds: ['chair', 'deliberation'],
+          },
+        },
+      ],
+      edges: [
+        { from: 'chair', to: 'deliberation' },
+        { from: 'deliberation', to: 'ratify' },
+        { from: 'ratify', to: 'capture-learning' },
+      ],
+    };
+    graph.nodes[0].config = {
+      ...graph.nodes[0].config,
+      mcpProfile: 'repository-read-only',
+    };
+
+    expect(() => assertGraphWithinGuards(graph)).not.toThrow();
+  });
+
+  it('refuses outcome feedback aimed at a later step or a step that is not AI', () => {
+    const graph: PlaybookGraph = {
+      nodes: [
+        node('announce', 'notify'),
+        node('ratify', 'approval-gate'),
+        {
+          id: 'capture-learning',
+          stepType: 'capture-outcome-feedback',
+          config: {
+            reviewStepId: 'ratify',
+            sourceStepIds: ['announce'],
+          },
+        },
+      ],
+      edges: [
+        { from: 'announce', to: 'ratify' },
+        { from: 'ratify', to: 'capture-learning' },
+      ],
+    };
+
+    expect(() => assertGraphWithinGuards(graph)).toThrow(/AI step/i);
+  });
+
+  it('accepts learning from selected AI steps without an approval gate', () => {
+    const graph: PlaybookGraph = {
+      nodes: [
+        node('chair', 'cursor-agent'),
+        {
+          id: 'leadership-feedback',
+          stepType: 'feedback-review',
+          config: { sourceStepIds: ['chair'], subject: 'Review the plan' },
+        },
+        {
+          id: 'capture-learning',
+          stepType: 'capture-outcome-feedback',
+          config: {
+            sourceStepIds: ['chair'],
+            feedbackStepId: 'leadership-feedback',
+          },
+        },
+      ],
+      edges: [
+        { from: 'chair', to: 'leadership-feedback' },
+        { from: 'leadership-feedback', to: 'capture-learning' },
+      ],
+    };
+    graph.nodes[0].config = {
+      ...graph.nodes[0].config,
+      mcpProfile: 'repository-read-only',
+    };
+
+    expect(() => assertGraphWithinGuards(graph)).not.toThrow();
+  });
+
+  it('refuses a feedback review aimed at a step that is not AI', () => {
+    const graph: PlaybookGraph = {
+      nodes: [
+        node('announce', 'notify'),
+        {
+          id: 'leadership-feedback',
+          stepType: 'feedback-review',
+          config: { sourceStepIds: ['announce'] },
+        },
+      ],
+      edges: [{ from: 'announce', to: 'leadership-feedback' }],
+    };
+
+    expect(() => assertGraphWithinGuards(graph)).toThrow(/AI step/i);
+  });
+
   it('refuses a self-loop with the same loop message as publish', () => {
     const graph: PlaybookGraph = {
       nodes: [{ id: 'solo', stepType: 'notify', config: configFor('notify', 'solo') }],

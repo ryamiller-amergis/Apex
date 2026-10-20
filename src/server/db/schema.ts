@@ -84,6 +84,8 @@ import type {
   InterviewStepMode,
   PlaybookGraph,
   PlaybookLayoutPositions,
+  PlaybookOutcomeFeedbackAnswer,
+  PlaybookOutcomeFeedbackSource,
   PlaybookRunStatus,
   PlaybookStepRunStatus,
   PlaybookVersionStatus,
@@ -3379,6 +3381,39 @@ export const playbookStepRuns = pgTable('playbook_step_runs', {
   ),
 }));
 
+export const playbookOutcomeFeedback = pgTable('playbook_outcome_feedback', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  runId: uuid('run_id').notNull().references(() => playbookRuns.id, { onDelete: 'cascade' }),
+  captureStepRunId: uuid('capture_step_run_id').notNull().unique()
+    .references(() => playbookStepRuns.id, { onDelete: 'cascade' }),
+  reviewStepRunId: uuid('review_step_run_id')
+    .references(() => playbookStepRuns.id, { onDelete: 'cascade' }),
+  definitionVersionId: uuid('definition_version_id').notNull()
+    .references(() => playbookDefinitionVersions.id, { onDelete: 'restrict' }),
+  label: text('label'),
+  decision: text('decision')
+    .$type<'approved' | 'rejected' | 'needs_changes' | 'recorded'>()
+    .notNull(),
+  overallComment: text('overall_comment'),
+  answers: jsonb('answers').$type<PlaybookOutcomeFeedbackAnswer[]>().notNull().default([]),
+  sources: jsonb('sources').$type<PlaybookOutcomeFeedbackSource[]>().notNull(),
+  capturedAt: timestamp('captured_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  runIdx: index('idx_playbook_outcome_feedback_run').on(t.runId),
+  decisionCheck: check(
+    'playbook_outcome_feedback_decision_check',
+    sql`${t.decision} IN ('approved', 'rejected', 'needs_changes', 'recorded')`,
+  ),
+  answersArrayCheck: check(
+    'playbook_outcome_feedback_answers_array_check',
+    sql`jsonb_typeof(${t.answers}) = 'array'`,
+  ),
+  sourcesArrayCheck: check(
+    'playbook_outcome_feedback_sources_array_check',
+    sql`jsonb_typeof(${t.sources}) = 'array'`,
+  ),
+}));
+
 export const playbookDeliberationSessions = pgTable('playbook_deliberation_sessions', {
   id: uuid('id').primaryKey().defaultRandom(),
   stepRunId: uuid('step_run_id').notNull().unique()
@@ -3506,11 +3541,16 @@ export const playbookVersionLayoutsRelations = relations(playbookVersionLayouts,
 }));
 
 export const playbookRunsRelations = relations(playbookRuns, ({ one, many }) => ({
+  initiator: one(appUsers, {
+    fields: [playbookRuns.initiatorUserId],
+    references: [appUsers.oid],
+  }),
   definitionVersion: one(playbookDefinitionVersions, {
     fields: [playbookRuns.definitionVersionId],
     references: [playbookDefinitionVersions.id],
   }),
   steps: many(playbookStepRuns),
+  outcomeFeedback: many(playbookOutcomeFeedback),
   interviews: many(interviews),
 }));
 
@@ -3519,9 +3559,36 @@ export const playbookStepRunsRelations = relations(playbookStepRuns, ({ one, man
     fields: [playbookStepRuns.runId],
     references: [playbookRuns.id],
   }),
+  agentRun: one(agentRuns, {
+    fields: [playbookStepRuns.agentRunId],
+    references: [agentRuns.id],
+  }),
   gateApprovers: many(playbookGateApprovers),
   deliberationSession: one(playbookDeliberationSessions),
+  outcomeFeedbackCaptures: many(playbookOutcomeFeedback, { relationName: 'outcomeFeedbackCapture' }),
+  outcomeFeedbackReviews: many(playbookOutcomeFeedback, { relationName: 'outcomeFeedbackReview' }),
   interviews: many(interviews),
+}));
+
+export const playbookOutcomeFeedbackRelations = relations(playbookOutcomeFeedback, ({ one }) => ({
+  run: one(playbookRuns, {
+    fields: [playbookOutcomeFeedback.runId],
+    references: [playbookRuns.id],
+  }),
+  captureStepRun: one(playbookStepRuns, {
+    fields: [playbookOutcomeFeedback.captureStepRunId],
+    references: [playbookStepRuns.id],
+    relationName: 'outcomeFeedbackCapture',
+  }),
+  reviewStepRun: one(playbookStepRuns, {
+    fields: [playbookOutcomeFeedback.reviewStepRunId],
+    references: [playbookStepRuns.id],
+    relationName: 'outcomeFeedbackReview',
+  }),
+  definitionVersion: one(playbookDefinitionVersions, {
+    fields: [playbookOutcomeFeedback.definitionVersionId],
+    references: [playbookDefinitionVersions.id],
+  }),
 }));
 
 export const playbookDeliberationSessionsRelations = relations(

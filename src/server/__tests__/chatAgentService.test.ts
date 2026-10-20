@@ -2940,6 +2940,27 @@ describe('document assistant MCP wiring', () => {
     expect(githubServers['ado-skills']).toBeUndefined();
   });
 
+  it('mounts repository plus project web MCP for ATS public-web Playbook profile', () => {
+    const servers = buildMcpServers(
+      baseKickoff({
+        playbookMcpProfile: 'repository-public-web-read-only',
+        mcpPill: {
+          transport: 'http',
+          label: 'Web',
+          mcpServerName: 'web-search',
+          url: 'http://localhost:3001/mcp/web-search',
+        },
+      }),
+      'http://localhost:3001/mcp/ado-skills',
+    );
+
+    expect(servers['github-repo']).toBeDefined();
+    expect(servers['web-search']).toEqual({
+      url: 'http://localhost:3001/mcp/web-search',
+    });
+    expect(servers['ado-skills']).toBeUndefined();
+  });
+
   it('mounts ADO operations only when a skill declares that capability', () => {
     const servers = buildMcpServers(
       baseKickoff(),

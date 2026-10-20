@@ -1,0 +1,255 @@
+CUSTOM APPLICATION PLATFORM - PHASES B TO E
+Same format as the Phase A backlog. Copy one block per text box.
+Sizes: story points (1 = half a day or less, 13 = about two weeks). H/M/L = confidence.
+
+=====================================================================
+PHASE B - MAKE IT TRUSTWORTHY (ABOUT 109 PTS, ABOUT 4 WEEKS)
+Goal: generated apps and the skills that build them can be trusted.
+Entry: Phase A exit test passes. Exit: a bad generation is caught by
+verify, and every artifact of a run can be re-opened and explained.
+---------------------------------------------------------------------
+B1  Capability registry replaces the skill allow-list
+B1.1  Skill contract in frontmatter (5 pts, H)
+      Every skill declares inputs, outputs, side effects
+      (reads Apex / writes Apex / leaves Apex), MCP profile,
+      and version. Zod-validated at load; a skill with no
+      contract does not load.
+      Files: src/shared/types/skillContract.ts (new),
+      projectSettingsService.ts (skill resolution)
+B1.2  Registry service (8 pts, M)
+      Reads contracts, lists skills by capability, resolves
+      an exact version. Project-scoped like project skills today.
+      File: src/server/services/skillCapabilityRegistryService.ts (new)
+B1.3  Registry wired into the Playbook step registry (5 pts, M)
+      cursor-agent / generate-app validate against contracts
+      instead of PHASE_0_ALLOWED_AGENT_SKILLS.
+      File: playbookSteps/registry.ts
+B1.4  Skill versioning and pinning (5 pts, M)
+      A run records the skill versions it used. Editing a skill
+      creates a new version; old runs keep theirs.
+      Files: skillCapabilityRegistryService.ts, playbookRunService.ts
+B1.5  Skill signing (8 pts, L)
+      Skills are signed at publish; the registry refuses
+      unsigned or altered skills. Unsigned skills are remote
+      code - this is the fix.
+      Files: skillCapabilityRegistryService.ts, publish tooling TBD
+
+B2  Sandbox hardening
+B2.1  Workspace isolation audit (5 pts, M)
+      Prove generate steps cannot read or write outside the
+      run workspace: filesystem, network, environment.
+      Tests attempt escape and must fail.
+      Files: appWorkspaceService.ts, playbookMcpCapabilityService.ts
+B2.2  Per-run credentials (5 pts, M)
+      Each run gets short-lived, least-privilege credentials
+      scoped to its workspace and Blob prefix. Nothing shared
+      with the Apex process identity.
+      Files: appWorkspaceService.ts, azure identity patterns in infra/
+
+B3  Artifact and version store
+B3.1  Blob container for step outputs (5 pts, H)
+      Name the container Phase 0 left unnamed. Every generate /
+      verify artifact lands here with run + step metadata.
+      Files: infra/shared-async.tf (pattern), appWorkspaceService.ts
+B3.2  Workspace snapshot + restore (8 pts, M)
+      Snapshot the workspace at each gate; restore any snapshot
+      into a new run. This is the seed of rollback in Phase C.
+      File: src/server/services/appArtifactService.ts (new)
+B3.3  Artifact viewer (5 pts, M)
+      Run view lists artifacts per step: manifest, logs,
+      Blueprint version, skill versions. Download + restore.
+      Files: PlaybookLiveRunPage.tsx, AppVerifyReportPanel.tsx
+
+B4  Verify Gate, hardened
+B4.1  Security scan in verify-app (5 pts, H)
+      Dependency audit + secret scan as verify checks.
+      A found secret fails the gate, always.
+      File: playbookSteps/verifyAppAdapter.ts
+B4.2  Data check in verify-app (3 pts, H)
+      Migrations run against an empty database and against
+      the previous version's database. Both must pass.
+      File: playbookSteps/verifyAppAdapter.ts
+
+B5  Permissions and audit
+B5.1  New RBAC keys: app:create, app:deploy (5 pts, M)
+      Added through the rbac-management skill workflow
+      (migration + middleware + client gating), not by hand.
+      Roles: admin + member create; deploy is its own key.
+B5.2  Gate approver pools (5 pts, M)
+      Gates resolve approvers by pool (not just the initiator):
+      Blueprint gate and deploy gate can name different people.
+      Empty pool is an error, never "anyone".
+      File: playbookGateService.ts
+B5.3  Audit view (3 pts, H)
+      Who asked, what ran, who approved, what it cost -
+      one timeline per app, from existing run + audit rows.
+      Files: PlaybookLiveRunPage.tsx, aiUsageService.ts
+
+=====================================================================
+PHASE C - REAL RUNTIME (ABOUT 149 PTS, ABOUT 6-8 WEEKS)
+Goal: a generated app lives at a real URL, under Apex's control.
+Entry: Phase B exit. Exit: a Phase A app goes live, is patched by
+a change request, and rolls back cleanly - all from Apex.
+This is the biggest net-new build in the programme.
+---------------------------------------------------------------------
+C1  Per-app provisioning
+C1.1  App Terraform module (13 pts, M)
+      One module per app: Container Apps (app), Postgres
+      (database), Entra app registration (auth), Key Vault
+      (secrets), App Insights (monitoring). Built from the
+      existing infra/ patterns and terraform-infra skill.
+      Files: infra/modules/generated-app/ (new)
+C1.2  Provision step type (8 pts, M)
+      Playbook step that plans, applies, and records the
+      Terraform state per app + environment. Plan output is
+      shown at Gate 2 before apply. Apply is the step Apex
+      cannot roll back by itself, so it sits behind the gate.
+      Files: playbookSteps/registry.ts,
+      playbookSteps/provisionAppAdapter.ts (new)
+C1.3  Environments: preview and prod (5 pts, H)
+      Same module, two variable sets. Preview is disposable;
+      prod is created only at Gate 2 approval.
+      Files: infra/modules/generated-app/, appPreviewService.ts
+
+C2  Runtime wiring
+C2.1  Secrets into the app (5 pts, M)
+      Database connection and app secrets issued from Key Vault
+      at deploy time. Never in the workspace, never in logs.
+C2.2  Auth for generated apps (8 pts, M)
+      Entra sign-in on every generated app. The Blueprint's
+      roles map to app roles. No app ships anonymous in prod.
+C2.3  Runtime monitoring (5 pts, H)
+      App Insights per app, surfaced in Apex: errors, latency,
+      cost estimate. Alerts go to the app owner via the
+      existing notification service.
+      Files: notificationService.ts, aiCostAnalyticsService.ts (pattern)
+
+C3  Change requests and rollback
+C3.1  Blueprint diff (8 pts, M)
+      Editing an app loads its pinned Blueprint, applies the
+      change, and shows the diff before anything regenerates.
+      File: appBlueprintService.ts
+C3.2  Patch, do not regenerate (8 pts, L)
+      generate-app gains a patch mode: it works in the app's
+      own workspace (restored from the artifact store) and
+      changes only what the Blueprint diff touches.
+      Files: playbookSteps/generateAppAdapter.ts,
+      .cursor/skills/app-builder-generate/SKILL.md
+C3.3  One-action rollback (5 pts, M)
+      Restore the previous workspace snapshot + previous
+      Blueprint version, re-verify, redeploy. Tested by
+      deliberately breaking a live app and rolling back.
+      Files: appArtifactService.ts, provisionAppAdapter.ts
+
+C4  App lifecycle in Apex
+C4.1  My Apps list (5 pts, H)
+      Owner's apps: status, URL, environment, last deploy,
+      cost this month. Viewers see shared apps read-only.
+      Files: new AppsView.tsx, uiLab list patterns
+C4.2  Decommission (3 pts, H)
+      Terraform destroy behind an approval gate, with the
+      final snapshot retained. Nobody deletes an app by
+      deleting files.
+
+=====================================================================
+PHASE D - MORE APP TYPES (ABOUT 121 PTS, THEN ONGOING)
+Goal: the platform stops being a CRUD generator.
+Entry: Phase C exit. Exit: three app archetypes generated from
+the same Blueprint schema, builders chosen by composition.
+---------------------------------------------------------------------
+D1  New archetypes
+D1.1  Template: approval / workflow app (13 pts, M)
+      Adds workflow states, approver roles, and notifications
+      to the Blueprint vocabulary. Second stack on purpose:
+      proves the Blueprint is not CRUD-shaped.
+      Files: app-templates/workflow-v1/ (new)
+D1.2  Template: read-only dashboard (8 pts, M)
+      Charts over an existing data source, no writes.
+      Exercises integrations in the Blueprint for real.
+      Files: app-templates/dashboard-v1/ (new)
+D1.3  Blueprint vocabulary v2 (8 pts, M)
+      Field types and screen types the new archetypes need.
+      Versioned schema; v1 Blueprints keep working (pinned).
+      File: src/shared/types/appBlueprint.ts
+
+D2  Skill composition
+D2.1  Composition engine (13 pts, L)
+      The Planner stops following one fixed graph. It reads
+      Blueprint features and wires builder skills by contract:
+      an app with approvals gets the workflow builders,
+      an app without them does not.
+      Files: playbookBindingResolver.ts, playbookTemplateService.ts
+D2.2  Builder skill split (8 pts, M)
+      app-builder-generate splits into per-artifact skills
+      (UI, API, data, workflow, tests) so composition has
+      pieces to compose. Verify already judges per artifact.
+      Files: .cursor/skills/app-builder-*/ (new set)
+
+D3  Richer generation inputs
+D3.1  UI Lab feeds the UI builder (8 pts, M)
+      A UI Lab design can be attached to a Blueprint screen;
+      the UI builder builds from it instead of from scratch.
+      UI Lab stops making throwaway prototypes.
+      Files: uiLabService.ts, generateAppAdapter.ts
+D3.2  Integration catalog (8 pts, M)
+      Named, pre-approved integrations (email, ADO, Blob)
+      the Blueprint can request. The platform refuses
+      integrations that are not in the catalog.
+      Files: skillCapabilityRegistryService.ts (catalog lives here)
+
+D4  Blueprint authoring (optional, do last in this phase)
+D4.1  Visual Blueprint editor (13 pts, L)
+      Edit entities and screens on a canvas, Diagrams-style.
+      Deliberately last: editors freeze schemas, and the
+      schema must settle first (vocabulary v2, D1.3).
+      Files: DiagramEditorView.tsx (pattern), AppBlueprintPanel.tsx
+
+=====================================================================
+PHASE E - GATED LEARNING (ABOUT 64 PTS, TIMING: LATER)
+Goal: the platform improves its skills from evidence, under control.
+Entry: Phase B registry + months of captured feedback (wired in
+Phase A, item A6.5). Exit: one skill measurably improves and ships
+without changing any running app's behaviour.
+NOT IN PHASE A SCOPE. Nothing here publishes itself.
+---------------------------------------------------------------------
+E1.1  Eval set from real runs (8 pts, M)
+      Outcome-feedback rows + verify results + gate decisions
+      become labeled example tasks with known-good outcomes.
+      Held out from any training or prompt use.
+      Files: playbookOutcomeFeedbackService.ts,
+      src/server/services/skillEvaluationService.ts (new)
+E1.2  Skill drafts, never live edits (8 pts, M)
+      The Skill Learning System reads run traces and feedback
+      and proposes new skill versions as drafts only.
+      It has no path to the live registry.
+      File: .cursor/skills/skill-learning/ (new)
+E1.3  Offline evaluation (8 pts, M)
+      Draft skills are scored against the held-out eval set
+      before a human sees them. Deterministic scorecard,
+      same pattern as design-doc validation: pass bar set
+      in advance, not after seeing scores.
+      File: skillEvaluationService.ts
+E1.4  Promotion by review (5 pts, H)
+      A person reviews eval scores and approves or rejects.
+      Approved drafts become a new registry version.
+      This is a PR process for skills, with the same audit
+      trail as a gate decision.
+      Files: skillCapabilityRegistryService.ts, playbookGateService.ts (pattern)
+E1.5  Behaviour pinning check (3 pts, H)
+      Before promotion, prove which live apps were built by
+      the old version. They keep the old version until their
+      next change request. Nothing running changes silently.
+      Files: skillCapabilityRegistryService.ts, appArtifactService.ts
+
+=====================================================================
+THE WHOLE PROGRAMME, IN ORDER
+---------------------------------------------------------------------
+Phase A  One app end to end ......... 152 pts ... flag first
+Phase B  Make it trustworthy ........ 109 pts ... registry + sandbox
+Phase C  Real runtime ............... 149 pts ... biggest build
+Phase D  More app types ............. 121 pts ... then ongoing
+Phase E  Gated learning .............  64 pts ... needs B + data
+Total to Phase D exit: about 531 points.
+The order is not arbitrary: B builds the registry E promotes into.
+C gives apps a real home so D has somewhere to run. E is last
+because it needs B's machinery and months of Phase A feedback.

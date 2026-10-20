@@ -26,6 +26,8 @@ import type {
   BranchStepConfig,
   CursorAgentStepConfig,
   IngestArtifactStepConfig,
+  CaptureOutcomeFeedbackStepConfig,
+  FeedbackReviewStepConfig,
   InterviewStepConfig,
   NotifyStepConfig,
   PlaybookStepSideEffect,
@@ -54,7 +56,8 @@ export const BOARD_DELIBERATION_STEP_TYPE = 'board-deliberation';
  * deliberately; nothing is added to it by accident.
  *
  * The ATS board skills are the shipped `ats-agent-board` template. They stay on this list
- * because that graph names them and every one of those steps is repository-read-only.
+ * because that graph names them. Specialists use repository-public-web-read-only after authorize;
+ * moderator and chair stay repository-read-only.
  */
 export const ATS_BOARD_AGENT_SKILLS: readonly string[] = [
   '.cursor/skills/ats-board-operations/SKILL.md',
@@ -89,6 +92,7 @@ export const PHASE_0_ALLOWED_AGENT_SKILLS: readonly string[] = [
 export const CURSOR_AGENT_DEADLINE_MS = 60 * MINUTE_MS;
 export const BOARD_DELIBERATION_DEADLINE_MS = 2 * HOUR_MS;
 export const APPROVAL_GATE_DEADLINE_MS = 48 * HOUR_MS;
+export const FEEDBACK_REVIEW_DEADLINE_MS = APPROVAL_GATE_DEADLINE_MS;
 
 /**
  * An interview outlives the request that started it.
@@ -110,7 +114,10 @@ export const INTERVIEW_MAX_DEADLINE_MS = 14 * 24 * HOUR_MS;
  */
 const READABLE_TIMESTAMP = z
   .string()
-  .refine((value) => !Number.isNaN(Date.parse(value)), 'must be a timestamp that reads as a time');
+  .refine(
+    (value) => !Number.isNaN(Date.parse(value)),
+    'must be a timestamp that reads as a time'
+  );
 
 /**
  * What each step type takes and returns, per TBI-032.
@@ -144,7 +151,11 @@ const BOARD_DELIBERATION_INPUT_SCHEMA = z.object({
   maxTopics: z.number().int().min(1).max(5).optional(),
   maxRounds: z.number().int().min(1).max(2).optional(),
   inquiryBudget: z.number().int().min(3).max(32).optional(),
-  deadlineMs: z.number().positive().max(BOARD_DELIBERATION_DEADLINE_MS).optional(),
+  deadlineMs: z
+    .number()
+    .positive()
+    .max(BOARD_DELIBERATION_DEADLINE_MS)
+    .optional(),
 });
 
 const BOARD_DELIBERATION_TOPIC_SCHEMA = z.object({
@@ -170,7 +181,9 @@ const APPROVAL_GATE_INPUT_SCHEMA = z.object({
   deadlineMs: z.number().positive().optional(),
   subject: z.string().optional(),
   // Optional only for Phase 1 rows. Production gates provide both values together.
-  approverPool: z.enum(['prd', 'design_doc', 'design_prototype', 'test_case', 'adr']).optional(),
+  approverPool: z
+    .enum(['prd', 'design_doc', 'design_prototype', 'test_case', 'adr'])
+    .optional(),
   gatedStepId: z.string().min(1).optional(),
 });
 
@@ -178,6 +191,16 @@ const APPROVAL_GATE_OUTPUT_SCHEMA = z.object({
   decision: z.enum(['approved', 'rejected']),
   decidedBy: z.string(),
   comment: z.string().min(1).max(2000).optional(),
+  answers: z
+    .array(
+      z.object({
+        decisionId: z.string().min(1).max(80),
+        resolution: z.enum(['accept_recommendation', 'direct', 'defer']),
+        response: z.string().min(1).max(2000),
+      })
+    )
+    .max(20)
+    .optional(),
 });
 
 const NOTIFY_INPUT_SCHEMA = z.object({
@@ -198,7 +221,9 @@ const INGEST_ARTIFACT_INPUT_SCHEMA = z.object({
   documentType: z.enum(['design_doc', 'prd']),
   documentId: z.string().min(1),
   validationThreadId: z.string().min(1),
-  scorecard: z.union([z.string().min(1), z.record(z.string(), z.unknown())]).optional(),
+  scorecard: z
+    .union([z.string().min(1), z.record(z.string(), z.unknown())])
+    .optional(),
   reportMd: z.string().optional(),
 });
 
@@ -229,7 +254,9 @@ const BRANCH_OUTPUT_SCHEMA = z.object({
 
 const INTERVIEW_INPUT_SCHEMA = z.object({
   mode: z.enum(['human_led', 'multi_agent_assisted']),
-  profileKey: z.string().refine((value) => value.trim().length > 0, 'must be nonblank'),
+  profileKey: z
+    .string()
+    .refine((value) => value.trim().length > 0, 'must be nonblank'),
   deadlineMs: z
     .number()
     .refine(
@@ -242,17 +269,68 @@ const INTERVIEW_INPUT_SCHEMA = z.object({
     .optional(),
 });
 
+const UNIQUE_SOURCE_IDS = {
+  message: 'Name each AI step once.',
+  path: ['sourceStepIds'] as ['sourceStepIds'],
+};
+
+const CAPTURE_OUTCOME_FEEDBACK_INPUT_SCHEMA = z
+  .object({
+    sourceStepIds: z.array(z.string().min(1)).min(1).max(8),
+    reviewStepId: z.string().min(1).optional(),
+    feedbackStepId: z.string().min(1).optional(),
+    label: z.string().trim().min(1).max(120).optional(),
+  })
+  .refine((value) => new Set(value.sourceStepIds).size === value.sourceStepIds.length, UNIQUE_SOURCE_IDS);
+
+const CAPTURE_OUTCOME_FEEDBACK_OUTPUT_SCHEMA = z.object({
+  feedbackId: z.string().min(1),
+  decision: z.enum(['approved', 'rejected', 'needs_changes', 'recorded']),
+  sourceCount: z.number().int().min(1).max(8),
+  capturedAt: READABLE_TIMESTAMP,
+});
+
+const FEEDBACK_REVIEW_ITEM_SCHEMA = z.object({
+  sourceStepId: z.string().min(1),
+  itemId: z.string().min(1).max(80),
+  action: z.enum(['accept', 'question', 'override', 'reject', 'defer']),
+  note: z.string().trim().min(1).max(2000).optional(),
+});
+
+const FEEDBACK_REVIEW_INPUT_SCHEMA = z
+  .object({
+    sourceStepIds: z.array(z.string().min(1)).min(1).max(8),
+    subject: z.string().trim().min(1).max(200).optional(),
+    label: z.string().trim().min(1).max(120).optional(),
+    deadlineMs: z.number().positive().optional(),
+  })
+  .refine((value) => new Set(value.sourceStepIds).size === value.sourceStepIds.length, UNIQUE_SOURCE_IDS);
+
+const FEEDBACK_REVIEW_OUTPUT_SCHEMA = z.object({
+  decision: z.enum(['accepted', 'needs_changes', 'rejected']),
+  decidedBy: z.string().min(1),
+  comment: z.string().trim().min(1).max(2000).optional(),
+  items: z.array(FEEDBACK_REVIEW_ITEM_SCHEMA).min(1).max(20),
+  revisionBrief: z.string().min(1).max(8000),
+});
+
 const INTERVIEW_OUTPUT_SCHEMA = z.object({
   interviewId: z.string().min(1),
   briefId: z.string().min(1),
   briefVersion: z
     .number()
-    .refine((value) => Number.isInteger(value) && value > 0, 'must be a positive integer'),
+    .refine(
+      (value) => Number.isInteger(value) && value > 0,
+      'must be a positive integer'
+    ),
   approvedBy: z.string().min(1),
   approvedAt: READABLE_TIMESTAMP,
   unresolvedCount: z
     .number()
-    .refine((value) => Number.isFinite(value) && value >= 0, 'must be nonnegative'),
+    .refine(
+      (value) => Number.isFinite(value) && value >= 0,
+      'must be nonnegative'
+    ),
 });
 
 /** The step types Apex ships. Adding a fourth is a change to this array and nowhere else. */
@@ -341,6 +419,27 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
     inputSchema: INTERVIEW_INPUT_SCHEMA,
     outputSchema: INTERVIEW_OUTPUT_SCHEMA,
   },
+  {
+    stepType: 'capture-outcome-feedback',
+    canSuspend: false,
+    isAgentStep: false,
+    sideEffect: 'writes-apex',
+    requiredPermissions: ['playbooks:run'],
+    inputSchema: CAPTURE_OUTCOME_FEEDBACK_INPUT_SCHEMA,
+    outputSchema: CAPTURE_OUTCOME_FEEDBACK_OUTPUT_SCHEMA,
+  },
+  {
+    stepType: 'feedback-review',
+    canSuspend: true,
+    defaultDeadlineMs: FEEDBACK_REVIEW_DEADLINE_MS,
+    deadlineOverridable: true,
+    suspendReason: 'feedback_review',
+    isAgentStep: false,
+    sideEffect: 'read',
+    requiredPermissions: ['playbooks:view'],
+    inputSchema: FEEDBACK_REVIEW_INPUT_SCHEMA,
+    outputSchema: FEEDBACK_REVIEW_OUTPUT_SCHEMA,
+  },
 ];
 
 export class PlaybookStepTypeError extends Error {
@@ -352,7 +451,9 @@ export class PlaybookStepTypeError extends Error {
 
 export class UnknownPlaybookStepTypeError extends PlaybookStepTypeError {
   constructor(stepType: string, known: readonly string[]) {
-    super(`Unknown Playbook step type "${stepType}". Registered types: ${known.join(', ')}.`);
+    super(
+      `Unknown Playbook step type "${stepType}". Registered types: ${known.join(', ')}.`
+    );
     this.name = 'UnknownPlaybookStepTypeError';
   }
 }
@@ -366,7 +467,11 @@ export class UnknownPlaybookStepTypeError extends PlaybookStepTypeError {
  * fields is perfectly valid, and inventing sample data to try it against would be testing the
  * sample rather than the declaration.
  */
-function assertZodSchema(stepType: string, field: string, schema: unknown): void {
+function assertZodSchema(
+  stepType: string,
+  field: string,
+  schema: unknown
+): void {
   if (!(schema instanceof z.ZodType)) {
     throw new PlaybookStepTypeError(
       `Step type "${stepType}" declares no usable Zod ${field}. ` +
@@ -384,11 +489,15 @@ function assertZodSchema(stepType: string, field: string, schema: unknown): void
  * half, and it is not redundant: a descriptor assembled from configuration, widened through a cast,
  * or arriving from a test helper never meets the compiler's version of the rule.
  */
-export function validateStepTypeDescriptor(descriptor: PlaybookStepTypeDescriptor): void {
+export function validateStepTypeDescriptor(
+  descriptor: PlaybookStepTypeDescriptor
+): void {
   const { stepType } = descriptor;
 
   if (!stepType || !stepType.trim()) {
-    throw new PlaybookStepTypeError('A Playbook step type descriptor must declare a stepType.');
+    throw new PlaybookStepTypeError(
+      'A Playbook step type descriptor must declare a stepType.'
+    );
   }
 
   assertZodSchema(stepType, 'inputSchema', descriptor.inputSchema);
@@ -405,7 +514,9 @@ export function validateStepTypeDescriptor(descriptor: PlaybookStepTypeDescripto
   const declaresPermission =
     Array.isArray(permissions) &&
     permissions.length > 0 &&
-    permissions.every((permission) => typeof permission === 'string' && permission.trim() !== '');
+    permissions.every(
+      (permission) => typeof permission === 'string' && permission.trim() !== ''
+    );
 
   if (!declaresPermission) {
     throw new PlaybookStepTypeError(
@@ -417,7 +528,11 @@ export function validateStepTypeDescriptor(descriptor: PlaybookStepTypeDescripto
 
   if (descriptor.canSuspend) {
     const deadline = descriptor.defaultDeadlineMs;
-    if (typeof deadline !== 'number' || !Number.isFinite(deadline) || deadline <= 0) {
+    if (
+      typeof deadline !== 'number' ||
+      !Number.isFinite(deadline) ||
+      deadline <= 0
+    ) {
       throw new PlaybookStepTypeError(
         `Step type "${stepType}" can suspend but declares no usable defaultDeadlineMs. ` +
           'Every suspension needs a deadline, or the run waits forever and no sweep can end it.'
@@ -478,11 +593,13 @@ export function isRegisteredStepType(stepType: string): boolean {
 /** Phase 2 types, including the production form of the existing approval gate. */
 export function isProductionAdapterStep(
   stepType: string,
-  config: Record<string, unknown> = {},
+  config: Record<string, unknown> = {}
 ): boolean {
-  return stepType === 'ingest-artifact'
-    || stepType === 'branch'
-    || (stepType === 'approval-gate' && Boolean(config.approverPool));
+  return (
+    stepType === 'ingest-artifact' ||
+    stepType === 'branch' ||
+    (stepType === 'approval-gate' && Boolean(config.approverPool))
+  );
 }
 
 export const isApprovalGateStepType = (stepType: string): boolean =>
@@ -491,9 +608,18 @@ export const isApprovalGateStepType = (stepType: string): boolean =>
 export const isBranchStepType = (stepType: string): boolean =>
   stepType === 'branch';
 
+export const isOutcomeFeedbackStepType = (stepType: string): boolean =>
+  stepType === 'capture-outcome-feedback';
+
+export const isFeedbackReviewStepType = (stepType: string): boolean =>
+  stepType === 'feedback-review';
+
+export const isHumanReviewStepType = (stepType: string): boolean =>
+  isApprovalGateStepType(stepType) || isFeedbackReviewStepType(stepType);
+
 export function requiredPermissionsForStep(
   stepType: string,
-  config: Record<string, unknown>,
+  config: Record<string, unknown>
 ): readonly string[] {
   const declared = getStepTypeDescriptor(stepType).requiredPermissions;
   if (stepType !== 'ingest-artifact') return declared;
@@ -503,10 +629,14 @@ export function requiredPermissionsForStep(
 }
 
 /** Looks up a descriptor, refusing rather than returning undefined for an unknown type. */
-export function getStepTypeDescriptor(stepType: string): PlaybookStepTypeDescriptor {
+export function getStepTypeDescriptor(
+  stepType: string
+): PlaybookStepTypeDescriptor {
   const descriptor = stepTypeRegistry.get(stepType);
   if (!descriptor) {
-    throw new UnknownPlaybookStepTypeError(stepType, [...stepTypeRegistry.keys()]);
+    throw new UnknownPlaybookStepTypeError(stepType, [
+      ...stepTypeRegistry.keys(),
+    ]);
   }
   return descriptor;
 }
@@ -518,7 +648,10 @@ export function getStepTypeDescriptor(stepType: string): PlaybookStepTypeDescrip
  * different number than the definition states is how a gate that was meant to expire in an hour
  * sits open for two days.
  */
-export function resolveDeadlineMs(stepType: string, overrideMs?: number): number {
+export function resolveDeadlineMs(
+  stepType: string,
+  overrideMs?: number
+): number {
   const descriptor = getStepTypeDescriptor(stepType);
 
   if (!descriptor.canSuspend) {
@@ -543,8 +676,8 @@ export function resolveDeadlineMs(stepType: string, overrideMs?: number): number
   }
 
   if (
-    (stepType === 'cursor-agent' || stepType === 'board-deliberation')
-    && overrideMs > descriptor.defaultDeadlineMs
+    (stepType === 'cursor-agent' || stepType === 'board-deliberation') &&
+    overrideMs > descriptor.defaultDeadlineMs
   ) {
     throw new PlaybookStepTypeError(
       `Deadline override for step type "${stepType}" may shorten the derived default but not exceed it.`
@@ -553,7 +686,8 @@ export function resolveDeadlineMs(stepType: string, overrideMs?: number): number
 
   if (
     stepType === 'interview' &&
-    (overrideMs < INTERVIEW_MIN_DEADLINE_MS || overrideMs > INTERVIEW_MAX_DEADLINE_MS)
+    (overrideMs < INTERVIEW_MIN_DEADLINE_MS ||
+      overrideMs > INTERVIEW_MAX_DEADLINE_MS)
   ) {
     throw new PlaybookStepTypeError(
       `Deadline override for step type "${stepType}" must be from 1 hour through 14 days.`
@@ -571,7 +705,9 @@ export function resolveDeadlineMs(stepType: string, overrideMs?: number): number
  * or removed must still render rather than throwing. An unregistered type reads as `agent_run`
  * because no current adapter could have produced it, so it is not a gate anyone can go and approve.
  */
-export function suspendReasonForStepType(stepType: string): PlaybookSuspendReason {
+export function suspendReasonForStepType(
+  stepType: string
+): PlaybookSuspendReason {
   const descriptor = stepTypeRegistry.get(stepType);
   return descriptor?.canSuspend ? descriptor.suspendReason : 'agent_run';
 }
@@ -594,7 +730,9 @@ export function isAgentStepType(stepType: string): boolean {
  * registry cannot name has not been shown to be harmless, and a caller that wants to treat it as
  * such should have to say so.
  */
-export function sideEffectOfStepType(stepType: string): PlaybookStepSideEffect | undefined {
+export function sideEffectOfStepType(
+  stepType: string
+): PlaybookStepSideEffect | undefined {
   return stepTypeRegistry.get(stepType)?.sideEffect;
 }
 
@@ -617,7 +755,9 @@ export function requiresInitiatorPermissionRecheck(stepType: string): boolean {
 export function assertSkillAllowed(stepType: string, skillPath: string): void {
   const allowed = getStepTypeDescriptor(stepType).allowedSkillPaths ?? [];
   // Project settings store repo-root paths with a leading '/'; the allow-list does not.
-  const repoRelativePath = skillPath.startsWith('/') ? skillPath.slice(1) : skillPath;
+  const repoRelativePath = skillPath.startsWith('/')
+    ? skillPath.slice(1)
+    : skillPath;
 
   if (!allowed.includes(repoRelativePath)) {
     throw new PlaybookStepTypeError(
@@ -648,8 +788,12 @@ export function validateStepTypeRegistry(): void {
     'ingest-artifact',
     'branch',
     'interview',
+    'capture-outcome-feedback',
+    'feedback-review',
   ];
-  const missing = expected.filter((stepType) => !stepTypeRegistry.has(stepType));
+  const missing = expected.filter(
+    (stepType) => !stepTypeRegistry.has(stepType)
+  );
 
   if (missing.length > 0) {
     throw new PlaybookStepTypeError(
@@ -659,7 +803,10 @@ export function validateStepTypeRegistry(): void {
   }
 
   for (const descriptor of stepTypeRegistry.values()) {
-    if (descriptor.allowedSkillPaths && descriptor.allowedSkillPaths.length === 0) {
+    if (
+      descriptor.allowedSkillPaths &&
+      descriptor.allowedSkillPaths.length === 0
+    ) {
       throw new PlaybookStepTypeError(
         `Step type "${descriptor.stepType}" declares an empty Skill allow-list, so every step of ` +
           'that type would be refused. Remove the list or name a Skill.'
@@ -675,6 +822,8 @@ export type {
   BranchStepConfig,
   CursorAgentStepConfig,
   IngestArtifactStepConfig,
+  CaptureOutcomeFeedbackStepConfig,
+  FeedbackReviewStepConfig,
   InterviewStepConfig,
   NotifyStepConfig,
   PlaybookStepTypeDescriptor,

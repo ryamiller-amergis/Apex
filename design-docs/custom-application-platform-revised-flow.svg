@@ -1,0 +1,156 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="2100" viewBox="0 0 1440 2100">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#111"/>
+    </marker>
+    <marker id="arrowGray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#666"/>
+    </marker>
+    <style>
+      .box { fill:#fff; stroke:#111; stroke-width:2.2; rx:4; }
+      .boxNew { fill:#fff; stroke:#111; stroke-width:3.6; rx:4; }
+      .boxSide { fill:#f7f7f7; stroke:#111; stroke-width:2; rx:4; }
+      .boxGate { fill:#eee; stroke:#111; stroke-width:2.6; rx:4; }
+      text { font-family:'Segoe Print','Ink Free','Comic Sans MS',cursive; fill:#111; text-anchor:middle; }
+      .t { font-size:20px; }
+      .ts { font-size:16px; fill:#444; }
+      .stage { font-size:15px; fill:#666; text-anchor:start; letter-spacing:2px; }
+      .flow { fill:none; stroke:#111; stroke-width:2.2; marker-end:url(#arrow); }
+      .loop { fill:none; stroke:#666; stroke-width:2; stroke-dasharray:7 5; marker-end:url(#arrowGray); }
+      .lbl { font-size:15px; fill:#555; }
+      .new { font-size:13px; font-weight:bold; fill:#111; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1440" height="2100" fill="#fff"/>
+  <rect x="14" y="14" width="1412" height="2025" fill="none" stroke="#111" stroke-width="2.4" rx="10"/>
+  <text class="stage" x="34" y="2030">SOLID THICK BORDER / NEW TAG = ADDED IN REVISION &#160;&#183;&#160; DASHED = LOOP BACK</text>
+
+  <!-- Title -->
+  <g transform="rotate(-0.4 720 60)">
+    <rect class="box" x="500" y="32" width="440" height="56"/>
+    <text class="t" x="720" y="68">Custom Application Platform</text>
+  </g>
+
+  <!-- STAGE 1 -->
+  <text class="stage" x="34" y="112">1 &#183; EXPERIENCE</text>
+  <g transform="rotate(0.3 720 128)"><rect class="box" x="560" y="106" width="320" height="46"/><text class="t" x="720" y="136">User Request</text></g>
+  <path class="flow" d="M720 152 L720 172"/>
+  <g transform="rotate(-0.3 720 200)"><rect class="box" x="560" y="174" width="320" height="54"/><text class="t" x="720" y="199">Conversational Builder</text><text class="ts" x="720" y="220">(chat + live preview)</text></g>
+  <path class="flow" d="M720 228 L720 248"/>
+  <g transform="rotate(0.3 720 270)"><rect class="box" x="560" y="250" width="320" height="46"/><text class="t" x="720" y="280">Natural Request Parser</text></g>
+
+  <!-- STAGE 2 -->
+  <text class="stage" x="34" y="330">2 &#183; UNDERSTAND &amp; PLAN</text>
+  <path class="flow" d="M660 296 C640 312, 560 312, 540 322"/>
+  <path class="flow" d="M780 296 C800 312, 890 312, 910 322"/>
+  <g transform="rotate(-0.3 530 346)"><rect class="box" x="380" y="324" width="300" height="46"/><text class="t" x="530" y="354">Intent Classification</text></g>
+  <g transform="rotate(0.3 910 346)"><rect class="box" x="760" y="324" width="300" height="46"/><text class="t" x="910" y="354">Request Validation</text></g>
+  <path class="flow" d="M530 370 C560 392, 620 392, 660 398"/>
+  <path class="flow" d="M910 370 C880 392, 820 392, 780 398"/>
+
+  <g transform="rotate(-0.3 720 426)"><rect class="boxNew" x="560" y="400" width="320" height="54"/><text class="t" x="720" y="425">Clarification Interview</text><text class="ts" x="720" y="446">(blocking questions only)</text></g>
+  <rect x="856" y="392" width="52" height="20" fill="#111"/><text class="new" x="882" y="407" fill="#fff" style="fill:#fff">NEW</text>
+  <path class="loop" d="M560 427 C470 420, 470 210, 556 202"/>
+  <text class="lbl" x="455" y="320" style="text-anchor:middle">user&#10;answers</text>
+
+  <path class="flow" d="M720 454 L720 478"/>
+  <g transform="rotate(0.2 720 514)"><rect class="boxNew" x="540" y="480" width="360" height="68"/><text class="t" x="720" y="510">App Blueprint</text><text class="ts" x="720" y="533">(structured spec &#183; source of truth)</text></g>
+  <rect x="876" y="472" width="52" height="20" fill="#111"/><text class="new" x="902" y="487" style="fill:#fff">NEW</text>
+
+  <path class="flow" d="M720 548 L720 570"/>
+  <g transform="rotate(-0.3 720 594)"><rect class="boxGate" x="560" y="572" width="320" height="48"/><text class="t" x="720" y="602">&#9670; Approval Gate 1: Blueprint</text></g>
+  <rect x="856" y="564" width="52" height="20" fill="#111"/><text class="new" x="882" y="579" style="fill:#fff">NEW</text>
+
+  <path class="flow" d="M720 620 L720 644"/>
+  <g transform="rotate(0.3 720 668)"><rect class="box" x="560" y="646" width="320" height="48"/><text class="t" x="720" y="677">Planner / Step Graph</text></g>
+
+  <!-- STAGE 3 -->
+  <text class="stage" x="34" y="730">3 &#183; CAPABILITY</text>
+  <g transform="rotate(-0.4 230 664)"><rect class="boxSide" x="70" y="638" width="320" height="54"/><text class="t" x="230" y="663">Packaged Skills</text><text class="ts" x="230" y="684">(versioned &#183; signed &#183; sandboxed)</text></g>
+  <path class="flow" d="M230 692 L230 716"/>
+  <g transform="rotate(0.3 230 744)"><rect class="boxSide" x="70" y="718" width="320" height="54"/><text class="t" x="230" y="752">Capability Registry</text></g>
+
+  <path class="flow" d="M720 694 L720 716"/>
+  <g transform="rotate(-0.3 720 744)"><rect class="box" x="560" y="718" width="320" height="54"/><text class="t" x="720" y="752">Skill Capability Matcher</text></g>
+  <path class="flow" d="M390 745 L556 745"/>
+  <path class="flow" d="M880 745 L1046 745"/>
+  <g transform="rotate(0.3 1210 744)"><rect class="box" x="1050" y="718" width="320" height="54"/><text class="t" x="1210" y="743">Skill Composition Engine</text><text class="ts" x="1210" y="764">(typed contracts)</text></g>
+
+  <path class="flow" d="M660 772 C640 792, 640 798, 660 812"/>
+  <path class="flow" d="M1210 772 C1210 850, 900 830, 884 828"/>
+  <g transform="rotate(-0.2 720 834)"><rect class="box" x="560" y="812" width="320" height="48"/><text class="t" x="720" y="843">Skill Resolution</text></g>
+  <path class="flow" d="M720 860 L720 882"/>
+  <g transform="rotate(0.2 720 912)"><rect class="box" x="525" y="884" width="390" height="58"/><text class="t" x="720" y="909">Multi-Skill Orchestration</text><text class="ts" x="720" y="931">(durable &#183; resumable &#183; traced)</text></g>
+
+  <!-- STAGE 4 -->
+  <text class="stage" x="34" y="988">4 &#183; BUILD &amp; VERIFY</text>
+  <g transform="rotate(-0.4 170 1012)"><rect class="boxSide" x="45" y="992" width="250" height="42"/><text class="ts" x="170" y="1019" style="font-size:17px;fill:#111">UI Layout Templates</text></g>
+  <g transform="rotate(0.3 720 1012)"><rect class="boxSide" x="595" y="992" width="250" height="42"/><text class="ts" x="720" y="1019" style="font-size:17px;fill:#111">Architectural Patterns</text></g>
+  <g transform="rotate(-0.3 1210 1012)"><rect class="boxSide" x="1085" y="992" width="250" height="42"/><text class="ts" x="1210" y="1019" style="font-size:17px;fill:#111">Infrastructure Templates</text></g>
+
+  <path class="flow" d="M720 942 L720 1052"/>
+  <path d="M170 1034 L170 1056 M720 1034 L720 1052" stroke="#111" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <path class="loop" d="M1210 1034 C1330 1080, 1380 1300, 1240 1404"/>
+  <text class="lbl" x="1362" y="1240">to provisioning</text>
+
+  <g>
+    <rect class="box" x="45" y="1060" width="250" height="58"/><text class="t" x="170" y="1095">UI Builder</text>
+    <rect class="box" x="305" y="1060" width="250" height="58"/><text class="t" x="430" y="1095">API / Service Builder</text>
+    <rect class="box" x="565" y="1060" width="250" height="58"/><text class="t" x="690" y="1084">Data Model &amp;</text><text class="t" x="690" y="1106">Migrations</text>
+    <rect class="box" x="825" y="1060" width="250" height="58"/><text class="t" x="950" y="1084">Workflows &amp;</text><text class="t" x="950" y="1106">Integrations</text>
+    <rect class="box" x="1085" y="1060" width="250" height="58"/><text class="t" x="1210" y="1095">Tests + Docs Builder</text>
+  </g>
+  <path d="M170 1118 L170 1140 M430 1118 L430 1140 M690 1118 L690 1140 M950 1118 L950 1140 M1210 1118 L1210 1140" stroke="#111" stroke-width="2" fill="none"/>
+  <path class="flow" d="M170 1140 L915 1140 L720 1162"/>
+
+  <g transform="rotate(-0.2 720 1192)"><rect class="boxNew" x="520" y="1164" width="400" height="60"/><text class="t" x="720" y="1189">Verify Gate</text><text class="ts" x="720" y="1211">build &#183; tests &#183; security &#183; a11y &#183; visual</text></g>
+  <rect x="896" y="1156" width="52" height="20" fill="#111"/><text class="new" x="922" y="1171" style="fill:#fff">NEW</text>
+  <path class="loop" d="M920 1194 C1030 1180, 1030 1130, 1080 1118"/>
+  <text class="lbl" x="1035" y="1150">fail: fix &amp; rebuild</text>
+
+  <path class="flow" d="M720 1224 L720 1246"/>
+  <g transform="rotate(0.3 720 1270)"><rect class="boxNew" x="560" y="1248" width="320" height="48"/><text class="t" x="720" y="1279">Preview Environment</text></g>
+  <rect x="856" y="1240" width="52" height="20" fill="#111"/><text class="new" x="882" y="1255" style="fill:#fff">NEW</text>
+
+  <!-- STAGE 5 -->
+  <text class="stage" x="34" y="1338">5 &#183; RUN</text>
+  <path class="flow" d="M720 1296 L720 1318"/>
+  <g transform="rotate(-0.3 720 1344)"><rect class="boxGate" x="560" y="1320" width="320" height="48"/><text class="t" x="720" y="1351">&#9670; Approval Gate 2: Preview</text></g>
+  <rect x="856" y="1312" width="52" height="20" fill="#111"/><text class="new" x="882" y="1327" style="fill:#fff">NEW</text>
+
+  <path class="flow" d="M720 1368 L720 1392"/>
+  <g transform="rotate(0.2 720 1422)"><rect class="box" x="525" y="1394" width="390" height="56"/><text class="t" x="720" y="1429">Deployment / Provisioning (IaC)</text></g>
+  <path class="flow" d="M720 1450 L720 1474"/>
+  <g transform="rotate(-0.2 720 1504)"><rect class="boxNew" x="520" y="1476" width="400" height="60"/><text class="t" x="720" y="1501">Runtime</text><text class="ts" x="720" y="1523">hosting &#183; DB &#183; auth &#183; secrets &#183; storage</text></g>
+  <rect x="896" y="1468" width="52" height="20" fill="#111"/><text class="new" x="922" y="1483" style="fill:#fff">NEW</text>
+
+  <g transform="rotate(0.3 230 1504)"><rect class="boxSide" x="70" y="1476" width="320" height="56"/><text class="t" x="230" y="1501">Change Request</text><text class="ts" x="230" y="1523">(edit existing app)</text></g>
+  <path class="loop" d="M70 1504 C28 1504, 28 520, 536 514"/>
+  <text class="lbl" x="42" y="1020" transform="rotate(-90 42 1020)">iterate: Blueprint diff &#8594; patch, not regenerate</text>
+
+  <path class="flow" d="M720 1536 L720 1562"/>
+  <g transform="rotate(0.3 720 1588)"><rect class="box" x="540" y="1564" width="360" height="50"/><text class="t" x="720" y="1596">Runtime Monitoring &amp; Performance</text></g>
+
+  <!-- STAGE 6 -->
+  <text class="stage" x="34" y="1666">6 &#183; LEARN (GATED)</text>
+  <g transform="rotate(-0.3 230 1692)"><rect class="boxSide" x="70" y="1666" width="320" height="54"/><text class="t" x="230" y="1691">User Feedback &amp;</text><text class="t" x="230" y="1713">Run Traces</text></g>
+  <path class="flow" d="M720 1614 L720 1648"/>
+  <path class="flow" d="M390 1693 L556 1693"/>
+  <g transform="rotate(0.2 720 1692)"><rect class="box" x="560" y="1650" width="320" height="54"/><text class="t" x="720" y="1684">Feedback &amp; Adaptation</text></g>
+  <path class="flow" d="M880 1677 L1046 1677"/>
+  <g transform="rotate(-0.3 1210 1692)"><rect class="box" x="1050" y="1650" width="320" height="62"/><text class="t" x="1210" y="1676">Skill Learning System</text><text class="ts" x="1210" y="1698">(proposes new versions only)</text></g>
+  <path class="flow" d="M1210 1712 L1210 1738"/>
+  <g transform="rotate(0.2 1210 1766)"><rect class="boxNew" x="1050" y="1740" width="320" height="54"/><text class="t" x="1210" y="1765">Evaluation Gate</text><text class="ts" x="1210" y="1786">(offline eval promotes / rejects)</text></g>
+  <rect x="1346" y="1732" width="52" height="20" fill="#111"/><text class="new" x="1372" y="1747" style="fill:#fff">NEW</text>
+  <path class="loop" d="M1370 1767 C1418 1767, 1418 745, 1394 745"/>
+  <text class="lbl" x="1408" y="1250" transform="rotate(-90 1408 1250)">promoted skills only &#8594; Capability Registry</text>
+
+  <!-- Cross-cutting -->
+  <g transform="rotate(-0.15 720 1884)">
+    <rect class="boxSide" x="70" y="1848" width="1300" height="72"/>
+    <text class="t" x="720" y="1878">Cross-cutting (all stages)</text>
+    <text class="ts" x="720" y="1902" style="font-size:17px;fill:#111">Identity / RBAC / Tenancy &#183; Policy &amp; Secrets &#183; Audit Log &#183; Artifact &amp; Version Store &#183; Model &amp; Cost Router &#183; Observability / Tracing</text>
+  </g>
+  <text class="lbl" x="720" y="1975">Artifact &amp; Version Store holds every Blueprint, generated artifact, and app version &#183; rollback is one action</text>
+</svg>

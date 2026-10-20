@@ -1,0 +1,307 @@
+.review {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-primary);
+}
+
+.heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.heading h4,
+.recommendation p,
+.question,
+.eyebrow {
+  margin: 0;
+}
+
+.eyebrow {
+  color: var(--accent-color);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.progress {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.question {
+  max-width: 72ch;
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.recommendation {
+  padding: 12px 16px;
+  border-left: 3px solid var(--accent-color);
+  border-radius: 0 8px 8px 0;
+  background: var(--bg-secondary);
+}
+
+.recommendation span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.recommendation p,
+.synopsis p,
+.more p,
+.option span {
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.synopsis,
+.more {
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+}
+
+.synopsis {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-left: 3px solid var(--accent-color);
+}
+
+.synopsis span,
+.optionLabel {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.more {
+  border: 1px solid var(--border-color-light);
+}
+
+.more summary {
+  min-height: 44px;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 44px;
+}
+
+.more summary:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.more p {
+  margin: 8px 0 0;
+}
+
+.optionList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.option,
+.optionSelected {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-height: 44px;
+  padding: 12px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.option strong,
+.optionSelected strong {
+  font-size: 15px;
+}
+
+.option em,
+.optionSelected em {
+  color: var(--accent-color);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.option:hover,
+.optionSelected {
+  border-color: var(--accent-color);
+  background: var(--bg-tertiary);
+}
+
+.optionSelected {
+  box-shadow: var(--glow-accent);
+}
+
+.option:focus-visible,
+.optionSelected:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.choices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.choice,
+.choiceSelected {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: all 0.2s ease;
+}
+
+.choice:hover {
+  border-color: var(--accent-color);
+  background: var(--bg-tertiary);
+}
+
+.choiceSelected {
+  border-color: var(--accent-color);
+  background: var(--bg-tertiary);
+  box-shadow: var(--glow-accent);
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
+.choice:focus-visible,
+.choiceSelected:focus-visible,
+.save:focus-visible,
+.secondary:focus-visible,
+.next:focus-visible,
+.responseForm textarea:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.responseForm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.responseForm label {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.responseForm textarea {
+  min-height: 88px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.save,
+.next,
+.secondary {
+  min-height: 44px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.save,
+.next {
+  align-self: flex-start;
+  border: 1px solid var(--accent-color);
+  background: var(--accent-color);
+  box-shadow: var(--glow-accent);
+  color: var(--on-accent);
+}
+
+.save:hover,
+.next:hover {
+  background: var(--accent-hover);
+}
+
+.secondary {
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.secondary:disabled,
+.next:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.navigation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.complete,
+.incomplete,
+.error {
+  margin: 0;
+  font-size: 13px;
+}
+
+.complete {
+  color: var(--success-color);
+  font-weight: 600;
+}
+
+.incomplete,
+.error {
+  color: var(--error-color);
+}
+
+@media (max-width: 760px) {
+  .choices {
+    grid-template-columns: 1fr;
+  }
+
+  .navigation {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

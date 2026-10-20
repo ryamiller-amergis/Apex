@@ -16,6 +16,7 @@ import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import { PlaybookRunStepList } from './PlaybookRunStepList';
 import { PlaybookRunActions } from './PlaybookRunActions';
 import { AtsBoardSynopsisPanel } from './AtsBoardSynopsisPanel';
+import { PlaybookFeedbackReviewPanel } from './PlaybookFeedbackReviewPanel';
 import { PlaybookGateReviewPanel } from './PlaybookGateReviewPanel';
 import { usePlaybookRun } from '../hooks/usePlaybookRuns';
 import { absoluteTime, runStatusLabel } from './playbookStatusFormat';
@@ -34,9 +35,10 @@ interface PlaybookRunRowProps {
 
 const PlaybookRunRow: React.FC<PlaybookRunRowProps> = ({ run, project }) => {
   const canvasEnabled = useFeatureFlag('playbooks-authoring-canvas', project);
-  const selectedRunId = typeof window !== 'undefined'
-    ? new URLSearchParams(window.location.search).get('run')
-    : null;
+  const selectedRunId =
+    typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('run')
+      : null;
   const [expanded, setExpanded] = useState(selectedRunId === run.runId);
 
   // Only fetched once opened; `usePlaybookRun` is disabled while `runId` is null.
@@ -57,9 +59,9 @@ const PlaybookRunRow: React.FC<PlaybookRunRowProps> = ({ run, project }) => {
         <span className={styles.runName}>{run.definitionName}</span>
 
         {/*
-          * The version the run pinned, not the definition's newest. Labelled rather than shown as a
-          * bare number so "v3" cannot be mistaken for a run number or a step count.
-          */}
+         * The version the run pinned, not the definition's newest. Labelled rather than shown as a
+         * bare number so "v3" cannot be mistaken for a run number or a step count.
+         */}
         <span
           className={styles.pinnedVersion}
           {...{ 'data-testid': 'playbook-run-pinned-version' }}
@@ -69,13 +71,17 @@ const PlaybookRunRow: React.FC<PlaybookRunRowProps> = ({ run, project }) => {
 
         <span
           className={styles.runStatus}
-          {...{ 'data-status': run.status, 'data-testid': 'playbook-run-status' }}
+          {...{
+            'data-status': run.status,
+            'data-testid': 'playbook-run-status',
+          }}
         >
           {runStatusLabel(run.status)}
         </span>
 
         <span className={styles.runMeta}>
-          started {absoluteTime(run.startedAt)} by {run.initiatorUserId}
+          started {absoluteTime(run.startedAt)} by{' '}
+          {run.initiatorDisplayName ?? run.initiatorUserId}
         </span>
         {canvasEnabled ? (
           <Link
@@ -103,14 +109,30 @@ const PlaybookRunRow: React.FC<PlaybookRunRowProps> = ({ run, project }) => {
             <>
               <AtsBoardSynopsisPanel
                 run={detail.data}
-                {...{ 'data-testid': `ats-board-synopsis-${detail.data.runId}` }}
+                {...{
+                  'data-testid': `ats-board-synopsis-${detail.data.runId}`,
+                }}
               />
-              <PlaybookRunStepList run={detail.data} id={stepListId} />
               <PlaybookGateReviewPanel
                 project={project}
                 run={detail.data}
                 {...{ 'data-testid': 'playbook-gate-review-panel' }}
               />
+              <PlaybookFeedbackReviewPanel
+                project={project}
+                run={detail.data}
+                {...{ 'data-testid': 'playbook-feedback-review-panel' }}
+              />
+              {detail.data.steps.some(
+                (step) => step.stepId === 'chair' && step.status === 'completed'
+              ) ? (
+                <details {...{ 'data-testid': 'ats-board-agent-activity' }}>
+                  <summary>View agent activity</summary>
+                  <PlaybookRunStepList run={detail.data} id={stepListId} />
+                </details>
+              ) : (
+                <PlaybookRunStepList run={detail.data} id={stepListId} />
+              )}
               <PlaybookRunActions run={detail.data} />
             </>
           ) : null}
@@ -120,7 +142,10 @@ const PlaybookRunRow: React.FC<PlaybookRunRowProps> = ({ run, project }) => {
   );
 };
 
-export const PlaybookRunList: React.FC<PlaybookRunListProps> = ({ runs, project }) => (
+export const PlaybookRunList: React.FC<PlaybookRunListProps> = ({
+  runs,
+  project,
+}) => (
   <ul className={styles.runList} {...{ 'data-testid': 'playbook-run-list' }}>
     {runs.map((run) => (
       <PlaybookRunRow key={run.runId} run={run} project={project} />

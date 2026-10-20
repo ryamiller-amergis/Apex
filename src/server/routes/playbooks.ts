@@ -12,6 +12,7 @@
 import express, { Request, Response } from 'express';
 import {
   AtsBoardCharterError,
+  parseAtsBoardLeadershipAnswers,
   prepareAtsBoardRunInput,
 } from '../../shared/atsBoard';
 import { requirePermission, resolveRequestProject } from '../middleware/rbac';
@@ -70,6 +71,13 @@ import {
   ApprovalNotPermittedError,
   submitApprovalDecision,
 } from '../services/playbookSteps/approvalGateAdapter';
+import {
+  FeedbackInvalidItemsError,
+  FeedbackMissingDeadlineError,
+  FeedbackNotAwaitingError,
+  FeedbackNotPermittedError,
+  submitFeedbackReview,
+} from '../services/playbookSteps/feedbackReviewAdapter';
 import {
   PlaybookSpendCapExceededError,
   PlaybookSpendConfigurationError,
@@ -1214,12 +1222,25 @@ router.post(
   '/runs/:runId/steps/:stepRunId/decision',
   async (req: Request, res: Response): Promise<void> => {
     const { runId, stepRunId } = req.params;
-    const { decision, comment } = (req.body ?? {}) as Record<string, unknown>;
+    const { decision, comment, answers } = (req.body ?? {}) as Record<
+      string,
+      unknown
+    >;
 
     if (decision !== 'approved' && decision !== 'rejected') {
       res
         .status(400)
         .json({ error: "decision must be 'approved' or 'rejected'" });
+      return;
+    }
+    const parsedAnswers =
+      answers === undefined
+        ? undefined
+        : parseAtsBoardLeadershipAnswers(answers);
+    if (answers !== undefined && !parsedAnswers) {
+      res
+        .status(400)
+        .json({ error: 'answers must be valid leadership decisions' });
       return;
     }
 
@@ -1263,6 +1284,7 @@ router.post(
             deciderUserId,
             decision,
             ...(note ? { comment: note } : {}),
+            ...(parsedAnswers?.length ? { answers: parsedAnswers } : {}),
           });
 
       /*
@@ -1317,6 +1339,66 @@ router.post(
         return;
       }
 
+      throw error;
+    }
+  }
+);
+
+/**
+ * `POST /api/playbooks/runs/:runId/steps/:stepRunId/feedback`
+ *
+ * Records one choice for each item from the AI steps the author selected.
+ */
+router.post(
+  '/runs/:runId/steps/:stepRunId/feedback',
+  async (req: Request, res: Response): Promise<void> => {
+    const { runId, stepRunId } = req.params;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const deciderUserId = getUserId(req);
+    if (!deciderUserId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const project = resolveRequestProject(req);
+    if (!project) {
+      res.status(400).json({ error: 'Missing project' });
+      return;
+    }
+    const permissions = await getUserPermissions(deciderUserId, project);
+    if (!permissions.has('playbooks:run')) {
+      res.status(403).json({ error: 'Missing required permission: playbooks:run' });
+      return;
+    }
+    const comment = typeof body.comment === 'string' ? body.comment : undefined;
+    try {
+      const result = await submitFeedbackReview({
+        stepRunId,
+        runId,
+        deciderUserId,
+        stopped: body.stopped === true,
+        ...(comment ? { comment } : {}),
+        items: body.items,
+      });
+      if (result.outcome === 'recorded') {
+        await advanceRun(runId, result.stepId);
+      }
+      res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof FeedbackNotPermittedError) {
+        res.status(403).json({ error: error.message });
+        return;
+      }
+      if (error instanceof FeedbackInvalidItemsError) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
+      if (
+        error instanceof FeedbackNotAwaitingError ||
+        error instanceof FeedbackMissingDeadlineError
+      ) {
+        res.status(409).json({ error: error.message });
+        return;
+      }
       throw error;
     }
   }

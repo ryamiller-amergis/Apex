@@ -4,8 +4,12 @@
  */
 import React, { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, PenLine, Play } from 'lucide-react';
-import { ATS_AGENT_BOARD_TEMPLATE_KEY } from '../../shared/atsBoard';
+import { ArrowLeft, Bot, ChevronDown, PenLine, Play } from 'lucide-react';
+import {
+  ATS_AGENT_BOARD_TEMPLATE_KEY,
+  ATS_BOARD_AI_TEAM,
+  type AtsBoardAiTeamMember,
+} from '../../shared/atsBoard';
 import type { PlaybookDefinitionDetail } from '../../shared/types/playbook';
 import { useAppShell } from '../hooks/useAppShell';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
@@ -17,7 +21,7 @@ import { AtsBoardLaunchForm } from './AtsBoardLaunchForm';
 import { PlaybookDraftEditor } from './PlaybookDraftEditor';
 import { PlaybookRunList } from './PlaybookRunList';
 import { PlaybookVersionList } from './PlaybookVersionList';
-import { nodeSubtitle, orderedSteps, stepMeta } from './playbookStepCatalog';
+import { orderedSteps, playbookStepOutline, stepMeta } from './playbookStepCatalog';
 import {
   computeRunStats,
   dailyActivity,
@@ -72,15 +76,37 @@ const ActivityChart: React.FC<{ days: PlaybookActivityDay[] }> = ({ days }) => {
   );
 };
 
-const FlowOutline: React.FC<{ detail: PlaybookDefinitionDetail }> = ({ detail }) => {
+interface FlowOutlineProps {
+  detail: PlaybookDefinitionDetail;
+  isBoard: boolean;
+}
+
+const FlowOutline: React.FC<FlowOutlineProps> = ({ detail, isBoard }) => {
+  const [expandedSteps, setExpandedSteps] = useState<Set<string>>(() => new Set());
   const steps = orderedSteps(detail.draft.graph);
   if (!steps.length) {
     return <p className={styles.muted}>No steps yet. Open the builder to add the first one.</p>;
   }
+
+  const toggleStep = (stepId: string) => {
+    setExpandedSteps((current) => {
+      const next = new Set(current);
+      if (next.has(stepId)) next.delete(stepId);
+      else next.add(stepId);
+      return next;
+    });
+  };
+
   return (
     <ol className={styles.outline} {...{ 'data-testid': 'playbook-dashboard-flow' }}>
       {steps.map((node, index) => {
         const meta = stepMeta(node.stepType);
+        const teamMember = isBoard
+          ? ATS_BOARD_AI_TEAM.find((member) => member.nodeId === node.id)
+          : undefined;
+        const title = teamMember ? `Agent: ${teamMember.name}` : meta.title;
+        const outline = playbookStepOutline(node, teamMember?.synopsis);
+        const expanded = expandedSteps.has(node.id);
         const Icon = meta.icon;
         return (
           <li key={node.id} className={styles.outlineStep} {...{ 'data-group': meta.group }}>
@@ -89,15 +115,81 @@ const FlowOutline: React.FC<{ detail: PlaybookDefinitionDetail }> = ({ detail })
               <Icon size={14} />
             </span>
             <span className={styles.outlineText}>
-              <span className={styles.outlineTitle}>{meta.title}</span>
-              <span className={styles.outlineMeta}>{nodeSubtitle(node)}</span>
+              <span className={styles.outlineTitle}>{title}</span>
+              <span className={styles.outlineMeta} title={outline.summary}>
+                {outline.summary}
+              </span>
+              {expanded && outline.details.length > 0 ? (
+                <span
+                  id={`playbook-step-description-${node.id}`}
+                  className={styles.outlineDetails}
+                >
+                  {outline.details.map((line) => (
+                    <span key={line}>{line}</span>
+                  ))}
+                </span>
+              ) : null}
             </span>
+            {outline.details.length > 0 ? (
+              <button
+                type="button"
+                className={styles.outlineExpand}
+                aria-expanded={expanded}
+                aria-controls={`playbook-step-description-${node.id}`}
+                aria-label={`${expanded ? 'Collapse' : 'Show'} details for ${title}`}
+                title={expanded ? 'Collapse details' : 'Show step details'}
+                onClick={() => toggleStep(node.id)}
+                {...{ 'data-testid': `playbook-step-${node.id}-description-toggle` }}
+              >
+                <ChevronDown size={14} aria-hidden />
+              </button>
+            ) : null}
           </li>
         );
       })}
     </ol>
   );
 };
+
+interface AiTeamPanelProps {
+  members: readonly AtsBoardAiTeamMember[];
+  'data-testid'?: string;
+}
+
+const AiTeamPanel: React.FC<AiTeamPanelProps> = ({
+  members,
+  'data-testid': testId = 'playbook-dashboard-ai-team',
+}) => (
+  <section
+    className={`${styles.panel} ${styles.teamPanel}`}
+    aria-labelledby="playbook-ai-team-heading"
+    {...{ 'data-testid': testId }}
+  >
+    <header className={styles.panelHeader}>
+      <div>
+        <h2 id="playbook-ai-team-heading" className={styles.panelTitle}>Meet your AI team</h2>
+        <p className={styles.teamIntro}>
+          Independent specialists review the charter from their own discipline before the chair
+          prepares one leadership synopsis.
+        </p>
+      </div>
+      <span className={styles.panelNote}>{members.length} AI roles</span>
+    </header>
+    <ul className={styles.teamGrid}>
+      {members.map((member) => (
+        <li key={member.nodeId} className={styles.teamCard}>
+          <span className={styles.teamAvatar} aria-hidden>
+            <Bot size={16} />
+          </span>
+          <span className={styles.teamCopy}>
+            <span className={styles.teamName}>{member.name}</span>
+            <span className={styles.teamSynopsis}>{member.synopsis}</span>
+          </span>
+        </li>
+      ))}
+    </ul>
+  </section>
+);
 
 /** A person's display name, falling back to a shortened id when no profile resolves. */
 const UserName: React.FC<{ userId: string }> = ({ userId }) => {
@@ -199,6 +291,13 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
   const truncated = runs.data ? runs.data.total > runs.data.runs.length : false;
 
   const isBoard = data.definition.templateKey === ATS_AGENT_BOARD_TEMPLATE_KEY;
+  const aiTeam = isBoard
+    ? ATS_BOARD_AI_TEAM.filter((member) =>
+        data.draft.graph.nodes.some(
+          (node) => node.id === member.nodeId,
+        ),
+      )
+    : [];
 
   const runNow = async (runInput?: Record<string, unknown>) => {
     setRunError(null);
@@ -301,6 +400,10 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
         ))}
       </dl>
 
+      {aiTeam.length > 0 ? (
+        <AiTeamPanel members={aiTeam} {...{ 'data-testid': 'playbook-dashboard-ai-team' }} />
+      ) : null}
+
       <div className={styles.split}>
         <section className={styles.panel} aria-labelledby="playbook-activity-heading">
           <header className={styles.panelHeader}>
@@ -315,7 +418,7 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
             <h2 id="playbook-flow-heading" className={styles.panelTitle}>Steps</h2>
             <span className={styles.panelNote}>{data.draft.graph.nodes.length} in draft</span>
           </header>
-          <FlowOutline detail={data} />
+          <FlowOutline detail={data} isBoard={isBoard} />
         </section>
       </div>
 

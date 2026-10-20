@@ -115,7 +115,7 @@ describe('AtsBoardSynopsisPanel', () => {
       />
     );
     expect(screen.getByTestId('ats-board-synopsis-status')).toHaveTextContent(
-      'Board approved — awaiting leadership'
+      'Board recommendation — awaiting leadership ratification'
     );
     expect(screen.getByTestId('ats-board-dissent')).toHaveTextContent(
       'second source'
@@ -151,6 +151,13 @@ describe('AtsBoardSynopsisPanel', () => {
               decision: 'approved',
               decidedBy: 'owner',
               comment: 'Phase 1 only.',
+              answers: [
+                {
+                  decisionId: 'D1',
+                  resolution: 'direct',
+                  response: 'Use the account-manager review for Phase 1.',
+                },
+              ],
             },
           }),
         ])}
@@ -162,6 +169,18 @@ describe('AtsBoardSynopsisPanel', () => {
     expect(screen.getByTestId('ats-board-leadership-note')).toHaveTextContent(
       'Phase 1 only.'
     );
+    expect(
+      screen.getByTestId('ats-board-leadership-resolutions')
+    ).toHaveTextContent('Use the account-manager review for Phase 1.');
+    expect(
+      screen.getByTestId('ats-board-ratification-summary')
+    ).toHaveTextContent('Phase 1 covers one filled assignment.');
+    expect(
+      screen.getByTestId('ats-board-ratification-summary')
+    ).toHaveTextContent('A recruiter submits one candidate.');
+    const exportRecord = screen.getByTestId('ats-board-export-record');
+    expect(exportRecord.tagName).toBe('DETAILS');
+    expect(exportRecord).not.toHaveAttribute('open');
     fireEvent.click(screen.getByTestId('ats-board-copy-transcript'));
     expect(writeText).toHaveBeenCalledWith(
       expect.stringContaining('## Phase 1 Requirements')
@@ -194,6 +213,96 @@ describe('AtsBoardSynopsisPanel', () => {
     expect(
       screen.getByTestId('ats-board-leadership-actions')
     ).toHaveTextContent('policy owner');
+  });
+
+  it('keeps research and development detail collapsed behind a supporting-detail section', () => {
+    render(
+      <AtsBoardSynopsisPanel
+        run={run([
+          step({
+            outputInline: {
+              scorecard: JSON.stringify({
+                ...synopsisV2,
+                schemaVersion: 3,
+                risks: ['A detailed implementation risk.'],
+                assumptions: ['A detailed operating assumption.'],
+                evidenceRegister: [
+                  {
+                    id: 'E1',
+                    claim: 'A detailed research claim.',
+                    source: 'Public source',
+                    corroboration: 'one source',
+                  },
+                ],
+              }),
+            },
+          }),
+        ])}
+      />
+    );
+
+    const supportingDetail = screen.getByTestId('ats-board-supporting-detail');
+    expect(supportingDetail.tagName).toBe('DETAILS');
+    expect(supportingDetail).not.toHaveAttribute('open');
+    expect(supportingDetail).toHaveTextContent(
+      'Supporting research and delivery detail'
+    );
+    expect(supportingDetail).toHaveTextContent('A detailed research claim');
+    expect(screen.getByTestId('ats-board-recommendation')).toHaveTextContent(
+      'thin workflow'
+    );
+  });
+
+  it('humanizes coded decision requests, pairs follow-up actions, and preserves internal reference IDs', () => {
+    const codedSynopsis = {
+      ...synopsisV2,
+      decisionRequests: [
+        'D-PORTAL: Decide whether Phase 1 ships a branded client portal or account-manager-mediated submittals.',
+      ],
+      leadershipActions: ['Rule on D-PORTAL before UX and cutover scope lock.'],
+      deliberation: [
+        {
+          topic: 'T1 — Phase 1 client self-service portal',
+          participants: ['client', 'product', 'operations'],
+          outcome: 'Escalated to leadership.',
+          status: 'leadership_required',
+        },
+      ],
+    };
+
+    render(
+      <AtsBoardSynopsisPanel
+        run={run([
+          step({ outputInline: { scorecard: JSON.stringify(codedSynopsis) } }),
+        ])}
+      />
+    );
+
+    const decisionRequests = screen.getByTestId('ats-board-decision-requests');
+    expect(decisionRequests).toHaveTextContent(
+      'Client Portal & Submittal Review'
+    );
+    expect(decisionRequests).toHaveTextContent(
+      'What needs to be accomplished:'
+    );
+    expect(decisionRequests).toHaveTextContent(
+      'before UX and cutover scope lock'
+    );
+    expect(decisionRequests).not.toHaveTextContent('D-PORTAL');
+    expect(
+      decisionRequests.querySelector('[data-ref-id="D-PORTAL"]')
+    ).not.toBeNull();
+
+    const deliberation = screen.getByTestId('ats-board-deliberation-summary');
+    expect(deliberation).toHaveTextContent(
+      'Phase 1 client self-service portal'
+    );
+    expect(deliberation).toHaveTextContent('Needs leadership decision');
+    expect(
+      deliberation.querySelector(
+        '[data-ref-id="T1"][data-status="leadership_required"]'
+      )
+    ).not.toBeNull();
   });
 
   it('shows only the structured board discussion audit', async () => {
@@ -255,5 +364,66 @@ describe('AtsBoardSynopsisPanel', () => {
     expect(screen.getByTestId('ats-board-audit')).not.toHaveTextContent(
       'prompt'
     );
+  });
+
+  it('renders the focused V4 leadership brief above the fold and keeps supporting detail collapsed', () => {
+    const synopsisV4 = {
+      ...synopsisV2,
+      schemaVersion: 4,
+      decisionRequests: [
+        'D-PII: Confirm whether Phase 1 remains synthetic-only or admits real candidate PII.',
+      ],
+      leadershipBrief: {
+        headline:
+          'Phase 1 ships a single-screen recruiter submittal desk on synthetic data.',
+        aiDecisions: [
+          'Use a 5-stage submission pipeline.',
+          'Derive job status from active submission stages.',
+        ],
+        expectedOutcomes: ['Submittal packet assembly in under 3 minutes.'],
+        materialExceptions: [
+          {
+            id: 'D-PII',
+            category: 'real_pii',
+            title: 'Real candidate PII boundary',
+            question:
+              'Confirm whether Phase 1 remains synthetic-only or admits real candidate PII.',
+            recommendedResolution:
+              'Keep Phase 1 synthetic-only until privacy sign-off.',
+          },
+        ],
+      },
+    };
+
+    render(
+      <AtsBoardSynopsisPanel
+        run={run([
+          step({ outputInline: { scorecard: JSON.stringify(synopsisV4) } }),
+        ])}
+      />
+    );
+
+    expect(screen.getByTestId('ats-board-v4-brief')).toBeInTheDocument();
+    expect(screen.getByTestId('ats-board-v4-headline')).toHaveTextContent(
+      'single-screen recruiter submittal desk'
+    );
+    expect(screen.getByTestId('ats-board-v4-ai-decisions')).toHaveTextContent(
+      '5-stage submission pipeline'
+    );
+    expect(screen.getByTestId('ats-board-v4-outcomes')).toHaveTextContent(
+      'under 3 minutes'
+    );
+    expect(screen.getByTestId('ats-board-v4-exception')).toHaveTextContent(
+      'Real candidate PII'
+    );
+    expect(screen.getByTestId('ats-board-v4-exception')).toHaveTextContent(
+      'Keep Phase 1 synthetic-only'
+    );
+    expect(
+      screen.queryByTestId('ats-board-decision-requests')
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId('ats-board-supporting-detail')
+    ).not.toHaveAttribute('open');
   });
 });

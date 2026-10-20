@@ -27,6 +27,10 @@ import {
   PlaybookMcpCapabilityError,
   resolvePlaybookMcpCapability,
 } from '../playbookMcpCapabilityService';
+import {
+  enrichKickoffForAtsBoardWebResearch,
+  PlaybookAtsWebResearchNotConfiguredError,
+} from '../playbookAtsWebResearchService';
 import { parseStepInput } from './descriptorValidation';
 import { assertSkillAllowed, resolveDeadlineMs } from './registry';
 import {
@@ -39,6 +43,7 @@ import {
 } from './stepRuns';
 import type { CursorAgentStepConfig } from '../../../shared/types/playbook';
 import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
+import type { ChatThreadKickoff } from '../../../shared/types/chat';
 
 /**
  * How much longer the step waits than the agent run it is watching.
@@ -129,20 +134,34 @@ export async function executeCursorAgentStep(
     throw new Error(`Validation thread "${config.threadId}" was not found.`);
   }
 
+  let kickoff: ChatThreadKickoff = {
+    project: context.project,
+    repo: skillConfig?.skillRepo ?? context.project,
+    branch: skillConfig?.skillBranch ?? 'main',
+    skillProvider: skillConfig?.skillProvider,
+    skillPath: config.skillPath,
+    freeformContext: config.prompt,
+    model,
+    playbookMcpProfile: config.mcpProfile,
+  };
+  try {
+    kickoff = await enrichKickoffForAtsBoardWebResearch(kickoff);
+  } catch (error) {
+    if (error instanceof PlaybookAtsWebResearchNotConfiguredError) {
+      await failStepRunForHuman({
+        stepRunId: context.stepRunId,
+        reason: error.message,
+      });
+      return { kind: 'suspended', expiresAt: stepExpiresAt };
+    }
+    throw error;
+  }
+
   const thread = existingThread ?? await createThread(
     // Every step executes as the run's initiator, never a service principal and never the approver
     // of some earlier gate (BR-003).
     context.initiatorUserId,
-    {
-      project: context.project,
-      repo: skillConfig?.skillRepo ?? context.project,
-      branch: skillConfig?.skillBranch ?? 'main',
-      skillProvider: skillConfig?.skillProvider,
-      skillPath: config.skillPath,
-      freeformContext: config.prompt,
-      model,
-      playbookMcpProfile: config.mcpProfile,
-    },
+    kickoff,
     // The adapter owns the enqueue, so the thread must not start a turn of its own.
     { skipAutoKickoff: true }
   );

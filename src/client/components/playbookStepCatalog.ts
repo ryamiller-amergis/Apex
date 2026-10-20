@@ -11,6 +11,8 @@ import {
   Box,
   FileInput,
   GitBranch,
+  GraduationCap,
+  ListChecks,
   MessagesSquare,
   ShieldCheck,
   type LucideIcon,
@@ -18,6 +20,12 @@ import {
 import type { PlaybookGraph, PlaybookGraphNode } from '../../shared/types/playbook';
 
 export type PlaybookStepGroup = 'AI' | 'People' | 'Logic' | 'Messaging' | 'Data' | 'Other';
+
+/** Step types an author may select as AI sources. Display metadata, not the registry. */
+export const AI_SOURCE_STEP_TYPES = new Set(['cursor-agent', 'board-deliberation']);
+
+/** Step types an author may select as a human review. */
+export const HUMAN_REVIEW_STEP_TYPES = new Set(['approval-gate', 'feedback-review']);
 
 export interface PlaybookStepMeta {
   stepType: string;
@@ -82,6 +90,18 @@ const KNOWN_STEPS: Record<string, Omit<PlaybookStepMeta, 'stepType'>> = {
     group: 'Data',
     icon: FileInput,
   },
+  'capture-outcome-feedback': {
+    title: 'Learn from outcome',
+    description: 'Store how people resolved earlier AI work, without saving every prompt.',
+    group: 'Data',
+    icon: GraduationCap,
+  },
+  'feedback-review': {
+    title: 'Feedback review',
+    description: 'Pause so a person can accept, question, or override selected AI work.',
+    group: 'People',
+    icon: ListChecks,
+  },
 };
 
 export function stepMeta(stepType: string): PlaybookStepMeta {
@@ -111,7 +131,7 @@ const GENERATED_ID = /^step-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 /** The most telling config value for a node, for its second line on the canvas. */
 export function nodeSummary(node: Pick<PlaybookGraphNode, 'config'>): string {
   const config = node.config ?? {};
-  for (const key of ['title', 'subject', 'prompt', 'profileKey', 'skillPath', 'documentType']) {
+  for (const key of ['label', 'title', 'subject', 'prompt', 'profileKey', 'skillPath', 'documentType']) {
     const value = config[key];
     if (typeof value === 'string' && value.trim()) return truncate(value.trim(), 44);
   }
@@ -126,6 +146,85 @@ export function nodeSubtitle(node: Pick<PlaybookGraphNode, 'id' | 'config'>): st
   const summary = nodeSummary(node);
   if (summary) return summary;
   return GENERATED_ID.test(node.id) ? 'Not configured yet' : node.id;
+}
+
+export interface PlaybookStepOutline {
+  summary: string;
+  /** Extra lines revealed by the dashboard step control. Empty when the summary already says it all. */
+  details: string[];
+}
+
+function configString(
+  config: Record<string, unknown> | undefined,
+  key: string,
+): string | null {
+  const value = config?.[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function skillName(skillPath: string): string {
+  const parts = skillPath.split('/').filter(Boolean);
+  const file = parts.at(-1) ?? skillPath;
+  if (file.toLowerCase() === 'skill.md' && parts.length > 1) return parts.at(-2)!;
+  return file;
+}
+
+/**
+ * The collapsed line and the text the expand control reveals.
+ *
+ * `nodeSummary` cuts config text to a canvas-sized line, so a control that only
+ * unwraps that string has nothing left to show. Details come from the rest of the config.
+ */
+export function playbookStepOutline(
+  node: Pick<PlaybookGraphNode, 'id' | 'stepType' | 'config'>,
+  summaryOverride?: string,
+): PlaybookStepOutline {
+  const meta = stepMeta(node.stepType);
+  const subject = configString(node.config, 'subject');
+  const title = configString(node.config, 'title');
+  const prompt = configString(node.config, 'prompt');
+  const body = configString(node.config, 'body');
+  const skillPath = configString(node.config, 'skillPath');
+  const summary = summaryOverride ?? subject ?? title ?? meta.description;
+  const details: string[] = [];
+  const add = (line: string | null | undefined) => {
+    const text = line?.trim();
+    if (!text || text === summary || details.includes(text)) return;
+    details.push(text);
+  };
+
+  if (node.stepType === 'cursor-agent') {
+    if (skillPath) add(`Skill: ${skillName(skillPath)}`);
+    add(prompt);
+  } else if (node.stepType === 'board-deliberation') {
+    const topics = node.config?.maxTopics;
+    const rounds = node.config?.maxRounds;
+    const budget = node.config?.inquiryBudget;
+    if (
+      typeof topics === 'number' &&
+      typeof rounds === 'number' &&
+      typeof budget === 'number'
+    ) {
+      add(`Up to ${topics} topics, ${rounds} rounds, and ${budget} inquiries.`);
+    }
+    add('Named specialists respond to the disagreements the moderator selects.');
+  } else if (node.stepType === 'capture-outcome-feedback' || node.stepType === 'feedback-review') {
+    const sources = node.config?.sourceStepIds;
+    if (Array.isArray(sources) && sources.length > 0) {
+      add(
+        node.stepType === 'feedback-review'
+          ? `Reviews ${sources.length} selected AI step${sources.length === 1 ? '' : 's'}.`
+          : `Learns from ${sources.length} earlier AI step${sources.length === 1 ? '' : 's'}.`
+      );
+    }
+    add(configString(node.config, 'label'));
+  } else if (node.stepType === 'approval-gate') {
+    add(meta.description);
+  } else if (node.stepType === 'notify') {
+    add(body);
+  }
+
+  return { summary, details };
 }
 
 /** Nodes in run order: entry nodes first, then each node after everything that leads to it. */

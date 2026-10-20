@@ -1,0 +1,208 @@
+CUSTOM APPLICATION PLATFORM - PHASE A BACKLOG
+One app, end to end: describe a CRUD app in chat, approve a Blueprint,
+generate it into a template workspace, verify it with scripts,
+open a working preview, approve again at Gate 2.
+Internal users only. One stack. Feature flag on.
+Sizes: story points (1 = half a day or less, 13 = about two weeks). H/M/L = confidence.
+
+=====================================================================
+EPIC A1 - APP BLUEPRINT (29 PTS)
+The structured spec. Extends the interview brief flow;
+approval resumes the suspended Playbook step like brief approval does today.
+---------------------------------------------------------------------
+A1.1  Blueprint schema (5 pts, H)
+      AppBlueprint type + Zod schema: entities and field types, roles,
+      screens (list / detail / form), workflows, integrations,
+      acceptance criteria. This schema is the contract for everything else.
+      File: src/shared/types/appBlueprint.ts
+A1.2  Blueprint store (5 pts, H)
+      app_blueprints + revisions tables, versioned like
+      interview_briefs / interview_brief_revisions. Immutable history.
+      Files: src/server/db/schema.ts, new migration in migrations/
+A1.3  Blueprint service (5 pts, M)
+      Create, read, save new revision, approve, get current approved version.
+      File: src/server/services/appBlueprintService.ts
+A1.4  Link to interview and Playbook (3 pts, M)
+      Blueprint carries briefId, interviewId, stepRunId so Gate 1 approval
+      resumes the run exactly once.
+      Files: appBlueprintService.ts, playbookSteps/stepRuns.ts
+A1.5  Blueprint review panel (8 pts, M)
+      Entities / screens / workflows shown readably, diff vs previous
+      version, Approve / Request changes. Copy the gate UX.
+      Files: src/client/components/AppBlueprintPanel.tsx,
+      PlaybookGateReviewPanel.tsx (pattern)
+A1.6  Blueprint tests (3 pts, H)
+      Schema rejects unknown field types. Approval resumes the step once
+      only. Revisions cannot be edited after save.
+      File: src/server/__tests__/appBlueprintService.test.ts
+
+=====================================================================
+EPIC A2 - APP-BUILDER INTERVIEW (17 PTS)
+Turns conversation into a complete Blueprint.
+Clarification asks only questions whose answers change the Blueprint.
+---------------------------------------------------------------------
+A2.1  Interview profile "app-builder" (3 pts, M)
+      New profileKey, supplied from run input like the core interview.
+      Files: interviewService.ts, interviewOrchestratorService.ts
+A2.2  Skill: app-builder-interview (5 pts, M)
+      Fills every Blueprint field. Anything it cannot settle goes to
+      unresolvedItems. Never invents entities.
+      File: .cursor/skills/app-builder-interview/SKILL.md
+A2.3  Blocking-question rule (3 pts, M)
+      unresolvedItems above zero blocks Gate 1, unless the approver
+      defers an item on record at the gate.
+      Files: appBlueprintService.ts, playbookSteps/approvalGateAdapter.ts
+A2.4  Completeness check - deterministic, no model (3 pts, H)
+      Every screen names an entity. Every entity has a key field.
+      Every workflow names its actor. Runs before Gate 1.
+      File: appBlueprintService.ts
+A2.5  Interview tests (3 pts, M)
+      Transcript fixtures produce the expected Blueprint fields.
+      Unresolved items are counted correctly.
+      File: src/server/__tests__/appBuilderInterview.test.ts
+
+=====================================================================
+EPIC A3 - GENERATE AND VERIFY STEPS (39 PTS)  ** RISKIEST EPIC **
+Two new step types in the existing Playbook registry.
+Generation needs a writable sandbox, which cursor-agent refuses today.
+---------------------------------------------------------------------
+A3.1  Sandbox workspace per run (5 pts, M)
+      Workspace under the shared data root, named by run id.
+      Blueprint JSON + template staged in. Never the Apex repo.
+      Torn down on the retention policy.
+      Files: src/server/services/appWorkspaceService.ts,
+      src/server/utils/dataDir.ts
+A3.2  MCP profile: workspace-write-sandbox (5 pts, M)
+      Write access inside the run workspace only. Refused anywhere
+      else, and that refusal is tested.
+      Files: playbookMcpCapabilityService.ts, playbookSteps/registry.ts
+A3.3  Step type: generate-app (8 pts, M)
+      Registry descriptor (Zod in/out, playbooks:run, suspends, deadline).
+      Adapter runs the builder skill in the workspace.
+      Returns file manifest + build log tail.
+      Files: playbookSteps/registry.ts,
+      playbookSteps/generateAppAdapter.ts, playbookSteps/index.ts
+A3.4  Skill: app-builder-generate (8 pts, L)
+      Reads Blueprint JSON, scaffolds CRUD per entity into the template.
+      Writes a manifest: what it created, what it skipped.
+      File: .cursor/skills/app-builder-generate/SKILL.md
+A3.5  Step type: verify-app (8 pts, M)
+      No model involved. Runs template scripts (build, unit tests,
+      API smoke), captures exit codes and logs, returns pass/fail
+      per check. One retry back to generate, then a human decides.
+      File: playbookSteps/verifyAppAdapter.ts
+A3.6  Generate / verify tests (5 pts, M)
+      Step refuses writes outside the workspace.
+      Red build fails the step. Retry-once loop always terminates.
+      Files: src/server/__tests__/generateAppAdapter.test.ts,
+      src/server/__tests__/verifyAppAdapter.test.ts
+
+=====================================================================
+EPIC A4 - TEMPLATE STACK, CRUD V1 (21 PTS)
+One boring stack so generation has a target.
+Start in parallel on day one - generation is blocked without it.
+---------------------------------------------------------------------
+A4.1  Template skeleton (13 pts, M)
+      Vite + React front end, Express API, SQLite file database.
+      Auth stub (single internal user), entity CRUD API pattern,
+      list / detail / form screens, seed data.
+      Files: app-templates/crud-v1/ (new, repo root)
+A4.2  Template scripts contract (3 pts, H)
+      npm run build / npm test / npm run start, port from env.
+      verify-app depends on these commands existing.
+      File: app-templates/crud-v1/package.json + README
+A4.3  Golden Blueprint fixture (5 pts, M)
+      Hand-written Blueprint, two entities (Clients + Appointments).
+      The builder skill must turn it into a passing build.
+      This fixture gates A3.4.
+      Files: app-templates/crud-v1/fixtures/
+
+=====================================================================
+EPIC A5 - PLAYBOOK TEMPLATE AND PREVIEW (34 PTS)
+Wires everything into one run a user can launch.
+---------------------------------------------------------------------
+A5.1  Playbook template: app-builder (5 pts, H)
+      interview -> Gate 1 (Blueprint) -> generate -> verify ->
+      branch (fail goes to a human) -> preview -> Gate 2 -> notify.
+      Files: src/server/playbookTemplates/app-builder.json,
+      playbookTemplateService.ts
+A5.2  Preview runner (13 pts, L)  ** HEAVIEST SINGLE ITEM - SPIKE FIRST **
+      Starts the verified workspace on an ephemeral port behind an
+      authenticated proxy: /api/app-preview/:runId/*
+      Stops on gate decision or the 48h deadline. Internal only.
+      Files: src/server/services/appPreviewService.ts, src/server/routes/
+A5.3  Run view additions (8 pts, M)
+      Preview link + panel, verify report (per-check pass/fail +
+      log tail), Gate 2 inside the existing gate panel.
+      Files: PlaybookLiveRunPage.tsx, PlaybookGateReviewPanel.tsx,
+      AppVerifyReportPanel.tsx (new)
+A5.4  Launch entry (3 pts, H)
+      "Build an app" on the Playbooks dashboard. The user's first
+      message becomes the run input.
+      File: PlaybookDashboardPage.tsx
+A5.5  End-to-end test (5 pts, M)
+      Scripted run, launch to Gate 2, against the golden Blueprint.
+      Agent step stubbed in CI.
+      File: src/server/__tests__/appBuilderPlaybook.test.ts
+
+=====================================================================
+EPIC A6 - GUARDRAILS AND OPERATIONS (12 PTS)
+Keeps Phase A safe and measurable for internal users.
+---------------------------------------------------------------------
+A6.1  Feature flag "app-builder" (2 pts, H)
+      Default off. Build it before any gated code merges.
+      Enabled branch and cleanup criterion recorded at creation.
+A6.2  Spend caps (3 pts, M)
+      Run cost lands in aiUsage. Per-run cap from the existing
+      spend policy applies to generate steps.
+      Files: aiUsageService.ts, playbookSpendPolicyService.ts
+A6.3  RBAC for Phase A (2 pts, H)
+      Reuse playbooks:run and playbooks:author. No new permission
+      keys yet (app:* keys are Phase B). Gate 2 = run initiator only.
+      File: playbookGateService.ts
+A6.4  Runbook (2 pts, H)
+      Inspect a failed generate / verify, find workspaces and logs,
+      kill a preview.
+      File: design-docs/app-builder-phase-a-runbook.md
+A6.5  Outcome feedback wired (3 pts, H)
+      Gate 2 decision captured by the existing
+      capture-outcome-feedback step, so Phase E learning
+      has data from day one.
+      Files: app-builder template (A5.1), playbookOutcomeFeedbackService.ts
+
+=====================================================================
+TOTALS AND BUILD ORDER (152 PTS TOTAL, ABOUT 5-7 WEEKS, 2 ENGINEERS)
+---------------------------------------------------------------------
+A1 Blueprint .......... 29 pts ... depends on: -
+A2 Interview .......... 17 pts ... depends on: A1 schema
+A3 Generate + verify .. 39 pts ... depends on: A1, A4 scripts
+A4 Template stack ..... 21 pts ... depends on: - (start day one)
+A5 Playbook + preview . 34 pts ... depends on: A1-A4
+A6 Guardrails ......... 12 pts ... flag first, rest after A5
+
+ORDER: flag (A6.1) -> A1 + A4 in parallel -> A2 -> A3 -> A5 -> A6
+
+=====================================================================
+DECISIONS LOCKED FOR PHASE A
+---------------------------------------------------------------------
+- Extend the Playbook step registry. No second orchestrator.
+- Blueprint extends the interview brief flow. Approval resumes the
+  suspended step the way brief approval already does.
+- Verify is scripts and exit codes. Models generate and explain;
+  they never pass their own gate.
+- One stack, SQLite, internal preview only. Production runtime,
+  multi-app hosting, and the capability registry are Phases B-C.
+
+=====================================================================
+RISKS AND SPIKES (RUN BOTH IN WEEK 1)
+---------------------------------------------------------------------
+1. Preview runner (A5.2): hosting an untrusted generated process
+   safely - isolation, ports, proxy auth. If the spike fails,
+   preview degrades to "download and run locally" and the
+   exit test changes.
+2. Generation quality (A3.4): measured against the golden fixture
+   (A4.3) before the pipeline depends on it. If the skill misses,
+   narrow the Blueprint (fewer field types). Do not weaken verify.
+3. Blueprint schema churn: every revision is versioned (A1.2),
+   so a schema change never invalidates an in-flight run.
+   Runs pin their Blueprint version, as they pin Playbook versions.

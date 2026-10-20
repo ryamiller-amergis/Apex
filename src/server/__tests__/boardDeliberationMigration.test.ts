@@ -15,6 +15,13 @@ describe('playbook board deliberation migration', () => {
   const migration = fs.readFileSync(migrationPath, 'utf8');
   const [upSql = '', downSql = ''] = migration.split(/-- Down Migration/i);
 
+  it('marks the up section so node-pg-migrate does not run the drops on apply', () => {
+    expect(migration).toMatch(/^-- Up Migration/m);
+    expect(migration.indexOf('-- Up Migration')).toBeLessThan(
+      migration.indexOf('-- Down Migration')
+    );
+  });
+
   it('creates durable sessions and turns with idempotency constraints', () => {
     expect(upSql).toMatch(/CREATE TABLE playbook_deliberation_sessions/i);
     expect(upSql).toMatch(/CREATE TABLE playbook_deliberation_turns/i);

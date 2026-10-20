@@ -1,3 +1,5 @@
+-- Up Migration
+
 -- Durable state for bounded, multi-agent Playbook deliberation.
 
 CREATE TABLE playbook_deliberation_sessions (

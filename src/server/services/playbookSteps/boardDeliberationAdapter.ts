@@ -1,8 +1,12 @@
 import type { BoardDeliberationStepConfig } from '../../../shared/types/playbook';
-import { startBoardDeliberation } from '../boardDeliberationService';
+import {
+  BoardDeliberationInputError,
+  startBoardDeliberation,
+} from '../boardDeliberationService';
 import { parseStepInput } from './descriptorValidation';
 import {
   deadlineFromNow,
+  failStepRunForHuman,
   suspendStepRun,
   type PlaybookStepExecutionContext,
   type PlaybookStepOutcome,
@@ -21,12 +25,24 @@ export async function executeBoardDeliberationStep(
   const deadline = deadlineFromNow(
     resolveDeadlineMs(STEP_TYPE, config.deadlineMs)
   );
-  const started = await startBoardDeliberation({
-    stepRunId: context.stepRunId,
-    config,
-    project: context.project,
-    userId: context.initiatorUserId,
-  });
+  let started: { sessionId: string; agentRunId: string };
+  try {
+    started = await startBoardDeliberation({
+      stepRunId: context.stepRunId,
+      config,
+      project: context.project,
+      userId: context.initiatorUserId,
+    });
+  } catch (error) {
+    if (!(error instanceof BoardDeliberationInputError)) throw error;
+    const reason =
+      error.message || 'ATS board deliberation input is invalid.';
+    await failStepRunForHuman({
+      stepRunId: context.stepRunId,
+      reason,
+    });
+    return { kind: 'suspended', expiresAt: deadline };
+  }
   await suspendStepRun({
     stepRunId: context.stepRunId,
     expiresAt: deadline,

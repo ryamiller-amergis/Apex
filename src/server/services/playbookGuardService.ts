@@ -26,6 +26,9 @@ import {
   isAgentStepType,
   isApprovalGateStepType,
   isBranchStepType,
+  isFeedbackReviewStepType,
+  isHumanReviewStepType,
+  isOutcomeFeedbackStepType,
   isRegisteredStepType,
 } from './playbookSteps/registry';
 import { validateBranchCondition } from './playbookSteps/branchConditionEvaluator';
@@ -283,6 +286,77 @@ export function assertStepGateSatisfied(
   }
 }
 
+function assertEarlierAiSources(
+  graph: PlaybookGraph,
+  node: PlaybookGraphNode,
+  sourceStepIds: unknown,
+  label: string
+): void {
+  if (!Array.isArray(sourceStepIds)) return;
+  const nodes = new Map(graph.nodes.map((entry) => [entry.id, entry]));
+  for (const sourceId of sourceStepIds) {
+    if (typeof sourceId !== 'string') continue;
+    const source = nodes.get(sourceId);
+    if (
+      !source ||
+      source.id === node.id ||
+      !isAgentStepType(source.stepType) ||
+      !canReach(graph, sourceId, node.id)
+    ) {
+      throw new PlaybookStepTypeError(
+        `${label} "${node.id}" must use an earlier AI step. ` +
+          `"${String(sourceId)}" is not an AI step that runs before it.`
+      );
+    }
+  }
+}
+
+function assertNamedEarlierStep(
+  graph: PlaybookGraph,
+  node: PlaybookGraphNode,
+  stepId: unknown,
+  accepts: (stepType: string) => boolean,
+  message: string
+): void {
+  if (typeof stepId !== 'string' || !stepId) return;
+  const target = graph.nodes.find((entry) => entry.id === stepId);
+  if (!target || target.id === node.id || !accepts(target.stepType) || !canReach(graph, stepId, node.id)) {
+    throw new PlaybookStepTypeError(message);
+  }
+}
+
+function assertOutcomeFeedbackReferences(
+  graph: PlaybookGraph,
+  node: PlaybookGraphNode
+): void {
+  assertEarlierAiSources(graph, node, node.config?.sourceStepIds, 'Outcome feedback');
+  const reviewStepId = node.config?.reviewStepId;
+  assertNamedEarlierStep(
+    graph,
+    node,
+    reviewStepId,
+    isHumanReviewStepType,
+    `Outcome feedback "${node.id}" must follow an earlier approval or feedback review. ` +
+      `"${String(reviewStepId ?? '')}" is not an earlier review.`
+  );
+  const feedbackStepId = node.config?.feedbackStepId;
+  assertNamedEarlierStep(
+    graph,
+    node,
+    feedbackStepId,
+    isFeedbackReviewStepType,
+    `Outcome feedback "${node.id}" must follow an earlier feedback review. ` +
+      `"${String(feedbackStepId ?? '')}" is not an earlier feedback review.`
+  );
+}
+
+function assertFeedbackReviewReferences(
+  graph: PlaybookGraph,
+  node: PlaybookGraphNode
+): void {
+  assertEarlierAiSources(graph, node, node.config?.sourceStepIds, 'Feedback review');
+}
+
 /**
  * Every node names a registered step type and carries a config that type accepts.
  *
@@ -307,6 +381,12 @@ export function assertGraphStepsResolvable(
       throw new PlaybookGraphNodeConfigError(node.id, node.stepType, parsed.error);
     }
     if (isBranchStepType(node.stepType)) validateBranchCondition(graph, node);
+    if (isOutcomeFeedbackStepType(node.stepType)) {
+      assertOutcomeFeedbackReferences(graph, node);
+    }
+    if (isFeedbackReviewStepType(node.stepType)) {
+      assertFeedbackReviewReferences(graph, node);
+    }
     if (isApprovalGateStepType(node.stepType)) {
       const approverPool = node.config?.approverPool;
       const gatedStepId = node.config?.gatedStepId;

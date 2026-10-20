@@ -1,7 +1,10 @@
 import {
   parseBoardDeliberationAgenda,
+  parseBoardDeliberationResponse,
+  sanitizeDeliberationResult,
   selectBoardDeliberationEntries,
   shouldRunBoardRebuttal,
+  turnPrompt,
 } from '../services/boardDeliberationService';
 
 const response = {
@@ -55,5 +58,94 @@ describe('board deliberation limits', () => {
         topics: [{ ...topic, participants: ['operations', 'operations'] }],
       })
     ).toThrow(/Duplicate participant/);
+  });
+
+  it('builds the synthesis prompt for a turn that has no topic', () => {
+    const session = {
+      charter: 'Phase 1 charter',
+      sourceReports: {},
+      maxTopics: 5,
+      agenda: {
+        role: 'moderator',
+        noMaterialDisagreement: false,
+        topics: [{
+          id: 'T1',
+          title: 'Ownership',
+          question: 'Who owns intake?',
+          participants: ['operations', 'product'],
+          evidenceNeeded: [],
+        }],
+      },
+    } as unknown as Parameters<typeof turnPrompt>[0];
+    const synthesis = { phase: 'synthesis', specialist: 'moderator', topicId: null } as unknown as Parameters<typeof turnPrompt>[1];
+    const response = {
+      phase: 'response',
+      specialist: 'operations',
+      topicId: 'T1',
+      result: { position: 'Operations owns intake.' },
+    } as unknown as Parameters<typeof turnPrompt>[1];
+
+    const prompt = turnPrompt(session, synthesis, [response]);
+    expect(prompt).toContain('Synthesize the bounded ATS board discussion.');
+    expect(prompt).toContain('Operations owns intake.');
+  });
+
+  it('flattens object evidence, challenges, and revisions into readable strings', () => {
+    const response = parseBoardDeliberationResponse({
+      role: 'client',
+      topicId: 'T1',
+      position: 'Clients approve submittals in the portal.',
+      evidence: [
+        { claim: 'Portal approval cuts email.', source: 'charter', corroboration: 'one source' },
+        'Plain evidence stays as written.',
+      ],
+      challenges: [{ target: 'operations', claim: 'Recruiters still need email fallback.' }],
+      revisions: [{ text: 'Keep email as a fallback.', reason: null }],
+      confidence: 0.6,
+      newEvidence: false,
+    });
+    expect(response.evidence).toEqual([
+      'Portal approval cuts email. — source: charter — corroboration: one source',
+      'Plain evidence stays as written.',
+    ]);
+    expect(response.challenges).toEqual([
+      'target: operations — Recruiters still need email fallback.',
+    ]);
+    expect(response.revisions).toEqual(['Keep email as a fallback.']);
+  });
+
+  it('accepts moderator audit fields on agenda and response', () => {
+    const agenda = parseBoardDeliberationAgenda({
+      role: 'moderator',
+      noMaterialDisagreement: false,
+      topics: [],
+      evidenceGaps: ['Missing SLA baseline'],
+      singleSourceClaims: ['Vendor pricing page only'],
+      charterConflicts: [],
+    });
+    expect(agenda.evidenceGaps).toEqual(['Missing SLA baseline']);
+
+    const parsed = parseBoardDeliberationResponse({
+      ...response,
+      citedEvidenceIds: ['E-OPS-1'],
+    });
+    expect(parsed.citedEvidenceIds).toEqual(['E-OPS-1']);
+  });
+
+  it('strips undocumented keys from deliberation audit payloads', () => {
+    const sanitized = sanitizeDeliberationResult('response', {
+      role: 'operations',
+      topicId: 'T1',
+      position: 'Hold',
+      evidence: [],
+      challenges: [],
+      revisions: [],
+      citedEvidenceIds: [],
+      confidence: 0.5,
+      newEvidence: false,
+      hiddenReasoning: 'must not leak',
+    });
+    expect(sanitized).not.toHaveProperty('hiddenReasoning');
+    expect(sanitized?.position).toBe('Hold');
   });
 });

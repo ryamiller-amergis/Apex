@@ -6,7 +6,10 @@ import type {
   PlaybookLayoutPositions,
   PlaybookStepRunStatus,
 } from '../../shared/types/playbook';
-import { layoutPlaybookGraph, positionsOverlap } from '../utils/playbookCanvasLayout';
+import {
+  layoutPlaybookGraph,
+  positionsOverlap,
+} from '../utils/playbookCanvasLayout';
 import { relativeTime, runStatusLabel } from './playbookStatusFormat';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import { usePlaybookRun } from '../hooks/usePlaybookRuns';
@@ -19,6 +22,7 @@ import { usePlaybookStepPalette } from '../hooks/usePlaybookCanvas';
 import { PlaybookRunStepList } from './PlaybookRunStepList';
 import { PlaybookRunActions } from './PlaybookRunActions';
 import { AtsBoardSynopsisPanel } from './AtsBoardSynopsisPanel';
+import { PlaybookFeedbackReviewPanel } from './PlaybookFeedbackReviewPanel';
 import { PlaybookGateReviewPanel } from './PlaybookGateReviewPanel';
 import { PlaybookCanvas } from './PlaybookCanvas';
 import styles from './PlaybookCanvas.module.css';
@@ -30,17 +34,31 @@ interface PlaybookLiveRunPageProps {
   runId: string;
 }
 
-export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ project, runId }) => {
+export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({
+  project,
+  runId,
+}) => {
   const canvasEnabled = useFeatureFlag('playbooks-authoring-canvas', project);
   const run = usePlaybookRun(project, runId);
   usePlaybookRunInvalidation(project, runId, canvasEnabled);
 
   const definitionId = run.data?.definitionId ?? null;
   const versionId = run.data?.definitionVersionId ?? null;
-  const graphQuery = usePlaybookVersionGraph(project, definitionId, versionId, canvasEnabled);
-  const layoutQuery = usePlaybookVersionLayout(project, definitionId, versionId, canvasEnabled);
+  const graphQuery = usePlaybookVersionGraph(
+    project,
+    definitionId,
+    versionId,
+    canvasEnabled
+  );
+  const layoutQuery = usePlaybookVersionLayout(
+    project,
+    definitionId,
+    versionId,
+    canvasEnabled
+  );
   const palette = usePlaybookStepPalette(project, canvasEnabled);
-  const [tidiedPositions, setTidiedPositions] = useState<PlaybookLayoutPositions | null>(null);
+  const [tidiedPositions, setTidiedPositions] =
+    useState<PlaybookLayoutPositions | null>(null);
 
   const stepLabels = useMemo(() => {
     const map: Record<string, string> = {};
@@ -62,7 +80,8 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
   const versionGraph = graphQuery.data?.graph;
   useEffect(() => {
     setTidiedPositions(null);
-    if (!savedPositions || !versionGraph || !positionsOverlap(savedPositions)) return undefined;
+    if (!savedPositions || !versionGraph || !positionsOverlap(savedPositions))
+      return undefined;
     let cancelled = false;
     void layoutPlaybookGraph(versionGraph).then((next) => {
       if (!cancelled) setTidiedPositions(next);
@@ -74,7 +93,10 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
 
   if (!canvasEnabled) {
     return (
-      <p className={styles.error} {...{ 'data-testid': 'playbook-live-run-flag-off' }}>
+      <p
+        className={styles.error}
+        {...{ 'data-testid': 'playbook-live-run-flag-off' }}
+      >
         Live run canvas is not enabled for this project.
       </p>
     );
@@ -92,7 +114,10 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
   const positions = tidiedPositions ?? layoutQuery.data?.positions ?? {};
 
   return (
-    <div className={styles.livePage} {...{ 'data-testid': 'playbook-live-run-page' }}>
+    <div
+      className={styles.livePage}
+      {...{ 'data-testid': 'playbook-live-run-page' }}
+    >
       <header className={styles.liveHeader}>
         <Link
           to={`/playbooks/${run.data.definitionId}`}
@@ -105,8 +130,9 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
         <div>
           <h1 className={styles.liveTitle}>{run.data.definitionName}</h1>
           <p className={styles.liveMeta}>
-            {runStatusLabel(run.data.status)} · version {run.data.versionNumber} · started{' '}
-            {relativeTime(run.data.startedAt)} by {run.data.initiatorUserId}
+            {runStatusLabel(run.data.status)} · version {run.data.versionNumber}{' '}
+            · started {relativeTime(run.data.startedAt)} by{' '}
+            {run.data.initiatorDisplayName ?? run.data.initiatorUserId}
           </p>
         </div>
       </header>
@@ -130,12 +156,32 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
           run={run.data}
           {...{ 'data-testid': `ats-board-synopsis-${run.data.runId}` }}
         />
-        <PlaybookRunStepList run={run.data} id={`playbook-live-steps-${runId}`} />
         <PlaybookGateReviewPanel
           project={project}
           run={run.data}
           {...{ 'data-testid': 'playbook-gate-review-panel' }}
         />
+        <PlaybookFeedbackReviewPanel
+          project={project}
+          run={run.data}
+          {...{ 'data-testid': 'playbook-feedback-review-panel' }}
+        />
+        {run.data.steps.some(
+          (step) => step.stepId === 'chair' && step.status === 'completed'
+        ) ? (
+          <details {...{ 'data-testid': 'ats-board-agent-activity' }}>
+            <summary>View agent activity</summary>
+            <PlaybookRunStepList
+              run={run.data}
+              id={`playbook-live-steps-${runId}`}
+            />
+          </details>
+        ) : (
+          <PlaybookRunStepList
+            run={run.data}
+            id={`playbook-live-steps-${runId}`}
+          />
+        )}
         <PlaybookRunActions run={run.data} />
       </section>
     </div>

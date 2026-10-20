@@ -1,6 +1,6 @@
 {
   "templateKey": "ats-agent-board",
-  "templateVersion": 2,
+  "templateVersion": 7,
   "name": "ATS agent board",
   "description": "Independent board members propose a Phase 1 ATS. Leadership ratifies the synopsis before it can become a requirement.",
   "graph": {
@@ -17,8 +17,8 @@
         "stepType": "cursor-agent",
         "config": {
           "skillPath": ".cursor/skills/ats-board-operations/SKILL.md",
-          "mcpProfile": "repository-read-only",
-          "prompt": "Follow your skill. Decide only from this charter. Do not use another member's recommendation.\n\n${input.charter}"
+          "mcpProfile": "repository-public-web-read-only",
+          "prompt": "Follow your skill. Decide only from this charter and bounded public research. Do not use another member's recommendation.\n\n${input.charter}"
         }
       },
       {
@@ -26,8 +26,8 @@
         "stepType": "cursor-agent",
         "config": {
           "skillPath": ".cursor/skills/ats-board-recruiting/SKILL.md",
-          "mcpProfile": "repository-read-only",
-          "prompt": "Follow your skill. Decide only from this charter. Do not use another member's recommendation.\n\n${input.charter}"
+          "mcpProfile": "repository-public-web-read-only",
+          "prompt": "Follow your skill. Decide only from this charter and bounded public research. Do not use another member's recommendation.\n\n${input.charter}"
         }
       },
       {
@@ -35,8 +35,8 @@
         "stepType": "cursor-agent",
         "config": {
           "skillPath": ".cursor/skills/ats-board-client/SKILL.md",
-          "mcpProfile": "repository-read-only",
-          "prompt": "Follow your skill. Decide only from this charter. Do not use another member's recommendation.\n\n${input.charter}"
+          "mcpProfile": "repository-public-web-read-only",
+          "prompt": "Follow your skill. Decide only from this charter and bounded public research. Do not use another member's recommendation.\n\n${input.charter}"
         }
       },
       {
@@ -44,8 +44,8 @@
         "stepType": "cursor-agent",
         "config": {
           "skillPath": ".cursor/skills/ats-board-compliance/SKILL.md",
-          "mcpProfile": "repository-read-only",
-          "prompt": "Follow your skill. Decide only from this charter. Do not use another member's recommendation.\n\n${input.charter}"
+          "mcpProfile": "repository-public-web-read-only",
+          "prompt": "Follow your skill. Decide only from this charter and bounded public research. Do not use another member's recommendation.\n\n${input.charter}"
         }
       },
       {
@@ -53,8 +53,8 @@
         "stepType": "cursor-agent",
         "config": {
           "skillPath": ".cursor/skills/ats-board-data/SKILL.md",
-          "mcpProfile": "repository-read-only",
-          "prompt": "Follow your skill. Decide only from this charter. Do not use another member's recommendation.\n\n${input.charter}"
+          "mcpProfile": "repository-public-web-read-only",
+          "prompt": "Follow your skill. Decide only from this charter and bounded public research. Do not use another member's recommendation.\n\n${input.charter}"
         }
       },
       {
@@ -62,8 +62,8 @@
         "stepType": "cursor-agent",
         "config": {
           "skillPath": ".cursor/skills/ats-board-product/SKILL.md",
-          "mcpProfile": "repository-read-only",
-          "prompt": "Follow your skill. Decide only from this charter. Do not use another member's recommendation.\n\n${input.charter}"
+          "mcpProfile": "repository-public-web-read-only",
+          "prompt": "Follow your skill. Decide only from this charter and bounded public research. Do not use another member's recommendation.\n\n${input.charter}"
         }
       },
       {
@@ -71,8 +71,8 @@
         "stepType": "cursor-agent",
         "config": {
           "skillPath": ".cursor/skills/ats-board-market/SKILL.md",
-          "mcpProfile": "repository-read-only",
-          "prompt": "Follow your skill. Decide only from this charter. Do not use another member's recommendation.\n\n${input.charter}"
+          "mcpProfile": "repository-public-web-read-only",
+          "prompt": "Follow your skill. Decide only from this charter and bounded public research. Do not use another member's recommendation.\n\n${input.charter}"
         }
       },
       {
@@ -89,9 +89,9 @@
             "product": "${steps.product.reportMd}",
             "market": "${steps.market.reportMd}"
           },
-          "maxTopics": 5,
-          "maxRounds": 2,
-          "inquiryBudget": 16
+          "maxTopics": 3,
+          "maxRounds": 1,
+          "inquiryBudget": 8
         }
       },
       {
@@ -100,7 +100,25 @@
         "config": {
           "skillPath": ".cursor/skills/ats-board-chair/SKILL.md",
           "mcpProfile": "repository-read-only",
-          "prompt": "Follow your skill. Write the version 2 leadership synopsis. A blank report means that domain is not settled. Do not settle compliance or data migration if that report is blank or objects.\n\nCharter:\n${input.charter}\n\nOperations:\n${steps.operations.reportMd}\n\nRecruiting:\n${steps.recruiting.reportMd}\n\nClient:\n${steps.client.reportMd}\n\nCompliance:\n${steps.compliance.reportMd}\n\nData:\n${steps.data.reportMd}\n\nProduct:\n${steps.product.reportMd}\n\nMarket:\n${steps.market.reportMd}\n\nStructured deliberation:\n${steps.deliberation.reportMd}"
+          "prompt": "Follow your skill. Write the version 4 leadership synopsis with a concise leadershipBrief (1-2 sentence headline, up to 5 AI-made decisions, up to 3 expected outcomes, and 0-3 material exceptions with recommendedResolution) plus the full audit record with evidence IDs on every decision. Settle reversible workflow, UX, schema, and stage-label choices autonomously. Escalate only charter changes, legal/compliance commitments, real-PII authorization, production cutover, material spend, or external commitments. A blank report means that domain is not settled. Do not settle compliance or data migration if that report is blank or objects. Keep moderator unsupportedClaims open.\n\nCharter:\n${input.charter}\n\nOperations:\n${steps.operations.reportMd}\n\nRecruiting:\n${steps.recruiting.reportMd}\n\nClient:\n${steps.client.reportMd}\n\nCompliance:\n${steps.compliance.reportMd}\n\nData:\n${steps.data.reportMd}\n\nProduct:\n${steps.product.reportMd}\n\nMarket:\n${steps.market.reportMd}\n\nStructured deliberation:\n${steps.deliberation.reportMd}"
+        }
+      },
+      {
+        "id": "leadership-feedback",
+        "stepType": "feedback-review",
+        "config": {
+          "subject": "Review the board plan before it is revised",
+          "label": "Leadership feedback",
+          "sourceStepIds": ["chair", "deliberation"]
+        }
+      },
+      {
+        "id": "revise",
+        "stepType": "cursor-agent",
+        "config": {
+          "skillPath": ".cursor/skills/ats-board-chair/SKILL.md",
+          "mcpProfile": "repository-read-only",
+          "prompt": "Follow your skill. This is one revision of the synopsis already written. Apply the leadership notes and do not widen Phase 1. If the notes say the plan was accepted, keep the same decisions. If leadership stopped the outcome, keep the synopsis and say that in the headline. Do not perform new research.\n\nCharter:\n${input.charter}\n\nOperations:\n${steps.operations.reportMd}\n\nRecruiting:\n${steps.recruiting.reportMd}\n\nClient:\n${steps.client.reportMd}\n\nCompliance:\n${steps.compliance.reportMd}\n\nData:\n${steps.data.reportMd}\n\nProduct:\n${steps.product.reportMd}\n\nMarket:\n${steps.market.reportMd}\n\nStructured deliberation:\n${steps.deliberation.reportMd}\n\nCurrent synopsis:\n${steps.chair.reportMd}\n\nLeadership notes:\n${steps.leadership-feedback.revisionBrief}"
         }
       },
       {
@@ -118,6 +136,16 @@
         "config": {
           "subject": "Ratify the ATS board synopsis"
         }
+      },
+      {
+        "id": "capture-learning",
+        "stepType": "capture-outcome-feedback",
+        "config": {
+          "label": "ATS board outcome",
+          "reviewStepId": "ratify",
+          "feedbackStepId": "leadership-feedback",
+          "sourceStepIds": ["chair", "deliberation", "revise"]
+        }
       }
     ],
     "edges": [
@@ -130,8 +158,11 @@
       { "from": "product", "to": "market" },
       { "from": "market", "to": "deliberation" },
       { "from": "deliberation", "to": "chair" },
-      { "from": "chair", "to": "notify-ready" },
-      { "from": "notify-ready", "to": "ratify" }
+      { "from": "chair", "to": "leadership-feedback" },
+      { "from": "leadership-feedback", "to": "revise" },
+      { "from": "revise", "to": "notify-ready" },
+      { "from": "notify-ready", "to": "ratify" },
+      { "from": "ratify", "to": "capture-learning" }
     ]
   }
 }

@@ -622,6 +622,20 @@
   accent-color: var(--accent-color);
 }
 
+.sourceList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.sourceOption {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+}
+
 .fieldHint {
   margin: 0;
   font-size: 0.7rem;

@@ -18,6 +18,8 @@ import { executeIngestArtifactStep } from './ingestArtifactAdapter';
 import { executeBranchStep } from './branchAdapter';
 import { executeInterviewStep } from './interviewAdapter';
 import { executeBoardDeliberationStep } from './boardDeliberationAdapter';
+import { executeCaptureOutcomeFeedbackStep } from './outcomeFeedbackAdapter';
+import { executeFeedbackReviewStep } from './feedbackReviewAdapter';
 import { getUserPermissions } from '../rbacService';
 import { parseStepInput } from './descriptorValidation';
 import { getStepTypeDescriptor, requiredPermissionsForStep } from './registry';
@@ -39,6 +41,8 @@ const ADAPTERS: Readonly<Record<string, PlaybookStepAdapter>> = {
   'ingest-artifact': executeIngestArtifactStep,
   branch: executeBranchStep,
   interview: executeInterviewStep,
+  'capture-outcome-feedback': executeCaptureOutcomeFeedbackStep,
+  'feedback-review': executeFeedbackReviewStep,
 };
 
 /** The step types that can actually be executed. Compared against the registry by a test. */

@@ -115,6 +115,53 @@ describe('VT-09 — enqueue, correlate, suspend', () => {
     }));
   });
 
+  it('requires interview web MCP before ATS public-web specialist steps run', async () => {
+    const outcome = await executeCursorAgentStep(
+      context({ mcpProfile: 'repository-public-web-read-only' }),
+    );
+
+    expect(createThread).not.toHaveBeenCalled();
+    expect(failStepRunForHuman).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stepRunId: 'step-run-1',
+      }),
+    );
+    expect(outcome).toMatchObject({ kind: 'suspended' });
+  });
+
+  it('wires charter-bound web research when interview web MCP is configured', async () => {
+    getSkillConfig.mockResolvedValue({
+      skillRepo: 'apex/ai-pilot',
+      skillBranch: 'main',
+      skillProvider: 'github',
+      defaultModel: 'claude-4',
+      interviewWebMcp: {
+        transport: 'http',
+        label: 'Web',
+        mcpServerName: 'web-search',
+        url: 'http://localhost:3001/mcp/web',
+      },
+    });
+
+    await executeCursorAgentStep(
+      context({ mcpProfile: 'repository-public-web-read-only' }),
+    );
+
+    expect(createThread.mock.calls[0][1]).toEqual(
+      expect.objectContaining({
+        playbookMcpProfile: 'repository-public-web-read-only',
+        playbookAtsWebResearch: true,
+        webResearchEnabled: true,
+        mcpPill: {
+          transport: 'http',
+          label: 'Web',
+          mcpServerName: 'web-search',
+          url: 'http://localhost:3001/mcp/web',
+        },
+      }),
+    );
+  });
+
   it('writes the correlation from the id enqueue returned, and suspends', async () => {
     const outcome = await executeCursorAgentStep(context());
 

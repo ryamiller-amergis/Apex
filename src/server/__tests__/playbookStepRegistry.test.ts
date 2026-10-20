@@ -125,7 +125,9 @@ describe('TBI-016 VT-02 — the three production step types', () => {
       'approval-gate',
       'board-deliberation',
       'branch',
+      'capture-outcome-feedback',
       'cursor-agent',
+      'feedback-review',
       'ingest-artifact',
       'interview',
       'notify',
@@ -649,5 +651,58 @@ describe('VT-STEP-3 — interview output names the approved brief', () => {
     expect(outputSchema().safeParse(withoutBrief).success).toBe(false);
     expect(outputSchema().safeParse(withoutApprover).success).toBe(false);
     expect(outputSchema().safeParse(withoutTime).success).toBe(false);
+  });
+});
+
+describe('outcome feedback — a reusable non-agent capture step', () => {
+  const descriptor = () => getStepTypeDescriptor('capture-outcome-feedback');
+
+  it('writes Apex state without suspending or calling an agent', () => {
+    expect(descriptor().canSuspend).toBe(false);
+    expect(descriptor().isAgentStep).toBe(false);
+    expect(isAgentStepType('capture-outcome-feedback')).toBe(false);
+    expect(descriptor().sideEffect).toBe('writes-apex');
+    expect(descriptor().requiredPermissions).toEqual(['playbooks:run']);
+    expect(descriptor().defaultDeadlineMs).toBeUndefined();
+  });
+
+  it('names selected AI steps and an optional earlier review', () => {
+    const input = descriptor().inputSchema;
+    expect(
+      input.safeParse({
+        reviewStepId: 'ratify',
+        feedbackStepId: 'leadership-feedback',
+        sourceStepIds: ['chair', 'deliberation'],
+        label: 'ATS board outcome',
+      }).success
+    ).toBe(true);
+    expect(input.safeParse({ sourceStepIds: ['chair'] }).success).toBe(true);
+    expect(input.safeParse({ reviewStepId: 'ratify', sourceStepIds: [] }).success).toBe(false);
+    expect(
+      input.safeParse({
+        reviewStepId: 'ratify',
+        sourceStepIds: ['chair', 'chair'],
+      }).success
+    ).toBe(false);
+  });
+
+  it('returns the stored decision without a prompt or report', () => {
+    const output = descriptor().outputSchema;
+    expect(
+      output.safeParse({
+        feedbackId: 'feedback-1',
+        decision: 'rejected',
+        sourceCount: 2,
+        capturedAt: '2026-10-20T15:00:00.000Z',
+      }).success
+    ).toBe(true);
+    expect(
+      output.safeParse({
+        feedbackId: 'feedback-1',
+        decision: 'approved',
+        sourceCount: 0,
+        capturedAt: '2026-10-20T15:00:00.000Z',
+      }).success
+    ).toBe(false);
   });
 });

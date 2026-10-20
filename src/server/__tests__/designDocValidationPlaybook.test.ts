@@ -88,6 +88,17 @@ describe('FEAT-014 design-doc validation Playbook', () => {
     });
   });
 
+  it('VT-02b treats the ATS public-web profile as read-only with web-search', () => {
+    expect(resolvePlaybookMcpCapability('repository-public-web-read-only')).toEqual({
+      mode: 'read',
+      serverKeys: ['github-repo', 'web-search'],
+      evidence: expect.arrayContaining([
+        expect.stringMatching(/web-search/i),
+        expect.stringMatching(/charter-bound/i),
+      ]),
+    });
+  });
+
   it.each([
     ['write-capable', 'ado-skills'],
     ['unknown', 'not-registered'],

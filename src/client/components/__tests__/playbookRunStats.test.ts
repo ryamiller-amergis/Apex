@@ -6,7 +6,7 @@ import {
   formatSuccessRate,
   groupRunsByDefinition,
 } from '../playbookRunStats';
-import { orderedSteps } from '../playbookStepCatalog';
+import { orderedSteps, playbookStepOutline } from '../playbookStepCatalog';
 import { newPlaybookNodeId } from '../../utils/playbookCanvasGraph';
 
 function run(
@@ -87,6 +87,35 @@ describe('helpers', () => {
     expect(formatDuration(190_000)).toBe('3m 10s');
     expect(formatDuration(7_500_000)).toBe('2h 5m');
     expect(formatDuration(100 * 3_600_000)).toBe('4d 4h');
+  });
+
+  it('gives an expanded step details that the one-line summary does not already show', () => {
+    const agent = playbookStepOutline(
+      {
+        id: 'operations',
+        stepType: 'cursor-agent',
+        config: {
+          skillPath: '.cursor/skills/ats-board-operations/SKILL.md',
+          prompt: 'Follow your skill. Decide only from this charter.',
+        },
+      },
+      'Maps how work moves from a client request to a filled assignment.',
+    );
+    expect(agent.summary).toBe(
+      'Maps how work moves from a client request to a filled assignment.',
+    );
+    expect(agent.details).toEqual([
+      'Skill: ats-board-operations',
+      'Follow your skill. Decide only from this charter.',
+    ]);
+
+    const deliberation = playbookStepOutline({
+      id: 'deliberation',
+      stepType: 'board-deliberation',
+      config: { maxTopics: 5, maxRounds: 2, inquiryBudget: 16 },
+    });
+    expect(deliberation.summary).not.toBe('deliberation');
+    expect(deliberation.details[0]).toBe('Up to 5 topics, 2 rounds, and 16 inquiries.');
   });
 
   it('orders steps so each comes after the steps that lead to it', () => {

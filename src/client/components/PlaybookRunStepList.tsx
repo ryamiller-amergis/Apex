@@ -30,17 +30,28 @@ function stepTiming(step: PlaybookStepRun): string {
   return 'Not started yet';
 }
 
-export const PlaybookRunStepList: React.FC<PlaybookRunStepListProps> = ({ run, id }) => {
+export const PlaybookRunStepList: React.FC<PlaybookRunStepListProps> = ({
+  run,
+  id,
+}) => {
   if (run.steps.length === 0) {
     return (
-      <div className={styles.stepList} id={id} {...{ 'data-testid': 'playbook-step-list' }}>
+      <div
+        className={styles.stepList}
+        id={id}
+        {...{ 'data-testid': 'playbook-step-list' }}
+      >
         <p className={styles.empty}>No steps recorded yet.</p>
       </div>
     );
   }
 
   return (
-    <ul className={styles.stepList} id={id} {...{ 'data-testid': 'playbook-step-list' }}>
+    <ul
+      className={styles.stepList}
+      id={id}
+      {...{ 'data-testid': 'playbook-step-list' }}
+    >
       {run.steps.map((step) => {
         const isSuspended = step.status === 'suspended';
 
@@ -54,23 +65,41 @@ export const PlaybookRunStepList: React.FC<PlaybookRunStepListProps> = ({ run, i
               <span className={styles.stepName}>{step.stepId}</span>
               <span className={styles.stepType}>{step.stepType}</span>
               {/*
-                * `data-status` drives colour from CSS; the text is the status itself. Removing the
-                * attribute would lose the colour and change nothing a person reads, which is the
-                * test of whether colour is carrying meaning on its own.
-                */}
+               * `data-status` drives colour from CSS; the text is the status itself. Removing the
+               * attribute would lose the colour and change nothing a person reads, which is the
+               * test of whether colour is carrying meaning on its own.
+               */}
               <span
                 className={styles.stepStatus}
-                {...{ 'data-status': step.status, 'data-testid': 'playbook-step-status' }}
+                {...{
+                  'data-status': step.status,
+                  'data-testid': 'playbook-step-status',
+                }}
               >
                 {stepStatusLabel(step.status)}
               </span>
             </div>
 
             <p className={styles.stepTiming}>{stepTiming(step)}</p>
+            {step.activity ? (
+              <div
+                className={styles.stepActivity}
+                role="status"
+                aria-live="polite"
+                {...{ 'data-testid': 'playbook-step-activity' }}
+              >
+                <strong>{step.activity.summary}</strong>
+                {step.activity.detail ? (
+                  <span>{step.activity.detail}</span>
+                ) : null}
+              </div>
+            ) : null}
 
             {/* Only on the parked step, which is PBI-003's fourth criterion: a run with no
                 suspension shows no suspension detail anywhere. */}
-            {isSuspended && run.suspension && run.suspension.stepId === step.stepId ? (
+            {isSuspended &&
+            run.suspension &&
+            run.suspension.stepId === step.stepId ? (
               <PlaybookSuspensionDetail suspension={run.suspension} />
             ) : null}
           </li>

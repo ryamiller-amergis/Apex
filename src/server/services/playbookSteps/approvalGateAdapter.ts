@@ -27,6 +27,7 @@ import {
   prepareStepRun,
 } from './stepRuns';
 import type { ApprovalGateStepConfig } from '../../../shared/types/playbook';
+import type { AtsBoardLeadershipAnswer } from '../../../shared/atsBoard';
 import { snapshotGateAtSuspend } from '../playbookGateService';
 import { resolveRunStepConfig } from '../playbookStepBindings';
 
@@ -87,25 +88,39 @@ export class ApprovalNotAwaitingError extends Error {
 export async function executeApprovalGateStep(
   context: PlaybookStepExecutionContext
 ): Promise<PlaybookStepOutcome> {
-  const config = parseStepInput<ApprovalGateStepConfig>('approval-gate', context.config);
+  const config = parseStepInput<ApprovalGateStepConfig>(
+    'approval-gate',
+    context.config
+  );
 
   // The registry owns both the 48-hour default and whether a definition may override it, so an
   // out-of-range or disallowed override is refused there rather than quietly clamped here.
-  const expiresAt = deadlineFromNow(resolveDeadlineMs(STEP_TYPE, config.deadlineMs));
+  const expiresAt = deadlineFromNow(
+    resolveDeadlineMs(STEP_TYPE, config.deadlineMs)
+  );
 
   if (config.approverPool || config.gatedStepId) {
     if (!config.approverPool || !config.gatedStepId) {
-      throw new Error('Production approval gates require both approverPool and gatedStepId.');
+      throw new Error(
+        'Production approval gates require both approverPool and gatedStepId.'
+      );
     }
-    const gatedNode = context.graph?.nodes.find((node) => node.id === config.gatedStepId);
+    const gatedNode = context.graph?.nodes.find(
+      (node) => node.id === config.gatedStepId
+    );
     if (!gatedNode) {
-      throw new Error(`Approval gate references missing gated step "${config.gatedStepId}".`);
+      throw new Error(
+        `Approval gate references missing gated step "${config.gatedStepId}".`
+      );
     }
     await prepareStepRun({
       runId: context.runId,
       stepId: gatedNode.id,
       stepType: gatedNode.stepType,
-      inputInline: await resolveRunStepConfig(context.runId, gatedNode.config ?? {}),
+      inputInline: await resolveRunStepConfig(
+        context.runId,
+        gatedNode.config ?? {}
+      ),
     });
     await snapshotGateAtSuspend({
       project: context.project,
@@ -136,6 +151,8 @@ export async function submitApprovalDecision(input: {
   runId?: string;
   /** Kept on the step output so a ratification note survives after the gate closes. */
   comment?: string;
+  /** Structured ATS board resolutions recorded before ratification. */
+  answers?: AtsBoardLeadershipAnswer[];
 }): Promise<ApprovalSubmissionResult> {
   const [row] = await db
     .select({
@@ -153,7 +170,9 @@ export async function submitApprovalDecision(input: {
     .limit(1);
 
   if (!row) {
-    throw new ApprovalNotPermittedError(`No approval gate with step run id ${input.stepRunId}.`);
+    throw new ApprovalNotPermittedError(
+      `No approval gate with step run id ${input.stepRunId}.`
+    );
   }
 
   if (input.runId && row.runId !== input.runId) {
@@ -203,6 +222,7 @@ export async function submitApprovalDecision(input: {
     decision: input.decision,
     decidedBy: input.deciderUserId,
     ...(comment ? { comment } : {}),
+    ...(input.answers?.length ? { answers: input.answers } : {}),
   });
   const moved = await resumeStepRun({
     stepRunId: input.stepRunId,
