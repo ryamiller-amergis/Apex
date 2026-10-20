@@ -922,12 +922,44 @@ describe('POST /api/interviews/prds/:prdId/submit', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
-    expect(mockPrdService.submitForReview).toHaveBeenCalledWith('prd-1', 'user-test', {
-      prdApproverIds: [],
-      designDocApproverIds: [],
-      designPrototypeApproverIds: [],
-      qaApproverIds: [],
-    });
+    expect(mockPrdService.submitForReview).toHaveBeenCalledWith(
+      'prd-1',
+      'user-test',
+      {
+        prdApproverIds: [],
+        designDocApproverIds: [],
+        designPrototypeApproverIds: [],
+        qaApproverIds: [],
+      },
+      { isSuperAdmin: false },
+    );
+  });
+
+  it('passes isSuperAdmin=true to the service for a super admin', async () => {
+    mockPrdService.submitForReview.mockResolvedValue(undefined);
+    mockIsSuperAdminRequest.mockReturnValueOnce(true);
+
+    const res = await request(buildApp()).post('/api/interviews/prds/prd-1/submit');
+
+    expect(res.status).toBe(200);
+    expect(mockPrdService.submitForReview).toHaveBeenCalledWith(
+      'prd-1',
+      'user-test',
+      expect.any(Object),
+      { isSuperAdmin: true },
+    );
+  });
+
+  it('looks up the PRD project before the permission check', async () => {
+    mockPrdService.submitForReview.mockResolvedValue(undefined);
+    mockDb.query.prds.findFirst.mockResolvedValueOnce({ project: 'MaxView' });
+
+    const res = await request(buildApp()).post('/api/interviews/prds/prd-1/submit');
+
+    expect(res.status).toBe(200);
+    expect(mockDb.query.prds.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ columns: { project: true } }),
+    );
   });
 
   it('propagates 409 conflict from service', async () => {
@@ -2592,6 +2624,44 @@ describe('POST /api/interviews/prds/:prdId/override-readiness', () => {
       .send({ reason: '' });
 
     expect(res.status).toBe(400);
+  });
+});
+
+describe('POST /api/interviews/prds/:prdId/force-submit', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('rejects callers who are not super admins', async () => {
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/force-submit')
+      .send({ reason: 'Stuck' });
+
+    expect(res.status).toBe(403);
+    expect(mockPrdService.forceSubmitForReview).not.toHaveBeenCalled();
+  });
+
+  it('force submits for a super admin and returns any reviewer assignment error', async () => {
+    mockIsSuperAdminRequest.mockReturnValueOnce(true);
+    mockPrdService.forceSubmitForReview.mockResolvedValue({ reviewerAssignmentError: 'not in pool' });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/force-submit')
+      .send({ reason: 'Stuck' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, reviewerAssignmentError: 'not in pool' });
+    expect(mockPrdService.forceSubmitForReview).toHaveBeenCalledWith('prd-1', 'user-test', 'Stuck', 'Test User');
+  });
+
+  it('propagates service validation errors', async () => {
+    mockIsSuperAdminRequest.mockReturnValueOnce(true);
+    mockPrdService.forceSubmitForReview.mockRejectedValue(
+      Object.assign(new Error('A reason is required to force submit for review'), { status: 400 }),
+    );
+
+    const res = await request(buildApp()).post('/api/interviews/prds/prd-1/force-submit').send({});
+
+    expect(res.status).toBe(400);
+    expect(mockPrdService.forceSubmitForReview).toHaveBeenCalledWith('prd-1', 'user-test', '', 'Test User');
   });
 });
 

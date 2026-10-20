@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { requirePermission, requireGroupMembership } from '../middleware/rbac';
@@ -74,6 +74,7 @@ import {
   triggerFixCoverageGaps,
   acceptFixCoverageGaps,
   overridePrdReadiness,
+  forceSubmitForReview,
   revertPrdSection,
   dismissPrdFixSession,
   applyProposedPrdChanges,
@@ -472,7 +473,28 @@ router.put('/prds/:prdId/backlog', requirePermission('interviews:manage'), async
   }
 });
 
-router.post('/prds/:prdId/submit', requirePermission('interviews:manage'), async (req, res, next) => {
+/**
+ * `requirePermission` resolves roles for the request's project, and this route
+ * carries only the PRD id. Without the PRD's project it falls back to global
+ * roles and rejects users whose access comes from a project-scoped role, even
+ * though the PRD page (scoped to that project) offered them the action.
+ */
+async function withPrdProject(req: Request, _res: Response, next: NextFunction): Promise<void> {
+  try {
+    const row = await db.query.prds.findFirst({
+      where: eq(prdsTable.id, req.params.prdId),
+      columns: { project: true },
+    });
+    if (row?.project) {
+      req.headers['x-apex-project'] = row.project;
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
+router.post('/prds/:prdId/submit', withPrdProject, requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const { prdApproverIds, designDocApproverIds, designPrototypeApproverIds, qaApproverIds } = req.body as {
@@ -481,12 +503,17 @@ router.post('/prds/:prdId/submit', requirePermission('interviews:manage'), async
       designPrototypeApproverIds?: string[];
       qaApproverIds?: string[];
     };
-    await submitForReview(req.params.prdId, userId, {
-      prdApproverIds: prdApproverIds ?? [],
-      designDocApproverIds: designDocApproverIds ?? [],
-      designPrototypeApproverIds: designPrototypeApproverIds ?? [],
-      qaApproverIds: qaApproverIds ?? [],
-    });
+    await submitForReview(
+      req.params.prdId,
+      userId,
+      {
+        prdApproverIds: prdApproverIds ?? [],
+        designDocApproverIds: designDocApproverIds ?? [],
+        designPrototypeApproverIds: designPrototypeApproverIds ?? [],
+        qaApproverIds: qaApproverIds ?? [],
+      },
+      { isSuperAdmin: isSuperAdminRequest(req) },
+    );
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -1582,6 +1609,22 @@ router.post('/prds/:prdId/override-readiness', requirePermission('interviews:man
     const reason = typeof req.body?.reason === 'string' ? req.body.reason : '';
     const override = await overridePrdReadiness(req.params.prdId, userId, reason, getDisplayName(req));
     res.json({ override });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /prds/:prdId/force-submit — super-admin escape hatch to pending_review, with an audited reason
+router.post('/prds/:prdId/force-submit', async (req, res, next) => {
+  try {
+    if (!isSuperAdminRequest(req)) {
+      res.status(403).json({ error: 'Only super admins can force submit a PRD for review' });
+      return;
+    }
+    const userId = getUserId(req);
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason : '';
+    const result = await forceSubmitForReview(req.params.prdId, userId, reason, getDisplayName(req));
+    res.json({ ok: true, ...result });
   } catch (err) {
     next(err);
   }
