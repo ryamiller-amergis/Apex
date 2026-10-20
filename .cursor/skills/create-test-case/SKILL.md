@@ -47,6 +47,7 @@ You are a senior QA engineer preparing test coverage before or during sprint pla
 - **Flag gaps, don't invent scope.** Record `coverageMatrix.gaps` only when a requirement is untestable or ambiguous in **both** backlog and PRD.
 - **Persona fidelity.** Every case uses the persona required by that scenario. Steps, preconditions, and `persona` must name the **same** actor.
 - **Use Apex personas verbatim** from the backlog schema: `Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA`, `Platform Admin`, `Project Admin`, `Authenticated User`.
+- **Exception — Azure DevOps backlogs.** When the kickoff context says the backlog comes from Azure DevOps, its `personas` are the product's own user types (for example `External User`, `Internal User`, `Recruiter`). Use those names verbatim instead of the Apex list, and write one case per user type when a requirement applies to several.
 
 ---
 
@@ -129,6 +130,27 @@ Each step is an object: `{ "order": 1, "action": "...", "expected": "..." }`.
 - **One atomic action per step.**
 - **Do not hide setup in step 1.** Account state, flag state, and seed data belong in `preconditions` and `testData`.
 
+#### Granular step script (manual-runnable cases)
+
+Write steps a tester can follow without guessing. Start each `action` with one of these verbs and name the exact target:
+
+| Verb | Example `action` | Example `expected` |
+|------|------------------|--------------------|
+| Sign in | Sign in as External User using `loginEmail` and `loginPassword` | The Home page opens and shows the user's name |
+| Navigate to | Navigate to **Timesheets → My Timesheets** | The My Timesheets list is shown |
+| Click | Click the **Submit** button | A confirmation dialog opens |
+| Enter | Enter `shiftHours` in the **Hours** field | The field shows `8` |
+| Select | Select **Night** from the **Shift type** dropdown | **Night** is selected |
+| Upload | Upload `timesheetPdf` to **Attachments** | The file name appears in the list |
+| Verify | Verify the **Status** column for the submitted row | It shows **Pending approval** |
+
+1. **Step 1 signs in as the case's persona** and expects the landing page. Skip it only when the case tests signed-out behavior or the sign-in screen itself; then step 1 opens the page directly.
+2. **Step 2 navigates** using the menu path or URL a user would take.
+3. **One control per step.** Never write "fill in the form and save"; give each field and button its own step.
+4. **Every step has its own `expected`** that a tester can see on screen. Never write "works correctly" or "as expected".
+5. **Credentials and values come from `testData`.** Reference them by key in the step and give example values in `testData`.
+6. **Do not write an Actual result.** Testers record actual results and pass/fail when they run the case in Azure DevOps Test Plans.
+
 #### Step expansion guidance
 
 | `tier` / `type` | Target steps | Expansion |
@@ -151,6 +173,18 @@ Set `automation` on every case:
 | `manual` | Subjective UX, third-party tooling, or missing data strategy |
 
 `automation.candidate: false` requires a one-line `automation.rationale`.
+
+### Manual execution coverage
+
+QA engineers run these cases by hand. QA Lab shows them on the **Manual** tab, which holds every case with `recommendedTier` `manual` or `e2e-playwright`. `unit` and `integration` cases are developer checks and do not count toward manual coverage.
+
+1. **Every AC gets all four scenarios a person can run.** For each acceptance criterion, author at least one manual-runnable case for each `tier`: `happy`, `error`, `edge`, and `negative`. If a scenario cannot apply (for example, no permission boundary exists), record why in `coverageMatrix.gaps` instead of skipping it silently.
+2. **E2E cases are still manual scripts.** A case tagged `e2e-playwright` must be complete enough for a person to run without automation. Do not shorten steps because a script will exist later.
+3. **User-visible behavior needs a manual case.** When an `api` or `integration` case verifies something a user can see, add a manual case that checks the same outcome on screen.
+4. **Concrete test data.** Put real example values in `testData` (for example `email` = `qa.user+1@example.com`). Never write "a valid value" or "some text".
+5. **Exact UI words.** Name screens, buttons, fields, and messages exactly as the user sees them. Each step has one action and its own `expected`.
+6. **Clean up.** When a case creates or changes data, end with a step that removes or restores it, and say what the tester should see afterwards.
+7. **Bugs.** For a Bug item, write a `happy` case that follows the original repro steps and expects the fixed behavior, plus `edge` cases for nearby inputs that could bring the bug back.
 
 ### Count test cases per PBI
 
@@ -234,6 +268,10 @@ Ensure `.ai-pilot/output/` exists. Write **in this order**:
 - [ ] Every in-scope PBI acceptance criterion has ≥1 mapped test case
 - [ ] Every in-scope PBI business rule (`BR-NNN`) appears in at least one case
 - [ ] Four AC scenario types represented across each PBI suite
+- [ ] Every AC has manual-runnable (`manual` or `e2e-playwright`) `happy`, `error`, `edge`, and `negative` cases, or a gap explaining why not
+- [ ] Every manual-runnable case has concrete `testData`, exact UI labels, and a cleanup step when it changes data
+- [ ] Manual-runnable steps start with Sign in / Navigate to / Click / Enter / Select / Upload / Verify, one control each, each with its own `expected`
+- [ ] Azure DevOps backlogs: personas use the product's user types, with one case per user type when several apply
 - [ ] Feature flag on/off covered when `featureFlag.name` is present
 - [ ] No test cases authored for `outOfScope` items
 - [ ] Persona names match Apex groups enum verbatim

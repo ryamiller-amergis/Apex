@@ -2264,6 +2264,41 @@ describe('POST /api/interviews/prds/:prdId/test-cases/generate', () => {
       'prd-1',
       'thread-2',
       'user-test',
+      undefined,
+    );
+  });
+
+  it('forwards the model override from the QA Lab picker', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(prdRowWithContent);
+    mockTriggerTestCaseGeneration.mockResolvedValue(true);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/test-cases/generate')
+      .send({ model: 'claude-opus-4-6', effort: 'high' });
+
+    expect(res.status).toBe(200);
+    expect(mockTriggerTestCaseGeneration).toHaveBeenCalledWith(
+      'prd-1',
+      'thread-2',
+      'user-test',
+      { model: 'claude-opus-4-6', effort: 'high' },
+    );
+  });
+
+  it('omits overrides entirely when no model or effort is supplied', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(prdRowWithContent);
+    mockTriggerTestCaseGeneration.mockResolvedValue(true);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/test-cases/generate')
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(mockTriggerTestCaseGeneration).toHaveBeenCalledWith(
+      'prd-1',
+      'thread-2',
+      'user-test',
+      undefined,
     );
   });
 
@@ -2316,6 +2351,7 @@ describe('POST /api/interviews/prds/:prdId/test-cases/generate', () => {
       'prd-1',
       'thread-2',
       'user-test',
+      undefined,
     );
   });
 
@@ -2334,6 +2370,7 @@ describe('POST /api/interviews/prds/:prdId/test-cases/generate', () => {
       'prd-1',
       '',
       'user-test',
+      undefined,
     );
   });
 
