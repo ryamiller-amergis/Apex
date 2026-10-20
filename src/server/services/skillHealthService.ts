@@ -18,7 +18,7 @@ const USAGE_ENTITY_TO_KIND: Record<string, SkillHealthArtifactKind> = {
 
 export const SKILL_HEALTH_CAVEATS: readonly string[] = [
   'Only PRDs and design docs are scored today; other Skills appear once they have a judge.',
-  'Each document is tied to the Skill its project settings point at now, not the version that generated it.',
+  'Each document is tied to the Skill path its project settings point at now. Its version is the SKILL.md content that generated it; documents saved before versions were recorded show as unversioned.',
   'Acceptance rate uses each document’s current status, so a document approved after a revision counts as approved.',
   'Cost covers AI usage events linked to the document, including validation and assistant runs.',
 ];
@@ -34,6 +34,7 @@ async function loadInputs(periodFrom: string): Promise<SkillHealthInputs> {
         validationScore: prds.validationScore,
         scorecard: prds.validationScorecard,
         skillSettingsId: prds.skillSettingsId,
+        skillSha256: prds.skillSha256,
         override: prds.readinessOverride,
       })
       .from(prds)
@@ -47,6 +48,7 @@ async function loadInputs(periodFrom: string): Promise<SkillHealthInputs> {
         validationScore: designDocs.validationScore,
         scorecard: designDocs.validationScorecard,
         skillSettingsId: designDocs.skillSettingsId,
+        skillSha256: designDocs.skillSha256,
         override: designDocs.validationOverride,
       })
       .from(designDocs)

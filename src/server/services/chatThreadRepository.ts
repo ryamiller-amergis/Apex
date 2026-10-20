@@ -92,6 +92,7 @@ export async function upsertThread(thread: ChatThread): Promise<void> {
       cursorAgentId: thread.cursorAgentId ?? null,
       groundingMode: thread.groundingMode ?? null,
       groundedSha: thread.groundedSha ?? null,
+      skillSha256: thread.skillSha256 ?? null,
       workspaceDir: thread.workspaceDir,
       lastError: thread.lastError ?? null,
       savedWikiUrl: thread.savedWikiUrl ?? null,
@@ -108,6 +109,7 @@ export async function upsertThread(thread: ChatThread): Promise<void> {
         cursorAgentId: thread.cursorAgentId ?? null,
         groundingMode: thread.groundingMode ?? null,
         groundedSha: thread.groundedSha ?? null,
+        skillSha256: thread.skillSha256 ?? null,
         workspaceDir: thread.workspaceDir,
         lastError: thread.lastError ?? null,
         savedWikiUrl: thread.savedWikiUrl ?? null,
@@ -378,6 +380,15 @@ function mapSearchRow(row: SearchThreadRow, term: string): ChatThreadSearchResul
 
 // ── loadFullThread ────────────────────────────────────────────────────────────
 
+export async function getThreadSkillSha256(threadId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ skillSha256: chatThreads.skillSha256 })
+    .from(chatThreads)
+    .where(eq(chatThreads.id, threadId))
+    .limit(1);
+  return row?.skillSha256 ?? null;
+}
+
 export async function listMessageIds(threadId: string): Promise<string[]> {
   const rows = await db
     .select({ id: chatMessages.id })
@@ -426,6 +437,7 @@ export async function loadFullThread(threadId: string): Promise<ChatThread | nul
     cursorAgentId: result.cursorAgentId ?? undefined,
     groundingMode: (result.groundingMode as ChatThread['groundingMode']) ?? undefined,
     groundedSha: result.groundedSha ?? null,
+    skillSha256: result.skillSha256 ?? null,
     activeRunId: result.activeRunId ?? undefined,
     workspaceDir: result.workspaceDir ?? '',
     lastError: result.lastError ?? undefined,

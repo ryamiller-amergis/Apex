@@ -131,6 +131,7 @@ export const chatThreads = pgTable('chat_threads', {
   cursorAgentId: text('cursor_agent_id'),
   groundingMode: text('grounding_mode'),
   groundedSha: text('grounded_sha'),
+  skillSha256: text('skill_sha256'),
   workspaceDir: text('workspace_dir'),
   lastError: text('last_error'),
   savedWikiUrl: text('saved_wiki_url'),
@@ -760,6 +761,7 @@ export const prds = pgTable('prds', {
   fixBaseline: jsonb('fix_baseline').$type<PrdValidationBaseline>(),
   readinessOverride: jsonb('readiness_override').$type<PrdReadinessOverride>(),
   skillSettingsId: uuid('skill_settings_id'),
+  skillSha256: text('skill_sha256'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
@@ -805,6 +807,7 @@ export const designDocs = pgTable('design_docs', {
   proposedAssumptionsContent: text('proposed_assumptions_content'),
   fixCommentId: uuid('fix_comment_id'),
   skillSettingsId: uuid('skill_settings_id'),
+  skillSha256: text('skill_sha256'),
   generationError: text('generation_error'),
   status: text('status').notNull().default('draft'),
   reviewerId: text('reviewer_id'),

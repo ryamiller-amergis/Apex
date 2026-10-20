@@ -63,6 +63,28 @@ const skill = (overrides: Partial<SkillHealthSkill> = {}): SkillHealthSkill => (
       exampleDocumentIds: ['a'],
     },
   ],
+  versions: [
+    {
+      skillSha256: 'abcdef1234567890',
+      documents: 4,
+      scoredDocuments: 4,
+      averageScore: 81,
+      passRate: 0.75,
+      acceptanceRate: 1,
+      firstSeen: '2026-10-12T00:00:00.000Z',
+      lastSeen: '2026-10-15T00:00:00.000Z',
+    },
+    {
+      skillSha256: null,
+      documents: 8,
+      scoredDocuments: 6,
+      averageScore: 68,
+      passRate: 0.5,
+      acceptanceRate: 0.6,
+      firstSeen: '2026-09-20T00:00:00.000Z',
+      lastSeen: '2026-10-10T00:00:00.000Z',
+    },
+  ],
   ...overrides,
 });
 
@@ -152,6 +174,15 @@ describe('SkillHealthAdmin', () => {
     expect(within(table).queryByText('Good')).not.toBeInTheDocument();
     expect(within(screen.getByTestId('skill-health-heatmap')).getByText('Backlog')).toBeInTheDocument();
     expect(screen.getByTestId('skill-health-gaps')).toHaveTextContent('No numeric latency target');
+  });
+
+  it('lists SKILL.md versions with a short hash and an unversioned row', () => {
+    mockResult({ data: overview([project()]) });
+    render(<SkillHealthAdmin />);
+
+    expect(screen.getByTestId('skill-health-version-abcdef12')).toHaveTextContent('2026-10-12 – 2026-10-15');
+    expect(screen.getByTestId('skill-health-version-abcdef12')).toHaveTextContent('75%');
+    expect(screen.getByTestId('skill-health-version-unversioned')).toHaveTextContent('Unversioned');
   });
 
   it('switches the detail view to the chosen skill', () => {

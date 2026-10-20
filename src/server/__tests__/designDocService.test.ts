@@ -2826,6 +2826,26 @@ describe('finalizeSingleFeatureDoc — idempotency guard', () => {
     );
   });
 
+  it('stamps the SKILL.md hash the generation thread loaded', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'doc-1', skillSettingsId: null });
+    const setMock = jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) });
+    mockDb.update.mockReturnValue({ set: setMock });
+    const defaultSelect = mockDb.select.getMockImplementation();
+    mockDb.select.mockImplementation(() => ({
+      from: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockResolvedValue([{ skillSha256: 'design-skill-sha' }]),
+    }));
+
+    try {
+      await finalizeSingleFeatureDoc('doc-1', 'thread-1', 'proj-alpha');
+    } finally {
+      mockDb.select.mockImplementation(defaultSelect);
+    }
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ skillSha256: 'design-skill-sha' }));
+  });
+
   it('returns false and marks generation_failed when output files are missing', async () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'doc-1', skillSettingsId: null });
     mockDesign.mockReturnValue(null);

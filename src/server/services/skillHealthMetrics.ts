@@ -16,6 +16,7 @@ import {
   type SkillHealthSkill,
   type SkillHealthStatus,
   type SkillHealthTrendPoint,
+  type SkillHealthVersion,
 } from '../../shared/types/skillHealth';
 import { collectValidationGaps, resolveScorecardOverallScore } from '../../shared/utils/validationReport';
 
@@ -28,6 +29,7 @@ export interface SkillHealthDocumentInput {
   validationScore: number | null;
   scorecard: ValidationScorecard | null;
   skillSettingsId: string | null;
+  skillSha256: string | null;
   hasOverride: boolean;
 }
 
@@ -208,6 +210,44 @@ function buildRecurringGaps(entries: SkillAccumulator['docs']): SkillHealthRecur
     }));
 }
 
+function acceptanceRateOf(entries: SkillAccumulator['docs']): number | null {
+  const accepted = entries.filter((e) => ACCEPTED_STATUSES.has(e.doc.status)).length;
+  const revisionRequested = entries.filter((e) => e.doc.status === 'revision_requested').length;
+  return ratio(accepted, accepted + revisionRequested);
+}
+
+function passRateOf(entries: SkillAccumulator['docs']): number | null {
+  const judged = entries.filter((e) => e.passed !== null);
+  return ratio(judged.filter((e) => e.passed).length, judged.length);
+}
+
+function buildVersions(entries: SkillAccumulator['docs']): SkillHealthVersion[] {
+  const byVersion = new Map<string | null, SkillAccumulator['docs']>();
+  for (const entry of entries) {
+    const list = byVersion.get(entry.doc.skillSha256);
+    if (list) list.push(entry);
+    else byVersion.set(entry.doc.skillSha256, [entry]);
+  }
+  return [...byVersion.entries()]
+    .map(([skillSha256, list]) => {
+      const scored = list.filter((e) => e.score !== null);
+      const created = list.map((e) => e.doc.createdAt).sort();
+      return {
+        skillSha256,
+        documents: list.length,
+        scoredDocuments: scored.length,
+        averageScore: average(scored.map((e) => e.score as number)),
+        passRate: passRateOf(list),
+        acceptanceRate: acceptanceRateOf(list),
+        firstSeen: created[0],
+        lastSeen: created[created.length - 1],
+      };
+    })
+    .sort((a, b) =>
+      Number(a.skillSha256 === null) - Number(b.skillSha256 === null) || b.lastSeen.localeCompare(a.lastSeen),
+    );
+}
+
 function defaultSettingsByProject(settings: SkillHealthSettingsInput[]): Map<string, SkillHealthSettingsInput> {
   const byProject = new Map<string, SkillHealthSettingsInput>();
   for (const s of settings) {
@@ -253,10 +293,8 @@ export function buildSkillHealthSkills(inputs: SkillHealthInputs): SkillHealthSk
   return [...skills.entries()]
     .map(([key, acc]) => {
       const scored = acc.docs.filter((e) => e.score !== null);
-      const judged = acc.docs.filter((e) => e.passed !== null);
-      const accepted = acc.docs.filter((e) => ACCEPTED_STATUSES.has(e.doc.status)).length;
       const revisionRequested = acc.docs.filter((e) => e.doc.status === 'revision_requested').length;
-      const passRate = ratio(judged.filter((e) => e.passed).length, judged.length);
+      const passRate = passRateOf(acc.docs);
       const reviewComments = acc.docs.reduce(
         (sum, e) => sum + (commentsByDoc.get(docKey(e.doc.kind, e.doc.id))?.length ?? 0),
         0,
@@ -273,7 +311,7 @@ export function buildSkillHealthSkills(inputs: SkillHealthInputs): SkillHealthSk
         scoredDocuments: scored.length,
         averageScore: average(scored.map((e) => e.score as number)),
         passRate,
-        acceptanceRate: ratio(accepted, accepted + revisionRequested),
+        acceptanceRate: acceptanceRateOf(acc.docs),
         revisionRequested,
         overrides: acc.docs.filter((e) => e.doc.hasOverride).length,
         generationFailures: acc.docs.filter((e) => e.doc.status === 'generation_failed').length,
@@ -285,6 +323,7 @@ export function buildSkillHealthSkills(inputs: SkillHealthInputs): SkillHealthSk
         trend: buildTrend(acc.docs),
         sections: buildSections(acc.docs, commentsByDoc),
         recurringGaps: buildRecurringGaps(acc.docs),
+        versions: buildVersions(acc.docs),
       };
     })
     .sort((a, b) => b.documents - a.documents);

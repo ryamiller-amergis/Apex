@@ -31,6 +31,7 @@ const doc = (overrides: Partial<SkillHealthDocumentInput> = {}): SkillHealthDocu
   validationScore: 80,
   scorecard: null,
   skillSettingsId: 'settings-a',
+  skillSha256: null,
   hasOverride: false,
   ...overrides,
 });
@@ -201,6 +202,33 @@ describe('buildSkillHealthSkills', () => {
       'MaxView:prd:.cursor/skills/to-prd/skill.md',
     ]);
     expect(skills.every((s) => s.documents === 1)).toBe(true);
+  });
+
+  it('breaks a Skill down by SKILL.md version, newest first and unversioned last', () => {
+    const [skill] = buildSkillHealthSkills(
+      inputs({
+        documents: [
+          doc({ id: 'old', createdAt: '2026-09-01T00:00:00.000Z', validationScore: 40 }),
+          doc({ id: 'v1a', skillSha256: 'aaa', createdAt: '2026-10-01T00:00:00.000Z', validationScore: 60 }),
+          doc({ id: 'v1b', skillSha256: 'aaa', createdAt: '2026-10-03T00:00:00.000Z', status: 'approved' }),
+          doc({ id: 'v2', skillSha256: 'bbb', createdAt: '2026-10-10T00:00:00.000Z', validationScore: 90 }),
+        ],
+      }),
+    );
+
+    expect(skill.versions).toEqual([
+      expect.objectContaining({ skillSha256: 'bbb', documents: 1, averageScore: 90, passRate: 1 }),
+      expect.objectContaining({
+        skillSha256: 'aaa',
+        documents: 2,
+        averageScore: 70,
+        passRate: 0.5,
+        acceptanceRate: 1,
+        firstSeen: '2026-10-01T00:00:00.000Z',
+        lastSeen: '2026-10-03T00:00:00.000Z',
+      }),
+      expect.objectContaining({ skillSha256: null, documents: 1, passRate: 0 }),
+    ]);
   });
 });
 

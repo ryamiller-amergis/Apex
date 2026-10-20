@@ -162,6 +162,47 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onCreateWorkItem }) =>
       </section>
 
       <section className={styles.card}>
+        <h4 className={styles.cardTitle}>SKILL.md versions</h4>
+        <table className={styles.versionTable} data-testid="skill-health-versions">
+          <thead>
+            <tr>
+              <th scope="col">Version</th>
+              <th scope="col">Used</th>
+              <th scope="col">Docs</th>
+              <th scope="col">Avg score</th>
+              <th scope="col">Pass rate</th>
+              <th scope="col">Accepted</th>
+            </tr>
+          </thead>
+          <tbody>
+            {skill.versions.map((version) => (
+              <tr
+                key={version.skillSha256 ?? 'unversioned'}
+                data-testid={`skill-health-version-${version.skillSha256?.slice(0, 8) ?? 'unversioned'}`}
+              >
+                <td>
+                  {version.skillSha256 ? (
+                    <span className={styles.skillPath} title={version.skillSha256}>
+                      {version.skillSha256.slice(0, 8)}
+                    </span>
+                  ) : (
+                    <span className={styles.muted}>Unversioned</span>
+                  )}
+                </td>
+                <td>
+                  {version.firstSeen.slice(0, 10)} – {version.lastSeen.slice(0, 10)}
+                </td>
+                <td>{version.documents}</td>
+                <td>{number(version.averageScore)}</td>
+                <td>{percent(version.passRate)}</td>
+                <td>{percent(version.acceptanceRate)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section className={styles.card}>
         <h4 className={styles.cardTitle}>Average score by week</h4>
         {skill.trend.length === 0 ? (
           <p className={styles.muted}>No documents in this period.</p>

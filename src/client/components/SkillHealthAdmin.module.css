@@ -108,6 +108,26 @@
   text-align: center;
 }
 
+.versionTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+}
+
+.versionTable th,
+.versionTable td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color-light);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.versionTable th {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
 .heatCell {
   position: relative;
   color: var(--text-primary);

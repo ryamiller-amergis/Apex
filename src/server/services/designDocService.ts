@@ -21,6 +21,7 @@ import { getUnresolvedCount } from './reviewCommentService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { resolveSkillConfig, getSkillSettingsName } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
+import { getThreadSkillSha256 } from './chatThreadRepository';
 import { getPrd } from './prdService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
 import { collectValidationGaps } from '../../shared/utils/validationReport';
@@ -768,6 +769,15 @@ export function isDocWatcherActive(designDocId: string): boolean {
   return activeDocWatchers.has(designDocId);
 }
 
+async function generationSkillSha256(threadId: string): Promise<string | null> {
+  try {
+    return await getThreadSkillSha256(threadId);
+  } catch (err) {
+    console.warn(`[designDoc] Skill version lookup skipped (threadId=${threadId}):`, err);
+    return null;
+  }
+}
+
 function humanizeSlug(slug: string): string {
   return slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -805,6 +815,7 @@ export async function syncPerFeatureDesignDocs(
     .where(and(eq(designDocs.prdId, prdId), eq(designDocs.project, project)));
   const existingTitles = new Set(existingRows.map((r) => r.title));
 
+  const skillSha256 = await generationSkillSha256(threadId);
   const createdIds: string[] = [];
   for (const feat of features) {
     const title = humanizeSlug(feat.slug);
@@ -823,6 +834,7 @@ export async function syncPerFeatureDesignDocs(
         model: seedModel,
         effort: seedModelRow?.effort ?? null,
         skillSettingsId: seedModelRow?.skillSettingsId ?? null,
+        skillSha256,
         designContent: feat.design,
         techSpecContent: stripPrototypeArtifactsFromTechSpec(feat.techSpec),
         assumptionsContent: feat.assumptions,
@@ -937,6 +949,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
       try {
         const skillConfig = await resolveSkillConfig({ project: seedDoc.project, settingsId: seedDoc.skillSettingsId ?? undefined });
         const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
+        const skillSha256 = await generationSkillSha256(chatThreadId);
 
         for (const feat of newFeatures) {
           const stillActive = await db.query.designDocs.findFirst({
@@ -964,6 +977,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
               model: seedDoc.model ?? null,
               effort: seedDoc.effort ?? null,
               skillSettingsId: seedDoc.skillSettingsId ?? null,
+              skillSha256,
               designContent: feat.design,
               techSpecContent: stripPrototypeArtifactsFromTechSpec(feat.techSpec),
               assumptionsContent: feat.assumptions,
@@ -1212,12 +1226,14 @@ export async function finalizeSingleFeatureDoc(
     eq(designDocs.status, 'generating'),
     ...(leaseFenceCondition ? [leaseFenceCondition] : []),
   ];
+  const skillSha256 = await generationSkillSha256(chatThreadId);
   const query = db.update(designDocs)
     .set({
       designContent: design,
       techSpecContent: techSpec,
       assumptionsContent: assumptions,
       status: finalStatus,
+      skillSha256,
       generationError: null,
       updatedAt: new Date().toISOString(),
     })

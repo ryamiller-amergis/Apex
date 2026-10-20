@@ -2,8 +2,9 @@
  * Skill Health — read-only quality metrics per generating Skill.
  *
  * v0 covers the two artifact kinds Apex already scores (PRDs and design docs). A Skill is
- * identified by its project and the path that project's settings row points at today; outputs do not yet record
- * the Skill version that produced them, so a settings change mid-period is not visible here.
+ * identified by its project and the path that project's settings row points at today. A version is the
+ * SHA-256 of the SKILL.md content that produced a document; documents saved before that was recorded have
+ * no version.
  */
 
 export type SkillHealthArtifactKind = 'prd' | 'design_doc';
@@ -61,6 +62,20 @@ export interface SkillHealthRecurringGap {
   exampleDocumentIds: string[];
 }
 
+/** One SKILL.md version's results within a Skill. */
+export interface SkillHealthVersion {
+  /** SHA-256 of the SKILL.md content, or null for documents saved before versions were recorded. */
+  skillSha256: string | null;
+  documents: number;
+  scoredDocuments: number;
+  averageScore: number | null;
+  passRate: number | null;
+  acceptanceRate: number | null;
+  /** createdAt of the oldest and newest document produced by this version. */
+  firstSeen: string;
+  lastSeen: string;
+}
+
 export interface SkillHealthSkill {
   /** Stable key: `${project}:${artifactKind}:${skillPath}`. */
   key: string;
@@ -88,6 +103,8 @@ export interface SkillHealthSkill {
   trend: SkillHealthTrendPoint[];
   sections: SkillHealthSectionCell[];
   recurringGaps: SkillHealthRecurringGap[];
+  /** Newest version first; unversioned documents last. */
+  versions: SkillHealthVersion[];
 }
 
 /** One project's Skills. The same path in two projects is two Skills: each lives in its own repo. */
