@@ -3,6 +3,7 @@ import { useNavigate, useLocation, Navigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAppShell } from '../hooks/useAppShell';
+import { useMyPermissions } from '../hooks/useRbac';
 import { useStartChat, useChatThread, useSkillList, useSkillRepos } from '../hooks/useChatThreads';
 import { useProjectSkillConfig, useGlobalDefaultModel, useAvailableModels } from '../hooks/useProjectSkillConfig';
 import { useAvailableModelSelection } from '../hooks/useAvailableModelSelection';
@@ -1020,6 +1021,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     location.state as ExistingInterviewLocationState | null;
 
   const { data: interview, isLoading, isError } = useInterview(id);
+  const { projectRoles: interviewProjectRoles } = useMyPermissions(interview?.project);
   const isPlaybookInterview = Boolean(interview?.playbookRunId);
   const {
     data: interviewBrief,
@@ -1408,7 +1410,8 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     interview.technicalAssigneeId,
   ].includes(userId);
   const isInterviewAdmin = isAdmin || can('admin:roles');
-  const canCompleteInterview = isAuthor || isSectionOwner || isInterviewAdmin;
+  const isInterviewProjectAdmin = isAdmin || interviewProjectRoles.includes('admin');
+  const canCompleteInterview = isAuthor || isSectionOwner || isInterviewProjectAdmin;
   const isReadOnlyViewer = !isAuthor && !isInterviewParticipant && !isInterviewAdmin;
   const canAssignPhases = isAuthor || isInterviewAdmin;
   const isStatusLocked = interview.status !== 'in_progress';

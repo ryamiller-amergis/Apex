@@ -94,6 +94,8 @@ const { isPlatformAdmin: mockIsPlatformAdmin, isProjectAdmin: mockIsProjectAdmin
 const COMPLETE_FORBIDDEN =
   'Only the author, an interview section owner, a project admin, or a platform admin can complete an interview';
 
+const COMPLETE_INVALID_STATUS = 'Only in-progress interviews can be marked complete';
+
 const AUTHOR_STATUS_FORBIDDEN = 'Only the author can change interview status';
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -829,6 +831,45 @@ describe('updateInterviewStatus', () => {
     await expect(
       updateInterviewStatus('interview-1', 'user-other', 'complete'),
     ).rejects.toMatchObject({ status: 403, message: COMPLETE_FORBIDDEN });
+  });
+
+  it.each([
+    ['author', 'user-1'],
+    ['section owner', 'owner-prd'],
+  ])('throws 409 when the %s completes an archived interview', async (_label, userId) => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      status: 'archived',
+    });
+
+    await expect(
+      updateInterviewStatus('interview-1', userId, 'complete'),
+    ).rejects.toMatchObject({ status: 409, message: COMPLETE_INVALID_STATUS });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it('throws 409 when a completer marks an already-complete interview complete', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      status: 'complete',
+    });
+
+    await expect(
+      updateInterviewStatus('interview-1', 'user-1', 'complete'),
+    ).rejects.toMatchObject({ status: 409, message: COMPLETE_INVALID_STATUS });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it('throws 409 when a completer marks a playbook interview complete', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      playbookRunId: 'run-1',
+    });
+
+    await expect(
+      updateInterviewStatus('interview-1', 'user-1', 'complete'),
+    ).rejects.toMatchObject({ status: 409, message: COMPLETE_INVALID_STATUS });
+    expect(mockDb.update).not.toHaveBeenCalled();
   });
 
   it.each([

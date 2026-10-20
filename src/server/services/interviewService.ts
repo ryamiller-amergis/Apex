@@ -18,6 +18,9 @@ const VALID_INTERVIEW_STATUSES: InterviewStatus[] = ['in_progress', 'complete', 
 export const INTERVIEW_COMPLETE_FORBIDDEN_MESSAGE =
   'Only the author, an interview section owner, a project admin, or a platform admin can complete an interview';
 
+export const INTERVIEW_COMPLETE_INVALID_STATUS_MESSAGE =
+  'Only in-progress interviews can be marked complete';
+
 function httpStatusError(message: string, status: number): Error {
   const err = new Error(message) as Error & { status: number };
   err.status = status;
@@ -461,6 +464,9 @@ export async function updateInterviewStatus(
   if (newStatus === 'complete') {
     const allowed = await canCompleteInterviewAndGeneratePrd(requestingUserId, row);
     if (!allowed) throw httpStatusError(INTERVIEW_COMPLETE_FORBIDDEN_MESSAGE, 403);
+    if (row.status !== 'in_progress' || row.playbookRunId != null) {
+      throw httpStatusError(INTERVIEW_COMPLETE_INVALID_STATUS_MESSAGE, 409);
+    }
   } else if (row.authorId !== requestingUserId) {
     const err = new Error('Only the author can change interview status');
     (err as any).status = 403;
