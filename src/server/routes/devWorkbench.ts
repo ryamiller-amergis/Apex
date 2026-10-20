@@ -8,7 +8,8 @@ import { getSkillConfig } from '../services/projectSettingsService';
 import { adoWriteForRequest, isAdoUserAuthError } from '../services/adoFactory';
 import { createThread } from '../services/chatAgentService';
 import * as githubCatalog from '../services/skillCatalogGitHub';
-import { buildWorkItemReferenceText, transitionWorkItemForPullRequest } from '../services/workItemPrLinkService';
+import { transitionWorkItemForPullRequest } from '../services/workItemPrLinkService';
+import { buildImplementationPullRequestText } from '../services/implementationDelivery';
 import {
   checkoutDefaultBranch,
   checkoutFeatureBranch,
@@ -941,6 +942,8 @@ router.get('/sessions/:id/cloud-agent/stream', async (req: Request, res: Respons
       req.params.id,
       getUserId(req),
       expectedRunId,
+      undefined,
+      await getAdoTokenForUser(req),
     );
     iterator = stream[Symbol.asyncIterator]();
 
@@ -1766,10 +1769,10 @@ async function createSessionPr(
 ): Promise<void> {
   let prUrl: string | null = null;
   try {
-    const description = workItemId
-      ? `Automated implementation via APEX dev workbench.\n\nWork item: ${buildWorkItemReferenceText(workItemId)}`
-      : `Automated implementation via APEX dev workbench.`;
-    const title = `[APEX] ${branchName.replace('feature/', '')}`;
+    const { title, description } = buildImplementationPullRequestText({
+      branchName,
+      workItemId,
+    });
 
     if (provider === 'github') {
       prUrl = await githubCatalog.createPullRequest({
