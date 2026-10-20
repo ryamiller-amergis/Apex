@@ -41,6 +41,9 @@ const inputs = (overrides: Partial<SkillHealthInputs> = {}): SkillHealthInputs =
   settings: [settings()],
   comments: [],
   costs: [],
+  evaluationProjects: [],
+  evaluationEvents: [],
+  evaluationJobs: [],
   ...overrides,
 });
 
@@ -256,6 +259,63 @@ describe('buildSkillHealthProjects', () => {
       ['MaxView', 'MaxView', false],
     ]);
     expect(projects[1].skills.map((s) => s.artifactKind).sort()).toEqual(['design_doc', 'prd']);
+  });
+
+  it('attaches evaluation only for projects with the flag on, including feedback-only projects', () => {
+    const feedback = {
+      id: 'e1',
+      subjectType: 'interview_phase' as const,
+      subjectId: 'interview-1',
+      stageKey: 'interview_phase_1',
+      skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+      skillVersion: null,
+      criteriaScores: { intent_alignment: 4 },
+      outcome: 'reject' as const,
+      comment: null,
+      createdAt: '2026-10-14T00:00:00.000Z',
+    };
+    const projects = buildSkillHealthProjects(
+      inputs({
+        documents: [doc()],
+        evaluationProjects: ['Amego'],
+        evaluationEvents: [
+          { ...feedback, project: 'Amego' },
+          { ...feedback, id: 'e2', project: 'MaxView' },
+        ],
+      }),
+    );
+
+    const amego = projects.find((p) => p.project === 'Amego');
+    expect(amego).toMatchObject({ skills: [], evaluation: { events: 1 } });
+    expect(projects.find((p) => p.project === 'MaxView')?.evaluation).toBeNull();
+  });
+
+  it('adds human feedback per SKILL.md version for PRD Skills', () => {
+    const [project] = buildSkillHealthProjects(
+      inputs({
+        documents: [doc({ id: 'p1', skillSha256: 'aaa' }), doc({ id: 'p2', skillSha256: null })],
+        evaluationProjects: ['MaxView'],
+        evaluationEvents: [
+          {
+            id: 'e1',
+            project: 'MaxView',
+            subjectType: 'prd',
+            subjectId: 'p1',
+            stageKey: 'prd_human_review',
+            skillPath: '.cursor/skills/to-prd/SKILL.md',
+            skillVersion: 'aaa',
+            criteriaScores: { intent_alignment: 2, readiness: 4 },
+            outcome: 'accept_after_edits',
+            comment: null,
+            createdAt: '2026-10-14T00:00:00.000Z',
+          },
+        ],
+      }),
+    );
+
+    const versions = project.skills[0].versions;
+    expect(versions.find((v) => v.skillSha256 === 'aaa')).toMatchObject({ humanEvents: 1, humanAverageScore: 3 });
+    expect(versions.find((v) => v.skillSha256 === null)).toMatchObject({ humanEvents: 0, humanAverageScore: null });
   });
 
   it('reports a null repo for a project without settings', () => {

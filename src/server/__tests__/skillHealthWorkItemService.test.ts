@@ -63,7 +63,7 @@ describe('parseSkillHealthWorkItemRequest', () => {
   it.each([
     [{ project: '' }, 'project is required'],
     [{ destination: 'email' }, 'destination must be apex-backlog or project-ado'],
-    [{ artifactKind: 'adr' }, 'artifactKind must be prd or design_doc'],
+    [{ artifactKind: 'adr' }, 'artifactKind must be prd, design_doc or interview'],
     [{ title: ' ' }, 'title is required'],
     [{ title: 'x'.repeat(256) }, 'title must be at most 255 characters'],
     [{ description: '' }, 'description is required'],

@@ -21,7 +21,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     return;
   }
   try {
-    res.json(await getSkillHealthOverview(periodDays));
+    res.json(await getSkillHealthOverview(periodDays, getUserId(req)));
   } catch (err) {
     console.error('[skill-health] Failed to build overview:', err);
     res.status(500).json({ error: 'Failed to load Skill Health' });

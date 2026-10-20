@@ -5,8 +5,18 @@
 
 import { and, gte, inArray, isNotNull, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { aiUsageEvents, designDocs, prds, projectSkillSettings, reviewComments } from '../db/schema';
+import {
+  aiUsageEvents,
+  designDocs,
+  prds,
+  projectSkillSettings,
+  reviewComments,
+  workflowEvaluationEvents,
+  workflowEvaluationJobs,
+} from '../db/schema';
 import type { SkillHealthArtifactKind, SkillHealthOverview } from '../../shared/types/skillHealth';
+import { WORKFLOW_HUMAN_EVALUATION_FLAG } from '../../shared/types/featureFlags';
+import { isFeatureEnabled, isFeatureOperational } from './featureFlagService';
 import { buildSkillHealthProjects, type SkillHealthInputs } from './skillHealthMetrics';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -21,10 +31,33 @@ export const SKILL_HEALTH_CAVEATS: readonly string[] = [
   'Each document is tied to the Skill path its project settings point at now. Its version is the SKILL.md content that generated it; documents saved before versions were recorded show as unversioned.',
   'Acceptance rate uses each document’s current status, so a document approved after a revision counts as approved.',
   'Cost covers AI usage events linked to the document, including validation and assistant runs.',
+  'Human feedback appears only for projects with Workflow evaluations turned on. Promptfoo and judge results are diagnostic; human scores are authoritative.',
 ];
 
-async function loadInputs(periodFrom: string): Promise<SkillHealthInputs> {
-  const [prdRows, designDocRows, settingsRows, commentRows, costRows] = await Promise.all([
+async function loadEvaluationJobs(eventIds: string[]) {
+  if (eventIds.length === 0) return [];
+  return db
+    .select({
+      eventId: workflowEvaluationJobs.eventId,
+      evaluatorKey: workflowEvaluationJobs.evaluatorKey,
+      status: workflowEvaluationJobs.status,
+      summary: workflowEvaluationJobs.summary,
+    })
+    .from(workflowEvaluationJobs)
+    .where(inArray(workflowEvaluationJobs.eventId, eventIds));
+}
+
+async function evaluationEnabledProjects(userId: string, projects: Iterable<string>): Promise<string[]> {
+  if (!(await isFeatureOperational(WORKFLOW_HUMAN_EVALUATION_FLAG))) return [];
+  const unique = [...new Set(projects)];
+  const enabled = await Promise.all(
+    unique.map((project) => isFeatureEnabled(WORKFLOW_HUMAN_EVALUATION_FLAG, { userId, project })),
+  );
+  return unique.filter((_, i) => enabled[i]);
+}
+
+async function loadInputs(periodFrom: string, userId: string): Promise<SkillHealthInputs> {
+  const [prdRows, designDocRows, settingsRows, commentRows, costRows, eventRows] = await Promise.all([
     db
       .select({
         id: prds.id,
@@ -93,9 +126,37 @@ async function loadInputs(periodFrom: string): Promise<SkillHealthInputs> {
         ),
       )
       .groupBy(aiUsageEvents.entityType, aiUsageEvents.entityId),
+    db
+      .select({
+        id: workflowEvaluationEvents.id,
+        project: workflowEvaluationEvents.project,
+        subjectType: workflowEvaluationEvents.subjectType,
+        subjectId: workflowEvaluationEvents.subjectId,
+        stageKey: workflowEvaluationEvents.stageKey,
+        skillPath: workflowEvaluationEvents.skillPath,
+        skillVersion: workflowEvaluationEvents.skillVersion,
+        criteriaScores: workflowEvaluationEvents.criteriaScores,
+        outcome: workflowEvaluationEvents.outcome,
+        comment: workflowEvaluationEvents.comment,
+        createdAt: workflowEvaluationEvents.createdAt,
+      })
+      .from(workflowEvaluationEvents)
+      .where(gte(workflowEvaluationEvents.createdAt, periodFrom)),
+  ]);
+
+  const [jobRows, evaluationProjects] = await Promise.all([
+    loadEvaluationJobs(eventRows.map((row) => row.id)),
+    evaluationEnabledProjects(userId, [
+      ...prdRows.map((row) => row.project),
+      ...designDocRows.map((row) => row.project),
+      ...eventRows.map((row) => row.project),
+    ]),
   ]);
 
   return {
+    evaluationProjects,
+    evaluationEvents: eventRows,
+    evaluationJobs: jobRows,
     documents: [
       ...prdRows.map((row) => ({ ...row, kind: 'prd' as const, hasOverride: row.override !== null })),
       ...designDocRows.map((row) => ({ ...row, kind: 'design_doc' as const, hasOverride: row.override !== null })),
@@ -114,9 +175,14 @@ async function loadInputs(periodFrom: string): Promise<SkillHealthInputs> {
   };
 }
 
-export async function getSkillHealthOverview(periodDays: number, now = new Date()): Promise<SkillHealthOverview> {
+/** `userId` is the signed-in admin; the evaluation flag is checked for that user in each project. */
+export async function getSkillHealthOverview(
+  periodDays: number,
+  userId: string,
+  now = new Date(),
+): Promise<SkillHealthOverview> {
   const periodFrom = new Date(now.getTime() - periodDays * DAY_MS).toISOString();
-  const inputs = await loadInputs(periodFrom);
+  const inputs = await loadInputs(periodFrom, userId);
   return {
     periodDays,
     periodFrom,

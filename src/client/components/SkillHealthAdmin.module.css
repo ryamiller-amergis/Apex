@@ -108,6 +108,19 @@
   text-align: center;
 }
 
+.evaluation {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.sectionTitle {
+  grid-column: 1 / -1;
+  margin: 8px 0 0;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
 .versionTable {
   width: 100%;
   border-collapse: collapse;

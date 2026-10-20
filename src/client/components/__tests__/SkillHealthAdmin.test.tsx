@@ -5,6 +5,7 @@ import { useCreateSkillHealthWorkItem, useSkillHealth } from '../../hooks/useSki
 import type {
   SkillHealthOverview,
   SkillHealthProject,
+  SkillHealthProjectEvaluation,
   SkillHealthSkill,
 } from '../../../shared/types/skillHealth';
 
@@ -73,6 +74,8 @@ const skill = (overrides: Partial<SkillHealthSkill> = {}): SkillHealthSkill => (
       acceptanceRate: 1,
       firstSeen: '2026-10-12T00:00:00.000Z',
       lastSeen: '2026-10-15T00:00:00.000Z',
+      humanEvents: 2,
+      humanAverageScore: 3.4,
     },
     {
       skillSha256: null,
@@ -83,6 +86,8 @@ const skill = (overrides: Partial<SkillHealthSkill> = {}): SkillHealthSkill => (
       acceptanceRate: 0.6,
       firstSeen: '2026-09-20T00:00:00.000Z',
       lastSeen: '2026-10-10T00:00:00.000Z',
+      humanEvents: 0,
+      humanAverageScore: null,
     },
   ],
   ...overrides,
@@ -102,10 +107,57 @@ const project = (overrides: Partial<SkillHealthProject> = {}): SkillHealthProjec
   skillRepo: 'MaxView',
   isFoundation: false,
   skills: [skill()],
+  evaluation: null,
   ...overrides,
 });
 
 const apexProject = project({ project: 'Apex', skillRepo: 'org/Apex', isFoundation: true, skills: [apexSkill] });
+
+const outcomes = { accept_unchanged: 1, accept_after_edits: 1, regenerate: 0, reject: 1 };
+const evaluation: SkillHealthProjectEvaluation = {
+  events: 3,
+  stages: [{ stageKey: 'prd_human_review', subjectType: 'prd', events: 3, outcomes }],
+  flagged: [
+    {
+      eventId: 'event-2',
+      stageKey: 'prd_human_review',
+      subjectType: 'prd',
+      subjectId: 'prd-2',
+      outcome: 'reject',
+      skillPath: '.cursor/skills/to-prd/SKILL.md',
+      commentExcerpt: 'Missed the export flow',
+      createdAt: '2026-10-14T00:00:00.000Z',
+    },
+  ],
+  skills: [
+    {
+      key: 'MaxView:prd:.cursor/skills/to-prd/skill.md',
+      skillPath: '.cursor/skills/to-prd/SKILL.md',
+      subjectType: 'prd',
+      events: 3,
+      criteriaAverages: {
+        intent_alignment: 4,
+        requirements_coverage: 3,
+        scope_alignment: 3.5,
+        acceptance_criteria: 2.5,
+        readiness: 3,
+      },
+      averageScore: 3.2,
+      outcomes,
+      promptfoo: { pending: 0, running: 0, ready: 2, failed: 1 },
+      judge: { pending: 1, running: 0, ready: 2, failed: 0 },
+      recommendations: [
+        {
+          eventId: 'event-1',
+          stageKey: 'prd_human_review',
+          text: 'State a numeric latency target',
+          criterion: 'readiness',
+          createdAt: '2026-10-13T00:00:00.000Z',
+        },
+      ],
+    },
+  ],
+};
 
 const overview = (projects: SkillHealthProject[]): SkillHealthOverview => ({
   periodDays: 30,
@@ -143,7 +195,7 @@ describe('SkillHealthAdmin', () => {
   it('shows an empty state when no documents exist in the period', () => {
     mockResult({ data: overview([]) });
     render(<SkillHealthAdmin />);
-    expect(screen.getByText(/No PRDs or design docs were created in the last 30 days/)).toBeInTheDocument();
+    expect(screen.getByText(/No PRDs, design docs or human feedback in the last 30 days/)).toBeInTheDocument();
   });
 
   it('shows the first project with its repo, skills, detail and caveats', () => {
@@ -238,6 +290,62 @@ describe('SkillHealthAdmin', () => {
           skillPath: '.cursor/skills/to-prd/SKILL.md',
           title: 'Skill Health: to-prd — Non-functional requirements (MaxView)',
         }),
+      ),
+    );
+  });
+
+  it('says when human feedback is off for the project', () => {
+    mockResult({ data: overview([project()]) });
+    render(<SkillHealthAdmin />);
+
+    expect(screen.getByTestId('skill-health-evaluation-off')).toHaveTextContent('is off for MaxView');
+    expect(screen.queryByTestId('skill-health-feedback-summary')).not.toBeInTheDocument();
+  });
+
+  it('shows stages, flagged events and per-Skill feedback, and files a judge recommendation', async () => {
+    mockResult({ data: overview([project({ evaluation })]) });
+    render(<SkillHealthAdmin />);
+
+    expect(screen.getByTestId('skill-health-evaluation-stage-prd_human_review')).toHaveTextContent('PRD review');
+    expect(screen.getByTestId('skill-health-evaluation-flagged')).toHaveTextContent('Missed the export flow');
+    expect(screen.getByTestId('skill-health-feedback-summary')).toHaveTextContent('3.2');
+    expect(screen.getByTestId('skill-health-version-abcdef12')).toHaveTextContent('3.4');
+
+    fireEvent.click(screen.getByTestId('skill-health-recommendation-work-item-event-1-0'));
+
+    expect(screen.getByTestId('skill-health-work-item-title')).toHaveValue(
+      'Skill Health: to-prd — judge recommendation (MaxView)',
+    );
+    expect((screen.getByTestId('skill-health-work-item-description') as HTMLTextAreaElement).value).toContain(
+      'State a numeric latency target',
+    );
+    fireEvent.click(screen.getByTestId('skill-health-work-item-submit'));
+
+    await waitFor(() =>
+      expect(mutate).toHaveBeenCalledWith(
+        expect.objectContaining({ project: 'MaxView', artifactKind: 'prd', destination: 'project-ado' }),
+      ),
+    );
+  });
+
+  it('files an Interview Skill recommendation as an interview work item', async () => {
+    const interviewSkill = {
+      ...evaluation.skills[0],
+      key: 'MaxView:interview_phase:.cursor/skills/grill-with-docs/skill.md',
+      subjectType: 'interview_phase' as const,
+      skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+      recommendations: [{ ...evaluation.skills[0].recommendations[0], eventId: 'event-9', stageKey: 'interview_phase_1' }],
+    };
+    mockResult({ data: overview([project({ skills: [], evaluation: { ...evaluation, skills: [interviewSkill] } })]) });
+    render(<SkillHealthAdmin />);
+
+    expect(screen.getByTestId('skill-health-no-documents')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('skill-health-recommendation-work-item-event-9-0'));
+    fireEvent.click(screen.getByTestId('skill-health-work-item-submit'));
+
+    await waitFor(() =>
+      expect(mutate).toHaveBeenCalledWith(
+        expect.objectContaining({ artifactKind: 'interview', skillPath: '.cursor/skills/grill-with-docs/SKILL.md' }),
       ),
     );
   });

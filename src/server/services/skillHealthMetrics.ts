@@ -19,6 +19,13 @@ import {
   type SkillHealthVersion,
 } from '../../shared/types/skillHealth';
 import { collectValidationGaps, resolveScorecardOverallScore } from '../../shared/utils/validationReport';
+import {
+  buildProjectEvaluation,
+  evaluationSkillPathKey,
+  humanStats,
+  type SkillHealthEvaluationEventInput,
+  type SkillHealthEvaluationJobInput,
+} from './skillHealthEvaluationMetrics';
 
 export interface SkillHealthDocumentInput {
   id: string;
@@ -61,6 +68,15 @@ export interface SkillHealthInputs {
   settings: SkillHealthSettingsInput[];
   comments: SkillHealthCommentInput[];
   costs: SkillHealthCostInput[];
+  /** Projects with the `workflow-human-evaluation` flag on; only their events are used. */
+  evaluationProjects: string[];
+  evaluationEvents: SkillHealthEvaluationEventInput[];
+  evaluationJobs: SkillHealthEvaluationJobInput[];
+}
+
+function enabledEvaluationEvents(inputs: SkillHealthInputs): SkillHealthEvaluationEventInput[] {
+  const enabled = new Set(inputs.evaluationProjects);
+  return inputs.evaluationEvents.filter((e) => enabled.has(e.project));
 }
 
 const ACCEPTED_STATUSES = new Set(['approved', 'reviewer_approved']);
@@ -221,7 +237,10 @@ function passRateOf(entries: SkillAccumulator['docs']): number | null {
   return ratio(judged.filter((e) => e.passed).length, judged.length);
 }
 
-function buildVersions(entries: SkillAccumulator['docs']): SkillHealthVersion[] {
+function buildVersions(
+  entries: SkillAccumulator['docs'],
+  humanEvents: SkillHealthEvaluationEventInput[],
+): SkillHealthVersion[] {
   const byVersion = new Map<string | null, SkillAccumulator['docs']>();
   for (const entry of entries) {
     const list = byVersion.get(entry.doc.skillSha256);
@@ -241,6 +260,7 @@ function buildVersions(entries: SkillAccumulator['docs']): SkillHealthVersion[] 
         acceptanceRate: acceptanceRateOf(list),
         firstSeen: created[0],
         lastSeen: created[created.length - 1],
+        ...humanStats(humanEvents.filter((e) => (e.skillVersion ?? null) === skillSha256)),
       };
     })
     .sort((a, b) =>
@@ -271,6 +291,14 @@ export function buildSkillHealthSkills(inputs: SkillHealthInputs): SkillHealthSk
   for (const c of inputs.costs) {
     const key = docKey(c.documentType, c.documentId);
     costByDoc.set(key, (costByDoc.get(key) ?? 0) + c.costUsd);
+  }
+  const prdEventsBySkill = new Map<string, SkillHealthEvaluationEventInput[]>();
+  for (const event of enabledEvaluationEvents(inputs)) {
+    if (event.subjectType !== 'prd') continue;
+    const key = `${event.project}:prd:${evaluationSkillPathKey(event.skillPath)}`;
+    const list = prdEventsBySkill.get(key);
+    if (list) list.push(event);
+    else prdEventsBySkill.set(key, [event]);
   }
 
   const skills = new Map<string, SkillAccumulator>();
@@ -323,7 +351,7 @@ export function buildSkillHealthSkills(inputs: SkillHealthInputs): SkillHealthSk
         trend: buildTrend(acc.docs),
         sections: buildSections(acc.docs, commentsByDoc),
         recurringGaps: buildRecurringGaps(acc.docs),
-        versions: buildVersions(acc.docs),
+        versions: buildVersions(acc.docs, prdEventsBySkill.get(key) ?? []),
       };
     })
     .sort((a, b) => b.documents - a.documents);
@@ -337,12 +365,23 @@ export function buildSkillHealthProjects(inputs: SkillHealthInputs): SkillHealth
     if (list) list.push(skill);
     else byProject.set(skill.project, [skill]);
   }
+  const enabledEvents = enabledEvaluationEvents(inputs);
+  for (const event of enabledEvents) {
+    if (!byProject.has(event.project)) byProject.set(event.project, []);
+  }
+  const evaluationEnabled = new Set(inputs.evaluationProjects);
+  const eventIds = new Set(enabledEvents.map((e) => e.id));
+  const jobs = inputs.evaluationJobs.filter((j) => eventIds.has(j.eventId));
+
   return [...byProject.entries()]
     .map(([project, skills]) => ({
       project,
       skillRepo: defaultByProject.get(project)?.skillRepo ?? null,
       isFoundation: project === SKILL_HEALTH_FOUNDATION_PROJECT,
       skills,
+      evaluation: evaluationEnabled.has(project)
+        ? buildProjectEvaluation(project, enabledEvents.filter((e) => e.project === project), jobs)
+        : null,
     }))
     .sort((a, b) => Number(b.isFoundation) - Number(a.isFoundation) || a.project.localeCompare(b.project));
 }

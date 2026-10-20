@@ -9,8 +9,8 @@ import {
   SKILL_HEALTH_WORK_ITEM_TITLE_MAX,
   allowedWorkItemDestinations,
   defaultWorkItemDestination,
-  type SkillHealthSkill,
   type SkillHealthWorkItemDestination,
+  type SkillHealthWorkItemTarget,
 } from '../../shared/types/skillHealth';
 
 const workItemSchema = z.object({
@@ -35,7 +35,7 @@ export function destinationLabel(destination: SkillHealthWorkItemDestination, pr
 }
 
 interface SkillHealthWorkItemModalProps {
-  skill: SkillHealthSkill;
+  skill: SkillHealthWorkItemTarget;
   initialTitle: string;
   initialDescription: string;
   onClose: () => void;

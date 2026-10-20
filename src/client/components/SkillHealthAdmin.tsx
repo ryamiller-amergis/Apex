@@ -4,12 +4,21 @@ import grid from './DataGrid.module.css';
 import styles from './SkillHealthAdmin.module.css';
 import { DataGridFilterPills } from './DataGridToolbar';
 import { SkillHealthWorkItemModal, destinationLabel } from './SkillHealthWorkItemModal';
+import {
+  PROPOSED_CHANGE_PROMPT,
+  SkillFeedbackSummary,
+  SkillHealthEvaluationPanel,
+  skillNameOf,
+  type SkillHealthWorkItemDraft,
+} from './SkillHealthEvaluationPanel';
 import { useSkillHealth } from '../hooks/useSkillHealth';
 import {
   SKILL_HEALTH_PERIOD_OPTIONS,
   defaultWorkItemDestination,
   type SkillHealthArtifactKind,
+  type SkillHealthEvaluationSkill,
   type SkillHealthPeriodDays,
+  type SkillHealthProject,
   type SkillHealthRecurringGap,
   type SkillHealthSkill,
   type SkillHealthStatus,
@@ -65,22 +74,21 @@ function money(value: number | null): string {
   return value === null ? '—' : `$${value.toFixed(2)}`;
 }
 
-/** `.cursor/skills/to-prd/SKILL.md` -> `to-prd`. */
 function skillName(skill: SkillHealthSkill): string {
-  if (!skill.skillPath) return 'app default Skill';
-  const parts = skill.skillPath.split('/');
-  return parts.length > 1 ? parts[parts.length - 2] : skill.skillPath;
+  return skillNameOf(skill.skillPath);
 }
 
-interface WorkItemDraft {
-  skill: SkillHealthSkill;
-  title: string;
-  description: string;
+/** The project's human feedback for a PRD Skill; design doc Skills have no feedback stage yet. */
+function feedbackFor(project: SkillHealthProject, skill: SkillHealthSkill): SkillHealthEvaluationSkill | null {
+  if (!project.evaluation || skill.artifactKind !== 'prd') return null;
+  const path = (skill.skillPath ?? '').toLowerCase();
+  return (
+    project.evaluation.skills.find((s) => s.subjectType === 'prd' && (s.skillPath ?? '').toLowerCase() === path) ??
+    null
+  );
 }
 
-const PROPOSED_CHANGE_PROMPT = 'Proposed SKILL.md change:\n<quote the current line and its replacement>';
-
-function draftForSkill(skill: SkillHealthSkill, periodDays: number): WorkItemDraft {
+function draftForSkill(skill: SkillHealthSkill, periodDays: number): SkillHealthWorkItemDraft {
   return {
     skill,
     title: `Skill Health: improve ${skillName(skill)} in ${skill.project}`,
@@ -93,7 +101,7 @@ function draftForSkill(skill: SkillHealthSkill, periodDays: number): WorkItemDra
   };
 }
 
-function draftForGap(skill: SkillHealthSkill, gap: SkillHealthRecurringGap, periodDays: number): WorkItemDraft {
+function draftForGap(skill: SkillHealthSkill, gap: SkillHealthRecurringGap, periodDays: number): SkillHealthWorkItemDraft {
   const examples = gap.sampleDescriptions.map((description) => `- ${description}`).join('\n');
   return {
     skill,
@@ -109,10 +117,13 @@ function draftForGap(skill: SkillHealthSkill, gap: SkillHealthRecurringGap, peri
 
 interface SkillDetailProps {
   skill: SkillHealthSkill;
+  /** True for PRD Skills in projects with human feedback turned on. */
+  showFeedback: boolean;
+  feedback: SkillHealthEvaluationSkill | null;
   onCreateWorkItem: (gap: SkillHealthRecurringGap | null) => void;
 }
 
-const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onCreateWorkItem }) => {
+const SkillDetail: React.FC<SkillDetailProps> = ({ skill, showFeedback, feedback, onCreateWorkItem }) => {
   const maxComments = useMemo(() => Math.max(1, ...skill.sections.map((c) => c.commentCount)), [skill.sections]);
 
   return (
@@ -161,6 +172,8 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onCreateWorkItem }) =>
         </p>
       </section>
 
+      {showFeedback && <SkillFeedbackSummary feedback={feedback} />}
+
       <section className={styles.card}>
         <h4 className={styles.cardTitle}>SKILL.md versions</h4>
         <table className={styles.versionTable} data-testid="skill-health-versions">
@@ -172,6 +185,8 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onCreateWorkItem }) =>
               <th scope="col">Avg score</th>
               <th scope="col">Pass rate</th>
               <th scope="col">Accepted</th>
+              {showFeedback && <th scope="col">Feedback</th>}
+              {showFeedback && <th scope="col">Human avg</th>}
             </tr>
           </thead>
           <tbody>
@@ -196,6 +211,8 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onCreateWorkItem }) =>
                 <td>{number(version.averageScore)}</td>
                 <td>{percent(version.passRate)}</td>
                 <td>{percent(version.acceptanceRate)}</td>
+                {showFeedback && <td>{version.humanEvents}</td>}
+                {showFeedback && <td>{number(version.humanAverageScore)}</td>}
               </tr>
             ))}
           </tbody>
@@ -300,7 +317,7 @@ export const SkillHealthAdmin: React.FC = () => {
   const [days, setDays] = useState<SkillHealthPeriodDays>(SKILL_HEALTH_PERIOD_OPTIONS[0]);
   const [selectedProjectName, setSelectedProjectName] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [workItemDraft, setWorkItemDraft] = useState<WorkItemDraft | null>(null);
+  const [workItemDraft, setWorkItemDraft] = useState<SkillHealthWorkItemDraft | null>(null);
   const { data, isLoading, error } = useSkillHealth(days);
 
   const project = useMemo(() => {
@@ -328,7 +345,8 @@ export const SkillHealthAdmin: React.FC = () => {
         <div>
           <h3 className={grid.title}>Skill Health</h3>
           <p className={grid.hint}>
-            How well each generating Skill performs, from validation scores, review comments, approvals and cost.
+            How well each Skill performs, from validation scores, review comments, approvals, cost and human
+            feedback with its Promptfoo and judge diagnostics.
           </p>
         </div>
         <div className={grid.headerActions}>
@@ -355,7 +373,9 @@ export const SkillHealthAdmin: React.FC = () => {
       {error && <div className={grid.error}>{error instanceof Error ? error.message : 'Failed to load'}</div>}
 
       {data && !project && (
-        <div className={grid.empty}>No PRDs or design docs were created in the last {data.periodDays} days.</div>
+        <div className={grid.empty}>
+          No PRDs, design docs or human feedback in the last {data.periodDays} days.
+        </div>
       )}
 
       {data && project && (
@@ -376,65 +396,73 @@ export const SkillHealthAdmin: React.FC = () => {
             {destinationLabel(defaultWorkItemDestination(project.project), project.project)}.
           </p>
 
-          <div className={grid.tableWrap}>
-            <table className={grid.table} data-testid="skill-health-table">
-              <thead>
-                <tr>
-                  <th>Skill</th>
-                  <th>Output</th>
-                  <th>Health</th>
-                  <th>Docs</th>
-                  <th>Avg score</th>
-                  <th>Pass rate</th>
-                  <th>Accepted</th>
-                  <th>Comments / doc</th>
-                  <th>Cost / doc</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {project.skills.map((skill) => (
-                  <tr key={skill.key} className={skill.key === selected?.key ? styles.selectedRow : undefined}>
-                    <td>
-                      {skill.skillPath ? (
-                        <span className={styles.skillPath}>{skill.skillPath}</span>
-                      ) : (
-                        <span className={styles.muted}>App default</span>
-                      )}
-                    </td>
-                    <td>{kindLabel(skill.artifactKind)}</td>
-                    <td>
-                      <span className={`${styles.status} ${styles[`status-${skill.status}`]}`}>
-                        {statusLabel(skill.status)}
-                      </span>
-                    </td>
-                    <td>{skill.documents}</td>
-                    <td>{number(skill.averageScore)}</td>
-                    <td>{percent(skill.passRate)}</td>
-                    <td>{percent(skill.acceptanceRate)}</td>
-                    <td>{number(skill.commentsPerDocument)}</td>
-                    <td>{money(skill.costPerDocument)}</td>
-                    <td>
-                      <div className={grid.rowActions}>
-                        <button
-                          type="button"
-                          className={grid.buttonGhost}
-                          onClick={() => setSelectedKey(skill.key)}
-                          data-testid={`skill-health-view-${skill.key}`}
-                        >
-                          View
-                        </button>
-                      </div>
-                    </td>
+          {project.skills.length === 0 ? (
+            <p className={styles.muted} data-testid="skill-health-no-documents">
+              No PRDs or design docs in {project.project} in this period.
+            </p>
+          ) : (
+            <div className={grid.tableWrap}>
+              <table className={grid.table} data-testid="skill-health-table">
+                <thead>
+                  <tr>
+                    <th>Skill</th>
+                    <th>Output</th>
+                    <th>Health</th>
+                    <th>Docs</th>
+                    <th>Avg score</th>
+                    <th>Pass rate</th>
+                    <th>Accepted</th>
+                    <th>Comments / doc</th>
+                    <th>Cost / doc</th>
+                    <th>Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {project.skills.map((skill) => (
+                    <tr key={skill.key} className={skill.key === selected?.key ? styles.selectedRow : undefined}>
+                      <td>
+                        {skill.skillPath ? (
+                          <span className={styles.skillPath}>{skill.skillPath}</span>
+                        ) : (
+                          <span className={styles.muted}>App default</span>
+                        )}
+                      </td>
+                      <td>{kindLabel(skill.artifactKind)}</td>
+                      <td>
+                        <span className={`${styles.status} ${styles[`status-${skill.status}`]}`}>
+                          {statusLabel(skill.status)}
+                        </span>
+                      </td>
+                      <td>{skill.documents}</td>
+                      <td>{number(skill.averageScore)}</td>
+                      <td>{percent(skill.passRate)}</td>
+                      <td>{percent(skill.acceptanceRate)}</td>
+                      <td>{number(skill.commentsPerDocument)}</td>
+                      <td>{money(skill.costPerDocument)}</td>
+                      <td>
+                        <div className={grid.rowActions}>
+                          <button
+                            type="button"
+                            className={grid.buttonGhost}
+                            onClick={() => setSelectedKey(skill.key)}
+                            data-testid={`skill-health-view-${skill.key}`}
+                          >
+                            View
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {selected && (
             <SkillDetail
               skill={selected}
+              showFeedback={project.evaluation !== null && selected.artifactKind === 'prd'}
+              feedback={feedbackFor(project, selected)}
               onCreateWorkItem={(gap) =>
                 setWorkItemDraft(
                   gap ? draftForGap(selected, gap, data.periodDays) : draftForSkill(selected, data.periodDays),
@@ -442,6 +470,13 @@ export const SkillHealthAdmin: React.FC = () => {
               }
             />
           )}
+
+          {/* data-testid-exempt — the panel root carries skill-health-evaluation(-off) */}
+          <SkillHealthEvaluationPanel
+            project={project.project}
+            evaluation={project.evaluation}
+            onCreateWorkItem={setWorkItemDraft}
+          />
 
           <ul className={styles.caveats} data-testid="skill-health-caveats">
             {data.caveats.map((caveat) => (

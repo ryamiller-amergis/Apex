@@ -7,6 +7,12 @@
  * no version.
  */
 
+import type {
+  WorkflowEvaluationCriteriaKey,
+  WorkflowEvaluationOutcome,
+  WorkflowEvaluationSubjectType,
+} from './workflowEvaluation';
+
 export type SkillHealthArtifactKind = 'prd' | 'design_doc';
 
 export type SkillHealthStatus = 'good' | 'fair' | 'poor' | 'insufficient_data';
@@ -74,6 +80,75 @@ export interface SkillHealthVersion {
   /** createdAt of the oldest and newest document produced by this version. */
   firstSeen: string;
   lastSeen: string;
+  /** Human feedback events on documents from this version (PRD Skills, evaluation flag on). */
+  humanEvents: number;
+  /** Mean of the five 1–5 criteria across those events. */
+  humanAverageScore: number | null;
+}
+
+/** Human feedback count per outcome. */
+export type SkillHealthOutcomeCounts = Record<WorkflowEvaluationOutcome, number>;
+
+/** Diagnostic job states for one evaluator. For Promptfoo, `ready` is a pass and `failed` a fail or error. */
+export interface SkillHealthJobCounts {
+  pending: number;
+  running: number;
+  ready: number;
+  failed: number;
+}
+
+export interface SkillHealthEvaluationStage {
+  stageKey: string;
+  subjectType: WorkflowEvaluationSubjectType;
+  events: number;
+  outcomes: SkillHealthOutcomeCounts;
+}
+
+/** A recent regenerate or reject outcome. */
+export interface SkillHealthFlaggedEvent {
+  eventId: string;
+  stageKey: string;
+  subjectType: WorkflowEvaluationSubjectType;
+  subjectId: string;
+  outcome: Extract<WorkflowEvaluationOutcome, 'regenerate' | 'reject'>;
+  skillPath: string | null;
+  /** First 160 characters of the reviewer comment. */
+  commentExcerpt: string | null;
+  createdAt: string;
+}
+
+export interface SkillHealthJudgeRecommendation {
+  eventId: string;
+  stageKey: string;
+  text: string;
+  criterion: string | null;
+  createdAt: string;
+}
+
+/** Human feedback and diagnostics for one Skill path within a project. */
+export interface SkillHealthEvaluationSkill {
+  /** Stable key: `${project}:${subjectType}:${skillPath}`. */
+  key: string;
+  skillPath: string | null;
+  subjectType: WorkflowEvaluationSubjectType;
+  events: number;
+  criteriaAverages: Record<WorkflowEvaluationCriteriaKey, number | null>;
+  /** Mean of the five criteria across all events. */
+  averageScore: number | null;
+  outcomes: SkillHealthOutcomeCounts;
+  promptfoo: SkillHealthJobCounts;
+  judge: SkillHealthJobCounts;
+  /** Newest first, at most five. */
+  recommendations: SkillHealthJudgeRecommendation[];
+}
+
+/** One project's human workflow evaluation results. */
+export interface SkillHealthProjectEvaluation {
+  events: number;
+  stages: SkillHealthEvaluationStage[];
+  /** Newest first, at most ten. */
+  flagged: SkillHealthFlaggedEvent[];
+  skills: SkillHealthEvaluationSkill[];
 }
 
 export interface SkillHealthSkill {
@@ -114,6 +189,8 @@ export interface SkillHealthProject {
   skillRepo: string | null;
   isFoundation: boolean;
   skills: SkillHealthSkill[];
+  /** Null when the `workflow-human-evaluation` flag is off for this project. */
+  evaluation: SkillHealthProjectEvaluation | null;
 }
 
 export interface SkillHealthOverview {
@@ -126,11 +203,21 @@ export interface SkillHealthOverview {
   caveats: string[];
 }
 
+/** Kinds of Skill a work item can be about: the two scored artifacts, or an Interview Skill. */
+export type SkillHealthWorkItemSkillKind = SkillHealthArtifactKind | 'interview';
+
+/** The Skill a work item is about. A `SkillHealthSkill` satisfies it. */
+export interface SkillHealthWorkItemTarget {
+  project: string;
+  artifactKind: SkillHealthWorkItemSkillKind;
+  skillPath: string | null;
+}
+
 export interface CreateSkillHealthWorkItemRequest {
   /** Project whose Skill the finding is about. */
   project: string;
   destination: SkillHealthWorkItemDestination;
-  artifactKind: SkillHealthArtifactKind;
+  artifactKind: SkillHealthWorkItemSkillKind;
   skillPath: string | null;
   title: string;
   description: string;
