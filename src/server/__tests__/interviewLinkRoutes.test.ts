@@ -333,7 +333,8 @@ describe('GET /api/interviews/link-candidates — kickoff staging', () => {
       registeredGroupRequirements.filter(
         (groups) => groups.join('|') === 'BA|Manager|Product-Owner',
       ),
-    ).toHaveLength(5);
+    // Brief approve is authorized by canCompleteInterviewAndGeneratePrd and is no longer in this group-middleware count.
+    ).toHaveLength(4);
   });
 });
 
