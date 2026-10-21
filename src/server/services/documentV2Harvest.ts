@@ -33,6 +33,10 @@ import {
   applyV2SmartTaggingResult,
   markV2SmartTaggingFailure,
 } from './walkthroughAnchorSmartTaggingService';
+import {
+  createWorkflowEvaluationJobIngestService,
+  type WorkflowEvaluationJobIngestService,
+} from './workflowEvaluationJobIngestService';
 
 const HARVEST_BATCH_SIZE = 100;
 const MAX_HARVEST_FAILURES = 3;
@@ -52,6 +56,7 @@ export type DocumentV2HarvestDependencies = Readonly<{
     runId: string;
     rawJson: string;
   }) => Promise<boolean>;
+  evaluationJobs?: Pick<WorkflowEvaluationJobIngestService, 'applyCompleted' | 'applyFailed'>;
   failWorkflow?: (
     attempt: FinishedV2DocumentAttempt,
     reason: string,
@@ -215,11 +220,13 @@ async function materializeManifest(
 
 async function applyAttempt(
   attempt: FinishedV2DocumentAttempt,
+  manifest: AiRunV2ArtifactManifest,
   workspacePath: string,
   applyWorkspace: (input: DocumentWorkspaceApplyInput) => Promise<void>,
   applySmartTagging: NonNullable<
     DocumentV2HarvestDependencies['applySmartTagging']
   >,
+  evaluationJobs: NonNullable<DocumentV2HarvestDependencies['evaluationJobs']>,
 ): Promise<void> {
   switch (attempt.workflowClass) {
     case 'prd':
@@ -254,9 +261,14 @@ async function applyAttempt(
       return;
     case 'evaluation-judge':
     case 'evaluation-promptfoo':
-      throw new PermanentHarvestApplicationError(
-        'Workflow evaluation results have no ingest path yet',
-      );
+      await evaluationJobs.applyCompleted({
+        runId: attempt.runId,
+        threadId: attempt.threadId,
+        workflowClass: attempt.workflowClass,
+        outputDir: path.join(workspacePath, '.ai-pilot', 'output'),
+        manifest,
+      });
+      return;
     default: {
       const unhandled: never = attempt.workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -300,6 +312,8 @@ export async function harvestFinishedV2Documents(
     dependencies.applyWorkspace ?? defaultApplyWorkspace;
   const applySmartTagging =
     dependencies.applySmartTagging ?? defaultApplySmartTagging;
+  const evaluationJobs =
+    dependencies.evaluationJobs ?? createWorkflowEvaluationJobIngestService();
   const tempRoot = dependencies.tempRoot ?? os.tmpdir();
   const failWorkflow =
     dependencies.failWorkflow
@@ -307,6 +321,18 @@ export async function harvestFinishedV2Documents(
       if (attempt.workflowClass === 'walkthrough-smart-tagging') {
         await markV2SmartTaggingFailure({
           threadId: attempt.threadId,
+          reason,
+        });
+        return;
+      }
+      if (
+        attempt.workflowClass === 'evaluation-judge'
+        || attempt.workflowClass === 'evaluation-promptfoo'
+      ) {
+        await evaluationJobs.applyFailed({
+          runId: attempt.runId,
+          threadId: attempt.threadId,
+          workflowClass: attempt.workflowClass,
           reason,
         });
         return;
@@ -354,9 +380,11 @@ export async function harvestFinishedV2Documents(
         );
         await applyAttempt(
           attempt,
+          manifest,
           workspacePath,
           applyWorkspace,
           applySmartTagging,
+          evaluationJobs,
         );
       }
 

@@ -4,11 +4,17 @@
  */
 import { and, asc, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { agentRuns, workflowEvaluationJobs } from '../db/schema';
+import {
+  agentRuns,
+  workflowEvaluationDefinitions,
+  workflowEvaluationEvents,
+  workflowEvaluationJobs,
+} from '../db/schema';
 import {
   WORKFLOW_EVALUATION_JOB_EVALUATORS,
   type WorkflowEvaluationJob,
   type WorkflowEvaluationJobEvaluator,
+  type WorkflowEvaluationJobResultBlobRefs,
   type WorkflowEvaluationJobStatus,
 } from '../../shared/types/workflowEvaluation';
 
@@ -152,6 +158,44 @@ export async function findRunOnThreadSince(threadId: string, since: string): Pro
   return rows[0]?.id ?? null;
 }
 
+export type FinishedJobFields = Readonly<{
+  status: Extract<WorkflowEvaluationJobStatus, 'ready' | 'failed'>;
+  summary: Record<string, unknown> | null;
+  resultBlobRefs: WorkflowEvaluationJobResultBlobRefs | null;
+  errorDetail: string | null;
+}>;
+
+/** Records a run's result only while that run still owns the running job. */
+export async function finishRunningJob(
+  jobId: string,
+  runId: string,
+  fields: FinishedJobFields,
+): Promise<boolean> {
+  const rows = await db
+    .update(workflowEvaluationJobs)
+    .set({ ...fields, updatedAt: sql`now()` })
+    .where(and(
+      eq(workflowEvaluationJobs.id, jobId),
+      eq(workflowEvaluationJobs.runId, runId),
+      eq(workflowEvaluationJobs.status, 'running'),
+    ))
+    .returning({ id: workflowEvaluationJobs.id });
+  return rows.length > 0;
+}
+
+export async function getJudgeOutputSchema(eventId: string): Promise<Record<string, unknown> | null> {
+  const rows = await db
+    .select({ schema: workflowEvaluationDefinitions.judgeOutputSchema })
+    .from(workflowEvaluationEvents)
+    .innerJoin(
+      workflowEvaluationDefinitions,
+      eq(workflowEvaluationDefinitions.id, workflowEvaluationEvents.definitionId),
+    )
+    .where(eq(workflowEvaluationEvents.id, eventId))
+    .limit(1);
+  return rows[0]?.schema ?? null;
+}
+
 /**
  * Moves a failed job back to pending and clears the previous attempt, so a
  * late result from the old run cannot be applied to it.
@@ -190,6 +234,8 @@ export const workflowEvaluationJobRepository = {
   listStalePendingJobs,
   findRunOnThreadSince,
   claimFailedJobForRetry,
+  finishRunningJob,
+  getJudgeOutputSchema,
 };
 
 export type WorkflowEvaluationJobRepository = typeof workflowEvaluationJobRepository;

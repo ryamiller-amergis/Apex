@@ -3594,6 +3594,9 @@ export const workflowEvaluationJobs = pgTable('workflow_evaluation_jobs', {
   openIdx: index('idx_workflow_evaluation_jobs_open')
     .on(t.status)
     .where(sql`${t.status} IN ('pending', 'running')`),
+  runIdx: index('idx_workflow_evaluation_jobs_run_id')
+    .on(t.runId)
+    .where(sql`${t.runId} IS NOT NULL`),
   evaluatorCheck: check(
     'workflow_evaluation_jobs_evaluator_check',
     sql`${t.evaluatorKey} IN ('promptfoo', 'llm_judge')`,
