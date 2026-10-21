@@ -6,7 +6,9 @@ ON CONFLICT (key) DO UPDATE
 SET
   value = EXCLUDED.value,
   updated_by = EXCLUDED.updated_by,
-  updated_at = EXCLUDED.updated_at;
+  updated_at = EXCLUDED.updated_at
+WHERE string_to_array(app_settings.value, '.')::int[]
+    < string_to_array(EXCLUDED.value, '.')::int[];
 
 -- Down Migration
 
