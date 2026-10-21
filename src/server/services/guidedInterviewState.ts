@@ -100,7 +100,9 @@ function isVisibleTranscriptMessage(
 /**
  * Split a guided transcript into phase slices.
  * Each visible user or agent message belongs to the phase of the latest agent
- * marker at or before it. Hidden, system and tool messages are left out.
+ * marker at or before it. Visible messages before the first marker (the user
+ * kickoff) belong to phase 1 once a phase has started. Hidden, system and
+ * tool messages are left out.
  */
 export function sliceGuidedInterviewPhases(
   messages: ReadonlyArray<{ role: string; text: string; hidden?: boolean }>,
@@ -110,6 +112,7 @@ export function sliceGuidedInterviewPhases(
     2: [],
     3: [],
   };
+  const prefix: Array<{ role: 'user' | 'agent'; text: string }> = [];
   let current: 1 | 2 | 3 | null = null;
   for (const message of messages) {
     if (!isVisibleTranscriptMessage(message)) continue;
@@ -117,8 +120,15 @@ export function sliceGuidedInterviewPhases(
       const phase = markerPhase(message.text);
       if (phase) current = GUIDED_PHASE_INDEX[phase];
     }
-    if (current === null) continue;
-    buckets[current].push({ role: message.role, text: message.text });
+    const item = { role: message.role, text: message.text };
+    if (current === null) {
+      prefix.push(item);
+      continue;
+    }
+    buckets[current].push(item);
+  }
+  if (prefix.length > 0 && current !== null) {
+    buckets[1].unshift(...prefix);
   }
   return ([1, 2, 3] as const)
     .filter((phaseIndex) => buckets[phaseIndex].length > 0)
