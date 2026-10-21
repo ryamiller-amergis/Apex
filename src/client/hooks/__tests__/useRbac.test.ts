@@ -126,8 +126,20 @@ describe('useMyPermissions', () => {
 
     expect(result.current.permissions).toEqual([]);
     expect(result.current.roles).toEqual([]);
+    expect(result.current.projectRoles).toEqual([]);
     expect(result.current.isAdmin).toBe(false);
     expect(result.current.can('admin:roles')).toBe(false);
+  });
+
+  it('exposes projectRoles from the permissions response', async () => {
+    mockFetchOk({ permissions: [], roles: ['member'], projectRoles: ['admin'] });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useMyPermissions('MyProject'), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.projectRoles).toEqual(['admin']);
   });
 
   it('calls the correct URL with credentials', async () => {
