@@ -1,7 +1,7 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import fs from 'fs';
 import path from 'path';
-import { requirePermission, requireGroupMembership } from '../middleware/rbac';
+import { requirePermission, requireGroupMembership, resolveRequestProject } from '../middleware/rbac';
 import { getDisplayName, getUserId } from '../utils/requestUser';
 import { getAdoTokenForUser } from '../services/adoUserToken';
 import { isAdoUserAuthError } from '../services/adoFactory';
@@ -23,9 +23,11 @@ import {
 } from '../services/artifactUsageContext';
 import { fixPrdContentWithBedrock, fixPrdBacklogWithBedrock, fixDesignDocSectionWithBedrock, regeneratePrdContentRegionWithBedrock, regeneratePrdBacklogItemWithBedrock, regenerateMarkdownRegionWithBedrock, BedrockModelTruncatedError } from '../services/bedrockService';
 import {
+  canCompleteInterviewAndGeneratePrd,
   createInterview,
   deleteInterview,
   getInterview,
+  INTERVIEW_COMPLETE_FORBIDDEN_MESSAGE,
   listInterviews,
   updateInterviewPhaseAssignments,
   updateInterviewStatus,
@@ -46,7 +48,8 @@ import type {
   AddDesignModuleLinkRequest,
   LinkCandidateType,
 } from '../../shared/types/interviewLinks';
-import { getActiveUsers } from '../services/rbacService';
+import { getActiveUsers, getUserPermissions } from '../services/rbacService';
+import { getUserGroupNames } from '../services/groupService';
 import { recordArtifactDoneEvent } from '../services/artifactDoneEventService';
 import {
   createPrd,
@@ -74,6 +77,7 @@ import {
   triggerFixCoverageGaps,
   acceptFixCoverageGaps,
   overridePrdReadiness,
+  forceSubmitForReview,
   revertPrdSection,
   dismissPrdFixSession,
   applyProposedPrdChanges,
@@ -472,7 +476,28 @@ router.put('/prds/:prdId/backlog', requirePermission('interviews:manage'), async
   }
 });
 
-router.post('/prds/:prdId/submit', requirePermission('interviews:manage'), async (req, res, next) => {
+/**
+ * `requirePermission` resolves roles for the request's project, and this route
+ * carries only the PRD id. Without the PRD's project it falls back to global
+ * roles and rejects users whose access comes from a project-scoped role, even
+ * though the PRD page (scoped to that project) offered them the action.
+ */
+async function withPrdProject(req: Request, _res: Response, next: NextFunction): Promise<void> {
+  try {
+    const row = await db.query.prds.findFirst({
+      where: eq(prdsTable.id, req.params.prdId),
+      columns: { project: true },
+    });
+    if (row?.project) {
+      req.headers['x-apex-project'] = row.project;
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
+router.post('/prds/:prdId/submit', withPrdProject, requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const { prdApproverIds, designDocApproverIds, designPrototypeApproverIds, qaApproverIds } = req.body as {
@@ -481,12 +506,17 @@ router.post('/prds/:prdId/submit', requirePermission('interviews:manage'), async
       designPrototypeApproverIds?: string[];
       qaApproverIds?: string[];
     };
-    await submitForReview(req.params.prdId, userId, {
-      prdApproverIds: prdApproverIds ?? [],
-      designDocApproverIds: designDocApproverIds ?? [],
-      designPrototypeApproverIds: designPrototypeApproverIds ?? [],
-      qaApproverIds: qaApproverIds ?? [],
-    });
+    await submitForReview(
+      req.params.prdId,
+      userId,
+      {
+        prdApproverIds: prdApproverIds ?? [],
+        designDocApproverIds: designDocApproverIds ?? [],
+        designPrototypeApproverIds: designPrototypeApproverIds ?? [],
+        qaApproverIds: qaApproverIds ?? [],
+      },
+      { isSuperAdmin: isSuperAdminRequest(req) },
+    );
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -1582,6 +1612,22 @@ router.post('/prds/:prdId/override-readiness', requirePermission('interviews:man
     const reason = typeof req.body?.reason === 'string' ? req.body.reason : '';
     const override = await overridePrdReadiness(req.params.prdId, userId, reason, getDisplayName(req));
     res.json({ override });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /prds/:prdId/force-submit — super-admin escape hatch to pending_review, with an audited reason
+router.post('/prds/:prdId/force-submit', async (req, res, next) => {
+  try {
+    if (!isSuperAdminRequest(req)) {
+      res.status(403).json({ error: 'Only super admins can force submit a PRD for review' });
+      return;
+    }
+    const userId = getUserId(req);
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason : '';
+    const result = await forceSubmitForReview(req.params.prdId, userId, reason, getDisplayName(req));
+    res.json({ ok: true, ...result });
   } catch (err) {
     next(err);
   }
@@ -3250,7 +3296,7 @@ router.get('/:id', requirePermission('interviews:view'), async (req, res, next) 
   }
 });
 
-router.patch('/:id', requirePermission('interviews:manage'), async (req, res, next) => {
+router.patch('/:id', async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const { status, title, phaseAssignments } = req.body as {
@@ -3262,9 +3308,36 @@ router.patch('/:id', requirePermission('interviews:manage'), async (req, res, ne
         technicalAssigneeId?: string | null;
       };
     };
-    if (status) await updateInterviewStatus(req.params.id, userId, status as InterviewStatus);
-    if (title) await updateInterviewTitle(req.params.id, userId, title);
+    const needsManage = Boolean(title)
+      || Boolean(phaseAssignments)
+      || (status != null && status !== 'complete');
+    let hasManage = false;
+    if (needsManage) {
+      const perms = await getUserPermissions(userId, resolveRequestProject(req));
+      hasManage = isSuperAdminRequest(req) || perms.has('interviews:manage');
+    }
+    const denyManage = () => {
+      res.status(403).json({ error: 'Forbidden', missing: ['interviews:manage'] });
+    };
+    if (status) {
+      if (status !== 'complete' && !hasManage) {
+        denyManage();
+        return;
+      }
+      await updateInterviewStatus(req.params.id, userId, status as InterviewStatus);
+    }
+    if (title) {
+      if (!hasManage) {
+        denyManage();
+        return;
+      }
+      await updateInterviewTitle(req.params.id, userId, title);
+    }
     if (phaseAssignments) {
+      if (!hasManage) {
+        denyManage();
+        return;
+      }
       await updateInterviewPhaseAssignments(req.params.id, userId, phaseAssignments);
     }
     res.json({ ok: true });
@@ -3319,11 +3392,41 @@ router.post('/:id/brief/draft', requirePermission('interviews:manage'), requireG
   }
 });
 
-router.post('/:id/brief/approve', requirePermission('interviews:manage'), requireGroupMembership('BA', 'Manager', 'Product-Owner'), async (req, res, next) => {
+const BRIEF_APPROVE_FORBIDDEN_MESSAGE =
+  'Only the author, an interview section owner, a project admin, a platform admin, or a BA, Manager, or Product Owner with interviews:manage can approve this interview brief';
+const BRIEF_APPROVER_GROUPS = ['BA', 'Manager', 'Product-Owner'];
+
+router.post('/:id/brief/approve', async (req, res, next) => {
   try {
+    const userId = getUserId(req);
+    const interview = await getInterview(req.params.id);
+    if (!interview) {
+      res.status(404).json({ error: 'Interview not found' });
+      return;
+    }
+    const completer = await canCompleteInterviewAndGeneratePrd(userId, interview);
+    let allowed = completer;
+    if (!allowed && isSuperAdminRequest(req)) {
+      allowed = true;
+    }
+    if (!allowed) {
+      const perms = await getUserPermissions(userId, resolveRequestProject(req));
+      if (perms.has('interviews:manage')) {
+        if (perms.has('admin:roles')) {
+          allowed = true;
+        } else {
+          const groups = await getUserGroupNames(userId);
+          allowed = BRIEF_APPROVER_GROUPS.some((group) => groups.includes(group));
+        }
+      }
+    }
+    if (!allowed) {
+      res.status(403).json({ error: BRIEF_APPROVE_FORBIDDEN_MESSAGE });
+      return;
+    }
     const result = await approveInterviewBrief({
       interviewId: req.params.id,
-      approvedBy: getUserId(req),
+      approvedBy: userId,
     });
     res.json(result);
   } catch (err) {
@@ -3331,7 +3434,7 @@ router.post('/:id/brief/approve', requirePermission('interviews:manage'), requir
   }
 });
 
-router.post('/:interviewId/prds', requirePermission('interviews:manage'), async (req, res, next) => {
+router.post('/:interviewId/prds', async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const { chatThreadId, title, model, kickoffGeneration, groundingPolicy } = req.body as {
@@ -3350,6 +3453,11 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
     const interview = await getInterview(req.params.interviewId);
     if (!interview) {
       res.status(404).json({ error: 'Interview not found' });
+      return;
+    }
+    const canGenerate = await canCompleteInterviewAndGeneratePrd(userId, interview);
+    if (!canGenerate) {
+      res.status(403).json({ error: INTERVIEW_COMPLETE_FORBIDDEN_MESSAGE });
       return;
     }
 

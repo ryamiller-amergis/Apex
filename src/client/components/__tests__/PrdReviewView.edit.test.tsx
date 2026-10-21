@@ -87,6 +87,7 @@ jest.mock('../../hooks/useInterviews', () => ({
   })),
   useAcceptFixPrdCoverage: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useOverridePrdReadiness: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useForceSubmitPrd: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useRevertPrdSection: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useDismissPrdFixSession: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useScreenInventoryRoutes: jest.fn(() => ({ data: [] })),

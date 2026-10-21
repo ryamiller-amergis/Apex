@@ -73,6 +73,7 @@ import {
   updateInterviewPhaseAssignments,
   updateInterviewTitle,
   deleteInterview,
+  canCompleteInterviewAndGeneratePrd,
 } from '../services/interviewService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
@@ -83,6 +84,19 @@ const { createNotification: mockCreateNotification } = jest.requireMock('../serv
 const { getActiveUsers: mockGetActiveUsers } = jest.requireMock('../services/rbacService') as {
   getActiveUsers: jest.Mock;
 };
+const { isPlatformAdmin: mockIsPlatformAdmin, isProjectAdmin: mockIsProjectAdmin } = jest.requireMock(
+  '../utils/rbacHelpers',
+) as {
+  isPlatformAdmin: jest.Mock;
+  isProjectAdmin: jest.Mock;
+};
+
+const COMPLETE_FORBIDDEN =
+  'Only the author, an interview section owner, a project admin, or a platform admin can complete an interview';
+
+const COMPLETE_INVALID_STATUS = 'Only in-progress interviews can be marked complete';
+
+const AUTHOR_STATUS_FORBIDDEN = 'Only the author can change interview status';
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -95,6 +109,10 @@ const interviewRow = {
   repo: 'org/repo-alpha',
   status: 'in_progress',
   prototypeStageEnabled: true,
+  prdOwnerId: 'owner-prd',
+  designDocOwnerId: 'owner-dd',
+  designPrototypeOwnerId: 'owner-proto',
+  testCaseOwnerId: 'owner-qa',
   createdAt: '2026-01-01T00:00:00Z',
   updatedAt: '2026-01-02T00:00:00Z',
 };
@@ -668,8 +686,66 @@ describe('getInterview', () => {
 
 // ── updateInterviewStatus ──────────────────────────────────────────────────────
 
+describe('canCompleteInterviewAndGeneratePrd', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsPlatformAdmin.mockResolvedValue(false);
+    mockIsProjectAdmin.mockResolvedValue(false);
+  });
+
+  it('allows the interview author', async () => {
+    await expect(canCompleteInterviewAndGeneratePrd('user-1', interviewRow)).resolves.toBe(true);
+    expect(mockIsPlatformAdmin).not.toHaveBeenCalled();
+    expect(mockIsProjectAdmin).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['PRD section owner', 'owner-prd'],
+    ['design doc section owner', 'owner-dd'],
+    ['design prototype section owner', 'owner-proto'],
+    ['QA section owner', 'owner-qa'],
+  ])('allows the %s when they are not the author', async (_label, userId) => {
+    await expect(canCompleteInterviewAndGeneratePrd(userId, interviewRow)).resolves.toBe(true);
+  });
+
+  it('allows a project admin who is not the author or a section owner', async () => {
+    mockIsProjectAdmin.mockResolvedValue(true);
+
+    await expect(canCompleteInterviewAndGeneratePrd('project-admin', interviewRow)).resolves.toBe(true);
+    expect(mockIsProjectAdmin).toHaveBeenCalledWith('project-admin', 'proj-alpha');
+  });
+
+  it('allows a platform admin who is not the author or a section owner', async () => {
+    mockIsPlatformAdmin.mockResolvedValue(true);
+
+    await expect(canCompleteInterviewAndGeneratePrd('platform-admin', interviewRow)).resolves.toBe(true);
+    expect(mockIsPlatformAdmin).toHaveBeenCalledWith('platform-admin');
+  });
+
+  it('denies a user who is not the author, a section owner, or an admin', async () => {
+    await expect(canCompleteInterviewAndGeneratePrd('user-other', interviewRow)).resolves.toBe(false);
+  });
+
+  it('does not allow an unrelated user just because they could hold interviews:manage', async () => {
+    await expect(canCompleteInterviewAndGeneratePrd('manage-only', interviewRow)).resolves.toBe(false);
+    expect(mockIsPlatformAdmin).toHaveBeenCalledWith('manage-only');
+    expect(mockIsProjectAdmin).toHaveBeenCalledWith('manage-only', 'proj-alpha');
+  });
+});
+
 describe('updateInterviewStatus', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsPlatformAdmin.mockResolvedValue(false);
+    mockIsProjectAdmin.mockResolvedValue(false);
+  });
+
+  function mockStatusPersist() {
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+    return setMock;
+  }
 
   it('DoD-4 persists terminal status before making grounding cleanup-eligible', async () => {
     mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
@@ -704,12 +780,130 @@ describe('updateInterviewStatus', () => {
     ).rejects.toMatchObject({ message: 'Interview not found' });
   });
 
-  it('throws 403 when a non-author tries to update status', async () => {
+  it('lets the author set status to complete', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+    const setMock = mockStatusPersist();
+
+    await updateInterviewStatus('interview-1', 'user-1', 'complete');
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'complete' }));
+  });
+
+  it.each([
+    ['PRD section owner', 'owner-prd'],
+    ['design doc section owner', 'owner-dd'],
+    ['design prototype section owner', 'owner-proto'],
+    ['QA section owner', 'owner-qa'],
+  ])('lets the %s set status to complete when they are not the author', async (_label, userId) => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+    const setMock = mockStatusPersist();
+
+    await updateInterviewStatus('interview-1', userId, 'complete');
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'complete' }));
+  });
+
+  it('lets a project admin set status to complete when they are not the author or a section owner', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+    mockIsProjectAdmin.mockResolvedValue(true);
+    const setMock = mockStatusPersist();
+
+    await updateInterviewStatus('interview-1', 'project-admin', 'complete');
+
+    expect(mockIsProjectAdmin).toHaveBeenCalledWith('project-admin', 'proj-alpha');
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'complete' }));
+  });
+
+  it('lets a platform admin set status to complete when they are not the author or a section owner', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+    mockIsPlatformAdmin.mockResolvedValue(true);
+    const setMock = mockStatusPersist();
+
+    await updateInterviewStatus('interview-1', 'platform-admin', 'complete');
+
+    expect(mockIsPlatformAdmin).toHaveBeenCalledWith('platform-admin');
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'complete' }));
+  });
+
+  it('throws 403 when a user who is not the author, a section owner, or an admin sets complete', async () => {
     mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
 
     await expect(
       updateInterviewStatus('interview-1', 'user-other', 'complete'),
-    ).rejects.toMatchObject({ message: 'Only the author can change interview status' });
+    ).rejects.toMatchObject({ status: 403, message: COMPLETE_FORBIDDEN });
+  });
+
+  it.each([
+    ['author', 'user-1'],
+    ['section owner', 'owner-prd'],
+  ])('throws 409 when the %s completes an archived interview', async (_label, userId) => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      status: 'archived',
+    });
+
+    await expect(
+      updateInterviewStatus('interview-1', userId, 'complete'),
+    ).rejects.toMatchObject({ status: 409, message: COMPLETE_INVALID_STATUS });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it('throws 409 when a completer marks an already-complete interview complete', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      status: 'complete',
+    });
+
+    await expect(
+      updateInterviewStatus('interview-1', 'user-1', 'complete'),
+    ).rejects.toMatchObject({ status: 409, message: COMPLETE_INVALID_STATUS });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it('throws 409 when a completer marks a playbook interview complete', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      playbookRunId: 'run-1',
+    });
+
+    await expect(
+      updateInterviewStatus('interview-1', 'user-1', 'complete'),
+    ).rejects.toMatchObject({ status: 409, message: COMPLETE_INVALID_STATUS });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['in_progress'],
+    ['archived'],
+  ])('throws 403 when a section owner sets status to %s', async (status) => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+
+    await expect(
+      updateInterviewStatus('interview-1', 'owner-prd', status as 'in_progress' | 'archived'),
+    ).rejects.toMatchObject({ status: 403, message: AUTHOR_STATUS_FORBIDDEN });
+  });
+
+  it('lets the author reopen and archive', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+    const setMock = mockStatusPersist();
+
+    await updateInterviewStatus('interview-1', 'user-1', 'in_progress');
+    await updateInterviewStatus('interview-1', 'user-1', 'archived');
+
+    expect(setMock).toHaveBeenNthCalledWith(1, expect.objectContaining({ status: 'in_progress' }));
+    expect(setMock).toHaveBeenNthCalledWith(2, expect.objectContaining({ status: 'archived' }));
+  });
+
+  it('still rejects a platform admin who tries to archive or reopen someone else\'s interview', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+    mockIsPlatformAdmin.mockResolvedValue(true);
+
+    await expect(
+      updateInterviewStatus('interview-1', 'platform-admin', 'archived'),
+    ).rejects.toMatchObject({ status: 403, message: AUTHOR_STATUS_FORBIDDEN });
+    await expect(
+      updateInterviewStatus('interview-1', 'platform-admin', 'in_progress'),
+    ).rejects.toMatchObject({ status: 403, message: AUTHOR_STATUS_FORBIDDEN });
   });
 });
 
@@ -862,6 +1056,19 @@ describe('updateInterviewPhaseAssignments', () => {
       deliveryAssigneeId: 'outside-project',
     })).rejects.toMatchObject({
       message: 'Phase assignees must be active users in this project',
+    });
+  });
+
+  it('does not let a section owner assign phases', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+    mockIsPlatformAdmin.mockResolvedValue(false);
+    mockIsProjectAdmin.mockResolvedValue(false);
+
+    await expect(updateInterviewPhaseAssignments('interview-1', 'owner-prd', {
+      discoveryAssigneeId: 'owner-prd',
+    })).rejects.toMatchObject({
+      status: 403,
+      message: 'Only the interview owner, a project admin, or a platform admin can assign phases',
     });
   });
 });

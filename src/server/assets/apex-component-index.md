@@ -164,19 +164,6 @@ them by name and replicate their CSS-variable-based styling patterns.
 | `FeatureRequestModal` | Modal | Submit a new feature request |
 | `FeatureRequestFab` | FAB | Floating action button to open request modal |
 
-## PDF Tools
-
-| Component | Route/Context | Purpose |
-|-----------|---------------|---------|
-| `PdfAssemblyView` | `/pdf-tools` | Multi-page PDF assembly workspace |
-| `PdfDocumentSidebar` | Sidebar | Document list for PDF assembly |
-| `PdfInlinePreview` | Inline | Preview a single PDF page |
-| `PdfConversionStatus` | Status | Background conversion job progress |
-| `PageThumbnailGrid` | Grid | Grid of page thumbnails |
-| `PageThumbnail` | Card | Single page thumbnail with selection |
-| `PagePreviewModal` | Modal | Full-size page preview |
-| `PdfToolsRouteGuard` | Guard | Gate for PDF tools feature flag |
-
 ## Shell
 
 | Component | Context | Purpose |
@@ -193,8 +180,6 @@ them by name and replicate their CSS-variable-based styling patterns.
 | `ViewErrorFallback` | Error | Error boundary fallback for views |
 | `Changelog` | Modal | What's New changelog overlay |
 | `ChangelogBanner` | Banner | Top-of-page "new release" banner |
-| `DesktopOnlyGate` | Guard | Redirects mobile users to guidance |
-| `MobileGuidanceMessage` | Info | Mobile unsupported message |
 | `MarkdownWithMermaid` | Inline | Renders markdown with Mermaid diagram support |
 | `RichTextField` | Form | Rich text input with toolbar |
 | `RangeInput` | Form | Numeric range slider |
