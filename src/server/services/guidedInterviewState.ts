@@ -74,6 +74,80 @@ const TECHNICAL_TOPICS = [
 const MARKER_RE =
   /\[\[interview-phase:(discovery|delivery|technical):(done|stopped|skipped|wrapup|\d+)(?::(\d+))?(?::(followup))?\]\]/g;
 
+const GUIDED_PHASE_INDEX = { discovery: 1, delivery: 2, technical: 3 } as const;
+
+export type GuidedInterviewPhaseSlice = {
+  phaseIndex: 1 | 2 | 3;
+  messages: Array<{ role: 'user' | 'agent'; text: string }>;
+};
+
+function markerPhase(text: string): 'discovery' | 'delivery' | 'technical' | null {
+  const re = new RegExp(MARKER_RE.source, 'g');
+  let phase: 'discovery' | 'delivery' | 'technical' | null = null;
+  for (const match of text.matchAll(re)) {
+    phase = match[1] as 'discovery' | 'delivery' | 'technical';
+  }
+  return phase;
+}
+
+function isVisibleTranscriptMessage(
+  message: { role: string; text: string; hidden?: boolean },
+): message is { role: 'user' | 'agent'; text: string; hidden?: boolean } {
+  if (message.hidden) return false;
+  return message.role === 'user' || message.role === 'agent';
+}
+
+/**
+ * Split a guided transcript into phase slices.
+ * Each visible user or agent message belongs to the phase of the latest agent
+ * marker at or before it. Visible messages before the first marker (the user
+ * kickoff) belong to phase 1 once a phase has started. Hidden, system and
+ * tool messages are left out.
+ */
+export function sliceGuidedInterviewPhases(
+  messages: ReadonlyArray<{ role: string; text: string; hidden?: boolean }>,
+): GuidedInterviewPhaseSlice[] {
+  const buckets: Record<1 | 2 | 3, Array<{ role: 'user' | 'agent'; text: string }>> = {
+    1: [],
+    2: [],
+    3: [],
+  };
+  const prefix: Array<{ role: 'user' | 'agent'; text: string }> = [];
+  let current: 1 | 2 | 3 | null = null;
+  for (const message of messages) {
+    if (!isVisibleTranscriptMessage(message)) continue;
+    if (message.role === 'agent') {
+      const phase = markerPhase(message.text);
+      if (phase) current = GUIDED_PHASE_INDEX[phase];
+    }
+    const item = { role: message.role, text: message.text };
+    if (current === null) {
+      prefix.push(item);
+      continue;
+    }
+    buckets[current].push(item);
+  }
+  if (prefix.length > 0 && current !== null) {
+    buckets[1].unshift(...prefix);
+  }
+  return ([1, 2, 3] as const)
+    .filter((phaseIndex) => buckets[phaseIndex].length > 0)
+    .map((phaseIndex) => ({ phaseIndex, messages: buckets[phaseIndex] }));
+}
+
+/** Phase of the last visible agent marker, or null when the interview has not started a phase. */
+export function latestGuidedInterviewPhaseIndex(
+  messages: ReadonlyArray<{ role: string; text: string; hidden?: boolean }>,
+): 1 | 2 | 3 | null {
+  let current: 1 | 2 | 3 | null = null;
+  for (const message of messages) {
+    if (!isVisibleTranscriptMessage(message) || message.role !== 'agent') continue;
+    const phase = markerPhase(message.text);
+    if (phase) current = GUIDED_PHASE_INDEX[phase];
+  }
+  return current;
+}
+
 const DEEPER_TECHNICAL_QUESTIONS = 3;
 const DEEPER_TECHNICAL_TOTAL = TECHNICAL_TOPICS.length + DEEPER_TECHNICAL_QUESTIONS;
 
