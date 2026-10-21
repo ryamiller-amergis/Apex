@@ -12,6 +12,12 @@ import { getActiveUsers } from './rbacService';
 import { getSkillSettingsName } from './projectSettingsService';
 import { runGroundingService } from './runGroundingService';
 import { recordArtifactDoneEvent } from './artifactDoneEventService';
+import { listLinkedContextIds } from './interviewLinkService';
+import {
+  latestGuidedInterviewPhaseIndex,
+  sliceGuidedInterviewPhases,
+  usesGuidedInterview,
+} from './guidedInterviewState';
 
 const VALID_INTERVIEW_STATUSES: InterviewStatus[] = ['in_progress', 'complete', 'archived'];
 
@@ -649,4 +655,77 @@ export async function deleteInterview(id: string, requestingUserId: string): Pro
   }
   await cancelRun(row.chatThreadId);
   await db.delete(interviews).where(eq(interviews.id, id));
+}
+
+export type InterviewEvaluationPhase = {
+  phaseIndex: number;
+  messages: Array<{ role: 'user' | 'agent'; text: string }>;
+};
+
+export type InterviewEvaluationInputs = {
+  id: string;
+  project: string;
+  model: string | null;
+  skillPath: string | null;
+  skillVersion: string | null;
+  phaseCount: number;
+  currentPhase: number | null;
+  phases: InterviewEvaluationPhase[];
+  linkedContextIds: { adrIds: string[]; designModuleIds: string[] };
+};
+
+/** Read-only lineage and transcript slices for an evaluation. Writes nothing. */
+export async function getInterviewEvaluationInputs(
+  interviewId: string,
+): Promise<InterviewEvaluationInputs | null> {
+  const row = await db.query.interviews.findFirst({
+    where: eq(interviews.id, interviewId),
+    columns: { id: true, project: true, model: true, chatThreadId: true },
+  });
+  if (!row) return null;
+
+  const { getThreadAsync } = await import('./chatAgentService');
+  const thread = await getThreadAsync(row.chatThreadId);
+  const skillPath = thread?.kickoff?.skillPath ?? null;
+  const skillVersion = thread?.groundedSha ?? null;
+  const model = row.model ?? thread?.kickoff?.model ?? null;
+  const messages = thread?.messages ?? [];
+  const guided = usesGuidedInterview(skillPath);
+
+  let phases: InterviewEvaluationPhase[];
+  let phaseCount: number;
+  let currentPhase: number | null;
+  if (!guided) {
+    const visible = messages.filter(
+      (message) => !message.hidden && (message.role === 'user' || message.role === 'agent'),
+    );
+    phaseCount = 1;
+    currentPhase = visible.length > 0 ? 1 : null;
+    phases = visible.length > 0
+      ? [{
+          phaseIndex: 1,
+          messages: visible.map((message) => ({
+            role: message.role as 'user' | 'agent',
+            text: message.text,
+          })),
+        }]
+      : [];
+  } else {
+    phaseCount = 3;
+    phases = sliceGuidedInterviewPhases(messages);
+    currentPhase = latestGuidedInterviewPhaseIndex(messages);
+  }
+
+  const linkedContextIds = await listLinkedContextIds(row.id);
+  return {
+    id: row.id,
+    project: row.project,
+    model,
+    skillPath,
+    skillVersion,
+    phaseCount,
+    currentPhase,
+    phases,
+    linkedContextIds,
+  };
 }
