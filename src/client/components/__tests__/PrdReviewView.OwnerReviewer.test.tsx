@@ -31,6 +31,7 @@ const mockUseDocumentAssignments = jest.fn();
 const mockUseInterview = jest.fn();
 const mockUseActiveUsers = jest.fn();
 const mockSubmitPrdMutateAsync = jest.fn();
+const mockForceSubmitPrdMutateAsync = jest.fn();
 
 jest.mock('../../hooks/useInterviews', () => ({
   usePrd: (...args: unknown[]) => mockUsePrd(...args),
@@ -66,6 +67,7 @@ jest.mock('../../hooks/useInterviews', () => ({
   })),
   useAcceptFixPrdCoverage: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useOverridePrdReadiness: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useForceSubmitPrd: jest.fn(() => ({ mutateAsync: mockForceSubmitPrdMutateAsync, isPending: false })),
   useRevertPrdSection: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useDismissPrdFixSession: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useScreenInventoryRoutes: jest.fn(() => ({ data: [] })),
@@ -376,6 +378,148 @@ describe('Submit for review', () => {
         qaApproverIds: ['qa-reviewer'],
       });
     });
+  });
+
+  it('shows the error and a Submit for Review retry when auto-submit fails on a ready draft', async () => {
+    const { useSubmitPrd } = jest.requireMock('../../hooks/useInterviews') as { useSubmitPrd: jest.Mock };
+    const submitError = new Error('Only the author or owner can submit for review');
+    mockSubmitPrdMutateAsync.mockRejectedValue(submitError);
+    useSubmitPrd.mockReturnValue({
+      mutateAsync: mockSubmitPrdMutateAsync,
+      isPending: false,
+      isError: true,
+      error: submitError,
+      variables: { prdId: 'prd-1' },
+    });
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage',
+      userId: 'user-author',
+      isAdmin: false,
+    });
+    mockUsePrd.mockReturnValue({
+      data: {
+        ...basePrd,
+        backlogJson: { epics: [] },
+        latestTestCase: {
+          id: 'test-case-1',
+          prdId: 'prd-1',
+          chatThreadId: null,
+          status: 'ready',
+          coverageSummary: { totalCases: 10, pbisCovered: 1, acCovered: '4/4', brCovered: '4/4', gaps: 0 },
+          validationStatus: 'not_available',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    try {
+      renderView();
+
+      await waitFor(() => expect(mockSubmitPrdMutateAsync).toHaveBeenCalledTimes(1));
+      expect(screen.getByTestId('submit-review-error')).toHaveTextContent(
+        'Only the author or owner can submit for review',
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Submit for Review/i }));
+      await waitFor(() => expect(mockSubmitPrdMutateAsync).toHaveBeenCalledTimes(2));
+    } finally {
+      useSubmitPrd.mockImplementation(() => ({ mutateAsync: mockSubmitPrdMutateAsync, isPending: false }));
+    }
+  });
+
+  it('does not show a submit error left over from a different PRD', () => {
+    const { useSubmitPrd } = jest.requireMock('../../hooks/useInterviews') as { useSubmitPrd: jest.Mock };
+    useSubmitPrd.mockReturnValue({
+      mutateAsync: mockSubmitPrdMutateAsync,
+      isPending: false,
+      isError: true,
+      error: new Error('Only the author or owner can submit for review'),
+      variables: { prdId: 'prd-other' },
+    });
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage',
+      userId: 'user-author',
+      isAdmin: false,
+    });
+    mockUsePrd.mockReturnValue({
+      data: { ...basePrd, status: 'revision_requested' },
+      isLoading: false,
+      isError: false,
+    });
+
+    try {
+      renderView();
+
+      expect(screen.queryByTestId('submit-review-error')).not.toBeInTheDocument();
+    } finally {
+      useSubmitPrd.mockImplementation(() => ({ mutateAsync: mockSubmitPrdMutateAsync, isPending: false }));
+    }
+  });
+
+  it('lets a super admin force submit a draft for review with a reason', async () => {
+    mockForceSubmitPrdMutateAsync.mockResolvedValue({ ok: true, reviewerAssignmentError: null });
+    mockUseAppShell.mockReturnValue({
+      can: () => true,
+      userId: 'super-admin-user',
+      isAdmin: true,
+      isSuperAdmin: true,
+    });
+
+    renderView();
+
+    fireEvent.click(screen.getByTestId('prd-actions-menu-btn'));
+    fireEvent.click(screen.getByTestId('prd-actions-force-submit-btn'));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Validation passed; status is stuck' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Force submit' }));
+
+    await waitFor(() =>
+      expect(mockForceSubmitPrdMutateAsync).toHaveBeenCalledWith({
+        prdId: 'prd-1',
+        reason: 'Validation passed; status is stuck',
+      }),
+    );
+  });
+
+  it('shows the reviewer warning after a force submit that could not assign reviewers', async () => {
+    mockForceSubmitPrdMutateAsync.mockResolvedValue({
+      ok: true,
+      reviewerAssignmentError: 'Users not in the prd approver pool',
+    });
+    mockUseAppShell.mockReturnValue({
+      can: () => true,
+      userId: 'super-admin-user',
+      isAdmin: true,
+      isSuperAdmin: true,
+    });
+
+    renderView();
+
+    fireEvent.click(screen.getByTestId('prd-actions-menu-btn'));
+    fireEvent.click(screen.getByTestId('prd-actions-force-submit-btn'));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Stuck' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Force submit' }));
+
+    const notice = await screen.findByTestId('force-submit-notice');
+    expect(notice).toHaveTextContent('Users not in the prd approver pool');
+    expect(notice).toHaveTextContent('owner-only review');
+    expect(notice).not.toHaveTextContent('Reassign');
+  });
+
+  it('does not offer force submit to a non-super-admin author', () => {
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage',
+      userId: 'user-author',
+      isAdmin: false,
+      isSuperAdmin: false,
+    });
+
+    renderView();
+
+    fireEvent.click(screen.getByTestId('prd-actions-menu-btn'));
+    expect(screen.queryByTestId('prd-actions-force-submit-btn')).not.toBeInTheDocument();
   });
 
   it('does not show Submit for Review while validation is still pending', () => {

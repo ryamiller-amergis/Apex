@@ -1088,4 +1088,41 @@ describe('AzureDevOpsService', () => {
       expect(result.medianDays).toBeNull();
     });
   });
+
+  describe('addPullRequestLabel', () => {
+    it('creates the label when the pull request does not already have it', async () => {
+      const service = new AzureDevOpsService();
+      mockGitApi.getPullRequestLabels = jest.fn().mockResolvedValue([{ name: 'other' }]);
+      mockGitApi.createPullRequestLabel = jest.fn().mockResolvedValue({ name: 'apex-cloud-agent' });
+
+      await service.addPullRequestLabel({
+        repo: 'MaxView',
+        project: 'MaxView',
+        pullRequestId: 9,
+        name: 'apex-cloud-agent',
+      });
+
+      expect(mockGitApi.createPullRequestLabel).toHaveBeenCalledWith(
+        { name: 'apex-cloud-agent' },
+        'MaxView',
+        9,
+        'MaxView',
+      );
+    });
+
+    it('does not create the label again when the name is already present', async () => {
+      const service = new AzureDevOpsService();
+      mockGitApi.getPullRequestLabels = jest.fn().mockResolvedValue([{ name: 'Apex-Cloud-Agent' }]);
+      mockGitApi.createPullRequestLabel = jest.fn();
+
+      await service.addPullRequestLabel({
+        repo: 'MaxView',
+        project: 'MaxView',
+        pullRequestId: 9,
+        name: 'apex-cloud-agent',
+      });
+
+      expect(mockGitApi.createPullRequestLabel).not.toHaveBeenCalled();
+    });
+  });
 });

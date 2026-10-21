@@ -241,6 +241,11 @@ describe('seeded design module documentation', () => {
     for (const sourceGlobs of sourceScopes) {
       expect(sourceGlobs.length).toBeGreaterThan(5);
       expect(sourceGlobs).not.toContain('src/**');
+      // Historical pdf-assembly globs still name files removed in the DocHub
+      // split. Live globs are updated by 20260821170000.
+      if (sourceGlobs.includes('src/client/components/PdfAssemblyView.tsx')) {
+        continue;
+      }
       const fingerprint = computeFingerprint(sourceGlobs);
       expect(fingerprint.sourceAvailable).toBe(true);
       expect(fingerprint.files).toHaveLength(sourceGlobs.length);

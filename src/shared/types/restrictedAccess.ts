@@ -29,7 +29,6 @@ export const MODULE_VIEW_PERMISSIONS: Record<MenuItemKey, string> = {
   standup: 'standup:participate',
   'ui-lab': 'ui-lab:view',
   'feature-requests': 'feature-requests:view',
-  'pdf-tools': 'pdf-assembly:use',
   'ai-cost': 'analytics:ai-cost:view',
   'design-module': 'design-module:view',
   'load-tests': 'load-test:view',

@@ -32,8 +32,6 @@ import { resolveUiLabRouteAccess } from '../shared/types/uiLab';
 import { RepoSelector } from './components/RepoSelector';
 import { DEFAULT_MODEL_ID } from './config/models';
 import { FeatureFlagDemo } from './components/FeatureFlagDemo';
-import { PdfToolsRouteGuard } from './components/PdfToolsRouteGuard';
-import { DesktopOnlyGate } from './components/DesktopOnlyGate';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
 import { useDocumentDeepLinkProject } from './hooks/useDocumentDeepLinkProject';
@@ -98,8 +96,6 @@ const StandupSummaryView = lazy(() => import('./components/StandupSummaryView'))
 const FeatureRequestsView = lazy(() => import('./components/FeatureRequestsView'));
 const ApexWorkBoardView = lazy(() => import('./components/ApexWorkBoardView').then(m => ({ default: m.ApexWorkBoardView })));
 const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ default: m.UiLabView })));
-const ApryseWebViewerPoc = lazy(() => import('./components/ApryseWebViewerPoc').then(m => ({ default: m.ApryseWebViewerPoc })));
-const NutrientWebSdkPoc = lazy(() => import('./components/NutrientWebSdkPoc').then(m => ({ default: m.NutrientWebSdkPoc })));
 const DesignModuleView = lazy(() => import('./components/DesignModuleView'));
 const PlaybookStatusView = lazy(() => import('./components/PlaybookStatusView'));
 const PlaybookCanvasPage = lazy(() => import('./components/PlaybookCanvasPage'));
@@ -191,7 +187,7 @@ function App() {
   }, []);
   const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -227,8 +223,6 @@ function App() {
                     ? 'feature-requests'
                     : location.pathname.startsWith('/ui-lab')
                     ? 'ui-lab'
-                    : location.pathname.startsWith('/pdf-tools')
-                    ? 'pdf-tools'
                     : location.pathname === '/ai-cost'
                     ? 'ai-cost'
                     : location.pathname === '/design-module'
@@ -561,7 +555,6 @@ function App() {
       });
       if (access === 'deny') navigate(fallback);
     }
-    if (currentView === 'pdf-tools'     && !isSuperAdmin && (!effectiveEnabledViews.includes('pdf-tools') || !can('pdf-assembly:use'))) navigate(fallback);
     if (currentView === 'design-module' && !isSuperAdmin && (!effectiveEnabledViews.includes('design-module') || !can('design-module:view'))) navigate(fallback);
     if (currentView === 'load-tests'    && !isSuperAdmin && (!effectiveEnabledViews.includes('load-tests')    || !can('load-test:view')))    navigate(fallback);
     if (currentView === 'diagrams'      && !isSuperAdmin && (!effectiveEnabledViews.includes('diagrams')      || !can('diagram:view')))      navigate(fallback);
@@ -936,7 +929,6 @@ function App() {
             onNavigateStandup={() => navigate('/standup')}
             onNavigateUiLab={() => navigate('/ui-lab')}
             onNavigateFeatureRequests={() => navigate('/feature-requests')}
-            onNavigatePdfTools={() => navigate('/pdf-tools/nutrient-poc')}
             onNavigateAiCost={() => navigate('/ai-cost')}
             onNavigateDesignModule={() => navigate('/design-module')}
             onNavigateWorkBoard={() => navigate('/work-board')}
@@ -1393,26 +1385,6 @@ function App() {
                   />
                 </div>
               </Suspense>
-            </ErrorBoundary>
-          ) : currentView === 'pdf-tools' ? (
-            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
-              <PdfToolsRouteGuard
-                selectedProject={selectedProject}
-                isSuperAdmin={isSuperAdmin}
-                menuEnabledViews={effectiveEnabledViews}
-              >
-                <DesktopOnlyGate>
-                  <Suspense fallback={<div {...{ 'data-testid': 'pdf-tools-loading' }}><ViewSkeleton /></div>}>
-                    <div className="pdf-tools-view" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                      {location.pathname === '/pdf-tools/webviewer-poc' ? (
-                        <ApryseWebViewerPoc />
-                      ) : (
-                        <NutrientWebSdkPoc />
-                      )}
-                    </div>
-                  </Suspense>
-                </DesktopOnlyGate>
-              </PdfToolsRouteGuard>
             </ErrorBoundary>
           ) : currentView === 'design-module' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>

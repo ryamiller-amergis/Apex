@@ -4184,7 +4184,7 @@ router.post('/ai-capability-baseline/auto-capture', async (req: Request, res: Re
 // ensureAuthenticated is applied upstream in index.ts for all /api routes.
 
 import { attachPermissions } from '../middleware/rbac';
-import { getUserPermissions, getUserRoleNames, getChangelogPrefs, updateChangelogPrefs } from '../services/rbacService';
+import { getUserPermissions, getUserRoleNames, getUserProjectRoles, getChangelogPrefs, updateChangelogPrefs } from '../services/rbacService';
 import { getUserGroupNames, getUserGroupIds } from '../services/groupService';
 import { resolveHomePillAccess } from '../services/homePillAccessResolver';
 import type {
@@ -4248,13 +4248,14 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       ? req.query.project
       : (restrictedActive ? RESTRICTED_ACCESS_PROJECT : undefined);
 
-    const [permSet, roles, userGroups, whatsNew, changelogPrefs, devAccessAllowlisted] = await Promise.all([
+    const [permSet, roles, userGroups, whatsNew, changelogPrefs, devAccessAllowlisted, projectRoles] = await Promise.all([
       getUserPermissions(userId, project),
       getUserRoleNames(userId),
       getUserGroupNames(userId),
       evaluateWhatsNewState(userId),
       getChangelogPrefs(userId),
       email ? isDevAccessAllowlisted(email) : Promise.resolve(false),
+      project ? getUserProjectRoles(userId, project) : Promise.resolve([] as string[]),
     ]);
     if (superAdmin && !roles.includes('admin')) {
       roles.push('admin');
@@ -4268,6 +4269,7 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
     res.json({
       permissions: [...permSet],
       roles,
+      projectRoles,
       groups: userGroups,
       userId,
       isSuperAdmin: superAdmin,

@@ -1172,6 +1172,27 @@ export function useOverridePrdReadiness() {
   });
 }
 
+export function useForceSubmitPrd() {
+  const qc = useQueryClient();
+  return useMutation<
+    { ok: true; reviewerAssignmentError: string | null },
+    Error,
+    { prdId: string; reason: string }
+  >({
+    mutationFn: ({ prdId, reason }) =>
+      apiFetch(`/api/interviews/prds/${prdId}/force-submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      }),
+    onSuccess: (_data, { prdId }) => {
+      void qc.invalidateQueries({ queryKey: ['prd', prdId] });
+      void qc.invalidateQueries({ queryKey: ['prds'] });
+      void qc.invalidateQueries({ queryKey: ['document-assignments', prdId] });
+    },
+  });
+}
+
 export function useOverrideDesignDocValidation() {
   const qc = useQueryClient();
   return useMutation<{ override: unknown }, Error, { designDocId: string; reason: string }>({
