@@ -511,7 +511,17 @@ describe('VT-02 / VT-06 — rollback and untouched prds and interviews', () => {
     const interviewsBefore = await columnNames('interviews');
 
     await client.end();
-    await migrateDown(scratch.connectionString, 2);
+    const files = fs
+      .readdirSync(MIGRATIONS_DIR)
+      .filter((file) => file.endsWith('.sql'))
+      .sort();
+    const firstEvaluation = files.findIndex((file) => file.startsWith('20261016154817'));
+    if (firstEvaluation < 0) {
+      throw new Error('Missing the workflow evaluation tables migration (20261016154817).');
+    }
+    // Permissions and the feature-flag seed follow the tables and rubric seeds.
+    // Rolling back only the last two leaves the evaluation tables in place.
+    await migrateDown(scratch.connectionString, files.length - firstEvaluation);
 
     client = new pg.Client({ connectionString: scratch.connectionString });
     await client.connect();
