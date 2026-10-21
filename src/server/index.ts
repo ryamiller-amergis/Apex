@@ -92,7 +92,6 @@ import {
   mountInteractiveGateway,
 } from './services/interactiveGatewayHost';
 import uiLabRoutes from './routes/uiLab';
-import pdfRoutes from './routes/pdf';
 import aiCostRoutes from './routes/aiCost';
 import e2eSetupRoutes from './routes/e2eSetup';
 import designModuleRoutes from './routes/designModule';
@@ -106,7 +105,6 @@ import aiRunsInternalRoutes from './routes/aiRunsInternal';
 import foundationSkillsAuthorizeRoutes from './routes/foundationSkillsAuthorize';
 import profileRoutes from './routes/profile';
 import walkthroughsRoutes from './routes/walkthroughs';
-import { startPdfProcessingPoller } from './services/pdfAssemblyService';
 import { startLoadTestRunReaper } from './services/loadTestRunService';
 
 // ── E2E mode guard ────────────────────────────────────────────────────────────
@@ -261,7 +259,6 @@ app.use('/api/standup', ensureAuthenticated, standupRouter);
 app.use('/api/feature-flags', ensureAuthenticated, featureFlagRoutes);
 app.use('/api/observability', ensureAuthenticated, observabilityRoutes);
 app.use('/api/ui-lab', ensureAuthenticated, uiLabRoutes);
-app.use('/api/pdf', pdfRoutes);
 app.use('/api/feature-requests', ensureAuthenticated, featureRequestRoutes);
 app.use('/api/apex-work-items', ensureAuthenticated, apexWorkItemsRoutes);
 app.use('/api/profile', ensureAuthenticated, profileRoutes);
@@ -443,8 +440,6 @@ const server = app.listen(PORT, () => {
 
   workBoardScheduler.start();
   console.log('Work board due-soon scheduler started');
-
-  startPdfProcessingPoller();
 
   bootstrapAdmin();
 

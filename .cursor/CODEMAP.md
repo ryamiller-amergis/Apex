@@ -16,7 +16,7 @@ Jest + Testing Library, Playwright E2E, Terraform on Azure.
 - `tests/integration/`: `*.integration.test.ts`, run with `jest.config.integration.js`.
 - `foundation-skills/`: packaged skills library (`foundation-skills/catalog.json`, `foundation-skills/foundation/`, `foundation-skills/adapters/`); published by `.github/workflows/publish-apex-skills.yml`.
 - `runners/`: container workers, one Dockerfile each: `runners/ai-runs/`, `runners/ai-runs-interactive/`, `runners/load-test-k6/`, `runners/repo-read-service/`.
-- `infra/`: Terraform, one `.tf` per capability (`infra/main.tf`, `infra/shared-async.tf`, `infra/ai-runs-worker.tf`, `infra/load-test.tf`, `infra/pdf-processing.tf`, `infra/repo-read-service.tf`). Standards: `.cursor/skills/terraform-infra/SKILL.md`.
+- `infra/`: Terraform, one `.tf` per capability (`infra/main.tf`, `infra/shared-async.tf`, `infra/ai-runs-worker.tf`, `infra/load-test.tf`, `infra/repo-read-service.tf`). Standards: `.cursor/skills/terraform-infra/SKILL.md`.
 - `scripts/`: CI checks (`scripts/ci/`), E2E helpers (`scripts/e2e/`), changelog, dev→prod migration.
 - `design-docs/`: feature design docs. `docs/`: setup and ops (auth, Azure cost, release, security).
 - `public/`: static assets; `public/CHANGELOG.json` is the release record.
