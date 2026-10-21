@@ -52,8 +52,20 @@ interface AppSidebarProps {
   onNavigatePlaybooks?: () => void;
   /** Playbooks stays hidden until the production-adapters flag is on for the project. */
   playbooksEnabled?: boolean;
+  onNavigateIntegrations?: () => void;
+  /** Integrations stays hidden until the project flag and menu are both on. */
+  integrationsEnabled?: boolean;
   onNavigateAdmin: () => void;
 }
+
+const IconIntegrations: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M7 3.5h6v4H7z" />
+    <path d="M10 7.5v3" />
+    <path d="M4 13.5h12v3H4z" />
+    <path d="M6 13.5v-2h8v2" />
+  </svg>
+);
 
 const IconHome: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -225,6 +237,8 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigateDiagrams,
   onNavigatePlaybooks,
   playbooksEnabled = false,
+  onNavigateIntegrations,
+  integrationsEnabled = false,
   onNavigateAdmin,
 }) => {
   const { isMobile } = useBreakpoint();
@@ -267,6 +281,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         { label: 'UI Lab', view: 'ui-lab', icon: <IconUiLab />, permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
         { label: 'Load Tests', view: 'load-tests', icon: <IconLoadTests />, permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}), testId: 'nav-load-tests' },
         { label: 'Playbooks', view: 'playbooks', icon: <IconPlaybooks />, permission: 'playbooks:view', onNavigate: onNavigatePlaybooks ?? (() => {}) },
+        { label: 'Integrations', view: 'integrations', icon: <IconIntegrations />, permission: 'integrations:view', onNavigate: onNavigateIntegrations ?? (() => {}) },
         { label: 'Apex Backlog', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
         { label: 'Work Board', view: 'work-board', icon: <IconWorkBoard />, permission: 'work-board:view', onNavigate: onNavigateWorkBoard ?? (() => {}) },
       ],
@@ -296,6 +311,11 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       if (!playbooksEnabled) return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;
       return isSuperAdmin || can('playbooks:view');
+    }
+    if (item.view === 'integrations') {
+      if (!integrationsEnabled) return false;
+      if (!menuEnabledViews.includes('integrations')) return false;
+      return isSuperAdmin || can('integrations:view');
     }
     if (item.view === 'ui-lab') {
       if (!isSuperAdmin && !menuEnabledViews.includes('ui-lab')) return false;

@@ -610,7 +610,9 @@ export function isRepositoryReadingChatCaller(
   kickoff: ChatThreadKickoff,
   isDevSession: boolean
 ): boolean {
-  return !isDevSession && kickoff.assistantType !== 'calendar-work-item';
+  return !isDevSession
+    && kickoff.assistantType !== 'calendar-work-item'
+    && kickoff.assistantType !== 'integration';
 }
 
 export type GroundingCallerKey =
@@ -707,6 +709,14 @@ export function buildMcpServers(
   ) {
     servers['calendar-assistant'] = {
       url: `http://localhost:${port}/mcp/calendar-assistant/${options.calendarSessionId}`,
+    };
+    return servers;
+  }
+
+  // Integration threads expose one connection's read operations and nothing else.
+  if (kickoff.assistantType === 'integration' && kickoff.integrationConnectionId) {
+    servers['integration-connector'] = {
+      url: `http://localhost:${port}/mcp/integrations/${kickoff.integrationConnectionId}`,
     };
     return servers;
   }

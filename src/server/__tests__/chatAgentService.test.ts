@@ -3141,3 +3141,24 @@ describe('buildDocumentAssistantEditGuidance', () => {
     );
   });
 });
+
+describe('integration connector MCP mount (SC-5)', () => {
+  it('SC-5 mounts only the selected connection tool server', () => {
+    const port = process.env.PORT ?? '3001';
+    const servers = buildMcpServers(
+      baseKickoff({
+        assistantType: 'integration',
+        integrationConnectionId: 'conn-clerk',
+        skillProvider: 'ado',
+      }),
+      'http://localhost:3001/mcp/ado-skills',
+      { maxviewEnabled: true },
+    );
+
+    expect(servers).toEqual({
+      'integration-connector': {
+        url: `http://localhost:${port}/mcp/integrations/conn-clerk`,
+      },
+    });
+  });
+});

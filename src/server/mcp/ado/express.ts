@@ -2,6 +2,7 @@ import { Application, Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createAdoMcpServer } from './server';
 import { mountCalendarAssistantMcp } from '../calendarAssistant/express';
+import { mountIntegrationMcp } from '../integrations/express';
 import { failMcpHttpResponse, handleMcpPost } from '../mcpRequestLog';
 import { McpTimeoutError, resolveMcpHttpTimeoutMs } from '../mcpTimeout';
 import type {
@@ -94,4 +95,6 @@ export function mountAdoMcp(app: Application, basePath = '/mcp/ado-skills'): voi
   // Mount the session-bound calendar assistant MCP alongside ado-skills.
   // URL: POST /mcp/calendar-assistant/:sessionId
   mountCalendarAssistantMcp(app);
+  // URL: POST /mcp/integrations/:connectionId
+  mountIntegrationMcp(app);
 }
