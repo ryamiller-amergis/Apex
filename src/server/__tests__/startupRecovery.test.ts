@@ -88,6 +88,11 @@ jest.mock('../services/designPrototypeV2Harvest', () => ({
 jest.mock('../services/uiLabV2Harvest', () => ({
   harvestFinishedV2UiLabDesigns: jest.fn().mockResolvedValue(0),
 }));
+const mockFailStalePendingJobs = jest.fn(async () => 0);
+jest.mock('../services/workflowEvaluationJobOrchestrator', () => ({
+  createWorkflowEvaluationJobOrchestrator: () => ({ failStalePendingJobs: mockFailStalePendingJobs }),
+}));
+
 jest.mock('../services/documentV2Harvest', () => ({
   harvestFinishedV2Documents: jest.fn().mockResolvedValue(0),
 }));
@@ -1198,5 +1203,11 @@ describe('finished durable document runs', () => {
 
     expect(order[0]).toBe('document-harvest');
     expect(order).toContain('prd-recovery-query');
+  });
+
+  it('sweeps workflow evaluation jobs that were never queued', async () => {
+    await recoverInFlightWork();
+
+    expect(mockFailStalePendingJobs).toHaveBeenCalledTimes(1);
   });
 });

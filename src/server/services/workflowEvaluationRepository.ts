@@ -128,6 +128,16 @@ export async function getActiveDefinition(stageKey: string): Promise<WorkflowEva
   return rows[0] ? toDefinition(rows[0]) : null;
 }
 
+/** The exact version an event was scored against, active or not. */
+export async function getDefinitionById(id: string): Promise<WorkflowEvaluationDefinition | null> {
+  const rows = await db
+    .select()
+    .from(workflowEvaluationDefinitions)
+    .where(eq(workflowEvaluationDefinitions.id, id))
+    .limit(1);
+  return rows[0] ? toDefinition(rows[0]) : null;
+}
+
 export async function listActiveDefinitions(stageKey?: string): Promise<WorkflowEvaluationDefinition[]> {
   const filters = [
     eq(workflowEvaluationDefinitions.active, true),

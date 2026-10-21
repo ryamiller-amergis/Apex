@@ -30,6 +30,7 @@ import { failStalePrototypes } from './designPrototypeService';
 import { harvestFinishedV2Prototypes } from './designPrototypeV2Harvest';
 import { harvestFinishedV2UiLabDesigns } from './uiLabV2Harvest';
 import { harvestFinishedV2Documents } from './documentV2Harvest';
+import { createWorkflowEvaluationJobOrchestrator } from './workflowEvaluationJobOrchestrator';
 import {
   findRunningInterviewThreads,
   clearStaleRun,
@@ -347,6 +348,13 @@ export async function recoverInFlightWork(
       console.log(
         `[recovery] Applied ${harvestedDocuments} finished durable document run(s)`,
       );
+    }
+  });
+
+  await runRecoveryCategory('stale workflow evaluation jobs', signal, async () => {
+    const failedJobs = await createWorkflowEvaluationJobOrchestrator().failStalePendingJobs();
+    if (failedJobs > 0) {
+      console.log(`[recovery] Failed ${failedJobs} workflow evaluation job(s) that were never queued`);
     }
   });
 

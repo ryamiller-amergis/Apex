@@ -13,7 +13,6 @@ import {
   type AiRunV2WorkloadLane,
 } from '../../../shared/types/aiRunV2';
 import type { VisualSubjectKind } from '../../../shared/types/aiRunV2VisualSpec';
-import type { WorkflowEvaluationJobEvaluator } from '../../../shared/types/workflowEvaluation';
 import {
   runAttemptRepository,
   type RunAttemptRepository,
@@ -81,20 +80,6 @@ export function visualRunThreadPrefix(
       throw new Error(`Unsupported visual subjectKind: ${String(unhandled)}`);
     }
   }
-}
-
-export const WORKFLOW_EVALUATION_THREAD_PREFIX = 'wfeval:';
-
-/**
- * Each diagnostic job of a human evaluation needs its own thread, for the same
- * reason as visual subjects, and because the document harvest reads only the
- * latest run on a thread: two jobs on one thread would hide one result.
- */
-export function workflowEvaluationRunThreadId(
-  eventId: string,
-  evaluatorKey: WorkflowEvaluationJobEvaluator,
-): string {
-  return `${WORKFLOW_EVALUATION_THREAD_PREFIX}${eventId}:${evaluatorKey}`;
 }
 
 export function visualGenerationRunId(

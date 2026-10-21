@@ -2,8 +2,10 @@ import { createHash } from 'node:crypto';
 import { isAiRunV2DocumentSpecification } from '../../../shared/types/aiRunV2DocumentSpec';
 import {
   isAiRunV2PromptfooSpecification,
+  parseWorkflowEvaluationRunThreadId,
   renderPromptfooTarget,
   WORKFLOW_EVALUATION_SCRATCH_PATHS,
+  workflowEvaluationRunThreadId,
   type WorkflowEvaluationArtifactPackage,
 } from '../../../shared/types/aiRunV2EvaluationSpec';
 
@@ -155,6 +157,24 @@ describe('Promptfoo execution specification', () => {
     const suite = { ref: 'r', subjectType: 'prd', tests: [test, test] };
     expect(isAiRunV2PromptfooSpecification(promptfooSpecification({ suite }))).toBe(false);
   });
+});
+
+describe('workflow evaluation run thread ids', () => {
+  it('round-trips the event id and evaluator', () => {
+    const threadId = workflowEvaluationRunThreadId('event-1', 'llm_judge');
+    expect(threadId).toBe('wfeval:event-1:llm_judge');
+    expect(parseWorkflowEvaluationRunThreadId(threadId)).toEqual({
+      eventId: 'event-1',
+      evaluatorKey: 'llm_judge',
+    });
+  });
+
+  it.each(['thread-1', 'wfeval:', 'wfeval:event-1', 'wfeval::promptfoo', 'wfeval:event-1:human'])(
+    'returns null for %p',
+    (threadId) => {
+      expect(parseWorkflowEvaluationRunThreadId(threadId)).toBeNull();
+    },
+  );
 });
 
 describe('renderPromptfooTarget', () => {

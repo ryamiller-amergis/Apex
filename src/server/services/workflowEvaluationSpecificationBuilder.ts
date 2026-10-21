@@ -17,6 +17,7 @@ import {
   isAiRunV2PromptfooSpecification,
   WORKFLOW_EVALUATION_PACKAGE_MAX_BYTES,
   WORKFLOW_EVALUATION_SCRATCH_PATHS,
+  workflowEvaluationRunThreadId,
   type AiRunV2PromptfooSpecification,
   type WorkflowEvaluationArtifactPackage,
   type WorkflowEvaluationRunIdentity,
@@ -28,7 +29,6 @@ import type {
   WorkflowEvaluationEvent,
   WorkflowEvaluationJobEvaluator,
 } from '../../shared/types/workflowEvaluation';
-import { workflowEvaluationRunThreadId } from './aiRunV2/v2AdmissionService';
 import { resolveEffort } from './agentEffortResolver';
 import { getDefaultModel } from './appSettingsService';
 import { hashInterviewPhaseArtifact, hashPrdArtifact } from './artifactBindingResolver';

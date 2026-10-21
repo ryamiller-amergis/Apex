@@ -16,13 +16,23 @@ import {
 } from '../../shared/types/workflowEvaluationAccess';
 import {
   CREATE_WORKFLOW_EVALUATION_REQUEST_FIELDS,
+  WORKFLOW_EVALUATION_JOB_EVALUATORS,
   type CreateWorkflowEvaluationRequest,
+  type WorkflowEvaluationJobEvaluator,
   type WorkflowEvaluationSubjectType,
 } from '../../shared/types/workflowEvaluation';
 import { WorkflowEvaluationError } from '../services/workflowEvaluationError';
+import {
+  createWorkflowEvaluationJobOrchestrator,
+  registerWorkflowEvaluationJobListener,
+  type WorkflowEvaluationJobFailureCode,
+} from '../services/workflowEvaluationJobOrchestrator';
 import * as workflowEvaluationService from '../services/workflowEvaluationService';
 
 const router = Router({ mergeParams: true });
+
+const jobOrchestrator = createWorkflowEvaluationJobOrchestrator();
+registerWorkflowEvaluationJobListener(jobOrchestrator);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -175,6 +185,79 @@ router.get(
       res.json(event);
     } catch (err) {
       handleServiceError(err, res, next);
+    }
+  },
+);
+
+function retryFailureStatus(code: WorkflowEvaluationJobFailureCode): number {
+  switch (code) {
+    case 'enqueue_failed':
+    case 'enqueue_interrupted':
+      return 502;
+    case 'artifact_unavailable':
+    case 'artifact_changed':
+    case 'suite_missing':
+    case 'skill_config_missing':
+    case 'specification_invalid':
+    case 'flag_disabled':
+    case 'transport_disabled':
+      return 409;
+    default: {
+      const unhandled: never = code;
+      throw new Error(`Unhandled job failure code: ${String(unhandled)}`);
+    }
+  }
+}
+
+router.post(
+  '/events/:eventId/jobs/:evaluatorKey/retry',
+  requirePermission('admin:roles'),
+  requireWorkflowEvaluationFlag,
+  async (req, res, next) => {
+    try {
+      const { eventId, evaluatorKey } = req.params;
+      if (
+        typeof eventId !== 'string'
+        || !UUID_RE.test(eventId)
+        || !(WORKFLOW_EVALUATION_JOB_EVALUATORS as readonly string[]).includes(evaluatorKey)
+      ) {
+        res.status(404).json({ error: 'Not found' });
+        return;
+      }
+      const result = await jobOrchestrator.retryJob({
+        projectId: pathProject(req),
+        eventId,
+        evaluatorKey: evaluatorKey as WorkflowEvaluationJobEvaluator,
+        userId: getUserId(req),
+      });
+      switch (result.status) {
+        case 'dispatched':
+          res.json({ job: result.job });
+          return;
+        case 'not_found':
+          res.status(404).json({ error: 'Not found' });
+          return;
+        case 'job_not_failed':
+          res.status(409).json({
+            error: 'Only a failed job can be retried.',
+            code: 'job_not_failed',
+            job: result.job,
+          });
+          return;
+        case 'failed':
+          res.status(retryFailureStatus(result.code)).json({
+            error: result.message,
+            code: result.code,
+            job: result.job,
+          });
+          return;
+        default: {
+          const unhandled: never = result;
+          throw new Error(`Unhandled retry result: ${JSON.stringify(unhandled)}`);
+        }
+      }
+    } catch (err) {
+      next(err);
     }
   },
 );

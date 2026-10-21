@@ -7,11 +7,40 @@
  * specification rather than padding the document one with invented values.
  */
 import {
+  WORKFLOW_EVALUATION_JOB_EVALUATORS,
   WORKFLOW_EVALUATION_SUBJECT_TYPES,
+  type WorkflowEvaluationJobEvaluator,
   type WorkflowEvaluationSubjectType,
 } from './workflowEvaluation';
 
 export const AI_RUN_V2_EVALUATION_SPEC_VERSION = 1;
+
+export const WORKFLOW_EVALUATION_THREAD_PREFIX = 'wfeval:';
+
+/**
+ * Each diagnostic job needs its own thread: V2 allows one active run per
+ * thread, and the document harvest reads only the latest run on a thread, so
+ * two jobs on one thread would hide one result.
+ */
+export function workflowEvaluationRunThreadId(
+  eventId: string,
+  evaluatorKey: WorkflowEvaluationJobEvaluator,
+): string {
+  return `${WORKFLOW_EVALUATION_THREAD_PREFIX}${eventId}:${evaluatorKey}`;
+}
+
+export function parseWorkflowEvaluationRunThreadId(
+  threadId: string,
+): { eventId: string; evaluatorKey: WorkflowEvaluationJobEvaluator } | null {
+  if (!threadId.startsWith(WORKFLOW_EVALUATION_THREAD_PREFIX)) return null;
+  const rest = threadId.slice(WORKFLOW_EVALUATION_THREAD_PREFIX.length);
+  const separator = rest.lastIndexOf(':');
+  if (separator <= 0) return null;
+  const eventId = rest.slice(0, separator);
+  const evaluatorKey = rest.slice(separator + 1);
+  if (!(WORKFLOW_EVALUATION_JOB_EVALUATORS as readonly string[]).includes(evaluatorKey)) return null;
+  return { eventId, evaluatorKey: evaluatorKey as WorkflowEvaluationJobEvaluator };
+}
 
 export const WORKFLOW_EVALUATION_SCRATCH_PATHS = {
   artifactPackage: '.ai-pilot/evaluation/artifact-package.json',

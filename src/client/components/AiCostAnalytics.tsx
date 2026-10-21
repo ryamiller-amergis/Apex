@@ -60,6 +60,7 @@ const FEATURE_LABELS: Record<string, string> = {
   'backlog-generate': 'Backlog Generation',
   'home-chat': 'Home Chat (Ask Apex)',
   'ai-cost-insights': 'AI Cost Insights',
+  'workflow-evaluation': 'Workflow Evaluation',
   other: 'Other',
 };
 
@@ -89,6 +90,7 @@ const FEATURE_COLORS: Record<string, string> = {
   'backlog-generate': '#0ea5e9',
   'home-chat': '#3b82f6',
   'ai-cost-insights': '#64748b',
+  'workflow-evaluation': '#d946ef',
   other: '#94a3b8',
 };
 
