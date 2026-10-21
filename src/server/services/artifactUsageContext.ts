@@ -93,6 +93,7 @@ export function labelUsageRun(opts: {
   if (feature === 'adr') return 'ADR';
   if (feature === 'design-prototype') return 'Prototype';
   if (feature === 'design-plan') return 'Design plan';
+  if (feature === 'cloud-agent') return 'Cloud Agent';
   return 'Agent run';
 }
 

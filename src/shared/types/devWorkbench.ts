@@ -228,6 +228,7 @@ export interface GuidedCloudJobsResponse {
   jobs: GuidedCloudJobOption[];
   skills: CloudAgentSkillChoice[];
   models: { id: string; displayName: string }[];
+  recommendedModel: string;
   runs: GuidedCloudAgentSession[];
 }
 

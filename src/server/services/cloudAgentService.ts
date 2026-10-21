@@ -10,6 +10,7 @@ import { agentRuns, devSessions } from '../db/schema';
 import { MY_WORK_CLOUD_AGENT_FLAG } from '../../shared/types/featureFlags';
 import {
   buildGuidedCloudAgentPrompt,
+  guidedSiteIssueBranchName,
   guidedCloudJobById,
   installedSkillPath,
   recommendImplementationSkill,
@@ -57,8 +58,10 @@ import {
   getCloudAgentRun,
   launchCloudAgent,
   streamCloudAgentRun,
+  type CloudAgentRunObservation,
   type LaunchCloudAgentResult,
 } from './cursorCloudAgentClient';
+import { recordCloudAgentUsage, type RecordCloudAgentUsageInput } from './cloudAgentUsageService';
 import type { CloudAgentActivityEvent } from '../../shared/types/devWorkbench';
 import {
   buildWorkItemReferenceText,
@@ -215,8 +218,10 @@ function backgroundSnapshot(
   return snapshot;
 }
 
-function isGuidedSnapshot(snapshot: AgentRunExecutionSnapshot | null | undefined): boolean {
-  return backgroundSnapshot(snapshot)?.cloudAgent?.delivery === 'guided';
+/** Older guided runs omit opensPullRequest and do not wait for a pull request. */
+function guidedSkipsPullRequest(snapshot: AgentRunExecutionSnapshot | null | undefined): boolean {
+  const cloud = backgroundSnapshot(snapshot)?.cloudAgent;
+  return cloud?.delivery === 'guided' && cloud.opensPullRequest !== true;
 }
 
 function metaBranchName(
@@ -754,8 +759,8 @@ export async function startGuidedCloudAgentRun(
     intent,
     recommendedSkillPath: recommendedPath,
     recommendedModel: skillConfig?.developmentModel?.trim() || DEFAULT_DEVELOPMENT_MODEL,
-    requestedSkillPath: intent === 'retry' ? input.skillPath : undefined,
-    requestedModel: intent === 'retry' ? input.model : undefined,
+    requestedSkillPath: input.skillPath,
+    requestedModel: input.model,
     allowedSkillPaths: input.availableSkills.map((skill) => skill.path),
     allowedModelIds: input.allowedModelIds,
     priorSkillPath: prior?.skillPath,
@@ -764,16 +769,19 @@ export async function startGuidedCloudAgentRun(
   if (!selection.ok) throw new CloudAgentLaunchError(selection.error);
 
   const taskText = intent === 'resume' && prior?.task ? prior.task : task;
+  const sessionId = intent === 'start' ? uuidv4() : input.sessionId!;
+  const branchName = prior?.branchName?.trim()
+    || guidedSiteIssueBranchName(sessionId, taskText);
   const skillName = skillNameFromPath(selection.skillPath);
   const prompt = buildGuidedCloudAgentPrompt({
     title: job.title,
     skillPath: selection.skillPath,
     skillName,
     task: taskText,
+    branchName,
   });
   const nowIso = new Date().toISOString();
   const timeoutAt = new Date(Date.now() + CLOUD_AGENT_QUEUE_WAIT_MS).toISOString();
-  const sessionId = intent === 'start' ? uuidv4() : input.sessionId!;
   const lockKey = `cloud-agent-guided:${input.project}:${sessionId}`;
 
   const started = await db.transaction(async (tx) => {
@@ -831,11 +839,13 @@ export async function startGuidedCloudAgentRun(
         provider: skillProvider as SkillProvider,
         repository: skillRepo,
         cloudAgent: {
-          workItemTitle: job.title,
+          workItemTitle: guidedTaskTitle(taskText),
+          branchName,
           baseBranch: skillBranch,
           initiatorName: input.initiatorName,
           initiatorEmail: input.initiatorEmail,
           delivery: 'guided',
+          opensPullRequest: true,
           guidedJobId: job.id,
           task: taskText,
           ...(skillName ? { skillName } : {}),
@@ -849,7 +859,7 @@ export async function startGuidedCloudAgentRun(
         currentRunId: runId,
         currentRunPrUrl: null,
         currentRunPrStatus: 'none',
-        branchName: null,
+        branchName,
         status: 'in_progress',
         leftoverWork: null,
         updatedAt: nowIso,
@@ -920,7 +930,7 @@ async function loadPriorCloudAgentSettings(input: {
   project: string;
   workItemId?: number | null;
   sessionId?: string | null;
-}): Promise<{ skillPath: string; model: string; task: string | null; guidedJobId: string | null } | null> {
+}): Promise<{ skillPath: string; model: string; task: string | null; guidedJobId: string | null; branchName: string | null } | null> {
   const rows = input.sessionId
     ? await db
       .select({ currentRunId: devSessions.currentRunId })
@@ -953,7 +963,13 @@ async function loadPriorCloudAgentSettings(input: {
     model,
     task: snapshot?.cloudAgent?.task?.trim() || null,
     guidedJobId: snapshot?.cloudAgent?.guidedJobId ?? null,
+    branchName: snapshot?.cloudAgent?.branchName?.trim() || null,
   };
+}
+
+function guidedTaskTitle(task: string): string {
+  const trimmed = task.replace(/\s+/g, ' ').trim();
+  return trimmed.length <= 80 ? trimmed : `${trimmed.slice(0, 79)}…`;
 }
 
 async function persistQueuedRun(
@@ -1220,7 +1236,7 @@ async function launchClaimedCloudAgentRun(
       initiatorEmail: cloud.initiatorEmail,
       skillName: cloud.skillName,
       adoUserToken,
-      autoCreatePr: !guided,
+      autoCreatePr: !guided || cloud.opensPullRequest === true,
     });
   } catch (err) {
     const detail = err instanceof Error ? err.message : 'Cloud Agent launch failed';
@@ -1432,9 +1448,9 @@ export async function reconcileRunningCloudAgentRuns(
         });
         const mapped = mapObservedStatus(observed.status);
         if (!mapped || !isAgentRunTerminalStatus(mapped)) continue;
-        const guided = isGuidedSnapshot(row.executionSnapshot);
+        const skipPullRequest = guidedSkipsPullRequest(row.executionSnapshot);
         if (
-          !guided
+          !skipPullRequest
           && awaitingCloudAgentPullRequest({
             status: mapped,
             prUrl: observed.prUrl,
@@ -1453,7 +1469,8 @@ export async function reconcileRunningCloudAgentRuns(
           prUrl: observed.prUrl,
           dispatchMessageId: row.dispatchMessageId,
           detail: mapped === 'failed' ? (observed.resultText ?? undefined) : undefined,
-          analysisOnly: guided,
+          usage: usageFromObservation(observed),
+          analysisOnly: skipPullRequest,
         }, deps);
       } catch (err) {
         console.warn('[cloud-agent] execution reconciliation failed', JSON.stringify({
@@ -1619,6 +1636,69 @@ async function writeWorkItemPullRequest(
   );
 }
 
+function cloudAgentWasLaunched(run: {
+  cloudAgentIdentity?: string | null;
+  dispatchMessageId?: string | null;
+}): boolean {
+  return Boolean(run.cloudAgentIdentity?.trim() || run.dispatchMessageId?.trim());
+}
+
+function usageFromObservation(
+  observed: CloudAgentRunObservation | null | undefined,
+): Pick<RecordCloudAgentUsageInput, 'modelId' | 'durationMs' | 'resultText' | 'tokens'> {
+  return {
+    modelId: observed?.modelId ?? null,
+    durationMs: observed?.durationMs ?? null,
+    resultText: observed?.resultText ?? null,
+    tokens: observed?.usage ?? null,
+  };
+}
+
+async function trackCloudAgentSpend(input: RecordCloudAgentUsageInput): Promise<void> {
+  try {
+    await recordCloudAgentUsage(input);
+  } catch (err) {
+    console.warn('[cloud-agent] could not record AI cost', JSON.stringify({
+      runId: input.runId,
+      error: err instanceof Error ? err.message : String(err),
+    }));
+  }
+}
+
+async function trackLaunchedCloudAgentSpend(
+  run: {
+    id: string;
+    cloudAgentIdentity?: string | null;
+    dispatchMessageId?: string | null;
+  },
+  project: string,
+  status: RecordCloudAgentUsageInput['status'],
+  deps: CloudAgentServiceDeps,
+): Promise<void> {
+  if (!cloudAgentWasLaunched(run)) return;
+  let observed: CloudAgentRunObservation | null = null;
+  if (run.cloudAgentIdentity && run.dispatchMessageId) {
+    try {
+      observed = await deps.getCloudAgentRun({
+        project,
+        cloudAgentId: run.cloudAgentIdentity,
+        cursorRunId: run.dispatchMessageId,
+      });
+    } catch (err) {
+      console.warn('[cloud-agent] could not read usage before recording cost', JSON.stringify({
+        runId: run.id,
+        error: err instanceof Error ? err.message : String(err),
+      }));
+    }
+  }
+  await trackCloudAgentSpend({
+    runId: run.id,
+    project,
+    status,
+    ...usageFromObservation(observed),
+  });
+}
+
 export async function applyCloudAgentCompletion(input: {
   runId: string;
   sessionId: string;
@@ -1628,6 +1708,8 @@ export async function applyCloudAgentCompletion(input: {
   terminalReason?: AgentRunTerminalReason;
   detail?: string;
   dispatchMessageId?: string;
+  /** Cursor token usage captured when the run was observed. */
+  usage?: Pick<RecordCloudAgentUsageInput, 'modelId' | 'durationMs' | 'resultText' | 'tokens'> | null;
   /**
    * Suite-level outcomes when the run reported them through the structured
    * completion contract. Failing suites never gate PR creation or terminal state.
@@ -1645,6 +1727,15 @@ export async function applyCloudAgentCompletion(input: {
   });
   if (!terminal.ok) return;
   scheduleCloudAgentDispatch();
+  await trackCloudAgentSpend({
+    runId: input.runId,
+    project: input.project,
+    status: input.status,
+    modelId: input.usage?.modelId,
+    durationMs: input.usage?.durationMs,
+    resultText: input.usage?.resultText ?? input.detail ?? null,
+    tokens: input.usage?.tokens,
+  });
 
   if (terminal.run.devSessionId && terminal.run.devSessionId !== input.sessionId) {
     console.warn('[cloud-agent] completion session mismatch', JSON.stringify({
@@ -1751,9 +1842,9 @@ export async function applyCloudAgentCompletion(input: {
     input.terminalReason ?? null,
   );
 
-  if (!prUrl) return;
+  if (!prUrl || !session.workItemId) return;
   try {
-    if (!session.workItemId || !provider || !repository) {
+    if (!provider || !repository) {
       throw new Error('Cloud Agent run is missing work-item repository context');
     }
     await writeWorkItemPullRequest({
@@ -1797,7 +1888,7 @@ export async function getCloudAgentRunStatus(
     where: eq(agentRuns.id, session.currentRunId),
   });
   if (!run) return null;
-  const guided = isGuidedSnapshot(run.executionSnapshot);
+  const skipPullRequest = guidedSkipsPullRequest(run.executionSnapshot);
 
   if (
     run.lane === 'cloud-agent'
@@ -1823,7 +1914,7 @@ export async function getCloudAgentRunStatus(
           pushed: pushedBranch,
         }));
       }
-      const waitingForPullRequest = !guided && awaitingCloudAgentPullRequest({
+      const waitingForPullRequest = !skipPullRequest && awaitingCloudAgentPullRequest({
         status: mapped,
         prUrl,
         noChanges: observed.noChanges,
@@ -1838,7 +1929,8 @@ export async function getCloudAgentRunStatus(
           prUrl,
           dispatchMessageId: run.dispatchMessageId,
           detail: mapped === 'failed' ? (observed.resultText ?? undefined) : undefined,
-          analysisOnly: guided,
+          usage: usageFromObservation(observed),
+          analysisOnly: skipPullRequest,
         }, deps);
         return toRunSummary(
           {
@@ -1853,7 +1945,7 @@ export async function getCloudAgentRunStatus(
           },
           prUrl,
           cachedPullRequestStatus(prUrl, null),
-          !guided,
+          !skipPullRequest,
         );
       }
     } catch (err) {
@@ -1869,7 +1961,7 @@ export async function getCloudAgentRunStatus(
           },
           null,
           'none',
-          !guided,
+          !skipPullRequest,
         );
       }
       console.warn('[cloud-agent] status refresh failed', JSON.stringify({
@@ -1931,7 +2023,7 @@ export async function getCloudAgentRunStatus(
     },
     prUrl,
     prStatus,
-    !guided,
+    !skipPullRequest,
   );
 }
 
@@ -2000,7 +2092,7 @@ export async function getCloudAgentRunHistory(
       }
     }
 
-    return toRunSummary(run, prUrl, prStatus, !isGuidedSnapshot(run.executionSnapshot));
+    return toRunSummary(run, prUrl, prStatus, !guidedSkipsPullRequest(run.executionSnapshot));
   }));
 }
 
@@ -2159,6 +2251,7 @@ export async function cancelCloudAgentRun(
       requested.run.terminalReason,
     );
     scheduleCloudAgentDispatch();
+    await trackLaunchedCloudAgentSpend(requested.run, session.project, 'cancelled', deps);
     return { ok: true, status: 'cancelled' };
   }
 
@@ -2202,5 +2295,6 @@ export async function cancelCloudAgentRun(
     terminal.run.terminalReason,
   );
   scheduleCloudAgentDispatch();
+  await trackLaunchedCloudAgentSpend(terminal.run, session.project, 'cancelled', deps);
   return { ok: true, status: 'cancelled' };
 }

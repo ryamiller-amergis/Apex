@@ -1,6 +1,7 @@
 import {
   GUIDED_CLOUD_JOBS,
   buildGuidedCloudAgentPrompt,
+  guidedSiteIssueBranchName,
   guidedCloudJobById,
   recommendImplementationSkill,
   resolveCloudAgentLaunchSelection,
@@ -109,25 +110,28 @@ describe('resolveCloudAgentLaunchSelection', () => {
 });
 
 describe('guided cloud jobs', () => {
-  it('lists jobs that do not need a work item', () => {
-    expect(GUIDED_CLOUD_JOBS.map((job) => job.id)).toEqual([
-      'feature-request-analysis',
-      'issue-analysis',
-      'technical-analysis',
-      'product-intake',
-    ]);
-    expect(guidedCloudJobById('issue-analysis')?.skillName).toBe('issue-analysis');
+  it('lists the site-issue report', () => {
+    expect(GUIDED_CLOUD_JOBS.map((job) => job.id)).toEqual(['site-issue']);
+    expect(guidedCloudJobById('site-issue')?.skillName).toBe('dev-orchestrator');
   });
 
-  it('tells the agent not to open a pull request', () => {
+  it('names a branch from the report without a work item id', () => {
+    expect(guidedSiteIssueBranchName('abc12345-0000-0000-0000-000000000000', 'The login page times out.')).toBe(
+      'feature/apex-site-abc123-the-login-page-times-out',
+    );
+  });
+
+  it('tells the agent to investigate and open a pull request', () => {
     const prompt = buildGuidedCloudAgentPrompt({
-      title: 'Analyze an issue',
-      skillPath: '.cursor/skills/issue-analysis/SKILL.md',
-      skillName: 'issue-analysis',
+      title: "There's an issue on the site",
+      skillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
+      skillName: 'dev-orchestrator',
       task: 'The login page times out.',
+      branchName: 'feature/apex-site-abc123-the-login-page-times-out',
     });
-    expect(prompt.startsWith('/issue-analysis')).toBe(true);
-    expect(prompt).toContain('Do not open a pull request.');
+    expect(prompt.startsWith('/dev-orchestrator')).toBe(true);
+    expect(prompt).toContain('Open a pull request titled `[APEX] apex-site-abc123-the-login-page-times-out`');
     expect(prompt).toContain('The login page times out.');
+    expect(prompt).toContain('This report has no work item.');
   });
 });

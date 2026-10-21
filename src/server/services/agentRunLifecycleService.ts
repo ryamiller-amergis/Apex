@@ -380,6 +380,9 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
             ...(input.snapshot.cloudAgent.delivery
               ? { delivery: input.snapshot.cloudAgent.delivery }
               : {}),
+            ...(input.snapshot.cloudAgent.opensPullRequest === true
+              ? { opensPullRequest: true as const }
+              : {}),
             ...(input.snapshot.cloudAgent.guidedJobId
               ? { guidedJobId: input.snapshot.cloudAgent.guidedJobId }
               : {}),

@@ -15,6 +15,7 @@ const mockTrackEvent = jest.fn();
 const mockBuildLocalDevContext = jest.fn().mockResolvedValue({ files: [] });
 const mockPersistLeftoverWork = jest.fn(async () => ({ firstWrite: true }));
 const mockWriteLeftoverWorkToAdo = jest.fn(async () => undefined);
+const mockRecordCloudAgentUsage = jest.fn();
 
 jest.mock('../db/drizzle', () => ({
   db: {
@@ -67,6 +68,9 @@ jest.mock('../services/cursorCloudAgentClient', () => ({
   getCloudAgentRun: jest.fn(),
   streamCloudAgentRun: jest.fn(),
   cancelCursorCloudAgentRun: (...args: unknown[]) => mockVendorCancel(...args),
+}));
+jest.mock('../services/cloudAgentUsageService', () => ({
+  recordCloudAgentUsage: (...args: unknown[]) => mockRecordCloudAgentUsage(...args),
 }));
 jest.mock('../services/workItemPrLinkService', () => ({
   ...jest.requireActual('../services/workItemPrLinkService'),
@@ -777,6 +781,11 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
       currentRunPrUrl: null,
     }));
     expect(mockLinkWorkItemToPullRequest).not.toHaveBeenCalled();
+    expect(mockRecordCloudAgentUsage).toHaveBeenCalledWith(expect.objectContaining({
+      runId: RUN_ID,
+      project: 'MaxView',
+      status: 'completed',
+    }));
     expect(mockAlignCloudAgentPullRequest).not.toHaveBeenCalled();
   });
 
@@ -878,6 +887,11 @@ describe('cancelCloudAgentRun (PBI-004)', () => {
       terminalReason: 'forced_cancel',
       dispatchMessageId: 'cursor-run-1',
     }));
+    expect(mockRecordCloudAgentUsage).toHaveBeenCalledWith(expect.objectContaining({
+      runId: RUN_ID,
+      project: 'MaxView',
+      status: 'cancelled',
+    }));
   });
 
   it('AC-0: finalizes a dispatched run that has no vendor identity yet', async () => {
@@ -913,6 +927,7 @@ describe('cancelCloudAgentRun (PBI-004)', () => {
     expect(mockMarkTerminal).toHaveBeenCalledWith(RUN_ID, expect.not.objectContaining({
       dispatchMessageId: expect.anything(),
     }));
+    expect(mockRecordCloudAgentUsage).not.toHaveBeenCalled();
   });
 
   it('AC-0: a failed vendor cancellation still finalizes the Apex row as cancelled', async () => {

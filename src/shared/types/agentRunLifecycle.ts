@@ -101,10 +101,15 @@ export interface ExecutionSnapshot {
     /** Configured development skill, invoked as `/name` by the container CLI. */
     skillName?: string;
     /**
-     * `guided` jobs skip pull requests, work-item links, and the ai-code tag.
+     * `guided` jobs have no Azure DevOps work item and do not add the ai-code tag.
      * Omitted on older runs, which stay implementation runs.
      */
     delivery?: 'implementation' | 'guided';
+    /**
+     * Guided site reports set this so Cursor opens a pull request.
+     * Older guided runs omit it and stay analysis-only.
+     */
+    opensPullRequest?: boolean;
     guidedJobId?: string;
     /** The person's task text for a guided job. */
     task?: string;

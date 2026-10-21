@@ -15,6 +15,8 @@ import {
   installedSkillPath,
   parseCloudAgentLaunchIntent,
 } from '../../shared/utils/cloudAgentLaunch';
+import { DEFAULT_DEVELOPMENT_MODEL } from '../../shared/utils/developmentKickoff';
+import { getSkillConfig } from '../services/projectSettingsService';
 import {
   cancelCloudAgentRun,
   CloudAgentConflictError,
@@ -94,18 +96,22 @@ router.get(
       return;
     }
     try {
-      const [skills, models, runs] = await Promise.all([
+      const [skills, models, runs, skillConfig] = await Promise.all([
         loadCloudAgentSkillChoices(project),
         fetchAvailableModels().catch(() => []),
         listGuidedCloudAgentRuns(userId, project),
+        getSkillConfig(project).catch(() => null),
       ]);
       res.json({
         jobs: GUIDED_CLOUD_JOBS.map((job) => ({
           ...job,
-          skillPath: installedSkillPath(skills, job.skillName),
+          skillPath: installedSkillPath(skills, job.skillName)
+            ?? skillConfig?.developmentSkillPath?.trim()
+            ?? null,
         })),
         skills,
         models,
+        recommendedModel: skillConfig?.developmentModel?.trim() || DEFAULT_DEVELOPMENT_MODEL,
         runs,
       });
     } catch (err) {

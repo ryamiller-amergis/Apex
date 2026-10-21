@@ -22,6 +22,8 @@ interface CloudAgentLaunchDialogProps {
   defaultSkillPath: string;
   defaultModel: string;
   requireTask: boolean;
+  taskLabel?: string;
+  emptyTaskMessage?: string;
   loading: boolean;
   loadError: string | null;
   pending: boolean;
@@ -38,6 +40,8 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
   defaultSkillPath,
   defaultModel,
   requireTask,
+  taskLabel = 'Task',
+  emptyTaskMessage = 'Describe the task',
   loading,
   loadError,
   pending,
@@ -84,7 +88,7 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
 
   const submit = handleSubmit((values) => {
     if (requireTask && !values.task.trim()) {
-      setError('task', { message: 'Describe the task' });
+      setError('task', { message: emptyTaskMessage });
       return;
     }
     onConfirm({
@@ -119,6 +123,19 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
           {loading ? <p className={styles.reason}>Loading skills…</p> : null}
           {loadError ? <p className={styles.error} role="alert">{loadError}</p> : null}
           {reason ? <p className={styles.reason}>{reason}</p> : null}
+          {requireTask ? (
+            <label className={styles.field}>
+              <span className={styles.label}>{taskLabel}</span>
+              <textarea
+                className={styles.textarea}
+                rows={5}
+                placeholder="The home page button does nothing when I click it."
+                {...register('task')}
+                data-testid="cloud-agent-launch-task"
+              />
+              {errors.task ? <span className={styles.error}>{errors.task.message}</span> : null}
+            </label>
+          ) : null}
           <label className={styles.field}>
             <span className={styles.label}>Skill</span>
             <select
@@ -149,18 +166,6 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
             </select>
             {errors.model ? <span className={styles.error}>{errors.model.message}</span> : null}
           </label>
-          {requireTask ? (
-            <label className={styles.field}>
-              <span className={styles.label}>Task</span>
-              <textarea
-                className={styles.textarea}
-                rows={5}
-                {...register('task')}
-                data-testid="cloud-agent-launch-task"
-              />
-              {errors.task ? <span className={styles.error}>{errors.task.message}</span> : null}
-            </label>
-          ) : null}
           {error ? <p className={styles.error} role="alert">{error}</p> : null}
           <div className={styles.actions}>
             <button type="button" className={styles.secondary} onClick={onClose}>

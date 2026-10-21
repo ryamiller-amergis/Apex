@@ -23,35 +23,29 @@ export interface GuidedCloudJob {
 }
 
 /**
- * Guided jobs do not need an Azure DevOps work item. The skill name is
- * matched against the project's installed skills at launch time.
+ * One Home job for someone who is not writing code. They describe a site
+ * problem. The development skill investigates it and opens a pull request.
  */
 export const GUIDED_CLOUD_JOBS: readonly GuidedCloudJob[] = [
   {
-    id: 'feature-request-analysis',
-    title: 'Analyze a feature request',
-    description: 'Score priority and risk for a request. No code changes.',
-    skillName: 'feature-request-analysis',
-  },
-  {
-    id: 'issue-analysis',
-    title: 'Analyze an issue',
-    description: 'Review a reported issue and recommend what to do next.',
-    skillName: 'issue-analysis',
-  },
-  {
-    id: 'technical-analysis',
-    title: 'Technical analysis',
-    description: 'Review a technical item and call out risk.',
-    skillName: 'technical-analysis',
-  },
-  {
-    id: 'product-intake',
-    title: 'Evaluate a product request',
-    description: 'Recommend build, buy, rent, or decline.',
-    skillName: 'product-intake-evaluation',
+    id: 'site-issue',
+    title: "There's an issue on the site",
+    description: 'Explain what you saw. The agent looks into it and opens a pull request for a developer to review.',
+    skillName: 'dev-orchestrator',
   },
 ];
+
+/** Branch for a site report that has no Azure DevOps work item. */
+export function guidedSiteIssueBranchName(sessionId: string, task: string): string {
+  const slug = task
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/-+$/, '');
+  const suffix = sessionId.replace(/-/g, '').slice(0, 6) || 'issue';
+  return slug ? `feature/apex-site-${suffix}-${slug}` : `feature/apex-site-${suffix}`;
+}
 
 /** First installed skill wins. Later names are fallbacks. */
 const IMPLEMENTATION_SKILL_PREFERENCES: Record<string, readonly string[]> = {
@@ -175,16 +169,19 @@ export function buildGuidedCloudAgentPrompt(input: {
   skillPath: string;
   skillName: string | null;
   task: string;
+  branchName: string;
 }): string {
   const invocation = input.skillName ? `/${input.skillName}\n\n` : '';
+  const pullRequestTitle = `[APEX] ${input.branchName.replace('feature/', '')}`;
   return [
-    `${invocation}Complete this guided job: ${input.title}.`,
+    `${invocation}A person who is not writing code reported a problem on the site: ${input.title}.`,
     `Load \`${input.skillPath}\` from the repository and follow it.`,
-    'Do not open a pull request.',
-    'Do not change Azure DevOps work items, branches, or tags.',
-    'Write the result in your final message.',
+    'Investigate the report, find the cause, and make the code change that fixes it.',
+    `Work on branch \`${input.branchName}\` and no other branch.`,
+    `Open a pull request titled \`${pullRequestTitle}\` so a developer can review the change.`,
+    'Do not change Azure DevOps work items. This report has no work item.',
     '',
-    'Task:',
+    'What they reported:',
     input.task.trim(),
   ].join('\n');
 }

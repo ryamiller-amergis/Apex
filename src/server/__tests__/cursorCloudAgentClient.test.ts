@@ -299,6 +299,32 @@ describe('cursorCloudAgentClient', () => {
     expect(observed.settled).toBe(false);
   });
 
+  it('copies Cursor token usage onto the observation', () => {
+    const observed = observeCloudRun({
+      status: 'finished',
+      result: 'Implemented the change',
+      git: { branches: [{ branch: 'feature/apex-1-login', prUrl: 'https://example/pr/1' }] },
+      model: { id: 'composer-2.5' },
+      durationMs: 4200,
+      usage: {
+        inputTokens: 100,
+        outputTokens: 40,
+        cacheReadTokens: 10,
+        cacheWriteTokens: 5,
+        totalTokens: 155,
+      },
+    } as unknown as Parameters<typeof observeCloudRun>[0]);
+
+    expect(observed.modelId).toBe('composer-2.5');
+    expect(observed.durationMs).toBe(4200);
+    expect(observed.usage).toEqual({
+      inputTokens: 100,
+      outputTokens: 40,
+      cacheReadTokens: 10,
+      cacheWriteTokens: 5,
+    });
+  });
+
   it('treats an explicit empty branch list as no file changes', () => {
     const observed = observeCloudRun({
       status: 'finished',

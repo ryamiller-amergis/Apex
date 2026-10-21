@@ -136,6 +136,11 @@
   font-size: 14px;
 }
 
+.prLink {
+  color: var(--accent-color);
+  font-size: 13px;
+}
+
 .error {
   color: var(--error-color);
 }

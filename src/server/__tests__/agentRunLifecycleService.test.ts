@@ -329,9 +329,10 @@ describe('enqueue + frozen snapshot (PBI-001 AC-0 / AC-3 / VT-01 / VT-04 / DoD-2
           baseBranch: 'development',
           branchName: 'feature/apex-42-login',
           delivery: 'guided',
-          guidedJobId: 'issue-analysis',
+          opensPullRequest: true,
+          guidedJobId: 'site-issue',
           task: 'The login page times out.',
-          workItemTitle: 'Analyze an issue',
+          workItemTitle: 'The login page times out.',
         },
       },
       timeoutAt: '2026-08-05T14:00:00.000Z',
@@ -343,7 +344,8 @@ describe('enqueue + frozen snapshot (PBI-001 AC-0 / AC-3 / VT-01 / VT-04 / DoD-2
       baseBranch: 'development',
       branchName: 'feature/apex-42-login',
       delivery: 'guided',
-      guidedJobId: 'issue-analysis',
+      opensPullRequest: true,
+      guidedJobId: 'site-issue',
       task: 'The login page times out.',
     });
     expect(stored.cloudAgent?.workItemId).toBeUndefined();

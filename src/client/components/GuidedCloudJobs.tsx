@@ -95,7 +95,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
         onClick={() => setOpen(true)}
         data-testid="home-guided-jobs"
       >
-        Guided jobs
+        Report an issue
       </button>
       {open ? (
         <div className={styles.overlay} role="presentation" onMouseDown={(event) => {
@@ -111,10 +111,10 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
           >
             <div className={styles.header}>
               <div>
-                <h2 id="guided-jobs-title">Guided jobs</h2>
-                <p>Start a skill without an Azure DevOps work item. These jobs do not open a pull request.</p>
+                <h2 id="guided-jobs-title">Report an issue</h2>
+                <p>Describe a problem on the site. The agent looks into it and opens a pull request for a developer to review.</p>
               </div>
-              <button type="button" className={styles.close} onClick={() => setOpen(false)} aria-label="Close guided jobs">
+              <button type="button" className={styles.close} onClick={() => setOpen(false)} aria-label="Close">
                 ×
               </button>
             </div>
@@ -140,8 +140,8 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
                 ) : null}
               </div>
               <div className={styles.runs}>
-                <h3>Your jobs</h3>
-                {(data?.runs ?? []).length === 0 ? <p>No guided jobs yet.</p> : null}
+                <h3>Your reports</h3>
+                {(data?.runs ?? []).length === 0 ? <p>No reports yet.</p> : null}
                 {(data?.runs ?? []).map((run) => {
                   const live = Boolean(run.run && !isAgentRunTerminalStatus(run.run.status));
                   return (
@@ -154,6 +154,12 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
                         <strong>{run.title}</strong>
                         <span>{run.run?.status ?? 'queued'}</span>
                       </button>
+                      {run.run?.prUrl ? (
+                        <a className={styles.prLink} href={run.run.prUrl} target="_blank" rel="noreferrer">
+                          Pull request
+                        </a>
+                      ) : null}
+                      {run.run?.finishedWithoutPr ? <span>Finished without a pull request.</span> : null}
                       <div className={styles.runActions}>
                         {live ? (
                           <button
@@ -216,9 +222,9 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
       ) : null}
       {job ? (
         <CloudAgentLaunchDialog
-          title={intent === 'retry' ? `Retry ${job.title}` : job.title}
+          title={intent === 'retry' ? 'Try the report again' : job.title}
           reason={job.skillPath
-            ? `${job.title} uses ${job.skillName}. You can change the skill or model before launch.`
+            ? 'Explain what is wrong. The agent will look into it and open a pull request. You can change the skill or model first.'
             : `${job.skillName} is not installed in this project. Choose another skill.`}
           skills={data?.skills ?? []}
           models={data?.models ?? []}
@@ -229,10 +235,12 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
           }
           defaultModel={
             intent === 'retry'
-              ? (priorModel ?? data?.models[0]?.id ?? 'composer-2.5')
-              : (data?.models[0]?.id ?? 'composer-2.5')
+              ? (priorModel ?? data?.recommendedModel ?? data?.models[0]?.id ?? 'composer-2.5')
+              : (data?.recommendedModel ?? data?.models[0]?.id ?? 'composer-2.5')
           }
           requireTask
+          taskLabel="What's wrong on the site?"
+          emptyTaskMessage="Describe the issue"
           loading={jobsQuery.isLoading}
           loadError={jobsQuery.error?.message ?? null}
           pending={startJob.isPending}

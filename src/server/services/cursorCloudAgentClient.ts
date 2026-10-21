@@ -31,7 +31,7 @@ export interface LaunchCloudAgentInput {
   skillName?: string;
   /** Azure DevOps token for the developer who started the run. Used only to open the pull request. */
   adoUserToken?: string | null;
-  /** Guided jobs leave this false. Implementation runs open a pull request. */
+  /** False skips Cursor's autoCreatePR. Implementation runs and site reports leave it on. */
   autoCreatePr?: boolean;
 }
 
@@ -40,6 +40,13 @@ export interface LaunchCloudAgentResult {
   cursorRunId: string;
   jobName: string;
   branchName?: string;
+}
+
+export interface CloudAgentTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
 }
 
 export interface CloudAgentRunObservation {
@@ -53,6 +60,11 @@ export interface CloudAgentRunObservation {
   noChanges?: boolean;
   /** The Cursor run has left the running state. */
   settled?: boolean;
+  /** Model the Cursor run reported. Absent until the handle has one. */
+  modelId?: string | null;
+  durationMs?: number | null;
+  /** Cumulative tokens. Absent when Cursor reported none. */
+  usage?: CloudAgentTokenUsage | null;
 }
 
 export function toCloudRepoUrl(remoteUrl: string): string {
@@ -106,6 +118,22 @@ function isTerminalStatus(status: Run['status']): boolean {
   return status === 'finished' || status === 'error' || status === 'cancelled';
 }
 
+function reportedUsage(run: Run): CloudAgentTokenUsage | null {
+  const usage = run.usage;
+  if (!usage) return null;
+  const total = usage.inputTokens
+    + usage.outputTokens
+    + usage.cacheReadTokens
+    + usage.cacheWriteTokens;
+  if (total <= 0) return null;
+  return {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cacheReadTokens: usage.cacheReadTokens,
+    cacheWriteTokens: usage.cacheWriteTokens,
+  };
+}
+
 // function containerExecutionName(cloudAgentId: string, cursorRunId: string): string {
 //   if (isContainerAgentId(cursorRunId)) {
 //     return cursorRunId.slice('container-agent-'.length);
@@ -134,6 +162,9 @@ export function observeCloudRun(run: Run): CloudAgentRunObservation {
     summary: run.result ?? null,
     noChanges: run.status === 'finished' && gitKnown && !branchName && !prUrl,
     settled: isTerminalStatus(run.status) && !gitPending,
+    modelId: run.model?.id ?? null,
+    durationMs: run.durationMs ?? null,
+    usage: reportedUsage(run),
   };
 }
 
