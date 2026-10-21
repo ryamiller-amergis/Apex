@@ -122,14 +122,26 @@ export const forkPromptfooRunner: RunPromptfooRunner = ({ runnerPath, request, c
       stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
       serialization: 'json',
     });
+    let outcome: (() => void) | null = null;
+    let exited = false;
     let settled = false;
     let stderr = '';
-    const finish = (settle: () => void): void => {
-      if (settled) return;
+    // Settles only once the child is gone: the caller deletes `cwd` next, and
+    // Windows refuses to remove a folder a live process is using.
+    const settle = (): void => {
+      if (settled || !outcome) return;
       settled = true;
       signal.removeEventListener('abort', onAbort);
-      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-      settle();
+      outcome();
+    };
+    const finish = (result: () => void): void => {
+      if (outcome) return;
+      outcome = result;
+      if (exited || child.pid === undefined) {
+        settle();
+        return;
+      }
+      child.kill('SIGKILL');
     };
     const onAbort = (): void => finish(() => reject(abortError(signal)));
     signal.addEventListener('abort', onAbort, { once: true });
@@ -138,10 +150,14 @@ export const forkPromptfooRunner: RunPromptfooRunner = ({ runnerPath, request, c
     });
     child.once('message', (message) => finish(() => resolve(message as PromptfooRunnerReply)));
     child.once('error', (error) => finish(() => reject(error)));
-    child.once('exit', (code, exitSignal) => finish(() => reject(new Error(
-      `Promptfoo runner exited before replying (code=${String(code)}, signal=${String(exitSignal)})`
-        + (stderr.trim() ? `: ${stderr.trim()}` : ''),
-    ))));
+    child.once('exit', (code, exitSignal) => {
+      exited = true;
+      finish(() => reject(new Error(
+        `Promptfoo runner exited before replying (code=${String(code)}, signal=${String(exitSignal)})`
+          + (stderr.trim() ? `: ${stderr.trim()}` : ''),
+      )));
+      settle();
+    });
     child.send(request, (error) => {
       if (error) finish(() => reject(error));
     });

@@ -93,8 +93,14 @@ describe('workflow evaluation job ingest', () => {
       getJob: jest.fn().mockResolvedValue(current),
       finishRunningJob: jest.fn().mockResolvedValue(true),
       getJudgeOutputSchema: jest.fn().mockResolvedValue(SCHEMA),
+      listStalledRunningJobs: jest.fn().mockResolvedValue([]),
+      failStalledRunningJob: jest.fn().mockResolvedValue(true),
     };
-    return { repository, service: createWorkflowEvaluationJobIngestService({ repository }) };
+    const service = createWorkflowEvaluationJobIngestService({
+      repository,
+      now: () => new Date('2026-10-21T13:00:00.000Z'),
+    });
+    return { repository, service };
   }
 
   function completed(workflowClass: WorkflowEvaluationRunClass, names: string[]) {
@@ -237,5 +243,30 @@ describe('workflow evaluation job ingest', () => {
       resultBlobRefs: null,
       errorDetail: 'run_failed: Document generation failed on the durable transport.',
     });
+  });
+
+  it('fails running jobs whose run finished more than 15 minutes ago or is gone', async () => {
+    const { repository, service } = arrange(null);
+    repository.listStalledRunningJobs.mockResolvedValue([
+      job('promptfoo', { runId: 'run-1' }),
+      job('llm_judge', { runId: null }),
+    ]);
+    repository.failStalledRunningJob
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+
+    await expect(service.failStalledRunningJobs()).resolves.toBe(1);
+
+    expect(repository.listStalledRunningJobs).toHaveBeenCalledWith('2026-10-21T12:45:00.000Z', 50);
+    expect(repository.failStalledRunningJob).toHaveBeenCalledWith(
+      'job-promptfoo',
+      'run-1',
+      'result_not_applied: Run run-1 finished but its result was never applied',
+    );
+    expect(repository.failStalledRunningJob).toHaveBeenCalledWith(
+      'job-llm_judge',
+      null,
+      'result_not_applied: The run for this job no longer exists',
+    );
   });
 });

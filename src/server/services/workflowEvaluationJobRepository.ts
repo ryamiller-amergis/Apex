@@ -2,7 +2,7 @@
  * Status changes for workflow evaluation jobs. Every update names the status
  * it expects, so two writers racing on one job cannot both win.
  */
-import { and, asc, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import {
   agentRuns,
@@ -183,6 +183,51 @@ export async function finishRunningJob(
   return rows.length > 0;
 }
 
+/** Running jobs whose run row is gone, or whose run finished before `cutoff`. */
+export async function listStalledRunningJobs(
+  cutoff: string,
+  limit: number,
+): Promise<WorkflowEvaluationJob[]> {
+  const rows = await db
+    .select({ job: workflowEvaluationJobs })
+    .from(workflowEvaluationJobs)
+    .leftJoin(agentRuns, eq(agentRuns.id, workflowEvaluationJobs.runId))
+    .where(and(
+      eq(workflowEvaluationJobs.status, 'running'),
+      lt(workflowEvaluationJobs.updatedAt, cutoff),
+      or(
+        isNull(workflowEvaluationJobs.runId),
+        and(
+          inArray(agentRuns.status, ['completed', 'failed', 'cancelled']),
+          lt(agentRuns.updatedAt, cutoff),
+        ),
+      ),
+    ))
+    .orderBy(asc(workflowEvaluationJobs.updatedAt))
+    .limit(limit);
+  return rows.map((row) => toJob(row.job));
+}
+
+/** Fails a running job only while it still points at the run the sweep saw. */
+export async function failStalledRunningJob(
+  jobId: string,
+  runId: string | null,
+  errorDetail: string,
+): Promise<boolean> {
+  const rows = await db
+    .update(workflowEvaluationJobs)
+    .set({ status: 'failed', errorDetail, updatedAt: sql`now()` })
+    .where(and(
+      eq(workflowEvaluationJobs.id, jobId),
+      eq(workflowEvaluationJobs.status, 'running'),
+      runId === null
+        ? isNull(workflowEvaluationJobs.runId)
+        : eq(workflowEvaluationJobs.runId, runId),
+    ))
+    .returning({ id: workflowEvaluationJobs.id });
+  return rows.length > 0;
+}
+
 export async function getJudgeOutputSchema(eventId: string): Promise<Record<string, unknown> | null> {
   const rows = await db
     .select({ schema: workflowEvaluationDefinitions.judgeOutputSchema })
@@ -236,6 +281,8 @@ export const workflowEvaluationJobRepository = {
   claimFailedJobForRetry,
   finishRunningJob,
   getJudgeOutputSchema,
+  listStalledRunningJobs,
+  failStalledRunningJob,
 };
 
 export type WorkflowEvaluationJobRepository = typeof workflowEvaluationJobRepository;

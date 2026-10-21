@@ -31,6 +31,7 @@ import { harvestFinishedV2Prototypes } from './designPrototypeV2Harvest';
 import { harvestFinishedV2UiLabDesigns } from './uiLabV2Harvest';
 import { harvestFinishedV2Documents } from './documentV2Harvest';
 import { createWorkflowEvaluationJobOrchestrator } from './workflowEvaluationJobOrchestrator';
+import { createWorkflowEvaluationJobIngestService } from './workflowEvaluationJobIngestService';
 import {
   findRunningInterviewThreads,
   clearStaleRun,
@@ -355,6 +356,13 @@ export async function recoverInFlightWork(
     const failedJobs = await createWorkflowEvaluationJobOrchestrator().failStalePendingJobs();
     if (failedJobs > 0) {
       console.log(`[recovery] Failed ${failedJobs} workflow evaluation job(s) that were never queued`);
+    }
+  });
+
+  await runRecoveryCategory('stalled workflow evaluation jobs', signal, async () => {
+    const stalledJobs = await createWorkflowEvaluationJobIngestService().failStalledRunningJobs();
+    if (stalledJobs > 0) {
+      console.log(`[recovery] Failed ${stalledJobs} workflow evaluation job(s) whose result never arrived`);
     }
   });
 

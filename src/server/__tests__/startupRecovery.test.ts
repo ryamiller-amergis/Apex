@@ -92,6 +92,10 @@ const mockFailStalePendingJobs = jest.fn(async () => 0);
 jest.mock('../services/workflowEvaluationJobOrchestrator', () => ({
   createWorkflowEvaluationJobOrchestrator: () => ({ failStalePendingJobs: mockFailStalePendingJobs }),
 }));
+const mockFailStalledRunningJobs = jest.fn(async () => 0);
+jest.mock('../services/workflowEvaluationJobIngestService', () => ({
+  createWorkflowEvaluationJobIngestService: () => ({ failStalledRunningJobs: mockFailStalledRunningJobs }),
+}));
 
 jest.mock('../services/documentV2Harvest', () => ({
   harvestFinishedV2Documents: jest.fn().mockResolvedValue(0),
@@ -1209,5 +1213,11 @@ describe('finished durable document runs', () => {
     await recoverInFlightWork();
 
     expect(mockFailStalePendingJobs).toHaveBeenCalledTimes(1);
+  });
+
+  it('sweeps workflow evaluation jobs whose result never arrived', async () => {
+    await recoverInFlightWork();
+
+    expect(mockFailStalledRunningJobs).toHaveBeenCalledTimes(1);
   });
 });

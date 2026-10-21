@@ -33,7 +33,15 @@ export type WorkflowEvaluationRunClass = 'evaluation-promptfoo' | 'evaluation-ju
 export type WorkflowEvaluationIngestFailureCode =
   | 'run_failed'
   | 'assertions_failed'
-  | 'result_invalid';
+  | 'result_invalid'
+  | 'result_not_applied';
+
+/**
+ * How long after its run finishes a job may stay running. The document harvest
+ * normally applies a result within a few sweeps of a minute each.
+ */
+export const WORKFLOW_EVALUATION_STALLED_RUNNING_MS = 15 * 60_000;
+const STALLED_SWEEP_BATCH_SIZE = 50;
 
 export type EvaluationRunReference = Readonly<{
   runId: string;
@@ -54,11 +62,16 @@ export type IngestOutcome = 'applied' | 'skipped';
 
 type IngestRepository = Pick<
   WorkflowEvaluationJobRepository,
-  'getJob' | 'finishRunningJob' | 'getJudgeOutputSchema'
+  | 'getJob'
+  | 'finishRunningJob'
+  | 'getJudgeOutputSchema'
+  | 'listStalledRunningJobs'
+  | 'failStalledRunningJob'
 >;
 
 export type WorkflowEvaluationJobIngestDependencies = Readonly<{
   repository?: IngestRepository;
+  now?: () => Date;
 }>;
 
 const EVALUATOR_BY_CLASS: Record<WorkflowEvaluationRunClass, WorkflowEvaluationJobEvaluator> = {
@@ -137,6 +150,7 @@ export function createWorkflowEvaluationJobIngestService(
   dependencies: WorkflowEvaluationJobIngestDependencies = {},
 ) {
   const repository = dependencies.repository ?? workflowEvaluationJobRepository;
+  const now = dependencies.now ?? (() => new Date());
 
   async function findOwnedJob(run: EvaluationRunReference): Promise<WorkflowEvaluationJob | null> {
     const identity = parseWorkflowEvaluationRunThreadId(run.threadId);
@@ -235,6 +249,20 @@ export function createWorkflowEvaluationJobIngestService(
         ...failed('run_failed', run.reason),
         resultBlobRefs: null,
       });
+    },
+
+    /** Fails running jobs whose result will never arrive, so they can be retried. */
+    async failStalledRunningJobs(): Promise<number> {
+      const cutoff = new Date(now().getTime() - WORKFLOW_EVALUATION_STALLED_RUNNING_MS).toISOString();
+      const stalled = await repository.listStalledRunningJobs(cutoff, STALLED_SWEEP_BATCH_SIZE);
+      let failedCount = 0;
+      for (const job of stalled) {
+        const detail = job.runId === null
+          ? formatIngestFailure('result_not_applied', 'The run for this job no longer exists')
+          : formatIngestFailure('result_not_applied', `Run ${job.runId} finished but its result was never applied`);
+        if (await repository.failStalledRunningJob(job.id, job.runId, detail)) failedCount += 1;
+      }
+      return failedCount;
     },
   };
 }
