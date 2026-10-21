@@ -12,11 +12,13 @@ import {
   useCloudAgentRunHistory,
   useDevSession,
   useCancelCloudAgentRun,
+  useCloudAgentLaunchOptions,
   useStartCloudAgentRun,
   useStartLocalFeature,
 } from '../hooks/useDevWorkbench';
-import { useFeatureFlag } from '../hooks/useFeatureFlags';
-import { MY_WORK_CLOUD_AGENT_FLAG } from '../../shared/types/featureFlags';
+import { useFeatureFlag, useFeatureFlags } from '../hooks/useFeatureFlags';
+import { CLOUD_AGENT_GUIDED_LAUNCH_FLAG, MY_WORK_CLOUD_AGENT_FLAG } from '../../shared/types/featureFlags';
+import { CloudAgentLaunchDialog } from './CloudAgentLaunchDialog';
 import { useApexBacklogFeatures } from '../hooks/useApexBacklog';
 import { useAssignedBoardItems } from '../hooks/useApexWorkItems';
 import type { ApexWorkItem } from '../../shared/types/apexWorkItem';
@@ -750,6 +752,10 @@ const CloudAgentEnabledRowAction: React.FC<{
 }> = ({ item, project, activeSession, cloudStatusPending, cloudStatusUnavailable }) => {
   const startCloud = useStartCloudAgentRun();
   const cancelCloud = useCancelCloudAgentRun();
+  const { flags } = useFeatureFlags(project);
+  const launchChooser = flags[CLOUD_AGENT_GUIDED_LAUNCH_FLAG] === true;
+  const [chooserIntent, setChooserIntent] = useState<'start' | 'retry' | null>(null);
+  const launchOptions = useCloudAgentLaunchOptions(project, item.id, chooserIntent !== null);
   const [startedSessionId, setStartedSessionId] = useState<string | null>(null);
   const [optimisticRun, setOptimisticRun] = useState<CloudAgentRunSummary | null>(null);
   const [cancelledRunId, setCancelledRunId] = useState<string | null>(null);
@@ -818,10 +824,18 @@ const CloudAgentEnabledRowAction: React.FC<{
     );
   }
 
-  const handleStartOrResume = async () => {
+  const handleStartOrResume = async (choice?: { intent: 'start' | 'resume' | 'retry'; skillPath?: string; model?: string }) => {
     setActionError(null);
     try {
-      const result = await startCloud.mutateAsync({ workItemId: item.id, project });
+      const result = await startCloud.mutateAsync({
+        workItemId: item.id,
+        project,
+        ...(launchChooser ? {
+          intent: choice?.intent ?? 'start',
+          skillPath: choice?.skillPath,
+          model: choice?.model,
+        } : {}),
+      });
       setStartedSessionId(result.sessionId);
       setCancelledRunId(null);
       setOptimisticRun({
@@ -840,8 +854,44 @@ const CloudAgentEnabledRowAction: React.FC<{
       });
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Unable to start Cloud Development.');
+      return false;
     }
+    return true;
   };
+
+  const launchDialog = chooserIntent ? (
+    <CloudAgentLaunchDialog
+      title={chooserIntent === 'retry' ? 'Retry cloud agent' : 'Start cloud agent'}
+      reason={launchOptions.data?.reason ?? ''}
+      skills={launchOptions.data?.skills ?? []}
+      models={launchOptions.data?.models ?? []}
+      defaultSkillPath={
+        chooserIntent === 'retry'
+          ? (launchOptions.data?.priorSkillPath ?? launchOptions.data?.recommendedSkillPath ?? '')
+          : (launchOptions.data?.recommendedSkillPath ?? '')
+      }
+      defaultModel={
+        chooserIntent === 'retry'
+          ? (launchOptions.data?.priorModel ?? launchOptions.data?.recommendedModel ?? '')
+          : (launchOptions.data?.recommendedModel ?? '')
+      }
+      requireTask={false}
+      loading={launchOptions.isLoading}
+      loadError={launchOptions.error instanceof Error ? launchOptions.error.message : null}
+      pending={startCloud.isPending}
+      error={actionError}
+      onClose={() => setChooserIntent(null)}
+      onConfirm={(value) => {
+        void handleStartOrResume({
+          intent: chooserIntent,
+          skillPath: value.skillPath,
+          model: value.model,
+        }).then((started) => {
+          if (started) setChooserIntent(null);
+        });
+      }}
+    />
+  ) : null;
 
   const handleCancel = async () => {
     if (!sessionId || !currentRun) return;
@@ -902,7 +952,19 @@ const CloudAgentEnabledRowAction: React.FC<{
           disabled={!eligibility.allowed || startCloud.isPending}
           title={eligibility.allowed ? 'Start a Cloud Agent on this work item' : eligibility.reason}
           aria-describedby={eligibility.allowed ? undefined : reasonId}
-          onClick={() => void handleStartOrResume()}
+          onClick={() => {
+            // @feature-flag:cloud-agent-guided-launch start winner=enabled
+            if (launchChooser) {
+              // @feature-flag:cloud-agent-guided-launch enabled-start
+              setChooserIntent('start');
+              // @feature-flag:cloud-agent-guided-launch enabled-end
+            } else {
+              // @feature-flag:cloud-agent-guided-launch disabled-start
+              void handleStartOrResume();
+              // @feature-flag:cloud-agent-guided-launch disabled-end
+            }
+            // @feature-flag:cloud-agent-guided-launch end
+          }}
           {...{ 'data-testid': 'my-work-start-cloud-dev-btn' }}
         >
           <span className={styles['cloud-button-icon']} aria-hidden="true">✦</span>
@@ -913,6 +975,7 @@ const CloudAgentEnabledRowAction: React.FC<{
             {actionError}
           </span>
         ) : null}
+        {launchDialog}
       </div>
     );
   }
@@ -991,13 +1054,36 @@ const CloudAgentEnabledRowAction: React.FC<{
                 className={styles['cloud-resume-btn']}
                 type="button"
                 disabled={startCloud.isPending}
-                onClick={() => void handleStartOrResume()}
+                onClick={() => {
+                  // @feature-flag:cloud-agent-guided-launch start winner=enabled
+                  if (launchChooser) {
+                    // @feature-flag:cloud-agent-guided-launch enabled-start
+                    void handleStartOrResume({ intent: 'resume' });
+                    // @feature-flag:cloud-agent-guided-launch enabled-end
+                  } else {
+                    // @feature-flag:cloud-agent-guided-launch disabled-start
+                    void handleStartOrResume();
+                    // @feature-flag:cloud-agent-guided-launch disabled-end
+                  }
+                  // @feature-flag:cloud-agent-guided-launch end
+                }}
                 {...{ 'data-testid': `my-work-resume-cloud-run-${item.id}` }}
               >
                 <span aria-hidden="true">↻</span>
                 {startCloud.isPending ? 'Resuming…' : 'Resume run'}
               </button>
             )}
+            {!isLive && !pullRequestUrl && launchChooser ? (
+              <button
+                className={styles['cloud-resume-btn']}
+                type="button"
+                disabled={startCloud.isPending}
+                onClick={() => setChooserIntent('retry')}
+                {...{ 'data-testid': `my-work-retry-cloud-run-${item.id}` }}
+              >
+                Retry
+              </button>
+            ) : null}
           </div>
         </div>
         {actionError ? (
@@ -1016,6 +1102,7 @@ const CloudAgentEnabledRowAction: React.FC<{
           {...{ 'data-testid': `my-work-cloud-run-drawer-${item.id}` }}
         />
       ) : null}
+      {launchDialog}
     </>
   );
 };

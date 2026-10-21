@@ -61,12 +61,17 @@ import {
   cancelCloudAgentRun,
   CloudAgentConflictError,
   CloudAgentEligibilityError,
+  CloudAgentLaunchError,
   getCloudAgentActivityStream,
   getCloudAgentRunHistory,
   getCloudAgentRunStatus,
+  getImplementationLaunchOptions,
+  loadCloudAgentSkillChoices,
   startCloudAgentRun,
 } from '../services/cloudAgentService';
-import { MY_WORK_CLOUD_AGENT_FLAG } from '../../shared/types/featureFlags';
+import { fetchAvailableModels } from '../services/modelsService';
+import { parseCloudAgentLaunchIntent } from '../../shared/utils/cloudAgentLaunch';
+import { CLOUD_AGENT_GUIDED_LAUNCH_FLAG, MY_WORK_CLOUD_AGENT_FLAG } from '../../shared/types/featureFlags';
 import { startSseHeartbeat, writeSseEvent } from '../utils/sseResponse';
 import { listAssignedToUser } from '../services/featureRequestService';
 
@@ -837,10 +842,73 @@ router.post('/start', async (req: Request, res: Response) => {
   }
 });
 
+// GET /cloud-agent/launch-options — recommended skill and model before start
+router.get('/cloud-agent/launch-options', async (req: Request, res: Response) => {
+  try {
+    const project = typeof req.query.project === 'string' ? req.query.project : '';
+    const workItemId = Number(req.query.workItemId);
+    if (!project || !Number.isInteger(workItemId)) {
+      res.status(400).json({ error: 'workItemId and project are required' });
+      return;
+    }
+    const userId = getUserId(req);
+    const enabled = await isFeatureEnabled(CLOUD_AGENT_GUIDED_LAUNCH_FLAG, { userId, project });
+    // @feature-flag:cloud-agent-guided-launch start winner=enabled
+    if (!enabled) {
+      // @feature-flag:cloud-agent-guided-launch disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:cloud-agent-guided-launch disabled-end
+    }
+
+    // @feature-flag:cloud-agent-guided-launch enabled-start
+    const cloudEnabled = await isFeatureEnabled(MY_WORK_CLOUD_AGENT_FLAG, { userId, project });
+    if (!cloudEnabled) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    const stateService = new AzureDevOpsService(project);
+    const wiResult = await stateService.queryWorkItemsByWiql({
+      wiql: `SELECT [System.Id],[System.WorkItemType] FROM WorkItems WHERE [System.Id] = ${workItemId}`,
+      fields: ['System.Id', 'System.WorkItemType'],
+    });
+    const workItemType = (wiResult.items[0]?.fields?.['System.WorkItemType'] ?? '') as string;
+    if (!workItemType) {
+      res.status(404).json({ error: 'Work item not found' });
+      return;
+    }
+    const [skills, models] = await Promise.all([
+      loadCloudAgentSkillChoices(project),
+      fetchAvailableModels().catch(() => []),
+    ]);
+    const options = await getImplementationLaunchOptions({
+      userId,
+      project,
+      workItemId,
+      workItemType,
+      skills,
+      models,
+    });
+    res.json(options);
+    // @feature-flag:cloud-agent-guided-launch enabled-end
+    // @feature-flag:cloud-agent-guided-launch end
+  } catch (err) {
+    console.error('[dev-workbench] cloud-agent launch options failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to load Cloud Agent launch options' });
+  }
+});
+
 // POST /cloud-agent/start — enqueue a Cloud Agent implementation run
 router.post('/cloud-agent/start', async (req: Request, res: Response) => {
   try {
-    const { workItemId, project } = req.body as { workItemId?: number; project?: string };
+    const body = req.body as {
+      workItemId?: number;
+      project?: string;
+      intent?: unknown;
+      skillPath?: unknown;
+      model?: unknown;
+    };
+    const { workItemId, project } = body;
     if (!project || !workItemId) {
       res.status(400).json({ error: 'workItemId and project are required' });
       return;
@@ -892,6 +960,18 @@ router.post('/cloud-agent/start', async (req: Request, res: Response) => {
     if (!adoUserToken) {
       console.warn('[cloud-agent] no developer Azure DevOps token; the pull request will be opened by the service account');
     }
+    const launchChooser = await isFeatureEnabled(CLOUD_AGENT_GUIDED_LAUNCH_FLAG, { userId, project });
+    const intent = parseCloudAgentLaunchIntent(body.intent);
+    if (launchChooser && !intent) {
+      res.status(400).json({ error: 'intent must be start, resume, or retry' });
+      return;
+    }
+    const [skills, models] = launchChooser
+      ? await Promise.all([
+        loadCloudAgentSkillChoices(project),
+        fetchAvailableModels().catch(() => []),
+      ])
+      : [[], []];
     const result = await startCloudAgentRun({
       userId,
       project,
@@ -906,6 +986,14 @@ router.post('/cloud-agent/start', async (req: Request, res: Response) => {
         workItemType: (fields['System.WorkItemType'] ?? '') as string,
         tags: (fields['System.Tags'] ?? '') as string,
       },
+      ...(launchChooser ? {
+        launchChooser: true,
+        intent: intent ?? 'start',
+        skillPath: typeof body.skillPath === 'string' ? body.skillPath : undefined,
+        model: typeof body.model === 'string' ? body.model : undefined,
+        availableSkills: skills,
+        allowedModelIds: models.map((model) => model.id),
+      } : {}),
     });
     res.json(result);
     // @feature-flag:my-work-cloud-agent enabled-end
@@ -913,6 +1001,10 @@ router.post('/cloud-agent/start', async (req: Request, res: Response) => {
   } catch (err) {
     if (err instanceof CloudAgentEligibilityError) {
       res.status(403).json({ error: err.reason });
+      return;
+    }
+    if (err instanceof CloudAgentLaunchError) {
+      res.status(400).json({ error: err.message });
       return;
     }
     if (err instanceof CloudAgentConflictError) {

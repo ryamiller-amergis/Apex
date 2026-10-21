@@ -1,0 +1,147 @@
+.tabButton {
+  min-height: 36px;
+  margin-left: auto;
+  padding: 0 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tabButton:hover {
+  border-color: var(--accent-color);
+  box-shadow: var(--glow-accent);
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.panel {
+  width: min(920px, calc(100vw - 32px));
+  max-height: 90vh;
+  overflow: auto;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: var(--shadow-md);
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.header h2 {
+  margin: 0 0 4px;
+  color: var(--text-primary);
+  font-size: 18px;
+}
+
+.header p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.close {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 16px 24px 24px;
+}
+
+.jobs,
+.runs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.job,
+.runSummary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.job span,
+.runSummary span {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.run {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.runActions {
+  display: flex;
+  gap: 8px;
+}
+
+.runActions button {
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.activity {
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+}
+
+.activity h3,
+.runs h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.error {
+  color: var(--error-color);
+}
+
+@media (max-width: 768px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}

@@ -355,9 +355,14 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
     ...(input.snapshot.cloudAgent
       ? {
           cloudAgent: {
-            workItemId: input.snapshot.cloudAgent.workItemId,
+            ...(input.snapshot.cloudAgent.workItemId != null
+              ? { workItemId: input.snapshot.cloudAgent.workItemId }
+              : {}),
             ...(input.snapshot.cloudAgent.workItemTitle
               ? { workItemTitle: input.snapshot.cloudAgent.workItemTitle }
+              : {}),
+            ...(input.snapshot.cloudAgent.branchName
+              ? { branchName: input.snapshot.cloudAgent.branchName }
               : {}),
             baseBranch: input.snapshot.cloudAgent.baseBranch,
             ...(input.snapshot.cloudAgent.initiatorName
@@ -371,6 +376,15 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
               : {}),
             ...(input.snapshot.cloudAgent.userTokenInstance
               ? { userTokenInstance: input.snapshot.cloudAgent.userTokenInstance }
+              : {}),
+            ...(input.snapshot.cloudAgent.delivery
+              ? { delivery: input.snapshot.cloudAgent.delivery }
+              : {}),
+            ...(input.snapshot.cloudAgent.guidedJobId
+              ? { guidedJobId: input.snapshot.cloudAgent.guidedJobId }
+              : {}),
+            ...(input.snapshot.cloudAgent.task
+              ? { task: input.snapshot.cloudAgent.task }
               : {}),
           },
         }

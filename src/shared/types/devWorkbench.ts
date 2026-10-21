@@ -179,9 +179,66 @@ export function isLeftoverWorkClean(
   );
 }
 
+export type CloudAgentLaunchIntent = 'start' | 'resume' | 'retry';
+
+export interface CloudAgentSkillChoice {
+  name: string;
+  path: string;
+  description: string;
+}
+
+export interface CloudAgentLaunchOptions {
+  recommendedSkillPath: string;
+  recommendedModel: string;
+  reason: string;
+  skills: CloudAgentSkillChoice[];
+  models: { id: string; displayName: string }[];
+  priorSkillPath: string | null;
+  priorModel: string | null;
+}
+
 export interface StartCloudAgentRunRequest {
   workItemId: number;
   project: string;
+  intent?: CloudAgentLaunchIntent;
+  skillPath?: string;
+  model?: string;
+}
+
+export interface GuidedCloudJobOption {
+  id: string;
+  title: string;
+  description: string;
+  skillName: string;
+  skillPath: string | null;
+}
+
+export interface GuidedCloudAgentSession {
+  sessionId: string;
+  jobId: string;
+  title: string;
+  task: string;
+  skillPath: string;
+  model: string;
+  updatedAt: string;
+  run: CloudAgentRunSummary | null;
+}
+
+export interface GuidedCloudJobsResponse {
+  jobs: GuidedCloudJobOption[];
+  skills: CloudAgentSkillChoice[];
+  models: { id: string; displayName: string }[];
+  runs: GuidedCloudAgentSession[];
+}
+
+export interface StartGuidedCloudAgentRequest {
+  project: string;
+  jobId: string;
+  task: string;
+  intent?: CloudAgentLaunchIntent;
+  sessionId?: string;
+  skillPath?: string;
+  model?: string;
 }
 
 export interface StartCloudAgentRunResponse {

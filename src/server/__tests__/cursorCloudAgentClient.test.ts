@@ -140,6 +140,21 @@ describe('cursorCloudAgentClient', () => {
         cursorRunId: 'run-1',
         jobName: 'cursor-sdk',
       });
+
+      mockCreate.mockClear();
+      await launchCloudAgent({
+        project: 'MaxView',
+        prompt: 'Analyze the issue',
+        model: 'composer-2.5',
+        skillProvider: 'ado',
+        skillRepo: 'MaxView',
+        skillBranch: 'development',
+        workItemTitle: 'Analyze an issue',
+        autoCreatePr: false,
+      });
+      expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({
+        cloud: expect.objectContaining({ autoCreatePR: false }),
+      }));
     } finally {
       if (previous === undefined) delete process.env.CURSOR_USER_LEVEL_API_KEY;
       else process.env.CURSOR_USER_LEVEL_API_KEY = previous;

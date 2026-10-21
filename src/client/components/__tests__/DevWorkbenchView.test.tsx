@@ -30,6 +30,11 @@ jest.mock('../../hooks/useDevWorkbench', () => ({
   useCompleteFeature: jest.fn(),
   useStartLocalFeature: jest.fn(),
   useStartCloudAgentRun: jest.fn(),
+  useCloudAgentLaunchOptions: jest.fn().mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    error: null,
+  }),
   useCloudAgentActivityStream: jest.fn(),
   useCloudAgentRun: jest.fn(),
   useCloudAgentRunHistory: jest.fn(),
@@ -79,6 +84,7 @@ jest.mock('../FeatureContextModal', () => ({
 }));
 
 import { useAppShell } from '../../hooks/useAppShell';
+import { useFeatureFlags } from '../../hooks/useFeatureFlags';
 import {
   useAssignedBacklog,
   useAssignedWorkItems,
@@ -93,6 +99,7 @@ import {
   useCloudAgentRunHistory,
   useDevSession,
   useCancelCloudAgentRun,
+  useCloudAgentLaunchOptions,
 } from '../../hooks/useDevWorkbench';
 import { useApexBacklogFeatures } from '../../hooks/useApexBacklog';
 import { useProjectMenuConfig } from '../../hooks/useProjectMenuConfig';
@@ -242,6 +249,12 @@ function openRunDetails(itemId: number, status: RegExp): void {
 describe('DevWorkbenchView', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    (useFeatureFlags as jest.Mock).mockReturnValue({ flags: {}, isLoading: false });
+    (useCloudAgentLaunchOptions as jest.Mock).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+    });
 
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
@@ -1027,6 +1040,54 @@ describe('DevWorkbenchView', () => {
     expect(await screen.findByText('A live run already exists.')).toBeInTheDocument();
     expect(screen.queryByTestId('my-work-cloud-run-status-42')).not.toBeInTheDocument();
     expect(screen.getByTestId('my-work-start-cloud-dev-btn')).toBeInTheDocument();
+  });
+
+  it('opens the launch chooser and sends the selected skill without starting immediately', async () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    (useFeatureFlags as jest.Mock).mockReturnValue({
+      flags: { 'cloud-agent-guided-launch': true },
+      isLoading: false,
+    });
+    (useCloudAgentLaunchOptions as jest.Mock).mockReturnValue({
+      data: {
+        recommendedSkillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
+        recommendedModel: 'composer-2.5',
+        reason: 'Feature work uses dev-orchestrator.',
+        skills: [{
+          name: 'dev-orchestrator',
+          path: '.cursor/skills/dev-orchestrator/SKILL.md',
+          description: 'Implements work',
+        }],
+        models: [{ id: 'composer-2.5', displayName: 'Composer' }],
+        priorSkillPath: null,
+        priorModel: null,
+      },
+      isLoading: false,
+      error: null,
+    });
+    (useAssignedWorkItems as jest.Mock).mockReturnValue({
+      data: [{ ...workItems[0], cloudAgentEligibility: { allowed: true } }],
+      isLoading: false,
+      error: null,
+    });
+
+    renderView();
+    fireEvent.click(screen.getByTestId('my-work-start-cloud-dev-btn'));
+
+    expect(screen.getByTestId('cloud-agent-launch-dialog')).toBeInTheDocument();
+    expect(screen.getByText('Feature work uses dev-orchestrator.')).toBeInTheDocument();
+    expect(mockStartCloudMutateAsync).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('cloud-agent-launch-confirm'));
+    await waitFor(() => {
+      expect(mockStartCloudMutateAsync).toHaveBeenCalledWith({
+        workItemId: 42,
+        project: 'MaxView',
+        intent: 'start',
+        skillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
+        model: 'composer-2.5',
+      });
+    });
   });
 
   it('TBI-004 DoD-3: does not render cloud controls on app-native My Work', () => {

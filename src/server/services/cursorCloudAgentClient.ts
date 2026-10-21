@@ -31,6 +31,8 @@ export interface LaunchCloudAgentInput {
   skillName?: string;
   /** Azure DevOps token for the developer who started the run. Used only to open the pull request. */
   adoUserToken?: string | null;
+  /** Guided jobs leave this false. Implementation runs open a pull request. */
+  autoCreatePr?: boolean;
 }
 
 export interface LaunchCloudAgentResult {
@@ -145,7 +147,7 @@ export async function launchCloudAgent(
     name: input.workItemTitle,
     cloud: {
       repos: [{ url: repoUrl, startingRef: input.skillBranch }],
-      autoCreatePR: true,
+      autoCreatePR: input.autoCreatePr !== false,
     },
   });
   try {

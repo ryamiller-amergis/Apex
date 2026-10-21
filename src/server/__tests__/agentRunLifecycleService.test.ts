@@ -319,6 +319,36 @@ describe('enqueue + frozen snapshot (PBI-001 AC-0 / AC-3 / VT-01 / VT-04 / DoD-2
     expect(stored.cloudAgent?.skillName).toBe('dev-orchestrator');
   });
 
+  it('freezes branch name and guided delivery on the original run', async () => {
+    await enqueue({
+      threadId: 'thread-1',
+      projectId: 'proj-1',
+      snapshot: {
+        ...snapshot,
+        cloudAgent: {
+          baseBranch: 'development',
+          branchName: 'feature/apex-42-login',
+          delivery: 'guided',
+          guidedJobId: 'issue-analysis',
+          task: 'The login page times out.',
+          workItemTitle: 'Analyze an issue',
+        },
+      },
+      timeoutAt: '2026-08-05T14:00:00.000Z',
+      runId: 'run-guided-1',
+    });
+    const stored = (mockInsertValues.mock.calls[0][0] as { executionSnapshot: ExecutionSnapshot })
+      .executionSnapshot;
+    expect(stored.cloudAgent).toMatchObject({
+      baseBranch: 'development',
+      branchName: 'feature/apex-42-login',
+      delivery: 'guided',
+      guidedJobId: 'issue-analysis',
+      task: 'The login page times out.',
+    });
+    expect(stored.cloudAgent?.workItemId).toBeUndefined();
+  });
+
   it('TBI-002 DoD-0: Given admission fails after insert, when enqueue returns, then the durable queued run is preserved', async () => {
     mockRunAdmissionCycle.mockRejectedValueOnce(new Error('admission unavailable'));
 
