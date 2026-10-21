@@ -255,6 +255,7 @@ import {
   triggerFixCoverageGaps,
   acceptFixCoverageGaps,
   overridePrdReadiness,
+  forceSubmitForReview,
   revertPrdSection,
   dismissPrdFixSession,
   createPrdAdoWorkItems,
@@ -984,6 +985,29 @@ describe('submitForReview', () => {
     await expect(submitForReview('prd-1', 'user-other')).rejects.toMatchObject({
       message: 'Only the author or owner can submit for review',
     });
+  });
+
+  it('allows a super admin who is neither author nor owner to submit for review', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft', content: 'some content' }));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await submitForReview('prd-1', 'super-admin-user', undefined, { isSuperAdmin: true });
+
+    expect(mockIsAdminUser).not.toHaveBeenCalled();
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending_review' }),
+    );
+  });
+
+  it('still rejects a non-author when the caller is not a super admin', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ content: 'x' }));
+
+    await expect(
+      submitForReview('prd-1', 'user-other', undefined, { isSuperAdmin: false }),
+    ).rejects.toMatchObject({ message: 'Only the author or owner can submit for review', status: 403 });
+    expect(mockDb.update).not.toHaveBeenCalled();
   });
 
   it('allows the document owner to submit for review', async () => {
@@ -2165,6 +2189,90 @@ describe('PRD validation lifecycle', () => {
     );
   });
 
+  function mockValidationRun(overallScore: number, isReady: boolean) {
+    mockPrdSelectForGetPrd({ status: 'validating', validationThreadId: 'validation-thread-1' });
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      validationThreadId: 'validation-thread-1',
+      fixBaseline: null,
+      status: 'validating',
+      content: '# PRD',
+      backlogJson: {},
+    });
+    mockReadOutputValidationScorecard.mockReturnValue(JSON.stringify({
+      slug: 'feature-prd',
+      generated_at: '2026-01-01T00:00:00Z',
+      review_phase: 'final',
+      overall_score: overallScore,
+      ready_threshold: 90,
+      is_ready: isReady,
+      verdict: isReady ? 'ready' : 'needs_work',
+      files: [],
+    }));
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'prd-1' }]);
+    const setMock = jest.fn().mockReturnValue({
+      where: jest.fn().mockReturnValue({ returning: returningMock }),
+    });
+    mockDb.update.mockReturnValue({ set: setMock });
+    return setMock;
+  }
+
+  it('moves to pending review when the score meets the project threshold even if the skill says not ready', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      prdValidationSkillPath: '.cursor/skills/prd-spec-review/SKILL.md',
+      prdValidationScoreThreshold: 85,
+    });
+    const setMock = mockValidationRun(87, false);
+
+    await syncPrdValidationResult('prd-1');
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ validationScore: 87, status: 'pending_review' }),
+    );
+    expect(mockNotifyApproversDocumentReady).toHaveBeenCalledWith('prd-1', 'prd');
+  });
+
+  it('stays in draft when the score is below the project threshold', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      prdValidationSkillPath: '.cursor/skills/prd-spec-review/SKILL.md',
+      prdValidationScoreThreshold: 90,
+    });
+    const setMock = mockValidationRun(87, false);
+
+    await syncPrdValidationResult('prd-1');
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ validationScore: 87, status: 'draft' }),
+    );
+    expect(mockNotifyApproversDocumentReady).not.toHaveBeenCalled();
+  });
+
+  it('stays in draft at 87% when the project has no custom threshold', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      prdValidationSkillPath: '.cursor/skills/prd-spec-review/SKILL.md',
+    });
+    const setMock = mockValidationRun(87, false);
+
+    await syncPrdValidationResult('prd-1');
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'draft' }));
+  });
+
+  it('stays in draft when the score passes but test-case coverage gaps remain', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      prdValidationSkillPath: '.cursor/skills/prd-spec-review/SKILL.md',
+      prdValidationScoreThreshold: 85,
+    });
+    mockGetTestCases.mockResolvedValue({
+      ...readyTestCase,
+      coverageSummary: { ...readyTestCase.coverageSummary, acCovered: '1/2' },
+    });
+    const setMock = mockValidationRun(95, true);
+
+    await syncPrdValidationResult('prd-1');
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'draft' }));
+  });
+
   it('does not overwrite validationScore while a Fix-with-Apex fixBaseline is set', async () => {
     mockPrdSelectForGetPrd({
       status: 'draft',
@@ -2429,6 +2537,104 @@ describe('overridePrdReadiness', () => {
     await expect(overridePrdReadiness('prd-1', 'user-1', 'not needed')).rejects.toMatchObject({
       message: expect.stringContaining('already ready for review'),
       status: 409,
+    });
+  });
+});
+
+describe('forceSubmitForReview', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  function mockUpdate() {
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+    return setMock;
+  }
+
+  it('moves a blocked draft to pending_review and records the override in the audit history', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft', content: '# PRD' }));
+    mockDb.query.interviews.findFirst.mockResolvedValue(null);
+    mockGetTestCases.mockResolvedValue(null);
+    const setMock = mockUpdate();
+
+    const result = await forceSubmitForReview('prd-1', 'super-admin', 'Validation passed; stuck', 'Ada');
+
+    expect(result).toEqual({ reviewerAssignmentError: null });
+    expect(mockCancelDocumentValidation).not.toHaveBeenCalled();
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'pending_review',
+      readinessOverride: expect.objectContaining({
+        reason: 'Validation passed; stuck',
+        userId: 'super-admin',
+        userDisplayName: 'Ada',
+        states: ['test_cases_pending'],
+        history: [expect.objectContaining({
+          reason: 'Validation passed; stuck',
+          summary: expect.stringContaining('Force-submitted for review by a super admin'),
+        })],
+      }),
+    }));
+  });
+
+  it('cancels an in-flight validation before moving a validating PRD', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({
+      status: 'validating',
+      content: '# PRD',
+      validationThreadId: 'validation-thread-1',
+    }));
+    mockDb.query.interviews.findFirst.mockResolvedValue(null);
+    mockGetTestCases.mockResolvedValue(null);
+    const setMock = mockUpdate();
+
+    await forceSubmitForReview('prd-1', 'super-admin', 'Validation hung');
+
+    expect(mockCancelDocumentValidation).toHaveBeenCalledWith('prd-1', 'validation-thread-1');
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending_review' }));
+  });
+
+  it('still moves the PRD and reports the error when kickoff reviewers cannot be assigned', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft', content: '# PRD' }));
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      prdApproverIds: ['left-the-pool'],
+      designDocApproverIds: null,
+      designPrototypeApproverIds: null,
+      testCaseApproverIds: null,
+      testCasesEnabled: true,
+    });
+    mockGetTestCases.mockResolvedValue(null);
+    mockAssignApprovers.mockRejectedValueOnce(new Error('Users not in the prd approver pool: left-the-pool'));
+    const setMock = mockUpdate();
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const result = await forceSubmitForReview('prd-1', 'super-admin', 'Stuck');
+
+      expect(result.reviewerAssignmentError).toContain('left-the-pool');
+      expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending_review' }));
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  it('requires a non-empty reason', async () => {
+    await expect(forceSubmitForReview('prd-1', 'super-admin', '  ')).rejects.toMatchObject({ status: 400 });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it.each(['pending_review', 'approved', 'generating'])('rejects a PRD in %s', async (status) => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status, content: '# PRD' }));
+
+    await expect(forceSubmitForReview('prd-1', 'super-admin', 'Stuck')).rejects.toMatchObject({
+      message: `Cannot force submit PRD from status '${status}'`,
+    });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a PRD with no content', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft', content: '' }));
+
+    await expect(forceSubmitForReview('prd-1', 'super-admin', 'Stuck')).rejects.toMatchObject({
+      message: 'PRD content must be non-empty before submitting for review',
     });
   });
 });

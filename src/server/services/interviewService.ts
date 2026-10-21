@@ -21,12 +21,53 @@ import {
 
 const VALID_INTERVIEW_STATUSES: InterviewStatus[] = ['in_progress', 'complete', 'archived'];
 
+export const INTERVIEW_COMPLETE_FORBIDDEN_MESSAGE =
+  'Only the author, an interview section owner, a project admin, or a platform admin can complete an interview';
+
+export const INTERVIEW_COMPLETE_INVALID_STATUS_MESSAGE =
+  'Only in-progress interviews can be marked complete';
+
+function httpStatusError(message: string, status: number): Error {
+  const err = new Error(message) as Error & { status: number };
+  err.status = status;
+  return err;
+}
+
 function assertValidInterviewStatus(status: string): asserts status is InterviewStatus {
   if (!VALID_INTERVIEW_STATUSES.includes(status as InterviewStatus)) {
     const err = new Error(`Invalid interview status: ${status}`);
     (err as any).status = 400;
     throw err;
   }
+}
+
+export interface InterviewCompletionActor {
+  authorId: string;
+  project: string;
+  prdOwnerId?: string | null;
+  designDocOwnerId?: string | null;
+  designPrototypeOwnerId?: string | null;
+  testCaseOwnerId?: string | null;
+}
+
+/**
+ * Author, section owner, platform admin, or project admin may complete an
+ * interview and generate its PRD. Other status changes stay author-only.
+ */
+export async function canCompleteInterviewAndGeneratePrd(
+  userId: string,
+  interviewRow: InterviewCompletionActor,
+): Promise<boolean> {
+  if (interviewRow.authorId === userId) return true;
+  const sectionOwnerIds = [
+    interviewRow.prdOwnerId,
+    interviewRow.designDocOwnerId,
+    interviewRow.designPrototypeOwnerId,
+    interviewRow.testCaseOwnerId,
+  ];
+  if (sectionOwnerIds.some((ownerId) => ownerId != null && ownerId === userId)) return true;
+  if (await isPlatformAdmin(userId)) return true;
+  return isProjectAdmin(userId, interviewRow.project);
 }
 
 const PLAYBOOK_LINKAGE_ERROR =
@@ -426,7 +467,13 @@ export async function updateInterviewStatus(
     (err as any).status = 404;
     throw err;
   }
-  if (row.authorId !== requestingUserId) {
+  if (newStatus === 'complete') {
+    const allowed = await canCompleteInterviewAndGeneratePrd(requestingUserId, row);
+    if (!allowed) throw httpStatusError(INTERVIEW_COMPLETE_FORBIDDEN_MESSAGE, 403);
+    if (row.status !== 'in_progress' || row.playbookRunId != null) {
+      throw httpStatusError(INTERVIEW_COMPLETE_INVALID_STATUS_MESSAGE, 409);
+    }
+  } else if (row.authorId !== requestingUserId) {
     const err = new Error('Only the author can change interview status');
     (err as any).status = 403;
     throw err;

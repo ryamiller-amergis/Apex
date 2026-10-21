@@ -8,6 +8,7 @@ import request from 'supertest';
 
 const authenticateMock = jest.fn();
 const oidcStrategyConfigs: Array<{ redirectUrl: string }> = [];
+let mockCallbackUser: unknown;
 
 jest.mock('passport-azure-ad', () => ({
   OIDCStrategy: jest.fn().mockImplementation((config: { redirectUrl: string }) => {
@@ -20,6 +21,10 @@ jest.mock('passport', () => ({
   use: jest.fn(),
   authenticate: (...args: unknown[]) => {
     authenticateMock(...args);
+    const verifyCallback = args[1];
+    if (mockCallbackUser && typeof verifyCallback === 'function') {
+      return () => verifyCallback(null, mockCallbackUser, undefined);
+    }
     return (_req: express.Request, res: express.Response) => {
       res.sendStatus(200);
     };
@@ -180,6 +185,70 @@ describe('GET /auth/dev-access-denied', () => {
     const res = await request(app).get('/auth/dev-access-denied').expect(403);
     expect(res.text).toContain('Dev access required');
     expect(res.text).toContain('platform admin');
+  });
+});
+
+describe('GET /auth/callback test accounts', () => {
+  const ssoEnv = {
+    NODE_ENV: 'production',
+    AZURE_TENANT_ID: 'tenant-test',
+    AZURE_CLIENT_ID: 'client-test',
+    AZURE_REDIRECT_URL: 'https://app-apex-prd.azurewebsites.net/auth/callback',
+  };
+
+  function buildCallbackApp() {
+    const app = express();
+    app.use((req, _res, next) => {
+      (req as any).session = {};
+      (req as any).logIn = (_user: unknown, _opts: unknown, done: (err?: unknown) => void) => done();
+      next();
+    });
+    app.use('/auth', loadAuthRouter());
+    return app;
+  }
+
+  function signInAs(email: string) {
+    mockCallbackUser = { profile: { oid: 'oid-test', displayName: 'Test', upn: email } };
+  }
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    mockCallbackUser = undefined;
+  });
+
+  it('refuses a test account on a deployed site without the opt-in setting', async () => {
+    process.env = { ...originalEnv, ...ssoEnv };
+    delete process.env.ALLOW_TEST_ACCOUNT_SIGN_IN;
+    signInAs('apex-test-05@amergis.com');
+
+    const res = await request(buildCallbackApp()).get('/auth/callback').expect(302);
+    expect(res.headers.location).toBe('/auth/login-failed');
+  });
+
+  it('refuses the legacy CI account on a deployed site without the opt-in setting', async () => {
+    process.env = { ...originalEnv, ...ssoEnv };
+    delete process.env.ALLOW_TEST_ACCOUNT_SIGN_IN;
+    signInAs('APEX-E2E-TEST@amergis.com');
+
+    const res = await request(buildCallbackApp()).get('/auth/callback').expect(302);
+    expect(res.headers.location).toBe('/auth/login-failed');
+  });
+
+  it('signs in a test account when the site opts in', async () => {
+    process.env = { ...originalEnv, ...ssoEnv, ALLOW_TEST_ACCOUNT_SIGN_IN: 'true' };
+    signInAs('apex-test-05@amergis.com');
+
+    const res = await request(buildCallbackApp()).get('/auth/callback').expect(302);
+    expect(res.headers.location).toBe('/');
+  });
+
+  it('signs in a regular user on a deployed site without the opt-in setting', async () => {
+    process.env = { ...originalEnv, ...ssoEnv };
+    delete process.env.ALLOW_TEST_ACCOUNT_SIGN_IN;
+    signInAs('someone@amergis.com');
+
+    const res = await request(buildCallbackApp()).get('/auth/callback').expect(302);
+    expect(res.headers.location).toBe('/');
   });
 });
 

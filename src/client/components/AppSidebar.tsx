@@ -43,7 +43,6 @@ interface AppSidebarProps {
   onNavigateStandup?: () => void;
   onNavigateUiLab?: () => void;
   onNavigateFeatureRequests?: () => void;
-  onNavigatePdfTools?: () => void;
   onNavigateAiCost?: () => void;
   onNavigateDesignModule?: () => void;
   onNavigateWorkBoard?: () => void;
@@ -128,13 +127,6 @@ const IconFeatureRequests: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <path d="M10 3a4 4 0 014 4c0 1.5-.8 2.5-1.5 3.3-.5.5-.5 1-.5 1.7h-4c0-.7 0-1.2-.5-1.7C6.8 9.5 6 8.5 6 7a4 4 0 014-4z" />
     <path d="M8 14h4M8.5 16h3" />
-  </svg>
-);
-
-const IconPdfTools: React.FC = () => (
-  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="4" y="2" width="12" height="16" rx="1.5" />
-    <path d="M7 6h6M7 9h6M7 12h4" />
   </svg>
 );
 
@@ -225,7 +217,6 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigateStandup,
   onNavigateUiLab,
   onNavigateFeatureRequests,
-  onNavigatePdfTools,
   onNavigateAiCost,
   onNavigateDesignModule,
   onNavigateWorkBoard,
@@ -274,7 +265,6 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       label: 'Tools',
       items: [
         { label: 'UI Lab', view: 'ui-lab', icon: <IconUiLab />, permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
-        { label: 'PDF Assembly Tool', view: 'pdf-tools', icon: <IconPdfTools />, permission: 'pdf-assembly:use', onNavigate: onNavigatePdfTools ?? (() => {}) },
         { label: 'Load Tests', view: 'load-tests', icon: <IconLoadTests />, permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}), testId: 'nav-load-tests' },
         { label: 'Playbooks', view: 'playbooks', icon: <IconPlaybooks />, permission: 'playbooks:view', onNavigate: onNavigatePlaybooks ?? (() => {}) },
         { label: 'Apex Backlog', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
@@ -306,11 +296,6 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       if (!playbooksEnabled) return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;
       return isSuperAdmin || can('playbooks:view');
-    }
-    if (item.view === 'pdf-tools') {
-      if (!isSuperAdmin && !menuEnabledViews.includes('pdf-tools')) return false;
-      if (!isSuperAdmin && !can('pdf-assembly:use')) return false;
-      return true;
     }
     if (item.view === 'ui-lab') {
       if (!isSuperAdmin && !menuEnabledViews.includes('ui-lab')) return false;

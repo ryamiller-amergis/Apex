@@ -81,35 +81,6 @@ output "grounding_app_setting_names" {
   }
 }
 
-# PDF workload (first consumer of shared blob)
-output "pdf_storage_account_name" {
-  description = "Storage Account used by PDF (alias of shared_storage_account_name)"
-  value       = azurerm_storage_account.shared.name
-}
-
-output "pdf_blob_container_name" {
-  description = "Private Blob container used for PDF artifacts"
-  value       = azurerm_storage_container.shared[var.pdf_blob_container_name].name
-}
-
-output "pdf_api_managed_identity_principal_id" {
-  description = "Apex App Service identity granted PDF Blob contributor role"
-  value       = try(azurerm_linux_web_app.main.identity[0].principal_id, null)
-}
-
-output "pdf_staging_managed_identity_principal_id" {
-  description = "Production staging-slot identity granted PDF Blob contributor role"
-  value       = var.enable_staging_slot ? try(azurerm_linux_web_app_slot.staging[0].identity[0].principal_id, null) : null
-}
-
-output "pdf_app_setting_names" {
-  description = "Non-secret app setting contract for PDF assembly inside the Apex application"
-  value = {
-    blob_account_name   = "PDF_BLOB_ACCOUNT_NAME"
-    blob_container_name = "PDF_BLOB_CONTAINER_NAME"
-  }
-}
-
 # ---------------------------------------------------------------------------
 # Load Test module outputs (FEAT-002)
 # Wire these into Apex app settings and the Container Apps Job environment

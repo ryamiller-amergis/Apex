@@ -120,17 +120,24 @@ describe('modelsService', () => {
     process.env.CURSOR_API_KEY = 'test-key';
     jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] });
     try {
-      let finishCreate: (agent: unknown) => void = () => {};
       const lateAgent = agentFinishingWith({ status: 'finished' });
-      mockAgentCreate.mockImplementation(async ({ model }: { model: { id: string } }) =>
-        model.id === 'default'
-          ? new Promise((resolve) => {
-              finishCreate = resolve;
-            })
-          : agentFinishingWith({ status: 'finished' }),
-      );
+      let finishCreate: (agent: unknown) => void = () => {};
+      let markCreateStarted: () => void = () => {};
+      const createStarted = new Promise<void>((resolve) => {
+        markCreateStarted = resolve;
+      });
+      mockAgentCreate.mockImplementation(async ({ model }: { model: { id: string } }) => {
+        if (model.id !== 'default') return agentFinishingWith({ status: 'finished' });
+        markCreateStarted();
+        return new Promise((resolve) => {
+          finishCreate = resolve;
+        });
+      });
 
-      await fetchAvailableModels();
+      void fetchAvailableModels();
+      // mkdtemp is real I/O. Advancing the probe timeout before Agent.create
+      // runs leaves finishCreate as a no-op, so the late agent is never disposed.
+      await createStarted;
       await jest.advanceTimersByTimeAsync(60 * 1000);
       await modelProbeInFlightForTests();
 
@@ -140,10 +147,12 @@ describe('modelsService', () => {
       expect(modelProbeInFlightForTests()).toBeNull();
 
       finishCreate(lateAgent);
-      await new Promise((resolve) => setImmediate(resolve));
-      await new Promise((resolve) => setImmediate(resolve));
+      const dispose = lateAgent[Symbol.asyncDispose] as jest.Mock;
+      for (let i = 0; i < 10 && dispose.mock.calls.length === 0; i += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
       expect(lateAgent.send).not.toHaveBeenCalled();
-      expect(lateAgent[Symbol.asyncDispose]).toHaveBeenCalled();
+      expect(dispose).toHaveBeenCalled();
     } finally {
       jest.useRealTimers();
     }
