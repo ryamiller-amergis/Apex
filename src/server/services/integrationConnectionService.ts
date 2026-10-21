@@ -22,7 +22,7 @@ import { IntegrationConnectionError } from './integrationErrors';
 import { getIntegrationFetchStub } from './integrationFetchStub';
 import {
   assertIntegrationBaseUrl,
-  assertPublicHttpsUrl,
+  assertResolvedPublicHttpsUrl,
   assertReadOnlyOperations,
   importOpenApiOperations,
   joinIntegrationUrl,
@@ -83,7 +83,7 @@ export async function defaultIntegrationFetch(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    assertPublicHttpsUrl(url);
+    await assertResolvedPublicHttpsUrl(url);
     const response = await fetch(url, {
       ...init,
       redirect: 'error',

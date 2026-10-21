@@ -1,3 +1,4 @@
+import dns from 'node:dns';
 import { BlockList, isIP } from 'node:net';
 import type { IntegrationOperation } from '../../shared/types/integrations';
 import { IntegrationConnectionError } from './integrationErrors';
@@ -27,7 +28,10 @@ function isPrivateHost(hostname: string): boolean {
   if (
     host === 'localhost' ||
     host.endsWith('.localhost') ||
-    host.endsWith('.local')
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    host.endsWith('.svc') ||
+    host.endsWith('.cluster.local')
   )
     return true;
   if (host === 'metadata.google.internal') return true;
@@ -35,6 +39,14 @@ function isPrivateHost(hostname: string): boolean {
   if (kind === 4) return PRIVATE_NETS.check(host, 'ipv4');
   if (kind === 6) return PRIVATE_NETS.check(host, 'ipv6');
   return false;
+}
+
+function throwUrlRestricted(): never {
+  throw new IntegrationConnectionError(
+    400,
+    'Base URL must be a public https host',
+    'URL_RESTRICTED'
+  );
 }
 
 export function assertPublicHttpsUrl(value: string): URL {
@@ -54,11 +66,27 @@ export function assertPublicHttpsUrl(value: string): URL {
     url.password ||
     isPrivateHost(url.hostname)
   ) {
-    throw new IntegrationConnectionError(
-      400,
-      'Base URL must be a public https host',
-      'URL_RESTRICTED'
-    );
+    throwUrlRestricted();
+  }
+  return url;
+}
+
+export async function assertResolvedPublicHttpsUrl(
+  value: string
+): Promise<URL> {
+  const url = assertPublicHttpsUrl(value);
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (isIP(host)) return url;
+  const resolved = await dns.promises.lookup(host, {
+    all: true,
+    verbatim: true,
+  });
+  const addresses = Array.isArray(resolved) ? resolved : [resolved];
+  if (
+    addresses.length === 0 ||
+    addresses.some((entry) => isPrivateHost(entry.address))
+  ) {
+    throwUrlRestricted();
   }
   return url;
 }
@@ -168,7 +196,16 @@ export function importOpenApiOperations(
   const doc = document as OpenApiDocument;
   const declared = doc.servers?.find((server) => server.url)?.url;
   if (declared) {
-    const server = new URL(declared);
+    let server: URL;
+    try {
+      server = new URL(declared, baseUrl);
+    } catch {
+      throw new IntegrationConnectionError(
+        400,
+        'OpenAPI server URL does not match the connection URL',
+        'URL_RESTRICTED'
+      );
+    }
     const base = new URL(baseUrl);
     if (server.origin !== base.origin) {
       throw new IntegrationConnectionError(

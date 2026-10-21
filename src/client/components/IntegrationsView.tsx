@@ -345,9 +345,11 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ project, ena
           Connection
           <select {...askForm.register('connectionId')} {...{ 'data-testid': 'integrations-connection-select' }}>
             <option value="">Select a connection</option>
-            {integrations.connections.map((connection) => (
-              <option key={connection.id} value={connection.id}>{connection.name}</option>
-            ))}
+            {integrations.connections
+              .filter((connection) => connection.provider !== 'custom')
+              .map((connection) => (
+                <option key={connection.id} value={connection.id}>{connection.name}</option>
+              ))}
           </select>
         </label>
         <label className={styles.field}>

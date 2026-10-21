@@ -76,6 +76,7 @@ jest.mock('../db/drizzle', () => ({
   },
 }));
 
+import dns from 'node:dns';
 import {
   createIntegrationConnection,
   defaultIntegrationFetch,
@@ -155,6 +156,9 @@ describe('integration connection service', () => {
   it('does not follow provider redirects', async () => {
     const previousE2e = process.env.E2E_MODE;
     process.env.E2E_MODE = 'false';
+    const lookupSpy = jest
+      .spyOn(dns.promises, 'lookup')
+      .mockResolvedValue([{ address: '1.2.3.4', family: 4 }] as never);
     const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
       status: 200,
       text: async () => '{}',
@@ -170,6 +174,30 @@ describe('integration connection service', () => {
         expect.objectContaining({ redirect: 'error' })
       );
     } finally {
+      lookupSpy.mockRestore();
+      fetchMock.mockRestore();
+      process.env.E2E_MODE = previousE2e;
+    }
+  });
+
+  it('refuses a hostname that resolves to a private address', async () => {
+    const previousE2e = process.env.E2E_MODE;
+    process.env.E2E_MODE = 'false';
+    const lookupSpy = jest
+      .spyOn(dns.promises, 'lookup')
+      .mockResolvedValue([{ address: '169.254.169.254', family: 4 }] as never);
+    const fetchMock = jest.spyOn(global, 'fetch');
+
+    try {
+      await expect(
+        defaultIntegrationFetch('https://metadata.attacker.example/latest', {
+          method: 'GET',
+          headers: { Authorization: 'Bearer custom-key' },
+        })
+      ).rejects.toMatchObject({ code: 'URL_RESTRICTED' });
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      lookupSpy.mockRestore();
       fetchMock.mockRestore();
       process.env.E2E_MODE = previousE2e;
     }

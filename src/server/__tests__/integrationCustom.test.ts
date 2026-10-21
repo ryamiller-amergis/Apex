@@ -376,6 +376,27 @@ describe('custom integration connectors', () => {
         createdBy: 'user-1',
       })
     ).rejects.toMatchObject({ code: 'URL_RESTRICTED' });
+
+    await expect(
+      createIntegrationConnection({
+        project: 'MaxView',
+        name: 'Internal DNS',
+        provider: 'custom',
+        credential: 'custom-key',
+        baseUrl: 'https://ip-10-0-0-1.ec2.internal/api',
+        operations: [
+          {
+            id: 'getTicket',
+            method: 'GET',
+            path: '/tickets/{id}',
+            summary: 'Get a ticket',
+            readOnly: true,
+          },
+        ],
+        allowedUserIds: ['user-1'],
+        createdBy: 'user-1',
+      })
+    ).rejects.toMatchObject({ code: 'URL_RESTRICTED' });
   });
 
   it('SC-7 imports GET operations from OpenAPI and ignores writes', () => {
@@ -417,6 +438,44 @@ describe('custom integration connectors', () => {
         {
           openapi: '3.0.0',
           servers: [{ url: 'https://evil.example' }],
+          paths: {
+            '/tickets/{id}': {
+              get: { operationId: 'getTicket', summary: 'Get a ticket' },
+            },
+          },
+        },
+        'https://api.example.com'
+      )
+    ).toThrow(expect.objectContaining({ code: 'URL_RESTRICTED' }));
+
+    expect(
+      importOpenApiOperations(
+        {
+          openapi: '3.0.0',
+          servers: [{ url: '/v1' }],
+          paths: {
+            '/tickets/{id}': {
+              get: { operationId: 'getTicket', summary: 'Get a ticket' },
+            },
+          },
+        },
+        'https://api.example.com'
+      )
+    ).toEqual([
+      {
+        id: 'getTicket',
+        method: 'GET',
+        path: '/tickets/{id}',
+        summary: 'Get a ticket',
+        readOnly: true,
+      },
+    ]);
+
+    expect(() =>
+      importOpenApiOperations(
+        {
+          openapi: '3.0.0',
+          servers: [{ url: 'http://{bad host}' }],
           paths: {
             '/tickets/{id}': {
               get: { operationId: 'getTicket', summary: 'Get a ticket' },

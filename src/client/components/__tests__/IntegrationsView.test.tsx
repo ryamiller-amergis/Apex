@@ -146,6 +146,33 @@ describe('IntegrationsView', () => {
     });
   });
 
+  it('omits custom connectors from Ask', () => {
+    mockConnections = [
+      {
+        id: 'clerk-1',
+        project: 'MaxView',
+        name: 'MaxView Clerk',
+        provider: 'clerk',
+        status: 'usable',
+        credentialHint: '••••cret',
+        allowedUserIds: ['user-1'],
+      },
+      {
+        id: 'custom-1',
+        project: 'MaxView',
+        name: 'Tickets',
+        provider: 'custom',
+        status: 'usable',
+        credentialHint: '••••key',
+        allowedUserIds: ['user-1'],
+      },
+    ];
+    render(<IntegrationsView project="MaxView" enabled menuEnabled />);
+
+    expect(screen.getByRole('option', { name: 'MaxView Clerk' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Tickets' })).not.toBeInTheDocument();
+  });
+
   it('SC-7 does not save a custom connector from only a URL and key', async () => {
     render(<IntegrationsView project="MaxView" enabled menuEnabled />);
 

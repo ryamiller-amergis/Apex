@@ -75,6 +75,7 @@ import { DEFAULT_ENABLED_MENU_VIEWS } from '../../shared/types/menuSettings';
 import { IntegrationConnectionError } from '../services/integrationErrors';
 import { assertCallerCanUseIntegrationConnection } from '../services/integrationReadService';
 import { getMenuConfig } from '../services/menuSettingsService';
+import { getUserPermissions } from '../services/rbacService';
 
 const router = Router();
 
@@ -437,6 +438,12 @@ router.post('/threads', async (req: Request, res: Response) => {
       const views = menu?.enabledViews ?? DEFAULT_ENABLED_MENU_VIEWS;
       if (!views.includes('integrations')) {
         return res.status(404).json({ error: 'Not found' });
+      }
+      if (!isSuperAdminRequest(req)) {
+        const permissions = await getUserPermissions(userId, clientKickoff.project);
+        if (!permissions.has('integrations:view')) {
+          return res.status(403).json({ error: 'Forbidden', missing: ['integrations:view'] });
+        }
       }
       await assertCallerCanUseIntegrationConnection({
         project: clientKickoff.project,

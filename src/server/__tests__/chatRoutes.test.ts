@@ -120,6 +120,11 @@ jest.mock('../services/integrationReadService', () => ({
     mockAssertCallerCanUseIntegrationConnection(...args),
 }));
 
+const mockGetUserPermissions = jest.fn().mockResolvedValue(new Set(['integrations:view']));
+jest.mock('../services/rbacService', () => ({
+  getUserPermissions: (...args: unknown[]) => mockGetUserPermissions(...args),
+}));
+
 const mockDurableRetry = jest.fn();
 jest.mock('../services/durableInteractiveTurnService', () => {
   class DurableInteractiveTurnError extends Error {
@@ -960,6 +965,7 @@ describe('POST /api/chat/threads — integration connection kickoff', () => {
       updatedBy: null,
     });
     mockAssertCallerCanUseIntegrationConnection.mockResolvedValue(undefined);
+    mockGetUserPermissions.mockResolvedValue(new Set(['integrations:view']));
   });
 
   afterEach(() => {
@@ -990,12 +996,27 @@ describe('POST /api/chat/threads — integration connection kickoff', () => {
     });
 
     expect(res.status).toBe(201);
+    expect(mockGetUserPermissions).toHaveBeenCalledWith('user-1', 'MaxView');
     expect(mockAssertCallerCanUseIntegrationConnection).toHaveBeenCalledWith({
       project: 'MaxView',
       connectionId: 'conn-clerk',
       userId: 'user-1',
     });
     expect(mockChatService.createThread).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an integration kickoff without integrations:view', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set(['chat:view']));
+
+    const res = await post({
+      assistantType: 'integration',
+      integrationConnectionId: 'conn-clerk',
+    });
+
+    expect(res.status).toBe(403);
+    expect(res.body.missing).toEqual(['integrations:view']);
+    expect(mockAssertCallerCanUseIntegrationConnection).not.toHaveBeenCalled();
+    expect(mockChatService.createThread).not.toHaveBeenCalled();
   });
 });
 
