@@ -507,21 +507,32 @@ describe('VT-09 / VT-10 / VT-11 / VT-12 — definition versioning guards', () =>
 
 describe('VT-02 / VT-06 — rollback and untouched prds and interviews', () => {
   it('DoD-3 down removes the tables and functions, leaves prds and interviews unchanged, and up applies again', async () => {
-    const prdsBefore = await columnNames('prds');
-    const interviewsBefore = await columnNames('interviews');
-
     await client.end();
     const files = fs
       .readdirSync(MIGRATIONS_DIR)
       .filter((file) => file.endsWith('.sql'))
       .sort();
     const firstEvaluation = files.findIndex((file) => file.startsWith('20261016154817'));
-    if (firstEvaluation < 0) {
-      throw new Error('Missing the workflow evaluation tables migration (20261016154817).');
+    const lastEvaluation = files.findIndex((file) => file.startsWith('20261016161100'));
+    if (firstEvaluation < 0 || lastEvaluation < firstEvaluation) {
+      throw new Error(
+        'Missing the workflow evaluation migrations (20261016154817 through 20261016161100).',
+      );
     }
-    // Permissions and the feature-flag seed follow the tables and rubric seeds.
-    // Rolling back only the last two leaves the evaluation tables in place.
-    await migrateDown(scratch.connectionString, files.length - firstEvaluation);
+    // Later migrations may change prds or interviews, so they are rolled back
+    // before the columns the evaluation group must leave alone are recorded.
+    const laterMigrations = files.length - lastEvaluation - 1;
+    if (laterMigrations > 0) {
+      await migrateDown(scratch.connectionString, laterMigrations);
+    }
+    client = new pg.Client({ connectionString: scratch.connectionString });
+    await client.connect();
+    const prdsBefore = await columnNames('prds');
+    const interviewsBefore = await columnNames('interviews');
+    await client.end();
+
+    // Tables, rubric seeds, permissions, and the feature-flag seed.
+    await migrateDown(scratch.connectionString, lastEvaluation - firstEvaluation + 1);
 
     client = new pg.Client({ connectionString: scratch.connectionString });
     await client.connect();
