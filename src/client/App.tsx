@@ -409,7 +409,8 @@ function App() {
     integrationsEnabled &&
     menuConfigReady &&
     permissionsLoaded &&
-    (isSuperAdmin || (effectiveEnabledViews.includes('integrations') && can('integrations:view')));
+    effectiveEnabledViews.includes('integrations') &&
+    (isSuperAdmin || can('integrations:view'));
   const restrictedSkipRef = useRef(false);
 
   // UI Lab members read the whole project list; everyone else only reaches
@@ -1534,7 +1535,7 @@ function App() {
                 <IntegrationsView
                   project={selectedProject}
                   enabled={integrationsEnabled}
-                  menuEnabled={effectiveEnabledViews.includes('integrations') || isSuperAdmin}
+                  menuEnabled={effectiveEnabledViews.includes('integrations')}
                 />
               </Suspense>
             </ErrorBoundary>

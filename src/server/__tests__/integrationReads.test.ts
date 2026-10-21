@@ -7,12 +7,16 @@ const memory: Array<Record<string, unknown>> = [];
 const upsertThread = jest.fn();
 const insertMessage = jest.fn();
 
-function applyWhere(rows: Array<Record<string, unknown>>, clause: any): Array<Record<string, unknown>> {
+function applyWhere(
+  rows: Array<Record<string, unknown>>,
+  clause: any
+): Array<Record<string, unknown>> {
   if (!clause) return rows;
   if (clause.type === 'and') {
     return clause.args.reduce(
-      (acc: Array<Record<string, unknown>>, child: unknown) => applyWhere(acc, child),
-      rows,
+      (acc: Array<Record<string, unknown>>, child: unknown) =>
+        applyWhere(acc, child),
+      rows
     );
   }
   if (clause.type === 'eq') {
@@ -22,14 +26,18 @@ function applyWhere(rows: Array<Record<string, unknown>>, clause: any): Array<Re
 }
 
 jest.mock('drizzle-orm', () => ({
-  eq: (column: { field: string }, val: unknown) => ({ type: 'eq', field: column.field, val }),
+  eq: (column: { field: string }, val: unknown) => ({
+    type: 'eq',
+    field: column.field,
+    val,
+  }),
   and: (...args: unknown[]) => ({ type: 'and', args }),
 }));
 
 jest.mock('../db/schema', () => ({
   integrationConnections: new Proxy(
     {},
-    { get: (_target, prop) => ({ field: String(prop) }) },
+    { get: (_target, prop) => ({ field: String(prop) }) }
   ),
 }));
 
@@ -75,27 +83,39 @@ jest.mock('../services/chatThreadRepository', () => ({
   insertMessage: (...args: unknown[]) => insertMessage(...args),
 }));
 
-import { createIntegrationConnection, testIntegrationConnection } from '../services/integrationConnectionService';
-import { executeIntegrationRead } from '../services/integrationReadService';
+import {
+  createIntegrationConnection,
+  testIntegrationConnection,
+} from '../services/integrationConnectionService';
+import {
+  buildIntegrationReadUrl,
+  executeIntegrationRead,
+  executeMountedIntegrationRead,
+} from '../services/integrationReadService';
 import { askIntegration } from '../services/integrationAskService';
 import { IntegrationConnectionError } from '../services/integrationErrors';
 
 const SECRET = 'integration-read-test-secret';
-const QUESTION = 'What do we know about user jane@example.com from ticket 4421?';
+const QUESTION =
+  'What do we know about user jane@example.com from ticket 4421?';
 
 async function usableConnection(
   provider: 'clerk' | 'pendo' | 'sendgrid',
-  name: string,
+  name: string
 ) {
   const created = await createIntegrationConnection({
     project: 'MaxView',
     name,
     provider,
-    credential: provider === 'pendo' ? 'pendo-secret-key' : 'sk_live_supersecret',
+    credential:
+      provider === 'pendo' ? 'pendo-secret-key' : 'sk_live_supersecret',
     allowedUserIds: ['user-1'],
     createdBy: 'user-1',
   });
-  return testIntegrationConnection('MaxView', created.id, async () => ({ status: 200, body: '{"ok":true}' }));
+  return testIntegrationConnection('MaxView', created.id, async () => ({
+    status: 200,
+    body: '{"ok":true}',
+  }));
 }
 
 describe('integration reads', () => {
@@ -140,23 +160,35 @@ describe('integration reads', () => {
     await testIntegrationConnection('MaxView', pendo.id, pendoFetch);
     await testIntegrationConnection('MaxView', sendgrid.id, sendgridFetch);
 
-    expect(clerkFetch).toHaveBeenCalledWith('https://api.clerk.com/v1/users?limit=1', {
-      method: 'GET',
-      headers: { Authorization: 'Bearer sk_live_supersecret' },
-    });
-    expect(pendoFetch).toHaveBeenCalledWith('https://app.pendo.io/api/v1/metadata/schema/visitor', {
-      method: 'GET',
-      headers: { 'x-pendo-integration-key': 'pendo-secret-key' },
-    });
-    expect(sendgridFetch).toHaveBeenCalledWith('https://api.sendgrid.com/v3/scopes', {
-      method: 'GET',
-      headers: { Authorization: 'Bearer sg-secret-key' },
-    });
+    expect(clerkFetch).toHaveBeenCalledWith(
+      'https://api.clerk.com/v1/users?limit=1',
+      {
+        method: 'GET',
+        headers: { Authorization: 'Bearer sk_live_supersecret' },
+      }
+    );
+    expect(pendoFetch).toHaveBeenCalledWith(
+      'https://app.pendo.io/api/v1/metadata/schema/visitor',
+      {
+        method: 'GET',
+        headers: { 'x-pendo-integration-key': 'pendo-secret-key' },
+      }
+    );
+    expect(sendgridFetch).toHaveBeenCalledWith(
+      'https://api.sendgrid.com/v3/scopes',
+      {
+        method: 'GET',
+        headers: { Authorization: 'Bearer sg-secret-key' },
+      }
+    );
   });
 
   it('SC-5 lets a Clerk connection call only Clerk read operations', async () => {
     const clerk = await usableConnection('clerk', 'MaxView Clerk');
-    const fetchImpl = jest.fn(async () => ({ status: 200, body: '{"id":"user_1"}' }));
+    const fetchImpl = jest.fn(async () => ({
+      status: 200,
+      body: '{"id":"user_1"}',
+    }));
 
     const result = await executeIntegrationRead({
       project: 'MaxView',
@@ -168,20 +200,25 @@ describe('integration reads', () => {
     });
 
     expect(result.body).toContain('user_1');
-    expect(fetchImpl).toHaveBeenCalledWith('https://api.clerk.com/v1/users/user_1', {
-      method: 'GET',
-      headers: { Authorization: 'Bearer sk_live_supersecret' },
-    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://api.clerk.com/v1/users/user_1',
+      {
+        method: 'GET',
+        headers: { Authorization: 'Bearer sk_live_supersecret' },
+      }
+    );
 
     fetchImpl.mockClear();
-    await expect(executeIntegrationRead({
-      project: 'MaxView',
-      connectionId: clerk.id,
-      userId: 'user-1',
-      operationId: 'getBounces',
-      params: { email: 'jane@example.com' },
-      fetchImpl,
-    })).rejects.toMatchObject({ code: 'OPERATION_NOT_ALLOWED' });
+    await expect(
+      executeIntegrationRead({
+        project: 'MaxView',
+        connectionId: clerk.id,
+        userId: 'user-1',
+        operationId: 'getBounces',
+        params: { email: 'jane@example.com' },
+        fetchImpl,
+      })
+    ).rejects.toMatchObject({ code: 'OPERATION_NOT_ALLOWED' });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -206,37 +243,47 @@ describe('integration reads', () => {
       expect.objectContaining({
         method: 'GET',
         headers: { Authorization: 'Bearer sk_live_supersecret' },
-      }),
+      })
     );
     expect(answer.operationId).toBe('listUsers');
     expect(answer.answer).toContain('Jane Ticket');
     expect(JSON.stringify(answer)).not.toContain('sk_live_supersecret');
-    expect(upsertThread).toHaveBeenCalledWith(expect.objectContaining({
-      userId: 'user-1',
-      kickoff: expect.objectContaining({
-        assistantType: 'integration',
-        integrationConnectionId: clerk.id,
-        project: 'MaxView',
-        pillLabel: 'MaxView Clerk',
-      }),
-    }));
+    expect(upsertThread).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        kickoff: expect.objectContaining({
+          assistantType: 'integration',
+          integrationConnectionId: clerk.id,
+          project: 'MaxView',
+          pillLabel: 'MaxView Clerk',
+        }),
+      })
+    );
     expect(insertMessage).toHaveBeenCalledWith(
       answer.threadId,
-      expect.objectContaining({ role: 'agent', text: expect.stringContaining('Jane Ticket') }),
+      expect.objectContaining({
+        role: 'agent',
+        text: expect.stringContaining('Jane Ticket'),
+      })
     );
   });
 
   it('SC-4 refuses a connection that belongs to another project', async () => {
     const clerk = await usableConnection('clerk', 'MaxView Clerk');
-    const fetchImpl = jest.fn(async () => ({ status: 200, body: 'Jane Ticket' }));
+    const fetchImpl = jest.fn(async () => ({
+      status: 200,
+      body: 'Jane Ticket',
+    }));
 
-    await expect(askIntegration({
-      project: 'MatterWorx',
-      connectionId: clerk.id,
-      userId: 'user-1',
-      question: QUESTION,
-      fetchImpl,
-    })).rejects.toBeInstanceOf(IntegrationConnectionError);
+    await expect(
+      askIntegration({
+        project: 'MatterWorx',
+        connectionId: clerk.id,
+        userId: 'user-1',
+        question: QUESTION,
+        fetchImpl,
+      })
+    ).rejects.toBeInstanceOf(IntegrationConnectionError);
 
     expect(fetchImpl).not.toHaveBeenCalled();
   });
@@ -246,7 +293,9 @@ describe('integration reads', () => {
     const sendgrid = await usableConnection('sendgrid', 'MaxView SendGrid');
     const fetchImpl = jest.fn(async (url: string) => ({
       status: 200,
-      body: url.includes('pendo') ? '{"name":"Jane Ticket"}' : '{"email":"jane@example.com"}',
+      body: url.includes('pendo')
+        ? '{"name":"Jane Ticket"}'
+        : '{"email":"jane@example.com"}',
     }));
 
     const pendoAnswer = await askIntegration({
@@ -269,20 +318,73 @@ describe('integration reads', () => {
     expect(fetchImpl).toHaveBeenNthCalledWith(
       1,
       'https://app.pendo.io/api/v1/visitor/jane%40example.com',
-      expect.objectContaining({ headers: { 'x-pendo-integration-key': 'pendo-secret-key' } }),
+      expect.objectContaining({
+        headers: { 'x-pendo-integration-key': 'pendo-secret-key' },
+      })
     );
     expect(fetchImpl).toHaveBeenNthCalledWith(
       2,
       'https://api.sendgrid.com/v3/suppression/bounces/jane%40example.com',
-      expect.objectContaining({ headers: { Authorization: 'Bearer sk_live_supersecret' } }),
+      expect.objectContaining({
+        headers: { Authorization: 'Bearer sk_live_supersecret' },
+      })
     );
-    await expect(executeIntegrationRead({
-      project: 'MaxView',
-      connectionId: pendo.id,
-      userId: 'user-1',
-      operationId: 'getBounces',
-      params: { email: 'jane@example.com' },
-      fetchImpl,
-    })).rejects.toMatchObject({ code: 'OPERATION_NOT_ALLOWED' });
+    await expect(
+      executeIntegrationRead({
+        project: 'MaxView',
+        connectionId: pendo.id,
+        userId: 'user-1',
+        operationId: 'getBounces',
+        params: { email: 'jane@example.com' },
+        fetchImpl,
+      })
+    ).rejects.toMatchObject({ code: 'OPERATION_NOT_ALLOWED' });
+  });
+
+  it('keeps the connection base path when joining an absolute operation path', () => {
+    expect(
+      buildIntegrationReadUrl('https://api.example.com/v1', '/tickets/{id}', {
+        id: '4421',
+      })
+    ).toBe('https://api.example.com/v1/tickets/4421');
+  });
+
+  it('rejects protocol-relative operation paths', () => {
+    expect(() =>
+      buildIntegrationReadUrl(
+        'https://api.example.com',
+        '//attacker.example/x',
+        {}
+      )
+    ).toThrow(expect.objectContaining({ code: 'OPERATION_NOT_ALLOWED' }));
+  });
+
+  it('refuses a mounted read when the caller is not on the connection allow-list', async () => {
+    const clerk = await usableConnection('clerk', 'MaxView Clerk');
+    const fetchImpl = jest.fn(async () => ({
+      status: 200,
+      body: '{"id":"user_1"}',
+    }));
+
+    await expect(
+      executeMountedIntegrationRead(
+        clerk.id,
+        'user-2',
+        'getUser',
+        { userId: 'user_1' },
+        fetchImpl
+      )
+    ).rejects.toMatchObject({ code: 'NOT_ALLOWED' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    const result = await executeMountedIntegrationRead(
+      clerk.id,
+      'user-1',
+      'getUser',
+      { userId: 'user_1' },
+      fetchImpl
+    );
+    expect(result.body).toContain('user_1');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });

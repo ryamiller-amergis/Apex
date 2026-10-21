@@ -70,6 +70,11 @@ import {
   DurableInteractiveTurnError,
 } from '../services/durableInteractiveTurnService';
 import { isCanonicalUuid } from '../../shared/types/durableInteractiveTurn';
+import { INTEGRATIONS_FLAG } from '../../shared/types/integrations';
+import { DEFAULT_ENABLED_MENU_VIEWS } from '../../shared/types/menuSettings';
+import { IntegrationConnectionError } from '../services/integrationErrors';
+import { assertCallerCanUseIntegrationConnection } from '../services/integrationReadService';
+import { getMenuConfig } from '../services/menuSettingsService';
 
 const router = Router();
 
@@ -412,6 +417,36 @@ router.post('/threads', async (req: Request, res: Response) => {
     });
     const agentModule = deriveAgentModule(clientKickoff, skillConfig);
 
+    if (clientKickoff.assistantType === 'integration') {
+      const connectionId = clientKickoff.integrationConnectionId;
+      if (!connectionId) {
+        return res.status(400).json({ error: 'integrationConnectionId is required' });
+      }
+      const enabled = await isFeatureEnabled(INTEGRATIONS_FLAG, {
+        userId,
+        project: clientKickoff.project,
+      });
+      // @feature-flag:integrations start winner=enabled
+      if (!enabled) {
+        // @feature-flag:integrations disabled-start
+        return res.status(404).json({ error: 'Not found' });
+        // @feature-flag:integrations disabled-end
+      }
+      // @feature-flag:integrations enabled-start
+      const menu = await getMenuConfig(clientKickoff.project);
+      const views = menu?.enabledViews ?? DEFAULT_ENABLED_MENU_VIEWS;
+      if (!views.includes('integrations')) {
+        return res.status(404).json({ error: 'Not found' });
+      }
+      await assertCallerCanUseIntegrationConnection({
+        project: clientKickoff.project,
+        connectionId,
+        userId,
+      });
+      // @feature-flag:integrations enabled-end
+      // @feature-flag:integrations end
+    }
+
     // Home pill admission (TBI-005) covers Home starts only: a kickoff that names
     // a configured quick pill, or one the server cannot map to any module (Home
     // free chat, or an unrecognized direct call). Configured Interview/ADR/PRD/
@@ -451,6 +486,9 @@ router.post('/threads', async (req: Request, res: Response) => {
     });
     res.status(201).json({ threadId: thread.id });
   } catch (err: unknown) {
+    if (err instanceof IntegrationConnectionError) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
     console.error('[chat] createThread error:', errorMessage(err));
     res.status(500).json({ error: errorMessage(err) || 'Failed to create thread' });
   }

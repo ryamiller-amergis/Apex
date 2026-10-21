@@ -8,7 +8,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { executeMountedIntegrationRead } from '../../services/integrationReadService';
 
-export function createIntegrationMcpServer(boundConnectionId: string): McpServer {
+export function createIntegrationMcpServer(
+  boundConnectionId: string,
+  boundUserId: string
+): McpServer {
   const server = new McpServer({
     name: 'integration-connector',
     version: '1.0.0',
@@ -20,26 +23,35 @@ export function createIntegrationMcpServer(boundConnectionId: string): McpServer
       'operationId must be one of the operations saved on the connection. ' +
       'This tool cannot call other providers or arbitrary URLs.',
     {
-      operationId: z.string().describe('Allow-listed operation id for this connection'),
-      params: z.record(z.string(), z.string()).optional().describe('Path and query parameters for that operation'),
+      operationId: z
+        .string()
+        .describe('Allow-listed operation id for this connection'),
+      params: z
+        .record(z.string(), z.string())
+        .optional()
+        .describe('Path and query parameters for that operation'),
     },
     async ({ operationId, params }) => {
       try {
         const result = await executeMountedIntegrationRead(
           boundConnectionId,
+          boundUserId,
           operationId,
-          params ?? {},
+          params ?? {}
         );
         return {
           content: [{ type: 'text' as const, text: result.body }],
         };
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Integration read failed';
+        const message =
+          err instanceof Error ? err.message : 'Integration read failed';
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
+          content: [
+            { type: 'text' as const, text: JSON.stringify({ error: message }) },
+          ],
         };
       }
-    },
+    }
   );
 
   return server;

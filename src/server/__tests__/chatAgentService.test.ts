@@ -3152,12 +3152,12 @@ describe('integration connector MCP mount (SC-5)', () => {
         skillProvider: 'ado',
       }),
       'http://localhost:3001/mcp/ado-skills',
-      { maxviewEnabled: true },
+      { maxviewEnabled: true, userId: 'user-1' },
     );
 
     expect(servers).toEqual({
       'integration-connector': {
-        url: `http://localhost:${port}/mcp/integrations/conn-clerk`,
+        url: `http://localhost:${port}/mcp/integrations/conn-clerk?userId=user-1`,
       },
     });
   });

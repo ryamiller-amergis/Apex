@@ -680,6 +680,7 @@ export function buildMcpServers(
      * ado-skills only when it is still required for document write-back.
      */
     nativeReads?: boolean;
+    userId?: string;
   }
 ): Record<string, McpServerConfig> {
   const servers: Record<string, McpServerConfig> = {};
@@ -715,9 +716,11 @@ export function buildMcpServers(
 
   // Integration threads expose one connection's read operations and nothing else.
   if (kickoff.assistantType === 'integration' && kickoff.integrationConnectionId) {
-    servers['integration-connector'] = {
-      url: `http://localhost:${port}/mcp/integrations/${kickoff.integrationConnectionId}`,
-    };
+    if (options?.userId) {
+      servers['integration-connector'] = {
+        url: `http://localhost:${port}/mcp/integrations/${kickoff.integrationConnectionId}?userId=${encodeURIComponent(options.userId)}`,
+      };
+    }
     return servers;
   }
 
@@ -838,6 +841,7 @@ export async function prepareRepositoryReadRuntime(options: {
   calendarSessionId?: string;
   restrictRepoSearch?: boolean;
   requireAdoTools?: boolean;
+  userId?: string;
 }): Promise<RepositoryReadRuntime> {
   const requestedNative =
     options.grounding.mode === 'local' && options.grounding.nativeReads;
@@ -891,6 +895,7 @@ export async function prepareRepositoryReadRuntime(options: {
     enableRepoBrowse: !nativeReads && !suppressProviderRepoMcp,
     nativeReads: nativeReads || suppressProviderRepoMcp,
     requireAdoTools: options.requireAdoTools,
+    userId: options.userId,
   });
   const local: LocalAgentOptions = {
     cwd: options.sandboxCwd,
@@ -4905,6 +4910,7 @@ async function sendMessageLegacy(
       turnHasExplicitAdoWriteIntent ||
       turnRequiresAdoOperations ||
       interactiveAttempt.bypassReason === 'mcp-tools-required',
+    userId: state.thread.userId,
   });
   let agentPromptText = promptText;
   let guidedFreshAgent = false;

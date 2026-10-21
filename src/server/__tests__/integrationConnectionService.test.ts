@@ -5,12 +5,16 @@
 
 const memory: Array<Record<string, unknown>> = [];
 
-function applyWhere(rows: Array<Record<string, unknown>>, clause: any): Array<Record<string, unknown>> {
+function applyWhere(
+  rows: Array<Record<string, unknown>>,
+  clause: any
+): Array<Record<string, unknown>> {
   if (!clause) return rows;
   if (clause.type === 'and') {
     return clause.args.reduce(
-      (acc: Array<Record<string, unknown>>, child: unknown) => applyWhere(acc, child),
-      rows,
+      (acc: Array<Record<string, unknown>>, child: unknown) =>
+        applyWhere(acc, child),
+      rows
     );
   }
   if (clause.type === 'eq') {
@@ -20,14 +24,18 @@ function applyWhere(rows: Array<Record<string, unknown>>, clause: any): Array<Re
 }
 
 jest.mock('drizzle-orm', () => ({
-  eq: (column: { field: string }, val: unknown) => ({ type: 'eq', field: column.field, val }),
+  eq: (column: { field: string }, val: unknown) => ({
+    type: 'eq',
+    field: column.field,
+    val,
+  }),
   and: (...args: unknown[]) => ({ type: 'and', args }),
 }));
 
 jest.mock('../db/schema', () => ({
   integrationConnections: new Proxy(
     {},
-    { get: (_target, prop) => ({ field: String(prop) }) },
+    { get: (_target, prop) => ({ field: String(prop) }) }
   ),
 }));
 
@@ -70,6 +78,7 @@ jest.mock('../db/drizzle', () => ({
 
 import {
   createIntegrationConnection,
+  defaultIntegrationFetch,
   listIntegrationConnections,
   testIntegrationConnection,
 } from '../services/integrationConnectionService';
@@ -109,8 +118,15 @@ describe('integration connection service', () => {
       createdBy: 'user-1',
     });
 
-    const fetchImpl = jest.fn(async () => ({ status: 200, body: '{"ok":true}' }));
-    const tested = await testIntegrationConnection('MaxView', created.id, fetchImpl);
+    const fetchImpl = jest.fn(async () => ({
+      status: 200,
+      body: '{"ok":true}',
+    }));
+    const tested = await testIntegrationConnection(
+      'MaxView',
+      created.id,
+      fetchImpl
+    );
 
     expect(tested.status).toBe('usable');
     expect(tested.lastTestedAt).toEqual(expect.any(String));
@@ -134,5 +150,28 @@ describe('integration connection service', () => {
     expect(projectB).toEqual([]);
     expect(projectA).toHaveLength(1);
     expect(projectA[0].name).toBe('MaxView Clerk');
+  });
+
+  it('does not follow provider redirects', async () => {
+    const previousE2e = process.env.E2E_MODE;
+    process.env.E2E_MODE = 'false';
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      status: 200,
+      text: async () => '{}',
+    } as Response);
+
+    try {
+      await defaultIntegrationFetch('https://api.example.com/v1/tickets', {
+        method: 'GET',
+        headers: { Authorization: 'Bearer custom-key' },
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://api.example.com/v1/tickets',
+        expect.objectContaining({ redirect: 'error' })
+      );
+    } finally {
+      fetchMock.mockRestore();
+      process.env.E2E_MODE = previousE2e;
+    }
   });
 });
