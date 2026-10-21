@@ -27,6 +27,7 @@ import {
   RepoServiceReader,
   resolveRepoReadServiceUrl,
 } from '../repoRead/repoServiceReader';
+import { checkJudgeOutput } from '../workflowEvaluationJudgeOutput';
 import type { ArtifactFile } from './artifactUploader';
 import type { ExecuteWorkload, ExecutionOutcome } from './worker';
 
@@ -300,6 +301,23 @@ export async function collectDocumentArtifacts(
     });
   }
   return artifacts;
+}
+
+function assertJudgeResultMatchesSchema(
+  files: readonly ArtifactFile[],
+  outputSchema: Record<string, unknown> | undefined,
+): void {
+  if (!outputSchema) {
+    throw new Error('Judge specification has no output schema');
+  }
+  const result = files.find((file) => file.path === `${ARTIFACT_OUTPUT_PREFIX}${JUDGE_RESULT_FILE}`);
+  if (!result) {
+    throw new Error(`Judge did not write ${JUDGE_RESULT_FILE}`);
+  }
+  const check = checkJudgeOutput(result.content.toString(), outputSchema);
+  if (!check.ok) {
+    throw new Error(`Judge output does not match the output schema: ${check.errors.join('; ')}`);
+  }
 }
 
 async function prepareDocumentWorkspace(
@@ -610,6 +628,9 @@ export function createDocumentExecute(
         ),
         signal,
       );
+      if (specification.workflowClass === 'evaluation-judge') {
+        assertJudgeResultMatchesSchema(files, specification.outputSchema);
+      }
       return {
         files,
         durationMs: Math.max(0, now() - startedAt),

@@ -467,7 +467,7 @@ describe('V2 document execution', () => {
     });
   }
 
-  function judgeExecution(outputs: string[]) {
+  function judgeExecution(outputs: string[], resultContent = '{}') {
     return jest.fn(async (snapshot) => ({
       run: {
         supports: () => false,
@@ -481,7 +481,10 @@ describe('V2 document execution', () => {
           ).resolves.toBe('{"kind":"prd"}');
           const output = path.join(snapshot.workspaceRef, '.ai-pilot', 'output');
           for (const file of outputs) {
-            await fs.writeFile(path.join(output, file), '{}');
+            await fs.writeFile(
+              path.join(output, file),
+              file === 'judge-result.json' ? resultContent : '# Appendix',
+            );
           }
           return { status: 'finished' };
         },
@@ -489,6 +492,25 @@ describe('V2 document execution', () => {
       dispose: jest.fn().mockResolvedValue(undefined),
     }));
   }
+
+  it('rejects an evaluation judge result that does not match the output schema', async () => {
+    const execute = createDocumentExecute({
+      openRepository: jest.fn(),
+      createExecution: judgeExecution(
+        ['judge-result.json', 'judge-result.md'],
+        '{"confidence":"high","verdict":"pass"}',
+      ),
+    });
+
+    await expect(
+      execute({
+        specification: judgeSpecification(),
+        command: command(),
+        checkpoints: checkpoints(),
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow('Judge output does not match the output schema: / must NOT have additional properties');
+  });
 
   it('runs the evaluation judge on scratch inputs and collects its result and appendix', async () => {
     const openRepository = jest.fn();
