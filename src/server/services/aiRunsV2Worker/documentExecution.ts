@@ -8,6 +8,10 @@ import {
   isAiRunV2DocumentSpecification,
   type AiRunV2DocumentSpecification,
 } from '../../../shared/types/aiRunV2DocumentSpec';
+import {
+  JUDGE_APPENDIX_FILE,
+  JUDGE_RESULT_FILE,
+} from '../../../shared/types/aiRunV2EvaluationSpec';
 import type { BackgroundWorkflowClass } from '../../../shared/types/backgroundWorkflow';
 import type { RepoReader } from '../../../shared/types/repoReader';
 import {
@@ -96,6 +100,12 @@ function isExpectedOutputPath(
     case 'walkthrough-smart-tagging':
       if (segments.length !== 1) return false;
       return name === 'walkthrough-anchor-smart-tagging.json';
+    case 'evaluation-judge':
+      if (segments.length !== 1) return false;
+      return name === JUDGE_RESULT_FILE || name === JUDGE_APPENDIX_FILE;
+    case 'evaluation-promptfoo':
+      // The Promptfoo executor writes its own files; no agent output is collected.
+      return false;
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -192,6 +202,17 @@ function assertExpectedOutputSet(
     case 'playbook-step':
       // The Playbook's ingest step owns a missing scorecard, as on the V1 path.
       return;
+    case 'evaluation-judge':
+      if (
+        names.length !== 2
+        || !names.includes(JUDGE_RESULT_FILE)
+        || !names.includes(JUDGE_APPENDIX_FILE)
+      ) {
+        throw new Error('Document workflow did not produce both judge result files');
+      }
+      return;
+    case 'evaluation-promptfoo':
+      throw new Error('The document executor does not run Promptfoo suites');
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);

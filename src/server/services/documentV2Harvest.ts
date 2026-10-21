@@ -11,6 +11,12 @@ import os from 'node:os';
 import path from 'node:path';
 import type { BackgroundWorkflowClass } from '../../shared/types/backgroundWorkflow';
 import type { AiRunV2ArtifactManifest } from '../../shared/types/aiRunV2';
+import {
+  JUDGE_APPENDIX_FILE,
+  JUDGE_RESULT_FILE,
+  PROMPTFOO_RESULTS_FILE,
+  PROMPTFOO_SUMMARY_FILE,
+} from '../../shared/types/aiRunV2EvaluationSpec';
 import { WalkthroughAnchorSmartTaggingError } from '../../shared/types/walkthroughAnchorSmartTagging';
 import {
   ArtifactVerificationError,
@@ -110,6 +116,12 @@ function isExpectedArtifactPath(
     case 'walkthrough-smart-tagging':
       if (segments.length !== 1) return false;
       return name === 'walkthrough-anchor-smart-tagging.json';
+    case 'evaluation-judge':
+      if (segments.length !== 1) return false;
+      return name === JUDGE_RESULT_FILE || name === JUDGE_APPENDIX_FILE;
+    case 'evaluation-promptfoo':
+      if (segments.length !== 1) return false;
+      return name === PROMPTFOO_SUMMARY_FILE || name === PROMPTFOO_RESULTS_FILE;
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -240,6 +252,11 @@ async function applyAttempt(
         );
       }
       return;
+    case 'evaluation-judge':
+    case 'evaluation-promptfoo':
+      throw new PermanentHarvestApplicationError(
+        'Workflow evaluation results have no ingest path yet',
+      );
     default: {
       const unhandled: never = attempt.workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
