@@ -25,11 +25,45 @@ export class AdminProjectSettingsPage {
   }
 
   approvalModeAnyOne() {
-    return this.page.getByTestId('ps-approval-mode-any-one');
+    return this.approvalModeOption('design_doc', 'any_one');
   }
 
   approvalModeAllRequired() {
-    return this.page.getByTestId('ps-approval-mode-all-required');
+    return this.approvalModeOption('design_doc', 'all_required');
+  }
+
+  approvalMode(module: string) {
+    return this.page.getByTestId(`ps-approval-mode-${module}`);
+  }
+
+  approvalModeOption(module: string, mode: 'any_one' | 'all_required') {
+    return this.page.getByTestId(`ps-approval-mode-${module}-${mode.replace('_', '-')}`);
+  }
+
+  noReviewersHelper(module: string) {
+    return this.page.getByTestId(`ps-no-reviewers-helper-${module}`);
+  }
+
+  approverPool(module: string) {
+    return this.page.getByTestId(`ps-${module}-approver-pool`);
+  }
+
+  async editConfig(settingsId: string): Promise<void> {
+    await this.page.getByTestId(`ps-config-edit-${settingsId}`).click();
+  }
+
+  async openReviewers(): Promise<void> {
+    await this.page.getByRole('button', { name: /Reviewers/i }).click();
+  }
+
+  async addApprover(module: string, searchText: string): Promise<void> {
+    const pool = this.approverPool(module);
+    await pool.getByPlaceholder('Search groups or people to add…').fill(searchText);
+    await pool.getByRole('button', { name: new RegExp(searchText, 'i') }).first().click();
+  }
+
+  async save(): Promise<void> {
+    await this.page.getByTestId('ps-form-save').click();
   }
 
   validationThresholdInput() {

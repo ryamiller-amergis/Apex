@@ -2,8 +2,8 @@
  * FEAT-007 / TBI-010 — long-running Azure Container Apps host for the
  * interactive AI-runs lane.
  *
- * Boots a Dapr server that registers {@link InteractiveSessionActorImpl} (one
- * activation per `threadId`) and exposes a single `dispatch` service-invocation
+ * Boots a Dapr server that registers the interactive session actor type for
+ * this host's Dapr app ID (one activation per `threadId`) and exposes a single `dispatch` service-invocation
  * method. The Apex API (App Service, no Dapr sidecar) posts turn dispatches to
  * this host's ingress; the handler resolves the thread's actor proxy through
  * the local Dapr sidecar and invokes `handleTurn`. The actor then fetches the
@@ -22,27 +22,119 @@ import {
   HttpMethod,
   type DaprInvokerCallbackContent,
 } from '@dapr/dapr';
-import { DefaultAzureCredential } from '@azure/identity';
+import express from 'express';
+import { promises as fs } from 'fs';
+import path from 'path';
 // Side-effect: initialize Application Insights when the connection string is set.
 import '../telemetry';
-import { createAiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
-import { openGroundedReader } from '../aiRunsWorker/workspace';
-import { resolveStaticAiRunnerCallbackToken } from '../aiRunnerCallbackAuthConfig';
+import { exitAfterFlush } from '../../utils/processExit';
+import {
+  isInteractiveActorBootstrap,
+  type InteractiveActorBootstrap,
+} from '../../../shared/types/aiRunIngest';
+import type { RepoReader, RepositoryIdentity } from '../../../shared/types/repoReader';
+import { getAiRunnerCallbackToken } from '../aiRunsCallbackToken';
+import {
+  createAiRunsCallbackClient,
+  retriedCallbackBudgetMs,
+} from '../aiRunsWorker/callbackClient';
+import {
+  artifactContainerName,
+  resolveArtifactContainerClient,
+} from '../aiRunV2/artifactContainer';
+import { createArtifactUploader } from '../aiRunsV2Worker/artifactUploader';
+import { resolveShutdownDrainMs } from '../aiRunsV2Worker/shutdownDrain';
 import { interactiveLiveBus } from '../interactiveLiveBus';
-import type { RepoReader } from '../../../shared/types/repoReader';
+import { LocalCheckoutReader } from '../localCheckoutReader';
+import {
+  RepoServiceReader,
+  resolveRepoReadServiceUrl,
+} from '../repoRead/repoServiceReader';
 import { acquireInteractiveCursorAgent } from './interactiveCursorExecution';
+import {
+  checkoutWithDiskReclaim,
+  createGroundedRepositoryCheckout,
+} from './groundedRepositoryCheckout';
 import {
   createInteractiveSessionActor,
   type WarmThreadCheckout,
 } from './interactiveSessionActor';
+import { collectInteractiveArtifacts } from './interactiveArtifactCollector';
+import { materializeInteractiveWorkspace } from './interactiveWorkspaceMaterializer';
+import { createPerThreadTurnQueue } from './perThreadTurnQueue';
 import {
-  InteractiveSessionActorImpl,
+  createActorInvocationStallTracker,
+  createDaprSidecarClient,
+  createSidecarHealthMonitor,
+  interactiveHealthRoute,
+  type ActorInvocationStallTracker,
+} from './sidecarHealth';
+import {
+  createInteractiveShutdownDrain,
+  interactiveInFlightInvocations,
+} from './shutdownDrain';
+import {
+  interactiveSessionActorClassFor,
   setInteractiveActorRuntime,
   type IInteractiveSessionActor,
 } from './interactiveSessionActorClass';
 
+const INTERACTIVE_CALLBACK_REQUEST_TIMEOUT_MS = 12_000;
+
+/**
+ * The actor replies once the dispatch fence is verified. This must outlast the
+ * bootstrap read with all its retries: the timed-out call is not cancelled, so
+ * a shorter limit fails a turn the actor is still about to start.
+ */
+export const INTERACTIVE_ACTOR_INVOKE_TIMEOUT_MS =
+  retriedCallbackBudgetMs(INTERACTIVE_CALLBACK_REQUEST_TIMEOUT_MS) + 10_000;
+
+export class ActorInvokeTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Interactive actor invocation timed out after ${timeoutMs}ms`);
+    this.name = 'ActorInvokeTimeoutError';
+  }
+}
+
+function withinActorInvokeTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new ActorInvokeTimeoutError(timeoutMs)), timeoutMs);
+    timer.unref?.();
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+}
+
 /** Warm checkout carrying the reader the execution factory needs. */
 type ReaderCheckout = WarmThreadCheckout & { reader: RepoReader };
+
+async function openPinnedReaderForBootstrap(
+  bootstrap: InteractiveActorBootstrap,
+): Promise<RepoReader | null> {
+  const grounding = bootstrap.specification.grounding;
+  if (!grounding) return null;
+  const identity: RepositoryIdentity = {
+    provider: grounding.provider,
+    project: grounding.project,
+    repo: grounding.repository,
+    sha: grounding.sha,
+  };
+  const serviceUrl = resolveRepoReadServiceUrl();
+  if (!serviceUrl) {
+    throw new Error(
+      'Pinned grounding repository is unavailable: repo-read service URL is not configured',
+    );
+  }
+  try {
+    const reader = new RepoServiceReader({ identity, baseUrl: serviceUrl });
+    await reader.listDir('');
+    return reader;
+  } catch (error) {
+    const reason =
+      error instanceof Error ? error.message : 'pinned repo-read open failed';
+    throw new Error(`Pinned grounding repository is unavailable: ${reason}`);
+  }
+}
 
 export interface InteractiveDispatchRequest {
   threadId: string;
@@ -54,7 +146,7 @@ interface InteractiveDispatchInvoker {
   listen(
     methodName: string,
     callback: (data: DaprInvokerCallbackContent) => Promise<unknown>,
-    options: { method: HttpMethod },
+    options: { method: HttpMethod }
   ): Promise<unknown>;
 }
 
@@ -105,16 +197,20 @@ function describeError(error: unknown): {
 }
 
 export function parseInteractiveDispatchRequest(
-  content: DaprInvokerCallbackContent,
+  content: DaprInvokerCallbackContent
 ): InteractiveDispatchRequest {
-  const payload = parseDispatchBody(content.body) as Partial<InteractiveDispatchRequest> | null;
+  const payload = parseDispatchBody(
+    content.body
+  ) as Partial<InteractiveDispatchRequest> | null;
   if (
-    !payload
-    || typeof payload.threadId !== 'string'
-    || typeof payload.runId !== 'string'
-    || typeof payload.dispatchMessageId !== 'string'
+    !payload ||
+    typeof payload.threadId !== 'string' ||
+    typeof payload.runId !== 'string' ||
+    typeof payload.dispatchMessageId !== 'string'
   ) {
-    throw new Error('Interactive dispatch requires threadId, runId, and dispatchMessageId');
+    throw new Error(
+      'Interactive dispatch requires threadId, runId, and dispatchMessageId'
+    );
   }
   return {
     threadId: payload.threadId,
@@ -123,9 +219,26 @@ export function parseInteractiveDispatchRequest(
   };
 }
 
+export interface InteractiveDispatchDrain {
+  isDraining(): boolean;
+  track<T>(work: () => Promise<T>): Promise<T>;
+}
+
+const NO_DISPATCH_DRAIN: InteractiveDispatchDrain = {
+  isDraining: () => false,
+  track: (work) => work(),
+};
+
 export async function registerInteractiveDispatchHandler(
   invoker: InteractiveDispatchInvoker,
   resolveActor: (threadId: string) => IInteractiveSessionActor,
+  recoverActorFailure?: (
+    payload: InteractiveDispatchRequest,
+    error: unknown
+  ) => Promise<void>,
+  drain: InteractiveDispatchDrain = NO_DISPATCH_DRAIN,
+  actorInvokeTimeoutMs: number = INTERACTIVE_ACTOR_INVOKE_TIMEOUT_MS,
+  invocationStall?: Pick<ActorInvocationStallTracker, 'recordCompleted' | 'recordTimedOut'>
 ): Promise<void> {
   await invoker.listen(
     'dispatch',
@@ -134,77 +247,101 @@ export async function registerInteractiveDispatchHandler(
       try {
         payload = parseInteractiveDispatchRequest(content);
       } catch (error) {
-        console.warn(JSON.stringify({
-          event: 'InteractiveDispatchRejected',
-          ...describeError(error),
-        }));
+        console.warn(
+          JSON.stringify({
+            event: 'InteractiveDispatchRejected',
+            ...describeError(error),
+          })
+        );
         return { accepted: false };
       }
-      console.log(JSON.stringify({
-        event: 'InteractiveDispatchAccepted',
-        threadId: payload.threadId,
-        runId: payload.runId,
-        dispatchMessageId: payload.dispatchMessageId,
-      }));
+      // The orchestrator retries a refused dispatch, which then lands on a replica
+      // that is not shutting down.
+      if (drain.isDraining()) {
+        console.warn(
+          JSON.stringify({
+            event: 'InteractiveDispatchRefusedDraining',
+            threadId: payload.threadId,
+            runId: payload.runId,
+            dispatchMessageId: payload.dispatchMessageId,
+          })
+        );
+        return { accepted: false };
+      }
+      console.log(
+        JSON.stringify({
+          event: 'InteractiveDispatchAccepted',
+          threadId: payload.threadId,
+          runId: payload.runId,
+          dispatchMessageId: payload.dispatchMessageId,
+        })
+      );
       const actor = resolveActor(payload.threadId);
-      void actor.handleTurn({
-        runId: payload.runId,
-        dispatchMessageId: payload.dispatchMessageId,
-      }).then((outcome) => {
-        console.log(JSON.stringify({
-          event: 'InteractiveDispatchCompleted',
-          threadId: payload.threadId,
-          runId: payload.runId,
-          dispatchMessageId: payload.dispatchMessageId,
-          status: outcome.status,
-        }));
-      }).catch((error) => {
-        console.error(JSON.stringify({
-          event: 'InteractiveDispatchFailed',
-          threadId: payload.threadId,
-          runId: payload.runId,
-          dispatchMessageId: payload.dispatchMessageId,
-          ...describeError(error),
-        }));
-      });
+      void drain
+        .track(() =>
+          withinActorInvokeTimeout(
+            actor.handleTurn({
+              runId: payload.runId,
+              dispatchMessageId: payload.dispatchMessageId,
+            }),
+            actorInvokeTimeoutMs
+          )
+        )
+        .then((outcome) => {
+          invocationStall?.recordCompleted();
+          console.log(
+            JSON.stringify({
+              event: 'InteractiveDispatchCompleted',
+              threadId: payload.threadId,
+              runId: payload.runId,
+              dispatchMessageId: payload.dispatchMessageId,
+              status: outcome.status,
+            })
+          );
+        })
+        .catch(async (error) => {
+          const timedOut = error instanceof ActorInvokeTimeoutError;
+          console.error(
+            JSON.stringify({
+              event: 'InteractiveDispatchFailed',
+              threadId: payload.threadId,
+              runId: payload.runId,
+              dispatchMessageId: payload.dispatchMessageId,
+              ...describeError(error),
+            })
+          );
+          if (!recoverActorFailure) {
+            if (timedOut) invocationStall?.recordTimedOut();
+            return;
+          }
+          try {
+            await recoverActorFailure(payload, error);
+            // Recovery reached App Service, so the actor call itself is what
+            // stalled; an App Service outage must not restart healthy replicas.
+            if (timedOut) invocationStall?.recordTimedOut();
+            console.log(
+              JSON.stringify({
+                event: 'InteractiveDispatchFailureRecovered',
+                threadId: payload.threadId,
+                runId: payload.runId,
+                dispatchMessageId: payload.dispatchMessageId,
+              })
+            );
+          } catch (recoveryError) {
+            console.error(
+              JSON.stringify({
+                event: 'InteractiveDispatchFailureRecoveryFailed',
+                threadId: payload.threadId,
+                runId: payload.runId,
+                dispatchMessageId: payload.dispatchMessageId,
+                ...describeError(recoveryError),
+              })
+            );
+          }
+        });
       return { accepted: true };
     },
-    { method: HttpMethod.POST },
-  );
-}
-
-async function getCallbackToken(): Promise<string> {
-  const staticToken = resolveStaticAiRunnerCallbackToken();
-  const audience = process.env.AI_RUNS_CALLBACK_TOKEN_AUDIENCE?.trim();
-
-  // Prefer managed identity whenever an audience is configured. The Apex App
-  // Service rejects static callback tokens in production (unless explicitly
-  // opted in via AI_RUNS_ALLOW_STATIC_CALLBACK_TOKEN), so a stale or
-  // re-provisioned AI_RUNS_RUNNER_CALLBACK_TOKEN must never take precedence
-  // over MI — otherwise the actor's first callback (getBootstrap) 401s and the
-  // turn silently fails. The static token remains a dev/local fallback (no
-  // audience configured, or MI unavailable in this environment).
-  if (audience) {
-    const scope = audience.endsWith('/.default')
-      ? audience
-      : `${audience}/.default`;
-    try {
-      const token = await new DefaultAzureCredential().getToken(scope);
-      if (token?.token) return token.token;
-      if (!staticToken) {
-        throw new Error('Failed to acquire AI runner callback token');
-      }
-      // Empty MI token but a static token exists — fall through to it.
-    } catch (error) {
-      if (!staticToken) throw error;
-      // MI unavailable but a static token exists — fall back to it (dev/local).
-    }
-  }
-
-  if (staticToken) return staticToken;
-
-  throw new Error(
-    'AI_RUNS_CALLBACK_TOKEN_AUDIENCE is required for managed-identity callbacks',
+    { method: HttpMethod.POST }
   );
 }
 
@@ -221,14 +358,26 @@ export async function main(): Promise<void> {
     process.env.PORT?.trim() ||
     '8080';
 
+  // Bootstrap is fetched before the execution specification exists, so this
+  // limit cannot come from it. Four attempts plus backoff stay under the
+  // reaper's 60s start timeout.
   const callback = createAiRunsCallbackClient({
     callbackBaseUrl,
-    getToken: getCallbackToken,
+    getToken: getAiRunnerCallbackToken,
+    requestTimeoutMs: INTERACTIVE_CALLBACK_REQUEST_TIMEOUT_MS,
   });
+
+  const repositoryCheckout = createGroundedRepositoryCheckout();
+
+  const turnQueue = createPerThreadTurnQueue();
 
   // Single shared logic core: thread-keyed warm checkout + live Agent cache.
   const logic = createInteractiveSessionActor({
+    turnQueue,
     openWarmCheckout: async (_threadId, snapshot) => {
+      // Dynamic import keeps the actor-host static graph free of App Service
+      // workspace helpers that transitively import PostgreSQL.
+      const { openGroundedReader } = await import('../aiRunsWorker/workspace');
       const reader = await openGroundedReader(snapshot);
       const checkout: ReaderCheckout = {
         workspacePath: snapshot.workspaceRef,
@@ -238,10 +387,134 @@ export async function main(): Promise<void> {
     },
     acquireAgent: (snapshot, checkout, options) =>
       acquireInteractiveCursorAgent(
-        snapshot,
+        {
+          model: snapshot.model,
+          effort: snapshot.effort ?? null,
+          workspaceRef: snapshot.workspaceRef,
+          interviewPhase: null,
+        },
         (checkout as ReaderCheckout).reader,
-        options,
+        {
+          resumeAgentId: options.resumeAgentId,
+          mcpServers: options.mcpServers ?? {},
+        },
+      ).then((acquired) => acquired.handle),
+    acquireDurableAgent: async (bootstrap, checkout, options) =>
+      acquireInteractiveCursorAgent(
+        {
+          model: bootstrap.specification.model,
+          effort: bootstrap.specification.effort,
+          workspaceRef: checkout.workspacePath,
+          interviewPhase: bootstrap.specification.guidedInterview?.phase ?? null,
+        },
+        (checkout as ReaderCheckout).reader,
+        {
+          resumeAgentId: options.resumeAgentId,
+          mcpServers: bootstrap.mcpServers,
+        },
       ),
+    materializeWorkspace: async (bootstrap, destination, signal, options) => {
+      const grounding = bootstrap.specification.grounding;
+      const checkout = grounding
+        ? await checkoutWithDiskReclaim({
+            repositoryCheckout,
+            grounding,
+            destination,
+            signal,
+            reclaimDisk: options?.reclaimDisk,
+            log: (result, retried) =>
+              console.log(
+                JSON.stringify({
+                  event: 'InteractiveRepositoryCheckout',
+                  runId: bootstrap.runId,
+                  status: result.status,
+                  detail: result.status === 'ready' ? result.source : result.reason,
+                  durationMs: result.durationMs,
+                  ...(retried ? { retriedAfterReclaim: true } : {}),
+                }),
+              ),
+          })
+        : null;
+      const reader =
+        checkout?.status === 'ready'
+          ? new LocalCheckoutReader({
+              checkoutPath: destination,
+              identity: checkout.identity,
+            })
+          : await openPinnedReaderForBootstrap(bootstrap);
+      // Turn outputs from a prior turn on this thread must not be re-uploaded.
+      await fs
+        .rm(path.join(destination, '.ai-pilot', 'output'), {
+          recursive: true,
+          force: true,
+        })
+        .catch(() => {});
+      await fs
+        .rm(path.join(destination, '.ai-pilot', 'kickoff-transcript.md'), {
+          force: true,
+        })
+        .catch(() => {});
+      // A retried turn rewrites its own attachments, which are created exclusively.
+      await fs
+        .rm(
+          path.join(
+            destination,
+            '.ai-pilot',
+            'attachments',
+            bootstrap.specification.turnId,
+          ),
+          { recursive: true, force: true },
+        )
+        .catch(() => {});
+      // The repository is already on disk (worktree) or read remotely through
+      // `reader`; only attachments are written here.
+      await materializeInteractiveWorkspace({
+        reader: null,
+        destination,
+        attachments: bootstrap.specification.currentMessage.attachments,
+        readAttachment: async (attachment) => {
+          const client = resolveArtifactContainerClient(
+            attachment.blobRef.container,
+          );
+          return client
+            .getBlockBlobClient(attachment.blobRef.key)
+            .downloadToBuffer();
+        },
+        signal,
+      });
+      return {
+        workspacePath: destination,
+        reader: reader ?? new LocalCheckoutReader({
+          checkoutPath: destination,
+          identity: {
+            provider: 'ado',
+            project: bootstrap.specification.projectId,
+            repo: 'empty',
+            sha: 'none',
+          },
+        }),
+        dispose: () => repositoryCheckout.release(destination),
+      } as ReaderCheckout;
+    },
+    uploadAttemptArtifacts: async (bootstrap, workspacePath, signal) => {
+      const collected = await collectInteractiveArtifacts(workspacePath);
+      const container = artifactContainerName();
+      const uploader = createArtifactUploader({
+        target: {
+          runId: bootstrap.runId,
+          attemptId: bootstrap.attemptId,
+          attemptNumber: bootstrap.attemptNumber,
+          container,
+        },
+      });
+      return uploader.uploadAll(
+        collected.map((file) => ({
+          path: file.relativePath,
+          content: file.content,
+        })),
+        signal,
+      );
+    },
     postIngest: (projectId, runId, body) =>
       callback.postIngest(projectId, runId, body),
     // Live token/tool/phase fan-out over Redis (ephemeral). No-op when Redis
@@ -253,23 +526,43 @@ export async function main(): Promise<void> {
   await interactiveLiveBus.init();
   setInteractiveActorRuntime({ logic, callback });
 
-  const disposeOnShutdown = (): void => {
-    void logic.disposeAll().catch(() => {});
-  };
-  process.once('SIGTERM', disposeOnShutdown);
-  process.once('SIGINT', disposeOnShutdown);
+  const shutdownDrain = createInteractiveShutdownDrain({
+    drainMs: resolveShutdownDrainMs(process.env.AI_RUNS_V2_SHUTDOWN_DRAIN_MS),
+    activeTurnCount: () =>
+      turnQueue.activeThreadCount() + interactiveInFlightInvocations.count(),
+    dispose: () => logic.disposeAll(),
+    exit: (code) => void exitAfterFlush(code),
+  });
+  process.on('SIGTERM', () => shutdownDrain.shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdownDrain.shutdown('SIGINT'));
+
+  const actorClass = interactiveSessionActorClassFor(
+    process.env.AI_RUNS_INTERACTIVE_DAPR_APP_ID,
+  );
+  const sidecar = createDaprSidecarClient(process.env.DAPR_HTTP_PORT?.trim() || '3500');
+  const invocationStall = createActorInvocationStallTracker();
+  const sidecarHealth = createSidecarHealthMonitor({
+    actorType: actorClass.name,
+    fetchMetadata: sidecar.fetchMetadata,
+    invocationStall: () => invocationStall.stalledDetail(),
+    requestSidecarShutdown: sidecar.requestSidecarShutdown,
+    now: Date.now,
+  });
+  const httpApp = express();
+  httpApp.get('/health', interactiveHealthRoute(() => sidecarHealth.check()));
 
   const server = new DaprServer({
     serverPort,
     communicationProtocol: CommunicationProtocolEnum.HTTP,
+    serverHttp: httpApp,
   });
 
   await server.actor.init();
-  await server.actor.registerActor(InteractiveSessionActorImpl);
+  await server.actor.registerActor(actorClass);
 
   const proxyBuilder = new ActorProxyBuilder<IInteractiveSessionActor>(
-    InteractiveSessionActorImpl,
-    server.client,
+    actorClass,
+    server.client
   );
 
   // The API POSTs { threadId, runId, dispatchMessageId }; Dapr wraps the JSON
@@ -277,6 +570,43 @@ export async function main(): Promise<void> {
   await registerInteractiveDispatchHandler(
     server.invoker,
     (threadId) => proxyBuilder.build(new ActorId(threadId)),
+    async (payload) => {
+      // `/dispatch` returns before the long-running actor invocation finishes.
+      // If Dapr cannot deliver that invocation (for example, it routes to a
+      // restarting replica), no actor exists to write a terminal event. Resolve
+      // the fenced bootstrap here and finish the run through the same durable
+      // ingest path used by the actor so the client can retry immediately.
+      const bootstrap = await callback.getBootstrap({
+        runId: payload.runId,
+        dispatchMessageId: payload.dispatchMessageId,
+      });
+      // Only an attempt that never started gets the start-failure terminal; a
+      // running or finished attempt owns its own outcome.
+      if (
+        isInteractiveActorBootstrap(bootstrap) &&
+        bootstrap.attemptStatus !== 'queued' &&
+        bootstrap.attemptStatus !== 'dispatched'
+      ) {
+        return;
+      }
+      const projectId = bootstrap.projectId;
+      await callback.postIngest(projectId, payload.runId, {
+        dispatchMessageId: payload.dispatchMessageId,
+        kind: 'terminal',
+        status: 'failed',
+        phase: 'completion',
+        detail: 'Interactive agent could not start. Please retry.',
+        ...(isInteractiveActorBootstrap(bootstrap)
+          ? { attemptId: bootstrap.attemptId }
+          : {}),
+      });
+    },
+    {
+      isDraining: () => shutdownDrain.isDraining(),
+      track: (work) => interactiveInFlightInvocations.track(work),
+    },
+    INTERACTIVE_ACTOR_INVOKE_TIMEOUT_MS,
+    invocationStall
   );
 
   await server.start();
@@ -284,18 +614,21 @@ export async function main(): Promise<void> {
     JSON.stringify({
       event: 'InteractiveActorHostStarted',
       serverPort,
-    }),
+      actorType: actorClass.name,
+    })
   );
 }
 
 if (require.main === module) {
+  // Resident service, so only the failure path exits: hanging here would leave
+  // a replica the platform still considers up but that serves nothing.
   main().catch((error) => {
     console.error(
       JSON.stringify({
         event: 'InteractiveActorHostFatal',
         ...describeError(error),
-      }),
+      })
     );
-    process.exitCode = 1;
+    return exitAfterFlush(1);
   });
 }

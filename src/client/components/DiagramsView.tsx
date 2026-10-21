@@ -82,7 +82,7 @@ export const DiagramsView: React.FC<DiagramsViewProps> = ({ projectId }) => {
 
   return (
     <div className={styles.page} {...{ 'data-testid': 'diagrams-browse-view' }}>
-      <header className={styles.header}>
+      <header className={styles.header} {...{ 'data-testid': 'diagrams-header' }}>
         <div>
           <h1 className={styles.title}>Diagrams</h1>
           <p className={styles.subtitle}>
@@ -121,6 +121,7 @@ export const DiagramsView: React.FC<DiagramsViewProps> = ({ projectId }) => {
         id="diagrams-panel-owned"
         aria-labelledby="diagrams-tab-owned"
         hidden={activeTab !== 'owned'}
+        {...{ 'data-testid': 'diagrams-owned-panel' }}
       >
         <DiagramCardGrid
           query={ownedQuery}
@@ -140,6 +141,7 @@ export const DiagramsView: React.FC<DiagramsViewProps> = ({ projectId }) => {
         id="diagrams-panel-shared"
         aria-labelledby="diagrams-tab-shared"
         hidden={activeTab !== 'shared'}
+        {...{ 'data-testid': 'diagrams-shared-panel' }}
       >
         <DiagramCardGrid
           query={sharedQuery}

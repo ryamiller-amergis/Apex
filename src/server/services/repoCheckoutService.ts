@@ -17,6 +17,7 @@ import {
   ensureGitSafeDirectory,
 } from './repoGitSettings';
 import { materializeWorkspaceFromCache } from './repoWorkspaceService';
+import { implementationBranchName } from './implementationDelivery';
 
 export { materializeWorkspaceFromCache } from './repoWorkspaceService';
 
@@ -208,8 +209,7 @@ export async function createFeatureBranch(
   baseBranch: string,
   remote?: GitRemote,
 ): Promise<string> {
-  const slug = slugify(workItemTitle);
-  const branchName = `feature/apex-${workItemId}-${slug}`;
+  const branchName = implementationBranchName(workItemId, workItemTitle);
   await checkoutFeatureBranch(workspaceDir, branchName, baseBranch, remote);
   return branchName;
 }
@@ -322,6 +322,18 @@ export async function checkoutFeatureBranch(
  */
 export function isMergeInProgress(workspaceDir: string): boolean {
   return fs.existsSync(path.join(workspaceDir, '.git', 'MERGE_HEAD'));
+}
+
+/**
+ * Branch currently checked out in the workspace. Callers use this to confirm an
+ * agent left the workspace on the feature branch before committing or pushing.
+ */
+export async function getCurrentBranch(workspaceDir: string): Promise<string> {
+  const output = await git(safeArgs(workspaceDir, ['rev-parse', '--abbrev-ref', 'HEAD']), {
+    cwd: workspaceDir,
+    timeout: WORKTREE_GIT_TIMEOUT_MS,
+  });
+  return output.trim();
 }
 
 /**

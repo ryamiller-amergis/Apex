@@ -56,6 +56,7 @@ export interface UseDiagramEditorResult {
   saveErrorKind: DiagramSaveErrorKind;
   effectiveAccess: DiagramDetail['effectiveAccess'] | null;
   onSceneChange: (scene: ExcalidrawScene) => void;
+  replaceDraft: (scene: ExcalidrawScene, title?: string) => void;
   /** Adopt Excalidraw's first live scene after mount so refresh defaults are not "dirty". */
   onCanvasHydrated: (scene: ExcalidrawScene) => void;
   save: () => Promise<DiagramDetail | null>;
@@ -245,6 +246,18 @@ export function useDiagramEditor(options: UseDiagramEditorOptions): UseDiagramEd
     setTitleState(next);
   }, []);
 
+  const replaceDraft = useCallback((nextScene: ExcalidrawScene, nextTitle?: string) => {
+    const cloned = cloneDiagramScene(nextScene);
+    setScene(cloned);
+    sceneRef.current = cloned;
+    if (nextTitle?.trim()) {
+      setTitleState(nextTitle.trim());
+    }
+    setSaveError(null);
+    setSaveErrorKind(null);
+    adoptNextSceneAsBaselineRef.current = false;
+  }, []);
+
   const clearSaveError = useCallback(() => {
     setSaveError(null);
     setSaveErrorKind(null);
@@ -378,6 +391,7 @@ export function useDiagramEditor(options: UseDiagramEditorOptions): UseDiagramEd
     saveErrorKind,
     effectiveAccess,
     onSceneChange,
+    replaceDraft,
     onCanvasHydrated,
     save,
     reload,

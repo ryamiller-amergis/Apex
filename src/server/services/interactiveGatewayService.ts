@@ -31,13 +31,22 @@ import type {
   ChatThreadStatus,
   SseEvent,
 } from '../../shared/types/chat';
-import { replayRunEvents as defaultReplayRunEvents } from './pgNotifyService';
+import {
+  replayRunEventPage as defaultReplayRunEventPage,
+  replayRunEvents as defaultReplayRunEvents,
+  subscribeRunEvents as defaultSubscribeRunEvents,
+  type RunEventPage,
+} from './pgNotifyService';
 import { interactiveLiveBus } from './interactiveLiveBus';
 import {
   getThread as defaultGetThread,
   subscribeToThread as defaultSubscribeToThread,
 } from './chatAgentService';
-import { eventForRunEnvelope as defaultEventForRunEnvelope } from '../routes/chat';
+import {
+  buildStreamStatusEvent,
+  eventForRunEnvelope as defaultEventForRunEnvelope,
+} from '../routes/chat';
+import { isFeatureEnabled } from './featureFlagService';
 
 /** Minimal socket contract satisfied by a `ws` WebSocket (and test fakes). */
 export interface InteractiveGatewaySocket {
@@ -58,6 +67,8 @@ export interface InteractiveGatewayFrame {
 export interface InteractiveThreadSnapshot {
   messages: ChatMessage[];
   status: ChatThreadStatus;
+  eventDrivenTermination: boolean;
+  activeRunId?: string;
 }
 
 export interface AttachInteractiveThreadOptions {
@@ -72,25 +83,54 @@ export interface AttachInteractiveThreadOptions {
 
 export interface InteractiveGatewayDependencies {
   loadThreadSnapshot: (
-    threadId: string,
+    threadId: string
   ) => Promise<InteractiveThreadSnapshot | null>;
-  replayRunEvents: (
+  /**
+   * Paginated durable replay. Preferred by the gateway; loops while `hasMore`.
+   */
+  replayRunEventPage?: (
+    threadId: string,
+    options?: {
+      afterEventId?: string;
+      limit?: number;
+      runId?: string;
+      coldStart?: 'recent' | 'oldest';
+    }
+  ) => Promise<RunEventPage>;
+  /**
+   * One-page wrapper retained for callers/tests that still inject the legacy
+   * shape. When only this is provided, the gateway pages through it.
+   */
+  replayRunEvents?: (
     threadId: string,
     lastEventId?: string,
+    limit?: number,
+    runId?: string,
+    coldStart?: 'recent' | 'oldest',
   ) => Promise<AgentRunEventEnvelope[]>;
+  /**
+   * Subscribe to durable run events as they are committed. This closes the
+   * replay/live race when Redis is unavailable: final messages and terminal
+   * events still reach an already-connected socket without requiring a
+   * reconnect.
+   */
+  subscribeDurableEvents: (
+    threadId: string,
+    callback: (envelope: AgentRunEventEnvelope) => void
+  ) => () => void;
   subscribeToThread: (
     threadId: string,
-    callback: (event: SseEvent, envelope?: AgentRunEventEnvelope) => void,
+    callback: (event: SseEvent, envelope?: AgentRunEventEnvelope) => void
   ) => () => void;
   /**
    * Subscribe to the thread's live run-event fan-out (Redis). The actor tier
    * publishes ephemeral token/tool/progress envelopes here; durability rides
-   * Postgres `replayRunEvents`. When Redis is unconfigured this is a no-op and
+   * Postgres `replayRunEventPage`. When Redis is unconfigured this is a no-op and
    * the socket relies on replay + the client's `/run-status` safety net.
    */
   subscribeLiveEvents: (
     threadId: string,
-    callback: (envelope: AgentRunEventEnvelope) => void,
+    callback: (envelope: AgentRunEventEnvelope) => void
   ) => () => void;
   eventForRunEnvelope: (envelope: AgentRunEventEnvelope) => SseEvent;
 }
@@ -98,16 +138,58 @@ export interface InteractiveGatewayDependencies {
 const defaultDependencies: InteractiveGatewayDependencies = {
   loadThreadSnapshot: async (threadId) => {
     const thread = await defaultGetThread(threadId);
-    return thread
-      ? { messages: thread.messages, status: thread.status }
-      : null;
+    if (!thread) return null;
+    const project = thread.kickoff?.project;
+    const eventDrivenTermination = project
+      ? await isFeatureEnabled('event-driven-run-termination', {
+          userId: thread.userId,
+          project,
+        }).catch(() => false)
+      : false;
+    return {
+      messages: thread.messages,
+      status: thread.status,
+      eventDrivenTermination,
+      activeRunId: thread.activeRunId,
+    };
   },
+  replayRunEventPage: defaultReplayRunEventPage,
   replayRunEvents: defaultReplayRunEvents,
+  subscribeDurableEvents: defaultSubscribeRunEvents,
   subscribeToThread: defaultSubscribeToThread,
   subscribeLiveEvents: (threadId, callback) =>
     interactiveLiveBus.subscribe(threadId, callback),
   eventForRunEnvelope: defaultEventForRunEnvelope,
 };
+
+function resolveReplayPage(
+  dependencies: InteractiveGatewayDependencies,
+): NonNullable<InteractiveGatewayDependencies['replayRunEventPage']> {
+  if (dependencies.replayRunEventPage) {
+    return dependencies.replayRunEventPage;
+  }
+  const legacy = dependencies.replayRunEvents ?? defaultReplayRunEvents;
+  // Legacy one-page helpers do not use LIMIT+1. Request one extra row and apply
+  // the same hasMore slice as replayRunEventPage so a full page is not treated
+  // as a false "has more" when that was the final page.
+  return async (threadId, options = {}) => {
+    const boundedLimit = Math.max(1, Math.min(options.limit ?? 500, 500));
+    const events = await legacy(
+      threadId,
+      options.afterEventId,
+      boundedLimit + 1,
+      options.runId,
+      options.coldStart,
+    );
+    const hasMore = events.length > boundedLimit;
+    const page = hasMore ? events.slice(0, boundedLimit) : events;
+    return {
+      events: page,
+      nextEventId: page.length > 0 ? page[page.length - 1]!.eventId : null,
+      hasMore,
+    };
+  };
+}
 
 /**
  * Attach `socket` to `threadId`'s stream. Resolves once replay has flushed and
@@ -118,9 +200,10 @@ export async function attachInteractiveThreadStream(
   socket: InteractiveGatewaySocket,
   threadId: string,
   options: AttachInteractiveThreadOptions = {},
-  dependencies: InteractiveGatewayDependencies = defaultDependencies,
+  dependencies: InteractiveGatewayDependencies = defaultDependencies
 ): Promise<() => void> {
   void options.localInstance; // retained for API compatibility; unused live-path filter
+  const replayPage = resolveReplayPage(dependencies);
   const sentEventIds = new Set<string>();
   const sentMessageIds = new Set<string>();
   let replaying = true;
@@ -132,10 +215,7 @@ export async function attachInteractiveThreadStream(
     arrival: number;
   }> = [];
 
-  const sendEvent = (
-    event: SseEvent,
-    eventId = '',
-  ): void => {
+  const sendEvent = (event: SseEvent, eventId = ''): void => {
     if (detached) return;
     if (event.type === 'message') {
       if (sentMessageIds.has(event.message.id)) return;
@@ -154,15 +234,12 @@ export async function attachInteractiveThreadStream(
     // De-dupe by durable ordinal across replay + both live sources (VT-04).
     if (sentEventIds.has(envelope.eventId)) return;
     sentEventIds.add(envelope.eventId);
-    sendEvent(
-      dependencies.eventForRunEnvelope(envelope),
-      envelope.eventId,
-    );
+    sendEvent(dependencies.eventForRunEnvelope(envelope), envelope.eventId);
   };
 
   const queueOrSend = (
     event: SseEvent,
-    envelope?: AgentRunEventEnvelope,
+    envelope?: AgentRunEventEnvelope
   ): void => {
     if (replaying) {
       pendingLiveEvents.push({
@@ -181,7 +258,13 @@ export async function attachInteractiveThreadStream(
   // replay window (mirrors the SSE route ordering).
   const unsubscribeThread = dependencies.subscribeToThread(
     threadId,
-    (event, envelope) => queueOrSend(event, envelope),
+    (event, envelope) => queueOrSend(event, envelope)
+  );
+  const unsubscribeDurable = dependencies.subscribeDurableEvents(
+    threadId,
+    (envelope) => {
+      queueOrSend(dependencies.eventForRunEnvelope(envelope), envelope);
+    }
   );
   // Live push from the ACA actor tier over Redis. No same-instance filter: the
   // actor runs in a different process, so every live envelope is forwarded and
@@ -190,13 +273,14 @@ export async function attachInteractiveThreadStream(
     threadId,
     (envelope) => {
       queueOrSend(dependencies.eventForRunEnvelope(envelope), envelope);
-    },
+    }
   );
 
   const detach = (): void => {
     if (detached) return;
     detached = true;
     unsubscribeThread();
+    unsubscribeDurable();
     unsubscribeLive();
   };
   socket.onClose(detach);
@@ -205,35 +289,59 @@ export async function attachInteractiveThreadStream(
   // send still receives the persisted user message and current running state.
   // Subscriptions are already active, so the snapshot/live overlap is closed
   // by message-id and durable-event-id de-duplication.
+  let snapshot: InteractiveThreadSnapshot | null = null;
   try {
-    const snapshot = await dependencies.loadThreadSnapshot(threadId);
+    snapshot = await dependencies.loadThreadSnapshot(threadId);
     if (snapshot) {
       for (const message of snapshot.messages) {
         sendEvent({ type: 'message', message });
       }
-      sendEvent({ type: 'status', status: snapshot.status });
+      sendEvent(
+        buildStreamStatusEvent(
+          snapshot.status,
+          snapshot.eventDrivenTermination
+        )
+      );
     }
   } catch {
     // A failed snapshot does not prevent durable/live streaming.
   }
 
-  let replayEvents: AgentRunEventEnvelope[] = [];
-  try {
-    replayEvents = await dependencies.replayRunEvents(threadId, options.lastEventId);
-  } catch {
-    replayEvents = [];
+  const shouldReplayEvents =
+    Boolean(options.lastEventId) || !snapshot || snapshot.status === 'running';
+  if (shouldReplayEvents) {
+    const coldStart =
+      !options.lastEventId && snapshot?.status === 'running'
+        ? 'oldest'
+        : options.lastEventId
+          ? 'oldest'
+          : 'recent';
+    let afterEventId = options.lastEventId;
+    try {
+      for (;;) {
+        const page = await replayPage(threadId, {
+          afterEventId,
+          limit: 500,
+          runId: snapshot?.activeRunId,
+          coldStart: afterEventId ? 'oldest' : coldStart,
+        });
+        for (const envelope of page.events) sendEnvelope(envelope);
+        if (!page.hasMore || !page.nextEventId) break;
+        afterEventId = page.nextEventId;
+      }
+    } catch {
+      // Replay failure does not prevent live streaming.
+    }
   }
-  for (const envelope of replayEvents) sendEnvelope(envelope);
 
   // Flush live events buffered during replay, ordered so replay precedes live.
   replaying = false;
   pendingLiveEvents
-    .sort(
-      (left, right) =>
-        left.envelope && right.envelope
-          ? left.envelope.timestamp.localeCompare(right.envelope.timestamp)
-            || left.envelope.sequence - right.envelope.sequence
-          : left.arrival - right.arrival,
+    .sort((left, right) =>
+      left.envelope && right.envelope
+        ? left.envelope.timestamp.localeCompare(right.envelope.timestamp) ||
+          left.envelope.sequence - right.envelope.sequence
+        : left.arrival - right.arrival
     )
     .forEach(({ event, envelope }) => {
       if (envelope) sendEnvelope(envelope);

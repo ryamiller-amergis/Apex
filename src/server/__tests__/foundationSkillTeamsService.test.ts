@@ -25,6 +25,7 @@ jest.mock('../services/foundationSkillReleaseService', () => ({
   // Real targeting logic is covered by foundationSkillReleaseTargeting.test.ts;
   // here we only need it to behave like the real resolver.
   getVisibleSkillsForProject: jest.fn(),
+  isReleaseVisibleToRepo: jest.fn(() => true),
 }));
 
 const mockSettings = projectSettings as jest.Mocked<typeof projectSettings>;
@@ -83,6 +84,7 @@ function release(overrides: Partial<FoundationSkillRelease> = {}): FoundationSki
     skillTargets: {},
     manifestSnapshot: null,
     releaseNotes: null,
+    projectNotes: {},
     breakingChanges: null,
     publishedBy: null,
     publishedAt: '2026-08-01T00:00:00.000Z',

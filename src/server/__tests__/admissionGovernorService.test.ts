@@ -8,12 +8,23 @@ jest.mock('../services/pgNotifyService', () => ({
   nextRunEventSequence: jest.fn().mockReturnValue(1),
   notifyRunEvent: jest.fn().mockResolvedValue(undefined),
 }));
+jest.mock('../db/drizzle', () => ({
+  db: {
+    execute: jest.fn(),
+    transaction: jest.fn(),
+  },
+}));
 
+import { db } from '../db/drizzle';
+import { setServiceBusPublisher } from '../services/serviceBusPublisher';
 import {
   createAdmissionGovernorService,
   createStaleDispatchRecoveryService,
+  recoverStaleDispatchedRuns,
+  resolveBackgroundDispatchTtlMs,
   resolveBackgroundInFlightLimit,
   resolveBackgroundPublishGraceMs,
+  runAdmissionCycle,
   type AdmissionStore,
   type AdmissionTransaction,
   type AdmissionQueueSnapshot,
@@ -613,6 +624,7 @@ describe('stale dispatch republish recovery (TBI-002 DoD-4/VT-07)', () => {
       publisher: { publish },
       now: () => new Date('2026-08-05T12:00:00.000Z'),
       resolveGraceMs: () => 60_000,
+      resolveTtlMs: () => 30 * 60_000,
       batchSize: 500,
       logError: jest.fn(),
     });
@@ -621,6 +633,7 @@ describe('stale dispatch republish recovery (TBI-002 DoD-4/VT-07)', () => {
 
     expect(findStaleDispatches).toHaveBeenCalledWith(
       '2026-08-05T11:59:00.000Z',
+      '2026-08-05T11:30:00.000Z',
       100,
     );
     expect(result).toEqual({ selected: 100, published: 100, failed: 0 });
@@ -686,11 +699,245 @@ describe('stale dispatch republish recovery (TBI-002 DoD-4/VT-07)', () => {
     expect(logged).not.toMatch(/snapshot|prompt|workspace|secret/i);
   });
 
+  test('Given a dispatch older than the TTL, when recovery runs, then selection is floored so it is never republished again', async () => {
+    const findStaleDispatches = jest.fn().mockResolvedValue([]);
+    const publish = jest.fn().mockResolvedValue(undefined);
+    const recovery = createStaleDispatchRecoveryService({
+      store: { findStaleDispatches },
+      publisher: { publish },
+      now: () => new Date('2026-08-05T12:00:00.000Z'),
+      resolveGraceMs: () => 60_000,
+      resolveTtlMs: () => 30 * 60_000,
+      logError: jest.fn(),
+    });
+
+    await expect(recovery.recoverStaleDispatchedRuns()).resolves.toEqual({
+      selected: 0,
+      published: 0,
+      failed: 0,
+    });
+
+    const [dispatchedBefore, dispatchedAtOrAfter] =
+      findStaleDispatches.mock.calls[0];
+    expect(Date.parse(dispatchedAtOrAfter)).toBeLessThan(
+      Date.parse(dispatchedBefore),
+    );
+    expect(dispatchedAtOrAfter).toBe('2026-08-05T11:30:00.000Z');
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  test('Given a republish failure, when it is logged, then only the numeric broker status is reported', async () => {
+    const findStaleDispatches = jest.fn().mockResolvedValue([
+      { runId: 'run-1', dispatchMessageId: 'persisted-fence-1' },
+    ]);
+    const publish = jest.fn().mockRejectedValue(
+      new Error('Service Bus publish failed (401)'),
+    );
+    const logError = jest.fn();
+    const recovery = createStaleDispatchRecoveryService({
+      store: { findStaleDispatches },
+      publisher: { publish },
+      now: () => new Date('2026-08-05T12:00:00.000Z'),
+      resolveGraceMs: () => 60_000,
+      resolveTtlMs: () => 30 * 60_000,
+      logError,
+    });
+
+    await recovery.recoverStaleDispatchedRuns();
+
+    expect(logError).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ publishStatus: '401' }),
+    );
+    expect(JSON.stringify(logError.mock.calls)).not.toContain('Service Bus');
+  });
+
+  test('Given an unparseable broker error, when it is logged, then the status is reported as unknown', async () => {
+    const findStaleDispatches = jest.fn().mockResolvedValue([
+      { runId: 'run-1', dispatchMessageId: 'persisted-fence-1' },
+    ]);
+    const logError = jest.fn();
+    const recovery = createStaleDispatchRecoveryService({
+      store: { findStaleDispatches },
+      publisher: {
+        publish: jest.fn().mockRejectedValue(
+          new Error('token for CURSOR_API_KEY rejected'),
+        ),
+      },
+      now: () => new Date('2026-08-05T12:00:00.000Z'),
+      resolveGraceMs: () => 60_000,
+      resolveTtlMs: () => 30 * 60_000,
+      logError,
+    });
+
+    await recovery.recoverStaleDispatchedRuns();
+
+    const logged = JSON.stringify(logError.mock.calls);
+    expect(logged).toContain('unknown');
+    expect(logged).not.toContain('CURSOR_API_KEY');
+  });
+
+  test('Given a dispatch failing every sweep, when the streak crosses the threshold, then it is reported as unrecoverable once', async () => {
+    const findStaleDispatches = jest.fn().mockResolvedValue([
+      { runId: 'run-1', dispatchMessageId: 'persisted-fence-1' },
+    ]);
+    const logError = jest.fn();
+    const recovery = createStaleDispatchRecoveryService({
+      store: { findStaleDispatches },
+      publisher: {
+        publish: jest.fn().mockRejectedValue(
+          new Error('Service Bus publish failed (401)'),
+        ),
+      },
+      now: () => new Date('2026-08-05T12:00:00.000Z'),
+      resolveGraceMs: () => 60_000,
+      resolveTtlMs: () => 30 * 60_000,
+      logError,
+    });
+
+    for (let sweep = 0; sweep < 8; sweep += 1) {
+      await recovery.recoverStaleDispatchedRuns();
+    }
+
+    const escalations = logError.mock.calls.filter(
+      ([, fields]) => (fields as Record<string, string>).status === 'republish_unrecoverable',
+    );
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0][1]).toEqual(
+      expect.objectContaining({
+        runId: 'run-1',
+        publishStatus: '401',
+        consecutiveFailures: '5',
+      }),
+    );
+  });
+
+  test('Given a dispatch that recovers before the threshold, when sweeps run, then nothing is escalated', async () => {
+    const findStaleDispatches = jest.fn().mockResolvedValue([
+      { runId: 'run-1', dispatchMessageId: 'persisted-fence-1' },
+    ]);
+    const logError = jest.fn();
+    const publish = jest.fn()
+      .mockRejectedValueOnce(new Error('Service Bus publish failed (503)'))
+      .mockRejectedValueOnce(new Error('Service Bus publish failed (503)'))
+      .mockResolvedValue(undefined);
+    const recovery = createStaleDispatchRecoveryService({
+      store: { findStaleDispatches },
+      publisher: { publish },
+      now: () => new Date('2026-08-05T12:00:00.000Z'),
+      resolveGraceMs: () => 60_000,
+      resolveTtlMs: () => 30 * 60_000,
+      logError,
+    });
+
+    for (let sweep = 0; sweep < 6; sweep += 1) {
+      await recovery.recoverStaleDispatchedRuns();
+    }
+
+    expect(
+      logError.mock.calls.some(
+        ([, fields]) => (fields as Record<string, string>).status === 'republish_unrecoverable',
+      ),
+    ).toBe(false);
+  });
+
+  test('Given invalid dispatch TTL configuration, when resolved, then it safely defaults to 30 minutes', () => {
+    expect(resolveBackgroundDispatchTtlMs(undefined)).toBe(30 * 60_000);
+    expect(resolveBackgroundDispatchTtlMs('')).toBe(30 * 60_000);
+    expect(resolveBackgroundDispatchTtlMs('0')).toBe(30 * 60_000);
+    expect(resolveBackgroundDispatchTtlMs('not-a-duration')).toBe(30 * 60_000);
+    // Below the floor and above the ceiling both fall back.
+    expect(resolveBackgroundDispatchTtlMs('1000')).toBe(30 * 60_000);
+    expect(resolveBackgroundDispatchTtlMs(String(48 * 60 * 60_000)))
+      .toBe(30 * 60_000);
+    expect(resolveBackgroundDispatchTtlMs('600000')).toBe(600_000);
+  });
+
   test('DoD-4: Given invalid publish grace configuration, when resolved, then it safely defaults to 60 seconds', () => {
     expect(resolveBackgroundPublishGraceMs(undefined)).toBe(60_000);
     expect(resolveBackgroundPublishGraceMs('')).toBe(60_000);
     expect(resolveBackgroundPublishGraceMs('0')).toBe(60_000);
     expect(resolveBackgroundPublishGraceMs('not-a-duration')).toBe(60_000);
     expect(resolveBackgroundPublishGraceMs('60000')).toBe(60_000);
+  });
+});
+
+/**
+ * Renders a Drizzle `sql` template, inlining bound parameters so the emitted
+ * predicate can be asserted as text.
+ */
+function sqlText(node: unknown): string {
+  if (node == null) return '';
+  if (typeof node === 'string') return node;
+  const chunks = (node as { queryChunks?: unknown[] }).queryChunks;
+  if (Array.isArray(chunks)) return chunks.map(sqlText).join('');
+  if (typeof node === 'object' && 'value' in (node as object)) {
+    return sqlText((node as { value: unknown }).value);
+  }
+  if (Array.isArray(node)) return node.map(sqlText).join('');
+  return String(node);
+}
+
+/** Collapse whitespace so multi-line SQL can be matched with simple patterns. */
+function flatSql(node: unknown): string {
+  return sqlText(node).replace(/\s+/g, ' ').trim();
+}
+
+describe('transport partitioning: V1 governs only http-files-v1 runs', () => {
+  const execute = jest.fn();
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    execute.mockResolvedValue([]);
+    jest.mocked(db.execute).mockResolvedValue([] as never);
+    jest.mocked(db.transaction).mockImplementation(
+      (async (work: (tx: unknown) => Promise<unknown>) =>
+        work({ execute })) as never,
+    );
+    setServiceBusPublisher({ publish: jest.fn().mockResolvedValue(undefined) });
+  });
+
+  afterEach(() => {
+    setServiceBusPublisher(null);
+  });
+
+  test('the queue snapshot excludes V2 runs from in-flight, queue depth, and oldest-queued age', async () => {
+    execute.mockResolvedValue([
+      { in_flight: 0, queued_depth: 0, oldest_queued_at: null },
+    ]);
+
+    await runAdmissionCycle('sweep');
+
+    const snapshot = flatSql(execute.mock.calls[1][0]);
+    const filters = snapshot.match(/COUNT\(\*\) FILTER \([^)]*\)|MIN\(queued_at\) FILTER \([^)]*\)/g) ?? [];
+    expect(filters).toHaveLength(3);
+    for (const filter of filters) {
+      expect(filter).toContain("transport_version <> 'servicebus-blob-v2'");
+    }
+  });
+
+  test('candidate selection and fairness counting both skip V2 runs', async () => {
+    execute
+      .mockResolvedValueOnce([]) // advisory lock
+      .mockResolvedValueOnce([{ in_flight: 0, queued_depth: 1, oldest_queued_at: null }])
+      .mockResolvedValue([]); // admitNext finds nothing, then the final snapshot
+
+    await runAdmissionCycle('sweep');
+
+    const admitNext = flatSql(execute.mock.calls[2][0]);
+    expect(admitNext).toContain('project_in_flight AS');
+    expect(admitNext).toContain('candidate AS');
+    // Once inside the fairness CTE, once inside candidate selection.
+    expect(
+      admitNext.match(/transport_version <> 'servicebus-blob-v2'/g),
+    ).toHaveLength(2);
+  });
+
+  test('stale dispatch republish never re-enqueues a V2 run onto the V1 queue', async () => {
+    await recoverStaleDispatchedRuns();
+
+    expect(flatSql(jest.mocked(db.execute).mock.calls[0][0])).toContain(
+      "transport_version <> 'servicebus-blob-v2'",
+    );
   });
 });

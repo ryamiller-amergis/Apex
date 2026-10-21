@@ -46,12 +46,21 @@ export interface FoundationSkillRelease {
   contractApiVersion: number;
   selectedSkills: string[];     // skill names included in this release
   targetProjects: string[];     // [] = all projects; non-empty = allowlist of Apex project names
+  /**
+   * Repositories that may see and install this release.
+   * Empty (or omitted) means every repository under the targeted projects.
+   * When a project has entries here, only those repositories are included.
+   */
+  targetRepos?: FoundationSkillTargetRepo[];
   /** Per-skill project overrides. skill → string[].
    *  Empty array means "all projects". Absent key inherits targetProjects. */
   skillTargets: Record<string, string[]>;
   manifestSnapshot: FoundationSkillArtifactManifest | null;
+  /** Admin-facing notes. Consumer projects only ever see their own projectNotes entry. */
   releaseNotes: string | null;
   breakingChanges: string | null;
+  /** Apex project name → the notes written for that project. */
+  projectNotes: Record<string, FoundationSkillProjectNotes>;
   publishedBy: string | null;
   publishedAt: string | null;
   deprecatedBy: string | null;
@@ -59,6 +68,24 @@ export interface FoundationSkillRelease {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface FoundationSkillProjectNotes {
+  releaseNotes: string | null;
+  breakingChanges: string | null;
+}
+
+/** One Project Settings repository a release is offered to. */
+export interface FoundationSkillTargetRepo {
+  /** Apex project that owns this repository configuration. */
+  apexProject: string;
+  provider: 'ado' | 'github';
+  /** ADO or GitHub project that owns the repository. */
+  project: string;
+  repo: string;
+  branch: string;
+  /** Name shown in the project picker, such as "Infra". */
+  friendlyName: string;
 }
 
 export interface FoundationSkillArtifactManifestSkill {
@@ -126,10 +153,14 @@ export interface CreateFoundationSkillReleaseRequest {
   artifactVersion: string;
   selectedSkills: string[];
   targetProjects?: string[];    // [] or omit = all projects; non-empty = Apex project allowlist
+  /** Repositories under those projects. Empty means every repository in the audience. */
+  targetRepos?: FoundationSkillTargetRepo[];
   /** Per-skill project overrides. Absent key inherits targetProjects. */
   skillTargets?: Record<string, string[]>;
   releaseNotes?: string | null;
   breakingChanges?: string | null;
+  /** Per-project notes. Projects absent from this map receive no notes. */
+  projectNotes?: Record<string, FoundationSkillProjectNotes>;
 }
 
 export interface PublishFoundationSkillReleaseRequest {
@@ -354,6 +385,77 @@ export function isReleaseVisibleToProject(
   return release.targetProjects.includes(apexProject);
 }
 
+/** Case-insensitive identity for a consumer repository configuration. */
+export function foundationSkillRepoKey(repo: {
+  provider?: string | null;
+  project?: string | null;
+  repo?: string | null;
+  branch?: string | null;
+}): string {
+  return [repo.provider ?? 'ado', repo.project ?? '', repo.repo ?? '', repo.branch || 'main']
+    .map((part) => part.trim().toLowerCase())
+    .join('|');
+}
+
+export interface FoundationSkillRepoVisibility {
+  apexProject: string | null | undefined;
+  provider?: string | null;
+  project: string;
+  repo: string;
+  branch?: string | null;
+}
+
+/**
+ * A repository sees a release when its Apex project is in the audience and,
+ * if that project has repository entries, this repository is one of them.
+ * Releases with no repository entries keep the older whole-project behavior.
+ */
+export function isReleaseVisibleToRepo(
+  release: Pick<FoundationSkillRelease, 'targetProjects' | 'targetRepos'>,
+  identity: FoundationSkillRepoVisibility,
+): boolean {
+  if (!isReleaseVisibleToProject(release, identity.apexProject)) return false;
+  const repos = release.targetRepos ?? [];
+  if (repos.length === 0) return true;
+  if (!identity.apexProject) return false;
+  const forProject = repos.filter(
+    (entry) => entry.apexProject.toLowerCase() === identity.apexProject!.toLowerCase(),
+  );
+  if (forProject.length === 0) return true;
+  const key = foundationSkillRepoKey(identity);
+  return forProject.some((entry) => foundationSkillRepoKey(entry) === key);
+}
+
+/** Drop incomplete rows and any repository outside the project audience. */
+export function normalizeTargetRepos(
+  value: unknown,
+  targetProjects: string[],
+): FoundationSkillTargetRepo[] {
+  if (targetProjects.length === 0 || !Array.isArray(value)) return [];
+  const allowed = new Set(targetProjects.map((project) => project.toLowerCase()));
+  const seen = new Set<string>();
+  const out: FoundationSkillTargetRepo[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object') continue;
+    const row = raw as Record<string, unknown>;
+    const apexProject = typeof row.apexProject === 'string' ? row.apexProject.trim() : '';
+    const provider = row.provider === 'github' ? 'github' : row.provider === 'ado' ? 'ado' : null;
+    const project = typeof row.project === 'string' ? row.project.trim() : '';
+    const repo = typeof row.repo === 'string' ? row.repo.trim() : '';
+    const branch = typeof row.branch === 'string' && row.branch.trim() ? row.branch.trim() : 'main';
+    const friendlyName = typeof row.friendlyName === 'string' && row.friendlyName.trim()
+      ? row.friendlyName.trim()
+      : repo;
+    if (!apexProject || !provider || !project || !repo) continue;
+    if (!allowed.has(apexProject.toLowerCase())) continue;
+    const key = foundationSkillRepoKey({ provider, project, repo, branch });
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ apexProject, provider, project, repo, branch, friendlyName });
+  }
+  return out;
+}
+
 /**
  * Returns the effective project allowlist for a specific skill in a release.
  * Resolution rule: skillTargets[skill] ?? release.targetProjects.
@@ -366,6 +468,38 @@ export function getEffectiveTargetProjects(
   const override = release.skillTargets?.[skillName];
   if (override !== undefined) return override;
   return release.targetProjects ?? [];
+}
+
+/**
+ * Notes written for one project. Shared releaseNotes/breakingChanges stay
+ * admin-facing, so a project without an entry sees nothing.
+ */
+export function getProjectReleaseNotes(
+  release: Pick<FoundationSkillRelease, 'projectNotes'>,
+  apexProject: string | null | undefined,
+): FoundationSkillProjectNotes {
+  const entry = apexProject ? release.projectNotes?.[apexProject] : undefined;
+  return {
+    releaseNotes:    entry?.releaseNotes ?? null,
+    breakingChanges: entry?.breakingChanges ?? null,
+  };
+}
+
+/**
+ * The release as one project sees it: its own notes in place of the shared ones,
+ * and no other project's notes.
+ */
+export function toProjectReleaseView(
+  release: FoundationSkillRelease,
+  apexProject: string | null | undefined,
+): FoundationSkillRelease {
+  const notes = getProjectReleaseNotes(release, apexProject);
+  return {
+    ...release,
+    releaseNotes:    notes.releaseNotes,
+    breakingChanges: notes.breakingChanges,
+    projectNotes:    {},
+  };
 }
 
 /**

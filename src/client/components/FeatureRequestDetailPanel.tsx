@@ -8,6 +8,7 @@ import type {
   FeatureRequestPriority,
   FeatureRequestRisk,
 } from '../../shared/types/featureRequest';
+import type { WorkItemOwnerSummary } from '../../shared/types/apexWorkItem';
 import {
   FEATURE_REQUEST_STATUSES,
   FEATURE_REQUEST_PRIORITIES,
@@ -92,6 +93,7 @@ function formatBody(text: string): React.ReactNode {
 interface FeatureRequestDetailPanelProps {
   fr: FeatureRequest;
   canManage: boolean;
+  assignees: WorkItemOwnerSummary[];
   onClose: () => void;
   onUpdate: (
     id: string,
@@ -100,6 +102,7 @@ interface FeatureRequestDetailPanelProps {
       teamPriority: FeatureRequestPriority | null;
       teamRisk: FeatureRequestRisk | null;
       rank: number | null;
+      assigneeId: string | null;
     }>,
   ) => void;
   onReanalyze: (id: string) => void;
@@ -109,6 +112,7 @@ interface FeatureRequestDetailPanelProps {
 export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps> = ({
   fr,
   canManage,
+  assignees,
   onClose,
   onUpdate,
   onReanalyze,
@@ -218,6 +222,33 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
               </select>
             ) : (
               <span className={statusBadgeClass(fr.status)}>{STATUS_LABELS[fr.status]}</span>
+            )}
+          </section>
+
+          <section className={styles['section']}>
+            <h3 className={styles['sectionTitle']}>Assignee</h3>
+            {canManage ? (
+              <select
+                className={listStyles['controlSelect']}
+                value={fr.assignedTo?.oid ?? ''}
+                onChange={(event) =>
+                  onUpdate(fr.id, {
+                    assigneeId: event.target.value || null,
+                  })
+                }
+                data-testid="feature-request-detail-assignee"
+              >
+                <option value="">Unassigned</option>
+                {assignees.map((assignee) => (
+                  <option key={assignee.oid} value={assignee.oid}>
+                    {assignee.displayName}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span data-testid="feature-request-detail-assignee-label">
+                {fr.assignedTo?.displayName ?? 'Unassigned'}
+              </span>
             )}
           </section>
 

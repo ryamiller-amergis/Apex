@@ -66,6 +66,202 @@ export function collectValidationGaps(
   return fromRoot;
 }
 
+const OVERALL_PERCENT_KEYS = [
+  'overall_score',
+  'overall_percentage',
+  'overall_percent',
+  'overall_pct',
+  'overall',
+] as const;
+
+const PERCENT_KEYS = [
+  'percentage',
+  'percent',
+  'pct',
+  'score_pct',
+  'weighted_percentage',
+  'weighted_pct',
+  'overall_score',
+  'score',
+  'value',
+] as const;
+
+/** Section lists the prd-spec-review skill scores on its 0–3 rubric. */
+const RUBRIC_SECTION_KEYS = ['prd_sections', 'backlog_sections'] as const;
+const RUBRIC_MAX_SECTION_SCORE = 3;
+
+/**
+ * Resolve the overall percentage from a scorecard. Prefers a percentage the
+ * agent wrote (top-level, `summary`, `scores`, or `files[]`); only when none is
+ * present does it apply the skill's weighted 0–3 formula to the stored section
+ * scores. Returns null when nothing usable is present.
+ */
+export function resolveScorecardOverallScore(raw: unknown): number | null {
+  const record = asRecord(raw);
+  if (!record) return null;
+
+  const direct = firstPercent(record, OVERALL_PERCENT_KEYS);
+  if (direct !== null) return direct;
+
+  const summary = asRecord(record.summary);
+  if (summary) {
+    const fromSummary = firstPercent(summary, OVERALL_PERCENT_KEYS);
+    if (fromSummary !== null) return fromSummary;
+  }
+
+  const scores = asRecord(record.scores);
+  if (scores) {
+    const overall = firstPercent(scores, OVERALL_PERCENT_KEYS);
+    if (overall !== null) return overall;
+
+    const parts = Object.entries(scores)
+      .filter(([key]) => !(OVERALL_PERCENT_KEYS as readonly string[]).includes(key))
+      .map(([, value]) => percentOf(value));
+    const average = averageOf(parts);
+    if (average !== null) return average;
+  }
+
+  const files = Array.isArray(record.files) ? record.files : [];
+  const fileAverage = averageOf(files.map((file) => percentOf(file)));
+  if (fileAverage !== null) return fileAverage;
+
+  return averageOf(RUBRIC_SECTION_KEYS.map((key) => rubricSectionsPercent(record[key])));
+}
+
+function firstPercent(record: Record<string, unknown>, keys: readonly string[]): number | null {
+  for (const key of keys) {
+    const value = percentOf(record[key]);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
+/** A number, a "82%" string, `{ score, max }`, or a record carrying a percent field. */
+function percentOf(value: unknown): number | null {
+  const direct = finitePercent(value);
+  if (direct !== null) return direct;
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const max = finiteNumber(record.max) ?? finiteNumber(record.out_of) ?? finiteNumber(record.max_score);
+  const earned = finiteNumber(record.score) ?? finiteNumber(record.value);
+  if (max !== null && max > 0 && earned !== null) return (earned / max) * 100;
+
+  for (const key of PERCENT_KEYS) {
+    const pct = finitePercent(record[key]);
+    if (pct !== null) return pct;
+  }
+  return null;
+}
+
+/** Applies `Σ(score × weight) / (3 × Σ weight) × 100`; null if any score is off the 0–3 rubric. */
+function rubricSectionsPercent(value: unknown): number | null {
+  const entries = Array.isArray(value)
+    ? value
+    : asRecord(value)
+      ? Object.values(value as Record<string, unknown>)
+      : [];
+  let weighted = 0;
+  let totalWeight = 0;
+  for (const entry of entries) {
+    const section = asRecord(entry);
+    const score = section ? finiteNumber(section.score) : finiteNumber(entry);
+    if (score === null) continue;
+    if (score < 0 || score > RUBRIC_MAX_SECTION_SCORE) return null;
+    const weight = section ? finiteNumber(section.weight) ?? 1 : 1;
+    if (weight <= 0) continue;
+    weighted += score * weight;
+    totalWeight += weight;
+  }
+  return totalWeight > 0 ? (weighted / (RUBRIC_MAX_SECTION_SCORE * totalWeight)) * 100 : null;
+}
+
+function averageOf(values: Array<number | null>): number | null {
+  const present = values.filter((value): value is number => value !== null);
+  return present.length > 0 ? present.reduce((sum, value) => sum + value, 0) / present.length : null;
+}
+
+function finitePercent(value: unknown): number | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim().replace(/%$/, '').trim();
+    return trimmed === '' ? null : finiteNumber(trimmed);
+  }
+  return finiteNumber(value);
+}
+
+/** True for the placeholder Apex stores when the agent's scorecard had no usable score. */
+export function isUnusableValidationScorecard(
+  scorecard: Pick<ValidationScorecard, 'slug'> | null | undefined,
+): boolean {
+  return scorecard?.slug === 'validation-unusable';
+}
+
+/** Last-resort scorecard so a finished run always has something the UI can show. */
+export function buildUnusableValidationScorecard(description: string): ValidationScorecard {
+  return {
+    slug: 'validation-unusable',
+    generated_at: new Date().toISOString(),
+    review_phase: 'initial',
+    overall_score: 0,
+    ready_threshold: 90,
+    is_ready: false,
+    verdict: 'significant_gaps',
+    gaps: [
+      {
+        id: 'validation-unusable-scorecard',
+        file: 'review-scorecard.json',
+        section: 'Scorecard',
+        score: 0,
+        description,
+        what_3_looks_like:
+          'A scorecard with overall_score (or files[].score) so Apex can display a result.',
+        resolution: 'pending',
+      },
+    ],
+  };
+}
+
+/**
+ * Parse an agent-written scorecard file. Always returns a scorecard so callers
+ * can persist a result even when JSON is missing a usable overall score.
+ */
+export function parseAgentValidationScorecard(raw: string): ValidationScorecard {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    const normalized = normalizeValidationScorecard(parsed);
+    const record = asRecord(parsed);
+    if (normalized) return normalized;
+    const keys = record ? Object.keys(record).slice(0, 24).join(',') : typeof parsed;
+    console.warn(`[validation] Unusable scorecard shape keys=${keys}`);
+    return buildUnusableValidationScorecard(
+      `Validation finished but the scorecard had no usable overall score (keys: ${keys || 'none'}). Re-run validation.`,
+    );
+  } catch {
+    return buildUnusableValidationScorecard(
+      'Validation finished but the scorecard file was not valid JSON. Re-run validation.',
+    );
+  }
+}
+
+export const NO_SCORECARD_REASON =
+  'Validation finished without writing a scorecard. Re-run validation.';
+export const VALIDATION_TIMEOUT_REASON =
+  'Validation timed out before a scorecard was available. Re-run validation.';
+
+/**
+ * Parse-site guard for agent-written scorecards. Returns the scorecard with a
+ * canonical finite `overall_score`, or null when no usable score can be
+ * resolved — `validation_score` is an integer column, so an unresolved score
+ * must be rejected rather than rounded into NaN.
+ */
+export function normalizeValidationScorecard(raw: unknown): ValidationScorecard | null {
+  const record = asRecord(raw);
+  if (!record) return null;
+  const overallScore = resolveScorecardOverallScore(record);
+  if (overallScore === null) return null;
+  return { ...(record as unknown as ValidationScorecard), overall_score: overallScore };
+}
+
 /** Section % for design-doc scorecards (canonical fields or nested score_pct). */
 export function designDocFeatureSectionScore(
   feature: Record<string, unknown> | null | undefined,
@@ -102,6 +298,11 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function finiteNumber(value: unknown): number | null {
+  const num = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+  return typeof num === 'number' && Number.isFinite(num) ? num : null;
 }
 
 function cleanText(value: string): string {

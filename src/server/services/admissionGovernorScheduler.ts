@@ -10,6 +10,7 @@ import {
   runAdmissionCycle,
   type AdmissionReason,
 } from './admissionGovernorService';
+import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
 
 const MAX_SWEEP_DELAY_MS = 30_000;
 const DOWNWARD_JITTER_MS = 6_000;
@@ -55,7 +56,10 @@ export function createAdmissionGovernorScheduler(
 
   let timer: ReturnType<typeof setInterval> | null = null;
   let started = false;
-  let running = false;
+  const runGuard = createSingleFlight({
+    name: 'agent-run-admission',
+    stuckAfterMs: stuckAfterForInterval(MAX_SWEEP_DELAY_MS),
+  });
 
   const safeLog = (
     message: string,
@@ -69,8 +73,8 @@ export function createAdmissionGovernorScheduler(
   };
 
   const runNow = async (): Promise<boolean> => {
-    if (running) return false;
-    running = true;
+    const runToken = runGuard.tryEnter();
+    if (runToken === null) return false;
     try {
       try {
         await recover();
@@ -93,7 +97,7 @@ export function createAdmissionGovernorScheduler(
       }
       return true;
     } finally {
-      running = false;
+      runGuard.exit(runToken);
     }
   };
 

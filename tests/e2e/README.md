@@ -118,8 +118,9 @@ small curated set of **read-only** journeys against an already-deployed site.
 | Var | Purpose |
 |-----|---------|
 | `E2E_BASE_URL` | Base URL of the deployed site. Setting it switches Playwright to *deployed-target* mode: no local `webServer`, no migrations/seeding, and the `deployed-smoke` project is enabled. Leave unset for the local full suite. |
-| `E2E_TEST_USER` | UPN/email of the dedicated Azure AD E2E test account. **Primary** auth path for dev + staging: when set together with `E2E_TEST_PASSWORD`, the `setup` project runs programmatic SSO login and `loginAsPersona(...)` becomes a no-op. Never used for prod. |
-| `E2E_TEST_PASSWORD` | Password for the dedicated E2E test account. Store as a secret; never commit it. |
+| `E2E_TEST_USER` | UPN/email of the default Azure AD E2E test account (`apex-test-01@amergis.com`). **Primary** auth path for dev + staging: when set together with `E2E_TEST_PASSWORD`, the `setup` project runs programmatic SSO login, and `loginAsPersona(...)` reuses this session for any persona without its own password. Never used for prod. |
+| `E2E_TEST_PASSWORD` | Password for the default E2E test account. Store as a secret; never commit it. |
+| `E2E_PERSONA_<ID>_PASSWORD` | *(Optional.)* Password for a persona's own test account, e.g. `E2E_PERSONA_QA_PASSWORD` → `apex-test-05`. When set, `setup` saves `tests/e2e/.auth/persona-<id>.json` and `loginAsPersona('<id>')` switches to that account. See [Test accounts](#test-accounts-dev--staging). |
 | `E2E_STORAGE_STATE` | *(Optional local fallback.)* Path to a pre-captured SSO `storageState` JSON. Used **only** when no `E2E_TEST_USER`/`E2E_TEST_PASSWORD` are provided. When set, `loginAsPersona(...)` becomes a no-op and tests reuse the stored session. Never commit — `tests/e2e/.auth/` is gitignored. |
 
 ### Curated smoke set
@@ -207,6 +208,7 @@ unauthenticated boundary passing.
 |--------|---------|
 | `E2E_TEST_USER` | `deployed-smoke-dev`, `deployed-smoke-staging` |
 | `E2E_TEST_PASSWORD` | `deployed-smoke-dev`, `deployed-smoke-staging` |
+| `E2E_PERSONA_<ID>_PASSWORD` *(optional, one per persona)* | `deployed-smoke-dev`, `deployed-smoke-staging` |
 
 > **The E2E test account must be MFA / conditional-access exempt** for dev +
 > staging — programmatic login cannot clear an interactive MFA challenge. See the
@@ -217,6 +219,43 @@ unauthenticated boundary passing.
 > which is swapped into production. That slot URL is the default staging target;
 > override it with `E2E_STAGING_BASE_URL` if a dedicated staging environment
 > exists. Never commit real secrets.
+
+### Test accounts (dev + staging)
+
+Ten cloud-only Entra accounts, `apex-test-01` to `apex-test-10@amergis.com`, live in
+the **Apex Test Users** administrative unit. Membership of the dynamic group
+`Apex-Test-Users` (UPN starts with `apex-test-`) exempts them from MFA, assigns
+them to the Apex enterprise app, and gives them Stakeholder + Contributor on the
+`Apex - Apps` Azure DevOps project. AU admins can reset their passwords; only
+sysops can create new ones.
+
+| Account | Persona | Account | Persona |
+|---------|---------|---------|---------|
+| `apex-test-01` | developer (also `E2E_TEST_USER`) | `apex-test-04` | product-owner |
+| `apex-test-02` | ba | `apex-test-05` | qa |
+| `apex-test-03` | manager | `apex-test-06` | ui-ux |
+
+`apex-test-07` to `apex-test-10` are spares for people validating by hand. The
+mapping lives in `src/shared/constants/testAccounts.ts`.
+
+**Production refuses them.** Every deployed site (`NODE_ENV=production`) rejects
+`apex-test-*` and the old `apex-e2e-test` account at `/auth/callback` unless
+`ALLOW_TEST_ACCOUNT_SIGN_IN=true`. `pr-tests.yml` sets it on dev; `deploy.yml`
+sets it as a sticky slot setting on staging and a sticky `false` on production,
+so a swap never carries it over.
+
+**Apex access.** Persona roles come from Apex groups, which are keyed by the
+account's Entra object ID, so an account must sign in once before it can join a
+group. Run the seed against each environment's database (prints a plan; add
+`--apply` to write):
+
+```bash
+DATABASE_URL="postgresql://..." npx ts-node -P tsconfig.server.json scripts/e2e/seed-test-accounts.ts --project Apex --apply
+```
+
+It allowlists each account for dev, adds a pending project assignment for
+accounts that have not signed in yet, and adds the persona group for those that
+have. Rerun it after the first sign-in.
 
 ## Prerequisites
 

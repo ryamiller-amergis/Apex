@@ -163,7 +163,11 @@ const TABLES: TableDef[] = [
   // Tier 10
   { name: 'review_replies', pk: 'id' },
   { name: 'notifications', pk: 'id' },
-  { name: 'teams_conversation_references', pk: 'user_oid' },
+  // teams_conversation_references is intentionally NOT migrated. Each environment
+  // has its own Teams bot app registration ("APEX Bot" vs "APEX Bot - Dev"), and a
+  // conversation reference is only usable by the bot that created it. Copying dev
+  // rows into prod would make prod's proactive sends fail. Users re-establish their
+  // reference by installing the prod bot.
 ];
 
 // ---------------------------------------------------------------------------

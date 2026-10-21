@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm';
 import { AGENT_SKILL_ROOT, skillPathFor } from '../../shared/skillPaths';
 import { requirePermission } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
+import { isSuperAdminRequest } from '../utils/superAdmin';
 import { db } from '../db/drizzle';
 import { adrs as adrsTable, chatThreads } from '../db/schema';
 import {
@@ -17,16 +18,16 @@ import {
   rejectAdrProposedContent,
   setAdrAssistantThread,
   stageAdrReviewFix,
-  startAdrWatcher,
   updateAdrStatus,
   updateAdrTitle,
 } from '../services/adrService';
-import { createThread, getThread, updateThreadKickoffContext } from '../services/chatAgentService';
+import { routeAdrGenerationKickoff } from '../services/adrGenerationService';
+import { createThread, getThread, getThreadAsync, updateThreadKickoffContext } from '../services/chatAgentService';
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import type { AdrStatus } from '../../shared/types/adr';
-import { listGroupsWithMembers } from '../services/groupService';
 import {
+  getAvailableApproverPool,
   getAssignments,
   isApprovalComplete,
   isAssignedApprover,
@@ -34,17 +35,31 @@ import {
   reassignApprovers,
   recordApproverResponse,
 } from '../services/documentApprovalService';
-import { getOwnerApproval, recordOwnerApproval } from '../services/ownerApprovalService';
+import { getOwnerApproval, isDocumentOwner, recordOwnerApproval } from '../services/ownerApprovalService';
 import { getComments, getUnresolvedCount } from '../services/reviewCommentService';
 import { createNotification } from '../services/notificationService';
 import { fixAdrContentWithBedrock, regenerateMarkdownRegionWithBedrock, BedrockModelTruncatedError } from '../services/bedrockService';
+import { adrUsageCtx, uniqueThreadIds } from '../services/artifactUsageContext';
+import { getEntityUsageRollup } from '../services/aiCostAnalyticsService';
 import type { OwnerApproveRequest } from '../../shared/types/approvals';
-import { isProjectRepositoryCheckoutReadinessEnabled } from '../services/featureFlagService';
+import {
+  isFeatureEnabled,
+  isProjectRepositoryCheckoutReadinessEnabled,
+} from '../services/featureFlagService';
 import {
   assertResolvedProjectRepositoryReady,
   ProjectRepositoryNotReady,
 } from '../services/projectRepositoryReadinessService';
-import { propagatePipelineGrounding } from '../services/runGroundingService';
+import { resolveReviewerAvailability } from '../services/reviewerAvailabilityService';
+
+const ADR_GENERATION_KICKOFF =
+  'Generate the ADR from `.ai-pilot/kickoff-transcript.md`. Do not ask questions. Write exactly one `.ai-pilot/output/{slug}.adr.md` file.';
+
+/** V2 prepares the repository itself and reports failure on the ADR, so it skips the readiness pre-check. */
+function isV2TransportEnabled(userId: string, project: string): Promise<boolean> {
+  return isFeatureEnabled('ai-runs-v2-transport', { userId, project, caller: 'adr' })
+    .catch(() => false);
+}
 
 const router = Router();
 
@@ -66,16 +81,34 @@ router.get('/reviewer-candidates', requirePermission('adr:create'), async (req, 
       res.status(400).json({ error: 'project is required' });
       return;
     }
-    const groups = await listGroupsWithMembers(project);
-    const developerGroup = groups.find((group) => group.name === 'Developer');
-    const ownerId = getUserId(req);
-    res.json((developerGroup?.members ?? [])
-      .filter((member) => member.userId !== ownerId)
-      .map((member) => ({
-        id: member.userId,
-        displayName: member.displayName ?? member.email ?? member.userId,
-        email: member.email,
-      })));
+    const pool = await getAvailableApproverPool(project, 'adr');
+    const candidates = new Map<string, { id: string; displayName: string; email: string | null }>();
+    const addCandidate = (userId: string, displayName: string | null, email: string | null) => {
+      if (candidates.has(userId)) return;
+      candidates.set(userId, { id: userId, displayName: displayName ?? email ?? userId, email });
+    };
+    for (const individual of pool.individuals) {
+      addCandidate(individual.userId, individual.displayName, individual.email);
+    }
+    for (const group of pool.groups) {
+      for (const member of group.members) {
+        addCandidate(member.userId, member.displayName, member.email);
+      }
+    }
+    res.json([...candidates.values()]);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/reviewer-availability', requirePermission('adr:create'), async (req, res, next) => {
+  try {
+    const project = typeof req.query.project === 'string' ? req.query.project.trim() : '';
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    res.json(await resolveReviewerAvailability(project, ['adr']));
   } catch (error) {
     next(error);
   }
@@ -101,11 +134,12 @@ router.post('/', requirePermission('adr:create'), async (req, res, next) => {
       return;
     }
     const userId = getUserId(req);
-    const enabled = await isProjectRepositoryCheckoutReadinessEnabled({
-      userId,
-      project,
-      caller: 'adr-interview',
-    });
+    const enabled = !(await isV2TransportEnabled(userId, project))
+      && await isProjectRepositoryCheckoutReadinessEnabled({
+        userId,
+        project,
+        caller: 'adr-interview',
+      });
     // @feature-flag:project-repository-checkout-readiness start winner=enabled
     if (enabled) {
       // @feature-flag:project-repository-checkout-readiness enabled-start
@@ -125,6 +159,7 @@ router.post('/', requirePermission('adr:create'), async (req, res, next) => {
       // @feature-flag:project-repository-checkout-readiness enabled-end
     }
     // @feature-flag:project-repository-checkout-readiness end
+    const sourceThread = await getThreadAsync(chatThreadId);
     const result = await createAdr({
       userId,
       project,
@@ -132,10 +167,29 @@ router.post('/', requirePermission('adr:create'), async (req, res, next) => {
       title: title.trim(),
       chatThreadId,
       model,
+      effort: sourceThread?.kickoff.effort,
       skillSettingsId,
       reviewerIds,
     });
     res.status(201).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/:id/usage', requirePermission('adr:view'), async (req, res, next) => {
+  try {
+    const adr = await getAdr(req.params.id);
+    if (!adr) {
+      res.status(404).json({ error: 'ADR not found' });
+      return;
+    }
+    const rollup = await getEntityUsageRollup({
+      entityType: 'adr',
+      entityId: adr.id,
+      threadIds: uniqueThreadIds(adr.chatThreadId, adr.adrAssistantThreadId),
+    });
+    res.json(rollup);
   } catch (error) {
     next(error);
   }
@@ -194,11 +248,12 @@ router.post('/:id/generate', requirePermission('adr:edit'), async (req, res, nex
       return;
     }
 
-    const enabled = await isProjectRepositoryCheckoutReadinessEnabled({
-      userId,
-      project: adr.project,
-      caller: 'adr-finalize',
-    });
+    const enabled = !(await isV2TransportEnabled(userId, adr.project))
+      && await isProjectRepositoryCheckoutReadinessEnabled({
+        userId,
+        project: adr.project,
+        caller: 'adr-finalize',
+      });
     // @feature-flag:project-repository-checkout-readiness start winner=enabled
     if (enabled) {
       // @feature-flag:project-repository-checkout-readiness enabled-start
@@ -239,44 +294,28 @@ router.post('/:id/generate', requirePermission('adr:edit'), async (req, res, nex
     const model = skillConfig?.adrModel ?? adr.model ?? await getDefaultModel();
     const thread = await createThread(userId, {
       project: adr.project,
+      agentModule: 'adr',
       repo: skillConfig?.skillRepo ?? adr.repo,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider,
       skillPath: skillConfig?.adrFinalizeSkillPath ?? skillPathFor(AGENT_SKILL_ROOT, 'adr-finalize'),
+      skillPathIsAppDefault: !skillConfig?.adrFinalizeSkillPath,
       transcript,
       model,
       skillSettingsId: skillConfig?.id ?? adr.skillSettingsId ?? undefined,
-    }, {
-      kickoffMessage: 'Generate the ADR from `.ai-pilot/kickoff-transcript.md`. Do not ask questions. Write exactly one `.ai-pilot/output/{slug}.adr.md` file.',
-    });
+    }, { skipAutoKickoff: true });
 
-    // Inherit the ADR interview's pinned SHA + grounding binding onto the
-    // finalize thread — descendants must not fetch or repin.
-    try {
-      await propagatePipelineGrounding(
-        {
-          runType: 'chat',
-          runId: adr.chatThreadId,
-          project: adr.project,
-        },
-        {
-          runType: 'chat',
-          runId: thread.id,
-          project: adr.project,
-        },
-        userId,
-        { deferMaterialization: true },
-      );
-    } catch (err) {
-      console.warn(
-        `[adr] finalize grounding propagation unavailable (adrId=${adr.id}):`,
-        err instanceof Error ? err.message : err,
-      );
-    }
-
-    await markAdrGenerating(adr.id, userId);
-    startAdrWatcher(adr.id, thread.id);
+    await markAdrGenerating(adr.id, userId, thread.id);
     res.status(201).json({ adrId: adr.id, threadId: thread.id });
+
+    void routeAdrGenerationKickoff({
+      adrId: adr.id,
+      userId,
+      project: adr.project,
+      threadId: thread.id,
+      sourceThreadId: adr.chatThreadId,
+      kickoffMessage: ADR_GENERATION_KICKOFF,
+    });
   } catch (error) {
     next(error);
   }
@@ -306,16 +345,16 @@ router.put('/:id/assignments', requirePermission('adr:edit'), async (req, res, n
       res.status(409).json({ error: 'Reviewers can only be updated while the ADR is proposed' });
       return;
     }
+    if ((await getAssignments(req.params.id, 'adr')).length === 0) {
+      res.status(409).json({ error: 'Reviewers cannot be assigned after owner-only review starts' });
+      return;
+    }
     const { reviewerIds } = req.body as { reviewerIds?: string[] };
     if (!Array.isArray(reviewerIds) || reviewerIds.some((id) => typeof id !== 'string')) {
       res.status(400).json({ error: 'reviewerIds must be an array of user IDs' });
       return;
     }
     const uniqueReviewerIds = [...new Set(reviewerIds)];
-    if (uniqueReviewerIds.includes(userId)) {
-      res.status(400).json({ error: 'The ADR owner cannot also be assigned as a reviewer' });
-      return;
-    }
     const removedReviewerIds = adr.reviewerIds.filter((id) => !uniqueReviewerIds.includes(id));
     await reassignApprovers(req.params.id, 'adr', uniqueReviewerIds, userId);
     await removeApproverAssignments(req.params.id, 'adr', removedReviewerIds);
@@ -339,6 +378,10 @@ router.post('/:id/review', requirePermission('adr:review'), async (req, res, nex
     }
     if (adr.status !== 'proposed') {
       res.status(409).json({ error: 'Only proposed ADRs can be reviewed' });
+      return;
+    }
+    if ((await getAssignments(adr.id, 'adr')).length === 0) {
+      res.status(409).json({ error: 'Reviewer actions are unavailable for owner-only documents' });
       return;
     }
     const assigned = await isAssignedApprover(adr.id, 'adr', userId);
@@ -388,7 +431,9 @@ router.post('/:id/owner-approve', requirePermission('adr:review'), async (req, r
       res.status(404).json({ error: 'ADR not found' });
       return;
     }
-    if (adr.authorId !== userId) {
+    const ownerOnly = (await getAssignments(adr.id, 'adr')).length === 0;
+    const isOwner = await isDocumentOwner(adr.id, 'adr', userId);
+    if (!isOwner && !(ownerOnly && isSuperAdminRequest(req))) {
       res.status(403).json({ error: 'Only the ADR owner can give final approval' });
       return;
     }
@@ -401,8 +446,16 @@ router.post('/:id/owner-approve', requirePermission('adr:review'), async (req, r
       res.status(400).json({ error: 'status must be approved or revision_requested' });
       return;
     }
+    if (status === 'approved' && await getUnresolvedCount(adr.id, 'adr') > 0) {
+      res.status(409).json({ error: 'Resolve all review comments before approving the ADR' });
+      return;
+    }
     if (status === 'approved') {
-      await updateAdrStatus(adr.id, userId, 'accepted');
+      if (!isOwner && ownerOnly && isSuperAdminRequest(req)) {
+        await updateAdrStatus(adr.id, userId, 'accepted', { allowNonAuthor: true });
+      } else {
+        await updateAdrStatus(adr.id, userId, 'accepted');
+      }
     } else {
       await recordOwnerApproval(adr.id, 'adr', userId, status, comment);
     }
@@ -493,10 +546,12 @@ router.post('/:id/assistant-thread', requirePermission('adr:view'), requirePermi
     const model = skillConfig?.adrModel ?? adr.model ?? await getDefaultModel();
     const thread = await createThread(userId, {
       project: adr.project,
+      agentModule: 'adr',
       repo: skillConfig?.skillRepo ?? adr.repo,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider,
       skillPath: skillConfig?.adrAssistantSkillPath ?? skillPathFor(AGENT_SKILL_ROOT, 'adr-assistant'),
+      skillPathIsAppDefault: !skillConfig?.adrAssistantSkillPath,
       freeformContext: buildContext('__THREAD_ID__'),
       model,
       assistantType: 'adr',
@@ -554,7 +609,7 @@ router.post('/:id/fix-with-ai', requirePermission('adr:edit'), async (req, res, 
       })),
       projectConfig?.prdReviewBedrockModelId,
       projectConfig?.prdReviewBedrockMaxTokens,
-      { feature: 'other', project: adr.project, entityType: 'adr', entityId: adr.id, userId },
+      adrUsageCtx(adr.project, adr.id, userId),
     );
     await stageAdrReviewFix(adr.id, userId, fixedContent, null);
     res.json({ ok: true });
@@ -612,7 +667,7 @@ router.post('/:id/fix-comment-with-ai', requirePermission('adr:edit'), async (re
       }],
       projectConfig?.prdReviewBedrockModelId,
       projectConfig?.prdReviewBedrockMaxTokens,
-      { feature: 'other', project: adr.project, entityType: 'adr', entityId: adr.id, userId },
+      adrUsageCtx(adr.project, adr.id, userId),
     );
     await stageAdrReviewFix(adr.id, userId, fixedContent, comment.id);
     res.json({ ok: true });
@@ -682,7 +737,7 @@ router.post('/:id/regenerate-proposed-section', requirePermission('adr:view'), r
       String(body.feedback).trim(),
       projectConfig?.prdReviewBedrockModelId,
       projectConfig?.prdReviewBedrockMaxTokens,
-      { feature: 'other', project: adr.project, entityType: 'adr', entityId: adr.id, userId },
+      adrUsageCtx(adr.project, adr.id, userId),
     );
     await stageAdrReviewFix(adr.id, userId, revised, adr.fixCommentId ?? null);
     const updated = await getAdr(adr.id);

@@ -8,12 +8,14 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash } from 'node:crypto';
 import { v4 as uuidv4 } from 'uuid';
 import type {
   ChatAttachment,
   ChatAttachmentMeta,
   ChatThread,
   ChatMessage,
+  ChatTurnSkill,
   ChatThreadKickoff,
   AgentRunEventEnvelope,
   AgentRunPhase,
@@ -25,9 +27,8 @@ import type {
 } from '../../shared/types/chat';
 import { isAzureWwwroot, resolveDataRoot } from '../utils/dataDir';
 import {
-  recordAiUsage,
+  recordCursorChatUsage,
   estimateTokens,
-  resolveFeatureFromKickoff,
 } from './aiUsageService';
 import {
   upsertThread as pgUpsertThread,
@@ -35,8 +36,10 @@ import {
   listThreadsByUser as pgListThreadsByUser,
   searchThreads as pgSearchThreads,
   loadFullThread as pgLoadFullThread,
+  listMessageIds as pgListMessageIds,
   deleteThread as pgDeleteThread,
   clearStaleRun,
+  reopenClosedThread,
 } from './chatThreadRepository';
 import { db } from '../db/drizzle';
 import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
@@ -61,18 +64,38 @@ import {
   INTERACTIVE_WORKFLOW_FLAG,
   type InteractiveWorkflowClass,
 } from '../../shared/types/interactiveWorkflow';
-import { interactiveWorkflowRouter } from './interactiveWorkflowRouter';
+import type { InteractiveTurnAcceptedResponse } from '../../shared/types/durableInteractiveTurn';
+import {
+  interactiveWorkflowRouter,
+  legacyInteractiveWorkflowRouter,
+} from './interactiveWorkflowRouter';
+import {
+  durableInteractiveTurnService,
+  type DurableInteractiveToolGrantInput,
+} from './durableInteractiveTurnService';
+import {
+  fetchAvailableModels,
+  fetchModelParameters,
+  resolveCursorModelChoice,
+} from './modelsService';
+import {
+  buildDocumentAssistantEditGuidance,
+  resolveDocumentAssistantType,
+} from './documentAssistantGuidance';
+import { resolveAvailableModelId } from '../../shared/utils/modelAvailability';
+import { resolveGroundingPreparationTimeoutMs } from './interactiveDeadlinePolicy';
 import { interactiveLiveBus } from './interactiveLiveBus';
 import { isExternalRunAbortEvent } from './agentRunAbort';
 import {
   skillNameFromPath,
   skillPathCandidates,
 } from '../../shared/skillPaths';
-import { syncPrdContent } from './prdService';
+import { createPrdValidationAdapter, syncPrdContent } from './prdService';
+import { applyAdrGenerationResult } from './adrService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import {
+  createDesignDocValidationAdapter,
   syncDesignDocContent,
-  syncValidationResult,
   syncPerFeatureDesignDocs,
 } from './designDocService';
 import {
@@ -80,7 +103,9 @@ import {
   syncTestCaseOutput,
   triggerTestCaseGeneration,
 } from './testCaseService';
-import type { ValidationScorecard } from '../../shared/types/interview';
+import type { Prd } from '../../shared/types/interview';
+import { NO_SCORECARD_REASON } from '../../shared/utils/validationReport';
+import { ingestValidationScorecard } from './documentValidationService';
 import type {
   ChatThreadSearchResult,
   ChatThreadSummary,
@@ -133,20 +158,46 @@ import type {
 } from '../../shared/types/repoReader';
 import { groundingTelemetry } from './groundingTelemetry';
 import { groundingProfileResolver } from './groundingProfileResolver';
+import { isRepositorySyncingError } from './repoRead/mirrorHydration';
 import { createNativeReadTools } from './nativeReadToolAdapter';
+import { readInterviewBaBrief } from './interviewBaBrief';
+import {
+  buildGuidedInterviewTurnPrompt,
+  deriveGuidedInterviewTurn,
+  normalizeGuidedInterviewResponse,
+  writeGuidedInterviewState,
+} from './guidedInterviewState';
+import {
+  applyGuidedInterviewRuntime,
+  guidedInterviewNeedsFreshAgent,
+  isInterviewSandboxUnsupported,
+  markGuidedInterviewGrounding,
+  usesGuidedInterview,
+  wrapGuidedInterviewPrompt,
+  writeInterviewBaBriefFile,
+} from './interviewGroundingPolicy';
 import { workerCanReadWithoutWorkingTree } from './repoRead/workerReadVisibility';
 import {
+  createCursorTurnEndMonitor,
   createCursorRunEventEnvelope,
   CursorExecutionWaitError,
   executeCursorExecutionCore,
   sanitizeCursorTerminalDetail,
   ThinkingPhaseCoalescer,
   type CursorExecutionRun,
+  type CursorTokenUsage,
 } from './cursorExecutionCore';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
 import type { RepositoryPreparationTarget } from './repositoryPreparationService';
+import {
+  buildCursorModelSelection,
+  deriveAgentModule,
+  resolveEffort,
+  resolveSelectedEffort,
+} from './agentEffortResolver';
 
 export { ThinkingPhaseCoalescer } from './cursorExecutionCore';
+export { buildDocumentAssistantEditGuidance, resolveDocumentAssistantType };
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -158,7 +209,6 @@ const WORKSPACE_BASE = process.env.AI_PILOT_WORKSPACE_DIR
     : path.join(os.tmpdir(), 'ai-pilot-workspaces');
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const INTERVIEW_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
-const GROUNDING_PREPARATION_TIMEOUT_MS = 2 * 60 * 1000;
 // After this much thread inactivity, a resumed SDK session is likely cold and
 // prone to emitting zero events. Proactively recreate the agent (with history)
 // instead of resuming a stale session. Overridable for tests/tuning.
@@ -195,15 +245,13 @@ interface ThreadState {
   bindingContinuity: BindingContinuityDecision | null;
   /** Server-local checkout used only while this process owns the profile. */
   groundingWorkspaceDir: string | null;
+  /** Incremented by Stop so turn preparation can detect cancellation across awaits. */
+  cancellationEpoch: number;
 }
 
 const threads = new Map<string, ThreadState>();
 const lastTokenProgressWriteAt = new Map<string, number>();
 const eventDrivenRunIds = new Set<string>();
-
-function runtimeWorkspaceDir(state: ThreadState): string {
-  return state.groundingWorkspaceDir ?? state.thread.workspaceDir;
-}
 
 /**
  * Cap concurrent local Cursor agents per App Service instance. Interview →
@@ -565,26 +613,6 @@ export function isRepositoryReadingChatCaller(
   return !isDevSession && kickoff.assistantType !== 'calendar-work-item';
 }
 
-/** Prefer explicit assistantType; fall back to freeform context markers for older threads. */
-export function resolveDocumentAssistantType(
-  kickoff: ChatThreadKickoff
-): 'adr' | 'prd' | 'design-doc' | undefined {
-  if (
-    kickoff.assistantType === 'adr' ||
-    kickoff.assistantType === 'prd' ||
-    kickoff.assistantType === 'design-doc'
-  ) {
-    return kickoff.assistantType;
-  }
-  const ctx = kickoff.freeformContext;
-  if (!ctx) return undefined;
-  if (/^document_operation:\s*validation\s*$/m.test(ctx)) return undefined;
-  if (/^adr_id:\s*\S+/m.test(ctx)) return 'adr';
-  if (/^prd_id:\s*\S+/m.test(ctx)) return 'prd';
-  if (/^doc_id:\s*\S+/m.test(ctx)) return 'design-doc';
-  return undefined;
-}
-
 export type GroundingCallerKey =
   | 'interview'
   | 'prd'
@@ -641,6 +669,8 @@ export function buildMcpServers(
     restrictRepoSearch?: boolean;
     groundingProfileId?: GroundingProfileId;
     enableRepoBrowse?: boolean;
+    /** Mount ADO operational tools for a skill even when its repo is on GitHub. */
+    requireAdoTools?: boolean;
     /**
      * When native (in-process) repository reads are engaged, the provider
      * repo-read MCP servers are redundant. In that case we DE-MOUNT any server
@@ -653,6 +683,21 @@ export function buildMcpServers(
   const servers: Record<string, McpServerConfig> = {};
 
   const port = process.env.PORT ?? '3001';
+
+  /*
+   * Playbook profiles are server-selected, never merged with user pills or always-on operational
+   * servers. GitHub's repository server is read-only. ADO Playbooks use the existing native
+   * repository-read tools and therefore mount no MCP server; the general ado-skills server also
+   * contains mutation tools and must not be reachable from this profile.
+   */
+  if (kickoff.playbookMcpProfile === 'repository-read-only') {
+    if (kickoff.skillProvider === 'github') {
+      servers['github-repo'] = {
+        url: `http://localhost:${port}/mcp/github-repo`,
+      };
+    }
+    return servers;
+  }
 
   // Calendar assistant threads use a restricted MCP that only exposes the
   // propose_work_item_changes tool — never the general ado-skills MCP.
@@ -698,7 +743,11 @@ export function buildMcpServers(
   // for ADO callers so work-item and wiki tools remain available, while
   // enableRepoBrowse=false strips the redundant repository-read surface.
   const documentAssistant = Boolean(resolveDocumentAssistantType(kickoff));
-  if (kickoff.skillProvider !== 'github' || documentAssistant) {
+  if (
+    kickoff.skillProvider !== 'github' ||
+    documentAssistant ||
+    options?.requireAdoTools
+  ) {
     const profilePath = options?.groundingProfileId
       ? `/grounding/${options.groundingProfileId}`
       : '';
@@ -778,6 +827,7 @@ export async function prepareRepositoryReadRuntime(options: {
   maxviewEnabled?: boolean;
   calendarSessionId?: string;
   restrictRepoSearch?: boolean;
+  requireAdoTools?: boolean;
 }): Promise<RepositoryReadRuntime> {
   const requestedNative =
     options.grounding.mode === 'local' && options.grounding.nativeReads;
@@ -814,6 +864,11 @@ export async function prepareRepositoryReadRuntime(options: {
       'native-read-reader-resolution-failed'
     );
   }
+  // Local grounding means the workspace-profile flag is on. Never restore
+  // github-repo / ADO catalog MCP — that is the interview hang path
+  // (`list_skills` / `list_projects`). Staging write-back can stay.
+  const localGrounded = options.grounding.mode === 'local';
+  const suppressProviderRepoMcp = localGrounded;
   const groundingProfileId =
     options.grounding.mode === 'local' && !requestedNative
       ? options.grounding.profileId
@@ -823,8 +878,9 @@ export async function prepareRepositoryReadRuntime(options: {
     calendarSessionId: options.calendarSessionId,
     restrictRepoSearch: options.restrictRepoSearch,
     groundingProfileId,
-    enableRepoBrowse: !nativeReads,
-    nativeReads,
+    enableRepoBrowse: !nativeReads && !suppressProviderRepoMcp,
+    nativeReads: nativeReads || suppressProviderRepoMcp,
+    requireAdoTools: options.requireAdoTools,
   });
   const local: LocalAgentOptions = {
     cwd: options.sandboxCwd,
@@ -836,6 +892,37 @@ export async function prepareRepositoryReadRuntime(options: {
     local,
     mcpServers,
     repoReader,
+  };
+}
+
+function groundedTurnPromptOptions(
+  state: ThreadState,
+  grounding: CallerGroundingSelection,
+  runtime: RepositoryReadRuntime,
+  productPhaseInterview = false
+) {
+  const localGrounded = grounding.mode === 'local';
+  const appKnowledgeHome =
+    resolveGroundingCallerKey(state.thread.kickoff) === 'agent-home' &&
+    (state.thread.kickoff.skillPath ?? '')
+      .replace(/\\/g, '/')
+      .toLowerCase()
+      .includes('/app-knowledge/');
+  return {
+    productPhaseInterview,
+    preloadRepositoryContext:
+      !productPhaseInterview &&
+      ((state.isInterviewThread && grounding.mode === 'remote') ||
+        appKnowledgeHome),
+    repoSearchEnabled: !state.isInterviewThread,
+    nativeReads: runtime.nativeReads,
+    forbidProviderRepoMcp: localGrounded && !runtime.nativeReads,
+    skipProviderCatalogFetch: localGrounded && !runtime.repoReader,
+    repoReader: runtime.repoReader,
+    groundingProvenance: groundingProvenanceFor(
+      grounding,
+      state.thread.kickoff
+    ),
   };
 }
 
@@ -960,145 +1047,6 @@ async function enrichKickoffForInterviewWebResearch(
   }
 }
 
-/**
- * Mandatory MCP write-back guidance for ADR / PRD / design-doc assistants.
- * Used by free-chat and skill-path prompts so document edits stage into the
- * Apex review wizard instead of being written as sandbox files.
- */
-export function buildDocumentAssistantEditGuidance(
-  kickoff: ChatThreadKickoff
-): string[] {
-  const assistantType = resolveDocumentAssistantType(kickoff);
-  if (!kickoff.freeformContext || !assistantType) {
-    return [];
-  }
-
-  if (assistantType === 'adr') {
-    const adrIdMatch = kickoff.freeformContext.match(/^adr_id:\s*(\S+)/m);
-    const threadIdMatch = kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
-    const adrId =
-      adrIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
-    const threadId =
-      threadIdMatch?.[1] ??
-      '(unknown — read from .ai-pilot/kickoff-context.md)';
-    return [
-      ``,
-      `# Document write tools (via \`ado-skills\` MCP server)`,
-      `- \`update_adr\` — stage the complete revised ADR markdown for Apex review`,
-      ``,
-      `# ADR session identifiers`,
-      `Use these exact values when calling MCP tools:`,
-      `  adr_id:    ${adrId}`,
-      `  thread_id: ${threadId}`,
-      ``,
-      `# ADR context and repository grounding`,
-      `Read \`.ai-pilot/kickoff-context.md\` for the current ADR, original interview transcript, and repository identity.`,
-      `Inspect relevant repository files with the available repository read tools before making factual claims or proposing edits.`,
-      ``,
-      `# Applying edits — MANDATORY tool use`,
-      `When the author asks to change the ADR, produce the complete revised markdown and call \`update_adr\` with the adr_id and thread_id above.`,
-      `The tool stages proposed content only. Never write live ADR content or change workflow status directly.`,
-      `Do NOT write proposed ADR content to \`.ai-pilot/output/\` — that does not open the Apex review wizard.`,
-      `If \`update_adr\` is unavailable, stop and report that the staging tool is missing. Do not invent a file-based workaround.`,
-      `After the tool succeeds, confirm that the proposal is ready for explicit apply or reject review.`,
-    ];
-  }
-
-  if (assistantType === 'prd') {
-    const prdIdMatch = kickoff.freeformContext.match(/^prd_id:\s*(\S+)/m);
-    const threadIdMatch = kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
-    const prdId =
-      prdIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
-    const threadId =
-      threadIdMatch?.[1] ??
-      '(unknown — read from .ai-pilot/kickoff-context.md)';
-    return [
-      ``,
-      `# Document write tools (via \`ado-skills\` MCP server)`,
-      `- \`update_prd\` — stage PRD content or backlog JSON for Apex review`,
-      `- \`add_test_case\` — add a real QA test case with steps and traceability`,
-      `- \`resolve_prd_comment\` — mark a review comment resolved after addressing it`,
-      ``,
-      `# PRD session identifiers`,
-      `Use these exact values when calling MCP tools — do not guess or substitute them:`,
-      `  prd_id:    ${prdId}`,
-      `  thread_id: ${threadId}`,
-      ``,
-      `# PRD context`,
-      `The full PRD content, backlog, and review comments have been written to \`.ai-pilot/kickoff-context.md\`.`,
-      `Read this file when you need the current PRD text or backlog to answer a question or produce an edit.`,
-      ``,
-      `# Applying edits — MANDATORY tool use`,
-      `When the user asks you to change, update, rewrite, improve, add to, or fix anything in the PRD or backlog:`,
-      `1. Read \`.ai-pilot/kickoff-context.md\` to get the current content.`,
-      `2. Produce the full updated text for the changed section.`,
-      `3. Call \`update_prd\` with the prd_id and thread_id above. Do NOT describe the change without calling the tool.`,
-      `   - \`section="content"\` for the PRD narrative (full markdown)`,
-      `   - \`section="backlog"\` for the backlog (full JSON string)`,
-      `4. After the tool succeeds, confirm briefly what was changed.`,
-      `Do NOT write proposed PRD/backlog content to \`.ai-pilot/output/\` — that does not open the Apex review wizard.`,
-      `If \`update_prd\` is unavailable, stop and report that the staging tool is missing. Do not invent a file-based workaround.`,
-      ``,
-      `# User stories live in the backlog (single ownership)`,
-      `User stories are OWNED by the backlog (the \`userStory\` object on each PBI). The PRD does NOT contain an authored "User Stories" section — the PRD view renders stories as a READ-ONLY projection of the backlog PBIs.`,
-      `Therefore, to add, change, reword, or remove a user story you MUST call \`update_prd\` with \`section="backlog"\` (NOT \`section="content"\`) and edit the relevant PBI's \`userStory\` (\`persona\`/\`iWant\`/\`soThat\`).`,
-      `Never write user stories into the PRD markdown via \`section="content"\` — they would not render and would duplicate the backlog.`,
-      `Assumptions are the mirror case: the PRD's \`## Assumptions Made\` section OWNS assumptions; the backlog's \`assumptionsMade\` is just a copy of it.`,
-      ``,
-      `# Keep PRD content and backlog consistent`,
-      `The PRD content (markdown) and the backlog (JSON with epics/features/PBIs) describe the SAME feature, but each field has a single owner — do not duplicate an owned field into the other artifact.`,
-      `When a change crosses the ownership line, update the owning artifact:`,
-      `- Adding/removing/rewording a user story → edit the backlog PBI's \`userStory\` (section="backlog"). Do NOT touch the PRD markdown for this.`,
-      `- Changing narrative (problem, solution, implementation/testing decisions, security, NFRs, feature-flag behavior) → edit the PRD content (section="content").`,
-      `- Changing structural detail (epics/features/PBIs/TBIs, acceptance criteria, business rules, dependencies, feature-flag name) → edit the backlog (section="backlog").`,
-      `- Editing assumptions → edit the PRD \`## Assumptions Made\` (section="content"); if you also keep the backlog \`assumptionsMade\` in step, mirror the same text via section="backlog".`,
-      `- \`userTypes\` / \`personaBehaviors\` belong on Features and PBIs only (for design prototypes). TBIs must NOT have these fields — remove them if present; never add them to TBIs.`,
-      `Only call \`update_prd\` for the artifact(s) that actually own the changed field — often a single call is correct.`,
-      ``,
-      `- \`resolve_prd_comment\` — call this after addressing a review comment to mark it resolved.`,
-      `  Pass the \`comment_id\` from the Review Comments section in \`.ai-pilot/kickoff-context.md\`.`,
-      ``,
-      `# Addressing review comments`,
-      `When the user asks you to address comments: read the Review Comments section, revise the relevant content,`,
-      `call \`update_prd\`, then call \`resolve_prd_comment\` for each comment addressed.`,
-      `Confirm what was changed and which comments were resolved.`,
-    ];
-  }
-
-  const docIdMatch = kickoff.freeformContext.match(/^doc_id:\s*(\S+)/m);
-  const docThreadIdMatch =
-    kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
-  const docId =
-    docIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
-  const docThreadId =
-    docThreadIdMatch?.[1] ??
-    '(unknown — read from .ai-pilot/kickoff-context.md)';
-  return [
-    ``,
-    `# Document write tools (via \`ado-skills\` MCP server)`,
-    `- \`update_design_doc\` — stage design / tech-spec / assumptions markdown for Apex review`,
-    ``,
-    `# Design doc session identifiers`,
-    `Use these exact values when calling MCP tools:`,
-    `  doc_id:    ${docId}`,
-    `  thread_id: ${docThreadId}`,
-    ``,
-    `# Design doc context`,
-    `The full design doc content has been written to \`.ai-pilot/kickoff-context.md\`.`,
-    `Read this file when you need the current document text to answer a question or produce an edit.`,
-    ``,
-    `# Applying edits — MANDATORY tool use`,
-    `When the user asks you to change, update, rewrite, improve, add to, or fix anything in the document:`,
-    `1. Read \`.ai-pilot/kickoff-context.md\` to get the current content.`,
-    `2. Produce the full updated text for the changed section.`,
-    `3. Call \`update_design_doc\` with the doc_id and thread_id above. Do NOT describe the change without calling the tool.`,
-    `   - Call it once per section that needs updating.`,
-    `4. After the tool succeeds, confirm briefly what was changed.`,
-    `Do NOT write proposed design-doc content to \`.ai-pilot/output/\` — that does not open the Apex review wizard.`,
-    `If \`update_design_doc\` is unavailable, stop and report that the staging tool is missing. Do not invent a file-based workaround.`,
-  ];
-}
-
 export type GroundingStorageLabel = 'bare mirror' | 'Azure Files checkout';
 
 export interface GroundingProvenance {
@@ -1124,8 +1072,18 @@ function groundingProvenanceFor(
 function buildRepositoryReadPromptLines(
   kickoff: ChatThreadKickoff,
   nativeReads: boolean,
-  provenance?: GroundingProvenance
+  provenance?: GroundingProvenance,
+  forbidProviderRepoMcp = false
 ): string[] {
+  if (!nativeReads && forbidProviderRepoMcp) {
+    return [
+      `# Sandbox workspace`,
+      `You are running in an isolated sandbox. The current working directory contains only a \`.ai-pilot/\` scratch folder.`,
+      `Do not use the GitHub or ADO provider MCP servers for repository reads. Local checkout tools are unavailable this turn.`,
+      `Use only \`.ai-pilot/\` kickoff files already in the workspace.`,
+      ``,
+    ];
+  }
   if (!nativeReads) {
     const repoLabel =
       kickoff.skillProvider === 'github' ? 'GitHub repo' : 'ADO repo';
@@ -1153,9 +1111,25 @@ function buildRepositoryReadPromptLines(
     `- \`get_skill_file\` — read a repository-relative file`,
     `- \`list_repo_dir\` — list a repository-relative directory`,
     `- \`search_repo_code\` — search the authorized pinned checkout`,
-    `Never use the GitHub or ADO provider MCP servers for repository reads. Use document-staging/write-back MCP tools for repository-related output when the workflow requires them.`,
+    `Never use the GitHub or ADO provider MCP servers for repository reads.`,
+    buildNativeReadOutputInstruction(kickoff),
     ``,
   ];
+}
+
+/**
+ * Native-read turns share repo tools but must not share write instructions.
+ * Assistants stage edits via MCP; generation skills must Write into the
+ * thread scratch `.ai-pilot/output/` or watchers report missing files.
+ */
+function buildNativeReadOutputInstruction(kickoff: ChatThreadKickoff): string {
+  if (resolveDocumentAssistantType(kickoff)) {
+    return `Use document-staging/write-back MCP tools for repository-related output when the workflow requires them.`;
+  }
+  if (isInteractiveWorkspaceBoundSkill(kickoff.skillPath)) {
+    return `Write required output files with the built-in Write / create_file tool into \`.ai-pilot/output/\`. Do not use document-staging MCP tools for this generation run. Do not write generation output into the repository checkout.`;
+  }
+  return `Do not write files into the repository checkout.`;
 }
 
 function buildFreeChatPrompt(
@@ -1163,6 +1137,7 @@ function buildFreeChatPrompt(
   options?: {
     nativeReads?: boolean;
     groundingProvenance?: GroundingProvenance;
+    forbidProviderRepoMcp?: boolean;
   }
 ): string {
   const branch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
@@ -1172,7 +1147,8 @@ function buildFreeChatPrompt(
     ...buildRepositoryReadPromptLines(
       kickoff,
       nativeReads,
-      options?.groundingProvenance
+      options?.groundingProvenance,
+      options?.forbidProviderRepoMcp
     ),
     `# Session context`,
     `  project: "${kickoff.project}"`,
@@ -1189,7 +1165,7 @@ function buildFreeChatPrompt(
       `Skills from this project's GitHub repo are pre-loaded into the conversation by the system when applicable.`,
       ...buildScopePolicyLines(kickoff)
     );
-  } else if (nativeReads) {
+  } else if (nativeReads || options?.forbidProviderRepoMcp) {
     // Native reads are engaged: the ado-skills repo-read tools are not mounted,
     // so read exclusively through the local checkout tools described above.
     parts.push(
@@ -1246,6 +1222,14 @@ function buildFreeChatPrompt(
       `A prior conversation transcript has been written to \`.ai-pilot/kickoff-transcript.md\`. Read it as additional context.`
     );
   }
+
+  parts.push(
+    ``,
+    `# Conversational turn contract`,
+    `- Do all repository reads before writing the answer.`,
+    `- Do not narrate tool use, emit progress commentary, or continue researching after answering.`,
+    `- Emit exactly one user-facing answer for this turn. Once the answer is emitted, the turn is complete.`,
+  );
 
   return parts.join('\n');
 }
@@ -1480,6 +1464,7 @@ export function buildInitialPrompt(
     repoSearchEnabled?: boolean;
     nativeReads?: boolean;
     groundingProvenance?: GroundingProvenance;
+    forbidProviderRepoMcp?: boolean;
   }
 ): string {
   if (kickoff.assistantType === 'calendar-work-item') {
@@ -1501,6 +1486,7 @@ export function buildInitialPrompt(
     return buildFreeChatPrompt(kickoff, {
       nativeReads: options?.nativeReads,
       groundingProvenance: options?.groundingProvenance,
+      forbidProviderRepoMcp: options?.forbidProviderRepoMcp,
     });
   }
 
@@ -1512,7 +1498,8 @@ export function buildInitialPrompt(
     ...buildRepositoryReadPromptLines(
       kickoff,
       nativeReads,
-      options?.groundingProvenance
+      options?.groundingProvenance,
+      options?.forbidProviderRepoMcp
     ),
   ];
 
@@ -1528,6 +1515,14 @@ export function buildInitialPrompt(
       ``,
       `# Your task`,
       `The skill and core repository context are pre-loaded below when available. Follow the skill exactly.`
+    );
+  } else if (options?.forbidProviderRepoMcp) {
+    parts.push(
+      ...buildScopePolicyLines(kickoff),
+      ``,
+      `# Your task`,
+      `The skill and core repository context are pre-loaded below when available. Follow the skill exactly.`,
+      `Do not call GitHub or ADO provider MCP servers for repository reads.`
     );
   } else if (isGitHub) {
     const slashIdx = kickoff.repo.indexOf('/');
@@ -1616,6 +1611,16 @@ export function buildInitialPrompt(
     );
   }
 
+  if (resolveGroundingCallerKey(kickoff) === 'agent-home') {
+    parts.push(
+      `# Conversational turn contract`,
+      `- Do all repository reads before writing the answer.`,
+      `- Do not narrate tool use, emit progress commentary, or continue researching after answering.`,
+      `- Emit exactly one user-facing answer for this turn. Once the answer is emitted, the turn is complete.`,
+      ``,
+    );
+  }
+
   parts.push(
     `# UI rendering — interactive questions`,
     `This chat has an interactive question UI. When you ask the user a multiple-choice question:`,
@@ -1624,7 +1629,8 @@ export function buildInitialPrompt(
     `2. **Ask only ONE question per message.** After presenting a question, STOP and wait for the user's answer before continuing. Do NOT batch multiple questions into a single response.`,
     `3. You may include context, analysis, or trade-offs BEFORE the question in the same message, but the message must end with exactly one set of options.`,
     `4. After receiving an answer, acknowledge it, incorporate it into your thinking, then ask the next question. The user's answers may change which questions you ask next.`,
-    `5. You do NOT have an AskQuestion tool — format questions directly in your text output using the \`a. text\` pattern described above.`
+    `5. You do NOT have an AskQuestion tool — format questions directly in your text output using the \`a. text\` pattern described above.`,
+    `6. Picker answers arrive as \`Q<n> · <question>\` then \`Answer: ...\`. \`Q<n>\` is the UI's running counter and may not match your own question labels; match each answer to the question text it quotes.`
   );
 
   if (kickoff.transcript) {
@@ -1869,26 +1875,40 @@ async function buildNewAgentTurnPrompt(
     preloadRepositoryContext?: boolean;
     repoSearchEnabled?: boolean;
     nativeReads?: boolean;
+    forbidProviderRepoMcp?: boolean;
+    skipProviderCatalogFetch?: boolean;
     repoReader?: RepoReader;
     groundingProvenance?: GroundingProvenance;
+    /** Discovery and Delivery already carry the application brief. Do not preload AGENTS.md. */
+    productPhaseInterview?: boolean;
+    onResolvedSkill?: (skill: { path: string; content: string }) => void;
+    onSkillReadError?: (error: unknown) => void;
   }
 ): Promise<string> {
   let initialPrompt = buildInitialPrompt(kickoff, {
     repoSearchEnabled: options?.repoSearchEnabled,
     nativeReads: options?.nativeReads,
     groundingProvenance: options?.groundingProvenance,
+    forbidProviderRepoMcp: options?.forbidProviderRepoMcp,
   });
   const provider = kickoff.skillProvider ?? 'ado';
   const resolvedBranch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
   let skillContent: string | null = null;
+  let resolvedSkillPath =
+    kickoff.skillPath?.replace(/^\//, '') ?? null;
   let skillSource: 'ado' | 'github' | 'local' | null = null;
   let contextContent: string | null = null;
   let agentsContent: string | null = null;
 
   // Fetch independent bootstrap documents concurrently. Native turns use the
-  // same authorized pinned reader exposed through custom tools; fallback turns
-  // retain the configured provider catalog behavior.
-  if (kickoff.skillPath || options?.preloadRepositoryContext) {
+  // same authorized pinned reader exposed through custom tools. Local grounding
+  // without a reader must not call the provider catalog (that hangs the turn).
+  const skipProviderCatalog =
+    options?.skipProviderCatalogFetch && !options?.repoReader;
+  if (
+    (kickoff.skillPath || options?.preloadRepositoryContext) &&
+    !skipProviderCatalog
+  ) {
     try {
       const requests: Array<{
         key: 'skill' | 'context' | 'agents';
@@ -1896,7 +1916,7 @@ async function buildNewAgentTurnPrompt(
       }> = [];
       if (kickoff.skillPath)
         requests.push({ key: 'skill', path: kickoff.skillPath });
-      if (options?.preloadRepositoryContext) {
+      if (options?.preloadRepositoryContext && !options.productPhaseInterview) {
         requests.push(
           { key: 'context', path: 'context.md' },
           { key: 'agents', path: 'AGENTS.md' }
@@ -1921,6 +1941,7 @@ async function buildNewAgentTurnPrompt(
       results.forEach((result, index) => {
         const request = requests[index];
         if (result.status === 'rejected') {
+          if (request.key === 'skill') options?.onSkillReadError?.(result.reason);
           console.warn(
             `[chat] Failed to pre-fetch ${request.path} from ${provider}:`,
             result.reason instanceof Error
@@ -1931,6 +1952,7 @@ async function buildNewAgentTurnPrompt(
         }
         if (request.key === 'skill') {
           skillContent = result.value;
+          resolvedSkillPath = request.path.replace(/^\//, '');
           skillSource = options?.repoReader ? 'local' : provider;
         } else if (request.key === 'context') {
           contextContent = result.value;
@@ -1953,7 +1975,7 @@ async function buildNewAgentTurnPrompt(
       ? skillPathCandidates(skillName, skillPathNorm)
       : [skillPathNorm];
 
-    if (!skillContent) {
+    if (!skillContent && !skipProviderCatalog) {
       for (const candidate of candidates.slice(1)) {
         try {
           const content = options?.repoReader
@@ -1969,10 +1991,12 @@ async function buildNewAgentTurnPrompt(
               );
           if (content) {
             skillContent = content;
+            resolvedSkillPath = candidate;
             skillSource = options?.repoReader ? 'local' : provider;
             break;
           }
         } catch (err) {
+          options?.onSkillReadError?.(err);
           console.warn(
             `[chat] Cross-root skill fetch failed for ${candidate}:`,
             err instanceof Error ? err.message : String(err)
@@ -1981,12 +2005,13 @@ async function buildNewAgentTurnPrompt(
       }
     }
 
-    if (!skillContent && !options?.repoReader) {
+    if (!skillContent && (!options?.repoReader || kickoff.skillPathIsAppDefault)) {
       for (const candidate of candidates) {
         const localPath = path.join(process.cwd(), candidate);
         if (!fs.existsSync(localPath)) continue;
         try {
           skillContent = fs.readFileSync(localPath, 'utf8');
+          resolvedSkillPath = candidate;
           skillSource = 'local';
           console.log('[chat] Using local skill fallback:', candidate);
           break;
@@ -2000,17 +2025,35 @@ async function buildNewAgentTurnPrompt(
     }
 
     if (skillContent) {
+      options?.onResolvedSkill?.({
+        path: resolvedSkillPath ?? skillPathNorm,
+        content: skillContent,
+      });
       initialPrompt +=
         `\n\n# Pre-loaded skill content (${skillPathNorm}; source: ${skillSource})` +
         `\n\n${skillContent}`;
       initialPrompt +=
         '\n\nThe skill content above is already loaded. Do not call `get_skill` or `get_skill_file` for this path — execute it now.';
+    } else if (options?.nativeReads) {
+      initialPrompt += `\n\n# Skill load\nCould not preload ${kickoff.skillPath} on the web tier. Load it with \`get_skill_file\` from the pinned checkout, then follow it. Do not use the GitHub or ADO provider MCP servers.`;
+    } else if (options?.forbidProviderRepoMcp || skipProviderCatalog) {
+      initialPrompt += `\n\n# Skill unavailable this turn\nCould not preload ${kickoff.skillPath}. Do not use the GitHub or ADO provider MCP servers. Use only \`.ai-pilot/\` kickoff files already in the workspace.`;
     } else {
       initialPrompt += `\n\n# Skill pre-fetch failed\nCould not load ${kickoff.skillPath} from ${provider} or the local checkout. Inform the user that the skill file is missing.`;
     }
   }
 
-  if (options?.preloadRepositoryContext) {
+  if (options?.productPhaseInterview) {
+    initialPrompt += [
+      '',
+      '',
+      '# Discovery and Delivery grounding',
+      'The application brief is included in the user message. Do not search the repository.',
+      'Do not open AGENTS.md or design docs until the interview enters Technical.',
+    ].join('\n');
+  }
+
+  if (options?.preloadRepositoryContext && !options.productPhaseInterview) {
     const contextPack = buildRepositoryContextPack({
       project: kickoff.project,
       repo: kickoff.repo,
@@ -2045,7 +2088,12 @@ async function buildNewAgentTurnPrompt(
 export interface PreparedBackgroundWorkflowTurn {
   prompt: string;
   model: string;
+  effort?: import('../../shared/types/effort').EffortLevel;
   skillPath: string;
+  skillContent?: string;
+  skillSha256?: string;
+  /** Set when no Skill was frozen because the mirror was still fetching the pinned commit. */
+  skillRepositorySyncing?: boolean;
   projectId: string;
   threadWorkspacePath: string;
   repository: RepositoryPreparationTarget;
@@ -2053,18 +2101,31 @@ export interface PreparedBackgroundWorkflowTurn {
 
 export function buildBackgroundWorkflowPrompt(
   kickoff: ChatThreadKickoff,
-  promptText: string
+  promptText: string,
+  options?: {
+    repoReader?: RepoReader;
+    skipProviderCatalogFetch?: boolean;
+    groundingProvenance?: GroundingProvenance;
+    onResolvedSkill?: (skill: { path: string; content: string }) => void;
+    onSkillReadError?: (error: unknown) => void;
+  }
 ): Promise<string> {
   return buildNewAgentTurnPrompt(kickoff, promptText, false, undefined, {
     repoSearchEnabled: false,
     nativeReads: true,
+    repoReader: options?.repoReader,
+    skipProviderCatalogFetch: options?.skipProviderCatalogFetch,
+    groundingProvenance: options?.groundingProvenance,
+    onResolvedSkill: options?.onResolvedSkill,
+    onSkillReadError: options?.onSkillReadError,
   });
 }
 
 /**
  * Freezes the same first-turn system and skill context used by sendMessage,
  * while directing a background worker to its pinned local checkout only.
- * Skill content is still preloaded on the authorized web tier.
+ * Under local grounding, skill preload uses the checkout reader or is skipped
+ * entirely — never the GitHub/ADO HTTP catalog (that hangs generation).
  */
 export async function prepareBackgroundWorkflowTurn(
   threadId: string,
@@ -2076,10 +2137,60 @@ export async function prepareBackgroundWorkflowTurn(
   }
 
   const kickoff = state.thread.kickoff;
+  let repoReader: RepoReader | undefined;
+  let skipProviderCatalogFetch = false;
+  let groundingProvenance: GroundingProvenance | undefined;
+
+  const grounding = await waitForReadyThreadGrounding(state);
+  if (grounding.mode === 'local') {
+    if (grounding.nativeReads) {
+      try {
+        const resolved = await groundingProfileResolver.resolveConnectionProfile(
+          grounding.profileId
+        );
+        if (isExactGroundingReader(resolved, grounding, kickoff)) {
+          repoReader = resolved;
+        }
+      } catch {
+        repoReader = undefined;
+      }
+    }
+    // Local grounding must never HTTP-fetch the old GitHub/ADO skill catalog.
+    skipProviderCatalogFetch = !repoReader;
+    groundingProvenance = groundingProvenanceFor(grounding, kickoff);
+  }
+
+  let resolvedSkill: { path: string; content: string } | null = null;
+  let skillReadHitSyncingMirror = false;
+  const prompt = await buildBackgroundWorkflowPrompt(kickoff, promptText, {
+    repoReader,
+    skipProviderCatalogFetch,
+    groundingProvenance,
+    onResolvedSkill: (skill) => {
+      resolvedSkill = skill;
+    },
+    onSkillReadError: (error) => {
+      if (isRepositorySyncingError(error)) skillReadHitSyncingMirror = true;
+    },
+  });
+  const frozenSkill = resolvedSkill as
+    | { path: string; content: string }
+    | null;
   return {
-    prompt: await buildBackgroundWorkflowPrompt(kickoff, promptText),
+    prompt,
     model: resolveModelId(kickoff.model),
-    skillPath: kickoff.skillPath ?? '',
+    effort: kickoff.effort,
+    skillPath: frozenSkill?.path ?? kickoff.skillPath ?? '',
+    ...(frozenSkill
+      ? {
+          skillContent: frozenSkill.content,
+          skillSha256: createHash('sha256')
+            .update(frozenSkill.content)
+            .digest('hex'),
+        }
+      : skillReadHitSyncingMirror
+        ? { skillRepositorySyncing: true }
+        : {}),
     projectId: kickoff.project,
     threadWorkspacePath: state.thread.workspaceDir,
     repository: {
@@ -2265,6 +2376,7 @@ function makeStartupDeadlineError(
 }
 
 const AGENT_DISPOSAL_TIMEOUT_MS = 10_000;
+const AGENT_RUN_CANCEL_TIMEOUT_MS = 3_000;
 
 export function sanitizeTerminalDetail(detail: string): string {
   return sanitizeCursorTerminalDetail(detail);
@@ -2329,11 +2441,17 @@ async function cancelSdkRunBestEffort(
         opts: { runtime: 'local'; cwd: string }
       ) => Promise<AgentRunHandle>;
     };
-    const run = await (Agent as AgentWithGetRun).getRun(runId, {
-      runtime: 'local',
-      cwd: runtimeWorkspaceDir(state),
-    });
-    if (run.supports('cancel')) await run.cancel();
+    await raceWithTimeout(
+      'Cursor SDK run cancellation',
+      AGENT_RUN_CANCEL_TIMEOUT_MS,
+      async () => {
+        const run = await (Agent as AgentWithGetRun).getRun(runId, {
+          runtime: 'local',
+          cwd: state.thread.workspaceDir,
+        });
+        if (run.supports('cancel')) await run.cancel();
+      }
+    );
   } catch {
     // Best-effort — dispose below is the hard guarantee.
   }
@@ -2708,9 +2826,13 @@ async function ensureThreadState(
     resolvedGroundingBinding: null,
     bindingContinuity: null,
     groundingWorkspaceDir: null,
+    cancellationEpoch: 0,
   };
   threads.set(threadId, state);
   resetIdleTimer(state);
+  if (thread.status === 'running' && thread.activeRunId) {
+    watchDurableTerminal(state, thread.activeRunId);
+  }
   return state;
 }
 
@@ -2792,12 +2914,29 @@ export async function createThread(
 
   // Opt interview threads into live web research (web MCP + scope carve-out) when the project enables it.
   const enrichedKickoff = await enrichKickoffForInterviewWebResearch(kickoff);
+  const { resolveSkillConfig } = await import('./projectSettingsService');
+  const skillConfig = await resolveSkillConfig({
+    project: enrichedKickoff.project,
+    settingsId: enrichedKickoff.skillSettingsId ?? undefined,
+  });
+  const agentModule =
+    enrichedKickoff.agentModule ??
+    deriveAgentModule(enrichedKickoff, skillConfig);
+  const kickoffWithModule = agentModule
+    ? { ...enrichedKickoff, agentModule }
+    : enrichedKickoff;
+  const effort = resolveEffort({
+    kickoff: kickoffWithModule,
+    skillConfig,
+    selectedEffort: resolveSelectedEffort(kickoffWithModule, skillConfig),
+  });
 
   // Resolve branch
   const branch = enrichedKickoff.branch ?? 'main';
   const resolvedKickoff = {
-    ...enrichedKickoff,
+    ...kickoffWithModule,
     branch,
+    effort,
     dependenciesPrepared:
       options?.dependenciesPrepared ?? enrichedKickoff.dependenciesPrepared,
   };
@@ -2831,6 +2970,7 @@ export async function createThread(
     resolvedGroundingBinding: null,
     bindingContinuity: null,
     groundingWorkspaceDir: null,
+    cancellationEpoch: 0,
   };
 
   threads.set(threadId, state);
@@ -2882,6 +3022,17 @@ export function updateThreadKickoffContext(
   persistThread(state.thread);
 }
 
+export async function updateThreadKickoffTranscript(
+  threadId: string,
+  transcript: string,
+): Promise<boolean> {
+  const state = await ensureThreadState(threadId);
+  if (!state) return false;
+  state.thread.kickoff = { ...state.thread.kickoff, transcript };
+  await pgUpsertThread(state.thread);
+  return true;
+}
+
 /**
  * Mark an in-memory thread as interview-backed, extending its idle timeout.
  * Call this after linking a thread to an interviews row so the longer timeout
@@ -2895,7 +3046,44 @@ export function markAsInterviewThread(threadId: string): void {
 }
 
 export async function getThread(threadId: string): Promise<ChatThread | null> {
-  return (await ensureThreadState(threadId))?.thread ?? null;
+  const cached = threads.get(threadId);
+  if (!cached) return (await ensureThreadState(threadId))?.thread ?? null;
+  await mergePersistedMessages(cached);
+  return cached.thread;
+}
+
+/**
+ * Durable (V2) turns persist the agent's reply from the run-ingest callback,
+ * which may land on any instance and never touches this in-memory copy. Pull
+ * those rows in so reloads and transcript builders see both sides. Only ids
+ * are read on every call; full rows load only when one is missing.
+ */
+async function mergePersistedMessages(state: ThreadState): Promise<void> {
+  let persisted: ChatThread | null;
+  try {
+    const known = new Set(state.thread.messages.map((message) => message.id));
+    const persistedIds = await pgListMessageIds(state.thread.id);
+    if (persistedIds.every((id) => known.has(id))) return;
+    persisted = await loadThread(state.thread.id);
+  } catch (err) {
+    console.error(
+      '[chat] failed to merge persisted messages for thread',
+      state.thread.id,
+      ':',
+      (err as Error).message
+    );
+    return;
+  }
+  if (!persisted) return;
+  const known = new Set(state.thread.messages.map((message) => message.id));
+  const missing = persisted.messages.filter((message) => !known.has(message.id));
+  if (missing.length === 0) return;
+  state.thread.messages.push(...missing);
+  state.thread.messages.sort((a, b) => {
+    const byTs = a.ts.localeCompare(b.ts);
+    if (byTs !== 0) return byTs;
+    return a.id.localeCompare(b.id);
+  });
 }
 
 /** Alias kept for backward compatibility with callers that imported the explicitly async name. */
@@ -2940,7 +3128,7 @@ export function subscribeToThread(
   return () => state.subscribers.delete(callback);
 }
 
-const DEFAULT_MODEL = 'composer-2';
+const DEFAULT_MODEL = 'composer-2.5';
 
 function resolveModelId(model?: string): string {
   return model?.trim() || DEFAULT_MODEL;
@@ -3141,6 +3329,17 @@ async function syncOutputToDbFromWorkspace(
 ): Promise<void> {
   let fullySynced = false;
 
+  const adrContent = readOutputAdr(threadId);
+  if (
+    await applyAdrGenerationResult(
+      threadId,
+      adrContent,
+      adrContent ? undefined : 'the agent did not produce an ADR file',
+    )
+  ) {
+    return;
+  }
+
   // Check if this thread belongs to a test-case generation run
   const testCaseRow = await db.query.testCases.findFirst({
     where: eq(testCases.chatThreadId, threadId),
@@ -3177,6 +3376,7 @@ async function syncOutputToDbFromWorkspace(
     where: eq(prds.chatThreadId, threadId),
   });
   if (prdRow) {
+    if (prdRow.status !== 'generating') return;
     const content = readOutputPrd(threadId);
     const backlog = readOutputBacklog(threadId);
     const { isPrdGenerationOutputComplete } = await import(
@@ -3184,7 +3384,17 @@ async function syncOutputToDbFromWorkspace(
     );
     const outputComplete = isPrdGenerationOutputComplete(content, backlog);
     if (outputComplete && content) {
-      await syncPrdContent(prdRow.id, content, backlog ?? undefined);
+      const applied = await syncPrdContent(
+        prdRow.id,
+        content,
+        backlog ?? undefined,
+        'draft',
+        {
+          expectedStatus: 'generating',
+          expectedThreadId: threadId,
+        },
+      );
+      if (!applied) return;
       console.log(
         `[chat] post-run: synced PRD output to DB (prdId=${prdRow.id})`
       );
@@ -3202,7 +3412,13 @@ async function syncOutputToDbFromWorkspace(
       await db
         .update(prds)
         .set({ status: 'draft', updatedAt: new Date().toISOString() })
-        .where(and(eq(prds.id, prdRow.id), eq(prds.status, 'generating')));
+        .where(
+          and(
+            eq(prds.id, prdRow.id),
+            eq(prds.status, 'generating'),
+            eq(prds.chatThreadId, threadId),
+          ),
+        );
       console.warn(
         `[chat] post-run: agent produced incomplete/stub PRD output — reset to draft (prdId=${prdRow.id})`
       );
@@ -3246,9 +3462,11 @@ async function syncOutputToDbFromWorkspace(
       authorId: true,
       designPrototypeId: true,
       featureIndex: true,
+      status: true,
     },
   });
   if (ddGenRow) {
+    if (ddGenRow.status !== 'generating') return;
     const { finalizeSingleFeatureDoc, isSingleFeatureDesignDocRow } =
       await import('./designDocService');
     // Single-feature docs finalize in place; legacy seeds fan out to child rows.
@@ -3309,60 +3527,24 @@ async function syncOutputToDbFromWorkspace(
     where: eq(designDocs.validationThreadId, threadId),
   });
   if (ddValRow) {
+    if (ddValRow.status !== 'validating') return;
     const scorecardRaw = readOutputValidationScorecard(threadId);
-    if (scorecardRaw) {
-      try {
-        // Re-verify thread ownership — another validation may have started
-        const freshDoc = await db.query.designDocs.findFirst({
-          where: eq(designDocs.id, ddValRow.id),
-          columns: { validationThreadId: true },
-        });
-        if (freshDoc?.validationThreadId !== threadId) {
-          console.log(
-            `[chat] post-run: discarded stale validation scorecard — thread ${threadId} no longer active (designDocId=${ddValRow.id})`
-          );
-          cleanupWorkspaceDir(workspaceDir);
-          return;
-        }
-        const scorecard = JSON.parse(scorecardRaw) as ValidationScorecard;
-        const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
-        await syncValidationResult(ddValRow.id, scorecard, reportMd);
-        console.log(
-          `[chat] post-run: synced validation scorecard to DB (designDocId=${ddValRow.id})`
-        );
-        fullySynced = true;
-      } catch (err) {
-        console.error(
-          `[chat] post-run: failed to parse validation scorecard`,
-          err
-        );
-      }
-    } else {
-      // Agent completed but wrote no scorecard file.
-      // Keep the generated content accessible by moving to pending_review (matching the
-      // watcher's own idle-without-scorecard path). The approval gate will still require a
-      // valid validation score if a skill is configured — this just unblocks the author
-      // from seeing and reviewing the content rather than hiding it in a Draft state.
-      const freshDoc = await db.query.designDocs.findFirst({
-        where: eq(designDocs.id, ddValRow.id),
-        columns: { validationThreadId: true, status: true },
-      });
-      if (
-        freshDoc?.validationThreadId === threadId &&
-        freshDoc?.status === 'validating'
-      ) {
-        await db
-          .update(designDocs)
-          .set({
-            status: 'pending_review',
-            updatedAt: new Date().toISOString(),
-          })
-          .where(eq(designDocs.id, ddValRow.id));
-        console.warn(
-          `[chat] post-run: validation agent wrote no scorecard — moved to pending_review (designDocId=${ddValRow.id})`
-        );
-      }
-      fullySynced = true; // workspace can be cleaned
+    const result = await ingestValidationScorecard(
+      createDesignDocValidationAdapter(ddValRow.id),
+      threadId,
+      scorecardRaw
+        ? {
+            kind: 'success',
+            scorecardRaw,
+            reportMd: readOutputValidationScorecardMd(threadId) ?? undefined,
+          }
+        : { kind: 'unusable', reason: NO_SCORECARD_REASON },
+    );
+    fullySynced = result.disposition === 'applied';
+    if (!scorecardRaw && fullySynced) {
+      console.warn(
+        `[chat] post-run: validation agent wrote no scorecard (designDocId=${ddValRow.id})`,
+      );
     }
     if (fullySynced) cleanupWorkspaceDir(workspaceDir);
     return;
@@ -3396,65 +3578,24 @@ async function syncOutputToDbFromWorkspace(
     where: eq(prds.validationThreadId, threadId),
   });
   if (prdValRow) {
+    if (prdValRow.status !== 'validating') return;
     const scorecardRaw = readOutputValidationScorecard(threadId);
-    if (scorecardRaw) {
-      try {
-        const freshPrd = await db.query.prds.findFirst({
-          where: eq(prds.id, prdValRow.id),
-          columns: { validationThreadId: true },
-        });
-        if (freshPrd?.validationThreadId !== threadId) {
-          console.log(
-            `[chat] post-run: discarded stale PRD validation scorecard — thread ${threadId} no longer active (prdId=${prdValRow.id})`
-          );
-          cleanupWorkspaceDir(workspaceDir);
-          return;
-        }
-        const scorecard = JSON.parse(scorecardRaw) as ValidationScorecard;
-        const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
-        const { generateFallbackReport } =
-          await import('./documentValidationService');
-        const effectiveReportMd = reportMd ?? generateFallbackReport(scorecard);
-        const newStatus = scorecard.is_ready ? 'pending_review' : 'draft';
-        await db
-          .update(prds)
-          .set({
-            validationScore: Math.round(scorecard.overall_score),
-            validationScorecard: scorecard,
-            validationPhase: scorecard.review_phase,
-            validationReportMd: effectiveReportMd,
-            status: newStatus,
-            updatedAt: new Date().toISOString(),
-          })
-          .where(eq(prds.id, prdValRow.id));
-        console.log(
-          `[chat] post-run: synced PRD validation scorecard to DB (prdId=${prdValRow.id})`
-        );
-        fullySynced = true;
-      } catch (err) {
-        console.error(
-          `[chat] post-run: failed to parse PRD validation scorecard`,
-          err
-        );
-      }
-    } else {
-      const freshPrd = await db.query.prds.findFirst({
-        where: eq(prds.id, prdValRow.id),
-        columns: { validationThreadId: true, status: true },
-      });
-      if (
-        freshPrd?.validationThreadId === threadId &&
-        freshPrd?.status === 'validating'
-      ) {
-        await db
-          .update(prds)
-          .set({ status: 'draft', updatedAt: new Date().toISOString() })
-          .where(eq(prds.id, prdValRow.id));
-        console.warn(
-          `[chat] post-run: PRD validation agent wrote no scorecard, reset to draft (prdId=${prdValRow.id})`
-        );
-      }
-      fullySynced = true;
+    const result = await ingestValidationScorecard(
+      createPrdValidationAdapter(prdValRow as unknown as Prd),
+      threadId,
+      scorecardRaw
+        ? {
+            kind: 'success',
+            scorecardRaw,
+            reportMd: readOutputValidationScorecardMd(threadId) ?? undefined,
+          }
+        : { kind: 'unusable', reason: NO_SCORECARD_REASON },
+    );
+    fullySynced = result.disposition === 'applied';
+    if (!scorecardRaw && fullySynced) {
+      console.warn(
+        `[chat] post-run: PRD validation agent wrote no scorecard (prdId=${prdValRow.id})`,
+      );
     }
     if (fullySynced) cleanupWorkspaceDir(workspaceDir);
     return;
@@ -3694,7 +3835,7 @@ async function ensureThreadGrounding(
 async function waitForReadyThreadGrounding(
   state: ThreadState
 ): Promise<Exclude<CallerGroundingSelection, { mode: 'preparing' }>> {
-  const deadline = Date.now() + GROUNDING_PREPARATION_TIMEOUT_MS;
+  const deadline = Date.now() + resolveGroundingPreparationTimeoutMs();
   let announcedPreparing = false;
 
   while (true) {
@@ -3779,7 +3920,64 @@ export function isInteractiveWorkspaceBoundSkill(
     normalized.includes('create-test-case') ||
     normalized.includes('prd-design-spec') ||
     normalized.includes('design-doc-validation') ||
-    normalized.includes('document-validation')
+    normalized.includes('document-validation') ||
+    normalized.includes('adr-finalize') ||
+    normalized.includes('prd-spec-review')
+  );
+}
+
+/**
+ * The interactive actor currently exposes only pinned repository read tools.
+ * Route a turn in-process when its fully prepared prompt requires an MCP-only
+ * operation. Matching named tools keeps repository-only skills interactive
+ * while allowing skills to declare their dependency in their own SKILL.md.
+ */
+const INTERACTIVE_UNAVAILABLE_MCP_MARKERS = [
+  'ado-skills',
+  'update_design_doc',
+  'update_prd',
+  'update_adr',
+  'resolve_prd_comment',
+  'add_test_case',
+  'list_wikis',
+  'list_wiki_pages',
+  'get_wiki_page',
+  'query_work_items',
+  'get_work_item_history',
+  'get_work_item_comment_history',
+  'create_work_items',
+  'update_work_item',
+  'add_work_item_comment',
+  'get_standup_session',
+  'create_standup_followup',
+  'complete_standup_session',
+  'propose_work_item_changes',
+] as const;
+
+export function interactivePromptRequiresInProcessMcp(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  return INTERACTIVE_UNAVAILABLE_MCP_MARKERS.some((marker) =>
+    normalized.includes(marker)
+  );
+}
+
+const ADO_OPERATIONAL_SKILL_MARKERS = [
+  'scrum-assistant',
+  'scrum-helper',
+  'scrum-master-health',
+  'daily-standup',
+] as const;
+
+export function skillRequiresAdoOperations(
+  skillPath: string | null | undefined,
+  skillName?: string | null
+): boolean {
+  const normalized = `${skillPath ?? ''} ${skillName ?? ''}`
+    .replace(/\\/g, '/')
+    .toLowerCase()
+    .replace(/\s+/g, '-');
+  return ADO_OPERATIONAL_SKILL_MARKERS.some((marker) =>
+    normalized.includes(marker)
   );
 }
 
@@ -3819,19 +4017,90 @@ async function postInteractiveActorDispatch(dispatch: {
 }
 
 /**
- * Fail-closed interactive routing seam (BR-017). Returns true only when the turn
- * was admitted and dispatched to the warm actor lane (the actor then streams
- * events back through the durable ingest + gateway). Any other outcome — no
- * dispatch URL, flag disabled/eval-error, over-capacity shed, lost race, or any
- * preparation/dispatch failure — returns false so the caller runs in-process.
- * On a non-actor decision the transient queued interactive row is discarded so
- * admission counts stay accurate and nothing is left dispatched without a runner.
+ * Legacy-only interactive routing seam (BR-017). Called only from the private
+ * legacy chat send path while `ai-runs-v2-transport` is off or unreadable.
+ * Returns true only when the turn was admitted and dispatched to the warm
+ * actor lane. Any other outcome — no dispatch URL, flag disabled/eval-error,
+ * attachments / workspace-bound skill / custom MCP / ADO bypasses,
+ * over-capacity shed, lost race, actor post failure, or any preparation
+ * failure — returns false so the legacy caller runs in-process.
+ *
+ * Canonical enabled traffic never enters this function: those bypasses are
+ * replaced by Tasks 2–4 durable paths or explicit validation errors
+ * (see durable interactive turns design). BR-017 is legacy-only.
  */
 interface InteractiveDispatchAttempt {
   dispatched: boolean;
   persistedUserMessage?: ChatMessage;
   /** Why actor dispatch was skipped / failed (for telemetry + troubleshooting). */
   bypassReason?: string;
+}
+
+export type InteractiveMessageSubmission =
+  | Readonly<{ route: 'legacy' }>
+  | Readonly<{
+      route: 'durable';
+      response: InteractiveTurnAcceptedResponse;
+    }>;
+
+export type InteractiveSendOptions = Readonly<{
+  hidden?: boolean;
+  turnSkill?: ChatTurnSkill;
+  /** Specialist findings for this turn's model prompt. The visible user message stays `text`. */
+  internalContext?: string;
+  turnId?: string;
+  turnIdPolicy?: 'required' | 'generate';
+  legacyCompletion?: 'await' | 'detach';
+  requesterUserId?: string;
+  toolGrant?: DurableInteractiveToolGrantInput;
+  onLegacySettled?: () => void;
+}>;
+
+type LegacyChatSendOptions = Pick<
+  InteractiveSendOptions,
+  'hidden' | 'turnSkill' | 'internalContext'
+>;
+
+const ADO_WRITE_TARGET =
+  /\b(?:azure\s+devops|ado|work\s*items?|pbi|tbis?|epics?)\b|\b(?:bug|task|feature)\s*#?\d+\b|#\d+\b/i;
+const ADO_WRITE_ACTION =
+  /\b(?:create|add|update|edit|change|set|move|link|re-?parent|comment(?:\s+on)?|assign|unassign|close|resolve|activate|remove)\b/i;
+const INFORMATIONAL_REQUEST =
+  /^\s*(?:how|why|what|when|where|who|explain|describe|tell\s+me|show\s+me)\b/i;
+
+export function isExplicitAdoWriteIntent(text: string): boolean {
+  const request = text.trim();
+  if (!request || INFORMATIONAL_REQUEST.test(request)) return false;
+  if (/^\s*can\s+i\b/i.test(request)) return false;
+  return ADO_WRITE_TARGET.test(request) && ADO_WRITE_ACTION.test(request);
+}
+
+const CHAT_WRITE_POLICY_LINES = [
+  '# Repository and Azure DevOps write policy',
+  '- Treat the repository checkout as read-only. Never create, edit, delete, or move files in it.',
+  '- Create, update, comment on, link, or re-parent Azure DevOps work items only when the user directly requests that write in the current turn.',
+  '- Informational questions and analysis must not mutate Azure DevOps.',
+  '',
+] as const;
+
+export function buildTurnPrompt(
+  text: string,
+  turnSkill?: ChatTurnSkill,
+  internalContext?: string,
+): string {
+  const context = internalContext?.trim();
+  return [
+    ...CHAT_WRITE_POLICY_LINES,
+    ...(turnSkill
+      ? [
+          `Run skill: ${turnSkill.name} (\`${turnSkill.path}\`)`,
+          '',
+        ]
+      : []),
+    ...(context ? [context, ''] : []),
+    'User request:',
+    text,
+  ].join('\n');
 }
 
 /** Bound interactive prep so a grounding hang cannot swallow the fire-and-forget turn. */
@@ -3860,7 +4129,8 @@ async function tryDispatchInteractiveTurn(
   text: string,
   modelOverride?: string,
   attachments: ChatAttachment[] = [],
-  options?: { hidden?: boolean }
+  options?: LegacyChatSendOptions,
+  expectedCancellationEpoch = 0
 ): Promise<InteractiveDispatchAttempt> {
   // Inert unless the actor host dispatch URL is configured (cloud only).
   if (!process.env[INTERACTIVE_DISPATCH_URL_ENV]?.trim()) {
@@ -3941,13 +4211,38 @@ async function tryDispatchInteractiveTurn(
       if (!state || state.thread.status === 'running') {
         return bypass(!state ? 'thread-missing' : 'thread-already-running');
       }
+      const wasCancelled = () =>
+        state.cancellationEpoch !== expectedCancellationEpoch;
+      if (wasCancelled()) return bypass('cancel-requested');
+      const turnSkillPath =
+        options?.turnSkill?.path ?? state.thread.kickoff.skillPath;
+      const turnSkillName =
+        options?.turnSkill?.name ?? state.thread.kickoff.pillLabel;
+      if (
+        state.thread.kickoff.assistantType !== 'calendar-work-item' &&
+        isExplicitAdoWriteIntent(text)
+      ) {
+        return bypass('explicit-ado-write-intent');
+      }
+      if (skillRequiresAdoOperations(turnSkillPath, turnSkillName)) {
+        return bypass('ado-skill-capability');
+      }
       // Walkthrough smart-tagging / generation / discovery (and similar
       // file-output skills) inject kickoff context into thread.workspaceDir and
       // poll that same tree for `.ai-pilot/output/*`. Actor dispatch uses the
       // shared grounding checkout instead, so candidates never arrive and the
       // status poller never finds the artifact (prod Sync review failure).
-      if (isInteractiveWorkspaceBoundSkill(state.thread.kickoff.skillPath)) {
+      if (isInteractiveWorkspaceBoundSkill(turnSkillPath)) {
         return bypass('workspace-bound-skill');
+      }
+      // This lane sends neither the guided turn prompt nor its phase tools.
+      if (usesGuidedInterview(state.thread.kickoff.skillPath)) {
+        return bypass('guided-interview');
+      }
+      // Custom MCP pills are arbitrary by design and cannot execute in the
+      // actor while its MCP map is intentionally empty.
+      if (state.thread.kickoff.mcpPill) {
+        return bypass('custom-mcp-pill');
       }
       const userId = state.thread.userId;
       const project = state.thread.kickoff.project;
@@ -3969,6 +4264,7 @@ async function tryDispatchInteractiveTurn(
         return bypass('flag-evaluation-error');
       }
       if (timedOut) return bypass('timeout-abort');
+      if (wasCancelled()) return bypass('cancel-requested');
       if (!interactiveEnabled) {
         return bypass('flag-disabled');
       }
@@ -3976,6 +4272,7 @@ async function tryDispatchInteractiveTurn(
       markStage('ground-turn');
       const grounding = await ensureThreadGrounding(state);
       if (timedOut) return bypass('timeout-abort');
+      if (wasCancelled()) return bypass('cancel-requested');
       if (grounding.mode !== 'local' || !grounding.nativeReads) {
         return bypass(
           grounding.mode !== 'local'
@@ -3991,6 +4288,7 @@ async function tryDispatchInteractiveTurn(
           grounding.profileId
         );
       if (timedOut) return bypass('timeout-abort');
+      if (wasCancelled()) return bypass('cancel-requested');
       if (
         !isExactGroundingReader(repoReader, grounding, state.thread.kickoff)
       ) {
@@ -3999,12 +4297,19 @@ async function tryDispatchInteractiveTurn(
       state.groundingWorkspaceDir = grounding.cwd;
 
       markStage('prepare-turn');
+      const turnKickoff = options?.turnSkill
+        ? {
+            ...state.thread.kickoff,
+            skillPath: turnSkillPath?.replace(/^\//, ''),
+            pillLabel: options.turnSkill.name,
+          }
+        : state.thread.kickoff;
       const recoveryContext = state.isInterviewThread
         ? buildAgentRecoveryContext(state.thread.messages)
         : null;
       const prompt = await buildNewAgentTurnPrompt(
-        state.thread.kickoff,
-        text,
+        turnKickoff,
+        buildTurnPrompt(text, options?.turnSkill, options?.internalContext),
         false,
         recoveryContext,
         {
@@ -4019,10 +4324,15 @@ async function tryDispatchInteractiveTurn(
         }
       );
       if (timedOut) return bypass('timeout-abort');
-      const skillPath = state.thread.kickoff.skillPath ?? '';
+      if (wasCancelled()) return bypass('cancel-requested');
+      if (interactivePromptRequiresInProcessMcp(prompt)) {
+        return bypass('mcp-tools-required');
+      }
+      const skillPath = turnSkillPath ?? '';
       const snapshot: ExecutionSnapshot = {
         prompt,
         model: resolveModelId(modelOverride ?? state.thread.kickoff.model),
+        effort: state.thread.kickoff.effort,
         workspaceRef: grounding.cwd,
         workflowClass,
         skillPath,
@@ -4055,15 +4365,26 @@ async function tryDispatchInteractiveTurn(
         queuedRunId = undefined;
         return bypass('timeout-abort');
       }
+      if (wasCancelled()) {
+        await db
+          .delete(agentRuns)
+          .where(eq(agentRuns.id, enqueued.runId))
+          .catch(() => {});
+        queuedRunId = undefined;
+        return bypass('cancel-requested');
+      }
 
       markStage('route');
-      const decision = await interactiveWorkflowRouter.route({
+      const decision = await legacyInteractiveWorkflowRouter.route({
         userId,
         project,
         workflowClass,
         threadId,
         runId: enqueued.runId,
         dispatchToActor: async (d) => {
+          if (wasCancelled()) {
+            throw new Error('Interactive dispatch cancelled before actor post');
+          }
           if (timedOut) {
             throw new Error('Interactive dispatch timed out before actor post');
           }
@@ -4213,12 +4534,12 @@ async function tryDispatchInteractiveTurn(
   }
 }
 
-export async function sendMessage(
+async function sendMessageLegacy(
   threadId: string,
   text: string,
   modelOverride?: string,
   attachments: ChatAttachment[] = [],
-  options?: { hidden?: boolean }
+  options?: LegacyChatSendOptions
 ): Promise<void> {
   const sendStartedAt = Date.now();
   console.log('[chat] sendMessage.start', {
@@ -4231,16 +4552,24 @@ export async function sendMessage(
     attachmentCount: String(attachments.length),
     hidden: String(Boolean(options?.hidden)),
   });
+  const state = await ensureThreadState(threadId);
+  if (!state) throw new Error(`Thread ${threadId} not found`);
+  const expectedCancellationEpoch = state.cancellationEpoch;
+  const turnWasCancelled = () =>
+    state.cancellationEpoch !== expectedCancellationEpoch;
 
   // @feature-flag:ai-runs-interactive start winner=disabled
-  // FEAT-007: offload the turn to the warm Dapr actor lane when enabled + admitted.
-  // Fail-closed: any other outcome falls through to the in-process path below.
+  // Legacy-only FEAT-007: offload the turn to the warm Dapr actor lane when the
+  // interim flag is enabled + admitted. Fail-closed: any other outcome falls
+  // through to the in-process path below. Canonical `ai-runs-v2-transport`
+  // never reaches this function.
   const interactiveAttempt = await tryDispatchInteractiveTurn(
     threadId,
     text,
     modelOverride,
     attachments,
-    options
+    options,
+    expectedCancellationEpoch
   );
   trackEvent(
     'chat.send.interactive_result',
@@ -4260,10 +4589,9 @@ export async function sendMessage(
   if (interactiveAttempt.dispatched) {
     return;
   }
+  if (turnWasCancelled()) return;
   // @feature-flag:ai-runs-interactive end
 
-  const state = await ensureThreadState(threadId);
-  if (!state) throw new Error(`Thread ${threadId} not found`);
   const myWorkContext = state.isDevSession
     ? await getMyWorkSessionContext(threadId).catch(() => null)
     : null;
@@ -4314,12 +4642,15 @@ export async function sendMessage(
   } catch {
     // Non-fatal — fall back to shared key
   }
+  if (turnWasCancelled()) return;
 
   // If the caller wants a different model, dispose the current agent so it
   // will be recreated (or resumed) with the new model on this turn.
-  const resolvedModel = resolveModelId(
-    modelOverride ?? state.thread.kickoff.model
+  const resolvedModel = resolveAvailableModelId(
+    resolveModelId(modelOverride ?? state.thread.kickoff.model),
+    await fetchAvailableModels(),
   );
+  const resolvedModelParameters = await fetchModelParameters(resolvedModel);
   if (state.thread.kickoff.model !== resolvedModel) {
     state.thread.kickoff.model = resolvedModel;
     if (state.agent) {
@@ -4393,7 +4724,10 @@ export async function sendMessage(
     turnId,
     attachments
   );
-  const promptText = buildPromptWithAttachments(text, attachmentMeta);
+  const promptText = buildPromptWithAttachments(
+    buildTurnPrompt(text, options?.turnSkill, options?.internalContext),
+    attachmentMeta
+  );
   const priorMessages = interactiveAttempt.persistedUserMessage
     ? state.thread.messages.filter(
         (message) => message.id !== interactiveAttempt.persistedUserMessage?.id
@@ -4422,6 +4756,10 @@ export async function sendMessage(
     messageLength: userMsg.text.length,
     attachmentCount: attachmentMeta.length,
   });
+  if (turnWasCancelled()) {
+    await cancelRun(threadId);
+    return;
+  }
 
   // ── Grounding + agent lifecycle (may be slow after idle) ────────────────
   const mcpServerUrl = `http://localhost:${process.env.PORT ?? 3001}/mcp/ado-skills`;
@@ -4450,6 +4788,10 @@ export async function sendMessage(
       .where(eq(agentRuns.id, provisionalRunId))
       .catch(() => {});
     throw error;
+  }
+  if (turnWasCancelled()) {
+    await cancelRun(threadId);
+    return;
   }
   const groundingCaller = resolveGroundingCallerKey(state.thread.kickoff);
   const lifecycleTelemetryContext = {
@@ -4523,7 +4865,25 @@ export async function sendMessage(
     state.thread.kickoff.assistantType === 'calendar-work-item'
       ? (state.thread.kickoff.calendarAssistantSessionId ?? undefined)
       : undefined;
-  const repositoryRuntime = await prepareRepositoryReadRuntime({
+  const turnHasExplicitAdoWriteIntent =
+    !calendarSessionId && isExplicitAdoWriteIntent(text);
+  const turnRequiresAdoOperations = skillRequiresAdoOperations(
+    options?.turnSkill?.path ?? state.thread.kickoff.skillPath,
+    options?.turnSkill?.name ?? state.thread.kickoff.pillLabel
+  );
+  if (turnHasExplicitAdoWriteIntent && state.agent) {
+    await state.agent[Symbol.asyncDispose]().catch(() => {});
+    state.agent = null;
+  }
+  const guidedTurn = usesGuidedInterview(state.thread.kickoff.skillPath)
+    ? deriveGuidedInterviewTurn(priorMessages, text)
+    : null;
+  const interviewPhase = guidedTurn
+    ? guidedTurn.phase === 'technical'
+      ? 'technical'
+      : 'product'
+    : null;
+  let repositoryRuntime = await prepareRepositoryReadRuntime({
     grounding,
     kickoff: state.thread.kickoff,
     adoSkillsUrl: mcpServerUrl,
@@ -4531,7 +4891,58 @@ export async function sendMessage(
     maxviewEnabled,
     calendarSessionId,
     restrictRepoSearch: state.isInterviewThread,
+    requireAdoTools:
+      turnHasExplicitAdoWriteIntent ||
+      turnRequiresAdoOperations ||
+      interactiveAttempt.bypassReason === 'mcp-tools-required',
   });
+  let agentPromptText = promptText;
+  let guidedFreshAgent = false;
+  if (interviewPhase) {
+    const brief = await readInterviewBaBrief(async () => {
+      if (repositoryRuntime.repoReader) {
+        return repositoryRuntime.repoReader.readFile('context.md');
+      }
+      if (grounding.mode !== 'local') {
+        const { getSkillFile } = await import('./skillCatalogFacade');
+        return getSkillFile(
+          state.thread.kickoff.project,
+          state.thread.kickoff.repo,
+          'context.md',
+          state.thread.kickoff.skillBranch ?? state.thread.kickoff.branch ?? 'main',
+          state.thread.kickoff.skillProvider ?? 'ado'
+        );
+      }
+      const repoLeaf = state.thread.kickoff.repo.split('/').pop() ?? '';
+      const sameCheckout =
+        repoLeaf.toLowerCase() === path.basename(process.cwd()).toLowerCase() ||
+        state.thread.kickoff.project === 'Apex';
+      const localBrief = path.join(process.cwd(), 'context.md');
+      if (!sameCheckout || !fs.existsSync(localBrief)) return null;
+      return fs.readFileSync(localBrief, 'utf8');
+    });
+    if (brief.startsWith('No application brief')) {
+      console.warn('[chat] Guided interview has no application brief', {
+        threadId,
+        project: state.thread.kickoff.project,
+        repo: state.thread.kickoff.repo,
+      });
+    }
+    writeInterviewBaBriefFile(state.thread.workspaceDir, brief);
+    writeGuidedInterviewState(state.thread.workspaceDir, guidedTurn!);
+    const controlledTurnPrompt = buildGuidedInterviewTurnPrompt(
+      priorMessages,
+      promptText,
+      guidedTurn!,
+    );
+    agentPromptText = wrapGuidedInterviewPrompt(
+      controlledTurnPrompt,
+      interviewPhase,
+      brief,
+    );
+    repositoryRuntime = applyGuidedInterviewRuntime(repositoryRuntime, interviewPhase);
+    guidedFreshAgent = guidedInterviewNeedsFreshAgent(state.thread.workspaceDir);
+  }
 
   // FEAT-003: live linked-context materialization (fail-open; never blocks the turn).
   // Dynamic import avoids a circular dependency through designModuleService.
@@ -4545,7 +4956,7 @@ export async function sendMessage(
   });
 
   const agentWorkspaceDir = state.thread.workspaceDir;
-  const localAgentOptions = repositoryRuntime.local;
+  let localAgentOptions = repositoryRuntime.local;
   const mcpServers = repositoryRuntime.mcpServers;
   console.log(
     '[chat] MCP servers for turn:',
@@ -4561,24 +4972,20 @@ export async function sendMessage(
   // force-disposed interview agent. In the latter case, include the visible
   // PostgreSQL-backed history so Agent.create() continues instead of restarting.
   const hadCursorAgentId = Boolean(state.thread.cursorAgentId);
+  const productPhaseInterview = interviewPhase === 'product';
   let prompt = hadCursorAgentId
-    ? promptText
+    ? agentPromptText
     : await buildNewAgentTurnPrompt(
         state.thread.kickoff,
-        promptText,
+        agentPromptText,
         maxviewEnabled,
         recoveryContext,
-        {
-          preloadRepositoryContext:
-            state.isInterviewThread && grounding.mode === 'remote',
-          repoSearchEnabled: !state.isInterviewThread,
-          nativeReads: repositoryRuntime.nativeReads,
-          repoReader: repositoryRuntime.repoReader,
-          groundingProvenance: groundingProvenanceFor(
-            grounding,
-            state.thread.kickoff
-          ),
-        }
+        groundedTurnPromptOptions(
+          state,
+          grounding,
+          repositoryRuntime,
+          productPhaseInterview
+        )
       );
   let agentAcquisitionMode: 'existing' | 'created' | 'resumed' | 'recreated' =
     state.agent ? 'existing' : hadCursorAgentId ? 'resumed' : 'created';
@@ -4589,6 +4996,9 @@ export async function sendMessage(
   let mcpDeadlineController: McpToolDeadlineController | null = null;
   let unsubscribeAbort: (() => void) | null = null;
   let heldLocalAgentSlot = false;
+  // Retained across attempts and visible to the error handler so a run that
+  // ultimately fails still reports the tokens it burned, rather than zeros.
+  let lastRunUsage: CursorTokenUsage | undefined;
 
   try {
     await acquireLocalAgentSlot(threadId);
@@ -4617,11 +5027,19 @@ export async function sendMessage(
       model: { id: 'claude-opus-4-6' },
     };
 
+    if (guidedFreshAgent && state.agent) {
+      await state.agent[Symbol.asyncDispose]().catch(() => {});
+      state.agent = null;
+    }
+
     if (!state.agent) {
       const priorCursorAgentId = state.thread.cursorAgentId;
       const acquisition = await resumeOrCreateAgent({
         cursorAgentId: priorCursorAgentId,
-        forceRecreate: boundaryRecreationReason !== null || staleIdleResume,
+        forceRecreate:
+          boundaryRecreationReason !== null ||
+          staleIdleResume ||
+          guidedFreshAgent,
         resume: async () => {
           logMyWork('agent.resume_started', {
             cursorAgentId: priorCursorAgentId,
@@ -4632,7 +5050,11 @@ export async function sendMessage(
             () =>
               Agent.resume(priorCursorAgentId!, {
                 apiKey,
-                model: { id: resolvedModel },
+                model: buildCursorModelSelection(
+                  resolvedModel,
+                  state.thread.kickoff.effort,
+                  resolvedModelParameters,
+                ),
                 local: localAgentOptions,
                 mcpServers,
                 agents: { 'code-reviewer': codeReviewerAgent },
@@ -4642,17 +5064,38 @@ export async function sendMessage(
         },
         create: async () => {
           logMyWork('agent.create_started', { model: resolvedModel });
-          return retryWithBackoff(
-            () =>
+          return retryWithBackoff(async () => {
+            const createWith = (local: LocalAgentOptions) =>
               Agent.create({
                 apiKey,
-                model: { id: resolvedModel },
-                local: localAgentOptions,
+                model: buildCursorModelSelection(
+                  resolvedModel,
+                  state.thread.kickoff.effort,
+                  resolvedModelParameters,
+                ),
+                local,
                 mcpServers,
                 agents: { 'code-reviewer': codeReviewerAgent },
-              }),
-            sdkRetryOpts
-          );
+              });
+            try {
+              return await createWith(localAgentOptions);
+            } catch (error) {
+              if (
+                !localAgentOptions.sandboxOptions?.enabled ||
+                !isInterviewSandboxUnsupported(error)
+              ) {
+                throw error;
+              }
+              console.warn(
+                '[chat] Interview workspace sandbox is unavailable; repository tools stay closed without it'
+              );
+              localAgentOptions = {
+                ...localAgentOptions,
+                sandboxOptions: { enabled: false },
+              };
+              return createWith(localAgentOptions);
+            }
+          }, sdkRetryOpts);
         },
       });
       state.agent = acquisition.agent;
@@ -4663,6 +5106,12 @@ export async function sendMessage(
         acquisition.mode,
         state.resolvedGroundingBinding
       );
+      if (
+        interviewPhase &&
+        (acquisition.mode === 'created' || acquisition.mode === 'recreated')
+      ) {
+        markGuidedInterviewGrounding(state.thread.workspaceDir);
+      }
       if (
         (acquisition.mode === 'created' || acquisition.mode === 'recreated') &&
         state.resolvedGroundingBinding
@@ -4689,20 +5138,15 @@ export async function sendMessage(
         );
         prompt = await buildNewAgentTurnPrompt(
           state.thread.kickoff,
-          promptText,
+          agentPromptText,
           maxviewEnabled,
           recoveryContext,
-          {
-            preloadRepositoryContext:
-              state.isInterviewThread && grounding.mode === 'remote',
-            repoSearchEnabled: !state.isInterviewThread,
-            nativeReads: repositoryRuntime.nativeReads,
-            repoReader: repositoryRuntime.repoReader,
-            groundingProvenance: groundingProvenanceFor(
-              grounding,
-              state.thread.kickoff
-            ),
-          }
+          groundedTurnPromptOptions(
+            state,
+            grounding,
+            repositoryRuntime,
+            productPhaseInterview
+          )
         );
       }
     }
@@ -4729,8 +5173,30 @@ export async function sendMessage(
         acquisitionMode: agentAcquisitionMode,
       });
     }
+    let turnEndMonitor = createCursorTurnEndMonitor();
+    const sendWithTurnMonitor = (
+      target: typeof agent,
+    ) => {
+      const monitor = createCursorTurnEndMonitor();
+      turnEndMonitor = monitor;
+      return target.send(prompt, {
+        onDelta: ({ update }) => monitor.observe(update),
+        ...(interviewPhase
+          ? {
+              mcpServers,
+              local: { customTools: localAgentOptions.customTools },
+            }
+          : {}),
+      });
+    };
+
     // Send the prompt (retry up to 2x on transient errors)
-    const run = await retryWithBackoff(() => agent.send(prompt), {
+    const run = await retryWithBackoff(() => {
+      if (turnWasCancelled()) {
+        throw makeCancelledError('Run cancelled during preparation');
+      }
+      return sendWithTurnMonitor(agent);
+    }, {
       ...sdkRetryOpts,
       maxRetries: 2,
     });
@@ -5073,6 +5539,7 @@ export async function sendMessage(
         const executionSnapshot: Readonly<ExecutionSnapshot> = Object.freeze({
           prompt,
           model: resolvedModel,
+          effort: state.thread.kickoff.effort,
           workspaceRef: agentWorkspaceDir,
           workflowClass:
             state.thread.kickoff.assistantType ??
@@ -5095,6 +5562,7 @@ export async function sendMessage(
           },
           thinkingPhase,
           nextSequence: () => nextRunEventSequence(agentRunId!),
+          turnEnd: turnEndMonitor.completion,
           hooks: {
             beforeStreamEvent: throwIfAborted,
             onFirstStreamEvent: () => {
@@ -5184,6 +5652,7 @@ export async function sendMessage(
       } catch (streamErr) {
         firstEventDeadline?.clear();
         if (streamErr instanceof CursorExecutionWaitError) {
+          lastRunUsage = streamErr.usage ?? lastRunUsage;
           throw streamErr.cause;
         }
 
@@ -5228,35 +5697,40 @@ export async function sendMessage(
             state.thread.cursorAgentId = undefined;
             prompt = await buildNewAgentTurnPrompt(
               state.thread.kickoff,
-              promptText,
+              agentPromptText,
               maxviewEnabled,
               recoveryContext,
-              {
-                preloadRepositoryContext:
-                  state.isInterviewThread && grounding.mode === 'remote',
-                repoSearchEnabled: !state.isInterviewThread,
-                nativeReads: repositoryRuntime.nativeReads,
-                repoReader: repositoryRuntime.repoReader,
-                groundingProvenance: groundingProvenanceFor(
-                  grounding,
-                  state.thread.kickoff
-                ),
-              }
+              groundedTurnPromptOptions(
+                state,
+                grounding,
+                repositoryRuntime,
+                productPhaseInterview
+              )
             );
             state.agent = await retryWithBackoff(
               () =>
                 Agent.create({
                   apiKey,
-                  model: { id: resolvedModel },
+                  model: buildCursorModelSelection(
+                    resolvedModel,
+                    state.thread.kickoff.effort,
+                    resolvedModelParameters,
+                  ),
                   local: localAgentOptions,
                   mcpServers,
                   agents: { 'code-reviewer': codeReviewerAgent },
                 }),
               sdkRetryOpts
             );
-            currentRun = await state.agent.send(prompt);
+            if (turnWasCancelled()) {
+              throw makeCancelledError('Run cancelled before retry');
+            }
+            currentRun = await sendWithTurnMonitor(state.agent);
             state.thread.cursorAgentId =
               state.agent.agentId ?? state.thread.cursorAgentId;
+            if (interviewPhase) {
+              markGuidedInterviewGrounding(state.thread.workspaceDir);
+            }
             state.thread.activeRunId = getRunId(currentRun);
             continue;
           }
@@ -5319,14 +5793,21 @@ export async function sendMessage(
                 resumePinnedTurnAgent(() =>
                   Agent.resume(state.thread.cursorAgentId!, {
                     apiKey,
-                    model: { id: resolvedModel },
+                    model: buildCursorModelSelection(
+                      resolvedModel,
+                      state.thread.kickoff.effort,
+                      resolvedModelParameters,
+                    ),
                     local: localAgentOptions,
                     mcpServers,
                   })
                 ),
               sdkRetryOpts
             );
-            currentRun = await state.agent.send(prompt);
+            if (turnWasCancelled()) {
+              throw makeCancelledError('Run cancelled before retry');
+            }
+            currentRun = await sendWithTurnMonitor(state.agent);
             state.thread.activeRunId = getRunId(currentRun);
             continue;
           }
@@ -5335,7 +5816,10 @@ export async function sendMessage(
       }
 
       if (!executionResult) continue;
-      agentTextBuffer = executionResult.text;
+      agentTextBuffer = guidedTurn
+        ? normalizeGuidedInterviewResponse(executionResult.text, guidedTurn)
+        : executionResult.text;
+      lastRunUsage = executionResult.usage ?? lastRunUsage;
       const result = executionResult.waitResult;
 
       if (result.status === 'error') {
@@ -5365,14 +5849,21 @@ export async function sendMessage(
                 resumePinnedTurnAgent(() =>
                   Agent.resume(state.thread.cursorAgentId!, {
                     apiKey,
-                    model: { id: resolvedModel },
+                    model: buildCursorModelSelection(
+                      resolvedModel,
+                      state.thread.kickoff.effort,
+                      resolvedModelParameters,
+                    ),
                     local: localAgentOptions,
                     mcpServers,
                   })
                 ),
               sdkRetryOpts
             );
-            currentRun = await state.agent.send(prompt);
+            if (turnWasCancelled()) {
+              throw makeCancelledError('Run cancelled before retry');
+            }
+            currentRun = await sendWithTurnMonitor(state.agent);
             state.thread.activeRunId = getRunId(currentRun);
             continue;
           }
@@ -5486,26 +5977,27 @@ export async function sendMessage(
         const kickoff =
           state.thread.kickoff ??
           ({} as import('../../shared/types/chat').ChatThreadKickoff);
-        const inputEst = estimateTokens(text ?? '');
-        const outputEst = estimateTokens(agentTextBuffer ?? '');
-        recordAiUsage({
-          provider: 'cursor',
+        // Real counts cover the whole prompt the model read — system prompt,
+        // skill, grounding docs, replayed history, tool output. The chars/4
+        // estimate covers only the two visible messages, so it undercounts
+        // heavily; use it only when the runtime reported nothing.
+        const usage = lastRunUsage;
+        void recordCursorChatUsage({
+          kickoff,
           modelId: resolvedModel,
-          feature: resolveFeatureFromKickoff(kickoff),
-          project: kickoff.project ?? 'unknown',
-          skillPath: kickoff.skillPath ?? undefined,
           threadId,
           runId: agentRunId ?? undefined,
           workItemId:
             kickoff.workItemId != null ? String(kickoff.workItemId) : undefined,
           userId: state.thread.userId ?? undefined,
-          inputTokens: inputEst,
-          outputTokens: outputEst,
-          tokenSource: 'estimated',
-          costUsd: 0,
-          costSource: 'estimated',
+          inputTokens: usage?.inputTokens ?? estimateTokens(text ?? ''),
+          outputTokens: usage?.outputTokens ?? estimateTokens(agentTextBuffer ?? ''),
+          cacheReadTokens: usage?.cacheReadTokens,
+          cacheWriteTokens: usage?.cacheWriteTokens,
+          tokenSource: usage ? 'exact' : 'estimated',
+          durationMs: Date.now() - runStartedAtMs,
           status: 'success',
-        });
+        }).catch(() => {});
       }
 
       break;
@@ -5520,7 +6012,7 @@ export async function sendMessage(
     try {
       await syncOutputToDb(
         threadId,
-        runtimeWorkspaceDir(state),
+        state.thread.workspaceDir,
         agentTextBuffer
       );
     } catch (err) {
@@ -5742,22 +6234,20 @@ export async function sendMessage(
       const kickoff =
         state.thread?.kickoff ??
         ({} as import('../../shared/types/chat').ChatThreadKickoff);
-      recordAiUsage({
-        provider: 'cursor',
+      void recordCursorChatUsage({
+        kickoff,
         modelId: resolvedModel,
-        feature: resolveFeatureFromKickoff(kickoff),
-        project: kickoff.project ?? 'unknown',
-        skillPath: kickoff.skillPath ?? undefined,
         threadId,
         runId: agentRunId ?? undefined,
         userId: state.thread?.userId ?? undefined,
-        inputTokens: 0,
-        outputTokens: 0,
-        tokenSource: 'estimated',
-        costUsd: 0,
-        costSource: 'estimated',
+        inputTokens: lastRunUsage?.inputTokens ?? 0,
+        outputTokens: lastRunUsage?.outputTokens ?? 0,
+        cacheReadTokens: lastRunUsage?.cacheReadTokens,
+        cacheWriteTokens: lastRunUsage?.cacheWriteTokens,
+        tokenSource: lastRunUsage ? 'exact' : 'estimated',
+        durationMs: Date.now() - runStartedAtMs,
         status: 'error',
-      });
+      }).catch(() => {});
     }
 
     if (agentRunId) {
@@ -5850,6 +6340,256 @@ export async function sendMessage(
   }
 }
 
+const durableTerminalWatches = new Map<string, () => void>();
+
+/**
+ * A durable run is finished by whichever instance receives the worker's
+ * terminal callback, and that write updates only the database. Output
+ * watchers on this instance read the in-memory thread, so clear it when the
+ * run's terminal event arrives.
+ */
+function watchDurableTerminal(state: ThreadState, runId: string): void {
+  const threadId = state.thread.id;
+  durableTerminalWatches.get(threadId)?.();
+  const stop = (): void => {
+    unsubscribe();
+    if (durableTerminalWatches.get(threadId) === stop) {
+      durableTerminalWatches.delete(threadId);
+    }
+  };
+  const unsubscribe = subscribeRunEvents(threadId, (envelope) => {
+    if (envelope.runId !== runId) return;
+    if (
+      envelope.status !== 'completed'
+      && envelope.status !== 'failed'
+      && envelope.status !== 'cancelled'
+    ) {
+      return;
+    }
+    stop();
+    if (threads.get(threadId) !== state || state.thread.activeRunId !== runId) {
+      return;
+    }
+    const status = envelope.status === 'failed' ? 'error' : 'idle';
+    state.thread.status = status;
+    state.thread.activeRunId = undefined;
+    broadcast(state, { type: 'status', status });
+  });
+  durableTerminalWatches.set(threadId, stop);
+}
+
+function forgetThread(threadId: string): void {
+  threads.delete(threadId);
+  durableTerminalWatches.get(threadId)?.();
+}
+
+function reflectDurableAdmission(
+  state: ThreadState,
+  text: string,
+  attachments: ChatAttachment[],
+  options: InteractiveSendOptions | undefined,
+  response: InteractiveTurnAcceptedResponse,
+): void {
+  if (response.idempotent === true) return;
+  if (response.shouldReflectThreadState === false) return;
+  let timestamp = new Date().toISOString();
+  const existingMessage = state.thread.messages.find(
+    (message) => message.id === response.turnId,
+  );
+  if (!existingMessage) {
+    const message: ChatMessage = {
+      id: response.turnId,
+      role: 'user',
+      text: text.trim() || 'Uploaded files for context.',
+      ts: timestamp,
+      ...(options?.hidden ? { hidden: true } : {}),
+      ...(attachments.length > 0
+        ? {
+            attachments: attachments.map((attachment) => ({
+              id: attachment.id,
+              name: attachment.name,
+              type: attachment.type,
+              size: attachment.size,
+            })),
+          }
+        : {}),
+    };
+    state.thread.messages.push(message);
+    broadcast(state, { type: 'message', message });
+  } else {
+    timestamp = existingMessage.ts;
+  }
+  state.thread.lastActivityAt = timestamp;
+  switch (response.status) {
+    case 'queued':
+    case 'dispatched':
+    case 'running':
+      state.thread.status = 'running';
+      state.thread.activeRunId = response.runId;
+      broadcast(state, { type: 'status', status: 'running' });
+      watchDurableTerminal(state, response.runId);
+      return;
+    case 'completed':
+    case 'cancelled':
+      state.thread.status = 'idle';
+      state.thread.activeRunId = undefined;
+      broadcast(state, { type: 'status', status: 'idle' });
+      return;
+    case 'failed':
+      state.thread.status = 'error';
+      state.thread.activeRunId = undefined;
+      broadcast(state, { type: 'status', status: 'error' });
+      return;
+    default: {
+      const unhandled: never = response.status;
+      throw new Error(
+        `Unsupported interactive response status: ${String(unhandled)}`,
+      );
+    }
+  }
+}
+
+function reportDetachedLegacyError(threadId: string, error: unknown): void {
+  console.error(
+    `[chat] sendMessage error for thread ${threadId}:`,
+    error instanceof Error ? error.message : 'Unexpected error',
+  );
+  trackEvent('chat.send.failed', {
+    threadId,
+    errorType: error instanceof Error ? error.name : 'UnknownError',
+    errorMessage:
+      error instanceof Error ? error.message.slice(0, 200) : 'Unexpected error',
+  });
+}
+
+export function sendMessage(
+  threadId: string,
+  text: string,
+  modelOverride: string | undefined,
+  attachments: ChatAttachment[] | undefined,
+  options: InteractiveSendOptions & Readonly<{ hidden: true }>,
+): Promise<void>;
+export function sendMessage(
+  threadId: string,
+  text: string,
+  modelOverride?: string,
+  attachments?: ChatAttachment[],
+  options?: InteractiveSendOptions,
+): Promise<InteractiveMessageSubmission>;
+export async function sendMessage(
+  threadId: string,
+  text: string,
+  modelOverride?: string,
+  attachments: ChatAttachment[] = [],
+  options?: InteractiveSendOptions,
+): Promise<InteractiveMessageSubmission | void> {
+  const state = await ensureThreadState(threadId);
+  if (!state) throw new Error(`Thread ${threadId} not found`);
+  // 'closed' only means the idle timer released this thread's resources; the
+  // transcript is persisted, so a new message continues the conversation.
+  if (state.thread.status === 'closed' && !state.isDevSession) {
+    await reopenClosedThread(threadId);
+    state.thread.status = 'idle';
+    broadcast(state, { type: 'status', status: 'idle' });
+  }
+  const workflowClass = resolveInteractiveWorkflowClass(state);
+  const legacyCompletion = options?.legacyCompletion ?? 'await';
+  const requesterUserId = options?.requesterUserId ?? state.thread.userId;
+
+  const decision = await interactiveWorkflowRouter.route({
+    userId: requesterUserId,
+    project: state.thread.kickoff.project,
+    workflowClass,
+    threadId,
+    runLegacy: async () => {
+      if (
+        legacyCompletion === 'detach' &&
+        state.thread.status === 'running'
+      ) {
+        const gate = await recoverStaleRunningThread(threadId);
+        if (gate === 'running') {
+          throw Object.assign(new Error('Agent is already running'), {
+            status: 409,
+          });
+        }
+      }
+
+      const execution = sendMessageLegacy(
+        threadId,
+        text,
+        modelOverride,
+        attachments,
+        {
+          hidden: options?.hidden,
+          turnSkill: options?.turnSkill,
+          internalContext: options?.internalContext,
+        },
+      );
+      if (legacyCompletion === 'await') {
+        try {
+          await execution;
+        } finally {
+          options?.onLegacySettled?.();
+        }
+        return;
+      }
+      void execution
+        .catch((error: unknown) => {
+          reportDetachedLegacyError(threadId, error);
+        })
+        .finally(() => {
+          options?.onLegacySettled?.();
+        });
+    },
+    admitDurable: async () => {
+      const turnId =
+        options?.turnId ??
+        (options?.turnIdPolicy === 'required' ? '' : uuidv4());
+      const modelChoice = await resolveCursorModelChoice(
+        resolveModelId(modelOverride ?? state.thread.kickoff.model),
+        state.thread.kickoff.effort,
+      );
+      return durableInteractiveTurnService.admit({
+        threadId,
+        userId: requesterUserId,
+        workflowClass,
+        turnId,
+        text,
+        modelOverride: modelChoice.model,
+        effort: modelChoice.effort ?? null,
+        attachments,
+        hidden: options?.hidden,
+        turnSkill: options?.turnSkill,
+        toolGrant: options?.toolGrant,
+        internalContext: options?.internalContext,
+      });
+    },
+  });
+
+  switch (decision.route) {
+    case 'legacy':
+      return { route: 'legacy' };
+    case 'durable':
+      reflectDurableAdmission(
+        state,
+        text,
+        attachments,
+        options,
+        decision.response,
+      );
+      return {
+        route: 'durable',
+        response: decision.response,
+      };
+    default: {
+      const unhandled: never = decision;
+      throw new Error(
+        `Unsupported interactive route decision: ${String(unhandled)}`,
+      );
+    }
+  }
+}
+
 /**
  * If the thread is marked running but no live agent_runs row remains (or the
  * run is health-dead), force it idle so the user can send again. Returns the
@@ -5895,9 +6635,16 @@ export async function recoverStaleRunningThread(
   return 'idle';
 }
 
+export const CANCELLABLE_AGENT_RUN_STATUSES = [
+  'queued',
+  'dispatched',
+  'running',
+] as const;
+
 export async function cancelRun(threadId: string): Promise<void> {
   const state = await ensureThreadState(threadId);
   if (!state) return;
+  state.cancellationEpoch += 1;
 
   let activeRunId = state.thread.activeRunId;
   if (!activeRunId) {
@@ -5905,7 +6652,7 @@ export async function cancelRun(threadId: string): Promise<void> {
     const latest = await db.query.agentRuns.findFirst({
       where: and(
         eq(agentRuns.threadId, threadId),
-        inArray(agentRuns.status, ['queued', 'running'])
+        inArray(agentRuns.status, [...CANCELLABLE_AGENT_RUN_STATUSES])
       ),
       orderBy: [desc(agentRuns.createdAt)],
       columns: { id: true },
@@ -5941,6 +6688,46 @@ export async function cancelRun(threadId: string): Promise<void> {
       project: state.thread.kickoff.project,
     }
   ).catch(() => false);
+
+  // dapr-actor-v2: Stop only persists cancel_requested on the active run/fence.
+  // The actor observes the flag on the next progress/heartbeat and acknowledges.
+  const [activeRunRow] = await db
+    .select({
+      id: agentRuns.id,
+      transportVersion: agentRuns.transportVersion,
+      dispatchMessageId: agentRuns.dispatchMessageId,
+      status: agentRuns.status,
+    })
+    .from(agentRuns)
+    .where(eq(agentRuns.id, activeRunId))
+    .limit(1)
+    .catch(() => []);
+
+  if (activeRunRow?.transportVersion === 'dapr-actor-v2') {
+    await db
+      .update(agentRuns)
+      .set({
+        cancelRequested: true,
+        cancelState: 'requested',
+        updatedAt: new Date().toISOString(),
+      })
+      .where(
+        and(
+          eq(agentRuns.id, activeRunId),
+          // A turn still waiting for dispatch has no dispatch id yet; the orchestrator cancels it.
+          activeRunRow.dispatchMessageId === null
+            ? isNull(agentRuns.dispatchMessageId)
+            : eq(agentRuns.dispatchMessageId, activeRunRow.dispatchMessageId),
+          inArray(agentRuns.status, [...CANCELLABLE_AGENT_RUN_STATUSES]),
+        ),
+      )
+      .catch((e) => {
+        console.error('[chat] Failed to mark dapr-actor-v2 cancel requested:', e);
+      });
+    broadcast(state, { type: 'status', status: 'running' });
+    return;
+  }
+
   // @feature-flag:event-driven-run-termination start winner=enabled
   if (eventDrivenTerminationEnabled) {
     // @feature-flag:event-driven-run-termination enabled-start
@@ -5985,7 +6772,7 @@ export async function cancelRun(threadId: string): Promise<void> {
       .where(
         and(
           eq(agentRuns.id, activeRunId),
-          inArray(agentRuns.status, ['queued', 'running'])
+          inArray(agentRuns.status, [...CANCELLABLE_AGENT_RUN_STATUSES])
         )
       )
       .returning({ id: agentRuns.id })
@@ -6017,10 +6804,10 @@ export async function cancelRun(threadId: string): Promise<void> {
 
   state.thread.status = 'idle';
   state.thread.activeRunId = undefined;
-  if (!eventDrivenTerminationEnabled) {
-    broadcast(state, { type: 'status', status: 'idle' });
-    broadcast(state, { type: 'done' });
-  }
+  // Notify same-instance subscribers immediately in both termination modes.
+  // The durable cancel envelope remains the cross-instance source of truth.
+  broadcast(state, { type: 'status', status: 'idle' });
+  broadcast(state, { type: 'done', runId: activeRunId });
   clearRunEventSequence(activeRunId);
   lastTokenProgressWriteAt.delete(activeRunId);
   eventDrivenRunIds.delete(activeRunId);
@@ -6042,6 +6829,16 @@ export async function cancelRun(threadId: string): Promise<void> {
 export async function closeThread(threadId: string): Promise<void> {
   const state = await ensureThreadState(threadId);
   if (!state) return;
+
+  // Generation workers keep in-memory status idle while agent_runs is live.
+  // Idle eviction must not delete the thin workspace the worker is writing.
+  if (await isThreadRunAlive(threadId)) {
+    console.warn(
+      `[chat] closeThread deferred — run still alive (threadId=${threadId})`
+    );
+    resetIdleTimer(state);
+    return;
+  }
 
   if (state.idleTimer) clearTimeout(state.idleTimer);
 
@@ -6074,7 +6871,7 @@ export async function closeThread(threadId: string): Promise<void> {
         console.log(
           `[chat] Dev session thread ${threadId}: evicting from memory (idle timeout), keeping workspace and thread status intact (unpushed changes)`
         );
-        threads.delete(threadId);
+        forgetThread(threadId);
         return;
       }
     }
@@ -6084,7 +6881,7 @@ export async function closeThread(threadId: string): Promise<void> {
   state.thread.status = 'closed';
   await pgUpsertThread(state.thread);
 
-  threads.delete(threadId);
+  forgetThread(threadId);
 
   try {
     fs.rmSync(state.thread.workspaceDir, { recursive: true, force: true });
@@ -6113,7 +6910,7 @@ export async function permanentlyDeleteThread(threadId: string): Promise<void> {
     state.groundingWorkspaceDir = null;
     await grounding?.release().catch(() => undefined);
 
-    threads.delete(threadId);
+    forgetThread(threadId);
 
     try {
       fs.rmSync(state.thread.workspaceDir, { recursive: true, force: true });
@@ -6125,6 +6922,12 @@ export async function permanentlyDeleteThread(threadId: string): Promise<void> {
   await pgDeleteThread(threadId);
 }
 
+/**
+ * Generation artifacts always live in the thread scratch tree. Never use the
+ * shared SHA checkout (`groundingWorkspaceDir`) — leftover or empty checkout
+ * output is how "Missing output files: design, tech-spec, assumptions" happens
+ * when repo-grounding is on.
+ */
 function resolveOutputDir(threadId: string): string | null {
   const override = outputWorkspaceContext.getStore();
   if (override?.threadId === threadId) {
@@ -6132,8 +6935,21 @@ function resolveOutputDir(threadId: string): string | null {
   }
   const state = threads.get(threadId);
   if (state)
-    return path.join(runtimeWorkspaceDir(state), '.ai-pilot', 'output');
+    return path.join(state.thread.workspaceDir, '.ai-pilot', 'output');
   return null;
+}
+
+/**
+ * Whether output reads for this thread can tell an absent file from an
+ * unreachable workspace.
+ *
+ * Every readOutput* helper returns null for both, and a thread that has not
+ * hydrated yet has no workspace to resolve. Callers that treat null as "the
+ * agent produced nothing" must check this first or they will report a
+ * hydration gap as an agent failure.
+ */
+export function isOutputWorkspaceReadable(threadId: string): boolean {
+  return resolveOutputDir(threadId) !== null;
 }
 
 /**

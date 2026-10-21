@@ -31,13 +31,16 @@ class FakeWebSocket {
 
 afterEach(() => {
   jest.useRealTimers();
-  delete (globalThis as { __APEX_INTERACTIVE_WS__?: unknown }).__APEX_INTERACTIVE_WS__;
+  delete (globalThis as { __APEX_INTERACTIVE_WS__?: unknown })
+    .__APEX_INTERACTIVE_WS__;
 });
 
 describe('isInteractiveWsEnabled', () => {
   it('defaults to false and honors the global flag', () => {
     expect(isInteractiveWsEnabled()).toBe(false);
-    (globalThis as { __APEX_INTERACTIVE_WS__?: unknown }).__APEX_INTERACTIVE_WS__ = true;
+    (
+      globalThis as { __APEX_INTERACTIVE_WS__?: unknown }
+    ).__APEX_INTERACTIVE_WS__ = true;
     expect(isInteractiveWsEnabled()).toBe(true);
   });
 });
@@ -75,13 +78,16 @@ describe('openThreadEventStream — SSE backend (default)', () => {
           created = new FakeEventSource(url) as unknown as FakeEventSource;
           return created as unknown as EventSource;
         },
-      },
+      }
     );
 
     expect(created!.url).toBe('/api/chat/threads/thread-1/stream');
     created!.emit('open', {});
     expect(opened).toBe(true);
-    created!.emit('message', { data: '{"type":"token","text":"hi"}', lastEventId: 'e5' });
+    created!.emit('message', {
+      data: '{"type":"token","text":"hi"}',
+      lastEventId: 'e5',
+    });
     expect(messages).toEqual([['{"type":"token","text":"hi"}', 'e5']]);
   });
 });
@@ -103,17 +109,23 @@ describe('openThreadEventStream — WebSocket backend', () => {
           sockets.push(ws);
           return ws as unknown as WebSocket;
         },
-      },
+      }
     );
 
     // First socket connects with no resume ordinal.
     expect(sockets).toHaveLength(1);
-    expect(sockets[0].url).toContain('/api/interactive/threads/thread-9/stream');
+    expect(sockets[0].url).toContain(
+      '/api/interactive/threads/thread-9/stream'
+    );
     expect(sockets[0].url).not.toContain('lastEventId');
 
     // Deliver a framed event; the transport unwraps `data` and forwards the id.
     sockets[0].onmessage?.({
-      data: JSON.stringify({ type: 'event', id: 'e7', data: { type: 'token', text: 'a' } }),
+      data: JSON.stringify({
+        type: 'event',
+        id: 'e7',
+        data: { type: 'token', text: 'a' },
+      }),
     });
     expect(messages).toEqual([['{"type":"token","text":"a"}', 'e7']]);
 
@@ -128,5 +140,45 @@ describe('openThreadEventStream — WebSocket backend', () => {
     sockets[1].onclose?.();
     jest.advanceTimersByTime(5000);
     expect(sockets).toHaveLength(2);
+  });
+
+  it('falls back to durable SSE after repeated WebSocket failures', () => {
+    jest.useFakeTimers();
+    const sockets: FakeWebSocket[] = [];
+    let eventSource: FakeEventSource | null = null;
+
+    const handle = openThreadEventStream(
+      'thread-9',
+      { onMessage: jest.fn() },
+      {
+        transport: 'ws',
+        reconnectDelayMs: 100,
+        wsFailuresBeforeSseFallback: 3,
+        webSocketFactory: (url) => {
+          const ws = new FakeWebSocket(url);
+          sockets.push(ws);
+          return ws as unknown as WebSocket;
+        },
+        eventSourceFactory: (url) => {
+          eventSource = new FakeEventSource(url);
+          return eventSource as unknown as EventSource;
+        },
+      }
+    );
+
+    sockets[0].onclose?.();
+    jest.advanceTimersByTime(100);
+    sockets[1].onclose?.();
+    jest.advanceTimersByTime(100);
+    sockets[2].onclose?.();
+
+    expect(sockets).toHaveLength(3);
+    expect(eventSource).not.toBeNull();
+    expect(eventSource!.url).toBe('/api/chat/threads/thread-9/stream');
+    jest.advanceTimersByTime(1_000);
+    expect(sockets).toHaveLength(3);
+
+    handle.close();
+    expect(eventSource!.close).toHaveBeenCalledTimes(1);
   });
 });

@@ -29,6 +29,8 @@ jest.mock('../services/rbacService', () => ({
 
 jest.mock('../utils/rbacHelpers', () => ({
   isAdminUser: jest.fn(),
+  isProjectAdmin: jest.fn(),
+  isPlatformAdmin: jest.fn(),
 }));
 
 jest.mock('../services/documentApprovalService', () => ({
@@ -39,7 +41,7 @@ import { db } from '../db/drizzle';
 import { loadFullThread } from '../services/chatThreadRepository';
 import { getThread } from '../services/chatAgentService';
 import { getUserPermissions } from '../services/rbacService';
-import { isAdminUser } from '../utils/rbacHelpers';
+import { isAdminUser, isPlatformAdmin, isProjectAdmin } from '../utils/rbacHelpers';
 import { isAssignedApprover } from '../services/documentApprovalService';
 import {
   resolveThreadAccess,
@@ -51,6 +53,8 @@ const mockLoadFullThread = loadFullThread as jest.Mock;
 const mockGetThread = getThread as jest.Mock;
 const mockGetUserPermissions = getUserPermissions as jest.Mock;
 const mockIsAdminUser = isAdminUser as jest.Mock;
+const mockIsProjectAdmin = isProjectAdmin as jest.Mock;
+const mockIsPlatformAdmin = isPlatformAdmin as jest.Mock;
 const mockIsAssignedApprover = isAssignedApprover as jest.Mock;
 
 const mockDb = db as unknown as {
@@ -80,6 +84,8 @@ beforeEach(() => {
   mockLoadFullThread.mockResolvedValue(baseThread);
   mockGetUserPermissions.mockResolvedValue(new Set(['interviews:view']));
   mockIsAdminUser.mockResolvedValue(false);
+  mockIsProjectAdmin.mockResolvedValue(false);
+  mockIsPlatformAdmin.mockResolvedValue(false);
   mockIsAssignedApprover.mockResolvedValue(false);
   mockDb.query.interviews.findFirst.mockResolvedValue(null);
   mockDb.query.prds.findFirst.mockResolvedValue(null);
@@ -153,6 +159,47 @@ describe('canWriteThread', () => {
   it('denies write for a viewer on an interview-linked thread', async () => {
     mockDb.query.interviews.findFirst.mockResolvedValue({ id: 'iv-1' });
     expect(await canWriteThread('viewer-1', 'thread-1')).toBe(false);
+  });
+
+  it('allows a selected section owner to answer an interview', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      id: 'iv-1',
+      authorId: 'author-1',
+      project: 'Apex',
+      testCaseOwnerId: 'qa-1',
+    });
+    expect(await canWriteThread('qa-1', 'thread-1')).toBe(true);
+  });
+
+  it('allows an assigned interview phase participant to answer', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      id: 'iv-1',
+      authorId: 'author-1',
+      project: 'Apex',
+      deliveryAssigneeId: 'delivery-1',
+    });
+    expect(await canWriteThread('delivery-1', 'thread-1')).toBe(true);
+  });
+
+  it('allows a project admin to answer an interview', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      id: 'iv-1',
+      authorId: 'author-1',
+      project: 'Apex',
+    });
+    mockIsProjectAdmin.mockResolvedValue(true);
+    expect(await canWriteThread('admin-1', 'thread-1')).toBe(true);
+    expect(mockIsProjectAdmin).toHaveBeenCalledWith('admin-1', 'Apex');
+  });
+
+  it('allows a platform admin to answer an interview', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      id: 'iv-1',
+      authorId: 'author-1',
+      project: 'Apex',
+    });
+    mockIsPlatformAdmin.mockResolvedValue(true);
+    expect(await canWriteThread('platform-1', 'thread-1')).toBe(true);
   });
 
   it('allows an assigned approver to write on a design-doc assistant thread', async () => {

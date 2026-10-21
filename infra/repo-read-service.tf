@@ -5,14 +5,24 @@
 # mounted (git on SMB is the hot-path we are leaving). Blob container
 # repo-grounding remains the durable restore source.
 #
-# Gated by enable_repo_read_service (default false). Reuses the ai-runs
-# Container Apps Environment, runner identity, ACR, and Key Vault.
+# Gated by enable_repo_read_service (default false). Shares the runner
+# identity, ACR, and Key Vault with ai-runs. The Container Apps Environment
+# defaults to the ai-runs one but prod overrides it: grep over a bare mirror
+# needs a dedicated workload profile, and putting one on the shared
+# environment would price every ai-runs app into it.
 
 locals {
   repo_read_service_enabled  = var.enable_repo_read_service
   repo_read_service_app_name = coalesce(var.repo_read_service_container_app_name, "ca-apex-repo-read-${var.environment}")
   repo_read_service_data_dir = "/tmp/ai-pilot"
   repo_read_github_token     = var.github_token != null && var.github_token != ""
+
+  # container_app_environment_id is ForceNew, so pointing this at the wrong
+  # environment destroys and rebuilds the service rather than moving it.
+  repo_read_service_environment_id = coalesce(
+    var.repo_read_service_environment_id,
+    azurerm_container_app_environment.ai_runs.id,
+  )
 }
 
 resource "azurerm_role_assignment" "repo_read_service_blob_contributor" {
@@ -27,9 +37,10 @@ resource "azurerm_container_app" "repo_read_service" {
   count = local.repo_read_service_enabled ? 1 : 0
 
   name                         = local.repo_read_service_app_name
-  container_app_environment_id = azurerm_container_app_environment.ai_runs.id
+  container_app_environment_id = local.repo_read_service_environment_id
   resource_group_name          = local.app_resource_group_name
   revision_mode                = "Single"
+  workload_profile_name        = var.repo_read_service_workload_profile_name
 
   identity {
     type         = "UserAssigned"
@@ -162,14 +173,17 @@ resource "azurerm_container_app" "repo_read_service" {
       # which reads to the caller as the search hanging. Grep over a bare mirror
       # has to inflate blobs, so slow is normal here and must not mean unhealthy.
       # azurerm ~> 3.0 has no initial_delay on these probes; slack comes from
-      # interval_seconds * failure_count_threshold instead.
+      # interval_seconds * failure_count_threshold instead. The provider caps
+      # failure_count_threshold at 10, so the interval has to carry the slack:
+      # a threshold above 10 fails the plan outright rather than the apply.
+      # 30 * 10 keeps the intended five minutes.
       startup_probe {
         transport               = "HTTP"
         port                    = var.repo_read_service_target_port
         path                    = "/healthz"
-        interval_seconds        = 10
+        interval_seconds        = 30
         timeout                 = 5
-        failure_count_threshold = 30
+        failure_count_threshold = 10
       }
 
       liveness_probe {

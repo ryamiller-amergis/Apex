@@ -33,6 +33,8 @@ import {
   ensureRepoCache,
   fetchPinnedCommit,
   fetchRepositoryTip,
+  REPO_CACHE_MIN_FREE_BYTES,
+  RepoCacheDiskFullError,
   getRepoCacheDir,
   readRemoteBranchTip,
   repairRepoCache,
@@ -54,6 +56,7 @@ describe('repoCacheService', () => {
       GITHUB_TOKEN: 'github-secret',
     };
     mockFs.existsSync.mockReturnValue(false);
+    mockFs.readdirSync.mockReturnValue([] as never);
     mockGit.mockImplementation(async (args: string[]) => {
       if (args.includes('rev-parse')) return 'abc123\n';
       return '';
@@ -294,6 +297,35 @@ describe('repoCacheService', () => {
     );
   });
 
+  it('refuses a cold clone when the repository disk is nearly full', async () => {
+    const statfs = jest.fn().mockResolvedValue({ bavail: 1024, bsize: 1024 * 1024 });
+    const originalPromises = Object.getOwnPropertyDescriptor(mockFs, 'promises');
+    Object.defineProperty(mockFs, 'promises', { value: { statfs }, configurable: true });
+    const errorLog = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const result = ensureRepoCache({
+        provider: 'ado',
+        project: 'MaxView',
+        repo: 'MaxView',
+        branch: 'development',
+      });
+
+      await expect(result).rejects.toBeInstanceOf(RepoCacheDiskFullError);
+      await expect(result).rejects.toMatchObject({
+        freeBytes: 1024 ** 3,
+        requiredBytes: REPO_CACHE_MIN_FREE_BYTES,
+      });
+      expect(statfs).toHaveBeenCalledTimes(1);
+      expect(mockGit.mock.calls.some(([args]) => (args as string[]).includes('clone'))).toBe(false);
+      expect(errorLog).toHaveBeenCalledWith(expect.stringContaining('[repo-cache] disk-low'));
+    } finally {
+      errorLog.mockRestore();
+      if (originalPromises) Object.defineProperty(mockFs, 'promises', originalPromises);
+      else delete (mockFs as { promises?: unknown }).promises;
+    }
+  });
+
   it('does not publish a cold cache that fails connectivity verification', async () => {
     mockGit.mockImplementation(async (args: string[]) => {
       if (args.includes('rev-parse')) return 'broken-cold\n';
@@ -500,5 +532,69 @@ describe('repoCacheService', () => {
     );
     expect(fetchArgs).not.toContain('origin');
     expect(fetchArgs?.some((arg) => arg.includes('refs/heads/*'))).toBe(false);
+  });
+
+  it('removes stale pack temps before fetching, and leaves in-flight ones alone', async () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockFs.readdirSync.mockReturnValue(
+      ['tmp_pack_abandoned', 'tmp_pack_inflight', 'pack-real.pack'] as never,
+    );
+    mockFs.statSync.mockImplementation((target) => ({
+      mtimeMs: String(target).endsWith('tmp_pack_abandoned')
+        ? Date.now() - COLD_CACHE_TIMEOUT_MS - 1_000
+        : Date.now(),
+    }) as fs.Stats);
+
+    try {
+      await fetchRepositoryTip({
+        provider: 'ado',
+        project: 'MaxView',
+        repo: 'MaxView',
+        branch: 'development',
+      });
+
+      const removed = mockFs.rmSync.mock.calls.map(([target]) => String(target));
+      expect(removed).toEqual([expect.stringContaining('tmp_pack_abandoned')]);
+    } finally {
+      mockFs.readdirSync.mockReset();
+      mockFs.statSync.mockReset();
+    }
+  });
+
+  it('writes pin-fetch identity only after taking the cache lease', async () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockGit.mockResolvedValue('');
+    const order: string[] = [];
+    const originalLease = mockWithLease.getMockImplementation();
+    mockWithLease.mockImplementation(
+      async (
+        _key: string,
+        operation: (lease: { signal: AbortSignal; assertOwned: () => Promise<void> }) => Promise<unknown>,
+      ) => {
+        order.push('lease');
+        return operation({
+          signal: new AbortController().signal,
+          assertOwned: jest.fn().mockResolvedValue(undefined),
+        });
+      },
+    );
+    mockFs.writeFileSync.mockImplementation((file: fs.PathOrFileDescriptor) => {
+      if (String(file).includes('apex-cache-identity.json')) order.push('identity');
+    });
+
+    try {
+      await expect(fetchPinnedCommit({
+        provider: 'ado',
+        project: 'MaxView',
+        repo: 'MaxView',
+        branch: 'development',
+      }, 'a'.repeat(40))).resolves.toBe(true);
+
+      expect(order[0]).toBe('lease');
+      expect(order).toContain('identity');
+    } finally {
+      if (originalLease) mockWithLease.mockImplementation(originalLease);
+      mockFs.writeFileSync.mockReset();
+    }
   });
 });

@@ -19,7 +19,7 @@ Do **not** use for local or cloud-dev DBs — use `.cursor/skills/postgresql-mig
 
 1. `az login` into the production subscription (`MSS-Production`)
 2. Permissions to:
-   - create/delete firewall rules on `psql-apex-eus2`
+   - create/delete firewall rules on `psql-apex-cus`
    - read App Service app settings on `app-apex-prd`
 3. Run commands from the **repo root**
 4. Explicit user request before applying (prod write)
@@ -29,10 +29,14 @@ Do **not** use for local or cloud-dev DBs — use `.cursor/skills/postgresql-mig
 | Resource | Value |
 |----------|--------|
 | Subscription | `MSS-Production` |
-| Postgres | `psql-apex-eus2` in `rg-apex-prd-data` |
+| Postgres | `psql-apex-cus` in `rg-apex-prd-data` (Central US) |
 | App (DATABASE_URL) | `app-apex-prd` in `rg-apex-prd-app` |
 
 Defined in `scripts/prod-db-defaults.ps1`.
+
+`psql-apex-cus` is the only production server. The former East US 2 server `psql-apex-eus2` was deleted on 2026-09-18 after the Central US migration; any command still naming it will fail.
+
+The firewall scripts use Azure CLI ≥ 2.80 argument names — `--server-name <server>` for the server and `--name <rule>` for the rule. The older `--name <server> --rule-name <rule>` spelling fails with `the following arguments are required: --server-name/-s`.
 
 ## Scripts (execute these — do not reinvent)
 

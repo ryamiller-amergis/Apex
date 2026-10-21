@@ -1,3 +1,5 @@
+import type { WorkItemOwnerSummary } from './apexWorkItem';
+
 export type FeatureRequestStatus =
   | 'new'
   | 'under-review'
@@ -46,6 +48,8 @@ export interface FeatureRequest {
   interviewId: string | null;
   submittedBy: string;
   sourceProject: string;
+  assignedTo: WorkItemOwnerSummary | null;
+  assignedToApex: boolean;
   status: FeatureRequestStatus;
   aiStatus: FeatureRequestAiStatus;
   aiPriority: FeatureRequestPriority | null;
@@ -77,4 +81,14 @@ export interface UpdateFeatureRequestDTO {
   teamPriority?: FeatureRequestPriority | null;
   teamRisk?: FeatureRequestRisk | null;
   rank?: number | null;
+  assigneeId?: string | null;
+}
+
+export interface RankFeatureRequestsDTO {
+  ids: string[];
+}
+
+export interface RankFeatureRequestsResult {
+  items: FeatureRequest[];
+  rankedAt: string;
 }

@@ -257,6 +257,7 @@ export async function startScoping(
     userId,
     {
       project: projectId,
+      agentModule: 'designModuleScoping',
       repo: skillConfig.skillRepo,
       branch: skillConfig.skillBranch ?? 'main',
       skillProvider: skillConfig.skillProvider ?? 'ado',

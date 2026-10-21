@@ -29,13 +29,82 @@ export type CursorStreamEvent =
     }
   | { type: string; [key: string]: unknown };
 
+/**
+ * Token counts as reported by the Cursor runtime (`@cursor/sdk` `TokenUsage`).
+ * Structural rather than an SDK import so the worker/actor hosts stay decoupled.
+ */
+export interface CursorTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+/** Fields a worker may attach to a terminal ingest when the runtime reported usage. */
+export function tokenFieldsForTerminalIngest(
+  usage: CursorTokenUsage | undefined,
+): {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+} {
+  if (!usage) return {};
+  return {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cacheReadTokens: usage.cacheReadTokens,
+    cacheWriteTokens: usage.cacheWriteTokens,
+  };
+}
+
+function readTokenUsage(value: unknown): CursorTokenUsage | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as Record<string, unknown>;
+  const num = (key: string): number => (typeof raw[key] === 'number' && Number.isFinite(raw[key] as number)
+    ? Math.max(0, raw[key] as number)
+    : 0);
+  const usage: CursorTokenUsage = {
+    inputTokens: num('inputTokens'),
+    outputTokens: num('outputTokens'),
+    cacheReadTokens: num('cacheReadTokens'),
+    cacheWriteTokens: num('cacheWriteTokens'),
+  };
+  // A turn that reported nothing is indistinguishable from an all-zero payload;
+  // treat both as "no usage" so the caller can fall back to its estimate.
+  const total = usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
+  return total > 0 ? usage : undefined;
+}
+
+function addTokenUsage(
+  a: CursorTokenUsage | undefined,
+  b: CursorTokenUsage | undefined,
+): CursorTokenUsage | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
+    cacheWriteTokens: a.cacheWriteTokens + b.cacheWriteTokens,
+  };
+}
+
 export interface CursorExecutionWaitResult {
   status: string;
   result?: string;
+  error?: unknown;
+  /** Cumulative usage across turns; absent when the runtime reported none. */
+  usage?: unknown;
 }
 
 export class CursorExecutionWaitError extends Error {
-  constructor(public readonly cause: unknown) {
+  constructor(
+    public readonly cause: unknown,
+    public readonly usage?: CursorTokenUsage,
+    /** Raw stream error text; sanitize before persisting or displaying. */
+    public readonly terminalStatusMessage?: string,
+  ) {
     super(cause instanceof Error ? cause.message : 'Cursor run wait failed');
     this.name = 'CursorExecutionWaitError';
   }
@@ -50,6 +119,130 @@ export interface CursorExecutionRun {
   supports(capability: string): boolean;
   stream(): AsyncIterable<CursorStreamEvent>;
   wait(): Promise<CursorExecutionWaitResult>;
+  cancel?(): Promise<void>;
+}
+
+export interface CursorTurnEndResult {
+  text: string;
+  usage?: CursorTokenUsage;
+}
+
+export interface CursorTurnEndMonitor {
+  observe(update: unknown): void;
+  completion: Promise<CursorTurnEndResult>;
+}
+
+/**
+ * Captures Cursor's authoritative `turn-ended` delta and the final answer text
+ * that preceded it. Tool calls reset the text segment so progress narration is
+ * not persisted as the answer.
+ */
+export function createCursorTurnEndMonitor(): CursorTurnEndMonitor {
+  let text = '';
+  let settled = false;
+  let resolve!: (result: CursorTurnEndResult) => void;
+  const completion = new Promise<CursorTurnEndResult>((done) => {
+    resolve = done;
+  });
+
+  return {
+    observe(update: unknown) {
+      if (
+        !update ||
+        typeof update !== 'object' ||
+        !('type' in update)
+      ) {
+        return;
+      }
+      const delta = update as {
+        type?: unknown;
+        text?: unknown;
+        usage?: unknown;
+      };
+      if (delta.type === 'text-delta' && typeof delta.text === 'string') {
+        text += delta.text;
+      } else if (delta.type === 'tool-call-started') {
+        text = '';
+      } else if (delta.type === 'turn-ended' && !settled) {
+        settled = true;
+        resolve({ text, usage: readTokenUsage(delta.usage) });
+      }
+    },
+    completion,
+  };
+}
+
+async function* streamUntilTurnEnd(
+  stream: AsyncIterable<CursorStreamEvent>,
+  turnEnd: Promise<CursorTurnEndResult>,
+  /** After the stream ends, a late turn end is accepted until this settles. */
+  afterStreamEnd?: () => Promise<unknown>,
+): AsyncGenerator<CursorStreamEvent> {
+  const iterator = stream[Symbol.asyncIterator]();
+  let next = iterator.next();
+  let streamedText = '';
+  try {
+    while (true) {
+      let outcome = await Promise.race([
+        next.then((result) => ({ kind: 'stream' as const, result })),
+        turnEnd.then((result) => ({ kind: 'turn-end' as const, result })),
+      ]);
+      if (outcome.kind === 'stream' && outcome.result.done && afterStreamEnd) {
+        const late = await Promise.race([
+          turnEnd,
+          afterStreamEnd().then(() => null),
+        ]);
+        if (late) outcome = { kind: 'turn-end' as const, result: late };
+      }
+      if (outcome.kind === 'turn-end') {
+        const remainingText = outcome.result.text.startsWith(streamedText)
+          ? outcome.result.text.slice(streamedText.length)
+          : outcome.result.text;
+        if (remainingText) {
+          yield {
+            type: 'assistant',
+            message: {
+              content: [{ type: 'text', text: remainingText }],
+            },
+          };
+        }
+        yield {
+          type: 'apex_turn_end',
+          text: outcome.result.text,
+          usage: outcome.result.usage,
+        };
+        return;
+      }
+      if (outcome.result.done) return;
+      if (outcome.result.value.type === 'assistant') {
+        const content = (
+          outcome.result.value as {
+            message?: { content?: CursorAssistantBlock[] };
+          }
+        ).message?.content ?? [];
+        if (content.some((block) => block.type === 'tool_use')) {
+          streamedText = '';
+        } else {
+          streamedText += content
+            .filter(
+              (block): block is Extract<CursorAssistantBlock, { type: 'text' }> =>
+                block.type === 'text',
+            )
+            .map((block) => block.text)
+            .join('');
+        }
+      } else if (
+        outcome.result.value.type === 'tool_call' &&
+        (outcome.result.value as { status?: unknown }).status === 'running'
+      ) {
+        streamedText = '';
+      }
+      yield outcome.result.value;
+      next = iterator.next();
+    }
+  } finally {
+    void iterator.return?.().catch(() => {});
+  }
 }
 
 export interface CursorExecutionEventSink {
@@ -289,11 +482,59 @@ export interface ExecuteCursorExecutionCoreInput {
   nextSequence: () => number;
   createEventId?: () => string;
   now?: () => string;
+  /** Abort when the model repeats the exact same tool call this many times. */
+  maxIdenticalToolCalls?: number;
+  /** Authoritative end-of-turn signal captured from Cursor's onDelta callback. */
+  turnEnd?: Promise<CursorTurnEndResult>;
+  /** How long a run may take to settle after turn end before it is cancelled. */
+  turnEndSettleMs?: number;
+  /**
+   * Fail when the stream ends and, within `turnEndSettleMs`, neither a turn
+   * end arrives nor `wait()` settles. A dropped Cursor connection can leave
+   * `wait()` pending forever.
+   */
+  failIfStreamEndsBeforeTurnEnd?: boolean;
+}
+
+export class CursorStreamClosedBeforeTurnEndError extends Error {
+  constructor() {
+    super('Cursor stream closed before the turn finished');
+    this.name = 'CursorStreamClosedBeforeTurnEndError';
+  }
+}
+
+const DEFAULT_TURN_END_SETTLE_MS = 5_000;
+
+async function settlesWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => true, () => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export interface CursorExecutionResult {
   text: string;
   waitResult: CursorExecutionWaitResult;
+  completedOnTurnEnd?: boolean;
+  /**
+   * The turn completed but neither cancel() nor wait() settled, so the run
+   * may still be live on Cursor's side.
+   */
+  runLeftUnsettled?: boolean;
+  terminalStatusMessage?: string;
+  /**
+   * Real token counts from the runtime, covering the full prompt the model saw
+   * (system prompt, skill, grounding, history, tool output). Absent when the
+   * runtime reported no usage — callers should fall back to an estimate.
+   */
+  usage?: CursorTokenUsage;
 }
 
 /**
@@ -315,11 +556,18 @@ export async function executeCursorExecutionCore(
     nextSequence,
     createEventId = uuidv4,
     now = () => new Date().toISOString(),
+    maxIdenticalToolCalls = 8,
   } = input;
   const thinkingPhase = input.thinkingPhase ?? new ThinkingPhaseCoalescer();
   let textBuffer = '';
   let firstStreamEventSeen = false;
   let anonymousToolUseCount = 0;
+  let streamedUsage: CursorTokenUsage | undefined;
+  let completedOnTurnEnd = false;
+  let runLeftUnsettled = false;
+  let turnEndWait: Promise<CursorExecutionWaitResult> | null = null;
+  let terminalStatusMessage: string | undefined;
+  const identicalToolCallCounts = new Map<string, number>();
 
   const publish = async (event: SseEvent, phase?: AgentRunPhase): Promise<void> => {
     const envelope = createCursorRunEventEnvelope({
@@ -340,15 +588,66 @@ export async function executeCursorExecutionCore(
     if (phaseEvent) await publish(phaseEvent);
   };
 
+  const turnEndSettleMs = input.turnEndSettleMs ?? DEFAULT_TURN_END_SETTLE_MS;
+  const streamEnd: {
+    wait?: Promise<CursorExecutionWaitResult>;
+    settled?: boolean;
+  } = {};
+  const waitAfterStreamEnd = async (): Promise<void> => {
+    streamEnd.wait ??= run.wait();
+    streamEnd.settled = await settlesWithin(streamEnd.wait, turnEndSettleMs);
+  };
+
   if (run.supports('stream')) {
-    for await (const event of run.stream()) {
+    const stream = input.turnEnd
+      ? streamUntilTurnEnd(
+          run.stream(),
+          input.turnEnd,
+          input.failIfStreamEndsBeforeTurnEnd ? waitAfterStreamEnd : undefined,
+        )
+      : run.stream();
+    for await (const event of stream) {
       await hooks.beforeStreamEvent?.();
       if (!firstStreamEventSeen) {
         firstStreamEventSeen = true;
         await hooks.onFirstStreamEvent?.();
       }
 
-      if (event.type === 'assistant') {
+      if (event.type === 'apex_turn_end') {
+        const turnEndEvent = event as {
+          type: 'apex_turn_end';
+          text?: unknown;
+          usage?: unknown;
+        };
+        if (typeof turnEndEvent.text === 'string' && turnEndEvent.text.trim()) {
+          textBuffer = turnEndEvent.text;
+        }
+        streamedUsage =
+          readTokenUsage(turnEndEvent.usage) ?? streamedUsage;
+        // Cursor drops a cancelled run's turn from the agent's conversation, so
+        // only cancel a run that does not settle on its own after turn end.
+        turnEndWait = streamEnd.wait ?? run.wait();
+        const settled = await settlesWithin(turnEndWait, turnEndSettleMs);
+        if (!settled && input.failIfStreamEndsBeforeTurnEnd) {
+          // On a dropped connection neither cancel() nor wait() may ever
+          // settle; the turn already has its answer, so stop waiting on them.
+          if (run.cancel && run.supports('cancel')) {
+            await settlesWithin(run.cancel(), turnEndSettleMs);
+          }
+          if (!(await settlesWithin(turnEndWait, turnEndSettleMs))) {
+            turnEndWait = Promise.resolve({ status: 'cancelled' });
+            runLeftUnsettled = true;
+          }
+        } else if (!settled && run.cancel && run.supports('cancel')) {
+          try {
+            await run.cancel();
+          } catch {
+            // Best-effort — the turn already produced the answer.
+          }
+        }
+        completedOnTurnEnd = true;
+        break;
+      } else if (event.type === 'assistant') {
         const assistantEvent = event as {
           type: 'assistant';
           message: { content: CursorAssistantBlock[] };
@@ -366,6 +665,25 @@ export async function executeCursorExecutionCore(
             if (textBuffer.trim()) {
               await hooks.onReasoningSegment?.(textBuffer.trim());
               textBuffer = '';
+            }
+            let serializedInput = '';
+            try {
+              serializedInput = JSON.stringify(block.input ?? null);
+            } catch {
+              serializedInput = String(block.input);
+            }
+            const toolCallSignature = `${block.name}\n${serializedInput}`;
+            const identicalCallCount =
+              (identicalToolCallCounts.get(toolCallSignature) ?? 0) + 1;
+            identicalToolCallCounts.set(toolCallSignature, identicalCallCount);
+            if (
+              maxIdenticalToolCalls > 0 &&
+              identicalCallCount > maxIdenticalToolCalls
+            ) {
+              throw new Error(
+                `The agent repeated ${block.name} with the same input too many times. ` +
+                  'Start a new chat or rephrase the request.',
+              );
             }
             const key = typeof block.id === 'string'
               ? block.id
@@ -390,6 +708,19 @@ export async function executeCursorExecutionCore(
             });
             await hooks.onHeartbeat?.();
           }
+        }
+      } else if (event.type === 'status') {
+        const statusEvent = event as {
+          status?: unknown;
+          message?: unknown;
+        };
+        const status = String(statusEvent.status ?? '').toUpperCase();
+        if (['FINISHED', 'ERROR', 'CANCELLED', 'EXPIRED'].includes(status)) {
+          terminalStatusMessage =
+            status !== 'FINISHED' && typeof statusEvent.message === 'string'
+              ? statusEvent.message
+              : undefined;
+          break;
         }
       } else if (event.type === 'thinking') {
         const thinkingEvent = event as {
@@ -442,20 +773,47 @@ export async function executeCursorExecutionCore(
           result: summarizeCursorToolResult(toolCallEvent.result),
         }, phase);
         await hooks.onHeartbeat?.();
+      } else if (event.type === 'usage') {
+        // Emitted once per turn at turn end. Summing turns gives the run total
+        // when `wait()` does not carry a cumulative snapshot.
+        streamedUsage = addTokenUsage(
+          streamedUsage,
+          readTokenUsage((event as { usage?: unknown }).usage),
+        );
       }
     }
     await hooks.onStreamComplete?.();
   }
 
   await flushThinkingPhase();
+  if (!turnEndWait && input.failIfStreamEndsBeforeTurnEnd) {
+    if (streamEnd.settled === undefined) await waitAfterStreamEnd();
+    turnEndWait = streamEnd.wait ?? null;
+    if (!streamEnd.settled) {
+      if (run.cancel && run.supports('cancel')) {
+        await settlesWithin(run.cancel(), turnEndSettleMs);
+      }
+      throw new CursorExecutionWaitError(
+        new CursorStreamClosedBeforeTurnEndError(),
+        streamedUsage,
+        terminalStatusMessage,
+      );
+    }
+  }
   let waitResult: CursorExecutionWaitResult;
   try {
-    waitResult = await run.wait();
+    waitResult = await (turnEndWait ?? run.wait());
   } catch (error) {
-    throw new CursorExecutionWaitError(error);
+    throw new CursorExecutionWaitError(error, streamedUsage, terminalStatusMessage);
   }
   return {
     text: textBuffer,
     waitResult,
+    completedOnTurnEnd,
+    ...(runLeftUnsettled ? { runLeftUnsettled } : {}),
+    terminalStatusMessage,
+    // `wait()` reports cumulative usage for the whole run; the summed stream
+    // events are the fallback for runtimes that only emit per-turn events.
+    usage: readTokenUsage(waitResult.usage) ?? streamedUsage,
   };
 }

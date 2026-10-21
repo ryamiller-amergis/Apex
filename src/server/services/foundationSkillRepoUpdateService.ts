@@ -44,7 +44,7 @@ import * as githubCatalog from './skillCatalogGitHub';
 import {
   getRelease,
   getLatestPublishedRelease,
-  isReleaseVisibleToProject,
+  isReleaseVisibleToRepo,
   listRollbackTargets,
   semverGreaterThan,
   appendAudit,
@@ -58,7 +58,10 @@ import type {
   FoundationSkillRelease,
   RollbackFoundationSkillRepoResult,
 } from '../../shared/types/foundationSkills';
-import { getVisibleSkillsForProject } from '../../shared/types/foundationSkills';
+import {
+  getProjectReleaseNotes,
+  getVisibleSkillsForProject,
+} from '../../shared/types/foundationSkills';
 import {
   AGENT_SKILL_ROOT,
   LEGACY_CURSOR_SKILL_ROOT,
@@ -712,12 +715,22 @@ function detectDrift(workspaceDir: string): string[] {
 }
 
 /** Build a structured PR description from release notes and CLI output. */
-function buildPrDescription(
-  release: FoundationSkillRelease,
-  cliOutput: string,
-  intent: 'update' | 'rollback' = 'update',
-  fromVersion?: string | null
-): string {
+function buildPrDescription({
+  release,
+  apexProject,
+  skills,
+  cliOutput,
+  intent = 'update',
+  fromVersion = null,
+}: {
+  release: FoundationSkillRelease;
+  /** The consumer project — decides which notes and skills the PR describes. */
+  apexProject: string;
+  skills: string[];
+  cliOutput: string;
+  intent?: 'update' | 'rollback';
+  fromVersion?: string | null;
+}): string {
   const sections: string[] = [];
 
   if (intent === 'rollback') {
@@ -742,19 +755,19 @@ function buildPrDescription(
     );
   }
 
-  if (release.releaseNotes?.trim()) {
-    sections.push(`## Release notes\n\n${release.releaseNotes.trim()}`);
+  const notes = getProjectReleaseNotes(release, apexProject);
+  if (notes.releaseNotes?.trim()) {
+    sections.push(`## Release notes\n\n${notes.releaseNotes.trim()}`);
   }
-  if (release.breakingChanges?.trim()) {
+  if (notes.breakingChanges?.trim()) {
     sections.push(
-      `## ⚠️ Breaking changes\n\n${release.breakingChanges.trim()}`
+      `## ⚠️ Breaking changes\n\n${notes.breakingChanges.trim()}`
     );
   }
 
-  const installed = release.selectedSkills?.length
-    ? `Skills included: ${release.selectedSkills.join(', ')}`
-    : '';
-  if (installed) sections.push(`## Skills\n\n${installed}`);
+  if (skills.length) {
+    sections.push(`## Skills\n\nSkills included: ${skills.join(', ')}`);
+  }
 
   sections.push(
     `## Install output\n\n\`\`\`\n${cliOutput.slice(0, 3000).trim()}\n\`\`\``
@@ -799,7 +812,13 @@ export async function updateRepoWithFoundationSkills(
   try {
     release = opts.releaseId
       ? await getRelease(opts.releaseId)
-      : await getLatestPublishedRelease(apexProject);
+      : await getLatestPublishedRelease(apexProject, {
+          apexProject,
+          provider,
+          project,
+          repo,
+          branch: opts.defaultBranch ?? 'main',
+        });
   } catch (e: unknown) {
     errors.push(`Failed to resolve release: ${(e as Error).message}`);
   }
@@ -829,9 +848,15 @@ export async function updateRepoWithFoundationSkills(
       errors,
     };
   }
-  if (!isReleaseVisibleToProject(release, apexProject)) {
+  if (!isReleaseVisibleToRepo(release, {
+    apexProject,
+    provider,
+    project,
+    repo,
+    branch: opts.defaultBranch ?? 'main',
+  })) {
     errors.push(
-      `Release ${release.version} is not targeted at Apex project "${apexProject}" — update the release targeting or use a different release`
+      `Release ${release.version} is not targeted at ${apexProject} / ${repo} — update the release targeting or use a different release`
     );
     return {
       status: 'error',
@@ -1027,7 +1052,14 @@ export async function updateRepoWithFoundationSkills(
       intent === 'rollback'
         ? `chore: rollback APEX foundation skills to v${version}`
         : `chore: update APEX foundation skills to v${version}`;
-    const prBody = buildPrDescription(release, cliOutput, intent, fromVersion);
+    const prBody = buildPrDescription({
+      release,
+      apexProject,
+      skills,
+      cliOutput,
+      intent,
+      fromVersion,
+    });
 
     if (provider === 'github') {
       prUrl = await githubCatalog.createPullRequest({
@@ -1158,8 +1190,14 @@ export async function rollbackRepoWithFoundationSkills(
       errors: [msg],
     };
   }
-  if (!isReleaseVisibleToProject(target, opts.apexProject)) {
-    const msg = `Release v${target.version} is not targeted at Apex project "${opts.apexProject}"`;
+  if (!isReleaseVisibleToRepo(target, {
+    apexProject: opts.apexProject,
+    provider: opts.provider,
+    project: opts.project,
+    repo: opts.repo,
+    branch: opts.defaultBranch,
+  })) {
+    const msg = `Release v${target.version} is not targeted at ${opts.apexProject} / ${opts.repo}`;
     return {
       status: 'error',
       prUrl: null,

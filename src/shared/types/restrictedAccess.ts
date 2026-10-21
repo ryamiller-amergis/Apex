@@ -34,6 +34,7 @@ export const MODULE_VIEW_PERMISSIONS: Record<MenuItemKey, string> = {
   'load-tests': 'load-test:view',
   diagrams: 'diagram:view',
   'work-board': 'work-board:view',
+  playbooks: 'playbooks:view',
 };
 
 export interface RestrictedUserAccess {

@@ -107,6 +107,36 @@ describe('walkthroughAnchorSyncHeuristics', () => {
         },
       }),
     ).toBe(false);
+    expect(
+      needsAiSmartTagging({
+        reviewStatus: 'pending',
+        testId: 'ado-create-error',
+        smartTags: ['ado', 'create', 'error'],
+        aiProvenance: {
+          provider: 'cursor',
+          model: 'anchor-classifier',
+          skillPath: '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+          generatedAt: '2026-07-30T01:00:00.000Z',
+          confidence: 0.9,
+          rationale: 'classifier',
+        },
+      }),
+    ).toBe(false);
+    expect(
+      needsAiSmartTagging({
+        reviewStatus: 'pending',
+        testId: 'shared-layout-header',
+        smartTags: ['header', 'all-users', 'discover'],
+        aiProvenance: {
+          provider: 'cursor',
+          model: 'anchor-classifier',
+          skillPath: '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+          generatedAt: '2026-07-30T01:00:00.000Z',
+          confidence: 0.4,
+          rationale: 'no owner',
+        },
+      }),
+    ).toBe(true);
     expect(isPlausibleWalkthroughTestId('${escaped}')).toBe(false);
     expect(isPlausibleWalkthroughTestId('ado-create-error')).toBe(true);
   });

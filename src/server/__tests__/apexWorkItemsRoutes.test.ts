@@ -27,6 +27,7 @@ const mockCreateItem = jest.fn();
 const mockUpdateItem = jest.fn();
 const mockMoveItem = jest.fn();
 const mockBulkUpdate = jest.fn();
+const mockRankItems = jest.fn();
 const mockListOwners = jest.fn();
 const mockListFacets = jest.fn();
 const mockListReleases = jest.fn();
@@ -51,6 +52,7 @@ jest.mock('../services/apexWorkItemService', () => ({
   updateApexWorkItem: (...a: any[]) => mockUpdateItem(...a),
   moveApexWorkItem: (...a: any[]) => mockMoveItem(...a),
   bulkUpdateApexWorkItems: (...a: any[]) => mockBulkUpdate(...a),
+  rankApexWorkItems: (...a: any[]) => mockRankItems(...a),
   listEligibleOwners: (...a: any[]) => mockListOwners(...a),
   listFilterFacets: (...a: any[]) => mockListFacets(...a),
   listReleases: (...a: any[]) => mockListReleases(...a),
@@ -296,6 +298,27 @@ describe('POST /api/apex-work-items/bulk', () => {
       PROJECT,
       expect.objectContaining({ ids: ['item-1'], status: 'ready' }),
     );
+  });
+});
+
+describe('POST /api/apex-work-items/rank', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('ranks the complete submitted filtered id set', async () => {
+    mockRankItems.mockResolvedValue({ items: [MOCK_ITEM], rankedAt: '2026-09-23T12:00:00Z' });
+    const res = await request(buildApp())
+      .post(`/api/apex-work-items/rank?${q}`)
+      .send({ ids: ['item-1', 'item-2'] });
+    expect(res.status).toBe(200);
+    expect(mockRankItems).toHaveBeenCalledWith('user-1', PROJECT, ['item-1', 'item-2']);
+  });
+
+  it('rejects an empty id set', async () => {
+    const res = await request(buildApp())
+      .post(`/api/apex-work-items/rank?${q}`)
+      .send({ ids: [] });
+    expect(res.status).toBe(400);
+    expect(mockRankItems).not.toHaveBeenCalled();
   });
 });
 

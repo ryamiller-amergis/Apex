@@ -329,7 +329,7 @@ describe('FEAT-005 S5 VT-09 fail-closed repository read integration', () => {
       capabilityCalls: 1,
     },
   ])(
-    '$criterion keeps provider browse, attaches no local tools, sanitizes fallback, and emits no engagement',
+    '$criterion keeps local grounding without provider browse, attaches no local tools, sanitizes fallback, and emits no engagement',
     async ({ nativeFlag, capability, fallbackReason, capabilityCalls }) => {
       // Arrange
       const deps = dependencies('C:\\sensitive\\checkout', {
@@ -346,9 +346,7 @@ describe('FEAT-005 S5 VT-09 fail-closed repository read integration', () => {
       expect(capability).toHaveBeenCalledTimes(capabilityCalls);
       expect(mockResolveConnectionProfile).not.toHaveBeenCalled();
       expect(prepared.local.customTools).toBeUndefined();
-      expect(prepared.mcpServers['github-repo']).toEqual({
-        url: `http://localhost:3001/mcp/github-repo/grounding/${profileId}`,
-      });
+      expect(prepared.mcpServers['github-repo']).toBeUndefined();
       expect(deps.trackEvent).toHaveBeenCalledWith(
         'grounding.fallback',
         expect.objectContaining({ reason: fallbackReason }),
@@ -365,7 +363,7 @@ describe('FEAT-005 S5 VT-09 fail-closed repository read integration', () => {
     }
   );
 
-  it('AC-2 / DoD-2 reader-resolution failure restores provider browse and records only sanitized fallback telemetry', async () => {
+  it('AC-2 / DoD-2 reader-resolution failure does not restore provider browse and records only sanitized fallback telemetry', async () => {
     // Arrange
     mockResolveConnectionProfile.mockRejectedValue(
       new Error('token=private C:\\secret\\checkout --raw-args')
@@ -386,9 +384,7 @@ describe('FEAT-005 S5 VT-09 fail-closed repository read integration', () => {
     // Assert
     expect(prepared.nativeReads).toBe(false);
     expect(prepared.local.customTools).toBeUndefined();
-    expect(prepared.mcpServers['github-repo']).toEqual({
-      url: 'http://localhost:3001/mcp/github-repo',
-    });
+    expect(prepared.mcpServers['github-repo']).toBeUndefined();
     expect(mockTrackEvent).toHaveBeenCalledWith(
       'grounding.fallback',
       {
@@ -642,9 +638,7 @@ describe('FEAT-005 S5 VT-15 exact targeted repository identity and NFRs', () => 
       expect(targetedRuntime.mcpServers['github-repo']).toBeUndefined();
       expect(siblingRuntime.nativeReads).toBe(false);
       expect(siblingRuntime.local.customTools).toBeUndefined();
-      expect(siblingRuntime.mcpServers['github-repo']).toEqual({
-        url: 'http://localhost:3001/mcp/github-repo',
-      });
+      expect(siblingRuntime.mcpServers['github-repo']).toBeUndefined();
     } finally {
       fs.rmSync(target.root, { recursive: true, force: true });
       fs.rmSync(sibling.root, { recursive: true, force: true });

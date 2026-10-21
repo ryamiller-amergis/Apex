@@ -1,5 +1,6 @@
 import React from 'react';
 import { useBreakpoint } from '../hooks/useBreakpoint';
+import { canAccessMyWork } from '../utils/canAccessMyWork';
 import styles from './AppSidebar.module.css';
 
 interface NavItem {
@@ -28,6 +29,8 @@ interface AppSidebarProps {
   isInAnyGroup?: (groups: string[]) => boolean;
   menuEnabledViews?: string[];
   isSuperAdmin?: boolean;
+  /** True when designs have been shared with the user, who is otherwise not a UI Lab member. */
+  hasUiLabShares?: boolean;
   selectedProject?: string;
   canAccessHome?: boolean;
   onNavigateHome: () => void;
@@ -46,6 +49,9 @@ interface AppSidebarProps {
   workBoardEnabled?: boolean;
   onNavigateLoadTests?: () => void;
   onNavigateDiagrams?: () => void;
+  onNavigatePlaybooks?: () => void;
+  /** Playbooks stays hidden until the production-adapters flag is on for the project. */
+  playbooksEnabled?: boolean;
   onNavigateAdmin: () => void;
 }
 
@@ -149,6 +155,15 @@ const IconLoadTests: React.FC = () => (
   </svg>
 );
 
+const IconPlaybooks: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="4" cy="10" r="1.6" />
+    <circle cx="10" cy="10" r="1.6" />
+    <circle cx="16" cy="10" r="1.6" />
+    <path d="M5.6 10h2.8M11.6 10h2.8" />
+  </svg>
+);
+
 const IconDiagrams: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <rect x="3" y="4" width="14" height="12" rx="2" />
@@ -190,6 +205,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   isInAnyGroup,
   menuEnabledViews = [],
   isSuperAdmin = false,
+  hasUiLabShares = false,
   canAccessHome = true,
   onNavigateHome,
   onNavigateCalendar,
@@ -207,6 +223,8 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   workBoardEnabled = true,
   onNavigateLoadTests,
   onNavigateDiagrams,
+  onNavigatePlaybooks,
+  playbooksEnabled = false,
   onNavigateAdmin,
 }) => {
   const { isMobile } = useBreakpoint();
@@ -248,6 +266,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       items: [
         { label: 'UI Lab', view: 'ui-lab', icon: <IconUiLab />, permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
         { label: 'Load Tests', view: 'load-tests', icon: <IconLoadTests />, permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}), testId: 'nav-load-tests' },
+        { label: 'Playbooks', view: 'playbooks', icon: <IconPlaybooks />, permission: 'playbooks:view', onNavigate: onNavigatePlaybooks ?? (() => {}) },
         { label: 'Apex Backlog', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
         { label: 'Work Board', view: 'work-board', icon: <IconWorkBoard />, permission: 'work-board:view', onNavigate: onNavigateWorkBoard ?? (() => {}) },
       ],
@@ -256,8 +275,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
 
   const isItemVisible = (item: NavItem): boolean => {
     if (item.view === 'my-work') {
-      if (!isSuperAdmin && !menuEnabledViews.includes('my-work')) return false;
-      return can('dev-workbench:view') && (isInAnyGroup?.(['Developer']) ?? false);
+      return canAccessMyWork({ can, isSuperAdmin, isInAnyGroup, enabledViews: menuEnabledViews });
     }
     if (item.view === 'standup') {
       if (!isSuperAdmin && !menuEnabledViews.includes('standup')) return false;
@@ -274,10 +292,15 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       if (!isSuperAdmin && !menuEnabledViews.includes('work-board')) return false;
       return isSuperAdmin || can('work-board:view');
     }
+    if (item.view === 'playbooks') {
+      if (!playbooksEnabled) return false;
+      if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;
+      return isSuperAdmin || can('playbooks:view');
+    }
     if (item.view === 'ui-lab') {
       if (!isSuperAdmin && !menuEnabledViews.includes('ui-lab')) return false;
       if (!isSuperAdmin && !can('ui-lab:view')) return false;
-      return isSuperAdmin || (isInAnyGroup?.(['UI/UX']) ?? false);
+      return isSuperAdmin || (isInAnyGroup?.(['UI/UX']) ?? false) || hasUiLabShares;
     }
     if (!isSuperAdmin && !menuEnabledViews.includes(item.view)) return false;
     if (!isSuperAdmin && item.permission !== null && !can(item.permission)) return false;

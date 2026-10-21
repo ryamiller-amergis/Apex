@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { ErrorBoundary } from 'react-error-boundary';
 import type { ExcalidrawScene } from '../../shared/types/diagram';
 import { isDarkFamilyTheme } from '../../shared/walkthroughAssets';
 import { useAppShell } from '../hooks/useAppShell';
-import { fromDiagramScene, toDiagramScene } from '../utils/diagramScene';
+import { materializeDiagramScene } from '../utils/diagramMaterialize';
+import { cloneDiagramScene, toDiagramScene } from '../utils/diagramScene';
 import type { ThumbnailSource } from '../utils/diagramThumbnail';
 import styles from './ExcalidrawAdapter.module.css';
 
@@ -13,6 +15,11 @@ export interface ExcalidrawAdapterHandle {
   getThumbnailSource: () => ThumbnailSource;
   /** Live canvas scene — preferred over React state when saving. */
   getLiveScene: () => ExcalidrawScene;
+  /**
+   * Replace the live canvas without remounting Excalidraw (Build with Apex).
+   * No-op until the imperative API is ready.
+   */
+  applyScene: (scene: ExcalidrawScene) => Promise<void>;
   exportPng: () => Promise<Blob>;
   exportSvg: () => Promise<SVGSVGElement>;
   exportNativeJson: () => Promise<string>;
@@ -26,6 +33,12 @@ interface ExcalidrawAdapterProps {
   onCanvasHydrated?: (scene: ExcalidrawScene) => void;
   /** When true, canvas fills the host without decorative frame chrome. */
   fullscreen?: boolean;
+  /**
+   * Remounts only the canvas host (not the lazy package load). Use when a new
+   * scene must replace initialData — e.g. Build with Apex — without re-importing
+   * Excalidraw, which surfaces as "Canvas failed to load" in Vite.
+   */
+  sceneEpoch?: string;
 }
 
 type ExcalidrawModule = typeof import('@excalidraw/excalidraw');
@@ -33,6 +46,10 @@ type ImperativeApi = {
   getSceneElements: () => readonly unknown[];
   getAppState: () => Record<string, unknown>;
   getFiles: () => Record<string, unknown>;
+  updateScene: (scene: {
+    elements?: readonly unknown[];
+    appState?: Record<string, unknown>;
+  }) => void;
 };
 
 type ExcalidrawImperativeAPI = NonNullable<
@@ -69,7 +86,25 @@ function ExcalidrawHost({
   onApiRef.current = onApi;
   const onSceneChangeRef = useRef(onSceneChange);
   onSceneChangeRef.current = onSceneChange;
-  const initial = fromDiagramScene(initialScene);
+  const [materializedInitial, setMaterializedInitial] = useState<ExcalidrawScene | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const materialized = await materializeDiagramScene(
+        mod.convertToExcalidrawElements as (
+          skeleton: unknown[] | null,
+          opts?: { regenerateIds: boolean },
+        ) => unknown[],
+        initialScene,
+      );
+      if (cancelled) return;
+      setMaterializedInitial(materialized);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mod, initialScene]);
   const libraryReturnUrl = `${window.location.origin}${window.location.pathname}`;
 
   useEffect(() => {
@@ -101,6 +136,19 @@ function ExcalidrawHost({
     );
   }, []);
 
+  if (!materializedInitial) {
+    return (
+      <div
+        className={styles.loading}
+        role="status"
+        aria-live="polite"
+        {...{ 'data-testid': 'diagram-editor-canvas-preparing' }}
+      >
+        Preparing canvas…
+      </div>
+    );
+  }
+
   return (
     <div
       className={[styles.canvas, fullscreen && styles.canvasFullscreen].filter(Boolean).join(' ')}
@@ -111,12 +159,12 @@ function ExcalidrawHost({
         excalidrawAPI={handleApi}
         theme={theme}
         initialData={{
-          elements: initial.elements as never[],
+          elements: materializedInitial.elements as never[],
           appState: {
-            ...(initial.appState as Record<string, unknown>),
+            ...(materializedInitial.appState as Record<string, unknown>),
             theme,
           } as never,
-          files: initial.files as never,
+          files: materializedInitial.files as never,
         }}
         viewModeEnabled={!editable}
         libraryReturnUrl={libraryReturnUrl}
@@ -131,7 +179,14 @@ function ExcalidrawHost({
  * component mounts (TBI-005 / initial-bundle NFR).
  */
 export const ExcalidrawAdapter = React.forwardRef(function ExcalidrawAdapter(
-  { scene, editable, onSceneChange, onCanvasHydrated, fullscreen = false }: ExcalidrawAdapterProps,
+  {
+    scene,
+    editable,
+    onSceneChange,
+    onCanvasHydrated,
+    fullscreen = false,
+    sceneEpoch,
+  }: ExcalidrawAdapterProps,
   ref: React.ForwardedRef<ExcalidrawAdapterHandle>,
 ) {
   const { theme: apexTheme } = useAppShell();
@@ -145,10 +200,40 @@ export const ExcalidrawAdapter = React.forwardRef(function ExcalidrawAdapter(
   const apiRef = useRef<ImperativeApi | null>(null);
   const sceneRef = useRef(scene);
   sceneRef.current = scene;
-  const initialSceneRef = useRef(scene);
   const onCanvasHydratedRef = useRef(onCanvasHydrated);
   onCanvasHydratedRef.current = onCanvasHydrated;
   const didHydrateRef = useRef(false);
+  const pendingSceneRef = useRef<ExcalidrawScene | null>(null);
+  const hostEpoch = sceneEpoch ?? 'initial';
+
+  const pushSceneToCanvas = useCallback(async (nextScene: ExcalidrawScene) => {
+    if (!mod) return false;
+    // Parse before checking the imperative API so Mermaid failures surface to
+    // applyScene callers instead of being queued as a pending empty draft.
+    const materialized = await materializeDiagramScene(
+      mod.convertToExcalidrawElements as (
+        skeleton: unknown[] | null,
+        opts?: { regenerateIds: boolean },
+      ) => unknown[],
+      nextScene,
+    );
+    const api = apiRef.current;
+    if (!api) return false;
+    api.updateScene({
+      elements: materialized.elements as never[],
+      appState: {
+        ...materialized.appState,
+        theme: excalidrawTheme,
+      },
+    });
+    return true;
+  }, [mod, excalidrawTheme]);
+
+  const applyScene = useCallback(async (nextScene: ExcalidrawScene) => {
+    if (!await pushSceneToCanvas(nextScene)) {
+      pendingSceneRef.current = cloneDiagramScene(nextScene);
+    }
+  }, [pushSceneToCanvas]);
 
   useEffect(() => {
     let cancelled = false;
@@ -196,6 +281,7 @@ export const ExcalidrawAdapter = React.forwardRef(function ExcalidrawAdapter(
       },
     }),
     getLiveScene: () => readLiveScene(),
+    applyScene,
     exportPng: async () => {
       if (!mod) throw new Error('Excalidraw is not loaded');
       const live = readLiveScene();
@@ -225,10 +311,29 @@ export const ExcalidrawAdapter = React.forwardRef(function ExcalidrawAdapter(
         'local',
       );
     },
-  }), [mod, readLiveScene]);
+  }), [mod, readLiveScene, applyScene]);
+
+  useEffect(() => {
+    didHydrateRef.current = false;
+    apiRef.current = null;
+  }, [hostEpoch]);
 
   const handleApi = useCallback((api: ImperativeApi) => {
     apiRef.current = api;
+    const pending = pendingSceneRef.current;
+    if (pending) {
+      pendingSceneRef.current = null;
+      void (async () => {
+        if (await pushSceneToCanvas(pending)) {
+          setTimeout(() => {
+            const live = readLiveScene();
+            onCanvasHydratedRef.current?.(live);
+          }, 0);
+          return;
+        }
+        pendingSceneRef.current = pending;
+      })();
+    }
     if (didHydrateRef.current) {
       return;
     }
@@ -241,7 +346,7 @@ export const ExcalidrawAdapter = React.forwardRef(function ExcalidrawAdapter(
         hydrate(live);
       }
     }, 0);
-  }, [readLiveScene]);
+  }, [readLiveScene, pushSceneToCanvas]);
 
   if (loadError) {
     return (
@@ -277,15 +382,37 @@ export const ExcalidrawAdapter = React.forwardRef(function ExcalidrawAdapter(
   }
 
   return (
-    <ExcalidrawHost
-      mod={mod}
-      editable={editable}
-      theme={excalidrawTheme}
-      fullscreen={fullscreen}
-      initialScene={initialSceneRef.current}
-      onApi={handleApi}
-      onSceneChange={onSceneChange}
-    />
+    <ErrorBoundary
+      resetKeys={[hostEpoch]}
+      fallback={
+        <div
+          className={styles.error}
+          role="alert"
+          {...{ 'data-testid': 'diagram-editor-canvas-error' }}
+        >
+          <p>Canvas failed to load.</p>
+          <button
+            type="button"
+            className={styles.retry}
+            onClick={() => setRetryCount((n) => n + 1)}
+            {...{ 'data-testid': 'diagram-editor-canvas-retry' }}
+          >
+            Retry
+          </button>
+        </div>
+      }
+    >
+      <ExcalidrawHost
+        key={hostEpoch}
+        mod={mod}
+        editable={editable}
+        theme={excalidrawTheme}
+        fullscreen={fullscreen}
+        initialScene={scene}
+        onApi={handleApi}
+        onSceneChange={onSceneChange}
+      />
+    </ErrorBoundary>
   );
 });
 

@@ -5,7 +5,7 @@ import type { ChatThread } from '../../shared/types/chat';
 import { loadFullThread } from './chatThreadRepository';
 import { getThread } from './chatAgentService';
 import { getUserPermissions } from './rbacService';
-import { isAdminUser } from '../utils/rbacHelpers';
+import { isAdminUser, isPlatformAdmin, isProjectAdmin } from '../utils/rbacHelpers';
 import { isAssignedApprover } from './documentApprovalService';
 
 export type ThreadAccess = 'owner' | 'read';
@@ -126,10 +126,53 @@ export async function canWriteThread(userId: string, threadId: string): Promise<
   if (thread.userId === userId) return true;
 
   const link = await findThreadLink(threadId);
-  if (!link || link.kind !== 'design_doc_assistant') return false;
+  if (!link) return false;
 
-  if (await isAdminUser(userId)) return true;
+  if (link.kind === 'interview') {
+    return canAnswerInterview(userId, link.documentId);
+  }
+
+  if (link.kind !== 'design_doc_assistant') return false;
+
+  if (await isAdminUser(userId) || await isPlatformAdmin(userId)) return true;
   return isAssignedApprover(link.documentId, 'design_doc', userId);
+}
+
+/**
+ * Interview author, a selected section owner, a project admin, or a platform admin
+ * may answer questions on the interview thread.
+ */
+async function canAnswerInterview(userId: string, interviewId: string): Promise<boolean> {
+  const row = await db.query.interviews.findFirst({
+    where: eq(interviews.id, interviewId),
+    columns: {
+      authorId: true,
+      project: true,
+      prdOwnerId: true,
+      designDocOwnerId: true,
+      designPrototypeOwnerId: true,
+      testCaseOwnerId: true,
+      discoveryAssigneeId: true,
+      deliveryAssigneeId: true,
+      technicalAssigneeId: true,
+    },
+  });
+  if (!row) return false;
+  if (
+    row.authorId === userId
+    || row.prdOwnerId === userId
+    || row.designDocOwnerId === userId
+    || row.designPrototypeOwnerId === userId
+    || row.testCaseOwnerId === userId
+    || row.discoveryAssigneeId === userId
+    || row.deliveryAssigneeId === userId
+    || row.technicalAssigneeId === userId
+  ) {
+    return true;
+  }
+  if (await isPlatformAdmin(userId)) return true;
+  if (row.project && await isProjectAdmin(userId, row.project)) return true;
+  return false;
 }
 
 /** Author, admin, or assigned approver may create / replace doc_assistant_thread_id on a design doc. */

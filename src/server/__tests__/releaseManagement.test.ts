@@ -18,6 +18,7 @@ jest.mock('../services/releaseOrderService', () => ({
 
 // Mock release management service for rename route tests
 jest.mock('../services/releaseManagementService', () => ({
+  assignWorkItemsToRelease: jest.fn(),
   renameRelease: jest.fn(),
 }));
 
@@ -54,6 +55,7 @@ describe('Release Management API Routes', () => {
       getReleaseEpics: jest.fn(),
       updateWorkItemField: jest.fn(),
       linkWorkItemsToEpic: jest.fn(),
+      getRelatedItemsCycleTime: jest.fn(),
     } as any;
 
     // Mock the constructor to return our mock instance
@@ -188,6 +190,47 @@ describe('Release Management API Routes', () => {
 
       expect(response.body).toEqual(mockEpics);
       expect(mockAdoService.getReleaseEpics).toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /api/releases/:epicId/cycle-time', () => {
+    it('returns related-item cycle time for a valid epic id', async () => {
+      const payload = {
+        items: [
+          {
+            id: 1,
+            title: 'PBI',
+            workItemType: 'Product Backlog Item',
+            state: 'Done',
+            lastInProgressAt: '2024-01-01T00:00:00.000Z',
+            lastDoneAt: '2024-01-05T00:00:00.000Z',
+            cycleTimeDays: 4,
+            incompleteReason: null,
+          },
+        ],
+        medianDays: 4,
+        avgDays: 4,
+        sampleSize: 1,
+        incompleteCount: 0,
+      };
+      mockAdoService.getRelatedItemsCycleTime = jest.fn().mockResolvedValue(payload);
+
+      const response = await request(app)
+        .get('/api/releases/101/cycle-time')
+        .query({ project: 'TestProject', areaPath: 'TestArea' })
+        .expect(200);
+
+      expect(response.body).toEqual(payload);
+      expect(mockAdoService.getRelatedItemsCycleTime).toHaveBeenCalledWith(101);
+      expect(AzureDevOpsService).toHaveBeenCalledWith('TestProject', 'TestArea');
+    });
+
+    it('returns 400 for an invalid epic id', async () => {
+      const response = await request(app)
+        .get('/api/releases/not-a-number/cycle-time')
+        .expect(400);
+
+      expect(response.body).toEqual({ error: 'Invalid epic ID' });
     });
   });
 
@@ -399,6 +442,37 @@ describe('Release Management API Routes', () => {
         .expect(400);
 
       expect(response.body).toEqual({ error: 'workItemIds array is required' });
+    });
+  });
+
+  describe('POST /api/releases/:epicId/link-related', () => {
+    const mockAssignWorkItems = releaseManagementService.assignWorkItemsToRelease as jest.Mock;
+
+    it('assigns items exclusively to the target release', async () => {
+      mockAssignWorkItems.mockResolvedValue({
+        linkedCount: 2,
+        movedCount: 1,
+        unchangedCount: 0,
+        movedFrom: { 2: [456] },
+      });
+
+      const response = await request(app)
+        .post('/api/releases/123/link-related')
+        .send({
+          workItemIds: [1, 2],
+          project: 'TestProject',
+          areaPath: 'TestArea',
+        })
+        .expect(200);
+
+      expect(mockAssignWorkItems).toHaveBeenCalledWith(123, [1, 2], mockAdoService);
+      expect(response.body).toEqual({
+        success: true,
+        linkedCount: 2,
+        movedCount: 1,
+        unchangedCount: 0,
+        movedFrom: { 2: [456] },
+      });
     });
   });
 });

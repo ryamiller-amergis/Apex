@@ -6,8 +6,9 @@
  */
 import { DefaultAzureCredential } from '@azure/identity';
 import type { DispatchMessage } from '../../../shared/types/agentRunAdmission';
-import { resolveStaticAiRunnerCallbackToken } from '../aiRunnerCallbackAuthConfig';
-import { createAiRunsCallbackClient } from './callbackClient';
+import { getAiRunnerCallbackToken } from '../aiRunsCallbackToken';
+import { exitAfterFlush } from '../../utils/processExit';
+import { AiRunCallbackError, createAiRunsCallbackClient } from './callbackClient';
 import { createLocalCursorExecution } from './cursorExecution';
 import { createAiRunsWorker } from './worker';
 import {
@@ -104,34 +105,6 @@ export async function loadAiRunsDispatchMessage(): Promise<DispatchMessage> {
   });
 }
 
-async function getCallbackToken(): Promise<string> {
-  // Match interactive actor host: prefer MI JWT when audience is configured,
-  // fall back to the static bridge token when MI is unavailable (DEV allowlist).
-  const staticToken = resolveStaticAiRunnerCallbackToken();
-  const audience = process.env.AI_RUNS_CALLBACK_TOKEN_AUDIENCE?.trim();
-
-  if (audience) {
-    const scope = audience.endsWith('/.default')
-      ? audience
-      : `${audience}/.default`;
-    try {
-      const token = await new DefaultAzureCredential().getToken(scope);
-      if (token?.token) return token.token;
-      if (!staticToken) {
-        throw new Error('Failed to acquire AI runner callback token');
-      }
-    } catch (error) {
-      if (!staticToken) throw error;
-    }
-  }
-
-  if (staticToken) return staticToken;
-
-  throw new Error(
-    'AI_RUNS_CALLBACK_TOKEN_AUDIENCE is required for managed-identity callbacks',
-  );
-}
-
 export async function main(): Promise<void> {
   const dispatch = await loadAiRunsDispatchMessage();
   const callbackBaseUrl =
@@ -144,10 +117,23 @@ export async function main(): Promise<void> {
 
   const callback = createAiRunsCallbackClient({
     callbackBaseUrl,
-    getToken: getCallbackToken,
+    getToken: getAiRunnerCallbackToken,
   });
   const worker = createAiRunsWorker({
-    getBootstrap: (message) => callback.getBootstrap(message),
+    getBootstrap: async (message) => {
+      const bootstrap = await callback.getBootstrap(message);
+      if (
+        bootstrap &&
+        typeof bootstrap === 'object' &&
+        'kind' in bootstrap &&
+        bootstrap.kind === 'interactive-actor-v2'
+      ) {
+        throw new Error(
+          'Interactive actor bootstrap is not supported by the background worker',
+        );
+      }
+      return bootstrap as import('../../../shared/types/aiRunIngest').AiRunBootstrapResponse;
+    },
     openCheckout: (snapshot) => openGroundedReader(snapshot),
     createExecution: (snapshot, checkout) =>
       createLocalCursorExecution(
@@ -173,11 +159,24 @@ export async function main(): Promise<void> {
 }
 
 if (require.main === module) {
-  main().catch((error) => {
-    console.error(JSON.stringify({
-      event: 'AiRunsWorkerFatal',
-      errorType: error instanceof Error ? error.name : 'UnknownError',
-    }));
-    process.exitCode = 1;
-  });
+  // One message per execution, so the replica has to be released as soon as the
+  // outcome is recorded — see exitAfterFlush for why returning from main() is
+  // not enough on its own.
+  main()
+    .then(() => exitAfterFlush(0))
+    .catch((error) => {
+      // Callback failures are the common fatal path and the error name alone
+      // cannot distinguish a rejected token from an overloaded API, so report the
+      // structured status/code. Free-form messages stay out: they can echo
+      // request headers.
+      const callbackError = error instanceof AiRunCallbackError ? error : null;
+      console.error(JSON.stringify({
+        event: 'AiRunsWorkerFatal',
+        errorType: error instanceof Error ? error.name : 'UnknownError',
+        ...(callbackError
+          ? { callbackStatus: callbackError.status, callbackCode: callbackError.code }
+          : {}),
+      }));
+      return exitAfterFlush(1);
+    });
 }

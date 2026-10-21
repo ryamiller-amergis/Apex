@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type {
   ChatThread,
   ChatThreadSummary,
@@ -6,6 +6,7 @@ import type {
   StartChatRequest,
   SendMessageRequest,
 } from '../../shared/types/chat';
+import type { InteractiveTurnAcceptedResponse } from '../../shared/types/durableInteractiveTurn';
 import { useDebouncedValue } from './useDebouncedValue';
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
@@ -72,7 +73,10 @@ export function useChatThreadList(
       apiFetch(buildThreadListUrl(limit, project, effectiveQ, flaggedOnly)),
     enabled: !!project,
     staleTime: 30_000,
-    placeholderData: keepPreviousData,
+    // Keep prior rows while searching within one project, but never render one
+    // project's history under another project's heading during a project switch.
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[2] === project ? previousData : undefined,
   });
 
   return {
@@ -109,7 +113,11 @@ export function useStartChat() {
 
 export function useSendMessage(threadId: string) {
   const queryClient = useQueryClient();
-  return useMutation<{ ok: boolean }, Error, SendMessageRequest>({
+  return useMutation<
+    { ok: true } | InteractiveTurnAcceptedResponse,
+    Error,
+    SendMessageRequest
+  >({
     mutationFn: (body) =>
       apiFetch(`/api/chat/threads/${threadId}/messages`, {
         method: 'POST',

@@ -378,6 +378,14 @@ function mapSearchRow(row: SearchThreadRow, term: string): ChatThreadSearchResul
 
 // ── loadFullThread ────────────────────────────────────────────────────────────
 
+export async function listMessageIds(threadId: string): Promise<string[]> {
+  const rows = await db
+    .select({ id: chatMessages.id })
+    .from(chatMessages)
+    .where(eq(chatMessages.threadId, threadId));
+  return rows.map((row) => row.id);
+}
+
 export async function loadFullThread(threadId: string): Promise<ChatThread | null> {
   const result = await db.query.chatThreads.findFirst({
     where: eq(chatThreads.id, threadId),
@@ -489,6 +497,14 @@ export async function clearStaleRun(threadId: string): Promise<void> {
     .update(chatThreads)
     .set({ status: 'idle', activeRunId: null })
     .where(eq(chatThreads.id, threadId));
+}
+
+/** Move an idle-closed thread back to 'idle'; other columns are left as stored. */
+export async function reopenClosedThread(threadId: string): Promise<void> {
+  await db
+    .update(chatThreads)
+    .set({ status: 'idle' })
+    .where(and(eq(chatThreads.id, threadId), eq(chatThreads.status, 'closed')));
 }
 
 /** Lightweight read of the thread's persisted Cursor agent id (interactive resume). */

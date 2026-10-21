@@ -11,9 +11,8 @@ import {
   readOutputBacklog,
   isPrdReady,
   getThread,
-  recoverStaleRunningThread,
-  isRepositoryReadingChatCaller,
-  resolveGroundingCallerKey,
+  isExplicitAdoWriteIntent,
+  skillRequiresAdoOperations,
 } from '../services/chatAgentService';
 import { db } from '../db/drizzle';
 import { eq, desc } from 'drizzle-orm';
@@ -26,21 +25,27 @@ import type {
   AgentRunStatusResponse,
   AgentRunPhase,
   ChatAttachment,
+  ChatTurnSkill,
   ChatThread,
+  ChatThreadKickoff,
   ChatThreadStatus,
   SseEvent,
   SseStatusEvent,
   StartChatRequest,
   SendMessageRequest,
 } from '../../shared/types/chat';
+import type { InteractiveTurnAcceptedResponse } from '../../shared/types/durableInteractiveTurn';
 import type { ThreadAccess } from '../services/threadAccessService';
+import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import { requirePermission } from '../middleware/rbac';
+import { prepareAutonomousInterviewTurn } from '../services/interviewOrchestratorService';
 import { writeSseEvent, startSseHeartbeat } from '../utils/sseResponse';
 import {
-  replayRunEvents,
+  replayRunEventPage,
   RUN_EVENT_SOURCE_INSTANCE,
   subscribeRunEvents,
 } from '../services/pgNotifyService';
+import { interactiveLiveBus } from '../services/interactiveLiveBus';
 import {
   assessAgentRunHealth,
   resolveAgentRunHealthConfig,
@@ -48,15 +53,23 @@ import {
   type AgentRunHealthSnapshot,
 } from '../services/agentRunReaperService';
 import { getMyWorkSessionContext, logMyWorkSession } from '../services/myWorkSessionLogger';
-import {
-  isFeatureEnabled,
-  isProjectRepositoryCheckoutReadinessEnabled,
-} from '../services/featureFlagService';
-import {
-  assertResolvedProjectRepositoryReady,
-  ProjectRepositoryNotReady,
-} from '../services/projectRepositoryReadinessService';
+import { isFeatureEnabled } from '../services/featureFlagService';
 import { trackEvent } from '../services/telemetry';
+import { deriveAgentModule } from '../services/agentEffortResolver';
+import { resolveSkillConfig } from '../services/projectSettingsService';
+import { getAdoTokenForUser } from '../services/adoUserToken';
+import { registerChatAdoWriteTurn } from '../services/chatAdoWriteAuth';
+import { isSuperAdminRequest } from '../utils/superAdmin';
+import { getUserGroupIds } from '../services/groupService';
+import {
+  resolveThreadCreationAdmission,
+  type ThreadCreationDenialReason,
+} from '../services/homePillAccessResolver';
+import {
+  durableInteractiveTurnService,
+  DurableInteractiveTurnError,
+} from '../services/durableInteractiveTurnService';
+import { isCanonicalUuid } from '../../shared/types/durableInteractiveTurn';
 
 const router = Router();
 
@@ -65,6 +78,35 @@ const MAX_CHAT_ATTACHMENTS = 5;
 const MAX_CHAT_ATTACHMENT_BYTES = 1024 * 1024;
 const MAX_CHAT_ATTACHMENT_TOTAL_BYTES = 4 * 1024 * 1024;
 const MAX_STREAM_EVENT_IDS = 2_000;
+
+/** Stable, user-readable text for each Home pill admission denial (FEAT-002 / TBI-005). */
+const THREAD_CREATION_DENIAL_MESSAGES: Record<ThreadCreationDenialReason, string> = {
+  skill_pill_not_allowed:
+    'You are not allowed to start a chat with this Home skill. Ask a project admin for access.',
+  mcp_pill_not_allowed:
+    'You are not allowed to start a chat with this Home MCP server. Ask a project admin for access.',
+  pilless_chat_not_allowed:
+    'You have no available Home skills for this project, so you cannot start a chat here. Ask a project admin for access to a Home skill or MCP server.',
+};
+
+/**
+ * True when the kickoff exactly names one of the project's configured Home quick
+ * pills. Such a kickoff is a Home start and stays subject to pill admission even
+ * when its skill path also maps to a non-Home agent module.
+ */
+function namesHomePill(
+  kickoff: Partial<ChatThreadKickoff>,
+  skillConfig: ProjectSkillConfig | null,
+): boolean {
+  const { skillPath } = kickoff;
+  const mcpServerName = kickoff.mcpPill?.mcpServerName;
+  return Boolean(
+    (skillPath
+      && skillConfig?.quickSkillPills?.some((pill) => pill.skillPath === skillPath))
+    || (mcpServerName
+      && skillConfig?.quickMcpPills?.some((pill) => pill.mcpServerName === mcpServerName)),
+  );
+}
 
 export function eventForRunEnvelope(envelope: AgentRunEventEnvelope): SseEvent {
   const event: SseEvent = envelope.event.type === 'cancel'
@@ -96,6 +138,15 @@ async function isEventDrivenTerminationEnabled(thread: ChatThread): Promise<bool
   }).catch(() => false);
 }
 
+async function isAiRunsV2TransportEnabled(thread: ChatThread): Promise<boolean> {
+  const project = thread.kickoff?.project;
+  if (!project) return false;
+  return isFeatureEnabled('ai-runs-v2-transport', {
+    userId: thread.userId,
+    project,
+  }).catch(() => false);
+}
+
 export function formatRunEventSse(envelope: AgentRunEventEnvelope): string {
   return `id: ${envelope.eventId}\ndata: ${JSON.stringify(eventForRunEnvelope(envelope))}\n\n`;
 }
@@ -108,6 +159,10 @@ export function shouldForwardPgRunEvent(
 }
 
 export function shouldAssignRunEventSseId(envelope: AgentRunEventEnvelope): boolean {
+  if (envelope.event.type === 'token') {
+    const offset = envelope.event.streamOffset;
+    return typeof offset === 'number' && Number.isFinite(offset) && offset >= 0;
+  }
   return envelope.event.type === 'phase'
     || envelope.event.type === 'health'
     || envelope.event.type === 'tool_call'
@@ -172,6 +227,13 @@ export function buildRunStatusResponse(
 interface ThreadRequest extends Request {
   thread?: ChatThread;
   threadAccess?: ThreadAccess;
+}
+
+function isMultiAgentAssistedThread(thread: ChatThread): boolean {
+  const kickoff = thread.kickoff as ChatThread['kickoff'] & {
+    playbookInterview?: { snapshot?: { mode?: string } };
+  };
+  return kickoff.playbookInterview?.snapshot?.mode === 'multi_agent_assisted';
 }
 
 class HttpError extends Error {
@@ -249,6 +311,9 @@ function readAttachments(raw: unknown): ChatAttachment[] {
     if (!a.id || !a.name || typeof a.content !== 'string') {
       throw new HttpError(`attachment ${index + 1} is invalid`, 400);
     }
+    if (a.encoding !== undefined && a.encoding !== 'base64') {
+      throw new HttpError(`attachment ${a.name} has an invalid encoding`, 400);
+    }
     const size = Number(a.size);
     if (!Number.isFinite(size) || size < 0) {
       throw new HttpError(`attachment ${a.name} has an invalid size`, 400);
@@ -266,8 +331,23 @@ function readAttachments(raw: unknown): ChatAttachment[] {
       type: a.type ?? 'text/plain',
       size,
       content: a.content,
+      ...(a.encoding === 'base64' ? { encoding: 'base64' as const } : {}),
     };
   });
+}
+
+function readTurnSkill(raw: unknown): ChatTurnSkill | undefined {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== 'object') {
+    throw new HttpError('skill must contain a name and path', 400);
+  }
+  const candidate = raw as Partial<ChatTurnSkill>;
+  const name = typeof candidate.name === 'string' ? candidate.name.trim() : '';
+  const path = typeof candidate.path === 'string' ? candidate.path.trim() : '';
+  if (!name || !path || name.length > 120 || path.length > 500 || path.includes('\0')) {
+    throw new HttpError('skill must contain a valid name and path', 400);
+  }
+  return { name, path };
 }
 
 /**
@@ -308,7 +388,8 @@ router.get('/threads', async (req: Request, res: Response) => {
 
 /**
  * POST /api/chat/threads
- * Start a new chat thread (clones the repo, injects context).
+ * Start a new chat thread. Repository grounding resolves from the cached,
+ * SHA-pinned checkout when the first turn begins.
  * Body: StartChatRequest
  */
 router.post('/threads', async (req: Request, res: Response) => {
@@ -319,37 +400,52 @@ router.post('/threads', async (req: Request, res: Response) => {
 
   try {
     const userId = getUserId(req);
-    const kickoff = body.kickoff;
-    const isDevSession = kickoff.mode === 'development';
-    if (isRepositoryReadingChatCaller(kickoff, isDevSession)) {
-      const project = kickoff.project;
-      const surface = resolveGroundingCallerKey(kickoff);
-      const enabled = await isProjectRepositoryCheckoutReadinessEnabled({
-        userId,
-        project,
-        caller: surface,
+    const {
+      effort: _clientEffort,
+      agentModule: _clientAgentModule,
+      skillPathIsAppDefault: _clientSkillPathIsAppDefault,
+      ...clientKickoff
+    } = body.kickoff;
+    const skillConfig = await resolveSkillConfig({
+      project: clientKickoff.project,
+      settingsId: clientKickoff.skillSettingsId ?? undefined,
+    });
+    const agentModule = deriveAgentModule(clientKickoff, skillConfig);
+
+    // Home pill admission (TBI-005) covers Home starts only: a kickoff that names
+    // a configured quick pill, or one the server cannot map to any module (Home
+    // free chat, or an unrecognized direct call). Configured Interview/ADR/PRD/
+    // assistant/development/standup workflows keep their own gates (BR-008).
+    // Runs before any persistence, so a denied kickoff leaves no thread row.
+    if (namesHomePill(clientKickoff, skillConfig) || agentModule === undefined) {
+      const isSuperAdmin = isSuperAdminRequest(req);
+      const admission = resolveThreadCreationAdmission({
+        skillPills: skillConfig?.quickSkillPills,
+        mcpPills: skillConfig?.quickMcpPills,
+        callerId: userId,
+        callerGroupIds: isSuperAdmin ? [] : await getUserGroupIds(userId),
+        isSuperAdmin,
+        skillPath: clientKickoff.skillPath,
+        mcpServerName: clientKickoff.mcpPill?.mcpServerName,
       });
-      // @feature-flag:project-repository-checkout-readiness start winner=enabled
-      if (enabled) {
-        // @feature-flag:project-repository-checkout-readiness enabled-start
-        try {
-          await assertResolvedProjectRepositoryReady({
-            project,
-            settingsId: kickoff.skillSettingsId,
-            surface,
-          });
-        } catch (e) {
-          if (e instanceof ProjectRepositoryNotReady) {
-            res.status(409).json(e.toJSON());
-            return;
-          }
-          throw e;
-        }
-        // @feature-flag:project-repository-checkout-readiness enabled-end
+      if (!admission.admitted) {
+        return res
+          .status(403)
+          .json({ error: THREAD_CREATION_DENIAL_MESSAGES[admission.reason] });
       }
-      // @feature-flag:project-repository-checkout-readiness end
     }
 
+    // Consumers treat a missing provider as Azure DevOps, which loses grounding
+    // for GitHub repositories. Azure DevOps repository names cannot contain '/'.
+    const skillProvider =
+      clientKickoff.skillProvider ??
+      skillConfig?.skillProvider ??
+      (clientKickoff.repo.includes('/') ? 'github' : undefined);
+    const kickoff = {
+      ...clientKickoff,
+      ...(skillProvider ? { skillProvider } : {}),
+      ...(agentModule ? { agentModule } : {}),
+    };
     const thread = await createThread(userId, kickoff, {
       skipAutoKickoff: Boolean(body.skipAutoKickoff),
     });
@@ -377,6 +473,7 @@ router.get('/threads/:id', requireThreadRead, (req: Request, res: Response) => {
 router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: Response) => {
   const thread = (req as ThreadRequest).thread!;
   const eventDrivenTermination = await isEventDrivenTerminationEnabled(thread);
+  const v2Transport = await isAiRunsV2TransportEnabled(thread);
   const streamStartedAt = Date.now();
   const myWorkContext = thread.kickoff?.mode === 'development'
     ? await getMyWorkSessionContext(req.params.id).catch(() => null)
@@ -391,7 +488,9 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
   let stopHeartbeat = () => {};
   let unsubscribe = () => {};
   let unsubNotify = () => {};
+  let unsubLive = () => {};
   const sentEventIds = new Set<string>();
+  const sentTokenOffsets = new Set<number>();
   const sentEventIdOrder: string[] = [];
   let replaying = true;
   const pendingLiveEvents: AgentRunEventEnvelope[] = [];
@@ -411,6 +510,7 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
     stopHeartbeat();
     unsubscribe();
     unsubNotify();
+    unsubLive();
   };
 
   const sendEvent = (event: object, eventId?: string) => {
@@ -435,6 +535,14 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
       sendEvent({ type: 'status', status: 'idle' });
       sendEvent({ type: 'done', runId: envelope.runId }, envelope.eventId);
       return;
+    }
+    // Dedupe Redis live vs durable replay by eventId and by token offsets.
+    if (envelope.event.type === 'token') {
+      const offset = envelope.event.streamOffset;
+      if (typeof offset === 'number' && Number.isFinite(offset)) {
+        if (sentTokenOffsets.has(offset)) return;
+        sentTokenOffsets.add(offset);
+      }
     }
     sendEvent(
       eventForRunEnvelope(envelope),
@@ -481,14 +589,9 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
     sendEvent({ type: 'message', message: msg });
   }
 
-  // Send current status after the message replay so the client can render
-  // the full history before seeing the running/idle indicator. Prefer the
-  // hydrated status since it reflects the normalized in-memory state.
-  sendEvent(buildStreamStatusEvent(
-    hydrated?.status ?? thread.status,
-    eventDrivenTermination,
-  ));
-
+  // Subscribe BEFORE durable page replay so live Redis / PG events that arrive
+  // during the async hasMore loop are buffered and flushed after the final page
+  // (mirrors interactiveGatewayService).
   unsubscribe = subscribeToThread(req.params.id, sendLocalEvent);
 
   // Cross-worker: also subscribe via Postgres LISTEN/NOTIFY so tokens from
@@ -500,12 +603,52 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
     queueOrSendEnvelope(envelope);
   });
 
+  // Under ai-runs-v2-transport, WS→SSE fallback must see Redis live tokens.
+  if (v2Transport) {
+    unsubLive = interactiveLiveBus.subscribe(req.params.id, (envelope) => {
+      queueOrSendEnvelope(envelope);
+    });
+  }
+
   const lastEventId = req.get('Last-Event-ID')?.trim() || undefined;
-  const replayEvents = await replayRunEvents(req.params.id, lastEventId).catch((err) => {
-    console.error(`[chat] run-event replay failed for thread ${req.params.id}:`, (err as Error).message);
-    return [];
-  });
-  for (const envelope of replayEvents) sendEnvelope(envelope);
+  // A cold page load already receives persisted messages and the authoritative
+  // thread status above. Replaying old tool/phase events for an idle thread
+  // makes completed work look like it started again. Only resume durable
+  // events when the browser supplied a cursor or a run is currently active.
+  const shouldReplayEvents =
+    Boolean(lastEventId) || hydrated?.status === 'running';
+  let replayedEventCount = 0;
+  if (shouldReplayEvents) {
+    const coldStart = 'oldest' as const;
+    let afterEventId = lastEventId;
+    try {
+      for (;;) {
+        const page = await replayRunEventPage(req.params.id, {
+          afterEventId,
+          limit: 500,
+          runId: hydrated?.activeRunId,
+          coldStart,
+        });
+        for (const envelope of page.events) sendEnvelope(envelope);
+        replayedEventCount += page.events.length;
+        if (!page.hasMore || !page.nextEventId) break;
+        afterEventId = page.nextEventId;
+      }
+    } catch (err) {
+      console.error(
+        `[chat] run-event replay failed for thread ${req.params.id}:`,
+        (err as Error).message,
+      );
+    }
+  }
+
+  // Historical phase/done events must not override the current thread state.
+  // Send the authoritative snapshot after replay, then drain events that
+  // arrived live while replay was in progress.
+  sendEvent(buildStreamStatusEvent(
+    hydrated?.status ?? thread.status,
+    eventDrivenTermination,
+  ));
   replaying = false;
   pendingLiveEvents
     .sort((left, right) => left.timestamp.localeCompare(right.timestamp) || left.sequence - right.sequence)
@@ -517,7 +660,7 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
       ...myWorkContext,
       threadStatus: hydrated?.status ?? thread.status,
       replayedMessageCount: replayMessages.length,
-      replayedEventCount: replayEvents.length,
+      replayedEventCount,
       resumedFromEvent: Boolean(lastEventId),
     });
   }
@@ -542,8 +685,10 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
 router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, res: Response) => {
   const body = req.body as Partial<SendMessageRequest>;
   let attachments: ChatAttachment[];
+  let turnSkill: ChatTurnSkill | undefined;
   try {
     attachments = readAttachments(body.attachments);
+    turnSkill = readTurnSkill(body.skill);
   } catch (err: unknown) {
     return res.status(errorStatus(err, 400)).json({ error: errorMessage(err) });
   }
@@ -552,47 +697,55 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
   }
 
   const thread = (req as ThreadRequest).thread!;
-  if (thread.status === 'running') {
-    const gate = await recoverStaleRunningThread(req.params.id);
-    if (gate === 'running') {
-      return res.status(409).json({ error: 'Agent is already running' });
-    }
-    // Dead run cleared — accept the message.
-  }
+  const requesterUserId = getUserId(req);
 
-  const isDevSession = thread.kickoff?.mode === 'development';
-  if (thread.kickoff && isRepositoryReadingChatCaller(thread.kickoff, isDevSession)) {
-    const userId = getUserId(req);
-    const project = thread.kickoff.project;
-    const surface = resolveGroundingCallerKey(thread.kickoff);
-    const enabled = await isProjectRepositoryCheckoutReadinessEnabled({
-      userId,
-      project,
-      caller: surface,
-    });
-    // @feature-flag:project-repository-checkout-readiness start winner=enabled
-    if (enabled) {
-      // @feature-flag:project-repository-checkout-readiness enabled-start
-      try {
-        await assertResolvedProjectRepositoryReady({
-          project,
-          settingsId: thread.kickoff.skillSettingsId,
-          surface,
-        });
-      } catch (e) {
-        if (e instanceof ProjectRepositoryNotReady) {
-          res.status(409).json(e.toJSON());
-          return;
-        }
-        throw e;
+  let releaseAdoWriteTurn = () => {};
+  let durableToolGrant:
+    | {
+        allowedOperations: readonly ['ado:read', 'ado:write'];
+        delegatedAdoToken: string | null;
       }
-      // @feature-flag:project-repository-checkout-readiness enabled-end
+    | undefined;
+  const calendarAssistant =
+    thread.kickoff.assistantType === 'calendar-work-item';
+  const explicitAdoWrite =
+    !calendarAssistant && isExplicitAdoWriteIntent(body.text ?? '');
+  const operationalAdoWrite =
+    !calendarAssistant &&
+    (skillRequiresAdoOperations(
+      turnSkill?.path ??
+        thread.kickoff.skillPath ??
+        thread.kickoff.standupSkillPath,
+      turnSkill?.name ?? thread.kickoff.pillLabel,
+    ) ||
+      Boolean(thread.kickoff.standupSessionId) ||
+      thread.kickoff.mode === 'standup-participant' ||
+      thread.kickoff.mode === 'standup-facilitator');
+  if (explicitAdoWrite || operationalAdoWrite) {
+    try {
+      const token = await getAdoTokenForUser(req);
+      releaseAdoWriteTurn = await registerChatAdoWriteTurn({
+        threadId: req.params.id,
+        userId: requesterUserId,
+        project: thread.kickoff.project,
+        token,
+        isSuperAdmin: isSuperAdminRequest(req),
+      });
+      durableToolGrant = {
+        allowedOperations: ['ado:read', 'ado:write'],
+        delegatedAdoToken: token,
+      };
+    } catch (err: unknown) {
+      if (explicitAdoWrite) {
+        return res
+          .status(errorStatus(err, 403))
+          .json({ error: errorMessage(err) });
+      }
     }
-    // @feature-flag:project-repository-checkout-readiness end
   }
 
-  // Fire-and-forget: response streams via SSE/WS; 202 returns immediately.
-  // Breadcrumb BEFORE the async turn so a hang inside sendMessage is still visible.
+  // The legacy callback detaches after its running-thread gate. Durable
+  // admission is awaited so the 202 can carry the persisted turn identity.
   const threadId = req.params.id;
   console.log('[chat] messages.accepted', {
     threadId,
@@ -602,16 +755,153 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
     threadId,
     attachmentCount: String(attachments.length),
   });
-  res.status(202).json({ ok: true });
-  sendMessage(threadId, body.text ?? '', body.model, attachments).catch((err: unknown) => {
-    console.error(`[chat] sendMessage error for thread ${threadId}:`, errorMessage(err));
+  let internalContext: string | undefined;
+  if (isMultiAgentAssistedThread(thread)) {
+    try {
+      const prepared = await prepareAutonomousInterviewTurn({
+        mainThreadId: threadId,
+        answerText: body.text ?? '',
+      });
+      if (prepared.internalContext) internalContext = prepared.internalContext;
+    } catch (err: unknown) {
+      console.error(
+        `[chat] assisted interview preparation failed for thread ${threadId}:`,
+        errorMessage(err),
+      );
+    }
+  }
+
+  try {
+    // Unified send: canonical flag-off/error runs legacy (detach); flag-on admits
+    // durably and returns the accepted identity. Enabled-path failures never fall
+    // back to App Service Cursor/model execution.
+    const submission = await sendMessage(
+      threadId,
+      body.text ?? '',
+      body.model,
+      attachments,
+      {
+        turnSkill,
+        turnId: body.turnId,
+        turnIdPolicy: 'required',
+        legacyCompletion: 'detach',
+        requesterUserId,
+        toolGrant: durableToolGrant,
+        onLegacySettled: releaseAdoWriteTurn,
+        ...(internalContext ? { internalContext } : {}),
+      },
+    );
+    if (submission?.route === 'durable') {
+      releaseAdoWriteTurn();
+      const accepted = submission.response;
+      return res.status(202).json({
+        turnId: accepted.turnId,
+        runId: accepted.runId,
+        status: accepted.status,
+        interactiveClass: accepted.interactiveClass,
+      } satisfies InteractiveTurnAcceptedResponse);
+    }
+    // Undefined is retained only for isolated route tests that mock the older
+    // void-returning send service. Production always returns a route decision.
+    if (!submission) releaseAdoWriteTurn();
+    return res.status(202).json({ ok: true });
+  } catch (err: unknown) {
+    releaseAdoWriteTurn();
+    console.error(
+      `[chat] sendMessage error for thread ${threadId}:`,
+      errorMessage(err),
+    );
     trackEvent('chat.send.failed', {
       threadId,
       errorType: err instanceof Error ? err.name : 'UnknownError',
       errorMessage: errorMessage(err).slice(0, 200),
+
     });
-  });
+    return res
+      .status(errorStatus(err))
+      .json({ error: errorMessage(err) });
+  }
 });
+
+/**
+ * POST /api/chat/threads/:id/runs/:runId/retry
+ * Retry a failed durable interactive run without resending text or attachments.
+ */
+router.post(
+  '/threads/:id/runs/:runId/retry',
+  requireThreadWrite,
+  async (req: Request, res: Response) => {
+    const threadId = req.params.id;
+    const runId = req.params.runId;
+    if (!isCanonicalUuid(runId)) {
+      return res.status(404).json({ error: 'Thread not found' });
+    }
+
+    const thread = (req as ThreadRequest).thread!;
+    const requesterUserId = getUserId(req);
+    let releaseAdoWriteTurn = () => {};
+    let durableToolGrant:
+      | {
+          allowedOperations: readonly ['ado:read', 'ado:write'];
+          delegatedAdoToken: string | null;
+        }
+      | undefined;
+
+    const calendarAssistant =
+      thread.kickoff.assistantType === 'calendar-work-item';
+    const operationalAdoWrite =
+      !calendarAssistant &&
+      (skillRequiresAdoOperations(
+        thread.kickoff.skillPath ?? thread.kickoff.standupSkillPath,
+        thread.kickoff.pillLabel,
+      ) ||
+        Boolean(thread.kickoff.standupSessionId) ||
+        thread.kickoff.mode === 'standup-participant' ||
+        thread.kickoff.mode === 'standup-facilitator');
+    if (operationalAdoWrite) {
+      try {
+        const token = await getAdoTokenForUser(req);
+        releaseAdoWriteTurn = await registerChatAdoWriteTurn({
+          threadId,
+          userId: requesterUserId,
+          project: thread.kickoff.project,
+          token,
+          isSuperAdmin: isSuperAdminRequest(req),
+        });
+        durableToolGrant = {
+          allowedOperations: ['ado:read', 'ado:write'],
+          delegatedAdoToken: token,
+        };
+      } catch {
+        // Retry may still proceed when the failed attempt had no ADO grant.
+      }
+    }
+
+    try {
+      const accepted = await durableInteractiveTurnService.retry({
+        threadId,
+        runId,
+        userId: requesterUserId,
+        toolGrant: durableToolGrant,
+      });
+      releaseAdoWriteTurn();
+      return res.status(202).json({
+        turnId: accepted.turnId,
+        runId: accepted.runId,
+        status: accepted.status,
+        interactiveClass: accepted.interactiveClass,
+      } satisfies InteractiveTurnAcceptedResponse);
+    } catch (err: unknown) {
+      releaseAdoWriteTurn();
+      if (err instanceof DurableInteractiveTurnError) {
+        return res.status(err.status).json({ error: err.code });
+      }
+      return res
+        .status(errorStatus(err))
+        .json({ error: errorMessage(err) });
+    }
+  },
+);
 
 /**
  * POST /api/chat/threads/:id/cancel

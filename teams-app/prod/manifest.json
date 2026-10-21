@@ -1,0 +1,33 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.0",
+  "id": "2f0071fc-b6cd-45a5-ae0d-f3bdfa0271c6",
+  "developer": {
+    "name": "Amergis",
+    "websiteUrl": "https://apex.amergis.com",
+    "privacyUrl": "https://apex.amergis.com/privacy",
+    "termsOfUseUrl": "https://apex.amergis.com/terms"
+  },
+  "name": {
+    "short": "APEX",
+    "full": "APEX Notifications"
+  },
+  "description": {
+    "short": "Get APEX app notifications in Teams",
+    "full": "Sends real-time notifications from the APEX app directly to your Teams chat when you are assigned to interviews or reviews."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#6264A7",
+  "bots": [
+    {
+      "botId": "2cc05d99-fad4-4eb9-a9e6-0b926684f5dd",
+      "scopes": ["personal"],
+      "supportsFiles": false
+    }
+  ],
+  "validDomains": ["apex.amergis.com", "app-apex-prd.azurewebsites.net"]
+}

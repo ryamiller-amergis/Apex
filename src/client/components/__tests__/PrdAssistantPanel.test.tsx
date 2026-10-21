@@ -94,6 +94,7 @@ describe('Visibility', () => {
   it('renders the panel when open={true}', () => {
     renderPanel({ open: true, existingThreadId: 'thread-123' });
     expect(screen.getByText('Apex Assistant')).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: 'PRD assistant panel' })).toBeInTheDocument();
   });
 });
 
@@ -134,6 +135,15 @@ describe('Thread creation', () => {
   it('displays the chat input when existingThreadId is provided from the start', () => {
     renderPanel({ open: true, existingThreadId: 'thread-123' });
     expect(screen.getByPlaceholderText(/Ask about this PRD/i)).toBeInTheDocument();
+  });
+
+  it('PBI-007 AC-1 keeps the shared transcript and composer when thread creation fails', async () => {
+    (global.fetch as jest.Mock).mockRejectedValueOnce(new Error('network unavailable'));
+    renderPanel({ open: true, existingThreadId: null });
+
+    expect(await screen.findByText('network unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: 'PRD assistant panel' })).toBeInTheDocument();
+    expect(screen.getByTestId('prd-assistant-composer')).toBeInTheDocument();
   });
 });
 

@@ -20,6 +20,7 @@ import type {
   ReviewDocumentType,
   ReviewSectionKey,
 } from '../../shared/types/reviewComments';
+import type { ReviewerDocumentType } from '../../shared/types/approvals';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -420,7 +421,7 @@ export async function getComments(
 
 export async function getUnresolvedCount(
   documentId: string,
-  documentType: ReviewDocumentType,
+  documentType: ReviewerDocumentType,
 ): Promise<number> {
   const [result] = await db
     .select({ value: count() })

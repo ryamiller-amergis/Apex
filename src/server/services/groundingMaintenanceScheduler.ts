@@ -23,7 +23,16 @@ import {
   nightlyIdleReGroundService,
   type NightlyIdleReGroundResult,
 } from './nightlyIdleReGroundService';
+import {
+  repoCacheEvictionService,
+  type RepoCacheEvictionService,
+} from './repoCacheEvictionService';
 import { withRepoCacheLease } from './repoCacheLeaseService';
+import {
+  createSingleFlight,
+  stuckAfterForInterval,
+  type SingleFlight,
+} from '../utils/singleFlight';
 
 export const GROUNDING_MAINTENANCE_INTERVAL_MS = 5 * 60 * 1000;
 const GROUNDING_MAINTENANCE_CLAIM_KEY = 'grounding-maintenance:sweep';
@@ -33,6 +42,10 @@ export interface GroundingMaintenanceSchedulerDependencies {
   preWarmService?: Pick<GroundingPreWarmService, 'preWarm' | 'sweep'>;
   evictionService?: Pick<GroundingEvictionService, 'evictIdle'>;
   sharedReadCheckoutService?: Pick<SharedReadCheckoutService, 'evictIdle'>;
+  repoCacheEvictionService?: Pick<
+    RepoCacheEvictionService,
+    'evictOverBudget'
+  >;
   stalenessService?: Pick<GroundingStalenessService, 'evaluateActive'>;
   nightlyIdleReGround?: {
     runIfDue: () => Promise<NightlyIdleReGroundResult>;
@@ -52,7 +65,7 @@ export class GroundingMaintenanceScheduler {
   private startupTimer: NodeJS.Timeout | null = null;
   private intervalTimer: NodeJS.Timeout | null = null;
   private unsubscribe: (() => void) | null = null;
-  private isRunning = false;
+  private readonly runGuard: SingleFlight;
   private readonly preWarmService: Pick<
     GroundingPreWarmService,
     'preWarm' | 'sweep'
@@ -64,6 +77,10 @@ export class GroundingMaintenanceScheduler {
   private readonly sharedReadCheckoutService: Pick<
     SharedReadCheckoutService,
     'evictIdle'
+  >;
+  private readonly repoCacheEvictionService: Pick<
+    RepoCacheEvictionService,
+    'evictOverBudget'
   >;
   private readonly stalenessService: Pick<
     GroundingStalenessService,
@@ -91,6 +108,8 @@ export class GroundingMaintenanceScheduler {
       dependencies.evictionService ?? groundingEvictionService;
     this.sharedReadCheckoutService =
       dependencies.sharedReadCheckoutService ?? sharedReadCheckoutService;
+    this.repoCacheEvictionService =
+      dependencies.repoCacheEvictionService ?? repoCacheEvictionService;
     this.stalenessService =
       dependencies.stalenessService ?? groundingStalenessService;
     this.nightlyIdleReGround =
@@ -115,6 +134,10 @@ export class GroundingMaintenanceScheduler {
       dependencies.startupDelayMs ?? 5_000 + Math.floor(Math.random() * 10_000);
     this.intervalMs =
       dependencies.intervalMs ?? GROUNDING_MAINTENANCE_INTERVAL_MS;
+    this.runGuard = createSingleFlight({
+      name: 'grounding-maintenance',
+      stuckAfterMs: stuckAfterForInterval(this.intervalMs),
+    });
   }
 
   start(): void {
@@ -152,8 +175,8 @@ export class GroundingMaintenanceScheduler {
   }
 
   async runNow(): Promise<void> {
-    if (this.isRunning) return;
-    this.isRunning = true;
+    const runToken = this.runGuard.tryEnter();
+    if (runToken === null) return;
     try {
       const leaseWindowMs = Math.max(
         1_000,
@@ -161,11 +184,30 @@ export class GroundingMaintenanceScheduler {
       );
       try {
         await this.runLeaderSweep(async () => {
-          await this.preWarmService.sweep();
-          await this.stalenessService.evaluateActive();
-          await this.evictionService.evictIdle();
-          await this.sharedReadCheckoutService.evictIdle();
-          await this.nightlyIdleReGround.runIfDue();
+          // Each step runs even if an earlier one failed: a pre-warm clone
+          // that fails on a full disk must not skip the evictions that free it.
+          const failedSteps: string[] = [];
+          const runStep = async (name: string, step: () => Promise<unknown>) => {
+            try {
+              await step();
+            } catch (error) {
+              failedSteps.push(name);
+              console.warn(
+                `[grounding-maintenance] step=${name} failed: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          };
+          await runStep('pre-warm', () => this.preWarmService.sweep());
+          await runStep('staleness', () => this.stalenessService.evaluateActive());
+          await runStep('workspace-eviction', () => this.evictionService.evictIdle());
+          await runStep('shared-checkout-eviction', () => this.sharedReadCheckoutService.evictIdle());
+          // Runs after the workspace sweeps so freed checkouts count against
+          // the share before mirrors are considered for deletion.
+          await runStep('repo-cache-eviction', () => this.repoCacheEvictionService.evictOverBudget());
+          await runStep('nightly-re-ground', () => this.nightlyIdleReGround.runIfDue());
+          if (failedSteps.length > 0) {
+            throw new Error(`Grounding maintenance steps failed: ${failedSteps.join(', ')}`);
+          }
         }, leaseWindowMs);
       } catch (error) {
         if (
@@ -179,7 +221,7 @@ export class GroundingMaintenanceScheduler {
         throw error;
       }
     } finally {
-      this.isRunning = false;
+      this.runGuard.exit(runToken);
     }
   }
 }

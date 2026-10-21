@@ -55,6 +55,7 @@ jest.mock('../services/testCaseService', () => ({
 }));
 jest.mock('../services/aiUsageService', () => ({
   recordAiUsage: jest.fn(),
+  recordCursorChatUsage: jest.fn().mockResolvedValue(undefined),
   estimateTokens: jest.fn().mockReturnValue(0),
   resolveFeatureFromKickoff: jest.fn().mockReturnValue('chat'),
 }));
@@ -149,6 +150,29 @@ describe('createRunEventEnvelope', () => {
       phase: 'implementation',
       status: 'running',
       detail: 'Implementing FEAT-001',
+    });
+  });
+
+  it('preserves durable token offsets for replay pagination', () => {
+    const event = createRunEventEnvelope({
+      eventId: 'event-token',
+      threadId: 'thread-1',
+      runId: 'run-1',
+      sequence: 2,
+      timestamp: '2026-07-14T12:00:01.000Z',
+      event: {
+        type: 'token',
+        text: 'hello',
+        streamOffset: 0,
+        streamEndOffset: 5,
+      },
+    });
+
+    expect(event.event).toEqual({
+      type: 'token',
+      text: 'hello',
+      streamOffset: 0,
+      streamEndOffset: 5,
     });
   });
 });

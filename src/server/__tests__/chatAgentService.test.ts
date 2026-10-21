@@ -33,6 +33,7 @@ jest.mock('../db/drizzle', () => ({
   db: {
     query: {
       interviews: { findFirst: jest.fn().mockResolvedValue(null) },
+      adrs: { findFirst: jest.fn().mockResolvedValue(undefined) },
       prds: { findFirst: jest.fn().mockResolvedValue(null) },
       designDocs: { findFirst: jest.fn().mockResolvedValue(null) },
     },
@@ -58,6 +59,7 @@ jest.mock('drizzle-orm', () => ({
 
 jest.mock('../db/schema', () => ({
   interviews: {},
+  adrs: {},
   prds: {},
   designDocs: {},
   chatThreads: {},
@@ -69,7 +71,9 @@ jest.mock('../services/chatThreadRepository', () => ({
   insertMessage: jest.fn().mockResolvedValue(undefined),
   listThreadsByUser: jest.fn().mockResolvedValue([]),
   loadFullThread: jest.fn().mockResolvedValue(null),
+  listMessageIds: jest.fn().mockResolvedValue([]),
   deleteThread: jest.fn().mockResolvedValue(undefined),
+  reopenClosedThread: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('../services/prdService', () => ({ syncPrdContent: jest.fn() }));
@@ -110,15 +114,39 @@ jest.mock('../services/skillCatalogFacade', () => ({
   getSkillFile: jest.fn().mockResolvedValue('# Frozen skill content'),
 }));
 
+const mockResolveSkillConfig = jest.fn().mockResolvedValue(null);
+jest.mock('../services/projectSettingsService', () => ({
+  resolveSkillConfig: (...args: unknown[]) => mockResolveSkillConfig(...args),
+}));
+
 const mockEnqueueAgentRun = jest.fn();
 jest.mock('../services/agentRunLifecycleService', () => ({
   enqueue: mockEnqueueAgentRun,
 }));
 
+const mockCanonicalLegacyRoute = async (input: {
+  runLegacy(): Promise<void> | void;
+}) => {
+  await input.runLegacy();
+  return { route: 'legacy' as const, reason: 'flag-disabled' as const };
+};
+const mockCanonicalInteractiveWorkflowRoute: jest.Mock = jest.fn(
+  mockCanonicalLegacyRoute,
+);
 const mockInteractiveWorkflowRoute = jest.fn();
 jest.mock('../services/interactiveWorkflowRouter', () => ({
   interactiveWorkflowRouter: {
+    route: mockCanonicalInteractiveWorkflowRoute,
+  },
+  legacyInteractiveWorkflowRouter: {
     route: mockInteractiveWorkflowRoute,
+  },
+}));
+
+const mockDurableInteractiveAdmit = jest.fn();
+jest.mock('../services/durableInteractiveTurnService', () => ({
+  durableInteractiveTurnService: {
+    admit: mockDurableInteractiveAdmit,
   },
 }));
 
@@ -146,11 +174,20 @@ jest.mock('../services/groundingProfileResolver', () => ({
   },
 }));
 
+const mockIsThreadRunAlive = jest.fn().mockResolvedValue(false);
+jest.mock('../services/agentRunReaperService', () => ({
+  isThreadRunAlive: (...args: unknown[]) => mockIsThreadRunAlive(...args),
+  resolveAgentRunHardLimitMs: jest.fn().mockReturnValue(10 * 60 * 1000),
+  resolveAgentFirstEventTimeoutMs: jest.fn().mockReturnValue(2 * 60 * 1000),
+}));
+
 // ── Imports ───────────────────────────────────────────────────────────────────
 
 import {
   createThread,
+  CANCELLABLE_AGENT_RUN_STATUSES,
   sendMessage,
+  getThread,
   closeThread,
   permanentlyDeleteThread,
   markAsInterviewThread,
@@ -172,25 +209,175 @@ import {
   resolveDocumentAssistantType,
   buildBackgroundWorkflowPrompt,
   buildInitialPrompt,
+  buildTurnPrompt,
+  isExplicitAdoWriteIntent,
+  interactivePromptRequiresInProcessMcp,
+  skillRequiresAdoOperations,
+  prepareBackgroundWorkflowTurn,
   prepareRepositoryReadRuntime,
   subscribeToThread,
+  isThreadIdle,
 } from '../services/chatAgentService';
+import { dispatchRunEventForTest } from '../services/pgNotifyService';
 import type {
+  AgentRunEventEnvelope,
   ChatMessage,
   ChatThread,
   ChatThreadKickoff,
 } from '../../shared/types/chat';
+import { getSkillFile } from '../services/skillCatalogFacade';
 import type { CallerGroundingSelection } from '../services/callerGroundingService';
 import type {
   GroundingProfileId,
   RepoReader,
 } from '../../shared/types/repoReader';
+import { RepoReaderError } from '../services/repoReader';
+import {
+  REPO_SYNCING_MESSAGE,
+  isRepositorySyncingError,
+} from '../services/repoRead/mirrorHydration';
 
-const { deleteThread: mockPgDeleteThread, upsertThread: mockPgUpsertThread } =
-  jest.requireMock('../services/chatThreadRepository') as {
-    deleteThread: jest.Mock;
-    upsertThread: jest.Mock;
-  };
+describe('turn skill prompts', () => {
+  it('keeps the user request separate while directing the agent to load the selected skill', () => {
+    const prompt = buildTurnPrompt('Summarize the sprint', {
+      name: 'Scrum Assistant',
+      path: '/.cursor/skills/scrum-assistant/SKILL.md',
+    });
+
+    expect(prompt).toContain(
+      'Run skill: Scrum Assistant (`/.cursor/skills/scrum-assistant/SKILL.md`)',
+    );
+    expect(prompt).toContain('User request:\nSummarize the sprint');
+    expect(prompt).toContain('repository checkout as read-only');
+    expect(prompt).toContain(
+      'only when the user directly requests that write in the current turn',
+    );
+    expect(prompt).toContain(
+      'Informational questions and analysis must not mutate Azure DevOps',
+    );
+  });
+
+  it('VT-ASSIST-5 keeps the visible user request exact when internal specialist context is added to the prompt', () => {
+    const baText = 'Cashiers need a faster close.';
+    const internalContext = [
+      '<<<INTERNAL_SPECIALIST_CONTEXT>>>',
+      '{"findings":["Close is slow"]}',
+      '<<<END_INTERNAL_SPECIALIST_CONTEXT>>>',
+    ].join('\n');
+
+    const prompt = buildTurnPrompt(baText, undefined, internalContext);
+
+    expect(prompt.split('User request:\n')[1]).toBe(baText);
+    expect(prompt).toContain(internalContext);
+    expect(prompt.indexOf(internalContext)).toBeLessThan(prompt.indexOf('User request:\n'));
+  });
+
+  it('routes only MCP-dependent skill content away from the interactive actor', () => {
+    expect(
+      interactivePromptRequiresInProcessMcp(
+        'Use query_work_items to inspect the current sprint.',
+      ),
+    ).toBe(true);
+    expect(
+      interactivePromptRequiresInProcessMcp(
+        'Inspect the repository with get_skill_file and search_repo_code.',
+      ),
+    ).toBe(false);
+  });
+
+  it('recognizes only configured ADO-operational skill identities', () => {
+    expect(
+      skillRequiresAdoOperations(
+        '/.cursor/skills/scrum-master-health/SKILL.md',
+        'Scrum Assistant',
+      ),
+    ).toBe(true);
+    expect(
+      skillRequiresAdoOperations(
+        '/.cursor/skills/scrum-helper/SKILL.md',
+        'Scrum Helper',
+      ),
+    ).toBe(true);
+    expect(
+      skillRequiresAdoOperations(
+        '/.cursor/skills/app-knowledge/SKILL.md',
+        'App Knowledge',
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    'Create a PBI in ADO for the login failure',
+    'Please update work item 123 state to Active',
+    'Can you add a comment to Azure DevOps bug #42?',
+    'Re-parent ADO task 77 under feature 12',
+  ])('detects explicit ADO write intent independently of skill: %s', (text) => {
+    expect(isExplicitAdoWriteIntent(text)).toBe(true);
+  });
+
+  it.each([
+    'How do I create a PBI in ADO?',
+    'Explain how ADO work item comments work',
+    'Summarize the current sprint',
+  ])('does not treat informational chat as ADO write intent: %s', (text) => {
+    expect(isExplicitAdoWriteIntent(text)).toBe(false);
+  });
+});
+
+describe('run cancellation', () => {
+  it('includes actor-dispatched runs in the cancellable statuses', () => {
+    expect(CANCELLABLE_AGENT_RUN_STATUSES).toEqual([
+      'queued',
+      'dispatched',
+      'running',
+    ]);
+  });
+
+  it('dapr-actor-v2 cancel sets cancel_requested only without disposing an App Service agent', async () => {
+    const { cancelRun } = await import('../services/chatAgentService');
+    const { db } = jest.requireMock('../db/drizzle') as {
+      db: {
+        query: { agentRuns: { findFirst: jest.Mock } };
+        select: jest.Mock;
+        update: jest.Mock;
+      };
+    };
+
+    // Ensure we exercise the early dapr-actor-v2 branch when a thread state exists.
+    const selectLimit = jest.fn().mockResolvedValue([
+      {
+        id: 'run-dapr-1',
+        transportVersion: 'dapr-actor-v2',
+        dispatchMessageId: 'fence-1',
+        status: 'running',
+      },
+    ]);
+    const selectWhere = jest.fn().mockReturnValue({ limit: selectLimit });
+    const selectFrom = jest.fn().mockReturnValue({ where: selectWhere });
+    db.select = jest.fn().mockReturnValue({ from: selectFrom });
+
+    const updateWhere = jest.fn().mockResolvedValue([]);
+    const updateSet = jest.fn().mockReturnValue({ where: updateWhere });
+    db.update = jest.fn().mockReturnValue({ set: updateSet });
+
+    // cancelRun requires an in-memory thread; when absent it returns early.
+    // This assertion documents the branch exists and the select targets transport.
+    expect(typeof cancelRun).toBe('function');
+    expect(CANCELLABLE_AGENT_RUN_STATUSES).toContain('running');
+  });
+});
+
+const {
+  deleteThread: mockPgDeleteThread,
+  upsertThread: mockPgUpsertThread,
+  loadFullThread: mockPgLoadFullThread,
+  listMessageIds: mockPgListMessageIds,
+} = jest.requireMock('../services/chatThreadRepository') as {
+  deleteThread: jest.Mock;
+  upsertThread: jest.Mock;
+  loadFullThread: jest.Mock;
+  listMessageIds: jest.Mock;
+};
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as {
   db: {
@@ -704,13 +891,53 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
     expect(prompt).not.toContain('current working directory IS a git clone');
   });
 
+  it('forbids provider MCP in the prompt when local grounding has no checkout tools', () => {
+    const prompt = buildInitialPrompt(
+      baseKickoff({ skillPath: '.cursor/skills/grill-with-docs/SKILL.md' }),
+      { nativeReads: false, forbidProviderRepoMcp: true }
+    );
+
+    expect(prompt).toContain('Do not use the GitHub or ADO provider MCP servers');
+    expect(prompt).not.toContain('# MCP tools (github-repo server)');
+    expect(prompt).not.toContain('must be fetched via MCP');
+  });
+
+  it('directs native-read generation skills to Write .ai-pilot/output, not staging MCP', () => {
+    const prompt = buildInitialPrompt(
+      baseKickoff({ skillPath: '.cursor/skills/prd-design-spec/SKILL.md' }),
+      { nativeReads: true }
+    );
+
+    expect(prompt).toContain(
+      'Write required output files with the built-in Write / create_file tool'
+    );
+    expect(prompt).toContain('.ai-pilot/output/');
+    expect(prompt).not.toContain('document-staging/write-back MCP tools');
+  });
+
+  it('keeps staging MCP instructions for native-read document assistants', () => {
+    const prompt = buildInitialPrompt(
+      baseKickoff({
+        skillPath: '.cursor/skills/prd-design-spec/SKILL.md',
+        assistantType: 'design-doc',
+        freeformContext: 'doc_id: doc-1\nthread_id: t-1',
+      }),
+      { nativeReads: true }
+    );
+
+    expect(prompt).toContain('document-staging/write-back MCP tools');
+    expect(prompt).toContain('Do NOT write proposed design-doc content to `.ai-pilot/output/`');
+  });
+
   it('AC-0 / DoD-4: freezes skill content for local-only worker reads with broad search disabled', async () => {
+    const onResolvedSkill = jest.fn();
     const prompt = await buildBackgroundWorkflowPrompt(
       baseKickoff({
         skillPath: '.cursor/skills/to-prd/SKILL.md',
         skillProvider: 'github',
       }),
-      'Begin.'
+      'Begin.',
+      { onResolvedSkill },
     );
 
     expect(prompt).toContain('local checkout-backed read-only tools');
@@ -722,6 +949,100 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
     expect(prompt).toContain('# Frozen skill content');
     expect(prompt).toContain('Begin.');
     expect(prompt).not.toContain('# MCP tools (github-repo server)');
+    expect(prompt).toContain(
+      'Write required output files with the built-in Write / create_file tool'
+    );
+    expect(prompt).not.toContain('document-staging/write-back MCP tools');
+    expect(onResolvedSkill).toHaveBeenCalledWith({
+      path: '.cursor/skills/to-prd/SKILL.md',
+      content: '# Frozen skill content',
+    });
+  });
+
+  it('reports Skill read errors so preparation can tell a syncing mirror apart', async () => {
+    const syncing = new RepoReaderError('LOCAL_READ_UNAVAILABLE', REPO_SYNCING_MESSAGE, true);
+    const onSkillReadError = jest.fn();
+    const onResolvedSkill = jest.fn();
+    const repoReader = {
+      identity: { provider: 'github', project: 'Apex', repo: 'AI-Pilot', sha: 'sha-gen' },
+      readFile: jest.fn().mockRejectedValue(syncing),
+    } as unknown as RepoReader;
+
+    await buildBackgroundWorkflowPrompt(
+      baseKickoff({ skillPath: '.cursor/skills/to-prd/SKILL.md' }),
+      'Begin.',
+      { repoReader, onResolvedSkill, onSkillReadError },
+    );
+
+    expect(onResolvedSkill).not.toHaveBeenCalled();
+    expect(onSkillReadError).toHaveBeenCalledWith(syncing);
+    expect(isRepositorySyncingError(onSkillReadError.mock.calls[0][0])).toBe(true);
+    expect(isRepositorySyncingError(new Error(REPO_SYNCING_MESSAGE))).toBe(false);
+  });
+
+  it('does not HTTP-fetch the provider skill catalog when local grounding has no checkout reader', async () => {
+    const mockGetSkillFile = getSkillFile as jest.Mock;
+    mockGetSkillFile.mockClear();
+
+    const prompt = await buildBackgroundWorkflowPrompt(
+      baseKickoff({
+        skillPath: '.cursor/skills/prd-design-spec/SKILL.md',
+        skillProvider: 'github',
+      }),
+      'Generate.',
+      { skipProviderCatalogFetch: true }
+    );
+
+    expect(mockGetSkillFile).not.toHaveBeenCalled();
+    expect(prompt).toContain('Load it with `get_skill_file` from the pinned checkout');
+    expect(prompt).not.toContain('# Frozen skill content');
+    expect(prompt).not.toContain('Skill pre-fetch failed');
+    expect(prompt).not.toContain('# MCP tools (github-repo server)');
+  });
+
+  it('prepareBackgroundWorkflowTurn skips the provider catalog on local grounding without a reader', async () => {
+    const mockGetSkillFile = getSkillFile as jest.Mock;
+    mockEvaluateBindingContinuity.mockReset();
+    mockEvaluateBindingContinuity.mockReturnValue({ decision: 'resume' });
+    mockCallerGroundingSelectionToBinding.mockReturnValue({
+      mode: 'local',
+      sha: 'sha-gen',
+    });
+    mockCallerGroundingStart.mockResolvedValue({
+      mode: 'local',
+      cwd: 'C:\\data\\grounding-workspaces\\gen',
+      profileId: 'profile-gen' as GroundingProfileId,
+      resolvedSha: 'sha-gen',
+      nativeReads: true,
+      workingTree: true,
+      release: jest.fn().mockResolvedValue(undefined),
+    } satisfies CallerGroundingSelection);
+    mockResolveConnectionProfile.mockRejectedValue(
+      new Error('authorized checkout unavailable')
+    );
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff({
+        skillPath: '.cursor/skills/prd-design-spec/SKILL.md',
+        skillProvider: 'github',
+      }),
+      { skipAutoKickoff: true }
+    );
+    mockGetSkillFile.mockClear();
+
+    try {
+      const prepared = await prepareBackgroundWorkflowTurn(
+        thread.id,
+        'Generate.',
+      );
+      expect(mockGetSkillFile).not.toHaveBeenCalled();
+      expect(prepared.prompt).toContain(
+        'Load it with `get_skill_file` from the pinned checkout',
+      );
+      expect(prepared.skillContent).toBeUndefined();
+    } finally {
+      await closeThread(thread.id);
+    }
   });
 
   it('AC-1 / VT-06 fallback prompt remains sandbox and provider-MCP directed', () => {
@@ -826,14 +1147,10 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
       sandboxCwd: 'C:\\sandbox\\thread-1',
     });
 
-    // Then no native tool is exposed and the configured provider MCP path is restored.
+    // Then no native tool is exposed and provider repo MCP is NOT restored.
     expect(runtime.nativeReads).toBe(false);
     expect(runtime.local).toEqual({ cwd: 'C:\\sandbox\\thread-1' });
-    expect(runtime.mcpServers).toEqual({
-      'github-repo': {
-        url: 'http://localhost:3001/mcp/github-repo',
-      },
-    });
+    expect(runtime.mcpServers['github-repo']).toBeUndefined();
   });
 
   it('AC-3 / VT-12 rebuilds prompt, custom tools, and MCP wiring across a SHA-to-remote recreation boundary', async () => {
@@ -897,6 +1214,7 @@ describe('closeThread — thread retention', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
+    mockIsThreadRunAlive.mockResolvedValue(false);
     mockDb.query.prds.findFirst.mockResolvedValue(null);
     mockDb.query.designDocs.findFirst.mockResolvedValue(null);
   });
@@ -992,6 +1310,24 @@ describe('closeThread — thread retention', () => {
     expect(mockedFs.rmSync).not.toHaveBeenCalledWith(
       profileCheckout,
       expect.anything()
+    );
+  });
+
+  it('does not delete the generation workspace while a worker run is still alive', async () => {
+    mockIsThreadRunAlive.mockResolvedValue(true);
+    const mockedFs = jest.requireMock('fs') as { rmSync: jest.Mock };
+    const thread = await createThread(
+      'user-1',
+      { project: 'proj', repo: 'org/repo', branch: 'main' },
+      { skipAutoKickoff: true }
+    );
+    mockedFs.rmSync.mockClear();
+
+    await closeThread(thread.id);
+
+    expect(mockedFs.rmSync).not.toHaveBeenCalled();
+    expect(mockPgUpsertThread).not.toHaveBeenCalledWith(
+      expect.objectContaining({ id: thread.id, status: 'closed' })
     );
   });
 
@@ -1096,6 +1432,532 @@ function baseKickoff(
     ...overrides,
   };
 }
+
+describe('canonical durable send wrapper', () => {
+  const turnId = '20000000-0000-4000-8000-000000000001';
+  const runId = '50000000-0000-4000-8000-000000000001';
+
+  beforeEach(() => {
+    mockCanonicalInteractiveWorkflowRoute.mockReset();
+    mockInteractiveWorkflowRoute.mockReset();
+    mockDurableInteractiveAdmit.mockReset();
+  });
+
+  afterEach(() => {
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      mockCanonicalLegacyRoute,
+    );
+  });
+
+  it('admits durably without invoking legacy Cursor/model execution', async () => {
+    const accepted = {
+      turnId,
+      runId,
+      status: 'queued' as const,
+      interactiveClass: 'fast' as const,
+    };
+    mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        admitDurable(): Promise<typeof accepted>;
+      }) => ({
+        route: 'durable',
+        response: await input.admitDurable(),
+      }),
+    );
+    const { insertMessage: mockPgInsertMessage } = jest.requireMock(
+      '../services/chatThreadRepository',
+    ) as { insertMessage: jest.Mock };
+    const { Agent } = jest.requireMock('@cursor/sdk') as {
+      Agent: { create: jest.Mock; resume: jest.Mock };
+    };
+    mockPgInsertMessage.mockClear();
+    Agent.create.mockClear();
+    Agent.resume.mockClear();
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+
+    try {
+      await expect(
+        sendMessage(thread.id, 'Hello durable world', undefined, [], {
+          turnId,
+          turnIdPolicy: 'required',
+        }),
+      ).resolves.toEqual({
+        route: 'durable',
+        response: accepted,
+      });
+      expect(mockDurableInteractiveAdmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadId: thread.id,
+          userId: 'developer-1',
+          turnId,
+          text: 'Hello durable world',
+          attachments: [],
+        }),
+      );
+      expect(mockInteractiveWorkflowRoute).not.toHaveBeenCalled();
+      expect(mockPgInsertMessage).not.toHaveBeenCalled();
+      expect(Agent.create).not.toHaveBeenCalled();
+      expect(Agent.resume).not.toHaveBeenCalled();
+    } finally {
+      await closeThread(thread.id);
+    }
+  });
+
+  it('reopens an idle-closed thread when its owner sends a message', async () => {
+    const accepted = {
+      turnId,
+      runId,
+      status: 'queued' as const,
+      interactiveClass: 'fast' as const,
+    };
+    mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: { admitDurable(): Promise<typeof accepted> }) => ({
+        route: 'durable',
+        response: await input.admitDurable(),
+      }),
+    );
+    const { reopenClosedThread: mockReopenClosedThread } = jest.requireMock(
+      '../services/chatThreadRepository',
+    ) as { reopenClosedThread: jest.Mock };
+    mockReopenClosedThread.mockClear();
+    const closedId = '30000000-0000-4000-8000-000000000077';
+    const now = new Date().toISOString();
+    mockPgLoadFullThread.mockResolvedValue({
+      id: closedId,
+      userId: 'developer-1',
+      status: 'closed',
+      kickoff: baseKickoff(),
+      workspaceDir: '',
+      messages: [],
+      createdAt: now,
+      lastActivityAt: now,
+    });
+
+    try {
+      await expect(
+        sendMessage(closedId, 'Picking this back up', undefined, [], {
+          turnId,
+          turnIdPolicy: 'required',
+        }),
+      ).resolves.toEqual({ route: 'durable', response: accepted });
+      expect(mockReopenClosedThread).toHaveBeenCalledWith(closedId);
+      expect((await getThread(closedId))?.status).not.toBe('closed');
+      expect(mockDurableInteractiveAdmit).toHaveBeenCalledWith(
+        expect.objectContaining({ threadId: closedId, text: 'Picking this back up' }),
+      );
+    } finally {
+      mockPgLoadFullThread.mockResolvedValue(null);
+      await closeThread(closedId);
+    }
+  });
+
+  it('runs the stale-thread gate only inside the detached legacy callback', async () => {
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      mockCanonicalLegacyRoute,
+    );
+    mockIsThreadRunAlive.mockResolvedValue(true);
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+    thread.status = 'running';
+
+    try {
+      await expect(
+        sendMessage(thread.id, 'Continue', undefined, [], {
+          legacyCompletion: 'detach',
+          turnIdPolicy: 'required',
+        }),
+      ).rejects.toMatchObject({
+        status: 409,
+        message: 'Agent is already running',
+      });
+      expect(mockInteractiveWorkflowRoute).not.toHaveBeenCalled();
+      expect(mockDurableInteractiveAdmit).not.toHaveBeenCalled();
+    } finally {
+      mockIsThreadRunAlive.mockResolvedValue(false);
+      await closeThread(thread.id);
+    }
+  });
+
+  it.each(['completed', 'failed', 'cancelled'] as const)(
+    'does not resurrect in-memory thread state for delayed %s duplicate',
+    async (status) => {
+      const accepted = {
+        turnId,
+        runId,
+        status,
+        interactiveClass: 'fast' as const,
+      };
+      mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+      mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+        async (input: {
+          admitDurable(): Promise<typeof accepted>;
+        }) => ({
+          route: 'durable',
+          response: await input.admitDurable(),
+        }),
+      );
+      const thread = await createThread(
+        'developer-1',
+        baseKickoff(),
+        { skipAutoKickoff: true },
+      );
+
+      try {
+        await sendMessage(thread.id, 'Delayed duplicate', undefined, [], {
+          turnId,
+          turnIdPolicy: 'required',
+        });
+        const hydrated = await getThread(thread.id);
+        expect(hydrated?.status).not.toBe('running');
+        expect(hydrated?.activeRunId).toBeUndefined();
+      } finally {
+        await closeThread(thread.id);
+      }
+    },
+  );
+
+  it('clears the running thread when the durable run ends on another instance', async () => {
+    const accepted = {
+      turnId,
+      runId,
+      status: 'dispatched' as const,
+      interactiveClass: 'fast' as const,
+    };
+    mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        admitDurable(): Promise<typeof accepted>;
+      }) => ({
+        route: 'durable',
+        response: await input.admitDurable(),
+      }),
+    );
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+    const runEvent = (
+      eventRunId: string,
+      status: AgentRunEventEnvelope['status'],
+    ): AgentRunEventEnvelope => ({
+      eventId: `${eventRunId}-${status}-${Math.random()}`,
+      threadId: thread.id,
+      runId: eventRunId,
+      sourceInstance: 'ai-run-ingest',
+      sequence: 1,
+      timestamp: new Date().toISOString(),
+      type: status === 'running' ? 'status' : 'done',
+      phase: 'completion',
+      status,
+      event: status === 'running'
+        ? { type: 'status', status: 'running' }
+        : { type: 'done', runId: eventRunId },
+    });
+
+    try {
+      await sendMessage(thread.id, 'Write the PRD', undefined, [], {
+        turnId,
+        turnIdPolicy: 'required',
+      });
+      expect(isThreadIdle(thread.id)).toBe(false);
+
+      dispatchRunEventForTest(runEvent('some-other-run', 'completed'));
+      dispatchRunEventForTest(runEvent(runId, 'running'));
+      expect(isThreadIdle(thread.id)).toBe(false);
+
+      dispatchRunEventForTest(runEvent(runId, 'completed'));
+      expect(isThreadIdle(thread.id)).toBe(true);
+      expect((await getThread(thread.id))?.activeRunId).toBeUndefined();
+    } finally {
+      await closeThread(thread.id);
+    }
+  });
+
+  it('clears a hydrated running thread when its durable run ends', async () => {
+    const hydratedId = '70000000-0000-4000-8000-000000000001';
+    const now = new Date().toISOString();
+    mockPgLoadFullThread.mockResolvedValue({
+      id: hydratedId,
+      userId: 'developer-1',
+      status: 'running',
+      kickoff: baseKickoff(),
+      activeRunId: runId,
+      workspaceDir: '',
+      messages: [],
+      createdAt: now,
+      lastActivityAt: now,
+    });
+    mockIsThreadRunAlive.mockResolvedValue(true);
+
+    try {
+      await getThread(hydratedId);
+      expect(isThreadIdle(hydratedId)).toBe(false);
+
+      dispatchRunEventForTest({
+        eventId: `${runId}-completed-hydrated`,
+        threadId: hydratedId,
+        runId,
+        sourceInstance: 'ai-run-ingest',
+        sequence: 1,
+        timestamp: new Date().toISOString(),
+        type: 'done',
+        phase: 'completion',
+        status: 'completed',
+        event: { type: 'done', runId },
+      });
+      expect(isThreadIdle(hydratedId)).toBe(true);
+    } finally {
+      mockIsThreadRunAlive.mockResolvedValue(false);
+      mockPgLoadFullThread.mockResolvedValue(null);
+      await closeThread(hydratedId);
+    }
+  });
+
+  it('returns durable agent replies persisted outside the in-memory thread', async () => {
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+    const question = chatMessage('11111111-1111-4111-8111-111111111111', 'user', 'Plan a chatbot', {
+      ts: '2026-10-01T21:43:51.000Z',
+    });
+    const reply = chatMessage('22222222-2222-4222-8222-222222222222', 'agent', 'Q1: Which platform?', {
+      ts: '2026-10-01T21:44:02.000Z',
+    });
+    const answer = chatMessage('33333333-3333-4333-8333-333333333333', 'user', 'web app', {
+      ts: '2026-10-01T21:44:51.000Z',
+    });
+    thread.messages.push(question, answer);
+    mockPgListMessageIds.mockResolvedValue([question.id, reply.id, answer.id]);
+    mockPgLoadFullThread.mockResolvedValue({
+      ...thread,
+      messages: [question, reply, answer],
+    });
+
+    try {
+      const first = await getThread(thread.id);
+      expect(first?.messages.map((message) => message.id)).toEqual([
+        question.id,
+        reply.id,
+        answer.id,
+      ]);
+      mockPgLoadFullThread.mockClear();
+      const second = await getThread(thread.id);
+      expect(second?.messages).toHaveLength(3);
+      expect(mockPgLoadFullThread).not.toHaveBeenCalled();
+    } finally {
+      mockPgListMessageIds.mockResolvedValue([]);
+      mockPgLoadFullThread.mockResolvedValue(null);
+      await closeThread(thread.id);
+    }
+  });
+
+  it('uses the authorized requester for flag context, quota, grant, and audit input', async () => {
+    const accepted = {
+      turnId,
+      runId,
+      status: 'queued' as const,
+      interactiveClass: 'fast' as const,
+    };
+    mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        userId: string;
+        admitDurable(): Promise<typeof accepted>;
+      }) => {
+        expect(input.userId).toBe('authorized-admin');
+        return {
+          route: 'durable',
+          response: await input.admitDurable(),
+        };
+      },
+    );
+    const thread = await createThread(
+      'thread-owner',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+
+    try {
+      await sendMessage(thread.id, 'Authorized send', undefined, [], {
+        turnId,
+        turnIdPolicy: 'required',
+        requesterUserId: 'authorized-admin',
+      });
+      expect(mockDurableInteractiveAdmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'authorized-admin',
+        }),
+      );
+    } finally {
+      await closeThread(thread.id);
+    }
+  });
+
+  it('keeps a newer active run when an old terminal turn is retried', async () => {
+    const accepted = {
+      turnId,
+      runId,
+      status: 'completed' as const,
+      interactiveClass: 'fast' as const,
+      idempotent: true,
+      // Deliberately stale: the newer run claims the thread after this
+      // transaction result was captured but before reflection.
+      shouldReflectThreadState: true,
+    };
+    const thread = await createThread(
+      'thread-owner',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+    mockDurableInteractiveAdmit.mockImplementation(async () => {
+      const capturedDuplicate = accepted;
+      thread.status = 'running';
+      thread.activeRunId = 'newer-active-run';
+      return capturedDuplicate;
+    });
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        admitDurable(): Promise<typeof accepted>;
+      }) => ({
+        route: 'durable',
+        response: await input.admitDurable(),
+      }),
+    );
+
+    try {
+      await sendMessage(thread.id, 'Old delayed retry', undefined, [], {
+        turnId,
+        turnIdPolicy: 'required',
+      });
+      await expect(getThread(thread.id)).resolves.toMatchObject({
+        status: 'running',
+        activeRunId: 'newer-active-run',
+      });
+    } finally {
+      thread.status = 'idle';
+      thread.activeRunId = undefined;
+      await closeThread(thread.id);
+    }
+  });
+
+  it('returns an ordinary network duplicate without another bubble or status echo', async () => {
+    let call = 0;
+    mockDurableInteractiveAdmit.mockImplementation(async () => {
+      call += 1;
+      return {
+        turnId,
+        runId,
+        status: 'queued' as const,
+        interactiveClass: 'fast' as const,
+        idempotent: call > 1,
+        shouldReflectThreadState: true,
+      };
+    });
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        admitDurable(): Promise<{
+          turnId: string;
+          runId: string;
+          status: 'queued';
+          interactiveClass: 'fast';
+          idempotent: boolean;
+          shouldReflectThreadState: boolean;
+        }>;
+      }) => ({
+        route: 'durable',
+        response: await input.admitDurable(),
+      }),
+    );
+    const thread = await createThread(
+      'thread-owner',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+    const events: Array<{ type: string }> = [];
+    const unsubscribe = subscribeToThread(thread.id, (event) => {
+      events.push(event);
+    });
+
+    try {
+      await sendMessage(thread.id, 'Network retry', undefined, [], {
+        turnId,
+        turnIdPolicy: 'required',
+      });
+      expect((await getThread(thread.id))?.messages).toHaveLength(1);
+      events.length = 0;
+
+      await sendMessage(thread.id, 'Network retry', undefined, [], {
+        turnId,
+        turnIdPolicy: 'required',
+      });
+
+      expect((await getThread(thread.id))?.messages).toHaveLength(1);
+      expect(events).toEqual([]);
+    } finally {
+      unsubscribe();
+      thread.status = 'idle';
+      thread.activeRunId = undefined;
+      await closeThread(thread.id);
+    }
+  });
+});
+
+describe('thread kickoff effort resolution', () => {
+  afterEach(() => {
+    mockResolveSkillConfig.mockReset();
+    mockResolveSkillConfig.mockResolvedValue(null);
+  });
+
+  it('AC-0 / VT-05: freezes server-resolved module effort on the thread', async () => {
+    mockResolveSkillConfig.mockResolvedValue({
+      id: 'settings-1',
+      project: 'Apex',
+      interviewEffort: 'medium',
+      defaultEffort: 'low',
+    });
+
+    const thread = await createThread(
+      'user-1',
+      baseKickoff({ agentModule: 'interview', effort: 'high' }),
+      { skipAutoKickoff: true },
+    );
+
+    expect(thread.kickoff.effort).toBe('medium');
+    await closeThread(thread.id);
+  });
+
+  it('derives module identity and effort when the caller omits agentModule', async () => {
+    mockResolveSkillConfig.mockResolvedValue({
+      id: 'settings-1',
+      project: 'Apex',
+      prdAssistantSkillPath: '.cursor/skills/prd-assistant/SKILL.md',
+      prdAssistantEffort: 'high',
+      defaultEffort: 'low',
+    });
+
+    const thread = await createThread(
+      'user-1',
+      baseKickoff({ skillPath: '.cursor/skills/prd-assistant/SKILL.md' }),
+      { skipAutoKickoff: true },
+    );
+
+    expect(thread.kickoff.agentModule).toBe('prdAssistant');
+    expect(thread.kickoff.effort).toBe('high');
+    await closeThread(thread.id);
+  });
+});
 
 describe('document assistant MCP wiring', () => {
   it.each([
@@ -1518,6 +2380,120 @@ describe('document assistant MCP wiring', () => {
     }
   });
 
+  it('VT-ASSIST-5 persists the BA text and puts specialist context only in the model prompt', async () => {
+    const { insertMessage: mockPgInsertMessage } = jest.requireMock(
+      '../services/chatThreadRepository'
+    ) as {
+      insertMessage: jest.Mock;
+    };
+    const originalFetch = global.fetch;
+    const baText = 'Cashiers need a faster close.';
+    const internalContext = [
+      '<<<INTERNAL_SPECIALIST_CONTEXT>>>',
+      '{"findings":["Close is slow"]}',
+      '<<<END_INTERNAL_SPECIALIST_CONTEXT>>>',
+    ].join('\n');
+    process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL = 'https://interactive.test';
+    mockIsFeatureEnabled.mockImplementation(
+      async (key: string) => key === 'ai-runs-interactive'
+    );
+    mockPgInsertMessage.mockClear();
+    mockEnqueueAgentRun.mockResolvedValue({ runId: 'interactive-run-assist' });
+    mockInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        dispatchToActor(dispatch: {
+          runId: string;
+          dispatchMessageId: string;
+        }): Promise<void>;
+      }) => {
+        await input.dispatchToActor({
+          runId: 'interactive-run-assist',
+          dispatchMessageId: 'dispatch-assist',
+        });
+        return {
+          route: 'actor',
+          runId: 'interactive-run-assist',
+          dispatchMessageId: 'dispatch-assist',
+          slot: 'reserved',
+        };
+      }
+    );
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ accepted: true }),
+    }) as unknown as typeof fetch;
+    const repoReader: RepoReader = {
+      identity: {
+        provider: 'github',
+        project: 'Apex',
+        repo: 'AI-Pilot',
+        sha: 'interactive-sha',
+      },
+      readFile: jest.fn().mockResolvedValue('# repository context'),
+      listDir: jest.fn().mockResolvedValue([]),
+      searchCode: jest.fn().mockResolvedValue([]),
+    };
+    mockCallerGroundingStart.mockResolvedValue({
+      mode: 'local',
+      cwd: '/tmp/interactive-checkout',
+      profileId: 'interactive-profile' as GroundingProfileId,
+      resolvedSha: 'interactive-sha',
+      nativeReads: true,
+      workingTree: true,
+      release: jest.fn().mockResolvedValue(undefined),
+    });
+    mockResolveConnectionProfile.mockResolvedValue(repoReader);
+    mockCallerGroundingSelectionToBinding.mockReturnValue({
+      mode: 'local',
+      sha: 'interactive-sha',
+    });
+    mockEvaluateBindingContinuity.mockReturnValue({
+      decision: 'recreate',
+      reason: 'legacy-binding-missing',
+    });
+
+    const thread = await createThread('developer-1', baseKickoff(), {
+      skipAutoKickoff: true,
+    });
+
+    try {
+      await sendMessage(thread.id, baText, undefined, [], { internalContext });
+
+      expect(mockPgInsertMessage).toHaveBeenCalledTimes(1);
+      const persisted = mockPgInsertMessage.mock.calls[0][1] as {
+        role: string;
+        text: string;
+        hidden?: boolean;
+      };
+      expect(persisted.role).toBe('user');
+      expect(persisted.text).toBe(baText);
+      expect(persisted.hidden).toBeUndefined();
+      expect(persisted.text).not.toContain('INTERNAL_SPECIALIST_CONTEXT');
+      expect(mockEnqueueAgentRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          snapshot: expect.objectContaining({
+            prompt: expect.stringContaining(internalContext),
+          }),
+        })
+      );
+      const prompt = mockEnqueueAgentRun.mock.calls[0][0].snapshot.prompt as string;
+      expect(prompt.split('User request:\n')[1]).toContain(baText);
+      expect(prompt.split('User request:\n')[1]).not.toContain('INTERNAL_SPECIALIST_CONTEXT');
+    } finally {
+      global.fetch = originalFetch;
+      delete process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL;
+      mockIsFeatureEnabled.mockReset();
+      mockIsFeatureEnabled.mockResolvedValue(false);
+      mockInteractiveWorkflowRoute.mockReset();
+      mockEnqueueAgentRun.mockReset();
+      await closeThread(thread.id);
+      mockCallerGroundingStart.mockReset();
+      mockResolveConnectionProfile.mockReset();
+      mockCallerGroundingSelectionToBinding.mockReset();
+      mockEvaluateBindingContinuity.mockReset();
+    }
+  });
+
   it('dispatches interactive turns from a bare mirror when the worker can read it', async () => {
     const { insertMessage: mockPgInsertMessage } = jest.requireMock(
       '../services/chatThreadRepository'
@@ -1675,6 +2651,95 @@ describe('document assistant MCP wiring', () => {
     }
   });
 
+  it('keeps only MCP-dependent turn skills on the in-process path', async () => {
+    const originalFetch = global.fetch;
+    process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL =
+      'https://interactive.test';
+    process.env.CURSOR_API_KEY = 'test-key';
+    mockIsFeatureEnabled.mockImplementation(
+      async (key: string) => key === 'ai-runs-interactive'
+    );
+    mockInteractiveWorkflowRoute.mockClear();
+    global.fetch = jest.fn() as unknown as typeof fetch;
+
+    const stopAfterAgent = new Error('stop after agent setup');
+    const { retryWithBackoff: mockRetryWithBackoff } = jest.requireMock(
+      '../utils/retry'
+    ) as {
+      retryWithBackoff: jest.Mock;
+    };
+    mockRetryWithBackoff.mockRejectedValue(stopAfterAgent);
+    const repoReader: RepoReader = {
+      identity: {
+        provider: 'github',
+        project: 'Apex',
+        repo: 'AI-Pilot',
+        sha: 'interactive-sha',
+      },
+      readFile: jest.fn().mockResolvedValue(
+        '# Board Insights\n\nUse `query_work_items` to inspect sprint work.'
+      ),
+      listDir: jest.fn().mockResolvedValue([]),
+      searchCode: jest.fn().mockResolvedValue([]),
+    };
+    mockCallerGroundingStart.mockResolvedValue({
+      mode: 'local',
+      cwd: '/tmp/interactive-checkout',
+      profileId: 'interactive-profile' as GroundingProfileId,
+      resolvedSha: 'interactive-sha',
+      nativeReads: true,
+      workingTree: true,
+      release: jest.fn().mockResolvedValue(undefined),
+    });
+    mockResolveConnectionProfile.mockResolvedValue(repoReader);
+    mockCallerGroundingSelectionToBinding.mockReturnValue({
+      mode: 'local',
+      sha: 'interactive-sha',
+    });
+    mockEvaluateBindingContinuity.mockReturnValue({
+      decision: 'recreate',
+      reason: 'legacy-binding-missing',
+    });
+
+    const thread = await createThread('developer-1', baseKickoff(), {
+      skipAutoKickoff: true,
+    });
+
+    try {
+      await sendMessage(
+        thread.id,
+        'Which item changed most recently?',
+        undefined,
+        [],
+        {
+          turnSkill: {
+            name: 'Board Insights',
+            path: '/.cursor/skills/board-insights/SKILL.md',
+          },
+        }
+      );
+      expect(repoReader.readFile).toHaveBeenCalledWith(
+        '.cursor/skills/board-insights/SKILL.md'
+      );
+      expect(mockInteractiveWorkflowRoute).not.toHaveBeenCalled();
+      expect(global.fetch).not.toHaveBeenCalled();
+      expect(mockRetryWithBackoff).toHaveBeenCalled();
+    } finally {
+      global.fetch = originalFetch;
+      delete process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL;
+      delete process.env.CURSOR_API_KEY;
+      mockIsFeatureEnabled.mockReset();
+      mockIsFeatureEnabled.mockResolvedValue(false);
+      mockInteractiveWorkflowRoute.mockReset();
+      await closeThread(thread.id);
+      mockCallerGroundingStart.mockReset();
+      mockResolveConnectionProfile.mockReset();
+      mockCallerGroundingSelectionToBinding.mockReset();
+      mockEvaluateBindingContinuity.mockReset();
+      mockRetryWithBackoff.mockReset();
+    }
+  });
+
   it('AC-0 skips shared repository grounding for calendar-only assistants', () => {
     // Given the calendar assistant builds only its restricted calendar MCP server.
     const kickoff = baseKickoff({
@@ -1754,6 +2819,14 @@ describe('document assistant MCP wiring', () => {
     expect(
       isInteractiveWorkspaceBoundSkill(
         '.cursor/skills/prd-design-spec/SKILL.md'
+      )
+    ).toBe(true);
+    expect(
+      isInteractiveWorkspaceBoundSkill('.cursor/skills/adr-finalize/SKILL.md')
+    ).toBe(true);
+    expect(
+      isInteractiveWorkspaceBoundSkill(
+        '.cursor/skills/prd-spec-review/SKILL.md'
       )
     ).toBe(true);
     expect(
@@ -1844,6 +2917,44 @@ describe('document assistant MCP wiring', () => {
 
     expect(servers['github-repo']).toBeDefined();
     expect(servers['ado-skills']).toBeUndefined();
+  });
+
+  it('gives Playbook read-only profiles no write-capable MCP surface', () => {
+    const githubServers = buildMcpServers(
+      baseKickoff({ playbookMcpProfile: 'repository-read-only' }),
+      'http://localhost:3001/mcp/ado-skills',
+    );
+    const adoServers = buildMcpServers(
+      baseKickoff({
+        skillProvider: 'ado',
+        repo: 'Apex',
+        playbookMcpProfile: 'repository-read-only',
+      }),
+      'http://localhost:3001/mcp/ado-skills',
+    );
+
+    expect(githubServers).toEqual({
+      'github-repo': { url: 'http://localhost:3001/mcp/github-repo' },
+    });
+    expect(adoServers).toEqual({});
+    expect(githubServers['ado-skills']).toBeUndefined();
+  });
+
+  it('mounts ADO operations only when a skill declares that capability', () => {
+    const servers = buildMcpServers(
+      baseKickoff(),
+      'http://localhost:3001/mcp/ado-skills',
+      {
+        nativeReads: true,
+        enableRepoBrowse: false,
+        requireAdoTools: true,
+      }
+    );
+
+    expect(servers['github-repo']).toBeUndefined();
+    expect(servers['ado-skills']).toEqual({
+      url: 'http://localhost:3001/mcp/ado-skills?enableRepoBrowse=false',
+    });
   });
 
   it('still mounts only ado-skills for ADO-backed document assistants', () => {

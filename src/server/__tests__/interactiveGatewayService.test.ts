@@ -5,11 +5,11 @@
  *  - persisted thread messages/status are replayed on socket attach
  *  - envelope-less live user/final-agent messages are forwarded
  *  - ordinal resume from lastEventId
- *  - de-dupe by eventId across replay + in-memory + Redis live sources
+ *  - de-dupe by eventId across replay + durable + in-memory + Redis sources
  *  - replay always precedes live; live buffered during replay is flushed
  *    ordered by (timestamp, sequence)
  *  - every Redis live envelope is forwarded (no same-instance drop — the hang fix)
- *  - close detaches both subscriptions
+ *  - close detaches every subscription
  */
 import {
   attachInteractiveThreadStream,
@@ -22,7 +22,7 @@ import type { AgentRunEventEnvelope, SseEvent } from '../../shared/types/chat';
 function envelope(
   eventId: string,
   sequence: number,
-  overrides: Partial<AgentRunEventEnvelope> = {},
+  overrides: Partial<AgentRunEventEnvelope> = {}
 ): AgentRunEventEnvelope {
   return {
     eventId,
@@ -50,7 +50,8 @@ function makeSocket(): {
     frames,
     triggerClose: () => closeHandler(),
     socket: {
-      send: (data: string) => frames.push(JSON.parse(data) as InteractiveGatewayFrame),
+      send: (data: string) =>
+        frames.push(JSON.parse(data) as InteractiveGatewayFrame),
       onClose: (handler: () => void) => {
         closeHandler = handler;
       },
@@ -67,26 +68,39 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
 }
 
 function makeDeps(
-  overrides: Partial<InteractiveGatewayDependencies> = {},
+  overrides: Partial<InteractiveGatewayDependencies> = {}
 ): InteractiveGatewayDependencies & {
   emitThread: (env: AgentRunEventEnvelope) => void;
   emitTransient: (event: SseEvent) => void;
+  emitDurable: (env: AgentRunEventEnvelope) => void;
   emitLive: (env: AgentRunEventEnvelope) => void;
   threadUnsub: jest.Mock;
+  durableUnsub: jest.Mock;
   liveUnsub: jest.Mock;
 } {
-  let threadCb: (event: SseEvent, env?: AgentRunEventEnvelope) => void = () => {};
+  let threadCb: (
+    event: SseEvent,
+    env?: AgentRunEventEnvelope
+  ) => void = () => {};
+  let durableCb: (env: AgentRunEventEnvelope) => void = () => {};
   let liveCb: (env: AgentRunEventEnvelope) => void = () => {};
   const threadUnsub = jest.fn();
+  const durableUnsub = jest.fn();
   const liveUnsub = jest.fn();
   return {
     emitThread: (env) => threadCb(env.event as SseEvent, env),
     emitTransient: (event) => threadCb(event),
+    emitDurable: (env) => durableCb(env),
     emitLive: (env) => liveCb(env),
     threadUnsub,
+    durableUnsub,
     liveUnsub,
     loadThreadSnapshot: jest.fn(async () => null),
     replayRunEvents: jest.fn(async () => []),
+    subscribeDurableEvents: (_threadId, cb) => {
+      durableCb = cb;
+      return durableUnsub;
+    },
     subscribeToThread: (_threadId, cb) => {
       threadCb = cb;
       return threadUnsub;
@@ -101,7 +115,7 @@ function makeDeps(
 }
 
 describe('attachInteractiveThreadStream', () => {
-  it('replays persisted user/agent messages and current status before durable events', async () => {
+  it('replays persisted messages and status without old run events on a cold idle connection', async () => {
     const userMessage = {
       id: 'user-1',
       role: 'user' as const,
@@ -118,10 +132,13 @@ describe('attachInteractiveThreadStream', () => {
       loadThreadSnapshot: jest.fn(async () => ({
         messages: [userMessage, agentMessage],
         status: 'idle' as const,
+        eventDrivenTermination: true,
       })),
-      replayRunEvents: jest.fn(async () => [envelope('done-1', 1, {
-        event: { type: 'done' },
-      })]),
+      replayRunEvents: jest.fn(async () => [
+        envelope('done-1', 1, {
+          event: { type: 'done' },
+        }),
+      ]),
     });
     const { socket, frames } = makeSocket();
 
@@ -130,10 +147,36 @@ describe('attachInteractiveThreadStream', () => {
     expect(frames.map((frame) => frame.data)).toEqual([
       { type: 'message', message: userMessage },
       { type: 'message', message: agentMessage },
-      { type: 'status', status: 'idle' },
-      { type: 'done' },
+      {
+        type: 'status',
+        status: 'idle',
+        eventDrivenTermination: true,
+      },
     ]);
-    expect(frames.map((frame) => frame.id)).toEqual(['', '', '', 'done-1']);
+    expect(frames.map((frame) => frame.id)).toEqual(['', '', '']);
+    expect(deps.replayRunEvents).not.toHaveBeenCalled();
+  });
+
+  it('replays the active run tail on a cold running connection', async () => {
+    const deps = makeDeps({
+      loadThreadSnapshot: jest.fn(async () => ({
+        messages: [],
+        status: 'running' as const,
+        eventDrivenTermination: true,
+        activeRunId: 'run-current',
+      })),
+    });
+    const { socket } = makeSocket();
+
+    await attachInteractiveThreadStream(socket, 't1', {}, deps);
+
+    expect(deps.replayRunEvents).toHaveBeenCalledWith(
+      't1',
+      undefined,
+      501,
+      'run-current',
+      'oldest',
+    );
   });
 
   it('forwards envelope-less live user and final agent messages', async () => {
@@ -160,7 +203,10 @@ describe('attachInteractiveThreadStream', () => {
       },
     });
 
-    expect(frames.map((frame) => frame.data.type)).toEqual(['message', 'message']);
+    expect(frames.map((frame) => frame.data.type)).toEqual([
+      'message',
+      'message',
+    ]);
     expect(frames.map((frame) => frame.id)).toEqual(['', '']);
   });
 
@@ -173,6 +219,7 @@ describe('attachInteractiveThreadStream', () => {
         ts: string;
       }>;
       status: 'running';
+      eventDrivenTermination: boolean;
     } | null>();
     const message = {
       id: 'user-race',
@@ -187,33 +234,53 @@ describe('attachInteractiveThreadStream', () => {
 
     const attachPromise = attachInteractiveThreadStream(socket, 't1', {}, deps);
     deps.emitTransient({ type: 'message', message });
-    snapshotGate.resolve({ messages: [message], status: 'running' });
+    snapshotGate.resolve({
+      messages: [message],
+      status: 'running',
+      eventDrivenTermination: true,
+    });
     await attachPromise;
 
     expect(
-      frames.filter((frame) => frame.data.type === 'message'),
+      frames.filter((frame) => frame.data.type === 'message')
     ).toHaveLength(1);
   });
 
   it('replays from the ordinal and de-dupes a later echo of the same event', async () => {
     const deps = makeDeps({
-      replayRunEvents: jest.fn(async () => [envelope('e1', 1), envelope('e2', 2)]),
+      replayRunEvents: jest.fn(async () => [
+        envelope('e1', 1),
+        envelope('e2', 2),
+      ]),
     });
     const { socket, frames } = makeSocket();
 
-    await attachInteractiveThreadStream(socket, 't1', { lastEventId: 'e0' }, deps);
+    await attachInteractiveThreadStream(
+      socket,
+      't1',
+      { lastEventId: 'e0' },
+      deps
+    );
 
     // A live re-delivery of e2 (dupe) then a fresh e3.
     deps.emitLive(envelope('e2', 2));
     deps.emitLive(envelope('e3', 3));
 
     expect(frames.map((f) => f.id)).toEqual(['e1', 'e2', 'e3']);
-    expect(deps.replayRunEvents).toHaveBeenCalledWith('t1', 'e0');
+    expect(deps.replayRunEvents).toHaveBeenCalledWith(
+      't1',
+      'e0',
+      501,
+      undefined,
+      'oldest',
+    );
   });
 
   it('flushes live events buffered during replay AFTER replay, ordered by (timestamp, sequence)', async () => {
     const replayGate = deferred<AgentRunEventEnvelope[]>();
-    const deps = makeDeps({ replayRunEvents: jest.fn(() => replayGate.promise) });
+    const deps = makeDeps({
+      replayRunEvents: jest.fn(() => replayGate.promise),
+    });
     const { socket, frames } = makeSocket();
 
     const attachPromise = attachInteractiveThreadStream(socket, 't1', {}, deps);
@@ -240,7 +307,7 @@ describe('attachInteractiveThreadStream', () => {
       socket,
       't1',
       { localInstance: 'this-node' },
-      deps,
+      deps
     );
 
     // Both a same-named instance and a peer are forwarded — the old
@@ -251,7 +318,37 @@ describe('attachInteractiveThreadStream', () => {
     expect(frames.map((f) => f.id)).toEqual(['a', 'b']);
   });
 
-  it('detaches both subscriptions when the socket closes', async () => {
+  it('forwards durable terminal events without waiting for a reconnect', async () => {
+    const deps = makeDeps();
+    const { socket, frames } = makeSocket();
+
+    await attachInteractiveThreadStream(socket, 't1', {}, deps);
+    deps.emitDurable(
+      envelope('error-1', 10, {
+        type: 'error',
+        phase: 'completion',
+        status: 'failed',
+        event: {
+          type: 'error',
+          error: 'Interactive agent could not start. Please retry.',
+          errorCode: 'fatal',
+        },
+      })
+    );
+    deps.emitDurable(
+      envelope('done-1', 11, {
+        type: 'done',
+        phase: 'completion',
+        status: 'failed',
+        event: { type: 'done', runId: 'run-1' },
+      })
+    );
+
+    expect(frames.map((frame) => frame.id)).toEqual(['error-1', 'done-1']);
+    expect(frames.map((frame) => frame.data.type)).toEqual(['error', 'done']);
+  });
+
+  it('detaches every subscription when the socket closes', async () => {
     const deps = makeDeps();
     const { socket, triggerClose } = makeSocket();
 
@@ -259,10 +356,81 @@ describe('attachInteractiveThreadStream', () => {
     triggerClose();
 
     expect(deps.threadUnsub).toHaveBeenCalledTimes(1);
+    expect(deps.durableUnsub).toHaveBeenCalledTimes(1);
     expect(deps.liveUnsub).toHaveBeenCalledTimes(1);
 
     // Idempotent: calling the returned detach again does not double-unsubscribe.
     detach();
     expect(deps.threadUnsub).toHaveBeenCalledTimes(1);
+  });
+
+  it('pages through 1,201 durable events and flushes live only after the final page', async () => {
+    const allEvents = Array.from({ length: 1_201 }, (_value, index) =>
+      envelope(`event-${index + 1}`, index + 1)
+    );
+    const pageTwoStarted = deferred<void>();
+    const pageTwoGate = deferred<void>();
+    let pageCalls = 0;
+    const replayRunEventPage = jest.fn(
+      async (
+        _threadId: string,
+        options: {
+          afterEventId?: string;
+          limit?: number;
+          runId?: string;
+          coldStart?: 'recent' | 'oldest';
+        } = {}
+      ) => {
+        pageCalls += 1;
+        if (pageCalls === 2) {
+          pageTwoStarted.resolve();
+          await pageTwoGate.promise;
+        }
+        const start = options.afterEventId
+          ? allEvents.findIndex((item) => item.eventId === options.afterEventId) +
+            1
+          : 0;
+        const limit = options.limit ?? 500;
+        const slice = allEvents.slice(start, start + limit);
+        const hasMore = start + limit < allEvents.length;
+        return {
+          events: slice,
+          nextEventId: slice.length > 0 ? slice[slice.length - 1]!.eventId : null,
+          hasMore,
+        };
+      }
+    );
+
+    const deps = makeDeps({
+      loadThreadSnapshot: jest.fn(async () => ({
+        messages: [],
+        status: 'running' as const,
+        eventDrivenTermination: true,
+        activeRunId: 'run-1',
+      })),
+      replayRunEventPage,
+      replayRunEvents: undefined,
+    });
+    const { socket, frames } = makeSocket();
+
+    const attachPromise = attachInteractiveThreadStream(socket, 't1', {}, deps);
+    await pageTwoStarted.promise;
+    deps.emitLive(envelope('live-during-page-two', 9_999));
+    expect(frames.some((frame) => frame.id === 'live-during-page-two')).toBe(
+      false
+    );
+    pageTwoGate.resolve();
+    await attachPromise;
+
+    expect(
+      replayRunEventPage.mock.calls.map((call) => call[1]?.afterEventId)
+    ).toEqual([undefined, 'event-500', 'event-1000']);
+    const sentDurableIds = frames
+      .map((frame) => frame.id)
+      .filter((id) => id.startsWith('event-'));
+    expect(sentDurableIds).toEqual(
+      Array.from({ length: 1_201 }, (_value, index) => `event-${index + 1}`)
+    );
+    expect(frames[frames.length - 1]?.id).toBe('live-during-page-two');
   });
 });

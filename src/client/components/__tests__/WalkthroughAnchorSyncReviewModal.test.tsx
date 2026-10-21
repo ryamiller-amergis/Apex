@@ -1,10 +1,63 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { WalkthroughAnchorSyncReviewModal } from '../WalkthroughAnchorSyncReviewModal';
+import {
+  SYNC_REVIEW_PAGE_SIZE,
+  WalkthroughAnchorSyncReviewModal,
+} from '../WalkthroughAnchorSyncReviewModal';
 import { MOCK_WALKTHROUGH_ANCHOR_SYNC_CANDIDATES } from '../walkthroughAnchorManagementMockData';
 
+function classifiedCandidates(count: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    ...MOCK_WALKTHROUGH_ANCHOR_SYNC_CANDIDATES[0],
+    id: `classified-${i}`,
+    testId: `classified-btn-${i}`,
+    anchorKey: `classified-btn-${i}`,
+    smartTags: ['adr', 'button'],
+    aiProvenance: {
+      provider: 'cursor' as const,
+      model: 'anchor-classifier',
+      skillPath: '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+      generatedAt: '2026-07-30T04:00:00.000Z',
+      confidence: 0.9,
+      rationale: 'AdrChatView.tsx:705',
+    },
+  }));
+}
+
 describe('WalkthroughAnchorSyncReviewModal enrichment gating', () => {
-  it('disables Save while AI enrichment is running', () => {
+  it('places classifier-tagged rows in Ready and keeps Save usable', async () => {
+    const user = userEvent.setup();
+    const classified = {
+      ...MOCK_WALKTHROUGH_ANCHOR_SYNC_CANDIDATES[0],
+      id: 'classifier-ready-1',
+      testId: 'ado-create-error',
+      anchorKey: 'ado-create-error',
+      smartTags: ['ado', 'create', 'error'],
+      aiProvenance: {
+        provider: 'cursor' as const,
+        model: 'anchor-classifier',
+        skillPath: '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+        generatedAt: '2026-07-30T04:00:00.000Z',
+        confidence: 0.9,
+        rationale: 'CreateAdoItemsModal.tsx:415',
+      },
+    };
+
+    render(
+      <WalkthroughAnchorSyncReviewModal
+        candidates={[classified]}
+        enrichmentStatus="idle"
+        onClose={jest.fn()}
+        onSave={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('walkthrough-anchor-sync-section-ready')).toBeInTheDocument();
+    expect(screen.getByText('Classifier')).toBeInTheDocument();
+    await user.click(screen.getByTestId('walkthrough-anchor-sync-approve-ready'));
+    expect(screen.getByTestId('walkthrough-anchor-sync-save')).not.toBeDisabled();
+  });
+  it('keeps Save enabled while background AI refine is running', () => {
     render(
       <WalkthroughAnchorSyncReviewModal
         candidates={MOCK_WALKTHROUGH_ANCHOR_SYNC_CANDIDATES}
@@ -16,8 +69,8 @@ describe('WalkthroughAnchorSyncReviewModal enrichment gating', () => {
 
     expect(screen.getByTestId('walkthrough-anchor-sync-enrichment-running')).toBeInTheDocument();
     const save = screen.getByTestId('walkthrough-anchor-sync-save');
+    expect(save).toHaveTextContent('Save decided (0)');
     expect(save).toBeDisabled();
-    expect(save).toHaveTextContent('Waiting for AI…');
   });
 
   it('allows Save after AI enrichment finishes', async () => {
@@ -79,7 +132,41 @@ describe('WalkthroughAnchorSyncReviewModal enrichment gating', () => {
     expect(screen.getByTestId('walkthrough-anchor-sync-select-scanner-only-1')).not.toBeChecked();
   });
 
-  it('exposes batch size options 10, 20, and 50', async () => {
+  it('renders only a page of rows per section and reveals more on demand', async () => {
+    const user = userEvent.setup();
+    const total = SYNC_REVIEW_PAGE_SIZE * 2 + 10;
+
+    render(
+      <WalkthroughAnchorSyncReviewModal
+        candidates={classifiedCandidates(total)}
+        enrichmentStatus="idle"
+        onClose={jest.fn()}
+        onSave={jest.fn()}
+      />,
+    );
+
+    const ready = screen.getByTestId('walkthrough-anchor-sync-section-ready');
+    expect(ready.querySelectorAll('[data-testid^="walkthrough-anchor-sync-row-"]')).toHaveLength(
+      SYNC_REVIEW_PAGE_SIZE,
+    );
+    expect(screen.getByTestId('walkthrough-anchor-sync-pager-ready')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('walkthrough-anchor-sync-show-more-ready'));
+    expect(ready.querySelectorAll('[data-testid^="walkthrough-anchor-sync-row-"]')).toHaveLength(
+      SYNC_REVIEW_PAGE_SIZE * 2,
+    );
+
+    // Bulk actions still cover the unrendered rows.
+    expect(screen.getByTestId('walkthrough-anchor-sync-approve-ready')).toHaveTextContent(
+      `Approve ready (${total})`,
+    );
+    await user.click(screen.getByTestId('walkthrough-anchor-sync-approve-ready'));
+    expect(screen.getByTestId('walkthrough-anchor-sync-save')).toHaveTextContent(
+      `Save decided (${total})`,
+    );
+  });
+
+  it('exposes batch size options 10, 20, 50, and All', async () => {
     const user = userEvent.setup();
     const onBatchSizeChange = jest.fn();
     render(
@@ -95,6 +182,7 @@ describe('WalkthroughAnchorSyncReviewModal enrichment gating', () => {
     expect(screen.getByTestId('walkthrough-anchor-sync-batch-size-10')).toBeInTheDocument();
     expect(screen.getByTestId('walkthrough-anchor-sync-batch-size-20')).toBeInTheDocument();
     expect(screen.getByTestId('walkthrough-anchor-sync-batch-size-50')).toBeInTheDocument();
+    expect(screen.getByTestId('walkthrough-anchor-sync-batch-size-all')).toBeInTheDocument();
     await user.click(screen.getByTestId('walkthrough-anchor-sync-batch-size-50'));
     expect(onBatchSizeChange).toHaveBeenCalledWith(50);
   });
@@ -112,7 +200,7 @@ describe('WalkthroughAnchorSyncReviewModal enrichment gating', () => {
     expect(screen.queryByTestId('walkthrough-anchor-sync-info-panel')).not.toBeInTheDocument();
     await user.click(screen.getByTestId('walkthrough-anchor-sync-info'));
     expect(screen.getByTestId('walkthrough-anchor-sync-info-panel')).toBeInTheDocument();
-    expect(screen.getByText(/What AI smart-tagging does/i)).toBeInTheDocument();
+    expect(screen.getByText(/What optional background AI does/i)).toBeInTheDocument();
     await user.click(screen.getByTestId('walkthrough-anchor-sync-info-close'));
     expect(screen.queryByTestId('walkthrough-anchor-sync-info-panel')).not.toBeInTheDocument();
   });

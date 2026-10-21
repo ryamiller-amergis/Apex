@@ -11,6 +11,8 @@ function makeRequest(id: string, rank: number | null, createdAt: string): Featur
     interviewId: null,
     submittedBy: 'user-1',
     sourceProject: 'Apex',
+    assignedTo: null,
+    assignedToApex: false,
     linkedAdrs: [],
     status: 'new',
     aiStatus: 'complete',

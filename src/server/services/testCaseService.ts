@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { agentRuns, chatThreads, interviews, prds, testCases } from '../db/schema';
+import { chatThreads, interviews, prds, testCases } from '../db/schema';
 import type {
   TestCaseCoverageSummary,
   TestCaseRecord,
@@ -18,8 +18,13 @@ import {
   updateThreadKickoffContext,
 } from './chatAgentService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
+import {
+  canThisInstanceFailGeneration,
+  isThreadRunAlive,
+} from './agentRunReaperService';
 import { resolveSkillConfig } from './projectSettingsService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
+import { recordArtifactDoneEvent } from './artifactDoneEventService';
 import {
   propagatePipelineGrounding,
   runGroundingService,
@@ -626,7 +631,11 @@ export async function markTestCaseFailed(
     .update(testCases)
     .set({ status: 'failed', updatedAt: new Date().toISOString() })
     .where(
-      and(eq(testCases.id, testCaseId), eq(testCases.status, 'generating'))
+      and(
+        eq(testCases.id, testCaseId),
+        eq(testCases.chatThreadId, chatThreadId),
+        eq(testCases.status, 'generating'),
+      )
     );
 
   const prdRow = await db.query.prds.findFirst({
@@ -854,6 +863,7 @@ export async function triggerTestCaseGeneration(
     prdRow.authorId,
     {
       project: prdRow.project,
+      agentModule: 'testCase',
       repo: skillConfig.skillRepo,
       branch: skillConfig.skillBranch ?? 'main',
       skillProvider: skillConfig.skillProvider ?? undefined,
@@ -957,28 +967,41 @@ export function startTestCaseWatcher(
       return;
     }
 
-    // Background lane keeps the App Service thread idle while the job is
-    // queued/dispatched/running. Only treat idle as "finished without output"
-    // once there is no in-flight agent run for this thread.
-    const inFlightRun = await db.query.agentRuns.findFirst({
-      where: and(
-        eq(agentRuns.threadId, chatThreadId),
-        inArray(agentRuns.status, ['queued', 'dispatched', 'running']),
-      ),
-      columns: { id: true },
-    });
-    if (inFlightRun) {
-      return;
-    }
-
-    if (attempts > WATCHER_MAX_ATTEMPTS || isThreadIdle(chatThreadId)) {
+    if (attempts > WATCHER_MAX_ATTEMPTS) {
       clearInterval(interval);
       activeTestCaseWatchers.delete(testCaseId);
       console.warn(
-        `[testCaseWatcher] No test-case output produced — marking failed (testCaseId=${testCaseId}, threadId=${chatThreadId})`
+        `[testCaseWatcher] Timed out waiting for test-case output — marking failed (testCaseId=${testCaseId}, threadId=${chatThreadId})`
       );
       await markTestCaseFailed(testCaseId, row.prdId, chatThreadId);
+      return;
     }
+
+    // Background lane keeps the App Service thread idle while the job is
+    // queued/dispatched/running, so idle alone never means "finished".
+    const agentFinished =
+      isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId));
+    if (!agentFinished) return;
+
+    // Requires a terminal agent_runs row owned by this instance (or an orphan
+    // past its grace). Without it, keep polling: the recovery sweep starts a
+    // watcher while triggerTestCaseGeneration is still routing, and back then
+    // an idle thread with no run row yet looked identical to "finished without
+    // output" — which failed the row and deleted the workspace out from under
+    // the worker that was about to run. Timeout above is the backstop.
+    if (!(await canThisInstanceFailGeneration(chatThreadId))) {
+      console.warn(
+        `[testCaseWatcher] Waiting — not run owner or no terminal run yet (testCaseId=${testCaseId}, threadId=${chatThreadId})`
+      );
+      return;
+    }
+
+    clearInterval(interval);
+    activeTestCaseWatchers.delete(testCaseId);
+    console.warn(
+      `[testCaseWatcher] No test-case output produced — marking failed (testCaseId=${testCaseId}, threadId=${chatThreadId})`
+    );
+    await markTestCaseFailed(testCaseId, row.prdId, chatThreadId);
   }, WATCHER_INTERVAL_MS);
 
   activeTestCaseWatchers.set(testCaseId, interval);
@@ -1013,6 +1036,10 @@ export async function syncTestCaseOutput(
     await cleanupWorkspace(chatThreadId);
     return false;
   }
+  if (currentRow.status !== 'generating') {
+    await cleanupWorkspace(chatThreadId);
+    return false;
+  }
 
   const testCasesMd = await readOutputTestCasesMd(
     chatThreadId,
@@ -1027,25 +1054,51 @@ export async function syncTestCaseOutput(
     testCasesJson
   );
   const coverageSummary = extractCoverageSummary(testCasesJson);
+  const readyAt = new Date().toISOString();
   const updates: Partial<typeof testCases.$inferInsert> = {
     status: 'ready',
     testCasesJson: testCasesJson as any,
     testCasesMd: testCasesMd ?? null,
     coverageSummary: coverageSummary ?? null,
-    updatedAt: new Date().toISOString(),
+    updatedAt: readyAt,
   };
 
-  await db.update(testCases).set(updates).where(eq(testCases.id, testCaseId));
-  if (backlogWithTestCaseCounts !== null) {
-    await db
-      .update(prds)
-      .set({
-        backlogJson: backlogWithTestCaseCounts as any,
-        updatedAt: new Date().toISOString(),
-      })
-      .where(eq(prds.id, prdId));
+  const applied = await db.transaction(async (tx) => {
+    const updatedRows = await tx
+      .update(testCases)
+      .set(updates)
+      .where(
+        and(
+          eq(testCases.id, testCaseId),
+          eq(testCases.chatThreadId, chatThreadId),
+          eq(testCases.status, 'generating'),
+        ),
+      )
+      .returning({ id: testCases.id });
+    if (updatedRows.length === 0) return false;
+    if (backlogWithTestCaseCounts !== null) {
+      await tx
+        .update(prds)
+        .set({
+          backlogJson: backlogWithTestCaseCounts as any,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(prds.id, prdId));
+    }
+    return true;
+  });
+  if (!applied) {
+    await cleanupWorkspace(chatThreadId);
+    return false;
   }
 
+  // Frozen cycle-time end instant — insert-once, so a regeneration keeps the
+  // first suite-ready timestamp (FEAT-001 / TBI-002).
+  try {
+    await recordArtifactDoneEvent('test_case', testCaseId, readyAt);
+  } catch (err) {
+    console.error(`[testCase] Failed to record done event (testCaseId=${testCaseId})`, err);
+  }
   await cleanupWorkspace(chatThreadId);
   await cleanupWorkspace(prdRow?.chatThreadId);
   console.log(

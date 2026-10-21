@@ -71,8 +71,8 @@ export const AdrReviewerModal: React.FC<AdrReviewerModalProps> = ({
             </h2>
             <p className={styles.subtitle}>
               {mode === 'edit'
-                ? 'Add or remove reviewers from the project’s Developer group.'
-                : 'You will own this ADR. Select reviewers from the project’s Developer group.'}
+                ? 'Add or remove reviewers from the configured ADR reviewer pool.'
+                : 'You will own this ADR. Select reviewers from the configured ADR reviewer pool.'}
             </p>
           </div>
           <button
@@ -99,7 +99,7 @@ export const AdrReviewerModal: React.FC<AdrReviewerModalProps> = ({
 
             <div className={styles.field}>
               <div className={styles.groupHeader}>
-                <span className={styles.label}>Developer Reviewers</span>
+                <span className={styles.label}>Configured ADR Reviewers</span>
                 {candidates.length > 0 && (
                   <button
                     className={styles.selectAllBtn}
@@ -113,13 +113,16 @@ export const AdrReviewerModal: React.FC<AdrReviewerModalProps> = ({
                 )}
               </div>
               {isLoading ? (
-                <span className={styles.loadingText}>Loading Developer group…</span>
+                <span className={styles.loadingText}>Loading ADR reviewer pool…</span>
               ) : error ? (
                 <span className={styles.noApprovers}>{error.message}</span>
               ) : candidates.length === 0 ? (
-                <span className={styles.noApprovers}>No members are assigned to the Developer group.</span>
+                <span className={styles.noApprovers}>No reviewers are assigned to the configured ADR reviewer pool.</span>
               ) : (
-                <div className={styles.chipGrid}>
+                <div
+                  className={styles.chipGrid}
+                  {...{ 'data-testid': 'adr-reviewer-picker' }}
+                >
                   {candidates.map((candidate) => {
                     const selected = selectedIds.includes(candidate.id);
                     return (
@@ -146,6 +149,15 @@ export const AdrReviewerModal: React.FC<AdrReviewerModalProps> = ({
               {selectedNames.length > 0 && (
                 <p className={styles.validationHint}>{selectedNames.length} reviewer{selectedNames.length === 1 ? '' : 's'} selected</p>
               )}
+              {mode === 'create' && !isLoading && candidates.length > 0 && selectedIds.length === 0 && (
+                <p
+                  id="adr-reviewer-selection-required"
+                  className={styles.validationHint}
+                  role="status"
+                >
+                  Select at least one reviewer to continue.
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -163,6 +175,11 @@ export const AdrReviewerModal: React.FC<AdrReviewerModalProps> = ({
             type="button"
             onClick={() => onConfirm(selectedIds)}
             disabled={isSubmitting || isLoading || mode === 'create' && candidates.length > 0 && selectedIds.length === 0}
+            aria-describedby={
+              mode === 'create' && candidates.length > 0 && selectedIds.length === 0
+                ? 'adr-reviewer-selection-required'
+                : undefined
+            }
             {...{ 'data-testid': 'adr-reviewer-confirm-btn' }}
           >
             {isSubmitting

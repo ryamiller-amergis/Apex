@@ -9,6 +9,7 @@ import {
   DiagramVersionConflictError,
 } from '../../shared/types/diagram';
 import diagramRouter from '../routes/diagrams';
+import * as aiService from '../services/diagramAiService';
 import * as service from '../services/diagramService';
 
 let permissions = new Set<string>();
@@ -36,7 +37,9 @@ jest.mock('../middleware/rbac', () => ({
 }));
 
 jest.mock('../services/diagramService');
+jest.mock('../services/diagramAiService');
 const mockedService = service as jest.Mocked<typeof service>;
+const mockedAiService = aiService as jest.Mocked<typeof aiService>;
 
 const NOW = '2026-08-06T00:00:00.000Z';
 const detail = {
@@ -139,6 +142,39 @@ describe('Diagram API route contracts', () => {
     expect((await request(buildApp()).get(`${base}/${detail.id}`)).status).toBe(200);
     expect((await request(buildApp()).put(`${base}/${detail.id}`).send(detail)).status).toBe(200);
     expect((await request(buildApp()).delete(`${base}/${detail.id}`)).status).toBe(204);
+  });
+
+  it('V1-1/V1-3 generates a draft with diagram:create and current project access', async () => {
+    permissions.add('diagram:create');
+    mockedAiService.generateDiagramFromPrompt.mockResolvedValue({
+      title: 'Generated flow',
+      scene: {
+        elements: [{ id: 'generated', type: 'rectangle' }],
+        appState: {},
+        files: {},
+      },
+    });
+
+    const response = await request(buildApp())
+      .post(`${base}/generate`)
+      .send({ prompt: 'Map the release process' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.title).toBe('Generated flow');
+    expect(mockedAiService.generateDiagramFromPrompt).toHaveBeenCalledWith(
+      'project-a',
+      'Map the release process',
+      'user-1',
+    );
+  });
+
+  it('V1-3 denies AI generation without diagram:create', async () => {
+    const response = await request(buildApp())
+      .post(`${base}/generate`)
+      .send({ prompt: 'Map the release process' });
+
+    expect(response.status).toBe(403);
+    expect(mockedAiService.generateDiagramFromPrompt).not.toHaveBeenCalled();
   });
 
   it('TBI-002 DoD-0 exposes grant and share-target operations', async () => {

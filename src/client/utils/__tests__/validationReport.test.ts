@@ -1,9 +1,14 @@
 import {
   buildPassingValidationReasonsMarkdown,
+  buildUnusableValidationScorecard,
   collectValidationGaps,
   designDocFeatureSectionScore,
+  isUnusableValidationScorecard,
   normalizeCrossCuttingCheck,
   normalizeValidationGap,
+  normalizeValidationScorecard,
+  parseAgentValidationScorecard,
+  resolveScorecardOverallScore,
 } from '../../../shared/utils/validationReport';
 import type { ValidationScorecard } from '../../../shared/types/interview';
 
@@ -342,5 +347,138 @@ describe('designDocFeatureSectionScore', () => {
         'design_score',
       ),
     ).toBe(96);
+  });
+});
+
+describe('resolveScorecardOverallScore', () => {
+  it('prefers the canonical top-level overall_score', () => {
+    expect(resolveScorecardOverallScore({ overall_score: 94, scores: { overall: 12 } })).toBe(94);
+  });
+
+  it('falls back to scores.overall when overall_score is absent', () => {
+    expect(
+      resolveScorecardOverallScore({
+        scores: { prd: { percentage: 97.33 }, backlog: { percentage: 95 }, overall: 96.17 },
+      }),
+    ).toBeCloseTo(96.17);
+  });
+
+  it('averages per-file percentages when no overall is reported', () => {
+    expect(
+      resolveScorecardOverallScore({
+        scores: { prd: { percentage: 90 }, backlog: { percentage: 80 } },
+      }),
+    ).toBe(85);
+  });
+
+  it('averages files[].score when scores and overall_score are absent', () => {
+    expect(
+      resolveScorecardOverallScore({
+        files: [{ file: 'prd', score: 80 }, { file: 'backlog', score: 90 }],
+      }),
+    ).toBe(85);
+  });
+
+  it('reads alternate overall fields, summary, and "%" strings', () => {
+    expect(resolveScorecardOverallScore({ overall_percent: 91 })).toBe(91);
+    expect(resolveScorecardOverallScore({ summary: { overall_score: '88%' } })).toBe(88);
+    expect(resolveScorecardOverallScore({ scores: { overall: { pct: 93 } } })).toBe(93);
+  });
+
+  it('converts { score, max } entries under scores to percentages', () => {
+    expect(
+      resolveScorecardOverallScore({
+        scores: { prd: { score: 45, max: 50 }, backlog: { score: 40, max: 50 } },
+      }),
+    ).toBe(85);
+  });
+
+  it('prefers an agent-written percentage over section scores', () => {
+    expect(
+      resolveScorecardOverallScore({
+        summary: { overall_score: 92 },
+        prd_sections: [{ section: 'Problem', score: 0 }],
+      }),
+    ).toBe(92);
+  });
+
+  it('applies the weighted 0–3 rubric to prd_sections and backlog_sections', () => {
+    const score = resolveScorecardOverallScore({
+      summary: 'All sections substantive.',
+      prd_sections: [
+        { section: 'Problem', score: 3, weight: 30 },
+        { section: 'Goals', score: 2, weight: 70 },
+      ],
+      backlog_sections: { epics: { score: 3 }, pbis: { score: 3 } },
+    });
+    // PRD: (90 + 140) / 300 = 76.67%; backlog: 100%; overall = average.
+    expect(score).toBeCloseTo((230 / 300 * 100 + 100) / 2);
+  });
+
+  it('ignores section lists whose scores are off the 0–3 rubric', () => {
+    expect(
+      resolveScorecardOverallScore({ prd_sections: [{ section: 'Problem', score: 80 }] }),
+    ).toBeNull();
+  });
+
+  it('returns null when no finite score is present', () => {
+    expect(resolveScorecardOverallScore({ verdict: 'ready' })).toBeNull();
+    expect(resolveScorecardOverallScore({ overall_score: 'n/a' })).toBeNull();
+    expect(resolveScorecardOverallScore({ scores: { overall: null } })).toBeNull();
+    expect(resolveScorecardOverallScore(null)).toBeNull();
+  });
+});
+
+describe('normalizeValidationScorecard', () => {
+  it('stamps a canonical overall_score onto the nested prd-spec-review shape', () => {
+    const normalized = normalizeValidationScorecard({
+      review_phase: 'initial',
+      is_ready: true,
+      verdict: 'Ready',
+      scores: { prd: { percentage: 97.33 }, backlog: { percentage: 95 }, overall: 96.17 },
+    });
+
+    expect(normalized?.overall_score).toBeCloseTo(96.17);
+    expect(Math.round(normalized!.overall_score)).toBe(96);
+    expect(normalized?.is_ready).toBe(true);
+  });
+
+  it('rejects a scorecard with no usable score rather than yielding NaN', () => {
+    const normalized = normalizeValidationScorecard({ review_phase: 'initial', is_ready: true });
+
+    expect(normalized).toBeNull();
+  });
+});
+
+describe('parseAgentValidationScorecard', () => {
+  it('returns a 0% system scorecard when JSON is unusable', () => {
+    const parsed = parseAgentValidationScorecard('{"verdict":"ready"}');
+    expect(parsed.overall_score).toBe(0);
+    expect(parsed.is_ready).toBe(false);
+    expect(parsed.slug).toBe('validation-unusable');
+  });
+
+  it('returns a 0% system scorecard when JSON is invalid', () => {
+    const parsed = parseAgentValidationScorecard('{not json');
+    expect(parsed.overall_score).toBe(0);
+    expect(parsed.verdict).toBe('significant_gaps');
+  });
+
+  it('preserves a usable files[].score average', () => {
+    const parsed = parseAgentValidationScorecard(
+      JSON.stringify({ files: [{ file: 'prd', score: 70 }, { file: 'backlog', score: 80 }] }),
+    );
+    expect(parsed.overall_score).toBe(75);
+  });
+});
+
+describe('buildUnusableValidationScorecard', () => {
+  it('always produces a persistable 0% card', () => {
+    const card = buildUnusableValidationScorecard('Re-run validation.');
+    expect(isUnusableValidationScorecard(card)).toBe(true);
+    expect(isUnusableValidationScorecard({ slug: 'demo' })).toBe(false);
+    expect(card.overall_score).toBe(0);
+    expect(card.is_ready).toBe(false);
+    expect(card.gaps?.[0]?.description).toContain('Re-run');
   });
 });

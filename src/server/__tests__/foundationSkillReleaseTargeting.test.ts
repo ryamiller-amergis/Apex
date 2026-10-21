@@ -6,6 +6,8 @@
 import type { FoundationSkillRelease } from '../../shared/types/foundationSkills';
 import {
   isReleaseVisibleToProject,
+  isReleaseVisibleToRepo,
+  normalizeTargetRepos,
   shippableSkills,
   rejectNonShippableSkills,
   type CatalogSkillEntry,
@@ -19,7 +21,7 @@ function makeRelease(targetProjects: string[], skillTargets: Record<string, stri
     artifactPackage: '@apex/skills', artifactVersion: '0.2.0',
     artifactFeed: null, integritySha256: null, contractApiVersion: 1,
     selectedSkills: [], targetProjects, skillTargets, manifestSnapshot: null,
-    releaseNotes: null, breakingChanges: null,
+    releaseNotes: null, breakingChanges: null, projectNotes: {},
     publishedBy: null, publishedAt: null, deprecatedBy: null, deprecatedAt: null,
     createdBy: 'admin', createdAt: '', updatedAt: '',
   };
@@ -41,6 +43,55 @@ describe('isReleaseVisibleToProject', () => {
 
   it('returns false when apexProject is null and allowlist is non-empty', () => {
     expect(isReleaseVisibleToProject(makeRelease(['MaxView']), null)).toBe(false);
+  });
+});
+
+describe('isReleaseVisibleToRepo', () => {
+  const infra = {
+    apexProject: 'MaxView',
+    provider: 'ado' as const,
+    project: 'MaxView',
+    repo: 'MaxView.Infra',
+    branch: 'development',
+    friendlyName: 'Infra',
+  };
+  const app = {
+    ...infra,
+    repo: 'MaxView',
+    friendlyName: 'MaxView',
+  };
+
+  it('keeps every repository when the release has no repository list', () => {
+    const release = makeRelease(['MaxView']);
+    expect(isReleaseVisibleToRepo(release, app)).toBe(true);
+    expect(isReleaseVisibleToRepo(release, infra)).toBe(true);
+  });
+
+  it('shows the release only to the selected repository', () => {
+    const release = { ...makeRelease(['MaxView']), targetRepos: [infra] };
+    expect(isReleaseVisibleToRepo(release, infra)).toBe(true);
+    expect(isReleaseVisibleToRepo(release, app)).toBe(false);
+  });
+
+  it('still includes a project that has no repository entries', () => {
+    const release = {
+      ...makeRelease(['MaxView', 'ATS-Integration']),
+      targetRepos: [infra],
+    };
+    expect(isReleaseVisibleToRepo(release, {
+      apexProject: 'ATS-Integration',
+      provider: 'ado',
+      project: 'ATS-Integration',
+      repo: 'ATS',
+      branch: 'main',
+    })).toBe(true);
+  });
+
+  it('drops repositories outside the project audience', () => {
+    expect(normalizeTargetRepos(
+      [infra, { ...app, apexProject: 'Other' }],
+      ['MaxView'],
+    )).toEqual([infra]);
   });
 });
 

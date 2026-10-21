@@ -432,7 +432,7 @@ describe('getters + listAnchors', () => {
 
     const coverage = await getModuleCoverage();
 
-    expect(coverage.totalModules).toBe(17);
+    expect(coverage.totalModules).toBe(18);
     expect(coverage.coveredModules).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ key: 'profile', anchorCount: 2 }),
@@ -443,6 +443,7 @@ describe('getters + listAnchors', () => {
       expect.arrayContaining([
         expect.objectContaining({ key: 'planning', anchorCount: 0 }),
         expect.objectContaining({ key: 'ai-cost', anchorCount: 0 }),
+        expect.objectContaining({ key: 'playbooks', anchorCount: 0 }),
       ]),
     );
   });

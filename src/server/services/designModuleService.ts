@@ -472,6 +472,7 @@ export async function regenerateModule(
     options.actorId,
     {
       project: options.project,
+      agentModule: 'designModule',
       repo: skillConfig.skillRepo,
       branch: skillConfig.skillBranch ?? 'main',
       skillProvider: skillConfig.skillProvider,

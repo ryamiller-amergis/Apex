@@ -20,6 +20,7 @@ import {
   useValidationReport,
   useFixValidation,
   useAcceptFixValidation,
+  useDismissDesignDocFixSession,
   useRevertDesignDocSection,
   useDocumentAssignments,
   useReassignApprovers,
@@ -31,27 +32,31 @@ import {
   useOverrideDesignDocValidation,
 } from '../hooks/useInterviews';
 import { ProposedDesignDocChangesReview } from './ProposedDesignDocChangesReview';
+import { DesignDocPlaybookStartAction } from './DesignDocPlaybookStartAction';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
-import { AgentComposer } from './agentChat';
+import { AgentComposer, AgentPanelShell } from './agentChat';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
 import { ReviewReasonModal } from './ReviewReasonModal';
+import { ArtifactUsageStrip } from './ArtifactUsageStrip';
 import { ValidationOverrideAudit } from './ValidationOverrideAudit';
 import { AnnotationLayer, unwrapCommentMarks } from './AnnotationLayer';
 import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { FixValidationPanel } from './FixValidationPanel';
 import { ApexFixRunningBanner } from './ApexFixRunningBanner';
-import { RunGroundingStatus } from './RunGroundingStatus';
 import type { ContentSnapshot, GapChangeEntry } from './FixValidationPanel';
 import type { DesignDocStatus, ValidationScorecardGap, ValidationScorecard, ValidationScorecardFeature } from '../../shared/types/interview';
+import { effortLabel } from '../../shared/utils/effort';
 import {
   collectValidationGaps,
   designDocFeatureSectionScore,
+  isUnusableValidationScorecard,
 } from '../../shared/utils/validationReport';
 import {
   designDocHasProposedChanges,
   isDesignDocSingleCommentFixPending,
 } from '../utils/apexFixHelpers';
+import { createChatTurnId } from '../utils/chatTurnId';
 import {
   APEX_FIX_TIMEOUT_MS,
   agentErrorFromChatThreadStatus,
@@ -469,7 +474,10 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ text: contextMsg }),
+      body: JSON.stringify({
+        turnId: createChatTurnId(),
+        text: contextMsg,
+      }),
     });
   }, [threadId, isRunning, discussContext]);
 
@@ -495,6 +503,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby="new-conv-confirm-title"
+        {...{ 'data-testid': 'design-doc-assistant-new-confirm-dialog' }}
       >
         <div className={styles.confirmCard}>
           <div className={styles.confirmIconWrap} aria-hidden="true">
@@ -505,7 +514,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
           <h2 className={styles.confirmTitle} id="new-conv-confirm-title">Start new conversation?</h2>
           <p className={styles.confirmBody}>The current thread will be cleared and a fresh session with Apex will begin.</p>
           <div className={styles.confirmActions}>
-            <button className={styles.confirmBtnCancel} onClick={() => setShowNewConvConfirm(false)} type="button">Cancel</button>
+            <button className={styles.confirmBtnCancel} onClick={() => setShowNewConvConfirm(false)} type="button" {...{ 'data-testid': 'design-doc-assistant-new-confirm-cancel' }}>Cancel</button>
             <button
               className={styles.confirmBtnConfirm}
               onClick={async () => {
@@ -532,6 +541,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
                 }
               }}
               type="button"
+              {...{ 'data-testid': 'design-doc-assistant-new-confirm-start' }}
             >
               Start new
             </button>
@@ -539,43 +549,54 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
         </div>
       </div>
     )}
-    <div className={styles.assistantPanel} style={{ width: panelWidth }}>
-      <div
-        className={`${styles.assistantResizeHandle} ${isDragging ? styles.assistantResizeHandleDragging : ''}`}
-        onMouseDown={handleResizeMouseDown}
-        role="separator"
-        aria-label="Resize panel"
-        aria-orientation="vertical"
-      />
-      <div className={styles.assistantPanelHeader}>
-        <div className={styles.assistantPanelHeaderLeft}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-          </svg>
-          <span className={styles.assistantPanelTitle}>Apex Assistant</span>
-        </div>
-        <div className={styles.assistantPanelHeaderActions}>
-          {!readOnly && canCreateThread && (
+    <div {...{ 'data-testid': 'design-doc-assistant-panel' }}>
+      <AgentPanelShell
+        title="Apex Assistant"
+        ariaLabel="Design document assistant panel"
+        onClose={onClose}
+        closeAriaLabel="Close assistant"
+        closeTestId="design-doc-assistant-close-btn"
+        width={panelWidth}
+        onResizeMouseDown={handleResizeMouseDown}
+        actions={!readOnly && canCreateThread ? (
           <button
             className={styles.assistantPanelIconBtn}
             onClick={() => setShowNewConvConfirm(true)}
             type="button"
             title="New conversation"
             aria-label="New conversation"
+            {...{ 'data-testid': 'design-doc-assistant-new-btn' }}
           >
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M13 3v4H9" /><path d="M13 7A6 6 0 1 1 9.5 2.5" />
             </svg>
           </button>
-          )}
-          <button className={styles.assistantPanelClose} onClick={onClose} type="button" aria-label="Close assistant">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-              <path d="M1 1l12 12M13 1L1 13" />
-            </svg>
-          </button>
-        </div>
-      </div>
-
+        ) : undefined}
+        composer={!readOnly ? (
+          <AgentComposer
+            className={styles.composerEmbed}
+            value={input}
+            onChange={setInput}
+            onSend={() => void handleSend()}
+            onCancel={isRunning ? () => void session.cancel() : undefined}
+            disabled={isRunning || isSending || isCreating || !threadId}
+            isRunning={isRunning}
+            isSending={isSending}
+            placeholder={
+              isCreating ? 'Starting assistant…' :
+              isRunning ? 'Agent is thinking…' :
+              'Ask about this design doc… (Enter to send)'
+            }
+            testIdPrefix="design-doc-assistant"
+            {...{ 'data-testid': 'design-doc-assistant-composer' }}
+            textareaRef={textareaRef}
+          />
+        ) : (
+          <div className={styles.qaMessageBubbleSystem} style={{ margin: '0 12px 12px' }}>
+            Assistant is read-only — you can view the conversation but cannot send messages.
+          </div>
+        )}
+      >
       <div className={styles.assistantMessages}>
         <div className={styles.assistantMessageList}>
           {isCreating && (
@@ -623,31 +644,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
           <div ref={messagesEndRef} />
         </div>
       </div>
-
-      {!readOnly ? (
-        <AgentComposer
-          className={styles.composerEmbed}
-          value={input}
-          onChange={setInput}
-          onSend={() => void handleSend()}
-          onCancel={isRunning ? () => void session.cancel() : undefined}
-          disabled={isRunning || isSending || isCreating || !threadId}
-          isRunning={isRunning}
-          isSending={isSending}
-          placeholder={
-            isCreating ? 'Starting assistant…' :
-            isRunning ? 'Agent is thinking…' :
-            'Ask about this design doc… (Enter to send)'
-          }
-          testIdPrefix="design-doc-assistant"
-          {...{ 'data-testid': 'design-doc-assistant-composer' }}
-          textareaRef={textareaRef}
-        />
-      ) : (
-        <div className={styles.qaMessageBubbleSystem} style={{ margin: '0 12px 12px' }}>
-          Assistant is read-only — you can view the conversation but cannot send messages.
-        </div>
-      )}
+      </AgentPanelShell>
     </div>
     </>
   );
@@ -973,7 +970,7 @@ export const DesignDocReviewView: React.FC = () => {
   const location = useLocation();
   const id = location.pathname.split('/').pop() ?? null;
   const navigate = useNavigate();
-  const { can, userId, isAdmin } = useAppShell();
+  const { can, userId, isAdmin, isSuperAdmin } = useAppShell();
   const qc = useQueryClient();
 
   const { data: doc, isLoading, isError } = useDesignDoc(id);
@@ -990,6 +987,7 @@ export const DesignDocReviewView: React.FC = () => {
   const { data: validationReport } = useValidationReport(id, doc?.validationThreadId, doc?.status);
   const fixValidation = useFixValidation();
   const acceptFixValidation = useAcceptFixValidation();
+  const dismissFixSession = useDismissDesignDocFixSession();
   const revertSection = useRevertDesignDocSection();
   const overrideDesignDocValidation = useOverrideDesignDocValidation();
   const fixDesignDocWithAi = useFixDesignDocWithAi(id ?? '');
@@ -998,6 +996,7 @@ export const DesignDocReviewView: React.FC = () => {
   const [fixFlow, fixFlowDispatch] = useReducer(fixFlowReducer, { phase: 'idle' });
   /** Sync lock so double-clicks can't start two Fix-with-Apex runs before isPending re-renders. */
   const [apexFixStartLocked, setApexFixStartLocked] = useState(false);
+  const [fixIdleNotice, setFixIdleNotice] = useState<string | null>(null);
   const [fixingCommentId, setFixingCommentId] = useState<string | null>(null);
   const [bulkCommentFixRunning, setBulkCommentFixRunning] = useState(false);
 
@@ -1013,10 +1012,30 @@ export const DesignDocReviewView: React.FC = () => {
   const [pendingSelector, setPendingSelector] = useState<{ sectionKey: ReviewSectionKey; selector: TextSelector } | null>(null);
   const [newCommentBody, setNewCommentBody] = useState('');
 
+  const clearLocalFixSession = useCallback((docId: string) => {
+    clearApexFixInProgress('design-doc-validation', docId);
+    setApexFixStartLocked(false);
+  }, []);
+
+  // TanStack rebuilds the mutation object on every render, so effects that
+  // dismiss a fix session must depend on a stable callback instead — otherwise
+  // they re-fire each render and hammer the thread-status endpoint.
+  const dismissFixSessionRef = useRef(dismissFixSession);
+  useEffect(() => {
+    dismissFixSessionRef.current = dismissFixSession;
+  });
+  const dismissFixSessionAsync = useCallback(
+    (docId: string) => dismissFixSessionRef.current.mutateAsync(docId),
+    [],
+  );
+
   // Restore validation fix flow from server fixBaseline after navigation.
+  // Skip while re-validation is in progress — otherwise a leftover baseline
+  // immediately reopens the "No changes" panel over the validating UI.
   useEffect(() => {
     if (!doc || fixFlow.phase !== 'idle') return;
     if (!doc.fixBaseline) return;
+    if (doc.status === 'validating') return;
 
     const baseline = doc.fixBaseline as ContentSnapshot;
     const threadId = baseline.fixThreadId ?? doc.docAssistantThreadId;
@@ -1037,10 +1056,31 @@ export const DesignDocReviewView: React.FC = () => {
       if (thread && isTerminalChatThreadStatus(thread.status)) {
         await qc.refetchQueries({ queryKey: ['design-doc', doc.id] });
         if (cancelled) return;
+        const fresh = qc.getQueryData<{
+          designContent: string;
+          techSpecContent: string;
+          assumptionsContent: string;
+        }>(['design-doc', doc.id]);
+        const unchanged = !!fresh
+          && fresh.designContent === baseline.design
+          && fresh.techSpecContent === baseline.techSpec
+          && fresh.assumptionsContent === baseline.assumptions;
+        clearLocalFixSession(doc.id);
+        if (unchanged) {
+          try {
+            await dismissFixSessionAsync(doc.id);
+          } catch { /* fall through to review panel if dismiss fails */ }
+          if (cancelled) return;
+          setFixIdleNotice(
+            agentErrorFromChatThreadStatus(thread.status, thread.lastError)
+              ?? 'No changes applied. You can try Fix with Apex again.',
+          );
+          fixFlowDispatch({ type: 'RESET' });
+          return;
+        }
         const res = await fetch(`/api/chat/threads/${threadId}`, { credentials: 'include' });
         const fullThread = res.ok ? await res.json() : null;
         const gapChanges = parseGapChangesFromMessages(fullThread?.messages ?? []);
-        clearApexFixInProgress('design-doc-validation', doc.id);
         fixFlowDispatch({ type: 'START_FIX', baseline, threadId });
         fixFlowDispatch({
           type: 'FIX_COMPLETE',
@@ -1050,7 +1090,7 @@ export const DesignDocReviewView: React.FC = () => {
         return;
       }
       // Thread not found — treat as completed with error so the UI doesn't get stuck
-      clearApexFixInProgress('design-doc-validation', doc.id);
+      clearLocalFixSession(doc.id);
       fixFlowDispatch({ type: 'START_FIX', baseline, threadId });
       fixFlowDispatch({
         type: 'FIX_COMPLETE',
@@ -1062,7 +1102,7 @@ export const DesignDocReviewView: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [doc?.id, doc?.fixBaseline, doc?.docAssistantThreadId, fixFlow.phase, qc]);
+  }, [doc?.id, doc?.fixBaseline, doc?.docAssistantThreadId, doc?.status, fixFlow.phase, qc, clearLocalFixSession, dismissFixSessionAsync]);
 
   const [activeTab, setActiveTab] = useState<TabId>('design');
 
@@ -1185,7 +1225,11 @@ export const DesignDocReviewView: React.FC = () => {
   // Restore React-owned text before this render's commit (tab/split remounts).
   unwrapCommentMarks(tabContentSplitRef.current);
 
-  const { data: assignments = [] } = useDocumentAssignments(id, 'design_doc');
+  const {
+    data: assignments = [],
+    isLoading: assignmentsLoading,
+    isError: assignmentsError,
+  } = useDocumentAssignments(id, 'design_doc');
   useDesignDocOwnerApproval(id);
   const ownerApproveMutation = useDesignDocOwnerApprove(id);
 
@@ -1310,8 +1354,31 @@ export const DesignDocReviewView: React.FC = () => {
 
   const handleStartFixWithAI = useCallback(async () => {
     if (!id || !doc) return;
-    if (fixFlow.phase !== 'idle' || apexFixStartLocked) return;
-    if (readApexFixInProgress('design-doc-validation', id)) return;
+    if (apexFixStartLocked || fixValidation.isPending) return;
+    // Block only while a run is actively in flight — allow Retry from reviewing.
+    if (fixFlow.phase === 'fixing') return;
+    // Only defer to a same-tab marker when the server still has an open fix
+    // session; a stale marker alone must not swallow the click.
+    if (
+      fixFlow.phase === 'idle'
+      && doc.fixBaseline
+      && readApexFixInProgress('design-doc-validation', id)
+    ) return;
+
+    setFixIdleNotice(null);
+
+    // Leaving a prior review/discuss session: clear server baseline so restore
+    // cannot yank the UI back into the stale "No changes" panel.
+    if (fixFlow.phase === 'reviewing' || fixFlow.phase === 'discussing' || doc.fixBaseline) {
+      clearLocalFixSession(id);
+      fixFlowDispatch({ type: 'RESET' });
+      try {
+        if (doc.fixBaseline) {
+          await dismissFixSessionAsync(id);
+        }
+      } catch { /* start a new fix even if dismiss races */ }
+    }
+
     const baseline: ContentSnapshot = {
       design: doc.designContent,
       techSpec: doc.techSpecContent,
@@ -1325,17 +1392,24 @@ export const DesignDocReviewView: React.FC = () => {
       markApexFixInProgress('design-doc-validation', id, { threadId: result.threadId });
       fixFlowDispatch({ type: 'START_FIX', baseline, threadId: result.threadId });
     } catch {
-      if (id) clearApexFixInProgress('design-doc-validation', id);
-      setApexFixStartLocked(false);
+      clearLocalFixSession(id);
       fixFlowDispatch({ type: 'RESET' });
     }
-  }, [id, doc, fixValidation, fixFlow.phase, apexFixStartLocked]);
+  }, [
+    id,
+    doc,
+    fixValidation,
+    fixFlow.phase,
+    apexFixStartLocked,
+    clearLocalFixSession,
+    dismissFixSessionAsync,
+  ]);
 
   // Poll the assistant thread status during the fixing phase.
   // Only transition to reviewing once the agent is terminal (done with all MCP calls).
   useEffect(() => {
     if (fixFlow.phase !== 'fixing' || !id) return;
-    const { threadId } = fixFlow;
+    const { threadId, baseline } = fixFlow;
     let cancelled = false;
 
     let notFoundCount = 0;
@@ -1346,7 +1420,7 @@ export const DesignDocReviewView: React.FC = () => {
         if (!thread) {
           notFoundCount++;
           if (notFoundCount >= 3) {
-            clearApexFixInProgress('design-doc-validation', id);
+            clearLocalFixSession(id);
             fixFlowDispatch({
               type: 'FIX_COMPLETE',
               gapChanges: [],
@@ -1358,12 +1432,37 @@ export const DesignDocReviewView: React.FC = () => {
         notFoundCount = 0;
         if (isTerminalChatThreadStatus(thread.status)) {
           await qc.refetchQueries({ queryKey: ['design-doc', id] });
+          const fresh = qc.getQueryData<{
+            designContent: string;
+            techSpecContent: string;
+            assumptionsContent: string;
+          }>(['design-doc', id]);
+          const unchanged = !!fresh
+            && fresh.designContent === baseline.design
+            && fresh.techSpecContent === baseline.techSpec
+            && fresh.assumptionsContent === baseline.assumptions;
+          const agentError = agentErrorFromChatThreadStatus(thread.status, thread.lastError);
+          if (cancelled) return;
+
+          clearLocalFixSession(id);
+          if (unchanged) {
+            try {
+              await dismissFixSessionAsync(id);
+            } catch { /* show review panel fallback */ }
+            if (cancelled) return;
+            setFixIdleNotice(
+              agentError
+                ? `${agentError} No changes were applied.`
+                : 'No changes applied. You can try Fix with Apex again.',
+            );
+            fixFlowDispatch({ type: 'RESET' });
+            return;
+          }
+
           const res = await fetch(`/api/chat/threads/${threadId}`, { credentials: 'include' });
           const fullThread = res.ok ? await res.json() : null;
           const gapChanges = parseGapChangesFromMessages(fullThread?.messages ?? []);
-          const agentError = agentErrorFromChatThreadStatus(thread.status, thread.lastError);
           if (!cancelled) {
-            clearApexFixInProgress('design-doc-validation', id);
             fixFlowDispatch({ type: 'FIX_COMPLETE', gapChanges, agentError });
           }
         }
@@ -1379,13 +1478,13 @@ export const DesignDocReviewView: React.FC = () => {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [fixFlow, id, qc]);
+  }, [fixFlow, id, qc, clearLocalFixSession, dismissFixSessionAsync]);
 
   // Hard wall-clock timeout so the fixing overlay can never spin indefinitely.
   useEffect(() => {
     if (fixFlow.phase !== 'fixing' || !id) return;
     const timeoutId = window.setTimeout(() => {
-      clearApexFixInProgress('design-doc-validation', id);
+      clearLocalFixSession(id);
       void cancelChatThread(fixFlow.threadId);
       fixFlowDispatch({
         type: 'FIX_COMPLETE',
@@ -1394,7 +1493,7 @@ export const DesignDocReviewView: React.FC = () => {
       });
     }, APEX_FIX_TIMEOUT_MS);
     return () => window.clearTimeout(timeoutId);
-  }, [fixFlow, id]);
+  }, [fixFlow, id, clearLocalFixSession]);
 
   const handleFixAcceptSection = useCallback((_section: 'design' | 'tech-spec' | 'assumptions') => {
     // Accept = keep current AI changes (already persisted) — no-op on server
@@ -1444,14 +1543,14 @@ export const DesignDocReviewView: React.FC = () => {
 
   const handleFixApplyAndRevalidate = useCallback(async () => {
     if (!id) return;
+    setFixIdleNotice(null);
     try {
       await acceptFixValidation.mutateAsync(id);
     } finally {
-      if (id) clearApexFixInProgress('design-doc-validation', id);
-      setApexFixStartLocked(false);
+      clearLocalFixSession(id);
       fixFlowDispatch({ type: 'RESET' });
     }
-  }, [id, acceptFixValidation]);
+  }, [id, acceptFixValidation, clearLocalFixSession]);
 
   const handleFixRevertAll = useCallback(async () => {
     if (!id || fixFlow.phase === 'idle') return;
@@ -1462,10 +1561,13 @@ export const DesignDocReviewView: React.FC = () => {
       techSpecContent: bl.techSpec,
       assumptionsContent: bl.assumptions,
     });
-    clearApexFixInProgress('design-doc-validation', id);
-    setApexFixStartLocked(false);
+    try {
+      await dismissFixSessionAsync(id);
+    } catch { /* content already reverted */ }
+    clearLocalFixSession(id);
+    setFixIdleNotice(null);
     fixFlowDispatch({ type: 'RESET' });
-  }, [id, fixFlow, revertSection]);
+  }, [id, fixFlow, revertSection, dismissFixSessionAsync, clearLocalFixSession]);
 
   const handleFixCancel = useCallback(() => {
     const threadId =
@@ -1473,10 +1575,15 @@ export const DesignDocReviewView: React.FC = () => {
         ? fixFlow.threadId
         : (doc?.docAssistantThreadId ?? undefined);
     if (threadId) void cancelChatThread(threadId);
-    if (id) clearApexFixInProgress('design-doc-validation', id);
-    setApexFixStartLocked(false);
+    if (id) {
+      clearLocalFixSession(id);
+      if (doc?.fixBaseline) {
+        void dismissFixSessionAsync(id).catch(() => {});
+      }
+    }
+    setFixIdleNotice(null);
     fixFlowDispatch({ type: 'RESET' });
-  }, [id, fixFlow, doc?.docAssistantThreadId]);
+  }, [id, fixFlow, doc?.docAssistantThreadId, doc?.fixBaseline, dismissFixSessionAsync, clearLocalFixSession]);
 
   // Once Accept kicks off re-validation, drop leftover Fix-with-Apex UI so the
   // "fixing validation gaps" spinner cannot sit on top of VALIDATING.
@@ -1484,12 +1591,12 @@ export const DesignDocReviewView: React.FC = () => {
     if (!id || !doc) return;
     if (doc.status !== 'validating') return;
     if (doc.fixBaseline) return;
-    clearApexFixInProgress('design-doc-validation', id);
-    setApexFixStartLocked(false);
-    if (fixFlow.phase === 'fixing' || fixFlow.phase === 'reviewing') {
+    clearLocalFixSession(id);
+    setFixIdleNotice(null);
+    if (fixFlow.phase === 'fixing' || fixFlow.phase === 'reviewing' || fixFlow.phase === 'discussing') {
       fixFlowDispatch({ type: 'RESET' });
     }
-  }, [id, doc, fixFlow.phase]);
+  }, [id, doc, fixFlow.phase, clearLocalFixSession]);
 
   // When the assistant panel closes during discuss phase, return to reviewing
   const handleAssistantClose = useCallback(() => {
@@ -1817,24 +1924,36 @@ export const DesignDocReviewView: React.FC = () => {
 
   const isAuthor = doc.authorId === userId;
   const isOwner = doc.ownerId === userId;
+  const ownerOnly = !assignmentsLoading && !assignmentsError && assignments.length === 0;
+  const isOwnerActor = (doc.ownerId ? isOwner : isAuthor) || isSuperAdmin;
   const validationThreshold = doc.validationScoreThreshold ?? 90;
   const scoreBelowThreshold =
     doc.validationScore !== undefined &&
     doc.validationScore !== null &&
     doc.validationScore < validationThreshold;
+  const validationScoreMissing = isUnusableValidationScorecard(doc.validationScorecard);
+  const displayedValidationScore = validationScoreMissing ? null : doc.validationScore;
+  const validationScoreLabel = validationScoreMissing ? 'not recorded' : `${doc.validationScore}%`;
   const hasValidationOverride = !!doc.validationOverride;
   const validationBlocking = scoreBelowThreshold && !hasValidationOverride;
   const canManage = can('interviews:manage');
   const canReview = can('design-docs:review');
   const isAssignedApprover = assignments.some((a) => a.approverUserId === userId);
   const isReviewer = canReview && (!isAuthor || isAdmin) && (!isOwner || isAdmin);
-  const canPerformReview = isReviewer && (isAssignedApprover || isAdmin);
-  const showOwnerApproveButton = doc.status === 'reviewer_approved' && (isOwner || isAdmin);
+  const canPerformReview = !ownerOnly && isReviewer && (isAssignedApprover || isAdmin);
+  const showOwnerApproveButton =
+    (doc.status === 'reviewer_approved' || (ownerOnly && doc.status === 'pending_review'))
+    && (isOwnerActor || ownerOnly);
   const canEdit = canManage && (isAuthor || isOwner || isAdmin) && doc.status !== 'approved' && doc.status !== 'reviewer_approved';
   const canUseAssistant = (isReviewer || isOwner || isAuthor || isAdmin) &&
     (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'reviewer_approved' || doc.status === 'revision_requested');
 
-  const validationFixSession = id ? readApexFixInProgress('design-doc-validation', id) : null;
+  // The server's fixBaseline is the source of truth for an open fix session; the
+  // sessionStorage marker is only a same-tab hint. Honouring a marker with no
+  // baseline behind it would keep Fix-with-Apex disabled until the 30-minute TTL.
+  const validationFixSession = id && doc.fixBaseline
+    ? readApexFixInProgress('design-doc-validation', id)
+    : null;
   const isFixWithApexBusy =
     apexFixStartLocked
     || fixFlow.phase !== 'idle'
@@ -1842,11 +1961,13 @@ export const DesignDocReviewView: React.FC = () => {
     || !!validationFixSession
     || doc.status === 'validating';
   const apexFixRunningBanner = (() => {
-    // After Accept, re-validation owns the page — never keep the Fix spinner over it.
-    if (doc.status === 'validating' && !doc.fixBaseline) {
+    // Re-validation owns the page — never leave the Fix spinner sitting on top
+    // of VALIDATING, even if a fix session is still recorded on the doc.
+    if (doc.status === 'validating') {
       return null;
     }
-    if (fixFlow.phase === 'fixing' || apexFixStartLocked) {
+    // Only while actively starting/running — not during reviewing (locks must not keep this up).
+    if (fixFlow.phase === 'fixing' || (apexFixStartLocked && fixFlow.phase === 'idle')) {
       return {
         title: 'Apex is fixing validation gaps…',
         subtitle: 'You can leave this page — progress will resume when you return.',
@@ -1892,7 +2013,7 @@ export const DesignDocReviewView: React.FC = () => {
     hasAnyContent &&
     (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'revision_requested');
   const canWithdrawAction = canManageAuthorActions && doc.status === 'pending_review';
-  const canShowApproversAction = doc.status === 'pending_review';
+  const canShowApproversAction = !ownerOnly && doc.status === 'pending_review';
   const canDeleteDocAction = canManageAuthorActions;
   const canShowHeaderActionMenu =
     canRunValidationAction ||
@@ -1905,7 +2026,7 @@ export const DesignDocReviewView: React.FC = () => {
 
   const showCommentLayer =
     (doc.status === 'pending_review' || doc.status === 'reviewer_approved' || doc.status === 'revision_requested') &&
-    (canPerformReview || isOwner || isAuthor || isAdmin);
+    (ownerOnly || canPerformReview || isOwner || isAuthor || isAdmin);
 
   const tabToSectionKey: Record<string, ReviewSectionKey> = {
     'design': 'design',
@@ -2044,10 +2165,10 @@ export const DesignDocReviewView: React.FC = () => {
               </span>
               {doc.validationScore !== null && doc.validationScore !== undefined && (
                 <span
-                  className={`${styles.validationBadge} ${doc.validationScore >= validationThreshold ? styles.validationBadgeGood : doc.validationScore >= 70 ? styles.validationBadgeMid : styles.validationBadgeBad}`}
+                  className={`${styles.validationBadge} ${validationScoreMissing ? styles.validationBadgeBad : doc.validationScore >= validationThreshold ? styles.validationBadgeGood : doc.validationScore >= 70 ? styles.validationBadgeMid : styles.validationBadgeBad}`}
                   {...{ 'data-testid': 'dd-validation-badge' }}
                 >
-                  {doc.validationScore}% validated
+                  {validationScoreMissing ? 'Score not recorded' : `${doc.validationScore}% validated`}
                 </span>
               )}
               {doc.reviewerId && doc.reviewedAt && (
@@ -2078,10 +2199,20 @@ export const DesignDocReviewView: React.FC = () => {
                   <span className={styles.metaValue}>{doc.model}</span>
                 </span>
               )}
+              {doc.effort && (
+                <span className={styles.metaItem}>
+                  <span className={styles.metaLabel}>Effort:</span>
+                  <span className={styles.metaValue}>{effortLabel(doc.effort)}</span>
+                </span>
+              )}
               {doc.skillSettingsName && (
                 <span className={styles.repoBadge}>{doc.skillSettingsName}</span>
               )}
             </div>
+            <ArtifactUsageStrip
+              endpoint={`/api/interviews/design-docs/${doc.id}/usage`}
+              visible={doc.status !== 'generating'}
+            />
             {sourcePrd && (
               <div className={styles.parentLinks}>
                 <button
@@ -2102,11 +2233,6 @@ export const DesignDocReviewView: React.FC = () => {
                 </button>
               </div>
             )}
-            <RunGroundingStatus
-              surface="design_doc"
-              domainRunId={doc.id}
-              project={doc.project}
-            />
           </div>
         </div>
 
@@ -2155,6 +2281,13 @@ export const DesignDocReviewView: React.FC = () => {
             </button>
           )}
 
+          <DesignDocPlaybookStartAction
+            designDocId={doc.id}
+            project={doc.project}
+            isOwner={isOwner}
+            canRun={can('playbooks:run')}
+          />
+
           {canManageAuthorActions && (doc.status === 'draft' || doc.status === 'revision_requested') && (
             <button
               className={styles.actionBtnPrimary}
@@ -2185,7 +2318,7 @@ export const DesignDocReviewView: React.FC = () => {
               </button>
             )}
 
-          {isReviewer && doc.status === 'pending_review' && (
+          {!ownerOnly && isReviewer && doc.status === 'pending_review' && (
             <>
               <span className={styles.actionDivider} />
               <div className={styles.reviewControls}>
@@ -2199,7 +2332,7 @@ export const DesignDocReviewView: React.FC = () => {
                       : unresolvedCount > 0
                         ? 'Resolve all comments before approving'
                         : validationBlocking
-                          ? `Validation score must be ≥ ${validationThreshold}% (current: ${doc.validationScore}%)`
+                          ? `Validation score must be ≥ ${validationThreshold}% (current: ${validationScoreLabel})`
                           : undefined
                   }
                   type="button"
@@ -2218,12 +2351,32 @@ export const DesignDocReviewView: React.FC = () => {
                 <button
                   className={styles.btnApprove}
                   onClick={() => void handleOwnerApprove()}
-                  disabled={ownerApproveMutation.isPending}
+                  disabled={ownerApproveMutation.isPending || !isOwnerActor || unresolvedCount > 0 || validationBlocking}
+                  aria-disabled={ownerApproveMutation.isPending || !isOwnerActor || unresolvedCount > 0 || validationBlocking}
+                  aria-describedby={ownerOnly && !isOwnerActor ? 'owner-approve-disabled-reason' : undefined}
+                  title={
+                    !isOwnerActor
+                      ? undefined
+                      : unresolvedCount > 0
+                        ? 'Resolve all comments before approving'
+                        : validationBlocking
+                          ? `Validation score must be ≥ ${validationThreshold}% (current: ${validationScoreLabel})`
+                          : undefined
+                  }
                   type="button"
                   {...{ 'data-testid': 'dd-approve-owner-btn' }}
                 >
                   Approve as Owner
                 </button>
+                {ownerOnly && !isOwnerActor && (
+                  <span
+                    id="owner-approve-disabled-reason"
+                    role="status"
+                    {...{ 'data-testid': 'owner-approve-disabled-reason' }}
+                  >
+                    Only the document owner or a Platform Admin can approve
+                  </span>
+                )}
               </div>
             </>
           )}
@@ -2263,9 +2416,20 @@ export const DesignDocReviewView: React.FC = () => {
                       className={styles.actionMenuItem}
                       onClick={() => {
                         setActionMenuOpen(false);
-                        void createValidationThread.mutateAsync(doc.id);
+                        void (async () => {
+                          if (!id) return;
+                          setFixIdleNotice(null);
+                          clearLocalFixSession(id);
+                          fixFlowDispatch({ type: 'RESET' });
+                          if (doc.fixBaseline) {
+                            try {
+                              await dismissFixSession.mutateAsync(id);
+                            } catch { /* still attempt re-run */ }
+                          }
+                          await createValidationThread.mutateAsync(doc.id);
+                        })();
                       }}
-                      disabled={createValidationThread.isPending}
+                      disabled={createValidationThread.isPending || dismissFixSession.isPending}
                       type="button"
                       role="menuitem"
                       title={
@@ -2478,7 +2642,7 @@ export const DesignDocReviewView: React.FC = () => {
                 <div className={styles.failureBannerTitle}>
                   Validation needs attention
                   <span className={bannerSeverity === 'red' ? styles.failureBannerScoreBadgeRed : styles.failureBannerScoreBadgeAmber}>
-                    {doc.validationScore}%
+                    {validationScoreMissing ? 'No score' : `${doc.validationScore}%`}
                   </span>
                 </div>
                 <div className={styles.failureBannerSummary}>
@@ -2487,6 +2651,7 @@ export const DesignDocReviewView: React.FC = () => {
                     : pendingGapCount > 0
                       ? `${pendingGapCount} gap${pendingGapCount === 1 ? '' : 's'} need${pendingGapCount === 1 ? 's' : ''} attention across the design doc sections.`
                       : `The validation score is below the ${validationThreshold}% threshold required for submission.`}
+                  {fixIdleNotice ? ` ${fixIdleNotice}` : ''}
                 </div>
                 {doc.validationOverride && (
                   <ValidationOverrideAudit
@@ -2761,7 +2926,7 @@ export const DesignDocReviewView: React.FC = () => {
                     onToggleComments={toggleCommentsPanel}
                     onToggleValidation={toggleValidationPanel}
                     openCommentCount={reviewComments.filter((c) => c.status === 'open').length}
-                    validationScore={doc.validationScore}
+                    validationScore={displayedValidationScore}
                     isValidating={doc.status === 'validating'}
                     commentsPanel={
                       <CommentsSidePanel
@@ -2791,7 +2956,7 @@ export const DesignDocReviewView: React.FC = () => {
                     }
                     validationPanel={
                       <ValidationSidePanel
-                        score={doc.validationScore}
+                        score={displayedValidationScore}
                         scorecard={doc.validationScorecard}
                         reportMarkdown={validationReport?.markdown ?? doc.validationReportMd}
                         isValidating={doc.status === 'validating'}

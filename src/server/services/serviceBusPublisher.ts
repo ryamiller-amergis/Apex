@@ -11,11 +11,26 @@ import type { DispatchMessage } from '../../shared/types/agentRunAdmission';
 const SERVICE_BUS_SCOPE = 'https://servicebus.azure.net/.default';
 const DEFAULT_QUEUE_NAME = 'ai-runs-background';
 
+const PUBLISH_MAX_ATTEMPTS = 3;
+const PUBLISH_RETRY_BASE_MS = 200;
+
+/**
+ * Transient broker statuses worth another attempt inside a single publish call.
+ *
+ * Retrying is safe because the queue requires duplicate detection: a repeat
+ * carrying the same MessageId inside the history window is dropped by the
+ * broker rather than delivered twice.
+ */
+const RETRYABLE_PUBLISH_STATUSES = new Set([
+  408, 429, 500, 502, 503, 504,
+]);
+
 export type ServiceBusPublisher = {
   publish(message: DispatchMessage): Promise<void>;
 };
 
 let injectedPublisher: ServiceBusPublisher | null = null;
+let cachedCredential: TokenCredential | null = null;
 
 export function setServiceBusPublisher(
   publisher: ServiceBusPublisher | null
@@ -27,11 +42,48 @@ export function getServiceBusPublisher(): ServiceBusPublisher {
   return injectedPublisher ?? createDefaultServiceBusPublisher();
 }
 
-/** Production uses the queue-scoped managed identity; local development uses Azure CLI. */
+/**
+ * Production uses the queue-scoped managed identity; local development uses Azure CLI.
+ * On App Service, AZURE_CLIENT_ID + AZURE_CLIENT_SECRET are the Apex login app
+ * registration, not an attached identity, so it uses its system identity.
+ * Container Apps name their user-assigned identity with AZURE_CLIENT_ID alone.
+ */
 export function createServiceBusCredential(): TokenCredential {
-  return process.env.NODE_ENV === 'production'
-    ? new ManagedIdentityCredential()
-    : new AzureCliCredential();
+  if (process.env.NODE_ENV !== 'production') {
+    return new AzureCliCredential();
+  }
+  const clientId = process.env.AZURE_CLIENT_SECRET?.trim()
+    ? undefined
+    : process.env.AZURE_CLIENT_ID?.trim();
+  return clientId
+    ? new ManagedIdentityCredential({ clientId })
+    : new ManagedIdentityCredential();
+}
+
+/**
+ * Reuse one credential while authentication succeeds.
+ *
+ * `@azure/identity` caches tokens per credential instance, so building a new
+ * one per publish sends an IMDS request every time. The recovery sweep
+ * publishes once per cycle per stale run on every instance, which turned into
+ * 721 token requests in 48 minutes during the incident this guards against.
+ * A broker 401/403 clears this instance so the next bounded retry cannot reuse
+ * the rejected credential/token cache.
+ */
+function getCachedServiceBusCredential(): TokenCredential {
+  cachedCredential ??= createServiceBusCredential();
+  return cachedCredential;
+}
+
+/** Drops the cached credential so tests can assert construction. */
+export function resetServiceBusCredentialCache(): void {
+  cachedCredential = null;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function createDefaultServiceBusPublisher(): ServiceBusPublisher {
@@ -49,14 +101,6 @@ function createDefaultServiceBusPublisher(): ServiceBusPublisher {
         );
       }
 
-      const token =
-        await createServiceBusCredential().getToken(SERVICE_BUS_SCOPE);
-      if (!token?.token) {
-        throw new Error(
-          'Failed to acquire Service Bus access token for AI run dispatch'
-        );
-      }
-
       const queueName =
         process.env.AI_RUNS_BACKGROUND_QUEUE_NAME?.trim() || DEFAULT_QUEUE_NAME;
       const host = namespace.includes('.')
@@ -68,21 +112,55 @@ function createDefaultServiceBusPublisher(): ServiceBusPublisher {
         dispatchMessageId: message.dispatchMessageId,
       };
 
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token.token}`,
-          'Content-Type': 'application/json',
-          BrokerProperties: JSON.stringify({
-            MessageId: message.dispatchMessageId,
-          }),
-        },
-        body: JSON.stringify(body),
-      });
+      let lastStatus = 0;
+      let authorizationRefreshAttempted = false;
+      for (let attempt = 1; attempt <= PUBLISH_MAX_ATTEMPTS; attempt += 1) {
+        const token =
+          await getCachedServiceBusCredential().getToken(SERVICE_BUS_SCOPE);
+        if (!token?.token) {
+          throw new Error(
+            'Failed to acquire Service Bus access token for AI run dispatch'
+          );
+        }
+        const request: RequestInit = {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token.token}`,
+            'Content-Type': 'application/json',
+            BrokerProperties: JSON.stringify({
+              MessageId: message.dispatchMessageId,
+            }),
+          },
+          body: JSON.stringify(body),
+        };
+        const response = await fetch(url, request);
+        if (response.ok) {
+          return;
+        }
 
-      if (!response.ok) {
-        throw new Error(`Service Bus publish failed (${response.status})`);
+        lastStatus = response.status;
+        if (response.status === 401 || response.status === 403) {
+          resetServiceBusCredentialCache();
+          if (
+            authorizationRefreshAttempted
+            || attempt >= PUBLISH_MAX_ATTEMPTS
+          ) {
+            break;
+          }
+          authorizationRefreshAttempted = true;
+          await delay(PUBLISH_RETRY_BASE_MS * attempt);
+          continue;
+        }
+        if (
+          !RETRYABLE_PUBLISH_STATUSES.has(response.status)
+          || attempt >= PUBLISH_MAX_ATTEMPTS
+        ) {
+          break;
+        }
+        await delay(PUBLISH_RETRY_BASE_MS * attempt);
       }
+
+      throw new Error(`Service Bus publish failed (${lastStatus})`);
     },
   };
 }

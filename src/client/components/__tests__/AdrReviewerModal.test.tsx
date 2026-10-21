@@ -13,7 +13,7 @@ jest.mock('../../hooks/useAdrs', () => ({
 }));
 
 describe('AdrReviewerModal', () => {
-  it('selects all Developer reviewers and confirms their IDs', () => {
+  it('selects all configured ADR pool reviewers and confirms their IDs', () => {
     const onConfirm = jest.fn();
     render(
       <AdrReviewerModal
@@ -25,6 +25,9 @@ describe('AdrReviewerModal', () => {
     );
 
     expect(screen.getByText('ADR Owner')).toBeInTheDocument();
+    expect(screen.getByText('Configured ADR Reviewers')).toBeInTheDocument();
+    expect(screen.getByText(/configured ADR reviewer pool/i)).toBeInTheDocument();
+    expect(screen.getByTestId('adr-reviewer-picker')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Select all' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm & Start ADR' }));
 
@@ -52,7 +55,26 @@ describe('AdrReviewerModal', () => {
     expect(onConfirm).toHaveBeenCalledWith([]);
   });
 
-  it('drops an existing reviewer who is no longer an eligible Developer candidate', async () => {
+  it('PBI-005 AC-3 blocks create confirmation until at least one reviewer is selected', () => {
+    const onConfirm = jest.fn();
+    render(
+      <AdrReviewerModal
+        project="Apex"
+        ownerName="ADR Owner"
+        onConfirm={onConfirm}
+        onCancel={jest.fn()}
+      />,
+    );
+
+    const confirm = screen.getByRole('button', { name: 'Confirm & Start ADR' });
+    expect(confirm).toBeDisabled();
+    expect(confirm).toHaveAttribute('aria-describedby', 'adr-reviewer-selection-required');
+    expect(screen.getByText('Select at least one reviewer to continue.')).toBeInTheDocument();
+    fireEvent.click(confirm);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it('drops an existing reviewer who is no longer in the configured ADR pool', async () => {
     const onConfirm = jest.fn();
     render(
       <AdrReviewerModal

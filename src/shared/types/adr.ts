@@ -1,3 +1,5 @@
+import type { EffortLevel } from './effort';
+
 export type AdrStatus =
   | 'in_progress'
   | 'generating'
@@ -26,6 +28,7 @@ export interface Adr {
   project: string;
   repo: string;
   model?: string;
+  effort?: EffortLevel;
   skillSettingsId?: string | null;
   skillSettingsName?: string | null;
   status: AdrStatus;

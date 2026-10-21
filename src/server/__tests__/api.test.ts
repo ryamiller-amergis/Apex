@@ -1,14 +1,28 @@
 import request from 'supertest';
 import express from 'express';
-import apiRouter from '../routes/api';
+import apiRouter, { isPublicHealthPath } from '../routes/api';
 import { AzureDevOpsService } from '../services/azureDevOps';
+import { getDbPoolStats } from '../db';
+import { db } from '../db/drizzle';
 import * as userProjectAssignmentService from '../services/userProjectAssignmentService';
 import * as projectCatalogService from '../services/projectCatalogService';
 import * as projectAccessRequestService from '../services/projectAccessRequestService';
 import * as workerTierHealthService from '../services/workerTierHealthService';
+import * as adoMembershipService from '../services/adoMembershipService';
+import * as linkProjectService from '../services/linkProjectService';
+
+const mockResolveThreadAccess = jest.fn();
+const mockGetDiagram = jest.fn();
+const mockResolveDesignAccess = jest.fn();
 
 // Mock the AzureDevOpsService
 jest.mock('../services/azureDevOps');
+jest.mock('../db/drizzle', () => ({
+  db: {
+    execute: jest.fn(),
+    select: jest.fn(),
+  },
+}));
 
 jest.mock('../services/projectSettingsService', () => {
   const getSkillConfig = jest.fn();
@@ -42,10 +56,37 @@ jest.mock('../services/workerTierHealthService', () => ({
   getWorkerTierHealthStats: jest.fn(),
 }));
 
+jest.mock('../services/adoMembershipService', () => ({
+  getUserProjects: jest.fn().mockResolvedValue([]),
+}));
+
+jest.mock('../services/linkProjectService', () => ({
+  resolveLinkProject: jest.fn(),
+}));
+
+jest.mock('../services/threadAccessService', () => ({
+  resolveThreadAccess: (...args: unknown[]) => mockResolveThreadAccess(...args),
+}));
+
+jest.mock('../services/diagramService', () => ({
+  getDiagram: (...args: unknown[]) => mockGetDiagram(...args),
+}));
+
+jest.mock('../services/uiLabService', () => ({
+  resolveDesignAccess: (...args: unknown[]) => mockResolveDesignAccess(...args),
+}));
+
+jest.mock('../db', () => ({
+  getDbPoolStats: jest.fn(),
+}));
+
 const mockAssignmentService = userProjectAssignmentService as jest.Mocked<typeof userProjectAssignmentService>;
 const mockProjectCatalogService = projectCatalogService as jest.Mocked<typeof projectCatalogService>;
 const mockProjectAccessRequestService = projectAccessRequestService as jest.Mocked<typeof projectAccessRequestService>;
 const mockWorkerTierHealthService = workerTierHealthService as jest.Mocked<typeof workerTierHealthService>;
+const mockAdoMembershipService = adoMembershipService as jest.Mocked<typeof adoMembershipService>;
+const mockLinkProjectService = linkProjectService as jest.Mocked<typeof linkProjectService>;
+const mockGetDbPoolStats = jest.mocked(getDbPoolStats);
 
 describe('API Routes', () => {
   let app: express.Application;
@@ -53,9 +94,21 @@ describe('API Routes', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockAdoMembershipService.getUserProjects.mockResolvedValue([]);
+    mockResolveThreadAccess.mockResolvedValue(null);
+    mockGetDiagram.mockRejectedValue(new Error('Diagram not found'));
+    mockResolveDesignAccess.mockRejectedValue(new Error('Forbidden'));
     mockWorkerTierHealthService.getWorkerTierHealthStats.mockResolvedValue({
       workerTierSaturation: 0.5,
       oldestQueuedAgeMs: 90_000,
+    });
+    mockGetDbPoolStats.mockReturnValue({
+      max: 5,
+      total: 3,
+      idle: 1,
+      active: 2,
+      waiting: 0,
+      saturation: 0.4,
     });
     
     // Create Express app with the API router
@@ -100,6 +153,14 @@ describe('API Routes', () => {
         uptime: expect.any(Number),
         workerTierSaturation: 0.5,
         oldestQueuedAgeMs: 90_000,
+        databasePool: {
+          max: 5,
+          total: 3,
+          idle: 1,
+          active: 2,
+          waiting: 0,
+          saturation: 0.4,
+        },
       }));
     });
 
@@ -116,6 +177,14 @@ describe('API Routes', () => {
         status: 'ok',
         workerTierSaturation: 0,
         oldestQueuedAgeMs: 0,
+        databasePool: {
+          max: 5,
+          total: 3,
+          idle: 1,
+          active: 2,
+          waiting: 0,
+          saturation: 0.4,
+        },
       }));
       expect(JSON.stringify(response.body)).not.toMatch(
         /password=secret|private-db/i,
@@ -237,6 +306,7 @@ describe('API Routes', () => {
     const profile = { oid: 'user-1', upn: 'user@example.com' };
 
     it('records the project selection and returns 204', async () => {
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['MaxView']);
       mockAssignmentService.ensureUserProjectAssignment.mockResolvedValue(undefined);
 
       await request(buildAppWithUser(profile))
@@ -251,6 +321,7 @@ describe('API Routes', () => {
     });
 
     it('handles URL-encoded project names', async () => {
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Support Ops']);
       mockAssignmentService.ensureUserProjectAssignment.mockResolvedValue(undefined);
 
       await request(buildAppWithUser(profile))
@@ -264,6 +335,51 @@ describe('API Routes', () => {
       );
     });
 
+    it('records selection when the user has ADO membership but no assignment yet', async () => {
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue([]);
+      mockAdoMembershipService.getUserProjects.mockResolvedValue([
+        { name: 'Nurses', id: 'nurses', description: '' },
+      ]);
+      mockAssignmentService.ensureUserProjectAssignment.mockResolvedValue(undefined);
+
+      await request(buildAppWithUser(profile))
+        .post('/api/projects/Nurses/select')
+        .expect(204);
+
+      expect(mockAssignmentService.ensureUserProjectAssignment).toHaveBeenCalledWith(
+        'user-1',
+        'Nurses',
+        'auto-select',
+      );
+    });
+
+    it('does not auto-assign a project the user cannot open', async () => {
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Apex']);
+      mockAdoMembershipService.getUserProjects.mockResolvedValue([]);
+
+      const response = await request(buildAppWithUser(profile))
+        .post('/api/projects/Nurses/select')
+        .expect(403);
+
+      expect(response.body).toEqual({ error: 'Forbidden: not assigned to this project' });
+      expect(mockAssignmentService.ensureUserProjectAssignment).not.toHaveBeenCalled();
+    });
+
+    it('lets super admins record a selection without a prior assignment', async () => {
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue([]);
+      mockAssignmentService.ensureUserProjectAssignment.mockResolvedValue(undefined);
+
+      await request(buildAppWithUser({ oid: 'admin-oid', upn: 'ryamiller@amergis.com' }))
+        .post('/api/projects/Nurses/select')
+        .expect(204);
+
+      expect(mockAssignmentService.ensureUserProjectAssignment).toHaveBeenCalledWith(
+        'admin-oid',
+        'Nurses',
+        'auto-select',
+      );
+    });
+
     it('returns 401 when unauthenticated', async () => {
       await request(app)
         .post('/api/projects/MaxView/select')
@@ -273,11 +389,145 @@ describe('API Routes', () => {
     });
 
     it('returns 500 when the service throws', async () => {
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['MaxView']);
       mockAssignmentService.ensureUserProjectAssignment.mockRejectedValue(new Error('DB error'));
 
       await request(buildAppWithUser(profile))
         .post('/api/projects/MaxView/select')
         .expect(500);
+    });
+  });
+
+  describe('GET /api/links/project', () => {
+    const profile = { oid: 'user-1', upn: 'user@example.com' };
+    const adrId = 'a9272fb9-0d59-4881-85f2-181f35c249b0';
+
+    it('returns the owning project when the caller can open it', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+
+      const response = await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'adr', id: adrId })
+        .expect(200);
+
+      expect(response.body).toEqual({ project: 'Nurses' });
+      expect(mockLinkProjectService.resolveLinkProject).toHaveBeenCalledWith('adr', adrId);
+    });
+
+    it('does not disclose a project the caller cannot open', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Apex']);
+      mockAdoMembershipService.getUserProjects.mockResolvedValue([]);
+
+      const response = await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'adr', id: adrId })
+        .expect(404);
+
+      expect(response.body).toEqual({ error: 'Link not found' });
+    });
+
+    it('does not disclose a chat thread the caller may not read', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+      mockResolveThreadAccess.mockResolvedValue(null);
+
+      await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'chat-thread', id: adrId })
+        .expect(404);
+
+      expect(mockResolveThreadAccess).toHaveBeenCalledWith(profile.oid, adrId);
+    });
+
+    it('returns a chat thread project when the caller has thread access', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+      mockResolveThreadAccess.mockResolvedValue({ access: 'owner', thread: { id: adrId } });
+
+      const response = await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'chat-thread', id: adrId })
+        .expect(200);
+
+      expect(response.body).toEqual({ project: 'Nurses' });
+    });
+
+    it('does not disclose a dev session owned by another user', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+      const limit = jest.fn().mockResolvedValue([{ authorId: 'other-user' }]);
+      const where = jest.fn().mockReturnValue({ limit });
+      const from = jest.fn().mockReturnValue({ where });
+      (db.select as jest.Mock).mockReturnValue({ from });
+
+      await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'dev-session', id: adrId })
+        .expect(404);
+    });
+
+    it('returns a dev session project to its author', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+      const limit = jest.fn().mockResolvedValue([{ authorId: profile.oid }]);
+      const where = jest.fn().mockReturnValue({ limit });
+      const from = jest.fn().mockReturnValue({ where });
+      (db.select as jest.Mock).mockReturnValue({ from });
+
+      await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'dev-session', id: adrId })
+        .expect(200);
+    });
+
+    it('does not disclose a diagram the caller may not read', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+      mockGetDiagram.mockRejectedValue(new Error('Forbidden'));
+
+      await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'diagram', id: adrId })
+        .expect(404);
+
+      expect(mockGetDiagram).toHaveBeenCalledWith('Nurses', adrId, profile.oid);
+    });
+
+    it('returns a diagram project when its read check succeeds', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+      mockGetDiagram.mockResolvedValue({ id: adrId });
+
+      await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'diagram', id: adrId })
+        .expect(200);
+    });
+
+    it('does not disclose a UI Lab design the caller may not read', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+      mockResolveDesignAccess.mockRejectedValue(new Error('Forbidden'));
+
+      await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'ui-lab', id: adrId })
+        .expect(404);
+
+      expect(mockResolveDesignAccess).toHaveBeenCalledWith(adrId, profile.oid, { isSuperAdmin: false });
+    });
+
+    it('returns a UI Lab project when its read check succeeds', async () => {
+      mockLinkProjectService.resolveLinkProject.mockResolvedValue('Nurses');
+      mockAssignmentService.getAssignmentsForUser.mockResolvedValue(['Nurses']);
+      mockResolveDesignAccess.mockResolvedValue({ id: adrId });
+
+      await request(buildAppWithUser(profile))
+        .get('/api/links/project')
+        .query({ kind: 'ui-lab', id: adrId })
+        .expect(200);
     });
   });
 
@@ -513,9 +763,7 @@ describe('API Routes', () => {
   });
 
   describe('GET /api/health', () => {
-    it('should return healthy status', async () => {
-      mockAdoService.healthCheck.mockResolvedValue(true);
-
+    it('returns 200 process health without calling Azure DevOps or the database', async () => {
       const response = await request(app)
         .get('/api/health')
         .expect(200);
@@ -524,19 +772,86 @@ describe('API Routes', () => {
         healthy: true,
         timestamp: expect.any(String),
       });
+      expect(AzureDevOpsService).not.toHaveBeenCalled();
+      expect(db.execute).not.toHaveBeenCalled();
     });
+  });
 
-    it('should return unhealthy status', async () => {
-      mockAdoService.healthCheck.mockRejectedValue(new Error('Service unavailable'));
-
+  describe('GET /api/health/live', () => {
+    it('returns 200 process health without calling Azure DevOps or the database', async () => {
       const response = await request(app)
-        .get('/api/health')
-        .expect(503);
+        .get('/api/health/live')
+        .expect(200);
 
       expect(response.body).toMatchObject({
-        healthy: false,
-        error: 'Service unavailable',
+        healthy: true,
+        timestamp: expect.any(String),
       });
+      expect(AzureDevOpsService).not.toHaveBeenCalled();
+      expect(db.execute).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /api/health/dependencies', () => {
+    it('returns 200 only when Azure DevOps is healthy', async () => {
+      mockAdoService.healthCheck.mockResolvedValue(true);
+
+      const response = await request(app)
+        .get('/api/health/dependencies')
+        .expect(200);
+
+      expect(response.body).toMatchObject({
+        healthy: true,
+        timestamp: expect.any(String),
+      });
+      expect(mockAdoService.healthCheck).toHaveBeenCalledTimes(1);
+      expect(db.execute).not.toHaveBeenCalled();
+    });
+
+    it('returns 503 when Azure DevOps reports unhealthy', async () => {
+      mockAdoService.healthCheck.mockResolvedValue(false);
+
+      const response = await request(app)
+        .get('/api/health/dependencies')
+        .expect(503);
+
+      expect(response.body).toEqual({
+        healthy: false,
+        error: 'Dependencies unavailable',
+      });
+    });
+
+    it('returns 503 when Azure DevOps throws without exposing details', async () => {
+      mockAdoService.healthCheck.mockRejectedValue(new Error('Azure DevOps PAT expired'));
+
+      const response = await request(app)
+        .get('/api/health/dependencies')
+        .expect(503);
+
+      expect(response.body).toEqual({
+        healthy: false,
+        error: 'Dependencies unavailable',
+      });
+      expect(JSON.stringify(response.body)).not.toMatch(/PAT expired|Azure DevOps/i);
+    });
+  });
+
+  describe('public health allowlist predicate', () => {
+    it('returns true for each exact public health path', () => {
+      expect(isPublicHealthPath('/health')).toBe(true);
+      expect(isPublicHealthPath('/health/live')).toBe(true);
+      expect(isPublicHealthPath('/health/ready')).toBe(true);
+      expect(isPublicHealthPath('/health/dependencies')).toBe(true);
+      expect(isPublicHealthPath('/health/db')).toBe(true);
+      expect(isPublicHealthPath('/health/agents')).toBe(true);
+    });
+
+    it('returns false for non-exact matches and neighboring paths', () => {
+      expect(isPublicHealthPath('/health/live/extra')).toBe(false);
+      expect(isPublicHealthPath('/healthz')).toBe(false);
+      expect(isPublicHealthPath('/health/dependencies/private')).toBe(false);
+      expect(isPublicHealthPath('/health/agent')).toBe(false);
+      expect(isPublicHealthPath('/status')).toBe(false);
     });
   });
 

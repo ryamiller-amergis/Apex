@@ -1,17 +1,24 @@
 import { Request, Response, NextFunction } from 'express';
+import { enforceDevEnvironmentAccess } from './devEnvAccess';
 
-export function ensureAuthenticated(req: Request, res: Response, next: NextFunction) {
+export async function ensureAuthenticated(req: Request, res: Response, next: NextFunction): Promise<void> {
   console.log('Auth check:', {
     isAuthenticated: req.isAuthenticated(),
     sessionID: req.sessionID,
     user: req.user ? 'present' : 'missing'
   });
-  
-  if (req.isAuthenticated()) {
-    return next();
+
+  if (!req.isAuthenticated()) {
+    res.status(401).json({ error: 'Not authenticated' });
+    return;
   }
-  res.status(401).json({ error: 'Not authenticated' });
-  return;
+
+  try {
+    const allowed = await enforceDevEnvironmentAccess(req, res);
+    if (allowed) next();
+  } catch (err) {
+    next(err);
+  }
 }
 
 export function getAuthUser(req: Request) {

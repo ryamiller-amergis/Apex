@@ -239,17 +239,19 @@ import {
   getLatestPublishedRelease,
   listReleases,
 } from '../services/foundationSkillReleaseService';
+import { toProjectReleaseView } from '../../shared/types/foundationSkills';
 import { getRepoStatus } from '../services/foundationSkillCompatibilityService';
 
 /**
  * GET /api/skills/foundation-releases
  * List all published foundation skill releases (teams use this to check for updates).
  */
-router.get('/foundation-releases', async (_req: Request, res: Response) => {
+router.get('/foundation-releases', async (req: Request, res: Response) => {
   try {
-    const releases = (await listReleases()).filter(
-      (r) => r.status === 'published'
-    );
+    const apexProject = (req.query.project as string | undefined) ?? null;
+    const releases = (await listReleases())
+      .filter((r) => r.status === 'published')
+      .map((r) => toProjectReleaseView(r, apexProject));
     res.json({ releases });
   } catch (err: any) {
     res
@@ -268,8 +270,25 @@ router.get(
   async (req: Request, res: Response) => {
     try {
       const apexProject = (req.query.project as string | undefined) ?? null;
-      const release = await getLatestPublishedRelease(apexProject);
-      res.json({ release: release ?? null });
+      const repoName = (req.query.repo as string | undefined)?.trim();
+      const repoProject = (req.query.repoProject as string | undefined)?.trim();
+      const provider = (req.query.provider as string | undefined)?.trim();
+      const branch = (req.query.branch as string | undefined)?.trim();
+      const release = await getLatestPublishedRelease(
+        apexProject,
+        repoName
+          ? {
+              apexProject,
+              provider: provider === 'github' ? 'github' : 'ado',
+              project: repoProject || apexProject || '',
+              repo: repoName,
+              branch: branch || 'main',
+            }
+          : null,
+      );
+      res.json({
+        release: release ? toProjectReleaseView(release, apexProject) : null,
+      });
     } catch (err: any) {
       res
         .status(500)

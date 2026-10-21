@@ -351,11 +351,7 @@ describe('askApexService', () => {
         'list_repo_dir',
         'search_repo_code',
       ]);
-      expect(options.mcpServers).toEqual({
-        'github-repo': {
-          url: 'http://localhost:3001/mcp/github-repo?enableRepoBrowse=false',
-        },
-      });
+      expect(options.mcpServers).toEqual({});
       expect(agent.send).toHaveBeenCalledWith(
         expect.stringContaining('local checkout-backed read-only tools'),
       );
@@ -395,16 +391,12 @@ describe('askApexService', () => {
       // When the public Ask Apex API prepares the turn.
       await sendMessage(sid, 'user-fallback', 'Read with fallback');
 
-      // Then no native tools leak and provider MCP plus fallback prompt are restored.
+      // Then no native tools leak and provider repo MCP is not remounted.
       const options = mockAgentCreate.mock.calls[0][0];
       expect(options.local).toEqual({ cwd: process.cwd() });
-      expect(options.mcpServers).toEqual({
-        'github-repo': {
-          url: 'http://localhost:3001/mcp/github-repo',
-        },
-      });
+      expect(options.mcpServers).toEqual({});
       expect(agent.send).toHaveBeenCalledWith(
-        expect.stringContaining('must be fetched via the `github-repo` MCP server'),
+        expect.stringContaining('Do not use the GitHub or ADO provider MCP servers'),
       );
     });
 

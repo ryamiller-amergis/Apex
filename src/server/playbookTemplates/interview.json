@@ -1,0 +1,19 @@
+{
+  "templateKey": "core-interview",
+  "templateVersion": 1,
+  "name": "Core interview",
+  "description": "One human-led interview. The profile key comes from the run input.",
+  "graph": {
+    "nodes": [
+      {
+        "id": "interview",
+        "stepType": "interview",
+        "config": {
+          "mode": "human_led",
+          "profileKey": "${input.interviewProfileKey}"
+        }
+      }
+    ],
+    "edges": []
+  }
+}

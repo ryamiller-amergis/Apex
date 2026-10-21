@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { InterviewChatView } from '../InterviewChatView';
 import type { Interview, PrdSummary } from '../../../shared/types/interview';
 import type { ChatThreadStatus } from '../../../shared/types/chat';
@@ -50,7 +51,7 @@ jest.mock('../../hooks/useProjectSkillConfig', () => ({
   })),
 }));
 
-// Flag-off / ready stub — these suites render without QueryClientProvider.
+// Flag-off / ready stub.
 jest.mock('../../hooks/useProjectRepositoryReadiness', () => ({
   useProjectRepositoryReadiness: jest.fn(() => ({
     isReady: true,
@@ -65,10 +66,21 @@ jest.mock('../../hooks/useProjectRepositoryReadiness', () => ({
 }));
 
 const mockUpdateStatus = jest.fn();
+const mockUpdatePhaseAssignments = jest.fn();
 jest.mock('../../hooks/useInterviews', () => ({
   useCreateInterview: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useInterview: jest.fn(),
+  useInterviewBrief: jest.fn(() => ({ data: null, isLoading: false })),
+  useDraftInterviewBrief: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false, error: null })),
+  useSaveInterviewBrief: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false, error: null })),
+  useApproveInterviewBrief: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false, error: null })),
   useUpdateInterviewStatus: jest.fn(() => ({ mutateAsync: mockUpdateStatus, isPending: false })),
+  useUpdateInterviewPhaseAssignments: jest.fn(() => ({
+    mutate: mockUpdatePhaseAssignments,
+    isPending: false,
+    error: null,
+  })),
+  useActiveUsers: jest.fn(() => ({ data: [], isLoading: false })),
   useUpdateInterviewTitle: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useCreatePrd: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useDeleteInterview: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
@@ -195,7 +207,12 @@ jest.mock('../../hooks/useGroundingResumeGate', () => ({
 
 import { within } from '@testing-library/react';
 import { useAppShell } from '../../hooks/useAppShell';
-import { useInterview, useUpdateInterviewStatus, useCreatePrd } from '../../hooks/useInterviews';
+import {
+  useActiveUsers,
+  useCreatePrd,
+  useInterview,
+  useUpdateInterviewStatus,
+} from '../../hooks/useInterviews';
 import { useStartChat, useChatThread } from '../../hooks/useChatThreads';
 import { useProjectSkillConfig, useGlobalDefaultModel, useAvailableModels } from '../../hooks/useProjectSkillConfig';
 
@@ -236,6 +253,7 @@ function makeInterview(overrides: Partial<Interview> = {}): Interview {
 const mockSend = jest.fn().mockResolvedValue(undefined);
 const mockCancel = jest.fn().mockResolvedValue(undefined);
 const mockRetryLast = jest.fn();
+const mockRetryFailedRun = jest.fn().mockResolvedValue(undefined);
 const mockClearSendError = jest.fn();
 
 const idleStream = {
@@ -263,6 +281,8 @@ const idleStream = {
   isInteractionBusy: false,
   send: mockSend,
   retryLast: mockRetryLast,
+  retryFailedRun: mockRetryFailedRun,
+  retryableRunId: null as string | null,
   cancel: mockCancel,
   sendError: null,
   clearSendError: mockClearSendError,
@@ -270,20 +290,55 @@ const idleStream = {
 
 // ── Render helper ──────────────────────────────────────────────────────────────
 
+let queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+function interviewTree(interviewId = 'iv-1', state?: Record<string, unknown>) {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter
+        initialEntries={[{
+          pathname: `/backlog/interview/${interviewId}`,
+          state,
+        }]}
+      >
+        <InterviewChatView />
+      </MemoryRouter>
+    </QueryClientProvider>
+  );
+}
+
 function renderExistingInterview(
   interviewId = 'iv-1',
   state?: Record<string, unknown>,
 ) {
-  return render(
-    <MemoryRouter
-      initialEntries={[{
-        pathname: `/backlog/interview/${interviewId}`,
-        state,
-      }]}
-    >
-      <InterviewChatView />
-    </MemoryRouter>,
-  );
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(interviewTree(interviewId, state));
+}
+
+// The usage strip queries `/api/interviews/:id/usage`, so the stub has to answer
+// with a rollup shape rather than the generic `{ ok: true }` body.
+const emptyUsageRollup = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  totalTokens: 0,
+  costUsd: 0,
+  costSource: 'reported',
+  durationMs: 0,
+  interactions: 0,
+  models: [],
+  incomplete: false,
+  runs: [],
+};
+
+function stubGlobalFetch() {
+  global.fetch = jest.fn((input: unknown) => {
+    const url = String(input);
+    return Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve(url.endsWith('/usage') ? emptyUsageRollup : { ok: true }),
+    });
+  }) as unknown as jest.Mock;
 }
 
 // ── Setup ──────────────────────────────────────────────────────────────────────
@@ -308,30 +363,18 @@ beforeEach(() => {
     userId: 'user-1',
     isAdmin: false,
   });
-  global.fetch = jest.fn().mockResolvedValue({
-    ok: true,
-    json: () => Promise.resolve({ ok: true }),
-  }) as jest.Mock;
+  stubGlobalFetch();
 });
 
 describe('PBI-004 Interview grounding status embed', () => {
-  it('AC-2 / VT-03 Given an existing Interview, When its run view renders, Then reusable grounding status receives the Interview scope', () => {
-    // Arrange / Act
+  it('does not show SHA or re-ground controls on an existing Interview', () => {
     renderExistingInterview();
 
-    // Assert
-    expect(screen.getByTestId('interview-grounding-embed')).toHaveAttribute(
-      'data-surface',
-      'interview'
-    );
-    expect(screen.getByTestId('interview-grounding-embed')).toHaveAttribute(
-      'data-domain-run-id',
-      'iv-1'
-    );
-    expect(screen.getByTestId('interview-grounding-embed')).toHaveAttribute(
-      'data-project',
-      'MaxView'
-    );
+    expect(
+      screen.queryByTestId('interview-grounding-embed')
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId('run-grounding-status')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('run-grounding-sha')).not.toBeInTheDocument();
   });
 });
 
@@ -528,9 +571,9 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
     const labelRegion = screen.getByTestId('agent-run-status-label');
     expect(labelRegion).toHaveAttribute('role', 'status');
     expect(labelRegion).toHaveAttribute('aria-live', 'polite');
-    expect(labelRegion).toHaveTextContent('Waiting…');
+    expect(labelRegion).toHaveTextContent('Queued');
     expect(screen.getByTestId('agent-run-status-queued')).toHaveTextContent(
-      'Waiting…',
+      'Queued',
     );
     expect(screen.queryByTestId('agent-run-status-dispatched')).not.toBeInTheDocument();
   });
@@ -548,9 +591,91 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
 
     renderExistingInterview();
 
-    expect(screen.getByTestId('agent-run-status-label')).toHaveTextContent('Starting…');
-    expect(screen.getByTestId('agent-run-status-dispatched')).toHaveTextContent('Starting…');
+    expect(screen.getByTestId('agent-run-status-label')).toHaveTextContent('Dispatched');
+    expect(screen.getByTestId('agent-run-status-dispatched')).toHaveTextContent('Dispatched');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows Discovery, Delivery, and Technical for a grill-with-docs interview', () => {
+    (useChatThread as jest.Mock).mockReturnValue({
+      data: {
+        id: 'thread-iv-1',
+        status: 'idle',
+        kickoff: {
+          skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+          model: 'composer-2',
+        },
+        messages: [],
+      },
+    });
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      messages: [{
+        id: 'm1',
+        role: 'agent',
+        text: '[[interview-phase:discovery:2:6]]\nWhat does success look like?\n\na. Confirm\nb. Change it\nc. Skip — decide later',
+        ts: '2026-01-01T00:00:00Z',
+      }],
+    });
+
+    renderExistingInterview();
+
+    expect(screen.getByTestId('interview-phase-discovery')).toHaveTextContent('Topic 2 of 6');
+    expect(screen.getByTestId('interview-phase-delivery')).toHaveTextContent('Later');
+    expect(screen.getByTestId('interview-phase-technical')).toHaveTextContent('Optional');
+    expect(screen.getByText(/What does success look like/)).toBeInTheDocument();
+    expect(screen.queryByText(/interview-phase/)).not.toBeInTheDocument();
+  });
+
+  it('updates only the selected interview phase assignment', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ deliveryAssigneeId: 'delivery-1' }),
+      isLoading: false,
+      isError: false,
+    });
+    (useActiveUsers as jest.Mock).mockReturnValue({
+      data: [
+        { oid: 'alice-1', displayName: 'Alice User', email: 'alice@example.com' },
+        { oid: 'delivery-1', displayName: 'Delivery User', email: 'delivery@example.com' },
+      ],
+      isLoading: false,
+    });
+    (useChatThread as jest.Mock).mockReturnValue({
+      data: {
+        id: 'thread-iv-1',
+        status: 'idle',
+        kickoff: {
+          skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+          model: 'composer-2',
+        },
+        messages: [],
+      },
+    });
+
+    renderExistingInterview();
+
+    fireEvent.click(screen.getByTestId('interview-phase-assignee-discovery'));
+    fireEvent.mouseDown(screen.getByTestId('interview-phase-assignee-option-discovery-alice-1'));
+
+    expect(mockUpdatePhaseAssignments).toHaveBeenCalledWith({
+      id: 'iv-1',
+      phaseAssignments: { discoveryAssigneeId: 'alice-1' },
+    });
+  });
+
+  it('hides the phase bar when the interview skill is not grill-with-docs', () => {
+    (useChatThread as jest.Mock).mockReturnValue({
+      data: {
+        id: 'thread-iv-1',
+        status: 'idle',
+        kickoff: { skillPath: '.cursor/skills/grill-design/SKILL.md' },
+        messages: [],
+      },
+    });
+
+    renderExistingInterview();
+
+    expect(screen.queryByTestId('interview-phase-bar')).not.toBeInTheDocument();
   });
 
   it('shows a recoverable error when repository preparation fails', () => {
@@ -609,13 +734,34 @@ describe('ExistingInterviewView — read-only viewer', () => {
     });
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
-      can: jest.fn(() => true),
+      can: jest.fn((permission: string) => permission === 'interviews:view' || permission === 'interviews:manage'),
       userId: 'viewer-2',
       isAdmin: false,
     });
     renderExistingInterview();
     expect(screen.queryByPlaceholderText(/Continue the interview/i)).not.toBeInTheDocument();
     expect(screen.getByText(/viewing another user's interview \(read-only\)/i)).toBeInTheDocument();
+  });
+
+  it('lets a project admin answer another author\'s interview', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ authorId: 'author-1', status: 'in_progress' }),
+      isLoading: false,
+      isError: false,
+    });
+    (useAppShell as jest.Mock).mockReturnValue({
+      selectedProject: 'MaxView',
+      can: jest.fn((permission: string) => (
+        permission === 'admin:roles'
+        || permission === 'interviews:view'
+        || permission === 'interviews:manage'
+      )),
+      userId: 'project-admin-1',
+      isAdmin: false,
+    });
+    renderExistingInterview();
+    expect(screen.queryByText(/viewing another user's interview \(read-only\)/i)).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Continue the interview/i)).toBeEnabled();
   });
 });
 
@@ -819,7 +965,7 @@ describe('ExistingInterviewView — choice block submit gating', () => {
       messages: [choiceMessage],
     });
     renderExistingInterview();
-    expect(screen.queryByRole('button', { name: /Submit answers/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Submit answer/i })).not.toBeInTheDocument();
   });
 
   it('hides the "Submit answers" button when the interview is archived', () => {
@@ -833,7 +979,7 @@ describe('ExistingInterviewView — choice block submit gating', () => {
       messages: [choiceMessage],
     });
     renderExistingInterview();
-    expect(screen.queryByRole('button', { name: /Submit answers/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Submit answer/i })).not.toBeInTheDocument();
   });
 
   it('shows the "Submit answers" button when the interview is in_progress', () => {
@@ -847,7 +993,7 @@ describe('ExistingInterviewView — choice block submit gating', () => {
       messages: [choiceMessage],
     });
     renderExistingInterview();
-    expect(screen.getByRole('button', { name: /Submit answers/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Submit answer/i })).toBeInTheDocument();
   });
 });
 
@@ -887,11 +1033,7 @@ describe('ExistingInterviewView — processing state after send', () => {
         },
       ],
     });
-    view.rerender(
-      <MemoryRouter initialEntries={['/backlog/interview/iv-1']}>
-        <InterviewChatView />
-      </MemoryRouter>,
-    );
+    view.rerender(interviewTree());
 
     await waitFor(() => {
       expect(screen.getByTestId('interview-message-input')).toBeEnabled();
@@ -958,6 +1100,49 @@ describe('ExistingInterviewView — processing state after send', () => {
     expect(screen.queryByTestId('interview-agent-processing')).not.toBeInTheDocument();
   });
 
+  it('retries a failed durable run by identity without resending text', () => {
+    mockRetryFailedRun.mockClear();
+    mockSend.mockClear();
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      messages: [
+        {
+          id: 'u1',
+          role: 'user',
+          text: 'Original interview answer',
+          ts: '2026-09-23T12:00:00.000Z',
+        },
+        {
+          id: 'e1',
+          role: 'system',
+          text: 'Error: worker failed',
+          ts: '2026-09-23T12:00:01.000Z',
+        },
+      ],
+      visibleMessages: [
+        {
+          id: 'u1',
+          role: 'user',
+          text: 'Original interview answer',
+          ts: '2026-09-23T12:00:00.000Z',
+        },
+        {
+          id: 'e1',
+          role: 'system',
+          text: 'Error: worker failed',
+          ts: '2026-09-23T12:00:01.000Z',
+        },
+      ],
+      status: 'error',
+      retryableRunId: '50000000-0000-4000-8000-000000000001',
+    });
+
+    renderExistingInterview();
+    fireEvent.click(screen.getByTestId('interview-retry-message'));
+    expect(mockRetryFailedRun).toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
   it('stays disabled throughout the running state and unlocks when the run ends', () => {
     let streamState = {
       ...idleStream,
@@ -970,11 +1155,7 @@ describe('ExistingInterviewView — processing state after send', () => {
 
     const view = renderExistingInterview();
     const renderCurrentStream = () => {
-      view.rerender(
-        <MemoryRouter initialEntries={['/backlog/interview/iv-1']}>
-          <InterviewChatView />
-        </MemoryRouter>,
-      );
+      view.rerender(interviewTree());
     };
 
     expect(screen.getByTestId('interview-message-input')).toBeDisabled();
@@ -1023,10 +1204,7 @@ describe('ExistingInterviewView — handleGeneratePrd model resolution', () => {
       isPending: false,
     });
 
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ ok: true }),
-    }) as jest.Mock;
+    stubGlobalFetch();
   });
 
   it('passes skillConfig.prdModel to the startChat kickoff when set', async () => {
@@ -1135,10 +1313,7 @@ describe('ExistingInterviewView — Generate PRD button disabled when PRD exists
       userId: 'user-1',
       isAdmin: false,
     });
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ ok: true }),
-    }) as jest.Mock;
+    stubGlobalFetch();
   });
 
   it('enables the Generate PRD button when the interview has no PRDs', () => {
@@ -1191,6 +1366,30 @@ describe('ExistingInterviewView — Generate PRD button disabled when PRD exists
 // ── Model hydration from kickoff ───────────────────────────────────────────────
 
 describe('ExistingInterviewView — model select reflects kickoff model', () => {
+  it('AC-0 / VT-08 shows the snapshotted effort next to model', async () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ model: 'composer-2', effort: 'medium' }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+
+    expect(await screen.findByText('Effort: Medium')).toBeVisible();
+  });
+
+  it('AC-1 / VT-09 omits the effort label for a legacy null snapshot', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ model: 'composer-2', effort: undefined }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+
+    expect(screen.queryByText(/Effort:/)).not.toBeInTheDocument();
+  });
+
   it('shows the kickoff model in the session dropdown (not the hardcoded Composer 2 default)', async () => {
     (useInterview as jest.Mock).mockReturnValue({
       data: makeInterview({ model: 'grok-4.5' }),
@@ -1233,10 +1432,45 @@ describe('ExistingInterviewView — model select reflects kickoff model', () => 
         status: 'idle',
       },
     });
+    (useAvailableModels as jest.Mock).mockReturnValue({
+      data: [
+        { id: 'composer-2', displayName: 'Composer 2' },
+        { id: 'claude-opus-4-6', displayName: 'Claude Opus 4.6' },
+      ],
+      isLoading: false,
+    });
 
     renderExistingInterview();
 
     const modelSelect = await screen.findByLabelText('Model');
     expect(modelSelect).toHaveValue('claude-opus-4-6');
+  });
+
+  it('moves a retired saved model to the newest available model in its family', async () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ model: 'claude-opus-4-6' }),
+      isLoading: false,
+      isError: false,
+    });
+    (useChatThread as jest.Mock).mockReturnValue({
+      data: {
+        id: 'thread-iv-1',
+        kickoff: { project: 'MaxView', repo: 'MaxView' },
+        messages: [],
+        status: 'idle',
+      },
+    });
+    (useAvailableModels as jest.Mock).mockReturnValue({
+      data: [
+        { id: 'composer-2', displayName: 'Composer 2' },
+        { id: 'claude-opus-5-5', displayName: 'Claude Opus 5.5' },
+      ],
+      isLoading: false,
+    });
+
+    renderExistingInterview();
+
+    const modelSelect = await screen.findByLabelText('Model');
+    expect(modelSelect).toHaveValue('claude-opus-5-5');
   });
 });

@@ -10,6 +10,7 @@ import {
 } from './chatAgentService';
 import { resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
+import type { AgentModuleId } from '../../shared/types/chat';
 import type { WorkItemType } from '../../shared/types/featureRequest';
 
 const WATCHER_INTERVAL_MS = 5_000;
@@ -22,22 +23,26 @@ const TYPE_CONFIG: Record<
     skillPathKey: 'featureRequestSkillPath' | 'technicalSkillPath' | 'issueSkillPath';
     modelKey: 'featureRequestModel' | 'technicalModel' | 'issueModel';
     outputFile: string;
+    agentModule: AgentModuleId;
   }
 > = {
   feature: {
     skillPathKey: 'featureRequestSkillPath',
     modelKey: 'featureRequestModel',
     outputFile: 'feature-request-analysis.json',
+    agentModule: 'featureRequest',
   },
   technical: {
     skillPathKey: 'technicalSkillPath',
     modelKey: 'technicalModel',
     outputFile: 'technical-analysis.json',
+    agentModule: 'technical',
   },
   issue: {
     skillPathKey: 'issueSkillPath',
     modelKey: 'issueModel',
     outputFile: 'issue-analysis.json',
+    agentModule: 'issue',
   },
 };
 
@@ -208,6 +213,7 @@ export async function autoStartFeatureRequestAnalysis(requestId: string): Promis
 
   const thread = await createChatThread('system', {
     project,
+    agentModule: config.agentModule,
     repo: skillConfig.skillRepo,
     branch: skillConfig.skillBranch ?? 'main',
     skillProvider: skillConfig.skillProvider ?? 'ado',

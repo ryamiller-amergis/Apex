@@ -1,3 +1,5 @@
+import type { EffortLevel } from './effort';
+
 export type DesignPrototypeStatus =
   | 'generating'
   | 'generation_failed'
@@ -40,6 +42,7 @@ export interface DesignPrototypeSummary {
   authorId: string;
   authorName?: string;
   model?: string;
+  effort?: EffortLevel;
   status: DesignPrototypeStatus;
   mockVersion: number;
   reviewerId?: string;

@@ -13,8 +13,13 @@ function readTf(name: string): string {
 
 const workerTf = readTf('ai-runs-worker.tf');
 const entraTf = readTf('ai-runs-worker-entra.tf');
+const mainTf = readTf('main.tf');
 const variablesTf = readTf('variables.tf');
 const outputsTf = readTf('outputs.tf');
+const envExample = fs.readFileSync(
+  path.resolve(process.cwd(), '.env.example'),
+  'utf8',
+);
 const deployWorkflow = fs.readFileSync(
   path.resolve(process.cwd(), '.github/workflows/deploy.yml'),
   'utf8',
@@ -188,6 +193,19 @@ describe('FEAT-003 Secure Ephemeral Background Worker Infrastructure', () => {
           /AI_RUNS_RUNNER_CALLBACK_TOKEN="\$\{\{\s*secrets\.AI_RUNS_RUNNER_CALLBACK_TOKEN\s*\}\}"/,
         );
       }
+    });
+
+    it('keeps the worker heartbeat mitigation durable across production slot swaps', () => {
+      const deployMatches = deployWorkflow.match(
+        /AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS="\$\{\{\s*vars\.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS\s*\|\|\s*'600000'\s*\}\}"/g,
+      );
+      expect(deployMatches).toHaveLength(2);
+      expect(mainTf).toMatch(
+        /sticky_settings\s*\{[\s\S]*?"AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS"/,
+      );
+      expect(envExample).toMatch(
+        /^AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS=600000$/m,
+      );
     });
 
     it('S7 publishes the FEAT-004 image only after its Dockerfile exists', () => {

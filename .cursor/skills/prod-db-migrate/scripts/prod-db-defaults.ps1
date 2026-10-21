@@ -4,7 +4,8 @@
 $script:ApexProd = @{
   SubscriptionHint = 'MSS-Production'
   DataResourceGroup = 'rg-apex-prd-data'
-  PostgresServer   = 'psql-apex-eus2'
+  # Sole production server. psql-apex-eus2 (East US 2) was deleted 2026-09-18.
+  PostgresServer   = 'psql-apex-cus'
   AppResourceGroup = 'rg-apex-prd-app'
   AppName          = 'app-apex-prd'
   DefaultRulePrefix = 'temp-cursor-migrate'

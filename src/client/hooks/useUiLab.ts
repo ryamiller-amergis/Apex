@@ -4,9 +4,12 @@ import type {
   UiLabDesign,
   UiLabDesignSummary,
   UiLabComment,
+  UiLabShare,
+  UiLabShareTarget,
   CreateUiLabDesignRequest,
   RegenerateUiLabDesignRequest,
   AddUiLabCommentRequest,
+  CreateUiLabShareRequest,
   UiLabStreamChunk,
 } from '../../shared/types/uiLab';
 
@@ -37,6 +40,23 @@ export function useUiLabDesigns(project: string | null) {
       const hasActive = data.some((d) => ACTIVE_STATUSES.includes(d.status));
       return hasActive ? 3_000 : false;
     },
+  });
+}
+
+// ── Designs shared with the current user (named viewers) ─────────────────────
+
+/**
+ * Pass a null project for users who already have workspace access — they read
+ * the full project list instead and should not trigger this request.
+ */
+export function useUiLabSharedDesigns(project: string | null) {
+  return useQuery<UiLabDesignSummary[]>({
+    queryKey: ['ui-lab', 'shared-designs', project],
+    queryFn: () =>
+      apiFetch(`/api/ui-lab/shared-with-me?project=${encodeURIComponent(project!)}`),
+    enabled: !!project,
+    staleTime: 30_000,
+    retry: false,
   });
 }
 
@@ -101,7 +121,7 @@ export function useDeleteUiLabDesign(project: string | null) {
 
 export function useSaveUiLabHtml(designId: string | null) {
   const qc = useQueryClient();
-  return useMutation<void, Error, string>({
+  return useMutation<UiLabDesign, Error, string>({
     mutationFn: (html) =>
       apiFetch(`/api/ui-lab/${designId}/html`, {
         method: 'PATCH',
@@ -110,6 +130,76 @@ export function useSaveUiLabHtml(designId: string | null) {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['ui-lab', 'design', designId] });
+      qc.invalidateQueries({ queryKey: ['ui-lab', 'designs'] });
+    },
+  });
+}
+
+// ── Share management ─────────────────────────────────────────────────────────
+
+export function uiLabSharesQueryKey(designId: string) {
+  return ['ui-lab', 'shares', designId] as const;
+}
+
+export function uiLabShareTargetsQueryKey(designId: string, query: string) {
+  return ['ui-lab', 'share-targets', designId, query] as const;
+}
+
+export function useUiLabShares(designId: string | null, enabled = true) {
+  return useQuery<UiLabShare[]>({
+    queryKey: uiLabSharesQueryKey(designId ?? ''),
+    queryFn: () => apiFetch(`/api/ui-lab/${designId}/shares`),
+    enabled: Boolean(designId && enabled),
+    retry: false,
+  });
+}
+
+export function useUiLabShareTargets(
+  designId: string | null,
+  query: string,
+  enabled = true,
+) {
+  return useQuery<UiLabShareTarget[]>({
+    queryKey: uiLabShareTargetsQueryKey(designId ?? '', query),
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (query.trim()) params.set('q', query.trim());
+      const qs = params.toString();
+      return apiFetch(`/api/ui-lab/${designId}/share-targets${qs ? `?${qs}` : ''}`);
+    },
+    enabled: Boolean(designId && enabled),
+    retry: false,
+  });
+}
+
+export function useCreateUiLabShare(designId: string | null) {
+  const qc = useQueryClient();
+  return useMutation<UiLabShare, Error, CreateUiLabShareRequest>({
+    mutationFn: (body) =>
+      apiFetch(`/api/ui-lab/${designId}/shares`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      if (!designId) return;
+      void qc.invalidateQueries({ queryKey: uiLabSharesQueryKey(designId) });
+      void qc.invalidateQueries({ queryKey: ['ui-lab', 'share-targets', designId] });
+    },
+  });
+}
+
+export function useRevokeUiLabShare(designId: string | null) {
+  const qc = useQueryClient();
+  return useMutation<void, Error, string>({
+    mutationFn: (granteeId) =>
+      apiFetch(`/api/ui-lab/${designId}/shares/${encodeURIComponent(granteeId)}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => {
+      if (!designId) return;
+      void qc.invalidateQueries({ queryKey: uiLabSharesQueryKey(designId) });
+      void qc.invalidateQueries({ queryKey: ['ui-lab', 'share-targets', designId] });
     },
   });
 }
@@ -165,6 +255,8 @@ export function useUiLabStream(onComplete?: (designId: string) => void): UiLabSt
   const xhrRef = useRef<XMLHttpRequest | null>(null);
   const activeDesignId = useRef<string | null>(null);
   const bufferRef = useRef('');
+  const transportRef = useRef<'v1' | 'v2' | null>(null);
+  const seenEventIdsRef = useRef<Set<string>>(new Set());
   const qc = useQueryClient();
 
   const cancelStream = useCallback(() => {
@@ -172,6 +264,8 @@ export function useUiLabStream(onComplete?: (designId: string) => void): UiLabSt
     esRef.current = null;
     xhrRef.current?.abort();
     xhrRef.current = null;
+    transportRef.current = null;
+    seenEventIdsRef.current.clear();
     setPhase('idle');
   }, []);
 
@@ -186,6 +280,8 @@ export function useUiLabStream(onComplete?: (designId: string) => void): UiLabSt
       cancelStream();
       activeDesignId.current = designId;
       bufferRef.current = '';
+      transportRef.current = null;
+      seenEventIdsRef.current.clear();
       setStreamedHtml('');
       setError(null);
       setPhase('streaming');
@@ -198,8 +294,24 @@ export function useUiLabStream(onComplete?: (designId: string) => void): UiLabSt
         es.onmessage = (e) => {
           try {
             const chunk = JSON.parse(e.data) as UiLabStreamChunk;
-            if (chunk.type === 'token' && chunk.text) {
-              bufferRef.current += chunk.text;
+            if (chunk.type === 'transport' && chunk.transport) {
+              transportRef.current = chunk.transport;
+            } else if (
+              (chunk.type === 'token' || chunk.type === 'snapshot')
+              && chunk.text
+            ) {
+              if (
+                e.lastEventId
+                && seenEventIdsRef.current.has(e.lastEventId)
+              ) {
+                return;
+              }
+              if (e.lastEventId) {
+                seenEventIdsRef.current.add(e.lastEventId);
+              }
+              bufferRef.current = chunk.type === 'snapshot'
+                ? chunk.text
+                : bufferRef.current + chunk.text;
               setStreamedHtml(bufferRef.current);
             } else if (chunk.type === 'complete') {
               es.close();
@@ -219,6 +331,11 @@ export function useUiLabStream(onComplete?: (designId: string) => void): UiLabSt
         };
 
         es.onerror = () => {
+          if (transportRef.current === 'v2') {
+            // Native EventSource reconnect preserves Last-Event-ID. The server
+            // replays durable V2 deltas while this buffer stays on screen.
+            return;
+          }
           es.close();
           esRef.current = null;
           setPhase('error');

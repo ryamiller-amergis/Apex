@@ -1,5 +1,6 @@
 import { AzureDevOpsService } from './azureDevOps';
 import { parseAutoCheckTeams } from './adoTeamConfig';
+import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
 
 /**
  * Background service that automatically updates Feature status to "Done"
@@ -7,9 +8,12 @@ import { parseAutoCheckTeams } from './adoTeamConfig';
  */
 export class FeatureAutoCompleteService {
   private intervalId: NodeJS.Timeout | null = null;
-  private isRunning: boolean = false;
   private readonly COMPLETED_STATES = ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
   private readonly CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes in milliseconds
+  private readonly runGuard = createSingleFlight({
+    name: 'FeatureAutoComplete',
+    stuckAfterMs: stuckAfterForInterval(this.CHECK_INTERVAL),
+  });
 
   /**
    * Start the background service
@@ -46,12 +50,12 @@ export class FeatureAutoCompleteService {
    * Main method to check and update features
    */
   private async checkAndUpdateFeatures(): Promise<void> {
-    if (this.isRunning) {
+    const runToken = this.runGuard.tryEnter();
+    if (runToken === null) {
       console.log('[FeatureAutoComplete] Previous check still running, skipping...');
       return;
     }
 
-    this.isRunning = true;
     const startTime = Date.now();
     console.log(`[FeatureAutoComplete] Starting feature check at ${new Date().toISOString()}`);
 
@@ -85,7 +89,7 @@ export class FeatureAutoCompleteService {
     } catch (error) {
       console.error('[FeatureAutoComplete] Error during feature check:', error);
     } finally {
-      this.isRunning = false;
+      this.runGuard.exit(runToken);
     }
   }
 

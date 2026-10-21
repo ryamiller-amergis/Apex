@@ -1,7 +1,6 @@
 import { db } from '../db/drizzle';
 import {
   documentApproverAssignments,
-  projectSkillSettings,
   prds,
   designDocs,
   adrs,
@@ -9,7 +8,12 @@ import {
   interviews,
 } from '../db/schema';
 import { eq, and, inArray } from 'drizzle-orm';
-import { getApproverUserIdsForProject, getApproverPoolForProject, getApproversForDocumentByProject } from './projectSettingsService';
+import {
+  getApproverUserIdsForProject,
+  getApproverPoolForProject,
+  getApproversForDocumentByProject,
+  getApprovalModeForProject,
+} from './projectSettingsService';
 import { createNotification } from './notificationService';
 import type {
   DocumentApproverAssignment,
@@ -18,7 +22,6 @@ import type {
   ApproverResponseStatus,
 } from '../../shared/types/approvals';
 import type { ProjectApprover, ApproverPoolResponse } from '../../shared/types/projectSettings';
-import { listGroupsWithMembers } from './groupService';
 
 /**
  * Document kinds that support approver assignment.
@@ -115,11 +118,6 @@ async function notifyAssignedApprovers(
 }
 
 async function getAllowedApproverIds(project: string, documentType: DocumentType): Promise<Set<string>> {
-  if (documentType === 'adr') {
-    const groups = await listGroupsWithMembers(project);
-    const developerGroup = groups.find((group) => group.name === 'Developer');
-    return new Set(developerGroup?.members.map((member) => member.userId) ?? []);
-  }
   return new Set(await getApproverUserIdsForProject(project, documentType));
 }
 
@@ -234,16 +232,10 @@ export async function isApprovalComplete(
   documentType: DocumentType,
   project: string,
 ): Promise<ApprovalCompletionResult> {
-  const settings = await db
-    .select({ approvalMode: projectSkillSettings.approvalMode })
-    .from(projectSkillSettings)
-    .where(eq(projectSkillSettings.project, project))
-    .limit(1);
-
-  const mode: ApprovalMode = settings[0]?.approvalMode ?? 'any_one';
+  const mode: ApprovalMode = await getApprovalModeForProject(project, documentType);
 
   const assignments = await getAssignments(documentId, documentType);
-  if (assignments.length === 0) return { complete: true, mode };
+  if (assignments.length === 0) return { complete: true, mode, reason: 'owner-only' };
 
   if (mode === 'any_one') {
     return { complete: assignments.some((a) => a.status === 'approved'), mode };
@@ -369,7 +361,6 @@ export async function getAvailableApprovers(
   documentType: DocumentType,
   excludeUserId?: string,
 ): Promise<ProjectApprover[]> {
-  if (documentType === 'adr') return [];
   const approvers = await getApproversForDocumentByProject(project, documentType);
   if (excludeUserId) {
     return approvers.filter((a) => a.userId !== excludeUserId);
@@ -382,7 +373,6 @@ export async function getAvailableApproverPool(
   documentType: DocumentType,
   excludeUserId?: string,
 ): Promise<ApproverPoolResponse> {
-  if (documentType === 'adr') return { individuals: [], groups: [] };
   const pool = await getApproverPoolForProject(project, documentType);
   if (excludeUserId) {
     return {

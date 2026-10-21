@@ -136,6 +136,11 @@ function renderWorkspace() {
 async function selectActor(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByTestId('observability-actor-input'));
   await user.click(screen.getByTestId(`observability-actor-option-${ACTOR}`));
+  await waitFor(() => expect(screen.getByTestId('observability-actor')).toHaveValue(ACTOR));
+}
+
+async function applyFilters(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByTestId('observability-apply-filters'));
 }
 
 describe('ObservabilityWorkspace', () => {
@@ -190,8 +195,10 @@ describe('ObservabilityWorkspace', () => {
     const user = userEvent.setup();
     renderWorkspace();
     await user.type(screen.getByTestId('observability-trace-id'), 'ZZ-NOT-VALID!!');
-    await user.click(screen.getByTestId('observability-apply-filters'));
-    expect(screen.getByTestId('observability-validation-summary')).toHaveTextContent(/validation error/i);
+    await applyFilters(user);
+    await waitFor(() => {
+      expect(screen.getByTestId('observability-validation-summary')).toHaveTextContent(/validation error/i);
+    });
     expect(screen.getByText(/actor is required/i)).toBeInTheDocument();
     expect(screen.getByText(/malformed trace id/i)).toBeInTheDocument();
     const calls = mockUseObservabilityTrail.mock.calls as unknown[][];
@@ -207,10 +214,13 @@ describe('ObservabilityWorkspace', () => {
     expect(option).toHaveTextContent('Ada Lovelace');
     expect(option).not.toHaveTextContent(ACTOR);
     await user.click(option);
-    await user.click(screen.getByTestId('observability-apply-filters'));
-    const calls = mockUseObservabilityTrail.mock.calls as unknown[][];
-    const lastCall = calls[calls.length - 1];
-    expect((lastCall?.[1] as { actorId: string } | null)?.actorId).toBe(ACTOR);
+    await waitFor(() => expect(screen.getByTestId('observability-actor')).toHaveValue(ACTOR));
+    await applyFilters(user);
+    await waitFor(() => {
+      const calls = mockUseObservabilityTrail.mock.calls as unknown[][];
+      const lastCall = calls[calls.length - 1];
+      expect((lastCall?.[1] as { actorId: string } | null)?.actorId).toBe(ACTOR);
+    });
   });
 
   it('filters the user dropdown as the operator types', async () => {
@@ -236,8 +246,8 @@ describe('ObservabilityWorkspace', () => {
     }));
     renderWorkspace();
     await selectActor(user);
-    await user.click(screen.getByTestId('observability-apply-filters'));
-    const table = screen.getByTestId('observability-trail-table');
+    await applyFilters(user);
+    const table = await screen.findByTestId('observability-trail-table');
     expect(within(table).getByText('UI Action')).toBeInTheDocument();
     expect(within(table).getByText('API Call')).toBeInTheDocument();
     expect(within(table).getByText('Error')).toBeInTheDocument();
@@ -255,8 +265,8 @@ describe('ObservabilityWorkspace', () => {
     }));
     renderWorkspace();
     await selectActor(user);
-    await user.click(screen.getByTestId('observability-apply-filters'));
-    expect(screen.getByTestId('observability-trail-error')).toHaveTextContent(/unavailable/i);
+    await applyFilters(user);
+    expect(await screen.findByTestId('observability-trail-error')).toHaveTextContent(/unavailable/i);
     expect(screen.getByTestId('observability-trail-retry')).toBeInTheDocument();
     expect(screen.queryByTestId('observability-trail-table')).not.toBeInTheDocument();
     expect(screen.getByTestId('observability-filter-form')).toBeInTheDocument();
@@ -270,7 +280,7 @@ describe('ObservabilityWorkspace', () => {
     }));
     renderWorkspace();
     await selectActor(user);
-    await user.click(screen.getByTestId('observability-apply-filters'));
+    await applyFilters(user);
     await user.click(screen.getByTestId('observability-tab-health'));
     expect(screen.getByTestId('observability-health-panel')).toBeInTheDocument();
     expect(screen.getByTestId('observability-actor')).toHaveValue(ACTOR);
@@ -285,8 +295,8 @@ describe('ObservabilityWorkspace', () => {
     }));
     renderWorkspace();
     await selectActor(user);
-    await user.click(screen.getByTestId('observability-apply-filters'));
-    expect(screen.getByTestId('observability-trail-pagination-info')).toHaveTextContent(/cap reached/i);
+    await applyFilters(user);
+    expect(await screen.findByTestId('observability-trail-pagination-info')).toHaveTextContent(/cap reached/i);
     expect(screen.getByTestId('observability-trail-next')).toBeDisabled();
     expect(screen.getAllByRole('row')).toHaveLength(51);
   });
@@ -309,8 +319,8 @@ describe('ObservabilityWorkspace', () => {
     });
     renderWorkspace();
     await selectActor(user);
-    await user.click(screen.getByTestId('observability-apply-filters'));
-    expect(screen.getByTestId('observability-trail-table')).toBeInTheDocument();
+    await applyFilters(user);
+    expect(await screen.findByTestId('observability-trail-table')).toBeInTheDocument();
     await user.click(screen.getByTestId('observability-trail-chip-error'));
     const calls = mockUseObservabilityTrail.mock.calls as unknown[][];
     const lastCall = calls[calls.length - 1];
@@ -328,8 +338,8 @@ describe('ObservabilityWorkspace', () => {
     mockUseObservabilityTrail.mockReturnValue(queryState({ data: trailPage([event()]) }));
     renderWorkspace();
     await selectActor(user);
-    await user.click(screen.getByTestId('observability-apply-filters'));
-    await user.click(screen.getByTestId(`observability-session-link-${SESSION}`));
+    await applyFilters(user);
+    await user.click(await screen.findByTestId(`observability-session-link-${SESSION}`));
     expect(screen.getByTestId('observability-timeline-panel')).toBeInTheDocument();
     expect(screen.getByTestId('session-timeline-page')).toBeInTheDocument();
     expect(screen.queryByTestId('observability-timeline-empty')).not.toBeInTheDocument();

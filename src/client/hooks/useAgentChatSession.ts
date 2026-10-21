@@ -4,6 +4,7 @@ import type {
   AgentRunPhase,
   ChatAttachment,
   ChatMessage,
+  ChatTurnSkill,
   ChatThreadStatus,
 } from '../../shared/types/chat';
 import type {
@@ -11,7 +12,12 @@ import type {
   RunPhaseProgress,
   RunHealthProgress,
 } from './useChatStream';
-import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
+import { friendlyChatErrorMessage, friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
+import { createChatTurnId } from '../utils/chatTurnId';
+
+function mapSendErrorMessage(raw: string): string {
+  return friendlyChatErrorMessage(raw);
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -69,11 +75,15 @@ export interface AgentChatSessionOptions {
 
   /** Active run id from the persisted thread, used to restore thinking after refresh. */
   initialActiveRunId?: string | null;
+
+  /** Generates the idempotency identity once per user send attempt. */
+  createTurnId?: () => string;
 }
 
 export interface SendOptions {
   attachments?: ChatAttachment[];
   model?: string;
+  skill?: ChatTurnSkill;
 }
 
 export interface AgentChatSession {
@@ -92,6 +102,7 @@ export interface AgentChatSession {
   isRetrying: boolean;
   retryReason: string | null;
   isConnected: boolean;
+  hasConnectionError: boolean;
   lastProgressAt: number | null;
 
   // --- Derived status flags ---
@@ -110,6 +121,10 @@ export interface AgentChatSession {
   // --- Actions ---
   send: (text: string, opts?: SendOptions) => Promise<void>;
   retryLast: () => void;
+  /** Retry a failed durable run by identity — never resends text. */
+  retryFailedRun: () => Promise<void>;
+  /** Failed durable run ID from the stream, if the terminal error carried one. */
+  retryableRunId: string | null;
   cancel: () => Promise<void>;
 
   // --- Errors ---
@@ -134,53 +149,6 @@ export function shouldShowAgentTypingIndicator(input: {
   return input.lastVisibleRole !== 'agent';
 }
 
-const PENDING_THINKING_TTL_MS = 2 * 60 * 60 * 1000;
-
-function pendingThinkingStorageKey(threadId: string): string {
-  return `apex:pending-agent-thinking:${threadId}`;
-}
-
-function readPendingAgentThinking(threadId: string | null): boolean {
-  if (!threadId || typeof window === 'undefined') return false;
-  try {
-    const raw = window.sessionStorage.getItem(pendingThinkingStorageKey(threadId));
-    if (!raw) return false;
-    const parsed = JSON.parse(raw) as { startedAt?: number };
-    if (typeof parsed.startedAt !== 'number') {
-      window.sessionStorage.removeItem(pendingThinkingStorageKey(threadId));
-      return false;
-    }
-    if (Date.now() - parsed.startedAt > PENDING_THINKING_TTL_MS) {
-      window.sessionStorage.removeItem(pendingThinkingStorageKey(threadId));
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function writePendingAgentThinking(threadId: string | null): void {
-  if (!threadId || typeof window === 'undefined') return;
-  try {
-    window.sessionStorage.setItem(
-      pendingThinkingStorageKey(threadId),
-      JSON.stringify({ startedAt: Date.now() }),
-    );
-  } catch {
-    /* ignore quota / private mode */
-  }
-}
-
-function clearPendingAgentThinking(threadId: string | null): void {
-  if (!threadId || typeof window === 'undefined') return;
-  try {
-    window.sessionStorage.removeItem(pendingThinkingStorageKey(threadId));
-  } catch {
-    /* ignore */
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Hook
 // ---------------------------------------------------------------------------
@@ -201,6 +169,7 @@ export function useAgentChatSession(
     visibleMessageFilter = DEFAULT_VISIBLE_FILTER,
     enablePreparationState = false,
     initialActiveRunId,
+    createTurnId = createChatTurnId,
   } = options;
 
   // --- useChatStream (the SSE subscription) ---
@@ -217,6 +186,7 @@ export function useAgentChatSession(
     toolProgress,
     status,
     isConnected,
+    hasConnectionError,
     lastProgressAt,
     phaseEvents,
     runHealth,
@@ -226,25 +196,34 @@ export function useAgentChatSession(
     backlogReady,
     isRetrying,
     retryReason,
+    retryableRunId,
+    clearRetryableRunId,
     groundingPreparation,
   } = stream;
 
   // --- Local state ---
   const [isSending, setIsSending] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
+  const [isStopConfirmed, setIsStopConfirmed] = useState(false);
   const [isAwaitingAgentResponse, setIsAwaitingAgentResponse] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [optimisticUserMessage, setOptimisticUserMessage] =
     useState<ChatMessage | null>(null);
+  /** Immediate Queued/Dispatched from the 202 acceptance before stream events. */
+  const [admissionPhase, setAdmissionPhase] = useState<
+    'queued' | 'dispatched' | null
+  >(null);
   const optimisticBaselineIdsRef = useRef<Set<string>>(new Set());
 
   // Refs for pending-message tracking (generalized from Interview)
   const pendingMessageIdsRef = useRef<Set<string>>(new Set());
   const pendingObservedRunningRef = useRef(false);
   const skipThinkingRestoreRef = useRef(false);
+  // A send from an idle-closed thread starts while status is still `closed`.
+  const statusAtAwaitStartRef = useRef<ChatThreadStatus | null>(null);
 
   // Derived
-  const isRunning = status === 'running';
+  const streamIsRunning = status === 'running';
   const hasPersistedOptimisticEcho = Boolean(
     optimisticUserMessage &&
     messages.some(
@@ -259,6 +238,14 @@ export function useAgentChatSession(
       ? [...messages, optimisticUserMessage]
       : messages;
   const visibleMessages = displayedMessages.filter(visibleMessageFilter);
+  const lastVisibleRole = visibleMessages[visibleMessages.length - 1]?.role;
+  // A persisted agent message is the completed response for this turn. The
+  // terminal status event can arrive a little later, especially through the
+  // actor lane; do not keep answers and the composer locked during that gap.
+  const isWaitingForUser =
+    lastVisibleRole === 'agent' && !streamingText && !thinkingText;
+  const isRunning =
+    streamIsRunning && !isStopConfirmed && !isWaitingForUser;
 
   // Preparation state (opt-in)
   const isEmptyInProgress =
@@ -289,27 +276,29 @@ export function useAgentChatSession(
   });
 
   // --- Awaiting-agent-response tracking ---
-  const lastVisibleRole = visibleMessages[visibleMessages.length - 1]?.role;
-
   const beginAwaitingAgentResponse = useCallback(() => {
     skipThinkingRestoreRef.current = false;
     pendingMessageIdsRef.current = new Set(messages.map((m) => m.id));
     pendingObservedRunningRef.current = false;
+    statusAtAwaitStartRef.current = status;
     setIsAwaitingAgentResponse(true);
-    writePendingAgentThinking(threadId);
-  }, [messages, threadId]);
+  }, [messages, status]);
 
   const clearAwaitingAgentResponse = useCallback(() => {
     pendingMessageIdsRef.current.clear();
     pendingObservedRunningRef.current = false;
+    statusAtAwaitStartRef.current = null;
     setIsAwaitingAgentResponse(false);
-    clearPendingAgentThinking(threadId);
-  }, [threadId]);
+  }, []);
 
   // Clear when an agent reply lands or the thread errors/closes — not when a
   // refresh snapshot briefly looks idle while the turn is still in flight.
   useEffect(() => {
     if (!isAwaitingAgentResponse) return;
+
+    if (status !== 'closed' && statusAtAwaitStartRef.current === 'closed') {
+      statusAtAwaitStartRef.current = status;
+    }
 
     const receivedAgentOutcome = messages.some(
       (m) =>
@@ -321,7 +310,7 @@ export function useAgentChatSession(
       receivedAgentOutcome ||
       lastVisibleRole === 'agent' ||
       status === 'error' ||
-      status === 'closed'
+      (status === 'closed' && statusAtAwaitStartRef.current !== 'closed')
     ) {
       clearAwaitingAgentResponse();
     }
@@ -338,34 +327,50 @@ export function useAgentChatSession(
     skipThinkingRestoreRef.current = false;
     setOptimisticUserMessage(null);
     setIsCancelling(false);
+    setIsStopConfirmed(false);
+    setAdmissionPhase(null);
     pendingMessageIdsRef.current.clear();
     pendingObservedRunningRef.current = false;
     setIsAwaitingAgentResponse(false);
   }, [threadId]);
 
+  // Prefer live stream phase; keep admission phase until the stream advances.
+  useEffect(() => {
+    if (!progressPhase) return;
+    if (progressPhase === 'queued' || progressPhase === 'dispatched') {
+      setAdmissionPhase(progressPhase);
+      return;
+    }
+    setAdmissionPhase(null);
+  }, [progressPhase]);
+
+  const effectiveProgressPhase: AgentRunPhase | null =
+    progressPhase ?? admissionPhase;
+  const effectiveProgressLabel =
+    effectiveProgressPhase === 'queued' ||
+    effectiveProgressPhase === 'dispatched'
+      ? friendlyChatProgressLabel(progressLabel, effectiveProgressPhase)
+      : progressLabel;
+
   // Restore thinking after refresh when the last visible line is still the user.
   useEffect(() => {
     if (!threadId || isAwaitingAgentResponse || skipThinkingRestoreRef.current) return;
 
-    if (lastVisibleRole === 'agent') {
-      clearPendingAgentThinking(threadId);
-      return;
-    }
-
+    if (lastVisibleRole === 'agent') return;
     if (lastVisibleRole !== 'user') return;
 
+    // History is a snapshot, not a new turn. Restore the waiting indicator only
+    // when the persisted thread identifies a run that is still active.
     const shouldResume =
-      isRunning ||
-      initialStatus === 'running' ||
-      Boolean(initialActiveRunId) ||
-      readPendingAgentThinking(threadId);
+      isRunning &&
+      initialStatus === 'running' &&
+      Boolean(initialActiveRunId);
 
     if (!shouldResume) return;
 
     pendingMessageIdsRef.current = new Set(messages.map((m) => m.id));
     pendingObservedRunningRef.current = false;
     setIsAwaitingAgentResponse(true);
-    writePendingAgentThinking(threadId);
   }, [
     initialActiveRunId,
     initialStatus,
@@ -377,34 +382,16 @@ export function useAgentChatSession(
   ]);
 
   useEffect(() => {
-    if (!threadId) return;
-    if (lastVisibleRole === 'agent' || status === 'error' || status === 'closed') {
-      clearPendingAgentThinking(threadId);
-      return;
-    }
-    if (
-      !isCancelling &&
-      (isRunning || isAwaitingAgentResponse) &&
-      lastVisibleRole === 'user'
-    ) {
-      writePendingAgentThinking(threadId);
-    }
-  }, [
-    isAwaitingAgentResponse,
-    isCancelling,
-    isRunning,
-    lastVisibleRole,
-    status,
-    threadId,
-  ]);
-
-  useEffect(() => {
     if (hasPersistedOptimisticEcho) setOptimisticUserMessage(null);
   }, [hasPersistedOptimisticEcho]);
 
   useEffect(() => {
     if (isCancelling && !isRunning) setIsCancelling(false);
   }, [isCancelling, isRunning]);
+
+  useEffect(() => {
+    if (status !== 'running') setIsStopConfirmed(false);
+  }, [status]);
 
   // --- Send ---
   const send = useCallback(
@@ -420,12 +407,14 @@ export function useAgentChatSession(
       }
 
       setSendError(null);
+      setIsStopConfirmed(false);
       setIsSending(true);
+      const turnId = createTurnId();
       optimisticBaselineIdsRef.current = new Set(
         messages.map((message) => message.id)
       );
       setOptimisticUserMessage({
-        id: `optimistic-user-${Date.now()}`,
+        id: turnId,
         role: 'user',
         text,
         ts: new Date().toISOString(),
@@ -445,24 +434,38 @@ export function useAgentChatSession(
       try {
         const endpoint =
           sendEndpoint ?? `/api/chat/threads/${threadId}/messages`;
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            text,
-            ...(opts.model ? { model: opts.model } : {}),
-            ...(opts.attachments?.length
-              ? { attachments: opts.attachments }
-              : {}),
-          }),
+        const body = JSON.stringify({
+          turnId,
+          text,
+          ...(opts.model ? { model: opts.model } : {}),
+          ...(opts.skill ? { skill: opts.skill } : {}),
+          ...(opts.attachments?.length
+            ? { attachments: opts.attachments }
+            : {}),
         });
+        let res: Response | null = null;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            res = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body,
+            });
+            break;
+          } catch (error) {
+            if (attempt === 1) throw error;
+          }
+        }
+        if (!res) {
+          throw new Error('Failed to send message');
+        }
 
         if (!res.ok) {
           let msg = 'Failed to send message';
           try {
             const body = await res.json();
-            if (body?.error) msg = body.error;
+            if (body?.error) msg = mapSendErrorMessage(String(body.error));
           } catch {
             /* use default */
           }
@@ -471,6 +474,22 @@ export function useAgentChatSession(
           clearAwaitingAgentResponse();
           return;
         }
+
+        try {
+          const accepted = (await res.json()) as {
+            status?: string;
+          } | null;
+          if (
+            accepted?.status === 'queued' ||
+            accepted?.status === 'dispatched'
+          ) {
+            setAdmissionPhase(accepted.status);
+          }
+        } catch {
+          // Legacy `{ ok: true }` responses have no durable phase.
+        }
+
+        clearRetryableRunId();
 
         // afterSend hook (e.g. refetchDiff)
         if (afterSend) {
@@ -496,10 +515,13 @@ export function useAgentChatSession(
       sendEndpoint,
       afterSend,
       clearAwaitingAgentResponse,
+      createTurnId,
+      clearRetryableRunId,
     ]
   );
 
-  // --- Retry last user message ---
+  // Legacy blind resend of the last user message. Prefer retryFailedRun for
+  // durable failed runs so the server retries by identity without resending text.
   const retryLast = useCallback(() => {
     if (locked || !threadId || isInteractionBusy) return;
     const lastUserMsg = [...visibleMessages]
@@ -509,23 +531,127 @@ export function useAgentChatSession(
     void send(lastUserMsg.text);
   }, [locked, threadId, isInteractionBusy, visibleMessages, send]);
 
+  // --- Retry failed durable run by identity (no text / optimistic message) ---
+  const retryFailedRun = useCallback(async () => {
+    if (locked || !threadId || isInteractionBusy) return;
+    if (!retryableRunId) return;
+
+    setSendError(null);
+    setIsStopConfirmed(false);
+    setIsSending(true);
+    beginAwaitingAgentResponse();
+    const runId = retryableRunId;
+
+    try {
+      const endpoint = `/api/chat/threads/${threadId}/runs/${runId}/retry`;
+      let res: Response | null = null;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: '{}',
+          });
+          break;
+        } catch (error) {
+          if (attempt === 1) throw error;
+        }
+      }
+      if (!res) {
+        throw new Error('Failed to retry run');
+      }
+
+      if (!res.ok) {
+        let msg = 'Failed to retry run';
+        try {
+          const body = await res.json();
+          if (body?.error) msg = mapSendErrorMessage(String(body.error));
+        } catch {
+          /* use default */
+        }
+        setSendError(msg);
+        clearAwaitingAgentResponse();
+        return;
+      }
+
+      try {
+        const accepted = (await res.json()) as {
+          status?: string;
+        } | null;
+        if (
+          accepted?.status === 'queued' ||
+          accepted?.status === 'dispatched'
+        ) {
+          setAdmissionPhase(accepted.status);
+        }
+      } catch {
+        // Empty or non-JSON success bodies are ignored.
+      }
+
+      clearRetryableRunId();
+
+      if (afterSend) {
+        await afterSend();
+      }
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : 'Failed to retry run';
+      setSendError(msg);
+      clearAwaitingAgentResponse();
+    } finally {
+      setIsSending(false);
+    }
+  }, [
+    locked,
+    threadId,
+    isInteractionBusy,
+    retryableRunId,
+    beginAwaitingAgentResponse,
+    clearRetryableRunId,
+    afterSend,
+    clearAwaitingAgentResponse,
+  ]);
+
   // --- Cancel ---
   const cancel = useCallback(async () => {
     if (!threadId || isCancelling) return;
     const endpoint = cancelEndpoint ?? `/api/chat/threads/${threadId}/cancel`;
+    setSendError(null);
     setIsCancelling(true);
+    clearRetryableRunId();
     skipThinkingRestoreRef.current = true;
-    clearAwaitingAgentResponse();
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
         credentials: 'include',
       });
-      if (!response.ok) setIsCancelling(false);
-    } catch {
+      if (!response.ok) {
+        let message = 'Failed to stop the agent. Please try again.';
+        try {
+          const body = await response.json();
+          if (body?.error) message = body.error;
+        } catch {
+          /* use default */
+        }
+        setSendError(message);
+        setIsCancelling(false);
+      } else {
+        // The endpoint returns only after the server has persisted the idle
+        // thread state. Do not leave the composer blocked on a delayed stream.
+        clearAwaitingAgentResponse();
+        setIsStopConfirmed(true);
+        setIsCancelling(false);
+      }
+    } catch (error) {
+      setSendError(
+        error instanceof Error
+          ? error.message
+          : 'Failed to stop the agent. Please try again.'
+      );
       setIsCancelling(false);
     }
-  }, [threadId, cancelEndpoint, isCancelling, clearAwaitingAgentResponse]);
+  }, [threadId, cancelEndpoint, isCancelling, clearAwaitingAgentResponse, clearRetryableRunId]);
 
   // --- Clear send error ---
   const clearSendError = useCallback(() => setSendError(null), []);
@@ -539,13 +665,14 @@ export function useAgentChatSession(
     toolProgress,
     phaseEvents,
     runHealth,
-    progressLabel,
-    progressPhase,
+    progressLabel: effectiveProgressLabel,
+    progressPhase: effectiveProgressPhase,
     prdReady,
     backlogReady,
     isRetrying,
     retryReason,
     isConnected,
+    hasConnectionError,
     lastProgressAt,
 
     // Status flags
@@ -563,6 +690,8 @@ export function useAgentChatSession(
     // Actions
     send,
     retryLast,
+    retryFailedRun,
+    retryableRunId,
     cancel,
 
     // Errors

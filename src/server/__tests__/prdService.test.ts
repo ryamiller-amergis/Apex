@@ -61,6 +61,7 @@ jest.mock('../services/chatAgentService', () => ({
   }),
   createThread: jest.fn().mockResolvedValue({ id: 'thread-new', workspaceDir: '/tmp/thread-new' }),
   cancelRun: jest.fn().mockResolvedValue(undefined),
+  hydrateThread: jest.fn().mockResolvedValue(true),
 }));
 
 jest.mock('../services/agentRunReaperService', () => ({
@@ -95,7 +96,10 @@ jest.mock('../services/runGroundingService', () => ({
       updatedAt: '2026-08-06T00:00:00.000Z',
     }]),
     persistThenMarkTerminalInactive: jest.fn().mockImplementation(
-      async (_run: unknown, persist: () => Promise<unknown>) => persist(),
+      async (_run: unknown, persist: () => Promise<unknown>) => ({
+        persisted: await persist(),
+        deactivatedCount: 0,
+      }),
     ),
   },
 }));
@@ -142,6 +146,29 @@ jest.mock('../services/documentValidationService', () => ({
   autoStartDocumentValidation: jest.fn().mockResolvedValue(undefined),
   cancelDocumentValidation: jest.fn().mockResolvedValue(undefined),
   generateFallbackReport: jest.fn().mockReturnValue('# Fallback validation report'),
+  ingestValidationScorecard: jest.fn().mockImplementation(
+    async (
+      adapter: {
+        isCurrentValidationThread(threadId: string): Promise<boolean>;
+        updateDbForValidationResult(
+          scorecard: Record<string, unknown>,
+          reportMd: string,
+        ): Promise<void>;
+      },
+      threadId: string,
+      outcome: { kind: string; scorecardRaw?: string; reportMd?: string },
+    ) => {
+      if (!(await adapter.isCurrentValidationThread(threadId))) {
+        return { disposition: 'discarded_stale' };
+      }
+      const scorecard = JSON.parse(outcome.scorecardRaw ?? '{}');
+      await adapter.updateDbForValidationResult(
+        scorecard,
+        outcome.reportMd ?? '# Fallback validation report',
+      );
+      return { disposition: 'applied', scorecard };
+    },
+  ),
   isDocumentValidationWatcherActive: jest.fn().mockReturnValue(false),
   startDocumentValidationWatcher: jest.fn(),
   stopDocumentValidationWatcher: jest.fn(),
@@ -228,9 +255,11 @@ import {
   triggerFixCoverageGaps,
   acceptFixCoverageGaps,
   overridePrdReadiness,
+  forceSubmitForReview,
   revertPrdSection,
   dismissPrdFixSession,
   createPrdAdoWorkItems,
+  createPrdValidationAdapter,
 } from '../services/prdService';
 import { hashPrdValidationContent } from '../../shared/utils/prdValidationFastPath';
 
@@ -424,6 +453,7 @@ describe('createPrd', () => {
       userId: 'user-1',
       chatThreadId: 'thread-abc',
       title: 'My PRD',
+      effort: 'low',
     });
 
     expect(result).toEqual({ prdId: 'prd-new', threadId: 'thread-abc' });
@@ -433,6 +463,7 @@ describe('createPrd', () => {
         authorId: 'user-1',
         chatThreadId: 'thread-abc',
         title: 'My PRD',
+        effort: 'low',
         status: 'generating',
         content: '',
       }),
@@ -956,6 +987,29 @@ describe('submitForReview', () => {
     });
   });
 
+  it('allows a super admin who is neither author nor owner to submit for review', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft', content: 'some content' }));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await submitForReview('prd-1', 'super-admin-user', undefined, { isSuperAdmin: true });
+
+    expect(mockIsAdminUser).not.toHaveBeenCalled();
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending_review' }),
+    );
+  });
+
+  it('still rejects a non-author when the caller is not a super admin', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ content: 'x' }));
+
+    await expect(
+      submitForReview('prd-1', 'user-other', undefined, { isSuperAdmin: false }),
+    ).rejects.toMatchObject({ message: 'Only the author or owner can submit for review', status: 403 });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
   it('allows the document owner to submit for review', async () => {
     mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft', content: 'some content' }));
     mockDb.select.mockReturnValueOnce(makeSelectChain([{ prdOwnerId: 'owner-user' }]));
@@ -1467,6 +1521,72 @@ describe('syncPrdContent', () => {
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({ backlogJson: backlog }),
     );
+  });
+
+  it('returns false when a generation completion loses its status and thread CAS', async () => {
+    const returningMock = jest.fn().mockResolvedValue([]);
+    const whereMock = jest.fn().mockReturnValue({
+      returning: returningMock,
+    });
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await expect(
+      syncPrdContent(
+        'prd-1',
+        'content',
+        { items: [] },
+        'draft',
+        {
+          expectedStatus: 'generating',
+          expectedThreadId: 'thread-prd',
+        },
+      ),
+    ).resolves.toBe(false);
+    expect(returningMock).toHaveBeenCalled();
+  });
+});
+
+describe('createPrdValidationAdapter', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('does not record or notify when another validation thread took over the PRD', async () => {
+    const { notifyAiCompletion: mockNotifyAiCompletion } = jest.requireMock(
+      '../services/aiCompletionNotifier',
+    ) as { notifyAiCompletion: jest.Mock };
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      fixBaseline: null,
+      status: 'validating',
+      content: '# PRD',
+      backlogJson: null,
+    });
+    const returningMock = jest.fn().mockResolvedValue([]);
+    const whereMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+    const adapter = createPrdValidationAdapter(
+      makePrdRow({ status: 'validating' }) as never,
+    );
+
+    await expect(
+      adapter.updateDbForValidationResult(
+        {
+          slug: 'feature-prd',
+          generated_at: '2026-01-01T00:00:00Z',
+          review_phase: 'initial',
+          overall_score: 82,
+          ready_threshold: 90,
+          is_ready: false,
+          verdict: 'gaps',
+          files: [],
+        } as never,
+        '# Report',
+        'stale-thread',
+      ),
+    ).resolves.toBe(false);
+
+    expect(whereMock).toHaveBeenCalledTimes(2);
+    expect(mockNotifyAiCompletion).not.toHaveBeenCalled();
   });
 });
 
@@ -1994,6 +2114,13 @@ describe('PRD validation lifecycle', () => {
 
   it('syncs a validation scorecard and moves ready PRDs to pending review', async () => {
     mockPrdSelectForGetPrd({ status: 'validating', validationThreadId: 'validation-thread-1' });
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      validationThreadId: 'validation-thread-1',
+      fixBaseline: null,
+      status: 'validating',
+      content: '# PRD',
+      backlogJson: {},
+    });
     const scorecard = {
       slug: 'feature-prd',
       generated_at: '2026-01-01T00:00:00Z',
@@ -2006,8 +2133,10 @@ describe('PRD validation lifecycle', () => {
     };
     mockReadOutputValidationScorecard.mockReturnValue(JSON.stringify(scorecard));
     mockReadOutputValidationScorecardMd.mockReturnValue('# Validation Report');
-    const whereMock = jest.fn().mockResolvedValue(undefined);
-    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'prd-1' }]);
+    const setMock = jest.fn().mockReturnValue({
+      where: jest.fn().mockReturnValue({ returning: returningMock }),
+    });
     mockDb.update.mockReturnValue({ set: setMock });
 
     const result = await syncPrdValidationResult('prd-1');
@@ -2024,6 +2153,90 @@ describe('PRD validation lifecycle', () => {
         status: 'pending_review',
       }),
     );
+  });
+
+  function mockValidationRun(overallScore: number, isReady: boolean) {
+    mockPrdSelectForGetPrd({ status: 'validating', validationThreadId: 'validation-thread-1' });
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      validationThreadId: 'validation-thread-1',
+      fixBaseline: null,
+      status: 'validating',
+      content: '# PRD',
+      backlogJson: {},
+    });
+    mockReadOutputValidationScorecard.mockReturnValue(JSON.stringify({
+      slug: 'feature-prd',
+      generated_at: '2026-01-01T00:00:00Z',
+      review_phase: 'final',
+      overall_score: overallScore,
+      ready_threshold: 90,
+      is_ready: isReady,
+      verdict: isReady ? 'ready' : 'needs_work',
+      files: [],
+    }));
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'prd-1' }]);
+    const setMock = jest.fn().mockReturnValue({
+      where: jest.fn().mockReturnValue({ returning: returningMock }),
+    });
+    mockDb.update.mockReturnValue({ set: setMock });
+    return setMock;
+  }
+
+  it('moves to pending review when the score meets the project threshold even if the skill says not ready', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      prdValidationSkillPath: '.cursor/skills/prd-spec-review/SKILL.md',
+      prdValidationScoreThreshold: 85,
+    });
+    const setMock = mockValidationRun(87, false);
+
+    await syncPrdValidationResult('prd-1');
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ validationScore: 87, status: 'pending_review' }),
+    );
+    expect(mockNotifyApproversDocumentReady).toHaveBeenCalledWith('prd-1', 'prd');
+  });
+
+  it('stays in draft when the score is below the project threshold', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      prdValidationSkillPath: '.cursor/skills/prd-spec-review/SKILL.md',
+      prdValidationScoreThreshold: 90,
+    });
+    const setMock = mockValidationRun(87, false);
+
+    await syncPrdValidationResult('prd-1');
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ validationScore: 87, status: 'draft' }),
+    );
+    expect(mockNotifyApproversDocumentReady).not.toHaveBeenCalled();
+  });
+
+  it('stays in draft at 87% when the project has no custom threshold', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      prdValidationSkillPath: '.cursor/skills/prd-spec-review/SKILL.md',
+    });
+    const setMock = mockValidationRun(87, false);
+
+    await syncPrdValidationResult('prd-1');
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'draft' }));
+  });
+
+  it('stays in draft when the score passes but test-case coverage gaps remain', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      prdValidationSkillPath: '.cursor/skills/prd-spec-review/SKILL.md',
+      prdValidationScoreThreshold: 85,
+    });
+    mockGetTestCases.mockResolvedValue({
+      ...readyTestCase,
+      coverageSummary: { ...readyTestCase.coverageSummary, acCovered: '1/2' },
+    });
+    const setMock = mockValidationRun(95, true);
+
+    await syncPrdValidationResult('prd-1');
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'draft' }));
   });
 
   it('does not overwrite validationScore while a Fix-with-Apex fixBaseline is set', async () => {
@@ -2101,8 +2314,10 @@ describe('PRD validation lifecycle', () => {
     expect(mockCreateThread).toHaveBeenCalledWith(
       'user-1',
       expect.objectContaining({
+        agentModule: 'prdAssistant',
         skillPath: '.cursor/skills/prd-assistant/SKILL.md',
         model: 'assistant-model',
+        assistantType: 'prd',
       }),
       { skipAutoKickoff: true },
     );
@@ -2292,6 +2507,104 @@ describe('overridePrdReadiness', () => {
   });
 });
 
+describe('forceSubmitForReview', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  function mockUpdate() {
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+    return setMock;
+  }
+
+  it('moves a blocked draft to pending_review and records the override in the audit history', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft', content: '# PRD' }));
+    mockDb.query.interviews.findFirst.mockResolvedValue(null);
+    mockGetTestCases.mockResolvedValue(null);
+    const setMock = mockUpdate();
+
+    const result = await forceSubmitForReview('prd-1', 'super-admin', 'Validation passed; stuck', 'Ada');
+
+    expect(result).toEqual({ reviewerAssignmentError: null });
+    expect(mockCancelDocumentValidation).not.toHaveBeenCalled();
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'pending_review',
+      readinessOverride: expect.objectContaining({
+        reason: 'Validation passed; stuck',
+        userId: 'super-admin',
+        userDisplayName: 'Ada',
+        states: ['test_cases_pending'],
+        history: [expect.objectContaining({
+          reason: 'Validation passed; stuck',
+          summary: expect.stringContaining('Force-submitted for review by a super admin'),
+        })],
+      }),
+    }));
+  });
+
+  it('cancels an in-flight validation before moving a validating PRD', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({
+      status: 'validating',
+      content: '# PRD',
+      validationThreadId: 'validation-thread-1',
+    }));
+    mockDb.query.interviews.findFirst.mockResolvedValue(null);
+    mockGetTestCases.mockResolvedValue(null);
+    const setMock = mockUpdate();
+
+    await forceSubmitForReview('prd-1', 'super-admin', 'Validation hung');
+
+    expect(mockCancelDocumentValidation).toHaveBeenCalledWith('prd-1', 'validation-thread-1');
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending_review' }));
+  });
+
+  it('still moves the PRD and reports the error when kickoff reviewers cannot be assigned', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft', content: '# PRD' }));
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      prdApproverIds: ['left-the-pool'],
+      designDocApproverIds: null,
+      designPrototypeApproverIds: null,
+      testCaseApproverIds: null,
+      testCasesEnabled: true,
+    });
+    mockGetTestCases.mockResolvedValue(null);
+    mockAssignApprovers.mockRejectedValueOnce(new Error('Users not in the prd approver pool: left-the-pool'));
+    const setMock = mockUpdate();
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const result = await forceSubmitForReview('prd-1', 'super-admin', 'Stuck');
+
+      expect(result.reviewerAssignmentError).toContain('left-the-pool');
+      expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending_review' }));
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  it('requires a non-empty reason', async () => {
+    await expect(forceSubmitForReview('prd-1', 'super-admin', '  ')).rejects.toMatchObject({ status: 400 });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it.each(['pending_review', 'approved', 'generating'])('rejects a PRD in %s', async (status) => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status, content: '# PRD' }));
+
+    await expect(forceSubmitForReview('prd-1', 'super-admin', 'Stuck')).rejects.toMatchObject({
+      message: `Cannot force submit PRD from status '${status}'`,
+    });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a PRD with no content', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(makePrdRow({ status: 'draft', content: '' }));
+
+    await expect(forceSubmitForReview('prd-1', 'super-admin', 'Stuck')).rejects.toMatchObject({
+      message: 'PRD content must be non-empty before submitting for review',
+    });
+  });
+});
+
 // ── triggerFixCoverageGaps / acceptFixCoverageGaps ─────────────────────────────
 
 describe('triggerFixCoverageGaps', () => {
@@ -2336,8 +2649,10 @@ describe('triggerFixCoverageGaps', () => {
     expect(mockCreateThread).toHaveBeenCalledWith(
       'user-1',
       expect.objectContaining({
+        agentModule: 'prdAssistant',
         skillPath: '.cursor/skills/prd-assistant/SKILL.md',
         model: 'assistant-model',
+        assistantType: 'prd',
       }),
       { skipAutoKickoff: true },
     );

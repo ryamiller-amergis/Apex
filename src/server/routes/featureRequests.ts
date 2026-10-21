@@ -9,6 +9,8 @@ import {
   updateFeatureRequest,
   linkInterview,
   resolveFeatureRequestReviewers,
+  listFeatureRequestAssignees,
+  rankFeatureRequests,
 } from '../services/featureRequestService';
 import {
   WORK_ITEM_TYPES,
@@ -107,6 +109,35 @@ router.get('/available-adrs', requirePermission('feature-requests:submit'), asyn
   }
 });
 
+router.get('/assignees', requirePermission('feature-requests:manage'), async (req, res, next) => {
+  try {
+    const project = (req.query.project as string | undefined)?.trim();
+    if (!project) {
+      return res.status(400).json({ error: 'project query parameter is required' });
+    }
+    return res.json(await listFeatureRequestAssignees(project));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/rank', requirePermission('feature-requests:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const project = resolveRequestProject(req);
+    const { ids } = req.body as { ids?: unknown };
+    if (!project) {
+      return res.status(400).json({ error: 'project query parameter is required' });
+    }
+    if (!Array.isArray(ids) || ids.length === 0 || ids.some((id) => typeof id !== 'string')) {
+      return res.status(400).json({ error: 'ids must be a non-empty array of strings' });
+    }
+    return res.json(await rankFeatureRequests(userId, project, ids));
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /:id — get a single feature request (must belong to the active project)
 router.get('/:id', requirePermission('feature-requests:view'), async (req, res, next) => {
   try {
@@ -128,8 +159,8 @@ router.patch('/:id', requirePermission('feature-requests:manage'), async (req, r
     const project = resolveRequestProject(req);
     const patch = req.body as UpdateFeatureRequestDTO;
 
-    if (patch.status === undefined && patch.teamPriority === undefined && patch.teamRisk === undefined && patch.rank === undefined) {
-      return res.status(400).json({ error: 'At least one field (status, teamPriority, teamRisk, rank) is required' });
+    if (patch.status === undefined && patch.teamPriority === undefined && patch.teamRisk === undefined && patch.rank === undefined && patch.assigneeId === undefined) {
+      return res.status(400).json({ error: 'At least one field (status, teamPriority, teamRisk, rank, assigneeId) is required' });
     }
 
     const existing = await getFeatureRequest(req.params.id);

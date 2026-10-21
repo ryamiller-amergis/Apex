@@ -238,6 +238,15 @@ const PAGE_MODULE_BY_MENU_KEY: Record<
       },
     ],
   },
+  playbooks: {
+    pageEntries: [
+      {
+        component: 'src/client/components/PlaybooksManagePage.tsx',
+        routePattern: '/playbooks',
+        suggestedRoute: '/playbooks',
+      },
+    ],
+  },
 };
 
 const FIXED_PAGE_MODULES: readonly WalkthroughPageModuleContext[] = [

@@ -65,13 +65,30 @@ async function buildBundle(): Promise<Fixture> {
   };
 }
 
-function storeServing(blockBlob: Record<string, jest.Mock>) {
+function storeServing(
+  blockBlob: Record<string, jest.Mock>,
+  downloadTimeoutMs?: number,
+) {
   return createGroundingBundleStore({
     getContainerClient: () =>
       ({ getBlockBlobClient: () => blockBlob }) as unknown as ContainerClient,
     repairAndMaterialize: async () => false,
     telemetry: jest.fn(),
+    downloadTimeoutMs,
   });
+}
+
+function stalledDownload(): Record<string, jest.Mock> {
+  return {
+    downloadToFile: jest.fn(
+      (_target: string, _offset: number, _count: number | undefined, options: { abortSignal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          options.abortSignal.addEventListener('abort', () =>
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+          );
+        }),
+    ),
+  };
 }
 
 function downloadOf(bundlePath: string): Record<string, jest.Mock> {
@@ -168,6 +185,20 @@ describe('rehydrateBare', () => {
     expect(result).toEqual({
       status: 'remote-fallback',
       reason: 'bundle-missing',
+    });
+  });
+
+  it('gives up on a stalled download so the caller can clone the remote', async () => {
+    const store = storeServing(stalledDownload(), 20);
+
+    const result = await store.rehydrateBare(
+      fixture.identity,
+      fixture.destination,
+    );
+
+    expect(result).toMatchObject({ status: 'remote-fallback' });
+    await expect(stat(fixture.destination)).rejects.toMatchObject({
+      code: 'ENOENT',
     });
   });
 

@@ -1,8 +1,12 @@
 import type { AgentRunEventEnvelope } from '../../shared/types/chat';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
 import {
+  createCursorTurnEndMonitor,
+  CursorExecutionWaitError,
+  CursorStreamClosedBeforeTurnEndError,
   executeCursorExecutionCore,
   type CursorExecutionRun,
+  type CursorExecutionWaitResult,
 } from '../services/cursorExecutionCore';
 
 const snapshot: Readonly<ExecutionSnapshot> = Object.freeze({
@@ -105,5 +109,478 @@ describe('TBI-004 shared Cursor execution core', () => {
     ]);
     expect(snapshot).toEqual(before);
     expect(Object.isFrozen(snapshot)).toBe(true);
+  });
+
+  it('aborts an exact repeated tool-call loop with actionable guidance', async () => {
+    const loopingRun: CursorExecutionRun = {
+      supports: (capability) => capability === 'stream',
+      stream: async function* () {
+        for (let index = 0; index < 4; index++) {
+          yield {
+            type: 'assistant',
+            message: {
+              content: [{
+                type: 'tool_use',
+                id: `call-${index}`,
+                name: 'list_projects',
+                input: {},
+              }],
+            },
+          };
+        }
+      },
+      wait: jest.fn().mockResolvedValue({ status: 'completed' }),
+    };
+
+    await expect(executeCursorExecutionCore({
+      snapshot,
+      run: loopingRun,
+      context: { runId: 'run-loop', sourceInstance: 'loop-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+      maxIdenticalToolCalls: 3,
+    })).rejects.toThrow(
+      'The agent repeated list_projects with the same input too many times',
+    );
+  });
+
+  it('collects all text fragments and completes on the SDK terminal status', async () => {
+    const wait = jest.fn().mockResolvedValue({ status: 'finished' });
+    const run: CursorExecutionRun = {
+      supports: (capability) => capability === 'stream',
+      stream: async function* () {
+        yield {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: '## Home' }] },
+        };
+        yield {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: ' page' }] },
+        };
+        yield { type: 'status', status: 'FINISHED' };
+        await new Promise<never>(() => {});
+      },
+      wait,
+    };
+
+    const result = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-status', sourceInstance: 'status-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+    });
+
+    expect(result.text).toBe('## Home page');
+    expect(wait).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['FINISHED', undefined],
+    ['ERROR', 'Custom tool schema is invalid'],
+  ] as const)('keeps the %s status message only for unsuccessful endings', async (status, expected) => {
+    const run: CursorExecutionRun = {
+      supports: (capability) => capability === 'stream',
+      stream: async function* () {
+        yield { type: 'status', status, message: 'Custom tool schema is invalid' };
+      },
+      wait: jest.fn().mockResolvedValue({ status: 'error' }),
+    };
+
+    const result = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-status-message', sourceInstance: 'status-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+    });
+
+    expect(result.terminalStatusMessage).toBe(expected);
+  });
+
+  it('keeps the stream error message when wait throws', async () => {
+    const run: CursorExecutionRun = {
+      supports: (capability) => capability === 'stream',
+      stream: async function* () {
+        yield { type: 'status', status: 'ERROR', message: 'Custom tool schema is invalid' };
+      },
+      wait: jest.fn().mockRejectedValue(new Error('socket hang up')),
+    };
+
+    const failure = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-wait-throws', sourceInstance: 'status-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(CursorExecutionWaitError);
+    expect((failure as CursorExecutionWaitError).terminalStatusMessage).toBe(
+      'Custom tool schema is invalid',
+    );
+  });
+
+  it('completes from the authoritative turn-ended delta with full text', async () => {
+    const monitor = createCursorTurnEndMonitor();
+    monitor.observe({ type: 'text-delta', text: '## Home' });
+    monitor.observe({ type: 'text-delta', text: ' page' });
+    monitor.observe({ type: 'turn-ended' });
+
+    const cancel = jest.fn().mockResolvedValue(undefined);
+    const wait = jest.fn().mockResolvedValue({ status: 'finished' });
+    const run: CursorExecutionRun = {
+      supports: (capability) =>
+        capability === 'stream' || capability === 'cancel',
+      stream: async function* () {
+        await new Promise<never>(() => {});
+        yield { type: 'status', status: 'RUNNING' };
+      },
+      wait,
+      cancel,
+    };
+
+    const result = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-turn-end', sourceInstance: 'turn-end-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+      turnEnd: monitor.completion,
+    });
+
+    expect(result.text).toBe('## Home page');
+    expect(result.completedOnTurnEnd).toBe(true);
+    // A cancelled run's turn is dropped from the agent's conversation.
+    expect(cancel).not.toHaveBeenCalled();
+    expect(wait).toHaveBeenCalledTimes(1);
+    expect(result.waitResult.status).toBe('finished');
+  });
+
+  it('cancels a run that does not settle after turn end', async () => {
+    const monitor = createCursorTurnEndMonitor();
+    monitor.observe({ type: 'text-delta', text: '## Home page' });
+    monitor.observe({ type: 'turn-ended' });
+
+    let settle!: (result: CursorExecutionWaitResult) => void;
+    const wait = jest.fn(
+      () => new Promise<CursorExecutionWaitResult>((resolve) => { settle = resolve; }),
+    );
+    const cancel = jest.fn(async () => settle({ status: 'cancelled' }));
+    const run: CursorExecutionRun = {
+      supports: (capability) =>
+        capability === 'stream' || capability === 'cancel',
+      stream: async function* () {
+        await new Promise<never>(() => {});
+        yield { type: 'status', status: 'RUNNING' };
+      },
+      wait,
+      cancel,
+    };
+
+    const result = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-turn-end-stuck', sourceInstance: 'turn-end-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+      turnEnd: monitor.completion,
+      turnEndSettleMs: 10,
+    });
+
+    expect(result.text).toBe('## Home page');
+    expect(result.completedOnTurnEnd).toBe(true);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(wait).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the completed answer when the runtime cannot cancel the run', async () => {
+    const monitor = createCursorTurnEndMonitor();
+    monitor.observe({ type: 'text-delta', text: '## Home page' });
+    monitor.observe({ type: 'turn-ended' });
+
+    const wait = jest.fn().mockResolvedValue({ status: 'finished' });
+    const run: CursorExecutionRun = {
+      supports: (capability) => capability === 'stream',
+      stream: async function* () {
+        await new Promise<never>(() => {});
+        yield { type: 'status', status: 'RUNNING' };
+      },
+      wait,
+    };
+
+    const result = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: {
+        runId: 'run-turn-end-no-cancel',
+        sourceInstance: 'turn-end-test',
+      },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+      turnEnd: monitor.completion,
+    });
+
+    expect(result.text).toBe('## Home page');
+    expect(result.completedOnTurnEnd).toBe(true);
+    expect(wait).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('cursor execution core stream closed before turn end', () => {
+  function closedStreamRun(wait: CursorExecutionRun['wait']): {
+    run: CursorExecutionRun;
+    cancel: jest.Mock;
+  } {
+    const cancel = jest.fn(() => new Promise<void>(() => {}));
+    return {
+      cancel,
+      run: {
+        supports: (capability) =>
+          capability === 'stream' || capability === 'cancel',
+        stream: async function* () {
+          yield {
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: 'Partial' }] },
+          };
+        },
+        wait,
+        cancel,
+      },
+    };
+  }
+
+  it('fails when the stream closes and wait() never settles', async () => {
+    const { run, cancel } = closedStreamRun(
+      jest.fn(() => new Promise<CursorExecutionWaitResult>(() => {})),
+    );
+
+    const failure = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-closed', sourceInstance: 'closed-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+      turnEnd: createCursorTurnEndMonitor().completion,
+      turnEndSettleMs: 10,
+      failIfStreamEndsBeforeTurnEnd: true,
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(CursorExecutionWaitError);
+    expect((failure as CursorExecutionWaitError).cause).toBeInstanceOf(
+      CursorStreamClosedBeforeTurnEndError,
+    );
+    // A cancel that never settles must not hold the turn open.
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('completes when the turn end arrives just after the stream closes', async () => {
+    const monitor = createCursorTurnEndMonitor();
+    const wait = jest.fn(
+      () => new Promise<CursorExecutionWaitResult>((resolve) => {
+        setTimeout(() => resolve({ status: 'finished' }), 20);
+      }),
+    );
+    const { run } = closedStreamRun(wait);
+    setTimeout(() => {
+      monitor.observe({ type: 'text-delta', text: 'Partial answer' });
+      monitor.observe({ type: 'turn-ended' });
+    }, 5);
+
+    const result = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-late-end', sourceInstance: 'closed-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+      turnEnd: monitor.completion,
+      turnEndSettleMs: 50,
+      failIfStreamEndsBeforeTurnEnd: true,
+    });
+
+    expect(result.completedOnTurnEnd).toBe(true);
+    expect(result.text).toBe('Partial answer');
+    expect(wait).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a late turn end answer when cancel() and wait() never settle', async () => {
+    const monitor = createCursorTurnEndMonitor();
+    const { run, cancel } = closedStreamRun(
+      jest.fn(() => new Promise<CursorExecutionWaitResult>(() => {})),
+    );
+    setTimeout(() => {
+      monitor.observe({ type: 'text-delta', text: 'Partial answer' });
+      monitor.observe({ type: 'turn-ended' });
+    }, 5);
+
+    const result = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-late-end-stuck', sourceInstance: 'closed-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+      turnEnd: monitor.completion,
+      turnEndSettleMs: 50,
+      failIfStreamEndsBeforeTurnEnd: true,
+    });
+
+    expect(result.completedOnTurnEnd).toBe(true);
+    expect(result.runLeftUnsettled).toBe(true);
+    expect(result.text).toBe('Partial answer');
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('completes normally when wait() settles after the stream closes', async () => {
+    const wait = jest.fn().mockResolvedValue({ status: 'finished' });
+    const { run, cancel } = closedStreamRun(wait);
+
+    const result = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-settles', sourceInstance: 'closed-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+      turnEnd: createCursorTurnEndMonitor().completion,
+      turnEndSettleMs: 10,
+      failIfStreamEndsBeforeTurnEnd: true,
+    });
+
+    expect(result.waitResult.status).toBe('finished');
+    expect(wait).toHaveBeenCalledTimes(1);
+    expect(cancel).not.toHaveBeenCalled();
+  });
+});
+
+describe('cursor execution core token usage', () => {
+  async function execute(run: CursorExecutionRun) {
+    let sequence = 0;
+    return executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-1', sourceInstance: 'usage-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => ++sequence,
+      createEventId: () => `event-${sequence}`,
+      now: () => '2026-08-06T12:00:00.000Z',
+    });
+  }
+
+  function runWith(opts: {
+    streamUsage?: unknown[];
+    waitUsage?: unknown;
+  }): CursorExecutionRun {
+    return {
+      supports: (capability) => capability === 'stream',
+      stream: async function* () {
+        yield {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: 'ok' }] },
+        };
+        for (const usage of opts.streamUsage ?? []) {
+          yield { type: 'usage', agent_id: 'a', run_id: 'run-1', usage };
+        }
+      },
+      wait: jest.fn().mockResolvedValue({
+        status: 'completed',
+        result: 'ok',
+        ...(opts.waitUsage !== undefined ? { usage: opts.waitUsage } : {}),
+      }),
+    };
+  }
+
+  it('prefers the cumulative usage reported by wait()', async () => {
+    const result = await execute(
+      runWith({
+        waitUsage: {
+          inputTokens: 42_000,
+          outputTokens: 900,
+          cacheReadTokens: 118_000,
+          cacheWriteTokens: 3_000,
+          totalTokens: 163_900,
+        },
+        streamUsage: [
+          { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        ],
+      }),
+    );
+
+    expect(result.usage).toEqual({
+      inputTokens: 42_000,
+      outputTokens: 900,
+      cacheReadTokens: 118_000,
+      cacheWriteTokens: 3_000,
+    });
+  });
+
+  it('sums per-turn usage events when wait() carries none', async () => {
+    const result = await execute(
+      runWith({
+        streamUsage: [
+          { inputTokens: 20_000, outputTokens: 400, cacheReadTokens: 5_000, cacheWriteTokens: 100 },
+          { inputTokens: 22_000, outputTokens: 500, cacheReadTokens: 6_000, cacheWriteTokens: 200 },
+        ],
+      }),
+    );
+
+    expect(result.usage).toEqual({
+      inputTokens: 42_000,
+      outputTokens: 900,
+      cacheReadTokens: 11_000,
+      cacheWriteTokens: 300,
+    });
+  });
+
+  it('reports no usage when the runtime never sends any', async () => {
+    const result = await execute(runWith({}));
+    expect(result.usage).toBeUndefined();
+  });
+
+  it('treats an all-zero usage payload as no usage', async () => {
+    const result = await execute(
+      runWith({
+        waitUsage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      }),
+    );
+    expect(result.usage).toBeUndefined();
+  });
+
+  it('keeps streamed usage on the wait() error so failed runs can still record tokens', async () => {
+    const run: CursorExecutionRun = {
+      supports: (capability) => capability === 'stream',
+      stream: async function* () {
+        yield {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: 'ok' }] },
+        };
+        yield {
+          type: 'usage',
+          usage: {
+            inputTokens: 42_000,
+            outputTokens: 900,
+            cacheReadTokens: 118_000,
+            cacheWriteTokens: 3_000,
+          },
+        };
+      },
+      wait: jest.fn().mockRejectedValue(new Error('run wait failed')),
+    };
+
+    try {
+      await execute(run);
+      throw new Error('expected wait() to reject');
+    } catch (error) {
+      expect(error).toBeInstanceOf(CursorExecutionWaitError);
+      expect((error as CursorExecutionWaitError).usage).toEqual({
+        inputTokens: 42_000,
+        outputTokens: 900,
+        cacheReadTokens: 118_000,
+        cacheWriteTokens: 3_000,
+      });
+    }
   });
 });

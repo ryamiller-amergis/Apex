@@ -14,6 +14,7 @@ import { getPrResolutionMetricsStats } from '../services/agentEvalsPrResolutionS
 import { getMaxViewEslintBurnDown } from '../services/eslintBurnDownService';
 import { getMaxViewEslintSnapshot } from '../services/eslintMetricsService';
 import { sql, eq as drizzleEq } from 'drizzle-orm';
+import { getDbPoolStats } from '../db';
 import { db } from '../db/drizzle';
 import { getSkillConfig, getSkillConfigById, listSkillConfigsForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
@@ -23,6 +24,10 @@ import { getWorkerTierHealthStats } from '../services/workerTierHealthService';
 import { isFeatureEnabled } from '../services/featureFlagService';
 import { getUserId } from '../utils/requestUser';
 import { ensureUserProjectAssignment, getAssignmentsForUser } from '../services/userProjectAssignmentService';
+import { resolveLinkProject } from '../services/linkProjectService';
+import { resolveThreadAccess } from '../services/threadAccessService';
+import { getDiagram } from '../services/diagramService';
+import { resolveDesignAccess } from '../services/uiLabService';
 import {
   filterProjectCatalogByNames,
   listProjectCatalog,
@@ -35,6 +40,7 @@ import {
 import { getUserProjects } from '../services/adoMembershipService';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 import { getUserEmail } from '../utils/requestUser';
+import { isDevAccessAllowlisted } from '../services/devEnvAllowlistService';
 import type { CreateProjectAccessRequestsRequest } from '../../shared/types/platformAdmin';
 import { requireGroupMembership, requirePermission, requireProjectAccess } from '../middleware/rbac';
 import {
@@ -43,8 +49,8 @@ import {
   bulkUpdateReleaseOrder,
   pruneStaleOrders,
 } from '../services/releaseOrderService';
-import { renameRelease } from '../services/releaseManagementService';
-import { chatThreads as chatThreadsSchema } from '../db/schema';
+import { assignWorkItemsToRelease, renameRelease } from '../services/releaseManagementService';
+import { chatThreads as chatThreadsSchema, devSessions } from '../db/schema';
 import {
   createOrReuseSession,
   setSessionThread,
@@ -62,12 +68,28 @@ import {
   RejectProposalRequestSchema,
 } from '../../shared/types/calendarWorkItemAssistant';
 
+import { checkStorageHealth } from '../services/storageHealthService';
 import runGroundingsRouter from './runGroundings';
 import diagramsRouter from './diagrams';
+import playbooksRouter from './playbooks';
 const router = express.Router();
+const publicHealthPaths = new Set([
+  '/health',
+  '/health/live',
+  '/health/ready',
+  '/health/dependencies',
+  '/health/db',
+  '/health/agents',
+  '/health/storage',
+]);
+
+export function isPublicHealthPath(path: string): boolean {
+  return publicHealthPaths.has(path);
+}
 
 router.use('/run-groundings', runGroundingsRouter);
 router.use('/projects/:projectId/diagrams', diagramsRouter);
+router.use('/playbooks', playbooksRouter);
 // GET /api/available-models — accessible to all authenticated users so that
 // non-admin roles (e.g. interviews:manage) can populate model dropdowns.
 router.get('/available-models', async (_req: Request, res: Response) => {
@@ -102,6 +124,102 @@ function isStringArrayOfNonEmptyItems(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string' && item.trim().length > 0);
 }
 
+/**
+ * Project names the user may open: manual assignments plus ADO team membership.
+ * Super-admin catalog access is handled separately.
+ */
+async function loadSelectableProjectNames(req: Request): Promise<string[]> {
+  const userId: string | undefined = (req.user as any)?.profile?.oid;
+  const email = getUserEmail(req);
+
+  const [assignedProjects, adoProjects] = await Promise.all([
+    userId ? getAssignmentsForUser(userId) : Promise.resolve([] as string[]),
+    email ? getUserProjects(email).catch((err) => {
+      console.warn('[api/projects] ADO membership lookup failed, falling back to manual assignments:', err);
+      return [];
+    }) : Promise.resolve([]),
+  ]);
+
+  return [...new Set([...assignedProjects, ...adoProjects.map((project) => project.name)])];
+}
+
+function projectNamesInclude(names: readonly string[], project: string): boolean {
+  const lower = project.toLowerCase();
+  return names.some((name) => name.toLowerCase() === lower);
+}
+
+async function canSelectProject(req: Request, project: string): Promise<boolean> {
+  if (!project.trim()) return false;
+  if (isSuperAdminRequest(req)) return true;
+  const names = await loadSelectableProjectNames(req);
+  return projectNamesInclude(names, project);
+}
+
+async function canReadLinkedRecord(
+  kind: string,
+  id: string,
+  project: string,
+  userId: string,
+  isSuperAdmin = false,
+): Promise<boolean> {
+  if (kind === 'chat-thread') {
+    return Boolean(await resolveThreadAccess(userId, id));
+  }
+  if (kind === 'dev-session') {
+    const rows = await db
+      .select({ authorId: devSessions.authorId })
+      .from(devSessions)
+      .where(drizzleEq(devSessions.id, id))
+      .limit(1);
+    return rows[0]?.authorId === userId;
+  }
+  if (kind === 'diagram') {
+    try {
+      await getDiagram(project, id, userId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  if (kind === 'ui-lab') {
+    try {
+      await resolveDesignAccess(id, userId, { isSuperAdmin });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+// GET /api/links/project?kind=&id= — the project that owns a shared record.
+// Only returns a project the caller can open and may read for private record kinds.
+router.get('/links/project', async (req: Request, res: Response) => {
+  const kind = typeof req.query.kind === 'string' ? req.query.kind : '';
+  const id = typeof req.query.id === 'string' ? req.query.id : '';
+  if (!kind || !id) {
+    res.status(400).json({ error: 'kind and id are required' });
+    return;
+  }
+  try {
+    const project = await resolveLinkProject(kind, id);
+    const userId = getProfileOid(req);
+    if (
+      !project
+      || !userId
+      || !(await canSelectProject(req, project))
+      || !(await canReadLinkedRecord(kind, id, project, userId, isSuperAdminRequest(req)))
+    ) {
+      res.status(404).json({ error: 'Link not found' });
+      return;
+    }
+    res.json({ project });
+  } catch (err) {
+    console.error('[links] project lookup failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to resolve link project' });
+  }
+});
+
 // GET /api/projects - List projects available to the current user.
 // Super admins see the full catalog; everyone else sees the union of:
 //   1. Manual assignments (via user_project_assignments, managed by admins)
@@ -113,20 +231,7 @@ router.get('/projects', async (req: Request, res: Response) => {
       return;
     }
 
-    const userId: string | undefined = (req.user as any)?.profile?.oid;
-    const email = getUserEmail(req);
-
-    const [assignedProjects, adoProjects] = await Promise.all([
-      userId ? getAssignmentsForUser(userId) : Promise.resolve([]),
-      email ? getUserProjects(email).catch((err) => {
-        console.warn('[api/projects] ADO membership lookup failed, falling back to manual assignments:', err);
-        return [];
-      }) : Promise.resolve([]),
-    ]);
-
-    const adoProjectNames = adoProjects.map((p) => p.name);
-    const merged = [...new Set([...assignedProjects, ...adoProjectNames])];
-
+    const merged = await loadSelectableProjectNames(req);
     if (merged.length === 0) {
       res.json([]);
       return;
@@ -210,11 +315,17 @@ router.get('/projects/:project/area-paths', async (req: Request, res: Response) 
 
 // POST /api/projects/:project/select - Record that the user selected this project.
 // Inserts into user_project_assignments if no row exists yet (idempotent).
+// Callers must already be allowed to open the project (picker or ADO membership);
+// a shared-link UUID must not grant a lasting assignment.
 router.post('/projects/:project/select', async (req: Request, res: Response): Promise<void> => {
   const userId = requireAuthenticatedUserId(req, res);
   if (!userId) return;
 
   try {
+    if (!(await canSelectProject(req, req.params.project))) {
+      res.status(403).json({ error: 'Forbidden: not assigned to this project' });
+      return;
+    }
     await ensureUserProjectAssignment(userId, req.params.project, 'auto-select');
     res.status(204).end();
   } catch (error: any) {
@@ -389,42 +500,74 @@ router.post('/cycle-time', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/health - Health check endpoint
-router.get('/health', async (req: Request, res: Response) => {
-  try {
-    // Health check uses default project from env
-    const adoService = new AzureDevOpsService();
-    const healthy = await adoService.healthCheck();
-    res.json({ healthy, timestamp: new Date().toISOString() });
-  } catch (error: any) {
-    console.error('Health check error:', error);
-    res.status(503).json({ healthy: false, error: 'Service unavailable' });
-  }
-});
+function sendProcessHealth(res: Response) {
+  return res.json({ healthy: true, timestamp: new Date().toISOString() });
+}
 
-// GET /api/health/db - Database connectivity check
-router.get('/health/db', async (_req: Request, res: Response) => {
+// The ADO client default socket timeout is 120s, longer than a health-check
+// ping, so a stalled /_apis/Location call would leave the probe hanging.
+const HEALTH_CHECK_SOCKET_TIMEOUT_MS = 8_000;
+
+async function sendDatabaseReadinessHealth(res: Response) {
   try {
     const result = await db.execute<{ now: string }>(sql`SELECT NOW() AS now`);
-    res.json({ healthy: true, timestamp: result.rows[0].now });
+    return res.json({ healthy: true, timestamp: result.rows[0].now });
   } catch (error: any) {
     console.error('[db] Health check failed:', error);
-    res.status(503).json({ healthy: false, error: 'Database unavailable' });
+    return res.status(503).json({ healthy: false, error: 'Database unavailable' });
+  }
+}
+
+// GET /api/health - Process-only liveness check
+router.get('/health', (_req: Request, res: Response) => sendProcessHealth(res));
+
+// GET /api/health/live - Explicit process-only liveness check
+router.get('/health/live', (_req: Request, res: Response) => sendProcessHealth(res));
+
+// GET /api/health/ready - Database readiness check
+router.get('/health/ready', (_req: Request, res: Response) => sendDatabaseReadinessHealth(res));
+
+// GET /api/health/db - Database readiness compatibility alias
+router.get('/health/db', (_req: Request, res: Response) => sendDatabaseReadinessHealth(res));
+
+// GET /api/health/storage - Data root, Azure Files workspace mount, and free disk space
+router.get('/health/storage', async (_req: Request, res: Response) => {
+  const report = await checkStorageHealth();
+  res.status(report.status === 'ok' ? 200 : 503).json(report);
+});
+
+// GET /api/health/dependencies - External dependency health
+router.get('/health/dependencies', async (_req: Request, res: Response) => {
+  try {
+    const adoService = new AzureDevOpsService(undefined, undefined, {
+      socketTimeout: HEALTH_CHECK_SOCKET_TIMEOUT_MS,
+    });
+    const healthy = await adoService.healthCheck();
+    if (!healthy) {
+      return res.status(503).json({ healthy: false, error: 'Dependencies unavailable' });
+    }
+
+    return res.json({ healthy: true, timestamp: new Date().toISOString() });
+  } catch (error: any) {
+    console.error('[dependencies] Health check failed:', error);
+    return res.status(503).json({ healthy: false, error: 'Dependencies unavailable' });
   }
 });
 
 // GET /api/health/agents - Chat agent system health
 router.get('/health/agents', async (_req: Request, res: Response) => {
   const agentHealth = getAgentHealthStats();
+  const databasePool = getDbPoolStats();
   try {
     const workerHealth = await getWorkerTierHealthStats();
-    res.json({ ...agentHealth, ...workerHealth });
+    res.json({ ...agentHealth, ...workerHealth, databasePool });
   } catch {
     console.error('[health/agents] Worker health query failed');
     res.json({
       ...agentHealth,
       workerTierSaturation: 0,
       oldestQueuedAgeMs: 0,
+      databasePool,
     });
   }
 });
@@ -1336,8 +1479,8 @@ router.post('/releases/:epicId/link-related', async (req: Request, res: Response
     }
 
     const adoService = await adoWriteForRequest(req, project, areaPath);
-    await adoService.linkWorkItemsToRelease(epicId, workItemIds);
-    res.json({ success: true, linkedCount: workItemIds.length });
+    const assignmentResult = await assignWorkItemsToRelease(epicId, workItemIds, adoService);
+    res.json({ success: true, ...assignmentResult });
   } catch (error: any) {
     if (isAdoUserAuthError(error)) {
       return res.status(403).json({ error: error.message });
@@ -1400,6 +1543,25 @@ router.get('/releases/:epicId/related-items', async (req: Request, res: Response
   } catch (error: any) {
     console.error('Error fetching related items:', error);
     res.status(500).json({ error: 'Failed to fetch related items' });
+  }
+});
+
+// GET /api/releases/:epicId/cycle-time — last In Progress → last Done/Closed for related items
+router.get('/releases/:epicId/cycle-time', async (req: Request, res: Response) => {
+  try {
+    const epicId = parseInt(req.params.epicId, 10);
+    const { project, areaPath } = req.query as { project?: string; areaPath?: string };
+
+    if (isNaN(epicId)) {
+      return res.status(400).json({ error: 'Invalid epic ID' });
+    }
+
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const cycleTime = await adoService.getRelatedItemsCycleTime(epicId);
+    res.json(cycleTime);
+  } catch (error: any) {
+    console.error('Error fetching related items cycle time:', error);
+    res.status(500).json({ error: 'Failed to fetch related items cycle time' });
   }
 });
 
@@ -4023,7 +4185,14 @@ router.post('/ai-capability-baseline/auto-capture', async (req: Request, res: Re
 
 import { attachPermissions } from '../middleware/rbac';
 import { getUserPermissions, getUserRoleNames, getChangelogPrefs, updateChangelogPrefs } from '../services/rbacService';
-import { getUserGroupNames } from '../services/groupService';
+import { getUserGroupNames, getUserGroupIds } from '../services/groupService';
+import { resolveHomePillAccess } from '../services/homePillAccessResolver';
+import type {
+  QuickMcpPill,
+  QuickMcpPillHttp,
+  QuickMcpPillStdio,
+  QuickSkillPill,
+} from '../../shared/types/projectSettings';
 import { getMenuConfig } from '../services/menuSettingsService';
 import { DEFAULT_ENABLED_MENU_VIEWS } from '../../shared/types/menuSettings';
 import {
@@ -4040,6 +4209,11 @@ import {
   getRestrictedAccessByEmail,
 } from '../services/restrictedAccessService';
 import { RESTRICTED_ACCESS_PROJECT } from '../../shared/types/restrictedAccess';
+import {
+  isGenerationSoundId,
+  normalizeGenerationSoundPreferences,
+} from '../../shared/types/notification';
+import type { UpdatePreferencesRequest } from '../../shared/types/rbac';
 
 router.get('/changelog', async (_req: Request, res: Response): Promise<void> => {
   try {
@@ -4074,28 +4248,38 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       ? req.query.project
       : (restrictedActive ? RESTRICTED_ACCESS_PROJECT : undefined);
 
-    const [permSet, roles, userGroups, whatsNew, changelogPrefs] = await Promise.all([
+    const [permSet, roles, userGroups, whatsNew, changelogPrefs, devAccessAllowlisted] = await Promise.all([
       getUserPermissions(userId, project),
       getUserRoleNames(userId),
       getUserGroupNames(userId),
       evaluateWhatsNewState(userId),
       getChangelogPrefs(userId),
+      email ? isDevAccessAllowlisted(email) : Promise.resolve(false),
     ]);
     if (superAdmin && !roles.includes('admin')) {
       roles.push('admin');
     }
+    const soundPrefs = normalizeGenerationSoundPreferences({
+      generationSoundEnabled: changelogPrefs.generationSoundEnabled,
+      generationSoundId: isGenerationSoundId(changelogPrefs.generationSoundId)
+        ? changelogPrefs.generationSoundId
+        : undefined,
+    });
     res.json({
       permissions: [...permSet],
       roles,
       groups: userGroups,
       userId,
       isSuperAdmin: superAdmin,
+      devAccessAllowlisted,
       // Legacy compatibility fields — sourced from the same WhatsNewState
       changelogUnread: whatsNew.unread,
       currentChangelogVersion: whatsNew.currentVersion ?? '',
       lastSeenChangelogVersion: whatsNew.lastSeenVersion,
       showChangelogOnLogin: whatsNew.showOnLogin,
       betaAnnouncementDismissed: changelogPrefs.dismissedBetaProdAnnouncement,
+      generationSoundEnabled: soundPrefs.generationSoundEnabled,
+      generationSoundId: soundPrefs.generationSoundId,
       whatsNew,
       restrictedAccess: restrictedActive && restricted
         ? { modules: restricted.modules, project: RESTRICTED_ACCESS_PROJECT }
@@ -4106,9 +4290,30 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
   }
 });
 
+// ── GET /api/me/preferences ───────────────────────────────────────────────────
+// Returns the authenticated user's UI preferences (generation sound, etc.).
+
+router.get('/me/preferences', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = (req.user as any)?.profile?.oid;
+    if (!userId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const prefs = await getChangelogPrefs(userId);
+    const soundPrefs = normalizeGenerationSoundPreferences({
+      generationSoundEnabled: prefs.generationSoundEnabled,
+      generationSoundId: prefs.generationSoundId,
+    });
+    res.json(soundPrefs);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // ── PATCH /api/me/preferences ─────────────────────────────────────────────────
 // Updates the authenticated user's preferences.
-// Body: { markChangelogRead?: boolean; lastSeenVersion?: string; showChangelogOnLogin?: boolean; dismissBetaAnnouncement?: boolean }
+// Body: { markChangelogRead?: boolean; lastSeenVersion?: string; showChangelogOnLogin?: boolean; dismissBetaAnnouncement?: boolean; generationSoundEnabled?: boolean; generationSoundId?: string }
 
 router.patch('/me/preferences', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -4117,12 +4322,14 @@ router.patch('/me/preferences', async (req: Request, res: Response): Promise<voi
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    const { markChangelogRead, lastSeenVersion, showChangelogOnLogin, dismissBetaAnnouncement } = req.body as {
-      markChangelogRead?: boolean;
-      lastSeenVersion?: string;
-      showChangelogOnLogin?: boolean;
-      dismissBetaAnnouncement?: boolean;
-    };
+    const {
+      markChangelogRead,
+      lastSeenVersion,
+      showChangelogOnLogin,
+      dismissBetaAnnouncement,
+      generationSoundEnabled,
+      generationSoundId,
+    } = req.body as UpdatePreferencesRequest;
 
     let whatsNew = await evaluateWhatsNewState(userId);
 
@@ -4152,7 +4359,31 @@ router.patch('/me/preferences', async (req: Request, res: Response): Promise<voi
       await updateChangelogPrefs(userId, { dismissedBetaProdAnnouncement: true });
     }
 
-    res.json({ ok: true, whatsNew });
+    if (
+      typeof generationSoundEnabled === 'boolean'
+      || generationSoundId !== undefined
+    ) {
+      if (generationSoundId !== undefined && !isGenerationSoundId(generationSoundId)) {
+        res.status(400).json({ error: 'Invalid generationSoundId' });
+        return;
+      }
+      await updateChangelogPrefs(userId, {
+        ...(typeof generationSoundEnabled === 'boolean'
+          ? { generationSoundEnabled }
+          : {}),
+        ...(generationSoundId !== undefined
+          ? { generationSoundId }
+          : {}),
+      });
+    }
+
+    const prefs = await getChangelogPrefs(userId);
+    const soundPrefs = normalizeGenerationSoundPreferences({
+      generationSoundEnabled: prefs.generationSoundEnabled,
+      generationSoundId: prefs.generationSoundId,
+    });
+
+    res.json({ ok: true, whatsNew, ...soundPrefs });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -4200,6 +4431,60 @@ router.get('/skill-settings/:id/repository-readiness', async (req: Request, res:
   }
 });
 
+// ── Public Home pill shaping (FEAT-002 TBI-004) ──────────────────────────────
+//
+// The public skill-config response must never carry pill allow-lists, so each
+// pill is rebuilt field by field instead of spread. A field added to the stored
+// pill type stays out of the public payload until it is listed here.
+
+type PublicQuickSkillPill = Omit<QuickSkillPill, 'allowedUserIds' | 'allowedGroupIds'>;
+type PublicQuickMcpPill =
+  | Omit<QuickMcpPillHttp, 'allowedUserIds' | 'allowedGroupIds'>
+  | Omit<QuickMcpPillStdio, 'allowedUserIds' | 'allowedGroupIds'>;
+
+/** Drop keys the stored pill never set, so absent stays absent rather than becoming null. */
+function omitUndefined<T extends object>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, v]) => v !== undefined),
+  ) as T;
+}
+
+function toPublicSkillPill(pill: QuickSkillPill): PublicQuickSkillPill {
+  return omitUndefined({
+    label: pill.label,
+    skillPath: pill.skillPath,
+    model: pill.model,
+    effort: pill.effort,
+    description: pill.description,
+    bypassScopePolicy: pill.bypassScopePolicy,
+  });
+}
+
+function toPublicMcpPill(pill: QuickMcpPill): PublicQuickMcpPill {
+  const shared = {
+    label: pill.label,
+    description: pill.description,
+    mcpServerName: pill.mcpServerName,
+    model: pill.model,
+    effort: pill.effort,
+    systemPromptHint: pill.systemPromptHint,
+  };
+  return pill.transport === 'stdio'
+    ? omitUndefined({
+        ...shared,
+        transport: 'stdio' as const,
+        command: pill.command,
+        args: pill.args,
+        env: pill.env,
+      })
+    : omitUndefined({
+        ...shared,
+        transport: 'http' as const,
+        url: pill.url,
+        headers: pill.headers,
+      });
+}
+
 // GET /api/skill-config?project=<name>&settingsId=<uuid> — resolve project skill settings
 router.get('/skill-config', async (req: Request, res: Response) => {
   try {
@@ -4216,6 +4501,28 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       res.status(404).json({ error: 'No skill config found' });
       return;
     }
+
+    // Home pills are filtered to what this caller may see. The caller's live
+    // group IDs only change the outcome when some pill names a group, and a
+    // verified Platform Admin sees everything, so both cases skip the lookup.
+    const callerId = getUserId(req);
+    const isSuperAdmin = isSuperAdminRequest(req);
+    const anyPillNamesGroup = [
+      ...(config.quickSkillPills ?? []),
+      ...(config.quickMcpPills ?? []),
+    ].some((pill) => (pill.allowedGroupIds?.length ?? 0) > 0);
+    const callerGroupIds =
+      !isSuperAdmin && anyPillNamesGroup ? await getUserGroupIds(callerId) : [];
+    const { allowedSkillPills, allowedMcpPills } = resolveHomePillAccess({
+      skillPills: config.quickSkillPills,
+      mcpPills: config.quickMcpPills,
+      callerId,
+      callerGroupIds,
+      isSuperAdmin,
+    });
+    const configuredPillCount =
+      (config.quickSkillPills?.length ?? 0) + (config.quickMcpPills?.length ?? 0);
+
     res.json({
       id: config.id,
       project: config.project,
@@ -4250,8 +4557,29 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       prototypeDesignSystemPath: config.prototypeDesignSystemPath ?? null,
       screenInventoryPath: config.screenInventoryPath ?? null,
       prototypeWebReferencesEnabled: config.prototypeWebReferencesEnabled ?? false,
-      quickSkillPills: config.quickSkillPills ?? null,
-      quickMcpPills: config.quickMcpPills ?? null,
+      quickSkillPills: allowedSkillPills.map(toPublicSkillPill),
+      quickMcpPills: allowedMcpPills.map(toPublicMcpPill),
+      homePillsConfigured: configuredPillCount > 0,
+      interviewEffort: config.interviewEffort ?? null,
+      prdEffort: config.prdEffort ?? null,
+      adrEffort: config.adrEffort ?? null,
+      designDocEffort: config.designDocEffort ?? null,
+      designDocAssistantEffort: config.designDocAssistantEffort ?? null,
+      designPrototypeEffort: config.designPrototypeEffort ?? null,
+      testCaseEffort: config.testCaseEffort ?? null,
+      designDocValidationEffort: config.designDocValidationEffort ?? null,
+      prdAssistantEffort: config.prdAssistantEffort ?? null,
+      prdValidationEffort: config.prdValidationEffort ?? null,
+      developmentEffort: config.developmentEffort ?? null,
+      standupEffort: config.standupEffort ?? null,
+      featureRequestEffort: config.featureRequestEffort ?? null,
+      technicalEffort: config.technicalEffort ?? null,
+      issueEffort: config.issueEffort ?? null,
+      calendarAssistantEffort: config.calendarAssistantEffort ?? null,
+      loadTestGenerationEffort: config.loadTestGenerationEffort ?? null,
+      designModuleEffort: config.designModuleEffort ?? null,
+      designModuleScopingEffort: config.designModuleScopingEffort ?? null,
+      defaultEffort: config.defaultEffort ?? null,
     });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
@@ -4369,6 +4697,7 @@ router.post(
 
         const thread = await createThread(userId, {
           project,
+          agentModule: 'calendarAssistant',
           repo: skillConfig?.skillRepo ?? project,
           branch: skillConfig?.skillBranch ?? 'main',
           skillProvider: (skillConfig?.skillProvider as any) ?? 'ado',

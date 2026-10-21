@@ -61,6 +61,8 @@ import {
   type WalkthroughAnchorSmartTaggingResult,
 } from '../../shared/types/walkthroughAnchorSmartTagging';
 import {
+  loadClientSourceFiles,
+  resolveOwningComponentsByPath,
   syncExtractWalkthroughAnchors,
   type WalkthroughAnchorDiscovery,
   type WalkthroughAnchorSyncExtractionResult,
@@ -78,12 +80,16 @@ import {
   needsSyncHeuristicEnrichment,
   SYNC_HEURISTIC_MODEL,
 } from './walkthroughAnchorSyncHeuristics';
+import {
+  classifyWalkthroughAnchor,
+  type ClassifierOwningPageEntry,
+  type ClassifyWalkthroughAnchorResult,
+} from './walkthroughAnchorSmartTagClassifier';
 import { isCoachableWalkthroughDiscovery } from './walkthroughAnchorCoachableFilter';
 import {
   listApplicableWalkthroughPageModules,
   listWalkthroughPageEntryComponents,
 } from './walkthroughPageModuleScope';
-import { WALKTHROUGH_REGISTRY_PLACEMENTS } from '../../shared/walkthroughAnchors';
 
 const LIST_DEFAULT_LIMIT = 50;
 const LIST_MAX_LIMIT = 200;
@@ -95,6 +101,64 @@ type RegistryRow = typeof walkthroughAnchorRegistry.$inferSelect;
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+interface PersistClassifyContext {
+  owningEntryLookup: Map<string, ClassifierOwningPageEntry>;
+  ownersByPath: Map<string, string[]>;
+}
+
+async function loadPersistClassifyContext(
+  repositoryRoot = process.cwd()
+): Promise<PersistClassifyContext | null> {
+  try {
+    const files = loadClientSourceFiles({ repositoryRoot });
+    if (files.length === 0) return null;
+    const pageModules = await listApplicableWalkthroughPageModules();
+    const pageEntryComponents = listWalkthroughPageEntryComponents(pageModules);
+    const ownersByPath = resolveOwningComponentsByPath(files, pageEntryComponents);
+    const owningEntryLookup = new Map<string, ClassifierOwningPageEntry>();
+    for (const module of pageModules) {
+      for (const entry of module.pageEntries) {
+        owningEntryLookup.set(entry.component, {
+          component: entry.component,
+          routePattern: entry.routePattern,
+          suggestedRoute: entry.suggestedRoute,
+          moduleKey: module.key,
+          moduleLabel: module.label,
+        });
+      }
+    }
+    return { owningEntryLookup, ownersByPath };
+  } catch {
+    return null;
+  }
+}
+
+function classifyDiscovery(
+  testId: string,
+  sourceLocations: readonly WalkthroughAnchorSourceLocation[],
+  context: PersistClassifyContext | null,
+): ClassifyWalkthroughAnchorResult {
+  const owningPageEntries: ClassifierOwningPageEntry[] = [];
+  if (context) {
+    const owningComponents = new Set<string>();
+    for (const loc of sourceLocations) {
+      const normalized = loc.filePath.replace(/\\/g, '/');
+      for (const owner of context.ownersByPath.get(normalized) ?? []) {
+        owningComponents.add(owner);
+      }
+    }
+    for (const component of owningComponents) {
+      const entry = context.owningEntryLookup.get(component);
+      if (entry) owningPageEntries.push(entry);
+    }
+  }
+  return classifyWalkthroughAnchor({
+    testId,
+    sourceLocations,
+    owningPageEntries,
+  });
 }
 
 function mapRow(row: RegistryRow): WalkthroughAnchorRegistryRecord {
@@ -581,7 +645,8 @@ export async function listCatalogSnapshotForSync(): Promise<
 export async function createFromCandidate(
   input: CreateWalkthroughAnchorFromCandidateCommand,
   actor: Actor,
-  executor: DbExecutor = db
+  executor: DbExecutor = db,
+  options?: { classification?: ClassifyWalkthroughAnchorResult }
 ): Promise<WalkthroughAnchorRegistryRecord> {
   const testId = input.testId.trim();
   const anchorKey = resolveCandidateAnchorKey(testId, input.suggestedAnchorKey);
@@ -590,16 +655,15 @@ export async function createFromCandidate(
   )
     ? [...input.sourceLocations]
     : [];
-  // Scanner-owned fields only. Leave tags/route/rationale empty until AI (or Super Admin) fills them.
-  // Placements always allow all sides; preferred side is chosen per walkthrough step.
+  const classified =
+    options?.classification ??
+    classifyWalkthroughAnchor({ testId, sourceLocations });
   const label = (
-    input.label?.trim() || humanizeWalkthroughTestId(testId)
+    input.label?.trim() || classified.label || humanizeWalkthroughTestId(testId)
   ).trim();
-  const allowedPlacements = [
-    ...WALKTHROUGH_REGISTRY_PLACEMENTS,
-  ] as WalkthroughRegistryPlacement[];
-  const suggestedRoute = input.suggestedRoute ?? null;
-  const smartTags: string[] = [];
+  const allowedPlacements = classified.allowedPlacements;
+  const suggestedRoute = classified.suggestedRoute ?? input.suggestedRoute ?? null;
+  const smartTags = classified.smartTags;
   const reviewStatus: WalkthroughAnchorReviewStatus = 'pending';
   const isActive = false;
 
@@ -645,7 +709,7 @@ export async function createFromCandidate(
       isActive,
       lastSeenAt: ts,
       missingSince: null,
-      aiProvenance: null,
+      aiProvenance: classified.aiProvenance,
       createdBy: actor.id,
       updatedBy: actor.id,
       createdAt: ts,
@@ -668,7 +732,10 @@ export async function refreshFromSyncDiscovery(
   >,
   actor: Actor,
   executor: DbExecutor = db,
-  options?: { applyHeuristicsIfEmpty?: boolean }
+  options?: {
+    applyHeuristicsIfEmpty?: boolean;
+    classification?: ClassifyWalkthroughAnchorResult;
+  }
 ): Promise<WalkthroughAnchorRegistryRecord> {
   const existing = await requireLiveRow(executor, id);
   const ts = nowIso();
@@ -689,22 +756,26 @@ export async function refreshFromSyncDiscovery(
       aiProvenance: existing.aiProvenance,
     });
 
-  if (needsEnrichment) {
-    // Scanner-only baseline: humanized label + full placements; AI fields stay empty.
+  const shouldReclassify =
+    needsEnrichment ||
+    (existing.reviewStatus === 'pending' &&
+      existing.aiProvenance?.model === SYNC_HEURISTIC_MODEL);
+
+  if (shouldReclassify) {
+    const classified =
+      options?.classification ??
+      classifyWalkthroughAnchor({
+        testId: discovery.testId || existing.testId,
+        sourceLocations: discovery.sourceLocations,
+      });
     patch.label =
       existing.label?.trim() ||
+      classified.label ||
       humanizeWalkthroughTestId(discovery.testId || existing.testId);
-    patch.allowedPlacements = [...WALKTHROUGH_REGISTRY_PLACEMENTS];
-    patch.smartTags = [];
-    patch.aiProvenance = null;
-  } else if (
-    existing.reviewStatus === 'pending' &&
-    existing.aiProvenance?.model === SYNC_HEURISTIC_MODEL
-  ) {
-    // Clear prior heuristic "fake" metadata on re-sync; AI fields empty until Track B.
-    patch.allowedPlacements = [...WALKTHROUGH_REGISTRY_PLACEMENTS];
-    patch.smartTags = [];
-    patch.aiProvenance = null;
+    patch.suggestedRoute = classified.suggestedRoute;
+    patch.allowedPlacements = classified.allowedPlacements;
+    patch.smartTags = classified.smartTags;
+    patch.aiProvenance = classified.aiProvenance;
   }
 
   const [row] = await executor
@@ -733,8 +804,12 @@ function shouldStampMissing(
  */
 export async function persistSyncExtractionResult(
   extraction: WalkthroughAnchorSyncExtractionResult,
-  actor: Actor
+  actor: Actor,
+  options?: { repositoryRoot?: string }
 ): Promise<WalkthroughAnchorSyncPersistenceSummary> {
+  const classifyContext = await loadPersistClassifyContext(
+    options?.repositoryRoot
+  );
   return db.transaction(async (tx) => {
     const liveRows = await tx.query.walkthroughAnchorRegistry.findMany({
       where: isNull(walkthroughAnchorRegistry.deletedAt),
@@ -781,12 +856,17 @@ export async function persistSyncExtractionResult(
           smartTags: existing.smartTags,
           aiProvenance: existing.aiProvenance,
         });
+        const classification = classifyDiscovery(
+          candidate.testId,
+          candidate.sourceLocations,
+          classifyContext
+        );
         const row = await refreshFromSyncDiscovery(
           existing.id,
           candidate,
           actor,
           tx,
-          { applyHeuristicsIfEmpty: needsEnrichment }
+          { applyHeuristicsIfEmpty: needsEnrichment, classification }
         );
         refreshed.push(row);
         queuePendingForReview(row, {
@@ -794,6 +874,11 @@ export async function persistSyncExtractionResult(
         });
         continue;
       }
+      const classification = classifyDiscovery(
+        candidate.testId,
+        candidate.sourceLocations,
+        classifyContext
+      );
       const row = await createFromCandidate(
         {
           testId: candidate.testId,
@@ -803,10 +888,13 @@ export async function persistSyncExtractionResult(
           sourceHash: candidate.sourceHash,
         },
         actor,
-        tx
+        tx,
+        { classification }
       );
       created.push(row);
-      queuePendingForReview(row, { queueSmartTagging: true });
+      queuePendingForReview(row, {
+        queueSmartTagging: needsAiSmartTagging(row),
+      });
       byTestId.set(row.testId, row as unknown as RegistryRow);
     }
 
@@ -821,12 +909,17 @@ export async function persistSyncExtractionResult(
         smartTags: existing.smartTags,
         aiProvenance: existing.aiProvenance,
       });
+      const classification = classifyDiscovery(
+        match.testId,
+        match.sourceLocations,
+        classifyContext
+      );
       const row = await refreshFromSyncDiscovery(
         existing.id,
         match,
         actor,
         tx,
-        { applyHeuristicsIfEmpty: needsEnrichment }
+        { applyHeuristicsIfEmpty: needsEnrichment, classification }
       );
       refreshed.push(row);
       // Always resurface pending matches in Sync review (even when already tagged).
@@ -929,7 +1022,9 @@ export async function syncExtractAndPersistAnchors(
   const extraction = await syncExtractWalkthroughAnchors(extractInput);
 
   // Persist all discoveries before any AI enrichment (Track B owns tagging).
-  const persistence = await persistSyncExtractionResult(extraction, actor);
+  const persistence = await persistSyncExtractionResult(extraction, actor, {
+    repositoryRoot,
+  });
 
   return {
     discoveries: extraction.discoveries,

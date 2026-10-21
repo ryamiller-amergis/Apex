@@ -6,9 +6,11 @@ import { FeatureRequestModal } from './FeatureRequestModal';
 import { NotificationBell } from './NotificationBell';
 import { UserMenu } from './UserMenu';
 import { useBreakpoint } from '../hooks/useBreakpoint';
+import { canAccessMyWork } from '../utils/canAccessMyWork';
 import type { ThemeMode } from '../hooks/useAppShell';
 import type { ProjectRepoConfigSummary } from '../../shared/types/projectSettings';
 import type { WorkItemType } from '../../shared/types/featureRequest';
+import { sortByLabel } from '../utils/sortByLabel';
 import styles from './AppHeader.module.css';
 
 interface NavItem {
@@ -19,7 +21,9 @@ interface NavItem {
 }
 
 interface AppHeaderProps {
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'work-board';
+  // `playbooks` is here so the shell can render the flag-gated /playbooks view. It is deliberately
+  // *not* a MenuItemKey — the header highlights no nav item for it, because it has none.
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -31,6 +35,8 @@ interface AppHeaderProps {
   isInAnyGroup?: (groups: string[]) => boolean;
   menuEnabledViews?: string[];
   isSuperAdmin?: boolean;
+  /** True when designs have been shared with the user, who is otherwise not a UI Lab member. */
+  hasUiLabShares?: boolean;
   repoConfigs?: ProjectRepoConfigSummary[];
   selectedSkillSettingsId?: string | null;
   onChangeSkillSettings?: (id: string) => void;
@@ -54,6 +60,9 @@ interface AppHeaderProps {
   onNavigateDiagrams?: () => void;
   onNavigateWorkBoard?: () => void;
   workBoardEnabled?: boolean;
+  onNavigatePlaybooks?: () => void;
+  /** Playbooks stays hidden until the production-adapters flag is on for the project. */
+  playbooksEnabled?: boolean;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
   onThemeChange: (theme: ThemeMode) => void;
@@ -71,6 +80,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   isInAnyGroup,
   menuEnabledViews = [],
   isSuperAdmin = false,
+  hasUiLabShares = false,
   repoConfigs = [],
   selectedSkillSettingsId,
   onChangeSkillSettings,
@@ -93,6 +103,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateDiagrams,
   onNavigateWorkBoard,
   workBoardEnabled = true,
+  onNavigatePlaybooks,
+  playbooksEnabled = false,
   onNavigateAdmin,
   onOpenChangelog,
   onThemeChange,
@@ -136,6 +148,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Design Module', view: 'design-module', permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
     { label: 'Diagrams', view: 'diagrams', permission: 'diagram:view', onNavigate: onNavigateDiagrams ?? (() => {}) },
     { label: 'Load Tests', view: 'load-tests', permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}) },
+    { label: 'Playbooks', view: 'playbooks', permission: 'playbooks:view', onNavigate: onNavigatePlaybooks ?? (() => {}) },
     { label: 'Work Board', view: 'work-board', permission: 'work-board:view', onNavigate: onNavigateWorkBoard ?? (() => {}) },
     { label: 'Admin', view: 'admin', permission: 'admin:roles', onNavigate: onNavigateAdmin },
   ];
@@ -144,8 +157,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     if (item.view === 'home') return canAccessHome;
     if (item.view === 'admin') return can('admin:roles');
     if (item.view === 'my-work') {
-      if (!isSuperAdmin && !menuEnabledViews.includes('my-work')) return false;
-      return can('dev-workbench:view') && (isInAnyGroup?.(['Developer']) ?? false);
+      return canAccessMyWork({ can, isSuperAdmin, isInAnyGroup, enabledViews: menuEnabledViews });
     }
     if (item.view === 'standup') {
       if (!isSuperAdmin && !menuEnabledViews.includes('standup')) return false;
@@ -162,10 +174,15 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       if (!isSuperAdmin && !menuEnabledViews.includes('work-board')) return false;
       return isSuperAdmin || can('work-board:view');
     }
+    if (item.view === 'playbooks') {
+      if (!playbooksEnabled) return false;
+      if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;
+      return isSuperAdmin || can('playbooks:view');
+    }
     if (item.view === 'ui-lab') {
       if (!isSuperAdmin && !menuEnabledViews.includes('ui-lab')) return false;
       if (!isSuperAdmin && !can('ui-lab:view')) return false;
-      return isSuperAdmin || (isInAnyGroup?.(['UI/UX']) ?? false);
+      return isSuperAdmin || (isInAnyGroup?.(['UI/UX']) ?? false) || hasUiLabShares;
     }
     if (!isSuperAdmin && !menuEnabledViews.includes(item.view)) return false;
     if (!isSuperAdmin && item.permission !== null && !can(item.permission)) return false;
@@ -237,7 +254,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               onChange={(e) => onChangeSkillSettings(e.target.value)}
               {...{ 'data-testid': 'app-header-repo-switcher' }}
             >
-              {repoConfigs.map((cfg) => (
+              {sortByLabel(repoConfigs, (cfg) => cfg.friendlyName).map((cfg) => (
                 <option key={cfg.id} value={cfg.id}>
                   {cfg.friendlyName}
                 </option>

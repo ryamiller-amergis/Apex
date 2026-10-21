@@ -10,6 +10,17 @@ const target: PreWarmTarget = {
   branch: 'main',
 };
 
+function stubRepoCacheEviction() {
+  return jest.fn().mockResolvedValue({
+    scanned: 0,
+    evicted: 0,
+    protected: 0,
+    bytesBefore: 0,
+    bytesAfter: 0,
+    maxBytes: 0,
+  });
+}
+
 describe('TBI-007 groundingMaintenanceScheduler', () => {
   beforeEach(() => {
     jest.useFakeTimers();
@@ -27,6 +38,7 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
     const sharedEvictIdle = jest
       .fn()
       .mockResolvedValue({ scanned: 0, evicted: 0, protected: 0 });
+    const evictOverBudget = stubRepoCacheEviction();
     const evaluateActive = jest.fn().mockResolvedValue([]);
     const runIfDue = jest.fn().mockResolvedValue({
       due: false,
@@ -47,6 +59,7 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
       preWarmService: { sweep, preWarm },
       evictionService: { evictIdle },
       sharedReadCheckoutService: { evictIdle: sharedEvictIdle },
+      repoCacheEvictionService: { evictOverBudget },
       stalenessService: { evaluateActive },
       nightlyIdleReGround: { runIfDue },
       runLeaderSweep,
@@ -71,6 +84,8 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
     expect(evictIdle).toHaveBeenCalledTimes(2);
     // The shared read-only checkout sweep runs as a second eviction pass.
     expect(sharedEvictIdle).toHaveBeenCalledTimes(2);
+    // The bare-mirror budget sweep runs as a third.
+    expect(evictOverBudget).toHaveBeenCalledTimes(2);
     expect(preWarm).toHaveBeenCalledWith(target);
     expect(evaluateActive).toHaveBeenCalledWith(target);
     expect(evaluateActive).toHaveBeenCalledWith();
@@ -97,6 +112,7 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
       },
       evictionService: { evictIdle },
       sharedReadCheckoutService: { evictIdle: sharedEvictIdle },
+      repoCacheEvictionService: { evictOverBudget: stubRepoCacheEviction() },
       stalenessService: { evaluateActive },
       nightlyIdleReGround: {
         runIfDue: jest.fn().mockResolvedValue({
@@ -125,6 +141,45 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
     expect(evictIdle).toHaveBeenCalledTimes(1);
     expect(sharedEvictIdle).toHaveBeenCalledTimes(1);
     expect(evaluateActive).toHaveBeenCalledTimes(1);
+  });
+
+  it('still runs the evictions when the pre-warm sweep fails, then reports the failure', async () => {
+    const sweep = jest.fn().mockRejectedValue(new Error('disk-low'));
+    const evaluateActive = jest.fn().mockResolvedValue([]);
+    const evictIdle = jest.fn().mockResolvedValue(undefined);
+    const sharedEvictIdle = jest.fn().mockResolvedValue({ scanned: 0, evicted: 0, protected: 0 });
+    const evictOverBudget = stubRepoCacheEviction();
+    const runIfDue = jest.fn().mockResolvedValue({
+      due: false,
+      etDate: '2026-08-20',
+      considered: 0,
+      reGrounded: 0,
+      skippedRunning: 0,
+      skippedFresh: 0,
+      skippedIneligible: 0,
+      errors: 0,
+    });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const scheduler = createGroundingMaintenanceScheduler({
+      preWarmService: { sweep, preWarm: jest.fn().mockResolvedValue(undefined) },
+      evictionService: { evictIdle },
+      sharedReadCheckoutService: { evictIdle: sharedEvictIdle },
+      repoCacheEvictionService: { evictOverBudget },
+      stalenessService: { evaluateActive },
+      nightlyIdleReGround: { runIfDue },
+      runLeaderSweep: async (operation) => operation(),
+      subscribe: () => jest.fn(),
+    });
+
+    await expect(scheduler.runNow()).rejects.toThrow('Grounding maintenance steps failed: pre-warm');
+
+    expect(evaluateActive).toHaveBeenCalledTimes(1);
+    expect(evictIdle).toHaveBeenCalledTimes(1);
+    expect(sharedEvictIdle).toHaveBeenCalledTimes(1);
+    expect(evictOverBudget).toHaveBeenCalledTimes(1);
+    expect(runIfDue).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('step=pre-warm failed: disk-low'));
+    warn.mockRestore();
   });
 
   it('allows only the distributed claim owner to run a scheduled sweep', async () => {

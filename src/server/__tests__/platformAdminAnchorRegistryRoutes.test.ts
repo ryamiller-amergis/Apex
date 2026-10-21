@@ -421,6 +421,7 @@ describe('platformAdmin anchor-registry routes (Phase 2)', () => {
   it('smart-tagging start/status/cancel are Super Admin gated', async () => {
     mockSmartTagging.startSmartTagging.mockResolvedValue({
       threadId: 'thread-1',
+      threadIds: ['thread-1'],
       candidateTestIds: ['new-candidate'],
       provenance: {
         provider: 'cursor',

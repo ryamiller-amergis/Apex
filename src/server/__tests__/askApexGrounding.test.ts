@@ -138,11 +138,7 @@ describe('PBI-005 Ask Apex shared grounding lifecycle', () => {
             search_repo_code: expect.any(Object),
           }),
         }),
-        mcpServers: {
-          'github-repo': {
-            url: 'http://localhost:3001/mcp/github-repo?enableRepoBrowse=false',
-          },
-        },
+        mcpServers: {},
       })
     );
     expect(agentCreate.mock.calls[0][0].local.cwd).not.toBe(

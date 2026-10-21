@@ -1,11 +1,23 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { DeploymentOutcomeReport } from '../DeploymentOutcomeReport';
 
+const mockSetSelectedItem = jest.fn();
+
+jest.mock('../../hooks/useAppShell', () => ({
+  useAppShell: () => ({
+    selectedProject: 'MaxView',
+    selectedAreaPath: 'MaxView\\Area',
+    setSelectedItem: mockSetSelectedItem,
+  }),
+}));
+
 jest.mock('../../hooks/useDeploymentOutcomes', () => ({
   useOutcomeReport: jest.fn(),
   useFilteredOutcomes: jest.fn(),
   useExportOutcomeReport: jest.fn(),
   useAvailableReleaseVersions: jest.fn(),
+  useReleaseEpics: jest.fn(),
+  useReleaseRelatedCycleTime: jest.fn(),
 }));
 
 import {
@@ -13,6 +25,8 @@ import {
   useFilteredOutcomes,
   useExportOutcomeReport,
   useAvailableReleaseVersions,
+  useReleaseEpics,
+  useReleaseRelatedCycleTime,
 } from '../../hooks/useDeploymentOutcomes';
 
 const mockSummary = {
@@ -66,6 +80,15 @@ const mockOutcomes = [
 
 const mockAvailableVersions = ['v1.2.0', 'v1.1.0', 'v1.0.0'];
 
+// v1.3.0 and v1.4.0 have no recorded outcome — they still belong in the report.
+const mockReleaseEpics = [
+  { id: 101, version: 'v1.0.0', status: 'released', targetDate: '2026-01-15' },
+  { id: 102, version: 'v1.1.0', status: 'released', targetDate: '2026-02-20' },
+  { id: 103, version: 'v1.2.0', status: 'released', targetDate: '2026-03-10' },
+  { id: 104, version: 'v1.3.0', status: 'in-progress', targetDate: '2026-04-18' },
+  { id: 105, version: 'v1.4.0', status: 'planned', targetDate: '2026-05-22' },
+];
+
 function setupMocks() {
   (useOutcomeReport as jest.Mock).mockReturnValue({
     data: mockSummary,
@@ -80,6 +103,15 @@ function setupMocks() {
   (useAvailableReleaseVersions as jest.Mock).mockReturnValue({
     data: mockAvailableVersions,
     isLoading: false,
+  });
+  (useReleaseEpics as jest.Mock).mockReturnValue({
+    data: mockReleaseEpics,
+    isLoading: false,
+  });
+  (useReleaseRelatedCycleTime as jest.Mock).mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    error: null,
   });
 }
 
@@ -129,6 +161,59 @@ describe('DeploymentOutcomeReport', () => {
     expect(screen.getByText('v1.0.0')).toBeInTheDocument();
     expect(screen.getByText('v1.1.0')).toBeInTheDocument();
     expect(screen.getByText('v1.2.0')).toBeInTheDocument();
+  });
+
+  it('lists releases that have no recorded outcome', () => {
+    render(<DeploymentOutcomeReport onClose={onClose} />);
+
+    expect(screen.getByText('v1.3.0')).toBeInTheDocument();
+    expect(screen.getByText('v1.4.0')).toBeInTheDocument();
+    expect(screen.getByTestId('outcome-report-not-recorded-release:104')).toBeInTheDocument();
+    expect(screen.getByTestId('outcome-report-expand-release:105')).toBeInTheDocument();
+  });
+
+  it('shows the release target date as the deploy date for unrecorded releases', () => {
+    render(<DeploymentOutcomeReport onClose={onClose} />);
+
+    const row = screen.getByTestId('outcome-report-expand-release:104').closest('tr')!;
+    expect(row).toHaveTextContent('Apr 18, 2026');
+  });
+
+  it('fetches cycle time for releases with no recorded outcome', () => {
+    render(<DeploymentOutcomeReport onClose={onClose} />);
+
+    expect(useReleaseRelatedCycleTime).toHaveBeenCalledWith(104, 'MaxView', 'MaxView\\Area', true);
+  });
+
+  it('hides unrecorded releases when a result filter is applied', () => {
+    render(<DeploymentOutcomeReport onClose={onClose} />);
+
+    fireEvent.change(screen.getByTestId('outcome-report-result-filter'), {
+      target: { value: 'success' },
+    });
+    fireEvent.click(screen.getByTestId('outcome-report-apply'));
+
+    expect(screen.queryByText('v1.3.0')).not.toBeInTheDocument();
+    expect(screen.queryByText('v1.4.0')).not.toBeInTheDocument();
+  });
+
+  it('offers release versions with no recorded outcome in the version filter', () => {
+    render(<DeploymentOutcomeReport onClose={onClose} />);
+
+    fireEvent.focus(screen.getByPlaceholderText(/search releases/i));
+
+    expect(screen.getByTestId('outcome-report-version-option-v1.4.0')).toBeInTheDocument();
+  });
+
+  it('keeps only the selected version when the version filter is applied', () => {
+    render(<DeploymentOutcomeReport onClose={onClose} />);
+
+    fireEvent.focus(screen.getByPlaceholderText(/search releases/i));
+    fireEvent.mouseDown(screen.getByTestId('outcome-report-version-option-v1.3.0'));
+    fireEvent.click(screen.getByTestId('outcome-report-apply'));
+
+    expect(screen.getByTestId('outcome-report-expand-release:104')).toBeInTheDocument();
+    expect(screen.queryByTestId('outcome-report-expand-release:105')).not.toBeInTheDocument();
   });
 
   it('renders result badges in the data table', () => {
@@ -241,6 +326,12 @@ describe('DatePickerInput (via filter section)', () => {
     (useFilteredOutcomes as jest.Mock).mockReturnValue({ data: [], isLoading: false });
     (useExportOutcomeReport as jest.Mock).mockReturnValue(jest.fn());
     (useAvailableReleaseVersions as jest.Mock).mockReturnValue({ data: [], isLoading: false });
+    (useReleaseEpics as jest.Mock).mockReturnValue({ data: [], isLoading: false });
+    (useReleaseRelatedCycleTime as jest.Mock).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+    });
   });
 
   it('renders start-date trigger with placeholder text', () => {
@@ -295,6 +386,12 @@ describe('MultiSelectTypeahead (via filter section)', () => {
     (useAvailableReleaseVersions as jest.Mock).mockReturnValue({
       data: ['v2.0.0', 'v1.1.0', 'v1.0.0'],
       isLoading: false,
+    });
+    (useReleaseEpics as jest.Mock).mockReturnValue({ data: [], isLoading: false });
+    (useReleaseRelatedCycleTime as jest.Mock).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
     });
   });
 
@@ -360,3 +457,148 @@ describe('MultiSelectTypeahead (via filter section)', () => {
     expect(screen.queryByTitle(/remove v1\.0\.0/i)).not.toBeInTheDocument();
   });
 });
+
+describe('DeploymentOutcomeReport cycle time expand', () => {
+  const onClose = jest.fn();
+
+  const workItem = (id: number, title: string, state: string) => ({
+    id,
+    title,
+    state,
+    workItemType: 'Product Backlog Item',
+    changedDate: '2026-01-05T00:00:00.000Z',
+    createdDate: '2026-01-01T00:00:00.000Z',
+    areaPath: 'MaxView\\Area',
+    iterationPath: 'MaxView\\Sprint 1',
+  });
+
+  const cyclePayload = {
+    items: [
+      {
+        id: 501,
+        title: 'Completed PBI',
+        workItemType: 'Product Backlog Item',
+        state: 'Done',
+        lastInProgressAt: '2026-01-01T00:00:00.000Z',
+        lastDoneAt: '2026-01-05T00:00:00.000Z',
+        cycleTimeDays: 4.2,
+        incompleteReason: null,
+        workItem: workItem(501, 'Completed PBI', 'Done'),
+      },
+      {
+        id: 502,
+        title: 'Still in progress',
+        workItemType: 'Bug',
+        state: 'In Progress',
+        lastInProgressAt: '2026-01-02T00:00:00.000Z',
+        lastDoneAt: null,
+        cycleTimeDays: null,
+        incompleteReason: 'missing_done' as const,
+        workItem: workItem(502, 'Still in progress', 'In Progress'),
+      },
+    ],
+    medianDays: 4.2,
+    avgDays: 4.2,
+    sampleSize: 1,
+    incompleteCount: 1,
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setupMocks();
+  });
+
+  it('shows median cycle time without expanding the row', () => {
+    (useReleaseRelatedCycleTime as jest.Mock).mockReturnValue({
+      data: cyclePayload,
+      isLoading: false,
+      error: null,
+    });
+    render(<DeploymentOutcomeReport onClose={onClose} />);
+
+    expect(screen.getByTestId('outcome-report-cycle-time-o1')).toHaveTextContent('4.2 d');
+    expect(screen.queryByTestId('outcome-report-cycle-panel-o1')).not.toBeInTheDocument();
+    expect(useReleaseRelatedCycleTime).toHaveBeenCalledWith(101, 'MaxView', 'MaxView\\Area', true);
+  });
+
+  it('opens the details panel when a work item row is clicked', () => {
+    (useReleaseRelatedCycleTime as jest.Mock).mockReturnValue({
+      data: cyclePayload,
+      isLoading: false,
+      error: null,
+    });
+    render(<DeploymentOutcomeReport onClose={onClose} />);
+    fireEvent.click(screen.getByTestId('outcome-report-expand-o1'));
+
+    fireEvent.click(screen.getByTestId('outcome-report-cycle-item-501'));
+
+    expect(mockSetSelectedItem).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 501, title: 'Completed PBI' }),
+    );
+  });
+
+  it('opens the details panel from the work item id button', () => {
+    (useReleaseRelatedCycleTime as jest.Mock).mockReturnValue({
+      data: cyclePayload,
+      isLoading: false,
+      error: null,
+    });
+    render(<DeploymentOutcomeReport onClose={onClose} />);
+    fireEvent.click(screen.getByTestId('outcome-report-expand-o1'));
+
+    fireEvent.click(screen.getByTestId('outcome-report-cycle-item-open-502'));
+
+    expect(mockSetSelectedItem).toHaveBeenCalledTimes(1);
+    expect(mockSetSelectedItem).toHaveBeenCalledWith(expect.objectContaining({ id: 502 }));
+  });
+
+  it('loads and shows median cycle time after expand', () => {
+    (useReleaseRelatedCycleTime as jest.Mock).mockReturnValue({
+      data: cyclePayload,
+      isLoading: false,
+      error: null,
+    });
+    render(<DeploymentOutcomeReport onClose={onClose} />);
+    fireEvent.click(screen.getByTestId('outcome-report-expand-o1'));
+    expect(screen.getByTestId('outcome-report-cycle-time-o1')).toHaveTextContent('4.2 d');
+    expect(screen.getByText(/Median cycle time · 1 of 2 items completed/i)).toBeInTheDocument();
+    expect(screen.getByTestId('outcome-report-cycle-item-501')).toHaveTextContent('Completed PBI');
+  });
+
+  it('shows a note for incomplete items that never reached Done', () => {
+    (useReleaseRelatedCycleTime as jest.Mock).mockReturnValue({
+      data: cyclePayload,
+      isLoading: false,
+      error: null,
+    });
+    render(<DeploymentOutcomeReport onClose={onClose} />);
+    fireEvent.click(screen.getByTestId('outcome-report-expand-o1'));
+    expect(screen.getByTestId('outcome-report-cycle-item-502')).toHaveTextContent('Never reached Done');
+  });
+
+  it('shows loading while cycle time is fetching', () => {
+    (useReleaseRelatedCycleTime as jest.Mock).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      error: null,
+    });
+    render(<DeploymentOutcomeReport onClose={onClose} />);
+    fireEvent.click(screen.getByTestId('outcome-report-expand-o1'));
+    expect(screen.getByTestId('outcome-report-cycle-loading-o1')).toHaveTextContent(/loading cycle time/i);
+  });
+
+  it('shows an empty state when no matching Epic exists', () => {
+    (useReleaseEpics as jest.Mock).mockReturnValue({
+      data: [],
+      isLoading: false,
+    });
+    render(<DeploymentOutcomeReport onClose={onClose} />);
+    fireEvent.click(screen.getByTestId('outcome-report-expand-o1'));
+    expect(screen.getByTestId('outcome-report-cycle-empty-o1')).toHaveTextContent(
+      /no matching release epic/i,
+    );
+    expect(screen.getByTestId('outcome-report-cycle-time-o1')).toHaveTextContent('—');
+    expect(useReleaseRelatedCycleTime).toHaveBeenCalledWith(undefined, 'MaxView', 'MaxView\\Area', false);
+  });
+});
+

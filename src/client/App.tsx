@@ -9,6 +9,7 @@ import { Changelog } from './components/Changelog';
 import { GuidedWalkthroughHost } from './components/GuidedWalkthroughHost';
 import { WhatsNewBanner } from './components/WhatsNewBanner';
 import { Login } from './components/Login';
+import { DevEnvAccessDenied } from './components/DevEnvAccessDenied';
 import { ViewErrorFallback } from './components/ViewErrorFallback';
 import { ViewSkeleton } from './components/ViewSkeleton';
 import { AppHeader } from './components/AppHeader';
@@ -17,7 +18,8 @@ import { PlanningTabs, type PlanningTab } from './components/PlanningTabs';
 import { ApexLoader } from './components/ApexLoader';
 import { ProjectSelector } from './components/ProjectSelector';
 import { AgentHome } from './components/AgentHome';
-import { ChatAgentPanel } from './components/ChatAgentPanel';
+import { FoundationSkillUpdateBanner } from './components/FoundationSkillUpdateBanner';
+import { ChatAgentPanel, type StartPanelChatOptions } from './components/ChatAgentPanel';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { ToastContainer } from './components/ToastContainer';
 import { useAppShell } from './hooks/useAppShell';
@@ -25,12 +27,24 @@ import { useProjectMenuConfig } from './hooks/useProjectMenuConfig';
 import { useProjectRepoConfigs } from './hooks/useProjectRepoConfigs';
 import { useProjectSkillConfig } from './hooks/useProjectSkillConfig';
 import { useChatThread, useSkillRepos, useStartChat } from './hooks/useChatThreads';
+import { useUiLabSharedDesigns } from './hooks/useUiLab';
+import { resolveUiLabRouteAccess } from '../shared/types/uiLab';
 import { RepoSelector } from './components/RepoSelector';
 import { DEFAULT_MODEL_ID } from './config/models';
 import { FeatureFlagDemo } from './components/FeatureFlagDemo';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
+import { useDocumentDeepLinkProject } from './hooks/useDocumentDeepLinkProject';
+import { useProjects } from './hooks/useProjects';
+import {
+  documentProjectForSwitch,
+  documentProjectSwitchTarget,
+  shouldHoldDocumentRoute,
+} from './utils/documentProjectDeepLink';
+import { canAccessMyWork } from './utils/canAccessMyWork';
 import { setInteractiveWsEnabled } from './utils/threadEventStream';
+import { createChatTurnId } from './utils/chatTurnId';
+import { friendlyChatErrorMessage } from '../shared/utils/chatProgressCopy';
 import { IS_BETA_RELEASE } from './config/release';
 import { RESTRICTED_ACCESS_PROJECT } from '../shared/types/restrictedAccess';
 import './App.css';
@@ -83,6 +97,11 @@ const FeatureRequestsView = lazy(() => import('./components/FeatureRequestsView'
 const ApexWorkBoardView = lazy(() => import('./components/ApexWorkBoardView').then(m => ({ default: m.ApexWorkBoardView })));
 const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ default: m.UiLabView })));
 const DesignModuleView = lazy(() => import('./components/DesignModuleView'));
+const PlaybookStatusView = lazy(() => import('./components/PlaybookStatusView'));
+const PlaybookCanvasPage = lazy(() => import('./components/PlaybookCanvasPage'));
+const PlaybookLiveRunPage = lazy(() => import('./components/PlaybookLiveRunPage'));
+const PlaybooksManagePage = lazy(() => import('./components/PlaybooksManagePage'));
+const PlaybookDashboardPage = lazy(() => import('./components/PlaybookDashboardPage'));
 const LoadTestsListPage = lazy(() => import('./components/LoadTestsListPage').then(m => ({ default: m.LoadTestsListPage })));
 const LoadTestDefinitionBuilderView = lazy(() =>
   import('./components/LoadTestDefinitionBuilderView').then((m) => ({ default: m.LoadTestDefinitionBuilderView })),
@@ -120,12 +139,24 @@ const isPlanningTab = (value: string | undefined): value is PlanningTab => (
   value !== undefined && PLANNING_TABS.includes(value as PlanningTab)
 );
 
+function DocumentProjectOpening({ label }: { label: string }) {
+  return (
+    <div className="loading-overlay" role="status" aria-live="polite" data-testid="document-project-opening">
+      <div className="loading-spinner-container">
+        <ApexLoader size={72} />
+        <p>{label}</p>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const navigate = useNavigate();
   const location = useLocation();
 
   const [chatOpen, setChatOpen] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [activeThreadProject, setActiveThreadProject] = useState<string | null>(null);
   const [pendingProject, setPendingProject] = useState<string | null>(null);
   const [calendarAssistantOpen, setCalendarAssistantOpen] = useState(false);
   const [calendarAssistantAnchor, setCalendarAssistantAnchor] = useState<{
@@ -154,9 +185,9 @@ function App() {
       return next;
     });
   }, []);
-  const { data: activeThread = null } = useChatThread(activeThreadId);
+  const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -196,6 +227,8 @@ function App() {
                     ? 'ai-cost'
                     : location.pathname === '/design-module'
                     ? 'design-module'
+                    : location.pathname === '/playbooks' || location.pathname.startsWith('/playbooks/')
+                    ? 'playbooks'
                     : location.pathname.startsWith('/work-board')
                     ? 'work-board'
                     : location.pathname.startsWith('/load-tests')
@@ -208,12 +241,15 @@ function App() {
     ? location.pathname.split('/')[2]
     : undefined;
 
-  // Close the slide-out panel when landing on the home view — the full-page
-  // AgentHome already provides the complete chat experience there.
-  // Adjust during render (same pattern as AppHeader) to avoid set-state-in-effect.
-  if (currentView === 'home' && chatOpen) {
-    setChatOpen(false);
-  }
+  useEffect(() => {
+    if (currentView !== 'home') {
+      setChatOpen(false);
+    }
+  }, [currentView]);
+
+  const handleHomeViewChange = useCallback((view: 'chat' | 'status') => {
+    setChatOpen(view === 'chat');
+  }, []);
 
   useEffect(() => {
     const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
@@ -230,10 +266,9 @@ function App() {
     isInAnyGroup,
     userId,
     isSuperAdmin,
+    devAccessDenied,
     isRestricted,
     restrictedModules,
-    isAdmin,
-    groups,
     permissionsLoaded,
     workItems,
     workBoardEnabled,
@@ -275,33 +310,74 @@ function App() {
     handleCancelDueDateChange,
     handleFieldUpdate,
     betaAnnouncementDismissed,
+    devAccessAllowlisted,
     handleDismissBetaAnnouncement,
   } = useAppShell({ workItemsEnabled: needsWorkItems });
-
-  // Deep-link from API key expiry notifications: /admin/api-keys?project=…
-  useEffect(() => {
-    if (location.pathname !== '/admin/api-keys') return;
-    const project = new URLSearchParams(location.search).get('project');
-    if (!project || project === selectedProject) return;
-    if (!availableProjects.includes(project)) return;
-    changeProject(project);
-  }, [location.pathname, location.search, selectedProject, availableProjects, changeProject]);
 
   const showBetaAnnouncement = useFeatureFlag('beta-to-prod-announcement', selectedProject);
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
-  const interactiveWsEnabled = homeFlags['ai-runs-interactive'] === true;
-
-  // @feature-flag:ai-runs-interactive start winner=disabled
-  // FEAT-007: flip the chat stream transport to the WebSocket agent gateway when
-  // ai-runs-interactive is enabled for this project; falls back to SSE otherwise.
+  const interactiveWsEnabled = homeFlags['ai-runs-v2-transport'] === true;
+  const documentLink = useDocumentDeepLinkProject(location.pathname, location.search);
+  const {
+    data: selectableProjectList = [],
+    isLoading: selectableProjectsLoading,
+    isError: selectableProjectsError,
+  } = useProjects();
+  const selectableProjectNames = selectableProjectList.map((project) => project.name);
+  const queryProject = new URLSearchParams(location.search).get('project') ?? undefined;
+  // A settled catalog error has isLoading === false and no data. Treat that as
+  // unresolved, not an empty accessible list, or the opening overlay drops and
+  // the document stays on the current project.
+  const documentAccessPending = !permissionsLoaded
+    || selectableProjectsLoading
+    || selectableProjectsError;
+  const documentProjectTarget = documentProjectSwitchTarget(
+    documentProjectForSwitch(documentLink.link, documentLink.project, queryProject),
+    selectedProject,
+    selectableProjectNames,
+    { isRestricted: isRestricted || !permissionsLoaded },
+  );
+  // The chat stream transport follows the selected project's flags. A shared
+  // document URL must switch projects, and the document view must wait until
+  // that project's flag is applied, or the stream opens on the old project and sticks.
+  const [streamAlignedProject, setStreamAlignedProject] = useState<string | null>(null);
+  useEffect(() => {
+    if (!documentProjectTarget) return;
+    changeProject(documentProjectTarget);
+    changeAreaPath(documentProjectTarget);
+    fetch(`/api/projects/${encodeURIComponent(documentProjectTarget)}/select`, {
+      method: 'POST',
+      credentials: 'include',
+    }).catch(() => {});
+  }, [documentProjectTarget, changeProject, changeAreaPath]);
+  const holdLinkedProjectRoute = shouldHoldDocumentRoute({
+    link: documentLink.link,
+    lookupPending: documentLink.pending || documentAccessPending,
+    switchTarget: documentProjectTarget,
+  });
+  const documentProjectOpening = documentProjectTarget !== null
+    || (
+      Boolean(documentLink.link)
+      && !documentLink.failed
+      && (
+        documentLink.pending
+        || documentAccessPending
+        || homeFlagsLoading
+        || streamAlignedProject !== selectedProject
+      )
+    );
+  const playbooksEnabled =
+    !homeFlagsLoading && homeFlags['playbooks-production-adapters'] === true;
+  // Prefer the WebSocket agent gateway when the durable interactive transport
+  // flag is enabled; SSE remains the stream-transport fallback only.
   // Wait until flags resolve so we do not open SSE first, then leave it stuck
   // after the flag loads as true (useChatStream reopens on the change event).
   useEffect(() => {
     if (homeFlagsLoading) return;
     setInteractiveWsEnabled(interactiveWsEnabled);
-  }, [homeFlagsLoading, interactiveWsEnabled]);
-  // @feature-flag:ai-runs-interactive end
+    setStreamAlignedProject(selectedProject);
+  }, [homeFlagsLoading, interactiveWsEnabled, selectedProject]);
 
   const canAccessHome =
     !isRestricted &&
@@ -318,7 +394,23 @@ function App() {
   );
   const effectiveEnabledViews = isRestricted ? restrictedModules : enabledViews;
   const menuConfigReady = isRestricted || !menuConfigLoading;
+  const canAccessPlaybooks =
+    playbooksEnabled &&
+    menuConfigReady &&
+    (isSuperAdmin || (effectiveEnabledViews.includes('playbooks') && can('playbooks:view')));
   const restrictedSkipRef = useRef(false);
+
+  // UI Lab members read the whole project list; everyone else only reaches
+  // designs shared with them, which is also what earns them the nav item.
+  const uiLabWorkspaceAccess = isSuperAdmin || isInAnyGroup(['UI/UX']);
+  const uiLabSharesProject = !uiLabWorkspaceAccess
+    && selectedProject
+    && effectiveEnabledViews.includes('ui-lab')
+    && can('ui-lab:view')
+    ? selectedProject
+    : null;
+  const { data: uiLabSharedDesigns, isLoading: uiLabSharesLoading } = useUiLabSharedDesigns(uiLabSharesProject);
+  const hasUiLabShares = (uiLabSharedDesigns?.length ?? 0) > 0;
 
   // Bind restricted users to the internal Apex project token (project-less UX).
   useEffect(() => {
@@ -402,7 +494,7 @@ function App() {
   // Wait for permissionsLoaded and homeFlagsLoading to avoid redirecting before
   // the permissions and flag fetches complete.
   useEffect(() => {
-    if (!permissionsLoaded || !menuConfigReady || homeFlagsLoading) return;
+    if (!permissionsLoaded || !menuConfigReady || homeFlagsLoading || holdLinkedProjectRoute) return;
     // Restricted users are redirected away from the selector by a dedicated effect.
     if (isRestricted && currentView === 'project-selector') return;
 
@@ -424,12 +516,45 @@ function App() {
     if (currentView === 'backlog'       && !isSuperAdmin && (!effectiveEnabledViews.includes('backlog')   || !can('interviews:view'))) navigate(fallback);
     if (currentView === 'adr'           && !isSuperAdmin && (!effectiveEnabledViews.includes('adr')       || !can('adr:view'))) navigate(fallback);
     if (currentView === 'notifications' && !can('notifications:view'))  navigate(fallback);
-    if (currentView === 'my-work'       && !isSuperAdmin && (!effectiveEnabledViews.includes('my-work') || !can('dev-workbench:view'))) navigate(fallback);
+    if (
+      currentView === 'my-work'
+      && !canAccessMyWork({
+        can,
+        isSuperAdmin,
+        isInAnyGroup,
+        enabledViews: effectiveEnabledViews,
+      })
+    ) navigate(fallback);
     if (currentView === 'standup'        && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
     if (currentView === 'standup-manage' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:manage')))      navigate(fallback);
     if (currentView === 'standup-summary' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
     if (currentView === 'feature-requests' && !isSuperAdmin && (!effectiveEnabledViews.includes('feature-requests') || !can('feature-requests:view'))) navigate(fallback);
-    if (currentView === 'ui-lab'        && !isSuperAdmin && (!effectiveEnabledViews.includes('ui-lab') || !can('ui-lab:view') || !isInAnyGroup(['UI/UX']))) navigate(fallback);
+    // UI Lab workspace requires UI/UX. Named viewers reach it two ways: a
+    // deep-linked design (`/ui-lab/:id`), or the shared list once something has
+    // been shared with them. The server enforces live share access either way.
+    // Wait when the link's ?project= has not been applied yet, or when the
+    // shared-with-me list is still loading — both used to bounce viewers off.
+    if (currentView === 'ui-lab') {
+      const uiLabDesignDeepLink = /^\/ui-lab\/[^/]+/.test(location.pathname);
+      const uiLabLinkProject = new URLSearchParams(location.search).get('project');
+      const projectSwitchPending = Boolean(
+        uiLabDesignDeepLink
+        && uiLabLinkProject
+        && uiLabLinkProject !== selectedProject
+        && availableProjects.includes(uiLabLinkProject),
+      );
+      const access = resolveUiLabRouteAccess({
+        isSuperAdmin,
+        menuEnabled: effectiveEnabledViews.includes('ui-lab'),
+        canView: can('ui-lab:view'),
+        inUiUxGroup: isInAnyGroup(['UI/UX']),
+        isDesignDeepLink: uiLabDesignDeepLink,
+        hasShares: hasUiLabShares,
+        sharesPending: Boolean(uiLabSharesProject) && uiLabSharesLoading,
+        projectSwitchPending,
+      });
+      if (access === 'deny') navigate(fallback);
+    }
     if (currentView === 'design-module' && !isSuperAdmin && (!effectiveEnabledViews.includes('design-module') || !can('design-module:view'))) navigate(fallback);
     if (currentView === 'load-tests'    && !isSuperAdmin && (!effectiveEnabledViews.includes('load-tests')    || !can('load-test:view')))    navigate(fallback);
     if (currentView === 'diagrams'      && !isSuperAdmin && (!effectiveEnabledViews.includes('diagrams')      || !can('diagram:view')))      navigate(fallback);
@@ -443,11 +568,14 @@ function App() {
         navigate(firstAccessible ? `/planning/${firstAccessible}` : fallback);
       }
     }
-  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, workBoardEnabled, navigate]);
+  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, availableProjects, workBoardEnabled, hasUiLabShares, uiLabSharesLoading, uiLabSharesProject, navigate, location.pathname, location.search, holdLinkedProjectRoute]);
 
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
   const startChat = useStartChat();
+  const [firstMessageError, setFirstMessageError] = useState<
+    { threadId: string; message: string } | null
+  >(null);
   const panelRepo = useMemo(
     () =>
       activeSkillConfig
@@ -456,11 +584,66 @@ function App() {
     [activeSkillConfig, skillRepos, selectedProject],
   );
 
-  const handleStartPanelChat = useCallback(async () => {
-    if (!can('chat:view')) return;
+  const syncHomeThreadUrl = useCallback((threadId: string | null) => {
+    const searchParams = new URLSearchParams(location.search);
+    if (
+      location.pathname === '/home'
+      && searchParams.get('thread') === threadId
+    ) {
+      return;
+    }
+    if (threadId) {
+      searchParams.set('thread', threadId);
+    } else {
+      searchParams.delete('thread');
+    }
+    const search = searchParams.toString();
+    navigate(
+      {
+        pathname: '/home',
+        search: search ? `?${search}` : '',
+      },
+      { replace: true },
+    );
+  }, [location.pathname, location.search, navigate]);
+
+  const previousHomeProjectRef = useRef(selectedProject);
+  useEffect(() => {
+    const projectChanged = previousHomeProjectRef.current !== selectedProject;
+    previousHomeProjectRef.current = selectedProject;
+    if (projectChanged && currentView === 'home') {
+      const urlThreadId = new URLSearchParams(location.search).get('thread');
+      const urlThreadMatchesProject = Boolean(
+        urlThreadId
+        && documentLink.link?.kind === 'chat-thread'
+        && documentLink.project
+        && documentLink.project.toLowerCase() === selectedProject.toLowerCase(),
+      );
+      if (urlThreadMatchesProject) {
+        setActiveThreadId(urlThreadId);
+        setActiveThreadProject(selectedProject);
+        return;
+      }
+      // Runs after AgentHome's effect, which still saw the outgoing project's
+      // ?thread= and rebound it; replace that with the destination's last thread.
+      const storedThreadId = sessionStorage.getItem(`agentHomeThreadId:${selectedProject}`);
+      setActiveThreadId(storedThreadId);
+      setActiveThreadProject(storedThreadId ? selectedProject : null);
+      syncHomeThreadUrl(storedThreadId);
+    }
+  }, [currentView, selectedProject, syncHomeThreadUrl, location.search, documentLink.link, documentLink.project]);
+
+  const handleStartPanelChat = useCallback(async (options?: StartPanelChatOptions) => {
+    if (!can('chat:view') || !can('chat:create')) return;
     setChatOpen(true);
+    setFirstMessageError(null);
+    if (!options) {
+      setActiveThreadId(null);
+      setActiveThreadProject(null);
+      syncHomeThreadUrl(null);
+      return;
+    }
     if (!panelRepo || startChat.isPending) return;
-    setActiveThreadId(null);
     try {
       const result = await startChat.mutateAsync({
         kickoff: {
@@ -468,18 +651,84 @@ function App() {
           repo: panelRepo.name,
           branch: panelRepo.defaultBranch ?? 'main',
           skillProvider: activeSkillConfig?.skillProvider ?? undefined,
-          model: DEFAULT_MODEL_ID,
-          skillSettingsId: selectedSkillSettingsId ?? undefined,
+          model: options?.model ?? DEFAULT_MODEL_ID,
+          skillSettingsId: activeSkillConfig?.id ?? selectedSkillSettingsId ?? undefined,
+          skillPath: options?.quickSkill?.skillPath,
+          pillLabel: options?.quickSkill?.label ?? options?.mcpPill?.label,
+          pillDescription: options?.quickSkill?.description ?? options?.mcpPill?.description ?? undefined,
+          pillBypassScopePolicy: options?.quickSkill?.bypassScopePolicy ?? undefined,
+          ...(options?.mcpPill ? { mcpPill: options.mcpPill } : {}),
         },
+        skipAutoKickoff: true,
       });
       setActiveThreadId(result.threadId);
+      setActiveThreadProject(selectedProject);
+      syncHomeThreadUrl(result.threadId);
+      if (options?.initialMessage) {
+        const res = await fetch(`/api/chat/threads/${result.threadId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            turnId: createChatTurnId(),
+            text: options.initialMessage,
+            model: options.model ?? DEFAULT_MODEL_ID,
+            ...(options.attachments?.length ? { attachments: options.attachments } : {}),
+          }),
+        });
+        if (!res.ok) {
+          const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+          setFirstMessageError({
+            threadId: result.threadId,
+            message: friendlyChatErrorMessage(typeof body?.error === 'string' ? body.error : null),
+          });
+        }
+      }
     } catch {
       // Error shown inside the panel
     }
-  }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig]);
+  }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig, syncHomeThreadUrl]);
+
+  useEffect(() => {
+    if (
+      currentView !== 'home'
+      || !activeThreadId
+      || activeThreadProject !== selectedProject
+      || activeThread?.id !== activeThreadId
+      || activeThread.kickoff.project !== selectedProject
+    ) return;
+    sessionStorage.setItem(`agentHomeThreadId:${selectedProject}`, activeThreadId);
+  }, [
+    activeThread,
+    activeThreadId,
+    activeThreadProject,
+    currentView,
+    selectedProject,
+  ]);
+
+  useEffect(() => {
+    if (
+      !activeThreadId
+      || !activeThread
+      || activeThread.id !== activeThreadId
+      || activeThreadProject !== selectedProject
+      || activeThread.kickoff.project === selectedProject
+    ) return;
+    const storageKey = `agentHomeThreadId:${selectedProject}`;
+    if (sessionStorage.getItem(storageKey) === activeThreadId) {
+      sessionStorage.removeItem(storageKey);
+    }
+  }, [activeThread, activeThreadId, activeThreadProject, selectedProject]);
+
+  const projectScopedActiveThread =
+    activeThreadProject === selectedProject
+    && activeThread?.kickoff.project === selectedProject
+      ? activeThread
+      : null;
 
   if (isAuthenticated === null) return <div className="app-loading"><ApexLoader size={80} /></div>;
   if (!isAuthenticated) return <Login />;
+  if (devAccessDenied) return <DevEnvAccessDenied onLogout={() => { void handleLogout(); }} />;
 
   if (currentView === 'project-selector') {
     // Restricted users never see the project picker — show a brief loader while redirecting.
@@ -638,7 +887,11 @@ function App() {
     );
   }
 
-  if (currentView === 'not-found') {
+  if (currentView === 'playbooks' && (homeFlagsLoading || !menuConfigReady)) {
+    return <ViewSkeleton />;
+  }
+
+  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks)) {
     return (
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <div role="status" aria-live="polite" {...{ 'data-testid': 'route-not-found' }}>
@@ -663,6 +916,7 @@ function App() {
             isInAnyGroup={isInAnyGroup}
             menuEnabledViews={effectiveEnabledViews}
             isSuperAdmin={isSuperAdmin}
+            hasUiLabShares={hasUiLabShares}
             selectedProject={selectedProject}
             canAccessHome={canAccessHome}
             onNavigateHome={() => navigate('/home')}
@@ -681,6 +935,8 @@ function App() {
             workBoardEnabled={workBoardEnabled}
             onNavigateLoadTests={() => navigate('/load-tests')}
             onNavigateDiagrams={() => navigate('/diagrams')}
+            onNavigatePlaybooks={() => navigate('/playbooks')}
+            playbooksEnabled={playbooksEnabled}
             onNavigateAdmin={() => navigate('/admin/roles')}
           />
           <div className={`app-main ${sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}>
@@ -710,6 +966,7 @@ function App() {
             isInAnyGroup={isInAnyGroup}
             menuEnabledViews={effectiveEnabledViews}
             isSuperAdmin={isSuperAdmin}
+            hasUiLabShares={hasUiLabShares}
             selectedProject={isRestricted ? undefined : selectedProject}
             hideProjectChrome={isRestricted}
             canAccessHome={canAccessHome}
@@ -734,10 +991,12 @@ function App() {
             onNavigateDiagrams={() => navigate('/diagrams')}
             onNavigateWorkBoard={() => navigate('/work-board')}
             workBoardEnabled={workBoardEnabled}
+            onNavigatePlaybooks={() => navigate('/playbooks')}
+            playbooksEnabled={playbooksEnabled}
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
             onLogout={handleLogout}
-            onOpenAgentChat={currentView !== 'home' ? () => setChatOpen(true) : undefined}
+            onOpenAgentChat={undefined}
           />
           {hasUnreadChangelog && (
             <div className="changelog-banner-row">
@@ -751,31 +1010,91 @@ function App() {
             </div>
           )}
 
+          {/*
+            Sits outside agent-home-keepalive on purpose: the Home chat panel is an
+            absolute overlay pinned below the tab strip, so a banner inside that
+            container would be covered by it.
+          */}
+          {canAccessHome && currentView === 'home'
+            && isInAnyGroup(['Manager', 'Product-Owner'])
+            && activeSkillConfig?.skillRepo && (
+            <div className="foundation-skill-banner-row">
+              <FoundationSkillUpdateBanner
+                project={selectedProject || null}
+                repo={activeSkillConfig.skillRepo}
+                provider={activeSkillConfig.skillProvider ?? 'ado'}
+                branch={activeSkillConfig.skillBranch ?? 'main'}
+                {...{ 'data-testid': 'agent-home-foundation-skill-banner' }}
+              />
+            </div>
+          )}
+
           {canAccessHome ? (
             <div
               className="agent-home-keepalive"
               style={
-                currentView === 'home'
+                currentView === 'home' && !documentProjectOpening
                   ? undefined
                   : { display: 'none' }
               }
-              aria-hidden={currentView !== 'home'}
+              aria-hidden={currentView !== 'home' || documentProjectOpening}
             >
               <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                 {/* Top-level split: demo component gated by "example-flag-demo" flag */}
                 <FeatureFlagDemo project={selectedProject} />
-                <AgentHome selectedProject={selectedProject} selectedSkillSettingsId={selectedSkillSettingsId} isAdmin={isSuperAdmin || isAdmin || (groups ?? []).includes('Manager') || (groups ?? []).includes('Product-Owner')} />
+                <AgentHome
+                  selectedProject={selectedProject}
+                  isActive={currentView === 'home' && !documentProjectOpening}
+                  onHomeViewChange={handleHomeViewChange}
+                  onRestoreThread={(id) => {
+                    setActiveThreadId(id);
+                    setActiveThreadProject(selectedProject);
+                    syncHomeThreadUrl(id);
+                  }}
+                />
+                {/* data-testid-exempt — ChatAgentPanel API has no data-testid prop */}
+                <ChatAgentPanel
+                  thread={projectScopedActiveThread}
+                  activeThreadId={projectScopedActiveThread?.id ?? null}
+                  isLoadingThread={
+                    Boolean(activeThreadId)
+                    && activeThreadProject === selectedProject
+                    && (isFetchingActiveThread || !projectScopedActiveThread)
+                  }
+                  isOpen={currentView === 'home' && chatOpen}
+                  onClose={() => setChatOpen(false)}
+                  onNewChat={handleStartPanelChat}
+                  onSelectThread={(id) => {
+                    setActiveThreadId(id || null);
+                    setActiveThreadProject(id ? selectedProject : null);
+                    syncHomeThreadUrl(id || null);
+                  }}
+                  selectedProject={selectedProject}
+                  canStartNewChat={!!panelRepo && !isLoadingSkillRepos && !startChat.isPending}
+                  isStartingNewChat={startChat.isPending}
+                  newChatError={
+                    startChat.error?.message
+                    ?? (firstMessageError?.threadId === activeThreadId
+                      ? firstMessageError.message
+                      : undefined)
+                  }
+                  onClearNewChatError={() => setFirstMessageError(null)}
+                  launchedFromHome
+                  selectedSkillSettingsId={selectedSkillSettingsId}
+                />
               </ErrorBoundary>
             </div>
           ) : currentView === 'home' ? (
             /* Access controls still loading — withhold content to avoid a flash */
             null
           ) : null}
-          {currentView === 'home' ? null : currentView === 'calendar' ? (
+          {documentProjectOpening ? (
+            <DocumentProjectOpening label={documentProjectTarget ? `Opening ${documentProjectTarget}…` : 'Loading…'} />
+          ) : currentView === 'home' ? null : currentView === 'calendar' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 {error && !isLoading && (
-                  <div className="work-items-inline-error" role="status" data-testid="work-items-inline-error">
+                  <div className="work-items-inline-error" role="status" {...{ 'data-testid': 'work-items-inline-error' }}>
                     <span>
                       Calendar work items couldn&apos;t be refreshed
                       {workItems.length > 0 ? ' — showing the last loaded data.' : '.'}
@@ -785,7 +1104,7 @@ function App() {
                       className="work-items-inline-error-retry"
                       onClick={() => { void refetchWorkItems(); }}
                       disabled={isFetchingWorkItems}
-                      data-testid="work-items-retry"
+                      {...{ 'data-testid': 'work-items-retry' }}
                     >
                       {isFetchingWorkItems ? 'Retrying…' : 'Retry'}
                     </button>
@@ -883,7 +1202,8 @@ function App() {
                     <InterviewChatView />
                   ) : location.pathname.startsWith('/backlog/prd/') ? (
                     <PrdReviewView />
-                  ) : location.pathname.startsWith('/backlog/design-prototypes/') ? (
+                  ) : location.pathname.startsWith('/backlog/design-prototypes/')
+                    || location.pathname.startsWith('/backlog/design-prototype/') ? (
                     <DesignPrototypeReviewView />
                   ) : location.pathname.startsWith('/backlog/design-plan/') ? (
                     <DesignPlanReviewView />
@@ -1051,7 +1371,18 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 <div className="ui-lab-view" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-                  <UiLabView project={selectedProject} />
+                  <UiLabView
+                    project={selectedProject}
+                    initialDesignId={(() => {
+                      const match = /^\/ui-lab\/([^/?#]+)/.exec(location.pathname);
+                      return match ? decodeURIComponent(match[1]) : null;
+                    })()}
+                    sharedMode={
+                      /^\/ui-lab\/[^/?#]+/.test(location.pathname)
+                      && !uiLabWorkspaceAccess
+                    }
+                    hasWorkspaceAccess={uiLabWorkspaceAccess}
+                  />
                 </div>
               </Suspense>
             </ErrorBoundary>
@@ -1059,6 +1390,46 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 <DesignModuleView selectedProject={selectedProject} />
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'playbooks' ? (
+            // Only reachable when the flag is on; the off case returned the not-found surface above.
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                {(() => {
+                  const segments = location.pathname.split('/').filter(Boolean);
+                  if (segments[0] === 'playbooks' && segments[1] === 'definitions' && segments[2]) {
+                    return (
+                      <PlaybookCanvasPage
+                        project={selectedProject}
+                        definitionId={segments[2]}
+                      />
+                    );
+                  }
+                  if (segments[0] === 'playbooks' && segments[1] === 'runs' && segments[2]) {
+                    return (
+                      <PlaybookLiveRunPage
+                        project={selectedProject}
+                        runId={segments[2]}
+                      />
+                    );
+                  }
+                  if (segments[0] === 'playbooks' && segments[1] && !segments[2]) {
+                    return (
+                      <PlaybookDashboardPage
+                        project={selectedProject}
+                        definitionId={segments[1]}
+                      />
+                    );
+                  }
+                  // Run lists keep the status view: links from notifications and Home carry
+                  // `?filter=assigned-to-me` or `?run=<id>` and expect that run expanded.
+                  const params = new URLSearchParams(location.search);
+                  if (params.get('view') === 'runs' || params.has('filter') || params.has('run')) {
+                    return <PlaybookStatusView selectedProject={selectedProject} />;
+                  }
+                  return <PlaybooksManagePage project={selectedProject} />;
+                })()}
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'load-tests' ? (
@@ -1141,7 +1512,7 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <div className="planning-view">
                 {error && !isLoading && (
-                  <div className="work-items-inline-error" role="status" data-testid="work-items-inline-error">
+                  <div className="work-items-inline-error" role="status" {...{ 'data-testid': 'work-items-inline-error' }}>
                     <span>
                       Planning work items couldn&apos;t be refreshed
                       {workItems.length > 0 ? ' — showing the last loaded data.' : '.'}
@@ -1151,7 +1522,7 @@ function App() {
                       className="work-items-inline-error-retry"
                       onClick={() => { void refetchWorkItems(); }}
                       disabled={isFetchingWorkItems}
-                      data-testid="work-items-retry"
+                      {...{ 'data-testid': 'work-items-retry' }}
                     >
                       {isFetchingWorkItems ? 'Retrying…' : 'Retry'}
                     </button>
@@ -1216,7 +1587,7 @@ function App() {
                   ) : planningTab === 'releases' ? (
                     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                       <Suspense fallback={<ViewSkeleton />}>
-                        {usesBoardWorkItems ? (
+                        {selectedProject.toLowerCase() === 'apex' ? (
                           <BoardReleaseView project={selectedProject} />
                         ) : (
                           <ReleaseView workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
@@ -1262,7 +1633,7 @@ function App() {
           whatsNewSettled={whatsNewAutomaticOverlaySettled}
           whatsNewBlocksWalkthrough={whatsNewBlocksAutomaticWalkthrough}
         />
-        {showBetaAnnouncement && !(isSuperAdmin && betaAnnouncementDismissed) && (
+        {permissionsLoaded && showBetaAnnouncement && !devAccessAllowlisted && !(isSuperAdmin && betaAnnouncementDismissed) && (
           // data-testid-exempt — BetaAnnouncementModal API has no data-testid prop
           <BetaAnnouncementModal
             isSuperAdmin={isSuperAdmin}
@@ -1270,18 +1641,6 @@ function App() {
           />
         )}
 
-        {/* data-testid-exempt — ChatAgentPanel API has no data-testid prop */}
-        <ChatAgentPanel
-          thread={activeThread}
-          isOpen={chatOpen}
-          onClose={() => setChatOpen(false)}
-          onNewChat={handleStartPanelChat}
-          onSelectThread={(id) => setActiveThreadId(id || null)}
-          selectedProject={selectedProject}
-          canStartNewChat={!!panelRepo && !isLoadingSkillRepos && !startChat.isPending}
-          isStartingNewChat={startChat.isPending}
-          newChatError={startChat.error?.message}
-        />
       </NotificationWrapper>
       </DndProvider>
     </ErrorBoundary>

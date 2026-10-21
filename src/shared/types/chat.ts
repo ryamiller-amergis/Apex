@@ -1,4 +1,27 @@
+import type { EffortLevel } from './effort';
+
 export type ChatMessageRole = 'user' | 'agent' | 'tool' | 'system';
+
+export type AgentModuleId =
+  | 'interview'
+  | 'prd'
+  | 'adr'
+  | 'designDoc'
+  | 'designDocAssistant'
+  | 'designPrototype'
+  | 'testCase'
+  | 'designDocValidation'
+  | 'prdAssistant'
+  | 'prdValidation'
+  | 'development'
+  | 'standup'
+  | 'featureRequest'
+  | 'technical'
+  | 'issue'
+  | 'calendarAssistant'
+  | 'loadTestGeneration'
+  | 'designModule'
+  | 'designModuleScoping';
 
 export interface ChatMessage {
   id: string;
@@ -43,14 +66,25 @@ export interface ChatThreadKickoff {
   skillProvider?: import('./projectSettings').SkillProvider;
   /** Optional — omit for a free-chat session with no skill pre-loaded */
   skillPath?: string;
+  /**
+   * Server-set when `skillPath` is Apex's default rather than a project setting.
+   * The copy bundled with Apex may stand in when the project repository lacks it.
+   */
+  skillPathIsAppDefault?: boolean;
   /** Cursor SDK model ID to use for this thread (e.g. "claude-opus-4-6") */
   model?: string;
+  /** Server-set module identity. Client-supplied values are discarded by client-facing routes. */
+  agentModule?: AgentModuleId;
+  /** Server-resolved once at kickoff. Client-supplied values are discarded. */
+  effort?: EffortLevel;
   /** Raw transcript text pasted by the user */
   transcript?: string;
   /** Additional freeform context */
   freeformContext?: string;
   /** MCP pill selected on the home page — wires an external MCP server into this thread */
   mcpPill?: import('./projectSettings').QuickMcpPill;
+  /** Server-verified MCP profile applied to a Playbook cursor-agent thread. */
+  playbookMcpProfile?: string;
   /** Identifies the type of assistant thread — controls system prompt behavior */
   assistantType?: 'design-doc' | 'prd' | 'adr' | 'calendar-work-item';
   /** Calendar assistant: anchor work item ID */
@@ -160,6 +194,12 @@ export type SseEventType =
 export interface SseTokenEvent {
   type: 'token';
   text: string;
+  /** Character offset for durable streamed text; absent on legacy chat tokens. */
+  streamOffset?: number;
+  /** Raw end offset when sanitized durable text consumed hidden bytes. */
+  streamEndOffset?: number;
+  /** Full final text snapshot used to recover any missing streamed tail. */
+  streamSnapshot?: boolean;
 }
 
 export interface SseMessageEvent {
@@ -200,6 +240,7 @@ export interface SseErrorEvent {
   type: 'error';
   error: string;
   errorCode?: SseErrorCode;
+  runId?: string;
 }
 
 export interface SseRetryingEvent {
@@ -429,11 +470,20 @@ export interface StartChatResponse {
   threadId: string;
 }
 
+export interface ChatTurnSkill {
+  name: string;
+  path: string;
+}
+
 export interface SendMessageRequest {
+  /** Client-generated durable turn identity, stable across one send's network retries. */
+  turnId: string;
   text: string;
   /** Optional model override for this turn. If different from the thread's current model,
    *  the agent will be disposed and resumed with the new model. */
   model?: string;
   /** Text file contents uploaded by the user as additional turn context. */
   attachments?: ChatAttachment[];
+  /** Skill selected for this turn. The visible user message remains unchanged. */
+  skill?: ChatTurnSkill;
 }

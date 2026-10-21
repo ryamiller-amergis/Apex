@@ -9,22 +9,29 @@ import type {
   GroundingPreparationStatus,
   SseErrorEvent,
   SseEvent,
+  SseDoneEvent,
   SseGroundingEvent,
   SseHealthEvent,
   SseMessageEvent,
   SsePhaseEvent,
   SseRetryingEvent,
   SseThinkingEvent,
+  SseTokenEvent,
   SseToolStatusEvent,
 } from '../../shared/types/chat';
 import { v4 as uuidv4 } from 'uuid';
-import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
+import {
+  friendlyChatErrorMessage,
+  friendlyChatProgressLabel,
+} from '../../shared/utils/chatProgressCopy';
 import {
   INTERACTIVE_WS_CHANGED_EVENT,
   isInteractiveWsEnabled,
   openThreadEventStream,
   type ThreadStreamHandle,
 } from '../utils/threadEventStream';
+
+const CONNECTION_ERROR_GRACE_MS = 2_000;
 
 /** Chronological order for chat history (SSE replay + REST merge). */
 export function sortChatMessagesByTs(messages: ChatMessage[]): ChatMessage[] {
@@ -33,6 +40,10 @@ export function sortChatMessagesByTs(messages: ChatMessage[]): ChatMessage[] {
     if (byTs !== 0) return byTs;
     return a.id.localeCompare(b.id);
   });
+}
+
+export function durableTokenKey(eventId: string, event: SseTokenEvent): string {
+  return `${eventId}:${event.streamOffset ?? 'legacy'}`;
 }
 
 export interface ToolProgress {
@@ -74,6 +85,8 @@ interface ChatStreamState {
   toolProgress: ToolProgress[];
   status: ChatThreadStatus;
   isConnected: boolean;
+  /** True only after the current stream reports a connection failure. */
+  hasConnectionError: boolean;
   /** Client-observed timestamp of the latest semantic run progress event. */
   lastProgressAt: number | null;
   phaseEvents: RunPhaseProgress[];
@@ -86,7 +99,14 @@ interface ChatStreamState {
   isRetrying: boolean;
   /** Human-readable reason shown during retry (e.g. "Rate limited, retrying…") */
   retryReason: string | null;
+  /**
+   * Failed durable run identity captured from a terminal error event.
+   * Null when the failure has no durable run ID (local/network send errors).
+   */
+  retryableRunId: string | null;
   groundingPreparation: GroundingPreparationProgress | null;
+  /** Clears the failed durable run identity (cancel / new turn). */
+  clearRetryableRunId: () => void;
 }
 
 interface UseChatStreamOptions {
@@ -97,7 +117,7 @@ interface UseChatStreamOptions {
   initialPrdReady?: boolean;
 }
 
-const MAX_SEEN_EVENT_IDS = 512;
+const MAX_SEEN_EVENT_IDS = 2048;
 const MAX_PHASE_EVENTS = 200;
 /**
  * Only these SSE event types carry durable `id:` frames from the server.
@@ -223,6 +243,7 @@ export function useChatStream(
     options.initialStatus ?? 'idle'
   );
   const [isConnected, setIsConnected] = useState(false);
+  const [hasConnectionError, setHasConnectionError] = useState(false);
   const [lastProgressAt, setLastProgressAt] = useState<number | null>(null);
   const [phaseEvents, setPhaseEvents] = useState<RunPhaseProgress[]>([]);
   const [runHealth, setRunHealth] = useState<RunHealthProgress | null>(null);
@@ -234,10 +255,11 @@ export function useChatStream(
   const [backlogReady, setBacklogReady] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [retryReason, setRetryReason] = useState<string | null>(null);
+  const [retryableRunId, setRetryableRunId] = useState<string | null>(null);
   const [groundingPreparation, setGroundingPreparation] =
     useState<GroundingPreparationProgress | null>(null);
   const [eventDrivenTermination, setEventDrivenTermination] = useState(false);
-  // Re-open the stream when ai-runs-interactive flips — otherwise a chat that
+  // Re-open the stream when ai-runs-v2-transport flips — otherwise a chat that
   // connected as SSE while flags were still loading stays on SSE forever.
   const [interactiveWsEnabled, setInteractiveWsEnabledState] = useState(
     isInteractiveWsEnabled
@@ -246,7 +268,11 @@ export function useChatStream(
   const streamRef = useRef<ThreadStreamHandle | null>(null);
   // Buffer tokens into the in-progress message
   const streamBufferRef = useRef('');
+  const pendingOffsetTokensRef = useRef<
+    Map<number, { text: string; key: string }>
+  >(new Map());
   const retryTimeoutRef = useRef<number | null>(null);
+  const connectionErrorTimeoutRef = useRef<number | null>(null);
   const pollTimerRef = useRef<number | null>(null);
   const seenEventIdsRef = useRef<Set<string>>(new Set());
   const seenEventIdOrderRef = useRef<string[]>([]);
@@ -289,6 +315,13 @@ export function useChatStream(
     }
   }, []);
 
+  const clearConnectionErrorTimeout = useCallback(() => {
+    if (connectionErrorTimeoutRef.current !== null) {
+      window.clearTimeout(connectionErrorTimeoutRef.current);
+      connectionErrorTimeoutRef.current = null;
+    }
+  }, []);
+
   const clearPollTimer = useCallback(() => {
     if (pollTimerRef.current !== null) {
       window.clearInterval(pollTimerRef.current);
@@ -303,6 +336,7 @@ export function useChatStream(
     setToolProgress([]);
     setStatus(initialStatusRef.current ?? 'idle');
     setIsConnected(false);
+    setHasConnectionError(false);
     setLastProgressAt(null);
     setPhaseEvents([]);
     setRunHealth(null);
@@ -312,15 +346,18 @@ export function useChatStream(
     setBacklogReady(false);
     setIsRetrying(false);
     setRetryReason(null);
+    setRetryableRunId(null);
     setGroundingPreparation(null);
     setEventDrivenTermination(false);
     eventDrivenTerminationRef.current = false;
     streamBufferRef.current = '';
+    pendingOffsetTokensRef.current.clear();
     seenEventIdsRef.current.clear();
     seenEventIdOrderRef.current = [];
+    clearConnectionErrorTimeout();
     clearRetryTimeout();
     clearPollTimer();
-  }, [clearRetryTimeout, clearPollTimer]);
+  }, [clearConnectionErrorTimeout, clearRetryTimeout, clearPollTimer]);
 
   // Merge REST thread snapshots into live state without reconnecting SSE.
   // Covers the common case where useChatThread loads after EventSource opens,
@@ -411,8 +448,72 @@ export function useChatStream(
       switch (event.type) {
         case 'token': {
           setLastProgressAt(Date.now());
-          streamBufferRef.current += event.text;
-          setStreamingText(streamBufferRef.current);
+          const tokenEvent = event as SseTokenEvent;
+          if (lastEventId) {
+            const key = durableTokenKey(lastEventId, tokenEvent);
+            if (!rememberEventId(key)) break;
+          }
+
+          const offset = tokenEvent.streamOffset;
+          if (
+            typeof offset !== 'number' ||
+            !Number.isSafeInteger(offset) ||
+            offset < 0
+          ) {
+            // Legacy tokens without offsets continue append-only.
+            streamBufferRef.current += tokenEvent.text;
+            setStreamingText(streamBufferRef.current);
+          } else {
+            const current = streamBufferRef.current;
+            const currentLen = current.length;
+            if (offset === currentLen) {
+              streamBufferRef.current = current + tokenEvent.text;
+            } else if (offset < currentLen) {
+              const overlapLen = Math.min(
+                tokenEvent.text.length,
+                currentLen - offset,
+              );
+              const existingOverlap = current.slice(offset, offset + overlapLen);
+              const incomingOverlap = tokenEvent.text.slice(0, overlapLen);
+              if (existingOverlap === incomingOverlap) {
+                const suffix = tokenEvent.text.slice(overlapLen);
+                if (suffix) {
+                  streamBufferRef.current = current + suffix;
+                }
+              } else {
+                streamBufferRef.current =
+                  current.slice(0, offset) + tokenEvent.text;
+              }
+            } else {
+              pendingOffsetTokensRef.current.set(offset, {
+                text: tokenEvent.text,
+                key: lastEventId
+                  ? durableTokenKey(lastEventId, tokenEvent)
+                  : `pending:${offset}`,
+              });
+            }
+
+            // Drain pending chunks the buffer has reached. Durable batches and
+            // live chunks are cut at different boundaries, so a pending chunk
+            // may start inside text that arrived since; append only its unseen
+            // suffix, and drop chunks the buffer already covers.
+            let drained = true;
+            while (drained) {
+              drained = false;
+              for (const [pendingOffset, pending] of pendingOffsetTokensRef.current) {
+                const bufferLength = streamBufferRef.current.length;
+                if (pendingOffset > bufferLength) continue;
+                pendingOffsetTokensRef.current.delete(pendingOffset);
+                if (pendingOffset + pending.text.length > bufferLength) {
+                  streamBufferRef.current += pending.text.slice(
+                    bufferLength - pendingOffset,
+                  );
+                }
+                drained = true;
+              }
+            }
+            setStreamingText(streamBufferRef.current);
+          }
           setIsRetrying(false);
           setRetryReason(null);
           clearRetryTimeout();
@@ -423,11 +524,13 @@ export function useChatStream(
           const messageEvent = event as SseMessageEvent;
           setLastProgressAt(Date.now());
           streamBufferRef.current = '';
+          pendingOffsetTokensRef.current.clear();
           setStreamingText('');
           setThinkingText('');
           setToolProgress([]);
           setIsRetrying(false);
           setRetryReason(null);
+          setRetryableRunId(null);
           clearRetryTimeout();
           setMessages((prev) => {
             const exists = prev.some((m) => m.id === messageEvent.message.id);
@@ -549,6 +652,10 @@ export function useChatStream(
           const errorEvent = event as SseErrorEvent;
           setLastProgressAt(Date.now());
           const code = errorEvent.errorCode;
+          const durableRunId =
+            typeof errorEvent.runId === 'string' && errorEvent.runId.trim()
+              ? errorEvent.runId.slice(0, 200)
+              : null;
 
           if (code === 'transient' || code === 'rate_limit') {
             const reason =
@@ -560,10 +667,11 @@ export function useChatStream(
             retryTimeoutRef.current = window.setTimeout(() => {
               setIsRetrying(false);
               setRetryReason(null);
+              if (durableRunId) setRetryableRunId(durableRunId);
               const fallbackMsg: ChatMessage = {
                 id: uuidv4(),
                 role: 'system',
-                text: `Error: ${errorText}`,
+                text: `Error: ${friendlyChatErrorMessage(errorText)}`,
                 ts: new Date().toISOString(),
               };
               setMessages((prev) => [...prev, fallbackMsg]);
@@ -573,6 +681,7 @@ export function useChatStream(
           }
 
           if (code === 'auth') {
+            setRetryableRunId(null);
             const authMsg: ChatMessage = {
               id: uuidv4(),
               role: 'system',
@@ -584,10 +693,15 @@ export function useChatStream(
             break;
           }
 
+          if (durableRunId) {
+            setRetryableRunId(durableRunId);
+          } else {
+            setRetryableRunId(null);
+          }
           const errMsg: ChatMessage = {
             id: uuidv4(),
             role: 'system',
-            text: `Error: ${event.error}`,
+            text: `Error: ${friendlyChatErrorMessage(event.error)}`,
             ts: new Date().toISOString(),
           };
           setMessages((prev) => [...prev, errMsg]);
@@ -597,6 +711,7 @@ export function useChatStream(
         case 'done': {
           setLastProgressAt(Date.now());
           streamBufferRef.current = '';
+          pendingOffsetTokensRef.current.clear();
           setStreamingText('');
           setThinkingText('');
           setToolProgress([]);
@@ -605,14 +720,21 @@ export function useChatStream(
           setGroundingPreparation(null);
           setProgressLabel(null);
           setProgressPhase(null);
+          // Keep retryableRunId across clean done after a prior failure so
+          // Retry remains available. Clear only on accepted turn, successful
+          // message, cancel, or thread change.
           clearRetryTimeout();
           clearPollTimer();
           setStatus('idle');
-          if ((event as any).error) {
+          if ((event as { error?: string }).error) {
+            const doneEvent = event as SseDoneEvent & { error?: string };
+            if (typeof doneEvent.runId === 'string' && doneEvent.runId.trim()) {
+              setRetryableRunId(doneEvent.runId.slice(0, 200));
+            }
             const errMsg: ChatMessage = {
               id: uuidv4(),
               role: 'system',
-              text: `Error: ${(event as any).error}`,
+              text: `Error: ${doneEvent.error}`,
               ts: new Date().toISOString(),
             };
             setMessages((prev) => [...prev, errMsg]);
@@ -625,10 +747,19 @@ export function useChatStream(
     };
 
     const stream = openThreadEventStream(threadId, {
-      onOpen: () => setIsConnected(true),
+      onOpen: () => {
+        clearConnectionErrorTimeout();
+        setIsConnected(true);
+        setHasConnectionError(false);
+      },
       onError: () => {
         // SSE auto-reconnects; the WS backend reconnects with ordinal resume.
         setIsConnected(false);
+        clearConnectionErrorTimeout();
+        connectionErrorTimeoutRef.current = window.setTimeout(() => {
+          connectionErrorTimeoutRef.current = null;
+          setHasConnectionError(true);
+        }, CONNECTION_ERROR_GRACE_MS);
       },
       onMessage: handleMessage,
     });
@@ -639,6 +770,7 @@ export function useChatStream(
       stream.close();
       streamRef.current = null;
       setIsConnected(false);
+      clearConnectionErrorTimeout();
       clearRetryTimeout();
       clearPollTimer();
     };
@@ -793,6 +925,7 @@ export function useChatStream(
     toolProgress,
     status,
     isConnected,
+    hasConnectionError,
     lastProgressAt,
     phaseEvents,
     runHealth,
@@ -802,6 +935,8 @@ export function useChatStream(
     backlogReady,
     isRetrying,
     retryReason,
+    retryableRunId,
+    clearRetryableRunId: () => setRetryableRunId(null),
     groundingPreparation,
   };
 }

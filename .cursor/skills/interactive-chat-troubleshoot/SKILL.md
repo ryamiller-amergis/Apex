@@ -93,7 +93,7 @@ node .cursor/skills/interactive-chat-troubleshoot/scripts/probe_live_bus.js --en
 When `needsPostgresFirewall` is true in environments.json:
 
 1. `az account set --subscription "MSS-Production"`
-2. Open temp rule on `psql-apex-eus2` / `rg-apex-prd-data` named `temp-interactive-chat-<you>`
+2. Open temp rule on `psql-apex-cus` / `rg-apex-prd-data` named `temp-interactive-chat-<you>`
 3. Run diagnose
 4. **Always delete** the firewall rule when finished
 

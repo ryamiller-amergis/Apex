@@ -12,6 +12,7 @@ import {
   updateApexWorkItem,
   moveApexWorkItem,
   bulkUpdateApexWorkItems,
+  rankApexWorkItems,
   listEligibleOwners,
   listFilterFacets,
   listReleases,
@@ -58,6 +59,7 @@ import type {
   GenerateFromFeatureRequestDTO,
   CreateFromDraftsDTO,
   RecordApexDeploymentDTO,
+  RankApexWorkItemsDTO,
 } from '../../shared/types/apexWorkItem';
 
 const router = Router();
@@ -331,6 +333,22 @@ router.post('/bulk', requirePermission('work-board:manage'), async (req, res, ne
     const dto = req.body as BulkUpdateApexWorkItemsDTO;
     const items = await bulkUpdateApexWorkItems(actorId, project, dto);
     res.json(items);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/rank', requirePermission('work-board:manage'), async (req, res, next) => {
+  try {
+    const actorId = getUserId(req);
+    const project = projectFromReq(req);
+    const dto = req.body as RankApexWorkItemsDTO;
+    if (!Array.isArray(dto.ids) || dto.ids.length === 0) {
+      res.status(400).json({ error: 'ids must be a non-empty array' });
+      return;
+    }
+    const result = await rankApexWorkItems(actorId, project, dto.ids);
+    res.json(result);
   } catch (err) {
     next(err);
   }

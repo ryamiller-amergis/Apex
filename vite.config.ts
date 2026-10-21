@@ -10,6 +10,13 @@ export default defineConfig({
     outDir: '../../dist/client',
     emptyOutDir: true,
   },
+  optimizeDeps: {
+    // Windows dev uses esbuild-wasm (scripts/patch-esbuild-wasm.js), which has a
+    // 32-bit memory ceiling; source maps for the full dependency set exceed it.
+    esbuildOptions: {
+      sourcemap: false,
+    },
+  },
   server: {
     port: 3000,
     proxy: {

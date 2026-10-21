@@ -12,6 +12,8 @@ import {
   useUpdateFeatureRequest,
   useReorderFeatureRequests,
   useReanalyzeFeatureRequest,
+  useFeatureRequestAssignees,
+  useRankFeatureRequests,
 } from '../hooks/useFeatureRequests';
 import type {
   FeatureRequest,
@@ -20,6 +22,7 @@ import type {
   FeatureRequestRisk,
   WorkItemType,
 } from '../../shared/types/featureRequest';
+import type { WorkItemOwnerSummary } from '../../shared/types/apexWorkItem';
 import {
   FEATURE_REQUEST_STATUSES,
   WORK_ITEM_TYPES,
@@ -143,10 +146,13 @@ export const FeatureRequestsView: React.FC = () => {
   const updateMutation = useUpdateFeatureRequest();
   const reorderMutation = useReorderFeatureRequests();
   const reanalyzeMutation = useReanalyzeFeatureRequest();
+  const rankMutation = useRankFeatureRequests(selectedProject);
 
   const [sortMode, setSortMode] = useState<SortMode>('rank');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('');
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
@@ -161,6 +167,10 @@ export const FeatureRequestsView: React.FC = () => {
     : 'feature';
 
   const canManage = can('feature-requests:manage');
+  const { data: assignees = [] } = useFeatureRequestAssignees(
+    selectedProject,
+    canManage,
+  );
   const canKickOff =
     permissionsLoaded &&
     can('interviews:manage') &&
@@ -174,7 +184,8 @@ export const FeatureRequestsView: React.FC = () => {
 
   useEffect(() => {
     setSelectedId(null);
-  }, [activeType]);
+    setPage(1);
+  }, [activeType, selectedProject]);
 
   // Deep link from Work Board Source: /feature-requests?id=<frId>
   useEffect(() => {
@@ -261,6 +272,7 @@ export const FeatureRequestsView: React.FC = () => {
 
   const handleTypeChange = useCallback(
     (type: WorkItemType) => {
+      setPage(1);
       setSearchParams(type === 'feature' ? {} : { tab: type });
     },
     [setSearchParams],
@@ -274,6 +286,7 @@ export const FeatureRequestsView: React.FC = () => {
         teamPriority: FeatureRequestPriority | null;
         teamRisk: FeatureRequestRisk | null;
         rank: number | null;
+        assigneeId: string | null;
       }>,
     ) => {
       updateMutation.mutate({ id, ...patch });
@@ -333,6 +346,13 @@ export const FeatureRequestsView: React.FC = () => {
   );
 
   const filtersActive = statusFilter !== '' || searchQuery !== '';
+  const pageCount = Math.max(1, Math.ceil(sorted.length / pageSize));
+  const currentPage = Math.min(page, pageCount);
+  const pageOffset = (currentPage - 1) * pageSize;
+  const visibleRequests = useMemo(
+    () => sorted.slice(pageOffset, pageOffset + pageSize),
+    [sorted, pageOffset, pageSize],
+  );
 
   const backlogTitle = selectedProject === 'Apex' ? 'Apex Backlog' : `${selectedProject} Backlog`;
 
@@ -365,22 +385,42 @@ export const FeatureRequestsView: React.FC = () => {
                 {filtersActive ? ' (filtered)' : ''}
               </p>
             </div>
-            {can('feature-requests:submit') && selectedProject && (
-              <button
-                type="button"
-                className={gridStyles.buttonPrimary}
-                onClick={() => setIsCreateModalOpen(true)}
-                {...{ 'data-testid': 'feature-request-create' }}
-              >
-                <span aria-hidden="true">+ </span>
-                New {itemNoun}
-              </button>
-            )}
+            <div className={gridStyles.headerActions}>
+              {canManage && (
+                <button
+                  type="button"
+                  className={gridStyles.buttonPrimary}
+                  disabled={rankMutation.isPending || sorted.length === 0}
+                  onClick={() =>
+                    rankMutation.mutate({ ids: sorted.map((item) => item.id) })
+                  }
+                  data-testid="feature-requests-ai-rank"
+                >
+                  {rankMutation.isPending
+                    ? 'Ranking…'
+                    : `AI rank filtered (${sorted.length})`}
+                </button>
+              )}
+              {can('feature-requests:submit') && selectedProject && (
+                <button
+                  type="button"
+                  className={gridStyles.buttonPrimary}
+                  onClick={() => setIsCreateModalOpen(true)}
+                  {...{ 'data-testid': 'feature-request-create' }}
+                >
+                  <span aria-hidden="true">+ </span>
+                  New {itemNoun}
+                </button>
+              )}
+            </div>
           </div>
 
           <DataGridToolbar
             searchValue={search}
-            onSearchChange={setSearch}
+            onSearchChange={(value) => {
+              setSearch(value);
+              setPage(1);
+            }}
             searchPlaceholder={`Search ${itemNoun}s…`}
             searchTestId="feature-requests-search"
           >
@@ -396,7 +436,10 @@ export const FeatureRequestsView: React.FC = () => {
             <DataGridFilterSelect
               label="Status"
               value={statusFilter}
-              onChange={setStatusFilter}
+              onChange={(value) => {
+                setStatusFilter(value);
+                setPage(1);
+              }}
               options={STATUS_FILTER_OPTIONS}
               includeEmptyOption
               emptyOptionLabel="All statuses"
@@ -410,6 +453,12 @@ export const FeatureRequestsView: React.FC = () => {
               {...{ 'data-testid': 'feature-requests-sort' }}
             />
           </DataGridToolbar>
+
+          {rankMutation.isError && (
+            <div className={gridStyles.error} role="alert">
+              {rankMutation.error.message}
+            </div>
+          )}
 
           {sorted.length === 0 ? (
             <p className={gridStyles.empty} {...{ 'data-testid': 'feature-requests-empty' }}>
@@ -428,6 +477,7 @@ export const FeatureRequestsView: React.FC = () => {
                     {showRank && <th scope="col">#</th>}
                     <th scope="col">Request</th>
                     <th scope="col">Status</th>
+                    <th scope="col">Assignee</th>
                     <th scope="col">AI Analysis</th>
                     <th scope="col">Team Override</th>
                     <th scope="col">Rationale</th>
@@ -435,13 +485,16 @@ export const FeatureRequestsView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {sorted.map((fr, idx) => (
+                  {visibleRequests.map((fr, visibleIndex) => {
+                    const idx = pageOffset + visibleIndex;
+                    return (
                     <FeatureRequestRow
                       key={fr.id}
                       fr={fr}
                       index={idx}
                       total={sorted.length}
                       canManage={canManage}
+                      assignees={assignees}
                       canKickOff={
                         isInterviewableWorkItemType(activeType) && canKickOff
                       }
@@ -453,6 +506,9 @@ export const FeatureRequestsView: React.FC = () => {
                         dragIndex !== idx
                       }
                       onEdit={() => setSelectedId(fr.id)}
+                      onAssign={(assigneeId) =>
+                        handleUpdate(fr.id, { assigneeId })
+                      }
                       onMoveUp={handleMoveUp}
                       onMoveDown={handleMoveDown}
                       onDragStart={() => {
@@ -482,11 +538,56 @@ export const FeatureRequestsView: React.FC = () => {
                         navigate(`/backlog/interview/${interviewId}`)
                       }
                     />
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           )}
+          <div
+            className={styles['pagination']}
+            data-testid="feature-requests-pagination"
+          >
+            <span>
+              {sorted.length === 0 ? '0' : pageOffset + 1}–
+              {Math.min(pageOffset + pageSize, sorted.length)} of {sorted.length}
+            </span>
+            <label>
+              Rows
+              <select
+                value={pageSize}
+                onChange={(event) => {
+                  setPageSize(Number(event.target.value));
+                  setPage(1);
+                }}
+                data-testid="feature-requests-page-size"
+              >
+                {[10, 25, 50, 100].map((size) => (
+                  <option key={size} value={size}>
+                    {size}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className={gridStyles.buttonGhost}
+              disabled={currentPage === 1}
+              onClick={() => setPage((current) => current - 1)}
+              data-testid="feature-requests-page-previous"
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              className={gridStyles.buttonGhost}
+              disabled={currentPage >= pageCount}
+              onClick={() => setPage((current) => current + 1)}
+              data-testid="feature-requests-page-next"
+            >
+              Next
+            </button>
+          </div>
         </section>
       </div>
 
@@ -496,6 +597,7 @@ export const FeatureRequestsView: React.FC = () => {
           canManage={canManage}
           onClose={() => setSelectedId(null)}
           onUpdate={handleUpdate}
+          assignees={assignees}
           onReanalyze={(id) => reanalyzeMutation.mutate(id)}
           isReanalyzing={reanalyzeMutation.isPending}
           {...{ 'data-testid': 'feature-request-detail-panel' }}
@@ -521,11 +623,13 @@ interface RowProps {
   index: number;
   total: number;
   canManage: boolean;
+  assignees: WorkItemOwnerSummary[];
   canKickOff: boolean;
   showRank: boolean;
   isDragging: boolean;
   isDropTarget: boolean;
   onEdit: () => void;
+  onAssign: (assigneeId: string | null) => void;
   onMoveUp: (index: number) => void;
   onMoveDown: (index: number) => void;
   onDragStart: () => void;
@@ -542,11 +646,13 @@ const FeatureRequestRow: React.FC<RowProps> = ({
   index,
   total,
   canManage,
+  assignees,
   canKickOff,
   showRank,
   isDragging,
   isDropTarget,
   onEdit,
+  onAssign,
   onMoveUp,
   onMoveDown,
   onDragStart,
@@ -647,6 +753,29 @@ const FeatureRequestRow: React.FC<RowProps> = ({
         <span className={statusBadgeClass(fr.status)}>
           {STATUS_LABELS[fr.status]}
         </span>
+      </td>
+
+      <td>
+        {canManage ? (
+          <select
+            className={styles['controlSelect']}
+            value={fr.assignedTo?.oid ?? ''}
+            onChange={(event) => onAssign(event.target.value || null)}
+            aria-label={`Assign ${fr.title}`}
+            data-testid={`feature-request-assignee-${fr.id}`}
+          >
+            <option value="">Unassigned</option>
+            {assignees.map((assignee) => (
+              <option key={assignee.oid} value={assignee.oid}>
+                {assignee.displayName}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span data-testid={`feature-request-assignee-label-${fr.id}`}>
+            {fr.assignedTo?.displayName ?? 'Unassigned'}
+          </span>
+        )}
       </td>
 
       <td>
