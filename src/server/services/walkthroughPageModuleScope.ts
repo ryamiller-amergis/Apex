@@ -247,6 +247,15 @@ const PAGE_MODULE_BY_MENU_KEY: Record<
       },
     ],
   },
+  integrations: {
+    pageEntries: [
+      {
+        component: 'src/client/components/IntegrationsView.tsx',
+        routePattern: '/integrations',
+        suggestedRoute: '/integrations',
+      },
+    ],
+  },
 };
 
 const FIXED_PAGE_MODULES: readonly WalkthroughPageModuleContext[] = [

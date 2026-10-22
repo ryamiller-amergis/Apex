@@ -18,6 +18,9 @@ import {
   appRoles,
   appUserProjectRoles,
   chatThreads,
+  featureFlagRules,
+  featureFlags,
+  integrationConnections,
   designDocs,
   designPrototypes,
   documentApproverAssignments,
@@ -33,7 +36,8 @@ import {
   reviewComments,
   testCases,
 } from '../db/schema';
-import type { MenuItemKey } from '../../shared/types/menuSettings';
+import { DEFAULT_ENABLED_MENU_VIEWS, type MenuItemKey } from '../../shared/types/menuSettings';
+import { clerkTicketFetchStub, setIntegrationFetchStub } from '../services/integrationFetchStub';
 import type { ValidationScorecard } from '../../shared/types/interview';
 
 const router = express.Router();
@@ -89,7 +93,9 @@ function defaultScorecard(score: number, threshold = 90): ValidationScorecard {
 router.post('/reset', async (_req, res) => {
   try {
     await db.delete(playbookDefinitions).where(like(playbookDefinitions.name, `${E2E_PREFIX}%`));
+    await db.delete(integrationConnections).where(like(integrationConnections.name, `${E2E_PREFIX}%`));
     await db.delete(appRoles).where(like(appRoles.name, `${E2E_PREFIX}%`));
+    setIntegrationFetchStub(null);
 
     await db.delete(reviewComments).where(like(reviewComments.body, `${E2E_PREFIX}%`));
     await db.delete(notifications).where(like(notifications.title, `${E2E_PREFIX}%`));
@@ -1106,6 +1112,94 @@ router.post('/seed/menu-settings', async (req, res) => {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: `E2E seed/menu-settings failed: ${message}` });
+  }
+});
+
+router.post('/seed/integration-provider-stub', (_req, res) => {
+  setIntegrationFetchStub(clerkTicketFetchStub);
+  res.json({ ok: true });
+});
+
+router.post('/seed/integrations-access', async (req, res) => {
+  try {
+    const { enabled, projects, grants } = req.body as {
+      enabled: boolean;
+      projects: string[];
+      grants: Array<{ userId: string; project: string; permissions: string[] }>;
+    };
+    const [flag] = await db.select().from(featureFlags).where(eq(featureFlags.key, 'integrations'));
+    if (!flag) {
+      res.status(500).json({ error: 'integrations feature flag is not seeded' });
+      return;
+    }
+    await db.update(featureFlags).set({ enabled, updatedAt: new Date().toISOString() }).where(eq(featureFlags.id, flag.id));
+    await db.delete(featureFlagRules).where(eq(featureFlagRules.flagId, flag.id));
+    if (!enabled) {
+      if (projects?.length) {
+        await db.delete(projectMenuSettings).where(inArray(projectMenuSettings.project, projects));
+      }
+      setIntegrationFetchStub(null);
+      res.json({ ok: true });
+      return;
+    }
+    for (const project of projects) {
+      await db.insert(featureFlagRules).values({
+        flagId: flag.id,
+        type: 'project',
+        value: project,
+        createdBy: 'e2e',
+      });
+      const enabledViews: MenuItemKey[] = [...DEFAULT_ENABLED_MENU_VIEWS, 'integrations'];
+      await db
+        .insert(projectMenuSettings)
+        .values({ project, enabledViews })
+        .onConflictDoUpdate({
+          target: projectMenuSettings.project,
+          set: { enabledViews },
+        });
+    }
+    const [member] = await db.select().from(appRoles).where(eq(appRoles.name, 'member'));
+    if (!member) {
+      res.status(500).json({ error: 'member role is missing' });
+      return;
+    }
+    const memberLinks = await db
+      .select({ permissionId: appRolePermissions.permissionId })
+      .from(appRolePermissions)
+      .where(eq(appRolePermissions.roleId, member.id));
+    for (const grant of grants) {
+      const extras = await db
+        .select()
+        .from(appPermissions)
+        .where(inArray(appPermissions.key, grant.permissions));
+      if (extras.length !== grant.permissions.length) {
+        res.status(500).json({ error: `missing permissions: ${grant.permissions.join(', ')}` });
+        return;
+      }
+      const roleName = `${E2E_PREFIX} integrations ${grant.project} ${grant.permissions.join('+')} ${grant.userId.slice(-8)}`;
+      const [role] = await db.insert(appRoles).values({
+        name: roleName,
+        description: 'E2E project integrations access',
+        isDefault: false,
+      }).returning();
+      const permissionIds = new Set([
+        ...memberLinks.map((link) => link.permissionId),
+        ...extras.map((permission) => permission.id),
+      ]);
+      await db.insert(appRolePermissions).values(
+        [...permissionIds].map((permissionId) => ({ roleId: role.id, permissionId })),
+      );
+      await db.insert(appUserProjectRoles).values({
+        userId: grant.userId,
+        project: grant.project,
+        roleId: role.id,
+        assignedBy: 'e2e',
+      });
+    }
+    res.json({ ok: true });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: `E2E seed/integrations-access failed: ${message}` });
   }
 });
 

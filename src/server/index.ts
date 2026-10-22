@@ -105,6 +105,7 @@ import aiRunsInternalRoutes from './routes/aiRunsInternal';
 import foundationSkillsAuthorizeRoutes from './routes/foundationSkillsAuthorize';
 import profileRoutes from './routes/profile';
 import walkthroughsRoutes from './routes/walkthroughs';
+import integrationRoutes from './routes/integrations';
 import workflowEvaluationsRoutes from './routes/workflowEvaluations';
 import { startLoadTestRunReaper } from './services/loadTestRunService';
 
@@ -270,6 +271,7 @@ app.use('/api/projects/:projectId/load-tests', ensureAuthenticated, loadTestsRou
 app.use('/api/projects/:projectId/load-test-targets', ensureAuthenticated, loadTestTargetsRoutes);
 app.use('/api/projects/:projectId/api-keys', ensureAuthenticated, apiKeysRoutes);
 app.use('/api/projects/:projectId/walkthroughs', ensureAuthenticated, walkthroughsRoutes);
+app.use('/api/projects/:projectId/integrations', ensureAuthenticated, integrationRoutes);
 app.use('/api/projects/:projectId/workflow-evaluations', ensureAuthenticated, workflowEvaluationsRoutes);
 // Public API — session-free; auth is Bearer API key (FEAT-002).
 app.use('/api/public', publicRoutes);

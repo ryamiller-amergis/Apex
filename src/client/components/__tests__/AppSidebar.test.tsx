@@ -428,6 +428,60 @@ describe('AppSidebar — grouped sections', () => {
   });
 });
 
+describe('AppSidebar — integrations nav (SC-1)', () => {
+  it('SC-1 hides Integrations when the flag is off', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key) => key === 'integrations:view'}
+        menuEnabledViews={['integrations']}
+        integrationsEnabled={false}
+        onNavigateIntegrations={jest.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('nav-item-integrations')).not.toBeInTheDocument();
+  });
+
+  it('SC-1 hides Integrations when the project menu omits it', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key) => key === 'integrations:view'}
+        menuEnabledViews={['calendar']}
+        integrationsEnabled
+        onNavigateIntegrations={jest.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('nav-item-integrations')).not.toBeInTheDocument();
+  });
+
+  it('SC-1 hides Integrations without integrations:view', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={() => false}
+        menuEnabledViews={['integrations']}
+        integrationsEnabled
+        onNavigateIntegrations={jest.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('nav-item-integrations')).not.toBeInTheDocument();
+  });
+
+  it('SC-1 shows Integrations when the flag, menu, and view permission are on', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key) => key === 'integrations:view'}
+        menuEnabledViews={['integrations']}
+        integrationsEnabled
+        onNavigateIntegrations={jest.fn()}
+      />,
+    );
+    expect(screen.getByTestId('nav-item-integrations')).toBeInTheDocument();
+  });
+});
+
 describe('AppSidebar — mobile', () => {
   it('renders nothing on mobile', () => {
     mockedUseBreakpoint.mockReturnValue({ isMobile: true, isTablet: false, isDesktop: false });

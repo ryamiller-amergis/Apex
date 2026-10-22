@@ -109,6 +109,22 @@ jest.mock('../services/featureFlagService', () => ({
   isFeatureEnabled: jest.fn().mockResolvedValue(false),
 }));
 
+const mockGetMenuConfig = jest.fn();
+jest.mock('../services/menuSettingsService', () => ({
+  getMenuConfig: (...args: unknown[]) => mockGetMenuConfig(...args),
+}));
+
+const mockAssertCallerCanUseIntegrationConnection = jest.fn();
+jest.mock('../services/integrationReadService', () => ({
+  assertCallerCanUseIntegrationConnection: (...args: unknown[]) =>
+    mockAssertCallerCanUseIntegrationConnection(...args),
+}));
+
+const mockGetUserPermissions = jest.fn().mockResolvedValue(new Set(['integrations:view']));
+jest.mock('../services/rbacService', () => ({
+  getUserPermissions: (...args: unknown[]) => mockGetUserPermissions(...args),
+}));
+
 const mockDurableRetry = jest.fn();
 jest.mock('../services/durableInteractiveTurnService', () => {
   class DurableInteractiveTurnError extends Error {
@@ -176,6 +192,7 @@ import chatRouter, {
 } from '../routes/chat';
 import * as chatAgentService from '../services/chatAgentService';
 import { isFeatureEnabled } from '../services/featureFlagService';
+import { IntegrationConnectionError } from '../services/integrationErrors';
 import type {
   AgentRunEventEnvelope,
   ChatThread,
@@ -914,6 +931,92 @@ describe('POST /api/chat/threads — Home pill admission (TBI-005)', () => {
 
     expect(res.status).toBe(201);
     expect(mockChatService.createThread).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('POST /api/chat/threads — integration connection kickoff', () => {
+  function post(kickoff: Record<string, unknown>) {
+    return request(buildApp())
+      .post('/api/chat/threads')
+      .send({ kickoff: { project: 'MaxView', repo: 'MaxView', ...kickoff } });
+  }
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+    mockIsSuperAdmin = false;
+    mockGetUserGroupIds.mockResolvedValue([]);
+    mockChatService.createThread.mockResolvedValue({ id: 'new-thread-id' } as ChatThread);
+    mockResolveSkillConfig.mockResolvedValue({
+      id: 'settings-1',
+      project: 'MaxView',
+      quickSkillPills: [{
+        label: 'App Knowledge',
+        skillPath: '/.cursor/skills/app-knowledge/SKILL.md',
+        allowedUserIds: ['user-1'],
+        allowedGroupIds: [],
+      }],
+      quickMcpPills: [],
+    });
+    (isFeatureEnabled as jest.Mock).mockResolvedValue(true);
+    mockGetMenuConfig.mockResolvedValue({
+      project: 'MaxView',
+      enabledViews: ['integrations'],
+      updatedBy: null,
+    });
+    mockAssertCallerCanUseIntegrationConnection.mockResolvedValue(undefined);
+    mockGetUserPermissions.mockResolvedValue(new Set(['integrations:view']));
+  });
+
+  afterEach(() => {
+    mockIsSuperAdmin = false;
+    mockResolveSkillConfig.mockResolvedValue(null);
+    (isFeatureEnabled as jest.Mock).mockResolvedValue(false);
+  });
+
+  it('refuses an integration kickoff when the caller is not on the connection allow-list', async () => {
+    mockAssertCallerCanUseIntegrationConnection.mockRejectedValue(
+      new IntegrationConnectionError(403, 'You cannot use this connection', 'NOT_ALLOWED'),
+    );
+
+    const res = await post({
+      assistantType: 'integration',
+      integrationConnectionId: 'conn-clerk',
+    });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('NOT_ALLOWED');
+    expect(mockChatService.createThread).not.toHaveBeenCalled();
+  });
+
+  it('creates an integration thread when the caller is allowed on that connection', async () => {
+    const res = await post({
+      assistantType: 'integration',
+      integrationConnectionId: 'conn-clerk',
+    });
+
+    expect(res.status).toBe(201);
+    expect(mockGetUserPermissions).toHaveBeenCalledWith('user-1', 'MaxView');
+    expect(mockAssertCallerCanUseIntegrationConnection).toHaveBeenCalledWith({
+      project: 'MaxView',
+      connectionId: 'conn-clerk',
+      userId: 'user-1',
+    });
+    expect(mockChatService.createThread).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an integration kickoff without integrations:view', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set(['chat:view']));
+
+    const res = await post({
+      assistantType: 'integration',
+      integrationConnectionId: 'conn-clerk',
+    });
+
+    expect(res.status).toBe(403);
+    expect(res.body.missing).toEqual(['integrations:view']);
+    expect(mockAssertCallerCanUseIntegrationConnection).not.toHaveBeenCalled();
+    expect(mockChatService.createThread).not.toHaveBeenCalled();
   });
 });
 

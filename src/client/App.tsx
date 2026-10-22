@@ -109,6 +109,9 @@ const LoadTestDefinitionBuilderView = lazy(() =>
 const DiagramsView = lazy(() =>
   import('./components/DiagramsView').then((m) => ({ default: m.DiagramsView })),
 );
+const IntegrationsView = lazy(() =>
+  import('./components/IntegrationsView').then((m) => ({ default: m.IntegrationsView })),
+);
 const DiagramEditorView = lazy(() =>
   import('./components/DiagramEditorView').then((m) => ({ default: m.DiagramEditorView })),
 );
@@ -187,7 +190,7 @@ function App() {
   }, []);
   const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'integrations' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -235,6 +238,8 @@ function App() {
                     ? 'load-tests'
                     : location.pathname.startsWith('/diagrams')
                     ? 'diagrams'
+                    : location.pathname === '/integrations' || location.pathname.startsWith('/integrations/')
+                    ? 'integrations'
                     : 'not-found';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
@@ -369,6 +374,8 @@ function App() {
     );
   const playbooksEnabled =
     !homeFlagsLoading && homeFlags['playbooks-production-adapters'] === true;
+  const integrationsEnabled =
+    !homeFlagsLoading && homeFlags['integrations'] === true;
   // Prefer the WebSocket agent gateway when the durable interactive transport
   // flag is enabled; SSE remains the stream-transport fallback only.
   // Wait until flags resolve so we do not open SSE first, then leave it stuck
@@ -398,6 +405,12 @@ function App() {
     playbooksEnabled &&
     menuConfigReady &&
     (isSuperAdmin || (effectiveEnabledViews.includes('playbooks') && can('playbooks:view')));
+  const canAccessIntegrations =
+    integrationsEnabled &&
+    menuConfigReady &&
+    permissionsLoaded &&
+    effectiveEnabledViews.includes('integrations') &&
+    (isSuperAdmin || can('integrations:view'));
   const restrictedSkipRef = useRef(false);
 
   // UI Lab members read the whole project list; everyone else only reaches
@@ -891,7 +904,11 @@ function App() {
     return <ViewSkeleton />;
   }
 
-  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks)) {
+  if (currentView === 'integrations' && (homeFlagsLoading || !menuConfigReady || !permissionsLoaded)) {
+    return <ViewSkeleton />;
+  }
+
+  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks) || (currentView === 'integrations' && !canAccessIntegrations)) {
     return (
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <div role="status" aria-live="polite" {...{ 'data-testid': 'route-not-found' }}>
@@ -937,6 +954,8 @@ function App() {
             onNavigateDiagrams={() => navigate('/diagrams')}
             onNavigatePlaybooks={() => navigate('/playbooks')}
             playbooksEnabled={playbooksEnabled}
+            onNavigateIntegrations={() => navigate('/integrations')}
+            integrationsEnabled={integrationsEnabled}
             onNavigateAdmin={() => navigate('/admin/roles')}
           />
           <div className={`app-main ${sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}>
@@ -993,6 +1012,8 @@ function App() {
             workBoardEnabled={workBoardEnabled}
             onNavigatePlaybooks={() => navigate('/playbooks')}
             playbooksEnabled={playbooksEnabled}
+            onNavigateIntegrations={() => navigate('/integrations')}
+            integrationsEnabled={integrationsEnabled}
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
             onLogout={handleLogout}
@@ -1506,6 +1527,16 @@ function App() {
                   }
                   return <DiagramsView projectId={selectedProject} />;
                 })()}
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'integrations' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <IntegrationsView
+                  project={selectedProject}
+                  enabled={integrationsEnabled}
+                  menuEnabled={effectiveEnabledViews.includes('integrations')}
+                />
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'planning' ? (
