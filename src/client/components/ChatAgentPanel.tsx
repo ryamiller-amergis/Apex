@@ -26,6 +26,11 @@ import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { formatChoiceAnswers } from '../utils/formatChoiceAnswers';
 import { useFocusChatMessage } from '../hooks/useFocusChatMessage';
+import { useAppShell } from '../hooks/useAppShell';
+import { useWorkflowEvaluationAccess } from '../hooks/useWorkflowEvaluationAccess';
+import { usePutWorkflowMessageFeedback, useWorkflowMessageFeedback } from '../hooks/useWorkflowMessageFeedback';
+import type { ChatMessageRating as ReplyRating } from '../../shared/types/workflowMessageFeedback';
+import { ChatMessageRating } from './ChatMessageRating';
 import styles from './ChatAgentPanel.module.css';
 
 const MIN_WIDTH = 340;
@@ -139,6 +144,8 @@ interface AgentMessageProps {
   onSend: (text: string) => void;
   isRunning: boolean;
   highlighted?: boolean;
+  /** Shown under the bubble, e.g. the reply rating. */
+  footer?: React.ReactNode;
 }
 
 interface QuestionState {
@@ -146,7 +153,7 @@ interface QuestionState {
   freeform: string;
 }
 
-const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning, highlighted }) => {
+const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning, highlighted, footer }) => {
   const parts = parseAgentMessage(msg.text);
   const choiceBlocks = parts.filter((p): p is ChoiceBlock => p.type === 'choices');
 
@@ -241,6 +248,7 @@ const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning, hig
           <div className={styles.choiceSentLabel}>✓ Answers sent</div>
         )}
       </div>
+      {footer}
     </div>
   );
 };
@@ -352,6 +360,29 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
 
   const sessionThreadId = thread?.id ?? activeThreadId ?? null;
   const inConversation = Boolean(sessionThreadId) || Boolean(pendingOutgoing);
+
+  // @feature-flag:workflow-human-evaluation
+  const { userId } = useAppShell();
+  const ratingProject = thread?.kickoff.project ?? selectedProject;
+  const feedbackAccess = useWorkflowEvaluationAccess(ratingProject);
+  const canRateReplies = feedbackAccess.canSubmit
+    && Boolean(thread)
+    && thread?.userId === userId
+    && !thread?.kickoff.assistantType;
+  const replyRatings = useWorkflowMessageFeedback({
+    project: ratingProject,
+    surface: 'chat',
+    subjectId: thread?.id ?? '',
+    enabled: canRateReplies,
+  });
+  const putReplyRating = usePutWorkflowMessageFeedback({
+    project: ratingProject,
+    surface: 'chat',
+    subjectId: thread?.id ?? '',
+  });
+  const replyRatingByMessage = new Map(
+    (replyRatings.data?.entries ?? []).map((entry) => [entry.messageId, entry]),
+  );
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1188,6 +1219,18 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                   onSend={doSend}
                   isRunning={isRunning}
                   highlighted={highlighted}
+                  footer={canRateReplies ? (
+                    <ChatMessageRating
+                      messageId={msg.id}
+                      rating={(replyRatingByMessage.get(msg.id)?.rating as ReplyRating | undefined) ?? null}
+                      comment={replyRatingByMessage.get(msg.id)?.comment ?? null}
+                      pending={putReplyRating.isPending && putReplyRating.variables?.messageId === msg.id}
+                      error={putReplyRating.isError && putReplyRating.variables?.messageId === msg.id
+                        ? putReplyRating.error.message
+                        : null}
+                      onSave={(rating, comment) => putReplyRating.mutateAsync({ messageId: msg.id, rating, comment })}
+                    />
+                  ) : undefined}
                 />
               );
             })}

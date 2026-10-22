@@ -22,6 +22,7 @@ jest.mock('../db/drizzle', () => ({
 import {
   WorkflowMessageFeedbackError,
   listMyMessageFeedback,
+  parsePutBody,
   putMessageFeedback,
 } from '../services/workflowMessageFeedbackService';
 
@@ -87,12 +88,51 @@ describe('putMessageFeedback', () => {
     await expectError(putMessageFeedback('proj-a', 'user-1', messageId, thumbsUp), 422, 'NOT_AGENT_MESSAGE');
   });
 
-  it('does not accept chat ratings yet', async () => {
-    await expectError(
-      putMessageFeedback('proj-a', 'user-1', messageId, { surface: 'chat', subjectId: threadId, rating: 'good' }),
-      422,
-      'SURFACE_NOT_AVAILABLE',
-    );
+  describe('home chat', () => {
+    const ownedThread = { userId: 'user-1', kickoff: { project: 'proj-a' } };
+    const bad = { surface: 'chat' as const, subjectId: threadId, rating: 'bad' as const, comment: 'Missed the point' };
+
+    it('saves the owner’s rating with its comment', async () => {
+      mockSelectResults.push([ownedThread], [agentMessage]);
+      mockReturning.mockResolvedValue([{
+        messageId, rating: 'bad', comment: 'Missed the point', updatedAt: '2026-10-22T12:00:00.000Z',
+      }]);
+      const result = await putMessageFeedback('proj-a', 'user-1', messageId, bad);
+      expect(result.entry?.rating).toBe('bad');
+      expect(mockValues).toHaveBeenCalledWith(expect.objectContaining({
+        surface: 'chat', subjectId: threadId, rating: 'bad', comment: 'Missed the point',
+      }));
+    });
+
+    it('treats someone else’s chat, or a chat in another project, as not found', async () => {
+      mockSelectResults.push([{ ...ownedThread, userId: 'user-2' }]);
+      await expectError(putMessageFeedback('proj-a', 'user-1', messageId, bad), 404, 'SUBJECT_NOT_FOUND');
+      mockSelectResults.push([{ ...ownedThread, kickoff: { project: 'proj-b' } }]);
+      await expectError(putMessageFeedback('proj-a', 'user-1', messageId, bad), 404, 'SUBJECT_NOT_FOUND');
+    });
+  });
+});
+
+describe('parsePutBody', () => {
+  const chat = { surface: 'chat', subjectId: interviewId };
+
+  it('requires a comment for Bad and Needs improvement, but not for Good', () => {
+    for (const rating of ['bad', 'needs_improvement']) {
+      expect(() => parsePutBody({ ...chat, rating, comment: '   ' })).toThrow('Say what the agent could do better.');
+    }
+    expect(parsePutBody({ ...chat, rating: 'good' })).toEqual({ ...chat, rating: 'good', comment: null });
+  });
+
+  it('trims the comment, caps its length, and drops it when clearing', () => {
+    expect(parsePutBody({ ...chat, rating: 'bad', comment: '  too long  ' }).comment).toBe('too long');
+    expect(() => parsePutBody({ ...chat, rating: 'bad', comment: 'x'.repeat(2001) })).toThrow(/under 2000/);
+    expect(parsePutBody({ ...chat, rating: null, comment: 'ignored' }).comment).toBeNull();
+  });
+
+  it('rejects thumbs on a chat and chat ratings on an interview', () => {
+    expect(() => parsePutBody({ ...chat, rating: 'up' })).toThrow('rating is invalid for this surface');
+    expect(() => parsePutBody({ surface: 'interview', subjectId: interviewId, rating: 'good' }))
+      .toThrow('rating is invalid for this surface');
   });
 });
 

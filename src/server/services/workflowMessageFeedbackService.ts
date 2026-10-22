@@ -4,10 +4,13 @@
  */
 import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { chatMessages, interviews, workflowMessageFeedback } from '../db/schema';
+import { chatMessages, chatThreads, interviews, workflowMessageFeedback } from '../db/schema';
 import {
+  CHAT_MESSAGE_RATINGS,
   INTERVIEW_MESSAGE_RATINGS,
+  WORKFLOW_MESSAGE_FEEDBACK_COMMENT_MAX_LENGTH,
   WORKFLOW_MESSAGE_FEEDBACK_SURFACES,
+  chatRatingNeedsComment,
   type ListWorkflowMessageFeedbackResponse,
   type PutWorkflowMessageFeedbackRequest,
   type PutWorkflowMessageFeedbackResponse,
@@ -55,16 +58,30 @@ async function resolveInterviewSubject(project: string, interviewId: string): Pr
   return { threadId: row.threadId, open: row.status === 'in_progress' };
 }
 
+/** Only the person who owns the chat rates its replies. */
+async function resolveChatSubject(project: string, threadId: string, userId: string): Promise<ResolvedSubject> {
+  const [row] = await db
+    .select({ userId: chatThreads.userId, kickoff: chatThreads.kickoff })
+    .from(chatThreads)
+    .where(eq(chatThreads.id, threadId))
+    .limit(1);
+  if (!row || row.userId !== userId || row.kickoff?.project !== project) {
+    throw new WorkflowMessageFeedbackError(404, 'SUBJECT_NOT_FOUND', 'Chat not found.');
+  }
+  return { threadId, open: true };
+}
+
 async function resolveSubject(
   project: string,
   surface: WorkflowMessageFeedbackSurface,
   subjectId: string,
+  userId: string,
 ): Promise<ResolvedSubject> {
   switch (surface) {
     case 'interview':
       return resolveInterviewSubject(project, subjectId);
     case 'chat':
-      throw new WorkflowMessageFeedbackError(422, 'SURFACE_NOT_AVAILABLE', 'Chat ratings are not available yet.');
+      return resolveChatSubject(project, subjectId, userId);
     default: {
       const unhandled: never = surface;
       return unhandled;
@@ -77,7 +94,7 @@ function isRatingForSurface(surface: WorkflowMessageFeedbackSurface, rating: unk
     case 'interview':
       return (INTERVIEW_MESSAGE_RATINGS as readonly unknown[]).includes(rating);
     case 'chat':
-      return false;
+      return (CHAT_MESSAGE_RATINGS as readonly unknown[]).includes(rating);
     default: {
       const unhandled: never = surface;
       return unhandled;
@@ -121,12 +138,22 @@ export function parsePutBody(body: unknown): PutWorkflowMessageFeedbackRequest {
   if (value.surface === 'interview' && value.comment != null) {
     throw new WorkflowMessageFeedbackError(422, 'UNKNOWN_FIELD', 'Interview ratings take no comment.');
   }
-  return {
-    surface: value.surface,
-    subjectId: value.subjectId,
-    rating: value.rating as WorkflowMessageRating | null,
-    comment: null,
-  };
+  if (value.comment != null && typeof value.comment !== 'string') {
+    throw new WorkflowMessageFeedbackError(422, 'UNKNOWN_FIELD', 'comment must be text');
+  }
+  const rating = value.rating as WorkflowMessageRating | null;
+  const comment = rating === null ? null : (value.comment as string | null | undefined)?.trim() || null;
+  if (comment && comment.length > WORKFLOW_MESSAGE_FEEDBACK_COMMENT_MAX_LENGTH) {
+    throw new WorkflowMessageFeedbackError(
+      422,
+      'COMMENT_TOO_LONG',
+      `Keep the comment under ${WORKFLOW_MESSAGE_FEEDBACK_COMMENT_MAX_LENGTH} characters.`,
+    );
+  }
+  if (!comment && rating !== null && chatRatingNeedsComment(rating)) {
+    throw new WorkflowMessageFeedbackError(422, 'COMMENT_REQUIRED', 'Say what the agent could do better.');
+  }
+  return { surface: value.surface, subjectId: value.subjectId, rating, comment };
 }
 
 export async function listMyMessageFeedback(
@@ -135,7 +162,7 @@ export async function listMyMessageFeedback(
   surface: WorkflowMessageFeedbackSurface,
   subjectId: string,
 ): Promise<ListWorkflowMessageFeedbackResponse> {
-  await resolveSubject(project, surface, subjectId);
+  await resolveSubject(project, surface, subjectId, userId);
   const rows = await db
     .select()
     .from(workflowMessageFeedback)
@@ -157,7 +184,7 @@ export async function putMessageFeedback(
   if (!isUuid(messageId)) {
     throw new WorkflowMessageFeedbackError(404, 'MESSAGE_NOT_FOUND', 'Message not found.');
   }
-  const subject = await resolveSubject(project, request.surface, request.subjectId);
+  const subject = await resolveSubject(project, request.surface, request.subjectId, userId);
   if (!subject.open) {
     throw new WorkflowMessageFeedbackError(409, 'SUBJECT_CLOSED', 'Ratings are closed for this interview.');
   }

@@ -16,6 +16,17 @@ export type WorkflowMessageRating = InterviewMessageRating | ChatMessageRating;
 
 export const WORKFLOW_MESSAGE_FEEDBACK_COMMENT_MAX_LENGTH = 2000;
 
+export const CHAT_MESSAGE_RATING_LABELS: Record<ChatMessageRating, string> = {
+  good: 'Good',
+  needs_improvement: 'Needs improvement',
+  bad: 'Bad',
+};
+
+/** Bad and Needs improvement need a comment; Good does not. */
+export function chatRatingNeedsComment(rating: WorkflowMessageRating): boolean {
+  return rating === 'bad' || rating === 'needs_improvement';
+}
+
 export interface WorkflowMessageFeedbackEntry {
   messageId: string;
   rating: WorkflowMessageRating;

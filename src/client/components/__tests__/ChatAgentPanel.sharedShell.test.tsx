@@ -76,6 +76,28 @@ jest.mock('../../hooks/useFocusChatMessage', () => ({
   useFocusChatMessage: () => undefined,
 }));
 
+jest.mock('../../hooks/useAppShell', () => ({
+  useAppShell: () => ({ userId: 'user-1' }),
+}));
+
+const mockRatingAccess = { canSubmit: false };
+jest.mock('../../hooks/useWorkflowEvaluationAccess', () => ({
+  useWorkflowEvaluationAccess: () => mockRatingAccess,
+}));
+
+const mockPutReplyRating = jest.fn(async (_vars: unknown) => ({ entry: null }));
+let mockReplyRatings: { messageId: string; rating: string; comment: string | null }[] = [];
+jest.mock('../../hooks/useWorkflowMessageFeedback', () => ({
+  useWorkflowMessageFeedback: () => ({ data: { entries: mockReplyRatings } }),
+  usePutWorkflowMessageFeedback: () => ({
+    mutateAsync: mockPutReplyRating,
+    isPending: false,
+    isError: false,
+    error: null,
+    variables: undefined,
+  }),
+}));
+
 jest.mock('../ThreadHistorySidebar', () => ({
   ThreadHistorySidebar: () => <div {...{ 'data-testid': 'thread-history-sidebar-mock' }}>Full history</div>,
 }));
@@ -783,5 +805,83 @@ describe('ChatAgentPanel shared Home shell', () => {
     fireEvent.click(screen.getByTestId('chat-agent-message-retry-btn'));
     expect(mockRetryFailedRun).toHaveBeenCalled();
     expect(mockSend).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChatAgentPanel reply ratings', () => {
+  function renderThread(overrides: Partial<ChatThread> = {}) {
+    render(
+      <ChatAgentPanel
+        thread={{ ...thread, ...overrides }}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+      />,
+    );
+  }
+
+  beforeEach(() => {
+    global.fetch = jest.fn();
+    mockSessionOverrides = {};
+    mockRatingAccess.canSubmit = true;
+    mockReplyRatings = [];
+    mockPutReplyRating.mockClear();
+  });
+
+  afterAll(() => {
+    mockRatingAccess.canSubmit = false;
+  });
+
+  it('saves Good straight away', () => {
+    renderThread();
+    fireEvent.click(screen.getByTestId('chat-message-rating-good-message-1'));
+    expect(mockPutReplyRating).toHaveBeenCalledWith({ messageId: 'message-1', rating: 'good', comment: null });
+  });
+
+  it('clears a saved Good on a second click', () => {
+    mockReplyRatings = [{ messageId: 'message-1', rating: 'good', comment: null }];
+    renderThread();
+    fireEvent.click(screen.getByTestId('chat-message-rating-good-message-1'));
+    expect(mockPutReplyRating).toHaveBeenCalledWith({ messageId: 'message-1', rating: null, comment: null });
+  });
+
+  it('asks for a comment before saving Bad', async () => {
+    renderThread();
+    fireEvent.click(screen.getByTestId('chat-message-rating-bad-message-1'));
+    const save = screen.getByTestId('chat-message-rating-save-message-1');
+    expect(save).toBeDisabled();
+    expect(mockPutReplyRating).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByTestId('chat-message-rating-comment-message-1'), {
+      target: { value: '  Missed the edge case  ' },
+    });
+    fireEvent.click(save);
+    expect(mockPutReplyRating).toHaveBeenCalledWith({
+      messageId: 'message-1',
+      rating: 'bad',
+      comment: 'Missed the edge case',
+    });
+    expect(await screen.findByTestId('chat-message-rating-message-1')).toBeInTheDocument();
+  });
+
+  it('shows the saved rating and pre-fills its comment when reopened', () => {
+    mockReplyRatings = [{ messageId: 'message-1', rating: 'needs_improvement', comment: 'Too long' }];
+    renderThread();
+    const needsImprovement = screen.getByTestId('chat-message-rating-needs_improvement-message-1');
+    expect(needsImprovement).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(needsImprovement);
+    expect(screen.getByTestId('chat-message-rating-comment-message-1')).toHaveValue('Too long');
+  });
+
+  it('hides ratings on a chat the viewer does not own', () => {
+    renderThread({ userId: 'someone-else' });
+    expect(screen.queryByTestId('chat-message-rating-message-1')).not.toBeInTheDocument();
+  });
+
+  it('hides ratings when the viewer cannot submit feedback', () => {
+    mockRatingAccess.canSubmit = false;
+    renderThread();
+    expect(screen.queryByTestId('chat-message-rating-message-1')).not.toBeInTheDocument();
   });
 });
