@@ -4,6 +4,12 @@ import {
 } from './effort';
 import type { BackgroundWorkflowClass } from './backgroundWorkflow';
 import type { SkillProvider } from './projectSettings';
+import {
+  isJudgeOutputSchema,
+  isWorkflowEvaluationRunIdentity,
+  WORKFLOW_EVALUATION_SCRATCH_PATHS,
+  type WorkflowEvaluationRunIdentity,
+} from './aiRunV2EvaluationSpec';
 
 export const AI_RUN_V2_DOCUMENT_WORKFLOW_CLASSES = [
   'prd',
@@ -13,7 +19,11 @@ export const AI_RUN_V2_DOCUMENT_WORKFLOW_CLASSES = [
   'test-cases',
   'walkthrough-smart-tagging',
   'playbook-step',
+  'evaluation-judge',
+  'evaluation-promptfoo',
 ] as const satisfies readonly BackgroundWorkflowClass[];
+
+const JUDGE_SCRATCH_PATHS: readonly string[] = Object.values(WORKFLOW_EVALUATION_SCRATCH_PATHS);
 
 export type AiRunV2DocumentScratchInput = Readonly<{
   path: string;
@@ -42,6 +52,10 @@ export type AiRunV2DocumentSpecification = Readonly<{
   groundedSha?: string;
   repository?: string;
   provider?: SkillProvider;
+  /** Required for `evaluation-judge` and refused for every other workflow. */
+  outputSchema?: Record<string, unknown>;
+  /** Required for `evaluation-judge` and refused for every other workflow. */
+  evaluation?: WorkflowEvaluationRunIdentity;
 }>;
 
 function isNonEmptyString(value: unknown): value is string {
@@ -69,6 +83,8 @@ export function documentWorkflowRequiresRepository(
     case 'validation':
     case 'walkthrough-smart-tagging':
     case 'playbook-step':
+    case 'evaluation-judge':
+    case 'evaluation-promptfoo':
       return false;
     default: {
       const unhandled: never = workflowClass;
@@ -106,10 +122,13 @@ export function isAllowedDocumentScratchInputPath(
         /^\.ai-pilot\/output\/[^/]+\.prd\.md$/i.test(value)
         || /^\.ai-pilot\/output\/[^/]+\.backlog\.json$/i.test(value)
       );
+    case 'evaluation-judge':
+      return JUDGE_SCRATCH_PATHS.includes(value);
     case 'design-doc':
     case 'validation':
     case 'walkthrough-smart-tagging':
     case 'playbook-step':
+    case 'evaluation-promptfoo':
       return false;
     default: {
       const unhandled: never = workflowClass;
@@ -138,6 +157,11 @@ function hasRequiredScratchInputs(
         && paths.some((value) => /\.prd\.md$/i.test(value))
         && paths.some((value) => /\.backlog\.json$/i.test(value))
       );
+    case 'evaluation-judge':
+      return JUDGE_SCRATCH_PATHS.every((value) => paths.includes(value));
+    case 'evaluation-promptfoo':
+      // Promptfoo has its own specification; the document guard never accepts it.
+      return false;
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -223,6 +247,16 @@ export function isAiRunV2DocumentSpecification(
       || !isSkillProvider(candidate.provider)
     )
   ) {
+    return false;
+  }
+  if (candidate.workflowClass === 'evaluation-judge') {
+    if (!isJudgeOutputSchema(candidate.outputSchema)) return false;
+    if (!isWorkflowEvaluationRunIdentity(candidate.evaluation)) return false;
+    // The judge reads only its package, so it never opens a repository.
+    for (const field of ['groundedSha', 'repository', 'provider'] as const) {
+      if (candidate[field] !== undefined) return false;
+    }
+  } else if (candidate.outputSchema !== undefined || candidate.evaluation !== undefined) {
     return false;
   }
   return true;

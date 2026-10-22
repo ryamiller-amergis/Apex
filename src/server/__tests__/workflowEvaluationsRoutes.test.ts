@@ -54,6 +54,15 @@ jest.mock('../services/workflowEvaluationService', () => ({
   getEvaluationEvent: jest.fn(),
 }));
 
+const mockRetryJob = jest.fn();
+jest.mock('../services/workflowEvaluationJobOrchestrator', () => ({
+  createWorkflowEvaluationJobOrchestrator: () => ({ retryJob: mockRetryJob }),
+  registerWorkflowEvaluationJobListener: jest.fn(),
+}));
+jest.mock('../services/skillRegressionCaseService', () => ({
+  registerSkillRegressionCaseListener: jest.fn(),
+}));
+
 import workflowEvaluationsRouter from '../routes/workflowEvaluations';
 
 const service = jest.requireMock('../services/workflowEvaluationService') as Record<string, jest.Mock>;
@@ -333,5 +342,62 @@ describe('workflow evaluation routes — TBI-008', () => {
       expect(JSON.stringify(response.body)).not.toContain('workflow-evaluations/');
       expect(response.body).not.toHaveProperty('correctedArtifactBlobRef');
     }
+  });
+});
+
+describe('workflow evaluation job retry route', () => {
+  const retryPath = (evaluator = 'llm_judge', id = eventId) =>
+    `/api/projects/proj-a/workflow-evaluations/events/${id}/jobs/${evaluator}/retry`;
+  const job = { id: 'job-1', eventId, evaluatorKey: 'llm_judge', status: 'running' };
+
+  it('retries with the path project and the session user, and returns the job', async () => {
+    mockRetryJob.mockResolvedValue({ status: 'dispatched', job });
+    const response = await request(buildApp()).post(retryPath());
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ job });
+    expect(mockRetryJob).toHaveBeenCalledWith({
+      projectId: 'proj-a',
+      eventId,
+      evaluatorKey: 'llm_judge',
+      userId: 'user-1',
+    });
+  });
+
+  it.each([
+    ['an unknown evaluator', retryPath('llm-judge')],
+    ['a malformed event id', retryPath('promptfoo', 'not-a-uuid')],
+  ])('answers 404 for %s without calling the orchestrator', async (_label, path) => {
+    const response = await request(buildApp()).post(path);
+    expect(response.status).toBe(404);
+    expect(mockRetryJob).not.toHaveBeenCalled();
+  });
+
+  it('answers 403 without the permission and 404 when the flag is off', async () => {
+    permissionGranted = false;
+    expect((await request(buildApp()).post(retryPath())).status).toBe(403);
+    permissionGranted = true;
+    flagEnabled = false;
+    expect((await request(buildApp()).post(retryPath())).status).toBe(404);
+    expect(mockRetryJob).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 for an event in another project', async () => {
+    mockRetryJob.mockResolvedValue({ status: 'not_found' });
+    const response = await request(buildApp()).post(retryPath());
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: 'Not found' });
+  });
+
+  it.each([
+    [{ status: 'job_not_failed', job }, 409, 'job_not_failed'],
+    [{ status: 'failed', code: 'artifact_changed', message: 'changed', job }, 409, 'artifact_changed'],
+    [{ status: 'failed', code: 'transport_disabled', message: 'off', job }, 409, 'transport_disabled'],
+    [{ status: 'failed', code: 'enqueue_failed', message: 'blob down', job }, 502, 'enqueue_failed'],
+  ])('maps %o to %i', async (result, status, code) => {
+    mockRetryJob.mockResolvedValue(result);
+    const response = await request(buildApp()).post(retryPath());
+    expect(response.status).toBe(status);
+    expect(response.body).toMatchObject({ code, job });
   });
 });

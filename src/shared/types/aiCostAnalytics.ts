@@ -26,6 +26,7 @@ export type AiFeature =
   | 'ai-cost-insights'
   | 'calendar-work-item-assistant'
   | 'adr'
+  | 'workflow-evaluation'
   | 'other';
 
 export interface RecordUsageInput {

@@ -24,14 +24,21 @@ jest.mock('../services/groupService', () => ({
   getUserGroupNamesForProject: jest.fn(),
 }));
 
+jest.mock('../services/ownerApprovalService', () => ({
+  isDocumentOwner: jest.fn(),
+  isTestCaseRecordOwner: jest.fn(),
+}));
+
 jest.mock('../services/telemetry', () => ({
   trackEvent: jest.fn(),
   telemetryClient: { trackMetric: jest.fn() },
 }));
 
 import {
+  WORKFLOW_EVALUATION_DESIGN_DOC_RUBRIC,
   WORKFLOW_EVALUATION_INTERVIEW_PHASE_RUBRIC,
   WORKFLOW_EVALUATION_PRD_RUBRIC,
+  WORKFLOW_EVALUATION_TEST_CASES_RUBRIC,
   type WorkflowEvaluationCriteriaScores,
 } from '../../shared/types/workflowEvaluation';
 import { WorkflowEvaluationError } from '../services/workflowEvaluationError';
@@ -50,6 +57,10 @@ const resolver = jest.requireMock('../services/artifactBindingResolver') as {
 };
 const groups = jest.requireMock('../services/groupService') as {
   getUserGroupNamesForProject: jest.Mock;
+};
+const ownership = jest.requireMock('../services/ownerApprovalService') as {
+  isDocumentOwner: jest.Mock;
+  isTestCaseRecordOwner: jest.Mock;
 };
 const telemetry = jest.requireMock('../services/telemetry') as {
   trackEvent: jest.Mock;
@@ -103,6 +114,7 @@ function binding(overrides: Record<string, unknown> = {}) {
       prdId: '11111111-1111-1111-1111-111111111111',
     },
     prdMarkdown: '# Live PRD',
+    artifact: { subjectType: 'prd', markdown: '# Live PRD', backlog: null },
     ...overrides,
   };
 }
@@ -140,6 +152,7 @@ beforeEach(() => {
   repository.insertEvent.mockImplementation(async (input: Record<string, unknown>) => storedFromInsert(input));
   resolver.resolveCurrentArtifactBinding.mockResolvedValue(binding());
   groups.getUserGroupNamesForProject.mockResolvedValue(['Product-Owner']);
+  ownership.isDocumentOwner.mockResolvedValue(false);
   store.writeCorrectedArtifact.mockResolvedValue({
     container: 'ai-run-artifacts',
     key: 'workflow-evaluations/proj-a/event/corrected-artifact.md',
@@ -342,6 +355,127 @@ describe('submitEvaluation — TBI-007', () => {
     expect(groups.getUserGroupNamesForProject).toHaveBeenCalledWith('user-1', 'proj-a');
   });
 
+  it('the PRD owner is stored as PRD owner whatever their groups, and nobody else can claim it', async () => {
+    ownership.isDocumentOwner.mockResolvedValue(true);
+    groups.getUserGroupNamesForProject.mockResolvedValue(['QA']);
+    await expect(submitEvaluation('proj-a', 'user-1', prdRequest())).resolves.toMatchObject({
+      reviewerRoleKey: 'prd_owner',
+      reviewerRoleLabel: 'PRD owner',
+    });
+    expect(ownership.isDocumentOwner).toHaveBeenCalledWith(prdRequest().subjectId, 'prd', 'user-1');
+    await expect(submitEvaluation('proj-a', 'user-1', prdRequest({
+      reviewerRole: 'qa',
+    }))).rejects.toMatchObject({ code: 'ROLE_NOT_ALLOWED' });
+
+    ownership.isDocumentOwner.mockResolvedValue(false);
+    groups.getUserGroupNamesForProject.mockResolvedValue([]);
+    await expect(submitEvaluation('proj-a', 'user-1', prdRequest({
+      reviewerRole: 'prd_owner',
+    }))).rejects.toMatchObject({ code: 'ROLE_NOT_ALLOWED' });
+  });
+
+  it('stores design doc feedback with its PRD lineage, and the owner as design doc owner', async () => {
+    const designDocId = '33333333-3333-3333-3333-333333333333';
+    repository.getActiveDefinition.mockResolvedValue({
+      ...prdDefinition,
+      id: 'def-design-doc',
+      stageKey: 'design_doc_human_review',
+      rubric: WORKFLOW_EVALUATION_DESIGN_DOC_RUBRIC,
+    });
+    resolver.resolveCurrentArtifactBinding.mockResolvedValue(binding({
+      subjectType: 'design_doc',
+      subjectId: designDocId,
+      prdMarkdown: null,
+    }));
+    ownership.isDocumentOwner.mockResolvedValue(true);
+    const request = prdRequest({ subjectType: 'design_doc', subjectId: designDocId, stageKey: 'design_doc_human_review' });
+
+    await expect(submitEvaluation('proj-a', 'user-1', request)).resolves.toMatchObject({
+      subjectType: 'design_doc',
+      reviewerRoleKey: 'design_doc_owner',
+      reviewerRoleLabel: 'Design doc owner',
+      lineage: { prdId: subjectId },
+    });
+    expect(ownership.isDocumentOwner).toHaveBeenCalledWith(designDocId, 'design_doc', 'user-1');
+    expect(repository.insertEvent).toHaveBeenCalledWith(expect.objectContaining({
+      subjectType: 'design_doc',
+      subjectId: designDocId,
+      phaseIndex: null,
+      prdId: subjectId,
+    }));
+
+    await expect(submitEvaluation('proj-a', 'user-1', {
+      ...request,
+      outcome: 'accept_after_edits',
+      correctedArtifact: { source: 'current_prd' },
+    })).rejects.toMatchObject({ code: 'CORRECTED_ARTIFACT_REQUIRED' });
+  });
+
+  it('stores test case feedback with its PRD lineage, and the owner as test case owner', async () => {
+    const testCaseId = '44444444-4444-4444-4444-444444444444';
+    repository.getActiveDefinition.mockResolvedValue({
+      ...prdDefinition,
+      id: 'def-test-cases',
+      stageKey: 'test_cases_human_review',
+      rubric: WORKFLOW_EVALUATION_TEST_CASES_RUBRIC,
+    });
+    resolver.resolveCurrentArtifactBinding.mockResolvedValue(binding({
+      subjectType: 'test_cases',
+      subjectId: testCaseId,
+      prdMarkdown: null,
+    }));
+    ownership.isTestCaseRecordOwner.mockResolvedValue(true);
+    const request = prdRequest({ subjectType: 'test_cases', subjectId: testCaseId, stageKey: 'test_cases_human_review' });
+
+    await expect(submitEvaluation('proj-a', 'user-1', request)).resolves.toMatchObject({
+      subjectType: 'test_cases',
+      reviewerRoleKey: 'test_case_owner',
+      reviewerRoleLabel: 'Test case owner',
+      lineage: { prdId: subjectId },
+    });
+    expect(ownership.isTestCaseRecordOwner).toHaveBeenCalledWith(testCaseId, 'user-1');
+    expect(repository.insertEvent).toHaveBeenCalledWith(expect.objectContaining({
+      subjectType: 'test_cases',
+      subjectId: testCaseId,
+      phaseIndex: null,
+      prdId: subjectId,
+    }));
+
+    await expect(submitEvaluation('proj-a', 'user-1', {
+      ...request,
+      outcome: 'accept_after_edits',
+      correctedArtifact: { source: 'current_prd' },
+    })).rejects.toMatchObject({ code: 'CORRECTED_ARTIFACT_REQUIRED' });
+  });
+
+  it('lets a QA approver who does not own the test cases pick a role', async () => {
+    const testCaseId = '44444444-4444-4444-4444-444444444444';
+    repository.getActiveDefinition.mockResolvedValue({
+      ...prdDefinition,
+      id: 'def-test-cases',
+      stageKey: 'test_cases_human_review',
+      rubric: WORKFLOW_EVALUATION_TEST_CASES_RUBRIC,
+    });
+    resolver.resolveCurrentArtifactBinding.mockResolvedValue(binding({
+      subjectType: 'test_cases',
+      subjectId: testCaseId,
+      prdMarkdown: null,
+    }));
+    ownership.isTestCaseRecordOwner.mockResolvedValue(false);
+    groups.getUserGroupNamesForProject.mockResolvedValue([]);
+    const request = prdRequest({
+      subjectType: 'test_cases',
+      subjectId: testCaseId,
+      stageKey: 'test_cases_human_review',
+      reviewerRole: 'qa',
+    });
+
+    await expect(submitEvaluation('proj-a', 'user-1', request)).resolves.toMatchObject({
+      subjectType: 'test_cases',
+      reviewerRoleKey: 'qa',
+    });
+  });
+
   it('VT-21 / TBI-007 (d): a subject in another project is not found and nothing is stored', async () => {
     resolver.resolveCurrentArtifactBinding.mockRejectedValue(
       new WorkflowEvaluationError('SUBJECT_NOT_FOUND', 'Subject was not found in this project.'),
@@ -356,6 +490,59 @@ describe('submitEvaluation — TBI-007', () => {
     repository.getEventWithJobs.mockResolvedValue(null);
     await expect(getEvaluationEvent('proj-a', subjectId)).resolves.toBeNull();
     expect(repository.insertEvent).not.toHaveBeenCalled();
+  });
+
+  it('returns each job with its error reason on the event detail', async () => {
+    const eventId = '00000000-0000-4000-8000-000000000009';
+    const event = storedFromInsert({
+      id: eventId,
+      project: 'proj-a',
+      definitionId: 'def-prd',
+      subjectType: 'prd',
+      subjectId,
+      stageKey: 'prd_human_review',
+      phaseIndex: null,
+      reviewerUserId: 'user-1',
+      reviewerRoleKey: 'product_owner',
+      reviewerRoleLabel: 'Product owner',
+      skillPath: null,
+      skillVersion: null,
+      model: null,
+      interviewId: null,
+      prdId: subjectId,
+      artifactHash: 'a'.repeat(64),
+      criteriaScores: scores(4),
+      outcome: 'accept_unchanged',
+      reasonCodes: [],
+      comment: null,
+      correctedArtifactBlobRef: null,
+    });
+    repository.getEventWithJobs.mockResolvedValue({
+      ...event,
+      jobs: [{
+        id: 'job-1',
+        eventId,
+        evaluatorKey: 'llm_judge',
+        status: 'failed',
+        runId: null,
+        specificationHash: null,
+        summary: null,
+        resultBlobRefs: null,
+        errorDetail: 'transport_disabled: ai-runs-v2-transport is off for this project',
+        createdAt: '2026-10-16T12:00:00.000Z',
+        updatedAt: '2026-10-16T12:00:01.000Z',
+      }],
+    });
+
+    const detail = await getEvaluationEvent('proj-a', eventId);
+
+    expect(detail?.jobs).toEqual([{
+      evaluatorKey: 'llm_judge',
+      status: 'failed',
+      summary: null,
+      errorDetail: 'transport_disabled: ai-runs-v2-transport is off for this project',
+      updatedAt: '2026-10-16T12:00:01.000Z',
+    }]);
   });
 
   it('VT-22 / TBI-007 (c): history defaults to the current hash and caps at 50', async () => {

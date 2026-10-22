@@ -7,12 +7,22 @@ import '../telemetry';
 import { createWorkerServiceBusClient } from './serviceBusClient';
 import { resolveWorkerEnvironment } from './entrypointSupport';
 import { isAiRunV2DocumentSpecification } from '../../../shared/types/aiRunV2DocumentSpec';
+import { isAiRunV2PromptfooSpecification } from '../../../shared/types/aiRunV2EvaluationSpec';
 import { createDocumentExecute } from './documentExecution';
-import { createV2Worker } from './worker';
+import { createPromptfooExecute } from './promptfooExecution';
+import { createV2Worker, type ExecuteWorkload } from './worker';
 import { createShutdownController, resolveShutdownDrainMs } from './shutdownDrain';
 import { createProgressWatchdog, exitWhenStalled } from '../../utils/progressWatchdog';
 
-export const executeDocumentWorkload = createDocumentExecute();
+const executeDocument = createDocumentExecute();
+const executePromptfoo = createPromptfooExecute({
+  runnerPath: process.env.AI_RUNS_V2_PROMPTFOO_RUNNER,
+});
+
+export const executeDocumentWorkload: ExecuteWorkload = (input) =>
+  isAiRunV2PromptfooSpecification(input.specification)
+    ? executePromptfoo(input)
+    : executeDocument(input);
 
 export async function startDocumentWorker(): Promise<void> {
   const env = resolveWorkerEnvironment('document');
@@ -42,7 +52,10 @@ export async function startDocumentWorker(): Promise<void> {
       return Math.max(1, deadlineAt - Date.now());
     },
     resolveDeadlineMs: (specification) => {
-      if (!isAiRunV2DocumentSpecification(specification)) {
+      if (
+        !isAiRunV2DocumentSpecification(specification)
+        && !isAiRunV2PromptfooSpecification(specification)
+      ) {
         throw new Error('Command referenced an invalid document specification');
       }
       return specification.deadlineMs;

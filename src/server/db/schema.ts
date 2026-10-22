@@ -65,6 +65,12 @@ import type { DevSessionSetupPhase, LeftoverWorkSummary } from '../../shared/typ
 import type { DesignPlanFeature, DesignPlanHistoryEntry } from '../../shared/types/designPlan';
 import type { QuickSkillPill, QuickMcpPill, InterviewSkillOption, PrototypeEngine } from '../../shared/types/projectSettings';
 import type { EffortLevel } from '../../shared/types/effort';
+import type { WorkflowMessageFeedbackSurface, WorkflowMessageRating } from '../../shared/types/workflowMessageFeedback';
+import type {
+  SkillRegressionCaseReason,
+  SkillRegressionCaseStatus,
+  SkillRegressionSnapshotStatus,
+} from '../../shared/types/skillRegressionCase';
 import type { ApprovalMode, OwnerApprovalStatus, ReviewerDocumentType } from '../../shared/types/approvals';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { ArtifactDoneEventType } from '../../shared/types/homeDashboard';
@@ -131,6 +137,7 @@ export const chatThreads = pgTable('chat_threads', {
   cursorAgentId: text('cursor_agent_id'),
   groundingMode: text('grounding_mode'),
   groundedSha: text('grounded_sha'),
+  skillSha256: text('skill_sha256'),
   workspaceDir: text('workspace_dir'),
   lastError: text('last_error'),
   savedWikiUrl: text('saved_wiki_url'),
@@ -779,6 +786,7 @@ export const prds = pgTable('prds', {
   fixBaseline: jsonb('fix_baseline').$type<PrdValidationBaseline>(),
   readinessOverride: jsonb('readiness_override').$type<PrdReadinessOverride>(),
   skillSettingsId: uuid('skill_settings_id'),
+  skillSha256: text('skill_sha256'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
@@ -824,6 +832,7 @@ export const designDocs = pgTable('design_docs', {
   proposedAssumptionsContent: text('proposed_assumptions_content'),
   fixCommentId: uuid('fix_comment_id'),
   skillSettingsId: uuid('skill_settings_id'),
+  skillSha256: text('skill_sha256'),
   generationError: text('generation_error'),
   status: text('status').notNull().default('draft'),
   reviewerId: text('reviewer_id'),
@@ -1059,6 +1068,8 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   prdValidationSkillPath: text('prd_validation_skill_path'),
   prdValidationModel: text('prd_validation_model'),
   prdValidationEffort: text('prd_validation_effort').$type<EffortLevel>(),
+  evaluationJudgeModel: text('evaluation_judge_model'),
+  evaluationJudgeEffort: text('evaluation_judge_effort').$type<EffortLevel>(),
   defaultModel: text('default_model'),
   defaultEffort: text('default_effort').$type<EffortLevel>(),
   prdReviewBedrockModelId: text('prd_review_bedrock_model_id'),
@@ -3552,7 +3563,7 @@ export const workflowEvaluationEvents = pgTable('workflow_evaluation_events', {
     .where(sql`${t.prdId} IS NOT NULL`),
   subjectTypeCheck: check(
     'workflow_evaluation_events_subject_type_check',
-    sql`${t.subjectType} IN ('interview_phase', 'prd')`,
+    sql`${t.subjectType} IN ('interview_phase', 'prd', 'design_doc', 'test_cases')`,
   ),
   outcomeCheck: check(
     'workflow_evaluation_events_outcome_check',
@@ -3566,6 +3577,12 @@ export const workflowEvaluationEvents = pgTable('workflow_evaluation_events', {
         ${t.subjectType} = 'interview_phase'
         AND ${t.phaseIndex} BETWEEN 1 AND 3
         AND ${t.interviewId} = ${t.subjectId}
+      )
+      OR (
+        ${t.subjectType} IN ('design_doc', 'test_cases')
+        AND ${t.phaseIndex} IS NULL
+        AND ${t.prdId} IS NOT NULL
+        AND ${t.prdId} <> ${t.subjectId}
       )
     )`,
   ),
@@ -3610,6 +3627,9 @@ export const workflowEvaluationJobs = pgTable('workflow_evaluation_jobs', {
   openIdx: index('idx_workflow_evaluation_jobs_open')
     .on(t.status)
     .where(sql`${t.status} IN ('pending', 'running')`),
+  runIdx: index('idx_workflow_evaluation_jobs_run_id')
+    .on(t.runId)
+    .where(sql`${t.runId} IS NOT NULL`),
   evaluatorCheck: check(
     'workflow_evaluation_jobs_evaluator_check',
     sql`${t.evaluatorKey} IN ('promptfoo', 'llm_judge')`,
@@ -3643,4 +3663,90 @@ export const workflowEvaluationJobsRelations = relations(workflowEvaluationJobs,
     fields: [workflowEvaluationJobs.eventId],
     references: [workflowEvaluationEvents.id],
   }),
+}));
+
+export const workflowMessageFeedback = pgTable('workflow_message_feedback', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  surface: text('surface').$type<WorkflowMessageFeedbackSurface>().notNull(),
+  subjectId: uuid('subject_id').notNull(),
+  messageId: uuid('message_id').notNull()
+    .references(() => chatMessages.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull()
+    .references(() => appUsers.oid, { onDelete: 'cascade' }),
+  rating: text('rating').$type<WorkflowMessageRating>().notNull(),
+  comment: text('comment'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  messageUserUq: unique('uq_workflow_message_feedback_message_user').on(t.messageId, t.userId),
+  subjectIdx: index('idx_workflow_message_feedback_subject').on(t.project, t.surface, t.subjectId),
+  projectCreatedIdx: index('idx_workflow_message_feedback_project_created').on(t.project, t.createdAt),
+  surfaceCheck: check(
+    'workflow_message_feedback_surface_check',
+    sql`${t.surface} IN ('interview', 'chat')`,
+  ),
+  ratingCheck: check(
+    'workflow_message_feedback_rating_check',
+    sql`(
+      (${t.surface} = 'interview' AND ${t.rating} IN ('up', 'down') AND ${t.comment} IS NULL)
+      OR (${t.surface} = 'chat' AND ${t.rating} IN ('good', 'needs_improvement', 'bad'))
+    )`,
+  ),
+}));
+
+export const skillRegressionCases = pgTable('skill_regression_cases', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  eventId: uuid('event_id').notNull()
+    .references(() => workflowEvaluationEvents.id, { onDelete: 'restrict' }),
+  subjectType: text('subject_type').$type<WorkflowEvaluationSubjectType>().notNull(),
+  subjectId: uuid('subject_id').notNull(),
+  phaseIndex: smallint('phase_index'),
+  skillPath: text('skill_path'),
+  skillVersion: text('skill_version'),
+  reason: text('reason').$type<SkillRegressionCaseReason>().notNull(),
+  artifactHash: text('artifact_hash').notNull(),
+  originalBlobRef: jsonb('original_blob_ref').$type<AiRunBlobRef>(),
+  snapshotStatus: text('snapshot_status').$type<SkillRegressionSnapshotStatus>().notNull().default('pending'),
+  status: text('status').$type<SkillRegressionCaseStatus>().notNull().default('active'),
+  statusReason: text('status_reason'),
+  statusChangedBy: text('status_changed_by').references(() => appUsers.oid, { onDelete: 'set null' }),
+  statusChangedAt: timestamp('status_changed_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  eventUq: unique('uq_skill_regression_cases_event').on(t.eventId),
+  skillIdx: index('idx_skill_regression_cases_skill').on(t.project, t.skillPath, t.createdAt),
+  snapshotOpenIdx: index('idx_skill_regression_cases_snapshot_open')
+    .on(t.project)
+    .where(sql`${t.snapshotStatus} IN ('pending', 'failed')`),
+  subjectTypeCheck: check(
+    'skill_regression_cases_subject_type_check',
+    sql`${t.subjectType} IN ('interview_phase', 'prd', 'design_doc', 'test_cases')`,
+  ),
+  reasonCheck: check(
+    'skill_regression_cases_reason_check',
+    sql`${t.reason} IN ('corrected_text', 'low_score', 'both')`,
+  ),
+  artifactHashCheck: check(
+    'skill_regression_cases_artifact_hash_check',
+    sql`${t.artifactHash} ~ '^[0-9a-f]{64}$'`,
+  ),
+  snapshotStatusCheck: check(
+    'skill_regression_cases_snapshot_status_check',
+    sql`${t.snapshotStatus} IN ('pending', 'stored', 'artifact_changed', 'failed')`,
+  ),
+  snapshotRefCheck: check(
+    'skill_regression_cases_snapshot_ref_check',
+    sql`(${t.snapshotStatus} = 'stored') = (${t.originalBlobRef} IS NOT NULL)`,
+  ),
+  statusCheck: check(
+    'skill_regression_cases_status_check',
+    sql`${t.status} IN ('active', 'retired')`,
+  ),
+  retireReasonCheck: check(
+    'skill_regression_cases_retire_reason_check',
+    sql`${t.status} = 'active' OR length(btrim(coalesce(${t.statusReason}, ''))) > 0`,
+  ),
 }));

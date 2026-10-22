@@ -385,4 +385,99 @@ describe('V2 document artifact harvest', () => {
     expect(failWorkflow).toHaveBeenCalled();
     expect(finishedAttempts.completeHarvest).toHaveBeenCalledWith('attempt-1');
   });
+
+  it('hands a finished evaluation run to the job ingest with its manifest', async () => {
+    const currentAttempt = attempt({
+      workflowClass: 'evaluation-judge',
+      threadId: 'wfeval:event-1:llm_judge',
+    });
+    const { finishedAttempts, artifacts } = arrange(currentAttempt, {
+      'output/judge-result.json': '{"confidence":"high"}',
+      'output/judge-result.md': '# Judge',
+    });
+    const applyCompleted = jest.fn(async ({ outputDir }: { outputDir: string }) => {
+      await expect(
+        fs.readFile(path.join(outputDir, 'judge-result.json'), 'utf8'),
+      ).resolves.toBe('{"confidence":"high"}');
+      return 'applied' as const;
+    });
+    const applyWorkspace = jest.fn();
+
+    await harvestFinishedV2Documents({
+      finishedAttempts,
+      artifacts,
+      applyWorkspace,
+      applySmartTagging: jest.fn(),
+      evaluationJobs: { applyCompleted, applyFailed: jest.fn() },
+    });
+
+    expect(applyCompleted).toHaveBeenCalledWith(expect.objectContaining({
+      runId: 'run-1',
+      threadId: 'wfeval:event-1:llm_judge',
+      workflowClass: 'evaluation-judge',
+      manifest: expect.objectContaining({
+        files: expect.arrayContaining([
+          expect.objectContaining({ path: 'output/judge-result.json' }),
+        ]),
+      }),
+    }));
+    expect(applyWorkspace).not.toHaveBeenCalled();
+    expect(finishedAttempts.completeHarvest).toHaveBeenCalledWith('attempt-1');
+  });
+
+  it('fails the evaluation job, not a chat thread, when the run failed', async () => {
+    const currentAttempt = attempt({
+      workflowClass: 'evaluation-promptfoo',
+      threadId: 'wfeval:event-1:promptfoo',
+      status: 'failed',
+      manifestRef: null,
+      failureDetail: 'Promptfoo runner exited with code 3',
+    });
+    const { finishedAttempts, artifacts } = arrange(currentAttempt);
+    const applyFailed = jest.fn().mockResolvedValue('applied');
+    const applyWorkspace = jest.fn();
+
+    await harvestFinishedV2Documents({
+      finishedAttempts,
+      artifacts,
+      applyWorkspace,
+      applySmartTagging: jest.fn(),
+      evaluationJobs: { applyCompleted: jest.fn(), applyFailed },
+    });
+
+    expect(applyFailed).toHaveBeenCalledWith({
+      runId: 'run-1',
+      threadId: 'wfeval:event-1:promptfoo',
+      workflowClass: 'evaluation-promptfoo',
+      reason: 'Promptfoo runner exited with code 3',
+    });
+    expect(applyWorkspace).not.toHaveBeenCalled();
+    expect(finishedAttempts.completeHarvest).toHaveBeenCalledWith('attempt-1');
+  });
+
+  it('rejects an evaluation manifest that carries document outputs', async () => {
+    const currentAttempt = attempt({
+      workflowClass: 'evaluation-judge',
+      threadId: 'wfeval:event-1:llm_judge',
+    });
+    const { finishedAttempts, artifacts } = arrange(currentAttempt, {
+      'output/judge-result.json': '{}',
+      'output/feature.prd.md': '# PRD',
+    });
+    const applyCompleted = jest.fn();
+    const applyFailed = jest.fn().mockResolvedValue('applied');
+
+    await harvestFinishedV2Documents({
+      finishedAttempts,
+      artifacts,
+      applyWorkspace: jest.fn(),
+      applySmartTagging: jest.fn(),
+      evaluationJobs: { applyCompleted, applyFailed },
+    });
+
+    expect(applyCompleted).not.toHaveBeenCalled();
+    expect(applyFailed).toHaveBeenCalledWith(expect.objectContaining({
+      reason: expect.stringMatching(/unexpected document output output\/feature\.prd\.md/),
+    }));
+  });
 });

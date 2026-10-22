@@ -1545,6 +1545,40 @@ describe('syncPrdContent', () => {
     ).resolves.toBe(false);
     expect(returningMock).toHaveBeenCalled();
   });
+
+  it('stamps the SKILL.md hash the generation thread loaded', async () => {
+    const setMock = jest.fn().mockReturnValue({
+      where: jest.fn().mockReturnValue({ returning: jest.fn().mockResolvedValue([{ id: 'prd-1' }]) }),
+    });
+    mockDb.update.mockReturnValue({ set: setMock });
+    const defaultSelect = mockDb.select.getMockImplementation();
+    mockDb.select.mockImplementation(() => ({
+      from: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockResolvedValue([{ skillSha256: 'skill-sha' }]),
+    }));
+
+    try {
+      await syncPrdContent('prd-1', 'content', undefined, 'draft', {
+        expectedStatus: 'generating',
+        expectedThreadId: 'thread-prd',
+      });
+    } finally {
+      mockDb.select.mockImplementation(defaultSelect);
+    }
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ skillSha256: 'skill-sha' }));
+  });
+
+  it('clears the hash when the PRD has no generation thread', async () => {
+    const setMock = jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) });
+    mockDb.update.mockReturnValue({ set: setMock });
+    mockDb.query.prds.findFirst.mockResolvedValue({ chatThreadId: null });
+
+    await syncPrdContent('prd-1', 'content');
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ skillSha256: null }));
+  });
 });
 
 describe('createPrdValidationAdapter', () => {

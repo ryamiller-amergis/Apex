@@ -16,13 +16,29 @@ import {
 } from '../../shared/types/workflowEvaluationAccess';
 import {
   CREATE_WORKFLOW_EVALUATION_REQUEST_FIELDS,
+  WORKFLOW_EVALUATION_JOB_EVALUATORS,
+  WORKFLOW_EVALUATION_SUBJECT_TYPES,
   type CreateWorkflowEvaluationRequest,
+  type WorkflowEvaluationJobEvaluator,
   type WorkflowEvaluationSubjectType,
 } from '../../shared/types/workflowEvaluation';
 import { WorkflowEvaluationError } from '../services/workflowEvaluationError';
+import {
+  createWorkflowEvaluationJobOrchestrator,
+  registerWorkflowEvaluationJobListener,
+  type WorkflowEvaluationJobFailureCode,
+} from '../services/workflowEvaluationJobOrchestrator';
+import { registerSkillRegressionCaseListener } from '../services/skillRegressionCaseService';
 import * as workflowEvaluationService from '../services/workflowEvaluationService';
+import * as workflowMessageFeedbackService from '../services/workflowMessageFeedbackService';
+import { WorkflowMessageFeedbackError } from '../services/workflowMessageFeedbackService';
+import workflowEvaluationsAdminRouter from './workflowEvaluationsAdmin';
 
 const router = Router({ mergeParams: true });
+
+const jobOrchestrator = createWorkflowEvaluationJobOrchestrator();
+registerWorkflowEvaluationJobListener(jobOrchestrator);
+registerSkillRegressionCaseListener();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -61,6 +77,7 @@ const requireNamedUser: (req: Request, res: Response, next: NextFunction) => voi
 router.use(rejectProjectMismatch);
 router.use(requireProjectAccess(resolveRequestProject));
 router.use(requireNamedUser);
+router.use('/admin', workflowEvaluationsAdminRouter);
 
 function handleServiceError(err: unknown, res: Response, next: NextFunction): void {
   if (err instanceof WorkflowEvaluationError) {
@@ -80,7 +97,7 @@ function handleServiceError(err: unknown, res: Response, next: NextFunction): vo
 }
 
 function isSubjectType(value: unknown): value is WorkflowEvaluationSubjectType {
-  return value === 'prd' || value === 'interview_phase';
+  return (WORKFLOW_EVALUATION_SUBJECT_TYPES as readonly unknown[]).includes(value);
 }
 
 router.get(
@@ -95,10 +112,15 @@ router.get(
         res.status(422).json({ error: 'subjectType is invalid', code: 'UNKNOWN_FIELD' });
         return;
       }
+      const subjectId = req.query.subjectId;
+      if (subjectId !== undefined && (typeof subjectId !== 'string' || !UUID_RE.test(subjectId))) {
+        res.status(422).json({ error: 'subjectId is invalid', code: 'UNKNOWN_FIELD' });
+        return;
+      }
       const body = await workflowEvaluationService.listEvaluationDefinitions(
         pathProject(req),
         getUserId(req),
-        { subjectType, stageKey },
+        { subjectType, stageKey, subjectId },
       );
       res.json(body);
     } catch (err) {
@@ -156,6 +178,52 @@ router.post(
   },
 );
 
+function handleMessageFeedbackError(err: unknown, res: Response, next: NextFunction): void {
+  if (err instanceof WorkflowMessageFeedbackError) {
+    res.status(err.status).json({ error: err.message, code: err.code });
+    return;
+  }
+  next(err);
+}
+
+router.get(
+  '/message-feedback',
+  requirePermission(WORKFLOW_EVALUATION_SUBMIT),
+  requireWorkflowEvaluationFlag,
+  async (req, res, next) => {
+    try {
+      const { surface, subjectId } = workflowMessageFeedbackService.parseListQuery(req.query);
+      res.json(await workflowMessageFeedbackService.listMyMessageFeedback(
+        pathProject(req),
+        getUserId(req),
+        surface,
+        subjectId,
+      ));
+    } catch (err) {
+      handleMessageFeedbackError(err, res, next);
+    }
+  },
+);
+
+router.put(
+  '/message-feedback/:messageId',
+  requirePermission(WORKFLOW_EVALUATION_SUBMIT),
+  requireWorkflowEvaluationFlag,
+  async (req, res, next) => {
+    try {
+      const body = workflowMessageFeedbackService.parsePutBody(req.body);
+      res.json(await workflowMessageFeedbackService.putMessageFeedback(
+        pathProject(req),
+        getUserId(req),
+        String(req.params.messageId),
+        body,
+      ));
+    } catch (err) {
+      handleMessageFeedbackError(err, res, next);
+    }
+  },
+);
+
 router.get(
   '/events/:eventId',
   requirePermission(WORKFLOW_EVALUATION_VIEW),
@@ -175,6 +243,79 @@ router.get(
       res.json(event);
     } catch (err) {
       handleServiceError(err, res, next);
+    }
+  },
+);
+
+function retryFailureStatus(code: WorkflowEvaluationJobFailureCode): number {
+  switch (code) {
+    case 'enqueue_failed':
+    case 'enqueue_interrupted':
+      return 502;
+    case 'artifact_unavailable':
+    case 'artifact_changed':
+    case 'suite_missing':
+    case 'skill_config_missing':
+    case 'specification_invalid':
+    case 'flag_disabled':
+    case 'transport_disabled':
+      return 409;
+    default: {
+      const unhandled: never = code;
+      throw new Error(`Unhandled job failure code: ${String(unhandled)}`);
+    }
+  }
+}
+
+router.post(
+  '/events/:eventId/jobs/:evaluatorKey/retry',
+  requirePermission('admin:roles'),
+  requireWorkflowEvaluationFlag,
+  async (req, res, next) => {
+    try {
+      const { eventId, evaluatorKey } = req.params;
+      if (
+        typeof eventId !== 'string'
+        || !UUID_RE.test(eventId)
+        || !(WORKFLOW_EVALUATION_JOB_EVALUATORS as readonly string[]).includes(evaluatorKey)
+      ) {
+        res.status(404).json({ error: 'Not found' });
+        return;
+      }
+      const result = await jobOrchestrator.retryJob({
+        projectId: pathProject(req),
+        eventId,
+        evaluatorKey: evaluatorKey as WorkflowEvaluationJobEvaluator,
+        userId: getUserId(req),
+      });
+      switch (result.status) {
+        case 'dispatched':
+          res.json({ job: result.job });
+          return;
+        case 'not_found':
+          res.status(404).json({ error: 'Not found' });
+          return;
+        case 'job_not_failed':
+          res.status(409).json({
+            error: 'Only a failed job can be retried.',
+            code: 'job_not_failed',
+            job: result.job,
+          });
+          return;
+        case 'failed':
+          res.status(retryFailureStatus(result.code)).json({
+            error: result.message,
+            code: result.code,
+            job: result.job,
+          });
+          return;
+        default: {
+          const unhandled: never = result;
+          throw new Error(`Unhandled retry result: ${JSON.stringify(unhandled)}`);
+        }
+      }
+    } catch (err) {
+      next(err);
     }
   },
 );

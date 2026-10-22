@@ -1,0 +1,218 @@
+.periodSelect {
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.caveats {
+  margin: 0;
+  padding: 12px 16px 12px 32px;
+  border: 1px solid var(--border-color-light);
+  border-radius: 12px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.caveats li + li {
+  margin-top: 4px;
+}
+
+.skillPath {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.selectedRow {
+  background: var(--bg-tertiary);
+}
+
+.status {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.status-good {
+  color: var(--success-color);
+}
+
+.status-fair {
+  color: var(--warning-color);
+}
+
+.status-poor {
+  color: var(--error-color);
+}
+
+.status-insufficient_data {
+  color: var(--text-muted);
+}
+
+.detail {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: 0.9375rem;
+  color: var(--text-primary);
+}
+
+.chart {
+  width: 100%;
+  height: 220px;
+}
+
+.heatmap {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.heatmap th,
+.heatmap td {
+  padding: 8px;
+  border: 1px solid var(--border-color-light);
+  text-align: center;
+}
+
+.evaluation {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.sectionTitle {
+  grid-column: 1 / -1;
+  margin: 8px 0 0;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.versionTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+}
+
+.versionTable th,
+.versionTable td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color-light);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.versionTable th {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.heatCell {
+  position: relative;
+  color: var(--text-primary);
+}
+
+.heatFill {
+  position: absolute;
+  inset: 0;
+  background: var(--error-color);
+  pointer-events: none;
+}
+
+.heatValue {
+  position: relative;
+}
+
+.gapList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gapHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.gapActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gapMeta {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.gapSamples {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.statLabel {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.statValue {
+  color: var(--text-primary);
+  font-size: 1.125rem;
+  font-weight: 600;
+}

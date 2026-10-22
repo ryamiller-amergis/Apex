@@ -204,6 +204,10 @@ export interface ProjectSkillConfig extends ProjectEffortSettings {
   prdAssistantSkillPath?: string | null;
   prdAssistantModel?: string | null;
   prdValidationModel?: string | null;
+  /** Model every workflow-evaluation judge uses; null falls back to PRD Validation, then the app default. */
+  evaluationJudgeModel?: string | null;
+  /** Effort for those judges; null falls back to PRD Validation effort. */
+  evaluationJudgeEffort?: EffortLevel | null;
   defaultModel?: string | null;
   prdReviewBedrockModelId?: string | null;
   prdReviewBedrockMaxTokens?: number | null;

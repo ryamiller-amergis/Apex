@@ -33,6 +33,7 @@ import {
 import { getTestCases, listLatestTestCaseSummariesForPrds, getUncoveredCoverageItems, recalculateTestCaseCoverage } from './testCaseService';
 import { getSkillConfig, resolveSkillConfig, getSkillSettingsName } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
+import { getThreadSkillSha256 } from './chatThreadRepository';
 import { resolvePrototypeStageEnabled } from '../../shared/utils/prototypeStage';
 import {
   autoStartDocumentValidation,
@@ -897,11 +898,21 @@ export async function syncPrdContent(
     stampedContent = content;
   }
 
+  let skillSha256: string | null = null;
+  try {
+    const generationThreadId = completionGuard?.expectedThreadId
+      ?? (await db.query.prds.findFirst({ where: eq(prds.id, id), columns: { chatThreadId: true } }))?.chatThreadId;
+    skillSha256 = generationThreadId ? await getThreadSkillSha256(generationThreadId) : null;
+  } catch (err) {
+    console.warn(`[prdService] Skill version lookup skipped for PRD ${id}:`, err);
+  }
+
   const update = db
     .update(prds)
     .set({
       content: stampedContent,
       status: finalStatus,
+      skillSha256,
       ...(resolvedBacklog !== undefined ? { backlogJson: resolvedBacklog as any } : {}),
       updatedAt: new Date().toISOString(),
     });
@@ -2720,21 +2731,21 @@ export async function getPrdEvaluationInputs(prdId: string): Promise<PrdEvaluati
       content: true,
       backlogJson: true,
       chatThreadId: true,
+      skillSha256: true,
     },
   });
   if (!row) return null;
 
   let skillPath: string | null = null;
-  let skillVersion: string | null = null;
+  const skillVersion = row.skillSha256 ?? null;
   let model = row.model ?? null;
   if (row.chatThreadId) {
     const thread = await db.query.chatThreads.findFirst({
       where: eq(chatThreads.id, row.chatThreadId),
-      columns: { kickoff: true, groundedSha: true },
+      columns: { kickoff: true },
     });
     if (thread) {
       skillPath = thread.kickoff?.skillPath ?? null;
-      skillVersion = thread.groundedSha ?? null;
       model = row.model ?? thread.kickoff?.model ?? null;
     }
   }

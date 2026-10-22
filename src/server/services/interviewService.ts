@@ -687,7 +687,7 @@ export async function getInterviewEvaluationInputs(
   const { getThreadAsync } = await import('./chatAgentService');
   const thread = await getThreadAsync(row.chatThreadId);
   const skillPath = thread?.kickoff?.skillPath ?? null;
-  const skillVersion = thread?.groundedSha ?? null;
+  const skillVersion = thread?.skillSha256 ?? null;
   const model = row.model ?? thread?.kickoff?.model ?? null;
   const messages = thread?.messages ?? [];
   const guided = usesGuidedInterview(skillPath);

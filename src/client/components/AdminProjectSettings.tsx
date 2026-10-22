@@ -333,6 +333,7 @@ interface PipelineStageDef {
   interviewOptions?: boolean;
   /** Nest the PRD validation score threshold under this stage. */
   prdValidationThreshold?: boolean;
+  /** Nest the workflow-evaluation judge model and effort under this stage. */
   /** Nest the design-doc validation score threshold under this stage. */
   designDocValidationThreshold?: boolean;
 }

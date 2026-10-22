@@ -1,5 +1,28 @@
 [
   {
+    "version": "1.40.0",
+    "date": "2026-10-20",
+    "title": "Skill Health",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Platform Admin has a Skill Health tab that shows, project by project, how each skill performs: review score, pass rate, acceptance, review comments and cost per document"
+      },
+      {
+        "type": "feature",
+        "description": "Create an Azure DevOps work item to improve a skill straight from Skill Health. Apex skills go to the Apex Backlog; other projects' skills go to that project's Azure DevOps under your own account"
+      },
+      {
+        "type": "feature",
+        "description": "PRDs, design docs and chats now record which version of their skill produced them, and Skill Health compares those versions side by side"
+      },
+      {
+        "type": "feature",
+        "description": "In projects with human workflow evaluation turned on, Skill Health shows reviewer feedback by stage, recent regenerate and reject decisions, and the judge's suggested fixes, each of which you can file as a work item"
+      }
+    ]
+  },
+  {
     "version": "1.39.1",
     "date": "2026-10-13",
     "title": "Production Reliability",

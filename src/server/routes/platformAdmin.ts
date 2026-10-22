@@ -84,6 +84,7 @@ import {
 } from '../../shared/types/groundingOperations';
 import { groundingGateService } from '../services/groundingGateService';
 import observabilityQueryRouter from './observabilityQuery';
+import skillHealthRouter from './skillHealth';
 
 const router = Router();
 const validMenuItemKeys = new Set<MenuItemKey>(CONFIGURABLE_MENU_ITEMS.map((item) => item.key));
@@ -198,6 +199,7 @@ router.use('/observability', observabilityQueryRouter);
 
 // ── Foundation Skills (Platform Admin only — guard inherited from above) ───────
 router.use('/foundation-skills', foundationSkillsAdminRouter);
+router.use('/skill-health', skillHealthRouter);
 
 router.get('/grounding/rollout-status', async (req: Request, res: Response): Promise<void> => {
   const stage = typeof req.query.stage === 'string' ? req.query.stage : '';

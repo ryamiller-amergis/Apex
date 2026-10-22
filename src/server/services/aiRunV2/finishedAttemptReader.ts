@@ -206,7 +206,9 @@ export function createFinishedAttemptReader(deps?: {
               'validation',
               'test-cases',
               'walkthrough-smart-tagging',
-              'playbook-step'
+              'playbook-step',
+              'evaluation-promptfoo',
+              'evaluation-judge'
             )
             AND NOT EXISTS (
               SELECT 1
@@ -278,7 +280,9 @@ export function createFinishedAttemptReader(deps?: {
             'validation',
             'test-cases',
             'walkthrough-smart-tagging',
-            'playbook-step'
+            'playbook-step',
+            'evaluation-promptfoo',
+            'evaluation-judge'
           )
           AND NOT EXISTS (
             SELECT 1

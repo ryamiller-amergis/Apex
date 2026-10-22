@@ -99,6 +99,30 @@ jest.mock('../FixValidationPanel', () => ({
   FixingProgressView: () => null,
 }));
 
+const mockUseWorkflowEvaluationAccess = jest.fn();
+jest.mock('../../hooks/useWorkflowEvaluationAccess', () => ({
+  useWorkflowEvaluationAccess: (...args: unknown[]) => mockUseWorkflowEvaluationAccess(...args),
+}));
+const mockUseWorkflowEvaluationEvents = jest.fn();
+jest.mock('../../hooks/useWorkflowEvaluations', () => ({
+  useWorkflowEvaluationEvents: (...args: unknown[]) => mockUseWorkflowEvaluationEvents(...args),
+}));
+jest.mock('../DesignDocQualityFeedbackPrompt', () => ({ __esModule: true, default: () => null }));
+jest.mock('../DesignDocQualityFeedbackTab', () => ({
+  __esModule: true,
+  default: () => <div data-testid="design-doc-quality-feedback-panel" />,
+}));
+
+const NO_FEEDBACK_ACCESS = {
+  flagEnabled: false,
+  canView: false,
+  canSubmit: false,
+  canAdmin: false,
+  isPlatformAdmin: false,
+  ready: true,
+  onRefused: jest.fn(),
+};
+
 // ── Base fixtures ──────────────────────────────────────────────────────────────
 
 const baseDoc = {
@@ -153,6 +177,99 @@ beforeEach(() => {
   });
   mockUseDocumentAssignments.mockReturnValue({
     data: [{ approverUserId: 'user-reviewer', approverDisplayName: 'Carol Reviewer', status: 'approved' }],
+  });
+  mockUseWorkflowEvaluationAccess.mockReturnValue(NO_FEEDBACK_ACCESS);
+  mockUseWorkflowEvaluationEvents.mockReturnValue({ data: undefined, isError: false });
+});
+
+describe('Owner feedback before approval', () => {
+  function ownerWithFeedbackAccess(overrides: Record<string, unknown> = {}) {
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
+      userId: 'user-owner',
+      isAdmin: false,
+      isSuperAdmin: false,
+      selectedProject: 'proj-alpha',
+      groups: [],
+      ...overrides,
+    });
+    mockUseWorkflowEvaluationAccess.mockReturnValue({
+      ...NO_FEEDBACK_ACCESS,
+      flagEnabled: true,
+      canView: true,
+      canSubmit: true,
+    });
+  }
+
+  function ownerEvent(overrides: Record<string, unknown> = {}) {
+    return {
+      reviewerUserId: 'user-owner',
+      reviewerRoleKey: 'design_doc_owner',
+      artifactContentHash: 'current-hash',
+      ...overrides,
+    };
+  }
+
+  it('locks Approve as Owner until the owner gives feedback, and links to the feedback panel', async () => {
+    ownerWithFeedbackAccess();
+    mockUseWorkflowEvaluationEvents.mockReturnValue({
+      data: { events: [], truncated: false, currentArtifactHash: 'current-hash' },
+      isError: false,
+    });
+
+    renderView();
+
+    expect(screen.getByTestId('dd-approve-owner-btn')).toBeDisabled();
+    expect(screen.getByTestId('dd-owner-approve-feedback-reason')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('dd-owner-approve-open-feedback'));
+    expect(await screen.findByTestId('design-doc-quality-feedback-panel')).toBeInTheDocument();
+  });
+
+  it('unlocks once the owner has given feedback on the current version', () => {
+    ownerWithFeedbackAccess();
+    mockUseWorkflowEvaluationEvents.mockReturnValue({
+      data: { events: [ownerEvent()], truncated: false, currentArtifactHash: 'current-hash' },
+      isError: false,
+    });
+
+    renderView();
+
+    expect(screen.getByTestId('dd-approve-owner-btn')).toBeEnabled();
+    expect(screen.queryByTestId('dd-owner-approve-feedback-reason')).not.toBeInTheDocument();
+  });
+
+  it('stays locked when the owner only reviewed an older version', () => {
+    ownerWithFeedbackAccess();
+    mockUseWorkflowEvaluationEvents.mockReturnValue({
+      data: {
+        events: [ownerEvent({ artifactContentHash: 'older-hash' })],
+        truncated: false,
+        currentArtifactHash: 'current-hash',
+      },
+      isError: false,
+    });
+
+    renderView();
+
+    expect(screen.getByTestId('dd-approve-owner-btn')).toBeDisabled();
+  });
+
+  it('lets a super admin approve without feedback', () => {
+    ownerWithFeedbackAccess({ userId: 'user-admin', isSuperAdmin: true });
+
+    renderView();
+
+    expect(screen.getByTestId('dd-approve-owner-btn')).toBeEnabled();
+    expect(screen.queryByTestId('dd-owner-approve-feedback-reason')).not.toBeInTheDocument();
+  });
+
+  it('does not block approval when the feedback lookup fails', () => {
+    ownerWithFeedbackAccess();
+    mockUseWorkflowEvaluationEvents.mockReturnValue({ data: undefined, isError: true });
+
+    renderView();
+
+    expect(screen.getByTestId('dd-approve-owner-btn')).toBeEnabled();
   });
 });
 
