@@ -65,6 +65,7 @@ import type { DevSessionSetupPhase, LeftoverWorkSummary } from '../../shared/typ
 import type { DesignPlanFeature, DesignPlanHistoryEntry } from '../../shared/types/designPlan';
 import type { QuickSkillPill, QuickMcpPill, InterviewSkillOption, PrototypeEngine } from '../../shared/types/projectSettings';
 import type { EffortLevel } from '../../shared/types/effort';
+import type { WorkflowMessageFeedbackSurface, WorkflowMessageRating } from '../../shared/types/workflowMessageFeedback';
 import type { ApprovalMode, OwnerApprovalStatus, ReviewerDocumentType } from '../../shared/types/approvals';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { ArtifactDoneEventType } from '../../shared/types/homeDashboard';
@@ -3657,4 +3658,34 @@ export const workflowEvaluationJobsRelations = relations(workflowEvaluationJobs,
     fields: [workflowEvaluationJobs.eventId],
     references: [workflowEvaluationEvents.id],
   }),
+}));
+
+export const workflowMessageFeedback = pgTable('workflow_message_feedback', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  surface: text('surface').$type<WorkflowMessageFeedbackSurface>().notNull(),
+  subjectId: uuid('subject_id').notNull(),
+  messageId: uuid('message_id').notNull()
+    .references(() => chatMessages.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull()
+    .references(() => appUsers.oid, { onDelete: 'cascade' }),
+  rating: text('rating').$type<WorkflowMessageRating>().notNull(),
+  comment: text('comment'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  messageUserUq: unique('uq_workflow_message_feedback_message_user').on(t.messageId, t.userId),
+  subjectIdx: index('idx_workflow_message_feedback_subject').on(t.project, t.surface, t.subjectId),
+  projectCreatedIdx: index('idx_workflow_message_feedback_project_created').on(t.project, t.createdAt),
+  surfaceCheck: check(
+    'workflow_message_feedback_surface_check',
+    sql`${t.surface} IN ('interview', 'chat')`,
+  ),
+  ratingCheck: check(
+    'workflow_message_feedback_rating_check',
+    sql`(
+      (${t.surface} = 'interview' AND ${t.rating} IN ('up', 'down') AND ${t.comment} IS NULL)
+      OR (${t.surface} = 'chat' AND ${t.rating} IN ('good', 'needs_improvement', 'bad'))
+    )`,
+  ),
 }));

@@ -201,6 +201,38 @@ jest.mock('../RunGroundingStatus', () => ({
     />
   ),
 }));
+const mockFeedbackAccess = { canView: false, canSubmit: false };
+jest.mock('../../hooks/useWorkflowEvaluationAccess', () => ({
+  useWorkflowEvaluationAccess: () => mockFeedbackAccess,
+}));
+let mockPhaseFeedbackReviewers: Record<string, string[]> = {};
+jest.mock('../../hooks/useWorkflowEvaluations', () => ({
+  useWorkflowEvaluationEvents: ({ stageKey, enabled }: { stageKey: string; enabled: boolean }) => ({
+    data: enabled
+      ? {
+        events: (mockPhaseFeedbackReviewers[stageKey] ?? []).map((reviewerUserId, index) => ({
+          id: `evt-${stageKey}-${index}`,
+          reviewerUserId,
+          artifactContentHash: 'a'.repeat(64),
+        })),
+        truncated: false,
+        currentArtifactHash: 'a'.repeat(64),
+      }
+      : undefined,
+    isError: false,
+  }),
+}));
+const mockPutMessageFeedback = jest.fn();
+let mockMessageRatings: { messageId: string; rating: string }[] = [];
+jest.mock('../../hooks/useWorkflowMessageFeedback', () => ({
+  useWorkflowMessageFeedback: () => ({ data: { entries: mockMessageRatings } }),
+  usePutWorkflowMessageFeedback: () => ({ mutate: mockPutMessageFeedback, isPending: false }),
+}));
+jest.mock('../InterviewPhaseFeedbackPanel', () => ({
+  InterviewPhaseFeedbackPanel: ({ phases, 'data-testid': testId }: { phases: number[]; 'data-testid': string }) => (
+    <div data-testid={testId} data-phases={phases.join(',')} />
+  ),
+}));
 jest.mock('../../hooks/useGroundingResumeGate', () => ({
   useGroundingResumeGate: () => ({
     composerBlocked: false,
@@ -1605,5 +1637,127 @@ describe('ExistingInterviewView — complete and generate PRD authorization', ()
     renderAs('project-admin', { status: 'complete' }, () => false, false, ['admin']);
 
     expect(screen.getByTestId('generate-prd-btn')).toBeInTheDocument();
+  });
+});
+
+describe('ExistingInterviewView — interview feedback', () => {
+  const deliveryDone = [
+    { id: 'm1', role: 'agent' as const, text: '[[interview-phase:discovery:1:6]]\nWho uses it?', ts: '2026-01-01T00:00:00Z' },
+    { id: 'm2', role: 'agent' as const, text: '[[interview-phase:delivery:done]]\nContinue to Technical?', ts: '2026-01-01T00:01:00Z' },
+  ];
+  const technicalRan = [
+    ...deliveryDone,
+    { id: 'm3', role: 'agent' as const, text: '[[interview-phase:technical:done]]\nAll set.', ts: '2026-01-01T00:02:00Z' },
+  ];
+
+  function renderGuided(
+    messages: typeof deliveryDone,
+    options: { userId?: string; isSuperAdmin?: boolean; interview?: Partial<Interview> } = {},
+  ) {
+    (useAppShell as jest.Mock).mockReturnValue({
+      selectedProject: 'MaxView',
+      can: jest.fn(() => true),
+      userId: options.userId ?? 'user-1',
+      isAdmin: false,
+      isSuperAdmin: options.isSuperAdmin ?? false,
+    });
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview(options.interview),
+      isLoading: false,
+      isError: false,
+    });
+    (useChatThread as jest.Mock).mockReturnValue({
+      data: {
+        id: 'thread-iv-1',
+        status: 'idle',
+        kickoff: { skillPath: '.cursor/skills/grill-with-docs/SKILL.md', model: 'composer-2' },
+        messages: [],
+      },
+    });
+    mockUseAgentChatSession.mockReturnValue({ ...idleStream, messages });
+    renderExistingInterview();
+  }
+
+  beforeEach(() => {
+    mockFeedbackAccess.canView = true;
+    mockFeedbackAccess.canSubmit = true;
+    mockPhaseFeedbackReviewers = {};
+    mockMessageRatings = [];
+  });
+
+  afterAll(() => {
+    mockFeedbackAccess.canView = false;
+    mockFeedbackAccess.canSubmit = false;
+  });
+
+  it('replaces the composer with the BA feedback form once Delivery is done', () => {
+    renderGuided(deliveryDone);
+
+    expect(screen.getByTestId('interview-ba-feedback-panel')).toHaveAttribute('data-phases', '1,2');
+    expect(screen.queryByTestId('interview-file-input')).not.toBeInTheDocument();
+    expect(screen.getByTestId('complete-interview-btn')).toBeDisabled();
+    expect(screen.getByTestId('complete-interview-feedback-reason'))
+      .toHaveTextContent('Waiting for you to rate Discovery and Delivery.');
+  });
+
+  it('tells everyone else who the chat is waiting on', () => {
+    renderGuided(deliveryDone, {
+      interview: { discoveryAssigneeId: 'ba-2', discoveryAssigneeName: 'Bea Analyst' },
+    });
+
+    expect(screen.queryByTestId('interview-ba-feedback-panel')).not.toBeInTheDocument();
+    expect(screen.getByTestId('interview-ba-feedback-wait'))
+      .toHaveTextContent('Waiting for Bea Analyst to rate Discovery and Delivery.');
+    expect(screen.queryByTestId('interview-file-input')).not.toBeInTheDocument();
+  });
+
+  it('reopens the chat and enables Complete once the BA rated both phases', () => {
+    mockPhaseFeedbackReviewers = { interview_phase_1: ['user-1'], interview_phase_2: ['user-1'] };
+    renderGuided(deliveryDone);
+
+    expect(screen.queryByTestId('interview-ba-feedback-panel')).not.toBeInTheDocument();
+    expect(screen.getByTestId('interview-file-input')).toBeInTheDocument();
+    expect(screen.getByTestId('complete-interview-btn')).not.toBeDisabled();
+  });
+
+  it('blocks Complete until the technical reviewer rates Technical, and offers them the form', () => {
+    mockPhaseFeedbackReviewers = { interview_phase_1: ['user-1'], interview_phase_2: ['user-1'] };
+    renderGuided(technicalRan, {
+      interview: { technicalAssigneeId: 'user-1' },
+    });
+
+    expect(screen.getByTestId('complete-interview-btn')).toBeDisabled();
+    expect(screen.getByTestId('complete-interview-feedback-reason'))
+      .toHaveTextContent('Waiting for you to rate Technical.');
+    fireEvent.click(screen.getByTestId('interview-technical-feedback-toggle'));
+    expect(screen.getByTestId('interview-technical-feedback-panel')).toHaveAttribute('data-phases', '3');
+  });
+
+  it('lets a super admin skip both locks', () => {
+    renderGuided(technicalRan, { isSuperAdmin: true });
+
+    expect(screen.queryByTestId('interview-ba-feedback-panel')).not.toBeInTheDocument();
+    expect(screen.getByTestId('interview-file-input')).toBeInTheDocument();
+    expect(screen.getByTestId('complete-interview-btn')).not.toBeDisabled();
+  });
+
+  it('saves and clears a thumbs rating on an agent question', () => {
+    mockPhaseFeedbackReviewers = { interview_phase_1: ['user-1'], interview_phase_2: ['user-1'] };
+    mockMessageRatings = [{ messageId: 'm1', rating: 'up' }];
+    renderGuided(deliveryDone);
+
+    const up = screen.getByTestId('interview-message-thumb-up-m1');
+    expect(up).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(up);
+    expect(mockPutMessageFeedback).toHaveBeenCalledWith({ messageId: 'm1', rating: null });
+    fireEvent.click(screen.getByTestId('interview-message-thumb-down-m2'));
+    expect(mockPutMessageFeedback).toHaveBeenCalledWith({ messageId: 'm2', rating: 'down' });
+  });
+
+  it('disables thumbs once the interview is complete', () => {
+    renderGuided(deliveryDone, { interview: { status: 'complete' } });
+
+    expect(screen.getByTestId('interview-message-thumb-up-m1')).toBeDisabled();
+    expect(screen.queryByTestId('interview-ba-feedback-panel')).not.toBeInTheDocument();
   });
 });

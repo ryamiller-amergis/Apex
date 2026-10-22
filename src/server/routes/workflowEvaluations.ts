@@ -29,6 +29,8 @@ import {
   type WorkflowEvaluationJobFailureCode,
 } from '../services/workflowEvaluationJobOrchestrator';
 import * as workflowEvaluationService from '../services/workflowEvaluationService';
+import * as workflowMessageFeedbackService from '../services/workflowMessageFeedbackService';
+import { WorkflowMessageFeedbackError } from '../services/workflowMessageFeedbackService';
 import workflowEvaluationsAdminRouter from './workflowEvaluationsAdmin';
 
 const router = Router({ mergeParams: true });
@@ -170,6 +172,52 @@ router.post(
       res.status(201).json(event);
     } catch (err) {
       handleServiceError(err, res, next);
+    }
+  },
+);
+
+function handleMessageFeedbackError(err: unknown, res: Response, next: NextFunction): void {
+  if (err instanceof WorkflowMessageFeedbackError) {
+    res.status(err.status).json({ error: err.message, code: err.code });
+    return;
+  }
+  next(err);
+}
+
+router.get(
+  '/message-feedback',
+  requirePermission(WORKFLOW_EVALUATION_SUBMIT),
+  requireWorkflowEvaluationFlag,
+  async (req, res, next) => {
+    try {
+      const { surface, subjectId } = workflowMessageFeedbackService.parseListQuery(req.query);
+      res.json(await workflowMessageFeedbackService.listMyMessageFeedback(
+        pathProject(req),
+        getUserId(req),
+        surface,
+        subjectId,
+      ));
+    } catch (err) {
+      handleMessageFeedbackError(err, res, next);
+    }
+  },
+);
+
+router.put(
+  '/message-feedback/:messageId',
+  requirePermission(WORKFLOW_EVALUATION_SUBMIT),
+  requireWorkflowEvaluationFlag,
+  async (req, res, next) => {
+    try {
+      const body = workflowMessageFeedbackService.parsePutBody(req.body);
+      res.json(await workflowMessageFeedbackService.putMessageFeedback(
+        pathProject(req),
+        getUserId(req),
+        String(req.params.messageId),
+        body,
+      ));
+    } catch (err) {
+      handleMessageFeedbackError(err, res, next);
     }
   },
 );
