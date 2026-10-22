@@ -112,6 +112,8 @@ export interface ChatThreadKickoff {
     | 'standup-followup';
   /** Work item ID driving the development session */
   workItemId?: number;
+  /** Server-set for Code Lab development threads: free-form edits beside a live preview. */
+  codeLab?: boolean;
   /** True only when server-side package-manager-aware dependency bootstrap completed */
   dependenciesPrepared?: boolean;
   /** Selected project_skill_settings row id — drives repo/branch/config resolution */

@@ -247,6 +247,15 @@ const PAGE_MODULE_BY_MENU_KEY: Record<
       },
     ],
   },
+  'code-lab': {
+    pageEntries: [
+      {
+        component: 'src/client/components/CodeLabView.tsx',
+        routePattern: '/code-lab',
+        suggestedRoute: '/code-lab',
+      },
+    ],
+  },
 };
 
 const FIXED_PAGE_MODULES: readonly WalkthroughPageModuleContext[] = [

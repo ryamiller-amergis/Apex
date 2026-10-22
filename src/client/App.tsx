@@ -29,6 +29,7 @@ import { useProjectSkillConfig } from './hooks/useProjectSkillConfig';
 import { useChatThread, useSkillRepos, useStartChat } from './hooks/useChatThreads';
 import { useUiLabSharedDesigns } from './hooks/useUiLab';
 import { resolveUiLabRouteAccess } from '../shared/types/uiLab';
+import { CODE_LAB_FLAG_KEY, CODE_LAB_PERMISSION } from '../shared/types/codeLab';
 import { RepoSelector } from './components/RepoSelector';
 import { DEFAULT_MODEL_ID } from './config/models';
 import { FeatureFlagDemo } from './components/FeatureFlagDemo';
@@ -102,6 +103,7 @@ const PlaybookCanvasPage = lazy(() => import('./components/PlaybookCanvasPage'))
 const PlaybookLiveRunPage = lazy(() => import('./components/PlaybookLiveRunPage'));
 const PlaybooksManagePage = lazy(() => import('./components/PlaybooksManagePage'));
 const PlaybookDashboardPage = lazy(() => import('./components/PlaybookDashboardPage'));
+const CodeLabView = lazy(() => import('./components/CodeLabView'));
 const LoadTestsListPage = lazy(() => import('./components/LoadTestsListPage').then(m => ({ default: m.LoadTestsListPage })));
 const LoadTestDefinitionBuilderView = lazy(() =>
   import('./components/LoadTestDefinitionBuilderView').then((m) => ({ default: m.LoadTestDefinitionBuilderView })),
@@ -187,7 +189,7 @@ function App() {
   }, []);
   const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'code-lab' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -235,6 +237,8 @@ function App() {
                     ? 'load-tests'
                     : location.pathname.startsWith('/diagrams')
                     ? 'diagrams'
+                    : location.pathname === '/code-lab'
+                    ? 'code-lab'
                     : 'not-found';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
@@ -369,6 +373,7 @@ function App() {
     );
   const playbooksEnabled =
     !homeFlagsLoading && homeFlags['playbooks-production-adapters'] === true;
+  const codeLabEnabled = !homeFlagsLoading && homeFlags[CODE_LAB_FLAG_KEY] === true;
   // Prefer the WebSocket agent gateway when the durable interactive transport
   // flag is enabled; SSE remains the stream-transport fallback only.
   // Wait until flags resolve so we do not open SSE first, then leave it stuck
@@ -398,6 +403,10 @@ function App() {
     playbooksEnabled &&
     menuConfigReady &&
     (isSuperAdmin || (effectiveEnabledViews.includes('playbooks') && can('playbooks:view')));
+  const canAccessCodeLab =
+    codeLabEnabled &&
+    menuConfigReady &&
+    (isSuperAdmin || (effectiveEnabledViews.includes('code-lab') && can(CODE_LAB_PERMISSION)));
   const restrictedSkipRef = useRef(false);
 
   // UI Lab members read the whole project list; everyone else only reaches
@@ -887,11 +896,15 @@ function App() {
     );
   }
 
-  if (currentView === 'playbooks' && (homeFlagsLoading || !menuConfigReady)) {
+  if ((currentView === 'playbooks' || currentView === 'code-lab') && (homeFlagsLoading || !menuConfigReady)) {
     return <ViewSkeleton />;
   }
 
-  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks)) {
+  if (
+    currentView === 'not-found'
+    || (currentView === 'playbooks' && !canAccessPlaybooks)
+    || (currentView === 'code-lab' && !canAccessCodeLab)
+  ) {
     return (
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <div role="status" aria-live="polite" {...{ 'data-testid': 'route-not-found' }}>
@@ -937,6 +950,8 @@ function App() {
             onNavigateDiagrams={() => navigate('/diagrams')}
             onNavigatePlaybooks={() => navigate('/playbooks')}
             playbooksEnabled={playbooksEnabled}
+            onNavigateCodeLab={() => navigate('/code-lab')}
+            codeLabEnabled={codeLabEnabled}
             onNavigateAdmin={() => navigate('/admin/roles')}
           />
           <div className={`app-main ${sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}>
@@ -993,6 +1008,8 @@ function App() {
             workBoardEnabled={workBoardEnabled}
             onNavigatePlaybooks={() => navigate('/playbooks')}
             playbooksEnabled={playbooksEnabled}
+            onNavigateCodeLab={() => navigate('/code-lab')}
+            codeLabEnabled={codeLabEnabled}
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
             onLogout={handleLogout}
@@ -1432,6 +1449,22 @@ function App() {
                 })()}
               </Suspense>
             </ErrorBoundary>
+          ) : currentView === 'code-lab' ? (
+            // @feature-flag:code-lab start winner=enabled
+            canAccessCodeLab ? (
+              // @feature-flag:code-lab enabled-start
+              <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+                <Suspense fallback={<ViewSkeleton />}>
+                  <CodeLabView selectedProject={selectedProject} />
+                </Suspense>
+              </ErrorBoundary>
+              // @feature-flag:code-lab enabled-end
+            ) : (
+              // @feature-flag:code-lab disabled-start
+              null
+              // @feature-flag:code-lab disabled-end
+            )
+            // @feature-flag:code-lab end
           ) : currentView === 'load-tests' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>

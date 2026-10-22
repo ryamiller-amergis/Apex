@@ -100,13 +100,16 @@ export async function checkoutDefaultBranch(opts: {
   branch: string;
   sessionId: string;
   provider?: SkillProvider;
+  /** Overrides the default `dev-workspaces/<sessionId>` location. */
+  workspaceDir?: string;
 }): Promise<string> {
   const { project, repo, branch, sessionId, provider = 'ado' } = opts;
-  const workspaceDir = getWorkspaceDir(sessionId);
+  const workspaceDir = opts.workspaceDir ?? getWorkspaceDir(sessionId);
 
   await ensureGitSafeDirectory();
   const remote = resolveGitRemote(provider, project, repo);
   fs.mkdirSync(CHECKOUT_BASE, { recursive: true });
+  fs.mkdirSync(path.dirname(workspaceDir), { recursive: true });
   fs.rmSync(workspaceDir, { recursive: true, force: true });
 
   try {

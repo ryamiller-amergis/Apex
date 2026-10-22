@@ -10,6 +10,7 @@ import passport from 'passport';
 dotenv.config();
 
 import apiRoutes, { isPublicHealthPath } from './routes/api';
+import { CODE_LAB_PREVIEW_ROUTE } from '../shared/types/codeLab';
 import authRoutes from './routes/auth';
 import azureCostRoutes from './routes/azureCost';
 import skillsRoutes from './routes/skills';
@@ -200,6 +201,10 @@ const foundationSkillCliPaths = ['/internal/foundation-skills'];
 // on publicRoutes (mounted at /api/public).
 const publicApiPaths = ['/public'];
 
+// Code Lab preview — session-free; the per-session token in the path is the
+// credential, so the sandboxed preview iframe never carries Apex cookies.
+const codeLabPreviewPaths = [CODE_LAB_PREVIEW_ROUTE];
+
 app.use('/api', observabilityCaptureMiddleware);
 app.use('/api', (req, res, next) => {
   const isLocalhost = req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1';
@@ -216,6 +221,7 @@ app.use('/api', (req, res, next) => {
     req.path.startsWith(p),
   );
   const isPublicApi = publicApiPaths.some((p) => req.path.startsWith(p));
+  const isCodeLabPreview = codeLabPreviewPaths.some((p) => req.path.startsWith(p));
 
   if (
     isHealthPath
@@ -223,6 +229,7 @@ app.use('/api', (req, res, next) => {
     || isAiRunnerCallback
     || isFoundationSkillCli
     || isPublicApi
+    || isCodeLabPreview
   ) return next();
 
   if (isInternalPath) {

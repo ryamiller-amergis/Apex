@@ -52,6 +52,9 @@ interface AppSidebarProps {
   onNavigatePlaybooks?: () => void;
   /** Playbooks stays hidden until the production-adapters flag is on for the project. */
   playbooksEnabled?: boolean;
+  onNavigateCodeLab?: () => void;
+  /** Code Lab stays hidden until the `code-lab` flag is on for the user and project. */
+  codeLabEnabled?: boolean;
   onNavigateAdmin: () => void;
 }
 
@@ -164,6 +167,13 @@ const IconPlaybooks: React.FC = () => (
   </svg>
 );
 
+const IconCodeLab: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2.5" y="3.5" width="15" height="13" rx="2" />
+    <path d="M7.5 8L5.5 10l2 2M12.5 8l2 2-2 2M10.75 7.5l-1.5 5" />
+  </svg>
+);
+
 const IconDiagrams: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <rect x="3" y="4" width="14" height="12" rx="2" />
@@ -225,6 +235,8 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigateDiagrams,
   onNavigatePlaybooks,
   playbooksEnabled = false,
+  onNavigateCodeLab,
+  codeLabEnabled = false,
   onNavigateAdmin,
 }) => {
   const { isMobile } = useBreakpoint();
@@ -240,6 +252,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         { label: 'ADR', view: 'adr', icon: <IconAdr />, permission: 'adr:view', onNavigate: onNavigateAdr },
         { label: 'Design Module', view: 'design-module', icon: <IconDesignModule />, permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
         { label: 'My Work', view: 'my-work', icon: <IconMyWork />, permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
+        { label: 'Code Lab', view: 'code-lab', icon: <IconCodeLab />, permission: 'code-lab:use', onNavigate: onNavigateCodeLab ?? (() => {}) },
         { label: 'Diagrams', view: 'diagrams', icon: <IconDiagrams />, permission: 'diagram:view', onNavigate: onNavigateDiagrams ?? (() => {}), testId: 'nav-diagrams' },
       ],
     },
@@ -296,6 +309,11 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       if (!playbooksEnabled) return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;
       return isSuperAdmin || can('playbooks:view');
+    }
+    if (item.view === 'code-lab') {
+      if (!codeLabEnabled) return false;
+      if (!isSuperAdmin && !menuEnabledViews.includes('code-lab')) return false;
+      return isSuperAdmin || can('code-lab:use');
     }
     if (item.view === 'ui-lab') {
       if (!isSuperAdmin && !menuEnabledViews.includes('ui-lab')) return false;

@@ -72,6 +72,7 @@ import { checkStorageHealth } from '../services/storageHealthService';
 import runGroundingsRouter from './runGroundings';
 import diagramsRouter from './diagrams';
 import playbooksRouter from './playbooks';
+import codeLabRouter from './codeLab';
 const router = express.Router();
 const publicHealthPaths = new Set([
   '/health',
@@ -90,6 +91,7 @@ export function isPublicHealthPath(path: string): boolean {
 router.use('/run-groundings', runGroundingsRouter);
 router.use('/projects/:projectId/diagrams', diagramsRouter);
 router.use('/playbooks', playbooksRouter);
+router.use('/code-lab', codeLabRouter);
 // GET /api/available-models — accessible to all authenticated users so that
 // non-admin roles (e.g. interviews:manage) can populate model dropdowns.
 router.get('/available-models', async (_req: Request, res: Response) => {

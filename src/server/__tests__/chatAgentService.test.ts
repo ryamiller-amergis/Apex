@@ -1508,6 +1508,32 @@ describe('canonical durable send wrapper', () => {
     }
   });
 
+  it('runs Code Lab turns in-process even when durable transport is enabled', async () => {
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: { admitDurable(): Promise<unknown> }) => ({
+        route: 'durable',
+        response: await input.admitDurable(),
+      }),
+    );
+    const thread = await createThread(
+      'developer-1',
+      { ...baseKickoff(), codeLab: true },
+      { skipAutoKickoff: true },
+    );
+    process.env.CURSOR_API_KEY = 'test-key';
+
+    try {
+      await expect(
+        sendMessage(thread.id, 'Make the header blue'),
+      ).resolves.toEqual({ route: 'legacy' });
+      expect(mockCanonicalInteractiveWorkflowRoute).not.toHaveBeenCalled();
+      expect(mockDurableInteractiveAdmit).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.CURSOR_API_KEY;
+      await closeThread(thread.id);
+    }
+  });
+
   it('reopens an idle-closed thread when its owner sends a message', async () => {
     const accepted = {
       turnId,
