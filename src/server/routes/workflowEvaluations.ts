@@ -28,6 +28,7 @@ import {
   registerWorkflowEvaluationJobListener,
   type WorkflowEvaluationJobFailureCode,
 } from '../services/workflowEvaluationJobOrchestrator';
+import { registerSkillRegressionCaseListener } from '../services/skillRegressionCaseService';
 import * as workflowEvaluationService from '../services/workflowEvaluationService';
 import * as workflowMessageFeedbackService from '../services/workflowMessageFeedbackService';
 import { WorkflowMessageFeedbackError } from '../services/workflowMessageFeedbackService';
@@ -37,6 +38,7 @@ const router = Router({ mergeParams: true });
 
 const jobOrchestrator = createWorkflowEvaluationJobOrchestrator();
 registerWorkflowEvaluationJobListener(jobOrchestrator);
+registerSkillRegressionCaseListener();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

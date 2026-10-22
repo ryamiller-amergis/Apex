@@ -3,6 +3,7 @@
  * The version tag lets a later canonical form coexist with stored hashes.
  */
 import { createHash } from 'crypto';
+import type { SkillRegressionArtifact } from '../../shared/types/skillRegressionCase';
 import type { WorkflowEvaluationSubjectType } from '../../shared/types/workflowEvaluation';
 import { WorkflowEvaluationError } from './workflowEvaluationError';
 
@@ -33,6 +34,8 @@ export type ArtifactBinding = {
   };
   /** Live PRD markdown when the subject is a ready PRD. The client cannot supply this. */
   prdMarkdown: string | null;
+  /** The parts `artifactHash` covers. */
+  artifact: SkillRegressionArtifact;
 };
 
 /** Sorted keys, stable arrays, no whitespace. `undefined` and `null` both become `null`. */
@@ -155,6 +158,7 @@ export async function resolveCurrentArtifactBinding(input: {
         prdId: prd.id,
       },
       prdMarkdown: prd.content,
+      artifact: { subjectType: 'prd', markdown: prd.content, backlog: prd.backlogJson ?? null },
     };
   }
 
@@ -181,6 +185,12 @@ export async function resolveCurrentArtifactBinding(input: {
         prdId: doc.prdId,
       },
       prdMarkdown: null,
+      artifact: {
+        subjectType: 'design_doc',
+        designContent: doc.designContent,
+        techSpecContent: doc.techSpecContent,
+        assumptionsContent: doc.assumptionsContent,
+      },
     };
   }
 
@@ -207,6 +217,11 @@ export async function resolveCurrentArtifactBinding(input: {
         prdId: record.prdId,
       },
       prdMarkdown: null,
+      artifact: {
+        subjectType: 'test_cases',
+        testCasesMd: record.testCasesMd,
+        testCasesJson: record.testCasesJson ?? null,
+      },
     };
   }
 
@@ -233,5 +248,14 @@ export async function resolveCurrentArtifactBinding(input: {
       prdId: null,
     },
     prdMarkdown: null,
+    artifact: {
+      subjectType: 'interview_phase',
+      phaseIndex: phase.phaseIndex,
+      messages: phase.messages.map((message) => ({ role: message.role, text: message.text })),
+      linkedContextIds: {
+        adrIds: [...interview.linkedContextIds.adrIds],
+        designModuleIds: [...interview.linkedContextIds.designModuleIds],
+      },
+    },
   };
 }

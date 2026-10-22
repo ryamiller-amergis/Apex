@@ -33,6 +33,7 @@ import { EVALUATOR_LABELS, JobStatusBadge, OutcomeBadge } from './WorkflowEvalua
 import { WorkflowEvaluationDetailDrawer } from './WorkflowEvaluationDetailDrawer';
 import { WorkflowEvaluationModelSettings } from './WorkflowEvaluationModelSettings';
 import { WorkflowMessageRatingsPanel } from './WorkflowMessageRatingsPanel';
+import { WorkflowRegressionCasesPanel } from './WorkflowRegressionCasesPanel';
 import gridStyles from './DataGrid.module.css';
 import styles from './WorkflowEvaluationsPage.module.css';
 
@@ -215,6 +216,11 @@ export const WorkflowEvaluationsPage: React.FC<WorkflowEvaluationsPageProps> = (
           key={`ratings-${selectedProject}`}
           project={selectedProject}
           data-testid="workflow-message-ratings"
+        />
+        <WorkflowRegressionCasesPanel
+          key={`regression-${selectedProject}`}
+          project={selectedProject}
+          data-testid="workflow-regression-cases"
         />
 
         <DataGridToolbar

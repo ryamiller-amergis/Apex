@@ -59,6 +59,9 @@ jest.mock('../services/workflowEvaluationJobOrchestrator', () => ({
   createWorkflowEvaluationJobOrchestrator: () => ({ retryJob: mockRetryJob }),
   registerWorkflowEvaluationJobListener: jest.fn(),
 }));
+jest.mock('../services/skillRegressionCaseService', () => ({
+  registerSkillRegressionCaseListener: jest.fn(),
+}));
 
 import workflowEvaluationsRouter from '../routes/workflowEvaluations';
 

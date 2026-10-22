@@ -70,6 +70,7 @@ describe('test case artifact hash', () => {
       artifactHash: hashTestCasesArtifact(parts),
       lineage: { prdId: 'prd-1', interviewId: 'interview-1' },
       prdMarkdown: null,
+      artifact: { subjectType: 'test_cases', testCasesMd: parts.testCasesMd, testCasesJson: parts.testCasesJson },
     });
 
     getTestCaseEvaluationInputs.mockResolvedValueOnce({ ...record, status: 'generating' });
@@ -185,6 +186,8 @@ describe('resolveCurrentArtifactBinding — TBI-006', () => {
     });
     expect(binding.artifactHash).toMatch(/^[0-9a-f]{64}$/);
     expect(binding.prdMarkdown).toBe('# PRD');
+    expect(binding.artifact).toEqual({ subjectType: 'prd', markdown: '# PRD', backlog: { epics: [] } });
+    expect(binding.artifactHash).toBe(hashPrdArtifact('# PRD', { epics: [] }));
 
     getPrdEvaluationInputs.mockResolvedValueOnce({
       id: 'prd-2',

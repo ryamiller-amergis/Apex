@@ -81,6 +81,20 @@ jest.mock('../services/workflowMessageFeedbackAdminService', () => {
   };
 });
 
+const mockListCases = jest.fn();
+const mockUpdateCase = jest.fn();
+const mockBackfill = jest.fn();
+jest.mock('../services/skillRegressionCaseService', () => {
+  const actual = jest.requireActual('../services/skillRegressionCaseService');
+  return {
+    ...actual,
+    registerSkillRegressionCaseListener: jest.fn(),
+    listRegressionCases: (...args: unknown[]) => mockListCases(...args),
+    updateRegressionCaseStatus: (...args: unknown[]) => mockUpdateCase(...args),
+    backfillRegressionCases: (...args: unknown[]) => mockBackfill(...args),
+  };
+});
+
 import workflowEvaluationsRouter from '../routes/workflowEvaluations';
 
 const EVENT_ID = '11111111-1111-4111-8111-111111111111';
@@ -271,5 +285,69 @@ describe('admin workflow evaluation routes', () => {
     const res = await request(buildApp()).get(`${BASE}/message-ratings`);
     expect(res.status).toBe(403);
     expect(mockSummarize).not.toHaveBeenCalled();
+  });
+
+  it('lists regression cases for the path project with parsed filters', async () => {
+    mockListCases.mockResolvedValueOnce({ cases: [], skillPaths: [], limit: 200 });
+    const res = await request(buildApp())
+      .get(`${BASE}/regression-cases?status=active&skillPath=.cursor/skills/to-prd/SKILL.md`);
+    expect(res.status).toBe(200);
+    expect(mockListCases).toHaveBeenCalledWith('proj-a', {
+      status: 'active',
+      skillPath: '.cursor/skills/to-prd/SKILL.md',
+    });
+  });
+
+  it('answers 400 for an unknown regression case status', async () => {
+    const res = await request(buildApp()).get(`${BASE}/regression-cases?status=deleted`);
+    expect(res.status).toBe(400);
+    expect(mockListCases).not.toHaveBeenCalled();
+  });
+
+  it('retires a regression case with a reason and the signed-in user', async () => {
+    mockUpdateCase.mockResolvedValueOnce({ id: EVENT_ID, status: 'retired' });
+    const res = await request(buildApp())
+      .patch(`${BASE}/regression-cases/${EVENT_ID}`)
+      .send({ status: 'retired', reason: '  Reviewer scored the wrong document  ' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ case: { id: EVENT_ID, status: 'retired' } });
+    expect(mockUpdateCase).toHaveBeenCalledWith(
+      'proj-a',
+      EVENT_ID,
+      { status: 'retired', reason: 'Reviewer scored the wrong document' },
+      'user-1',
+    );
+  });
+
+  it('answers 400 when retiring without a reason', async () => {
+    const res = await request(buildApp())
+      .patch(`${BASE}/regression-cases/${EVENT_ID}`)
+      .send({ status: 'retired', reason: '   ' });
+    expect(res.status).toBe(400);
+    expect(mockUpdateCase).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 for a bad id or a case in another project', async () => {
+    const bad = await request(buildApp()).patch(`${BASE}/regression-cases/not-a-uuid`).send({ status: 'active' });
+    expect(bad.status).toBe(404);
+    mockUpdateCase.mockResolvedValueOnce(null);
+    const missing = await request(buildApp()).patch(`${BASE}/regression-cases/${EVENT_ID}`).send({ status: 'active' });
+    expect(missing.status).toBe(404);
+  });
+
+  it('backfills regression cases for the path project', async () => {
+    const result = { created: 2, stored: 1, artifactChanged: 1, failed: 0, remaining: 0 };
+    mockBackfill.mockResolvedValueOnce(result);
+    const res = await request(buildApp()).post(`${BASE}/regression-cases/backfill`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(result);
+    expect(mockBackfill).toHaveBeenCalledWith('proj-a');
+  });
+
+  it('requires admin:roles for regression cases', async () => {
+    permissionGranted = false;
+    const res = await request(buildApp()).post(`${BASE}/regression-cases/backfill`);
+    expect(res.status).toBe(403);
+    expect(mockBackfill).not.toHaveBeenCalled();
   });
 });

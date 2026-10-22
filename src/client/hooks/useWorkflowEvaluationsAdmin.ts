@@ -15,6 +15,13 @@ import type {
   MessageRatingSummary,
   MessageRatingSummaryDays,
 } from '../../shared/types/workflowMessageFeedback';
+import type {
+  SkillRegressionBackfillResult,
+  SkillRegressionCase,
+  SkillRegressionCaseFilters,
+  SkillRegressionCaseListResponse,
+  UpdateSkillRegressionCaseRequest,
+} from '../../shared/types/skillRegressionCase';
 import { filtersToQuery } from '../utils/workflowEvaluationFilters';
 import {
   WorkflowEvaluationApiError,
@@ -35,7 +42,59 @@ export const workflowEvaluationsAdminKeys = {
   settings: (project: string) => ['workflow-evaluations-admin', project, 'settings'] as const,
   messageRatings: (project: string, days: MessageRatingSummaryDays) =>
     ['workflow-evaluations-admin', project, 'message-ratings', days] as const,
+  regressionCases: (project: string, filters: SkillRegressionCaseFilters) =>
+    ['workflow-evaluations-admin', project, 'regression-cases', filters] as const,
 };
+
+export function useSkillRegressionCases(project: string | null, filters: SkillRegressionCaseFilters, enabled: boolean) {
+  return useQuery<SkillRegressionCaseListResponse, WorkflowEvaluationApiError>({
+    queryKey: workflowEvaluationsAdminKeys.regressionCases(project ?? '', filters),
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (filters.status) params.set('status', filters.status);
+      if (filters.skillPath) params.set('skillPath', filters.skillPath);
+      return workflowEvaluationFetch(workflowEvaluationsUrl(project!, `/admin/regression-cases?${params}`));
+    },
+    enabled: enabled && Boolean(project),
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+function invalidateRegressionCases(queryClient: ReturnType<typeof useQueryClient>, project: string): void {
+  void queryClient.invalidateQueries({ queryKey: [...workflowEvaluationsAdminKeys.all(project), 'regression-cases'] });
+}
+
+export function useUpdateSkillRegressionCase(project: string) {
+  const queryClient = useQueryClient();
+  return useMutation<
+    { case: SkillRegressionCase },
+    WorkflowEvaluationApiError,
+    { caseId: string; update: UpdateSkillRegressionCaseRequest }
+  >({
+    mutationFn: ({ caseId, update }) =>
+      workflowEvaluationFetch(
+        workflowEvaluationsUrl(project, `/admin/regression-cases/${encodeURIComponent(caseId)}`),
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(update),
+        },
+      ),
+    onSuccess: () => invalidateRegressionCases(queryClient, project),
+  });
+}
+
+export function useBackfillSkillRegressionCases(project: string) {
+  const queryClient = useQueryClient();
+  return useMutation<SkillRegressionBackfillResult, WorkflowEvaluationApiError, void>({
+    mutationFn: () =>
+      workflowEvaluationFetch(workflowEvaluationsUrl(project, '/admin/regression-cases/backfill'), {
+        method: 'POST',
+      }),
+    onSuccess: () => invalidateRegressionCases(queryClient, project),
+  });
+}
 
 export function useMessageRatingSummary(project: string | null, days: MessageRatingSummaryDays, enabled: boolean) {
   return useQuery<MessageRatingSummary, WorkflowEvaluationApiError>({

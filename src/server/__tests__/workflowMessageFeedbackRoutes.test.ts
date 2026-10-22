@@ -36,6 +36,9 @@ jest.mock('../services/workflowEvaluationJobOrchestrator', () => ({
   createWorkflowEvaluationJobOrchestrator: () => ({ retryJob: jest.fn() }),
   registerWorkflowEvaluationJobListener: jest.fn(),
 }));
+jest.mock('../services/skillRegressionCaseService', () => ({
+  registerSkillRegressionCaseListener: jest.fn(),
+}));
 
 jest.mock('../services/workflowMessageFeedbackService', () => {
   const actual = jest.requireActual('../services/workflowMessageFeedbackService');

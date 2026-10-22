@@ -114,6 +114,7 @@ function binding(overrides: Record<string, unknown> = {}) {
       prdId: '11111111-1111-1111-1111-111111111111',
     },
     prdMarkdown: '# Live PRD',
+    artifact: { subjectType: 'prd', markdown: '# Live PRD', backlog: null },
     ...overrides,
   };
 }

@@ -1,6 +1,6 @@
 /**
- * Admin reads for workflow evaluations, plus the project's evaluation model
- * setting. Mounted by the workflow evaluations router at /admin, so its project
+ * Admin reads for workflow evaluations, the project's evaluation model
+ * setting, and skill regression cases. Mounted by the workflow evaluations router at /admin, so its project
  * pin and project access checks run first.
  */
 import { Router, type NextFunction, type Response } from 'express';
@@ -32,6 +32,14 @@ import {
   parseSummaryDays,
   summarizeMessageRatings,
 } from '../services/workflowMessageFeedbackAdminService';
+import {
+  SkillRegressionCaseRequestError,
+  backfillRegressionCases,
+  listRegressionCases,
+  parseRegressionCaseFilters,
+  parseRegressionCaseUpdate,
+  updateRegressionCaseStatus,
+} from '../services/skillRegressionCaseService';
 
 const router = Router({ mergeParams: true });
 
@@ -45,7 +53,7 @@ function projectId(params: Record<string, string | undefined>): string {
 }
 
 function handleError(err: unknown, res: Response, next: NextFunction): void {
-  if (err instanceof AdminEvaluationRequestError) {
+  if (err instanceof AdminEvaluationRequestError || err instanceof SkillRegressionCaseRequestError) {
     res.status(400).json({ error: err.message });
     return;
   }
@@ -172,6 +180,42 @@ router.get('/message-ratings', async (req, res, next) => {
       res.status(400).json({ error: err.message });
       return;
     }
+    handleError(err, res, next);
+  }
+});
+
+router.get('/regression-cases', async (req, res, next) => {
+  try {
+    const filters = parseRegressionCaseFilters(req.query);
+    res.json(await listRegressionCases(projectId(req.params), filters));
+  } catch (err) {
+    handleError(err, res, next);
+  }
+});
+
+router.patch('/regression-cases/:caseId', async (req, res, next) => {
+  try {
+    const { caseId } = req.params;
+    if (!UUID_RE.test(caseId)) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    const update = parseRegressionCaseUpdate(req.body);
+    const updated = await updateRegressionCaseStatus(projectId(req.params), caseId, update, getUserId(req));
+    if (!updated) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    res.json({ case: updated });
+  } catch (err) {
+    handleError(err, res, next);
+  }
+});
+
+router.post('/regression-cases/backfill', async (req, res, next) => {
+  try {
+    res.json(await backfillRegressionCases(projectId(req.params)));
+  } catch (err) {
     handleError(err, res, next);
   }
 });
