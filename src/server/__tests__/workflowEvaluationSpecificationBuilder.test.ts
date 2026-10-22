@@ -236,6 +236,25 @@ describe('buildWorkflowEvaluationSpecifications', () => {
     expect(result.llm_judge.specification.effort).toBeNull();
   });
 
+  it('uses the project judge model and effort ahead of the PRD validation ones', async () => {
+    const result = await buildWorkflowEvaluationSpecifications(
+      prdRequest(),
+      dependencies({
+        loadSkillConfig: async () => ({
+          skillRepo: 'apex',
+          prdValidationModel: 'claude-4-opus',
+          prdValidationEffort: 'high',
+          evaluationJudgeModel: 'gpt-judge',
+          evaluationJudgeEffort: 'low',
+        }) as unknown as ProjectSkillConfig,
+      }),
+    );
+
+    if (!result.llm_judge.ok) throw new Error('expected judge to build');
+    expect(result.llm_judge.specification.model).toBe('gpt-judge');
+    expect(result.llm_judge.specification.effort).toBe('low');
+  });
+
   it('packages only the evaluated interview phase', async () => {
     const result = await buildWorkflowEvaluationSpecifications(interviewRequest(2), dependencies());
 

@@ -1062,6 +1062,8 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   prdValidationSkillPath: text('prd_validation_skill_path'),
   prdValidationModel: text('prd_validation_model'),
   prdValidationEffort: text('prd_validation_effort').$type<EffortLevel>(),
+  evaluationJudgeModel: text('evaluation_judge_model'),
+  evaluationJudgeEffort: text('evaluation_judge_effort').$type<EffortLevel>(),
   defaultModel: text('default_model'),
   defaultEffort: text('default_effort').$type<EffortLevel>(),
   prdReviewBedrockModelId: text('prd_review_bedrock_model_id'),

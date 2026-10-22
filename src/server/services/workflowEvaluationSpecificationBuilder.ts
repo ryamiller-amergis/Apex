@@ -325,12 +325,16 @@ async function buildJudgeSpecification(
       `Project ${project} has no skill configuration to resolve the judge model.`,
     );
   }
-  // Same model and effort PRD validation resolves, so the judge never drifts from it.
-  const model = skillConfig.prdValidationModel ?? await loadDefaultModel();
-  const effort = resolveEffort({
-    kickoff: { project, repo: skillConfig.skillRepo, agentModule: 'prdValidation' },
-    skillConfig,
-  }) ?? null;
+  // Without its own setting the judge uses what PRD validation resolves.
+  const model = skillConfig.evaluationJudgeModel
+    ?? skillConfig.prdValidationModel
+    ?? await loadDefaultModel();
+  const effort = skillConfig.evaluationJudgeEffort
+    ?? resolveEffort({
+      kickoff: { project, repo: skillConfig.skillRepo, agentModule: 'prdValidation' },
+      skillConfig,
+    })
+    ?? null;
   const { rubric } = request.definition;
   const candidate: Record<string, unknown> = {
     workloadLane: 'document',
