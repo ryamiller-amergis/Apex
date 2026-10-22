@@ -27,6 +27,11 @@ import {
   parseEvaluationModelSettings,
   updateEvaluationModelSettings,
 } from '../services/workflowEvaluationModelSettingsService';
+import {
+  MessageRatingSummaryRequestError,
+  parseSummaryDays,
+  summarizeMessageRatings,
+} from '../services/workflowMessageFeedbackAdminService';
 
 const router = Router({ mergeParams: true });
 
@@ -154,6 +159,19 @@ router.put('/settings', async (req, res, next) => {
     }
     res.json(updated);
   } catch (err) {
+    handleError(err, res, next);
+  }
+});
+
+router.get('/message-ratings', async (req, res, next) => {
+  try {
+    const days = parseSummaryDays(req.query.days);
+    res.json(await summarizeMessageRatings(projectId(req.params), days));
+  } catch (err) {
+    if (err instanceof MessageRatingSummaryRequestError) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
     handleError(err, res, next);
   }
 });

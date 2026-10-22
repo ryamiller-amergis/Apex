@@ -52,3 +52,35 @@ export interface PutWorkflowMessageFeedbackRequest {
 export interface PutWorkflowMessageFeedbackResponse {
   entry: WorkflowMessageFeedbackEntry | null;
 }
+
+export const MESSAGE_RATING_SUMMARY_DAYS = [7, 30, 90] as const;
+export type MessageRatingSummaryDays = (typeof MESSAGE_RATING_SUMMARY_DAYS)[number];
+
+export interface DownvotedInterviewQuestion {
+  interviewId: string;
+  interviewTitle: string;
+  messageId: string;
+  excerpt: string;
+  up: number;
+  down: number;
+}
+
+export interface ChatRatingComment {
+  threadId: string;
+  threadTitle: string | null;
+  messageId: string;
+  excerpt: string;
+  rating: ChatMessageRating;
+  comment: string;
+  reviewerName: string | null;
+  updatedAt: string;
+}
+
+/** Admin view of per-message ratings in one project over the last `days` days. */
+export interface MessageRatingSummary {
+  days: MessageRatingSummaryDays;
+  interview: Record<InterviewMessageRating, number>;
+  chat: Record<ChatMessageRating, number>;
+  downvotedQuestions: DownvotedInterviewQuestion[];
+  chatComments: ChatRatingComment[];
+}

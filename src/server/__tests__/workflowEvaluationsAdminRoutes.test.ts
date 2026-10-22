@@ -72,6 +72,15 @@ jest.mock('../services/workflowEvaluationModelSettingsService', () => {
   };
 });
 
+const mockSummarize = jest.fn();
+jest.mock('../services/workflowMessageFeedbackAdminService', () => {
+  const actual = jest.requireActual('../services/workflowMessageFeedbackAdminService');
+  return {
+    ...actual,
+    summarizeMessageRatings: (...args: unknown[]) => mockSummarize(...args),
+  };
+});
+
 import workflowEvaluationsRouter from '../routes/workflowEvaluations';
 
 const EVENT_ID = '11111111-1111-4111-8111-111111111111';
@@ -233,5 +242,34 @@ describe('admin workflow evaluation routes', () => {
     const res = await request(buildApp()).put(`${BASE}/settings`).send({ model: null, effort: null });
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('NO_SKILL_CONFIG');
+  });
+
+  it('summarizes message ratings for the path project, 30 days by default', async () => {
+    const summary = { days: 30, interview: { up: 1, down: 2 } };
+    mockSummarize.mockResolvedValueOnce(summary);
+    const res = await request(buildApp()).get(`${BASE}/message-ratings`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(summary);
+    expect(mockSummarize).toHaveBeenCalledWith('proj-a', 30);
+  });
+
+  it('passes a supported period through', async () => {
+    mockSummarize.mockResolvedValueOnce({ days: 7 });
+    const res = await request(buildApp()).get(`${BASE}/message-ratings?days=7`);
+    expect(res.status).toBe(200);
+    expect(mockSummarize).toHaveBeenCalledWith('proj-a', 7);
+  });
+
+  it.each(['14', 'abc', '0'])('answers 400 for days=%s', async (days) => {
+    const res = await request(buildApp()).get(`${BASE}/message-ratings?days=${days}`);
+    expect(res.status).toBe(400);
+    expect(mockSummarize).not.toHaveBeenCalled();
+  });
+
+  it('requires admin:roles for message ratings', async () => {
+    permissionGranted = false;
+    const res = await request(buildApp()).get(`${BASE}/message-ratings`);
+    expect(res.status).toBe(403);
+    expect(mockSummarize).not.toHaveBeenCalled();
   });
 });

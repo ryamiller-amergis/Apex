@@ -11,6 +11,10 @@ import type {
   AdminEvaluationModelSettings,
   UpdateAdminEvaluationModelSettingsRequest,
 } from '../../shared/types/workflowEvaluationAdmin';
+import type {
+  MessageRatingSummary,
+  MessageRatingSummaryDays,
+} from '../../shared/types/workflowMessageFeedback';
 import { filtersToQuery } from '../utils/workflowEvaluationFilters';
 import {
   WorkflowEvaluationApiError,
@@ -29,7 +33,19 @@ export const workflowEvaluationsAdminKeys = {
   appendix: (project: string, eventId: string) =>
     ['workflow-evaluations-admin', project, 'appendix', eventId] as const,
   settings: (project: string) => ['workflow-evaluations-admin', project, 'settings'] as const,
+  messageRatings: (project: string, days: MessageRatingSummaryDays) =>
+    ['workflow-evaluations-admin', project, 'message-ratings', days] as const,
 };
+
+export function useMessageRatingSummary(project: string | null, days: MessageRatingSummaryDays, enabled: boolean) {
+  return useQuery<MessageRatingSummary, WorkflowEvaluationApiError>({
+    queryKey: workflowEvaluationsAdminKeys.messageRatings(project ?? '', days),
+    queryFn: () => workflowEvaluationFetch(workflowEvaluationsUrl(project!, `/admin/message-ratings?days=${days}`)),
+    enabled: enabled && Boolean(project),
+    staleTime: 60_000,
+    retry: false,
+  });
+}
 
 export function useEvaluationModelSettings(project: string | null) {
   return useQuery<AdminEvaluationModelSettings, WorkflowEvaluationApiError>({

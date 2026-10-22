@@ -32,6 +32,7 @@ import {
 import { EVALUATOR_LABELS, JobStatusBadge, OutcomeBadge } from './WorkflowEvaluationBadges';
 import { WorkflowEvaluationDetailDrawer } from './WorkflowEvaluationDetailDrawer';
 import { WorkflowEvaluationModelSettings } from './WorkflowEvaluationModelSettings';
+import { WorkflowMessageRatingsPanel } from './WorkflowMessageRatingsPanel';
 import gridStyles from './DataGrid.module.css';
 import styles from './WorkflowEvaluationsPage.module.css';
 
@@ -175,7 +176,7 @@ export const WorkflowEvaluationsPage: React.FC<WorkflowEvaluationsPageProps> = (
           <div>
             <h2 className={gridStyles.title}>Workflow evaluations</h2>
             <p className={gridStyles.hint}>
-              Human feedback on Interview phases and PRDs, with Promptfoo and judge diagnostics.
+              Human feedback on Interview phases, PRDs and design docs, with Promptfoo and judge diagnostics.
             </p>
           </div>
           <div className={gridStyles.headerActions}>
@@ -207,6 +208,11 @@ export const WorkflowEvaluationsPage: React.FC<WorkflowEvaluationsPageProps> = (
         )}
 
         <WorkflowEvaluationModelSettings key={selectedProject} project={selectedProject} />
+        <WorkflowMessageRatingsPanel
+          key={`ratings-${selectedProject}`}
+          project={selectedProject}
+          data-testid="workflow-message-ratings"
+        />
 
         <DataGridToolbar
           searchValue={search}
