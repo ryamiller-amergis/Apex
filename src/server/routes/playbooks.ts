@@ -96,6 +96,11 @@ import {
   PlaybookTemplateNotFoundError,
   installPlaybookTemplate,
 } from '../services/playbookTemplateService';
+import {
+  getPlaybookStepOutput,
+  PlaybookStepOutputNotFoundError,
+  type PlaybookOutputPart,
+} from '../services/playbookStepOutputService';
 
 const router = express.Router();
 
@@ -103,6 +108,7 @@ const router = express.Router();
 const MAX_RUN_PAGE = 50;
 const PRODUCTION_ADAPTERS_FLAG = 'playbooks-production-adapters';
 const AUTHORING_CANVAS_FLAG = 'playbooks-authoring-canvas';
+const STEP_OUTPUT_ARTIFACTS_FLAG = 'playbooks-step-output-artifacts';
 
 type RequestBody = Record<string, unknown>;
 
@@ -241,6 +247,13 @@ async function productionAdaptersFlagEnabled(req: Request, project: string): Pro
 
 async function authoringCanvasFlagEnabled(req: Request, project: string): Promise<boolean> {
   return isFeatureEnabled(AUTHORING_CANVAS_FLAG, {
+    userId: getUserId(req),
+    project,
+  });
+}
+
+async function stepOutputArtifactsFlagEnabled(req: Request, project: string): Promise<boolean> {
+  return isFeatureEnabled(STEP_OUTPUT_ARTIFACTS_FLAG, {
     userId: getUserId(req),
     project,
   });
@@ -841,6 +854,55 @@ router.get(
     }
 
     res.json(run);
+  }
+);
+
+router.get(
+  '/runs/:runId/steps/:stepRunId/output',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    // @feature-flag:playbooks-step-output-artifacts start winner=enabled
+    if (!(await stepOutputArtifactsFlagEnabled(req, project))) {
+      // @feature-flag:playbooks-step-output-artifacts disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:playbooks-step-output-artifacts disabled-end
+    }
+    // @feature-flag:playbooks-step-output-artifacts enabled-start
+    const part = (typeof req.query.part === 'string' ? req.query.part : 'full') as
+      PlaybookOutputPart;
+    if (!['full', 'reportMd', 'scorecard'].includes(part)) {
+      res.status(400).json({ error: 'part must be full, reportMd, or scorecard' });
+      return;
+    }
+    try {
+      const result = await getPlaybookStepOutput({
+        project,
+        runId: req.params.runId,
+        stepRunId: req.params.stepRunId,
+        part,
+      });
+      if (part === 'full') {
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="playbook-step-${req.params.stepRunId}.json"`
+        );
+      }
+      if (part === 'reportMd' && typeof result.value === 'string') {
+        res.type('text/markdown').send(result.value);
+        return;
+      }
+      res.json(result.value);
+    } catch (error) {
+      if (error instanceof PlaybookStepOutputNotFoundError) {
+        res.status(404).json({ error: error.message });
+        return;
+      }
+      throw error;
+    }
+    // @feature-flag:playbooks-step-output-artifacts enabled-end
+    // @feature-flag:playbooks-step-output-artifacts end
   }
 );
 

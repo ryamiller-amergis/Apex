@@ -28,6 +28,22 @@ const USAGE_STORAGE_KEY = 'apex.playbooks.stepUsage';
 const LIBRARY_STORAGE_KEY = 'apex.playbooks.libraryCollapsed';
 const NEW_STEP_OFFSET_X = 340;
 
+function priorNodeIds(graph: PlaybookGraph, targetId: string): string[] {
+  const inbound = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    inbound.set(edge.to, [...(inbound.get(edge.to) ?? []), edge.from]);
+  }
+  const result = new Set<string>();
+  const pending = [...(inbound.get(targetId) ?? [])];
+  while (pending.length > 0) {
+    const nodeId = pending.shift()!;
+    if (result.has(nodeId)) continue;
+    result.add(nodeId);
+    pending.push(...(inbound.get(nodeId) ?? []));
+  }
+  return [...result];
+}
+
 function readUsage(): Record<string, number> {
   try {
     const parsed: unknown = JSON.parse(window.localStorage.getItem(USAGE_STORAGE_KEY) ?? '{}');
@@ -428,6 +444,9 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
               node={selectedNode}
               paletteItem={palette.data?.items.find((item) => item.stepType === selectedNode.stepType)}
               otherNodeIds={graph.nodes.map((node) => node.id).filter((id) => id !== selectedNode.id)}
+              priorNodeIds={priorNodeIds(graph, selectedNode.id)}
+              allNodes={graph.nodes}
+              paletteItems={palette.data?.items ?? []}
               canAuthor={canAuthor}
               onChange={updateNodeConfig}
               onDelete={() => deleteStep(selectedNode.id)}

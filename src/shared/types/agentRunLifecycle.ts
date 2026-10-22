@@ -5,6 +5,7 @@
 
 import type { DurableInteractiveTurnSpecification } from './durableInteractiveTurn';
 import type { EffortLevel } from './effort';
+import type { PlaybookAgentRunPolicy } from './playbookExecutionCapability';
 import type { SkillProvider } from './projectSettings';
 
 export type AgentRunStatus =
@@ -106,8 +107,14 @@ export interface ExecutionSnapshot {
   };
   workflowClass: string;
   skillPath: string;
+  /** Frozen Skill markdown for background Playbook execution. */
+  skillContent?: string;
+  /** SHA-256 of skillContent; workers verify it before starting Cursor. */
+  skillSha256?: string;
   projectId: string;
   threadId: string;
+  /** Present on new Playbook agent runs; legacy queued snapshots may omit it. */
+  playbookAgentPolicy?: PlaybookAgentRunPolicy;
 }
 
 export type AgentRunExecutionSnapshot =

@@ -27,6 +27,11 @@ import {
   PlaybookMcpCapabilityError,
   resolvePlaybookMcpCapability,
 } from '../playbookMcpCapabilityService';
+import {
+  loadPlaybookSkillContent,
+  PlaybookExecutionCapabilityError,
+  resolvePlaybookAgentRunPolicy,
+} from '../playbookExecutionCapabilityService';
 import { parseStepInput } from './descriptorValidation';
 import { assertSkillAllowed, resolveDeadlineMs } from './registry';
 import {
@@ -39,6 +44,7 @@ import {
 } from './stepRuns';
 import type { CursorAgentStepConfig } from '../../../shared/types/playbook';
 import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
+import type { PlaybookAgentRunPolicy } from '../../../shared/types/playbookExecutionCapability';
 
 /**
  * How much longer the step waits than the agent run it is watching.
@@ -52,12 +58,26 @@ import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle'
 const STEP_TYPE = 'cursor-agent';
 const TERMINAL_EVENT_GRACE_MS = 5 * 60 * 1000;
 const V2_TRANSPORT_FLAG = 'ai-runs-v2-transport';
+const CAPABILITY_ENFORCEMENT_FLAG = 'playbooks-capability-enforcement';
 
 async function isV2TransportEnabled(userId: string, project: string): Promise<boolean> {
   try {
     return await isFeatureEnabled(V2_TRANSPORT_FLAG, { userId, project, caller: 'playbook-step' });
   } catch {
     // An unreadable flag keeps the V1 path, as the background router does.
+    return false;
+  }
+}
+
+async function capabilityEnforcementEnabled(userId: string, project: string): Promise<boolean> {
+  try {
+    return await isFeatureEnabled(CAPABILITY_ENFORCEMENT_FLAG, {
+      userId,
+      project,
+      caller: 'playbook-step',
+    });
+  } catch {
+    // Observation is the rollout baseline. An unreadable flag does not widen a policy.
     return false;
   }
 }
@@ -73,6 +93,7 @@ async function routeStepThroughV2(input: {
   threadId: string;
   prompt: string;
   model: string;
+  policy: PlaybookAgentRunPolicy;
 }): Promise<string | null> {
   const decision = await routeBackgroundWorkflow({
     userId: input.userId,
@@ -82,6 +103,7 @@ async function routeStepThroughV2(input: {
     // listener correlates on this id, so each step needs its own.
     agentRunId: randomUUID(),
     threadId: input.threadId,
+    playbookAgentPolicy: input.policy,
     prepareWorker: async () => ({
       ...(await prepareBackgroundWorkflowTurn(input.threadId, input.prompt)),
       model: input.model,
@@ -117,6 +139,37 @@ export async function executeCursorAgentStep(
   const stepExpiresAt = deadlineFromNow(deadlineMs);
 
   const skillConfig = await getSkillConfig(context.project);
+  const skillContent = await loadPlaybookSkillContent(config.skillPath);
+  const enforce = await capabilityEnforcementEnabled(
+    context.initiatorUserId,
+    context.project
+  );
+  const resolvedPolicy = resolvePlaybookAgentRunPolicy({
+    nodeId: context.stepId,
+    skillPath: config.skillPath,
+    skillContent,
+    mcpProfile: config.mcpProfile,
+    repository: skillConfig?.skillRepo ?? context.project,
+    provider: skillConfig?.skillProvider,
+    enforce,
+  });
+  const frozenPolicy = context.graph?.nodes.find(
+    (node) => node.id === context.stepId
+  )?.agentPolicy;
+  if (
+    frozenPolicy
+    && (
+      frozenPolicy.skill.path !== resolvedPolicy.skill.path
+      || frozenPolicy.skill.sha256 !== resolvedPolicy.skill.sha256
+    )
+  ) {
+    throw new PlaybookExecutionCapabilityError(
+      `The published capability policy for step "${context.stepId}" no longer matches its Skill.`
+    );
+  }
+  const policy = frozenPolicy
+    ? { ...frozenPolicy, enforcement: enforce ? 'enforce' as const : 'observe' as const }
+    : resolvedPolicy;
 
   // The SDK rejects a blank model id outright, so a step in a project with no configured default
   // cannot fall through to the empty string. This is the resolution the interactive lane already
@@ -153,8 +206,11 @@ export async function executeCursorAgentStep(
     workspaceRef: thread.workspaceDir,
     workflowClass: 'playbook-step',
     skillPath: config.skillPath,
+    skillContent,
+    skillSha256: policy.skill.sha256,
     projectId: context.project,
     threadId: thread.id,
+    playbookAgentPolicy: policy,
   };
 
   if (await isV2TransportEnabled(context.initiatorUserId, context.project)) {
@@ -166,6 +222,7 @@ export async function executeCursorAgentStep(
         threadId: thread.id,
         prompt: config.prompt,
         model,
+        policy,
       });
     } catch (error) {
       await failStepRun({

@@ -20,6 +20,7 @@ import { PlaybookRunStepList } from './PlaybookRunStepList';
 import { PlaybookRunActions } from './PlaybookRunActions';
 import { PlaybookGateReviewPanel } from './PlaybookGateReviewPanel';
 import { PlaybookCanvas } from './PlaybookCanvas';
+import { PlaybookStepDetailDrawer } from './PlaybookStepDetailDrawer';
 import styles from './PlaybookCanvas.module.css';
 
 const EMPTY_GRAPH: PlaybookGraph = { nodes: [], edges: [] };
@@ -31,6 +32,7 @@ interface PlaybookLiveRunPageProps {
 
 export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ project, runId }) => {
   const canvasEnabled = useFeatureFlag('playbooks-authoring-canvas', project);
+  const outputArtifactsEnabled = useFeatureFlag('playbooks-step-output-artifacts', project);
   const run = usePlaybookRun(project, runId);
   usePlaybookRunInvalidation(project, runId, canvasEnabled);
 
@@ -40,6 +42,7 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
   const layoutQuery = usePlaybookVersionLayout(project, definitionId, versionId, canvasEnabled);
   const palette = usePlaybookStepPalette(project, canvasEnabled);
   const [tidiedPositions, setTidiedPositions] = useState<PlaybookLayoutPositions | null>(null);
+  const [selectedStepRunId, setSelectedStepRunId] = useState<string | null>(null);
 
   const stepLabels = useMemo(() => {
     const map: Record<string, string> = {};
@@ -89,6 +92,7 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
 
   const graph = graphQuery.data?.graph ?? EMPTY_GRAPH;
   const positions = tidiedPositions ?? layoutQuery.data?.positions ?? {};
+  const selectedStep = run.data.steps.find((step) => step.id === selectedStepRunId) ?? null;
 
   return (
     <div className={styles.livePage} {...{ 'data-testid': 'playbook-live-run-page' }}>
@@ -120,12 +124,34 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
             stepLabels={stepLabels}
             readOnly
             stepStatusByNodeId={stepStatusByNodeId}
+            selectedNodeId={selectedStep?.stepId ?? null}
+            onSelectNode={outputArtifactsEnabled
+              ? (nodeId) => {
+                  const step = run.data.steps.find((candidate) => candidate.stepId === nodeId);
+                  setSelectedStepRunId(step?.id ?? null);
+                }
+              : undefined}
           />
         )}
       </div>
 
+      {selectedStep ? (
+        <PlaybookStepDetailDrawer
+          project={project}
+          runId={runId}
+          step={selectedStep}
+          suspension={run.data.suspension}
+          onClose={() => setSelectedStepRunId(null)}
+          data-testid="playbook-live-step-detail"
+        />
+      ) : null}
+
       <section className={styles.liveSection}>
-        <PlaybookRunStepList run={run.data} id={`playbook-live-steps-${runId}`} />
+        <PlaybookRunStepList
+          run={run.data}
+          id={`playbook-live-steps-${runId}`}
+          outputArtifactsEnabled={outputArtifactsEnabled}
+        />
         <PlaybookGateReviewPanel
           project={project}
           run={run.data}

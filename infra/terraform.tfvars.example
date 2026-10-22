@@ -86,11 +86,9 @@ postgresql_backup_retention_days = 7
 # Null uses the standard stapex<environment>async name (for example,
 # stapexdevasync or stapexprdasync). Override only for a global-name collision.
 shared_storage_account_name = null
-# blob_containers default includes pdf-artifacts. Example for another module:
-# blob_containers = {
-#   pdf-artifacts      = {}
-#   standup-recordings = {}
-# }
+# blob_containers default includes pdf-artifacts, repo-grounding,
+# cursor-prompts, and playbook-step-outputs. If you override the map, include
+# every container the environment still uses.
 
 pdf_blob_container_name = "pdf-artifacts"
 

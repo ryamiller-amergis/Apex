@@ -18,6 +18,7 @@ import { db } from '../db/drizzle';
 import { playbookRuns } from '../db/schema';
 import { suspendReasonForStepType } from './playbookSteps/registry';
 import { listPendingGateRows } from './playbookGateService';
+import { summarizePlaybookStepOutput } from './playbookStepOutputStore';
 import type {
   PlaybookRunDetail,
   PlaybookRunListResult,
@@ -56,7 +57,17 @@ function toSummary(run: RunRow): PlaybookRunSummary {
 }
 
 function toStepRun(row: Record<string, unknown>): PlaybookStepRun {
-  return row as unknown as PlaybookStepRun;
+  const step = row as unknown as PlaybookStepRun;
+  return {
+    ...step,
+    outputInline: step.outputInline
+      ? (
+          step.outputBlobRef
+            ? step.outputInline
+            : summarizePlaybookStepOutput(step.outputInline)
+        )
+      : null,
+  };
 }
 
 /**

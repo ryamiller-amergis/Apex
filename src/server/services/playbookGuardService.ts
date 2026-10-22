@@ -16,9 +16,10 @@
  * refused on a number with those properties would be refused unreproducibly.
  */
 import { and, count, eq, inArray, ne } from 'drizzle-orm';
-import type { ZodError } from 'zod';
+import { z, type ZodError } from 'zod';
 import { db } from '../db/drizzle';
 import { playbookRuns, playbookStepRuns } from '../db/schema';
+import { collectStepBindingReferences } from './playbookBindingResolver';
 import { PlaybookStepSchemaError } from './playbookSteps/descriptorValidation';
 import {
   PlaybookStepTypeError,
@@ -164,6 +165,23 @@ export class PlaybookGraphNodeConfigError extends PlaybookStepSchemaError {
   }
 }
 
+export class PlaybookGraphBindingError extends PlaybookStepTypeError {
+  constructor(nodeId: string, placeholder: string, reason: string) {
+    super(`Playbook step "${nodeId}" cannot use binding "${placeholder}": ${reason}.`);
+    this.name = 'PlaybookGraphBindingError';
+  }
+}
+
+export class PlaybookGraphStepVersionError extends PlaybookStepTypeError {
+  constructor(nodeId: string, stepType: string, version: number, currentVersion: number) {
+    super(
+      `Playbook step "${nodeId}" uses ${stepType} contract version ${version}, but this Apex ` +
+        `version supports contract versions 1 through ${currentVersion}.`
+    );
+    this.name = 'PlaybookGraphStepVersionError';
+  }
+}
+
 /**
  * Whether this step type is a human approval checkpoint.
  *
@@ -197,6 +215,54 @@ function canReach(graph: PlaybookGraph, from: string, to: string): boolean {
     pending.push(...graph.edges.filter((edge) => edge.from === current).map((edge) => edge.to));
   }
   return false;
+}
+
+function outputHasField(descriptor: PlaybookStepTypeDescriptor, field: string): boolean {
+  let schema: z.ZodTypeAny = descriptor.outputSchema;
+  while (
+    schema instanceof z.ZodOptional ||
+    schema instanceof z.ZodNullable ||
+    schema instanceof z.ZodDefault
+  ) {
+    schema = (schema._def as unknown as { innerType: z.ZodTypeAny }).innerType;
+  }
+  return schema instanceof z.ZodObject && field in schema.shape;
+}
+
+/** Every cross-step binding names an ancestor and a declared output field. */
+export function assertBindingsResolvable(
+  graph: PlaybookGraph,
+  lookup: PlaybookStepDescriptorLookup = registryLookup
+): void {
+  const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
+
+  for (const target of graph.nodes) {
+    for (const binding of collectStepBindingReferences(target.config ?? {})) {
+      const source = nodes.get(binding.stepId);
+      if (!source) {
+        throw new PlaybookGraphBindingError(
+          target.id,
+          binding.placeholder,
+          `source step "${binding.stepId}" is absent`
+        );
+      }
+      if (source.id === target.id || !canReach(graph, source.id, target.id)) {
+        throw new PlaybookGraphBindingError(
+          target.id,
+          binding.placeholder,
+          `source step "${binding.stepId}" is not a prior step`
+        );
+      }
+      const descriptor = lookup(source.stepType);
+      if (!descriptor || !outputHasField(descriptor, binding.field)) {
+        throw new PlaybookGraphBindingError(
+          target.id,
+          binding.placeholder,
+          `field "${binding.field}" is not declared by step "${binding.stepId}"`
+        );
+      }
+    }
+  }
 }
 
 /**
@@ -299,6 +365,19 @@ export function assertGraphStepsResolvable(
   for (const node of graph.nodes) {
     const descriptor = lookup(node.stepType);
     if (!descriptor) throw new PlaybookGraphStepTypeError(node.id, node.stepType);
+    const stepTypeVersion = node.stepTypeVersion ?? 1;
+    if (
+      !Number.isInteger(stepTypeVersion) ||
+      stepTypeVersion < 1 ||
+      stepTypeVersion > descriptor.schemaVersion
+    ) {
+      throw new PlaybookGraphStepVersionError(
+        node.id,
+        node.stepType,
+        stepTypeVersion,
+        descriptor.schemaVersion
+      );
+    }
 
     // `safeParse` rather than `parse`, and the result discarded: the graph is the author's and is
     // stored as written, so nothing here may hand back a coerced copy of it.
@@ -394,6 +473,7 @@ export function assertCanvasConnection(graph: PlaybookGraph): void {
     }
   }
   assertGraphTopologyGuards(graph);
+  assertBindingsResolvable(graph);
 }
 
 /**
@@ -424,6 +504,7 @@ export function assertGraphWithinGuards(graph: PlaybookGraph): void {
   assertGraphTopologyGuards(graph);
 
   assertGraphStepsResolvable(graph);
+  assertBindingsResolvable(graph);
 
   const ungated = findUngatedLeavesApexSteps(graph);
   if (ungated.length > 0) throw ungatedViolation(ungated);

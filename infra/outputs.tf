@@ -81,6 +81,19 @@ output "grounding_app_setting_names" {
   }
 }
 
+output "playbook_step_output_blob_container_name" {
+  description = "Private Blob container for large Playbook step output"
+  value       = azurerm_storage_container.shared["playbook-step-outputs"].name
+}
+
+output "playbook_step_output_app_setting_names" {
+  description = "Non-secret app setting contract for Playbook step-output storage"
+  value = {
+    blob_account_name   = "PLAYBOOK_STEP_OUTPUT_BLOB_ACCOUNT_NAME"
+    blob_container_name = "PLAYBOOK_STEP_OUTPUT_CONTAINER_NAME"
+  }
+}
+
 # PDF workload (first consumer of shared blob)
 output "pdf_storage_account_name" {
   description = "Storage Account used by PDF (alias of shared_storage_account_name)"

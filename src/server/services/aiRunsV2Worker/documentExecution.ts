@@ -395,6 +395,9 @@ function executionSnapshot(
     skillPath: specification.skillPath,
     projectId: specification.projectId,
     threadId: specification.threadId,
+    ...(specification.playbookAgentPolicy
+      ? { playbookAgentPolicy: specification.playbookAgentPolicy }
+      : {}),
   };
 }
 
@@ -495,6 +498,12 @@ export function createDocumentExecute(
       .digest('hex');
     if (actualSkillSha !== unknownSpecification.skillSha256.toLowerCase()) {
       throw new Error('Command referenced document skill content with a mismatched hash');
+    }
+    if (
+      unknownSpecification.playbookAgentPolicy
+      && actualSkillSha !== unknownSpecification.playbookAgentPolicy.skill.sha256.toLowerCase()
+    ) {
+      throw new Error('Command referenced a Playbook policy for different skill content');
     }
     if (command.workloadLane !== 'document') {
       throw new Error('Document worker received a non-document command');

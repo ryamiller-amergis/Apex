@@ -67,6 +67,10 @@ import {
   startPlaybookReconciliation,
   stopPlaybookReconciliation,
 } from './services/playbookReconciliationScheduler';
+import {
+  startPlaybookStepOutputCleanup,
+  stopPlaybookStepOutputCleanup,
+} from './services/playbookStepOutputCleanupScheduler';
 import { initPgNotify, shutdownPgNotify } from './services/pgNotifyService';
 import {
   initInteractiveLiveBus,
@@ -457,6 +461,8 @@ const server = app.listen(PORT, () => {
   // Phase 0/1 runs are not behind playbooks-production-adapters, so recovery always starts.
   void startPlaybookReconciliation();
   server.once('close', stopPlaybookReconciliation);
+  startPlaybookStepOutputCleanup();
+  server.once('close', stopPlaybookStepOutputCleanup);
   startLoadTestRunReaper();
   initPgNotify().catch((err) => console.error('[startup] initPgNotify failed:', err.message));
 

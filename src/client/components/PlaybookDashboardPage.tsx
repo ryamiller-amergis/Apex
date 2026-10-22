@@ -12,9 +12,7 @@ import { usePlaybookDefinition } from '../hooks/usePlaybookDefinitions';
 import { useProfileCard } from '../hooks/useProfile';
 import { usePlaybookVersionGraph } from '../hooks/usePlaybookCanvas';
 import { usePlaybookRuns, useStartPlaybookRun } from '../hooks/usePlaybookRuns';
-import { PlaybookDraftEditor } from './PlaybookDraftEditor';
 import { PlaybookRunList } from './PlaybookRunList';
-import { PlaybookVersionList } from './PlaybookVersionList';
 import { nodeSubtitle, orderedSteps, stepMeta } from './playbookStepCatalog';
 import {
   computeRunStats,
@@ -245,6 +243,15 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
           </p>
         </div>
         <div className={styles.headerActions}>
+          {canAuthor ? (
+            <Link
+              to={`/playbooks/${definitionId}/edit`}
+              className={styles.secondaryButton}
+              data-testid="playbook-dashboard-edit"
+            >
+              <PenLine size={15} aria-hidden /> Edit
+            </Link>
+          ) : null}
           {canvasEnabled ? (
             <Link
               to={`/playbooks/definitions/${definitionId}`}
@@ -340,32 +347,6 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
         </section>
       </div>
 
-      {canAuthor ? (
-        <section className={styles.panel} aria-labelledby="playbook-manage-heading">
-          <header className={styles.panelHeader}>
-            <h2 id="playbook-manage-heading" className={styles.panelTitle}>Manage</h2>
-          </header>
-          <details className={styles.disclosure}>
-            <summary {...{ 'data-testid': 'playbook-dashboard-versions-toggle' }}>Versions and deprecation</summary>
-            <PlaybookVersionList
-              project={project}
-              definitionId={definitionId}
-              versions={data.versions}
-              currentPublishedVersionId={data.currentPublishedVersionId}
-              canAuthor={canAuthor}
-            />
-          </details>
-          <details className={styles.disclosure}>
-            <summary {...{ 'data-testid': 'playbook-dashboard-json-toggle' }}>Edit name, description or graph JSON</summary>
-            <PlaybookDraftEditor
-              project={project}
-              detail={data}
-              canAuthor={canAuthor}
-              reload={detail.refetch}
-            />
-          </details>
-        </section>
-      ) : null}
     </div>
   );
 };

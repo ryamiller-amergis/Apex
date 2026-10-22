@@ -18,6 +18,13 @@ import { db } from '../../db/drizzle';
 import { playbookRuns, playbookStepRuns } from '../../db/schema';
 import { assertSuspendedRunCapacity } from '../playbookGuardService';
 import { notifyPlaybookRunChanged } from '../playbookRunNotifyService';
+import { isFeatureEnabled } from '../featureFlagService';
+import {
+  createPlaybookStepOutputStore,
+  inlineOutputMaxBytes,
+  playbookStepOutputSizeBytes,
+  type PersistedPlaybookStepOutput,
+} from '../playbookStepOutputStore';
 
 function signalRunChanged(runId: string): void {
   void notifyPlaybookRunChanged(runId).catch(() => {});
@@ -59,6 +66,70 @@ export class PlaybookStepRunNotFoundError extends Error {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+async function persistOutput(
+  stepRunId: string,
+  output: Record<string, unknown> | undefined,
+  completedAt: string
+): Promise<PersistedPlaybookStepOutput | null> {
+  if (!output) return null;
+  if (playbookStepOutputSizeBytes(output) <= inlineOutputMaxBytes()) {
+    return { outputInline: output, outputBlobRef: null };
+  }
+  const [context] = await db
+    .select({
+      project: playbookRuns.project,
+      initiatorUserId: playbookRuns.initiatorUserId,
+      runId: playbookStepRuns.runId,
+      stepId: playbookStepRuns.stepId,
+      stepType: playbookStepRuns.stepType,
+    })
+    .from(playbookStepRuns)
+    .innerJoin(playbookRuns, eq(playbookStepRuns.runId, playbookRuns.id))
+    .where(eq(playbookStepRuns.id, stepRunId))
+    .limit(1);
+  if (!context) throw new PlaybookStepRunNotFoundError(stepRunId);
+
+  let enabled = false;
+  try {
+    enabled = await isFeatureEnabled('playbooks-step-output-artifacts', {
+      project: context.project,
+      userId: context.initiatorUserId,
+      caller: 'playbook-step-output',
+    });
+  } catch {
+    enabled = false;
+  }
+  return createPlaybookStepOutputStore().persist({
+    enabled,
+    project: context.project,
+    runId: context.runId,
+    stepRunId,
+    stepId: context.stepId,
+    stepType: context.stepType,
+    completedAt,
+    output,
+  });
+}
+
+async function deleteUnreferencedOutput(
+  stepRunId: string,
+  stored: PersistedPlaybookStepOutput | null
+): Promise<void> {
+  if (!stored?.outputBlobRef) return;
+  const [current] = await db
+    .select({ outputBlobRef: playbookStepRuns.outputBlobRef })
+    .from(playbookStepRuns)
+    .where(eq(playbookStepRuns.id, stepRunId))
+    .limit(1);
+  if (
+    current?.outputBlobRef?.key === stored.outputBlobRef.key
+    && current.outputBlobRef.sha256 === stored.outputBlobRef.sha256
+  ) {
+    return;
+  }
+  await createPlaybookStepOutputStore().delete(stored.outputBlobRef).catch(() => {});
 }
 
 /** Creates the row for a step about to execute, and marks it running in the same insert. */
@@ -202,12 +273,16 @@ export async function resumeStepRun(input: {
   stepRunId: string;
   output?: Record<string, unknown>;
 }): Promise<boolean> {
+  const completedAt = nowIso();
+  const stored = await persistOutput(input.stepRunId, input.output, completedAt);
   const moved = await db
     .update(playbookStepRuns)
     .set({
       status: 'completed',
-      ...(input.output ? { outputInline: input.output } : {}),
-      completedAt: nowIso(),
+      ...(stored
+        ? { outputInline: stored.outputInline, outputBlobRef: stored.outputBlobRef }
+        : {}),
+      completedAt,
       updatedAt: nowIso(),
     })
     .where(
@@ -215,7 +290,10 @@ export async function resumeStepRun(input: {
     )
     .returning({ id: playbookStepRuns.id, runId: playbookStepRuns.runId });
 
-  if (moved.length === 0) return false;
+  if (moved.length === 0) {
+    await deleteUnreferencedOutput(input.stepRunId, stored);
+    return false;
+  }
 
   /*
    * Only the caller that actually moved the step puts the run back to running, which is what keeps
@@ -236,12 +314,16 @@ export async function completeStepRun(input: {
   stepRunId: string;
   output?: Record<string, unknown>;
 }): Promise<void> {
+  const completedAt = nowIso();
+  const stored = await persistOutput(input.stepRunId, input.output, completedAt);
   const updated = await db
     .update(playbookStepRuns)
     .set({
       status: 'completed',
-      ...(input.output ? { outputInline: input.output } : {}),
-      completedAt: nowIso(),
+      ...(stored
+        ? { outputInline: stored.outputInline, outputBlobRef: stored.outputBlobRef }
+        : {}),
+      completedAt,
       updatedAt: nowIso(),
     })
     .where(
@@ -253,6 +335,7 @@ export async function completeStepRun(input: {
     .returning({ id: playbookStepRuns.id, runId: playbookStepRuns.runId });
 
   if (updated.length === 0) {
+    await deleteUnreferencedOutput(input.stepRunId, stored);
     throw new PlaybookStepRunNotFoundError(input.stepRunId);
   }
   signalRunChanged(updated[0].runId);
@@ -274,12 +357,16 @@ export async function completeStepRunIfOpen(input: {
   stepRunId: string;
   output?: Record<string, unknown>;
 }): Promise<boolean> {
+  const completedAt = nowIso();
+  const stored = await persistOutput(input.stepRunId, input.output, completedAt);
   const updated = await db
     .update(playbookStepRuns)
     .set({
       status: 'completed',
-      ...(input.output ? { outputInline: input.output } : {}),
-      completedAt: nowIso(),
+      ...(stored
+        ? { outputInline: stored.outputInline, outputBlobRef: stored.outputBlobRef }
+        : {}),
+      completedAt,
       updatedAt: nowIso(),
     })
     .where(
@@ -291,6 +378,7 @@ export async function completeStepRunIfOpen(input: {
     .returning({ id: playbookStepRuns.id, runId: playbookStepRuns.runId });
 
   if (updated.length > 0) signalRunChanged(updated[0].runId);
+  else await deleteUnreferencedOutput(input.stepRunId, stored);
   return updated.length > 0;
 }
 

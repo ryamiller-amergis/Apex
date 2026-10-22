@@ -99,6 +99,7 @@ const PlaybookCanvasPage = lazy(() => import('./components/PlaybookCanvasPage'))
 const PlaybookLiveRunPage = lazy(() => import('./components/PlaybookLiveRunPage'));
 const PlaybooksManagePage = lazy(() => import('./components/PlaybooksManagePage'));
 const PlaybookDashboardPage = lazy(() => import('./components/PlaybookDashboardPage'));
+const PlaybookEditPage = lazy(() => import('./components/PlaybookEditPage'));
 const LoadTestsListPage = lazy(() => import('./components/LoadTestsListPage').then(m => ({ default: m.LoadTestsListPage })));
 const LoadTestDefinitionBuilderView = lazy(() =>
   import('./components/LoadTestDefinitionBuilderView').then((m) => ({ default: m.LoadTestDefinitionBuilderView })),
@@ -1375,6 +1376,14 @@ function App() {
                       <PlaybookLiveRunPage
                         project={selectedProject}
                         runId={segments[2]}
+                      />
+                    );
+                  }
+                  if (segments[0] === 'playbooks' && segments[1] && segments[2] === 'edit') {
+                    return (
+                      <PlaybookEditPage
+                        project={selectedProject}
+                        definitionId={segments[1]}
                       />
                     );
                   }
