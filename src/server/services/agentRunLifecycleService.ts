@@ -398,6 +398,12 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
                   })),
                 }
               : {}),
+            ...(input.snapshot.cloudAgent.bugWorkItemId != null
+              ? { bugWorkItemId: input.snapshot.cloudAgent.bugWorkItemId }
+              : {}),
+            ...(input.snapshot.cloudAgent.bugUrl
+              ? { bugUrl: input.snapshot.cloudAgent.bugUrl }
+              : {}),
           },
         }
       : {}),

@@ -148,6 +148,20 @@ describe('guided cloud jobs', () => {
     expect(prompt).not.toContain('screenshot');
   });
 
+  it('names the Bug that Apex already created and tells the agent not to edit it', () => {
+    const prompt = buildGuidedCloudAgentPrompt({
+      title: "There's an issue on the site",
+      skillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
+      skillName: 'dev-orchestrator',
+      task: 'The login page times out.',
+      branchName: 'feature/apex-site-abc123-the-login-page-times-out',
+      bugWorkItemId: 45681,
+      bugUrl: 'https://dev.azure.com/amergis/MaxView/_workitems/edit/45681',
+    });
+    expect(prompt).toContain('An Azure DevOps Bug already exists: #45681');
+    expect(prompt).toContain('Do not change its state, tags, or fields.');
+  });
+
   it('tells the agent to use attached screenshots', () => {
     const prompt = buildGuidedCloudAgentPrompt({
       title: "There's an issue on the site",

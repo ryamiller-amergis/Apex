@@ -173,6 +173,11 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
                         <strong>{run.title}</strong>
                         <span>{run.run?.status ?? 'queued'}</span>
                       </button>
+                      {run.bugUrl ? (
+                        <a className={styles.prLink} href={run.bugUrl} target="_blank" rel="noreferrer">
+                          Bug {run.bugWorkItemId}
+                        </a>
+                      ) : null}
                       {run.run?.prUrl ? (
                         <a className={styles.prLink} href={run.run.prUrl} target="_blank" rel="noreferrer">
                           Pull request

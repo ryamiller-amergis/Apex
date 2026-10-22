@@ -12,6 +12,7 @@ import {
   buildGuidedCloudAgentPrompt,
   guidedSiteIssueBranchName,
   recommendGuidedSiteSkill,
+  SITE_ISSUE_BUG_TAGS,
   type SiteIssueImage,
   guidedCloudJobById,
   recommendImplementationSkill,
@@ -699,6 +700,8 @@ export async function listGuidedCloudAgentRuns(
       skillPath: snapshot.skillPath,
       model: snapshot.model,
       updatedAt: session.updatedAt,
+      bugWorkItemId: snapshot.cloudAgent.bugWorkItemId ?? null,
+      bugUrl: snapshot.cloudAgent.bugUrl ?? null,
       run: summary,
     });
   }
@@ -775,6 +778,17 @@ export async function startGuidedCloudAgentRun(
   const images = intent === 'start'
     ? (input.images ?? [])
     : (input.images?.length ? input.images : (prior?.images ?? []));
+  const bug = intent === 'start'
+    ? await createSiteIssueBug({
+      project: input.project,
+      task: taskText,
+      imageCount: images.length,
+      initiatorName: input.initiatorName,
+    })
+    : {
+      bugWorkItemId: prior?.bugWorkItemId ?? null,
+      bugUrl: prior?.bugUrl ?? null,
+    };
   const sessionId = intent === 'start' ? uuidv4() : input.sessionId!;
   const branchName = prior?.branchName?.trim()
     || guidedSiteIssueBranchName(sessionId, taskText);
@@ -786,6 +800,8 @@ export async function startGuidedCloudAgentRun(
     task: taskText,
     branchName,
     imageCount: images.length,
+    bugWorkItemId: bug.bugWorkItemId,
+    bugUrl: bug.bugUrl,
   });
   const nowIso = new Date().toISOString();
   const timeoutAt = new Date(Date.now() + CLOUD_AGENT_QUEUE_WAIT_MS).toISOString();
@@ -856,6 +872,8 @@ export async function startGuidedCloudAgentRun(
           guidedJobId: job.id,
           task: taskText,
           ...(images.length ? { images } : {}),
+          ...(bug.bugWorkItemId != null ? { bugWorkItemId: bug.bugWorkItemId } : {}),
+          ...(bug.bugUrl ? { bugUrl: bug.bugUrl } : {}),
           ...(skillName ? { skillName } : {}),
         },
       },
@@ -874,7 +892,7 @@ export async function startGuidedCloudAgentRun(
       })
       .where(eq(devSessions.id, sessionId));
 
-    return { sessionId, runId };
+    return { sessionId, runId, bugWorkItemId: bug.bugWorkItemId, bugUrl: bug.bugUrl };
   });
 
   if (await claimCloudAgentRun(started.runId)) {
@@ -945,6 +963,8 @@ async function loadPriorCloudAgentSettings(input: {
   guidedJobId: string | null;
   branchName: string | null;
   images: SiteIssueImage[];
+  bugWorkItemId: number | null;
+  bugUrl: string | null;
 } | null> {
   const rows = input.sessionId
     ? await db
@@ -985,7 +1005,45 @@ async function loadPriorCloudAgentSettings(input: {
       }
       return [{ name: image.name, mimeType: image.mimeType, data: image.data }];
     }),
+    bugWorkItemId: snapshot?.cloudAgent?.bugWorkItemId ?? null,
+    bugUrl: snapshot?.cloudAgent?.bugUrl ?? null,
   };
+}
+
+function escapeBugHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+async function createSiteIssueBug(input: {
+  project: string;
+  task: string;
+  imageCount: number;
+  initiatorName?: string;
+}): Promise<{ bugWorkItemId: number; bugUrl: string }> {
+  const title = `Site issue: ${guidedTaskTitle(input.task)}`.slice(0, 250);
+  const reporter = input.initiatorName?.trim();
+  const description = [
+    '<p>Reported from Apex Home. This Bug is the audit record. A Cloud Agent investigates the report and opens a pull request for a developer to review.</p>',
+    reporter ? `<p>Reporter: ${escapeBugHtml(reporter)}</p>` : '',
+    input.imageCount > 0 ? `<p>Screenshots sent with the report: ${input.imageCount}</p>` : '',
+    '<p>Report:</p>',
+    `<pre>${escapeBugHtml(input.task)}</pre>`,
+  ].filter(Boolean).join('');
+  try {
+    const created = await new AzureDevOpsService(input.project).createWorkItemForPrd({
+      type: 'Bug',
+      title,
+      description,
+      tags: [...SITE_ISSUE_BUG_TAGS],
+    });
+    return { bugWorkItemId: created.id, bugUrl: created.url };
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : 'Azure DevOps could not create the Bug';
+    throw new CloudAgentLaunchError(`Could not create the Bug work item. ${detail}`);
+  }
 }
 
 function guidedTaskTitle(task: string): string {
@@ -1868,7 +1926,9 @@ export async function applyCloudAgentCompletion(input: {
     input.terminalReason ?? null,
   );
 
-  if (!prUrl || !session.workItemId) return;
+  if (!prUrl) return;
+  const bugWorkItemId = session.workItemId ?? terminalSnapshot?.cloudAgent?.bugWorkItemId ?? null;
+  if (!bugWorkItemId) return;
   try {
     if (!provider || !repository) {
       throw new Error('Cloud Agent run is missing work-item repository context');
@@ -1878,7 +1938,7 @@ export async function applyCloudAgentCompletion(input: {
       project: input.project,
       repository,
       prUrl,
-      workItemId: session.workItemId,
+      workItemId: bugWorkItemId,
       runId: input.runId,
       sessionId,
       titleBranch: terminalSnapshot?.cloudAgent?.branchName ?? session.branchName ?? null,

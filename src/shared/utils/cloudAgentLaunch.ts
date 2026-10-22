@@ -181,6 +181,9 @@ export function resolveCloudAgentLaunchSelection(
   return { ok: true, skillPath, model, keptPriorSettings: false };
 }
 
+/** Keeps site-report Bugs out of the normal investigation backlog. */
+export const SITE_ISSUE_BUG_TAGS = ['prod-issue'] as const;
+
 export const SITE_ISSUE_MAX_IMAGES = 3;
 export const SITE_ISSUE_MAX_IMAGE_BYTES = 400 * 1024;
 
@@ -248,17 +251,22 @@ export function buildGuidedCloudAgentPrompt(input: {
   task: string;
   branchName: string;
   imageCount?: number;
+  bugWorkItemId?: number | null;
+  bugUrl?: string | null;
 }): string {
   const invocation = input.skillName ? `/${input.skillName}\n\n` : '';
   const pullRequestTitle = `[APEX] ${input.branchName.replace('feature/', '')}`;
   const imageCount = input.imageCount ?? 0;
+  const bugLine = input.bugWorkItemId
+    ? `An Azure DevOps Bug already exists: #${input.bugWorkItemId}${input.bugUrl ? ` ${input.bugUrl}` : ''}. Mention that bug in the pull request. Do not change its state, tags, or fields.`
+    : 'Do not change Azure DevOps work items. This report has no work item.';
   return [
     `${invocation}A person who is not writing code reported a problem on the site: ${input.title}.`,
     `Load \`${input.skillPath}\` from the repository and follow it.`,
     'Investigate the report, find the cause, and make the code change that fixes it.',
     `Work on branch \`${input.branchName}\` and no other branch.`,
     `Open a pull request titled \`${pullRequestTitle}\` so a developer can review the change.`,
-    'Do not change Azure DevOps work items. This report has no work item.',
+    bugLine,
     ...(imageCount > 0
       ? [`This message includes ${imageCount} screenshot${imageCount === 1 ? '' : 's'}. Use them as evidence of the problem.`]
       : []),

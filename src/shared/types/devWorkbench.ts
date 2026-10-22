@@ -221,6 +221,8 @@ export interface GuidedCloudAgentSession {
   skillPath: string;
   model: string;
   updatedAt: string;
+  bugWorkItemId: number | null;
+  bugUrl: string | null;
   run: CloudAgentRunSummary | null;
 }
 
@@ -246,6 +248,8 @@ export interface StartGuidedCloudAgentRequest {
 export interface StartCloudAgentRunResponse {
   sessionId: string;
   runId: string;
+  bugWorkItemId?: number | null;
+  bugUrl?: string | null;
 }
 
 export interface BacklogFeatureItem {

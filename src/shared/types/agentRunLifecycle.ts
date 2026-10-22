@@ -115,6 +115,9 @@ export interface ExecutionSnapshot {
     task?: string;
     /** Small screenshots attached to a site report. */
     images?: Array<{ name: string; mimeType: string; data: string }>;
+    /** Bug created for a site report. Kept off dev_sessions.work_item_id so the report stays listed. */
+    bugWorkItemId?: number;
+    bugUrl?: string;
     /**
      * App Service instance that holds the developer's ADO token in memory.
      * Other instances wait before claiming the run so the pull request opens

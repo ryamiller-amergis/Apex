@@ -333,6 +333,8 @@ describe('enqueue + frozen snapshot (PBI-001 AC-0 / AC-3 / VT-01 / VT-04 / DoD-2
           guidedJobId: 'site-issue',
           task: 'The login page times out.',
           images: [{ name: 'home.png', mimeType: 'image/png', data: 'YQ==' }],
+          bugWorkItemId: 45681,
+          bugUrl: 'https://dev.azure.com/amergis/MaxView/_workitems/edit/45681',
           workItemTitle: 'The login page times out.',
         },
       },
@@ -349,6 +351,8 @@ describe('enqueue + frozen snapshot (PBI-001 AC-0 / AC-3 / VT-01 / VT-04 / DoD-2
       guidedJobId: 'site-issue',
       task: 'The login page times out.',
       images: [{ name: 'home.png', mimeType: 'image/png', data: 'YQ==' }],
+      bugWorkItemId: 45681,
+      bugUrl: 'https://dev.azure.com/amergis/MaxView/_workitems/edit/45681',
     });
     expect(stored.cloudAgent?.workItemId).toBeUndefined();
   });
