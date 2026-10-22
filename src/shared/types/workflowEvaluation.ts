@@ -11,6 +11,7 @@ export const WORKFLOW_EVALUATION_PROCESS_KEY = 'orchestrated_workflow' as const;
 export const WORKFLOW_EVALUATION_DEFINITION_EVALUATOR_KEY = 'human_review' as const;
 export const WORKFLOW_EVALUATION_BENCHMARK_KEY = 'baseline' as const;
 
+/** Stages seeded by the first seed migration. */
 export const WORKFLOW_EVALUATION_SEEDED_STAGE_KEYS = [
   'prd_human_review',
   'interview_phase_1',
@@ -18,8 +19,16 @@ export const WORKFLOW_EVALUATION_SEEDED_STAGE_KEYS = [
   'interview_phase_3',
 ] as const;
 export const WORKFLOW_EVALUATION_PRD_STAGE_KEY = 'prd_human_review' as const;
+export const WORKFLOW_EVALUATION_DESIGN_DOC_STAGE_KEY = 'design_doc_human_review' as const;
 export type WorkflowEvaluationSeededStageKey =
   (typeof WORKFLOW_EVALUATION_SEEDED_STAGE_KEYS)[number];
+
+/** Every stage with a seeded definition, in display order. */
+export const WORKFLOW_EVALUATION_STAGE_KEYS = [
+  ...WORKFLOW_EVALUATION_SEEDED_STAGE_KEYS,
+  WORKFLOW_EVALUATION_DESIGN_DOC_STAGE_KEY,
+] as const;
+export type WorkflowEvaluationStageKey = (typeof WORKFLOW_EVALUATION_STAGE_KEYS)[number];
 
 export const WORKFLOW_EVALUATION_OUTCOMES = [
   'accept_unchanged',
@@ -62,7 +71,7 @@ export const WORKFLOW_EVALUATION_REVIEWER_ROLE_KEYS = [
 export type WorkflowEvaluationReviewerRoleKey =
   (typeof WORKFLOW_EVALUATION_REVIEWER_ROLE_KEYS)[number];
 
-export const WORKFLOW_EVALUATION_SUBJECT_TYPES = ['interview_phase', 'prd'] as const;
+export const WORKFLOW_EVALUATION_SUBJECT_TYPES = ['interview_phase', 'prd', 'design_doc'] as const;
 export type WorkflowEvaluationSubjectType =
   (typeof WORKFLOW_EVALUATION_SUBJECT_TYPES)[number];
 
@@ -148,6 +157,17 @@ export const WORKFLOW_EVALUATION_INTERVIEW_CRITERION_HELP: Record<
   readiness: 'Is this phase complete enough to move to the next one?',
 };
 
+export const WORKFLOW_EVALUATION_DESIGN_DOC_CRITERION_HELP: Record<
+  WorkflowEvaluationCriteriaKey,
+  string
+> = {
+  intent_alignment: 'Does the design solve the problem the PRD describes, the way you meant?',
+  requirements_coverage: 'Does the design and tech spec cover every PRD requirement for this feature?',
+  scope_alignment: 'Does the design stay inside the PRD scope, with nothing invented?',
+  acceptance_criteria: 'Can a tester check each acceptance criterion and test in the design?',
+  readiness: 'Could a developer build this feature from the design without rework?',
+};
+
 export const WORKFLOW_EVALUATION_OUTCOME_LABELS: readonly WorkflowEvaluationLabeledValue<WorkflowEvaluationOutcome>[] =
   [
     { key: 'accept_unchanged', label: 'Accept unchanged' },
@@ -178,10 +198,15 @@ export const WORKFLOW_EVALUATION_REVIEWER_ROLE_LABELS: readonly WorkflowEvaluati
   ];
 
 /**
- * Given by the server when the reviewer owns the PRD; never offered as a choice
- * and not part of a stored rubric. Owner approval waits for feedback in this role.
+ * Given by the server when the reviewer owns the PRD or design doc; never offered
+ * as a choice and not part of a stored rubric. Owner approval waits for feedback
+ * in this role.
  */
 export const WORKFLOW_EVALUATION_PRD_OWNER_ROLE = { key: 'prd_owner', label: 'PRD owner' } as const;
+export const WORKFLOW_EVALUATION_DESIGN_DOC_OWNER_ROLE = {
+  key: 'design_doc_owner',
+  label: 'Design doc owner',
+} as const;
 
 export type WorkflowEvaluationRubric = {
   scale: readonly WorkflowEvaluationScaleLabel[];
@@ -224,6 +249,10 @@ export const WORKFLOW_EVALUATION_PRD_RUBRIC = buildWorkflowEvaluationRubric(
 
 export const WORKFLOW_EVALUATION_INTERVIEW_PHASE_RUBRIC = buildWorkflowEvaluationRubric(
   WORKFLOW_EVALUATION_INTERVIEW_CRITERION_HELP,
+);
+
+export const WORKFLOW_EVALUATION_DESIGN_DOC_RUBRIC = buildWorkflowEvaluationRubric(
+  WORKFLOW_EVALUATION_DESIGN_DOC_CRITERION_HELP,
 );
 
 /** Opaque suite key. The executor Feature resolves it; this Feature only stores it. */

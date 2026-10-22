@@ -1,11 +1,12 @@
 /**
- * Admin reads for workflow evaluations. Mounted by the workflow evaluations
- * router at /admin, so its project pin and project access checks run first.
+ * Admin reads for workflow evaluations, plus the project's evaluation model
+ * setting. Mounted by the workflow evaluations router at /admin, so its project
+ * pin and project access checks run first.
  */
 import { Router, type NextFunction, type Response } from 'express';
 import { requirePermission } from '../middleware/rbac';
 import { requireWorkflowEvaluationFlag } from '../middleware/workflowEvaluationAccess';
-import { getUserId } from '../utils/requestUser';
+import { getDisplayName, getUserId } from '../utils/requestUser';
 import {
   ADMIN_EVALUATION_EXPORT_FORMATS,
   type AdminEvaluationExportFormat,
@@ -21,6 +22,11 @@ import {
   parseAdminEvaluationLimit,
   type JudgeAppendixResult,
 } from '../services/workflowEvaluationAdminService';
+import {
+  getEvaluationModelSettings,
+  parseEvaluationModelSettings,
+  updateEvaluationModelSettings,
+} from '../services/workflowEvaluationModelSettingsService';
 
 const router = Router({ mergeParams: true });
 
@@ -122,6 +128,31 @@ router.get('/export', async (req, res, next) => {
     res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
     res.setHeader('X-Export-Row-Count', String(result.rowCount));
     res.send(result.body);
+  } catch (err) {
+    handleError(err, res, next);
+  }
+});
+
+router.get('/settings', async (req, res, next) => {
+  try {
+    res.json(await getEvaluationModelSettings(projectId(req.params)));
+  } catch (err) {
+    handleError(err, res, next);
+  }
+});
+
+router.put('/settings', async (req, res, next) => {
+  try {
+    const settings = parseEvaluationModelSettings(req.body);
+    const updated = await updateEvaluationModelSettings(projectId(req.params), settings, getDisplayName(req));
+    if (!updated) {
+      res.status(409).json({
+        error: 'Add a default skill configuration in Project Settings first.',
+        code: 'NO_SKILL_CONFIG',
+      });
+      return;
+    }
+    res.json(updated);
   } catch (err) {
     handleError(err, res, next);
   }

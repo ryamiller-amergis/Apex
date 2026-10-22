@@ -12,7 +12,7 @@ import {
   WORKFLOW_EVALUATION_SCRATCH_PATHS,
 } from '../../shared/types/aiRunV2EvaluationSpec';
 
-export const WORKFLOW_EVALUATION_JUDGE_SKILL_PATH = 'apex/workflow-evaluation-judge@1';
+export const WORKFLOW_EVALUATION_JUDGE_SKILL_PATH = 'apex/workflow-evaluation-judge@2';
 
 export const WORKFLOW_EVALUATION_JUDGE_PROMPT = [
   'Run the workflow-evaluation judge on the files in `.ai-pilot/evaluation/`.',
@@ -30,6 +30,7 @@ Read these files. Do not read, search or change anything else in the workspace, 
 - \`${WORKFLOW_EVALUATION_SCRATCH_PATHS.artifactPackage}\` — the artifact and its source.
   - \`kind: "prd"\`: \`markdown\` is the PRD, \`backlogJson\` is its backlog, and \`sourceTranscript\` is the interview the PRD was written from (null when there was none).
   - \`kind: "interview_phase"\`: \`messages\` is one phase of a requirements interview between the agent and a participant.
+  - \`kind: "design_doc"\`: \`markdown\` is the design doc for one Feature (design, technical specification and assumptions), and \`sourcePrd\` is the PRD it was written from (null when unavailable).
   - \`truncated\`, \`omittedSections\` and \`omittedMessages\` say what did not fit. Never report something as missed when it may sit in an omitted part.
   - \`humanScoreHints\` holds the person's 1–5 scores per criterion. Use them only to decide where to look first. Do not copy, restate or adjust them.
 - \`${WORKFLOW_EVALUATION_SCRATCH_PATHS.rubric}\` — the criteria the person scored, with help text. Use the criterion \`key\` values when you tie an improvement to a criterion.
@@ -47,6 +48,12 @@ For a PRD:
 For an interview phase:
 - **Missed requirements**: topics the phase needed and the agent never raised, or answers the agent accepted without the follow-up the answer clearly needed.
 - **Invented requirements**: requirements the agent stated as agreed that the participant never said.
+
+For a design doc:
+- **Missed requirements**: a requirement, acceptance criterion or constraint the PRD sets for this Feature that the design or technical specification leaves out or contradicts.
+- **Invented requirements**: behaviour, scope or constraints in the design that the PRD does not support and the design does not record as an assumption.
+- A design doc covers one Feature of the PRD. Do not report PRD requirements that belong to other Features as missed.
+- Without a source PRD, judge the design doc against itself: contradictions between the design and the technical specification, and acceptance criteria no test covers.
 
 Quote short evidence from the input for every finding. Report only what the input shows; an empty list is a valid answer.
 

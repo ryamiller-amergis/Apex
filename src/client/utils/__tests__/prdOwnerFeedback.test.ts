@@ -66,4 +66,11 @@ describe('hasCurrentOwnerFeedback', () => {
     expect(hasCurrentOwnerFeedback(undefined, 'owner-1')).toBe(false);
     expect(hasCurrentOwnerFeedback(response([event({})]), null)).toBe(false);
   });
+
+  it('matches the owner role it is given', () => {
+    const designDocOwner = event({ reviewerRoleKey: 'design_doc_owner' });
+    expect(hasCurrentOwnerFeedback(response([designDocOwner]), 'owner-1', 'design_doc_owner')).toBe(true);
+    expect(hasCurrentOwnerFeedback(response([designDocOwner]), 'owner-1')).toBe(false);
+    expect(hasCurrentOwnerFeedback(response([event({})]), 'owner-1', 'design_doc_owner')).toBe(false);
+  });
 });

@@ -160,8 +160,6 @@ export interface ProjectEffortSettings {
   designDocValidationEffort?: EffortLevel | null;
   prdAssistantEffort?: EffortLevel | null;
   prdValidationEffort?: EffortLevel | null;
-  /** Workflow-evaluation judge; null uses `prdValidationEffort`. */
-  evaluationJudgeEffort?: EffortLevel | null;
   developmentEffort?: EffortLevel | null;
   standupEffort?: EffortLevel | null;
   featureRequestEffort?: EffortLevel | null;
@@ -206,8 +204,10 @@ export interface ProjectSkillConfig extends ProjectEffortSettings {
   prdAssistantSkillPath?: string | null;
   prdAssistantModel?: string | null;
   prdValidationModel?: string | null;
-  /** Workflow-evaluation judge; null uses `prdValidationModel`. */
+  /** Model every workflow-evaluation judge uses; null falls back to PRD Validation, then the app default. */
   evaluationJudgeModel?: string | null;
+  /** Effort for those judges; null falls back to PRD Validation effort. */
+  evaluationJudgeEffort?: EffortLevel | null;
   defaultModel?: string | null;
   prdReviewBedrockModelId?: string | null;
   prdReviewBedrockMaxTokens?: number | null;
@@ -325,8 +325,6 @@ export interface UpsertProjectSkillConfigRequest extends ProjectEffortSettings {
   prdAssistantSkillPath?: string | null;
   prdAssistantModel?: string | null;
   prdValidationModel?: string | null;
-  /** Workflow-evaluation judge; null uses `prdValidationModel`. */
-  evaluationJudgeModel?: string | null;
   defaultModel?: string | null;
   prdReviewBedrockModelId?: string | null;
   prdReviewBedrockMaxTokens?: number | null;
@@ -445,8 +443,6 @@ export interface ProjectSkillConfigResponse extends ProjectEffortSettings {
   prdAssistantSkillPath?: string | null;
   prdAssistantModel?: string | null;
   prdValidationModel?: string | null;
-  /** Workflow-evaluation judge; null uses `prdValidationModel`. */
-  evaluationJudgeModel?: string | null;
   defaultModel?: string | null;
   developmentSkillPath?: string | null;
   developmentModel?: string | null;

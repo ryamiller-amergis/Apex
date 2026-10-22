@@ -361,6 +361,71 @@ export async function listDesignDocs(
   );
 }
 
+export type DesignDocEvaluationInputs = {
+  id: string;
+  project: string;
+  status: string;
+  prdId: string;
+  interviewId: string | null;
+  model: string | null;
+  skillPath: string | null;
+  skillVersion: string | null;
+  designContent: string;
+  techSpecContent: string;
+  assumptionsContent: string;
+};
+
+/** Read-only lineage and live content for an evaluation. Does not call getDesignDoc. */
+export async function getDesignDocEvaluationInputs(designDocId: string): Promise<DesignDocEvaluationInputs | null> {
+  const rows = await db
+    .select({
+      id: designDocs.id,
+      project: designDocs.project,
+      status: designDocs.status,
+      prdId: designDocs.prdId,
+      interviewId: prds.interviewId,
+      model: designDocs.model,
+      skillSha256: designDocs.skillSha256,
+      chatThreadId: designDocs.chatThreadId,
+      designContent: designDocs.designContent,
+      techSpecContent: designDocs.techSpecContent,
+      assumptionsContent: designDocs.assumptionsContent,
+    })
+    .from(designDocs)
+    .leftJoin(prds, eq(designDocs.prdId, prds.id))
+    .where(eq(designDocs.id, designDocId))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+
+  let skillPath: string | null = null;
+  let model = row.model ?? null;
+  if (row.chatThreadId) {
+    const thread = await db.query.chatThreads.findFirst({
+      where: eq(chatThreads.id, row.chatThreadId),
+      columns: { kickoff: true },
+    });
+    if (thread) {
+      skillPath = thread.kickoff?.skillPath ?? null;
+      model = row.model ?? thread.kickoff?.model ?? null;
+    }
+  }
+
+  return {
+    id: row.id,
+    project: row.project,
+    status: row.status,
+    prdId: row.prdId,
+    interviewId: row.interviewId ?? null,
+    model,
+    skillPath,
+    skillVersion: row.skillSha256 ?? null,
+    designContent: row.designContent,
+    techSpecContent: row.techSpecContent,
+    assumptionsContent: row.assumptionsContent,
+  };
+}
+
 export async function getDesignDoc(id: string): Promise<DesignDoc | null> {
   const rows = await db
     .select({

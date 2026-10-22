@@ -1,10 +1,18 @@
-import React, { useState, useCallback, useEffect, useRef, useReducer, useMemo } from 'react';
+import React, { Suspense, lazy, useState, useCallback, useEffect, useRef, useReducer, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
+import { ErrorBoundary } from 'react-error-boundary';
 import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAppShell } from '../hooks/useAppShell';
+import { useWorkflowEvaluationAccess } from '../hooks/useWorkflowEvaluationAccess';
+import { useWorkflowEvaluationEvents } from '../hooks/useWorkflowEvaluations';
+import { hasCurrentOwnerFeedback } from '../utils/prdOwnerFeedback';
+import {
+  WORKFLOW_EVALUATION_DESIGN_DOC_OWNER_ROLE,
+  WORKFLOW_EVALUATION_DESIGN_DOC_STAGE_KEY,
+} from '../../shared/types/workflowEvaluation';
 import {
   useDesignDoc,
   usePrd,
@@ -82,6 +90,9 @@ import styles from './DesignDocReviewView.module.css';
 import { ApexLoader } from './ApexLoader';
 
 type TabId = 'design' | 'tech-spec' | 'assumptions' | 'validation';
+
+const DesignDocQualityFeedbackTab = lazy(() => import('./DesignDocQualityFeedbackTab'));
+const DesignDocQualityFeedbackPrompt = lazy(() => import('./DesignDocQualityFeedbackPrompt'));
 
 // ── Fix Validation Flow state machine ─────────────────────────────────────────
 
@@ -970,10 +981,20 @@ export const DesignDocReviewView: React.FC = () => {
   const location = useLocation();
   const id = location.pathname.split('/').pop() ?? null;
   const navigate = useNavigate();
-  const { can, userId, isAdmin, isSuperAdmin } = useAppShell();
+  const { can, userId, isAdmin, isSuperAdmin, selectedProject } = useAppShell();
   const qc = useQueryClient();
+  const feedbackAccess = useWorkflowEvaluationAccess(selectedProject);
 
   const { data: doc, isLoading, isError } = useDesignDoc(id);
+  const subjectFeedbackQuery = useWorkflowEvaluationEvents({
+    project: selectedProject,
+    subjectType: 'design_doc',
+    subjectId: id ?? '',
+    stageKey: WORKFLOW_EVALUATION_DESIGN_DOC_STAGE_KEY,
+    includeOlderVersions: false,
+    enabled: feedbackAccess.canSubmit && !isSuperAdmin
+      && (doc?.status === 'pending_review' || doc?.status === 'reviewer_approved'),
+  });
   const { data: sourcePrd } = usePrd(doc?.prdId ?? null);
   const updateContent = useUpdateDesignDocContent();
   const submitDoc = useSubmitDesignDoc();
@@ -1105,6 +1126,9 @@ export const DesignDocReviewView: React.FC = () => {
   }, [doc?.id, doc?.fixBaseline, doc?.docAssistantThreadId, doc?.status, fixFlow.phase, qc, clearLocalFixSession, dismissFixSessionAsync]);
 
   const [activeTab, setActiveTab] = useState<TabId>('design');
+  // Quality feedback sits outside TabId so the edit, split and pin logic never sees it.
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  useEffect(() => setFeedbackOpen(false), [activeTab]);
 
   const markdownComponents: Components = useMemo(() => ({
     h1({ children, ...props }) {
@@ -1944,6 +1968,17 @@ export const DesignDocReviewView: React.FC = () => {
   const showOwnerApproveButton =
     (doc.status === 'reviewer_approved' || (ownerOnly && doc.status === 'pending_review'))
     && (isOwnerActor || ownerOnly);
+  const showQualityFeedback = feedbackAccess.canView
+    && doc.status !== 'generating'
+    && doc.status !== 'generation_failed'
+    && doc.project === selectedProject;
+  const canSubmitFeedback = showQualityFeedback && feedbackAccess.canSubmit;
+  // Owners give feedback before approving. A failed lookup does not block approval.
+  const ownerFeedbackMissing = canSubmitFeedback
+    && !isSuperAdmin
+    && !subjectFeedbackQuery.isError
+    && !hasCurrentOwnerFeedback(subjectFeedbackQuery.data, userId, WORKFLOW_EVALUATION_DESIGN_DOC_OWNER_ROLE.key);
+  const ownerApproveBlockedByFeedback = isOwnerActor && ownerFeedbackMissing;
   const canEdit = canManage && (isAuthor || isOwner || isAdmin) && doc.status !== 'approved' && doc.status !== 'reviewer_approved';
   const canUseAssistant = (isReviewer || isOwner || isAuthor || isAdmin) &&
     (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'reviewer_approved' || doc.status === 'revision_requested');
@@ -2351,9 +2386,11 @@ export const DesignDocReviewView: React.FC = () => {
                 <button
                   className={styles.btnApprove}
                   onClick={() => void handleOwnerApprove()}
-                  disabled={ownerApproveMutation.isPending || !isOwnerActor || unresolvedCount > 0 || validationBlocking}
-                  aria-disabled={ownerApproveMutation.isPending || !isOwnerActor || unresolvedCount > 0 || validationBlocking}
-                  aria-describedby={ownerOnly && !isOwnerActor ? 'owner-approve-disabled-reason' : undefined}
+                  disabled={ownerApproveMutation.isPending || !isOwnerActor || unresolvedCount > 0 || validationBlocking || ownerApproveBlockedByFeedback}
+                  aria-disabled={ownerApproveMutation.isPending || !isOwnerActor || unresolvedCount > 0 || validationBlocking || ownerApproveBlockedByFeedback}
+                  aria-describedby={ownerOnly && !isOwnerActor
+                    ? 'owner-approve-disabled-reason'
+                    : ownerApproveBlockedByFeedback ? 'dd-owner-approve-feedback-reason' : undefined}
                   title={
                     !isOwnerActor
                       ? undefined
@@ -2361,13 +2398,41 @@ export const DesignDocReviewView: React.FC = () => {
                         ? 'Resolve all comments before approving'
                         : validationBlocking
                           ? `Validation score must be ≥ ${validationThreshold}% (current: ${validationScoreLabel})`
-                          : undefined
+                          : ownerApproveBlockedByFeedback
+                            ? 'Give Quality feedback as design doc owner before approving'
+                            : undefined
                   }
                   type="button"
                   {...{ 'data-testid': 'dd-approve-owner-btn' }}
                 >
                   Approve as Owner
                 </button>
+                {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+                {ownerApproveBlockedByFeedback ? (
+                  /* @feature-flag:workflow-human-evaluation enabled-start */
+                  <span
+                    id="dd-owner-approve-feedback-reason"
+                    role="status"
+                    className={styles.ownerFeedbackReason}
+                    {...{ 'data-testid': 'dd-owner-approve-feedback-reason' }}
+                  >
+                    Give Quality feedback before approving.{' '}
+                    <button
+                      type="button"
+                      className={styles.ownerFeedbackLink}
+                      onClick={() => setFeedbackOpen(true)}
+                      {...{ 'data-testid': 'dd-owner-approve-open-feedback' }}
+                    >
+                      Open Quality feedback
+                    </button>
+                  </span>
+                  /* @feature-flag:workflow-human-evaluation enabled-end */
+                ) : (
+                  /* @feature-flag:workflow-human-evaluation disabled-start */
+                  null
+                  /* @feature-flag:workflow-human-evaluation disabled-end */
+                )}
+                {/* @feature-flag:workflow-human-evaluation end */}
                 {ownerOnly && !isOwnerActor && (
                   <span
                     id="owner-approve-disabled-reason"
@@ -2772,12 +2837,37 @@ export const DesignDocReviewView: React.FC = () => {
                 </div>
 
                 <div className={styles.workspaceCenter}>
+                  {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+                  {canSubmitFeedback && userId ? (
+                    /* @feature-flag:workflow-human-evaluation enabled-start */
+                    <ErrorBoundary fallback={null}>
+                      <Suspense fallback={null}>
+                        <DesignDocQualityFeedbackPrompt
+                          designDocId={doc.id}
+                          project={doc.project}
+                          status={doc.status}
+                          userId={userId}
+                          canSubmit={canSubmitFeedback}
+                          onOpenFeedbackTab={() => setFeedbackOpen(true)}
+                        />
+                      </Suspense>
+                    </ErrorBoundary>
+                    /* @feature-flag:workflow-human-evaluation enabled-end */
+                  ) : (
+                    /* @feature-flag:workflow-human-evaluation disabled-start */
+                    null
+                    /* @feature-flag:workflow-human-evaluation disabled-end */
+                  )}
+                  {/* @feature-flag:workflow-human-evaluation end */}
                   <div className={styles.tabs}>
                     {(['design', 'tech-spec', 'assumptions'] as TabId[]).map((t) => (
                       <div key={t} className={styles.tabWrap}>
                         <button
-                          className={`${styles.tab} ${activeTab === t ? styles.active : ''} ${dirtyTabs.has(t) ? styles.tabDirty : ''}`}
-                          onClick={() => selectTab(t)}
+                          className={`${styles.tab} ${activeTab === t && !feedbackOpen ? styles.active : ''} ${dirtyTabs.has(t) ? styles.tabDirty : ''}`}
+                          onClick={() => {
+                            setFeedbackOpen(false);
+                            selectTab(t);
+                          }}
                           type="button"
                         >
                           {tabLabel[t]}
@@ -2805,7 +2895,28 @@ export const DesignDocReviewView: React.FC = () => {
                         </button>
                       </div>
                     ))}
-                    {canEdit && activeTab !== 'validation' && (
+                    {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+                    {showQualityFeedback ? (
+                      /* @feature-flag:workflow-human-evaluation enabled-start */
+                      <div className={styles.tabWrap}>
+                        <button
+                          className={`${styles.tab} ${feedbackOpen ? styles.active : ''}`}
+                          onClick={() => setFeedbackOpen(true)}
+                          type="button"
+                          aria-pressed={feedbackOpen}
+                          {...{ 'data-testid': 'design-doc-tab-quality-feedback' }}
+                        >
+                          Quality feedback
+                        </button>
+                      </div>
+                      /* @feature-flag:workflow-human-evaluation enabled-end */
+                    ) : (
+                      /* @feature-flag:workflow-human-evaluation disabled-start */
+                      null
+                      /* @feature-flag:workflow-human-evaluation disabled-end */
+                    )}
+                    {/* @feature-flag:workflow-human-evaluation end */}
+                    {canEdit && activeTab !== 'validation' && !feedbackOpen && (
                       <button
                         className={styles.tabEditBtn}
                         onClick={() => handleEditToggle(activeTab as Exclude<TabId, 'validation'>)}
@@ -2816,7 +2927,38 @@ export const DesignDocReviewView: React.FC = () => {
                     )}
                   </div>
 
-                  <div ref={tabContentSplitRef} className={`${styles.tabContent} ${splitTab ? styles.tabContentSplit : ''}`}>
+                  {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+                  {feedbackOpen && showQualityFeedback ? (
+                    /* @feature-flag:workflow-human-evaluation enabled-start */
+                    <div className={styles.feedbackPane}>
+                      <ErrorBoundary
+                        fallback={(
+                          <div role="alert">Quality feedback couldn&apos;t load. Refresh the page to try again.</div>
+                        )}
+                      >
+                        <Suspense fallback={<div>Loading quality feedback…</div>}>
+                          <DesignDocQualityFeedbackTab
+                            designDocId={doc.id}
+                            project={doc.project}
+                            updatedAt={doc.updatedAt}
+                            canView={showQualityFeedback}
+                            canSubmit={canSubmitFeedback}
+                            data-testid="design-doc-quality-feedback-panel"
+                          />
+                        </Suspense>
+                      </ErrorBoundary>
+                    </div>
+                    /* @feature-flag:workflow-human-evaluation enabled-end */
+                  ) : (
+                    /* @feature-flag:workflow-human-evaluation disabled-start */
+                    null
+                    /* @feature-flag:workflow-human-evaluation disabled-end */
+                  )}
+                  {/* @feature-flag:workflow-human-evaluation end */}
+                  <div
+                    ref={tabContentSplitRef}
+                    className={`${styles.tabContent} ${splitTab ? styles.tabContentSplit : ''} ${feedbackOpen && showQualityFeedback ? styles.tabContentHidden : ''}`}
+                  >
                     {/* Primary / left content */}
                     <div
                       ref={centerScrollRef}

@@ -5,7 +5,7 @@ import {
   type WorkflowEvaluationArtifactPackage,
 } from '../../shared/types/aiRunV2EvaluationSpec';
 import {
-  WORKFLOW_EVALUATION_SEEDED_STAGE_KEYS,
+  WORKFLOW_EVALUATION_STAGE_KEYS,
   workflowEvaluationPromptfooSuiteRef,
 } from '../../shared/types/workflowEvaluation';
 import {
@@ -14,26 +14,38 @@ import {
 } from '../services/workflowEvaluationSuites';
 
 const TO_PRD_DIR = path.resolve(__dirname, '../../../.cursor/skills/to-prd');
+const DESIGN_SPEC_DIR = path.resolve(__dirname, '../../../.cursor/skills/prd-design-spec');
+
+const PACKAGES: Record<string, WorkflowEvaluationArtifactPackage> = {
+  prd: {
+    kind: 'prd',
+    markdown: '# PRD',
+    backlogJson: null,
+    sourceTranscript: null,
+    truncated: false,
+    omittedSections: [],
+    omittedMessages: 0,
+  },
+  interview_phase: {
+    kind: 'interview_phase',
+    phaseIndex: 1,
+    messages: [{ role: 'agent', text: 'What do you need?' }],
+    truncated: false,
+    omittedMessages: 0,
+  },
+  design_doc: {
+    kind: 'design_doc',
+    markdown: '# Design',
+    sourcePrd: null,
+    truncated: false,
+    omittedSections: [],
+    omittedMessages: 0,
+  },
+};
 
 function specificationFor(stageKey: string): Record<string, unknown> {
   const suite = getWorkflowEvaluationSuite(workflowEvaluationPromptfooSuiteRef(stageKey));
-  const artifactPackage: WorkflowEvaluationArtifactPackage = suite?.subjectType === 'prd'
-    ? {
-      kind: 'prd',
-      markdown: '# PRD',
-      backlogJson: null,
-      sourceTranscript: null,
-      truncated: false,
-      omittedSections: [],
-      omittedMessages: 0,
-    }
-    : {
-      kind: 'interview_phase',
-      phaseIndex: 1,
-      messages: [{ role: 'agent', text: 'What do you need?' }],
-      truncated: false,
-      omittedMessages: 0,
-    };
+  const artifactPackage = PACKAGES[suite?.subjectType ?? 'prd'];
   return {
     specVersion: 1,
     workloadLane: 'document',
@@ -55,7 +67,7 @@ function specificationFor(stageKey: string): Record<string, unknown> {
 }
 
 describe('workflow evaluation Promptfoo suites', () => {
-  it.each(WORKFLOW_EVALUATION_SEEDED_STAGE_KEYS)(
+  it.each(WORKFLOW_EVALUATION_STAGE_KEYS)(
     'resolves the seeded suite for %s and passes the specification guard',
     (stageKey) => {
       expect(getWorkflowEvaluationSuite(workflowEvaluationPromptfooSuiteRef(stageKey))).not.toBeNull();
@@ -65,7 +77,7 @@ describe('workflow evaluation Promptfoo suites', () => {
 
   it('registers no suite beyond the seeded stages', () => {
     expect(listWorkflowEvaluationSuiteRefs().sort()).toEqual(
-      WORKFLOW_EVALUATION_SEEDED_STAGE_KEYS.map(workflowEvaluationPromptfooSuiteRef).sort(),
+      WORKFLOW_EVALUATION_STAGE_KEYS.map(workflowEvaluationPromptfooSuiteRef).sort(),
     );
   });
 
@@ -98,5 +110,19 @@ describe('workflow evaluation Promptfoo suites', () => {
     for (const key of schema.required) {
       expect(backlogValues).toContain(`"${key}":`);
     }
+  });
+
+  it('checks only sections the design and tech spec templates define', () => {
+    const templates = ['design-template.md', 'tech-spec-template.md']
+      .map((name) => readFileSync(path.join(DESIGN_SPEC_DIR, name), 'utf8'))
+      .join('\n');
+    const templateSections = [...templates.matchAll(/^## (.+)$/gm)].map((match) => match[1].trim());
+    const suite = getWorkflowEvaluationSuite(workflowEvaluationPromptfooSuiteRef('design_doc_human_review'));
+    expect(suite?.subjectType).toBe('design_doc');
+    const checked = (suite?.tests ?? [])
+      .flatMap((test) => test.assert)
+      .map((assertion) => String(assertion.value).replace(/^## /, ''));
+    expect(checked.length).toBeGreaterThan(0);
+    for (const section of checked) expect(templateSections).toContain(section);
   });
 });

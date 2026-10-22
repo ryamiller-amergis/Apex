@@ -1,7 +1,7 @@
 import {
   WORKFLOW_EVALUATION_OUTCOMES,
   WORKFLOW_EVALUATION_REASON_CODES,
-  WORKFLOW_EVALUATION_SEEDED_STAGE_KEYS,
+  WORKFLOW_EVALUATION_STAGE_KEYS,
   WORKFLOW_EVALUATION_SUBJECT_TYPES,
   type WorkflowEvaluationOutcome,
   type WorkflowEvaluationSubjectType,
@@ -31,7 +31,7 @@ export function parseWorkflowEvaluationFilters(params: URLSearchParams): AdminEv
   const filters: AdminEvaluationFilters = {};
   const outcome = listed<WorkflowEvaluationOutcome>(WORKFLOW_EVALUATION_OUTCOMES, params.get('outcome'));
   if (outcome) filters.outcome = outcome;
-  const stage = listed(WORKFLOW_EVALUATION_SEEDED_STAGE_KEYS, params.get('stage'));
+  const stage = listed(WORKFLOW_EVALUATION_STAGE_KEYS, params.get('stage'));
   if (stage) filters.stage = stage;
   const reason = listed(WORKFLOW_EVALUATION_REASON_CODES, params.get('reason'));
   if (reason) filters.reason = reason;

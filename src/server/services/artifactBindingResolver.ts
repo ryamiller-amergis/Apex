@@ -72,6 +72,22 @@ export function hashPrdArtifact(markdown: string, backlog: unknown): string {
   ]);
 }
 
+export type DesignDocArtifactParts = {
+  designContent: string;
+  techSpecContent: string;
+  assumptionsContent: string;
+};
+
+export function hashDesignDocArtifact(parts: DesignDocArtifactParts): string {
+  return sha256Parts([
+    ARTIFACT_HASH_TAG,
+    'design_doc',
+    parts.designContent ?? '',
+    parts.techSpecContent ?? '',
+    parts.assumptionsContent ?? '',
+  ]);
+}
+
 export function hashInterviewPhaseArtifact(
   messages: readonly PhaseTranscriptMessage[],
   linked: LinkedContextIds,
@@ -118,6 +134,32 @@ export async function resolveCurrentArtifactBinding(input: {
         prdId: prd.id,
       },
       prdMarkdown: prd.content,
+    };
+  }
+
+  if (input.subjectType === 'design_doc') {
+    const { getDesignDocEvaluationInputs } = await import('./designDocService');
+    const doc = await getDesignDocEvaluationInputs(input.subjectId);
+    if (!doc || doc.project !== input.project) {
+      throw new WorkflowEvaluationError('SUBJECT_NOT_FOUND', 'Subject was not found in this project.');
+    }
+    if (!doc.designContent.trim() && !doc.techSpecContent.trim()) {
+      throw new WorkflowEvaluationError('ARTIFACT_NOT_READY', 'The design doc has no content yet.');
+    }
+    return {
+      project: doc.project,
+      subjectType: 'design_doc',
+      subjectId: doc.id,
+      phaseIndex: null,
+      artifactHash: hashDesignDocArtifact(doc),
+      lineage: {
+        skillPath: doc.skillPath,
+        skillVersion: doc.skillVersion,
+        model: doc.model,
+        interviewId: doc.interviewId,
+        prdId: doc.prdId,
+      },
+      prdMarkdown: null,
     };
   }
 

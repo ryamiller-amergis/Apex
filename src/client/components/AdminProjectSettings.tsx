@@ -334,7 +334,6 @@ interface PipelineStageDef {
   /** Nest the PRD validation score threshold under this stage. */
   prdValidationThreshold?: boolean;
   /** Nest the workflow-evaluation judge model and effort under this stage. */
-  evaluationJudge?: boolean;
   /** Nest the design-doc validation score threshold under this stage. */
   designDocValidationThreshold?: boolean;
 }
@@ -369,7 +368,6 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     effortKey: 'prdValidationEffort',
     optional: true,
     prdValidationThreshold: true,
-    evaluationJudge: true,
   },
   {
     id: 'design-doc',
@@ -1233,7 +1231,6 @@ interface EditState {
   testCaseModel: string;
   designDocValidationModel: string;
   prdValidationModel: string;
-  evaluationJudgeModel: string;
   developmentModel: string;
   standupModel: string;
   featureRequestModel: string;
@@ -1253,7 +1250,6 @@ interface EditState {
   designDocValidationEffort: EffortLevel | '';
   prdAssistantEffort: EffortLevel | '';
   prdValidationEffort: EffortLevel | '';
-  evaluationJudgeEffort: EffortLevel | '';
   developmentEffort: EffortLevel | '';
   standupEffort: EffortLevel | '';
   featureRequestEffort: EffortLevel | '';
@@ -1308,7 +1304,6 @@ const emptyEdit = (): EditState => ({
   interviewModel: '', prdModel: '', designDocModel: '',
   adrModel: '',
   designDocAssistantModel: '', designPrototypeModel: '', testCaseModel: '', designDocValidationModel: '', prdValidationModel: '',
-  evaluationJudgeModel: '',
   developmentModel: '', standupModel: '', featureRequestModel: '',
   technicalModel: '', issueModel: '', loadTestGenerationModel: '', designModuleModel: '',
   designModuleScopingModel: '',
@@ -1316,7 +1311,6 @@ const emptyEdit = (): EditState => ({
   interviewEffort: '', prdEffort: '', adrEffort: '', designDocEffort: '',
   designDocAssistantEffort: '', designPrototypeEffort: '', testCaseEffort: '',
   designDocValidationEffort: '', prdAssistantEffort: '', prdValidationEffort: '',
-  evaluationJudgeEffort: '',
   developmentEffort: '', standupEffort: '', featureRequestEffort: '',
   technicalEffort: '', issueEffort: '', calendarAssistantEffort: '',
   loadTestGenerationEffort: '', designModuleEffort: '', designModuleScopingEffort: '',
@@ -1534,51 +1528,6 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
                 <option value="95">95%</option>
                 <option value="100">100%</option>
               </select>
-            </div>
-          )}
-          {stage.evaluationJudge && (
-            <div className={styles.field} style={{ marginTop: '12px' }}>
-              <span className={styles.label}>Feedback judge</span>
-              <span className={styles.skillDescription}>
-                Reviews human Quality feedback and writes the recommendations in Admin → Workflow evaluations.
-                Leave empty to use the PRD Validation model and effort.
-              </span>
-              <div className={styles.stageFieldGrid}>
-                <div className={styles.field}>
-                  <label className={styles.label} htmlFor="ps-evaluationJudgeModel">Judge model</label>
-                  <select
-                    id="ps-evaluationJudgeModel"
-                    className={styles.select}
-                    value={edit.evaluationJudgeModel}
-                    onChange={(e) => onEditChange({ evaluationJudgeModel: e.target.value })}
-                    disabled={disabled || modelsDisabled}
-                    {...{ 'data-testid': 'ps-evaluation-judge-model' }}
-                  >
-                    <option value="">Same as PRD Validation</option>
-                    {availableModels.map((m) => (
-                      <option key={m.id} value={m.id}>{m.displayName}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className={styles.field}>
-                  <label className={styles.label} htmlFor="ps-evaluationJudgeEffort">Judge effort</label>
-                  <select
-                    id="ps-evaluationJudgeEffort"
-                    className={styles.select}
-                    value={edit.evaluationJudgeEffort}
-                    onChange={(e) => onEditChange({
-                      evaluationJudgeEffort: e.target.value as EffortLevel | '',
-                    })}
-                    disabled={disabled}
-                    {...{ 'data-testid': 'ps-evaluation-judge-effort' }}
-                  >
-                    <option value="">Same as PRD Validation</option>
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
-                  </select>
-                </div>
-              </div>
             </div>
           )}
           {stage.designDocValidationThreshold && (
@@ -1903,7 +1852,6 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       testCaseModel: config.testCaseModel ?? '',
       designDocValidationModel: config.designDocValidationModel ?? '',
       prdValidationModel: config.prdValidationModel ?? '',
-      evaluationJudgeModel: config.evaluationJudgeModel ?? '',
       developmentModel: config.developmentModel ?? '',
       standupModel: config.standupModel ?? '',
       featureRequestModel: config.featureRequestModel ?? '',
@@ -1923,7 +1871,6 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designDocValidationEffort: config.designDocValidationEffort ?? '',
       prdAssistantEffort: config.prdAssistantEffort ?? '',
       prdValidationEffort: config.prdValidationEffort ?? '',
-      evaluationJudgeEffort: config.evaluationJudgeEffort ?? '',
       developmentEffort: config.developmentEffort ?? '',
       standupEffort: config.standupEffort ?? '',
       featureRequestEffort: config.featureRequestEffort ?? '',
@@ -2030,7 +1977,6 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         testCaseModel: edit.testCaseModel || null,
         designDocValidationModel: edit.designDocValidationModel || null,
         prdValidationModel: edit.prdValidationModel || null,
-        evaluationJudgeModel: edit.evaluationJudgeModel || null,
         developmentModel: edit.developmentModel || null,
         standupModel: edit.standupModel || null,
         featureRequestModel: edit.featureRequestModel || null,
@@ -2050,7 +1996,6 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         designDocValidationEffort: edit.designDocValidationEffort || null,
         prdAssistantEffort: edit.prdAssistantEffort || null,
         prdValidationEffort: edit.prdValidationEffort || null,
-        evaluationJudgeEffort: edit.evaluationJudgeEffort || null,
         developmentEffort: edit.developmentEffort || null,
         standupEffort: edit.standupEffort || null,
         featureRequestEffort: edit.featureRequestEffort || null,

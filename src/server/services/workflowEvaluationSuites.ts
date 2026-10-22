@@ -73,6 +73,27 @@ const INTERVIEW_PHASE_TESTS: readonly WorkflowEvaluationPromptfooTest[] = [
   },
 ];
 
+/**
+ * Sections from `.cursor/skills/prd-design-spec/design-template.md` and
+ * `tech-spec-template.md`. The package renders the three parts as one text.
+ */
+const DESIGN_DOC_REQUIRED_SECTIONS = [
+  'Feature Summary',
+  'Scope and Out-of-Scope',
+  'Acceptance Criteria',
+  'Architecture and Approach',
+  'Data and Contracts',
+  'Testing Strategy',
+] as const;
+
+const DESIGN_DOC_TESTS: readonly WorkflowEvaluationPromptfooTest[] = DESIGN_DOC_REQUIRED_SECTIONS.map(
+  (section): WorkflowEvaluationPromptfooTest => ({
+    description: `Design doc has a "${section}" section`,
+    target: 'artifact',
+    assert: [{ type: 'contains', value: `## ${section}` }],
+  }),
+);
+
 function prdSuite(stageKey: string): WorkflowEvaluationPromptfooSuite {
   return {
     ref: workflowEvaluationPromptfooSuiteRef(stageKey),
@@ -89,12 +110,21 @@ function interviewSuite(stageKey: string): WorkflowEvaluationPromptfooSuite {
   };
 }
 
+function designDocSuite(stageKey: string): WorkflowEvaluationPromptfooSuite {
+  return {
+    ref: workflowEvaluationPromptfooSuiteRef(stageKey),
+    subjectType: 'design_doc',
+    tests: DESIGN_DOC_TESTS,
+  };
+}
+
 const SUITES: ReadonlyMap<string, WorkflowEvaluationPromptfooSuite> = new Map(
   [
     prdSuite('prd_human_review'),
     interviewSuite('interview_phase_1'),
     interviewSuite('interview_phase_2'),
     interviewSuite('interview_phase_3'),
+    designDocSuite('design_doc_human_review'),
   ].map((suite) => [suite.ref, suite]),
 );
 

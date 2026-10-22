@@ -6,7 +6,7 @@
 import {
   WORKFLOW_EVALUATION_CRITERIA_KEYS,
   WORKFLOW_EVALUATION_OUTCOMES,
-  WORKFLOW_EVALUATION_SEEDED_STAGE_KEYS,
+  WORKFLOW_EVALUATION_STAGE_KEYS,
   workflowEvaluationJudgeOutputSchema,
   type WorkflowEvaluationCriteriaKey,
   type WorkflowEvaluationJobEvaluator,
@@ -90,7 +90,7 @@ export function evaluationSkillPathKey(path: string | null): string {
 }
 
 function stageOrder(stageKey: string): number {
-  const index = (WORKFLOW_EVALUATION_SEEDED_STAGE_KEYS as readonly string[]).indexOf(stageKey);
+  const index = (WORKFLOW_EVALUATION_STAGE_KEYS as readonly string[]).indexOf(stageKey);
   return index === -1 ? Number.MAX_SAFE_INTEGER : index;
 }
 

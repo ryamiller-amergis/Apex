@@ -33,6 +33,7 @@ export function skillNameOf(skillPath: string | null): string {
 
 export function stageLabel(stageKey: string): string {
   if (stageKey === 'prd_human_review') return 'PRD review';
+  if (stageKey === 'design_doc_human_review') return 'Design doc review';
   const phase = /^interview_phase_(\d+)$/.exec(stageKey);
   return phase ? `Interview phase ${phase[1]}` : stageKey;
 }
@@ -43,6 +44,8 @@ function subjectLabel(subjectType: WorkflowEvaluationSubjectType): string {
       return 'PRD';
     case 'interview_phase':
       return 'Interview';
+    case 'design_doc':
+      return 'Design doc';
     default: {
       const unreachable: never = subjectType;
       return unreachable;
@@ -71,7 +74,7 @@ function draftForRecommendation(
   return {
     skill: {
       project,
-      artifactKind: skill.subjectType === 'prd' ? 'prd' : 'interview',
+      artifactKind: skill.subjectType === 'interview_phase' ? 'interview' : skill.subjectType,
       skillPath: skill.skillPath,
     },
     title: `Skill Health: ${skillNameOf(skill.skillPath)} — judge recommendation (${project})`,

@@ -34,6 +34,7 @@ jest.mock('../services/telemetry', () => ({
 }));
 
 import {
+  WORKFLOW_EVALUATION_DESIGN_DOC_RUBRIC,
   WORKFLOW_EVALUATION_INTERVIEW_PHASE_RUBRIC,
   WORKFLOW_EVALUATION_PRD_RUBRIC,
   type WorkflowEvaluationCriteriaScores,
@@ -367,6 +368,43 @@ describe('submitEvaluation — TBI-007', () => {
     await expect(submitEvaluation('proj-a', 'user-1', prdRequest({
       reviewerRole: 'prd_owner',
     }))).rejects.toMatchObject({ code: 'ROLE_NOT_ALLOWED' });
+  });
+
+  it('stores design doc feedback with its PRD lineage, and the owner as design doc owner', async () => {
+    const designDocId = '33333333-3333-3333-3333-333333333333';
+    repository.getActiveDefinition.mockResolvedValue({
+      ...prdDefinition,
+      id: 'def-design-doc',
+      stageKey: 'design_doc_human_review',
+      rubric: WORKFLOW_EVALUATION_DESIGN_DOC_RUBRIC,
+    });
+    resolver.resolveCurrentArtifactBinding.mockResolvedValue(binding({
+      subjectType: 'design_doc',
+      subjectId: designDocId,
+      prdMarkdown: null,
+    }));
+    ownership.isDocumentOwner.mockResolvedValue(true);
+    const request = prdRequest({ subjectType: 'design_doc', subjectId: designDocId, stageKey: 'design_doc_human_review' });
+
+    await expect(submitEvaluation('proj-a', 'user-1', request)).resolves.toMatchObject({
+      subjectType: 'design_doc',
+      reviewerRoleKey: 'design_doc_owner',
+      reviewerRoleLabel: 'Design doc owner',
+      lineage: { prdId: subjectId },
+    });
+    expect(ownership.isDocumentOwner).toHaveBeenCalledWith(designDocId, 'design_doc', 'user-1');
+    expect(repository.insertEvent).toHaveBeenCalledWith(expect.objectContaining({
+      subjectType: 'design_doc',
+      subjectId: designDocId,
+      phaseIndex: null,
+      prdId: subjectId,
+    }));
+
+    await expect(submitEvaluation('proj-a', 'user-1', {
+      ...request,
+      outcome: 'accept_after_edits',
+      correctedArtifact: { source: 'current_prd' },
+    })).rejects.toMatchObject({ code: 'CORRECTED_ARTIFACT_REQUIRED' });
   });
 
   it('VT-21 / TBI-007 (d): a subject in another project is not found and nothing is stored', async () => {

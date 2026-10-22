@@ -23,6 +23,7 @@ import type {
   RepositoryCheckoutStatus,
 } from '../../shared/types/projectSettings';
 import type { GroupWithMembers } from '../../shared/types/groups';
+import type { EffortLevel } from '../../shared/types/effort';
 import type {
   ApprovalMode,
   ModuleApprovalModes,
@@ -82,6 +83,34 @@ export async function getSkillConfig(
       )
     )
     .limit(1);
+  return rows[0] ? toSkillConfig(rows[0]) : null;
+}
+
+/**
+ * Sets the model and effort every workflow-evaluation judge uses on the
+ * project's default config. `upsertSkillConfig` never writes these columns, so
+ * saving Project Settings keeps them. Returns null when there is no default config.
+ */
+export async function setEvaluationJudgeSettings(
+  project: string,
+  settings: { model: string | null; effort: EffortLevel | null },
+  updatedBy?: string,
+): Promise<ProjectSkillConfig | null> {
+  const rows = await db
+    .update(projectSkillSettings)
+    .set({
+      evaluationJudgeModel: settings.model,
+      evaluationJudgeEffort: settings.effort,
+      updatedBy,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(
+      and(
+        eq(projectSkillSettings.project, project),
+        eq(projectSkillSettings.isDefault, true)
+      )
+    )
+    .returning();
   return rows[0] ? toSkillConfig(rows[0]) : null;
 }
 
@@ -170,7 +199,6 @@ export interface UpsertSkillConfigOptions extends ProjectEffortSettings {
   prdAssistantSkillPath?: string | null;
   prdAssistantModel?: string | null;
   prdValidationModel?: string | null;
-  evaluationJudgeModel?: string | null;
   defaultModel?: string | null;
   prdReviewBedrockModelId?: string | null;
   prdReviewBedrockMaxTokens?: number | null;
@@ -260,7 +288,6 @@ export async function upsertSkillConfig(
     prdAssistantModel: opts.prdAssistantModel ?? null,
     prdValidationSkillPath: opts.prdValidationSkillPath ?? null,
     prdValidationModel: opts.prdValidationModel ?? null,
-    evaluationJudgeModel: opts.evaluationJudgeModel ?? null,
     prdReviewBedrockModelId: opts.prdReviewBedrockModelId ?? null,
     prdReviewBedrockMaxTokens: opts.prdReviewBedrockMaxTokens ?? null,
     designPrototypeBedrockModelId: opts.designPrototypeBedrockModelId ?? null,
@@ -321,7 +348,6 @@ export async function upsertSkillConfig(
     designDocValidationEffort: opts.designDocValidationEffort ?? null,
     prdAssistantEffort: opts.prdAssistantEffort ?? null,
     prdValidationEffort: opts.prdValidationEffort ?? null,
-    evaluationJudgeEffort: opts.evaluationJudgeEffort ?? null,
     developmentEffort: opts.developmentEffort ?? null,
     standupEffort: opts.standupEffort ?? null,
     featureRequestEffort: opts.featureRequestEffort ?? null,

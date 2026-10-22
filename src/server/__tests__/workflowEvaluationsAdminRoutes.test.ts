@@ -61,6 +61,17 @@ jest.mock('../services/workflowEvaluationAdminService', () => {
   };
 });
 
+const mockGetSettings = jest.fn();
+const mockUpdateSettings = jest.fn();
+jest.mock('../services/workflowEvaluationModelSettingsService', () => {
+  const actual = jest.requireActual('../services/workflowEvaluationModelSettingsService');
+  return {
+    ...actual,
+    getEvaluationModelSettings: (...args: unknown[]) => mockGetSettings(...args),
+    updateEvaluationModelSettings: (...args: unknown[]) => mockUpdateSettings(...args),
+  };
+});
+
 import workflowEvaluationsRouter from '../routes/workflowEvaluations';
 
 const EVENT_ID = '11111111-1111-4111-8111-111111111111';
@@ -180,5 +191,47 @@ describe('admin workflow evaluation routes', () => {
     const tooMany = await request(buildApp()).get(`${BASE}/export?format=json`);
     expect(tooMany.status).toBe(422);
     expect(tooMany.headers['content-disposition']).toBeUndefined();
+  });
+
+  it('reads the evaluation model settings for the path project', async () => {
+    const settings = {
+      hasSkillConfig: true,
+      model: null,
+      effort: null,
+      effective: { model: 'composer-2.5', effort: null, source: 'app_default' },
+    };
+    mockGetSettings.mockResolvedValueOnce(settings);
+    const res = await request(buildApp()).get(`${BASE}/settings`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(settings);
+    expect(mockGetSettings).toHaveBeenCalledWith('proj-a');
+  });
+
+  it('saves a trimmed model and effort as the signed-in user', async () => {
+    mockUpdateSettings.mockResolvedValueOnce({ hasSkillConfig: true });
+    const res = await request(buildApp())
+      .put(`${BASE}/settings`)
+      .send({ model: ' claude-sonnet ', effort: 'high' });
+    expect(res.status).toBe(200);
+    expect(mockUpdateSettings).toHaveBeenCalledWith('proj-a', { model: 'claude-sonnet', effort: 'high' }, 'Ada');
+  });
+
+  it.each([
+    [{ model: '', effort: null }],
+    [{ model: 'x'.repeat(201), effort: null }],
+    [{ model: 42, effort: null }],
+    [{ model: null, effort: 'max' }],
+    [{ model: null }],
+  ])('answers 400 for settings %j', async (body) => {
+    const res = await request(buildApp()).put(`${BASE}/settings`).send(body);
+    expect(res.status).toBe(400);
+    expect(mockUpdateSettings).not.toHaveBeenCalled();
+  });
+
+  it('answers 409 when the project has no default skill configuration', async () => {
+    mockUpdateSettings.mockResolvedValueOnce(null);
+    const res = await request(buildApp()).put(`${BASE}/settings`).send({ model: null, effort: null });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('NO_SKILL_CONFIG');
   });
 });

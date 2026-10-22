@@ -78,13 +78,14 @@ function skillName(skill: SkillHealthSkill): string {
   return skillNameOf(skill.skillPath);
 }
 
-/** The project's human feedback for a PRD Skill; design doc Skills have no feedback stage yet. */
+/** The project's human feedback for a PRD or design doc Skill. */
 function feedbackFor(project: SkillHealthProject, skill: SkillHealthSkill): SkillHealthEvaluationSkill | null {
-  if (!project.evaluation || skill.artifactKind !== 'prd') return null;
+  if (!project.evaluation) return null;
   const path = (skill.skillPath ?? '').toLowerCase();
   return (
-    project.evaluation.skills.find((s) => s.subjectType === 'prd' && (s.skillPath ?? '').toLowerCase() === path) ??
-    null
+    project.evaluation.skills.find(
+      (s) => s.subjectType === skill.artifactKind && (s.skillPath ?? '').toLowerCase() === path,
+    ) ?? null
   );
 }
 

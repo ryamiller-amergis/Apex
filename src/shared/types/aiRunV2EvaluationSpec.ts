@@ -87,6 +87,17 @@ export type WorkflowEvaluationArtifactPackage =
       messages: readonly WorkflowEvaluationTranscriptMessage[];
       truncated: boolean;
       omittedMessages: number;
+    }>
+  | Readonly<{
+      kind: 'design_doc';
+      /** Design, technical specification and assumptions, each under its own `# ` heading. */
+      markdown: string;
+      /** The PRD the design doc was generated from, or null when it is unavailable or did not fit. */
+      sourcePrd: string | null;
+      truncated: boolean;
+      omittedSections: readonly string[];
+      /** Always 0; present so every package reports omissions the same way. */
+      omittedMessages: number;
     }>;
 
 /**
@@ -318,6 +329,13 @@ export function isWorkflowEvaluationArtifactPackage(
         && value.messages.length > 0
         && value.messages.every(isTranscriptMessage)
       );
+    case 'design_doc':
+      return (
+        isNonEmptyString(value.markdown)
+        && (value.sourcePrd === null || typeof value.sourcePrd === 'string')
+        && Array.isArray(value.omittedSections)
+        && value.omittedSections.every((item) => typeof item === 'string')
+      );
     default:
       return false;
   }
@@ -338,6 +356,8 @@ export function renderPromptfooTarget(
       return artifactPackage.messages
         .map((message) => `${message.role}: ${message.text.replace(/\s*\n\s*/g, ' ').trim()}`)
         .join('\n');
+    case 'design_doc':
+      return artifactPackage.markdown;
     default: {
       const unhandled: never = artifactPackage;
       throw new Error(`Unsupported artifact package: ${String(unhandled)}`);

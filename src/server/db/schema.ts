@@ -3557,7 +3557,7 @@ export const workflowEvaluationEvents = pgTable('workflow_evaluation_events', {
     .where(sql`${t.prdId} IS NOT NULL`),
   subjectTypeCheck: check(
     'workflow_evaluation_events_subject_type_check',
-    sql`${t.subjectType} IN ('interview_phase', 'prd')`,
+    sql`${t.subjectType} IN ('interview_phase', 'prd', 'design_doc')`,
   ),
   outcomeCheck: check(
     'workflow_evaluation_events_outcome_check',
@@ -3571,6 +3571,12 @@ export const workflowEvaluationEvents = pgTable('workflow_evaluation_events', {
         ${t.subjectType} = 'interview_phase'
         AND ${t.phaseIndex} BETWEEN 1 AND 3
         AND ${t.interviewId} = ${t.subjectId}
+      )
+      OR (
+        ${t.subjectType} = 'design_doc'
+        AND ${t.phaseIndex} IS NULL
+        AND ${t.prdId} IS NOT NULL
+        AND ${t.prdId} <> ${t.subjectId}
       )
     )`,
   ),

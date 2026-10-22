@@ -20,7 +20,10 @@ import type {
   WorkflowEvaluationRubric,
   WorkflowEvaluationSubjectType,
 } from '../../shared/types/workflowEvaluation';
-import { WORKFLOW_EVALUATION_PRD_OWNER_ROLE } from '../../shared/types/workflowEvaluation';
+import {
+  WORKFLOW_EVALUATION_DESIGN_DOC_OWNER_ROLE,
+  WORKFLOW_EVALUATION_PRD_OWNER_ROLE,
+} from '../../shared/types/workflowEvaluation';
 import { telemetryClient, trackEvent } from './telemetry';
 import { getUserGroupNamesForProject } from './groupService';
 import { isDocumentOwner } from './ownerApprovalService';
@@ -76,7 +79,31 @@ export function subjectForStageKey(stageKey: string): {
     return { subjectType: 'interview_phase', phaseIndex: Number(interview[1]) };
   }
   if (stageKey.startsWith('prd')) return { subjectType: 'prd', phaseIndex: null };
+  if (stageKey.startsWith('design_doc')) return { subjectType: 'design_doc', phaseIndex: null };
   return null;
+}
+
+/** The read-only owner role for subjects whose owner gives feedback before approving. */
+async function ownerRoleFor(
+  subject: { subjectType: WorkflowEvaluationSubjectType; subjectId: string },
+  userId: string,
+): Promise<{ key: string; label: string } | null> {
+  switch (subject.subjectType) {
+    case 'prd':
+      return (await isDocumentOwner(subject.subjectId, 'prd', userId))
+        ? { ...WORKFLOW_EVALUATION_PRD_OWNER_ROLE }
+        : null;
+    case 'design_doc':
+      return (await isDocumentOwner(subject.subjectId, 'design_doc', userId))
+        ? { ...WORKFLOW_EVALUATION_DESIGN_DOC_OWNER_ROLE }
+        : null;
+    case 'interview_phase':
+      return null;
+    default: {
+      const unhandled: never = subject.subjectType;
+      throw new Error(`Unsupported evaluation subject: ${String(unhandled)}`);
+    }
+  }
 }
 
 function correctedArtifactOutcomes(subjectType: WorkflowEvaluationSubjectType): readonly string[] {
@@ -143,8 +170,8 @@ export async function describeReviewerRole(
   subject?: { subjectType: WorkflowEvaluationSubjectType; subjectId: string },
 ): Promise<WorkflowEvaluationReviewerRoleState> {
   const options = roles.map((role) => ({ key: role.key, label: role.label }));
-  if (subject?.subjectType === 'prd' && (await isDocumentOwner(subject.subjectId, 'prd', userId))) {
-    const ownerRole = { ...WORKFLOW_EVALUATION_PRD_OWNER_ROLE };
+  const ownerRole = subject ? await ownerRoleFor(subject, userId) : null;
+  if (ownerRole) {
     return { derivedRoleKey: ownerRole.key, options: [ownerRole, ...options], requiresSelection: false };
   }
   const names = await getUserGroupNamesForProject(userId, project);
@@ -188,7 +215,7 @@ export async function listEvaluationEvents(
 ): Promise<ListWorkflowEvaluationEventsResponse> {
   const stage = query.stageKey ? subjectForStageKey(query.stageKey) : null;
   const phaseIndex = query.subjectType === 'interview_phase' ? (stage?.phaseIndex ?? null) : null;
-  const canResolveCurrent = query.subjectType === 'prd' || phaseIndex != null;
+  const canResolveCurrent = query.subjectType !== 'interview_phase' || phaseIndex != null;
 
   let currentArtifactHash: string | null = null;
   if (canResolveCurrent) {
@@ -502,6 +529,12 @@ function planCorrectedArtifact(
     throw new WorkflowEvaluationError(
       'CORRECTED_ARTIFACT_REQUIRED',
       'Interview phases accept only pasted corrected text.',
+    );
+  }
+  if (subjectType === 'design_doc' && artifact.source === 'current_prd') {
+    throw new WorkflowEvaluationError(
+      'CORRECTED_ARTIFACT_REQUIRED',
+      'Design docs accept only pasted corrected text.',
     );
   }
   if (artifact.source === 'pasted') {

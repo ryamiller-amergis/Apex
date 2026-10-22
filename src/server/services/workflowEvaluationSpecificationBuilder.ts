@@ -29,9 +29,15 @@ import type {
   WorkflowEvaluationEvent,
   WorkflowEvaluationJobEvaluator,
 } from '../../shared/types/workflowEvaluation';
-import { resolveEffort } from './agentEffortResolver';
 import { getDefaultModel } from './appSettingsService';
-import { hashInterviewPhaseArtifact, hashPrdArtifact } from './artifactBindingResolver';
+import { resolveEvaluationJudgeModel } from './workflowEvaluationJudgeModel';
+import {
+  hashDesignDocArtifact,
+  hashInterviewPhaseArtifact,
+  hashPrdArtifact,
+  type DesignDocArtifactParts,
+} from './artifactBindingResolver';
+import { getDesignDocEvaluationInputs, type DesignDocEvaluationInputs } from './designDocService';
 import { getInterviewEvaluationInputs, type InterviewEvaluationInputs } from './interviewService';
 import { getPrdEvaluationInputs, type PrdEvaluationInputs } from './prdService';
 import { resolveSkillConfig } from './projectSettingsService';
@@ -93,6 +99,7 @@ export type WorkflowEvaluationSpecifications = Readonly<{
 export type WorkflowEvaluationSpecificationDependencies = Readonly<{
   loadPrdInputs?: (prdId: string) => Promise<PrdEvaluationInputs | null>;
   loadInterviewInputs?: (interviewId: string) => Promise<InterviewEvaluationInputs | null>;
+  loadDesignDocInputs?: (designDocId: string) => Promise<DesignDocEvaluationInputs | null>;
   loadSkillConfig?: (project: string) => Promise<ProjectSkillConfig | null>;
   loadDefaultModel?: () => Promise<string>;
 }>;
@@ -130,24 +137,37 @@ function takeMessages(
   return { kept, used };
 }
 
+/** Keeps whole sections that fit the budget, in order. The first is kept regardless when `keepFirst`. */
+function fitSections(
+  markdown: string,
+  budget: number,
+  keepFirst: boolean,
+): { kept: string[]; used: number; omitted: string[] } {
+  const kept: string[] = [];
+  const omitted: string[] = [];
+  let used = 0;
+  for (const section of splitSections(markdown)) {
+    const size = jsonBytes(section);
+    if (used + size <= budget || (keepFirst && kept.length === 0)) {
+      kept.push(section);
+      used += size;
+    } else {
+      omitted.push(sectionName(section));
+    }
+  }
+  return { kept, used, omitted };
+}
+
 function packagePrd(
   markdown: string,
   backlog: unknown,
   transcript: readonly WorkflowEvaluationTranscriptMessage[] | null,
 ): WorkflowEvaluationArtifactPackage {
   const budget = WORKFLOW_EVALUATION_PACKAGE_MAX_BYTES;
-  const omittedSections: string[] = [];
-  const kept: string[] = [];
-  let used = 0;
-  for (const section of splitSections(markdown)) {
-    const size = jsonBytes(section);
-    if (used + size <= budget || kept.length === 0) {
-      kept.push(section);
-      used += size;
-    } else {
-      omittedSections.push(sectionName(section));
-    }
-  }
+  const fitted = fitSections(markdown, budget, true);
+  const omittedSections = fitted.omitted;
+  const kept = fitted.kept;
+  let used = fitted.used;
 
   let backlogJson: string | null = null;
   if (backlog !== null && backlog !== undefined) {
@@ -194,10 +214,43 @@ function packageInterviewPhase(
   };
 }
 
+export function renderDesignDocMarkdown(parts: DesignDocArtifactParts): string {
+  return [
+    `# Design\n\n${parts.designContent.trim()}\n\n`,
+    `# Technical specification\n\n${parts.techSpecContent.trim()}\n\n`,
+    `# Assumptions\n\n${parts.assumptionsContent.trim()}\n`,
+  ].join('');
+}
+
+/** The design doc comes first; the source PRD gets whatever budget is left. */
+function packageDesignDoc(
+  parts: DesignDocArtifactParts,
+  prdMarkdown: string | null,
+): WorkflowEvaluationArtifactPackage {
+  const budget = WORKFLOW_EVALUATION_PACKAGE_MAX_BYTES;
+  const doc = fitSections(renderDesignDocMarkdown(parts), budget, true);
+  const omittedSections = [...doc.omitted];
+  let sourcePrd: string | null = null;
+  if (prdMarkdown?.trim()) {
+    const prd = fitSections(prdMarkdown, budget - doc.used, false);
+    sourcePrd = prd.kept.length > 0 ? prd.kept.join('') : null;
+    omittedSections.push(...prd.omitted.map((name) => `Source PRD: ${name}`));
+  }
+  return {
+    kind: 'design_doc',
+    markdown: doc.kept.join(''),
+    sourcePrd,
+    truncated: omittedSections.length > 0,
+    omittedSections,
+    omittedMessages: 0,
+  };
+}
+
 async function buildArtifactPackage(
   event: WorkflowEvaluationSpecificationRequest['event'],
   loadPrdInputs: NonNullable<WorkflowEvaluationSpecificationDependencies['loadPrdInputs']>,
   loadInterviewInputs: NonNullable<WorkflowEvaluationSpecificationDependencies['loadInterviewInputs']>,
+  loadDesignDocInputs: NonNullable<WorkflowEvaluationSpecificationDependencies['loadDesignDocInputs']>,
 ): Promise<WorkflowEvaluationArtifactPackage> {
   switch (event.subjectType) {
     case 'prd': {
@@ -239,6 +292,23 @@ async function buildArtifactPackage(
         );
       }
       return packageInterviewPhase(phase.phaseIndex, phase.messages);
+    }
+    case 'design_doc': {
+      const doc = await loadDesignDocInputs(event.subjectId);
+      if (!doc || doc.project !== event.projectId || (!doc.designContent.trim() && !doc.techSpecContent.trim())) {
+        throw new WorkflowEvaluationSpecificationError(
+          'artifact_unavailable',
+          'The design doc is missing or has no content.',
+        );
+      }
+      if (hashDesignDocArtifact(doc) !== event.artifactContentHash) {
+        throw new WorkflowEvaluationSpecificationError(
+          'artifact_changed',
+          'The design doc changed after the evaluation was submitted.',
+        );
+      }
+      const prd = await loadPrdInputs(doc.prdId);
+      return packageDesignDoc(doc, prd && prd.project === event.projectId ? prd.content : null);
     }
     default: {
       const unhandled: never = event.subjectType;
@@ -325,16 +395,7 @@ async function buildJudgeSpecification(
       `Project ${project} has no skill configuration to resolve the judge model.`,
     );
   }
-  // Without its own setting the judge uses what PRD validation resolves.
-  const model = skillConfig.evaluationJudgeModel
-    ?? skillConfig.prdValidationModel
-    ?? await loadDefaultModel();
-  const effort = skillConfig.evaluationJudgeEffort
-    ?? resolveEffort({
-      kickoff: { project, repo: skillConfig.skillRepo, agentModule: 'prdValidation' },
-      skillConfig,
-    })
-    ?? null;
+  const { model, effort } = await resolveEvaluationJudgeModel(project, skillConfig, loadDefaultModel);
   const { rubric } = request.definition;
   const candidate: Record<string, unknown> = {
     workloadLane: 'document',
@@ -393,12 +454,18 @@ export async function buildWorkflowEvaluationSpecifications(
 ): Promise<WorkflowEvaluationSpecifications> {
   const loadPrdInputs = dependencies.loadPrdInputs ?? getPrdEvaluationInputs;
   const loadInterviewInputs = dependencies.loadInterviewInputs ?? getInterviewEvaluationInputs;
+  const loadDesignDocInputs = dependencies.loadDesignDocInputs ?? getDesignDocEvaluationInputs;
   const loadSkillConfig = dependencies.loadSkillConfig ?? ((project: string) => resolveSkillConfig({ project }));
   const loadDefaultModel = dependencies.loadDefaultModel ?? getDefaultModel;
 
   let artifactPackage: WorkflowEvaluationArtifactPackage;
   try {
-    artifactPackage = await buildArtifactPackage(request.event, loadPrdInputs, loadInterviewInputs);
+    artifactPackage = await buildArtifactPackage(
+      request.event,
+      loadPrdInputs,
+      loadInterviewInputs,
+      loadDesignDocInputs,
+    );
   } catch (error) {
     return { promptfoo: failed(error), llm_judge: failed(error) };
   }

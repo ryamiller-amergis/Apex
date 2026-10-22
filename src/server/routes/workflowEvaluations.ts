@@ -17,6 +17,7 @@ import {
 import {
   CREATE_WORKFLOW_EVALUATION_REQUEST_FIELDS,
   WORKFLOW_EVALUATION_JOB_EVALUATORS,
+  WORKFLOW_EVALUATION_SUBJECT_TYPES,
   type CreateWorkflowEvaluationRequest,
   type WorkflowEvaluationJobEvaluator,
   type WorkflowEvaluationSubjectType,
@@ -92,7 +93,7 @@ function handleServiceError(err: unknown, res: Response, next: NextFunction): vo
 }
 
 function isSubjectType(value: unknown): value is WorkflowEvaluationSubjectType {
-  return value === 'prd' || value === 'interview_phase';
+  return (WORKFLOW_EVALUATION_SUBJECT_TYPES as readonly unknown[]).includes(value);
 }
 
 router.get(

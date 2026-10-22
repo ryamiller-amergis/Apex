@@ -8,6 +8,8 @@ import type {
   AdminEvaluationFilters,
   AdminEvaluationJudgeAppendixResponse,
   AdminEvaluationListResponse,
+  AdminEvaluationModelSettings,
+  UpdateAdminEvaluationModelSettingsRequest,
 } from '../../shared/types/workflowEvaluationAdmin';
 import { filtersToQuery } from '../utils/workflowEvaluationFilters';
 import {
@@ -26,7 +28,32 @@ export const workflowEvaluationsAdminKeys = {
     ['workflow-evaluations-admin', project, 'event', eventId] as const,
   appendix: (project: string, eventId: string) =>
     ['workflow-evaluations-admin', project, 'appendix', eventId] as const,
+  settings: (project: string) => ['workflow-evaluations-admin', project, 'settings'] as const,
 };
+
+export function useEvaluationModelSettings(project: string | null) {
+  return useQuery<AdminEvaluationModelSettings, WorkflowEvaluationApiError>({
+    queryKey: workflowEvaluationsAdminKeys.settings(project ?? ''),
+    queryFn: () => workflowEvaluationFetch(workflowEvaluationsUrl(project!, '/admin/settings')),
+    enabled: Boolean(project),
+    retry: false,
+  });
+}
+
+export function useUpdateEvaluationModelSettings(project: string) {
+  const queryClient = useQueryClient();
+  return useMutation<AdminEvaluationModelSettings, WorkflowEvaluationApiError, UpdateAdminEvaluationModelSettingsRequest>({
+    mutationFn: (settings) =>
+      workflowEvaluationFetch(workflowEvaluationsUrl(project, '/admin/settings'), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings),
+      }),
+    onSuccess: (settings) => {
+      queryClient.setQueryData(workflowEvaluationsAdminKeys.settings(project), settings);
+    },
+  });
+}
 
 export function useAdminWorkflowEvaluationEvents(
   project: string | null,

@@ -6,15 +6,22 @@ import {
 } from '../../shared/types/aiRunV2EvaluationSpec';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import {
+  WORKFLOW_EVALUATION_DESIGN_DOC_RUBRIC,
   WORKFLOW_EVALUATION_INTERVIEW_PHASE_RUBRIC,
   WORKFLOW_EVALUATION_PRD_RUBRIC,
   workflowEvaluationPromptfooSuiteRef,
 } from '../../shared/types/workflowEvaluation';
-import { hashInterviewPhaseArtifact, hashPrdArtifact } from '../services/artifactBindingResolver';
+import {
+  hashDesignDocArtifact,
+  hashInterviewPhaseArtifact,
+  hashPrdArtifact,
+} from '../services/artifactBindingResolver';
+import type { DesignDocEvaluationInputs } from '../services/designDocService';
 import type { InterviewEvaluationInputs } from '../services/interviewService';
 import type { PrdEvaluationInputs } from '../services/prdService';
 import {
   buildWorkflowEvaluationSpecifications,
+  renderDesignDocMarkdown,
   type WorkflowEvaluationSpecificationDependencies,
   type WorkflowEvaluationSpecificationRequest,
 } from '../services/workflowEvaluationSpecificationBuilder';
@@ -22,6 +29,7 @@ import {
 jest.mock('../db/drizzle', () => ({ db: {} }));
 jest.mock('../services/prdService', () => ({ getPrdEvaluationInputs: jest.fn() }));
 jest.mock('../services/interviewService', () => ({ getInterviewEvaluationInputs: jest.fn() }));
+jest.mock('../services/designDocService', () => ({ getDesignDocEvaluationInputs: jest.fn() }));
 jest.mock('../services/projectSettingsService', () => ({ resolveSkillConfig: jest.fn() }));
 jest.mock('../services/appSettingsService', () => ({ getDefaultModel: jest.fn() }));
 
@@ -402,6 +410,82 @@ describe('buildWorkflowEvaluationSpecifications', () => {
       messages: [{ role: 'agent', text: huge }],
       truncated: true,
       omittedMessages: 1,
+    });
+  });
+
+  describe('design docs', () => {
+    const DOC: DesignDocEvaluationInputs = {
+      id: 'dd-1',
+      project: 'Apex',
+      status: 'reviewer_approved',
+      prdId: 'prd-1',
+      interviewId: 'interview-1',
+      model: null,
+      skillPath: null,
+      skillVersion: null,
+      designContent: '## Feature Summary\nExport reports.\n',
+      techSpecContent: '## Testing Strategy\nUnit tests.\n',
+      assumptionsContent: '## Assumptions Accepted\nCSV only.\n',
+    };
+
+    function designDocRequest(hash = hashDesignDocArtifact(DOC)): WorkflowEvaluationSpecificationRequest {
+      return {
+        event: {
+          id: 'event-3',
+          projectId: 'Apex',
+          stageKey: 'design_doc_human_review',
+          subjectType: 'design_doc',
+          subjectId: 'dd-1',
+          phaseIndex: null,
+          artifactContentHash: hash,
+          criteria: CRITERIA,
+        },
+        definition: {
+          version: 1,
+          rubric: WORKFLOW_EVALUATION_DESIGN_DOC_RUBRIC,
+          promptfooSuiteRef: workflowEvaluationPromptfooSuiteRef('design_doc_human_review'),
+          judgeOutputSchema: JUDGE_SCHEMA,
+        },
+        jobIds: { promptfoo: 'job-promptfoo', llm_judge: 'job-judge' },
+      };
+    }
+
+    it('packages the design doc with its source PRD for both jobs', async () => {
+      const result = await buildWorkflowEvaluationSpecifications(
+        designDocRequest(),
+        dependencies({ loadDesignDocInputs: async () => DOC }),
+      );
+
+      if (!result.promptfoo.ok || !result.llm_judge.ok) throw new Error('expected both to build');
+      expect(result.promptfoo.specification.suite.subjectType).toBe('design_doc');
+      expect(result.promptfoo.specification.artifactPackage).toEqual({
+        kind: 'design_doc',
+        markdown: renderDesignDocMarkdown(DOC),
+        sourcePrd: PRD_MARKDOWN,
+        truncated: false,
+        omittedSections: [],
+        omittedMessages: 0,
+      });
+      const artifact = scratchJson(result.llm_judge.specification, WORKFLOW_EVALUATION_SCRATCH_PATHS.artifactPackage);
+      expect(artifact).toMatchObject({ kind: 'design_doc', sourcePrd: PRD_MARKDOWN, humanScoreHints: CRITERIA });
+    });
+
+    it('fails both jobs when the design doc changed after submission', async () => {
+      const result = await buildWorkflowEvaluationSpecifications(
+        designDocRequest('c'.repeat(64)),
+        dependencies({ loadDesignDocInputs: async () => DOC }),
+      );
+      expect(result.promptfoo).toMatchObject({ ok: false, code: 'artifact_changed' });
+      expect(result.llm_judge).toMatchObject({ ok: false, code: 'artifact_changed' });
+    });
+
+    it('still builds without the source PRD', async () => {
+      const result = await buildWorkflowEvaluationSpecifications(
+        designDocRequest(),
+        dependencies({ loadDesignDocInputs: async () => DOC, loadPrdInputs: async () => null }),
+      );
+      if (!result.promptfoo.ok) throw new Error('expected Promptfoo to build');
+      expect(result.promptfoo.specification.artifactPackage).toMatchObject({ kind: 'design_doc', sourcePrd: null });
     });
   });
 });

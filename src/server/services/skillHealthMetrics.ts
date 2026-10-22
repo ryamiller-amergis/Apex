@@ -292,13 +292,13 @@ export function buildSkillHealthSkills(inputs: SkillHealthInputs): SkillHealthSk
     const key = docKey(c.documentType, c.documentId);
     costByDoc.set(key, (costByDoc.get(key) ?? 0) + c.costUsd);
   }
-  const prdEventsBySkill = new Map<string, SkillHealthEvaluationEventInput[]>();
+  const documentEventsBySkill = new Map<string, SkillHealthEvaluationEventInput[]>();
   for (const event of enabledEvaluationEvents(inputs)) {
-    if (event.subjectType !== 'prd') continue;
-    const key = `${event.project}:prd:${evaluationSkillPathKey(event.skillPath)}`;
-    const list = prdEventsBySkill.get(key);
+    if (event.subjectType === 'interview_phase') continue;
+    const key = `${event.project}:${event.subjectType}:${evaluationSkillPathKey(event.skillPath)}`;
+    const list = documentEventsBySkill.get(key);
     if (list) list.push(event);
-    else prdEventsBySkill.set(key, [event]);
+    else documentEventsBySkill.set(key, [event]);
   }
 
   const skills = new Map<string, SkillAccumulator>();
@@ -351,7 +351,7 @@ export function buildSkillHealthSkills(inputs: SkillHealthInputs): SkillHealthSk
         trend: buildTrend(acc.docs),
         sections: buildSections(acc.docs, commentsByDoc),
         recurringGaps: buildRecurringGaps(acc.docs),
-        versions: buildVersions(acc.docs, prdEventsBySkill.get(key) ?? []),
+        versions: buildVersions(acc.docs, documentEventsBySkill.get(key) ?? []),
       };
     })
     .sort((a, b) => b.documents - a.documents);

@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import {
   WORKFLOW_EVALUATION_OUTCOME_LABELS,
   WORKFLOW_EVALUATION_REASON_CODE_LABELS,
-  WORKFLOW_EVALUATION_SEEDED_STAGE_KEYS,
+  WORKFLOW_EVALUATION_STAGE_KEYS,
   type WorkflowEvaluationOutcome,
 } from '../../shared/types/workflowEvaluation';
 import {
@@ -31,6 +31,7 @@ import {
 } from './DataGridToolbar';
 import { EVALUATOR_LABELS, JobStatusBadge, OutcomeBadge } from './WorkflowEvaluationBadges';
 import { WorkflowEvaluationDetailDrawer } from './WorkflowEvaluationDetailDrawer';
+import { WorkflowEvaluationModelSettings } from './WorkflowEvaluationModelSettings';
 import gridStyles from './DataGrid.module.css';
 import styles from './WorkflowEvaluationsPage.module.css';
 
@@ -44,7 +45,7 @@ const OUTCOME_OPTIONS: readonly { label: string; value: OutcomeFilter }[] = [
   { label: 'All', value: 'all' },
   ...WORKFLOW_EVALUATION_OUTCOME_LABELS.map((outcome) => ({ label: outcome.label, value: outcome.key })),
 ];
-const STAGE_OPTIONS = WORKFLOW_EVALUATION_SEEDED_STAGE_KEYS.map((key) => ({
+const STAGE_OPTIONS = WORKFLOW_EVALUATION_STAGE_KEYS.map((key) => ({
   label: workflowEvaluationStageLabel(key),
   value: key as string,
 }));
@@ -55,6 +56,7 @@ const REASON_OPTIONS = WORKFLOW_EVALUATION_REASON_CODE_LABELS.map((reason) => ({
 const SUBJECT_OPTIONS = [
   { label: 'PRD', value: 'prd' },
   { label: 'Interview phase', value: 'interview_phase' },
+  { label: 'Design doc', value: 'design_doc' },
 ];
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -66,10 +68,18 @@ function formatDateTime(value: string): string {
 }
 
 function subjectText(event: AdminEvaluationEventSummary): string {
-  if (event.subjectType === 'interview_phase') {
-    return `Interview ${event.subjectId.slice(0, 8)} · phase ${event.phaseIndex ?? '?'}`;
+  switch (event.subjectType) {
+    case 'interview_phase':
+      return `Interview ${event.subjectId.slice(0, 8)} · phase ${event.phaseIndex ?? '?'}`;
+    case 'prd':
+      return `PRD ${event.subjectId.slice(0, 8)}`;
+    case 'design_doc':
+      return `Design doc ${event.subjectId.slice(0, 8)}`;
+    default: {
+      const unhandled: never = event.subjectType;
+      return String(unhandled);
+    }
   }
-  return `PRD ${event.subjectId.slice(0, 8)}`;
 }
 
 export const WorkflowEvaluationsPage: React.FC<WorkflowEvaluationsPageProps> = ({ selectedProject }) => {
@@ -195,6 +205,8 @@ export const WorkflowEvaluationsPage: React.FC<WorkflowEvaluationsPageProps> = (
         {exportStatus.startsWith('Export failed') && (
           <p className={gridStyles.error} role="alert">{exportStatus}</p>
         )}
+
+        <WorkflowEvaluationModelSettings key={selectedProject} project={selectedProject} />
 
         <DataGridToolbar
           searchValue={search}
