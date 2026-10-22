@@ -33,7 +33,7 @@ const PrdQualityFeedbackTab: React.FC<PrdQualityFeedbackTabProps> = ({
     <div>
       <h2 className={styles.title}>Quality feedback</h2>
       <p className={styles.intro}>
-        Optional. Your feedback improves the AI over time and never blocks approval.
+        Your feedback improves the AI over time. The PRD owner gives feedback before approving.
       </p>
     </div>
     <QualityFeedbackForm
@@ -47,7 +47,7 @@ const PrdQualityFeedbackTab: React.FC<PrdQualityFeedbackTabProps> = ({
         snapshotMarkdown: content,
         snapshotLabel: formatUpdatedAt(updatedAt),
       }}
-      successMessage="Feedback saved. It does not change this PRD or its approval."
+      successMessage="Feedback saved. It does not change this PRD."
       testIdPrefix="prd-quality-feedback"
       data-testid="prd-quality-feedback-form"
     />

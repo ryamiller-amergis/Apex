@@ -24,6 +24,10 @@ jest.mock('../services/groupService', () => ({
   getUserGroupNamesForProject: jest.fn(),
 }));
 
+jest.mock('../services/ownerApprovalService', () => ({
+  isDocumentOwner: jest.fn(),
+}));
+
 jest.mock('../services/telemetry', () => ({
   trackEvent: jest.fn(),
   telemetryClient: { trackMetric: jest.fn() },
@@ -50,6 +54,9 @@ const resolver = jest.requireMock('../services/artifactBindingResolver') as {
 };
 const groups = jest.requireMock('../services/groupService') as {
   getUserGroupNamesForProject: jest.Mock;
+};
+const ownership = jest.requireMock('../services/ownerApprovalService') as {
+  isDocumentOwner: jest.Mock;
 };
 const telemetry = jest.requireMock('../services/telemetry') as {
   trackEvent: jest.Mock;
@@ -140,6 +147,7 @@ beforeEach(() => {
   repository.insertEvent.mockImplementation(async (input: Record<string, unknown>) => storedFromInsert(input));
   resolver.resolveCurrentArtifactBinding.mockResolvedValue(binding());
   groups.getUserGroupNamesForProject.mockResolvedValue(['Product-Owner']);
+  ownership.isDocumentOwner.mockResolvedValue(false);
   store.writeCorrectedArtifact.mockResolvedValue({
     container: 'ai-run-artifacts',
     key: 'workflow-evaluations/proj-a/event/corrected-artifact.md',
@@ -340,6 +348,25 @@ describe('submitEvaluation — TBI-007', () => {
     groups.getUserGroupNamesForProject.mockResolvedValue([]);
     await submitEvaluation('proj-a', 'user-1', prdRequest({ reviewerRole: 'other' })).catch(() => undefined);
     expect(groups.getUserGroupNamesForProject).toHaveBeenCalledWith('user-1', 'proj-a');
+  });
+
+  it('the PRD owner is stored as PRD owner whatever their groups, and nobody else can claim it', async () => {
+    ownership.isDocumentOwner.mockResolvedValue(true);
+    groups.getUserGroupNamesForProject.mockResolvedValue(['QA']);
+    await expect(submitEvaluation('proj-a', 'user-1', prdRequest())).resolves.toMatchObject({
+      reviewerRoleKey: 'prd_owner',
+      reviewerRoleLabel: 'PRD owner',
+    });
+    expect(ownership.isDocumentOwner).toHaveBeenCalledWith(prdRequest().subjectId, 'prd', 'user-1');
+    await expect(submitEvaluation('proj-a', 'user-1', prdRequest({
+      reviewerRole: 'qa',
+    }))).rejects.toMatchObject({ code: 'ROLE_NOT_ALLOWED' });
+
+    ownership.isDocumentOwner.mockResolvedValue(false);
+    groups.getUserGroupNamesForProject.mockResolvedValue([]);
+    await expect(submitEvaluation('proj-a', 'user-1', prdRequest({
+      reviewerRole: 'prd_owner',
+    }))).rejects.toMatchObject({ code: 'ROLE_NOT_ALLOWED' });
   });
 
   it('VT-21 / TBI-007 (d): a subject in another project is not found and nothing is stored', async () => {

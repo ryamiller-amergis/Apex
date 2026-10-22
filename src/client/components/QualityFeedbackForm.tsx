@@ -62,6 +62,7 @@ export const QualityFeedbackForm: React.FC<QualityFeedbackFormProps> = ({
     project,
     subjectType,
     stageKey,
+    subjectId,
     enabled: canSubmit,
   });
 

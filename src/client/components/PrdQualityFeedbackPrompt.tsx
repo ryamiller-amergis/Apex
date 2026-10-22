@@ -56,6 +56,7 @@ const PrdQualityFeedbackPrompt: React.FC<PrdQualityFeedbackPromptProps> = ({
       promptReady={isPrdFeedbackPromptEligible(status)}
       suppressModal={showChangelog || !whatsNewAutomaticOverlaySettled || walkthroughOpen}
       onOpenPanel={onOpenFeedbackTab}
+      note="Your feedback improves the AI over time. The PRD owner gives feedback before approving."
       testIdPrefix="prd-quality-feedback"
     />
   );

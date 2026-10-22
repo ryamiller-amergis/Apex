@@ -9,6 +9,9 @@ import remarkGfm from 'remark-gfm';
 import { stripYamlFrontmatter } from '../utils/stripYamlFrontmatter';
 import { useAppShell } from '../hooks/useAppShell';
 import { useWorkflowEvaluationAccess } from '../hooks/useWorkflowEvaluationAccess';
+import { useWorkflowEvaluationEvents } from '../hooks/useWorkflowEvaluations';
+import { hasCurrentOwnerFeedback } from '../utils/prdOwnerFeedback';
+import { WORKFLOW_EVALUATION_PRD_STAGE_KEY } from '../../shared/types/workflowEvaluation';
 import {
   usePrd,
   useInterview,
@@ -600,6 +603,14 @@ export const PrdReviewView: React.FC = () => {
 
   const queryClient = useQueryClient();
   const { data: prd, isLoading, isError } = usePrd(id);
+  const subjectFeedbackQuery = useWorkflowEvaluationEvents({
+    project: selectedProject,
+    subjectType: 'prd',
+    subjectId: id ?? '',
+    stageKey: WORKFLOW_EVALUATION_PRD_STAGE_KEY,
+    includeOlderVersions: false,
+    enabled: feedbackAccess.canSubmit && !isSuperAdmin && prd?.status === 'pending_review',
+  });
   const { data: relatedDesignDocs } = useDesignDocsByPrd(id);
   const { data: relatedPrototypes = [] } = usePrototypesForPrd(
     prd?.status === 'approved' ? id : null
@@ -1658,6 +1669,11 @@ export const PrdReviewView: React.FC = () => {
     && prd.status !== 'generating'
     && prd.project === selectedProject;
   const canSubmitFeedback = showQualityFeedback && feedbackAccess.canSubmit;
+  // Owners give feedback before approving. A failed lookup does not block approval.
+  const ownerFeedbackMissing = canSubmitFeedback
+    && !isSuperAdmin
+    && !subjectFeedbackQuery.isError
+    && !hasCurrentOwnerFeedback(subjectFeedbackQuery.data, userId);
   const ownerOnly = !assignmentsLoading && !assignmentsError && assignments.length === 0;
   const qaOwnerOnly = !qaAssignmentsLoading && !qaAssignmentsError && qaAssignments.length === 0;
   const isOwnerActor = (prd.ownerId ? isOwner : isAuthor) || isSuperAdmin;
@@ -2251,17 +2267,47 @@ export const PrdReviewView: React.FC = () => {
                 <button
                   className={styles.btnApprove}
                   onClick={() => void handleOwnerApprove()}
-                  disabled={ownerApprovePrd.isPending || !isOwnerActor || (!reviewerApprovalComplete && !isSuperAdmin)}
-                  aria-disabled={ownerApprovePrd.isPending || !isOwnerActor || (!reviewerApprovalComplete && !isSuperAdmin)}
-                  aria-describedby={ownerOnly && !isOwnerActor ? 'owner-approve-disabled-reason' : undefined}
+                  disabled={ownerApprovePrd.isPending || !isOwnerActor || (!reviewerApprovalComplete && !isSuperAdmin) || (isOwnerActor && ownerFeedbackMissing)}
+                  aria-disabled={ownerApprovePrd.isPending || !isOwnerActor || (!reviewerApprovalComplete && !isSuperAdmin) || (isOwnerActor && ownerFeedbackMissing)}
+                  aria-describedby={ownerOnly && !isOwnerActor
+                    ? 'owner-approve-disabled-reason'
+                    : isOwnerActor && ownerFeedbackMissing ? 'owner-approve-feedback-reason' : undefined}
                   title={!reviewerApprovalComplete && !isSuperAdmin
                     ? 'Reviewers must approve the PRD before owner approval'
-                    : undefined}
+                    : isOwnerActor && ownerFeedbackMissing
+                      ? 'Give Quality feedback as PRD owner before approving'
+                      : undefined}
                   type="button"
                   {...{ 'data-testid': 'approve-owner-btn' }}
                 >
                   Approve as Owner
                 </button>
+                {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+                {isOwnerActor && ownerFeedbackMissing ? (
+                  /* @feature-flag:workflow-human-evaluation enabled-start */
+                  <span
+                    id="owner-approve-feedback-reason"
+                    role="status"
+                    className={styles.ownerFeedbackReason}
+                    {...{ 'data-testid': 'owner-approve-feedback-reason' }}
+                  >
+                    Give Quality feedback before approving.{' '}
+                    <button
+                      type="button"
+                      className={styles.ownerFeedbackLink}
+                      onClick={() => setActiveTab('quality-feedback')}
+                      {...{ 'data-testid': 'owner-approve-open-feedback' }}
+                    >
+                      Open Quality feedback
+                    </button>
+                  </span>
+                  /* @feature-flag:workflow-human-evaluation enabled-end */
+                ) : (
+                  /* @feature-flag:workflow-human-evaluation disabled-start */
+                  null
+                  /* @feature-flag:workflow-human-evaluation disabled-end */
+                )}
+                {/* @feature-flag:workflow-human-evaluation end */}
                 {ownerOnly && !isOwnerActor && (
                   <span
                     id="owner-approve-disabled-reason"

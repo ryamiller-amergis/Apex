@@ -20,8 +20,10 @@ import type {
   WorkflowEvaluationRubric,
   WorkflowEvaluationSubjectType,
 } from '../../shared/types/workflowEvaluation';
+import { WORKFLOW_EVALUATION_PRD_OWNER_ROLE } from '../../shared/types/workflowEvaluation';
 import { telemetryClient, trackEvent } from './telemetry';
 import { getUserGroupNamesForProject } from './groupService';
+import { isDocumentOwner } from './ownerApprovalService';
 import { resolveCurrentArtifactBinding } from './artifactBindingResolver';
 import { WorkflowEvaluationError } from './workflowEvaluationError';
 import {
@@ -138,7 +140,13 @@ export async function describeReviewerRole(
   userId: string,
   project: string,
   roles: readonly WorkflowEvaluationLabeledValue[],
+  subject?: { subjectType: WorkflowEvaluationSubjectType; subjectId: string },
 ): Promise<WorkflowEvaluationReviewerRoleState> {
+  const options = roles.map((role) => ({ key: role.key, label: role.label }));
+  if (subject?.subjectType === 'prd' && (await isDocumentOwner(subject.subjectId, 'prd', userId))) {
+    const ownerRole = { ...WORKFLOW_EVALUATION_PRD_OWNER_ROLE };
+    return { derivedRoleKey: ownerRole.key, options: [ownerRole, ...options], requiresSelection: false };
+  }
   const names = await getUserGroupNamesForProject(userId, project);
   const allowed = new Set(roles.map((role) => role.key));
   const matched = [...new Set(
@@ -146,7 +154,6 @@ export async function describeReviewerRole(
       .map((name) => GROUP_ROLE_KEYS[name])
       .filter((key): key is string => typeof key === 'string' && allowed.has(key)),
   )];
-  const options = roles.map((role) => ({ key: role.key, label: role.label }));
   if (matched.length === 1) {
     return { derivedRoleKey: matched[0], options, requiresSelection: false };
   }
@@ -156,14 +163,17 @@ export async function describeReviewerRole(
 export async function listEvaluationDefinitions(
   project: string,
   userId: string,
-  filter: { subjectType?: WorkflowEvaluationSubjectType; stageKey?: string } = {},
+  filter: { subjectType?: WorkflowEvaluationSubjectType; stageKey?: string; subjectId?: string } = {},
 ): Promise<GetWorkflowEvaluationDefinitionsResponse> {
   const definitions = (await listActiveDefinitions(filter.stageKey))
     .map(toDefinitionView)
     .filter((view): view is WorkflowEvaluationDefinitionView => view != null)
     .filter((view) => !filter.subjectType || view.subjectType === filter.subjectType);
   const roleSource = definitions[0]?.reviewerRoles ?? [];
-  const reviewer = await describeReviewerRole(userId, project, roleSource);
+  const subject = filter.subjectType && filter.subjectId
+    ? { subjectType: filter.subjectType, subjectId: filter.subjectId }
+    : undefined;
+  const reviewer = await describeReviewerRole(userId, project, roleSource, subject);
   return { definitions, reviewer };
 }
 
@@ -312,7 +322,10 @@ async function storeEvaluation(
   });
   const artifactText = artifactTextFromPlan(artifactPlan, binding.prdMarkdown);
 
-  const role = await resolveReviewerRole(userId, project, request.reviewerRole, definition.rubric);
+  const role = await resolveReviewerRole(userId, project, request.reviewerRole, definition.rubric, {
+    subjectType: request.subjectType,
+    subjectId: request.subjectId,
+  });
   const eventId = randomUUID();
   let blobRef: AiRunBlobRef | null = null;
   if (artifactText != null) {
@@ -536,8 +549,9 @@ async function resolveReviewerRole(
   project: string,
   requested: string | undefined,
   rubric: WorkflowEvaluationRubric,
+  subject: { subjectType: WorkflowEvaluationSubjectType; subjectId: string },
 ): Promise<{ key: string; label: string }> {
-  const described = await describeReviewerRole(userId, project, rubric.allowedReviewerRoles);
+  const described = await describeReviewerRole(userId, project, rubric.allowedReviewerRoles, subject);
   let key = described.derivedRoleKey;
   if (key) {
     if (requested && requested !== key) {

@@ -211,12 +211,18 @@ describe('QualityFeedbackPromptController', () => {
     expect(await screen.findByTestId('prd-quality-feedback-modal')).toBeInTheDocument();
   });
 
-  it('shows nothing when feedback already exists or the modal was seen', async () => {
-    respondWithEvents([{ id: 'evt-1', stageKey: 'prd_human_review' }]);
+  it('shows nothing once this user has given feedback', async () => {
+    respondWithEvents([{ id: 'evt-1', stageKey: 'prd_human_review', reviewerUserId: 'user-1' }]);
     renderWithClient(<QualityFeedbackPromptController {...props} />);
     await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
     await act(async () => { await Promise.resolve(); });
     expect(screen.queryByTestId('prd-quality-feedback-modal')).not.toBeInTheDocument();
     expect(screen.queryByTestId('prd-quality-feedback-banner')).not.toBeInTheDocument();
+  });
+
+  it('still prompts when only someone else has given feedback', async () => {
+    respondWithEvents([{ id: 'evt-1', stageKey: 'prd_human_review', reviewerUserId: 'someone-else' }]);
+    renderWithClient(<QualityFeedbackPromptController {...props} />);
+    expect(await screen.findByTestId('prd-quality-feedback-modal')).toBeInTheDocument();
   });
 });

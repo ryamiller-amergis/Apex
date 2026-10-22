@@ -107,10 +107,15 @@ router.get(
         res.status(422).json({ error: 'subjectType is invalid', code: 'UNKNOWN_FIELD' });
         return;
       }
+      const subjectId = req.query.subjectId;
+      if (subjectId !== undefined && (typeof subjectId !== 'string' || !UUID_RE.test(subjectId))) {
+        res.status(422).json({ error: 'subjectId is invalid', code: 'UNKNOWN_FIELD' });
+        return;
+      }
       const body = await workflowEvaluationService.listEvaluationDefinitions(
         pathProject(req),
         getUserId(req),
-        { subjectType, stageKey },
+        { subjectType, stageKey, subjectId },
       );
       res.json(body);
     } catch (err) {

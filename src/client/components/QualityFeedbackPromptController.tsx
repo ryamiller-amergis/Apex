@@ -23,13 +23,15 @@ export interface QualityFeedbackPromptControllerProps {
   /** Another automatic overlay is open; the modal waits and is not consumed. */
   suppressModal?: boolean;
   onOpenPanel: () => void;
+  /** Sentence after the question in the modal and banner. */
+  note?: string;
   testIdPrefix?: string;
 }
 
 /**
- * Optional nudge to give feedback: one modal per user, browser, subject and
- * stage, then a banner until feedback exists or the user dismisses it. It
- * never touches approval state.
+ * Nudge to give feedback: one modal per user, browser, subject and stage,
+ * then a banner until this user has given feedback or dismisses it. It never
+ * touches approval state.
  */
 export const QualityFeedbackPromptController: React.FC<QualityFeedbackPromptControllerProps> = ({
   enabled,
@@ -43,11 +45,18 @@ export const QualityFeedbackPromptController: React.FC<QualityFeedbackPromptCont
   promptReady,
   suppressModal = false,
   onOpenPanel,
+  note = 'Feedback is optional and improves the AI over time.',
   testIdPrefix: p = 'quality-feedback',
 }) => {
   const active = enabled && canSubmit && promptReady && Boolean(userId);
   const prompt = useQualityFeedbackPromptState({ userId, project, subjectType, subjectId, stageKey });
-  const definitionsQuery = useWorkflowEvaluationDefinitions({ project, subjectType, stageKey, enabled: active });
+  const definitionsQuery = useWorkflowEvaluationDefinitions({
+    project,
+    subjectType,
+    stageKey,
+    subjectId,
+    enabled: active,
+  });
   const eventsQuery = useWorkflowEvaluationEvents({
     project,
     subjectType,
@@ -59,7 +68,9 @@ export const QualityFeedbackPromptController: React.FC<QualityFeedbackPromptCont
   const settled = eventsQuery.isSuccess
     && definitionsQuery.isSuccess
     && definitionsQuery.data.definitions.some((definition) => definition.stageKey === stageKey);
-  const hasEvent = (eventsQuery.data?.events ?? []).some((event) => event.stageKey === stageKey);
+  const hasEvent = (eventsQuery.data?.events ?? []).some(
+    (event) => event.stageKey === stageKey && event.reviewerUserId === userId,
+  );
   const eligible = active && settled && !hasEvent;
   const modalVisible = eligible && !prompt.modalSeen && !suppressModal;
   const bannerVisible = eligible && !prompt.bannerDismissed && !modalVisible;
@@ -74,6 +85,7 @@ export const QualityFeedbackPromptController: React.FC<QualityFeedbackPromptCont
       {modalVisible && (
         <QualityFeedbackPromptModal
           subjectLabel={subjectLabel}
+          note={note}
           testIdPrefix={p}
           data-testid={`${p}-modal`}
           onGiveFeedback={() => {
@@ -86,7 +98,7 @@ export const QualityFeedbackPromptController: React.FC<QualityFeedbackPromptCont
       {bannerVisible && (
         <div className={styles.banner} role="region" aria-label="Quality feedback" {...{ 'data-testid': `${p}-banner` }}>
           <span className={styles.bannerText}>
-            How well did the AI write this {subjectLabel}? Feedback is optional and never blocks approval.
+            How well did the AI write this {subjectLabel}? {note}
           </span>
           <div className={styles.bannerActions}>
             <button
@@ -115,6 +127,7 @@ export const QualityFeedbackPromptController: React.FC<QualityFeedbackPromptCont
 
 interface QualityFeedbackPromptModalProps {
   subjectLabel: string;
+  note: string;
   testIdPrefix: string;
   'data-testid': string;
   onGiveFeedback: () => void;
@@ -123,6 +136,7 @@ interface QualityFeedbackPromptModalProps {
 
 const QualityFeedbackPromptModal: React.FC<QualityFeedbackPromptModalProps> = ({
   subjectLabel,
+  note,
   testIdPrefix: p,
   'data-testid': testId,
   onGiveFeedback,
@@ -149,9 +163,7 @@ const QualityFeedbackPromptModal: React.FC<QualityFeedbackPromptModalProps> = ({
         {...{ 'data-testid': testId }}
       >
         <h2 id={titleId} className={styles.title}>How well did the AI write this {subjectLabel}?</h2>
-        <p className={styles.body}>
-          Feedback is optional and improves the AI over time. It never blocks review or approval.
-        </p>
+        <p className={styles.body}>{note}</p>
         <div className={styles.actions}>
           <button
             type="button"

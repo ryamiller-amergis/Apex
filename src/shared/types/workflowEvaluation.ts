@@ -177,6 +177,12 @@ export const WORKFLOW_EVALUATION_REVIEWER_ROLE_LABELS: readonly WorkflowEvaluati
     { key: 'other', label: 'Other' },
   ];
 
+/**
+ * Given by the server when the reviewer owns the PRD; never offered as a choice
+ * and not part of a stored rubric. Owner approval waits for feedback in this role.
+ */
+export const WORKFLOW_EVALUATION_PRD_OWNER_ROLE = { key: 'prd_owner', label: 'PRD owner' } as const;
+
 export type WorkflowEvaluationRubric = {
   scale: readonly WorkflowEvaluationScaleLabel[];
   criteria: readonly WorkflowEvaluationCriterion[];

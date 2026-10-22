@@ -38,8 +38,12 @@ export function workflowEvaluationsUrl(project: string, path: string): string {
 }
 
 export const workflowEvaluationKeys = {
-  definitions: (project: string | undefined, subjectType: WorkflowEvaluationSubjectType, stageKey: string) =>
-    ['workflow-evaluations', 'definitions', project, subjectType, stageKey] as const,
+  definitions: (
+    project: string | undefined,
+    subjectType: WorkflowEvaluationSubjectType,
+    stageKey: string,
+    subjectId: string | undefined,
+  ) => ['workflow-evaluations', 'definitions', project, subjectType, stageKey, subjectId ?? null] as const,
   subjectEvents: (project: string | undefined, subjectType: WorkflowEvaluationSubjectType, subjectId: string) =>
     ['workflow-evaluations', 'events', project, subjectType, subjectId] as const,
 };
@@ -48,13 +52,16 @@ export function useWorkflowEvaluationDefinitions(options: {
   project: string | undefined;
   subjectType: WorkflowEvaluationSubjectType;
   stageKey: string;
+  /** Lets the server give the PRD owner role to the owner of this subject. */
+  subjectId?: string;
   enabled: boolean;
 }) {
-  const { project, subjectType, stageKey, enabled } = options;
+  const { project, subjectType, stageKey, subjectId, enabled } = options;
   return useQuery<GetWorkflowEvaluationDefinitionsResponse, WorkflowEvaluationApiError>({
-    queryKey: workflowEvaluationKeys.definitions(project, subjectType, stageKey),
+    queryKey: workflowEvaluationKeys.definitions(project, subjectType, stageKey, subjectId),
     queryFn: () => {
       const params = new URLSearchParams({ subjectType, stageKey });
+      if (subjectId) params.set('subjectId', subjectId);
       return workflowEvaluationFetch(workflowEvaluationsUrl(project!, `/definitions?${params}`));
     },
     enabled: enabled && Boolean(project),
