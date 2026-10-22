@@ -51,7 +51,8 @@ export const InterviewMessageThumbs: React.FC<InterviewMessageThumbsProps> = ({
   };
 
   return (
-    <div className={styles.group} role="group" aria-label="Rate this question">
+    <div className={styles.group} role="group" aria-label="Was this a good question?">
+      <span className={styles.label}>Was this a good question?</span>
       {button('up', 'Good question')}
       {button('down', 'Not a good question')}
     </div>

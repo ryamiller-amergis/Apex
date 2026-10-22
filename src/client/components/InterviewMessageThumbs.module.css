@@ -1,17 +1,26 @@
 .group {
-  display: inline-flex;
-  gap: 4px;
-  margin-right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 8px 12px 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
+}
+
+.label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
 }
 
 .thumb {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 32px;
+  height: 32px;
   border: 1px solid var(--border-color);
-  border-radius: 7px;
+  border-radius: 8px;
   background: color-mix(in srgb, var(--bg-primary) 88%, transparent);
   color: var(--text-secondary);
   cursor: pointer;
@@ -19,8 +28,8 @@
 }
 
 .thumb svg {
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
 }
 
 .thumb:hover:not(:disabled) {
@@ -42,5 +51,5 @@
 .thumbSelected {
   border-color: var(--accent-color);
   color: var(--accent-color);
-  background: var(--bg-primary);
+  background: color-mix(in srgb, var(--accent-color) 12%, var(--bg-primary));
 }

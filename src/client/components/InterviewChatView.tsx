@@ -196,7 +196,7 @@ interface InterviewAgentMessageProps {
   alreadyAnswered?: boolean;
   fullWidth?: boolean;
   anchorRef?: React.Ref<HTMLDivElement>;
-  /** Extra controls beside Read aloud, e.g. rating buttons. */
+  /** Shown at the bottom of the bubble, e.g. rating buttons. */
   actions?: React.ReactNode;
 }
 
@@ -249,13 +249,13 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
         className={`${styles.messageBubble} ${styles.messageBubbleAssistant} ${fullWidth ? styles.assistantBubbleFullWidth : ''}`}
       >
         <div className={styles.bubbleActions}>
-          {actions}
           <ReadAloudButton
             text={visibleText}
             {...{ 'data-testid': 'interview-message-read-aloud' }}
           />
         </div>
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{visibleText}</ReactMarkdown>
+        {actions}
       </div>
     );
   }
@@ -297,7 +297,6 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
       className={`${styles.assistantBubble} ${fullWidth ? styles.assistantBubbleFullWidth : ''}`}
     >
       <div className={styles.bubbleActions}>
-        {actions}
         <ReadAloudButton
           text={visibleText}
           {...{ 'data-testid': 'interview-message-read-aloud' }}
@@ -328,6 +327,7 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
           />
         );
       })}
+      {actions}
     </div>
   );
 };
