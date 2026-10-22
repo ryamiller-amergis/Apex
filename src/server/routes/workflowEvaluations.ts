@@ -28,6 +28,7 @@ import {
   type WorkflowEvaluationJobFailureCode,
 } from '../services/workflowEvaluationJobOrchestrator';
 import * as workflowEvaluationService from '../services/workflowEvaluationService';
+import workflowEvaluationsAdminRouter from './workflowEvaluationsAdmin';
 
 const router = Router({ mergeParams: true });
 
@@ -71,6 +72,7 @@ const requireNamedUser: (req: Request, res: Response, next: NextFunction) => voi
 router.use(rejectProjectMismatch);
 router.use(requireProjectAccess(resolveRequestProject));
 router.use(requireNamedUser);
+router.use('/admin', workflowEvaluationsAdminRouter);
 
 function handleServiceError(err: unknown, res: Response, next: NextFunction): void {
   if (err instanceof WorkflowEvaluationError) {

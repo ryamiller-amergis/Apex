@@ -358,6 +358,59 @@ describe('submitEvaluation — TBI-007', () => {
     expect(repository.insertEvent).not.toHaveBeenCalled();
   });
 
+  it('returns each job with its error reason on the event detail', async () => {
+    const eventId = '00000000-0000-4000-8000-000000000009';
+    const event = storedFromInsert({
+      id: eventId,
+      project: 'proj-a',
+      definitionId: 'def-prd',
+      subjectType: 'prd',
+      subjectId,
+      stageKey: 'prd_human_review',
+      phaseIndex: null,
+      reviewerUserId: 'user-1',
+      reviewerRoleKey: 'product_owner',
+      reviewerRoleLabel: 'Product owner',
+      skillPath: null,
+      skillVersion: null,
+      model: null,
+      interviewId: null,
+      prdId: subjectId,
+      artifactHash: 'a'.repeat(64),
+      criteriaScores: scores(4),
+      outcome: 'accept_unchanged',
+      reasonCodes: [],
+      comment: null,
+      correctedArtifactBlobRef: null,
+    });
+    repository.getEventWithJobs.mockResolvedValue({
+      ...event,
+      jobs: [{
+        id: 'job-1',
+        eventId,
+        evaluatorKey: 'llm_judge',
+        status: 'failed',
+        runId: null,
+        specificationHash: null,
+        summary: null,
+        resultBlobRefs: null,
+        errorDetail: 'transport_disabled: ai-runs-v2-transport is off for this project',
+        createdAt: '2026-10-16T12:00:00.000Z',
+        updatedAt: '2026-10-16T12:00:01.000Z',
+      }],
+    });
+
+    const detail = await getEvaluationEvent('proj-a', eventId);
+
+    expect(detail?.jobs).toEqual([{
+      evaluatorKey: 'llm_judge',
+      status: 'failed',
+      summary: null,
+      errorDetail: 'transport_disabled: ai-runs-v2-transport is off for this project',
+      updatedAt: '2026-10-16T12:00:01.000Z',
+    }]);
+  });
+
   it('VT-22 / TBI-007 (c): history defaults to the current hash and caps at 50', async () => {
     const current = [0, 1].map((index) => storedFromInsert({
       id: `00000000-0000-4000-8000-00000000000${index}`,

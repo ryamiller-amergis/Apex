@@ -1,5 +1,6 @@
-import React, { useState, useCallback, useMemo, useEffect, useReducer, useRef } from 'react';
+import React, { Suspense, lazy, useState, useCallback, useMemo, useEffect, useReducer, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { ErrorBoundary } from 'react-error-boundary';
 import { PrdAssistantPanel } from './PrdAssistantPanel';
 import { ArtifactUsageStrip } from './ArtifactUsageStrip';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -7,6 +8,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { stripYamlFrontmatter } from '../utils/stripYamlFrontmatter';
 import { useAppShell } from '../hooks/useAppShell';
+import { useWorkflowEvaluationAccess } from '../hooks/useWorkflowEvaluationAccess';
 import {
   usePrd,
   useInterview,
@@ -108,7 +110,10 @@ import type {
 import styles from './PrdReviewView.module.css';
 import { ApexLoader } from './ApexLoader';
 
-type TabId = 'preview' | 'backlog' | 'validation';
+type TabId = 'preview' | 'backlog' | 'validation' | 'quality-feedback';
+
+const PrdQualityFeedbackTab = lazy(() => import('./PrdQualityFeedbackTab'));
+const PrdQualityFeedbackPrompt = lazy(() => import('./PrdQualityFeedbackPrompt'));
 
 type PrdFixKind = 'validation' | 'coverage';
 
@@ -591,6 +596,7 @@ export const PrdReviewView: React.FC = () => {
   const id = location.pathname.split('/').pop() ?? null;
   const navigate = useNavigate();
   const { can, userId, isAdmin, isSuperAdmin, selectedProject, workBoardEnabled } = useAppShell();
+  const feedbackAccess = useWorkflowEvaluationAccess(selectedProject);
 
   const queryClient = useQueryClient();
   const { data: prd, isLoading, isError } = usePrd(id);
@@ -1648,6 +1654,10 @@ export const PrdReviewView: React.FC = () => {
 
   const isAuthor = prd.authorId === userId;
   const isOwner = prd.ownerId === userId;
+  const showQualityFeedback = feedbackAccess.canView
+    && prd.status !== 'generating'
+    && prd.project === selectedProject;
+  const canSubmitFeedback = showQualityFeedback && feedbackAccess.canSubmit;
   const ownerOnly = !assignmentsLoading && !assignmentsError && assignments.length === 0;
   const qaOwnerOnly = !qaAssignmentsLoading && !qaAssignmentsError && qaAssignments.length === 0;
   const isOwnerActor = (prd.ownerId ? isOwner : isAuthor) || isSuperAdmin;
@@ -2952,6 +2962,28 @@ export const PrdReviewView: React.FC = () => {
       ) : (
         /* ── Normal tabs ─────────────────────────────────────────────────────── */
         <div className={[styles.tabArea, isFullscreen && styles.tabAreaFullscreen].filter(Boolean).join(' ')}>
+          {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+          {canSubmitFeedback && userId ? (
+            /* @feature-flag:workflow-human-evaluation enabled-start */
+            <ErrorBoundary fallback={null}>
+              <Suspense fallback={null}>
+                <PrdQualityFeedbackPrompt
+                  prdId={prd.id}
+                  project={prd.project}
+                  status={prd.status}
+                  userId={userId}
+                  canSubmit={canSubmitFeedback}
+                  onOpenFeedbackTab={() => setActiveTab('quality-feedback')}
+                />
+              </Suspense>
+            </ErrorBoundary>
+            /* @feature-flag:workflow-human-evaluation enabled-end */
+          ) : (
+            /* @feature-flag:workflow-human-evaluation disabled-start */
+            null
+            /* @feature-flag:workflow-human-evaluation disabled-end */
+          )}
+          {/* @feature-flag:workflow-human-evaluation end */}
           <div className={styles.tabs}>
             <button
               className={`${styles.tab} ${activeTab === 'preview' ? styles.active : ''}`}
@@ -2979,6 +3011,25 @@ export const PrdReviewView: React.FC = () => {
                 Validation
               </button>
             )}
+            {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+            {showQualityFeedback ? (
+              /* @feature-flag:workflow-human-evaluation enabled-start */
+              <button
+                className={`${styles.tab} ${activeTab === 'quality-feedback' ? styles.active : ''}`}
+                onClick={() => setActiveTab('quality-feedback')}
+                type="button"
+                aria-pressed={activeTab === 'quality-feedback'}
+                {...{ 'data-testid': 'prd-tab-quality-feedback' }}
+              >
+                Quality feedback
+              </button>
+              /* @feature-flag:workflow-human-evaluation enabled-end */
+            ) : (
+              /* @feature-flag:workflow-human-evaluation disabled-start */
+              null
+              /* @feature-flag:workflow-human-evaluation disabled-end */
+            )}
+            {/* @feature-flag:workflow-human-evaluation end */}
             <button
               className={[styles.tabFullscreenBtn, isFullscreen && styles.tabFullscreenBtnActive].filter(Boolean).join(' ')}
               onClick={() => setIsFullscreen((v) => !v)}
@@ -3403,6 +3454,36 @@ export const PrdReviewView: React.FC = () => {
                 </div>
               </div>
             )}
+
+            {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+            {activeTab === 'quality-feedback' && showQualityFeedback ? (
+              /* @feature-flag:workflow-human-evaluation enabled-start */
+              <ErrorBoundary
+                fallback={(
+                  <div className={styles.emptyPreview} role="alert">
+                    Quality feedback couldn&apos;t load. Refresh the page to try again.
+                  </div>
+                )}
+              >
+                <Suspense fallback={<div className={styles.emptyPreview}>Loading quality feedback…</div>}>
+                  <PrdQualityFeedbackTab
+                    prdId={prd.id}
+                    project={prd.project}
+                    content={prd.content}
+                    updatedAt={prd.updatedAt}
+                    canView={showQualityFeedback}
+                    canSubmit={canSubmitFeedback}
+                    data-testid="prd-quality-feedback-panel"
+                  />
+                </Suspense>
+              </ErrorBoundary>
+              /* @feature-flag:workflow-human-evaluation enabled-end */
+            ) : (
+              /* @feature-flag:workflow-human-evaluation disabled-start */
+              null
+              /* @feature-flag:workflow-human-evaluation disabled-end */
+            )}
+            {/* @feature-flag:workflow-human-evaluation end */}
           </div>
         </div>
       )}

@@ -33,6 +33,7 @@ import { RepoSelector } from './components/RepoSelector';
 import { DEFAULT_MODEL_ID } from './config/models';
 import { FeatureFlagDemo } from './components/FeatureFlagDemo';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
+import { WORKFLOW_HUMAN_EVALUATION_FLAG } from '../shared/types/featureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
 import { useDocumentDeepLinkProject } from './hooks/useDocumentDeepLinkProject';
 import { useProjects } from './hooks/useProjects';
@@ -85,6 +86,7 @@ const AdminGroups = lazy(() => import('./components/AdminGroups').then(m => ({ d
 const AdminNotifications = lazy(() => import('./components/AdminNotifications').then(m => ({ default: m.AdminNotifications })));
 const LoadTestAllowlistSettings = lazy(() => import('./components/LoadTestAllowlistSettings').then(m => ({ default: m.LoadTestAllowlistSettings })));
 const ApiKeysAdminView = lazy(() => import('./components/ApiKeysAdminView').then(m => ({ default: m.ApiKeysAdminView })));
+const WorkflowEvaluationsPage = lazy(() => import('./components/WorkflowEvaluationsPage').then(m => ({ default: m.WorkflowEvaluationsPage })));
 const PlatformAdmin = lazy(() => import('./components/PlatformAdmin').then(m => ({ default: m.PlatformAdmin })));
 const NotificationsPage = lazy(() => import('./components/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 const ProfilePage = lazy(() => import('./components/ProfilePage').then(m => ({ default: m.ProfilePage })));
@@ -318,6 +320,7 @@ function App() {
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
   const interactiveWsEnabled = homeFlags['ai-runs-v2-transport'] === true;
+  const workflowEvaluationsEnabled = homeFlags[WORKFLOW_HUMAN_EVALUATION_FLAG] === true;
   const documentLink = useDocumentDeepLinkProject(location.pathname, location.search);
   const {
     data: selectableProjectList = [],
@@ -1290,6 +1293,24 @@ function App() {
                         API Keys
                       </button>
                     )}
+                    {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+                    {workflowEvaluationsEnabled ? (
+                      /* @feature-flag:workflow-human-evaluation enabled-start */
+                      <button
+                        className={`admin-tab${location.pathname === '/admin/workflow-evaluations' ? ' admin-tab-active' : ''}`}
+                        onClick={() => navigate('/admin/workflow-evaluations')}
+                        type="button"
+                        {...{ 'data-testid': 'admin-tab-workflow-evaluations' }}
+                      >
+                        Workflow evaluations
+                      </button>
+                      /* @feature-flag:workflow-human-evaluation enabled-end */
+                    ) : (
+                      /* @feature-flag:workflow-human-evaluation disabled-start */
+                      null
+                      /* @feature-flag:workflow-human-evaluation disabled-end */
+                    )}
+                    {/* @feature-flag:workflow-human-evaluation end */}
                   </div>
                   {location.pathname === '/admin/users' ? (
                     <AdminUsers selectedProject={selectedProject} />
@@ -1303,6 +1324,14 @@ function App() {
                     <LoadTestAllowlistSettings selectedProject={selectedProject} />
                   ) : location.pathname === '/admin/api-keys' ? (
                     <ApiKeysAdminView selectedProject={selectedProject} />
+                  // @feature-flag:workflow-human-evaluation start winner=enabled
+                  ) : location.pathname === '/admin/workflow-evaluations' && homeFlagsLoading ? (
+                    <ViewSkeleton />
+                  ) : location.pathname === '/admin/workflow-evaluations' && workflowEvaluationsEnabled ? (
+                    // @feature-flag:workflow-human-evaluation enabled-start
+                    <WorkflowEvaluationsPage selectedProject={selectedProject} />
+                    // @feature-flag:workflow-human-evaluation enabled-end
+                  // @feature-flag:workflow-human-evaluation end
                   ) : (
                     <AdminRoles selectedProject={selectedProject} />
                   )}

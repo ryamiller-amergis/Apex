@@ -232,6 +232,7 @@ export async function getEvaluationEvent(
       evaluatorKey: job.evaluatorKey,
       status: job.status,
       summary: job.summary,
+      errorDetail: job.errorDetail,
       updatedAt: job.updatedAt,
     })),
   };

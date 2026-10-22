@@ -17,6 +17,7 @@ export const WORKFLOW_EVALUATION_SEEDED_STAGE_KEYS = [
   'interview_phase_2',
   'interview_phase_3',
 ] as const;
+export const WORKFLOW_EVALUATION_PRD_STAGE_KEY = 'prd_human_review' as const;
 export type WorkflowEvaluationSeededStageKey =
   (typeof WORKFLOW_EVALUATION_SEEDED_STAGE_KEYS)[number];
 
@@ -466,6 +467,7 @@ export type WorkflowEvaluationEventJob = {
   evaluatorKey: string;
   status: WorkflowEvaluationJobStatus;
   summary: unknown | null;
+  errorDetail: string | null;
   updatedAt: string;
 };
 
