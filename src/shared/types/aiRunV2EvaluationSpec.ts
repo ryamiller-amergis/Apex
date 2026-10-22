@@ -98,6 +98,19 @@ export type WorkflowEvaluationArtifactPackage =
       omittedSections: readonly string[];
       /** Always 0; present so every package reports omissions the same way. */
       omittedMessages: number;
+    }>
+  | Readonly<{
+      kind: 'test_cases';
+      /** The QA test case document for one PRD. */
+      markdown: string;
+      /** The PRD the test cases were derived from, or null when it is unavailable or did not fit. */
+      sourcePrd: string | null;
+      /** The PRD backlog as pretty-printed JSON, or null when it has none or it did not fit. */
+      sourceBacklogJson: string | null;
+      truncated: boolean;
+      omittedSections: readonly string[];
+      /** Always 0; present so every package reports omissions the same way. */
+      omittedMessages: number;
     }>;
 
 /**
@@ -336,6 +349,14 @@ export function isWorkflowEvaluationArtifactPackage(
         && Array.isArray(value.omittedSections)
         && value.omittedSections.every((item) => typeof item === 'string')
       );
+    case 'test_cases':
+      return (
+        isNonEmptyString(value.markdown)
+        && (value.sourcePrd === null || typeof value.sourcePrd === 'string')
+        && (value.sourceBacklogJson === null || typeof value.sourceBacklogJson === 'string')
+        && Array.isArray(value.omittedSections)
+        && value.omittedSections.every((item) => typeof item === 'string')
+      );
     default:
       return false;
   }
@@ -357,6 +378,7 @@ export function renderPromptfooTarget(
         .map((message) => `${message.role}: ${message.text.replace(/\s*\n\s*/g, ' ').trim()}`)
         .join('\n');
     case 'design_doc':
+    case 'test_cases':
       return artifactPackage.markdown;
     default: {
       const unhandled: never = artifactPackage;

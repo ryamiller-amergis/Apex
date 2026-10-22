@@ -23,10 +23,11 @@ import type {
 import {
   WORKFLOW_EVALUATION_DESIGN_DOC_OWNER_ROLE,
   WORKFLOW_EVALUATION_PRD_OWNER_ROLE,
+  WORKFLOW_EVALUATION_TEST_CASES_OWNER_ROLE,
 } from '../../shared/types/workflowEvaluation';
 import { telemetryClient, trackEvent } from './telemetry';
 import { getUserGroupNamesForProject } from './groupService';
-import { isDocumentOwner } from './ownerApprovalService';
+import { isDocumentOwner, isTestCaseRecordOwner } from './ownerApprovalService';
 import { resolveCurrentArtifactBinding } from './artifactBindingResolver';
 import { WorkflowEvaluationError } from './workflowEvaluationError';
 import {
@@ -80,6 +81,7 @@ export function subjectForStageKey(stageKey: string): {
   }
   if (stageKey.startsWith('prd')) return { subjectType: 'prd', phaseIndex: null };
   if (stageKey.startsWith('design_doc')) return { subjectType: 'design_doc', phaseIndex: null };
+  if (stageKey.startsWith('test_cases')) return { subjectType: 'test_cases', phaseIndex: null };
   return null;
 }
 
@@ -96,6 +98,10 @@ async function ownerRoleFor(
     case 'design_doc':
       return (await isDocumentOwner(subject.subjectId, 'design_doc', userId))
         ? { ...WORKFLOW_EVALUATION_DESIGN_DOC_OWNER_ROLE }
+        : null;
+    case 'test_cases':
+      return (await isTestCaseRecordOwner(subject.subjectId, userId))
+        ? { ...WORKFLOW_EVALUATION_TEST_CASES_OWNER_ROLE }
         : null;
     case 'interview_phase':
       return null;
@@ -535,6 +541,12 @@ function planCorrectedArtifact(
     throw new WorkflowEvaluationError(
       'CORRECTED_ARTIFACT_REQUIRED',
       'Design docs accept only pasted corrected text.',
+    );
+  }
+  if (subjectType === 'test_cases' && artifact.source === 'current_prd') {
+    throw new WorkflowEvaluationError(
+      'CORRECTED_ARTIFACT_REQUIRED',
+      'Test cases accept only pasted corrected text.',
     );
   }
   if (artifact.source === 'pasted') {

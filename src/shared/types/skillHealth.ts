@@ -204,7 +204,7 @@ export interface SkillHealthOverview {
 }
 
 /** Kinds of Skill a work item can be about: the two scored artifacts, or an Interview Skill. */
-export type SkillHealthWorkItemSkillKind = SkillHealthArtifactKind | 'interview';
+export type SkillHealthWorkItemSkillKind = SkillHealthArtifactKind | 'interview' | 'test_cases';
 
 /** The Skill a work item is about. A `SkillHealthSkill` satisfies it. */
 export interface SkillHealthWorkItemTarget {

@@ -1368,6 +1368,63 @@ export async function getTestCases(
   return row ? rowToRecord(row) : null;
 }
 
+export type TestCaseEvaluationInputs = {
+  id: string;
+  project: string;
+  status: string;
+  prdId: string;
+  interviewId: string | null;
+  model: string | null;
+  skillPath: string | null;
+  skillVersion: string | null;
+  testCasesMd: string | null;
+  testCasesJson: unknown;
+};
+
+/** Read-only lineage and live content for an evaluation of one test case record. */
+export async function getTestCaseEvaluationInputs(testCaseId: string): Promise<TestCaseEvaluationInputs | null> {
+  const [row] = await db
+    .select({
+      id: testCases.id,
+      project: prds.project,
+      status: testCases.status,
+      prdId: testCases.prdId,
+      interviewId: prds.interviewId,
+      chatThreadId: testCases.chatThreadId,
+      testCasesMd: testCases.testCasesMd,
+      testCasesJson: testCases.testCasesJson,
+    })
+    .from(testCases)
+    .innerJoin(prds, eq(testCases.prdId, prds.id))
+    .where(eq(testCases.id, testCaseId))
+    .limit(1);
+  if (!row) return null;
+
+  let skillPath: string | null = null;
+  let model: string | null = null;
+  if (row.chatThreadId) {
+    const thread = await db.query.chatThreads.findFirst({
+      where: eq(chatThreads.id, row.chatThreadId),
+      columns: { kickoff: true },
+    });
+    skillPath = thread?.kickoff?.skillPath ?? null;
+    model = thread?.kickoff?.model ?? null;
+  }
+
+  return {
+    id: row.id,
+    project: row.project,
+    status: row.status,
+    prdId: row.prdId,
+    interviewId: row.interviewId ?? null,
+    model,
+    skillPath,
+    skillVersion: null,
+    testCasesMd: row.testCasesMd ?? null,
+    testCasesJson: row.testCasesJson ?? null,
+  };
+}
+
 export async function listLatestTestCaseSummariesForPrds(
   prdIds: string[]
 ): Promise<Map<string, TestCaseSummary>> {

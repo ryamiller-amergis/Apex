@@ -88,6 +88,27 @@ export function hashDesignDocArtifact(parts: DesignDocArtifactParts): string {
   ]);
 }
 
+export type TestCaseArtifactParts = {
+  testCasesMd: string | null;
+  testCasesJson: unknown;
+};
+
+export function hashTestCasesArtifact(parts: TestCaseArtifactParts): string {
+  return sha256Parts([
+    ARTIFACT_HASH_TAG,
+    'test_cases',
+    parts.testCasesMd ?? '',
+    canonicalJson(parts.testCasesJson === undefined ? null : parts.testCasesJson),
+  ]);
+}
+
+/** The markdown handoff when there is one; otherwise the JSON suite, so older records still evaluate. */
+export function renderTestCasesMarkdown(parts: TestCaseArtifactParts): string {
+  if (parts.testCasesMd?.trim()) return parts.testCasesMd;
+  if (parts.testCasesJson === null || parts.testCasesJson === undefined) return '';
+  return `# Test Cases\n\n\`\`\`json\n${JSON.stringify(parts.testCasesJson, null, 2)}\n\`\`\`\n`;
+}
+
 export function hashInterviewPhaseArtifact(
   messages: readonly PhaseTranscriptMessage[],
   linked: LinkedContextIds,
@@ -158,6 +179,32 @@ export async function resolveCurrentArtifactBinding(input: {
         model: doc.model,
         interviewId: doc.interviewId,
         prdId: doc.prdId,
+      },
+      prdMarkdown: null,
+    };
+  }
+
+  if (input.subjectType === 'test_cases') {
+    const { getTestCaseEvaluationInputs } = await import('./testCaseService');
+    const record = await getTestCaseEvaluationInputs(input.subjectId);
+    if (!record || record.project !== input.project) {
+      throw new WorkflowEvaluationError('SUBJECT_NOT_FOUND', 'Subject was not found in this project.');
+    }
+    if (record.status !== 'ready' || !renderTestCasesMarkdown(record).trim()) {
+      throw new WorkflowEvaluationError('ARTIFACT_NOT_READY', 'The test cases are not ready yet.');
+    }
+    return {
+      project: record.project,
+      subjectType: 'test_cases',
+      subjectId: record.id,
+      phaseIndex: null,
+      artifactHash: hashTestCasesArtifact(record),
+      lineage: {
+        skillPath: record.skillPath,
+        skillVersion: record.skillVersion,
+        model: record.model,
+        interviewId: record.interviewId,
+        prdId: record.prdId,
       },
       prdMarkdown: null,
     };

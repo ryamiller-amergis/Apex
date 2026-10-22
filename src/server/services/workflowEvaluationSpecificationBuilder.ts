@@ -35,11 +35,14 @@ import {
   hashDesignDocArtifact,
   hashInterviewPhaseArtifact,
   hashPrdArtifact,
+  hashTestCasesArtifact,
+  renderTestCasesMarkdown,
   type DesignDocArtifactParts,
 } from './artifactBindingResolver';
 import { getDesignDocEvaluationInputs, type DesignDocEvaluationInputs } from './designDocService';
 import { getInterviewEvaluationInputs, type InterviewEvaluationInputs } from './interviewService';
 import { getPrdEvaluationInputs, type PrdEvaluationInputs } from './prdService';
+import { getTestCaseEvaluationInputs, type TestCaseEvaluationInputs } from './testCaseService';
 import { resolveSkillConfig } from './projectSettingsService';
 import {
   WORKFLOW_EVALUATION_JUDGE_INSTRUCTIONS,
@@ -100,6 +103,7 @@ export type WorkflowEvaluationSpecificationDependencies = Readonly<{
   loadPrdInputs?: (prdId: string) => Promise<PrdEvaluationInputs | null>;
   loadInterviewInputs?: (interviewId: string) => Promise<InterviewEvaluationInputs | null>;
   loadDesignDocInputs?: (designDocId: string) => Promise<DesignDocEvaluationInputs | null>;
+  loadTestCaseInputs?: (testCaseId: string) => Promise<TestCaseEvaluationInputs | null>;
   loadSkillConfig?: (project: string) => Promise<ProjectSkillConfig | null>;
   loadDefaultModel?: () => Promise<string>;
 }>;
@@ -115,6 +119,11 @@ function jsonBytes(value: unknown): number {
 /** Whole `## ` sections; the leading title block is always kept. */
 function splitSections(markdown: string): string[] {
   return markdown.split(/(?=^## )/m).filter((section) => section.length > 0);
+}
+
+/** Test case documents hold every PBI suite under one `## Suites`, so each `### ` suite is its own section. */
+function splitTestCaseSections(markdown: string): string[] {
+  return markdown.split(/(?=^#{2,3} )/m).filter((section) => section.length > 0);
 }
 
 function sectionName(section: string): string {
@@ -142,11 +151,12 @@ function fitSections(
   markdown: string,
   budget: number,
   keepFirst: boolean,
+  split: (markdown: string) => string[] = splitSections,
 ): { kept: string[]; used: number; omitted: string[] } {
   const kept: string[] = [];
   const omitted: string[] = [];
   let used = 0;
-  for (const section of splitSections(markdown)) {
+  for (const section of split(markdown)) {
     const size = jsonBytes(section);
     if (used + size <= budget || (keepFirst && kept.length === 0)) {
       kept.push(section);
@@ -246,11 +256,52 @@ function packageDesignDoc(
   };
 }
 
+/** The test cases come first, then the source PRD, then its backlog, each in whatever budget is left. */
+function packageTestCases(
+  testCasesMarkdown: string,
+  prdMarkdown: string | null,
+  backlog: unknown,
+): WorkflowEvaluationArtifactPackage {
+  const budget = WORKFLOW_EVALUATION_PACKAGE_MAX_BYTES;
+  const cases = fitSections(testCasesMarkdown, budget, true, splitTestCaseSections);
+  const omittedSections = [...cases.omitted];
+  let used = cases.used;
+
+  let sourcePrd: string | null = null;
+  if (prdMarkdown?.trim()) {
+    const prd = fitSections(prdMarkdown, budget - used, false);
+    sourcePrd = prd.kept.length > 0 ? prd.kept.join('') : null;
+    used += prd.used;
+    omittedSections.push(...prd.omitted.map((name) => `Source PRD: ${name}`));
+  }
+
+  let sourceBacklogJson: string | null = null;
+  if (backlog !== null && backlog !== undefined) {
+    const pretty = JSON.stringify(backlog, null, 2);
+    if (used + jsonBytes(pretty) <= budget) {
+      sourceBacklogJson = pretty;
+    } else {
+      omittedSections.push('Source backlog JSON');
+    }
+  }
+
+  return {
+    kind: 'test_cases',
+    markdown: cases.kept.join(''),
+    sourcePrd,
+    sourceBacklogJson,
+    truncated: omittedSections.length > 0,
+    omittedSections,
+    omittedMessages: 0,
+  };
+}
+
 async function buildArtifactPackage(
   event: WorkflowEvaluationSpecificationRequest['event'],
   loadPrdInputs: NonNullable<WorkflowEvaluationSpecificationDependencies['loadPrdInputs']>,
   loadInterviewInputs: NonNullable<WorkflowEvaluationSpecificationDependencies['loadInterviewInputs']>,
   loadDesignDocInputs: NonNullable<WorkflowEvaluationSpecificationDependencies['loadDesignDocInputs']>,
+  loadTestCaseInputs: NonNullable<WorkflowEvaluationSpecificationDependencies['loadTestCaseInputs']>,
 ): Promise<WorkflowEvaluationArtifactPackage> {
   switch (event.subjectType) {
     case 'prd': {
@@ -309,6 +360,25 @@ async function buildArtifactPackage(
       }
       const prd = await loadPrdInputs(doc.prdId);
       return packageDesignDoc(doc, prd && prd.project === event.projectId ? prd.content : null);
+    }
+    case 'test_cases': {
+      const record = await loadTestCaseInputs(event.subjectId);
+      const markdown = record ? renderTestCasesMarkdown(record) : '';
+      if (!record || record.project !== event.projectId || !markdown.trim()) {
+        throw new WorkflowEvaluationSpecificationError(
+          'artifact_unavailable',
+          'The test cases are missing or have no content.',
+        );
+      }
+      if (hashTestCasesArtifact(record) !== event.artifactContentHash) {
+        throw new WorkflowEvaluationSpecificationError(
+          'artifact_changed',
+          'The test cases changed after the evaluation was submitted.',
+        );
+      }
+      const prd = await loadPrdInputs(record.prdId);
+      const samePrd = prd && prd.project === event.projectId ? prd : null;
+      return packageTestCases(markdown, samePrd?.content ?? null, samePrd?.backlogJson ?? null);
     }
     default: {
       const unhandled: never = event.subjectType;
@@ -455,6 +525,7 @@ export async function buildWorkflowEvaluationSpecifications(
   const loadPrdInputs = dependencies.loadPrdInputs ?? getPrdEvaluationInputs;
   const loadInterviewInputs = dependencies.loadInterviewInputs ?? getInterviewEvaluationInputs;
   const loadDesignDocInputs = dependencies.loadDesignDocInputs ?? getDesignDocEvaluationInputs;
+  const loadTestCaseInputs = dependencies.loadTestCaseInputs ?? getTestCaseEvaluationInputs;
   const loadSkillConfig = dependencies.loadSkillConfig ?? ((project: string) => resolveSkillConfig({ project }));
   const loadDefaultModel = dependencies.loadDefaultModel ?? getDefaultModel;
 
@@ -465,6 +536,7 @@ export async function buildWorkflowEvaluationSpecifications(
       loadPrdInputs,
       loadInterviewInputs,
       loadDesignDocInputs,
+      loadTestCaseInputs,
     );
   } catch (error) {
     return { promptfoo: failed(error), llm_judge: failed(error) };

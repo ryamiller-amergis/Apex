@@ -9,14 +9,17 @@ import {
   WORKFLOW_EVALUATION_DESIGN_DOC_RUBRIC,
   WORKFLOW_EVALUATION_INTERVIEW_PHASE_RUBRIC,
   WORKFLOW_EVALUATION_PRD_RUBRIC,
+  WORKFLOW_EVALUATION_TEST_CASES_RUBRIC,
   workflowEvaluationPromptfooSuiteRef,
 } from '../../shared/types/workflowEvaluation';
 import {
   hashDesignDocArtifact,
   hashInterviewPhaseArtifact,
   hashPrdArtifact,
+  hashTestCasesArtifact,
 } from '../services/artifactBindingResolver';
 import type { DesignDocEvaluationInputs } from '../services/designDocService';
+import type { TestCaseEvaluationInputs } from '../services/testCaseService';
 import type { InterviewEvaluationInputs } from '../services/interviewService';
 import type { PrdEvaluationInputs } from '../services/prdService';
 import {
@@ -30,6 +33,7 @@ jest.mock('../db/drizzle', () => ({ db: {} }));
 jest.mock('../services/prdService', () => ({ getPrdEvaluationInputs: jest.fn() }));
 jest.mock('../services/interviewService', () => ({ getInterviewEvaluationInputs: jest.fn() }));
 jest.mock('../services/designDocService', () => ({ getDesignDocEvaluationInputs: jest.fn() }));
+jest.mock('../services/testCaseService', () => ({ getTestCaseEvaluationInputs: jest.fn() }));
 jest.mock('../services/projectSettingsService', () => ({ resolveSkillConfig: jest.fn() }));
 jest.mock('../services/appSettingsService', () => ({ getDefaultModel: jest.fn() }));
 
@@ -486,6 +490,104 @@ describe('buildWorkflowEvaluationSpecifications', () => {
       );
       if (!result.promptfoo.ok) throw new Error('expected Promptfoo to build');
       expect(result.promptfoo.specification.artifactPackage).toMatchObject({ kind: 'design_doc', sourcePrd: null });
+    });
+  });
+
+  describe('test cases', () => {
+    const TEST_CASES_MD = [
+      '# Test Cases — Reports\n\n',
+      '## Coverage summary\n\n| Total test cases | 1 |\n\n',
+      '## Suites\n\n',
+      '### Reports — PBI-001: Export (1 cases)\n\n**Steps:**\n1. Export\n**Expected result:** CSV\n',
+      '## Gaps and assumptions\n\n- None\n',
+    ].join('');
+    const RECORD: TestCaseEvaluationInputs = {
+      id: 'tc-1',
+      project: 'Apex',
+      status: 'ready',
+      prdId: 'prd-1',
+      interviewId: 'interview-1',
+      model: null,
+      skillPath: null,
+      skillVersion: null,
+      testCasesMd: TEST_CASES_MD,
+      testCasesJson: { suites: [] },
+    };
+
+    function testCasesRequest(hash = hashTestCasesArtifact(RECORD)): WorkflowEvaluationSpecificationRequest {
+      return {
+        event: {
+          id: 'event-4',
+          projectId: 'Apex',
+          stageKey: 'test_cases_human_review',
+          subjectType: 'test_cases',
+          subjectId: 'tc-1',
+          phaseIndex: null,
+          artifactContentHash: hash,
+          criteria: CRITERIA,
+        },
+        definition: {
+          version: 1,
+          rubric: WORKFLOW_EVALUATION_TEST_CASES_RUBRIC,
+          promptfooSuiteRef: workflowEvaluationPromptfooSuiteRef('test_cases_human_review'),
+          judgeOutputSchema: JUDGE_SCHEMA,
+        },
+        jobIds: { promptfoo: 'job-promptfoo', llm_judge: 'job-judge' },
+      };
+    }
+
+    it('packages the test cases with the source PRD and backlog for both jobs', async () => {
+      const result = await buildWorkflowEvaluationSpecifications(
+        testCasesRequest(),
+        dependencies({ loadTestCaseInputs: async () => RECORD }),
+      );
+
+      if (!result.promptfoo.ok || !result.llm_judge.ok) throw new Error('expected both to build');
+      expect(result.promptfoo.specification.suite.subjectType).toBe('test_cases');
+      expect(result.promptfoo.specification.artifactPackage).toEqual({
+        kind: 'test_cases',
+        markdown: TEST_CASES_MD,
+        sourcePrd: PRD_MARKDOWN,
+        sourceBacklogJson: JSON.stringify(BACKLOG, null, 2),
+        truncated: false,
+        omittedSections: [],
+        omittedMessages: 0,
+      });
+      const artifact = scratchJson(result.llm_judge.specification, WORKFLOW_EVALUATION_SCRATCH_PATHS.artifactPackage);
+      expect(artifact).toMatchObject({ kind: 'test_cases', sourcePrd: PRD_MARKDOWN, humanScoreHints: CRITERIA });
+    });
+
+    it('fails both jobs when the test cases changed after submission', async () => {
+      const result = await buildWorkflowEvaluationSpecifications(
+        testCasesRequest('d'.repeat(64)),
+        dependencies({ loadTestCaseInputs: async () => RECORD }),
+      );
+      expect(result.promptfoo).toMatchObject({ ok: false, code: 'artifact_changed' });
+      expect(result.llm_judge).toMatchObject({ ok: false, code: 'artifact_changed' });
+    });
+
+    it('fails both jobs when the test cases belong to another project', async () => {
+      const result = await buildWorkflowEvaluationSpecifications(
+        testCasesRequest(),
+        dependencies({ loadTestCaseInputs: async () => ({ ...RECORD, project: 'Other' }) }),
+      );
+      expect(result.promptfoo).toMatchObject({ ok: false, code: 'artifact_unavailable' });
+    });
+
+    it('drops whole PBI suites, not the whole Suites section, when the document is too large', async () => {
+      const bigSuite = `### Reports — PBI-002: Big (1 cases)\n\n${'x'.repeat(WORKFLOW_EVALUATION_PACKAGE_MAX_BYTES)}\n`;
+      const big = { ...RECORD, testCasesMd: TEST_CASES_MD.replace('## Gaps', `${bigSuite}## Gaps`) };
+      const result = await buildWorkflowEvaluationSpecifications(
+        testCasesRequest(hashTestCasesArtifact(big)),
+        dependencies({ loadTestCaseInputs: async () => big }),
+      );
+      if (!result.promptfoo.ok) throw new Error('expected Promptfoo to build');
+      const artifactPackage = result.promptfoo.specification.artifactPackage;
+      if (artifactPackage.kind !== 'test_cases') throw new Error('expected a test case package');
+      expect(artifactPackage.omittedSections).toContain('Reports — PBI-002: Big (1 cases)');
+      expect(artifactPackage.markdown).toContain('### Reports — PBI-001: Export');
+      expect(artifactPackage.markdown).toContain('## Gaps and assumptions');
+      expect(artifactPackage.truncated).toBe(true);
     });
   });
 });

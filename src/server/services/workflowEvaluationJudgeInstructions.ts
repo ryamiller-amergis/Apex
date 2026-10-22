@@ -12,7 +12,7 @@ import {
   WORKFLOW_EVALUATION_SCRATCH_PATHS,
 } from '../../shared/types/aiRunV2EvaluationSpec';
 
-export const WORKFLOW_EVALUATION_JUDGE_SKILL_PATH = 'apex/workflow-evaluation-judge@2';
+export const WORKFLOW_EVALUATION_JUDGE_SKILL_PATH = 'apex/workflow-evaluation-judge@3';
 
 export const WORKFLOW_EVALUATION_JUDGE_PROMPT = [
   'Run the workflow-evaluation judge on the files in `.ai-pilot/evaluation/`.',
@@ -31,6 +31,7 @@ Read these files. Do not read, search or change anything else in the workspace, 
   - \`kind: "prd"\`: \`markdown\` is the PRD, \`backlogJson\` is its backlog, and \`sourceTranscript\` is the interview the PRD was written from (null when there was none).
   - \`kind: "interview_phase"\`: \`messages\` is one phase of a requirements interview between the agent and a participant.
   - \`kind: "design_doc"\`: \`markdown\` is the design doc for one Feature (design, technical specification and assumptions), and \`sourcePrd\` is the PRD it was written from (null when unavailable).
+  - \`kind: "test_cases"\`: \`markdown\` is the QA test case document for a PRD, \`sourcePrd\` is that PRD and \`sourceBacklogJson\` its backlog, where each PBI lists its acceptance criteria (either is null when unavailable).
   - \`truncated\`, \`omittedSections\` and \`omittedMessages\` say what did not fit. Never report something as missed when it may sit in an omitted part.
   - \`humanScoreHints\` holds the person's 1–5 scores per criterion. Use them only to decide where to look first. Do not copy, restate or adjust them.
 - \`${WORKFLOW_EVALUATION_SCRATCH_PATHS.rubric}\` — the criteria the person scored, with help text. Use the criterion \`key\` values when you tie an improvement to a criterion.
@@ -54,6 +55,13 @@ For a design doc:
 - **Invented requirements**: behaviour, scope or constraints in the design that the PRD does not support and the design does not record as an assumption.
 - A design doc covers one Feature of the PRD. Do not report PRD requirements that belong to other Features as missed.
 - Without a source PRD, judge the design doc against itself: contradictions between the design and the technical specification, and acceptance criteria no test covers.
+
+For test cases:
+- **Missed requirements**: a PBI acceptance criterion or business rule in the backlog or PRD that no test case covers, or that a case claims to cover but does not actually check.
+- **Invented requirements**: a test case that expects behaviour, data or permissions the PRD and backlog do not describe.
+- Test cases are written only for PBIs. Do not report TBIs as missed.
+- Note cases a tester could not run as written (missing steps, preconditions or expected results) as recommended improvements.
+- Without a source PRD or backlog, judge the test cases against themselves: cases with no traceability, duplicate cases, and gaps the coverage summary admits.
 
 Quote short evidence from the input for every finding. Report only what the input shows; an empty list is a valid answer.
 

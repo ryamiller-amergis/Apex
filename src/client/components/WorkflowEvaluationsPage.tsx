@@ -58,6 +58,7 @@ const SUBJECT_OPTIONS = [
   { label: 'PRD', value: 'prd' },
   { label: 'Interview phase', value: 'interview_phase' },
   { label: 'Design doc', value: 'design_doc' },
+  { label: 'Test cases', value: 'test_cases' },
 ];
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -76,6 +77,8 @@ function subjectText(event: AdminEvaluationEventSummary): string {
       return `PRD ${event.subjectId.slice(0, 8)}`;
     case 'design_doc':
       return `Design doc ${event.subjectId.slice(0, 8)}`;
+    case 'test_cases':
+      return `Test cases ${event.subjectId.slice(0, 8)}`;
     default: {
       const unhandled: never = event.subjectType;
       return String(unhandled);

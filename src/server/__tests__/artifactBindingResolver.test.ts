@@ -3,6 +3,8 @@ import {
   canonicalJson,
   hashInterviewPhaseArtifact,
   hashPrdArtifact,
+  hashTestCasesArtifact,
+  renderTestCasesMarkdown,
   resolveCurrentArtifactBinding,
 } from '../services/artifactBindingResolver';
 import { WorkflowEvaluationError } from '../services/workflowEvaluationError';
@@ -15,9 +17,78 @@ jest.mock('../services/interviewService', () => ({
   getInterviewEvaluationInputs: jest.fn(),
 }));
 
+jest.mock('../services/testCaseService', () => ({
+  getTestCaseEvaluationInputs: jest.fn(),
+}));
+
 const { getPrdEvaluationInputs } = jest.requireMock('../services/prdService') as {
   getPrdEvaluationInputs: jest.Mock;
 };
+const { getTestCaseEvaluationInputs } = jest.requireMock('../services/testCaseService') as {
+  getTestCaseEvaluationInputs: jest.Mock;
+};
+
+describe('test case artifact hash', () => {
+  const parts = { testCasesMd: '# Test Cases\n', testCasesJson: { suites: [{ id: 'a' }] } };
+
+  it('changes when the markdown or the JSON suite changes', () => {
+    const base = hashTestCasesArtifact(parts);
+    expect(base).toMatch(/^[0-9a-f]{64}$/);
+    expect(hashTestCasesArtifact({ ...parts })).toBe(base);
+    expect(hashTestCasesArtifact({ ...parts, testCasesMd: '# Test Cases v2\n' })).not.toBe(base);
+    expect(hashTestCasesArtifact({ ...parts, testCasesJson: { suites: [] } })).not.toBe(base);
+  });
+
+  it('renders the markdown, or the JSON suite when there is no markdown', () => {
+    expect(renderTestCasesMarkdown(parts)).toBe('# Test Cases\n');
+    expect(renderTestCasesMarkdown({ ...parts, testCasesMd: '  ' })).toContain('"suites"');
+    expect(renderTestCasesMarkdown({ testCasesMd: null, testCasesJson: null })).toBe('');
+  });
+
+  it('binds a ready test case record with its PRD lineage, and refuses one still generating', async () => {
+    const record = {
+      id: 'tc-1',
+      project: 'proj-a',
+      status: 'ready',
+      prdId: 'prd-1',
+      interviewId: 'interview-1',
+      model: 'claude',
+      skillPath: '.cursor/skills/create-test-case/SKILL.md',
+      skillVersion: null,
+      ...parts,
+    };
+    getTestCaseEvaluationInputs.mockResolvedValueOnce(record);
+    const binding = await resolveCurrentArtifactBinding({
+      project: 'proj-a',
+      subjectType: 'test_cases',
+      subjectId: 'tc-1',
+      phaseIndex: null,
+    });
+    expect(binding).toMatchObject({
+      subjectType: 'test_cases',
+      subjectId: 'tc-1',
+      artifactHash: hashTestCasesArtifact(parts),
+      lineage: { prdId: 'prd-1', interviewId: 'interview-1' },
+      prdMarkdown: null,
+    });
+
+    getTestCaseEvaluationInputs.mockResolvedValueOnce({ ...record, status: 'generating' });
+    await expect(resolveCurrentArtifactBinding({
+      project: 'proj-a',
+      subjectType: 'test_cases',
+      subjectId: 'tc-1',
+      phaseIndex: null,
+    })).rejects.toMatchObject({ code: 'ARTIFACT_NOT_READY' });
+
+    getTestCaseEvaluationInputs.mockResolvedValueOnce({ ...record, project: 'proj-b' });
+    await expect(resolveCurrentArtifactBinding({
+      project: 'proj-a',
+      subjectType: 'test_cases',
+      subjectId: 'tc-1',
+      phaseIndex: null,
+    })).rejects.toMatchObject({ code: 'SUBJECT_NOT_FOUND' });
+  });
+});
 
 describe('artifactBindingResolver hashes — TBI-006', () => {
   const markdown = '# Problem\nShip the evaluation service.';

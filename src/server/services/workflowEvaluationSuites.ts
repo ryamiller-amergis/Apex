@@ -94,6 +94,24 @@ const DESIGN_DOC_TESTS: readonly WorkflowEvaluationPromptfooTest[] = DESIGN_DOC_
   }),
 );
 
+/** Sections and per-case fields from the markdown template in `.cursor/skills/create-test-case/SKILL.md`. */
+const TEST_CASES_TESTS: readonly WorkflowEvaluationPromptfooTest[] = [
+  ...['Coverage summary', 'Suites', 'Gaps and assumptions'].map(
+    (section): WorkflowEvaluationPromptfooTest => ({
+      description: `Test cases have a "${section}" section`,
+      target: 'artifact',
+      assert: [{ type: 'contains', value: `## ${section}` }],
+    }),
+  ),
+  ...['**Steps:**', '**Expected result:**', '**Traceability:**'].map(
+    (field): WorkflowEvaluationPromptfooTest => ({
+      description: `Test cases include ${field.replace(/\*/g, '').replace(':', '')}`,
+      target: 'artifact',
+      assert: [{ type: 'contains', value: field }],
+    }),
+  ),
+];
+
 function prdSuite(stageKey: string): WorkflowEvaluationPromptfooSuite {
   return {
     ref: workflowEvaluationPromptfooSuiteRef(stageKey),
@@ -118,6 +136,14 @@ function designDocSuite(stageKey: string): WorkflowEvaluationPromptfooSuite {
   };
 }
 
+function testCasesSuite(stageKey: string): WorkflowEvaluationPromptfooSuite {
+  return {
+    ref: workflowEvaluationPromptfooSuiteRef(stageKey),
+    subjectType: 'test_cases',
+    tests: TEST_CASES_TESTS,
+  };
+}
+
 const SUITES: ReadonlyMap<string, WorkflowEvaluationPromptfooSuite> = new Map(
   [
     prdSuite('prd_human_review'),
@@ -125,6 +151,7 @@ const SUITES: ReadonlyMap<string, WorkflowEvaluationPromptfooSuite> = new Map(
     interviewSuite('interview_phase_2'),
     interviewSuite('interview_phase_3'),
     designDocSuite('design_doc_human_review'),
+    testCasesSuite('test_cases_human_review'),
   ].map((suite) => [suite.ref, suite]),
 );
 

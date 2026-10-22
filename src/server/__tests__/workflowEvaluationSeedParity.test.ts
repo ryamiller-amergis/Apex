@@ -18,6 +18,8 @@ import {
   WORKFLOW_EVALUATION_REASON_CODES,
   WORKFLOW_EVALUATION_REVIEWER_ROLE_KEYS,
   WORKFLOW_EVALUATION_SEEDED_STAGE_KEYS,
+  WORKFLOW_EVALUATION_TEST_CASES_RUBRIC,
+  WORKFLOW_EVALUATION_TEST_CASES_STAGE_KEY,
   workflowEvaluationJudgeOutputSchema,
   workflowEvaluationPromptfooSuiteRef,
   type WorkflowEvaluationRubric,
@@ -153,5 +155,30 @@ describe('design doc evaluation definition seed', () => {
     expect(up).toMatch(/ON\s+CONFLICT\s*\([^)]*\)\s+DO\s+NOTHING/i);
     expect(stripComments(up)).not.toMatch(/\bUPDATE\b/i);
     expect(down).toMatch(/subject_type IN \('interview_phase', 'prd'\)/);
+  });
+});
+
+describe('test cases evaluation definition seed', () => {
+  const dir = path.resolve(process.cwd(), 'migrations');
+  const file = fs.readdirSync(dir).filter((name) => name.endsWith('_workflow-evaluation-test-cases.sql'));
+  const [up = '', down = ''] = fs.readFileSync(path.join(dir, file[0] ?? ''), 'utf8').split(/-- Down Migration/i);
+
+  it('seeds one test_cases_human_review row matching the shared rubric and judge schema', () => {
+    expect(file).toHaveLength(1);
+    expect(up).toContain(`'${WORKFLOW_EVALUATION_TEST_CASES_STAGE_KEY}'`);
+    expect(up).toContain(`'${workflowEvaluationPromptfooSuiteRef(WORKFLOW_EVALUATION_TEST_CASES_STAGE_KEY)}'`);
+    const rubrics = dollarBlocks(up, 'rubric').map((block) => JSON.parse(block) as WorkflowEvaluationRubric);
+    expect(rubrics).toEqual([WORKFLOW_EVALUATION_TEST_CASES_RUBRIC]);
+    const schemas = dollarBlocks(up, 'judge').map((block) => JSON.parse(block) as Record<string, unknown>);
+    expect(schemas).toEqual([toJSONSchema(workflowEvaluationJudgeOutputSchema)]);
+  });
+
+  it('allows the test_cases subject type, is safe to re-run, and restores the design doc state on down', () => {
+    expect(up).toMatch(/subject_type IN \('interview_phase', 'prd', 'design_doc', 'test_cases'\)/);
+    expect(up).toMatch(/subject_type IN \('design_doc', 'test_cases'\)/);
+    expect(up).toMatch(/ON\s+CONFLICT\s*\([^)]*\)\s+DO\s+NOTHING/i);
+    expect(stripComments(up)).not.toMatch(/\bUPDATE\b/i);
+    expect(down).toMatch(/subject_type IN \('interview_phase', 'prd', 'design_doc'\)/);
+    expect(down).toMatch(/subject_type = 'design_doc'/);
   });
 });

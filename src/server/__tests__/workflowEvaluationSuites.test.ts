@@ -15,6 +15,7 @@ import {
 
 const TO_PRD_DIR = path.resolve(__dirname, '../../../.cursor/skills/to-prd');
 const DESIGN_SPEC_DIR = path.resolve(__dirname, '../../../.cursor/skills/prd-design-spec');
+const TEST_CASE_SKILL_DIR = path.resolve(__dirname, '../../../.cursor/skills/create-test-case');
 
 const PACKAGES: Record<string, WorkflowEvaluationArtifactPackage> = {
   prd: {
@@ -37,6 +38,15 @@ const PACKAGES: Record<string, WorkflowEvaluationArtifactPackage> = {
     kind: 'design_doc',
     markdown: '# Design',
     sourcePrd: null,
+    truncated: false,
+    omittedSections: [],
+    omittedMessages: 0,
+  },
+  test_cases: {
+    kind: 'test_cases',
+    markdown: '# Test Cases',
+    sourcePrd: null,
+    sourceBacklogJson: null,
     truncated: false,
     omittedSections: [],
     omittedMessages: 0,
@@ -124,5 +134,15 @@ describe('workflow evaluation Promptfoo suites', () => {
       .map((assertion) => String(assertion.value).replace(/^## /, ''));
     expect(checked.length).toBeGreaterThan(0);
     for (const section of checked) expect(templateSections).toContain(section);
+  });
+
+  it('checks only text the create-test-case markdown template contains', () => {
+    const skill = readFileSync(path.join(TEST_CASE_SKILL_DIR, 'SKILL.md'), 'utf8');
+    const template = /### Markdown template[\s\S]*?```markdown\r?\n([\s\S]*?)\r?\n```/.exec(skill)?.[1] ?? '';
+    const suite = getWorkflowEvaluationSuite(workflowEvaluationPromptfooSuiteRef('test_cases_human_review'));
+    expect(suite?.subjectType).toBe('test_cases');
+    const checked = (suite?.tests ?? []).flatMap((test) => test.assert).map((assertion) => String(assertion.value));
+    expect(checked.length).toBeGreaterThan(0);
+    for (const value of checked) expect(template).toContain(value);
   });
 });

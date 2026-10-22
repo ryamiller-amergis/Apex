@@ -22,7 +22,7 @@ import {
   type SkillHealthWorkItemSkillKind,
 } from '../../shared/types/skillHealth';
 
-const ARTIFACT_KINDS: readonly SkillHealthWorkItemSkillKind[] = ['prd', 'design_doc', 'interview'];
+const ARTIFACT_KINDS: readonly SkillHealthWorkItemSkillKind[] = ['prd', 'design_doc', 'interview', 'test_cases'];
 const DESTINATIONS: readonly SkillHealthWorkItemDestination[] = ['apex-backlog', 'project-ado'];
 const ADO_WORK_ITEM_TYPE = 'Product Backlog Item';
 const ADO_TAG = 'skill-health';
@@ -44,7 +44,7 @@ export function parseSkillHealthWorkItemRequest(body: unknown): CreateSkillHealt
   if (!allowedWorkItemDestinations(project).includes(raw.destination)) {
     return `${project} Skills are filed to the Apex Backlog`;
   }
-  if (!isOneOf(ARTIFACT_KINDS, raw.artifactKind)) return 'artifactKind must be prd, design_doc or interview';
+  if (!isOneOf(ARTIFACT_KINDS, raw.artifactKind)) return 'artifactKind must be prd, design_doc, interview or test_cases';
   if (!title) return 'title is required';
   if (title.length > SKILL_HEALTH_WORK_ITEM_TITLE_MAX) {
     return `title must be at most ${SKILL_HEALTH_WORK_ITEM_TITLE_MAX} characters`;

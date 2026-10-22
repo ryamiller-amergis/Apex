@@ -96,6 +96,7 @@ export const WORKFLOW_EVALUATION_STAGE_LABELS: Record<string, string> = {
   interview_phase_2: 'Interview phase 2',
   interview_phase_3: 'Interview phase 3',
   design_doc_human_review: 'Design doc review',
+  test_cases_human_review: 'Test case review',
 };
 
 export function workflowEvaluationStageLabel(stageKey: string): string {

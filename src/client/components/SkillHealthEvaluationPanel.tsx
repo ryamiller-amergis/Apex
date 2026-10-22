@@ -34,6 +34,7 @@ export function skillNameOf(skillPath: string | null): string {
 export function stageLabel(stageKey: string): string {
   if (stageKey === 'prd_human_review') return 'PRD review';
   if (stageKey === 'design_doc_human_review') return 'Design doc review';
+  if (stageKey === 'test_cases_human_review') return 'Test case review';
   const phase = /^interview_phase_(\d+)$/.exec(stageKey);
   return phase ? `Interview phase ${phase[1]}` : stageKey;
 }
@@ -46,6 +47,8 @@ function subjectLabel(subjectType: WorkflowEvaluationSubjectType): string {
       return 'Interview';
     case 'design_doc':
       return 'Design doc';
+    case 'test_cases':
+      return 'Test cases';
     default: {
       const unreachable: never = subjectType;
       return unreachable;

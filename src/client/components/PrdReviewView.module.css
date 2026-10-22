@@ -426,6 +426,12 @@
   color: var(--text-secondary);
 }
 
+.qualityFeedbackStack {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
 .ownerFeedbackLink {
   padding: 0;
   border: none;

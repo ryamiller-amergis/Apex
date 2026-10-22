@@ -11,7 +11,11 @@ import { useAppShell } from '../hooks/useAppShell';
 import { useWorkflowEvaluationAccess } from '../hooks/useWorkflowEvaluationAccess';
 import { useWorkflowEvaluationEvents } from '../hooks/useWorkflowEvaluations';
 import { hasCurrentOwnerFeedback } from '../utils/prdOwnerFeedback';
-import { WORKFLOW_EVALUATION_PRD_STAGE_KEY } from '../../shared/types/workflowEvaluation';
+import { hasCurrentFeedbackFrom } from '../utils/interviewPhaseFeedback';
+import {
+  WORKFLOW_EVALUATION_PRD_STAGE_KEY,
+  WORKFLOW_EVALUATION_TEST_CASES_STAGE_KEY,
+} from '../../shared/types/workflowEvaluation';
 import {
   usePrd,
   useInterview,
@@ -116,6 +120,7 @@ import { ApexLoader } from './ApexLoader';
 type TabId = 'preview' | 'backlog' | 'validation' | 'quality-feedback';
 
 const PrdQualityFeedbackTab = lazy(() => import('./PrdQualityFeedbackTab'));
+const TestCasesQualityFeedbackPanel = lazy(() => import('./TestCasesQualityFeedbackPanel'));
 const PrdQualityFeedbackPrompt = lazy(() => import('./PrdQualityFeedbackPrompt'));
 
 type PrdFixKind = 'validation' | 'coverage';
@@ -625,6 +630,15 @@ export const PrdReviewView: React.FC = () => {
   const { data: ownerApproval } = useOwnerApproval(id, 'prd');
   const { data: projectConfig } = useProjectSkillConfig(prd?.project);
   const latestTestCase = testCaseRecord ?? prd?.latestTestCase ?? null;
+  const testCasesReadyForFeedback = prd?.testCasesRequired !== false && latestTestCase?.status === 'ready';
+  const testCaseFeedbackQuery = useWorkflowEvaluationEvents({
+    project: selectedProject,
+    subjectType: 'test_cases',
+    subjectId: latestTestCase?.id ?? '',
+    stageKey: WORKFLOW_EVALUATION_TEST_CASES_STAGE_KEY,
+    includeOlderVersions: false,
+    enabled: feedbackAccess.canSubmit && !isSuperAdmin && prd?.status === 'pending_review' && testCasesReadyForFeedback,
+  });
   const prototypeStageEnabled = resolvePrototypeStageEnabled(
     prd?.prototypeStageEnabled,
     projectConfig,
@@ -1674,6 +1688,12 @@ export const PrdReviewView: React.FC = () => {
     && !isSuperAdmin
     && !subjectFeedbackQuery.isError
     && !hasCurrentOwnerFeedback(subjectFeedbackQuery.data, userId);
+  // QA approvers give feedback on the test cases on screen before approving QA.
+  const qaFeedbackMissing = canSubmitFeedback
+    && !isSuperAdmin
+    && testCasesReadyForFeedback
+    && !testCaseFeedbackQuery.isError
+    && !(testCaseFeedbackQuery.data && userId && hasCurrentFeedbackFrom(testCaseFeedbackQuery.data, userId));
   const ownerOnly = !assignmentsLoading && !assignmentsError && assignments.length === 0;
   const qaOwnerOnly = !qaAssignmentsLoading && !qaAssignmentsError && qaAssignments.length === 0;
   const isOwnerActor = (prd.ownerId ? isOwner : isAuthor) || isSuperAdmin;
@@ -1692,6 +1712,17 @@ export const PrdReviewView: React.FC = () => {
   const hasAlreadyApprovedQa = qaAssignments.some(
     (a) => a.approverUserId === userId && a.status === 'approved'
   );
+  const qaFeedbackFirst = isAssignedQaApprover || (Boolean(userId) && sourceInterview?.testCaseOwnerId === userId);
+  const testCaseFeedbackPanel = testCasesReadyForFeedback && latestTestCase ? (
+    <TestCasesQualityFeedbackPanel
+      testCaseId={latestTestCase.id}
+      project={prd.project}
+      updatedAt={latestTestCase.updatedAt}
+      canView={showQualityFeedback}
+      canSubmit={canSubmitFeedback}
+      data-testid="test-cases-quality-feedback-panel"
+    />
+  ) : null;
   const canPerformReview =
     !ownerOnly && canReview && (isAssignedApprover || isAdmin) && (!isAuthor || isAdmin);
   const anyDesignDocApproved =
@@ -2229,12 +2260,40 @@ export const PrdReviewView: React.FC = () => {
                   <button
                     className={styles.btnApprove}
                     onClick={() => void handleQaApprove()}
-                    disabled={reviewTestCases.isPending}
+                    disabled={reviewTestCases.isPending || qaFeedbackMissing}
+                    aria-describedby={qaFeedbackMissing ? 'qa-approve-feedback-reason' : undefined}
+                    title={qaFeedbackMissing ? 'Give test case feedback before approving QA' : undefined}
                     type="button"
                     {...{ 'data-testid': 'approve-qa-btn' }}
                   >
                     Approve QA
                   </button>
+                  {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+                  {qaFeedbackMissing ? (
+                    /* @feature-flag:workflow-human-evaluation enabled-start */
+                    <span
+                      id="qa-approve-feedback-reason"
+                      role="status"
+                      className={styles.ownerFeedbackReason}
+                      {...{ 'data-testid': 'qa-approve-feedback-reason' }}
+                    >
+                      Give test case feedback before approving.{' '}
+                      <button
+                        type="button"
+                        className={styles.ownerFeedbackLink}
+                        onClick={() => setActiveTab('quality-feedback')}
+                        {...{ 'data-testid': 'qa-approve-open-feedback' }}
+                      >
+                        Open Quality feedback
+                      </button>
+                    </span>
+                    /* @feature-flag:workflow-human-evaluation enabled-end */
+                  ) : (
+                    /* @feature-flag:workflow-human-evaluation disabled-start */
+                    null
+                    /* @feature-flag:workflow-human-evaluation disabled-end */
+                  )}
+                  {/* @feature-flag:workflow-human-evaluation end */}
                 </div>
               </>
             )}
@@ -2249,13 +2308,42 @@ export const PrdReviewView: React.FC = () => {
                   <button
                     className={styles.btnApprove}
                     onClick={() => void handleQaOwnerApprove()}
-                    disabled={ownerApproveQa.isPending || !readiness.readyForReviewActions}
-                    title={!readiness.readyForReviewActions ? readiness.blockingReason : undefined}
+                    disabled={ownerApproveQa.isPending || !readiness.readyForReviewActions || qaFeedbackMissing}
+                    aria-describedby={qaFeedbackMissing ? 'qa-owner-approve-feedback-reason' : undefined}
+                    title={!readiness.readyForReviewActions
+                      ? readiness.blockingReason
+                      : qaFeedbackMissing ? 'Give test case feedback before approving QA' : undefined}
                     type="button"
                     {...{ 'data-testid': 'approve-qa-owner-btn' }}
                   >
                     Approve QA as Owner
                   </button>
+                  {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+                  {qaFeedbackMissing ? (
+                    /* @feature-flag:workflow-human-evaluation enabled-start */
+                    <span
+                      id="qa-owner-approve-feedback-reason"
+                      role="status"
+                      className={styles.ownerFeedbackReason}
+                      {...{ 'data-testid': 'qa-owner-approve-feedback-reason' }}
+                    >
+                      Give test case feedback before approving.{' '}
+                      <button
+                        type="button"
+                        className={styles.ownerFeedbackLink}
+                        onClick={() => setActiveTab('quality-feedback')}
+                        {...{ 'data-testid': 'qa-owner-approve-open-feedback' }}
+                      >
+                        Open Quality feedback
+                      </button>
+                    </span>
+                    /* @feature-flag:workflow-human-evaluation enabled-end */
+                  ) : (
+                    /* @feature-flag:workflow-human-evaluation disabled-start */
+                    null
+                    /* @feature-flag:workflow-human-evaluation disabled-end */
+                  )}
+                  {/* @feature-flag:workflow-human-evaluation end */}
                 </div>
               </>
             )}
@@ -3512,15 +3600,19 @@ export const PrdReviewView: React.FC = () => {
                 )}
               >
                 <Suspense fallback={<div className={styles.emptyPreview}>Loading quality feedback…</div>}>
-                  <PrdQualityFeedbackTab
-                    prdId={prd.id}
-                    project={prd.project}
-                    content={prd.content}
-                    updatedAt={prd.updatedAt}
-                    canView={showQualityFeedback}
-                    canSubmit={canSubmitFeedback}
-                    data-testid="prd-quality-feedback-panel"
-                  />
+                  <div className={styles.qualityFeedbackStack}>
+                    {qaFeedbackFirst && testCaseFeedbackPanel}
+                    <PrdQualityFeedbackTab
+                      prdId={prd.id}
+                      project={prd.project}
+                      content={prd.content}
+                      updatedAt={prd.updatedAt}
+                      canView={showQualityFeedback}
+                      canSubmit={canSubmitFeedback}
+                      data-testid="prd-quality-feedback-panel"
+                    />
+                    {!qaFeedbackFirst && testCaseFeedbackPanel}
+                  </div>
                 </Suspense>
               </ErrorBoundary>
               /* @feature-flag:workflow-human-evaluation enabled-end */
