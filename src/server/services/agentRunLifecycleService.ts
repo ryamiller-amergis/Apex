@@ -389,6 +389,15 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
             ...(input.snapshot.cloudAgent.task
               ? { task: input.snapshot.cloudAgent.task }
               : {}),
+            ...(input.snapshot.cloudAgent.images?.length
+              ? {
+                  images: input.snapshot.cloudAgent.images.map((image) => ({
+                    name: image.name,
+                    mimeType: image.mimeType,
+                    data: image.data,
+                  })),
+                }
+              : {}),
           },
         }
       : {}),

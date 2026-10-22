@@ -332,6 +332,7 @@ describe('enqueue + frozen snapshot (PBI-001 AC-0 / AC-3 / VT-01 / VT-04 / DoD-2
           opensPullRequest: true,
           guidedJobId: 'site-issue',
           task: 'The login page times out.',
+          images: [{ name: 'home.png', mimeType: 'image/png', data: 'YQ==' }],
           workItemTitle: 'The login page times out.',
         },
       },
@@ -347,6 +348,7 @@ describe('enqueue + frozen snapshot (PBI-001 AC-0 / AC-3 / VT-01 / VT-04 / DoD-2
       opensPullRequest: true,
       guidedJobId: 'site-issue',
       task: 'The login page times out.',
+      images: [{ name: 'home.png', mimeType: 'image/png', data: 'YQ==' }],
     });
     expect(stored.cloudAgent?.workItemId).toBeUndefined();
   });

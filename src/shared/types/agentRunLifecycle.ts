@@ -113,6 +113,8 @@ export interface ExecutionSnapshot {
     guidedJobId?: string;
     /** The person's task text for a guided job. */
     task?: string;
+    /** Small screenshots attached to a site report. */
+    images?: Array<{ name: string; mimeType: string; data: string }>;
     /**
      * App Service instance that holds the developer's ADO token in memory.
      * Other instances wait before claiming the run so the pull request opens

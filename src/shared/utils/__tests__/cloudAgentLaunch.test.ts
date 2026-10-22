@@ -3,6 +3,8 @@ import {
   buildGuidedCloudAgentPrompt,
   guidedSiteIssueBranchName,
   guidedCloudJobById,
+  parseSiteIssueImages,
+  recommendGuidedSiteSkill,
   recommendImplementationSkill,
   resolveCloudAgentLaunchSelection,
 } from '../cloudAgentLaunch';
@@ -110,6 +112,16 @@ describe('resolveCloudAgentLaunchSelection', () => {
 });
 
 describe('guided cloud jobs', () => {
+  it('uses the skill the project has installed when dev-orchestrator is absent', () => {
+    expect(recommendGuidedSiteSkill({
+      skills: [{ name: 'apex-implement-feature', path: '.cursor/skills/apex-implement-feature/SKILL.md' }],
+      configuredSkillPath: null,
+    })).toEqual({
+      skillPath: '.cursor/skills/apex-implement-feature/SKILL.md',
+      skillName: 'apex-implement-feature',
+    });
+  });
+
   it('lists the site-issue report', () => {
     expect(GUIDED_CLOUD_JOBS.map((job) => job.id)).toEqual(['site-issue']);
     expect(guidedCloudJobById('site-issue')?.skillName).toBe('dev-orchestrator');
@@ -133,5 +145,34 @@ describe('guided cloud jobs', () => {
     expect(prompt).toContain('Open a pull request titled `[APEX] apex-site-abc123-the-login-page-times-out`');
     expect(prompt).toContain('The login page times out.');
     expect(prompt).toContain('This report has no work item.');
+    expect(prompt).not.toContain('screenshot');
+  });
+
+  it('tells the agent to use attached screenshots', () => {
+    const prompt = buildGuidedCloudAgentPrompt({
+      title: "There's an issue on the site",
+      skillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
+      skillName: 'dev-orchestrator',
+      task: 'The login page times out.',
+      branchName: 'feature/apex-site-abc123-the-login-page-times-out',
+      imageCount: 2,
+    });
+    expect(prompt).toContain('This message includes 2 screenshots.');
+  });
+
+  it('accepts up to three small screenshots', () => {
+    const image = { name: 'home.png', mimeType: 'image/png' as const, data: 'YQ==' };
+    expect(parseSiteIssueImages([image, image, image])).toEqual({
+      ok: true,
+      images: [image, image, image],
+    });
+    expect(parseSiteIssueImages([image, image, image, image])).toEqual({
+      ok: false,
+      error: 'Add up to 3 screenshots.',
+    });
+    expect(parseSiteIssueImages([{ ...image, mimeType: 'image/gif' }])).toEqual({
+      ok: false,
+      error: 'Screenshots must be PNG, JPEG, or WebP.',
+    });
   });
 });

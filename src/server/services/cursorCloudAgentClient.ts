@@ -3,7 +3,7 @@
  * Status, activity, and cancel read that same agent. This path does not
  * launch a container job.
  */
-import { Agent, type Run, type SDKMessage } from '@cursor/sdk';
+import { Agent, type Run, type SDKImage, type SDKMessage } from '@cursor/sdk';
 import type { SkillProvider } from '../../shared/types/projectSettings';
 import type { CloudAgentActivityEvent } from '../../shared/types/devWorkbench';
 // My Work cloud agents start with Agent.create. The container script
@@ -33,6 +33,8 @@ export interface LaunchCloudAgentInput {
   adoUserToken?: string | null;
   /** False skips Cursor's autoCreatePR. Implementation runs and site reports leave it on. */
   autoCreatePr?: boolean;
+  /** Small screenshots for a site report. The SDK receives the image bytes. */
+  images?: SDKImage[];
 }
 
 export interface LaunchCloudAgentResult {
@@ -182,7 +184,11 @@ export async function launchCloudAgent(
     },
   });
   try {
-    const run = await agent.send(input.prompt);
+    const run = await agent.send(
+      input.images?.length
+        ? { text: input.prompt, images: input.images }
+        : input.prompt,
+    );
     return {
       cloudAgentId: agent.agentId,
       cursorRunId: run.id,

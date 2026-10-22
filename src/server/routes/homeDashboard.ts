@@ -12,8 +12,9 @@ import { agentRuns, devSessions } from '../db/schema';
 import { fetchAvailableModels } from '../services/modelsService';
 import {
   GUIDED_CLOUD_JOBS,
-  installedSkillPath,
   parseCloudAgentLaunchIntent,
+  parseSiteIssueImages,
+  recommendGuidedSiteSkill,
 } from '../../shared/utils/cloudAgentLaunch';
 import { DEFAULT_DEVELOPMENT_MODEL } from '../../shared/utils/developmentKickoff';
 import { getSkillConfig } from '../services/projectSettingsService';
@@ -105,9 +106,10 @@ router.get(
       res.json({
         jobs: GUIDED_CLOUD_JOBS.map((job) => ({
           ...job,
-          skillPath: installedSkillPath(skills, job.skillName)
-            ?? skillConfig?.developmentSkillPath?.trim()
-            ?? null,
+          skillPath: recommendGuidedSiteSkill({
+            skills,
+            configuredSkillPath: skillConfig?.developmentSkillPath,
+          }).skillPath,
         })),
         skills,
         models,
@@ -156,10 +158,16 @@ router.post(
         sessionId?: unknown;
         skillPath?: unknown;
         model?: unknown;
+        images?: unknown;
       };
       const intent = parseCloudAgentLaunchIntent(body.intent);
       if (!intent) {
         res.status(400).json({ error: 'intent must be start, resume, or retry' });
+        return;
+      }
+      const images = parseSiteIssueImages(body.images);
+      if (!images.ok) {
+        res.status(400).json({ error: images.error });
         return;
       }
       const [skills, models] = await Promise.all([
@@ -176,6 +184,7 @@ router.post(
         sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
         skillPath: typeof body.skillPath === 'string' ? body.skillPath : undefined,
         model: typeof body.model === 'string' ? body.model : undefined,
+        images: images.images,
         availableSkills: skills,
         allowedModelIds: models.map((model) => model.id),
         initiatorName: displayName,

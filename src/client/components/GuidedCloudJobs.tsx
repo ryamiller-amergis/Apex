@@ -12,6 +12,22 @@ import { isAgentRunTerminalStatus } from '../../shared/types/agentRunLifecycle';
 import { CloudAgentLaunchDialog } from './CloudAgentLaunchDialog';
 import styles from './GuidedCloudJobs.module.css';
 
+const SITE_ISSUE_REPORT_TEMPLATE = [
+  'Page:',
+  '',
+  'Problem:',
+  '',
+  'Steps:',
+  '1.',
+  '2.',
+  '3.',
+  '',
+  'Expected:',
+  '',
+  'Actual:',
+  '',
+].join('\n');
+
 interface GuidedCloudJobsProps {
   project: string;
 }
@@ -28,6 +44,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [priorSkillPath, setPriorSkillPath] = useState<string | null>(null);
   const [priorModel, setPriorModel] = useState<string | null>(null);
+  const [priorTask, setPriorTask] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const data = jobsQuery.data;
@@ -59,13 +76,14 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
     setSessionId(null);
     setPriorSkillPath(null);
     setPriorModel(null);
+    setPriorTask('');
     setActionError(null);
   };
 
-  const confirm = async (value: { skillPath: string; model: string; task: string }) => {
+  const confirm = async (value: { skillPath: string; model: string; task: string; images?: Array<{ name: string; mimeType: 'image/png' | 'image/jpeg' | 'image/webp'; data: string }> }) => {
     if (!job) return;
-    if (!value.task) {
-      setActionError('Describe the task before launching.');
+    if (!value.task || value.task.trim() === SITE_ISSUE_REPORT_TEMPLATE.trim()) {
+      setActionError('Fill in the page, the problem, and what you expected.');
       return;
     }
     setActionError(null);
@@ -78,6 +96,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
         sessionId: sessionId ?? undefined,
         skillPath: value.skillPath,
         model: value.model,
+        images: value.images,
       });
       setSelectedSessionId(result.sessionId);
       setJob(null);
@@ -191,6 +210,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
                                 setSessionId(run.sessionId);
                                 setPriorSkillPath(run.skillPath);
                                 setPriorModel(run.model);
+                                setPriorTask(run.task);
                                 setActionError(null);
                               }}
                             >
@@ -223,22 +243,27 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
       {job ? (
         <CloudAgentLaunchDialog
           title={intent === 'retry' ? 'Try the report again' : job.title}
-          reason={job.skillPath
-            ? 'Explain what is wrong. The agent will look into it and open a pull request. You can change the skill or model first.'
-            : `${job.skillName} is not installed in this project. Choose another skill.`}
+          reason="Describe the problem. The agent looks into it and opens a pull request for a developer to review."
           skills={data?.skills ?? []}
           models={data?.models ?? []}
           defaultSkillPath={
             intent === 'retry'
-              ? (priorSkillPath ?? job.skillPath ?? data?.skills[0]?.path ?? '')
-              : (job.skillPath ?? data?.skills[0]?.path ?? '')
+              ? (priorSkillPath ?? job.skillPath ?? '')
+              : (job.skillPath ?? '')
           }
           defaultModel={
             intent === 'retry'
-              ? (priorModel ?? data?.recommendedModel ?? data?.models[0]?.id ?? 'composer-2.5')
-              : (data?.recommendedModel ?? data?.models[0]?.id ?? 'composer-2.5')
+              ? (priorModel ?? data?.recommendedModel ?? 'composer-2.5')
+              : (data?.recommendedModel ?? 'composer-2.5')
           }
+          defaultTask={intent === 'retry' ? priorTask : SITE_ISSUE_REPORT_TEMPLATE}
+          taskRows={12}
           requireTask
+          chooseSkillAndModel={false}
+          allowImages
+          imageHint={intent === 'retry'
+            ? 'Leave this empty to keep the screenshots from the last try. PNG, JPEG, or WebP. Up to 3 images, 400 KB each.'
+            : 'PNG, JPEG, or WebP. Up to 3 images, 400 KB each.'}
           taskLabel="What's wrong on the site?"
           emptyTaskMessage="Describe the issue"
           loading={jobsQuery.isLoading}

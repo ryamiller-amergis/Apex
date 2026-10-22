@@ -69,6 +69,29 @@ export function installedSkillPath(
   return match?.path ?? null;
 }
 
+/**
+ * Site reports do not ask the person to pick a skill.
+ * The project's development skill wins, then dev-orchestrator, then whichever
+ * skill the project actually has installed.
+ */
+export function recommendGuidedSiteSkill(input: {
+  skills: ReadonlyArray<Pick<CloudAgentSkillChoice, 'name' | 'path'>>;
+  configuredSkillPath?: string | null;
+}): { skillPath: string; skillName: string | null } {
+  const configured = input.configuredSkillPath?.trim();
+  if (configured) {
+    return { skillPath: configured, skillName: skillNameFromPath(configured) };
+  }
+  const preferred = installedSkillPath(input.skills, 'dev-orchestrator');
+  if (preferred) return { skillPath: preferred, skillName: 'dev-orchestrator' };
+  const installed = input.skills.find((skill) => skill.path.trim());
+  if (installed) return { skillPath: installed.path, skillName: installed.name };
+  return {
+    skillPath: DEFAULT_DEVELOPMENT_SKILL_PATH,
+    skillName: skillNameFromPath(DEFAULT_DEVELOPMENT_SKILL_PATH),
+  };
+}
+
 export function recommendImplementationSkill(input: {
   workItemType: string;
   skills: ReadonlyArray<Pick<CloudAgentSkillChoice, 'name' | 'path'>>;
@@ -158,6 +181,60 @@ export function resolveCloudAgentLaunchSelection(
   return { ok: true, skillPath, model, keptPriorSettings: false };
 }
 
+export const SITE_ISSUE_MAX_IMAGES = 3;
+export const SITE_ISSUE_MAX_IMAGE_BYTES = 400 * 1024;
+
+const SITE_ISSUE_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
+
+export type SiteIssueImageType = (typeof SITE_ISSUE_IMAGE_TYPES)[number];
+
+export interface SiteIssueImage {
+  name: string;
+  mimeType: SiteIssueImageType;
+  /** Base64 file bytes, without a data-URL prefix. */
+  data: string;
+}
+
+function siteIssueImageBytes(data: string): number | null {
+  const normalized = data.replace(/\s+/g, '');
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalized) || normalized.length % 4 === 1) return null;
+  const padding = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0;
+  return (normalized.length * 3) / 4 - padding;
+}
+
+/** Accepts a missing list. Rejects anything that is not a few small screenshots. */
+export function parseSiteIssueImages(
+  value: unknown,
+): { ok: true; images: SiteIssueImage[] } | { ok: false; error: string } {
+  if (value == null) return { ok: true, images: [] };
+  if (!Array.isArray(value)) return { ok: false, error: 'Screenshots must be a list of images.' };
+  if (value.length > SITE_ISSUE_MAX_IMAGES) {
+    return { ok: false, error: `Add up to ${SITE_ISSUE_MAX_IMAGES} screenshots.` };
+  }
+  const images: SiteIssueImage[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') {
+      return { ok: false, error: 'Each screenshot needs a name, type, and image data.' };
+    }
+    const record = item as { name?: unknown; mimeType?: unknown; data?: unknown };
+    const name = typeof record.name === 'string' ? record.name.trim().slice(0, 80) : '';
+    const mimeType = record.mimeType;
+    const data = typeof record.data === 'string' ? record.data.replace(/\s+/g, '') : '';
+    if (!name || !data) {
+      return { ok: false, error: 'Each screenshot needs a name, type, and image data.' };
+    }
+    if (mimeType !== 'image/png' && mimeType !== 'image/jpeg' && mimeType !== 'image/webp') {
+      return { ok: false, error: 'Screenshots must be PNG, JPEG, or WebP.' };
+    }
+    const bytes = siteIssueImageBytes(data);
+    if (bytes == null || bytes <= 0 || bytes > SITE_ISSUE_MAX_IMAGE_BYTES) {
+      return { ok: false, error: 'Each screenshot must be 400 KB or smaller.' };
+    }
+    images.push({ name, mimeType, data });
+  }
+  return { ok: true, images };
+}
+
 export function parseCloudAgentLaunchIntent(value: unknown): CloudAgentLaunchIntent | null {
   if (value === undefined || value === null || value === '') return 'start';
   if (value === 'start' || value === 'resume' || value === 'retry') return value;
@@ -170,9 +247,11 @@ export function buildGuidedCloudAgentPrompt(input: {
   skillName: string | null;
   task: string;
   branchName: string;
+  imageCount?: number;
 }): string {
   const invocation = input.skillName ? `/${input.skillName}\n\n` : '';
   const pullRequestTitle = `[APEX] ${input.branchName.replace('feature/', '')}`;
+  const imageCount = input.imageCount ?? 0;
   return [
     `${invocation}A person who is not writing code reported a problem on the site: ${input.title}.`,
     `Load \`${input.skillPath}\` from the repository and follow it.`,
@@ -180,6 +259,9 @@ export function buildGuidedCloudAgentPrompt(input: {
     `Work on branch \`${input.branchName}\` and no other branch.`,
     `Open a pull request titled \`${pullRequestTitle}\` so a developer can review the change.`,
     'Do not change Azure DevOps work items. This report has no work item.',
+    ...(imageCount > 0
+      ? [`This message includes ${imageCount} screenshot${imageCount === 1 ? '' : 's'}. Use them as evidence of the problem.`]
+      : []),
     '',
     'What they reported:',
     input.task.trim(),

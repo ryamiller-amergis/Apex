@@ -1,9 +1,15 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { skillNameFromPath } from '../../shared/skillPaths';
 import type { CloudAgentSkillChoice } from '../../shared/types/devWorkbench';
+import {
+  SITE_ISSUE_MAX_IMAGE_BYTES,
+  SITE_ISSUE_MAX_IMAGES,
+  type SiteIssueImage,
+  type SiteIssueImageType,
+} from '../../shared/utils/cloudAgentLaunch';
 import styles from './CloudAgentLaunchDialog.module.css';
 
 const schema = z.object({
@@ -24,12 +30,18 @@ interface CloudAgentLaunchDialogProps {
   requireTask: boolean;
   taskLabel?: string;
   emptyTaskMessage?: string;
+  /** Site reports hide these. My Work still lets a developer change them. */
+  chooseSkillAndModel?: boolean;
+  defaultTask?: string;
+  taskRows?: number;
+  allowImages?: boolean;
+  imageHint?: string;
   loading: boolean;
   loadError: string | null;
   pending: boolean;
   error: string | null;
   onClose: () => void;
-  onConfirm: (value: { skillPath: string; model: string; task: string }) => void;
+  onConfirm: (value: { skillPath: string; model: string; task: string; images?: SiteIssueImage[] }) => void;
 }
 
 export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
@@ -42,6 +54,11 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
   requireTask,
   taskLabel = 'Task',
   emptyTaskMessage = 'Describe the task',
+  chooseSkillAndModel = true,
+  defaultTask = '',
+  taskRows = 5,
+  allowImages = false,
+  imageHint = 'PNG, JPEG, or WebP. Up to 3 images, 400 KB each.',
   loading,
   loadError,
   pending,
@@ -63,6 +80,9 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
     ? models
     : [{ id: defaultModel, displayName: defaultModel }, ...models];
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [images, setImages] = useState<SiteIssueImage[]>([]);
+  const [imageError, setImageError] = useState<string | null>(null);
   const {
     register,
     handleSubmit,
@@ -71,12 +91,48 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
     formState: { errors },
   } = useForm<LaunchFormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { skillPath: defaultSkillPath, model: defaultModel, task: '' },
+    defaultValues: { skillPath: defaultSkillPath, model: defaultModel, task: defaultTask },
   });
 
   useEffect(() => {
-    reset({ skillPath: defaultSkillPath, model: defaultModel, task: '' });
-  }, [defaultModel, defaultSkillPath, reset]);
+    reset({ skillPath: defaultSkillPath, model: defaultModel, task: defaultTask });
+    setImages([]);
+    setImageError(null);
+  }, [defaultModel, defaultSkillPath, defaultTask, reset]);
+
+  const addImages = async (fileList: FileList | null) => {
+    const files = Array.from(fileList ?? []);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (files.length === 0) return;
+    const next = [...images];
+    let error: string | null = null;
+    for (const file of files) {
+      if (next.length >= SITE_ISSUE_MAX_IMAGES) {
+        error = `Add up to ${SITE_ISSUE_MAX_IMAGES} screenshots.`;
+        break;
+      }
+      const mimeType: SiteIssueImageType | null = file.type === 'image/png' || file.type === 'image/jpeg' || file.type === 'image/webp'
+        ? file.type
+        : null;
+      if (!mimeType) {
+        error = 'Screenshots must be PNG, JPEG, or WebP.';
+        continue;
+      }
+      if (file.size > SITE_ISSUE_MAX_IMAGE_BYTES) {
+        error = 'Each screenshot must be 400 KB or smaller.';
+        continue;
+      }
+      const data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+      next.push({ name: file.name, mimeType, data });
+    }
+    setImages(next);
+    setImageError(error);
+  };
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -95,6 +151,7 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
       skillPath: values.skillPath,
       model: values.model,
       task: values.task.trim(),
+      ...(allowImages ? { images } : {}),
     });
   });
 
@@ -120,7 +177,7 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
           </button>
         </div>
         <form className={styles.body} onSubmit={submit}>
-          {loading ? <p className={styles.reason}>Loading skills…</p> : null}
+          {loading ? <p className={styles.reason}>{chooseSkillAndModel ? 'Loading skills…' : 'Loading…'}</p> : null}
           {loadError ? <p className={styles.error} role="alert">{loadError}</p> : null}
           {reason ? <p className={styles.reason}>{reason}</p> : null}
           {requireTask ? (
@@ -128,14 +185,54 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
               <span className={styles.label}>{taskLabel}</span>
               <textarea
                 className={styles.textarea}
-                rows={5}
-                placeholder="The home page button does nothing when I click it."
+                rows={taskRows}
                 {...register('task')}
                 data-testid="cloud-agent-launch-task"
               />
               {errors.task ? <span className={styles.error}>{errors.task.message}</span> : null}
             </label>
           ) : null}
+          {allowImages ? (
+            <div className={styles.images}>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                multiple
+                hidden
+                data-testid="cloud-agent-launch-images"
+                onChange={(event) => { void addImages(event.target.files); }}
+              />
+              <button
+                type="button"
+                className={styles.secondary}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                Add file
+              </button>
+              <p className={styles.reason}>{imageHint}</p>
+              {images.length > 0 ? (
+                <div className={styles.imageList}>
+                  {images.map((image, index) => (
+                    <span key={`${image.name}-${index}`} className={styles.imageChip}>
+                      <img src={`data:${image.mimeType};base64,${image.data}`} alt="" />
+                      <span>{image.name}</span>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${image.name}`}
+                        onClick={() => setImages((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              {imageError ? <p className={styles.error} role="alert">{imageError}</p> : null}
+            </div>
+          ) : null}
+          {chooseSkillAndModel ? (
+          <>
           <label className={styles.field}>
             <span className={styles.label}>Skill</span>
             <select
@@ -166,6 +263,13 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
             </select>
             {errors.model ? <span className={styles.error}>{errors.model.message}</span> : null}
           </label>
+          </>
+          ) : (
+            <>
+              <input type="hidden" {...register('skillPath')} />
+              <input type="hidden" {...register('model')} />
+            </>
+          )}
           {error ? <p className={styles.error} role="alert">{error}</p> : null}
           <div className={styles.actions}>
             <button type="button" className={styles.secondary} onClick={onClose}>

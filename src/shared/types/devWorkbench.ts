@@ -240,6 +240,7 @@ export interface StartGuidedCloudAgentRequest {
   sessionId?: string;
   skillPath?: string;
   model?: string;
+  images?: Array<{ name: string; mimeType: 'image/png' | 'image/jpeg' | 'image/webp'; data: string }>;
 }
 
 export interface StartCloudAgentRunResponse {

@@ -11,8 +11,9 @@ import { MY_WORK_CLOUD_AGENT_FLAG } from '../../shared/types/featureFlags';
 import {
   buildGuidedCloudAgentPrompt,
   guidedSiteIssueBranchName,
+  recommendGuidedSiteSkill,
+  type SiteIssueImage,
   guidedCloudJobById,
-  installedSkillPath,
   recommendImplementationSkill,
   resolveCloudAgentLaunchSelection,
   type CloudAgentLaunchIntent,
@@ -713,6 +714,7 @@ export interface StartGuidedCloudAgentInput {
   sessionId?: string;
   skillPath?: string;
   model?: string;
+  images?: SiteIssueImage[];
   availableSkills: CloudAgentSkillChoice[];
   allowedModelIds: string[];
   initiatorName?: string;
@@ -752,9 +754,10 @@ export async function startGuidedCloudAgentRun(
   if ((intent === 'resume' || intent === 'retry') && !input.sessionId) {
     throw new CloudAgentLaunchError('Resume and retry need the original guided job.');
   }
-  const recommendedPath = installedSkillPath(input.availableSkills, job.skillName)
-    ?? skillConfig?.developmentSkillPath?.trim()
-    ?? `.cursor/skills/${job.skillName}/SKILL.md`;
+  const recommendedPath = recommendGuidedSiteSkill({
+    skills: input.availableSkills,
+    configuredSkillPath: skillConfig?.developmentSkillPath,
+  }).skillPath;
   const selection = resolveCloudAgentLaunchSelection({
     intent,
     recommendedSkillPath: recommendedPath,
@@ -769,6 +772,9 @@ export async function startGuidedCloudAgentRun(
   if (!selection.ok) throw new CloudAgentLaunchError(selection.error);
 
   const taskText = intent === 'resume' && prior?.task ? prior.task : task;
+  const images = intent === 'start'
+    ? (input.images ?? [])
+    : (input.images?.length ? input.images : (prior?.images ?? []));
   const sessionId = intent === 'start' ? uuidv4() : input.sessionId!;
   const branchName = prior?.branchName?.trim()
     || guidedSiteIssueBranchName(sessionId, taskText);
@@ -779,6 +785,7 @@ export async function startGuidedCloudAgentRun(
     skillName,
     task: taskText,
     branchName,
+    imageCount: images.length,
   });
   const nowIso = new Date().toISOString();
   const timeoutAt = new Date(Date.now() + CLOUD_AGENT_QUEUE_WAIT_MS).toISOString();
@@ -848,6 +855,7 @@ export async function startGuidedCloudAgentRun(
           opensPullRequest: true,
           guidedJobId: job.id,
           task: taskText,
+          ...(images.length ? { images } : {}),
           ...(skillName ? { skillName } : {}),
         },
       },
@@ -930,7 +938,14 @@ async function loadPriorCloudAgentSettings(input: {
   project: string;
   workItemId?: number | null;
   sessionId?: string | null;
-}): Promise<{ skillPath: string; model: string; task: string | null; guidedJobId: string | null; branchName: string | null } | null> {
+}): Promise<{
+  skillPath: string;
+  model: string;
+  task: string | null;
+  guidedJobId: string | null;
+  branchName: string | null;
+  images: SiteIssueImage[];
+} | null> {
   const rows = input.sessionId
     ? await db
       .select({ currentRunId: devSessions.currentRunId })
@@ -964,6 +979,12 @@ async function loadPriorCloudAgentSettings(input: {
     task: snapshot?.cloudAgent?.task?.trim() || null,
     guidedJobId: snapshot?.cloudAgent?.guidedJobId ?? null,
     branchName: snapshot?.cloudAgent?.branchName?.trim() || null,
+    images: (snapshot?.cloudAgent?.images ?? []).flatMap((image) => {
+      if (image.mimeType !== 'image/png' && image.mimeType !== 'image/jpeg' && image.mimeType !== 'image/webp') {
+        return [];
+      }
+      return [{ name: image.name, mimeType: image.mimeType, data: image.data }];
+    }),
   };
 }
 
@@ -1237,6 +1258,11 @@ async function launchClaimedCloudAgentRun(
       skillName: cloud.skillName,
       adoUserToken,
       autoCreatePr: !guided || cloud.opensPullRequest === true,
+      images: (cloud.images ?? []).flatMap((image) => (
+        image.data && image.mimeType
+          ? [{ data: image.data, mimeType: image.mimeType }]
+          : []
+      )),
     });
   } catch (err) {
     const detail = err instanceof Error ? err.message : 'Cloud Agent launch failed';
