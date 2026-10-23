@@ -374,11 +374,46 @@ describe('AppSidebar — Playbooks visibility', () => {
   });
 });
 
+describe('AppSidebar — Builds visibility (FEAT-002 VT-06)', () => {
+  const canView = (key: string) => key === 'builds:view';
+
+  it('PBI-003 AC-0 renders Builds when flag, menu and builds:view all hold, and click navigates', () => {
+    const onNavigateBuilds = jest.fn();
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={canView}
+        menuEnabledViews={['builds']}
+        buildsEnabled
+        onNavigateBuilds={onNavigateBuilds}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('nav-item-builds'));
+    expect(onNavigateBuilds).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['flag off', { can: canView, menuEnabledViews: ['builds'], buildsEnabled: false }],
+    ['menu excludes builds', { can: canView, menuEnabledViews: [] as string[], buildsEnabled: true }],
+    ['no builds:view', { can: () => false, menuEnabledViews: ['builds'], buildsEnabled: true }],
+  ])('hides Builds when %s', (_label, props) => {
+    render(<AppSidebar {...baseProps} {...props} onNavigateBuilds={jest.fn()} />);
+    expect(screen.queryByTestId('nav-item-builds')).not.toBeInTheDocument();
+  });
+
+  it('a super admin needs only the flag', () => {
+    const { rerender } = render(<AppSidebar {...baseProps} isSuperAdmin buildsEnabled onNavigateBuilds={jest.fn()} />);
+    expect(screen.getByTestId('nav-item-builds')).toBeInTheDocument();
+    rerender(<AppSidebar {...baseProps} isSuperAdmin buildsEnabled={false} onNavigateBuilds={jest.fn()} />);
+    expect(screen.queryByTestId('nav-item-builds')).not.toBeInTheDocument();
+  });
+});
+
 describe('AppSidebar — grouped sections', () => {
   const allViews = [
     'calendar', 'planning', 'cloudcost', 'backlog', 'adr',
     'my-work', 'standup', 'ui-lab', 'feature-requests',
-    'ai-cost', 'design-module', 'load-tests', 'diagrams',
+    'ai-cost', 'design-module', 'load-tests', 'diagrams', 'builds',
   ];
   const superAdminProps = {
     ...baseProps,
