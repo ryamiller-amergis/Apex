@@ -6,6 +6,7 @@ import React, { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, PenLine, Play } from 'lucide-react';
 import type { PlaybookDefinitionDetail } from '../../shared/types/playbook';
+import { playbookAuthorGraphsMatch } from '../../shared/utils/playbookGraph';
 import { useAppShell } from '../hooks/useAppShell';
 import { usePlaybookDefinition } from '../hooks/usePlaybookDefinitions';
 import { useProfileCard } from '../hooks/useProfile';
@@ -187,7 +188,8 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
   const data = detail.data;
   const currentVersion = data.versions.find((version) => version.id === publishedVersionId);
   const hasUnpublishedChanges = publishedVersionId
-    ? Boolean(publishedGraph.data) && JSON.stringify(publishedGraph.data!.graph) !== JSON.stringify(data.draft.graph)
+    ? Boolean(publishedGraph.data)
+      && !playbookAuthorGraphsMatch(publishedGraph.data!.graph, data.draft.graph)
     : data.draft.graph.nodes.length > 0;
   const truncated = runs.data ? runs.data.total > runs.data.runs.length : false;
 
