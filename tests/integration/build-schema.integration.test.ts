@@ -27,6 +27,8 @@ import {
 } from './support/scratch-db';
 
 const MIGRATE_TIMEOUT = 600_000;
+const TABLES_MIGRATION = '20261023143900_a1a4_build-from-prompt-tables';
+const AGENT_RUNS_MIGRATION = '20261023144000_c3d8_build-from-prompt-agent-runs';
 const USER_OID = 'feat001-build-user';
 const COMMIT = '0123456789abcdef0123456789abcdef01234567';
 const CONTACTS = JSON.stringify([{ userId: 'u', displayName: 'Dev', email: 'dev@example.com' }]);
@@ -80,6 +82,17 @@ async function query<T extends pg.QueryResultRow = pg.QueryResultRow>(
 ): Promise<T[]> {
   const { rows } = await client.query<T>(text, values);
   return rows;
+}
+
+/** How many applied migrations a rollback must undo to remove `name`; later migrations go too. */
+async function migrationsFrom(c: pg.Client, name: string): Promise<number> {
+  const { rows } = await c.query<{ count: string }>(
+    `SELECT count(*) AS count FROM pgmigrations WHERE id >= (SELECT id FROM pgmigrations WHERE name = $1)`,
+    [name],
+  );
+  const count = Number(rows[0].count);
+  if (count < 1) throw new Error(`Migration ${name} is not applied`);
+  return count;
 }
 
 async function seedPlaybookRun(): Promise<string> {
@@ -505,7 +518,7 @@ describe('VT-04 and VT-07 agent run link and rollback', () => {
     const linkClient = new pg.Client({ connectionString: linkScratch.connectionString });
     await linkClient.connect();
     try {
-      await migrateDown(linkScratch.connectionString, 1);
+      await migrateDown(linkScratch.connectionString, await migrationsFrom(linkClient, AGENT_RUNS_MIGRATION));
       await linkClient.query(
         `INSERT INTO app_users (oid, display_name) VALUES ($1, 'link') ON CONFLICT (oid) DO NOTHING`,
         [USER_OID],
@@ -589,7 +602,7 @@ describe('VT-04 and VT-07 agent run link and rollback', () => {
     const downClient = new pg.Client({ connectionString: downScratch.connectionString });
     await downClient.connect();
     try {
-      await migrateDown(downScratch.connectionString, 2);
+      await migrateDown(downScratch.connectionString, await migrationsFrom(downClient, TABLES_MIGRATION));
       const tables = await downClient.query<{ table_name: string }>(
         `SELECT table_name FROM information_schema.tables
          WHERE table_schema = 'public' AND table_name = ANY($1)`,
