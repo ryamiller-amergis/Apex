@@ -11,6 +11,7 @@ import { MY_WORK_CLOUD_AGENT_FLAG } from '../../shared/types/featureFlags';
 import {
   buildGuidedCloudAgentPrompt,
   guidedSiteIssueBranchName,
+  parseSiteIssueReport,
   recommendGuidedSiteSkill,
   SITE_ISSUE_BUG_TAGS,
   type SiteIssueImage,
@@ -681,7 +682,7 @@ export async function listGuidedCloudAgentRuns(
       isNull(devSessions.workItemId),
     ))
     .orderBy(desc(devSessions.updatedAt))
-    .limit(10);
+    .limit(50);
 
   const runs: GuidedCloudAgentSession[] = [];
   for (const session of sessions) {
@@ -791,7 +792,7 @@ export async function startGuidedCloudAgentRun(
     };
   const sessionId = intent === 'start' ? uuidv4() : input.sessionId!;
   const branchName = prior?.branchName?.trim()
-    || guidedSiteIssueBranchName(sessionId, taskText);
+    || guidedSiteIssueBranchName({ sessionId, task: taskText, bugWorkItemId: bug.bugWorkItemId });
   const skillName = skillNameFromPath(selection.skillPath);
   const prompt = buildGuidedCloudAgentPrompt({
     title: job.title,
@@ -802,6 +803,13 @@ export async function startGuidedCloudAgentRun(
     imageCount: images.length,
     bugWorkItemId: bug.bugWorkItemId,
     bugUrl: bug.bugUrl,
+    pullRequestInstructions: bug.bugWorkItemId
+      ? buildPullRequestDescriptionInstructions({
+        workItemId: bug.bugWorkItemId,
+        pullRequestTitle: `[APEX] ${branchName.replace('feature/', '')}`,
+        pullRequestLabel: CLOUD_AGENT_PULL_REQUEST_LABEL,
+      })
+      : null,
   });
   const nowIso = new Date().toISOString();
   const timeoutAt = new Date(Date.now() + CLOUD_AGENT_QUEUE_WAIT_MS).toISOString();
@@ -862,7 +870,7 @@ export async function startGuidedCloudAgentRun(
         provider: skillProvider as SkillProvider,
         repository: skillRepo,
         cloudAgent: {
-          workItemTitle: guidedTaskTitle(taskText),
+          workItemTitle: guidedTaskTitle(parseSiteIssueReport(taskText).problem || taskText),
           branchName,
           baseBranch: skillBranch,
           initiatorName: input.initiatorName,
@@ -1017,30 +1025,52 @@ function escapeBugHtml(value: string): string {
     .replace(/>/g, '&gt;');
 }
 
+function bugHtml(value: string): string {
+  return escapeBugHtml(value).replace(/\n/g, '<br>');
+}
+
 async function createSiteIssueBug(input: {
   project: string;
   task: string;
   imageCount: number;
   initiatorName?: string;
 }): Promise<{ bugWorkItemId: number; bugUrl: string }> {
-  const title = `Site issue: ${guidedTaskTitle(input.task)}`.slice(0, 250);
+  const report = parseSiteIssueReport(input.task);
+  const title = (report.problem || guidedTaskTitle(input.task)).replace(/\s+/g, ' ').trim().slice(0, 250);
   const reporter = input.initiatorName?.trim();
   const description = [
-    '<p>Reported from Apex Home. This Bug is the audit record. A Cloud Agent investigates the report and opens a pull request for a developer to review.</p>',
+    report.actual ? `<p><strong>Actual</strong><br>${bugHtml(report.actual)}</p>` : `<p>${bugHtml(input.task)}</p>`,
     reporter ? `<p>Reporter: ${escapeBugHtml(reporter)}</p>` : '',
     input.imageCount > 0 ? `<p>Screenshots sent with the report: ${input.imageCount}</p>` : '',
-    '<p>Report:</p>',
-    `<pre>${escapeBugHtml(input.task)}</pre>`,
   ].filter(Boolean).join('');
-  try {
-    const created = await new AzureDevOpsService(input.project).createWorkItemForPrd({
+  const acceptanceCriteriaHtml = report.expected ? `<p>${bugHtml(report.expected)}</p>` : '';
+  const systemInfoHtml = report.page ? `<p>${bugHtml(report.page)}</p>` : '';
+  const create = (includeSystemInfo: boolean) => {
+    const steps = !includeSystemInfo && report.page
+      ? `Page: ${report.page}${report.steps ? `\n\n${report.steps}` : ''}`
+      : report.steps;
+    return new AzureDevOpsService(input.project).createWorkItemForPrd({
       type: 'Bug',
       title,
       description,
+      ...(steps ? { reproStepsHtml: `<p>${bugHtml(steps)}</p>` } : {}),
+      ...(acceptanceCriteriaHtml ? { acceptanceCriteriaHtml } : {}),
+      ...(includeSystemInfo && systemInfoHtml ? { systemInfoHtml } : {}),
       tags: [...SITE_ISSUE_BUG_TAGS],
     });
+  };
+  try {
+    const created = await create(true);
     return { bugWorkItemId: created.id, bugUrl: created.url };
   } catch (err) {
+    if (systemInfoHtml) {
+      try {
+        const created = await create(false);
+        return { bugWorkItemId: created.id, bugUrl: created.url };
+      } catch (retryErr) {
+        err = retryErr;
+      }
+    }
     const detail = err instanceof Error ? err.message : 'Azure DevOps could not create the Bug';
     throw new CloudAgentLaunchError(`Could not create the Bug work item. ${detail}`);
   }

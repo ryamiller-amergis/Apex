@@ -31,20 +31,34 @@ export const GUIDED_CLOUD_JOBS: readonly GuidedCloudJob[] = [
     id: 'site-issue',
     title: "There's an issue on the site",
     description: 'Explain what you saw. The agent looks into it and opens a pull request for a developer to review.',
-    skillName: 'dev-orchestrator',
+    skillName: 'bug-fix',
   },
 ];
 
-/** Branch for a site report that has no Azure DevOps work item. */
-export function guidedSiteIssueBranchName(sessionId: string, task: string): string {
-  const slug = task
+function branchSlug(text: string): string {
+  return text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 40)
     .replace(/-+$/, '');
-  const suffix = sessionId.replace(/-/g, '').slice(0, 6) || 'issue';
-  return slug ? `feature/apex-site-${suffix}-${slug}` : `feature/apex-site-${suffix}`;
+}
+
+/**
+ * Site report branch. With a Bug it matches My Work: feature/apex-<bugId>-<problem>.
+ * The slug comes from the Problem section so the page URL does not fill the name.
+ */
+export function guidedSiteIssueBranchName(input: {
+  sessionId: string;
+  task: string;
+  bugWorkItemId?: number | null;
+}): string {
+  const report = parseSiteIssueReport(input.task);
+  const slug = branchSlug(report.problem || input.task);
+  const prefix = input.bugWorkItemId
+    ? `feature/apex-${input.bugWorkItemId}`
+    : `feature/apex-site-${input.sessionId.replace(/-/g, '').slice(0, 6) || 'issue'}`;
+  return slug ? `${prefix}-${slug}` : prefix;
 }
 
 /** First installed skill wins. Later names are fallbacks. */
@@ -71,13 +85,15 @@ export function installedSkillPath(
 
 /**
  * Site reports do not ask the person to pick a skill.
- * The project's development skill wins, then dev-orchestrator, then whichever
- * skill the project actually has installed.
+ * An installed bug-fix skill wins, then the project's development skill,
+ * then dev-orchestrator, then whichever skill the project has installed.
  */
 export function recommendGuidedSiteSkill(input: {
   skills: ReadonlyArray<Pick<CloudAgentSkillChoice, 'name' | 'path'>>;
   configuredSkillPath?: string | null;
 }): { skillPath: string; skillName: string | null } {
+  const bugFix = installedSkillPath(input.skills, 'bug-fix');
+  if (bugFix) return { skillPath: bugFix, skillName: 'bug-fix' };
   const configured = input.configuredSkillPath?.trim();
   if (configured) {
     return { skillPath: configured, skillName: skillNameFromPath(configured) };
@@ -184,6 +200,45 @@ export function resolveCloudAgentLaunchSelection(
 /** Keeps site-report Bugs out of the normal investigation backlog. */
 export const SITE_ISSUE_BUG_TAGS = ['prod-issue'] as const;
 
+export interface SiteIssueReportSections {
+  page: string;
+  problem: string;
+  steps: string;
+  expected: string;
+  actual: string;
+}
+
+const SITE_ISSUE_SECTION_NAMES = ['page', 'problem', 'steps', 'expected', 'actual'] as const;
+
+/** Reads the report form headings. Text outside those headings stays unused. */
+export function parseSiteIssueReport(task: string): SiteIssueReportSections {
+  const sections: Record<(typeof SITE_ISSUE_SECTION_NAMES)[number], string[]> = {
+    page: [],
+    problem: [],
+    steps: [],
+    expected: [],
+    actual: [],
+  };
+  let current: (typeof SITE_ISSUE_SECTION_NAMES)[number] | null = null;
+  for (const line of task.replace(/\r\n/g, '\n').split('\n')) {
+    const heading = /^(Page|Problem|Steps|Expected|Actual):\s*(.*)$/i.exec(line);
+    if (heading) {
+      const name = heading[1].toLowerCase() as (typeof SITE_ISSUE_SECTION_NAMES)[number];
+      current = name;
+      if (heading[2].trim()) sections[name].push(heading[2].trim());
+      continue;
+    }
+    if (current) sections[current].push(line);
+  }
+  return {
+    page: sections.page.join('\n').trim(),
+    problem: sections.problem.join('\n').trim(),
+    steps: sections.steps.join('\n').trim(),
+    expected: sections.expected.join('\n').trim(),
+    actual: sections.actual.join('\n').trim(),
+  };
+}
+
 export const SITE_ISSUE_MAX_IMAGES = 3;
 export const SITE_ISSUE_MAX_IMAGE_BYTES = 400 * 1024;
 
@@ -253,23 +308,36 @@ export function buildGuidedCloudAgentPrompt(input: {
   imageCount?: number;
   bugWorkItemId?: number | null;
   bugUrl?: string | null;
+  /** The repository's pull request description instructions, when it has a template. */
+  pullRequestInstructions?: string | null;
 }): string {
   const invocation = input.skillName ? `/${input.skillName}\n\n` : '';
   const pullRequestTitle = `[APEX] ${input.branchName.replace('feature/', '')}`;
   const imageCount = input.imageCount ?? 0;
   const bugLine = input.bugWorkItemId
-    ? `An Azure DevOps Bug already exists: #${input.bugWorkItemId}${input.bugUrl ? ` ${input.bugUrl}` : ''}. Mention that bug in the pull request. Do not change its state, tags, or fields.`
+    ? `An Azure DevOps Bug already exists: #${input.bugWorkItemId}${input.bugUrl ? ` ${input.bugUrl}` : ''}. It holds the same report. Use it as the bug work item id, and mention it in the pull request. Do not change its state, tags, or fields.`
     : 'Do not change Azure DevOps work items. This report has no work item.';
+  const screenshotLines = imageCount > 0
+    ? [
+      `This message includes ${imageCount} screenshot${imageCount === 1 ? '' : 's'} from the person who reported it. They show what the person saw. Compare them with what the code renders to confirm the problem and find the page or component.`,
+      'If your fix changes what the page shows, check the fixed page in a browser when you can run the app. Describe what you saw in the pull request, and attach a screenshot when your tools allow. If you cannot run the app, say how you confirmed the fix instead.',
+    ]
+    : [];
   return [
-    `${invocation}A person who is not writing code reported a problem on the site: ${input.title}.`,
-    `Load \`${input.skillPath}\` from the repository and follow it.`,
-    'Investigate the report, find the cause, and make the code change that fixes it.',
+    `${invocation}A person who does not write code reported a problem on the site: ${input.title}.`,
+    `Load \`${input.skillPath}\` from the repository and follow it, with these changes because nobody is watching this run:`,
+    '- Do not wait for approval. Where the skill asks for approval of a findings or fix plan, write that plan into the pull request description and continue.',
+    '- If you cannot reproduce the problem, cannot find its cause with high confidence, or the expected behavior is unclear, do not change production code. End with your findings and the questions a developer must answer.',
+    '- Open the pull request yourself. Do not hand off to another skill or ask for a new chat.',
+    '',
+    'Fix the cause, not the first place the symptom shows. Change only what the report needs.',
+    'Add a regression test that fails without the fix and passes with it. Run the relevant tests and lint before opening the pull request.',
+    ...screenshotLines,
+    '',
     `Work on branch \`${input.branchName}\` and no other branch.`,
-    `Open a pull request titled \`${pullRequestTitle}\` so a developer can review the change.`,
+    input.pullRequestInstructions?.trim()
+      || `Open a pull request titled \`${pullRequestTitle}\` so a developer can review the change. Describe the cause, the fix, and how you tested it.`,
     bugLine,
-    ...(imageCount > 0
-      ? [`This message includes ${imageCount} screenshot${imageCount === 1 ? '' : 's'}. Use them as evidence of the problem.`]
-      : []),
     '',
     'What they reported:',
     input.task.trim(),

@@ -1,15 +1,16 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useFeatureFlags } from '../hooks/useFeatureFlags';
 import {
   useCancelGuidedCloudAgentRun,
-  useCloudAgentActivityStream,
   useGuidedCloudJobs,
   useStartGuidedCloudAgentRun,
 } from '../hooks/useDevWorkbench';
 import { CLOUD_AGENT_GUIDED_LAUNCH_FLAG, MY_WORK_CLOUD_AGENT_FLAG } from '../../shared/types/featureFlags';
-import type { GuidedCloudJobOption } from '../../shared/types/devWorkbench';
+import type { GuidedCloudAgentSession, GuidedCloudJobOption } from '../../shared/types/devWorkbench';
 import { isAgentRunTerminalStatus } from '../../shared/types/agentRunLifecycle';
 import { CloudAgentLaunchDialog } from './CloudAgentLaunchDialog';
+import { DataGridToolbar } from './DataGridToolbar';
+import gridStyles from './DataGrid.module.css';
 import styles from './GuidedCloudJobs.module.css';
 
 const SITE_ISSUE_REPORT_TEMPLATE = [
@@ -27,6 +28,18 @@ const SITE_ISSUE_REPORT_TEMPLATE = [
   'Actual:',
   '',
 ].join('\n');
+
+function reportIsWorking(report: GuidedCloudAgentSession): boolean {
+  const run = report.run;
+  return !run || !isAgentRunTerminalStatus(run.status);
+}
+
+function reportedOn(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? ''
+    : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
 
 interface GuidedCloudJobsProps {
   project: string;
@@ -46,21 +59,18 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
   const [priorModel, setPriorModel] = useState<string | null>(null);
   const [priorTask, setPriorTask] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
   const data = jobsQuery.data;
-  const selected = data?.runs.find((run) => run.sessionId === selectedSessionId) ?? null;
-  const selectedLive = Boolean(
-    selected?.run
-    && !isAgentRunTerminalStatus(selected.run.status),
-  );
-  const activity = useCloudAgentActivityStream(
-    selected?.sessionId ?? null,
-    selected?.run?.runId ?? null,
-    open && selectedLive,
-    selected
-      ? `/api/home-dashboard/cloud-agent/guided/${encodeURIComponent(selected.sessionId)}/stream?project=${encodeURIComponent(project)}&runId=${encodeURIComponent(selected.run?.runId ?? '')}`
-      : null,
-  );
+  const siteIssueJob = data?.jobs[0] ?? null;
+
+  const reports = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return (data?.runs ?? []).filter((report) => {
+      if (!term) return true;
+      return report.title.toLowerCase().includes(term)
+        || String(report.bugWorkItemId ?? '').includes(term);
+    });
+  }, [data?.runs, search]);
 
   // @feature-flag:cloud-agent-guided-launch start winner=enabled
   if (!enabled || flags[MY_WORK_CLOUD_AGENT_FLAG] !== true) {
@@ -70,13 +80,26 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
   }
 
   // @feature-flag:cloud-agent-guided-launch enabled-start
-  const openStart = (nextJob: GuidedCloudJobOption) => {
-    setJob(nextJob);
+  const openStart = () => {
+    if (!siteIssueJob) return;
+    setJob(siteIssueJob);
     setIntent('start');
     setSessionId(null);
     setPriorSkillPath(null);
     setPriorModel(null);
     setPriorTask('');
+    setActionError(null);
+  };
+
+  const openRetry = (report: GuidedCloudAgentSession) => {
+    const match = data?.jobs.find((item) => item.id === report.jobId) ?? siteIssueJob;
+    if (!match) return;
+    setJob(match);
+    setIntent('retry');
+    setSessionId(report.sessionId);
+    setPriorSkillPath(report.skillPath);
+    setPriorModel(report.model);
+    setPriorTask(report.task);
     setActionError(null);
   };
 
@@ -88,7 +111,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
     }
     setActionError(null);
     try {
-      const result = await startJob.mutateAsync({
+      await startJob.mutateAsync({
         project,
         jobId: job.id,
         task: value.task,
@@ -98,13 +121,14 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
         model: value.model,
         images: value.images,
       });
-      setSelectedSessionId(result.sessionId);
       setJob(null);
       void jobsQuery.refetch();
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Unable to start the guided job.');
+      setActionError(error instanceof Error ? error.message : 'Unable to send the report.');
     }
   };
+
+  const hasReports = (data?.runs ?? []).length > 0;
 
   return (
     <>
@@ -131,116 +155,101 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
             <div className={styles.header}>
               <div>
                 <h2 id="guided-jobs-title">Report an issue</h2>
-                <p>Describe a problem on the site. The agent looks into it and opens a pull request for a developer to review.</p>
+                <p>Describe a problem on the site. Apex opens a Bug, and the agent prepares a fix for a developer to review.</p>
               </div>
-              <button type="button" className={styles.close} onClick={() => setOpen(false)} aria-label="Close">
-                ×
-              </button>
+              <div className={styles.headerActions}>
+                <button
+                  type="button"
+                  className={gridStyles.buttonPrimary}
+                  onClick={openStart}
+                  disabled={!siteIssueJob}
+                  data-testid="home-guided-job-site-issue"
+                >
+                  New report
+                </button>
+                <button type="button" className={styles.close} onClick={() => setOpen(false)} aria-label="Close">
+                  ×
+                </button>
+              </div>
             </div>
-            <div className={styles.layout}>
-              <div className={styles.jobs}>
-                {(data?.jobs ?? []).map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className={styles.job}
-                    onClick={() => openStart(item)}
-                    data-testid={`home-guided-job-${item.id}`}
-                  >
-                    <strong>{item.title}</strong>
-                    <span>{item.description}</span>
-                  </button>
-                ))}
-                {jobsQuery.isLoading ? <p>Loading guided jobs…</p> : null}
-                {jobsQuery.error ? (
-                  <p className={styles.error} role="alert">
-                    {jobsQuery.error.message}
-                  </p>
-                ) : null}
-              </div>
-              <div className={styles.runs}>
-                <h3>Your reports</h3>
-                {(data?.runs ?? []).length === 0 ? <p>No reports yet.</p> : null}
-                {(data?.runs ?? []).map((run) => {
-                  const live = Boolean(run.run && !isAgentRunTerminalStatus(run.run.status));
-                  return (
-                    <article key={run.sessionId} className={styles.run} data-testid={`home-guided-run-${run.sessionId}`}>
-                      <button
-                        type="button"
-                        className={styles.runSummary}
-                        onClick={() => setSelectedSessionId(run.sessionId)}
-                      >
-                        <strong>{run.title}</strong>
-                        <span>{run.run?.status ?? 'queued'}</span>
-                      </button>
-                      {run.bugUrl ? (
-                        <a className={styles.prLink} href={run.bugUrl} target="_blank" rel="noreferrer">
-                          Bug {run.bugWorkItemId}
-                        </a>
-                      ) : null}
-                      {run.run?.prUrl ? (
-                        <a className={styles.prLink} href={run.run.prUrl} target="_blank" rel="noreferrer">
-                          Pull request
-                        </a>
-                      ) : null}
-                      {run.run?.finishedWithoutPr ? <span>Finished without a pull request.</span> : null}
-                      <div className={styles.runActions}>
-                        {live ? (
-                          <button
-                            type="button"
-                            onClick={() => void cancelJob.mutateAsync({ project, sessionId: run.sessionId }).then(() => jobsQuery.refetch())}
-                          >
-                            Cancel
-                          </button>
-                        ) : (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => void startJob.mutateAsync({
-                                project,
-                                jobId: run.jobId,
-                                task: run.task,
-                                intent: 'resume',
-                                sessionId: run.sessionId,
-                              }).then(() => jobsQuery.refetch())}
-                            >
-                              Resume
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const match = data?.jobs.find((item) => item.id === run.jobId) ?? null;
-                                setJob(match);
-                                setIntent('retry');
-                                setSessionId(run.sessionId);
-                                setPriorSkillPath(run.skillPath);
-                                setPriorModel(run.model);
-                                setPriorTask(run.task);
-                                setActionError(null);
-                              }}
-                            >
-                              Retry
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </article>
-                  );
-                })}
-                {selected ? (
-                  <div className={styles.activity} data-testid="home-guided-activity">
-                    <h3>Activity</h3>
-                    {activity.events.length === 0 ? <p>Activity appears here while the job runs.</p> : null}
-                    {activity.events.map((event) => (
-                      <p key={event.id}>
-                        <strong>{event.title}</strong>
-                        {event.detail ? ` ${event.detail}` : ''}
-                      </p>
-                    ))}
-                    {activity.error ? <p className={styles.error} role="status">{activity.error}</p> : null}
-                  </div>
-                ) : null}
-              </div>
+            <div className={styles.body}>
+              <DataGridToolbar
+                searchValue={search}
+                onSearchChange={setSearch}
+                searchPlaceholder="Search reports or Bug number"
+                searchTestId="home-guided-reports-search"
+              />
+              {jobsQuery.isLoading ? <p className={gridStyles.loading}>Loading reports…</p> : null}
+              {jobsQuery.error ? (
+                <p className={gridStyles.error} role="alert">{jobsQuery.error.message}</p>
+              ) : null}
+              {!jobsQuery.isLoading && !jobsQuery.error && reports.length === 0 ? (
+                <p className={gridStyles.empty}>
+                  {hasReports ? 'No reports match this search.' : 'No reports yet. Choose New report to describe a problem.'}
+                </p>
+              ) : null}
+              {reports.length > 0 ? (
+                <div className={`${gridStyles.tableWrap} ${styles.tableScroll}`}>
+                  <table className={`${gridStyles.table} ${styles.table}`} data-testid="home-guided-reports-table">
+                    <thead>
+                      <tr>
+                        <th>Report</th>
+                        <th>Reported</th>
+                        <th>Links</th>
+                        <th aria-label="Actions" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reports.map((report) => {
+                        const working = reportIsWorking(report);
+                        return (
+                          <tr key={report.sessionId} data-testid={`home-guided-run-${report.sessionId}`}>
+                            <td className={styles.titleCell} title={report.title}>{report.title}</td>
+                            <td className={styles.dateCell}>{reportedOn(report.updatedAt)}</td>
+                            <td>
+                              <div className={styles.links}>
+                                {report.bugUrl ? (
+                                  <a href={report.bugUrl} target="_blank" rel="noreferrer">
+                                    Bug {report.bugWorkItemId}
+                                  </a>
+                                ) : null}
+                                {report.run?.prUrl ? (
+                                  <a href={report.run.prUrl} target="_blank" rel="noreferrer">
+                                    Pull request
+                                  </a>
+                                ) : null}
+                              </div>
+                            </td>
+                            <td>
+                              <div className={gridStyles.rowActions}>
+                                {working ? (
+                                  <button
+                                    type="button"
+                                    className={gridStyles.buttonGhost}
+                                    onClick={() => void cancelJob.mutateAsync({ project, sessionId: report.sessionId }).then(() => jobsQuery.refetch())}
+                                    data-testid={`home-guided-cancel-${report.sessionId}`}
+                                  >
+                                    Cancel
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className={gridStyles.buttonGhost}
+                                    onClick={() => openRetry(report)}
+                                    data-testid={`home-guided-retry-${report.sessionId}`}
+                                  >
+                                    Try again
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
@@ -248,7 +257,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
       {job ? (
         <CloudAgentLaunchDialog
           title={intent === 'retry' ? 'Try the report again' : job.title}
-          reason="Describe the problem. The agent looks into it and opens a pull request for a developer to review."
+          reason="Describe the problem. Apex opens a Bug, and the agent prepares a fix for a developer to review."
           skills={data?.skills ?? []}
           models={data?.models ?? []}
           defaultSkillPath={
@@ -265,6 +274,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
           taskRows={12}
           requireTask
           chooseSkillAndModel={false}
+          allowChangingSkillAndModel
           allowImages
           imageHint={intent === 'retry'
             ? 'Leave this empty to keep the screenshots from the last try. PNG, JPEG, or WebP. Up to 3 images, 400 KB each.'

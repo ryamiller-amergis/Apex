@@ -32,6 +32,8 @@ interface CloudAgentLaunchDialogProps {
   emptyTaskMessage?: string;
   /** Site reports hide these. My Work still lets a developer change them. */
   chooseSkillAndModel?: boolean;
+  /** When the pickers start hidden, shows a link that reveals them. */
+  allowChangingSkillAndModel?: boolean;
   defaultTask?: string;
   taskRows?: number;
   allowImages?: boolean;
@@ -55,6 +57,7 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
   taskLabel = 'Task',
   emptyTaskMessage = 'Describe the task',
   chooseSkillAndModel = true,
+  allowChangingSkillAndModel = false,
   defaultTask = '',
   taskRows = 5,
   allowImages = false,
@@ -83,6 +86,7 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [images, setImages] = useState<SiteIssueImage[]>([]);
   const [imageError, setImageError] = useState<string | null>(null);
+  const [showChoices, setShowChoices] = useState(chooseSkillAndModel);
   const {
     register,
     handleSubmit,
@@ -177,7 +181,7 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
           </button>
         </div>
         <form className={styles.body} onSubmit={submit}>
-          {loading ? <p className={styles.reason}>{chooseSkillAndModel ? 'Loading skills…' : 'Loading…'}</p> : null}
+          {loading ? <p className={styles.reason}>{showChoices ? 'Loading skills…' : 'Loading…'}</p> : null}
           {loadError ? <p className={styles.error} role="alert">{loadError}</p> : null}
           {reason ? <p className={styles.reason}>{reason}</p> : null}
           {requireTask ? (
@@ -231,7 +235,17 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
               {imageError ? <p className={styles.error} role="alert">{imageError}</p> : null}
             </div>
           ) : null}
-          {chooseSkillAndModel ? (
+          {!showChoices && allowChangingSkillAndModel ? (
+            <button
+              type="button"
+              className={styles.linkButton}
+              onClick={() => setShowChoices(true)}
+              data-testid="cloud-agent-launch-show-skill"
+            >
+              Choose a skill and model
+            </button>
+          ) : null}
+          {showChoices ? (
           <>
           <label className={styles.field}>
             <span className={styles.label}>Skill</span>

@@ -4,6 +4,7 @@ import {
   guidedSiteIssueBranchName,
   guidedCloudJobById,
   parseSiteIssueImages,
+  parseSiteIssueReport,
   recommendGuidedSiteSkill,
   recommendImplementationSkill,
   resolveCloudAgentLaunchSelection,
@@ -122,15 +123,42 @@ describe('guided cloud jobs', () => {
     });
   });
 
+  it('prefers an installed bug-fix skill over the development skill', () => {
+    expect(recommendGuidedSiteSkill({
+      skills: [
+        { name: 'dev-orchestrator', path: '.cursor/skills/dev-orchestrator/SKILL.md' },
+        { name: 'bug-fix', path: '.cursor/skills/bug-fix/SKILL.md' },
+      ],
+      configuredSkillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
+    })).toEqual({
+      skillPath: '.cursor/skills/bug-fix/SKILL.md',
+      skillName: 'bug-fix',
+    });
+  });
+
   it('lists the site-issue report', () => {
     expect(GUIDED_CLOUD_JOBS.map((job) => job.id)).toEqual(['site-issue']);
-    expect(guidedCloudJobById('site-issue')?.skillName).toBe('dev-orchestrator');
+    expect(guidedCloudJobById('site-issue')?.skillName).toBe('bug-fix');
   });
 
   it('names a branch from the report without a work item id', () => {
-    expect(guidedSiteIssueBranchName('abc12345-0000-0000-0000-000000000000', 'The login page times out.')).toBe(
-      'feature/apex-site-abc123-the-login-page-times-out',
-    );
+    expect(guidedSiteIssueBranchName({
+      sessionId: 'abc12345-0000-0000-0000-000000000000',
+      task: 'The login page times out.',
+    })).toBe('feature/apex-site-abc123-the-login-page-times-out');
+  });
+
+  it('names a branch from the Bug id and the Problem section, not the page URL', () => {
+    expect(guidedSiteIssueBranchName({
+      sessionId: 'abc12345-0000-0000-0000-000000000000',
+      task: [
+        'Page: https://dev.mymaxview.com/AdminPortal/Landing',
+        'Problem: Sync templates fail to load',
+        'Steps:',
+        '1. Open Document Management',
+      ].join('\n'),
+      bugWorkItemId: 59314,
+    })).toBe('feature/apex-59314-sync-templates-fail-to-load');
   });
 
   it('tells the agent to investigate and open a pull request', () => {
@@ -145,7 +173,23 @@ describe('guided cloud jobs', () => {
     expect(prompt).toContain('Open a pull request titled `[APEX] apex-site-abc123-the-login-page-times-out`');
     expect(prompt).toContain('The login page times out.');
     expect(prompt).toContain('This report has no work item.');
+    expect(prompt).toContain('Do not wait for approval.');
+    expect(prompt).toContain('Add a regression test that fails without the fix');
     expect(prompt).not.toContain('screenshot');
+  });
+
+  it('uses the repository pull request instructions when given', () => {
+    const prompt = buildGuidedCloudAgentPrompt({
+      title: "There's an issue on the site",
+      skillPath: '.cursor/skills/bug-fix/SKILL.md',
+      skillName: 'bug-fix',
+      task: 'The login page times out.',
+      branchName: 'feature/apex-45681-the-login-page-times-out',
+      bugWorkItemId: 45681,
+      pullRequestInstructions: 'Open a pull request titled `[APEX] apex-45681-the-login-page-times-out`. Use the template.',
+    });
+    expect(prompt).toContain('Use the template.');
+    expect(prompt).not.toContain('Describe the cause, the fix, and how you tested it.');
   });
 
   it('names the Bug that Apex already created and tells the agent not to edit it', () => {
@@ -171,7 +215,8 @@ describe('guided cloud jobs', () => {
       branchName: 'feature/apex-site-abc123-the-login-page-times-out',
       imageCount: 2,
     });
-    expect(prompt).toContain('This message includes 2 screenshots.');
+    expect(prompt).toContain('This message includes 2 screenshots from the person who reported it.');
+    expect(prompt).toContain('check the fixed page in a browser');
   });
 
   it('accepts up to three small screenshots', () => {
@@ -187,6 +232,31 @@ describe('guided cloud jobs', () => {
     expect(parseSiteIssueImages([{ ...image, mimeType: 'image/gif' }])).toEqual({
       ok: false,
       error: 'Screenshots must be PNG, JPEG, or WebP.',
+    });
+  });
+
+  it('puts each report heading in its own section', () => {
+    expect(parseSiteIssueReport([
+      'Page: https://dev.mymaxview.com/AdminPortal/Landing',
+      '',
+      'Problem:',
+      'The Document Management sync templates fail to load.',
+      '',
+      'Steps:',
+      '1. Open Document Management.',
+      '2. Open sync templates.',
+      '',
+      'Expected:',
+      'The templates load.',
+      '',
+      'Actual:',
+      'No templates are displayed.',
+    ].join('\n'))).toEqual({
+      page: 'https://dev.mymaxview.com/AdminPortal/Landing',
+      problem: 'The Document Management sync templates fail to load.',
+      steps: '1. Open Document Management.\n2. Open sync templates.',
+      expected: 'The templates load.',
+      actual: 'No templates are displayed.',
     });
   });
 });
