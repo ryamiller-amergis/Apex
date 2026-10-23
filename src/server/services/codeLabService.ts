@@ -17,6 +17,7 @@ import type {
 } from '../../shared/types/codeLab';
 import { CODE_LAB_PREVIEW_ROUTE } from '../../shared/types/codeLab';
 import type { SkillProvider } from '../../shared/types/projectSettings';
+import { git } from '../utils/asyncGit';
 import { AzureDevOpsService } from './azureDevOps';
 import { createThread } from './chatAgentService';
 import {
@@ -30,10 +31,10 @@ import { bootstrapDevelopmentDependencies } from './dependencyBootstrapService';
 import { getSkillConfig } from './projectSettingsService';
 import { resolveGitRemote } from './repoCacheService';
 import {
-  checkoutDefaultBranch,
   checkoutNewBranch,
   computeDiff,
   pushBranch,
+  redactSecrets,
 } from './repoCheckoutService';
 import * as githubCatalog from './skillCatalogGitHub';
 
@@ -42,6 +43,10 @@ import * as githubCatalog from './skillCatalogGitHub';
  * one instance, and file watching does not work on the Azure Files share.
  */
 const WORKSPACE_ROOT = path.join(os.tmpdir(), 'apex-code-lab');
+/** Lockfile-keyed dependency cache, also on local disk so it never fills the shared data root. */
+const DEPENDENCY_CACHE_ROOT = path.join(os.tmpdir(), 'apex-code-lab-deps');
+const CLONE_TIMEOUT_MS = 10 * 60 * 1000;
+const CLONE_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_ACTIVE_SESSIONS = 4;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const REAPER_INTERVAL_MS = 60 * 1000;
@@ -394,6 +399,46 @@ function stopPreviewProcess(record: CodeLabSessionRecord): void {
   }, PREVIEW_KILL_GRACE_MS).unref();
 }
 
+/**
+ * Clones only the base branch tip onto local disk. The shared repo cache needs
+ * 10 GiB free on the data root for a cold mirror, and a session never needs history.
+ */
+async function cloneLatestCommit(
+  record: CodeLabSessionRecord,
+  checkout: { provider: SkillProvider; repo: string; baseBranch: string },
+): Promise<void> {
+  const remote = resolveGitRemote(checkout.provider, record.session.project, checkout.repo);
+  fs.mkdirSync(WORKSPACE_ROOT, { recursive: true });
+  fs.rmSync(record.workspaceDir, { recursive: true, force: true });
+  try {
+    await git(
+      [
+        '-c',
+        'core.longpaths=true',
+        'clone',
+        '--depth',
+        '1',
+        '--single-branch',
+        '--no-tags',
+        '--branch',
+        checkout.baseBranch,
+        remote.url,
+        record.workspaceDir,
+      ],
+      {
+        cwd: WORKSPACE_ROOT,
+        timeout: CLONE_TIMEOUT_MS,
+        idleTimeout: CLONE_IDLE_TIMEOUT_MS,
+        env: remote.env,
+      },
+    );
+  } catch (err) {
+    fs.rmSync(record.workspaceDir, { recursive: true, force: true });
+    const raw = err instanceof Error ? err.message : String(err);
+    throw new Error(`git clone failed: ${redactSecrets(raw, remote.secret)}`);
+  }
+}
+
 async function runSetup(record: CodeLabSessionRecord, model: string | undefined): Promise<void> {
   const { session } = record;
   try {
@@ -404,14 +449,7 @@ async function runSetup(record: CodeLabSessionRecord, model: string | undefined)
     if (isStopped(record)) return;
 
     setStatus(record, 'preparing', `Checking out ${checkout.repo} at ${checkout.baseBranch}`);
-    await checkoutDefaultBranch({
-      project: session.project,
-      repo: checkout.repo,
-      branch: checkout.baseBranch,
-      sessionId: session.id,
-      provider: checkout.provider,
-      workspaceDir: record.workspaceDir,
-    });
+    await cloneLatestCommit(record, checkout);
     await checkoutNewBranch(record.workspaceDir, session.branchName);
     excludeCodeLabFilesFromGit(record.workspaceDir);
     if (isStopped(record)) return;
@@ -420,6 +458,7 @@ async function runSetup(record: CodeLabSessionRecord, model: string | undefined)
     let dependenciesPrepared = false;
     try {
       await bootstrapDevelopmentDependencies(record.workspaceDir, {
+        dataRoot: DEPENDENCY_CACHE_ROOT,
         onPhase: (_phase, detail) => appendLog(record, detail),
       });
       dependenciesPrepared = true;
