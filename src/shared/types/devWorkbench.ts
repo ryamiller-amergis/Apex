@@ -195,6 +195,7 @@ export interface CloudAgentLaunchOptions {
   models: { id: string; displayName: string }[];
   priorSkillPath: string | null;
   priorModel: string | null;
+  priorCustomPrompt: string | null;
 }
 
 export interface StartCloudAgentRunRequest {
@@ -203,6 +204,8 @@ export interface StartCloudAgentRunRequest {
   intent?: CloudAgentLaunchIntent;
   skillPath?: string;
   model?: string;
+  /** Optional instructions added to the cloud agent prompt for this start or retry. */
+  customPrompt?: string;
 }
 
 export interface GuidedCloudJobOption {

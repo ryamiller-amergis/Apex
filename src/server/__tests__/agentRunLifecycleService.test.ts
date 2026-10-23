@@ -357,6 +357,35 @@ describe('enqueue + frozen snapshot (PBI-001 AC-0 / AC-3 / VT-01 / VT-04 / DoD-2
     expect(stored.cloudAgent?.workItemId).toBeUndefined();
   });
 
+  it('freezes the project background job that started the run', async () => {
+    await enqueue({
+      threadId: 'thread-1',
+      projectId: 'proj-1',
+      snapshot: {
+        ...snapshot,
+        cloudAgent: {
+          baseBranch: 'development',
+          branchName: 'feature/apex-bg-abcdef-nightly-cleanup',
+          delivery: 'background-job',
+          opensPullRequest: true,
+          backgroundJobId: 'job-1',
+          backgroundJobName: 'Nightly cleanup',
+          notifyUserId: 'user-1',
+        },
+      },
+      timeoutAt: '2026-08-05T14:00:00.000Z',
+      runId: 'run-background-job-1',
+    });
+    const stored = (mockInsertValues.mock.calls[0][0] as { executionSnapshot: ExecutionSnapshot })
+      .executionSnapshot;
+    expect(stored.cloudAgent).toMatchObject({
+      delivery: 'background-job',
+      backgroundJobId: 'job-1',
+      backgroundJobName: 'Nightly cleanup',
+      notifyUserId: 'user-1',
+    });
+  });
+
   it('TBI-002 DoD-0: Given admission fails after insert, when enqueue returns, then the durable queued run is preserved', async () => {
     mockRunAdmissionCycle.mockRejectedValueOnce(new Error('admission unavailable'));
 

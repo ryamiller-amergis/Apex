@@ -453,6 +453,7 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
       workItemId: 42,
       isSuperAdmin: false,
       item: eligibleItem,
+      customPrompt: 'Keep the public API stable.',
     }, makeDeps({
       getSkillConfig: jest.fn().mockResolvedValue({
         skillProvider: 'ado',
@@ -473,12 +474,13 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
     expect(mockEnqueue).toHaveBeenCalledWith(expect.objectContaining({
       snapshot: expect.objectContaining({
         prompt: expect.stringMatching(
-          /base execution prompt[\s\S]*Failing check: e2e[\s\S]*No pull request was opened[\s\S]*AC-9/,
+          /base execution prompt[\s\S]*Additional instructions from the developer who started this run:\nKeep the public API stable\.[\s\S]*Failing check: e2e[\s\S]*No pull request was opened[\s\S]*AC-9/,
         ),
         skillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
         cloudAgent: expect.objectContaining({
           skillName: 'dev-orchestrator',
           branchName: 'feature/apex-42-wi-42',
+          customPrompt: 'Keep the public API stable.',
         }),
       }),
     }));

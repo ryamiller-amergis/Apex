@@ -299,6 +299,53 @@ export function parseCloudAgentLaunchIntent(value: unknown): CloudAgentLaunchInt
   return null;
 }
 
+/** Extra instructions a developer can add when starting or retrying a cloud agent. */
+export const CLOUD_AGENT_CUSTOM_PROMPT_MAX_CHARS = 4000;
+
+export function parseCloudAgentCustomPrompt(
+  value: unknown,
+): { ok: true; customPrompt: string | null } | { ok: false; error: string } {
+  if (value == null || value === '') return { ok: true, customPrompt: null };
+  if (typeof value !== 'string') return { ok: false, error: 'Custom prompt must be text.' };
+  const trimmed = value.trim();
+  if (!trimmed) return { ok: true, customPrompt: null };
+  if (trimmed.length > CLOUD_AGENT_CUSTOM_PROMPT_MAX_CHARS) {
+    return {
+      ok: false,
+      error: `Custom prompt must be ${CLOUD_AGENT_CUSTOM_PROMPT_MAX_CHARS} characters or fewer.`,
+    };
+  }
+  return { ok: true, customPrompt: trimmed };
+}
+
+/**
+ * Resume keeps the instructions saved on the original run.
+ * Start and retry use the text from this request.
+ */
+export function customPromptForCloudAgentLaunch(input: {
+  intent: CloudAgentLaunchIntent;
+  requested: unknown;
+  priorCustomPrompt?: string | null;
+}): { ok: true; customPrompt: string | null } | { ok: false; error: string } {
+  if (input.intent === 'resume') {
+    return { ok: true, customPrompt: input.priorCustomPrompt?.trim() || null };
+  }
+  return parseCloudAgentCustomPrompt(input.requested);
+}
+
+/** Places the developer's extra instructions after the generated kickoff. */
+export function injectCloudAgentCustomPrompt(
+  prompt: string,
+  customPrompt: string | null | undefined,
+): string {
+  const extra = customPrompt?.trim();
+  if (!extra) return prompt;
+  return [
+    prompt.trimEnd(),
+    `Additional instructions from the developer who started this run:\n${extra}`,
+  ].join('\n\n');
+}
+
 export function buildGuidedCloudAgentPrompt(input: {
   title: string;
   skillPath: string;

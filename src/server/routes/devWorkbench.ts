@@ -907,6 +907,7 @@ router.post('/cloud-agent/start', async (req: Request, res: Response) => {
       intent?: unknown;
       skillPath?: unknown;
       model?: unknown;
+      customPrompt?: unknown;
     };
     const { workItemId, project } = body;
     if (!project || !workItemId) {
@@ -986,6 +987,7 @@ router.post('/cloud-agent/start', async (req: Request, res: Response) => {
         workItemType: (fields['System.WorkItemType'] ?? '') as string,
         tags: (fields['System.Tags'] ?? '') as string,
       },
+      customPrompt: body.customPrompt,
       ...(launchChooser ? {
         launchChooser: true,
         intent: intent ?? 'start',

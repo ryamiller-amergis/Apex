@@ -1061,6 +1061,7 @@ describe('DevWorkbenchView', () => {
         models: [{ id: 'composer-2.5', displayName: 'Composer' }],
         priorSkillPath: null,
         priorModel: null,
+        priorCustomPrompt: null,
       },
       isLoading: false,
       error: null,
@@ -1077,6 +1078,9 @@ describe('DevWorkbenchView', () => {
     expect(screen.getByTestId('cloud-agent-launch-dialog')).toBeInTheDocument();
     expect(screen.getByText('Feature work uses dev-orchestrator.')).toBeInTheDocument();
     expect(mockStartCloudMutateAsync).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByTestId('cloud-agent-launch-custom-prompt'), {
+      target: { value: 'Prefer the existing scheduler service.' },
+    });
 
     fireEvent.click(screen.getByTestId('cloud-agent-launch-confirm'));
     await waitFor(() => {
@@ -1086,6 +1090,7 @@ describe('DevWorkbenchView', () => {
         intent: 'start',
         skillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
         model: 'composer-2.5',
+        customPrompt: 'Prefer the existing scheduler service.',
       });
     });
   });

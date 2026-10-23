@@ -3472,3 +3472,75 @@ export const playbookGateApproversRelations = relations(playbookGateApprovers, (
     references: [playbookStepRuns.id],
   }),
 }));
+
+// ── Cloud background jobs ─────────────────────────────────────────────────────
+
+export const cloudBackgroundJobs = pgTable('cloud_background_jobs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  name: text('name').notNull(),
+  instructions: text('instructions').notNull(),
+  skillPath: text('skill_path').notNull(),
+  model: text('model').notNull(),
+  workItemMode: text('work_item_mode').$type<'create_bug' | 'attach' | 'none'>().notNull(),
+  workItemId: integer('work_item_id'),
+  scheduleKind: text('schedule_kind').$type<'manual' | 'daily'>().notNull(),
+  scheduleHour: integer('schedule_hour'),
+  scheduleMinute: integer('schedule_minute').notNull().default(0),
+  enabled: boolean('enabled').notNull().default(true),
+  createdBy: text('created_by').notNull(),
+  updatedBy: text('updated_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  lastStartedAt: timestamp('last_started_at', { withTimezone: true, mode: 'string' }),
+}, (t) => ({
+  projectIdx: index('idx_cloud_background_jobs_project').on(t.project),
+  workItemModeCheck: check(
+    'cloud_background_jobs_work_item_mode_check',
+    sql`${t.workItemMode} IN ('create_bug', 'attach', 'none')`,
+  ),
+  scheduleKindCheck: check(
+    'cloud_background_jobs_schedule_kind_check',
+    sql`${t.scheduleKind} IN ('manual', 'daily')`,
+  ),
+  scheduleMinuteCheck: check(
+    'cloud_background_jobs_schedule_minute_check',
+    sql`${t.scheduleMinute} BETWEEN 0 AND 59`,
+  ),
+  scheduleHourCheck: check(
+    'cloud_background_jobs_schedule_hour_check',
+    sql`(${t.scheduleKind} = 'manual' AND ${t.scheduleHour} IS NULL) OR (${t.scheduleKind} = 'daily' AND ${t.scheduleHour} BETWEEN 0 AND 23)`,
+  ),
+  workItemCheck: check(
+    'cloud_background_jobs_work_item_check',
+    sql`(${t.workItemMode} = 'attach' AND ${t.workItemId} IS NOT NULL AND ${t.workItemId} > 0) OR (${t.workItemMode} <> 'attach' AND ${t.workItemId} IS NULL)`,
+  ),
+}));
+
+export const cloudBackgroundJobRuns = pgTable('cloud_background_job_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  jobId: uuid('job_id').notNull().references(() => cloudBackgroundJobs.id, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  agentRunId: text('agent_run_id').notNull(),
+  sessionId: uuid('session_id'),
+  trigger: text('trigger').$type<'manual' | 'schedule'>().notNull(),
+  startedBy: text('started_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  jobIdx: index('idx_cloud_background_job_runs_job').on(t.jobId, t.createdAt),
+  triggerCheck: check(
+    'cloud_background_job_runs_trigger_check',
+    sql`${t.trigger} IN ('manual', 'schedule')`,
+  ),
+}));
+
+export const cloudBackgroundJobsRelations = relations(cloudBackgroundJobs, ({ many }) => ({
+  runs: many(cloudBackgroundJobRuns),
+}));
+
+export const cloudBackgroundJobRunsRelations = relations(cloudBackgroundJobRuns, ({ one }) => ({
+  job: one(cloudBackgroundJobs, {
+    fields: [cloudBackgroundJobRuns.jobId],
+    references: [cloudBackgroundJobs.id],
+  }),
+}));

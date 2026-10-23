@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { skillNameFromPath } from '../../shared/skillPaths';
 import type { CloudAgentSkillChoice } from '../../shared/types/devWorkbench';
 import {
+  CLOUD_AGENT_CUSTOM_PROMPT_MAX_CHARS,
   SITE_ISSUE_MAX_IMAGE_BYTES,
   SITE_ISSUE_MAX_IMAGES,
   type SiteIssueImage,
@@ -16,6 +17,10 @@ const schema = z.object({
   skillPath: z.string().min(1, 'Choose a skill'),
   model: z.string().min(1, 'Choose a model'),
   task: z.string(),
+  customPrompt: z.string().max(
+    CLOUD_AGENT_CUSTOM_PROMPT_MAX_CHARS,
+    `Custom prompt must be ${CLOUD_AGENT_CUSTOM_PROMPT_MAX_CHARS} characters or fewer.`,
+  ),
 });
 
 type LaunchFormValues = z.infer<typeof schema>;
@@ -36,6 +41,9 @@ interface CloudAgentLaunchDialogProps {
   allowChangingSkillAndModel?: boolean;
   defaultTask?: string;
   taskRows?: number;
+  /** My Work start and retry. Site reports already collect the task. */
+  allowCustomPrompt?: boolean;
+  defaultCustomPrompt?: string;
   allowImages?: boolean;
   imageHint?: string;
   loading: boolean;
@@ -43,7 +51,13 @@ interface CloudAgentLaunchDialogProps {
   pending: boolean;
   error: string | null;
   onClose: () => void;
-  onConfirm: (value: { skillPath: string; model: string; task: string; images?: SiteIssueImage[] }) => void;
+  onConfirm: (value: {
+    skillPath: string;
+    model: string;
+    task: string;
+    images?: SiteIssueImage[];
+    customPrompt?: string;
+  }) => void;
 }
 
 export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
@@ -60,6 +74,8 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
   allowChangingSkillAndModel = false,
   defaultTask = '',
   taskRows = 5,
+  allowCustomPrompt = false,
+  defaultCustomPrompt = '',
   allowImages = false,
   imageHint = 'PNG, JPEG, or WebP. Up to 3 images, 400 KB each.',
   loading,
@@ -95,14 +111,24 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
     formState: { errors },
   } = useForm<LaunchFormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { skillPath: defaultSkillPath, model: defaultModel, task: defaultTask },
+    defaultValues: {
+      skillPath: defaultSkillPath,
+      model: defaultModel,
+      task: defaultTask,
+      customPrompt: defaultCustomPrompt,
+    },
   });
 
   useEffect(() => {
-    reset({ skillPath: defaultSkillPath, model: defaultModel, task: defaultTask });
+    reset({
+      skillPath: defaultSkillPath,
+      model: defaultModel,
+      task: defaultTask,
+      customPrompt: defaultCustomPrompt,
+    });
     setImages([]);
     setImageError(null);
-  }, [defaultModel, defaultSkillPath, defaultTask, reset]);
+  }, [defaultCustomPrompt, defaultModel, defaultSkillPath, defaultTask, reset]);
 
   const addImages = async (fileList: FileList | null) => {
     const files = Array.from(fileList ?? []);
@@ -151,11 +177,13 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
       setError('task', { message: emptyTaskMessage });
       return;
     }
+    const customPrompt = (values.customPrompt ?? '').trim();
     onConfirm({
       skillPath: values.skillPath,
       model: values.model,
       task: values.task.trim(),
       ...(allowImages ? { images } : {}),
+      ...(allowCustomPrompt && customPrompt ? { customPrompt } : {}),
     });
   });
 
@@ -184,6 +212,24 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
           {loading ? <p className={styles.reason}>{showChoices ? 'Loading skills…' : 'Loading…'}</p> : null}
           {loadError ? <p className={styles.error} role="alert">{loadError}</p> : null}
           {reason ? <p className={styles.reason}>{reason}</p> : null}
+          {allowCustomPrompt ? (
+            <label className={styles.field}>
+              <span className={styles.label}>Custom prompt</span>
+              <span className={styles.hint}>
+                Optional. Added to the agent instructions for this run.
+              </span>
+              <textarea
+                className={styles.textarea}
+                rows={4}
+                placeholder="Extra instructions for this run"
+                {...register('customPrompt')}
+                data-testid="cloud-agent-launch-custom-prompt"
+              />
+              {errors.customPrompt ? <span className={styles.error}>{errors.customPrompt.message}</span> : null}
+            </label>
+          ) : (
+            <input type="hidden" {...register('customPrompt')} />
+          )}
           {requireTask ? (
             <label className={styles.field}>
               <span className={styles.label}>{taskLabel}</span>

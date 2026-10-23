@@ -1,8 +1,12 @@
 import {
+  CLOUD_AGENT_CUSTOM_PROMPT_MAX_CHARS,
   GUIDED_CLOUD_JOBS,
   buildGuidedCloudAgentPrompt,
+  customPromptForCloudAgentLaunch,
   guidedSiteIssueBranchName,
   guidedCloudJobById,
+  injectCloudAgentCustomPrompt,
+  parseCloudAgentCustomPrompt,
   parseSiteIssueImages,
   parseSiteIssueReport,
   recommendGuidedSiteSkill,
@@ -109,6 +113,46 @@ describe('resolveCloudAgentLaunchSelection', () => {
       requestedSkillPath: '.cursor/skills/not-a-skill/SKILL.md',
     });
     expect(result).toEqual({ ok: false, error: 'Choose a skill from this project.' });
+  });
+});
+
+describe('custom prompt', () => {
+  it('treats a blank prompt as absent', () => {
+    expect(parseCloudAgentCustomPrompt('   ')).toEqual({ ok: true, customPrompt: null });
+    expect(parseCloudAgentCustomPrompt(undefined)).toEqual({ ok: true, customPrompt: null });
+  });
+
+  it('rejects a prompt that is not text or is too long', () => {
+    expect(parseCloudAgentCustomPrompt(12).ok).toBe(false);
+    expect(parseCloudAgentCustomPrompt('x'.repeat(CLOUD_AGENT_CUSTOM_PROMPT_MAX_CHARS + 1)).ok).toBe(false);
+  });
+
+  it('keeps a trimmed prompt', () => {
+    expect(parseCloudAgentCustomPrompt('  Prefer the scheduler service.  ')).toEqual({
+      ok: true,
+      customPrompt: 'Prefer the scheduler service.',
+    });
+  });
+
+  it('resume reuses the saved prompt and ignores a new one', () => {
+    expect(customPromptForCloudAgentLaunch({
+      intent: 'resume',
+      requested: 'Ignore this',
+      priorCustomPrompt: 'Prefer the scheduler service.',
+    })).toEqual({ ok: true, customPrompt: 'Prefer the scheduler service.' });
+  });
+
+  it('injects the prompt after the generated kickoff', () => {
+    expect(injectCloudAgentCustomPrompt('Implement the work item.', 'Prefer the scheduler service.')).toBe(
+      [
+        'Implement the work item.',
+        'Additional instructions from the developer who started this run:\nPrefer the scheduler service.',
+      ].join('\n\n'),
+    );
+  });
+
+  it('leaves the kickoff unchanged when no custom prompt was given', () => {
+    expect(injectCloudAgentCustomPrompt('Implement the work item.', null)).toBe('Implement the work item.');
   });
 });
 

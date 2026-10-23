@@ -404,6 +404,15 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
             ...(input.snapshot.cloudAgent.bugUrl
               ? { bugUrl: input.snapshot.cloudAgent.bugUrl }
               : {}),
+            ...(input.snapshot.cloudAgent.backgroundJobId
+              ? { backgroundJobId: input.snapshot.cloudAgent.backgroundJobId }
+              : {}),
+            ...(input.snapshot.cloudAgent.backgroundJobName
+              ? { backgroundJobName: input.snapshot.cloudAgent.backgroundJobName }
+              : {}),
+            ...(input.snapshot.cloudAgent.notifyUserId
+              ? { notifyUserId: input.snapshot.cloudAgent.notifyUserId }
+              : {}),
           },
         }
       : {}),

@@ -418,6 +418,25 @@ describe('POST /api/dev-workbench/cloud-agent/start', () => {
     }));
     expect(mockStartCloudAgentRun).toHaveBeenCalledTimes(1);
   });
+
+  it('forwards an optional custom prompt', async () => {
+    mockWorkItemLookup({
+      'System.AssignedTo': callerAssignedTo,
+    });
+
+    const res = await request(buildApp(callerProfile))
+      .post('/api/dev-workbench/cloud-agent/start')
+      .send({
+        workItemId: 42,
+        project: 'MaxView',
+        customPrompt: 'Prefer the existing scheduler service.',
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockStartCloudAgentRun).toHaveBeenCalledWith(expect.objectContaining({
+      customPrompt: 'Prefer the existing scheduler service.',
+    }));
+  });
 });
 
 describe('GET /api/dev-workbench/sessions/:id/cloud-agent/stream', () => {

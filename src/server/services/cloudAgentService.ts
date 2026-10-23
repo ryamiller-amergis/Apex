@@ -15,7 +15,9 @@ import {
   recommendGuidedSiteSkill,
   SITE_ISSUE_BUG_TAGS,
   type SiteIssueImage,
+  customPromptForCloudAgentLaunch,
   guidedCloudJobById,
+  injectCloudAgentCustomPrompt,
   recommendImplementationSkill,
   resolveCloudAgentLaunchSelection,
   type CloudAgentLaunchIntent,
@@ -527,6 +529,8 @@ export interface StartCloudAgentRunInput {
   intent?: CloudAgentLaunchIntent;
   skillPath?: string;
   model?: string;
+  /** Text from the start dialog. Resume ignores this and reuses the saved prompt. */
+  customPrompt?: unknown;
   availableSkills?: CloudAgentSkillChoice[];
   allowedModelIds?: string[];
 }
@@ -561,6 +565,7 @@ export async function startCloudAgentRun(
     throw new CloudAgentEligibilityError('Skill settings are incomplete: skillRepo is not set.');
   }
 
+  const customPrompt = await resolveCloudAgentCustomPrompt(input);
   const launchSettings = input.launchChooser
     ? await resolveChooserLaunch(input, skillConfig)
     : null;
@@ -580,7 +585,7 @@ export async function startCloudAgentRun(
     );
   }
 
-  const started = await persistQueuedRun(input, skillConfig, deps, launchSettings);
+  const started = await persistQueuedRun(input, skillConfig, deps, launchSettings, customPrompt);
   if (input.adoUserToken) pendingCloudAgentUserTokens.set(started.runId, input.adoUserToken);
   if (await claimCloudAgentRun(started.runId)) {
     try {
@@ -666,6 +671,7 @@ export async function getImplementationLaunchOptions(input: {
     models: input.models,
     priorSkillPath: prior?.skillPath ?? null,
     priorModel: prior?.model ?? null,
+    priorCustomPrompt: prior?.customPrompt ?? null,
   };
 }
 
@@ -973,6 +979,7 @@ async function loadPriorCloudAgentSettings(input: {
   images: SiteIssueImage[];
   bugWorkItemId: number | null;
   bugUrl: string | null;
+  customPrompt: string | null;
 } | null> {
   const rows = input.sessionId
     ? await db
@@ -1015,6 +1022,7 @@ async function loadPriorCloudAgentSettings(input: {
     }),
     bugWorkItemId: snapshot?.cloudAgent?.bugWorkItemId ?? null,
     bugUrl: snapshot?.cloudAgent?.bugUrl ?? null,
+    customPrompt: snapshot?.cloudAgent?.customPrompt?.trim() || null,
   };
 }
 
@@ -1081,11 +1089,30 @@ function guidedTaskTitle(task: string): string {
   return trimmed.length <= 80 ? trimmed : `${trimmed.slice(0, 79)}…`;
 }
 
+async function resolveCloudAgentCustomPrompt(input: StartCloudAgentRunInput): Promise<string | null> {
+  const intent = input.intent ?? 'start';
+  const prior = intent === 'resume'
+    ? await loadPriorCloudAgentSettings({
+      userId: input.userId,
+      project: input.project,
+      workItemId: input.workItemId,
+    })
+    : null;
+  const resolved = customPromptForCloudAgentLaunch({
+    intent,
+    requested: input.customPrompt,
+    priorCustomPrompt: prior?.customPrompt,
+  });
+  if (!resolved.ok) throw new CloudAgentLaunchError(resolved.error);
+  return resolved.customPrompt;
+}
+
 async function persistQueuedRun(
   input: StartCloudAgentRunInput,
   skillConfig: ProjectSkillConfig,
   deps: CloudAgentServiceDeps,
   launchSettings: { skillPath: string; model: string } | null = null,
+  customPrompt: string | null = null,
 ): Promise<PersistedCloudAgentRun> {
   const lockKey = `cloud-agent:${input.project}:${input.workItemId}:${input.userId}`;
   const nowIso = new Date().toISOString();
@@ -1145,9 +1172,10 @@ async function persistQueuedRun(
 
       const sessionId = existing?.id ?? uuidv4();
       const priorWork = formatLeftoverWorkForResumePrompt(existing?.leftoverWork);
+      const promptWithCustom = injectCloudAgentCustomPrompt(basePrompt, customPrompt);
       const executionPrompt = priorWork
-        ? `${basePrompt}\n\n${priorWork}`
-        : basePrompt;
+        ? `${promptWithCustom}\n\n${priorWork}`
+        : promptWithCustom;
       if (!existing) {
         await tx.insert(devSessions).values({
           id: sessionId,
@@ -1186,6 +1214,7 @@ async function persistQueuedRun(
             initiatorName: input.initiatorName,
             initiatorEmail: input.initiatorEmail,
             ...(skillName ? { skillName } : {}),
+            ...(customPrompt ? { customPrompt } : {}),
             ...(input.adoUserToken ? { userTokenInstance: cloudAgentInstanceId() } : {}),
           },
         },
@@ -1249,6 +1278,19 @@ async function claimCloudAgentRun(runId: string): Promise<boolean> {
   return Array.isArray(updated) && updated.length > 0;
 }
 
+function notifyBackgroundJobTerminal(input: {
+  runId: string;
+  status: 'completed' | 'failed' | 'cancelled';
+  prUrl?: string | null;
+  detail?: string | null;
+}): void {
+  void import('./cloudBackgroundJobService')
+    .then((mod) => mod.notifyCloudBackgroundJobTerminal(input))
+    .catch((err) => {
+      console.error('[cloud-background-job] notification failed', err instanceof Error ? err.message : err);
+    });
+}
+
 /** Claims saved runs that never reached Cursor. There is no launch cap. */
 async function claimCloudAgentRunIds(): Promise<string[]> {
   const instance = cloudAgentInstanceId();
@@ -1298,7 +1340,7 @@ async function launchClaimedCloudAgentRun(
   });
   const snapshot = backgroundSnapshot(run?.executionSnapshot);
   const cloud = snapshot?.cloudAgent;
-  const guided = cloud?.delivery === 'guided';
+  const unattended = cloud?.delivery === 'guided' || cloud?.delivery === 'background-job';
   const sessionId = run?.devSessionId ?? snapshot?.threadId ?? null;
   if (!run || run.status !== 'queued' || run.cloudAgentIdentity) {
     pendingCloudAgentUserTokens.delete(runId);
@@ -1311,11 +1353,12 @@ async function launchClaimedCloudAgentRun(
     || !snapshot.projectId
     || !snapshot.repository
     || !cloud?.baseBranch
-    || (!guided && !cloud.workItemId)
+    || (!unattended && !cloud.workItemId)
   ) {
     pendingCloudAgentUserTokens.delete(runId);
     const detail = 'Cloud Agent run is missing its saved repository settings.';
     await markTerminal(runId, { status: 'failed', detail });
+    notifyBackgroundJobTerminal({ runId, status: 'failed', detail });
     if (sessionId && snapshot?.projectId) {
       emitTerminal({ sessionId, runId }, snapshot.projectId, 'failed', null);
     }
@@ -1324,7 +1367,7 @@ async function launchClaimedCloudAgentRun(
   }
 
   const adoUserToken = takeCloudAgentUserToken(runId);
-  if (!adoUserToken && !guided) {
+  if (!adoUserToken && !unattended) {
     console.warn('[cloud-agent] queued run has no developer token; the pull request will be opened by the service account', JSON.stringify({
       runId,
     }));
@@ -1340,12 +1383,12 @@ async function launchClaimedCloudAgentRun(
       skillRepo: snapshot.repository,
       skillBranch: cloud.baseBranch,
       workItemId: cloud.workItemId,
-      workItemTitle: cloud.workItemTitle ?? (cloud.workItemId ? `Work item ${cloud.workItemId}` : 'Guided job'),
+      workItemTitle: cloud.workItemTitle ?? (cloud.workItemId ? `Work item ${cloud.workItemId}` : (cloud.backgroundJobName ?? 'Guided job')),
       initiatorName: cloud.initiatorName,
       initiatorEmail: cloud.initiatorEmail,
       skillName: cloud.skillName,
       adoUserToken,
-      autoCreatePr: !guided || cloud.opensPullRequest === true,
+      autoCreatePr: !unattended || cloud.opensPullRequest === true,
       images: (cloud.images ?? []).flatMap((image) => (
         image.data && image.mimeType
           ? [{ data: image.data, mimeType: image.mimeType }]
@@ -1372,6 +1415,8 @@ async function launchClaimedCloudAgentRun(
         reason: terminal.reason,
         status: terminal.run?.status ?? null,
       }));
+    } else {
+      notifyBackgroundJobTerminal({ runId, status: 'failed', detail });
     }
     emitTerminal({ sessionId, runId }, snapshot.projectId, 'failed', null);
     scheduleCloudAgentDispatch();
@@ -1490,8 +1535,17 @@ async function failLaunchAfterCursorCreate(
       reason: terminal.reason,
       status: terminal.run?.status ?? null,
     }));
+  } else {
+    notifyBackgroundJobTerminal({ runId, status: 'failed', detail });
   }
   emitTerminal({ sessionId, runId }, projectId, 'failed', null);
+}
+
+/** Sends one saved run to Cursor when this process can claim it. */
+export async function claimAndLaunchCloudAgentRun(runId: string): Promise<void> {
+  if (await claimCloudAgentRun(runId)) {
+    await launchClaimedCloudAgentRun(runId, defaultDeps);
+  }
 }
 
 async function stopUntrackedCloudAgent(
@@ -1840,6 +1894,14 @@ export async function applyCloudAgentCompletion(input: {
     ...(input.checkResults ? { checkResults: input.checkResults } : {}),
   });
   if (!terminal.ok) return;
+  if (input.status === 'completed' || input.status === 'failed' || input.status === 'cancelled') {
+    notifyBackgroundJobTerminal({
+      runId: input.runId,
+      status: input.status,
+      prUrl: input.prUrl,
+      detail: input.detail,
+    });
+  }
   scheduleCloudAgentDispatch();
   await trackCloudAgentSpend({
     runId: input.runId,
@@ -2366,6 +2428,10 @@ export async function cancelCloudAgentRun(
       'cancelled',
       requested.run.terminalReason,
     );
+    notifyBackgroundJobTerminal({
+      runId: run.id,
+      status: 'cancelled',
+    });
     scheduleCloudAgentDispatch();
     await trackLaunchedCloudAgentSpend(requested.run, session.project, 'cancelled', deps);
     return { ok: true, status: 'cancelled' };
@@ -2410,6 +2476,10 @@ export async function cancelCloudAgentRun(
     terminal.run.status,
     terminal.run.terminalReason,
   );
+  notifyBackgroundJobTerminal({
+    runId: run.id,
+    status: 'cancelled',
+  });
   scheduleCloudAgentDispatch();
   await trackLaunchedCloudAgentSpend(terminal.run, session.project, 'cancelled', deps);
   return { ok: true, status: 'cancelled' };

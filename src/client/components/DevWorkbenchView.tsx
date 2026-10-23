@@ -824,7 +824,12 @@ const CloudAgentEnabledRowAction: React.FC<{
     );
   }
 
-  const handleStartOrResume = async (choice?: { intent: 'start' | 'resume' | 'retry'; skillPath?: string; model?: string }) => {
+  const handleStartOrResume = async (choice?: {
+    intent: 'start' | 'resume' | 'retry';
+    skillPath?: string;
+    model?: string;
+    customPrompt?: string;
+  }) => {
     setActionError(null);
     try {
       const result = await startCloud.mutateAsync({
@@ -834,6 +839,7 @@ const CloudAgentEnabledRowAction: React.FC<{
           intent: choice?.intent ?? 'start',
           skillPath: choice?.skillPath,
           model: choice?.model,
+          ...(choice?.customPrompt ? { customPrompt: choice.customPrompt } : {}),
         } : {}),
       });
       setStartedSessionId(result.sessionId);
@@ -876,6 +882,10 @@ const CloudAgentEnabledRowAction: React.FC<{
           : (launchOptions.data?.recommendedModel ?? '')
       }
       requireTask={false}
+      allowCustomPrompt
+      defaultCustomPrompt={
+        chooserIntent === 'retry' ? (launchOptions.data?.priorCustomPrompt ?? '') : ''
+      }
       loading={launchOptions.isLoading}
       loadError={launchOptions.error instanceof Error ? launchOptions.error.message : null}
       pending={startCloud.isPending}
@@ -886,6 +896,7 @@ const CloudAgentEnabledRowAction: React.FC<{
           intent: chooserIntent,
           skillPath: value.skillPath,
           model: value.model,
+          customPrompt: value.customPrompt,
         }).then((started) => {
           if (started) setChooserIntent(null);
         });

@@ -28,6 +28,7 @@ import {
 } from '../hooks/useProjectRepositoryReadiness';
 import styles from './AdminProjectSettings.module.css';
 import { PlaybookSpendPolicyCard } from './PlaybookSpendPolicyCard';
+import { CloudBackgroundJobsCard } from './CloudBackgroundJobsCard';
 
 // ── BranchCombobox ─────────────────────────────────────────────────────────────
 
@@ -2236,7 +2237,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         <div className={styles.pageHeader}>
           <div>
             <h1 className={styles.pageTitle}>Project Skill Settings</h1>
-            <p className={styles.pageSubtitle}>Configure skill repository, pipeline settings, and document reviewers for <strong>{selectedProject}</strong>.</p>
+            <p className={styles.pageSubtitle}>Configure skill repository, pipeline settings, document reviewers, and background jobs for <strong>{selectedProject}</strong>.</p>
           </div>
           {!edit && (
             <button className={styles.btnPrimary} onClick={handleAddNew} type="button" {...{ 'data-testid': 'ps-add-repo-config' }}>
@@ -2249,6 +2250,15 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           project={selectedProject}
           {...{ 'data-testid': 'playbook-spend-policy-card-entry' }}
         />
+
+        {selectedProject && (
+          <CloudBackgroundJobsCard
+            project={selectedProject}
+            skillRepo={(projectConfigs.find((config) => config.isDefault) ?? projectConfigs[0])?.skillRepo ?? ''}
+            skillBranch={(projectConfigs.find((config) => config.isDefault) ?? projectConfigs[0])?.skillBranch ?? ''}
+            skillProvider={(projectConfigs.find((config) => config.isDefault) ?? projectConfigs[0])?.skillProvider ?? 'ado'}
+          />
+        )}
 
         {/* ── Edit form (accordion layout) ────────────────────────────── */}
         {edit && (

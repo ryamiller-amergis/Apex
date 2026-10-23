@@ -934,6 +934,13 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
           console.log(
             `[reaper] Reaped cloud-agent run (id=${row.id}, managed=${managed}) — ${terminalReason}`,
           );
+          void import('./cloudBackgroundJobService')
+            .then((mod) => mod.notifyCloudBackgroundJobTerminal({
+              runId: row.id,
+              status: 'failed',
+              detail,
+            }))
+            .catch(() => undefined);
         }
         continue;
       }
@@ -1493,6 +1500,11 @@ export function startReaper(): void {
     .catch((err) => {
       console.error('[cloud-agent] queue scheduler failed to start:', err instanceof Error ? err.message : err);
     });
+  void import('./cloudBackgroundJobScheduler')
+    .then((scheduler) => scheduler.startCloudBackgroundJobScheduler())
+    .catch((err) => {
+      console.error('[cloud-background-job] scheduler failed to start:', err instanceof Error ? err.message : err);
+    });
 
   void runReaperCycle('[reaper] Initial reap failed:');
   reaperTimer = setInterval(() => {
@@ -1511,5 +1523,8 @@ export function stopReaper(): void {
   }
   void import('./cloudAgentQueueScheduler')
     .then((scheduler) => scheduler.stopCloudAgentQueueScheduler())
+    .catch(() => undefined);
+  void import('./cloudBackgroundJobScheduler')
+    .then((scheduler) => scheduler.stopCloudBackgroundJobScheduler())
     .catch(() => undefined);
 }
