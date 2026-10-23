@@ -7,6 +7,7 @@ import { NotificationBell } from './NotificationBell';
 import { UserMenu } from './UserMenu';
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import { canAccessMyWork } from '../utils/canAccessMyWork';
+import { canAccessBuilds } from '../utils/canAccessBuilds';
 import type { ThemeMode } from '../hooks/useAppShell';
 import type { ProjectRepoConfigSummary } from '../../shared/types/projectSettings';
 import type { WorkItemType } from '../../shared/types/featureRequest';
@@ -23,7 +24,7 @@ interface NavItem {
 interface AppHeaderProps {
   // `playbooks` is here so the shell can render the flag-gated /playbooks view. It is deliberately
   // *not* a MenuItemKey — the header highlights no nav item for it, because it has none.
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -63,6 +64,9 @@ interface AppHeaderProps {
   onNavigatePlaybooks?: () => void;
   /** Playbooks stays hidden until the production-adapters flag is on for the project. */
   playbooksEnabled?: boolean;
+  onNavigateBuilds?: () => void;
+  /** `build-from-prompt` evaluated for this user and project. */
+  buildsEnabled?: boolean;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
   onThemeChange: (theme: ThemeMode) => void;
@@ -105,6 +109,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   workBoardEnabled = true,
   onNavigatePlaybooks,
   playbooksEnabled = false,
+  onNavigateBuilds,
+  buildsEnabled = false,
   onNavigateAdmin,
   onOpenChangelog,
   onThemeChange,
@@ -142,6 +148,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Interview', view: 'backlog', permission: 'interviews:view', onNavigate: onNavigateBacklog },
     { label: 'ADR', view: 'adr', permission: 'adr:view', onNavigate: onNavigateAdr },
     { label: 'My Work', view: 'my-work', permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
+    { label: 'Builds', view: 'builds', permission: 'builds:view', onNavigate: onNavigateBuilds ?? (() => {}) },
     { label: 'Standup', view: 'standup', permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
     { label: 'UI Lab', view: 'ui-lab', permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
     { label: 'Apex Backlog', view: 'feature-requests', permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
@@ -173,6 +180,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       if (!workBoardEnabled) return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('work-board')) return false;
       return isSuperAdmin || can('work-board:view');
+    }
+    if (item.view === 'builds') {
+      return canAccessBuilds({ can, isSuperAdmin, enabledViews: menuEnabledViews, flagEnabled: buildsEnabled });
     }
     if (item.view === 'playbooks') {
       if (!playbooksEnabled) return false;

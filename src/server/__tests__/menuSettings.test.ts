@@ -9,8 +9,8 @@ import {
 } from '../../shared/types/menuSettings';
 
 describe('menuSettings shared types', () => {
-  it('CONFIGURABLE_MENU_ITEMS has exactly 15 entries', () => {
-    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(15);
+  it('CONFIGURABLE_MENU_ITEMS has exactly 16 entries', () => {
+    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(16);
   });
 
   it('contains the expected keys in order', () => {
@@ -31,6 +31,7 @@ describe('menuSettings shared types', () => {
       'diagrams',
       'work-board',
       'playbooks',
+      'builds',
     ]);
   });
 
@@ -52,6 +53,7 @@ describe('menuSettings shared types', () => {
       'Diagrams',
       'Work Board',
       'Playbooks',
+      'Builds',
     ]);
   });
 
@@ -71,7 +73,13 @@ describe('menuSettings shared types', () => {
   it('VT-04 / BR-011: diagrams is configurable but excluded from DEFAULT_ENABLED_MENU_VIEWS', () => {
     expect(ALL_MENU_VIEWS).toContain('diagrams');
     expect(DEFAULT_ENABLED_MENU_VIEWS).not.toContain('diagrams');
-    expect(DEFAULT_ENABLED_MENU_VIEWS).toHaveLength(ALL_MENU_VIEWS.length - 1);
+    expect(DEFAULT_ENABLED_MENU_VIEWS).toHaveLength(ALL_MENU_VIEWS.length - 2);
+  });
+
+  it('FEAT-002 VT-14: builds is configurable, labelled Builds, and opt-in', () => {
+    expect(CONFIGURABLE_MENU_ITEMS).toContainEqual({ key: 'builds', label: 'Builds' });
+    expect(ALL_MENU_VIEWS).toContain('builds');
+    expect(DEFAULT_ENABLED_MENU_VIEWS).not.toContain('builds');
   });
 
   it('ProjectMenuConfig shape is correctly typed', () => {

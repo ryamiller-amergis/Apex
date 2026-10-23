@@ -34,6 +34,7 @@ import { DEFAULT_MODEL_ID } from './config/models';
 import { FeatureFlagDemo } from './components/FeatureFlagDemo';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
+import { BUILD_FROM_PROMPT_FLAG } from '../shared/types/featureFlags';
 import { useDocumentDeepLinkProject } from './hooks/useDocumentDeepLinkProject';
 import { useProjects } from './hooks/useProjects';
 import {
@@ -118,6 +119,10 @@ const LoadTestRunDetailView = lazy(() =>
 const LoadTestsRouteGuard = lazy(() =>
   import('./components/LoadTestsRouteGuard').then((m) => ({ default: m.LoadTestsRouteGuard })),
 );
+const BuildsRouteGuard = lazy(() =>
+  import('./components/BuildsRouteGuard').then((m) => ({ default: m.BuildsRouteGuard })),
+);
+const BuildsView = lazy(() => import('./components/BuildsView').then((m) => ({ default: m.BuildsView })));
 const CalendarWorkItemAssistantPanel = lazy(() => import('./components/CalendarWorkItemAssistantPanel').then(m => ({ default: m.CalendarWorkItemAssistantPanel })));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
@@ -187,7 +192,7 @@ function App() {
   }, []);
   const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -235,6 +240,8 @@ function App() {
                     ? 'load-tests'
                     : location.pathname.startsWith('/diagrams')
                     ? 'diagrams'
+                    : location.pathname === '/builds' || location.pathname.startsWith('/builds/')
+                    ? 'builds'
                     : 'not-found';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
@@ -369,6 +376,7 @@ function App() {
     );
   const playbooksEnabled =
     !homeFlagsLoading && homeFlags['playbooks-production-adapters'] === true;
+  const buildsEnabled = !homeFlagsLoading && homeFlags[BUILD_FROM_PROMPT_FLAG] === true;
   // Prefer the WebSocket agent gateway when the durable interactive transport
   // flag is enabled; SSE remains the stream-transport fallback only.
   // Wait until flags resolve so we do not open SSE first, then leave it stuck
@@ -937,6 +945,8 @@ function App() {
             onNavigateDiagrams={() => navigate('/diagrams')}
             onNavigatePlaybooks={() => navigate('/playbooks')}
             playbooksEnabled={playbooksEnabled}
+            onNavigateBuilds={() => navigate('/builds')}
+            buildsEnabled={buildsEnabled}
             onNavigateAdmin={() => navigate('/admin/roles')}
           />
           <div className={`app-main ${sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}>
@@ -993,6 +1003,8 @@ function App() {
             workBoardEnabled={workBoardEnabled}
             onNavigatePlaybooks={() => navigate('/playbooks')}
             playbooksEnabled={playbooksEnabled}
+            onNavigateBuilds={() => navigate('/builds')}
+            buildsEnabled={buildsEnabled}
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
             onLogout={handleLogout}
@@ -1430,6 +1442,28 @@ function App() {
                   }
                   return <PlaybooksManagePage project={selectedProject} />;
                 })()}
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'builds' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <BuildsRouteGuard
+                  can={can}
+                  isSuperAdmin={isSuperAdmin}
+                  enabledViews={effectiveEnabledViews}
+                  flagEnabled={buildsEnabled}
+                  isLoading={homeFlagsLoading || !menuConfigReady || !permissionsLoaded}
+                  fallbackPath={resolveAccessibleRoute({
+                    canAccessHome,
+                    can,
+                    isSuperAdmin,
+                    enabledViews: effectiveEnabledViews,
+                    selectedProject,
+                    isInAnyGroup,
+                  })}
+                >
+                  <BuildsView project={selectedProject} isSuperAdmin={isSuperAdmin} />
+                </BuildsRouteGuard>
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'load-tests' ? (
