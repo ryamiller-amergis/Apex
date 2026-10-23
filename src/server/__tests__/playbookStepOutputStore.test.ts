@@ -51,7 +51,6 @@ describe('Playbook step output store', () => {
     const store = createPlaybookStepOutputStore({ backend, thresholdBytes: 100 });
     const stored = await store.persist({
       ...metadata,
-      enabled: true,
       output: { verdict: 'ready' },
     });
 
@@ -66,7 +65,7 @@ describe('Playbook step output store', () => {
     const backend = memoryBackend();
     const store = createPlaybookStepOutputStore({ backend, thresholdBytes: 10 });
     const output = { verdict: 'ready', reportMd: 'long report body' };
-    const stored = await store.persist({ ...metadata, enabled: true, output });
+    const stored = await store.persist({ ...metadata, output });
 
     expect(stored.outputBlobRef?.key).toMatch(
       /^Apex\/run-1\/step-run-1\/output-v1-[a-f0-9]{64}\.json$/
@@ -83,7 +82,6 @@ describe('Playbook step output store', () => {
     const store = createPlaybookStepOutputStore({ backend, thresholdBytes: 1 });
     const stored = await store.persist({
       ...metadata,
-      enabled: true,
       output: { reportMd: 'report' },
     });
     backend.bodies.set(stored.outputBlobRef!.key, Buffer.from('{}'));
@@ -93,16 +91,6 @@ describe('Playbook step output store', () => {
     );
   });
 
-  it('keeps output inline while the rollout flag is disabled', async () => {
-    const backend = memoryBackend();
-    const store = createPlaybookStepOutputStore({ backend, thresholdBytes: 1 });
-    const output = { reportMd: 'report' };
-
-    await expect(
-      store.persist({ ...metadata, enabled: false, output })
-    ).resolves.toEqual({ outputInline: output, outputBlobRef: null });
-  });
-
   it('uses content-addressed keys so a losing duplicate cannot delete the winner', async () => {
     const backend = memoryBackend();
     const store = createPlaybookStepOutputStore({ backend, thresholdBytes: 1 });
@@ -110,13 +98,11 @@ describe('Playbook step output store', () => {
     const first = await store.persist({
       ...metadata,
       completedAt: '2026-10-19T00:00:00.000Z',
-      enabled: true,
       output,
     });
     const duplicate = await store.persist({
       ...metadata,
       completedAt: '2026-10-19T00:00:01.000Z',
-      enabled: true,
       output,
     });
 

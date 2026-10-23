@@ -52,7 +52,6 @@ interface AppSidebarProps {
   onNavigateDiagrams?: () => void;
   onNavigatePlaybooks?: () => void;
   /** Playbooks stays hidden until the production-adapters flag is on for the project. */
-  playbooksEnabled?: boolean;
   onNavigateAdmin: () => void;
 }
 
@@ -233,7 +232,6 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigateLoadTests,
   onNavigateDiagrams,
   onNavigatePlaybooks,
-  playbooksEnabled = false,
   onNavigateAdmin,
 }) => {
   const { isMobile } = useBreakpoint();
@@ -303,7 +301,6 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       return isSuperAdmin || can('work-board:view');
     }
     if (item.view === 'playbooks') {
-      if (!playbooksEnabled) return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;
       return isSuperAdmin || can('playbooks:view');
     }

@@ -458,7 +458,7 @@ const server = app.listen(PORT, () => {
   startReaper();
   startAdmissionGovernorScheduler();
   server.once('close', stopAdmissionGovernorScheduler);
-  // Phase 0/1 runs are not behind playbooks-production-adapters, so recovery always starts.
+  // Playbook recovery always starts. A restart has to resume parked runs.
   void startPlaybookReconciliation();
   server.once('close', stopPlaybookReconciliation);
   startPlaybookStepOutputCleanup();

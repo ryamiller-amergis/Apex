@@ -36,7 +36,7 @@ function storeDouble(overrides: Partial<PlaybookStepOutputStore> = {}): Playbook
   return {
     persist: jest.fn(),
     load: jest.fn(async (ref) => ({
-      schemaVersion: 1,
+      schemaVersion: 1 as const,
       project: 'Apex',
       runId: 'run-1',
       stepRunId: ref.key.includes('referenced') ? 'step-1' : 'other-step',

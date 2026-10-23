@@ -18,7 +18,7 @@ jest.mock('../utils/superAdmin', () => ({
   getAppEnvironment: () => 'local',
 }));
 
-// The publish route consults playbooks-production-adapters before forwarding. The real evaluator
+// The publish route forwards to the lifecycle service. The real evaluator
 // queries group membership, which the stubbed `db` above cannot answer.
 const isFeatureEnabled = jest.fn();
 jest.mock('../services/featureFlagService', () => ({

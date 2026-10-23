@@ -200,7 +200,6 @@ export function inlineOutputMaxBytes(env: NodeJS.ProcessEnv = process.env): numb
 }
 
 export interface PersistPlaybookStepOutputInput {
-  enabled: boolean;
   project: string;
   runId: string;
   stepRunId: string;
@@ -227,7 +226,7 @@ export function createPlaybookStepOutputStore(options?: {
       input: PersistPlaybookStepOutputInput
     ): Promise<PersistedPlaybookStepOutput> {
       const outputBytes = canonicalBytes(input.output);
-      if (!input.enabled || outputBytes.byteLength <= threshold) {
+      if (outputBytes.byteLength <= threshold) {
         return { outputInline: input.output, outputBlobRef: null };
       }
 

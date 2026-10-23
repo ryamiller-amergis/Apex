@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import { ArrowLeft, FlaskConical, MousePointerClick, Rocket, Save, WandSparkles } from 'lucide-react';
 import type { PlaybookGraph, PlaybookLayoutPositions } from '../../shared/types/playbook';
 import { useAppShell } from '../hooks/useAppShell';
-import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import {
   PlaybookApiError,
   usePlaybookDefinition,
@@ -67,13 +66,12 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
   project,
   definitionId,
 }) => {
-  const canvasEnabled = useFeatureFlag('playbooks-authoring-canvas', project);
   const { can } = useAppShell();
   const canAuthor = can('playbooks:author');
   const detail = usePlaybookDefinition(project, definitionId);
-  const palette = usePlaybookStepPalette(project, canvasEnabled);
+  const palette = usePlaybookStepPalette(project, true);
   const draftVersionId = detail.data?.draft.id ?? null;
-  const layoutQuery = usePlaybookVersionLayout(project, definitionId, draftVersionId, canvasEnabled);
+  const layoutQuery = usePlaybookVersionLayout(project, definitionId, draftVersionId, true);
   const validateConnection = useValidatePlaybookConnection(project);
   const saveDraft = useSavePlaybookDraft(project, definitionId);
   const saveLayout = useSavePlaybookLayout(project, definitionId, draftVersionId ?? '');
@@ -288,14 +286,6 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [canAuthor, onSave]);
-
-  if (!canvasEnabled) {
-    return (
-      <p className={styles.pageMessage} {...{ 'data-testid': 'playbook-canvas-flag-off' }}>
-        Playbook authoring canvas is not enabled for this project.
-      </p>
-    );
-  }
 
   if (detail.isPending || layoutQuery.isPending) {
     return <p className={styles.pageMessage}>Loading playbook…</p>;

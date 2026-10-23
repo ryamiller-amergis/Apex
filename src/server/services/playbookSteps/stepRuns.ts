@@ -18,7 +18,6 @@ import { db } from '../../db/drizzle';
 import { playbookRuns, playbookStepRuns } from '../../db/schema';
 import { assertSuspendedRunCapacity } from '../playbookGuardService';
 import { notifyPlaybookRunChanged } from '../playbookRunNotifyService';
-import { isFeatureEnabled } from '../featureFlagService';
 import {
   createPlaybookStepOutputStore,
   inlineOutputMaxBytes,
@@ -80,7 +79,6 @@ async function persistOutput(
   const [context] = await db
     .select({
       project: playbookRuns.project,
-      initiatorUserId: playbookRuns.initiatorUserId,
       runId: playbookStepRuns.runId,
       stepId: playbookStepRuns.stepId,
       stepType: playbookStepRuns.stepType,
@@ -91,18 +89,7 @@ async function persistOutput(
     .limit(1);
   if (!context) throw new PlaybookStepRunNotFoundError(stepRunId);
 
-  let enabled = false;
-  try {
-    enabled = await isFeatureEnabled('playbooks-step-output-artifacts', {
-      project: context.project,
-      userId: context.initiatorUserId,
-      caller: 'playbook-step-output',
-    });
-  } catch {
-    enabled = false;
-  }
   return createPlaybookStepOutputStore().persist({
-    enabled,
     project: context.project,
     runId: context.runId,
     stepRunId,

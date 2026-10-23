@@ -326,8 +326,6 @@ function App() {
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
   const interactiveWsEnabled = homeFlags['ai-runs-v2-transport'] === true;
-  const playbooksEnabled =
-    !homeFlagsLoading && homeFlags['playbooks-production-adapters'] === true;
   // Prefer the WebSocket agent gateway when the durable interactive transport
   // flag is enabled; SSE remains the stream-transport fallback only.
   // Wait until flags resolve so we do not open SSE first, then leave it stuck
@@ -353,7 +351,6 @@ function App() {
   const effectiveEnabledViews = isRestricted ? restrictedModules : enabledViews;
   const menuConfigReady = isRestricted || !menuConfigLoading;
   const canAccessPlaybooks =
-    playbooksEnabled &&
     menuConfigReady &&
     (isSuperAdmin || (effectiveEnabledViews.includes('playbooks') && can('playbooks:view')));
   const restrictedSkipRef = useRef(false);
@@ -884,7 +881,6 @@ function App() {
             onNavigateLoadTests={() => navigate('/load-tests')}
             onNavigateDiagrams={() => navigate('/diagrams')}
             onNavigatePlaybooks={() => navigate('/playbooks')}
-            playbooksEnabled={playbooksEnabled}
             onNavigateAdmin={() => navigate('/admin/roles')}
           />
           <div className={`app-main ${sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}>
@@ -940,7 +936,6 @@ function App() {
             onNavigateWorkBoard={() => navigate('/work-board')}
             workBoardEnabled={workBoardEnabled}
             onNavigatePlaybooks={() => navigate('/playbooks')}
-            playbooksEnabled={playbooksEnabled}
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
             onLogout={handleLogout}

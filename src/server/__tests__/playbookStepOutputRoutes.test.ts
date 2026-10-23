@@ -68,16 +68,20 @@ describe('Playbook step output route', () => {
     });
   });
 
-  it('returns no output metadata while the rollout flag is disabled', async () => {
+  it('returns step output without a rollout flag', async () => {
     mockIsFeatureEnabled.mockResolvedValue(false);
 
     const response = await request(buildApp())
       .get('/api/playbooks/runs/run-1/steps/step-run-1/output')
       .query({ project: PROJECT });
 
-    expect(response.status).toBe(404);
-    expect(mockGetStepOutput).not.toHaveBeenCalled();
-    expect(JSON.stringify(response.body)).not.toContain('step-run-1');
+    expect(response.status).toBe(200);
+    expect(mockGetStepOutput).toHaveBeenCalledWith({
+      project: PROJECT,
+      runId: 'run-1',
+      stepRunId: 'step-run-1',
+      part: 'full',
+    });
   });
 
   it('rejects unsupported output parts before reading storage', async () => {

@@ -72,7 +72,10 @@ export async function createLocalCursorExecution(
     throw new Error('Playbook agent run referenced an invalid frozen capability policy');
   }
   const policy = rawPolicy;
-  if (policy) {
+  // A recorded policy is audit data until enforcement is on. Observe mode keeps the
+  // worker path that already shipped: project settings, no sandbox, and the prompt as given.
+  const enforcing = policy?.enforcement === 'enforce';
+  if (policy && enforcing) {
     if (!snapshot.skillContent || !snapshot.skillSha256) {
       throw new Error('Playbook agent run is missing its frozen Skill content');
     }
@@ -85,25 +88,23 @@ export async function createLocalCursorExecution(
     ) {
       throw new Error('Playbook agent run referenced Skill content with a mismatched hash');
     }
-  }
-  if (
-    policy?.enforcement === 'enforce'
-    && (
+    if (
       policy.localAgent.cwdMode !== 'scratch'
       || policy.localAgent.allowBuiltinWrites
       || policy.capabilities.includes('repository-write')
       || policy.mcpServers.length > 0
-    )
-  ) {
-    throw new Error('Playbook agent policy is broader than the worker read-only execution lane');
+    ) {
+      throw new Error('Playbook agent policy is broader than the worker read-only execution lane');
+    }
   }
   const nativeReadsAllowed =
-    !policy || policy.localAgent.customTools === 'native-read-only';
+    policy?.enforcement !== 'enforce'
+    || policy.localAgent.customTools === 'native-read-only';
 
   const local = {
     cwd: snapshot.workspaceRef,
-    settingSources: policy ? [] : ['project'],
-    ...(policy ? { sandboxOptions: { enabled: true } } : {}),
+    settingSources: enforcing ? [] : ['project'],
+    ...(enforcing ? { sandboxOptions: { enabled: true } } : {}),
     ...(checkout && nativeReadsAllowed ? { customTools: createNativeReadTools(checkout) } : {}),
   } satisfies LocalAgentOptions;
 
@@ -122,12 +123,11 @@ export async function createLocalCursorExecution(
   );
 
   try {
+    const prompt = enforcing && snapshot.skillContent && !snapshot.prompt.includes(snapshot.skillContent)
+      ? `${snapshot.skillContent}\n\n---\n\n${snapshot.prompt}`
+      : snapshot.prompt;
     const run = await raceCursorStartup(
-      agent.send(
-        policy
-          ? `${snapshot.skillContent}\n\n---\n\n${snapshot.prompt}`
-          : snapshot.prompt
-      ),
+      agent.send(prompt),
       signal,
       () => agent[Symbol.asyncDispose](),
     );

@@ -58,7 +58,6 @@ import type { PlaybookAgentRunPolicy } from '../../../shared/types/playbookExecu
 const STEP_TYPE = 'cursor-agent';
 const TERMINAL_EVENT_GRACE_MS = 5 * 60 * 1000;
 const V2_TRANSPORT_FLAG = 'ai-runs-v2-transport';
-const CAPABILITY_ENFORCEMENT_FLAG = 'playbooks-capability-enforcement';
 
 async function isV2TransportEnabled(userId: string, project: string): Promise<boolean> {
   try {
@@ -69,30 +68,43 @@ async function isV2TransportEnabled(userId: string, project: string): Promise<bo
   }
 }
 
-async function capabilityEnforcementEnabled(userId: string, project: string): Promise<boolean> {
-  try {
-    return await isFeatureEnabled(CAPABILITY_ENFORCEMENT_FLAG, {
-      userId,
-      project,
-      caller: 'playbook-step',
-    });
-  } catch {
-    // Observation is the rollout baseline. An unreadable flag does not widen a policy.
-    return false;
-  }
-}
-
 /**
  * Admits the step's agent run on the V2 document lane and returns its run id, or null when the
  * router did not reach a worker. The router's in-process fallback is a no-op here: running the
  * agent on App Service would hide a V2 failure, so the caller fails the step as retryable instead.
  */
+/**
+ * The V2 specification must carry the same Skill bytes the policy was hashed from.
+ * `prepareBackgroundWorkflowTurn` loads a catalog copy, and that copy can differ from the
+ * App Service file the policy already pinned. The worker then refuses the run.
+ */
+function bindPolicySkill<T extends { prompt: string; skillContent?: string }>(
+  prepared: T,
+  skillContent: string,
+  policy: PlaybookAgentRunPolicy,
+): T & { skillPath: string; skillContent: string; skillSha256: string } {
+  const catalogSkill = prepared.skillContent;
+  const prompt = catalogSkill
+    && catalogSkill !== skillContent
+    && prepared.prompt.includes(catalogSkill)
+    ? prepared.prompt.replace(catalogSkill, skillContent)
+    : prepared.prompt;
+  return {
+    ...prepared,
+    prompt,
+    skillPath: policy.skill.path,
+    skillContent,
+    skillSha256: policy.skill.sha256,
+  };
+}
+
 async function routeStepThroughV2(input: {
   userId: string;
   project: string;
   threadId: string;
   prompt: string;
   model: string;
+  skillContent: string;
   policy: PlaybookAgentRunPolicy;
 }): Promise<string | null> {
   const decision = await routeBackgroundWorkflow({
@@ -104,10 +116,14 @@ async function routeStepThroughV2(input: {
     agentRunId: randomUUID(),
     threadId: input.threadId,
     playbookAgentPolicy: input.policy,
-    prepareWorker: async () => ({
-      ...(await prepareBackgroundWorkflowTurn(input.threadId, input.prompt)),
-      model: input.model,
-    }),
+    prepareWorker: async () => bindPolicySkill(
+      {
+        ...(await prepareBackgroundWorkflowTurn(input.threadId, input.prompt)),
+        model: input.model,
+      },
+      input.skillContent,
+      input.policy,
+    ),
     runInProcess: () => undefined,
     reportRecoverablePreparationFailure: () => undefined,
   });
@@ -140,10 +156,6 @@ export async function executeCursorAgentStep(
 
   const skillConfig = await getSkillConfig(context.project);
   const skillContent = await loadPlaybookSkillContent(config.skillPath);
-  const enforce = await capabilityEnforcementEnabled(
-    context.initiatorUserId,
-    context.project
-  );
   const resolvedPolicy = resolvePlaybookAgentRunPolicy({
     nodeId: context.stepId,
     skillPath: config.skillPath,
@@ -151,7 +163,7 @@ export async function executeCursorAgentStep(
     mcpProfile: config.mcpProfile,
     repository: skillConfig?.skillRepo ?? context.project,
     provider: skillConfig?.skillProvider,
-    enforce,
+    enforce: true,
   });
   const frozenPolicy = context.graph?.nodes.find(
     (node) => node.id === context.stepId
@@ -168,7 +180,7 @@ export async function executeCursorAgentStep(
     );
   }
   const policy = frozenPolicy
-    ? { ...frozenPolicy, enforcement: enforce ? 'enforce' as const : 'observe' as const }
+    ? { ...frozenPolicy, enforcement: 'enforce' as const }
     : resolvedPolicy;
 
   // The SDK rejects a blank model id outright, so a step in a project with no configured default
@@ -222,6 +234,7 @@ export async function executeCursorAgentStep(
         threadId: thread.id,
         prompt: config.prompt,
         model,
+        skillContent,
         policy,
       });
     } catch (error) {

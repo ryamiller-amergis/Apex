@@ -7,7 +7,6 @@ import { Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, PenLine, Play } from 'lucide-react';
 import type { PlaybookDefinitionDetail } from '../../shared/types/playbook';
 import { useAppShell } from '../hooks/useAppShell';
-import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import { usePlaybookDefinition } from '../hooks/usePlaybookDefinitions';
 import { useProfileCard } from '../hooks/useProfile';
 import { usePlaybookVersionGraph } from '../hooks/usePlaybookCanvas';
@@ -159,12 +158,11 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
   const { can } = useAppShell();
   const canAuthor = can('playbooks:author');
   const canRun = can('playbooks:run');
-  const canvasEnabled = useFeatureFlag('playbooks-authoring-canvas', project);
   const detail = usePlaybookDefinition(project, definitionId);
   const runs = usePlaybookRuns(project);
   const start = useStartPlaybookRun(project, definitionId);
   const publishedVersionId = detail.data?.currentPublishedVersionId ?? null;
-  const publishedGraph = usePlaybookVersionGraph(project, definitionId, publishedVersionId, canvasEnabled);
+  const publishedGraph = usePlaybookVersionGraph(project, definitionId, publishedVersionId, true);
   const [runError, setRunError] = useState<string | null>(null);
 
   const definitionRuns = useMemo(
@@ -197,7 +195,7 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
     setRunError(null);
     try {
       const result = await start.mutateAsync();
-      if (canvasEnabled) navigate(`/playbooks/runs/${result.runId}`);
+      navigate(`/playbooks/runs/${result.runId}`);
     } catch (error) {
       setRunError(error instanceof Error ? error.message : 'Could not start the run.');
     }
@@ -252,15 +250,13 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
               <PenLine size={15} aria-hidden /> Edit
             </Link>
           ) : null}
-          {canvasEnabled ? (
-            <Link
-              to={`/playbooks/definitions/${definitionId}`}
-              className={styles.secondaryButton}
-              {...{ 'data-testid': 'playbook-open-canvas' }}
-            >
-              <PenLine size={15} aria-hidden /> {canAuthor ? 'Edit in builder' : 'View in builder'}
-            </Link>
-          ) : null}
+          <Link
+            to={`/playbooks/definitions/${definitionId}`}
+            className={styles.secondaryButton}
+            {...{ 'data-testid': 'playbook-open-canvas' }}
+          >
+            <PenLine size={15} aria-hidden /> {canAuthor ? 'Edit in builder' : 'View in builder'}
+          </Link>
           {canRun ? (
             <button
               type="button"
@@ -276,9 +272,6 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
         </div>
       </header>
       {runError ? <p className={styles.errorBanner} role="alert">{runError}</p> : null}
-      {start.isSuccess && !canvasEnabled ? (
-        <p className={styles.successBanner} role="status">Run started.</p>
-      ) : null}
 
       <dl className={styles.tiles} {...{ 'data-testid': 'playbook-dashboard-stats' }}>
         {tiles.map((tile) => (

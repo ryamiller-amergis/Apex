@@ -8,7 +8,6 @@ import type {
 } from '../../shared/types/playbook';
 import { layoutPlaybookGraph, positionsOverlap } from '../utils/playbookCanvasLayout';
 import { relativeTime, runStatusLabel } from './playbookStatusFormat';
-import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import { usePlaybookRun } from '../hooks/usePlaybookRuns';
 import { usePlaybookRunInvalidation } from '../hooks/usePlaybookRunInvalidation';
 import {
@@ -31,16 +30,14 @@ interface PlaybookLiveRunPageProps {
 }
 
 export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ project, runId }) => {
-  const canvasEnabled = useFeatureFlag('playbooks-authoring-canvas', project);
-  const outputArtifactsEnabled = useFeatureFlag('playbooks-step-output-artifacts', project);
   const run = usePlaybookRun(project, runId);
-  usePlaybookRunInvalidation(project, runId, canvasEnabled);
+  usePlaybookRunInvalidation(project, runId, true);
 
   const definitionId = run.data?.definitionId ?? null;
   const versionId = run.data?.definitionVersionId ?? null;
-  const graphQuery = usePlaybookVersionGraph(project, definitionId, versionId, canvasEnabled);
-  const layoutQuery = usePlaybookVersionLayout(project, definitionId, versionId, canvasEnabled);
-  const palette = usePlaybookStepPalette(project, canvasEnabled);
+  const graphQuery = usePlaybookVersionGraph(project, definitionId, versionId, true);
+  const layoutQuery = usePlaybookVersionLayout(project, definitionId, versionId, true);
+  const palette = usePlaybookStepPalette(project, true);
   const [tidiedPositions, setTidiedPositions] = useState<PlaybookLayoutPositions | null>(null);
   const [selectedStepRunId, setSelectedStepRunId] = useState<string | null>(null);
 
@@ -73,14 +70,6 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
       cancelled = true;
     };
   }, [savedPositions, versionGraph]);
-
-  if (!canvasEnabled) {
-    return (
-      <p className={styles.error} {...{ 'data-testid': 'playbook-live-run-flag-off' }}>
-        Live run canvas is not enabled for this project.
-      </p>
-    );
-  }
 
   if (run.isPending) {
     return <p className={styles.loading}>Loading run…</p>;
@@ -125,12 +114,10 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
             readOnly
             stepStatusByNodeId={stepStatusByNodeId}
             selectedNodeId={selectedStep?.stepId ?? null}
-            onSelectNode={outputArtifactsEnabled
-              ? (nodeId) => {
-                  const step = run.data.steps.find((candidate) => candidate.stepId === nodeId);
-                  setSelectedStepRunId(step?.id ?? null);
-                }
-              : undefined}
+            onSelectNode={(nodeId) => {
+              const step = run.data.steps.find((candidate) => candidate.stepId === nodeId);
+              setSelectedStepRunId(step?.id ?? null);
+            }}
           />
         )}
       </div>
@@ -150,7 +137,6 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
         <PlaybookRunStepList
           run={run.data}
           id={`playbook-live-steps-${runId}`}
-          outputArtifactsEnabled={outputArtifactsEnabled}
         />
         <PlaybookGateReviewPanel
           project={project}

@@ -17,7 +17,6 @@ import { assertGraphWithinGuards } from './playbookGuardService';
 import { assertCursorAgentsUseReadOnlyMcp } from './playbookMcpCapabilityService';
 import { getStepTypeDescriptor } from './playbookSteps/registry';
 import { resolvePlaybookGraphAgentPolicies } from './playbookExecutionCapabilityService';
-import { isFeatureEnabled } from './featureFlagService';
 import { getSkillConfig } from './projectSettingsService';
 import { copyLayoutToPublishedVersion } from './playbookVersionLayoutService';
 import type {
@@ -141,18 +140,6 @@ async function assertPlaybookCapabilitiesForPublish(input: {
   project?: string;
   userId?: string;
 }): Promise<Array<{ nodeId: string; policy: PlaybookAgentRunPolicy }>> {
-  let enforce = false;
-  if (input.project && input.userId) {
-    try {
-      enforce = await isFeatureEnabled('playbooks-capability-enforcement', {
-        project: input.project,
-        userId: input.userId,
-        caller: 'playbook-publish',
-      });
-    } catch {
-      enforce = false;
-    }
-  }
   let repository = input.project;
   let provider: SkillProvider | undefined;
   if (input.project) {
@@ -166,9 +153,9 @@ async function assertPlaybookCapabilitiesForPublish(input: {
   }
   return resolvePlaybookGraphAgentPolicies({
     graph: input.graph,
+    enforce: true,
     repository,
     provider,
-    enforce,
   });
 }
 

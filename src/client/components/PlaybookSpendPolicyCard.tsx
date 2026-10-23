@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { useAppShell } from '../hooks/useAppShell';
-import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import {
   usePlaybookSpendPolicy,
   useUpdatePlaybookSpendPolicy,
@@ -171,16 +170,5 @@ export const PlaybookSpendPolicyCard: React.FC<{
   project: string;
   'data-testid'?: string;
 }> = ({ project }) => {
-  const enabled = useFeatureFlag('playbooks-production-adapters', project);
-
-  // @feature-flag:playbooks-production-adapters start winner=enabled
-  if (!enabled) {
-    // @feature-flag:playbooks-production-adapters disabled-start
-    return null;
-    // @feature-flag:playbooks-production-adapters disabled-end
-  }
-  // @feature-flag:playbooks-production-adapters enabled-start
   return <PlaybookSpendPolicyCardEnabled project={project} />;
-  // @feature-flag:playbooks-production-adapters enabled-end
-  // @feature-flag:playbooks-production-adapters end
 };

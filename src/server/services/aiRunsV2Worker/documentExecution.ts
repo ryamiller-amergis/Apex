@@ -393,6 +393,8 @@ function executionSnapshot(
     ...(specification.provider ? { provider: specification.provider } : {}),
     workflowClass: specification.workflowClass,
     skillPath: specification.skillPath,
+    skillContent: specification.skillContent,
+    skillSha256: specification.skillSha256,
     projectId: specification.projectId,
     threadId: specification.threadId,
     ...(specification.playbookAgentPolicy

@@ -22,7 +22,6 @@ interface PlaybookRunStepListProps {
   run: PlaybookRunDetail;
   /** The DOM id the run row's `aria-controls` points at. */
   id: string;
-  outputArtifactsEnabled?: boolean;
 }
 
 function stepTiming(step: PlaybookStepRun): string {
@@ -34,7 +33,6 @@ function stepTiming(step: PlaybookStepRun): string {
 export const PlaybookRunStepList: React.FC<PlaybookRunStepListProps> = ({
   run,
   id,
-  outputArtifactsEnabled = false,
 }) => {
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const selectedStep = run.steps.find((step) => step.id === selectedStepId) ?? null;
@@ -75,17 +73,15 @@ export const PlaybookRunStepList: React.FC<PlaybookRunStepListProps> = ({
             </div>
 
             <p className={styles.stepTiming}>{stepTiming(step)}</p>
-            {outputArtifactsEnabled ? (
-              <button
-                type="button"
-                className={styles.stepDetailButton}
-                onClick={() => setSelectedStepId(step.id)}
-                aria-label={`View details for ${step.stepId}`}
-                data-testid={`playbook-step-view-${step.stepId}`}
-              >
-                View details
-              </button>
-            ) : null}
+            <button
+              type="button"
+              className={styles.stepDetailButton}
+              onClick={() => setSelectedStepId(step.id)}
+              aria-label={`View details for ${step.stepId}`}
+              data-testid={`playbook-step-view-${step.stepId}`}
+            >
+              View details
+            </button>
 
             {/* Only on the parked step, which is PBI-003's fourth criterion: a run with no
                 suspension shows no suspension detail anywhere. */}
