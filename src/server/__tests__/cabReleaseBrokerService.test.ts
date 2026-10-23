@@ -122,6 +122,48 @@ describe('cabReleaseBrokerService', () => {
     )).toThrow(/Release\/\{version\}/);
   });
 
+  it('refuses a build log until the build is mv-prod-cd on a release branch', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('/builds/99?')) {
+        return new Response(JSON.stringify({
+          id: 99,
+          sourceBranch: 'refs/heads/feature/secret',
+          definition: { name: 'some-other-pipeline' },
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('pipeline secret', { status: 200 });
+    });
+
+    await expect(forwardCabAdoRequest(
+      request('https://dev.azure.com/Amergis/MaxView/_apis/build/builds/99/logs/1'),
+      env,
+      fetchImpl as unknown as typeof fetch,
+    )).rejects.toMatchObject({ status: 403, code: 'CAB_BROKER_FORBIDDEN' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards an mv-prod-cd build log on a release branch', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('/builds/42?')) {
+        return new Response(JSON.stringify({
+          id: 42,
+          sourceBranch: 'refs/heads/Release/2026.15.0',
+          definition: { name: 'mv-prod-cd' },
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('build log', { status: 200, headers: { 'content-type': 'text/plain' } });
+    });
+
+    const result = await forwardCabAdoRequest(
+      request('https://dev.azure.com/Amergis/MaxView/_apis/build/builds/42/logs/3'),
+      env,
+      fetchImpl as unknown as typeof fetch,
+    );
+    expect(result.status).toBe(200);
+    expect(result.body).toBe('build log');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it('fails when the server has no PAT', async () => {
     await expect(forwardCabAdoRequest(
       request('https://dev.azure.com/Amergis/MaxView/_apis/git/repositories/MaxView/refs?filter=heads/development'),

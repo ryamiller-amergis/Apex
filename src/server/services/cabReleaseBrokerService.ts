@@ -99,6 +99,31 @@ function assertRefQuery(url: URL): void {
   );
 }
 
+const BUILD_RESOURCE = /^\/MaxView\/_apis\/build\/builds\/(\d+)(\/(?:workitems|logs(?:\/\d+)?))?$/;
+const PROD_CD_BRANCH = new RegExp(String.raw`^refs/heads/(?:${RELEASE_BRANCH}|development)$`);
+
+function buildResource(relativePath: string): { id: string; child: boolean } | null {
+  const match = relativePath.match(BUILD_RESOURCE);
+  if (!match) return null;
+  return { id: match[1], child: Boolean(match[2]) };
+}
+
+function assertProdCdBuild(body: unknown): void {
+  const record = body as { sourceBranch?: unknown; definition?: { name?: unknown } };
+  if (!record || typeof record !== 'object' || record.definition?.name !== 'mv-prod-cd') {
+    throw new CabReleaseBrokerError(
+      'Build reads are limited to mv-prod-cd',
+      403,
+      'CAB_BROKER_FORBIDDEN',
+    );
+  }
+  assertPattern(
+    String(record.sourceBranch ?? ''),
+    PROD_CD_BRANCH,
+    'Build reads are limited to Release/{version} and development',
+  );
+}
+
 function assertBuildQuery(url: URL, relativePath: string): void {
   if (relativePath.endsWith('/definitions')) {
     if (queryValue(url, 'name') !== 'mv-prod-cd') {
@@ -263,6 +288,38 @@ export async function forwardCabAdoRequest(
   };
   if (typeof request.ifMatch === 'string' && request.ifMatch.trim()) {
     headers['If-Match'] = request.ifMatch.trim();
+  }
+
+  const org = orgBase(env);
+  const relativePath = url.pathname.slice(new URL(org).pathname.length) || '/';
+  const build = method === 'GET' ? buildResource(relativePath) : null;
+  if (build) {
+    const lookup = new URL(`${org}/MaxView/_apis/build/builds/${build.id}`);
+    lookup.searchParams.set('api-version', '7.1');
+    const lookedUp = await fetchImpl(lookup.href, {
+      method: 'GET',
+      headers: {
+        Authorization: headers.Authorization,
+        Accept: 'application/json',
+      },
+    });
+    const lookedUpText = await lookedUp.text();
+    const lookedUpBody = readResponseBody(lookedUpText, lookedUp.headers.get('content-type') ?? '');
+    if (!lookedUp.ok) {
+      return {
+        status: lookedUp.status,
+        body: lookedUpBody,
+        etag: lookedUp.headers.get('etag') ?? '',
+      };
+    }
+    assertProdCdBuild(lookedUpBody);
+    if (!build.child) {
+      return {
+        status: lookedUp.status,
+        body: lookedUpBody,
+        etag: lookedUp.headers.get('etag') ?? '',
+      };
+    }
   }
 
   const hasBody = method !== 'GET' && request.body !== undefined && request.body !== null;

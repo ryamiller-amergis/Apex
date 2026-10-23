@@ -68,6 +68,20 @@ describe('CreateCabRequestModal', () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
+  it('shows the normalized release branch when the epic title includes a product label', () => {
+    render(
+      <CreateCabRequestModal
+        targetVersion="MV 2026.15.0"
+        defaultPreviousBranch="Release/2026.14.0"
+        onCancel={onCancel}
+        onConfirm={onConfirm}
+      />,
+    );
+    expect(screen.getByText(/Cutting/)).toHaveTextContent('Release/2026.15.0');
+    expect(screen.getByTestId('create-cab-cut-branch').parentElement).toHaveTextContent('Release/2026.15.0');
+    expect(screen.getByText(/Cutting/)).not.toHaveTextContent('Release/MV');
+  });
+
   it('rejects a whitespace-only previous branch', async () => {
     const user = userEvent.setup();
     renderModal();

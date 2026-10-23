@@ -53,6 +53,8 @@ export const CreateCabRequestModal: React.FC<CreateCabRequestModalProps> = ({
     return () => document.removeEventListener('keydown', handleKey);
   }, [onCancel]);
 
+  const releaseRef = normalizeReleaseBranch(targetVersion) || targetVersion;
+
   const submit = (values: FormValues) => {
     onConfirm({
       previousReleaseBranch: normalizeReleaseBranch(values.previousReleaseBranch),
@@ -73,7 +75,7 @@ export const CreateCabRequestModal: React.FC<CreateCabRequestModalProps> = ({
       <form className={styles.card} onSubmit={handleSubmit(submit)} {...{ 'data-testid': 'create-cab-request-form' }}>
         <h2 className={styles.title} id="create-cab-request-title">Create CAB request</h2>
         <p className={styles.body}>
-          Snow still gathers the release delta. Cutting <code>Release/{targetVersion}</code> from
+          Snow still gathers the release delta. Cutting <code>{releaseRef}</code> from
           development is optional and happens only after a succeeded snow run.
         </p>
 
@@ -115,7 +117,7 @@ export const CreateCabRequestModal: React.FC<CreateCabRequestModalProps> = ({
 
         <label className={styles.radioOption}>
           <input type="checkbox" {...register('cutReleaseBranch')} {...{ 'data-testid': 'create-cab-cut-branch' }} />
-          After snow succeeds, cut Release/{targetVersion} from development
+          After snow succeeds, cut {releaseRef} from development
         </label>
         <p className={styles.hint}>Leave unchecked to file the CAB without creating the git branch.</p>
 
