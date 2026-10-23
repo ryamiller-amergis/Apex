@@ -322,6 +322,9 @@ async function startVitePreview(record: CodeLabSessionRecord, appDirAbs: string)
   }
 
   const wrapperDir = path.join(appDirAbs, VITE_WRAPPER_DIR);
+  const viteCacheDir = path.join(wrapperDir, 'vite-cache');
+  // Vite reuses pre-bundled deps across restarts, so a corrupt bundle would survive Restart preview.
+  fs.rmSync(viteCacheDir, { recursive: true, force: true });
   fs.mkdirSync(wrapperDir, { recursive: true });
   const wrapperPath = path.join(wrapperDir, VITE_WRAPPER_FILE);
   fs.writeFileSync(wrapperPath, VITE_WRAPPER_SOURCE, 'utf-8');
@@ -340,7 +343,7 @@ async function startVitePreview(record: CodeLabSessionRecord, appDirAbs: string)
     env: previewEnv({
       CODE_LAB_APP_DIR: appDirAbs,
       CODE_LAB_BASE: basePath,
-      CODE_LAB_CACHE_DIR: path.join(wrapperDir, 'vite-cache'),
+      CODE_LAB_CACHE_DIR: viteCacheDir,
       CODE_LAB_PORT: String(port),
       CODE_LAB_FS_ALLOW: JSON.stringify([...new Set(fsAllow)]),
     }),
