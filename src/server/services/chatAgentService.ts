@@ -39,6 +39,7 @@ import {
   listMessageIds as pgListMessageIds,
   deleteThread as pgDeleteThread,
   clearStaleRun,
+  reopenClosedThread,
 } from './chatThreadRepository';
 import { db } from '../db/drizzle';
 import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
@@ -6484,6 +6485,13 @@ export async function sendMessage(
 ): Promise<InteractiveMessageSubmission | void> {
   const state = await ensureThreadState(threadId);
   if (!state) throw new Error(`Thread ${threadId} not found`);
+  // 'closed' only means the idle timer released this thread's resources; the
+  // transcript is persisted, so a new message continues the conversation.
+  if (state.thread.status === 'closed' && !state.isDevSession) {
+    await reopenClosedThread(threadId);
+    state.thread.status = 'idle';
+    broadcast(state, { type: 'status', status: 'idle' });
+  }
   const workflowClass = resolveInteractiveWorkflowClass(state);
   const legacyCompletion = options?.legacyCompletion ?? 'await';
   const requesterUserId = options?.requesterUserId ?? state.thread.userId;

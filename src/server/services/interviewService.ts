@@ -7,11 +7,31 @@ import type { EffortLevel } from '../../shared/types/effort';
 import type { InterviewProfileSnapshot, InterviewStepMode } from '../../shared/types/playbook';
 import { cancelRun, markAsInterviewThread } from './chatAgentService';
 import { createNotification } from './notificationService';
+import { isPlatformAdmin, isProjectAdmin } from '../utils/rbacHelpers';
+import { getActiveUsers } from './rbacService';
 import { getSkillSettingsName } from './projectSettingsService';
 import { runGroundingService } from './runGroundingService';
 import { recordArtifactDoneEvent } from './artifactDoneEventService';
+import { listLinkedContextIds } from './interviewLinkService';
+import {
+  latestGuidedInterviewPhaseIndex,
+  sliceGuidedInterviewPhases,
+  usesGuidedInterview,
+} from './guidedInterviewState';
 
 const VALID_INTERVIEW_STATUSES: InterviewStatus[] = ['in_progress', 'complete', 'archived'];
+
+export const INTERVIEW_COMPLETE_FORBIDDEN_MESSAGE =
+  'Only the author, an interview section owner, a project admin, or a platform admin can complete an interview';
+
+export const INTERVIEW_COMPLETE_INVALID_STATUS_MESSAGE =
+  'Only in-progress interviews can be marked complete';
+
+function httpStatusError(message: string, status: number): Error {
+  const err = new Error(message) as Error & { status: number };
+  err.status = status;
+  return err;
+}
 
 function assertValidInterviewStatus(status: string): asserts status is InterviewStatus {
   if (!VALID_INTERVIEW_STATUSES.includes(status as InterviewStatus)) {
@@ -19,6 +39,35 @@ function assertValidInterviewStatus(status: string): asserts status is Interview
     (err as any).status = 400;
     throw err;
   }
+}
+
+export interface InterviewCompletionActor {
+  authorId: string;
+  project: string;
+  prdOwnerId?: string | null;
+  designDocOwnerId?: string | null;
+  designPrototypeOwnerId?: string | null;
+  testCaseOwnerId?: string | null;
+}
+
+/**
+ * Author, section owner, platform admin, or project admin may complete an
+ * interview and generate its PRD. Other status changes stay author-only.
+ */
+export async function canCompleteInterviewAndGeneratePrd(
+  userId: string,
+  interviewRow: InterviewCompletionActor,
+): Promise<boolean> {
+  if (interviewRow.authorId === userId) return true;
+  const sectionOwnerIds = [
+    interviewRow.prdOwnerId,
+    interviewRow.designDocOwnerId,
+    interviewRow.designPrototypeOwnerId,
+    interviewRow.testCaseOwnerId,
+  ];
+  if (sectionOwnerIds.some((ownerId) => ownerId != null && ownerId === userId)) return true;
+  if (await isPlatformAdmin(userId)) return true;
+  return isProjectAdmin(userId, interviewRow.project);
 }
 
 const PLAYBOOK_LINKAGE_ERROR =
@@ -268,6 +317,9 @@ export async function listInterviews(
       designDocOwnerId: interviews.designDocOwnerId,
       designPrototypeOwnerId: interviews.designPrototypeOwnerId,
       testCaseOwnerId: interviews.testCaseOwnerId,
+      discoveryAssigneeId: interviews.discoveryAssigneeId,
+      deliveryAssigneeId: interviews.deliveryAssigneeId,
+      technicalAssigneeId: interviews.technicalAssigneeId,
       skillSettingsId: interviews.skillSettingsId,
       prdApproverIds: interviews.prdApproverIds,
       designDocApproverIds: interviews.designDocApproverIds,
@@ -307,6 +359,9 @@ export async function listInterviews(
     designDocOwnerId: row.designDocOwnerId ?? undefined,
     designPrototypeOwnerId: row.designPrototypeOwnerId ?? undefined,
     testCaseOwnerId: row.testCaseOwnerId ?? undefined,
+    discoveryAssigneeId: row.discoveryAssigneeId ?? undefined,
+    deliveryAssigneeId: row.deliveryAssigneeId ?? undefined,
+    technicalAssigneeId: row.technicalAssigneeId ?? undefined,
     skillSettingsId: row.skillSettingsId ?? null,
     skillSettingsName: row.skillSettingsId ? settingsNameMap.get(row.skillSettingsId) ?? null : null,
     prdApproverIds: row.prdApproverIds ?? undefined,
@@ -322,7 +377,16 @@ export async function listInterviews(
 export async function getInterview(id: string): Promise<Interview | null> {
   const row = await db.query.interviews.findFirst({
     where: eq(interviews.id, id),
-    with: { prds: true, prdOwner: true, designDocOwner: true, designPrototypeOwner: true, testCaseOwner: true },
+    with: {
+      prds: true,
+      prdOwner: true,
+      designDocOwner: true,
+      designPrototypeOwner: true,
+      testCaseOwner: true,
+      discoveryAssignee: true,
+      deliveryAssignee: true,
+      technicalAssignee: true,
+    },
   });
 
   if (!row) return null;
@@ -365,12 +429,20 @@ export async function getInterview(id: string): Promise<Interview | null> {
     designPrototypeOwnerName: row.designPrototypeOwner?.displayName ?? undefined,
     testCaseOwnerId: row.testCaseOwnerId ?? undefined,
     testCaseOwnerName: row.testCaseOwner?.displayName ?? undefined,
+    discoveryAssigneeId: row.discoveryAssigneeId ?? undefined,
+    discoveryAssigneeName: row.discoveryAssignee?.displayName ?? undefined,
+    deliveryAssigneeId: row.deliveryAssigneeId ?? undefined,
+    deliveryAssigneeName: row.deliveryAssignee?.displayName ?? undefined,
+    technicalAssigneeId: row.technicalAssigneeId ?? undefined,
+    technicalAssigneeName: row.technicalAssignee?.displayName ?? undefined,
     skillSettingsId: row.skillSettingsId ?? null,
     skillSettingsName,
     prdApproverIds: row.prdApproverIds ?? undefined,
     designDocApproverIds: row.designDocApproverIds ?? undefined,
     designPrototypeApproverIds: row.designPrototypeApproverIds ?? undefined,
     testCaseApproverIds: row.testCaseApproverIds ?? undefined,
+    prototypeStageEnabled: row.prototypeStageEnabled,
+    testCasesEnabled: row.testCasesEnabled,
     playbookRunId: row.playbookRunId,
     playbookStepRunId: row.playbookStepRunId,
     playbookInterviewMode: row.playbookInterviewMode,
@@ -395,7 +467,13 @@ export async function updateInterviewStatus(
     (err as any).status = 404;
     throw err;
   }
-  if (row.authorId !== requestingUserId) {
+  if (newStatus === 'complete') {
+    const allowed = await canCompleteInterviewAndGeneratePrd(requestingUserId, row);
+    if (!allowed) throw httpStatusError(INTERVIEW_COMPLETE_FORBIDDEN_MESSAGE, 403);
+    if (row.status !== 'in_progress' || row.playbookRunId != null) {
+      throw httpStatusError(INTERVIEW_COMPLETE_INVALID_STATUS_MESSAGE, 409);
+    }
+  } else if (row.authorId !== requestingUserId) {
     const err = new Error('Only the author can change interview status');
     (err as any).status = 403;
     throw err;
@@ -453,6 +531,116 @@ export async function updateInterviewTitle(
     .where(eq(interviews.id, id));
 }
 
+export interface InterviewPhaseAssignments {
+  discoveryAssigneeId?: string | null;
+  deliveryAssigneeId?: string | null;
+  technicalAssigneeId?: string | null;
+}
+
+function assigneeOrNull(id: string | null | undefined): string | null {
+  const trimmed = id?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function hasAssignment(
+  assignments: InterviewPhaseAssignments,
+  key: keyof InterviewPhaseAssignments,
+): boolean {
+  return Object.prototype.hasOwnProperty.call(assignments, key);
+}
+
+/**
+ * The interview author, a project admin, or a platform admin can assign
+ * Discovery, Delivery, and Technical to project users.
+ */
+export async function updateInterviewPhaseAssignments(
+  id: string,
+  requestingUserId: string,
+  assignments: InterviewPhaseAssignments,
+): Promise<void> {
+  const row = await db.query.interviews.findFirst({ where: eq(interviews.id, id) });
+  if (!row) {
+    const err = new Error('Interview not found');
+    (err as any).status = 404;
+    throw err;
+  }
+
+  const allowed = row.authorId === requestingUserId
+    || await isPlatformAdmin(requestingUserId)
+    || await isProjectAdmin(requestingUserId, row.project);
+  if (!allowed) {
+    const err = new Error('Only the interview owner, a project admin, or a platform admin can assign phases');
+    (err as any).status = 403;
+    throw err;
+  }
+
+  const next = {
+    discoveryAssigneeId: hasAssignment(assignments, 'discoveryAssigneeId')
+      ? assigneeOrNull(assignments.discoveryAssigneeId)
+      : row.discoveryAssigneeId,
+    deliveryAssigneeId: hasAssignment(assignments, 'deliveryAssigneeId')
+      ? assigneeOrNull(assignments.deliveryAssigneeId)
+      : row.deliveryAssigneeId,
+    technicalAssigneeId: hasAssignment(assignments, 'technicalAssigneeId')
+      ? assigneeOrNull(assignments.technicalAssigneeId)
+      : row.technicalAssigneeId,
+  };
+  const activeUserIds = new Set((await getActiveUsers(row.project)).map((user) => user.oid));
+  const assignmentKeys: Array<keyof InterviewPhaseAssignments> = [
+    'discoveryAssigneeId',
+    'deliveryAssigneeId',
+    'technicalAssigneeId',
+  ];
+  const invalidAssignee = assignmentKeys
+    .filter((key) => hasAssignment(assignments, key))
+    .map((key) => next[key])
+    .find((assigneeId) => assigneeId && !activeUserIds.has(assigneeId));
+  if (invalidAssignee) {
+    const err = new Error('Phase assignees must be active users in this project');
+    (err as any).status = 400;
+    throw err;
+  }
+
+  const updates: Partial<typeof next> & { updatedAt: string } = {
+    updatedAt: new Date().toISOString(),
+  };
+  if (hasAssignment(assignments, 'discoveryAssigneeId')) {
+    updates.discoveryAssigneeId = next.discoveryAssigneeId;
+  }
+  if (hasAssignment(assignments, 'deliveryAssigneeId')) {
+    updates.deliveryAssigneeId = next.deliveryAssigneeId;
+  }
+  if (hasAssignment(assignments, 'technicalAssigneeId')) {
+    updates.technicalAssigneeId = next.technicalAssigneeId;
+  }
+
+  await db
+    .update(interviews)
+    .set(updates)
+    .where(eq(interviews.id, id));
+
+  const interviewTitle = row.title ?? 'Untitled Interview';
+  const changedAssignments: Array<{ previous: string | null; nextId: string | null; phase: string }> = [
+    { previous: row.discoveryAssigneeId, nextId: next.discoveryAssigneeId, phase: 'Discovery' },
+    { previous: row.deliveryAssigneeId, nextId: next.deliveryAssigneeId, phase: 'Delivery' },
+    { previous: row.technicalAssigneeId, nextId: next.technicalAssigneeId, phase: 'Technical' },
+  ];
+
+  try {
+    await Promise.all(changedAssignments.map(async (assignment) => {
+      if (!assignment.nextId || assignment.nextId === assignment.previous) return;
+      await createNotification(assignment.nextId, {
+        type: 'user-action',
+        title: `Assigned to ${assignment.phase}`,
+        body: `You were assigned to the ${assignment.phase} phase of the interview "${interviewTitle}".`,
+        link: `/backlog/interview/${id}`,
+      });
+    }));
+  } catch (err) {
+    console.error(`[interview] Failed to notify phase assignees (interviewId=${id})`, err);
+  }
+}
+
 export async function deleteInterview(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.interviews.findFirst({ where: eq(interviews.id, id) });
   if (!row) {
@@ -467,4 +655,77 @@ export async function deleteInterview(id: string, requestingUserId: string): Pro
   }
   await cancelRun(row.chatThreadId);
   await db.delete(interviews).where(eq(interviews.id, id));
+}
+
+export type InterviewEvaluationPhase = {
+  phaseIndex: number;
+  messages: Array<{ role: 'user' | 'agent'; text: string }>;
+};
+
+export type InterviewEvaluationInputs = {
+  id: string;
+  project: string;
+  model: string | null;
+  skillPath: string | null;
+  skillVersion: string | null;
+  phaseCount: number;
+  currentPhase: number | null;
+  phases: InterviewEvaluationPhase[];
+  linkedContextIds: { adrIds: string[]; designModuleIds: string[] };
+};
+
+/** Read-only lineage and transcript slices for an evaluation. Writes nothing. */
+export async function getInterviewEvaluationInputs(
+  interviewId: string,
+): Promise<InterviewEvaluationInputs | null> {
+  const row = await db.query.interviews.findFirst({
+    where: eq(interviews.id, interviewId),
+    columns: { id: true, project: true, model: true, chatThreadId: true },
+  });
+  if (!row) return null;
+
+  const { getThreadAsync } = await import('./chatAgentService');
+  const thread = await getThreadAsync(row.chatThreadId);
+  const skillPath = thread?.kickoff?.skillPath ?? null;
+  const skillVersion = thread?.groundedSha ?? null;
+  const model = row.model ?? thread?.kickoff?.model ?? null;
+  const messages = thread?.messages ?? [];
+  const guided = usesGuidedInterview(skillPath);
+
+  let phases: InterviewEvaluationPhase[];
+  let phaseCount: number;
+  let currentPhase: number | null;
+  if (!guided) {
+    const visible = messages.filter(
+      (message) => !message.hidden && (message.role === 'user' || message.role === 'agent'),
+    );
+    phaseCount = 1;
+    currentPhase = visible.length > 0 ? 1 : null;
+    phases = visible.length > 0
+      ? [{
+          phaseIndex: 1,
+          messages: visible.map((message) => ({
+            role: message.role as 'user' | 'agent',
+            text: message.text,
+          })),
+        }]
+      : [];
+  } else {
+    phaseCount = 3;
+    phases = sliceGuidedInterviewPhases(messages);
+    currentPhase = latestGuidedInterviewPhaseIndex(messages);
+  }
+
+  const linkedContextIds = await listLinkedContextIds(row.id);
+  return {
+    id: row.id,
+    project: row.project,
+    model,
+    skillPath,
+    skillVersion,
+    phaseCount,
+    currentPhase,
+    phases,
+    linkedContextIds,
+  };
 }

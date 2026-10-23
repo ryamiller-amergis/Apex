@@ -62,6 +62,7 @@ describe('interactive Cursor execution repository tools', () => {
           },
           mcpServers,
           model: { id: 'composer-2.5' },
+          disallowedTools: ['task'],
         }),
       );
       expect(execution.agentId).toBe('agent-1');
@@ -284,6 +285,10 @@ describe('interactive Cursor execution repository tools', () => {
       expect(acquired.mode).toBe('resumed');
       expect(acquired.handle.agentId).toBe('agent-live');
       expect(mockCreateAgent).not.toHaveBeenCalled();
+      expect(mockResumeAgent).toHaveBeenCalledWith(
+        'agent-live',
+        expect.objectContaining({ disallowedTools: ['task'] }),
+      );
     } finally {
       delete process.env.CURSOR_API_KEY;
       jest.clearAllMocks();

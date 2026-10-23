@@ -9,12 +9,16 @@
 import { notifyDueSoonWorkItems } from './apexWorkItemService';
 import { isFeatureOperational } from './featureFlagService';
 import { WORK_BOARD_FLAG } from '../../shared/types/featureFlags';
+import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
 
 export class WorkBoardSchedulerService {
   private intervalId: NodeJS.Timeout | null = null;
   private initialTimeoutId: NodeJS.Timeout | null = null;
-  private isRunning = false;
   private readonly CHECK_INTERVAL = 60 * 60 * 1000; // 1 hour
+  private readonly runGuard = createSingleFlight({
+    name: 'WorkBoardScheduler',
+    stuckAfterMs: stuckAfterForInterval(this.CHECK_INTERVAL),
+  });
 
   start(): void {
     if (this.intervalId) {
@@ -43,7 +47,6 @@ export class WorkBoardSchedulerService {
   }
 
   private async run(): Promise<void> {
-    if (this.isRunning) return;
     // @feature-flag:work-board start winner=enabled
     if (!(await isFeatureOperational(WORK_BOARD_FLAG))) {
       // @feature-flag:work-board disabled-start
@@ -51,7 +54,8 @@ export class WorkBoardSchedulerService {
       // @feature-flag:work-board disabled-end
     }
     // @feature-flag:work-board enabled-start
-    this.isRunning = true;
+    const runToken = this.runGuard.tryEnter();
+    if (runToken === null) return;
     try {
       const count = await notifyDueSoonWorkItems();
       if (count > 0) {
@@ -60,7 +64,7 @@ export class WorkBoardSchedulerService {
     } catch (err) {
       console.error('[WorkBoardScheduler] Error during run:', (err as Error).message);
     } finally {
-      this.isRunning = false;
+      this.runGuard.exit(runToken);
     }
     // @feature-flag:work-board enabled-end
     // @feature-flag:work-board end

@@ -219,6 +219,8 @@ export function useAgentChatSession(
   const pendingMessageIdsRef = useRef<Set<string>>(new Set());
   const pendingObservedRunningRef = useRef(false);
   const skipThinkingRestoreRef = useRef(false);
+  // A send from an idle-closed thread starts while status is still `closed`.
+  const statusAtAwaitStartRef = useRef<ChatThreadStatus | null>(null);
 
   // Derived
   const streamIsRunning = status === 'running';
@@ -278,12 +280,14 @@ export function useAgentChatSession(
     skipThinkingRestoreRef.current = false;
     pendingMessageIdsRef.current = new Set(messages.map((m) => m.id));
     pendingObservedRunningRef.current = false;
+    statusAtAwaitStartRef.current = status;
     setIsAwaitingAgentResponse(true);
-  }, [messages]);
+  }, [messages, status]);
 
   const clearAwaitingAgentResponse = useCallback(() => {
     pendingMessageIdsRef.current.clear();
     pendingObservedRunningRef.current = false;
+    statusAtAwaitStartRef.current = null;
     setIsAwaitingAgentResponse(false);
   }, []);
 
@@ -291,6 +295,10 @@ export function useAgentChatSession(
   // refresh snapshot briefly looks idle while the turn is still in flight.
   useEffect(() => {
     if (!isAwaitingAgentResponse) return;
+
+    if (status !== 'closed' && statusAtAwaitStartRef.current === 'closed') {
+      statusAtAwaitStartRef.current = status;
+    }
 
     const receivedAgentOutcome = messages.some(
       (m) =>
@@ -302,7 +310,7 @@ export function useAgentChatSession(
       receivedAgentOutcome ||
       lastVisibleRole === 'agent' ||
       status === 'error' ||
-      status === 'closed'
+      (status === 'closed' && statusAtAwaitStartRef.current !== 'closed')
     ) {
       clearAwaitingAgentResponse();
     }

@@ -17,6 +17,7 @@ import {
   ensureGitSafeDirectory,
 } from './repoGitSettings';
 import { materializeWorkspaceFromCache } from './repoWorkspaceService';
+import { implementationBranchName } from './implementationDelivery';
 
 export { materializeWorkspaceFromCache } from './repoWorkspaceService';
 
@@ -208,8 +209,7 @@ export async function createFeatureBranch(
   baseBranch: string,
   remote?: GitRemote,
 ): Promise<string> {
-  const slug = slugify(workItemTitle);
-  const branchName = `feature/apex-${workItemId}-${slug}`;
+  const branchName = implementationBranchName(workItemId, workItemTitle);
   await checkoutFeatureBranch(workspaceDir, branchName, baseBranch, remote);
   return branchName;
 }

@@ -66,6 +66,13 @@ jest.mock('../services/workerTierTelemetry', () => ({
   },
 }));
 
+const mockTrackEvent = jest.fn();
+
+jest.mock('../services/telemetry', () => ({
+  ...jest.requireActual('../services/telemetry'),
+  trackEvent: (...args: unknown[]) => mockTrackEvent(...args),
+}));
+
 const mockGetCursorAgentId = jest.fn();
 const mockSetCursorAgentId = jest.fn();
 
@@ -1143,11 +1150,31 @@ describe('dapr-actor-v2 bootstrap + terminal remediation', () => {
       artifactsFlushed: false,
       failureCategory: 'tool_timeout',
       detail: 'Interactive tool deadline exceeded',
+      stageTimings: {
+        workspaceMs: 120,
+        agentAcquireMs: 900,
+        agentMode: 'resumed',
+        firstEventMs: -5,
+        workerTurnMs: 4_000,
+      },
     });
 
     expect(mockTransaction).toHaveBeenCalledTimes(1);
     expect(mockMarkTerminal).not.toHaveBeenCalled();
     expect(result.run.status).toBe('failed');
+    expect(mockTrackEvent).toHaveBeenCalledWith(
+      'InteractiveTurnStages',
+      expect.objectContaining({ status: 'failed', agentMode: 'resumed' }),
+      expect.objectContaining({
+        workspaceMs: 120,
+        agentAcquireMs: 900,
+        workerTurnMs: 4_000,
+      }),
+    );
+    const measurements = mockTrackEvent.mock.calls.find(
+      ([name]) => name === 'InteractiveTurnStages',
+    )?.[2];
+    expect(measurements).not.toHaveProperty('firstEventMs');
   });
 
   it('returns 409 semantics before transactional writes on fence mismatch', async () => {

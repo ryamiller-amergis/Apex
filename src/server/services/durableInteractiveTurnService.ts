@@ -33,6 +33,7 @@ import type {
 import type { GroundingProfileId } from '../../shared/types/repoReader';
 import type { RepoReader } from '../../shared/types/repoReader';
 import { callerGroundingService } from './callerGroundingService';
+import { runGroundingService } from './runGroundingService';
 import { groundingProfileResolver } from './groundingProfileResolver';
 import { RepoReaderError } from './repoReader';
 import { isRepositorySyncingError } from './repoRead/mirrorHydration';
@@ -45,6 +46,7 @@ import {
   resolveDocumentAssistantType,
 } from './documentAssistantGuidance';
 import { isFeatureEnabled } from './featureFlagService';
+import { trackEvent } from './telemetry';
 import { isMaxviewConfigured } from './maxviewAuthService';
 import {
   classifyInteractiveTurn,
@@ -55,6 +57,7 @@ import {
   type InteractiveAttachmentStore,
 } from './interactiveAttachmentStore';
 import {
+  resolveGroundingPreparationTimeoutMs,
   resolveInteractiveDeadlinePolicy,
 } from './interactiveDeadlinePolicy';
 import {
@@ -78,6 +81,7 @@ import { db } from '../db/drizzle';
 import { sql } from 'drizzle-orm';
 
 const PLAYBOOK_INTERVIEW_STEP_FLAG = 'playbook-interview-step';
+const BACKGROUND_GROUNDING_FLAG = 'interview-background-grounding';
 
 const DEFAULT_MODEL = 'composer-2.5';
 const MAX_TRANSCRIPT_CHARS = 120_000;
@@ -201,6 +205,8 @@ type LoadSkillInput = Readonly<{
   grounding: FrozenGrounding;
   registration: DurableInteractiveSkillRegistration;
   builtInRoots: ReadonlyArray<BuiltInSkillRoot>;
+  /** Without grounding, read a project skill from the branch tip instead of failing. */
+  readBranchTip?: boolean;
 }>;
 
 export type DurableInteractiveSkillRegistration =
@@ -228,6 +234,7 @@ type ServiceDependencies = Readonly<{
   resolveGrounding: (
     input: ResolveGroundingInput,
   ) => Promise<FrozenGrounding>;
+  hasPinnedGrounding: (thread: ChatThread) => Promise<boolean>;
   optionalGroundingWaitMs: number;
   loadRepositoryContext?: (
     grounding: NonNullable<FrozenGrounding>,
@@ -250,8 +257,12 @@ type ServiceDependencies = Readonly<{
   isGuidedInterviewEnabled: (
     input: Readonly<{ userId: string; project: string }>,
   ) => Promise<boolean>;
+  isBackgroundGroundingEnabled: (
+    input: Readonly<{ userId: string; project: string }>,
+  ) => Promise<boolean>;
   /** Raw `context.md` for the application brief when the grounded read had none. */
   loadInterviewContext: (thread: ChatThread) => Promise<string | null>;
+  trackEvent: typeof trackEvent;
   now: () => Date;
 }>;
 
@@ -323,12 +334,36 @@ export class DurableInteractiveTurnError extends Error {
       | 'USER_AGENTIC_LIMIT'
       | 'INTERACTIVE_V2_STDIO_MCP_UNSUPPORTED'
       | 'INTERACTIVE_V2_GROUNDING_UNAVAILABLE'
+      | 'INTERACTIVE_V2_GROUNDING_PREPARING'
       | 'INTERACTIVE_V2_SKILL_UNAVAILABLE'
       | 'INTERACTIVE_V2_MAXVIEW_UNAVAILABLE',
     readonly status: 400 | 409 | 422 | 429,
   ) {
     super(code);
     this.name = 'DurableInteractiveTurnError';
+  }
+}
+
+/** Preparation outlived the admission wait; it keeps running for the next try. */
+export class GroundingStillPreparingError extends Error {
+  constructor() {
+    super('Repository preparation is still running');
+    this.name = 'GroundingStillPreparingError';
+  }
+}
+
+async function waitForPreparation(
+  ready: Promise<void>,
+  waitMs: number,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new GroundingStillPreparingError()), waitMs);
+  });
+  try {
+    await Promise.race([ready, expired]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -424,7 +459,7 @@ function describeSkillLoadError(error: unknown): string {
  * has not seen yet, such as the first read after a push to the branch.
  */
 async function readPinnedSkill(
-  reader: RepoReader,
+  reader: Pick<RepoReader, 'readFile'>,
   skillPath: string,
   syncWait: DurableSkillSyncWait,
 ): Promise<string> {
@@ -448,7 +483,7 @@ export async function loadDurableInteractiveSkill(
   input: Readonly<{
     path: string;
     registration: DurableInteractiveSkillRegistration;
-    pinnedReader: RepoReader | null;
+    pinnedReader: Pick<RepoReader, 'readFile'> | null;
     /** The path is Apex's default, so the bundled copy may stand in for a missing repo copy. */
     bundledFallback?: boolean;
   }>,
@@ -1019,22 +1054,26 @@ async function defaultLoadSkill(
       { builtInRoots: input.builtInRoots },
     );
   }
+  let pinnedReader: Pick<RepoReader, 'readFile'>;
   if (!input.grounding) {
-    warnSkillUnavailable(input.skill.path, 'repository grounding is not ready');
-    throw unavailableSkill();
-  }
-  let pinnedReader: RepoReader;
-  try {
-    pinnedReader =
-      await groundingProfileResolver.resolveConnectionProfile(
-        input.grounding.profileId as GroundingProfileId,
+    if (!input.readBranchTip) {
+      warnSkillUnavailable(input.skill.path, 'repository grounding is not ready');
+      throw unavailableSkill();
+    }
+    pinnedReader = branchTipReader(input.thread);
+  } else {
+    try {
+      pinnedReader =
+        await groundingProfileResolver.resolveConnectionProfile(
+          input.grounding.profileId as GroundingProfileId,
+        );
+    } catch (error) {
+      warnSkillUnavailable(
+        input.skill.path,
+        `grounding profile unavailable: ${describeSkillLoadError(error)}`,
       );
-  } catch (error) {
-    warnSkillUnavailable(
-      input.skill.path,
-      `grounding profile unavailable: ${describeSkillLoadError(error)}`,
-    );
-    throw unavailableSkill();
+      throw unavailableSkill();
+    }
   }
   const kickoffSkillPath = normalizePath(input.thread.kickoff.skillPath ?? '');
   return loadDurableInteractiveSkill(
@@ -1074,14 +1113,19 @@ async function defaultResolveGrounding(
       reauthorize: async () => true,
       readOnlyShareable: true,
       sandboxCwd: input.thread.workspaceDir,
+      shareAcrossInstances: true,
     });
   let selection = await start();
   if (selection.mode === 'preparing') {
     if (!selection.waitUntilReady) return null;
-    await selection.waitUntilReady();
+    await waitForPreparation(
+      selection.waitUntilReady(),
+      resolveGroundingPreparationTimeoutMs(),
+    );
     selection = await start();
   }
   if (selection.mode !== 'local') return null;
+  await groundingProfileResolver.whenShared(selection.profileId);
   return {
     provider: repository.provider,
     project: input.thread.kickoff.project,
@@ -1128,17 +1172,43 @@ async function defaultIsGuidedInterviewEnabled(
   }
 }
 
+async function defaultHasPinnedGrounding(thread: ChatThread): Promise<boolean> {
+  const rows = await runGroundingService.getGroundings({
+    runType: 'chat',
+    runId: thread.id,
+    project: thread.kickoff.project,
+  });
+  return rows.some((row) => row.repoRole === 'target' && row.isActive);
+}
+
+async function defaultIsBackgroundGroundingEnabled(
+  input: Readonly<{ userId: string; project: string }>,
+): Promise<boolean> {
+  try {
+    return await isFeatureEnabled(BACKGROUND_GROUNDING_FLAG, input);
+  } catch {
+    return false;
+  }
+}
+
+function branchTipReader(thread: ChatThread): Pick<RepoReader, 'readFile'> {
+  const { kickoff } = thread;
+  return {
+    readFile: (filePath) =>
+      getSkillFile(
+        kickoff.project,
+        kickoff.repo,
+        filePath,
+        kickoff.skillBranch ?? kickoff.branch ?? 'main',
+        kickoff.skillProvider ?? 'ado',
+      ),
+  };
+}
+
 async function defaultLoadInterviewContext(
   thread: ChatThread,
 ): Promise<string | null> {
-  const { kickoff } = thread;
-  return getSkillFile(
-    kickoff.project,
-    kickoff.repo,
-    'context.md',
-    kickoff.skillBranch ?? kickoff.branch ?? 'main',
-    kickoff.skillProvider ?? 'ado',
-  );
+  return branchTipReader(thread).readFile('context.md');
 }
 
 async function resolveGuidedInterview(
@@ -1174,6 +1244,7 @@ function defaultDependencies(): ServiceDependencies {
     loadSkill: defaultLoadSkill,
     builtInSkillRoots: DEFAULT_BUILT_IN_SKILL_ROOTS,
     resolveGrounding: defaultResolveGrounding,
+    hasPinnedGrounding: defaultHasPinnedGrounding,
     optionalGroundingWaitMs: DEFAULT_OPTIONAL_GROUNDING_WAIT_MS,
     loadRepositoryContext: defaultLoadRepositoryContext,
     resolveMaxviewCapability: resolveDurableMaxviewCapability,
@@ -1181,7 +1252,9 @@ function defaultDependencies(): ServiceDependencies {
     encryptToolGrant: encryptInteractiveToolGrant,
     loadRetrySource: loadDurableInteractiveRetrySource,
     isGuidedInterviewEnabled: defaultIsGuidedInterviewEnabled,
+    isBackgroundGroundingEnabled: defaultIsBackgroundGroundingEnabled,
     loadInterviewContext: defaultLoadInterviewContext,
+    trackEvent,
     now: () => new Date(),
   };
 }
@@ -1190,6 +1263,37 @@ export function createDurableInteractiveTurnService(
   dependencies: Partial<ServiceDependencies> = {},
 ): DurableInteractiveTurnService {
   const deps = { ...defaultDependencies(), ...dependencies };
+  const backgroundGrounding = new Map<
+    string,
+    Promise<'ready' | 'still-preparing' | 'failed'>
+  >();
+
+  const prepareGroundingInBackground = (input: ResolveGroundingInput): void => {
+    const threadId = input.thread.id;
+    if (backgroundGrounding.has(threadId)) return;
+    const preparation = deps
+      .resolveGrounding(input)
+      .then(
+        () => 'ready' as const,
+        (error: unknown) => {
+          if (error instanceof GroundingStillPreparingError) {
+            return 'still-preparing' as const;
+          }
+          console.warn(
+            JSON.stringify({
+              event: 'InteractiveBackgroundGroundingFailed',
+              threadId,
+              reason: error instanceof Error ? error.message : String(error),
+            }),
+          );
+          return 'failed' as const;
+        },
+      )
+      .finally(() => {
+        backgroundGrounding.delete(threadId);
+      });
+    backgroundGrounding.set(threadId, preparation);
+  };
 
   return {
     async admit(input) {
@@ -1199,6 +1303,7 @@ export function createDurableInteractiveTurnService(
       if (!isDurableUserIdentity(input.userId)) {
         throw new DurableInteractiveTurnError('INVALID_REQUESTER_ID', 400);
       }
+      const admitStartedAt = deps.now().getTime();
       const access = await deps.resolveThreadAccess(
         input.userId,
         input.threadId,
@@ -1209,10 +1314,40 @@ export function createDurableInteractiveTurnService(
       const thread = access.thread;
       const attachments = [...(input.attachments ?? [])];
       const initiallySelectedSkill = selectedSkill(thread, input.turnSkill);
-      const config = await deps.resolveSkillConfig({
+      // Independent lookups start together; awaiting them in the original
+      // order keeps which validation error wins unchanged.
+      const configLookup = deps.resolveSkillConfig({
         project: thread.kickoff.project,
         settingsId: thread.kickoff.skillSettingsId ?? undefined,
       });
+      const maxviewLookup = workflowUsesMaxview(input.workflowClass)
+        ? deps.resolveMaxviewCapability({
+            userId: input.userId,
+            project: thread.kickoff.project,
+          })
+        : Promise.resolve('disabled' as const);
+      const guidedInterviewLookup = resolveGuidedInterview(thread, input, deps);
+      // @feature-flag:interview-background-grounding start winner=enabled
+      const backgroundGroundingLookup = guidedInterviewLookup.then(
+        (guided) =>
+          guided?.phase === 'product'
+            // @feature-flag:interview-background-grounding enabled-start
+            ? deps.isBackgroundGroundingEnabled({
+                userId: input.userId,
+                project: thread.kickoff.project,
+              })
+            // @feature-flag:interview-background-grounding enabled-end
+            : false,
+      );
+      // @feature-flag:interview-background-grounding end
+      for (const lookup of [
+        configLookup,
+        maxviewLookup,
+        backgroundGroundingLookup,
+      ]) {
+        void lookup.catch(() => undefined);
+      }
+      const config = await configLookup;
       const skill =
         initiallySelectedSkill && !input.turnSkill
           ? {
@@ -1237,12 +1372,7 @@ export function createDurableInteractiveTurnService(
           422,
         );
       }
-      const maxviewCapability = workflowUsesMaxview(input.workflowClass)
-        ? await deps.resolveMaxviewCapability({
-          userId: input.userId,
-          project: thread.kickoff.project,
-        })
-        : 'disabled';
+      const maxviewCapability = await maxviewLookup;
       if (maxviewCapability === 'unavailable') {
         throw new DurableInteractiveTurnError(
           'INTERACTIVE_V2_MAXVIEW_UNAVAILABLE',
@@ -1264,10 +1394,20 @@ export function createDurableInteractiveTurnService(
         skillPath: skill?.path ?? null,
         capabilityMetadata: metadata,
       });
-      const requiresRepositoryPreparation = classHasCapability(
+      const skillNeedsRepository = classHasCapability(
         classification.reasons,
         'workspace',
       ) || registration === 'project';
+      const guidedInterview = await guidedInterviewLookup;
+      // Discovery and Delivery carry the application brief instead of AGENTS.md.
+      const productPhaseInterview = guidedInterview?.phase === 'product';
+      const groundInBackground = await backgroundGroundingLookup;
+      // Discovery and Delivery cannot read the repository, so their turns go
+      // out on the branch-tip skill and brief while the thread's pin is prepared
+      // for Technical. Keeping these turns ungrounded also keeps the worker's
+      // workspace, and so its warm agent, the same across the product phase.
+      const requiresRepositoryPreparation =
+        skillNeedsRepository && !groundInBackground;
 
       const immutableAttachments = [];
       for (
@@ -1286,14 +1426,33 @@ export function createDurableInteractiveTurnService(
         );
       }
 
+      const setupDoneAt = deps.now().getTime();
       let grounding: FrozenGrounding = null;
-      if (requiresRepositoryPreparation) {
+      if (groundInBackground) {
+        if (thread.kickoff.repo) {
+          prepareGroundingInBackground({ thread, userId: input.userId });
+        }
+      } else if (requiresRepositoryPreparation) {
+        // The background preparation already spent the admission wait; waiting
+        // again would let one admit block for twice the bound.
+        if ((await backgroundGrounding.get(thread.id)) === 'still-preparing') {
+          throw new DurableInteractiveTurnError(
+            'INTERACTIVE_V2_GROUNDING_PREPARING',
+            422,
+          );
+        }
         try {
           grounding = await deps.resolveGrounding({
             thread,
             userId: input.userId,
           });
-        } catch {
+        } catch (error) {
+          if (error instanceof GroundingStillPreparingError) {
+            throw new DurableInteractiveTurnError(
+              'INTERACTIVE_V2_GROUNDING_PREPARING',
+              422,
+            );
+          }
           throw new DurableInteractiveTurnError(
             'INTERACTIVE_V2_GROUNDING_UNAVAILABLE',
             422,
@@ -1310,19 +1469,28 @@ export function createDurableInteractiveTurnService(
       // without a pinned SHA the agent's read tools see an empty workspace.
       // Preparation keeps running after the wait expires, so a later turn
       // on the same thread finds the repository ready.
-      if (!requiresRepositoryPreparation && thread.kickoff.repo) {
-        grounding = await resolveWithin(
-          deps.resolveGrounding({ thread, userId: input.userId }),
-          deps.optionalGroundingWaitMs,
-        );
+      if (
+        !groundInBackground &&
+        !requiresRepositoryPreparation &&
+        thread.kickoff.repo
+      ) {
+        const resolution = deps.resolveGrounding({
+          thread,
+          userId: input.userId,
+        });
+        void resolution.catch(() => undefined);
+        // Once a thread is pinned, an expired short wait would send an
+        // ungrounded turn and move the worker to another workspace.
+        const pinned = await deps.hasPinnedGrounding(thread).catch(() => false);
+        grounding = pinned
+          ? await resolution.catch(() => null)
+          : await resolveWithin(resolution, deps.optionalGroundingWaitMs);
       }
+      const groundingDoneAt = deps.now().getTime();
       const repositoryContext =
         grounding && deps.loadRepositoryContext
           ? await deps.loadRepositoryContext(grounding).catch(() => null)
           : null;
-      const guidedInterview = await resolveGuidedInterview(thread, input, deps);
-      // Discovery and Delivery carry the application brief instead of AGENTS.md.
-      const productPhaseInterview = guidedInterview?.phase === 'product';
       const promptText = guidedInterview
         ? wrapGuidedInterviewPrompt(
             buildGuidedInterviewTurnPrompt(
@@ -1360,6 +1528,7 @@ export function createDurableInteractiveTurnService(
             grounding,
             registration: registration ?? 'unknown',
             builtInRoots: deps.builtInSkillRoots,
+            readBranchTip: groundInBackground,
           })
         : null;
       if (skill && !loadedSkill) {
@@ -1475,6 +1644,7 @@ export function createDurableInteractiveTurnService(
         deadlines,
         ...(guidedInterview ? { guidedInterview } : {}),
       };
+      const promptDoneAt = deps.now().getTime();
       const admitted = await deps.repository.admit({
         turnId: input.turnId,
         requestHash: requestHash({
@@ -1492,6 +1662,25 @@ export function createDurableInteractiveTurnService(
         attachments: immutableAttachments,
         specification,
       });
+      const admittedAt = deps.now().getTime();
+      deps.trackEvent(
+        'InteractiveTurnAdmission',
+        {
+          status: admitted.status,
+          workflowClass: input.workflowClass,
+          interactiveClass: classification.interactiveClass,
+          interviewPhase: guidedInterview?.phase ?? 'none',
+          groundInBackground: String(groundInBackground),
+          grounded: String(grounding !== null),
+        },
+        {
+          setupMs: setupDoneAt - admitStartedAt,
+          groundingMs: groundingDoneAt - setupDoneAt,
+          promptMs: promptDoneAt - groundingDoneAt,
+          persistMs: admittedAt - promptDoneAt,
+          totalMs: admittedAt - admitStartedAt,
+        },
+      );
 
       switch (admitted.status) {
         case 'queued':

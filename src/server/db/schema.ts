@@ -1,4 +1,4 @@
-import { bigint, bigserial, boolean, check, date, index, integer, jsonb, numeric, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigint, bigserial, boolean, check, date, index, integer, jsonb, numeric, pgTable, primaryKey, real, smallint, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type { RepoProvider, RepoRole, RunType } from '../../shared/types/runGrounding';
@@ -48,6 +48,16 @@ import type {
   AiRunV2AttemptStatus,
   AiRunV2FailureCategory,
 } from '../../shared/types/aiRunV2';
+import type {
+  WorkflowEvaluationCriteriaScores,
+  WorkflowEvaluationJobEvaluator,
+  WorkflowEvaluationJobResultBlobRefs,
+  WorkflowEvaluationJobStatus,
+  WorkflowEvaluationOutcome,
+  WorkflowEvaluationReasonCode,
+  WorkflowEvaluationRubric,
+  WorkflowEvaluationSubjectType,
+} from '../../shared/types/workflowEvaluation';
 import type { ContentSnapshot, DesignDocValidationOverride, PrdReadinessOverride, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
 import type { UiLabHistoryEntry } from '../../shared/types/uiLab';
@@ -235,6 +245,25 @@ export const repoCacheLeases = pgTable('repo_cache_leases', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   expiresAtIdx: index('idx_repo_cache_leases_expires_at').on(t.expiresAt),
+}));
+
+export const groundingProfiles = pgTable('grounding_profiles', {
+  idHash: text('id_hash').primaryKey(),
+  runRef: text('run_ref').notNull(),
+  provider: text('provider').notNull(),
+  project: text('project').notNull(),
+  repo: text('repo').notNull(),
+  sha: text('sha').notNull(),
+  checkoutPath: text('checkout_path').notNull(),
+  mirrorPath: text('mirror_path'),
+  caller: text('caller'),
+  ownerUserId: text('owner_user_id').notNull(),
+  ownerRunRef: text('owner_run_ref').notNull(),
+  ownerProject: text('owner_project').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  expiresAtIdx: index('idx_grounding_profiles_expires_at').on(t.expiresAt),
 }));
 
 export const runGroundings = pgTable('run_groundings', {
@@ -524,6 +553,9 @@ export const interviews = pgTable('interviews', {
   designDocOwnerId: text('design_doc_owner_id').references(() => appUsers.oid, { onDelete: 'set null' }),
   designPrototypeOwnerId: text('design_prototype_owner_id').references(() => appUsers.oid, { onDelete: 'set null' }),
   testCaseOwnerId: text('test_case_owner_id').references(() => appUsers.oid, { onDelete: 'set null' }),
+  discoveryAssigneeId: text('discovery_assignee_id').references(() => appUsers.oid, { onDelete: 'set null' }),
+  deliveryAssigneeId: text('delivery_assignee_id').references(() => appUsers.oid, { onDelete: 'set null' }),
+  technicalAssigneeId: text('technical_assignee_id').references(() => appUsers.oid, { onDelete: 'set null' }),
   prdApproverIds: jsonb('prd_approver_ids').$type<string[]>(),
   designDocApproverIds: jsonb('design_doc_approver_ids').$type<string[]>(),
   designPrototypeApproverIds: jsonb('design_prototype_approver_ids').$type<string[]>(),
@@ -835,6 +867,21 @@ export const interviewsRelations = relations(interviews, ({ one, many }) => ({
     fields: [interviews.testCaseOwnerId],
     references: [appUsers.oid],
     relationName: 'interviewTestCaseOwner',
+  }),
+  discoveryAssignee: one(appUsers, {
+    fields: [interviews.discoveryAssigneeId],
+    references: [appUsers.oid],
+    relationName: 'interviewDiscoveryAssignee',
+  }),
+  deliveryAssignee: one(appUsers, {
+    fields: [interviews.deliveryAssigneeId],
+    references: [appUsers.oid],
+    relationName: 'interviewDeliveryAssignee',
+  }),
+  technicalAssignee: one(appUsers, {
+    fields: [interviews.technicalAssigneeId],
+    references: [appUsers.oid],
+    relationName: 'interviewTechnicalAssignee',
   }),
   prds: many(prds),
   adrLinks: many(interviewAdrLinks),
@@ -3431,5 +3478,170 @@ export const playbookGateApproversRelations = relations(playbookGateApprovers, (
   stepRun: one(playbookStepRuns, {
     fields: [playbookGateApprovers.stepRunId],
     references: [playbookStepRuns.id],
+  }),
+}));
+
+export const workflowEvaluationDefinitions = pgTable('workflow_evaluation_definitions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  processKey: text('process_key').notNull(),
+  stageKey: text('stage_key').notNull(),
+  evaluatorKey: text('evaluator_key').notNull(),
+  benchmarkKey: text('benchmark_key').notNull(),
+  version: integer('version').notNull(),
+  rubric: jsonb('rubric').$type<WorkflowEvaluationRubric>().notNull(),
+  promptfooSuiteRef: text('promptfoo_suite_ref').notNull(),
+  judgeOutputSchema: jsonb('judge_output_schema').$type<Record<string, unknown>>().notNull(),
+  active: boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  versionUq: unique('uq_workflow_evaluation_definitions_version')
+    .on(t.processKey, t.stageKey, t.evaluatorKey, t.benchmarkKey, t.version),
+  oneActiveUq: uniqueIndex('uq_workflow_evaluation_definitions_one_active')
+    .on(t.processKey, t.stageKey, t.evaluatorKey, t.benchmarkKey)
+    .where(sql`${t.active} = true`),
+  versionCheck: check(
+    'workflow_evaluation_definitions_version_check',
+    sql`${t.version} >= 1`,
+  ),
+  suiteRefCheck: check(
+    'workflow_evaluation_definitions_suite_ref_check',
+    sql`length(btrim(${t.promptfooSuiteRef})) > 0`,
+  ),
+}));
+
+export const workflowEvaluationEvents = pgTable('workflow_evaluation_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  definitionId: uuid('definition_id').notNull()
+    .references(() => workflowEvaluationDefinitions.id, { onDelete: 'restrict' }),
+  subjectType: text('subject_type').$type<WorkflowEvaluationSubjectType>().notNull(),
+  subjectId: uuid('subject_id').notNull(),
+  stageKey: text('stage_key').notNull(),
+  phaseIndex: smallint('phase_index'),
+  reviewerUserId: text('reviewer_user_id').notNull()
+    .references(() => appUsers.oid, { onDelete: 'restrict' }),
+  reviewerRoleKey: text('reviewer_role_key').notNull(),
+  reviewerRoleLabel: text('reviewer_role_label').notNull(),
+  skillPath: text('skill_path'),
+  skillVersion: text('skill_version'),
+  model: text('model'),
+  interviewId: uuid('interview_id'),
+  prdId: uuid('prd_id'),
+  artifactHash: text('artifact_hash').notNull(),
+  criteriaScores: jsonb('criteria_scores').$type<WorkflowEvaluationCriteriaScores>().notNull(),
+  outcome: text('outcome').$type<WorkflowEvaluationOutcome>().notNull(),
+  reasonCodes: jsonb('reason_codes').$type<WorkflowEvaluationReasonCode[]>().notNull().default([]),
+  comment: text('comment'),
+  correctedArtifactText: text('corrected_artifact_text'),
+  correctedArtifactBlobRef: jsonb('corrected_artifact_blob_ref').$type<AiRunBlobRef>(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  subjectHistoryIdx: index('idx_workflow_evaluation_events_subject_history')
+    .on(t.project, t.subjectType, t.subjectId, t.createdAt),
+  artifactIdx: index('idx_workflow_evaluation_events_artifact')
+    .on(t.project, t.subjectType, t.subjectId, t.artifactHash),
+  projectCreatedIdx: index('idx_workflow_evaluation_events_project_created')
+    .on(t.project, t.createdAt),
+  lineageIdx: index('idx_workflow_evaluation_events_lineage')
+    .on(t.skillPath, t.skillVersion),
+  modelIdx: index('idx_workflow_evaluation_events_model').on(t.model),
+  interviewIdx: index('idx_workflow_evaluation_events_interview')
+    .on(t.interviewId)
+    .where(sql`${t.interviewId} IS NOT NULL`),
+  prdIdx: index('idx_workflow_evaluation_events_prd')
+    .on(t.prdId)
+    .where(sql`${t.prdId} IS NOT NULL`),
+  subjectTypeCheck: check(
+    'workflow_evaluation_events_subject_type_check',
+    sql`${t.subjectType} IN ('interview_phase', 'prd')`,
+  ),
+  outcomeCheck: check(
+    'workflow_evaluation_events_outcome_check',
+    sql`${t.outcome} IN ('accept_unchanged', 'accept_after_edits', 'regenerate', 'reject')`,
+  ),
+  subjectCoherenceCheck: check(
+    'workflow_evaluation_events_subject_coherence_check',
+    sql`(
+      (${t.subjectType} = 'prd' AND ${t.phaseIndex} IS NULL AND ${t.prdId} = ${t.subjectId})
+      OR (
+        ${t.subjectType} = 'interview_phase'
+        AND ${t.phaseIndex} BETWEEN 1 AND 3
+        AND ${t.interviewId} = ${t.subjectId}
+      )
+    )`,
+  ),
+  artifactHashCheck: check(
+    'workflow_evaluation_events_artifact_hash_check',
+    sql`${t.artifactHash} ~ '^[0-9a-f]{64}$'`,
+  ),
+  roleNotBlankCheck: check(
+    'workflow_evaluation_events_role_not_blank_check',
+    sql`length(btrim(${t.reviewerRoleKey})) > 0 AND length(btrim(${t.reviewerRoleLabel})) > 0`,
+  ),
+  correctionCheck: check(
+    'workflow_evaluation_events_correction_check',
+    sql`${t.correctedArtifactText} IS NULL OR ${t.correctedArtifactBlobRef} IS NULL`,
+  ),
+  criteriaScoresCheck: check(
+    'workflow_evaluation_events_criteria_scores_check',
+    sql`jsonb_typeof(${t.criteriaScores}) = 'object'`,
+  ),
+  reasonCodesCheck: check(
+    'workflow_evaluation_events_reason_codes_check',
+    sql`jsonb_typeof(${t.reasonCodes}) = 'array'`,
+  ),
+}));
+
+export const workflowEvaluationJobs = pgTable('workflow_evaluation_jobs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  eventId: uuid('event_id').notNull()
+    .references(() => workflowEvaluationEvents.id, { onDelete: 'restrict' }),
+  evaluatorKey: text('evaluator_key').$type<WorkflowEvaluationJobEvaluator>().notNull(),
+  status: text('status').$type<WorkflowEvaluationJobStatus>().notNull().default('pending'),
+  runId: text('run_id').references(() => agentRuns.id, { onDelete: 'set null' }),
+  specificationHash: text('specification_hash'),
+  summary: jsonb('summary').$type<Record<string, unknown>>(),
+  resultBlobRefs: jsonb('result_blob_refs').$type<WorkflowEvaluationJobResultBlobRefs>(),
+  errorDetail: text('error_detail'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  eventEvaluatorUq: unique('uq_workflow_evaluation_jobs_event_evaluator')
+    .on(t.eventId, t.evaluatorKey),
+  openIdx: index('idx_workflow_evaluation_jobs_open')
+    .on(t.status)
+    .where(sql`${t.status} IN ('pending', 'running')`),
+  evaluatorCheck: check(
+    'workflow_evaluation_jobs_evaluator_check',
+    sql`${t.evaluatorKey} IN ('promptfoo', 'llm_judge')`,
+  ),
+  statusCheck: check(
+    'workflow_evaluation_jobs_status_check',
+    sql`${t.status} IN ('pending', 'running', 'ready', 'failed')`,
+  ),
+}));
+
+export const workflowEvaluationDefinitionsRelations = relations(
+  workflowEvaluationDefinitions,
+  ({ many }) => ({
+    events: many(workflowEvaluationEvents),
+  }),
+);
+
+export const workflowEvaluationEventsRelations = relations(
+  workflowEvaluationEvents,
+  ({ one, many }) => ({
+    definition: one(workflowEvaluationDefinitions, {
+      fields: [workflowEvaluationEvents.definitionId],
+      references: [workflowEvaluationDefinitions.id],
+    }),
+    jobs: many(workflowEvaluationJobs),
+  }),
+);
+
+export const workflowEvaluationJobsRelations = relations(workflowEvaluationJobs, ({ one }) => ({
+  event: one(workflowEvaluationEvents, {
+    fields: [workflowEvaluationJobs.eventId],
+    references: [workflowEvaluationEvents.id],
   }),
 }));

@@ -93,6 +93,8 @@ export interface UpdateRoleRequest {
 export interface MyPermissionsResponse {
   permissions: string[];
   roles: string[];
+  /** Role names assigned on the requested project when `?project=` is present. */
+  projectRoles?: string[];
   groups: string[];
   userId: string;
   isSuperAdmin: boolean;

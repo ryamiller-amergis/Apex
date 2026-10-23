@@ -448,6 +448,8 @@ describe('GET /api/dev-workbench/sessions/:id/cloud-agent/stream', () => {
       'session-1',
       'user-1',
       'run-1',
+      undefined,
+      null,
     );
   });
 

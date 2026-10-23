@@ -1,9 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useActiveUsers, useAvailableApproverPool, useInterviewGroupsWithMembers } from '../hooks/useInterviews';
 import { useReviewerAvailability } from '../hooks/useReviewerAvailability';
 import type { ActiveUser } from '../../shared/types/interview';
 import type { ReviewerDocumentType } from '../../shared/types/approvals';
 import type { ApproverPoolResponse } from '../../shared/types/projectSettings';
+import { sortByLabel } from '../utils/sortByLabel';
 import styles from './SectionOwnerModal.module.css';
 
 /** Reviewer modules a kickoff can assign. `adr` is out of scope here. */
@@ -31,34 +33,88 @@ interface UserComboboxProps {
   disabled?: boolean;
 }
 
-const UserCombobox: React.FC<UserComboboxProps> = ({
+function userLabel(user: ActiveUser): string {
+  return user.displayName || user.email || user.oid;
+}
+
+interface MenuBox {
+  left: number;
+  width: number;
+  maxHeight: number;
+  top?: number;
+  bottom?: number;
+}
+
+export const UserCombobox: React.FC<UserComboboxProps> = ({
   id, users, selectedId, onSelect, placeholder, disabled = false,
 }) => {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [highlightIdx, setHighlightIdx] = useState(-1);
+  const [menuBox, setMenuBox] = useState<MenuBox | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
 
   const selectedUser = users.find((u) => u.oid === selectedId);
+  const orderedUsers = useMemo(
+    () => sortByLabel(users, userLabel),
+    [users],
+  );
 
   const filtered = query.trim()
-    ? users.filter((u) => {
+    ? orderedUsers.filter((u) => {
         const q = query.toLowerCase();
         return (u.displayName?.toLowerCase().includes(q)) ||
                (u.email?.toLowerCase().includes(q));
       })
-    : users;
+    : orderedUsers;
+
+  const placeMenu = useCallback(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    const rect = input.getBoundingClientRect();
+    const gap = 4;
+    const spaceBelow = window.innerHeight - rect.bottom - gap;
+    const spaceAbove = rect.top - gap;
+    const openUp = spaceBelow < 220 && spaceAbove > spaceBelow;
+    const available = Math.max(120, openUp ? spaceAbove : spaceBelow);
+    setMenuBox({
+      left: rect.left,
+      width: rect.width,
+      maxHeight: Math.min(240, available),
+      ...(openUp
+        ? { bottom: window.innerHeight - rect.top + gap }
+        : { top: rect.bottom + gap }),
+    });
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const target = e.target as Node;
+      if (wrapperRef.current?.contains(target)) return;
+      if (listRef.current?.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    placeMenu();
+    const onMove = (event: Event) => {
+      const target = event.target;
+      if (target instanceof Node && listRef.current?.contains(target)) return;
+      placeMenu();
+    };
+    window.addEventListener('resize', onMove);
+    window.addEventListener('scroll', onMove, true);
+    return () => {
+      window.removeEventListener('resize', onMove);
+      window.removeEventListener('scroll', onMove, true);
+    };
+  }, [open, placeMenu, filtered.length]);
 
   useEffect(() => {
     setHighlightIdx(-1);
@@ -131,6 +187,7 @@ const UserCombobox: React.FC<UserComboboxProps> = ({
   return (
     <div className={styles.comboWrapper} ref={wrapperRef}>
       <input
+        ref={inputRef}
         id={id}
         type="text"
         className={styles.comboInput}
@@ -147,37 +204,63 @@ const UserCombobox: React.FC<UserComboboxProps> = ({
         aria-autocomplete="list"
         {...{ 'data-testid': `${id}-input` }}
       />
-      {open && filtered.length > 0 && (
-        <ul
-          id={`${id}-listbox`}
-          className={styles.comboDropdown}
-          role="listbox"
-          ref={listRef}
-          {...{ 'data-testid': `${id}-listbox` }}
-        >
-          {filtered.map((u, idx) => (
-            <li
-              key={u.oid}
-              role="option"
-              aria-selected={idx === highlightIdx}
-              className={`${styles.comboOption} ${idx === highlightIdx ? styles.comboOptionHighlight : ''}`}
-              onMouseDown={() => handleSelect(u.oid)}
-              onMouseEnter={() => setHighlightIdx(idx)}
-              {...{ 'data-testid': `${id}-option-${u.oid}` }}
-            >
-              <span className={styles.comboAvatar}>
-                {(u.displayName ?? '?')[0].toUpperCase()}
-              </span>
-              <span className={styles.comboOptionInfo}>
-                <span className={styles.comboOptionName}>{u.displayName ?? 'Unknown'}</span>
-                {u.email && <span className={styles.comboOptionEmail}>{u.email}</span>}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {open && query.trim() && filtered.length === 0 && (
-        <div className={styles.comboEmpty}>No users match "{query}"</div>
+      {open && menuBox && (filtered.length > 0 || !!query.trim()) && createPortal(
+        filtered.length > 0 ? (
+          <ul
+            id={`${id}-listbox`}
+            className={styles.comboMenu}
+            role="listbox"
+            ref={listRef}
+            style={{
+              position: 'fixed',
+              left: menuBox.left,
+              width: menuBox.width,
+              maxHeight: menuBox.maxHeight,
+              top: menuBox.top ?? 'auto',
+              bottom: menuBox.bottom ?? 'auto',
+              right: 'auto',
+              zIndex: 5000,
+            }}
+            onWheel={(e) => e.stopPropagation()}
+            {...{ 'data-testid': `${id}-listbox` }}
+          >
+            {filtered.map((u, idx) => (
+              <li
+                key={u.oid}
+                role="option"
+                aria-selected={idx === highlightIdx}
+                className={`${styles.comboOption} ${idx === highlightIdx ? styles.comboOptionHighlight : ''}`}
+                onMouseDown={() => handleSelect(u.oid)}
+                onMouseEnter={() => setHighlightIdx(idx)}
+                {...{ 'data-testid': `${id}-option-${u.oid}` }}
+              >
+                <span className={styles.comboAvatar}>
+                  {(u.displayName ?? '?')[0].toUpperCase()}
+                </span>
+                <span className={styles.comboOptionInfo}>
+                  <span className={styles.comboOptionName}>{u.displayName ?? 'Unknown'}</span>
+                  {u.email && <span className={styles.comboOptionEmail}>{u.email}</span>}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div
+            className={styles.comboMenu}
+            style={{
+              position: 'fixed',
+              left: menuBox.left,
+              width: menuBox.width,
+              top: menuBox.top ?? 'auto',
+              bottom: menuBox.bottom ?? 'auto',
+              right: 'auto',
+              zIndex: 5000,
+            }}
+          >
+            No users match "{query}"
+          </div>
+        ),
+        document.body,
       )}
     </div>
   );
@@ -211,7 +294,7 @@ function renderPoolChips(
 ) {
   return (
     <div className={styles.approverSection}>
-      {pool.groups.map((group) => (
+      {sortByLabel(pool.groups, (group) => group.name).map((group) => (
         <div key={group.id}>
           <div className={styles.groupHeader}>
             <span className={styles.groupLabel}>{group.name}</span>
@@ -233,7 +316,7 @@ function renderPoolChips(
             </button>
           </div>
           <div className={styles.chipGrid}>
-            {group.members.map((m) => {
+            {sortByLabel(group.members, (m) => m.displayName ?? m.email ?? m.userId).map((m) => {
               const selected = selectedIds.includes(m.userId);
               return (
                 <button
@@ -259,7 +342,7 @@ function renderPoolChips(
             </div>
           )}
           <div className={styles.chipGrid}>
-            {pool.individuals.map((ind) => {
+            {sortByLabel(pool.individuals, (ind) => ind.displayName ?? ind.email ?? ind.userId).map((ind) => {
               const selected = selectedIds.includes(ind.userId);
               return (
                 <button
@@ -327,13 +410,20 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
         }
       }
     }
-    return result.length > 0 ? result : users;
+    const source = result.length > 0 ? result : users;
+    return sortByLabel(source, userLabel);
   }, [groupsWithMembers, users]);
 
   const prdOwnerUsers = useMemo(() => usersFromGroups(OWNER_GROUP_MAP.prd), [usersFromGroups, OWNER_GROUP_MAP]);
   const ddOwnerUsers = useMemo(() => usersFromGroups(OWNER_GROUP_MAP.designDoc), [usersFromGroups, OWNER_GROUP_MAP]);
   const protoOwnerUsers = useMemo(() => usersFromGroups(OWNER_GROUP_MAP.designPrototype), [usersFromGroups, OWNER_GROUP_MAP]);
   const qaOwnerUsers = useMemo(() => usersFromGroups(OWNER_GROUP_MAP.testCase), [usersFromGroups, OWNER_GROUP_MAP]);
+
+  const withCurrentOwner = useCallback((list: ActiveUser[], selectedId: string) => {
+    if (!selectedId || list.some((user) => user.oid === selectedId)) return list;
+    const current = users.find((user) => user.oid === selectedId);
+    return current ? sortByLabel([...list, current], userLabel) : list;
+  }, [users]);
 
   const togglePrdApprover = useCallback((id: string) => {
     setPrdApproverIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
@@ -538,7 +628,7 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
                 ) : (
                   <UserCombobox
                     id="so-prd-owner"
-                    users={prdOwnerUsers}
+                    users={withCurrentOwner(prdOwnerUsers, prdOwnerId)}
                     selectedId={prdOwnerId}
                     onSelect={setPrdOwnerId}
                     placeholder="Search by name or email…"
@@ -556,7 +646,7 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
                 ) : (
                   <UserCombobox
                     id="so-dd-owner"
-                    users={ddOwnerUsers}
+                    users={withCurrentOwner(ddOwnerUsers, designDocOwnerId)}
                     selectedId={designDocOwnerId}
                     onSelect={setDesignDocOwnerId}
                     placeholder="Search by name or email…"
@@ -575,7 +665,7 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
                   ) : (
                     <UserCombobox
                       id="so-proto-owner"
-                      users={protoOwnerUsers}
+                      users={withCurrentOwner(protoOwnerUsers, designPrototypeOwnerId)}
                       selectedId={designPrototypeOwnerId}
                       onSelect={setDesignPrototypeOwnerId}
                       placeholder="Search by name or email…"
@@ -595,7 +685,7 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
                   ) : (
                     <UserCombobox
                       id="so-qa-owner"
-                      users={qaOwnerUsers}
+                      users={withCurrentOwner(qaOwnerUsers, testCaseOwnerId)}
                       selectedId={testCaseOwnerId}
                       onSelect={setTestCaseOwnerId}
                       placeholder="Search by name or email…"

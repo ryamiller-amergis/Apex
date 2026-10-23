@@ -96,7 +96,6 @@ import {
   mountInteractiveGateway,
 } from './services/interactiveGatewayHost';
 import uiLabRoutes from './routes/uiLab';
-import pdfRoutes from './routes/pdf';
 import aiCostRoutes from './routes/aiCost';
 import e2eSetupRoutes from './routes/e2eSetup';
 import designModuleRoutes from './routes/designModule';
@@ -110,7 +109,7 @@ import aiRunsInternalRoutes from './routes/aiRunsInternal';
 import foundationSkillsAuthorizeRoutes from './routes/foundationSkillsAuthorize';
 import profileRoutes from './routes/profile';
 import walkthroughsRoutes from './routes/walkthroughs';
-import { startPdfProcessingPoller } from './services/pdfAssemblyService';
+import workflowEvaluationsRoutes from './routes/workflowEvaluations';
 import { startLoadTestRunReaper } from './services/loadTestRunService';
 
 // ── E2E mode guard ────────────────────────────────────────────────────────────
@@ -265,7 +264,6 @@ app.use('/api/standup', ensureAuthenticated, standupRouter);
 app.use('/api/feature-flags', ensureAuthenticated, featureFlagRoutes);
 app.use('/api/observability', ensureAuthenticated, observabilityRoutes);
 app.use('/api/ui-lab', ensureAuthenticated, uiLabRoutes);
-app.use('/api/pdf', pdfRoutes);
 app.use('/api/feature-requests', ensureAuthenticated, featureRequestRoutes);
 app.use('/api/apex-work-items', ensureAuthenticated, apexWorkItemsRoutes);
 app.use('/api/profile', ensureAuthenticated, profileRoutes);
@@ -276,6 +274,7 @@ app.use('/api/projects/:projectId/load-tests', ensureAuthenticated, loadTestsRou
 app.use('/api/projects/:projectId/load-test-targets', ensureAuthenticated, loadTestTargetsRoutes);
 app.use('/api/projects/:projectId/api-keys', ensureAuthenticated, apiKeysRoutes);
 app.use('/api/projects/:projectId/walkthroughs', ensureAuthenticated, walkthroughsRoutes);
+app.use('/api/projects/:projectId/workflow-evaluations', ensureAuthenticated, workflowEvaluationsRoutes);
 // Public API — session-free; auth is Bearer API key (FEAT-002).
 app.use('/api/public', publicRoutes);
 // Runner ingest — session-free; auth is LT_RUNNER_CALLBACK_TOKEN (FEAT-007 / A-009).
@@ -447,8 +446,6 @@ const server = app.listen(PORT, () => {
 
   workBoardScheduler.start();
   console.log('Work board due-soon scheduler started');
-
-  startPdfProcessingPoller();
 
   bootstrapAdmin();
 

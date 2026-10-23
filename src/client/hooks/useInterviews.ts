@@ -484,6 +484,29 @@ export function useUpdateInterviewStatus() {
   });
 }
 
+export function useUpdateInterviewPhaseAssignments() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, {
+    id: string;
+    phaseAssignments: {
+      discoveryAssigneeId?: string | null;
+      deliveryAssigneeId?: string | null;
+      technicalAssigneeId?: string | null;
+    };
+  }>({
+    mutationFn: ({ id, phaseAssignments }) =>
+      apiFetch(`/api/interviews/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phaseAssignments }),
+      }),
+    onSuccess: (_data, { id }) => {
+      qc.invalidateQueries({ queryKey: ['interviews'] });
+      qc.invalidateQueries({ queryKey: ['interview', id] });
+    },
+  });
+}
+
 export function useUpdateInterviewTitle() {
   const qc = useQueryClient();
   return useMutation<void, Error, { id: string; title: string }>({
@@ -1145,6 +1168,27 @@ export function useOverridePrdReadiness() {
     onSuccess: (_data, { prdId }) => {
       void qc.invalidateQueries({ queryKey: ['prd', prdId] });
       void qc.invalidateQueries({ queryKey: ['prds'] });
+    },
+  });
+}
+
+export function useForceSubmitPrd() {
+  const qc = useQueryClient();
+  return useMutation<
+    { ok: true; reviewerAssignmentError: string | null },
+    Error,
+    { prdId: string; reason: string }
+  >({
+    mutationFn: ({ prdId, reason }) =>
+      apiFetch(`/api/interviews/prds/${prdId}/force-submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      }),
+    onSuccess: (_data, { prdId }) => {
+      void qc.invalidateQueries({ queryKey: ['prd', prdId] });
+      void qc.invalidateQueries({ queryKey: ['prds'] });
+      void qc.invalidateQueries({ queryKey: ['document-assignments', prdId] });
     },
   });
 }

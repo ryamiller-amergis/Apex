@@ -93,6 +93,8 @@ export interface ExecutionSnapshot {
   cloudAgent?: {
     workItemId: number;
     workItemTitle?: string;
+    /** My Work branch: feature/apex-<workItemId>-<title-slug>. */
+    branchName?: string;
     baseBranch: string;
     initiatorName?: string;
     initiatorEmail?: string;
@@ -104,6 +106,11 @@ export interface ExecutionSnapshot {
      * as the developer.
      */
     userTokenInstance?: string;
+    /**
+     * First time the run was seen finished with a pushed branch but no
+     * autoCreatePR url. Bounds how long the run waits for that url.
+     */
+    pullRequestPendingSince?: string;
   };
   workflowClass: string;
   skillPath: string;

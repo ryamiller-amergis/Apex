@@ -14,10 +14,15 @@
 import { AiRunCallbackError, AiRunFenceConflictError } from '../services/aiRunsWorker/callbackClient';
 import type { WorkerCursorExecutionRun } from '../services/aiRunsWorker/cursorExecution';
 import type { CursorStreamEvent } from '../services/cursorExecutionCore';
-import type { InteractiveCursorAgentHandle } from '../services/interactiveActorHost/interactiveCursorExecution';
+import type {
+  InteractiveCursorAgentHandle,
+  InteractiveSendOptions,
+} from '../services/interactiveActorHost/interactiveCursorExecution';
 import {
   createInteractiveSessionActor,
+  INTERACTIVE_LOADING_CODE_DETAIL,
   INTERACTIVE_STARTING_DETAIL,
+  INTERACTIVE_THINKING_DETAIL,
   type InteractiveActorDependencies,
   type InteractiveTurnRequest,
 } from '../services/interactiveActorHost/interactiveSessionActor';
@@ -61,7 +66,7 @@ interface FakeAgentOptions {
   agentId?: string | null;
   waitGate?: Promise<void>;
   onCancel?: () => void;
-  onSend?: () => void;
+  onSend?: (sendOptions?: InteractiveSendOptions) => void;
   model?: string;
   workspaceRef?: string;
   waitStatus?: string;
@@ -108,7 +113,7 @@ function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgent
     model: options.model ?? 'auto',
     workspaceRef: options.workspaceRef ?? '/warm/checkout',
     send: async (_prompt, sendOptions) => {
-      options.onSend?.();
+      options.onSend?.(sendOptions);
       for (const text of options.tokens ?? []) {
         await sendOptions?.onDelta?.({ type: 'text-delta', text });
       }
@@ -1054,6 +1059,150 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
       status: 'completed',
       artifactsFlushed: true,
       artifactManifestRef: manifestRef,
+      stageTimings: {
+        workspaceMs: expect.any(Number),
+        agentAcquireMs: expect.any(Number),
+        agentMode: 'recreated',
+        workerTurnMs: expect.any(Number),
+      },
+    });
+  });
+
+  it('publishes a live label for each startup step of a grounded durable turn', async () => {
+    const { publishLive, live } = captureLive();
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          tokens: ['ok'],
+          workspaceRef: checkout.workspacePath,
+        }),
+      ),
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+        dispose: async () => {},
+      }),
+      uploadAttemptArtifacts: jest.fn(async () => ({
+        container: 'artifacts',
+        key: 'runs/r/attempts/1/manifest.json',
+      })),
+      postIngest: async () => ({ ok: true, cancelRequested: false }),
+      publishLive,
+    });
+    const base = makeDurableBootstrap();
+
+    await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: {
+        ...base,
+        specification: {
+          ...base.specification,
+          grounding: {
+            provider: 'github' as const,
+            project: 'proj-1',
+            repository: 'owner/repo',
+            sha: 'a'.repeat(40),
+            profileId: 'profile-1',
+          },
+        },
+      },
+    });
+
+    const labels = live
+      .filter((e) => e.event.type === 'phase')
+      .map((e) => (e.event as { detail?: string }).detail);
+    expect(labels).toEqual([
+      INTERACTIVE_LOADING_CODE_DETAIL,
+      INTERACTIVE_STARTING_DETAIL,
+      INTERACTIVE_THINKING_DETAIL,
+    ]);
+  });
+
+  function makeSendFailureActor(sendError: Error) {
+    const { publishLive, live } = captureLive();
+    const posted: AiRunIngestBody[] = [];
+    const sentPrompts: string[] = [];
+    let acquisitions = 0;
+    const acquireAgent = jest.fn(async (_s, checkout, _options) => {
+      acquisitions += 1;
+      const handle = makeAgentHandle({
+        tokens: ['ok'],
+        agentId: `agent-${acquisitions}`,
+        workspaceRef: checkout.workspacePath,
+      });
+      const failFirst = acquisitions === 1;
+      return {
+        ...handle,
+        send: async (prompt: string, options?: Parameters<typeof handle.send>[1]) => {
+          sentPrompts.push(prompt);
+          if (failFirst) throw sendError;
+          return handle.send(prompt, options);
+        },
+      };
+    });
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent,
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+        dispose: async () => {},
+      }),
+      uploadAttemptArtifacts: jest.fn(async () => ({
+        container: 'artifacts',
+        key: 'runs/r/attempts/1/manifest.json',
+      })),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+      publishLive,
+    });
+    return { actor, acquireAgent, live, posted, sentPrompts };
+  }
+
+  it('reconnects once with a fresh Agent when send drops before any event', async () => {
+    const { actor, acquireAgent, live, posted, sentPrompts } = makeSendFailureActor(
+      Object.assign(new Error('Connection stalled'), {
+        name: 'NetworkError',
+        code: 'connection_stalled',
+        isRetryable: true,
+      }),
+    );
+
+    const outcome = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({ cursorAgentId: 'agent-prior' }),
+    });
+
+    expect(outcome.status).toBe('completed');
+    expect(acquireAgent).toHaveBeenCalledTimes(2);
+    expect(acquireAgent.mock.calls[1][2]).toMatchObject({ resumeAgentId: null });
+    expect(sentPrompts).toEqual(['Hello', 'Hello (recreated)']);
+    expect(live.some((e) => e.event.type === 'retrying')).toBe(true);
+    expect(posted.find((b) => b.kind === 'terminal')).toMatchObject({
+      status: 'completed',
+      cursorAgentId: 'agent-2',
+      stageTimings: { agentMode: 'recreated' },
+    });
+  });
+
+  it('does not retry a rate-limited send', async () => {
+    const { actor, acquireAgent, posted } = makeSendFailureActor(
+      Object.assign(new Error('Too many requests'), {
+        name: 'RateLimitError',
+        isRetryable: true,
+      }),
+    );
+
+    const outcome = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap(),
+    });
+
+    expect(outcome.status).toBe('failed');
+    expect(acquireAgent).toHaveBeenCalledTimes(1);
+    expect(posted.find((b) => b.kind === 'terminal')).toMatchObject({
+      status: 'failed',
     });
   });
 

@@ -95,9 +95,6 @@ jest.mock('../services/chatThreadRepository', () => ({
   findRunningInterviewThreads: jest.fn(),
   clearStaleRun: jest.fn(),
 }));
-jest.mock('../services/pdfAssemblyService', () => ({
-  expireOldSessions: jest.fn(),
-}));
 jest.mock('../services/featureRequestAnalysisService', () => ({
   recoverAnalyzingFeatureRequests: jest.fn(),
 }));
@@ -204,8 +201,6 @@ describe('startRecoveryLoop leader election', () => {
     mockedFindRunning.mockResolvedValue([]);
     jest.requireMock('../services/designPrototypeService')
       .failStalePrototypes.mockResolvedValue(0);
-    jest.requireMock('../services/pdfAssemblyService')
-      .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
     jest.requireMock('../services/featureRequestAnalysisService')
       .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
   });
@@ -374,8 +369,6 @@ describe('recovery cooperative aborts', () => {
       .rehydratePrdValidationWatcher.mockResolvedValue(undefined);
     jest.requireMock('../services/designPrototypeService')
       .failStalePrototypes.mockResolvedValue(0);
-    jest.requireMock('../services/pdfAssemblyService')
-      .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
     jest.requireMock('../services/featureRequestAnalysisService')
       .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
   });
@@ -540,8 +533,6 @@ describe('graceful shutdown scheduler stop', () => {
     mockAgentRunsFindMany.mockImplementation(async () => []);
     jest.requireMock('../services/designPrototypeService')
       .failStalePrototypes.mockResolvedValue(0);
-    jest.requireMock('../services/pdfAssemblyService')
-      .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
     jest.requireMock('../services/featureRequestAnalysisService')
       .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
   });
@@ -645,8 +636,6 @@ describe('design-doc generation recovery claim', () => {
     mockedFindRunning.mockResolvedValue([]);
     jest.requireMock('../services/designPrototypeService')
       .failStalePrototypes.mockResolvedValue(0);
-    jest.requireMock('../services/pdfAssemblyService')
-      .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
     jest.requireMock('../services/featureRequestAnalysisService')
       .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
     routeDesignDoc.mockResolvedValue();
@@ -803,8 +792,6 @@ describe('test-case generation recovery routing', () => {
     mockedFindRunning.mockResolvedValue([]);
     jest.requireMock('../services/designPrototypeService')
       .failStalePrototypes.mockResolvedValue(0);
-    jest.requireMock('../services/pdfAssemblyService')
-      .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
     jest.requireMock('../services/featureRequestAnalysisService')
       .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
     routeTestCases.mockResolvedValue(true);
@@ -985,8 +972,6 @@ describe('startup recovery transient query bounds', () => {
       .isPrdValidationWatcherActive.mockReturnValue(false);
     jest.requireMock('../services/designPrototypeService')
       .failStalePrototypes.mockResolvedValue(0);
-    jest.requireMock('../services/pdfAssemblyService')
-      .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
     jest.requireMock('../services/featureRequestAnalysisService')
       .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
   });
@@ -1110,8 +1095,6 @@ describe('finished durable prototype runs', () => {
     mockedFindRunning.mockResolvedValue([]);
     harvest().mockResolvedValue(0);
     failStale().mockResolvedValue(0);
-    jest.requireMock('../services/pdfAssemblyService')
-      .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
     jest.requireMock('../services/featureRequestAnalysisService')
       .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
   });
@@ -1177,8 +1160,6 @@ describe('finished durable document runs', () => {
       .harvestFinishedV2Prototypes.mockResolvedValue(0);
     jest.requireMock('../services/designPrototypeService')
       .failStalePrototypes.mockResolvedValue(0);
-    jest.requireMock('../services/pdfAssemblyService')
-      .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
     jest.requireMock('../services/featureRequestAnalysisService')
       .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
   });

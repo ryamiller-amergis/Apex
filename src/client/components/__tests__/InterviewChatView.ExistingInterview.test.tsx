@@ -24,6 +24,16 @@ jest.mock('../../hooks/useAppShell', () => ({
   })),
 }));
 
+jest.mock('../../hooks/useRbac', () => ({
+  useMyPermissions: jest.fn(() => ({
+    projectRoles: [],
+    roles: [],
+    permissions: [],
+    isAdmin: false,
+    can: () => false,
+  })),
+}));
+
 jest.mock('../../hooks/useChatThreads', () => ({
   useSkillRepos: jest.fn(() => ({
     data: [{ id: 'repo-1', name: 'MaxView', defaultBranch: 'main' }],
@@ -66,6 +76,7 @@ jest.mock('../../hooks/useProjectRepositoryReadiness', () => ({
 }));
 
 const mockUpdateStatus = jest.fn();
+const mockUpdatePhaseAssignments = jest.fn();
 jest.mock('../../hooks/useInterviews', () => ({
   useCreateInterview: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useInterview: jest.fn(),
@@ -74,6 +85,12 @@ jest.mock('../../hooks/useInterviews', () => ({
   useSaveInterviewBrief: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false, error: null })),
   useApproveInterviewBrief: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false, error: null })),
   useUpdateInterviewStatus: jest.fn(() => ({ mutateAsync: mockUpdateStatus, isPending: false })),
+  useUpdateInterviewPhaseAssignments: jest.fn(() => ({
+    mutate: mockUpdatePhaseAssignments,
+    isPending: false,
+    error: null,
+  })),
+  useActiveUsers: jest.fn(() => ({ data: [], isLoading: false })),
   useUpdateInterviewTitle: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useCreatePrd: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useDeleteInterview: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
@@ -200,7 +217,13 @@ jest.mock('../../hooks/useGroundingResumeGate', () => ({
 
 import { within } from '@testing-library/react';
 import { useAppShell } from '../../hooks/useAppShell';
-import { useInterview, useUpdateInterviewStatus, useCreatePrd } from '../../hooks/useInterviews';
+import { useMyPermissions } from '../../hooks/useRbac';
+import {
+  useActiveUsers,
+  useCreatePrd,
+  useInterview,
+  useUpdateInterviewStatus,
+} from '../../hooks/useInterviews';
 import { useStartChat, useChatThread } from '../../hooks/useChatThreads';
 import { useProjectSkillConfig, useGlobalDefaultModel, useAvailableModels } from '../../hooks/useProjectSkillConfig';
 
@@ -350,6 +373,13 @@ beforeEach(() => {
     can: jest.fn(() => true),
     userId: 'user-1',
     isAdmin: false,
+  });
+  (useMyPermissions as jest.Mock).mockReturnValue({
+    projectRoles: [],
+    roles: [],
+    permissions: [],
+    isAdmin: false,
+    can: () => false,
   });
   stubGlobalFetch();
 });
@@ -615,6 +645,42 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
     expect(screen.queryByText(/interview-phase/)).not.toBeInTheDocument();
   });
 
+  it('updates only the selected interview phase assignment', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ deliveryAssigneeId: 'delivery-1' }),
+      isLoading: false,
+      isError: false,
+    });
+    (useActiveUsers as jest.Mock).mockReturnValue({
+      data: [
+        { oid: 'alice-1', displayName: 'Alice User', email: 'alice@example.com' },
+        { oid: 'delivery-1', displayName: 'Delivery User', email: 'delivery@example.com' },
+      ],
+      isLoading: false,
+    });
+    (useChatThread as jest.Mock).mockReturnValue({
+      data: {
+        id: 'thread-iv-1',
+        status: 'idle',
+        kickoff: {
+          skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+          model: 'composer-2',
+        },
+        messages: [],
+      },
+    });
+
+    renderExistingInterview();
+
+    fireEvent.click(screen.getByTestId('interview-phase-assignee-discovery'));
+    fireEvent.mouseDown(screen.getByTestId('interview-phase-assignee-option-discovery-alice-1'));
+
+    expect(mockUpdatePhaseAssignments).toHaveBeenCalledWith({
+      id: 'iv-1',
+      phaseAssignments: { discoveryAssigneeId: 'alice-1' },
+    });
+  });
+
   it('hides the phase bar when the interview skill is not grill-with-docs', () => {
     (useChatThread as jest.Mock).mockReturnValue({
       data: {
@@ -686,13 +752,34 @@ describe('ExistingInterviewView — read-only viewer', () => {
     });
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
-      can: jest.fn(() => true),
+      can: jest.fn((permission: string) => permission === 'interviews:view' || permission === 'interviews:manage'),
       userId: 'viewer-2',
       isAdmin: false,
     });
     renderExistingInterview();
     expect(screen.queryByPlaceholderText(/Continue the interview/i)).not.toBeInTheDocument();
     expect(screen.getByText(/viewing another user's interview \(read-only\)/i)).toBeInTheDocument();
+  });
+
+  it('lets a project admin answer another author\'s interview', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ authorId: 'author-1', status: 'in_progress' }),
+      isLoading: false,
+      isError: false,
+    });
+    (useAppShell as jest.Mock).mockReturnValue({
+      selectedProject: 'MaxView',
+      can: jest.fn((permission: string) => (
+        permission === 'admin:roles'
+        || permission === 'interviews:view'
+        || permission === 'interviews:manage'
+      )),
+      userId: 'project-admin-1',
+      isAdmin: false,
+    });
+    renderExistingInterview();
+    expect(screen.queryByText(/viewing another user's interview \(read-only\)/i)).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Continue the interview/i)).toBeEnabled();
   });
 });
 
@@ -1403,5 +1490,120 @@ describe('ExistingInterviewView — model select reflects kickoff model', () => 
 
     const modelSelect = await screen.findByLabelText('Model');
     expect(modelSelect).toHaveValue('claude-opus-5-5');
+  });
+});
+
+describe('ExistingInterviewView — complete and generate PRD authorization', () => {
+  function renderAs(
+    userId: string,
+    interviewOverrides: Partial<Interview>,
+    can: (permission: string) => boolean,
+    isAdmin = false,
+    projectRoles: string[] = [],
+  ) {
+    (useAppShell as jest.Mock).mockReturnValue({
+      selectedProject: 'MaxView',
+      can: jest.fn(can),
+      userId,
+      isAdmin,
+    });
+    (useMyPermissions as jest.Mock).mockReturnValue({
+      projectRoles,
+      roles: [],
+      permissions: [],
+      isAdmin: false,
+      can: () => false,
+    });
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ authorId: 'author-1', prds: [], ...interviewOverrides }),
+      isLoading: false,
+      isError: false,
+    });
+    renderExistingInterview();
+  }
+
+  it.each([
+    ['prdOwnerId', 'owner-prd'],
+    ['designDocOwnerId', 'owner-dd'],
+    ['designPrototypeOwnerId', 'owner-proto'],
+    ['testCaseOwnerId', 'owner-qa'],
+  ] as const)(
+    'shows Complete for a non-author %s and hides delete, archive, and reopen',
+    (field, userId) => {
+      renderAs(userId, { status: 'in_progress', [field]: userId }, () => false);
+
+      expect(screen.getByTestId('complete-interview-btn')).toBeInTheDocument();
+      expect(screen.queryByTestId('delete-interview-btn')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('archive-interview-btn')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('reopen-interview-btn')).not.toBeInTheDocument();
+    },
+  );
+
+  it('shows Generate PRD for a non-author section owner and hides delete, archive, and reopen', () => {
+    renderAs('owner-qa', { status: 'complete', testCaseOwnerId: 'owner-qa' }, () => false);
+
+    expect(screen.getByTestId('generate-prd-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('delete-interview-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('archive-interview-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('reopen-interview-btn')).not.toBeInTheDocument();
+  });
+
+  it('shows Complete for an interview admin who lacks interviews:manage', () => {
+    renderAs('admin-1', { status: 'in_progress' }, () => false, true);
+
+    expect(screen.getByTestId('complete-interview-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('delete-interview-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('archive-interview-btn')).not.toBeInTheDocument();
+  });
+
+  it('hides Complete and Generate PRD from a user who only has interviews:manage', () => {
+    renderAs(
+      'stranger',
+      { status: 'in_progress' },
+      (permission) => permission === 'interviews:manage',
+    );
+
+    expect(screen.queryByTestId('complete-interview-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('generate-prd-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('archive-interview-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('delete-interview-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('reopen-interview-btn')).not.toBeInTheDocument();
+  });
+
+  it('hides Generate PRD from an interviews:manage user who is not author, owner, or admin', () => {
+    renderAs(
+      'stranger',
+      { status: 'complete' },
+      (permission) => permission === 'interviews:manage',
+    );
+
+    expect(screen.queryByTestId('generate-prd-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('complete-interview-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('reopen-interview-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('archive-interview-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('delete-interview-btn')).toBeInTheDocument();
+  });
+
+  it('hides Complete from an admin:roles holder who is not a project admin', () => {
+    renderAs(
+      'roles-admin',
+      { status: 'in_progress' },
+      (permission) => permission === 'admin:roles',
+    );
+
+    expect(screen.queryByTestId('complete-interview-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('generate-prd-btn')).not.toBeInTheDocument();
+  });
+
+  it('shows Complete for a project admin of the interview project', () => {
+    renderAs('project-admin', { status: 'in_progress' }, () => false, false, ['admin']);
+
+    expect(screen.getByTestId('complete-interview-btn')).toBeInTheDocument();
+  });
+
+  it('shows Generate PRD for a project admin of the interview project', () => {
+    renderAs('project-admin', { status: 'complete' }, () => false, false, ['admin']);
+
+    expect(screen.getByTestId('generate-prd-btn')).toBeInTheDocument();
   });
 });
