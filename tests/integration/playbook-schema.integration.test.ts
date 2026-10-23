@@ -684,6 +684,8 @@ describe('VT-02 — the playbook migrations roll back cleanly', () => {
     // Interview migrations landed after the Playbook window and reference those tables.
     // Reverse them before the windowed rollback, or playbook_step_runs cannot be dropped.
     for (const file of [
+      '20261023144000_c3d8_build-from-prompt-agent-runs.sql',
+      '20261023143900_a1a4_build-from-prompt-tables.sql',
       '20261007143000_playbook-interview-template.sql',
       '20261007124500_playbook-interview-brief.sql',
       '20261005153100_seed-playbooks-authoring-canvas-flag.sql',
