@@ -459,6 +459,7 @@ async function runSetup(record: CodeLabSessionRecord, model: string | undefined)
     try {
       await bootstrapDevelopmentDependencies(record.workspaceDir, {
         dataRoot: DEPENDENCY_CACHE_ROOT,
+        ignoreScripts: true,
         onPhase: (_phase, detail) => appendLog(record, detail),
       });
       dependenciesPrepared = true;
