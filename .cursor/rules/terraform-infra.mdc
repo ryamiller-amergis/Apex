@@ -13,9 +13,9 @@ follow `.cursor/skills/azure-async-infra/SKILL.md`.
 ## Must follow
 
 1. **Single root module** in `infra/`. Split by workload (`main.tf`,
-   `shared-async.tf`, `pdf-processing.tf`, …) — not one file per Azure resource type.
+   `shared-async.tf`, …) — not one file per Azure resource type.
 2. **Extend shared maps** (`blob_containers`) before creating new storage accounts.
-   Do not provision Service Bus by default (PDF uses Postgres + Blob).
+   Do not provision Service Bus by default (current-scale jobs use Postgres + Blob).
 3. Prefer **`for_each` + stable keys** for homogeneous entities; use `count` only
    for simple optional resources.
 4. Every variable: typed, described; secrets marked `sensitive = true`.

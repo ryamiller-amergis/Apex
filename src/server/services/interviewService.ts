@@ -12,8 +12,26 @@ import { getActiveUsers } from './rbacService';
 import { getSkillSettingsName } from './projectSettingsService';
 import { runGroundingService } from './runGroundingService';
 import { recordArtifactDoneEvent } from './artifactDoneEventService';
+import { listLinkedContextIds } from './interviewLinkService';
+import {
+  latestGuidedInterviewPhaseIndex,
+  sliceGuidedInterviewPhases,
+  usesGuidedInterview,
+} from './guidedInterviewState';
 
 const VALID_INTERVIEW_STATUSES: InterviewStatus[] = ['in_progress', 'complete', 'archived'];
+
+export const INTERVIEW_COMPLETE_FORBIDDEN_MESSAGE =
+  'Only the author, an interview section owner, a project admin, or a platform admin can complete an interview';
+
+export const INTERVIEW_COMPLETE_INVALID_STATUS_MESSAGE =
+  'Only in-progress interviews can be marked complete';
+
+function httpStatusError(message: string, status: number): Error {
+  const err = new Error(message) as Error & { status: number };
+  err.status = status;
+  return err;
+}
 
 function assertValidInterviewStatus(status: string): asserts status is InterviewStatus {
   if (!VALID_INTERVIEW_STATUSES.includes(status as InterviewStatus)) {
@@ -21,6 +39,35 @@ function assertValidInterviewStatus(status: string): asserts status is Interview
     (err as any).status = 400;
     throw err;
   }
+}
+
+export interface InterviewCompletionActor {
+  authorId: string;
+  project: string;
+  prdOwnerId?: string | null;
+  designDocOwnerId?: string | null;
+  designPrototypeOwnerId?: string | null;
+  testCaseOwnerId?: string | null;
+}
+
+/**
+ * Author, section owner, platform admin, or project admin may complete an
+ * interview and generate its PRD. Other status changes stay author-only.
+ */
+export async function canCompleteInterviewAndGeneratePrd(
+  userId: string,
+  interviewRow: InterviewCompletionActor,
+): Promise<boolean> {
+  if (interviewRow.authorId === userId) return true;
+  const sectionOwnerIds = [
+    interviewRow.prdOwnerId,
+    interviewRow.designDocOwnerId,
+    interviewRow.designPrototypeOwnerId,
+    interviewRow.testCaseOwnerId,
+  ];
+  if (sectionOwnerIds.some((ownerId) => ownerId != null && ownerId === userId)) return true;
+  if (await isPlatformAdmin(userId)) return true;
+  return isProjectAdmin(userId, interviewRow.project);
 }
 
 const PLAYBOOK_LINKAGE_ERROR =
@@ -420,7 +467,13 @@ export async function updateInterviewStatus(
     (err as any).status = 404;
     throw err;
   }
-  if (row.authorId !== requestingUserId) {
+  if (newStatus === 'complete') {
+    const allowed = await canCompleteInterviewAndGeneratePrd(requestingUserId, row);
+    if (!allowed) throw httpStatusError(INTERVIEW_COMPLETE_FORBIDDEN_MESSAGE, 403);
+    if (row.status !== 'in_progress' || row.playbookRunId != null) {
+      throw httpStatusError(INTERVIEW_COMPLETE_INVALID_STATUS_MESSAGE, 409);
+    }
+  } else if (row.authorId !== requestingUserId) {
     const err = new Error('Only the author can change interview status');
     (err as any).status = 403;
     throw err;
@@ -602,4 +655,77 @@ export async function deleteInterview(id: string, requestingUserId: string): Pro
   }
   await cancelRun(row.chatThreadId);
   await db.delete(interviews).where(eq(interviews.id, id));
+}
+
+export type InterviewEvaluationPhase = {
+  phaseIndex: number;
+  messages: Array<{ role: 'user' | 'agent'; text: string }>;
+};
+
+export type InterviewEvaluationInputs = {
+  id: string;
+  project: string;
+  model: string | null;
+  skillPath: string | null;
+  skillVersion: string | null;
+  phaseCount: number;
+  currentPhase: number | null;
+  phases: InterviewEvaluationPhase[];
+  linkedContextIds: { adrIds: string[]; designModuleIds: string[] };
+};
+
+/** Read-only lineage and transcript slices for an evaluation. Writes nothing. */
+export async function getInterviewEvaluationInputs(
+  interviewId: string,
+): Promise<InterviewEvaluationInputs | null> {
+  const row = await db.query.interviews.findFirst({
+    where: eq(interviews.id, interviewId),
+    columns: { id: true, project: true, model: true, chatThreadId: true },
+  });
+  if (!row) return null;
+
+  const { getThreadAsync } = await import('./chatAgentService');
+  const thread = await getThreadAsync(row.chatThreadId);
+  const skillPath = thread?.kickoff?.skillPath ?? null;
+  const skillVersion = thread?.groundedSha ?? null;
+  const model = row.model ?? thread?.kickoff?.model ?? null;
+  const messages = thread?.messages ?? [];
+  const guided = usesGuidedInterview(skillPath);
+
+  let phases: InterviewEvaluationPhase[];
+  let phaseCount: number;
+  let currentPhase: number | null;
+  if (!guided) {
+    const visible = messages.filter(
+      (message) => !message.hidden && (message.role === 'user' || message.role === 'agent'),
+    );
+    phaseCount = 1;
+    currentPhase = visible.length > 0 ? 1 : null;
+    phases = visible.length > 0
+      ? [{
+          phaseIndex: 1,
+          messages: visible.map((message) => ({
+            role: message.role as 'user' | 'agent',
+            text: message.text,
+          })),
+        }]
+      : [];
+  } else {
+    phaseCount = 3;
+    phases = sliceGuidedInterviewPhases(messages);
+    currentPhase = latestGuidedInterviewPhaseIndex(messages);
+  }
+
+  const linkedContextIds = await listLinkedContextIds(row.id);
+  return {
+    id: row.id,
+    project: row.project,
+    model,
+    skillPath,
+    skillVersion,
+    phaseCount,
+    currentPhase,
+    phases,
+    linkedContextIds,
+  };
 }

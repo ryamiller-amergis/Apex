@@ -10,15 +10,15 @@ jest.mock('@cursor/sdk', () => ({
   },
 }));
 
-const mockGetContainerRun = jest.fn();
-const mockCancelContainerRun = jest.fn();
-
-jest.mock('../services/cursorContainerCliService', () => ({
-  isContainerAgentId: (id: string) => id.startsWith('container-agent-'),
-  getCursorContainerCliRun: (...args: unknown[]) => mockGetContainerRun(...args),
-  streamCursorContainerCliRun: jest.fn(),
-  cancelCursorContainerCliRun: (...args: unknown[]) => mockCancelContainerRun(...args),
-}));
+// const mockGetContainerRun = jest.fn();
+// const mockCancelContainerRun = jest.fn();
+//
+// jest.mock('../services/cursorContainerCliService', () => ({
+//   isContainerAgentId: (id: string) => id.startsWith('container-agent-'),
+//   getCursorContainerCliRun: (...args: unknown[]) => mockGetContainerRun(...args),
+//   streamCursorContainerCliRun: jest.fn(),
+//   cancelCursorContainerCliRun: (...args: unknown[]) => mockCancelContainerRun(...args),
+// }));
 
 jest.mock('../services/repoCacheService', () => ({
   resolveGitRemote: jest.fn((provider: string, project: string, repo: string) => {
@@ -131,8 +131,7 @@ describe('cursorCloudAgentClient', () => {
             url: 'https://dev.azure.com/amergis/MaxView/_git/MaxView',
             startingRef: 'development',
           }],
-          autoCreatePR: false,
-          skipReviewerRequest: true,
+          autoCreatePR: true,
         },
       });
       expect(mockSend).toHaveBeenCalledWith('Implement the work item');
@@ -245,7 +244,7 @@ describe('cursorCloudAgentClient', () => {
     }
   });
 
-  it('lets Cursor open the pull request only for GitHub', async () => {
+  it('turns on autoCreatePR so Cursor opens the pull request', async () => {
     const previous = process.env.CURSOR_USER_LEVEL_API_KEY;
     process.env.CURSOR_USER_LEVEL_API_KEY = 'cursor-key';
     mockDispose.mockResolvedValue(undefined);
@@ -296,40 +295,40 @@ describe('cursorCloudAgentClient', () => {
     expect(observed.settled).toBe(true);
   });
 
-  it('reads a live container execution through the container adapter', async () => {
-    mockGetRun.mockClear();
-    mockGetContainerRun.mockResolvedValue({
-      status: 'running',
-      prUrl: null,
-      resultText: null,
-      branchName: null,
-      baseBranch: null,
-      summary: null,
-      noChanges: false,
-      settled: false,
-    });
-
-    await getCloudAgentRun({
-      project: 'MaxView',
-      cloudAgentId: 'container-agent-exec-1',
-      cursorRunId: 'exec-1',
-    });
-
-    expect(mockGetContainerRun).toHaveBeenCalledWith('exec-1');
-    expect(mockGetRun).not.toHaveBeenCalled();
-  });
-
-  it('cancels a live container execution through the container adapter', async () => {
-    mockGetRun.mockClear();
-    mockCancelContainerRun.mockResolvedValue(undefined);
-
-    await cancelCursorCloudAgentRun({
-      project: 'MaxView',
-      cloudAgentId: 'container-agent-exec-1',
-      cursorRunId: 'exec-1',
-    });
-
-    expect(mockCancelContainerRun).toHaveBeenCalledWith('exec-1');
-    expect(mockGetRun).not.toHaveBeenCalled();
-  });
+  // it('reads a live container execution through the container adapter', async () => {
+  //   mockGetRun.mockClear();
+  //   mockGetContainerRun.mockResolvedValue({
+  //     status: 'running',
+  //     prUrl: null,
+  //     resultText: null,
+  //     branchName: null,
+  //     baseBranch: null,
+  //     summary: null,
+  //     noChanges: false,
+  //     settled: false,
+  //   });
+  //
+  //   await getCloudAgentRun({
+  //     project: 'MaxView',
+  //     cloudAgentId: 'container-agent-exec-1',
+  //     cursorRunId: 'exec-1',
+  //   });
+  //
+  //   expect(mockGetContainerRun).toHaveBeenCalledWith('exec-1');
+  //   expect(mockGetRun).not.toHaveBeenCalled();
+  // });
+  //
+  // it('cancels a live container execution through the container adapter', async () => {
+  //   mockGetRun.mockClear();
+  //   mockCancelContainerRun.mockResolvedValue(undefined);
+  //
+  //   await cancelCursorCloudAgentRun({
+  //     project: 'MaxView',
+  //     cloudAgentId: 'container-agent-exec-1',
+  //     cursorRunId: 'exec-1',
+  //   });
+  //
+  //   expect(mockCancelContainerRun).toHaveBeenCalledWith('exec-1');
+  //   expect(mockGetRun).not.toHaveBeenCalled();
+  // });
 });

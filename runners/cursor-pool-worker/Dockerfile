@@ -57,7 +57,7 @@ WORKDIR /workspace
 COPY runners/cursor-pool-worker/git-credential.sh /usr/local/bin/cursor-git-credential
 COPY runners/cursor-pool-worker/run-cli.sh /usr/local/bin/cursor-run-cli
 COPY runners/cursor-pool-worker/activity-log.mjs /usr/local/bin/cursor-activity-log
-COPY runners/cursor-pool-worker/pr-description.md /usr/local/share/apex/pr-description.md
+COPY pr-description.md /usr/local/share/apex/pr-description.md
 # Windows checkouts add CRLF, which breaks the bash shebang inside Linux.
 RUN sed -i 's/\r$//' /usr/local/bin/cursor-git-credential /usr/local/bin/cursor-run-cli /usr/local/bin/cursor-activity-log \
  && chmod +x /usr/local/bin/cursor-git-credential /usr/local/bin/cursor-run-cli /usr/local/bin/cursor-activity-log

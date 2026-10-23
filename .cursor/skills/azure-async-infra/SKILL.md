@@ -11,24 +11,25 @@ description: >-
 
 # Azure Async Infrastructure
 
-Canonical platform pattern for Apex async work. Inspect `infra/shared-async.tf`,
-`infra/pdf-processing.tf`, and `infra/README.md` before inventing alternatives.
+Canonical platform pattern for Apex async work. Inspect `infra/shared-async.tf`
+and `infra/README.md` before inventing alternatives.
 
 ## Default decision (current)
 
 | Concern | Default | Exception |
 |---------|---------|-----------|
 | Storage | **One** private Storage Account per environment | Separate account only for hard security, lifecycle, compliance, or cost isolation |
-| Blob isolation | **Container per workload** (`pdf-artifacts`, …) keyed `{userId}/{sessionId}/...` where applicable | — |
-| PDF / current-scale job delivery | **Postgres job queue** (existing claim/lease patterns) | Managed broker only when ADR scale-up triggers fire |
+| Blob isolation | **Container per workload** (existing `pdf-artifacts`, plus new kebab-case names) keyed `{userId}/{sessionId}/...` where applicable | — |
+| Current-scale job delivery | **Postgres job queue** (existing claim/lease patterns) | Managed broker only when ADR scale-up triggers fire |
 | Messaging (future) | **One** Service Bus namespace per environment when a broker is justified | Separate namespace only for hard isolation / SKU / blast-radius needs |
 | Competing-consumer jobs (when broker exists) | **Queue** per workload | Never one mega-queue for unrelated domains |
 | Pub/sub / fan-out | **Topic + subscriptions** | Do not overload a job queue for fan-out |
 | Worker compute | Prefer the Apex App Service until isolation/scale requires a dedicated host | New App Service solely to “own” Blob |
 | Auth | Managed identity; entity-scoped RBAC | No shared keys in app settings as the primary path |
 
-PDF is the **first consumer** of shared Blob (`pdf-artifacts`) and runs **inside Apex**.
-Service Bus is **not** provisioned by default (revised PDF scale ADR).
+The `pdf-artifacts` container remains on the shared account (orphan Apex PDF
+data; do not destroy on apply). Interactive PDF editing now lives in DocHub,
+not Apex. Service Bus is **not** provisioned by default.
 
 ## Interview / ADR checklist
 

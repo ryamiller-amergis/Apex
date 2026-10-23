@@ -744,6 +744,38 @@ describe('evaluateFlags', () => {
 
     expect(result['repo-grounding-workspace-profile']).toBe(false);
   });
+
+  it('TBI-005 VT-15 enables workflow-human-evaluation for Apex only, and for nobody when disabled', async () => {
+    mockDb.query.featureFlags.findMany.mockResolvedValue([
+      {
+        ...baseFlag,
+        key: 'workflow-human-evaluation',
+        enabled: true,
+        rules: [{ type: 'project', value: 'Apex' }],
+      },
+    ]);
+
+    const apex = await evaluateFlags({ userId: 'user-1', project: 'Apex', groupIds: [] });
+    const beta = await evaluateFlags({ userId: 'user-1', project: 'Beta', groupIds: [] });
+
+    expect(apex['workflow-human-evaluation']).toBe(true);
+    expect(beta['workflow-human-evaluation']).toBe(false);
+
+    mockDb.query.featureFlags.findMany.mockResolvedValue([
+      {
+        ...baseFlag,
+        key: 'workflow-human-evaluation',
+        enabled: false,
+        rules: [{ type: 'project', value: 'Apex' }],
+      },
+    ]);
+
+    const apexOff = await evaluateFlags({ userId: 'user-1', project: 'Apex', groupIds: [] });
+    const betaOff = await evaluateFlags({ userId: 'user-1', project: 'Beta', groupIds: [] });
+
+    expect(apexOff['workflow-human-evaluation']).toBe(false);
+    expect(betaOff['workflow-human-evaluation']).toBe(false);
+  });
 });
 
 // ── isFeatureEnabled ─────────────────────────────────────────────────────────

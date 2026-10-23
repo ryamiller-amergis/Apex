@@ -65,7 +65,6 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `planning:ai-analysis` | planning | admin, member |
 | `planning:roadmap` | planning | admin, member |
 | `planning:releases` | planning | admin, member |
-| `pdf-assembly:use` | pdf-tools | *(no default roles — assign explicitly)* |
 | `playbooks:view` | playbooks | admin, member, viewer |
 | `playbooks:run` | playbooks | admin, member |
 | `playbooks:author` | playbooks | *(no default roles — assign explicitly)* |
@@ -76,6 +75,8 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `work-board:view` | work-board | admin, member, viewer |
 | `work-board:manage` | work-board | admin, member |
 | `work-board:admin` | work-board | admin, member |
+| `workflow-evaluation:view` | workflow-evaluation | admin, member |
+| `workflow-evaluation:submit` | workflow-evaluation | admin, member |
 | `workitems:write` | workitems | admin, member |
 
 ## Client Gating Pattern

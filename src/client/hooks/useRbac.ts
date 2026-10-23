@@ -27,10 +27,12 @@ export function useMyPermissions(project?: string) {
   });
   const permissions = query.data?.permissions ?? [];
   const roles = query.data?.roles ?? [];
+  const projectRoles = query.data?.projectRoles ?? [];
   return {
     ...query,
     permissions,
     roles,
+    projectRoles,
     isAdmin: roles.includes('admin'),
     can: (key: string) => permissions.includes(key),
   };
