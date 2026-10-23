@@ -61,8 +61,19 @@ import { loadConfigFromFile, mergeConfig } from 'vite';
 
 export default async (env) => {
   const loaded = await loadConfigFromFile(env, undefined, process.env.CODE_LAB_APP_DIR);
-  return mergeConfig(loaded ? loaded.config : {}, {
-    base: process.env.CODE_LAB_BASE,
+  const config = loaded ? loaded.config : {};
+  const base = process.env.CODE_LAB_BASE;
+  // The preview base sits under /api, so a project rule like '/api' would send
+  // every preview request to a backend Code Lab does not run.
+  const proxy = config.server && config.server.proxy;
+  if (proxy) {
+    for (const key of Object.keys(proxy)) {
+      const capturesBase = key.startsWith('^') ? new RegExp(key).test(base) : base.startsWith(key);
+      if (capturesBase) delete proxy[key];
+    }
+  }
+  return mergeConfig(config, {
+    base,
     cacheDir: process.env.CODE_LAB_CACHE_DIR,
     clearScreen: false,
     server: {
