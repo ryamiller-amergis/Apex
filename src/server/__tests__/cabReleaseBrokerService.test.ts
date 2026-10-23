@@ -58,6 +58,27 @@ describe('cabReleaseBrokerService', () => {
     )).toThrow(/configured organization/);
   });
 
+  it('allows a read of the parent wiki page and refuses a write of it', () => {
+    expect(() => assertCabAdoRequestAllowed(
+      request('https://dev.azure.com/Amergis/MaxView/_apis/wiki/wikis/MaxView.wiki/pages?path=/Manual%20Release&api-version=7.1'),
+      env,
+    )).not.toThrow();
+
+    expect(() => assertCabAdoRequestAllowed(
+      request('https://dev.azure.com/Amergis/MaxView/_apis/wiki/wikis/MaxView.wiki/pages?path=/Manual%20Release&api-version=7.1', 'PUT', {
+        content: '# overwritten',
+      }),
+      env,
+    )).toThrow(/Wiki writes are limited/);
+
+    expect(() => assertCabAdoRequestAllowed(
+      request('https://dev.azure.com/Amergis/MaxView/_apis/wiki/wikis/MaxView.wiki/pages?path=/Manual%20Release/2026.15.0&api-version=7.1', 'PUT', {
+        content: '# 2026.15.0',
+      }),
+      env,
+    )).not.toThrow();
+  });
+
   it('rejects a wiki page outside Manual Release and a pipeline other than snow', () => {
     expect(() => assertCabAdoRequestAllowed(
       request('https://dev.azure.com/Amergis/MaxView/_apis/wiki/wikis/MaxView.wiki/pages?path=/Secret&api-version=7.1'),

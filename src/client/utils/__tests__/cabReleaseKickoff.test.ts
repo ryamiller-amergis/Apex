@@ -91,7 +91,8 @@ describe('buildCabReleaseKickoffMessage', () => {
 
     expect(text).toContain('do not invent a development prod-cd fallback');
     expect(text).toContain('Run (queue definition 595');
-    expect(text).toContain('create and push Release/{version} from current development');
+    expect(text).toContain('create Release/{version} from current development through the CAB broker');
+    expect(text).toContain('Do not git push.');
   });
 
   it('passes normalized release refs when Apex titles contain the product label', () => {

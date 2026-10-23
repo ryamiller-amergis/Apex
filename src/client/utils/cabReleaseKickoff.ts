@@ -58,7 +58,7 @@ export function buildCabReleaseKickoffMessage(input: CabReleaseKickoffInput): st
     ? 'Run (queue definition 595 SNOW - Create CAB Release Request / mv-application-prod-snow.yml)'
     : 'Dry-run (queue definition 670 SNOW - Create CAB Request - Test / mv-application-qa-snow.yml)';
   const cutChoice = input.cutReleaseBranch
-    ? 'Yes — after snow succeeds, create and push Release/{version} from current development'
+    ? 'Yes — after snow succeeds, create Release/{version} from current development through the CAB broker. Do not git push.'
     : 'No — do not create or push the git branch after snow succeeds';
 
   return [

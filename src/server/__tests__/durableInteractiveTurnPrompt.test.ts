@@ -219,6 +219,8 @@ describe('durable interactive turn prompt', () => {
     expect(specification.currentPrompt).toContain('update only `/Manual Release/{version}`');
     expect(specification.currentPrompt).toContain('pipeline 670 for Dry-run or 595 for Run');
     expect(specification.currentPrompt).toContain('only after the snow run succeeds');
+    expect(specification.currentPrompt).toContain('through the CAB broker');
+    expect(specification.currentPrompt).toContain('Do not git push.');
     expect(specification.currentPrompt).not.toContain(
       'Treat the repository checkout as read-only',
     );

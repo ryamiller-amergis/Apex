@@ -22,10 +22,6 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends powershell \
   && rm -rf /var/lib/apt/lists/*
 
-COPY runners/cursor-pool-worker/git-credential.sh /usr/local/bin/git-credential-ado
-RUN chmod 0555 /usr/local/bin/git-credential-ado \
-  && git config --system credential.https://dev.azure.com.helper /usr/local/bin/git-credential-ado
-
 # Install only the production dependencies used by the compiled host graph.
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts

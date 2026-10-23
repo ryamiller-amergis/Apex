@@ -8,6 +8,7 @@ const RELEASE_VERSION = String.raw`\d+\.\d+\.\d+(?:\.\d+)?`;
 const RELEASE_BRANCH = String.raw`Release/${RELEASE_VERSION}`;
 const GIT_REF = String.raw`refs/heads/[A-Za-z0-9._/-]+`;
 const WIKI_PATH = String.raw`/Manual Release(?:/${RELEASE_VERSION})?`;
+const WIKI_VERSION_PATH = String.raw`/Manual Release/${RELEASE_VERSION}`;
 
 const ALLOWED_PATHS: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: 'GET', path: /^\/MaxView\/_apis\/git\/repositories\/MaxView\/refs$/ },
@@ -79,6 +80,14 @@ function assertWikiQuery(url: URL): void {
     queryValue(url, 'path'),
     new RegExp(`^${WIKI_PATH}$`),
     'Wiki calls are limited to /Manual Release/{version}',
+  );
+}
+
+function assertWikiWriteQuery(url: URL): void {
+  assertPattern(
+    queryValue(url, 'path'),
+    new RegExp(`^${WIKI_VERSION_PATH}$`),
+    'Wiki writes are limited to /Manual Release/{version}',
   );
 }
 
@@ -210,7 +219,10 @@ export function assertCabAdoRequestAllowed(request: CabAdoForwardRequest, env: N
   if (relativePath.includes('/_apis/build/')) assertBuildQuery(url, relativePath);
   if (method === 'POST' && relativePath.includes('/pipelines/')) assertPipelineBody(request.body);
   if (method === 'POST' && relativePath.endsWith('/refs')) assertCreateRefBody(request.body);
-  if (method === 'PUT' && relativePath.includes('/wiki/')) assertWikiBody(request.body);
+  if (method === 'PUT' && relativePath.includes('/wiki/')) {
+    assertWikiWriteQuery(url);
+    assertWikiBody(request.body);
+  }
   return url;
 }
 

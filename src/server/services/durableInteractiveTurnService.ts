@@ -848,7 +848,7 @@ function currentPrompt(
         '# Repository and Azure DevOps write policy',
         '- This is the explicitly requested CAB release workflow.',
         '- You may run the pre-loaded cab-release scripts, write their temporary files, update only `/Manual Release/{version}`, and queue only snow pipeline 670 for Dry-run or 595 for Run.',
-        '- You may create and push only `Release/{version}`, only when the kickoff says to cut it, and only after the snow run succeeds.',
+        '- You may create only `Release/{version}` through the CAB broker, only when the kickoff says to cut it, and only after the snow run succeeds. Do not git push.',
         '- Do not make any other repository or Azure DevOps write.',
         '',
       ]
