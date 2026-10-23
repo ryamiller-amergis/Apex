@@ -22,7 +22,7 @@ import { AzureDevOpsService } from './azureDevOps';
 import { createThread } from './chatAgentService';
 import {
   CODE_LAB_APP_DIR_CANDIDATES,
-  injectRouteReset,
+  injectPreviewBootstrap,
   resolvePreviewPlan,
   type PackageJsonLike,
   type PreviewCandidate,
@@ -687,7 +687,7 @@ function proxyToVite(record: CodeLabSessionRecord, req: Request, res: Response):
       const chunks: Buffer[] = [];
       upstreamRes.on('data', (chunk: Buffer) => chunks.push(chunk));
       upstreamRes.on('end', () => {
-        res.send(injectRouteReset(Buffer.concat(chunks).toString('utf-8'), previewBasePath(record)));
+        res.send(injectPreviewBootstrap(Buffer.concat(chunks).toString('utf-8'), previewBasePath(record)));
       });
     },
   );

@@ -1,16 +1,40 @@
-import { injectRouteReset, resolvePreviewPlan, type PreviewCandidate } from '../services/codeLabPreviewPlan';
+import { injectPreviewBootstrap, resolvePreviewPlan, type PreviewCandidate } from '../services/codeLabPreviewPlan';
 
-describe('injectRouteReset', () => {
+describe('injectPreviewBootstrap', () => {
   const base = '/api/code-lab/preview/abc/tok/';
 
   it('inserts the reset script right after the opening head tag', () => {
-    const html = injectRouteReset('<html><head lang="en"><title>x</title></head></html>', base);
+    const html = injectPreviewBootstrap('<html><head lang="en"><title>x</title></head></html>', base);
     expect(html).toMatch(/^<html><head lang="en"><script>.*<\/script><title>x<\/title>/);
     expect(html).toContain(JSON.stringify(base));
   });
 
   it('prepends the script when the document has no head tag', () => {
-    expect(injectRouteReset('<div>hi</div>', base)).toMatch(/^<script>.*<\/script><div>hi<\/div>$/);
+    expect(injectPreviewBootstrap('<div>hi</div>', base)).toMatch(/^<script>.*<\/script><div>hi<\/div>$/);
+  });
+
+  it('replaces blocked storage and cookies and strips the base from the path', () => {
+    const blocked = () => {
+      throw new Error('SecurityError');
+    };
+    const window = {} as Record<string, unknown>;
+    Object.defineProperty(window, 'localStorage', { get: blocked, configurable: true });
+    Object.defineProperty(window, 'sessionStorage', { get: blocked, configurable: true });
+    const document = {} as Record<string, unknown>;
+    Object.defineProperty(document, 'cookie', { get: blocked, set: blocked, configurable: true });
+    const location = { pathname: `${base}settings`, search: '?a=1', hash: '' };
+    const history = { state: null, replaceState: jest.fn() };
+
+    const script = /<script>([\s\S]*)<\/script>/.exec(injectPreviewBootstrap('<div></div>', base))![1];
+    new Function('window', 'document', 'location', 'history', script)(window, document, location, history);
+
+    const storage = window.localStorage as Storage;
+    storage.setItem('theme', 'dark');
+    expect(storage.getItem('theme')).toBe('dark');
+    expect(storage.length).toBe(1);
+    expect((window.sessionStorage as Storage).getItem('missing')).toBeNull();
+    expect(document.cookie).toBe('');
+    expect(history.replaceState).toHaveBeenCalledWith(null, '', '/settings?a=1');
   });
 });
 

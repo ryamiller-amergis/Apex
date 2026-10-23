@@ -83,12 +83,29 @@ function classify(candidate: PreviewCandidate): CodeLabPreviewInfo | null {
 }
 
 /**
- * Client-side routers read `location.pathname`. Before the app boots, move the
- * address from `<base>settings` to `/settings` so routes match. Assets keep
- * loading because Vite writes them as absolute URLs under the base.
+ * The sandboxed preview has an opaque origin, where reading `localStorage`,
+ * `sessionStorage`, or `document.cookie` throws and crashes most apps on boot.
+ * Swap in per-page in-memory stand-ins only when the real ones throw.
  */
-export function injectRouteReset(html: string, basePath: string): string {
-  const script = `<script>(function(){var b=${JSON.stringify(basePath)};var p=location.pathname;`
+const STORAGE_FALLBACK_SCRIPT = [
+  'function m(){var d={};return{get length(){return Object.keys(d).length},',
+  'key:function(i){var k=Object.keys(d)[i];return k===undefined?null:k},',
+  'getItem:function(k){k=String(k);return Object.prototype.hasOwnProperty.call(d,k)?d[k]:null},',
+  'setItem:function(k,v){d[String(k)]=String(v)},removeItem:function(k){delete d[String(k)]},',
+  'clear:function(){d={}}}}',
+  "['localStorage','sessionStorage'].forEach(function(n){try{window[n].getItem('')}catch(e){",
+  'Object.defineProperty(window,n,{value:m(),configurable:true})}});',
+  'try{document.cookie}catch(e){',
+  "Object.defineProperty(document,'cookie',{get:function(){return''},set:function(){},configurable:true})}",
+].join('');
+
+/**
+ * Runs before the app boots. Client-side routers read `location.pathname`, so
+ * the address moves from `<base>settings` to `/settings` and routes match.
+ * Assets keep loading because Vite writes them as absolute URLs under the base.
+ */
+export function injectPreviewBootstrap(html: string, basePath: string): string {
+  const script = `<script>(function(){${STORAGE_FALLBACK_SCRIPT}var b=${JSON.stringify(basePath)};var p=location.pathname;`
     + `if(p.indexOf(b)===0){history.replaceState(history.state,'','/'+p.slice(b.length)+location.search+location.hash);}})();</script>`;
   const head = /<head[^>]*>/i.exec(html);
   if (!head) return script + html;
