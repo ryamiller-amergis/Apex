@@ -1,4 +1,4 @@
-import type { CodeLabPreviewInfo } from '../../shared/types/codeLab';
+import { CODE_LAB_PREVIEW_ROUTE, type CodeLabPreviewInfo } from '../../shared/types/codeLab';
 
 /** Folders checked for a web app, in priority order. */
 export const CODE_LAB_APP_DIR_CANDIDATES = [
@@ -99,13 +99,50 @@ const STORAGE_FALLBACK_SCRIPT = [
   "Object.defineProperty(document,'cookie',{get:function(){return''},set:function(){},configurable:true})}",
 ].join('');
 
+/** Path segment under the preview base that carries the app's own server calls. */
+export const CODE_LAB_PREVIEW_BACKEND_SEGMENT = '__backend__';
+
+/**
+ * The opaque origin cannot call the host's API directly (CORS). Same-origin
+ * fetch/XHR calls outside the base are rerouted under `<base>__backend__`
+ * without credentials; the preview route forwards them as an anonymous visitor.
+ * Expects `b` (the base path) in scope.
+ */
+const BACKEND_REROUTE_SCRIPT = [
+  `var k=b+'${CODE_LAB_PREVIEW_BACKEND_SEGMENT}';`,
+  'function r(u){try{var x=new URL(u,location.href);',
+  'if(x.origin===location.origin&&x.pathname.indexOf(b)!==0)return k+x.pathname+x.search+x.hash}catch(e){}return null}',
+  'var F=window.fetch;window.fetch=function(i,o){',
+  "var s=typeof i==='string'||i instanceof URL;var t=r(s?String(i):i&&i.url);",
+  'if(!t)return F.apply(this,arguments);',
+  "return F.call(this,s?t:new Request(t,i),Object.assign({},o,{credentials:'omit'}))};",
+  'var X=XMLHttpRequest.prototype,O=X.open,S=X.send;',
+  'X.open=function(m,u){var t=r(String(u));this.__codeLab=!!t;if(t)arguments[1]=t;return O.apply(this,arguments)};',
+  'X.send=function(){if(this.__codeLab)this.withCredentials=false;return S.apply(this,arguments)};',
+].join('');
+
+/**
+ * Returns the host path (with query) a rerouted preview call targets, or null
+ * when the URL is not a backend call or points back into a Code Lab preview.
+ */
+export function resolvePreviewBackendPath(originalUrl: string, basePath: string): string | null {
+  const prefix = basePath + CODE_LAB_PREVIEW_BACKEND_SEGMENT;
+  if (!originalUrl.startsWith(prefix)) return null;
+  const rest = originalUrl.slice(prefix.length);
+  if (!rest.startsWith('/')) return null;
+  const url = new URL(`http://placeholder${rest}`);
+  const pathname = url.pathname.replace(/\/{2,}/g, '/');
+  if (pathname.toLowerCase().startsWith(`/api${CODE_LAB_PREVIEW_ROUTE}`)) return null;
+  return pathname + url.search;
+}
+
 /**
  * Runs before the app boots. Client-side routers read `location.pathname`, so
  * the address moves from `<base>settings` to `/settings` and routes match.
  * Assets keep loading because Vite writes them as absolute URLs under the base.
  */
 export function injectPreviewBootstrap(html: string, basePath: string): string {
-  const script = `<script>(function(){${STORAGE_FALLBACK_SCRIPT}var b=${JSON.stringify(basePath)};var p=location.pathname;`
+  const script = `<script>(function(){${STORAGE_FALLBACK_SCRIPT}var b=${JSON.stringify(basePath)};${BACKEND_REROUTE_SCRIPT}var p=location.pathname;`
     + `if(p.indexOf(b)===0){history.replaceState(history.state,'','/'+p.slice(b.length)+location.search+location.hash);}})();</script>`;
   const head = /<head[^>]*>/i.exec(html);
   if (!head) return script + html;

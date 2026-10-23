@@ -1,4 +1,9 @@
-import { injectPreviewBootstrap, resolvePreviewPlan, type PreviewCandidate } from '../services/codeLabPreviewPlan';
+import {
+  injectPreviewBootstrap,
+  resolvePreviewBackendPath,
+  resolvePreviewPlan,
+  type PreviewCandidate,
+} from '../services/codeLabPreviewPlan';
 
 describe('injectPreviewBootstrap', () => {
   const base = '/api/code-lab/preview/abc/tok/';
@@ -13,20 +18,42 @@ describe('injectPreviewBootstrap', () => {
     expect(injectPreviewBootstrap('<div>hi</div>', base)).toMatch(/^<script>.*<\/script><div>hi<\/div>$/);
   });
 
-  it('replaces blocked storage and cookies and strips the base from the path', () => {
+  function runBootstrap() {
     const blocked = () => {
       throw new Error('SecurityError');
     };
-    const window = {} as Record<string, unknown>;
+    const fetch = jest.fn(async () => 'ok');
+    const window = { fetch } as Record<string, unknown>;
     Object.defineProperty(window, 'localStorage', { get: blocked, configurable: true });
     Object.defineProperty(window, 'sessionStorage', { get: blocked, configurable: true });
     const document = {} as Record<string, unknown>;
     Object.defineProperty(document, 'cookie', { get: blocked, set: blocked, configurable: true });
-    const location = { pathname: `${base}settings`, search: '?a=1', hash: '' };
+    const origin = 'https://apex.example';
+    const location = {
+      origin,
+      href: `${origin}${base}settings?a=1`,
+      pathname: `${base}settings`,
+      search: '?a=1',
+      hash: '',
+    };
     const history = { state: null, replaceState: jest.fn() };
-
+    const open = jest.fn();
+    class FakeXhr {
+      withCredentials = true;
+      open(...args: unknown[]) {
+        open(...args);
+      }
+      send() {}
+    }
     const script = /<script>([\s\S]*)<\/script>/.exec(injectPreviewBootstrap('<div></div>', base))![1];
-    new Function('window', 'document', 'location', 'history', script)(window, document, location, history);
+    new Function('window', 'document', 'location', 'history', 'XMLHttpRequest', script)(
+      window, document, location, history, FakeXhr,
+    );
+    return { window, document, history, fetch, open, FakeXhr, origin };
+  }
+
+  it('replaces blocked storage and cookies and strips the base from the path', () => {
+    const { window, document, history } = runBootstrap();
 
     const storage = window.localStorage as Storage;
     storage.setItem('theme', 'dark');
@@ -35,6 +62,49 @@ describe('injectPreviewBootstrap', () => {
     expect((window.sessionStorage as Storage).getItem('missing')).toBeNull();
     expect(document.cookie).toBe('');
     expect(history.replaceState).toHaveBeenCalledWith(null, '', '/settings?a=1');
+  });
+
+  it('reroutes same-origin server calls under the base without credentials', async () => {
+    const { window, fetch, open, FakeXhr, origin } = runBootstrap();
+    const patchedFetch = window.fetch as (input: string, init?: RequestInit) => Promise<unknown>;
+
+    await patchedFetch('/auth/status', { credentials: 'include' });
+    expect(fetch).toHaveBeenLastCalledWith(`${base}__backend__/auth/status`, { credentials: 'omit' });
+
+    await patchedFetch(`${base}src/main.tsx`);
+    expect(fetch).toHaveBeenLastCalledWith(`${base}src/main.tsx`);
+
+    await patchedFetch('https://other.example/data');
+    expect(fetch).toHaveBeenLastCalledWith('https://other.example/data');
+
+    const xhr = new FakeXhr();
+    xhr.open('GET', `${origin}/api/menu-config?project=x`);
+    xhr.send();
+    expect(open).toHaveBeenCalledWith('GET', `${base}__backend__/api/menu-config?project=x`);
+    expect(xhr.withCredentials).toBe(false);
+  });
+});
+
+describe('resolvePreviewBackendPath', () => {
+  const base = '/api/code-lab/preview/abc/tok/';
+
+  it('returns the host path and query for a rerouted call', () => {
+    expect(resolvePreviewBackendPath(`${base}__backend__/auth/status?x=1`, base)).toBe('/auth/status?x=1');
+  });
+
+  it('keeps a leading double slash as a path, not a host', () => {
+    expect(resolvePreviewBackendPath(`${base}__backend__//evil.example/x`, base)).toBe('/evil.example/x');
+  });
+
+  it('ignores preview assets and other sessions', () => {
+    expect(resolvePreviewBackendPath(`${base}src/main.tsx`, base)).toBeNull();
+    expect(resolvePreviewBackendPath(`${base}__backend__auth`, base)).toBeNull();
+  });
+
+  it('refuses calls that point back into a Code Lab preview', () => {
+    expect(resolvePreviewBackendPath(`${base}__backend__/api/code-lab/preview/x/y/`, base)).toBeNull();
+    expect(resolvePreviewBackendPath(`${base}__backend__//api//code-lab/preview/x/`, base)).toBeNull();
+    expect(resolvePreviewBackendPath(`${base}__backend__/a/../API/code-lab/preview/x/`, base)).toBeNull();
   });
 });
 

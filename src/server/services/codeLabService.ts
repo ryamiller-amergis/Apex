@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import { randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import fs from 'fs';
 import http from 'http';
+import https from 'https';
 import net from 'net';
 import os from 'os';
 import path from 'path';
@@ -23,6 +24,7 @@ import { createThread } from './chatAgentService';
 import {
   CODE_LAB_APP_DIR_CANDIDATES,
   injectPreviewBootstrap,
+  resolvePreviewBackendPath,
   resolvePreviewPlan,
   type PackageJsonLike,
   type PreviewCandidate,
@@ -700,6 +702,42 @@ function proxyToVite(record: CodeLabSessionRecord, req: Request, res: Response):
 }
 
 /**
+ * Forwards a preview's own server call to this app's public hostname as an
+ * anonymous visitor. Never loopback: requests from 127.0.0.1 skip auth on
+ * internal-only paths in `src/server/index.ts`.
+ */
+function forwardToAppBackend(backendPath: string, req: Request, res: Response): void {
+  const host = process.env.WEBSITE_HOSTNAME?.trim();
+  if (!host) {
+    res.status(503).json({ error: 'The Code Lab preview has no backend outside Azure App Service.' });
+    return;
+  }
+  const headers: http.OutgoingHttpHeaders = { host };
+  for (const name of FORWARDED_REQUEST_HEADERS) {
+    const value = req.headers[name];
+    if (value !== undefined) headers[name] = value;
+  }
+  const upstream = https.request(
+    { host, port: 443, method: req.method, path: backendPath, headers },
+    (upstreamRes) => {
+      res.status(upstreamRes.statusCode ?? 502);
+      for (const [name, value] of Object.entries(upstreamRes.headers)) {
+        if (value === undefined || DROPPED_RESPONSE_HEADERS.has(name.toLowerCase())) continue;
+        res.setHeader(name, value);
+      }
+      applyPreviewHeaders(res);
+      upstreamRes.pipe(res);
+    },
+  );
+  upstream.on('error', (err) => {
+    if (!res.headersSent) res.status(502).json({ error: `Backend unavailable: ${err.message}` });
+    else res.end();
+  });
+  req.on('close', () => upstream.destroy());
+  upstream.end();
+}
+
+/**
  * Serves `/api/code-lab/preview/:sessionId/:token/*` without an Apex session.
  * The unguessable per-session token in the path is the credential.
  */
@@ -721,6 +759,11 @@ export function handleCodeLabPreviewRequest(
   }
   touch(record);
   applyPreviewHeaders(res);
+  const backendPath = resolvePreviewBackendPath(req.originalUrl, previewBasePath(record));
+  if (backendPath) {
+    forwardToAppBackend(backendPath, req, res);
+    return;
+  }
   if (record.session.preview?.kind === 'static') {
     serveStaticPreview(record, relativePath, res);
     return;
