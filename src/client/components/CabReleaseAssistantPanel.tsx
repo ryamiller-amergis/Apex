@@ -142,7 +142,7 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
   } catch (err: unknown) {
     kickoffError = err instanceof Error ? err.message : 'Could not start cab-release.';
   }
-  const shownError = createError ?? (threadId ? kickoffError : null);
+  const shownError = createError ?? (threadId ? kickoffError ?? session.sendError : null);
 
   useEffect(() => {
     if (!threadId || kickoffSentRef.current || session.isPreparing || !kickoffText) return;

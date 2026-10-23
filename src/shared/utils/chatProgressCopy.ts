@@ -147,6 +147,8 @@ const CHAT_ERROR_BY_CODE: Record<string, string> = {
     "This tool connection runs locally and isn't supported in chat. Choose a different tool.",
   INTERACTIVE_V2_MAXVIEW_UNAVAILABLE:
     "MaxView tools aren't available right now. Try again later.",
+  INTERACTIVE_V2_REQUIRED:
+    'This workflow needs the Apex agent service, which is not turned on for this project. Ask an admin to enable ai-runs-v2-transport.',
   THREAD_ACTIVE_TURN:
     'A reply is already in progress in this chat. Wait for it to finish or stop it first.',
   TURN_ID_CONFLICT: 'That message was already sent. Refresh the page and try again.',

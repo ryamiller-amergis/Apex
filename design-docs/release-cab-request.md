@@ -102,13 +102,14 @@ Actions item opens the modal; confirm opens the panel.
 4. Skill repo and branch come from admin `project_skill_settings` only. Do not hardcode `tbi/55352-phase-3-service-now-cab-ticket`.
 5. Normalize Apex titles such as `MV 2026.15.0` to version `2026.15.0` and ref `Release/2026.15.0` before the kickoff reaches the skill.
 6. A `cab-release` thread receives a narrow write exception for its Manual Release wiki page, selected snow pipeline, and explicitly confirmed post-snow release branch only.
-7. The interactive actor image includes PowerShell. `ADO_PAT` stays on the Apex web app. CAB scripts call `POST /api/internal/cab-release/ado` with the runner credential already used for callbacks. That route forwards only MaxView release-ref, prod-cd, work-item read, Manual Release wiki, and snow pipeline 670/595 calls. The agentic container does not receive `ADO_PAT`. `REPO_READ_SERVICE_TOKEN` is not an Azure DevOps credential.
+7. CAB turns run only on the V2 interactive container (`ai-runs-v2-transport`), never inside the App Service, so agent work does not slow Apex for other users. The Releases action is hidden when that flag is off for the project, and `sendMessage` rejects a `cab-release` turn on the legacy route with `422 INTERACTIVE_V2_REQUIRED` instead of running it in-process. Bedrock is not used because the skill must run the MaxView repository scripts.
+8. The interactive actor image includes PowerShell. `ADO_PAT` stays on the Apex web app. CAB scripts call `POST /api/internal/cab-release/ado` with the runner credential already used for callbacks. That route forwards only MaxView release-ref, prod-cd, work-item read, Manual Release wiki, and snow pipeline 670/595 calls. The agentic container does not receive `ADO_PAT`. `REPO_READ_SERVICE_TOKEN` is not an Azure DevOps credential.
 
 ## Feature Flag
 
 - **Flag key**: `release-cab-request` (create in Platform Admin → Feature Flags)
 - **Server gating**: none
-- **Client gating**: `useFeatureFlag('release-cab-request', project)` on `ReleaseCabRequestAction`
+- **Client gating**: `useFeatureFlag('release-cab-request', project)` and `useFeatureFlag('ai-runs-v2-transport', project)` on `ReleaseCabRequestAction`
 - **Disabled path**: omit the Actions item, modal, and panel (`null`)
 - **Targeting**: MaxView project (and users/groups as needed)
 - **Cleanup**: retain enabled after two stable sprints at full rollout
@@ -146,8 +147,10 @@ Phase 1 tasks have no dependencies on each other. Phase 2 starts after Phase 1 t
 | Create | `src/client/components/CabReleaseAssistantPanel.tsx` |
 | Create | `src/client/components/CabReleaseAssistantPanel.module.css` |
 | Create | `src/client/components/__tests__/CabReleaseAssistantPanel.test.tsx` |
+| Create | `src/shared/utils/cabReleaseSkill.ts` |
 | Edit | `src/server/services/chatAgentService.ts` |
 | Edit | `src/server/services/durableInteractiveTurnService.ts` |
+| Edit | `src/shared/utils/chatProgressCopy.ts` |
 | Edit | `runners/ai-runs-interactive/Dockerfile` |
 | Edit | `infra/ai-runs-interactive.tf` |
 | Edit | `src/client/components/ReleaseView.tsx` |

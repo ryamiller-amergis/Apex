@@ -9,6 +9,7 @@ import type {
 import type { EffortLevel } from '../../shared/types/effort';
 import type { InteractiveWorkflowClass } from '../../shared/types/interactiveWorkflow';
 import { skillNameFromPath, skillPathCandidates } from '../../shared/skillPaths';
+import { isCabReleaseSkillPath } from '../../shared/utils/cabReleaseSkill';
 import type {
   DurableInteractiveTurnSpecification,
   FrozenGuidedInterview,
@@ -842,9 +843,7 @@ function currentPrompt(
   policySkill: ChatTurnSkill | null = skill,
 ): string {
   const context = internalContext?.trim();
-  const cabReleaseSelected =
-    policySkill?.path.toLowerCase().endsWith('.cursor/skills/cab-release/skill.md') === true;
-  const writePolicyLines = cabReleaseSelected
+  const writePolicyLines = isCabReleaseSkillPath(policySkill?.path)
     ? [
         '# Repository and Azure DevOps write policy',
         '- This is the explicitly requested CAB release workflow.',

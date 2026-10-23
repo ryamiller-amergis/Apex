@@ -1,4 +1,4 @@
-export const CAB_RELEASE_SKILL_PATH = '.cursor/skills/cab-release/SKILL.md';
+export { CAB_RELEASE_SKILL_PATH } from '../../shared/utils/cabReleaseSkill';
 export const CAB_RELEASE_SKILL_NAME = 'cab-release';
 export const RELEASE_CAB_REQUEST_FLAG = 'release-cab-request';
 

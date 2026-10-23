@@ -73,6 +73,7 @@ import {
   durableInteractiveTurnService,
   type DurableInteractiveToolGrantInput,
 } from './durableInteractiveTurnService';
+import { isCabReleaseSkillPath } from '../../shared/utils/cabReleaseSkill';
 import {
   fetchAvailableModels,
   fetchModelParameters,
@@ -4087,23 +4088,10 @@ export function buildTurnPrompt(
   text: string,
   turnSkill?: ChatTurnSkill,
   internalContext?: string,
-  policySkill: ChatTurnSkill | undefined = turnSkill,
 ): string {
   const context = internalContext?.trim();
-  const cabReleaseSelected =
-    policySkill?.path.toLowerCase().endsWith('.cursor/skills/cab-release/skill.md') === true;
-  const writePolicyLines = cabReleaseSelected
-    ? [
-        '# Repository and Azure DevOps write policy',
-        '- This is the explicitly requested CAB release workflow.',
-        '- You may run the cab-release scripts, write their temporary files, update only `/Manual Release/{version}`, and queue only snow pipeline 670 for Dry-run or 595 for Run.',
-        '- You may create and push only `Release/{version}`, only when the kickoff says to cut it, and only after the snow run succeeds.',
-        '- Do not make any other repository or Azure DevOps write.',
-        '',
-      ]
-    : CHAT_WRITE_POLICY_LINES;
   return [
-    ...writePolicyLines,
+    ...CHAT_WRITE_POLICY_LINES,
     ...(turnSkill
       ? [
           `Run skill: ${turnSkill.name} (\`${turnSkill.path}\`)`,
@@ -4114,19 +4102,6 @@ export function buildTurnPrompt(
     'User request:',
     text,
   ].join('\n');
-}
-
-function sessionPolicySkill(
-  kickoff: ChatThreadKickoff,
-  turnSkill: ChatTurnSkill | undefined,
-): ChatTurnSkill | undefined {
-  if (turnSkill) return turnSkill;
-  const path = kickoff.skillPath?.trim();
-  if (!path) return undefined;
-  return {
-    name: kickoff.pillLabel?.trim() || path,
-    path,
-  };
 }
 
 /** Bound interactive prep so a grounding hang cannot swallow the fire-and-forget turn. */
@@ -4335,12 +4310,7 @@ async function tryDispatchInteractiveTurn(
         : null;
       const prompt = await buildNewAgentTurnPrompt(
         turnKickoff,
-        buildTurnPrompt(
-          text,
-          options?.turnSkill,
-          options?.internalContext,
-          sessionPolicySkill(state.thread.kickoff, options?.turnSkill),
-        ),
+        buildTurnPrompt(text, options?.turnSkill, options?.internalContext),
         false,
         recoveryContext,
         {
@@ -4756,12 +4726,7 @@ async function sendMessageLegacy(
     attachments
   );
   const promptText = buildPromptWithAttachments(
-    buildTurnPrompt(
-      text,
-      options?.turnSkill,
-      options?.internalContext,
-      sessionPolicySkill(state.thread.kickoff, options?.turnSkill),
-    ),
+    buildTurnPrompt(text, options?.turnSkill, options?.internalContext),
     attachmentMeta
   );
   const priorMessages = interactiveAttempt.persistedUserMessage
@@ -6538,6 +6503,16 @@ export async function sendMessage(
     workflowClass,
     threadId,
     runLegacy: async () => {
+      // The legacy path can run the agent inside the web app. CAB release
+      // turns run only on the interactive container.
+      if (
+        isCabReleaseSkillPath(state.thread.kickoff.skillPath) ||
+        isCabReleaseSkillPath(options?.turnSkill?.path)
+      ) {
+        throw Object.assign(new Error('INTERACTIVE_V2_REQUIRED'), {
+          status: 422,
+        });
+      }
       if (
         legacyCompletion === 'detach' &&
         state.thread.status === 'running'

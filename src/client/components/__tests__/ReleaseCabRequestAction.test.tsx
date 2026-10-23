@@ -22,6 +22,10 @@ function stubShell(overrides?: { can?: (key: string) => boolean }) {
   });
 }
 
+function stubFlags(flags: Record<string, boolean>) {
+  mockFlag.mockImplementation((key: string) => flags[key] === true);
+}
+
 describe('ReleaseCabRequestAction', () => {
   const onClick = jest.fn();
 
@@ -31,21 +35,28 @@ describe('ReleaseCabRequestAction', () => {
   });
 
   it('renders nothing when the flag is off', () => {
-    mockFlag.mockReturnValue(false);
+    stubFlags({ 'ai-runs-v2-transport': true });
     const { container } = render(<ReleaseCabRequestAction project="MaxView" onClick={onClick} />);
     expect(container).toBeEmptyDOMElement();
     expect(mockFlag).toHaveBeenCalledWith('release-cab-request', 'MaxView');
   });
 
+  it('renders nothing when the interactive container transport is off', () => {
+    stubFlags({ 'release-cab-request': true });
+    const { container } = render(<ReleaseCabRequestAction project="MaxView" onClick={onClick} />);
+    expect(container).toBeEmptyDOMElement();
+    expect(mockFlag).toHaveBeenCalledWith('ai-runs-v2-transport', 'MaxView');
+  });
+
   it('renders nothing without chat:create', () => {
-    mockFlag.mockReturnValue(true);
+    stubFlags({ 'release-cab-request': true, 'ai-runs-v2-transport': true });
     stubShell({ can: (key) => key === 'planning:releases' });
     const { container } = render(<ReleaseCabRequestAction project="MaxView" onClick={onClick} />);
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('renders the Actions item when the flag and permissions are present', async () => {
-    mockFlag.mockReturnValue(true);
+  it('renders the Actions item when the flags and permissions are present', async () => {
+    stubFlags({ 'release-cab-request': true, 'ai-runs-v2-transport': true });
     const user = userEvent.setup();
     render(<ReleaseCabRequestAction project="MaxView" onClick={onClick} />);
     const button = screen.getByTestId('release-create-cab-action');
