@@ -9,9 +9,17 @@ FROM node:24-bookworm-slim
 
 WORKDIR /app
 
-# Grounded turns restore a repository checkout from a git bundle.
+# Grounded turns restore a repository checkout from a git bundle. CAB release
+# turns run the MaxView PowerShell scripts.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends git ca-certificates \
+  && apt-get install -y --no-install-recommends git ca-certificates curl gnupg \
+  && mkdir -p /etc/apt/keyrings \
+  && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+    | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg \
+  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" \
+    > /etc/apt/sources.list.d/microsoft-prod.list \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends powershell \
   && rm -rf /var/lib/apt/lists/*
 
 # Install only the production dependencies used by the compiled host graph.

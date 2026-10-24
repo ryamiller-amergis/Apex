@@ -4,8 +4,15 @@ import { useDeploymentOutcomes } from '../hooks/useDeploymentOutcomes';
 import type { DeploymentResult } from '../../shared/types/deploymentOutcome';
 import { DeploymentOutcomeModal } from './DeploymentOutcomeModal';
 import { DeploymentOutcomeReport } from './DeploymentOutcomeReport';
+import { CreateCabRequestModal } from './CreateCabRequestModal';
+import { CabReleaseAssistantPanel } from './CabReleaseAssistantPanel';
+import { ReleaseCabRequestAction } from './ReleaseCabRequestAction';
 import { useAppShell } from '../hooks/useAppShell';
 import { reorderReleases } from '../utils/releaseOrder';
+import {
+  defaultPreviousReleaseBranch,
+  type CreateCabRequestFormValues,
+} from '../utils/cabReleaseKickoff';
 import './ReleaseView.css';
 
 const RENAMABLE_STATUSES = ['New', 'In Design', 'In Progress'] as const;
@@ -179,6 +186,17 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
   const [outcomeReleaseVersion, setOutcomeReleaseVersion] = useState<string>('');
   const [outcomeDeployedAt, setOutcomeDeployedAt] = useState<string | undefined>(undefined);
   const [showReport, setShowReport] = useState(false);
+  const [cabModalEpic, setCabModalEpic] = useState<{ id: number; version: string } | null>(null);
+  const [cabPanel, setCabPanel] = useState<{
+    requestId: number;
+    epicId: number;
+    version: string;
+    relatedWorkItemIds: number[];
+    previousReleaseBranch: string;
+    snowMode: CreateCabRequestFormValues['snowMode'];
+    cutReleaseBranch: boolean;
+  } | null>(null);
+  const cabRequestGenerationRef = useRef(0);
 
   // Inline rename state
   const [inlineEditEpicId, setInlineEditEpicId] = useState<number | null>(null);
@@ -1010,6 +1028,44 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
     });
   }, [releaseEpics, sortColumn, sortDirection]);
 
+  const handleConfirmCabRequest = useCallback(async (
+    epic: { id: number; version: string },
+    values: CreateCabRequestFormValues,
+  ) => {
+    const requestId = cabRequestGenerationRef.current + 1;
+    cabRequestGenerationRef.current = requestId;
+    let relatedIds = (childItems.get(epic.id) ?? []).map((item) => item.id);
+    try {
+      const response = await fetch(
+        `/api/releases/${epic.id}/related-items?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`,
+      );
+      if (response.ok) {
+        const children = await response.json() as WorkItem[];
+        relatedIds = children.map((item) => item.id);
+      }
+    } catch {
+      // Keep the expanded-row cache when the refresh fails.
+    }
+
+    if (cabRequestGenerationRef.current !== requestId) return;
+
+    setCabPanel({
+      requestId,
+      epicId: epic.id,
+      version: epic.version,
+      relatedWorkItemIds: relatedIds,
+      previousReleaseBranch: values.previousReleaseBranch,
+      snowMode: values.snowMode,
+      cutReleaseBranch: values.cutReleaseBranch,
+    });
+    setCabModalEpic(null);
+  }, [areaPath, childItems, project]);
+
+  const dismissCabModal = useCallback(() => {
+    cabRequestGenerationRef.current += 1;
+    setCabModalEpic(null);
+  }, []);
+
   const healthStatus = getHealthStatus();
   const completionPercentage = calculateCompletionPercentage();
 
@@ -1337,6 +1393,14 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                           >
                             📊 Deployment Outcome
                           </button>
+                          <ReleaseCabRequestAction
+                            project={project}
+                            onClick={() => {
+                              setCabModalEpic({ id: epic.id, version: epic.version });
+                              setOpenActionMenuId(null);
+                            }}
+                            {...{ 'data-testid': `release-create-cab-${epic.id}` }}
+                          />
                           <button
                             className="action-menu-item"
                             {...{ 'data-testid': `release-action-changelog-${epic.id}` }}
@@ -1974,6 +2038,35 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {cabModalEpic && (
+        <CreateCabRequestModal
+          {...{ 'data-testid': 'create-cab-request-modal' }}
+          targetVersion={cabModalEpic.version}
+          defaultPreviousBranch={defaultPreviousReleaseBranch(
+            sortedEpics.map((epic) => epic.version as string),
+            cabModalEpic.version,
+          )}
+          onCancel={dismissCabModal}
+          onConfirm={(values) => { void handleConfirmCabRequest(cabModalEpic, values); }}
+        />
+      )}
+
+      {cabPanel && (
+        <CabReleaseAssistantPanel
+          key={cabPanel.requestId}
+          {...{ 'data-testid': 'cab-release-assistant-panel' }}
+          open
+          onClose={() => setCabPanel(null)}
+          project={project}
+          targetVersion={cabPanel.version}
+          apexReleaseEpicId={cabPanel.epicId}
+          relatedWorkItemIds={cabPanel.relatedWorkItemIds}
+          previousReleaseBranch={cabPanel.previousReleaseBranch}
+          snowMode={cabPanel.snowMode}
+          cutReleaseBranch={cabPanel.cutReleaseBranch}
+        />
       )}
     </div>
   );
