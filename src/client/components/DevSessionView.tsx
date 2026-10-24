@@ -19,6 +19,7 @@ import type { ConflictedFile } from '../../shared/types/devWorkbench';
 import { parseAgentMessage, type ChoiceBlock } from '../utils/parseAgentMessage';
 import { formatChoiceAnswers } from '../utils/formatChoiceAnswers';
 import { parseAgentTodos } from '../utils/parseAgentTodos';
+import { parseGitDiff } from '../utils/parseGitDiff';
 import { AgentChecklist } from './AgentChecklist';
 import { AgentActivityTimeline } from './AgentActivityTimeline';
 import { LeftoverWorkList } from './LeftoverWorkList';
@@ -28,60 +29,8 @@ function isActivityMsg(m: ChatMessage): boolean {
   return m.role === 'tool' || m.toolName === '_reasoning' || m.toolName === '_thinking';
 }
 
-interface DiffLine {
-  type: 'add' | 'remove' | 'context' | 'hunk-header';
-  content: string;
-  oldLineNo?: number;
-  newLineNo?: number;
-}
-
-interface DiffFile {
-  path: string;
-  hunks: DiffLine[];
-}
-
-function parseDiff(raw: string): DiffFile[] {
-  const files: DiffFile[] = [];
-  const lines = raw.split('\n');
-  let current: DiffFile | null = null;
-  let oldLine = 0;
-  let newLine = 0;
-
-  for (const line of lines) {
-    if (line.startsWith('diff --git')) {
-      const match = line.match(/b\/(.+)$/);
-      current = { path: match?.[1] ?? line, hunks: [] };
-      files.push(current);
-      continue;
-    }
-    if (!current) continue;
-    if (line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++') || line.startsWith('new file') || line.startsWith('deleted file')) {
-      continue;
-    }
-    if (line.startsWith('@@')) {
-      const hunkMatch = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)/);
-      oldLine = hunkMatch ? parseInt(hunkMatch[1], 10) : 0;
-      newLine = hunkMatch ? parseInt(hunkMatch[2], 10) : 0;
-      current.hunks.push({ type: 'hunk-header', content: line });
-      continue;
-    }
-    if (line.startsWith('+')) {
-      current.hunks.push({ type: 'add', content: line.slice(1), newLineNo: newLine });
-      newLine++;
-    } else if (line.startsWith('-')) {
-      current.hunks.push({ type: 'remove', content: line.slice(1), oldLineNo: oldLine });
-      oldLine++;
-    } else {
-      current.hunks.push({ type: 'context', content: line.startsWith(' ') ? line.slice(1) : line, oldLineNo: oldLine, newLineNo: newLine });
-      oldLine++;
-      newLine++;
-    }
-  }
-  return files;
-}
-
 const DiffViewer: React.FC<{ diffText: string }> = ({ diffText }) => {
-  const files = useMemo(() => parseDiff(diffText), [diffText]);
+  const files = useMemo(() => parseGitDiff(diffText), [diffText]);
   const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
 
   const isCollapsed = useCallback((idx: number) => collapsed[idx] ?? true, [collapsed]);

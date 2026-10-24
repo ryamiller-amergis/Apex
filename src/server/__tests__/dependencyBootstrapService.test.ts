@@ -125,6 +125,28 @@ describe('dependencyBootstrapService', () => {
     }
   });
 
+  it('skips lifecycle scripts in a separate cache when ignoreScripts is set', async () => {
+    const workspace = await makeWorkspace(root, 'workspace-one');
+    const runner: DependencyCommandRunner = jest.fn(
+      async (_command, args, options) => {
+        expect(args).toContain('--ignore-scripts');
+        await fs.mkdir(path.join(options.cwd, 'node_modules'), {
+          recursive: true,
+        });
+      }
+    );
+
+    const result = await bootstrapDevelopmentDependencies(workspace, {
+      dataRoot: path.join(root, 'data'),
+      nodeVersion: 'v24.1.0',
+      commandRunner: runner,
+      ignoreScripts: true,
+    });
+
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(result.cacheKey).toMatch(/-noscripts$/);
+  });
+
   it('reuses a completed cache for the same Node version and lockfile', async () => {
     const workspaceOne = await makeWorkspace(root, 'workspace-one');
     const workspaceTwo = await makeWorkspace(root, 'workspace-two');

@@ -41,6 +41,7 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `backlog:view` | backlog | admin, member |
 | `calendar:view` | calendar | admin, member |
 | `chat:create` | chat | admin, member |
+| `code-lab:use` | code-lab | admin |
 | `chat:view` | chat | admin, member |
 | `chat:view_all` | chat | admin |
 | `home:view` | chat | admin, member, viewer |

@@ -58,6 +58,11 @@ export type DependencyCommandRunner = (
 
 export interface DependencyBootstrapOptions {
   dataRoot?: string;
+  /**
+   * Skips package lifecycle scripts. The install runs in a staging folder that
+   * holds only the manifest and lockfile, so root scripts that read repo files fail there.
+   */
+  ignoreScripts?: boolean;
   nodeVersion?: string;
   commandRunner?: DependencyCommandRunner;
   lockPollMs?: number;
@@ -111,7 +116,8 @@ function defaultCommandRunner(
     let stderr = '';
 
     child.stderr.on('data', (chunk: Buffer | string) => {
-      if (stderr.length < 8_000) stderr += chunk.toString();
+      // npm prints its actual error last, after thousands of progress lines.
+      stderr = (stderr + chunk.toString()).slice(-8_000);
     });
     child.once('error', reject);
     child.once('exit', (code) => {
@@ -378,7 +384,8 @@ export async function discoverJavaScriptInstallUnits(
 function buildCacheKey(
   unit: DependencyInstallUnit,
   nodeVersion: string,
-  lockHash: string
+  lockHash: string,
+  ignoreScripts: boolean
 ): string {
   const sanitize = (value: string) => value.replace(/[^a-zA-Z0-9._-]/g, '_');
   const folder = unit.relativeDir === '.' ? 'root' : unit.relativeDir;
@@ -388,20 +395,29 @@ function buildCacheKey(
     sanitize(managerIdentity),
     `folder-${sanitize(folder)}`,
     `lock-${lockHash}`,
+    ...(ignoreScripts ? ['noscripts'] : []),
   ].join('-');
 }
 
-function resolveInstallCommand(unit: DependencyInstallUnit): {
+function resolveInstallCommand(
+  unit: DependencyInstallUnit,
+  ignoreScripts: boolean
+): {
   command: string;
   args: readonly string[];
 } {
+  const scriptArgs = ignoreScripts ? ['--ignore-scripts'] : [];
   if (unit.packageManager === 'pnpm') {
     return {
       command: 'corepack',
-      args: [`pnpm@${unit.packageManagerVersion!}`, ...PNPM_INSTALL_ARGS],
+      args: [
+        `pnpm@${unit.packageManagerVersion!}`,
+        ...PNPM_INSTALL_ARGS,
+        ...scriptArgs,
+      ],
     };
   }
-  return { command: 'npm', args: NPM_CI_ARGS };
+  return { command: 'npm', args: [...NPM_CI_ARGS, ...scriptArgs] };
 }
 
 /**
@@ -439,11 +455,12 @@ export async function bootstrapDevelopmentDependencies(
   for (const unit of units) {
     const lockContents = await fs.readFile(unit.lockfilePath);
     const lockHash = createHash('sha256').update(lockContents).digest('hex');
-    const cacheKey = buildCacheKey(unit, nodeVersion, lockHash);
+    const ignoreScripts = options.ignoreScripts ?? false;
+    const cacheKey = buildCacheKey(unit, nodeVersion, lockHash, ignoreScripts);
     const cacheDir = path.join(cacheRoot, cacheKey);
     const lockDir = `${cacheDir}.lock`;
     const stagingDir = `${cacheDir}.building-${process.pid}-${randomUUID()}`;
-    const installCommand = resolveInstallCommand(unit);
+    const installCommand = resolveInstallCommand(unit, ignoreScripts);
 
     await onPhase(
       'dependencies_preparing',

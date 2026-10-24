@@ -2254,6 +2254,22 @@ export function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
 
   parts.push(...buildScopePolicyLines(kickoff), ``);
 
+  if (kickoff.codeLab) {
+    parts.push(
+      `# Code Lab`,
+      `The user is changing this application in Apex Code Lab. A live preview of this checkout runs next to the chat`,
+      `and reloads after each of your turns, so the user sees your edits right away.`,
+      ``,
+      `- Make the change the user asks for directly in the working directory, then stop and summarize what changed and in which files.`,
+      `- Keep each change small and focused, and follow the conventions already in the codebase.`,
+      `- If a request is ambiguous, ask one short question before editing.`,
+      `- Apex runs the preview server. Do not start, stop, or restart dev servers, and do not edit the \`.codelab/\` folder.`,
+      `- Make every file edit yourself. Task sub-agents run in separate processes, so their file writes never reach this workspace.`,
+      `- Do NOT run \`git commit\`, \`git push\`, create branches, or open pull requests. Apex owns those steps.`,
+    );
+    return parts.join('\n');
+  }
+
   if (hasApexPath) {
     // Apex PRD-sourced path: full design context injected by injectDevContextFiles
     parts.push(
@@ -6496,51 +6512,59 @@ export async function sendMessage(
   const legacyCompletion = options?.legacyCompletion ?? 'await';
   const requesterUserId = options?.requesterUserId ?? state.thread.userId;
 
+  const runLegacy = async (): Promise<void> => {
+    if (
+      legacyCompletion === 'detach' &&
+      state.thread.status === 'running'
+    ) {
+      const gate = await recoverStaleRunningThread(threadId);
+      if (gate === 'running') {
+        throw Object.assign(new Error('Agent is already running'), {
+          status: 409,
+        });
+      }
+    }
+
+    const execution = sendMessageLegacy(
+      threadId,
+      text,
+      modelOverride,
+      attachments,
+      {
+        hidden: options?.hidden,
+        turnSkill: options?.turnSkill,
+        internalContext: options?.internalContext,
+      },
+    );
+    if (legacyCompletion === 'await') {
+      try {
+        await execution;
+      } finally {
+        options?.onLegacySettled?.();
+      }
+      return;
+    }
+    void execution
+      .catch((error: unknown) => {
+        reportDetachedLegacyError(threadId, error);
+      })
+      .finally(() => {
+        options?.onLegacySettled?.();
+      });
+  };
+
+  // Code Lab previews serve this instance's local workspace, so turns must edit it in-process.
+  if (state.thread.kickoff.codeLab) {
+    await runLegacy();
+    return { route: 'legacy' };
+  }
+
   const decision = await interactiveWorkflowRouter.route({
     userId: requesterUserId,
     project: state.thread.kickoff.project,
     workflowClass,
     threadId,
-    runLegacy: async () => {
-      if (
-        legacyCompletion === 'detach' &&
-        state.thread.status === 'running'
-      ) {
-        const gate = await recoverStaleRunningThread(threadId);
-        if (gate === 'running') {
-          throw Object.assign(new Error('Agent is already running'), {
-            status: 409,
-          });
-        }
-      }
-
-      const execution = sendMessageLegacy(
-        threadId,
-        text,
-        modelOverride,
-        attachments,
-        {
-          hidden: options?.hidden,
-          turnSkill: options?.turnSkill,
-          internalContext: options?.internalContext,
-        },
-      );
-      if (legacyCompletion === 'await') {
-        try {
-          await execution;
-        } finally {
-          options?.onLegacySettled?.();
-        }
-        return;
-      }
-      void execution
-        .catch((error: unknown) => {
-          reportDetachedLegacyError(threadId, error);
-        })
-        .finally(() => {
-          options?.onLegacySettled?.();
-        });
-    },
+    runLegacy,
     admitDurable: async () => {
       const turnId =
         options?.turnId ??

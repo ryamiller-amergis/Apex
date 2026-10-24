@@ -23,7 +23,7 @@ interface NavItem {
 interface AppHeaderProps {
   // `playbooks` is here so the shell can render the flag-gated /playbooks view. It is deliberately
   // *not* a MenuItemKey — the header highlights no nav item for it, because it has none.
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'code-lab';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -63,6 +63,9 @@ interface AppHeaderProps {
   onNavigatePlaybooks?: () => void;
   /** Playbooks stays hidden until the production-adapters flag is on for the project. */
   playbooksEnabled?: boolean;
+  onNavigateCodeLab?: () => void;
+  /** Code Lab stays hidden until the `code-lab` flag is on for the user and project. */
+  codeLabEnabled?: boolean;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
   onThemeChange: (theme: ThemeMode) => void;
@@ -105,6 +108,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   workBoardEnabled = true,
   onNavigatePlaybooks,
   playbooksEnabled = false,
+  onNavigateCodeLab,
+  codeLabEnabled = false,
   onNavigateAdmin,
   onOpenChangelog,
   onThemeChange,
@@ -142,6 +147,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Interview', view: 'backlog', permission: 'interviews:view', onNavigate: onNavigateBacklog },
     { label: 'ADR', view: 'adr', permission: 'adr:view', onNavigate: onNavigateAdr },
     { label: 'My Work', view: 'my-work', permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
+    { label: 'Code Lab', view: 'code-lab', permission: 'code-lab:use', onNavigate: onNavigateCodeLab ?? (() => {}) },
     { label: 'Standup', view: 'standup', permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
     { label: 'UI Lab', view: 'ui-lab', permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
     { label: 'Apex Backlog', view: 'feature-requests', permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
@@ -178,6 +184,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       if (!playbooksEnabled) return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;
       return isSuperAdmin || can('playbooks:view');
+    }
+    if (item.view === 'code-lab') {
+      if (!codeLabEnabled) return false;
+      if (!isSuperAdmin && !menuEnabledViews.includes('code-lab')) return false;
+      return isSuperAdmin || can('code-lab:use');
     }
     if (item.view === 'ui-lab') {
       if (!isSuperAdmin && !menuEnabledViews.includes('ui-lab')) return false;

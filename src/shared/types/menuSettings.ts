@@ -13,7 +13,8 @@ export type MenuItemKey =
   | 'load-tests'
   | 'diagrams'
   | 'work-board'
-  | 'playbooks';
+  | 'playbooks'
+  | 'code-lab';
 
 export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'calendar', label: 'Calendar' },
@@ -31,6 +32,7 @@ export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'diagrams', label: 'Diagrams' },
   { key: 'work-board', label: 'Work Board' },
   { key: 'playbooks', label: 'Playbooks' },
+  { key: 'code-lab', label: 'Code Lab' },
 ];
 
 /** All configurable menu keys (includes opt-in-only keys such as Diagrams). */

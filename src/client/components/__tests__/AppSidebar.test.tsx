@@ -428,6 +428,40 @@ describe('AppSidebar — grouped sections', () => {
   });
 });
 
+describe('AppSidebar — Code Lab visibility', () => {
+  const can = (key: string) => key === 'code-lab:use';
+
+  it('shows Code Lab when the flag is on, the menu is enabled, and the user has code-lab:use', () => {
+    const onNavigateCodeLab = jest.fn();
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['code-lab']}
+        codeLabEnabled
+        onNavigateCodeLab={onNavigateCodeLab}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Code Lab' }));
+    expect(onNavigateCodeLab).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides Code Lab when the flag is off, even for a super admin', () => {
+    render(<AppSidebar {...baseProps} isSuperAdmin can={can} menuEnabledViews={['code-lab']} />);
+    expect(screen.queryByRole('button', { name: 'Code Lab' })).not.toBeInTheDocument();
+  });
+
+  it('hides Code Lab without the code-lab:use permission', () => {
+    render(<AppSidebar {...baseProps} menuEnabledViews={['code-lab']} codeLabEnabled />);
+    expect(screen.queryByRole('button', { name: 'Code Lab' })).not.toBeInTheDocument();
+  });
+
+  it('shows Code Lab for a super admin when the flag is on regardless of menu or permission', () => {
+    render(<AppSidebar {...baseProps} isSuperAdmin codeLabEnabled />);
+    expect(screen.getByRole('button', { name: 'Code Lab' })).toBeInTheDocument();
+  });
+});
+
 describe('AppSidebar — mobile', () => {
   it('renders nothing on mobile', () => {
     mockedUseBreakpoint.mockReturnValue({ isMobile: true, isTablet: false, isDesktop: false });
