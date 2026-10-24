@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import { ArrowLeft, FlaskConical, MousePointerClick, Rocket, Save, WandSparkles } from 'lucide-react';
 import type { PlaybookGraph, PlaybookLayoutPositions } from '../../shared/types/playbook';
 import { useAppShell } from '../hooks/useAppShell';
-import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import {
   PlaybookApiError,
   usePlaybookDefinition,
@@ -28,6 +27,22 @@ const USAGE_STORAGE_KEY = 'apex.playbooks.stepUsage';
 const LIBRARY_STORAGE_KEY = 'apex.playbooks.libraryCollapsed';
 const NEW_STEP_OFFSET_X = 340;
 
+function priorNodeIds(graph: PlaybookGraph, targetId: string): string[] {
+  const inbound = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    inbound.set(edge.to, [...(inbound.get(edge.to) ?? []), edge.from]);
+  }
+  const result = new Set<string>();
+  const pending = [...(inbound.get(targetId) ?? [])];
+  while (pending.length > 0) {
+    const nodeId = pending.shift()!;
+    if (result.has(nodeId)) continue;
+    result.add(nodeId);
+    pending.push(...(inbound.get(nodeId) ?? []));
+  }
+  return [...result];
+}
+
 function readUsage(): Record<string, number> {
   try {
     const parsed: unknown = JSON.parse(window.localStorage.getItem(USAGE_STORAGE_KEY) ?? '{}');
@@ -51,13 +66,12 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
   project,
   definitionId,
 }) => {
-  const canvasEnabled = useFeatureFlag('playbooks-authoring-canvas', project);
   const { can } = useAppShell();
   const canAuthor = can('playbooks:author');
   const detail = usePlaybookDefinition(project, definitionId);
-  const palette = usePlaybookStepPalette(project, canvasEnabled);
+  const palette = usePlaybookStepPalette(project, true);
   const draftVersionId = detail.data?.draft.id ?? null;
-  const layoutQuery = usePlaybookVersionLayout(project, definitionId, draftVersionId, canvasEnabled);
+  const layoutQuery = usePlaybookVersionLayout(project, definitionId, draftVersionId, true);
   const validateConnection = useValidatePlaybookConnection(project);
   const saveDraft = useSavePlaybookDraft(project, definitionId);
   const saveLayout = useSavePlaybookLayout(project, definitionId, draftVersionId ?? '');
@@ -273,14 +287,6 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [canAuthor, onSave]);
 
-  if (!canvasEnabled) {
-    return (
-      <p className={styles.pageMessage} {...{ 'data-testid': 'playbook-canvas-flag-off' }}>
-        Playbook authoring canvas is not enabled for this project.
-      </p>
-    );
-  }
-
   if (detail.isPending || layoutQuery.isPending) {
     return <p className={styles.pageMessage}>Loading playbook…</p>;
   }
@@ -428,6 +434,9 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
               node={selectedNode}
               paletteItem={palette.data?.items.find((item) => item.stepType === selectedNode.stepType)}
               otherNodeIds={graph.nodes.map((node) => node.id).filter((id) => id !== selectedNode.id)}
+              priorNodeIds={priorNodeIds(graph, selectedNode.id)}
+              allNodes={graph.nodes}
+              paletteItems={palette.data?.items ?? []}
               canAuthor={canAuthor}
               onChange={updateNodeConfig}
               onDelete={() => deleteStep(selectedNode.id)}

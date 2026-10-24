@@ -543,6 +543,104 @@ describe('V2 document execution', () => {
     },
   );
 
+  it('gives a Playbook worker the same Skill bytes the policy hashed', async () => {
+    const spec = specification({
+      workflowClass: 'playbook-step',
+      groundedSha: undefined,
+      repository: undefined,
+      provider: undefined,
+      scratchInputs: [{ path: '.ai-pilot/kickoff-context.md', content: '# Document' }],
+    });
+    const createExecution = jest.fn(async (snapshot) => {
+      expect(snapshot.skillContent).toBe(spec.skillContent);
+      expect(snapshot.skillSha256).toBe(spec.skillSha256);
+      expect(snapshot.playbookAgentPolicy?.skill.sha256).toBe(spec.skillSha256);
+      return {
+        run: {
+          supports: () => false,
+          async *stream() {
+            yield undefined as never;
+          },
+          async wait() {
+            return { status: 'finished' };
+          },
+        },
+        dispose: jest.fn().mockResolvedValue(undefined),
+      };
+    });
+    const execute = createDocumentExecute({
+      openRepository: jest.fn(),
+      createExecution,
+    });
+
+    await execute({
+      specification: {
+        ...spec,
+        playbookAgentPolicy: {
+          schemaVersion: 1,
+          resolverVersion: 1,
+          executionProfile: 'repository-read-only',
+          capabilities: ['repository-read', 'network-read'],
+          skill: { path: spec.skillPath, sha256: spec.skillSha256 },
+          mcpServers: [],
+          localAgent: {
+            cwdMode: 'scratch',
+            allowBuiltinWrites: false,
+            customTools: 'none',
+          },
+          enforcement: 'observe',
+          resolvedAt: '2026-10-19T00:00:00.000Z',
+        },
+      },
+      command: command(),
+      checkpoints: checkpoints(),
+      signal: new AbortController().signal,
+    });
+
+    expect(createExecution).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a Playbook policy hashed from different Skill bytes', async () => {
+    const spec = specification({
+      workflowClass: 'playbook-step',
+      groundedSha: undefined,
+      repository: undefined,
+      provider: undefined,
+      scratchInputs: [{ path: '.ai-pilot/kickoff-context.md', content: '# Document' }],
+    });
+    const createExecution = jest.fn();
+    const execute = createDocumentExecute({
+      openRepository: jest.fn(),
+      createExecution,
+    });
+
+    await expect(execute({
+      specification: {
+        ...spec,
+        playbookAgentPolicy: {
+          schemaVersion: 1,
+          resolverVersion: 1,
+          executionProfile: 'repository-read-only',
+          capabilities: ['repository-read', 'network-read'],
+          skill: { path: spec.skillPath, sha256: 'a'.repeat(64) },
+          mcpServers: [],
+          localAgent: {
+            cwdMode: 'scratch',
+            allowBuiltinWrites: false,
+            customTools: 'none',
+          },
+          enforcement: 'observe',
+          resolvedAt: '2026-10-19T00:00:00.000Z',
+        },
+      },
+      command: command(),
+      checkpoints: checkpoints(),
+      signal: new AbortController().signal,
+    })).rejects.toThrow(/different skill content/);
+
+    expect(createExecution).not.toHaveBeenCalled();
+  });
+
   it('cancels Cursor and cleans up when the attempt signal aborts', async () => {
     let workspacePath = '';
     const cancel = jest.fn().mockResolvedValue(undefined);

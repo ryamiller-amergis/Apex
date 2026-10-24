@@ -20,7 +20,6 @@ import { executeInterviewStep } from './interviewAdapter';
 import { getUserPermissions } from '../rbacService';
 import { parseStepInput } from './descriptorValidation';
 import { getStepTypeDescriptor, requiredPermissionsForStep } from './registry';
-import { isFeatureEnabled } from '../featureFlagService';
 import { configHasBindings } from '../playbookBindingResolver';
 import { resolveRunStepConfig } from '../playbookStepBindings';
 import {
@@ -57,13 +56,6 @@ export class PlaybookPermissionRevokedError extends Error {
         `${missingPermissions.join(', ')} on ${project}.`
     );
     this.name = 'PlaybookPermissionRevokedError';
-  }
-}
-
-export class PlaybookProductionAdapterDisabledError extends Error {
-  constructor(stepType: string) {
-    super(`Step type "${stepType}" is unavailable while playbooks-production-adapters is disabled.`);
-    this.name = 'PlaybookProductionAdapterDisabledError';
   }
 }
 
@@ -127,27 +119,6 @@ export async function executeStep(
   }
   const parsedConfig = parseStepInput(context.stepType, boundConfig);
 
-  // @feature-flag:playbooks-production-adapters start winner=enabled
-  const isPhase2Step = context.stepType === 'ingest-artifact'
-    || context.stepType === 'branch'
-    || (context.stepType === 'approval-gate' && Boolean(parsedConfig.approverPool));
-  const phase2Enabled = !isPhase2Step || await isFeatureEnabled('playbooks-production-adapters', {
-      userId: context.initiatorUserId,
-      project: context.project,
-    });
-  if (isPhase2Step && !phase2Enabled) {
-    // @feature-flag:playbooks-production-adapters disabled-start
-    if (context.stepType === 'ingest-artifact' || context.stepType === 'branch') {
-      throw new PlaybookProductionAdapterDisabledError(context.stepType);
-    }
-    if (context.stepType === 'approval-gate') {
-      delete parsedConfig.approverPool;
-      delete parsedConfig.gatedStepId;
-    }
-    // @feature-flag:playbooks-production-adapters disabled-end
-  }
-  // @feature-flag:playbooks-production-adapters enabled-start
-
   // Every descriptor is enforced, including `read`. Fetch once at the last boundary before
   // dispatch so a permission revoked while the run was parked cannot reach an adapter.
   await assertInitiatorStillPermitted(
@@ -155,10 +126,7 @@ export async function executeStep(
     requiredPermissionsForStep(context.stepType, parsedConfig),
   );
 
-  const result = await adapter({ ...context, config: parsedConfig });
-  // @feature-flag:playbooks-production-adapters enabled-end
-  // @feature-flag:playbooks-production-adapters end
-  return result;
+  return adapter({ ...context, config: parsedConfig });
 }
 
 export * from './registry';

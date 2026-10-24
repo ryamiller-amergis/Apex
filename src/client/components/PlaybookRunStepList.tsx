@@ -5,12 +5,12 @@
  * never instead. The distinction matters for the demo audience as much as for accessibility: a row
  * of coloured dots does not tell anyone what "waiting" is waiting for.
  *
- * Step *output* is deliberately absent. Outputs can carry agent transcripts confidential to a
- * project, and Phase 0 has no redaction story, so the view shows that a step completed rather than
- * what it produced.
+ * Output stays behind the project-scoped detail route and is fetched only after the user opens a
+ * step. The list itself carries only the safe inline summary returned by the run projection.
  */
-import React from 'react';
+import React, { useState } from 'react';
 import { PlaybookSuspensionDetail } from './PlaybookSuspensionDetail';
+import { PlaybookStepDetailDrawer } from './PlaybookStepDetailDrawer';
 import { absoluteTime, stepStatusLabel } from './playbookStatusFormat';
 import type {
   PlaybookRunDetail,
@@ -30,7 +30,12 @@ function stepTiming(step: PlaybookStepRun): string {
   return 'Not started yet';
 }
 
-export const PlaybookRunStepList: React.FC<PlaybookRunStepListProps> = ({ run, id }) => {
+export const PlaybookRunStepList: React.FC<PlaybookRunStepListProps> = ({
+  run,
+  id,
+}) => {
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const selectedStep = run.steps.find((step) => step.id === selectedStepId) ?? null;
   if (run.steps.length === 0) {
     return (
       <div className={styles.stepList} id={id} {...{ 'data-testid': 'playbook-step-list' }}>
@@ -40,8 +45,9 @@ export const PlaybookRunStepList: React.FC<PlaybookRunStepListProps> = ({ run, i
   }
 
   return (
-    <ul className={styles.stepList} id={id} {...{ 'data-testid': 'playbook-step-list' }}>
-      {run.steps.map((step) => {
+    <>
+      <ul className={styles.stepList} id={id} {...{ 'data-testid': 'playbook-step-list' }}>
+        {run.steps.map((step) => {
         const isSuspended = step.status === 'suspended';
 
         return (
@@ -67,6 +73,15 @@ export const PlaybookRunStepList: React.FC<PlaybookRunStepListProps> = ({ run, i
             </div>
 
             <p className={styles.stepTiming}>{stepTiming(step)}</p>
+            <button
+              type="button"
+              className={styles.stepDetailButton}
+              onClick={() => setSelectedStepId(step.id)}
+              aria-label={`View details for ${step.stepId}`}
+              data-testid={`playbook-step-view-${step.stepId}`}
+            >
+              View details
+            </button>
 
             {/* Only on the parked step, which is PBI-003's fourth criterion: a run with no
                 suspension shows no suspension detail anywhere. */}
@@ -75,8 +90,19 @@ export const PlaybookRunStepList: React.FC<PlaybookRunStepListProps> = ({ run, i
             ) : null}
           </li>
         );
-      })}
-    </ul>
+        })}
+      </ul>
+      {selectedStep ? (
+        <PlaybookStepDetailDrawer
+          project={run.project}
+          runId={run.runId}
+          step={selectedStep}
+          suspension={run.suspension}
+          onClose={() => setSelectedStepId(null)}
+          data-testid="playbook-run-step-detail"
+        />
+      ) : null}
+    </>
   );
 };
 

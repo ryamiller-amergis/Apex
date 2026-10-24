@@ -26,6 +26,9 @@ interface PlaybookStepInspectorProps {
   node: PlaybookGraphNode;
   paletteItem: PlaybookStepTypePaletteItem | undefined;
   otherNodeIds: readonly string[];
+  priorNodeIds: readonly string[];
+  allNodes: readonly PlaybookGraphNode[];
+  paletteItems: readonly PlaybookStepTypePaletteItem[];
   canAuthor: boolean;
   onChange: (config: Config) => void;
   onDelete: () => void;
@@ -254,6 +257,9 @@ export const PlaybookStepInspector: React.FC<PlaybookStepInspectorProps> = ({
   node,
   paletteItem,
   otherNodeIds,
+  priorNodeIds,
+  allNodes,
+  paletteItems,
   canAuthor,
   onChange,
   onDelete,
@@ -267,6 +273,32 @@ export const PlaybookStepInspector: React.FC<PlaybookStepInspectorProps> = ({
   const properties = Object.entries(schema.properties ?? {});
   const required = new Set(schema.required ?? []);
   const [mode, setMode] = useState<'form' | 'json'>(properties.length ? 'form' : 'json');
+  const configJson = JSON.stringify(config);
+  const stepBindings = [...configJson.matchAll(
+    /\$\{steps\.([A-Za-z][A-Za-z0-9_-]*)\.([A-Za-z][A-Za-z0-9_]*)\}/g
+  )].map((match) => {
+    const source = allNodes.find((candidate) => candidate.id === match[1]);
+    const sourcePalette = paletteItems.find((item) => item.stepType === source?.stepType);
+    const output = sourcePalette?.outputJsonSchema as JsonSchema | undefined;
+    return {
+      placeholder: match[0],
+      valid: Boolean(
+        source
+        && priorNodeIds.includes(source.id)
+        && output?.properties
+        && match[2] in output.properties
+      ),
+    };
+  });
+  const inputBindings = [...configJson.matchAll(
+    /\$\{input\.([A-Za-z][A-Za-z0-9_-]*)\}/g
+  )].map((match) => ({
+    placeholder: match[0],
+    valid: true,
+  }));
+  const bindings = [...new Map(
+    [...inputBindings, ...stepBindings].map((binding) => [binding.placeholder, binding])
+  ).values()];
 
   const setField = (key: string, value: unknown) => {
     const next: Config = { ...config };
@@ -318,6 +350,19 @@ export const PlaybookStepInspector: React.FC<PlaybookStepInspectorProps> = ({
       </div>
 
       <div className={styles.inspectorBody}>
+        {bindings.length > 0 ? (
+          <div className={styles.field} data-testid="playbook-inspector-reads">
+            <span className={styles.fieldLabel}>Reads</span>
+            {bindings.map((binding, index) => (
+              <span
+                key={`${binding.placeholder}-${index}`}
+                className={binding.valid ? styles.fieldHint : styles.fieldError}
+              >
+                {binding.placeholder} — {binding.valid ? 'available' : 'not available before this step'}
+              </span>
+            ))}
+          </div>
+        ) : null}
         {mode === 'json' ? (
           <ConfigJsonEditor
             key={`${node.id}-json`}
