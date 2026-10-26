@@ -66,6 +66,7 @@ describe('VT-03 — startup validation', () => {
       createStepTypeRegistry([
         {
           stepType: 'broken',
+          schemaVersion: 1,
           canSuspend: true,
           isAgentStep: false,
           sideEffect: 'read',
@@ -91,6 +92,7 @@ describe('VT-03 — startup validation', () => {
       const partial = createStepTypeRegistry([
         {
           stepType: 'notify',
+          schemaVersion: 1,
           canSuspend: false,
           isAgentStep: false,
           sideEffect: 'writes-apex',

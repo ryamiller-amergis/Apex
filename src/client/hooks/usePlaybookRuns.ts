@@ -149,6 +149,25 @@ export function usePlaybookRun(project: string | undefined, runId: string | null
   });
 }
 
+export function usePlaybookStepOutput(
+  project: string | undefined,
+  runId: string | null,
+  stepRunId: string | null,
+  enabled: boolean
+) {
+  return useQuery<Record<string, unknown>>({
+    queryKey: ['playbook-step-output', project, runId, stepRunId],
+    queryFn: () =>
+      apiFetch<Record<string, unknown>>(
+        `/api/playbooks/runs/${encodeURIComponent(runId!)}`
+          + `/steps/${encodeURIComponent(stepRunId!)}`
+          + `/output?project=${encodeURIComponent(project!)}&part=full`
+      ),
+    enabled: Boolean(project && runId && stepRunId && enabled),
+    retry: false,
+  });
+}
+
 async function invalidateRunQueries(
   queryClient: ReturnType<typeof useQueryClient>,
   project: string,

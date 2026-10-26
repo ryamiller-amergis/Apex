@@ -396,6 +396,11 @@ describe('ChatAgentPanel shared Home shell', () => {
     expect(screen.getByTestId('chat-agent-pill-description')).toHaveTextContent(
       'Generate a PRD from interview notes',
     );
+    const skillInfoBtn = screen.getByTestId('chat-agent-skill-info-btn');
+    expect(skillInfoBtn).toHaveTextContent('Write PRD');
+    expect(skillInfoBtn).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(skillInfoBtn);
+    expect(skillInfoBtn).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByTestId('chat-run-spinner')).toBeInTheDocument();
   });
 
@@ -448,6 +453,29 @@ describe('ChatAgentPanel shared Home shell', () => {
     // markup that the test environment removes.
     expect(screen.getByText(/\*\*Rendered\*\*/)).toBeInTheDocument();
     expect(screen.getByText('Agent is responding…')).toBeInTheDocument();
+  });
+
+  it('keeps the live step line visible after the answer starts streaming', () => {
+    mockSessionOverrides = {
+      streamingText: 'Searching',
+      isRunning: true,
+      status: 'running',
+      toolProgress: [{ toolName: 'list_users', status: 'running', args: {} }],
+    };
+
+    render(
+      <ChatAgentPanel
+        thread={thread}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+      />,
+    );
+
+    expect(screen.queryByText('Searching')).not.toBeInTheDocument();
+    expect(screen.getByTestId('chat-agent-progress-label')).toHaveTextContent('Working…');
   });
 
   it('explains an empty transcript instead of rendering a blank pane', () => {

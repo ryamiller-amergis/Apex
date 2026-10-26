@@ -1,6 +1,7 @@
 ---
 name: app-knowledge
 description: Answers user questions about the Apex (AI-Pilot) application in plain language, grounded in repo documentation and code. Supports a clarifying Q&A loop when the question is ambiguous. Use when the user sends /app-knowledge, asks how a feature works, wants help navigating the product, or has questions about workflows, permissions, architecture, or recent changes — strictly within this repository's scope.
+playbook-capabilities: [repository-read, network-read]
 ---
 
 # App Knowledge

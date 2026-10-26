@@ -253,15 +253,15 @@ describe('AppHeader — Work Board visibility', () => {
     expect(onNavigateWorkBoard).toHaveBeenCalled();
   });
 
-  it('hides Playbooks until the flag is on and the project enables the module', () => {
+  it('shows Playbooks when the project enables the module and the user can view it', () => {
     const can = (key: string) => key === 'playbooks:view';
     const { rerender } = render(
-      <AppHeader {...baseProps} can={can} menuEnabledViews={['playbooks']} playbooksEnabled={false} />,
+      <AppHeader {...baseProps} can={can} menuEnabledViews={[]} />,
     );
     expect(screen.queryByRole('button', { name: 'Playbooks' })).not.toBeInTheDocument();
 
     rerender(
-      <AppHeader {...baseProps} can={can} menuEnabledViews={['playbooks']} playbooksEnabled />,
+      <AppHeader {...baseProps} can={can} menuEnabledViews={['playbooks']} />,
     );
     expect(screen.getByRole('button', { name: 'Playbooks' })).toBeInTheDocument();
   });

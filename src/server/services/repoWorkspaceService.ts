@@ -7,6 +7,31 @@ import {
   ensureGitSafeDirectory,
 } from './repoGitSettings';
 
+/**
+ * Removes a directory without blocking the event loop. Synchronous `fs.rmSync`
+ * on the Azure Files mount stalls every request on the instance, including
+ * health probes. The directory is renamed first so the original path is free
+ * immediately; the renamed copy is then deleted asynchronously.
+ */
+export async function removeDirectoryAsync(targetDir: string): Promise<void> {
+  const trashDir = `${targetDir}.removing-${Date.now()}`;
+  try {
+    await fs.promises.rename(targetDir, trashDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    // Rename failed (for example a locked directory); delete in place instead.
+    await fs.promises.rm(targetDir, { recursive: true, force: true });
+    return;
+  }
+  try {
+    await fs.promises.rm(trashDir, { recursive: true, force: true });
+  } catch (err) {
+    console.warn(
+      `[repo-workspace] failed to delete ${path.basename(trashDir)}: ${(err as Error).message}`
+    );
+  }
+}
+
 const MATERIALIZE_RETRY_DELAY_MS = 1_000;
 
 export interface MaterializeWorkspaceOptions {
@@ -51,8 +76,8 @@ async function cloneWorkspaceFromCache(
   console.log(
     `[repo-workspace] phase=materialize-start session=${workspaceLabel} branch=${branch}`
   );
-  fs.mkdirSync(path.dirname(workspaceDir), { recursive: true });
-  fs.rmSync(workspaceDir, { recursive: true, force: true });
+  await fs.promises.mkdir(path.dirname(workspaceDir), { recursive: true });
+  await removeDirectoryAsync(workspaceDir);
   try {
     // `git clone --no-local` spawns a separate upload-pack transport process to
     // read the bare cache mirror; that child does not inherit the per-command
@@ -91,7 +116,7 @@ async function cloneWorkspaceFromCache(
         `branch=${branch} durationMs=${Date.now() - startedAt}`
     );
   } catch (err) {
-    fs.rmSync(workspaceDir, { recursive: true, force: true });
+    await removeDirectoryAsync(workspaceDir);
     console.error(
       `[repo-workspace] phase=materialize-failed session=${workspaceLabel} ` +
         `branch=${branch} durationMs=${Date.now() - startedAt}:`,

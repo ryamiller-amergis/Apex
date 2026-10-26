@@ -28,6 +28,12 @@ import { formatChoiceAnswers } from '../utils/formatChoiceAnswers';
 import { useFocusChatMessage } from '../hooks/useFocusChatMessage';
 import styles from './ChatAgentPanel.module.css';
 
+function isStatusOnlyStream(text: string): boolean {
+  return /^(?:(?:searching|checking|trying|looking|working|finding|fetching|querying|reading|loading|analyzing)[.…\s]*)+$/i.test(
+    text.trim(),
+  );
+}
+
 const MIN_WIDTH = 340;
 const MAX_WIDTH_RATIO = 0.92;
 const HOME_MAX_WIDTH_RATIO = 1;
@@ -334,6 +340,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const [skillPickerIdx, setSkillPickerIdx] = useState(0);
   const [showPrdPreview, setShowPrdPreview] = useState(false);
+  const [showSkillInfo, setShowSkillInfo] = useState(false);
   const panelWidthStorageKey = launchedFromHome ? HOME_LS_WIDTH_KEY : LS_WIDTH_KEY;
   const [panelWidth, setPanelWidth] = useState<number>(() =>
     loadStoredWidth(
@@ -718,6 +725,16 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     return null;
   }, [resolvedQuickSkill, resolvedMcpPill, homeSkills]);
 
+  const activePillLabel =
+    resolvedQuickSkill?.label
+    ?? resolvedMcpPill?.label
+    ?? thread?.kickoff.pillLabel
+    ?? null;
+
+  useEffect(() => {
+    setShowSkillInfo(false);
+  }, [sessionThreadId]);
+
   useEffect(() => {
     if (newChatError) {
       setPendingOutgoing(null);
@@ -781,9 +798,49 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
       className={launchedFromHome ? styles.homePanel : undefined}
       pageLayout={launchedFromHome}
       bareHeader={launchedFromHome}
-      floatHeader={launchedFromHome && !inConversation}
+      floatHeader={launchedFromHome}
       actions={(
         <>
+          {launchedFromHome && inConversation && (
+            <div className={styles.homeMergedBarMeta}>
+              <span className={`${styles.statusDot} ${statusDotClass}`} />
+              <span className={styles.statusText}>{statusLabel}</span>
+              {!isHomeCompose && selectedPillDescription && (
+                <div
+                  className={styles.homeSkillBadgeWrap}
+                  aria-label="Active chat skill"
+                >
+                  <button
+                    type="button"
+                    className={`${styles.homeSkillBadgeBtn} ${showSkillInfo ? styles.homeSkillBadgeBtnActive : ''}`.trim()}
+                    onClick={() => setShowSkillInfo((v) => !v)}
+                    aria-expanded={showSkillInfo}
+                    title={selectedPillDescription}
+                    {...{ 'data-testid': 'chat-agent-skill-info-btn' }}
+                  >
+                    <span className={styles.homeSkillBadgeText}>
+                      {activePillLabel ?? 'Active skill'}
+                    </span>
+                    <span className={styles.homeSkillBadgeIcon} aria-hidden="true">i</span>
+                  </button>
+                  <div
+                    className={`${styles.homeSkillPopover} ${showSkillInfo ? styles.homeSkillPopoverOpen : ''}`.trim()}
+                  >
+                    <p className={styles.pillDescription} {...{ 'data-testid': 'chat-agent-pill-description' }}>
+                      {selectedPillDescription}
+                    </p>
+                  </div>
+                </div>
+              )}
+              <span className={styles.connBadge}>
+                {isConnected
+                  ? '● live'
+                  : hasConnectionError
+                    ? '○ Disconnected'
+                    : '○ Connecting…'}
+              </span>
+            </div>
+          )}
           {!launchedFromHome && (
             <button
               className={styles.iconBtn}
@@ -820,7 +877,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
           )}
         </>
       )}
-      status={inConversation ? (
+      status={!launchedFromHome && inConversation ? (
         <div className={styles.statusBar}>
           <span className={`${styles.statusDot} ${statusDotClass}`} />
           <span className={styles.statusText}>{statusLabel}</span>
@@ -833,15 +890,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
           </span>
         </div>
       ) : undefined}
-      before={!launchedFromHome || isHomeCompose ? undefined : selectedPillDescription ? (
-        // Selection controls belong to a new chat only; an active conversation
-        // just names the skill it is already running.
-        <section className={styles.quickPills} aria-label="Active chat skill">
-          <p className={styles.pillDescription} {...{ 'data-testid': 'chat-agent-pill-description' }}>
-            {selectedPillDescription}
-          </p>
-        </section>
-      ) : undefined}
+      before={undefined}
     >
 
       {showHistory && onSelectThread ? (
@@ -1251,9 +1300,20 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                   <span className={styles.agentLabel}>Agent</span>
                 </div>
                 <div className={styles.agentBubble}>
-                  <div className={`${styles.markdownBody} ${styles.streamingBody}`}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
-                  </div>
+                  {(toolProgress.length > 0 || isStatusOnlyStream(streamingText)) && (
+                    <p className={styles.progressLabel} {...{ 'data-testid': 'chat-agent-progress-label' }}>
+                      <ChatRunProgressLabel
+                        fallbackLabel={progressLabel ?? 'Working…'}
+                        progressPhase={progressPhase}
+                        toolProgress={toolProgress}
+                      />
+                    </p>
+                  )}
+                  {!isStatusOnlyStream(streamingText) && (
+                    <div className={`${styles.markdownBody} ${styles.streamingBody}`}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1284,7 +1344,8 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
           )}
 
           <AgentComposer
-            className={styles.composerEmbed}
+            className={`${styles.composerEmbed} ${launchedFromHome ? styles.homeConversationComposer : ''}`.trim()}
+            shellClassName={launchedFromHome ? styles.compactComposerShell : undefined}
             value={input}
             onChange={(val) => {
               setInput(val);
@@ -1300,7 +1361,9 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             placeholder={
               isRunning
                 ? 'Agent is thinking…'
-                : 'Message agent · type / to invoke a skill…'
+                : launchedFromHome
+                  ? 'Message agent · / for skills · Enter to send'
+                  : 'Message agent · type / to invoke a skill…'
             }
             testIdPrefix="chat-agent"
             {...{ 'data-testid': 'chat-agent-composer' }}
@@ -1355,12 +1418,12 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 ))}
               </div>
             ) : undefined}
-            after={(
+            after={!launchedFromHome ? (
               <div className={styles.inputHint}>
                 <span className={styles.modelBadge}>{modelBadge(selectedModel)}</span>
                 Enter to send · Shift+Enter for newline · <kbd className={styles.kbdHint}>/</kbd> invoke skill
               </div>
-            )}
+            ) : undefined}
           />
 
           {showPrdPreview && thread && (

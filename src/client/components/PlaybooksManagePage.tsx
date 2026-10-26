@@ -10,7 +10,6 @@ import { z } from 'zod';
 import { ListChecks, Plus, Workflow, X } from 'lucide-react';
 import type { PlaybookDefinitionSummary, PlaybookRunSummary } from '../../shared/types/playbook';
 import { useAppShell } from '../hooks/useAppShell';
-import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import {
   useCreatePlaybookDefinition,
   usePlaybookDefinition,
@@ -272,7 +271,6 @@ export const PlaybooksManagePage: React.FC<PlaybooksManagePageProps> = ({ projec
   const navigate = useNavigate();
   const { can } = useAppShell();
   const canAuthor = can('playbooks:author');
-  const canvasEnabled = useFeatureFlag('playbooks-authoring-canvas', project);
   const definitions = usePlaybookDefinitions(project);
   const runs = usePlaybookRuns(project);
   const [search, setSearch] = useState('');
@@ -425,7 +423,7 @@ export const PlaybooksManagePage: React.FC<PlaybooksManagePageProps> = ({ projec
           project={project}
           onClose={() => setCreating(false)}
           onCreated={(definitionId) =>
-            navigate(canvasEnabled ? `/playbooks/definitions/${definitionId}` : `/playbooks/${definitionId}`)
+            navigate(`/playbooks/definitions/${definitionId}`)
           }
           data-testid="playbook-create-dialog"
         />

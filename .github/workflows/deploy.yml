@@ -289,7 +289,8 @@ jobs:
               AZURE_ARTIFACTS_PAT="${{ secrets.AZURE_ARTIFACTS_PAT }}" \
               APEX_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
               WEBSITE_SWAP_WARMUP_PING_PATH="/api/health/db" \
-              WEBSITE_SWAP_WARMUP_PING_STATUSES="200"
+              WEBSITE_SWAP_WARMUP_PING_STATUSES="200" \
+              WEBSITE_HEALTHCHECK_MAXPINGFAILURES="2"
 
           # Mark sticky slot settings (these stay with their slot during swap)
           # LT_APEX_CALLBACK_BASE_URL must be sticky so staging dispatches callback
@@ -357,6 +358,7 @@ jobs:
               AI_RUNS_INTERACTIVE_BURST_MAX="${{ vars.AI_RUNS_INTERACTIVE_BURST_MAX }}" \
               AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS="${{ vars.AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS }}" \
               AI_RUNS_INTERACTIVE_DISPATCH_URL="${{ vars.AI_RUNS_INTERACTIVE_DISPATCH_URL }}" \
+              WEBSITE_HEALTHCHECK_MAXPINGFAILURES="2" \
               "${REDIS_SETTINGS[@]}"
 
           # The Azure Node/Linux image ships without git, and Dev Workbench
@@ -401,14 +403,16 @@ jobs:
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot ${{ env.SLOT_NAME }} \
             --query clientAffinityEnabled -o tsv)
-          if [ "$CURRENT_AFFINITY" = "true" ]; then
-            echo "clientAffinityEnabled already true — skipping."
+          # Sessions live in Postgres, so any instance can serve any user. ARR
+          # affinity would keep a browser pinned to an instance that has hung.
+          if [ "$CURRENT_AFFINITY" = "false" ]; then
+            echo "clientAffinityEnabled already false — skipping."
           else
             az webapp update \
               --name ${{ env.APP_SERVICE_NAME }} \
               --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
               --slot ${{ env.SLOT_NAME }} \
-              --set clientAffinityEnabled=true
+              --set clientAffinityEnabled=false
           fi
 
       - name: Wait for SCM to settle before deploying

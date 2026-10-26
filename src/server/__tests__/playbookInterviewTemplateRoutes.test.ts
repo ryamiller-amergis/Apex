@@ -71,7 +71,7 @@ function grant(...permissions: string[]): void {
 beforeEach(() => {
   jest.clearAllMocks();
   grant('playbooks:author');
-  isFeatureEnabled.mockImplementation(async (key: string) => key === 'playbooks-production-adapters');
+  isFeatureEnabled.mockResolvedValue(false);
   installPlaybookTemplate.mockResolvedValue({
     created: true,
     detail: { definition: { id: 'def-a', project: PROJECT }, draft: { id: 'draft-a' }, versions: [] },

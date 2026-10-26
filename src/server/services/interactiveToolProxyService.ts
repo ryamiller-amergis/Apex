@@ -101,7 +101,7 @@ export type InteractiveToolProxyRequest = Readonly<{
    * Keys: ado-skills | calendar-assistant | maxview
    */
   invokeInternal?: (
-    serverName: 'ado-skills' | 'calendar-assistant' | 'maxview',
+    serverName: Extract<FrozenInteractiveMcpDescriptor, { kind: 'internal-proxy' }>['serverName'],
     descriptor: Extract<FrozenInteractiveMcpDescriptor, { kind: 'internal-proxy' }>,
     body: unknown,
     context: Readonly<{

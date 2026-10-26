@@ -56,7 +56,13 @@ function toSummary(run: RunRow): PlaybookRunSummary {
 }
 
 function toStepRun(row: Record<string, unknown>): PlaybookStepRun {
-  return row as unknown as PlaybookStepRun;
+  const step = row as unknown as PlaybookStepRun;
+  // A spilled step already stores the summary beside its blob reference.
+  // A small step stores the output itself, and the status read has to keep it.
+  return {
+    ...step,
+    outputInline: step.outputInline ?? null,
+  };
 }
 
 /**
