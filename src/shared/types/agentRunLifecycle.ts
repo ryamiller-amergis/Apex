@@ -26,7 +26,7 @@ export type AgentRunLane = 'background' | 'ai-runs-interactive' | 'cloud-agent';
 /**
  * Closed workflow classification on agent_runs. NULL preserves legacy generation rows.
  */
-export type AgentRunWorkflowClass = 'generation' | 'implementation';
+export type AgentRunWorkflowClass = 'generation' | 'implementation' | 'build-task';
 
 /**
  * Closed terminal-reason set stored alongside domain status

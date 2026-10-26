@@ -1110,7 +1110,9 @@ function rowToPrdSummary(
 
 // ── Title normalization for fuzzy matching ────────────────────────────────────
 
-function normalizeTitle(t: string): string {
+// Backlog JSON is AI-authored, so titles can be missing.
+function normalizeTitle(t: unknown): string {
+  if (typeof t !== 'string') return '';
   return t.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
 }
 
@@ -1366,6 +1368,7 @@ export async function createPrdAdoWorkItems(
                 }
                 const docNorm = normalizeTitle(doc.title);
                 const featNorm = normalizeTitle(feature.title);
+                if (!docNorm || !featNorm) return false;
                 if (docNorm === featNorm) return true;
                 if (docNorm.length >= 4 && featNorm.length >= 4) {
                   if (docNorm.includes(featNorm) || featNorm.includes(docNorm)) return true;
