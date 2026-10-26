@@ -176,6 +176,10 @@ resource "azurerm_linux_web_app" "main" {
       # shortly after the former 90s reaper threshold. Keep this with each slot
       # until V2 confirms worker loss through checkpoints plus platform status.
       "AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS",
+      # Staging shares production's database, so a full grounding sweep there
+      # clones production's repositories onto staging's disk. Staging holds
+      # "cleanup-only" and production "full"; a swap must not trade them.
+      "GROUNDING_MAINTENANCE_MODE",
     ])
   }
 
