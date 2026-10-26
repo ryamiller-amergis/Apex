@@ -1005,6 +1005,29 @@ describe('POST /api/chat/threads — integration connection kickoff', () => {
     expect(mockChatService.createThread).toHaveBeenCalledTimes(1);
   });
 
+  it('creates an MCP-server thread without Home pill admission', async () => {
+    mockResolveSkillConfig.mockResolvedValue({
+      id: 'settings-1',
+      project: 'MaxView',
+      quickSkillPills: [{
+        label: 'App Knowledge',
+        skillPath: '/.cursor/skills/app-knowledge/SKILL.md',
+        allowedUserIds: ['user-2'],
+        allowedGroupIds: [],
+      }],
+      quickMcpPills: [],
+    });
+
+    const res = await post({
+      assistantType: 'mcp-server',
+      mcpServerId: 'conn-clerk',
+    });
+
+    expect(res.status).toBe(201);
+    expect(mockGetUserGroupIds).not.toHaveBeenCalled();
+    expect(mockChatService.createThread).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses an integration kickoff without mcp-servers:view', async () => {
     mockGetUserPermissions.mockResolvedValue(new Set(['chat:view']));
 

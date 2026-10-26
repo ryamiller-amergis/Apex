@@ -261,7 +261,7 @@ describe('integration connection service', () => {
   it('stores a remote MCP server without the secret and loads read-only tools on test', async () => {
     (discoverRemoteMcpTools as jest.Mock).mockResolvedValue([
       { name: 'search', description: 'Search docs', readOnly: true },
-      { name: 'writeDoc', description: 'Write a doc', readOnly: true },
+      { name: 'writeDoc', description: 'Write a doc', readOnly: false },
     ]);
     const created = await createMcpServer({
       project: 'MaxView',
@@ -282,7 +282,7 @@ describe('integration connection service', () => {
 
     const tested = await testMcpServer('MaxView', created.id);
     expect(tested.status).toBe('usable');
-    expect(tested.operations.map((operation) => operation.id)).toEqual(['search', 'writeDoc']);
+    expect(tested.operations.map((operation) => operation.id)).toEqual(['search']);
     expect(tested.toolNames).toEqual(['search']);
     expect(selectEnabledMcpOperations(tested.operations, tested.toolNames).map((operation) => operation.id)).toEqual(['search']);
     expect(discoverRemoteMcpTools).toHaveBeenCalledWith({

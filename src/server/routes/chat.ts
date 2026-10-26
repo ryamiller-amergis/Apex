@@ -457,9 +457,12 @@ router.post('/threads', async (req: Request, res: Response) => {
     // Home pill admission (TBI-005) covers Home starts only: a kickoff that names
     // a configured quick pill, or one the server cannot map to any module (Home
     // free chat, or an unrecognized direct call). Configured Interview/ADR/PRD/
-    // assistant/development/standup workflows keep their own gates (BR-008).
+    // assistant/development/standup/MCP-server workflows keep their own gates (BR-008).
     // Runs before any persistence, so a denied kickoff leaves no thread row.
-    if (namesHomePill(clientKickoff, skillConfig) || agentModule === undefined) {
+    if (
+      clientKickoff.assistantType !== 'mcp-server' &&
+      (namesHomePill(clientKickoff, skillConfig) || agentModule === undefined)
+    ) {
       const isSuperAdmin = isSuperAdminRequest(req);
       const admission = resolveThreadCreationAdmission({
         skillPills: skillConfig?.quickSkillPills,

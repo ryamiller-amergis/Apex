@@ -695,14 +695,15 @@ export async function testMcpServer(
       url: existing.baseUrl,
       headers: resolveRemoteMcpHeaders(remote),
     });
-    if (discovered.length === 0) {
+    const readOnlyTools = discovered.filter((tool) => tool.readOnly === true);
+    if (readOnlyTools.length === 0) {
       throw new McpServerError(
         400,
         'This server did not publish a read-only tool',
         'OPERATIONS_REQUIRED'
       );
     }
-    const operations: McpServerOperation[] = discovered.map((tool) => ({
+    const operations: McpServerOperation[] = readOnlyTools.map((tool) => ({
       id: tool.name,
       method: 'GET',
       path: '/mcp-tool',

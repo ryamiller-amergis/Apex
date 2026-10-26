@@ -30,6 +30,10 @@ describe('integration MCP discovery', () => {
         description: 'Delete a guide',
         annotations: { destructiveHint: true },
       },
+      {
+        name: 'unannotatedWrite',
+        description: 'A write tool with no annotations',
+      },
     ]);
 
     const tools = await discoverMcpServerTools(
@@ -83,6 +87,7 @@ describe('integration MCP discovery', () => {
     const listTools = jest.fn(async () => [
       { name: 'search', description: 'Search', annotations: { readOnlyHint: true } },
       { name: 'deleteDoc', description: 'Delete', annotations: { destructiveHint: true } },
+      { name: 'unannotatedWrite', description: 'Write without annotations' },
     ]);
     const tools = await discoverRemoteMcpTools(
       { url: 'https://example.com/mcp', headers: resolveRemoteMcpHeaders(stored) },
