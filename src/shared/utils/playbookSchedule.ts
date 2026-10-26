@@ -84,12 +84,17 @@ export function isDailyPlaybookScheduleDue(input: {
   now: Date;
 }): boolean {
   if (input.scheduleKind !== 'daily' || input.scheduleHour == null) return false;
-  const scheduledMs = dailyScheduleInstantUtc(
+  const nowMs = input.now.getTime();
+  let scheduled = dailyScheduleInstantUtc(
     input.now,
     input.scheduleHour,
     input.scheduleMinute,
-  ).getTime();
-  const nowMs = input.now.getTime();
+  );
+  // A 23:55 trigger is still inside the window a few minutes after UTC midnight.
+  if (nowMs < scheduled.getTime()) {
+    scheduled = new Date(scheduled.getTime() - 24 * 60 * 60 * 1000);
+  }
+  const scheduledMs = scheduled.getTime();
   if (nowMs < scheduledMs || nowMs >= scheduledMs + PLAYBOOK_SCHEDULE_WINDOW_MS) {
     return false;
   }

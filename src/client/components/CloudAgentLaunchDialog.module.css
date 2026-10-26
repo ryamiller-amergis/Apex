@@ -172,7 +172,7 @@
 .primary {
   border: 1px solid var(--accent-color);
   background: var(--accent-color);
-  color: var(--bg-primary);
+  color: var(--on-accent);
   box-shadow: var(--glow-accent);
 }
 

@@ -119,6 +119,8 @@ export interface EnqueueAgentRunInput {
   ownerInstance?: string | null;
   runId?: string;
   devSessionId?: string | null;
+  /** Person who asked for the run. Cloud Agent cost rows attribute spend to this id. */
+  requestedByUserId?: string | null;
   /** Optional link to build_tasks. No other enqueue behavior changes. */
   buildTaskId?: string | null;
   workflowClass?: AgentRunWorkflowClass | null;
@@ -379,6 +381,9 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
             ...(input.snapshot.cloudAgent.skillName
               ? { skillName: input.snapshot.cloudAgent.skillName }
               : {}),
+            ...(input.snapshot.cloudAgent.customPrompt
+              ? { customPrompt: input.snapshot.cloudAgent.customPrompt }
+              : {}),
             ...(input.snapshot.cloudAgent.userTokenInstance
               ? { userTokenInstance: input.snapshot.cloudAgent.userTokenInstance }
               : {}),
@@ -437,6 +442,7 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
     createdAt: nowIso,
     updatedAt: nowIso,
     ...(input.devSessionId ? { devSessionId: input.devSessionId } : {}),
+    ...(input.requestedByUserId ? { requestedByUserId: input.requestedByUserId } : {}),
     ...(input.buildTaskId ? { buildTaskId: input.buildTaskId } : {}),
     ...(input.workflowClass ? { workflowClass: input.workflowClass } : {}),
   });

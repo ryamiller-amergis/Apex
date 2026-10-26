@@ -22,6 +22,7 @@ import {
 import {
   createScratchDatabase,
   migrateDown,
+  migrationsFromFileThroughTip,
   migrateUp,
   ScratchDatabase,
 } from './support/scratch-db';
@@ -589,7 +590,10 @@ describe('VT-04 and VT-07 agent run link and rollback', () => {
     const downClient = new pg.Client({ connectionString: downScratch.connectionString });
     await downClient.connect();
     try {
-      await migrateDown(downScratch.connectionString, 2);
+      await migrateDown(
+        downScratch.connectionString,
+        migrationsFromFileThroughTip('20261023143900_a1a4_build-from-prompt-tables.sql'),
+      );
       const tables = await downClient.query<{ table_name: string }>(
         `SELECT table_name FROM information_schema.tables
          WHERE table_schema = 'public' AND table_name = ANY($1)`,

@@ -11,6 +11,7 @@ import {
   type SiteIssueImage,
   type SiteIssueImageType,
 } from '../../shared/utils/cloudAgentLaunch';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import styles from './CloudAgentLaunchDialog.module.css';
 
 const schema = z.object({
@@ -51,6 +52,7 @@ interface CloudAgentLaunchDialogProps {
   pending: boolean;
   error: string | null;
   onClose: () => void;
+  'data-testid'?: string;
   onConfirm: (value: {
     skillPath: string;
     model: string;
@@ -84,6 +86,7 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
   error,
   onClose,
   onConfirm,
+  'data-testid': dataTestId = 'cloud-agent-launch-dialog',
 }) => {
   const skillChoices = skills.some((skill) => skill.path === defaultSkillPath) || !defaultSkillPath
     ? skills
@@ -130,6 +133,8 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
     setImageError(null);
   }, [defaultCustomPrompt, defaultModel, defaultSkillPath, defaultTask, reset]);
 
+  const dialogRef = useDialogFocus<HTMLDivElement>(true, onClose);
+
   const addImages = async (fileList: FileList | null) => {
     const files = Array.from(fileList ?? []);
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -164,14 +169,6 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
     setImageError(error);
   };
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   const submit = handleSubmit((values) => {
     if (requireTask && !values.task.trim()) {
       setError('task', { message: emptyTaskMessage });
@@ -196,19 +193,20 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
       }}
     >
       <div
+        ref={dialogRef}
         className={styles.modal}
         role="dialog"
         aria-modal="true"
         aria-labelledby="cloud-agent-launch-title"
-        data-testid="cloud-agent-launch-dialog"
+        data-testid={dataTestId}
       >
         <div className={styles.header}>
           <h2 id="cloud-agent-launch-title" className={styles.title}>{title}</h2>
-          <button type="button" className={styles.closeBtn} onClick={onClose} aria-label="Close">
+          <button type="button" className={styles.closeBtn} onClick={onClose} aria-label="Close" data-testid="cloud-agent-launch-close">
             ×
           </button>
         </div>
-        <form className={styles.body} onSubmit={submit}>
+        <form className={styles.body} onSubmit={submit} data-testid="cloud-agent-launch-form">
           {loading ? <p className={styles.reason}>{showChoices ? 'Loading skills…' : 'Loading…'}</p> : null}
           {loadError ? <p className={styles.error} role="alert">{loadError}</p> : null}
           {reason ? <p className={styles.reason}>{reason}</p> : null}
@@ -228,7 +226,7 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
               {errors.customPrompt ? <span className={styles.error}>{errors.customPrompt.message}</span> : null}
             </label>
           ) : (
-            <input type="hidden" {...register('customPrompt')} />
+            <input type="hidden" {...register('customPrompt')} data-testid="cloud-agent-launch-custom-prompt-hidden" />
           )}
           {requireTask ? (
             <label className={styles.field}>
@@ -257,6 +255,7 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
                 type="button"
                 className={styles.secondary}
                 onClick={() => fileInputRef.current?.click()}
+                data-testid="cloud-agent-launch-add-file"
               >
                 Add file
               </button>
@@ -271,6 +270,7 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
                         type="button"
                         aria-label={`Remove ${image.name}`}
                         onClick={() => setImages((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                        data-testid={`cloud-agent-launch-remove-image-${index}`}
                       >
                         ×
                       </button>
@@ -326,13 +326,13 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
           </>
           ) : (
             <>
-              <input type="hidden" {...register('skillPath')} />
-              <input type="hidden" {...register('model')} />
+              <input type="hidden" {...register('skillPath')} data-testid="cloud-agent-launch-skill-hidden" />
+              <input type="hidden" {...register('model')} data-testid="cloud-agent-launch-model-hidden" />
             </>
           )}
           {error ? <p className={styles.error} role="alert">{error}</p> : null}
           <div className={styles.actions}>
-            <button type="button" className={styles.secondary} onClick={onClose}>
+            <button type="button" className={styles.secondary} onClick={onClose} data-testid="cloud-agent-launch-cancel">
               Cancel
             </button>
             <button

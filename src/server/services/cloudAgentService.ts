@@ -690,29 +690,71 @@ export async function listGuidedCloudAgentRuns(
     .orderBy(desc(devSessions.updatedAt))
     .limit(50);
 
-  const runs: GuidedCloudAgentSession[] = [];
-  for (const session of sessions) {
-    if (!session.currentRunId) continue;
-    const run = await db.query.agentRuns.findFirst({
-      where: eq(agentRuns.id, session.currentRunId),
-    });
+  const runIds = sessions.flatMap((session) => session.currentRunId ? [session.currentRunId] : []);
+  const runRows = runIds.length === 0
+    ? []
+    : await db.select().from(agentRuns).where(inArray(agentRuns.id, runIds));
+  const runsById = new Map(runRows.map((run) => [run.id, run]));
+  const guided = sessions.flatMap((session) => {
+    if (!session.currentRunId) return [];
+    const run = runsById.get(session.currentRunId);
     const snapshot = backgroundSnapshot(run?.executionSnapshot);
-    if (snapshot?.cloudAgent?.delivery !== 'guided') continue;
-    const summary = await getCloudAgentRunStatus(session.id, userId);
-    runs.push({
-      sessionId: session.id,
-      jobId: snapshot.cloudAgent.guidedJobId ?? '',
-      title: snapshot.cloudAgent.workItemTitle ?? 'Guided job',
-      task: snapshot.cloudAgent.task ?? '',
-      skillPath: snapshot.skillPath,
-      model: snapshot.model,
-      updatedAt: session.updatedAt,
-      bugWorkItemId: snapshot.cloudAgent.bugWorkItemId ?? null,
-      bugUrl: snapshot.cloudAgent.bugUrl ?? null,
-      run: summary,
-    });
-  }
-  return runs;
+    if (!run || snapshot?.cloudAgent?.delivery !== 'guided') return [];
+    return [{ session, run, snapshot }];
+  });
+
+  const summaries = await mapWithConcurrency(guided, 4, async (row) => {
+    if (isAgentRunTerminalStatus(row.run.status)) {
+      const prUrl = row.run.cloudPrUrl ?? row.session.currentRunPrUrl ?? null;
+      return toRunSummary(
+        {
+          id: row.run.id,
+          status: row.run.status,
+          terminalReason: row.run.terminalReason as AgentRunTerminalReason | null,
+          checkResults: row.run.checkResults ?? null,
+          lastError: row.run.lastError,
+          cloudAgentIdentity: row.run.cloudAgentIdentity,
+          cloudBranchName: row.run.cloudBranchName,
+          createdAt: row.run.createdAt,
+        },
+        prUrl,
+        cachedPullRequestStatus(prUrl, row.run.cloudPrStatus as HostAgnosticPrStatus | null),
+        !guidedSkipsPullRequest(row.run.executionSnapshot),
+      );
+    }
+    return getCloudAgentRunStatus(row.session.id, userId);
+  });
+
+  return guided.map((row, index) => ({
+    sessionId: row.session.id,
+    jobId: row.snapshot.cloudAgent?.guidedJobId ?? '',
+    title: row.snapshot.cloudAgent?.workItemTitle ?? 'Guided job',
+    task: row.snapshot.cloudAgent?.task ?? '',
+    skillPath: row.snapshot.skillPath,
+    model: row.snapshot.model,
+    updatedAt: row.session.updatedAt,
+    bugWorkItemId: row.snapshot.cloudAgent?.bugWorkItemId ?? null,
+    bugUrl: row.snapshot.cloudAgent?.bugUrl ?? null,
+    run: summaries[index],
+  }));
+}
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  mapItem: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await mapItem(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 export interface StartGuidedCloudAgentInput {
@@ -786,12 +828,7 @@ export async function startGuidedCloudAgentRun(
     ? (input.images ?? [])
     : (input.images?.length ? input.images : (prior?.images ?? []));
   const bug = intent === 'start'
-    ? await createSiteIssueBug({
-      project: input.project,
-      task: taskText,
-      imageCount: images.length,
-      initiatorName: input.initiatorName,
-    })
+    ? { bugWorkItemId: null as number | null, bugUrl: null as string | null }
     : {
       bugWorkItemId: prior?.bugWorkItemId ?? null,
       bugUrl: prior?.bugUrl ?? null,
@@ -864,6 +901,7 @@ export async function startGuidedCloudAgentRun(
       lane: 'cloud-agent',
       workflowClass: 'implementation',
       devSessionId: sessionId,
+      requestedByUserId: input.userId,
       executor: tx,
       snapshot: {
         prompt,
@@ -909,6 +947,90 @@ export async function startGuidedCloudAgentRun(
     return { sessionId, runId, bugWorkItemId: bug.bugWorkItemId, bugUrl: bug.bugUrl };
   });
 
+  if (intent === 'start') {
+    let created: { bugWorkItemId: number; bugUrl: string };
+    try {
+      created = await createSiteIssueBug({
+        project: input.project,
+        task: taskText,
+        imageCount: images.length,
+        initiatorName: input.initiatorName,
+      });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'Could not open the Bug';
+      try {
+        await markTerminal(started.runId, { status: 'failed', detail });
+      } catch (markErr) {
+        console.error('[cloud-agent] could not record guided bug failure', JSON.stringify({
+          runId: started.runId,
+          error: markErr instanceof Error ? markErr.message : String(markErr),
+        }));
+      }
+      throw err instanceof CloudAgentLaunchError ? err : new CloudAgentLaunchError(detail);
+    }
+
+    const branchWithBug = guidedSiteIssueBranchName({
+      sessionId: started.sessionId,
+      task: taskText,
+      bugWorkItemId: created.bugWorkItemId,
+    });
+    const promptWithBug = buildGuidedCloudAgentPrompt({
+      title: job.title,
+      skillPath: selection.skillPath,
+      skillName,
+      task: taskText,
+      branchName: branchWithBug,
+      imageCount: images.length,
+      bugWorkItemId: created.bugWorkItemId,
+      bugUrl: created.bugUrl,
+      pullRequestInstructions: buildPullRequestDescriptionInstructions({
+        workItemId: created.bugWorkItemId,
+        pullRequestTitle: `[APEX] ${branchWithBug.replace('feature/', '')}`,
+        pullRequestLabel: CLOUD_AGENT_PULL_REQUEST_LABEL,
+      }),
+    });
+    try {
+      const [stored] = await db
+        .select({ executionSnapshot: agentRuns.executionSnapshot })
+        .from(agentRuns)
+        .where(eq(agentRuns.id, started.runId))
+        .limit(1);
+      const snapshot = backgroundSnapshot(stored?.executionSnapshot);
+      if (!snapshot?.cloudAgent) {
+        throw new CloudAgentLaunchError('Guided run lost its snapshot before the Bug was saved.');
+      }
+      snapshot.prompt = promptWithBug;
+      snapshot.cloudAgent = {
+        ...snapshot.cloudAgent,
+        branchName: branchWithBug,
+        bugWorkItemId: created.bugWorkItemId,
+        bugUrl: created.bugUrl,
+      };
+      const savedAt = new Date().toISOString();
+      await db.update(agentRuns).set({
+        executionSnapshot: snapshot,
+        updatedAt: savedAt,
+      }).where(eq(agentRuns.id, started.runId));
+      await db.update(devSessions).set({
+        branchName: branchWithBug,
+        updatedAt: savedAt,
+      }).where(eq(devSessions.id, started.sessionId));
+    } catch (err) {
+      const detail = `Bug ${created.bugWorkItemId} was opened, but the guided run could not store it.`;
+      try {
+        await markTerminal(started.runId, { status: 'failed', detail });
+      } catch (markErr) {
+        console.error('[cloud-agent] could not record guided bug save failure', JSON.stringify({
+          runId: started.runId,
+          error: markErr instanceof Error ? markErr.message : String(markErr),
+        }));
+      }
+      throw err instanceof CloudAgentLaunchError ? err : new CloudAgentLaunchError(detail);
+    }
+    started.bugWorkItemId = created.bugWorkItemId;
+    started.bugUrl = created.bugUrl;
+  }
+
   if (await claimCloudAgentRun(started.runId)) {
     try {
       await launchClaimedCloudAgentRun(started.runId, defaultDeps);
@@ -938,7 +1060,7 @@ async function resolveChooserLaunch(
   skillConfig: ProjectSkillConfig,
 ): Promise<{ skillPath: string; model: string }> {
   const intent = input.intent ?? 'start';
-  const prior = intent === 'resume'
+  const prior = intent === 'resume' || intent === 'retry'
     ? await loadPriorCloudAgentSettings({
       userId: input.userId,
       project: input.project,
@@ -1196,6 +1318,7 @@ async function persistQueuedRun(
         lane: 'cloud-agent',
         workflowClass: 'implementation',
         devSessionId: sessionId,
+        requestedByUserId: input.userId,
         executor: tx,
         snapshot: {
           prompt: executionPrompt,

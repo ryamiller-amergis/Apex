@@ -419,8 +419,13 @@ router.put(
   '/definitions/:definitionId/schedule',
   requirePermission('playbooks:author'),
   async (req: Request, res: Response): Promise<void> => {
-    const { project, scheduleKind, scheduleHour, scheduleMinute } = (req.body ?? {}) as RequestBody;
-    if (!isNonBlankString(project)) {
+    if (requestProjectsDisagree(req)) {
+      res.status(400).json({ error: 'project does not match the request project' });
+      return;
+    }
+    const project = resolveRequestProject(req);
+    const { scheduleKind, scheduleHour, scheduleMinute } = (req.body ?? {}) as RequestBody;
+    if (!project) {
       res.status(400).json({ error: 'project is required' });
       return;
     }

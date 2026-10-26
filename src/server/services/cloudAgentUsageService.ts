@@ -5,7 +5,7 @@
  */
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { agentRuns, aiUsageEvents } from '../db/schema';
+import { agentRuns, aiUsageEvents, devSessions } from '../db/schema';
 import type { AgentRunExecutionSnapshot, AgentRunStatus, ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
 import type { AiUsageStatus } from '../../shared/types/aiCostAnalytics';
 import { computeCost, estimateTokens } from './aiUsageService';
@@ -48,6 +48,15 @@ function reportedTokens(tokens: CloudAgentUsageTokens | null | undefined): Cloud
     + tokens.cacheWriteTokens;
   if (total <= 0) return null;
   return tokens;
+}
+
+async function sessionAuthorId(devSessionId: string | null | undefined): Promise<string | null> {
+  if (!devSessionId) return null;
+  const session = await db.query.devSessions.findFirst({
+    where: eq(devSessions.id, devSessionId),
+    columns: { authorId: true },
+  });
+  return session?.authorId ?? null;
 }
 
 function usageStatus(status: RecordCloudAgentUsageInput['status']): AiUsageStatus {
@@ -105,7 +114,8 @@ export async function recordCloudAgentUsage(input: RecordCloudAgentUsageInput): 
     cacheWriteTokens,
   });
   const tokenSource = tokens ? 'exact' : 'estimated';
-  const workItemId = snapshot?.cloudAgent?.workItemId;
+  const workItemId = snapshot?.cloudAgent?.workItemId ?? snapshot?.cloudAgent?.bugWorkItemId;
+  const userId = run?.requestedByUserId ?? await sessionAuthorId(run?.devSessionId);
 
   await db.insert(aiUsageEvents).values({
     provider: 'cursor',
@@ -119,7 +129,7 @@ export async function recordCloudAgentUsage(input: RecordCloudAgentUsageInput): 
     entityType: run?.devSessionId ? 'dev-session' : null,
     entityId: run?.devSessionId ?? null,
     workItemId: workItemId != null ? String(workItemId) : null,
-    userId: run?.requestedByUserId ?? null,
+    userId,
     inputTokens,
     outputTokens,
     cacheReadTokens,

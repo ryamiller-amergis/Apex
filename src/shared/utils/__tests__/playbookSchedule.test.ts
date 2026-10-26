@@ -66,6 +66,16 @@ describe('isDailyPlaybookScheduleDue', () => {
     })).toBe(false);
   });
 
+  it('stays due just after UTC midnight when the minute is late', () => {
+    expect(isDailyPlaybookScheduleDue({
+      scheduleKind: 'daily',
+      scheduleHour: 23,
+      scheduleMinute: 55,
+      lastScheduledAt: null,
+      now: new Date('2026-10-24T00:02:00.000Z'),
+    })).toBe(true);
+  });
+
   it('ignores a run-now trigger', () => {
     expect(isDailyPlaybookScheduleDue({
       scheduleKind: 'manual',

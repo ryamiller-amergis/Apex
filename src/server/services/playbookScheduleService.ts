@@ -95,7 +95,10 @@ async function stampSchedule(definitionId: string, now: Date): Promise<void> {
  * A Playbook with no published version is left the same way, so publishing
  * during the window still starts it.
  */
-async function claimDuePlaybook(definitionId: string, now: Date): Promise<boolean> {
+async function claimDuePlaybook(
+  definitionId: string,
+  now: Date,
+): Promise<{ project: string; initiatorUserId: string } | null> {
   const lockKey = `playbook-schedule:${definitionId}`;
   return db.transaction(async (tx) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
@@ -114,7 +117,7 @@ async function claimDuePlaybook(definitionId: string, now: Date): Promise<boolea
         now,
       })
     ) {
-      return false;
+      return null;
     }
 
     const live = await tx
@@ -129,7 +132,7 @@ async function claimDuePlaybook(definitionId: string, now: Date): Promise<boolea
         inArray(playbookRuns.status, [...LIVE_RUN_STATUSES]),
       ))
       .limit(1);
-    if (live[0]) return false;
+    if (live[0]) return null;
 
     const [published] = await tx
       .select({ id: playbookDefinitionVersions.id })
@@ -139,13 +142,13 @@ async function claimDuePlaybook(definitionId: string, now: Date): Promise<boolea
         eq(playbookDefinitionVersions.status, 'published'),
       ))
       .limit(1);
-    if (!published) return false;
+    if (!published) return null;
 
     const playbooksOn = await isFeatureEnabled(PLAYBOOKS_FLAG, {
       userId: locked.scheduleSetBy,
       project: locked.project,
     });
-    let start = false;
+    let start: { project: string; initiatorUserId: string } | null = null;
     // @feature-flag:playbooks-production-adapters start winner=enabled
     if (!playbooksOn) {
       // @feature-flag:playbooks-production-adapters disabled-start
@@ -163,7 +166,7 @@ async function claimDuePlaybook(definitionId: string, now: Date): Promise<boolea
           project: locked.project,
         }));
       } else {
-        start = true;
+        start = { project: locked.project, initiatorUserId: locked.scheduleSetBy };
       }
       await tx
         .update(playbookDefinitions)
@@ -199,7 +202,7 @@ export async function sweepDuePlaybookSchedules(now = new Date()): Promise<void>
       now,
     })) continue;
 
-    let claimed = false;
+    let claimed: { project: string; initiatorUserId: string } | null = null;
     try {
       claimed = await claimDuePlaybook(definition.id, now);
     } catch (err) {
@@ -214,9 +217,9 @@ export async function sweepDuePlaybookSchedules(now = new Date()): Promise<void>
 
     try {
       await startRun({
-        project: definition.project,
+        project: claimed.project,
         definitionId: definition.id,
-        initiatorUserId: definition.scheduleSetBy,
+        initiatorUserId: claimed.initiatorUserId,
         spendAdmissionEnabled: true,
       });
     } catch (err) {

@@ -11,6 +11,7 @@ import { isAgentRunTerminalStatus } from '../../shared/types/agentRunLifecycle';
 import { CloudAgentLaunchDialog } from './CloudAgentLaunchDialog';
 import { DataGridToolbar } from './DataGridToolbar';
 import gridStyles from './DataGrid.module.css';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import styles from './GuidedCloudJobs.module.css';
 
 const SITE_ISSUE_REPORT_TEMPLATE = [
@@ -60,6 +61,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
   const [priorTask, setPriorTask] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const panelRef = useDialogFocus<HTMLDivElement>(open, () => setOpen(false));
   const data = jobsQuery.data;
   const siteIssueJob = data?.jobs[0] ?? null;
 
@@ -146,6 +148,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
         }}
         >
           <div
+            ref={panelRef}
             className={styles.panel}
             role="dialog"
             aria-modal="true"
@@ -167,7 +170,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
                 >
                   New report
                 </button>
-                <button type="button" className={styles.close} onClick={() => setOpen(false)} aria-label="Close">
+                <button type="button" className={styles.close} onClick={() => setOpen(false)} aria-label="Close" data-testid="home-guided-jobs-close">
                   ×
                 </button>
               </div>
@@ -209,12 +212,12 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
                             <td>
                               <div className={styles.links}>
                                 {report.bugUrl ? (
-                                  <a href={report.bugUrl} target="_blank" rel="noreferrer">
+                                  <a href={report.bugUrl} target="_blank" rel="noreferrer" data-testid={`home-guided-bug-${report.sessionId}`}>
                                     Bug {report.bugWorkItemId}
                                   </a>
                                 ) : null}
                                 {report.run?.prUrl ? (
-                                  <a href={report.run.prUrl} target="_blank" rel="noreferrer">
+                                  <a href={report.run.prUrl} target="_blank" rel="noreferrer" data-testid={`home-guided-pr-${report.sessionId}`}>
                                     Pull request
                                   </a>
                                 ) : null}
@@ -256,6 +259,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
       ) : null}
       {job ? (
         <CloudAgentLaunchDialog
+          data-testid="home-guided-launch-dialog"
           title={intent === 'retry' ? 'Try the report again' : job.title}
           reason="Describe the problem. Apex opens a Bug, and the agent prepares a fix for a developer to review."
           skills={data?.skills ?? []}

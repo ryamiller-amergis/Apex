@@ -200,6 +200,9 @@ describe('cursorCloudAgentClient', () => {
         summary: 'Opened the pull request.',
         noChanges: false,
         settled: true,
+        modelId: null,
+        durationMs: null,
+        usage: null,
       });
     } finally {
       if (previous === undefined) delete process.env.CURSOR_USER_LEVEL_API_KEY;
