@@ -4,6 +4,7 @@ import {
   buildRemoteMcpCredential,
   discoverMcpServerTools,
   discoverRemoteMcpTools,
+  publicRemoteHeaders,
   resolveRemoteMcpHeaders,
 } from '../services/mcpServerDiscovery';
 
@@ -65,6 +66,18 @@ describe('integration MCP discovery', () => {
       },
     });
     expect(toolArgumentTemplate(inputs)).toBe('{\n  "application_id": "",\n  "instance": ""\n}');
+  });
+
+  it('redacts stored header values that are not placeholders', () => {
+    expect(publicRemoteHeaders({
+      Authorization: 'Bearer ${TOKEN}',
+      Accept: 'application/json',
+      'X-Clerk-Auth': 'sk_live_pasted_secret',
+    })).toEqual({
+      Authorization: 'Bearer ${TOKEN}',
+      Accept: '${REDACTED}',
+      'X-Clerk-Auth': '${REDACTED}',
+    });
   });
 
   it('keeps a secret name when the value is still empty', () => {

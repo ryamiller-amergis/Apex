@@ -728,7 +728,7 @@ function App() {
   }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig, syncHomeThreadUrl]);
 
   const handleStartMcpChat = useCallback(async (connection: { id: string; name: string }) => {
-    if (!can('chat:view') || !can('chat:create') || !panelRepo || startChat.isPending) return;
+    if (!can('chat:view') || !can('chat:create') || startChat.isPending) return;
     setChatOpen(true);
     setFirstMessageError(null);
     const startingLocationKey = locationRef.current.key;
@@ -736,8 +736,8 @@ function App() {
       const result = await startChat.mutateAsync({
         kickoff: {
           project: selectedProject,
-          repo: panelRepo.name,
-          branch: panelRepo.defaultBranch ?? 'main',
+          repo: selectedProject,
+          branch: 'main',
           skillProvider: activeSkillConfig?.skillProvider ?? undefined,
           model: DEFAULT_MODEL_ID,
           skillSettingsId: activeSkillConfig?.id ?? selectedSkillSettingsId ?? undefined,
@@ -757,7 +757,7 @@ function App() {
         syncHomeThreadUrl(null);
       }
     }
-  }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig, syncHomeThreadUrl]);
+  }, [selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig, syncHomeThreadUrl]);
 
   useEffect(() => {
     if (
@@ -1595,7 +1595,7 @@ function App() {
                   project={selectedProject}
                   enabled={mcpServersEnabled}
                   menuEnabled={effectiveEnabledViews.includes('mcp-servers')}
-                  canStartChat={Boolean(panelRepo) && can('chat:view') && can('chat:create') && !startChat.isPending}
+                  canStartChat={can('chat:view') && can('chat:create') && !startChat.isPending}
                   onStartChat={(connection) => { void handleStartMcpChat(connection); }}
                 />
               </Suspense>

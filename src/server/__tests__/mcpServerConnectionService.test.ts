@@ -291,6 +291,26 @@ describe('integration connection service', () => {
     });
   });
 
+  it('does not return a pasted custom header credential on the public list', async () => {
+    const created = await createMcpServer({
+      project: 'MaxView',
+      name: 'Clerk MCP',
+      provider: 'custom',
+      credential: '',
+      mcpUrl: 'https://mcp.clerk.com/mcp',
+      headers: { 'X-Clerk-Auth': 'sk_live_pasted_secret' },
+      allowedUserIds: [],
+      createdBy: 'user-1',
+    });
+
+    expect(created.headers).toEqual({ 'X-Clerk-Auth': '${REDACTED}' });
+    expect(JSON.stringify(created)).not.toContain('sk_live_pasted_secret');
+
+    const listed = await listMcpServers('MaxView');
+    expect(listed[0].headers).toEqual({ 'X-Clerk-Auth': '${REDACTED}' });
+    expect(JSON.stringify(listed)).not.toContain('sk_live_pasted_secret');
+  });
+
   it('refuses a hostname that resolves to a private address', async () => {
     const previousE2e = process.env.E2E_MODE;
     process.env.E2E_MODE = 'false';

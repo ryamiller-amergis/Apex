@@ -279,12 +279,10 @@ function assertHeaderPlaceholders(
   }
 }
 
-const SENSITIVE_HEADER = /authorization|api-key|token|secret|key/i;
-
 export function publicRemoteHeaders(headers: Record<string, string>): Record<string, string> {
   const visible: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
-    visible[key] = value.includes('${') || !SENSITIVE_HEADER.test(key) ? value : '${REDACTED}';
+    visible[key] = value.includes('${') ? value : '${REDACTED}';
   }
   return visible;
 }
