@@ -246,7 +246,8 @@ describe('repoCheckoutService', () => {
       mockGit.mockImplementation(async (args: string[]) => {
         if (args.includes('clone')) {
           cloneAttempts += 1;
-          if (cloneAttempts === 1) throw new Error('fatal: invalid object abc123');
+          // Both attempts inside materializeWorkspaceFromCache fail.
+          if (cloneAttempts <= 2) throw new Error('fatal: invalid object abc123');
         }
         return '';
       });
@@ -264,6 +265,28 @@ describe('repoCheckoutService', () => {
         branch: 'development',
         provider: 'ado',
       });
+      expect(cloneAttempts).toBe(3);
+    });
+
+    it('does not repair the mirror when only one clone attempt fails', async () => {
+      process.env.ADO_ORG = 'https://dev.azure.com/amergis';
+      process.env.ADO_PAT = 'secret-pat';
+      let cloneAttempts = 0;
+      mockGit.mockImplementation(async (args: string[]) => {
+        if (args.includes('clone') && ++cloneAttempts === 1) {
+          throw new Error('fatal: packfile objects/pack/pack-1.pack cannot be accessed');
+        }
+        return '';
+      });
+
+      await expect(checkoutDefaultBranch({
+        project: 'MaxView',
+        repo: 'MaxView',
+        branch: 'development',
+        sessionId: 'session-race',
+      })).resolves.toBe(workspacePath('session-race'));
+
+      expect(mockRepairRepoCache).not.toHaveBeenCalled();
       expect(cloneAttempts).toBe(2);
     });
 

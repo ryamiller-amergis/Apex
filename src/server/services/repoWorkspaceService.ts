@@ -7,7 +7,40 @@ import {
   ensureGitSafeDirectory,
 } from './repoGitSettings';
 
+const MATERIALIZE_RETRY_DELAY_MS = 1_000;
+
+export interface MaterializeWorkspaceOptions {
+  retryDelayMs?: number;
+}
+
+/**
+ * Clones a workspace from the bare mirror without holding the mirror's lease.
+ * A repair can repack the mirror mid-clone and delete a pack the clone is
+ * reading, so one failure is retried against the new pack set before callers
+ * treat the mirror as broken and refetch it.
+ */
 export async function materializeWorkspaceFromCache(
+  cacheDir: string,
+  workspaceDir: string,
+  branch: string,
+  remoteUrl: string,
+  options: MaterializeWorkspaceOptions = {}
+): Promise<void> {
+  try {
+    await cloneWorkspaceFromCache(cacheDir, workspaceDir, branch, remoteUrl);
+  } catch (firstError) {
+    console.warn(
+      `[repo-workspace] phase=materialize-retry session=${path.basename(workspaceDir)} ` +
+        `branch=${branch}: ${(firstError as Error).message.slice(0, 300)}`
+    );
+    await new Promise((resolve) =>
+      setTimeout(resolve, options.retryDelayMs ?? MATERIALIZE_RETRY_DELAY_MS)
+    );
+    await cloneWorkspaceFromCache(cacheDir, workspaceDir, branch, remoteUrl);
+  }
+}
+
+async function cloneWorkspaceFromCache(
   cacheDir: string,
   workspaceDir: string,
   branch: string,
