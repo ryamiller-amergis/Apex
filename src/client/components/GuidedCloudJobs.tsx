@@ -61,7 +61,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
   const [priorTask, setPriorTask] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const panelRef = useDialogFocus<HTMLDivElement>(open, () => setOpen(false));
+  const panelRef = useDialogFocus<HTMLDivElement>(open, () => setOpen(false), job !== null);
   const data = jobsQuery.data;
   const siteIssueJob = data?.jobs[0] ?? null;
 

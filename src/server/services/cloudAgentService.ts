@@ -855,7 +855,14 @@ export async function startGuidedCloudAgentRun(
       : null,
   });
   const nowIso = new Date().toISOString();
-  const timeoutAt = new Date(Date.now() + CLOUD_AGENT_QUEUE_WAIT_MS).toISOString();
+  // A new site-issue run is owned by this process until the Bug is stored.
+  // The queue pump claims queued runs with a null owner, including during the
+  // Azure DevOps call, so the run must not be claimable until the prompt,
+  // branch, and Bug id are on the snapshot.
+  const holdUntilBugIsStored = intent === 'start';
+  const timeoutAt = holdUntilBugIsStored
+    ? cloudAgentPreIdentityTimeoutAt(0)
+    : new Date(Date.now() + CLOUD_AGENT_QUEUE_WAIT_MS).toISOString();
   const lockKey = `cloud-agent-guided:${input.project}:${sessionId}`;
 
   const started = await db.transaction(async (tx) => {
@@ -902,6 +909,7 @@ export async function startGuidedCloudAgentRun(
       workflowClass: 'implementation',
       devSessionId: sessionId,
       requestedByUserId: input.userId,
+      ...(holdUntilBugIsStored ? { ownerInstance: cloudAgentInstanceId() } : {}),
       executor: tx,
       snapshot: {
         prompt,
@@ -1007,15 +1015,25 @@ export async function startGuidedCloudAgentRun(
         bugUrl: created.bugUrl,
       };
       const savedAt = new Date().toISOString();
-      await db.update(agentRuns).set({
+      const saved = await db.update(agentRuns).set({
         executionSnapshot: snapshot,
         updatedAt: savedAt,
-      }).where(eq(agentRuns.id, started.runId));
+      }).where(and(
+        eq(agentRuns.id, started.runId),
+        eq(agentRuns.status, 'queued'),
+        eq(agentRuns.ownerInstance, cloudAgentInstanceId()),
+      )).returning({ id: agentRuns.id });
+      if (!Array.isArray(saved) || saved.length === 0) {
+        throw new CloudAgentLaunchError(`Bug ${created.bugWorkItemId} was opened, but the guided run ended before it could start.`);
+      }
       await db.update(devSessions).set({
         branchName: branchWithBug,
         updatedAt: savedAt,
       }).where(eq(devSessions.id, started.sessionId));
     } catch (err) {
+      if (err instanceof CloudAgentLaunchError && err.message.includes('ended before it could start')) {
+        throw err;
+      }
       const detail = `Bug ${created.bugWorkItemId} was opened, but the guided run could not store it.`;
       try {
         await markTerminal(started.runId, { status: 'failed', detail });
@@ -1031,7 +1049,26 @@ export async function startGuidedCloudAgentRun(
     started.bugUrl = created.bugUrl;
   }
 
-  if (await claimCloudAgentRun(started.runId)) {
+  let readyToLaunch = false;
+  if (holdUntilBugIsStored) {
+    const refreshed = await db.update(agentRuns).set({
+      timeoutAt: cloudAgentPreIdentityTimeoutAt(0),
+      updatedAt: new Date().toISOString(),
+    }).where(and(
+      eq(agentRuns.id, started.runId),
+      eq(agentRuns.status, 'queued'),
+      eq(agentRuns.cancelRequested, false),
+      eq(agentRuns.ownerInstance, cloudAgentInstanceId()),
+      sql`${agentRuns.cloudAgentIdentity} IS NULL`,
+    )).returning({ id: agentRuns.id });
+    readyToLaunch = Array.isArray(refreshed) && refreshed.length > 0;
+    if (!readyToLaunch) {
+      throw new CloudAgentLaunchError('The guided run ended before it could start.');
+    }
+  } else {
+    readyToLaunch = await claimCloudAgentRun(started.runId);
+  }
+  if (readyToLaunch) {
     try {
       await launchClaimedCloudAgentRun(started.runId, defaultDeps);
     } catch (err) {

@@ -128,9 +128,7 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
       model: defaultModel,
       task: defaultTask,
       customPrompt: defaultCustomPrompt,
-    });
-    setImages([]);
-    setImageError(null);
+    }, { keepDirtyValues: true });
   }, [defaultCustomPrompt, defaultModel, defaultSkillPath, defaultTask, reset]);
 
   const dialogRef = useDialogFocus<HTMLDivElement>(true, onClose);

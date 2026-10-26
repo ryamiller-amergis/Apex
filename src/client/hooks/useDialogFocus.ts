@@ -12,14 +12,22 @@ const FOCUSABLE = [
 /**
  * Moves focus into a dialog, keeps Tab inside it, and restores the previous
  * focus when the dialog closes. Escape calls `onEscape`.
+ * Pass `suspended` while a dialog in front should take the keys. This trap
+ * stays mounted, so it does not pull focus back.
  */
 export function useDialogFocus<T extends HTMLElement>(
   active: boolean,
   onEscape: () => void,
+  suspended = false,
 ) {
   const nodeRef = useRef<T>(null);
   const onEscapeRef = useRef(onEscape);
-  onEscapeRef.current = onEscape;
+  const suspendedRef = useRef(suspended);
+
+  useEffect(() => {
+    onEscapeRef.current = onEscape;
+    suspendedRef.current = suspended;
+  }, [onEscape, suspended]);
 
   useEffect(() => {
     if (!active) return undefined;
@@ -32,6 +40,7 @@ export function useDialogFocus<T extends HTMLElement>(
     focusable()[0]?.focus({ preventScroll: true });
 
     const onKey = (event: KeyboardEvent) => {
+      if (suspendedRef.current) return;
       if (event.key === 'Escape') {
         event.stopPropagation();
         onEscapeRef.current();
