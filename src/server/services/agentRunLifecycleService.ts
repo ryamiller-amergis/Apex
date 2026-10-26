@@ -96,6 +96,8 @@ export type AgentRunLifecycleRow = {
   ownerInstance: string | null;
   updatedAt: string;
   devSessionId: string | null;
+  /** Set when this run implements one build task. Null for every other workflow. */
+  buildTaskId: string | null;
   workflowClass: AgentRunWorkflowClass | null;
   cloudAgentIdentity: string | null;
   cloudAgentManaged: boolean;
@@ -117,6 +119,8 @@ export interface EnqueueAgentRunInput {
   ownerInstance?: string | null;
   runId?: string;
   devSessionId?: string | null;
+  /** Optional link to build_tasks. No other enqueue behavior changes. */
+  buildTaskId?: string | null;
   workflowClass?: AgentRunWorkflowClass | null;
   executor?: { insert: typeof db.insert };
 }
@@ -188,6 +192,7 @@ function mapRow(row: typeof agentRuns.$inferSelect): AgentRunLifecycleRow {
     ownerInstance: row.ownerInstance ?? null,
     updatedAt: row.updatedAt,
     devSessionId: row.devSessionId ?? null,
+    buildTaskId: row.buildTaskId ?? null,
     workflowClass: (row.workflowClass as AgentRunWorkflowClass | null) ?? null,
     cloudAgentIdentity: row.cloudAgentIdentity ?? null,
     cloudAgentManaged: row.cloudAgentManaged ?? false,
@@ -400,6 +405,7 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
     createdAt: nowIso,
     updatedAt: nowIso,
     ...(input.devSessionId ? { devSessionId: input.devSessionId } : {}),
+    ...(input.buildTaskId ? { buildTaskId: input.buildTaskId } : {}),
     ...(input.workflowClass ? { workflowClass: input.workflowClass } : {}),
   });
 

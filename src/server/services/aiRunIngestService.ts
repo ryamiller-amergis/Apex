@@ -463,6 +463,7 @@ function mapRow(row: typeof agentRuns.$inferSelect): AgentRunLifecycleRow {
     ownerInstance: row.ownerInstance ?? null,
     updatedAt: row.updatedAt,
     devSessionId: row.devSessionId ?? null,
+    buildTaskId: row.buildTaskId ?? null,
     workflowClass: row.workflowClass ?? null,
     cloudAgentIdentity: row.cloudAgentIdentity ?? null,
     cloudAgentManaged: row.cloudAgentManaged ?? false,

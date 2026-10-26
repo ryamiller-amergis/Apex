@@ -53,7 +53,8 @@ Jest + Testing Library, Playwright E2E, Terraform on Azure.
 
 ## src/shared
 
-- `src/shared/types/`: types shared by client and server (`src/shared/types/menuSettings.ts` = nav items and visibility).
+- `src/shared/types/`: types shared by client and server (`src/shared/types/menuSettings.ts` = nav items and visibility, `src/shared/types/build.ts` = build contract). `src/shared/buildPlanSchema.ts` is the build-plan shape check.
+- `src/shared/fixtures/`: shared test fixtures (`src/shared/fixtures/buildPlanFixtures.ts`).
 - `src/shared/walkthroughRoutes.ts`, `src/shared/walkthroughAnchors.ts`, `src/shared/skillPaths.ts`, `src/shared/utils/`,
   `src/shared/constants/`, `src/shared/config/`.
 
