@@ -1,6 +1,6 @@
 import { db } from '../db/drizzle';
 import { appGroups, appGroupMembers, appUsers } from '../db/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { AppGroup, GroupMember, GroupWithMembers } from '../../shared/types/groups';
 
 const DEFAULTS = [
@@ -124,6 +124,16 @@ export async function getUserGroupNames(userId: string): Promise<string[]> {
     .innerJoin(appGroups, eq(appGroupMembers.groupId, appGroups.id))
     .where(eq(appGroupMembers.userId, userId));
   return [...new Set(rows.map(r => r.name))];
+}
+
+/** Group names for one user in one project. Memberships in other projects are not included. */
+export async function getUserGroupNamesForProject(userId: string, project: string): Promise<string[]> {
+  const rows = await db
+    .select({ name: appGroups.name })
+    .from(appGroupMembers)
+    .innerJoin(appGroups, eq(appGroupMembers.groupId, appGroups.id))
+    .where(and(eq(appGroupMembers.userId, userId), eq(appGroups.project, project)));
+  return [...new Set(rows.map((r) => r.name))];
 }
 
 /**

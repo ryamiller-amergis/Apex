@@ -19,15 +19,22 @@ import type {
   AppPermission,
   RoleWithPermissions,
 } from '../../shared/types/rbac';
+import {
+  WORKFLOW_EVALUATION_SUBMIT,
+  WORKFLOW_EVALUATION_VIEW,
+} from '../../shared/types/workflowEvaluationAccess';
 import styles from './AdminRoles.module.css';
 
 // ── Schemas ───────────────────────────────────────────────────────────────
 
 interface RbacConfigurationWarning {
-  code: 'PLAYBOOK_AUTHOR_WITHOUT_RUN';
+  code: 'PLAYBOOK_AUTHOR_WITHOUT_RUN' | 'WORKFLOW_EVALUATION_SUBMIT_WITHOUT_VIEW';
   message: string;
-  permissionKeys: ['playbooks:author', 'playbooks:run'];
+  permissionKeys: string[];
 }
+
+const WORKFLOW_EVALUATION_SUBMIT_WITHOUT_VIEW_MESSAGE =
+  'Submit permission is present without view permission; members can submit feedback but the form cannot load its definitions.';
 
 const roleSchema = z.object({
   name: z.string().min(1, 'Name is required').max(64, 'Name must be 64 characters or less'),
@@ -47,6 +54,18 @@ function playbookAuthorWithoutRunWarning(
     message:
       'Playbook author permission is present without run permission; the member can author but cannot run what they author.',
     permissionKeys: ['playbooks:author', 'playbooks:run'],
+  };
+}
+
+function workflowEvaluationSubmitWithoutViewWarning(
+  permissionKeys: Iterable<string>,
+): RbacConfigurationWarning | null {
+  const keys = new Set(permissionKeys);
+  if (!keys.has(WORKFLOW_EVALUATION_SUBMIT) || keys.has(WORKFLOW_EVALUATION_VIEW)) return null;
+  return {
+    code: 'WORKFLOW_EVALUATION_SUBMIT_WITHOUT_VIEW',
+    message: WORKFLOW_EVALUATION_SUBMIT_WITHOUT_VIEW_MESSAGE,
+    permissionKeys: [WORKFLOW_EVALUATION_SUBMIT, WORKFLOW_EVALUATION_VIEW],
   };
 }
 
@@ -252,7 +271,8 @@ interface PermissionsModalProps {
 
 const PermissionsModal: React.FC<PermissionsModalProps> = ({ role, allPermissions, onClose }) => {
   const updatePerms = useUpdateRolePermissions();
-  const [savedWarning, setSavedWarning] = useState<RbacConfigurationWarning | null>(null);
+  const [savedPlaybookWarning, setSavedPlaybookWarning] = useState<RbacConfigurationWarning | null>(null);
+  const [savedWorkflowWarning, setSavedWorkflowWarning] = useState<RbacConfigurationWarning | null>(null);
 
   const [selected, setSelected] = useState<Set<string>>(() => {
     const rolePermKeys = new Set(role.permissions);
@@ -284,9 +304,11 @@ const PermissionsModal: React.FC<PermissionsModalProps> = ({ role, allPermission
         id: role.id,
         permissionIds: Array.from(selected),
       });
-      const warning = playbookAuthorWithoutRunWarning(selectedKeys);
-      if (warning) {
-        setSavedWarning(warning);
+      const playbookWarning = playbookAuthorWithoutRunWarning(selectedKeys);
+      const workflowWarning = workflowEvaluationSubmitWithoutViewWarning(selectedKeys);
+      if (playbookWarning || workflowWarning) {
+        setSavedPlaybookWarning(playbookWarning);
+        setSavedWorkflowWarning(workflowWarning);
       } else {
         onClose();
       }
@@ -301,6 +323,15 @@ const PermissionsModal: React.FC<PermissionsModalProps> = ({ role, allPermission
   );
   const hasAuthorWithoutRun = selectedKeys.has('playbooks:author')
     && !selectedKeys.has('playbooks:run');
+  const hasSubmitWithoutView = selectedKeys.has(WORKFLOW_EVALUATION_SUBMIT)
+    && !selectedKeys.has(WORKFLOW_EVALUATION_VIEW);
+  const playbookWarningVisible = Boolean(savedPlaybookWarning || hasAuthorWithoutRun);
+  const workflowWarningVisible = Boolean(savedWorkflowWarning || hasSubmitWithoutView);
+  const hasSavedWarning = Boolean(savedPlaybookWarning || savedWorkflowWarning);
+  const warningDescribedBy = [
+    playbookWarningVisible ? 'playbook-author-without-run-warning' : null,
+    workflowWarningVisible ? 'workflow-evaluation-submit-without-view-warning' : null,
+  ].filter(Boolean).join(' ') || undefined;
 
   return (
     <div className={styles.overlay} role="dialog" aria-modal="true" aria-labelledby="perms-modal-title" {...{ 'data-testid': 'role-permissions-dialog' }}>
@@ -354,16 +385,28 @@ const PermissionsModal: React.FC<PermissionsModalProps> = ({ role, allPermission
             </div>
           ))}
 
-          {(savedWarning || hasAuthorWithoutRun) && (
+          {playbookWarningVisible && (
             <div
               className={styles.warning}
               id="playbook-author-without-run-warning"
-              role={savedWarning ? 'alert' : 'status'}
-              aria-live={savedWarning ? 'assertive' : 'polite'}
+              role={savedPlaybookWarning ? 'alert' : 'status'}
+              aria-live={savedPlaybookWarning ? 'assertive' : 'polite'}
               {...{ 'data-testid': 'playbook-author-without-run-warning' }}
             >
-              {savedWarning?.message
+              {savedPlaybookWarning?.message
                 ?? 'Playbook author permission is present without run permission; the member can author but cannot run what they author.'}
+            </div>
+          )}
+
+          {workflowWarningVisible && (
+            <div
+              className={styles.warning}
+              id="workflow-evaluation-submit-without-view-warning"
+              role={savedWorkflowWarning ? 'alert' : 'status'}
+              aria-live={savedWorkflowWarning ? 'assertive' : 'polite'}
+              {...{ 'data-testid': 'workflow-evaluation-submit-without-view-warning' }}
+            >
+              {savedWorkflowWarning?.message ?? WORKFLOW_EVALUATION_SUBMIT_WITHOUT_VIEW_MESSAGE}
             </div>
           )}
 
@@ -376,16 +419,16 @@ const PermissionsModal: React.FC<PermissionsModalProps> = ({ role, allPermission
           </button>
           <button
             className={styles.btnPrimary}
-            onClick={savedWarning ? onClose : handleSave}
+            onClick={hasSavedWarning ? onClose : handleSave}
             disabled={updatePerms.isPending}
-            aria-describedby={hasAuthorWithoutRun ? 'playbook-author-without-run-warning' : undefined}
+            aria-describedby={warningDescribedBy}
             {...{
-              'data-testid': savedWarning
+              'data-testid': hasSavedWarning
                 ? 'role-permissions-warning-acknowledge'
                 : 'role-permissions-save',
             }}
           >
-            {savedWarning
+            {hasSavedWarning
               ? 'Acknowledge and Close'
               : updatePerms.isPending
                 ? 'Saving…'
@@ -421,6 +464,7 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, project, onCl
   const [selectedOid, setSelectedOid] = useState('');
   const [memberSearch, setMemberSearch] = useState('');
   const [assignmentWarning, setAssignmentWarning] = useState<RbacConfigurationWarning | null>(null);
+  const [workflowAssignmentWarning, setWorkflowAssignmentWarning] = useState<RbacConfigurationWarning | null>(null);
 
   const members = useMemo(
     () => users.filter((u) =>
@@ -455,6 +499,7 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, project, onCl
           onSuccess: () => {
             setSelectedOid('');
             setAssignmentWarning(playbookAuthorWithoutRunWarning(role.permissions));
+            setWorkflowAssignmentWarning(workflowEvaluationSubmitWithoutViewWarning(role.permissions));
           },
         },
       );
@@ -465,6 +510,7 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, project, onCl
           onSuccess: () => {
             setSelectedOid('');
             setAssignmentWarning(null);
+            setWorkflowAssignmentWarning(workflowEvaluationSubmitWithoutViewWarning(role.permissions));
           },
         },
       );
@@ -530,7 +576,12 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, project, onCl
               onClick={handleAdd}
               disabled={!selectedOid || isLoading || isAssigning}
               aria-label="Add selected user to role"
-              aria-describedby={assignmentWarning ? 'project-role-assignment-warning' : undefined}
+              aria-describedby={
+                [
+                  assignmentWarning ? 'project-role-assignment-warning' : null,
+                  workflowAssignmentWarning ? 'workflow-evaluation-submit-without-view-warning' : null,
+                ].filter(Boolean).join(' ') || undefined
+              }
               {...{ 'data-testid': 'project-role-assign' }}
             >
               {isAssigning ? 'Adding…' : 'Add'}
@@ -547,6 +598,16 @@ const RoleMembersModal: React.FC<RoleMembersModalProps> = ({ role, project, onCl
               {...{ 'data-testid': 'playbook-author-without-run-warning' }}
             >
               {assignmentWarning.message}
+            </div>
+          )}
+          {workflowAssignmentWarning && (
+            <div
+              id="workflow-evaluation-submit-without-view-warning"
+              className={styles.warning}
+              role="alert"
+              {...{ 'data-testid': 'workflow-evaluation-submit-without-view-warning' }}
+            >
+              {workflowAssignmentWarning.message}
             </div>
           )}
 

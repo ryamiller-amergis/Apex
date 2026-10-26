@@ -155,6 +155,25 @@ function isUniqueViolation(err: unknown): boolean {
  * Current linked-context read model with live stale-ADR flags.
  * Requires interviews:view at the route layer; enforces project assignment here.
  */
+/** Sorted ADR and Design Module ids linked to an Interview. Titles are not included. */
+export async function listLinkedContextIds(interviewId: string): Promise<{
+  adrIds: string[];
+  designModuleIds: string[];
+}> {
+  const adrRows = await db
+    .select({ id: interviewAdrLinks.adrId })
+    .from(interviewAdrLinks)
+    .where(eq(interviewAdrLinks.interviewId, interviewId));
+  const moduleRows = await db
+    .select({ id: interviewDesignModuleLinks.designModuleId })
+    .from(interviewDesignModuleLinks)
+    .where(eq(interviewDesignModuleLinks.interviewId, interviewId));
+  return {
+    adrIds: adrRows.map((row) => row.id).sort(),
+    designModuleIds: moduleRows.map((row) => row.id).sort(),
+  };
+}
+
 export async function getLinkedContext(
   interviewId: string,
   actor: ActorContext,
