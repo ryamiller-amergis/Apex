@@ -430,7 +430,13 @@ describe('VT-TEMPLATE-7 — publish-time interview profile keys', () => {
     expect(committedWrites[1]).toEqual(
       expect.objectContaining({
         kind: 'insert',
-        values: expect.objectContaining({ status: 'published', graph: INTERVIEW_GRAPH }),
+        values: expect.objectContaining({
+          status: 'published',
+          graph: {
+            ...INTERVIEW_GRAPH,
+            nodes: INTERVIEW_GRAPH.nodes.map((node) => ({ ...node, stepTypeVersion: 1 })),
+          },
+        }),
       }),
     );
   });

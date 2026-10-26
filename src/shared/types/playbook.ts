@@ -13,7 +13,7 @@
 import type { ZodType } from 'zod';
 import type { ApprovalMode, ReviewerDocumentType } from './approvals';
 import type { EffortLevel } from './effort';
-import type { ArtifactRef } from './loadTest';
+import type { PlaybookAgentRunPolicy } from './playbookExecutionCapability';
 
 // ── Per-project spend admission ──────────────────────────────────────────────
 
@@ -134,6 +134,15 @@ export type PlaybookSuspendReason = 'approval_gate' | 'agent_run' | 'interview';
 export interface PlaybookGraphNode {
   id: string;
   stepType: string;
+  /**
+   * Immutable contract version stamped when a draft is published.
+   *
+   * Drafts and Playbook versions published before contract versioning may omit this value; those
+   * rows use version 1. Projects version the graph, not the shared step type itself.
+   */
+  stepTypeVersion?: number;
+  /** Frozen execution policy for an agent node on an immutable published version. */
+  agentPolicy?: PlaybookAgentRunPolicy;
   config?: Record<string, unknown>;
 }
 
@@ -162,6 +171,7 @@ export interface PlaybookVersionLayout {
 /** Registry metadata for the authoring canvas step palette. */
 export interface PlaybookStepTypePaletteItem {
   stepType: string;
+  schemaVersion: number;
   label: string;
   sideEffect: PlaybookStepSideEffect;
   requiredPermissions: readonly string[];
@@ -170,7 +180,7 @@ export interface PlaybookStepTypePaletteItem {
   canSuspend: boolean;
 }
 
-export type PlaybookDryRunIssueKind = 'graph' | 'stub' | 'branch';
+export type PlaybookDryRunIssueKind = 'graph' | 'stub' | 'branch' | 'capability';
 
 export interface PlaybookDryRunIssue {
   nodeId: string;
@@ -184,6 +194,13 @@ export interface PlaybookDryRunResult {
   manifest: string[];
   authorFootnote: { held: string[]; missing: string[] };
   issues: PlaybookDryRunIssue[];
+  capabilityManifest: Array<{
+    nodeId: string;
+    skillPath: string;
+    executionProfile: string;
+    capabilities: string[];
+    skillSha256: string;
+  }>;
 }
 
 export const PLAYBOOK_DRY_RUN_LIMIT =
@@ -274,16 +291,35 @@ export interface PlaybookStepRun {
   inputInline?: Record<string, unknown> | null;
   gatePoolKey?: ReviewerDocumentType | null;
   gateApprovalMode?: ApprovalMode | null;
-  /** Phase 0 writes only this. */
+  /** Full output for small results, or a safe summary when outputBlobRef is present. */
   outputInline: Record<string, unknown> | null;
-  /** Shaped now so the Phase 1 threshold decision costs no migration. */
-  outputBlobRef: ArtifactRef | null;
+  outputBlobRef: PlaybookStepBlobRef | null;
   /** Every suspension has one; reconciliation ends the run as expired once it passes. */
   expiresAt: string | null;
   startedAt: string | null;
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PlaybookStepBlobRef {
+  schemaVersion: 1;
+  container: string;
+  key: string;
+  sha256: string;
+  sizeBytes: number;
+  contentType: 'application/json';
+}
+
+export interface PlaybookStepOutputEnvelope {
+  schemaVersion: 1;
+  project: string;
+  runId: string;
+  stepRunId: string;
+  stepId: string;
+  stepType: string;
+  completedAt: string;
+  output: Record<string, unknown>;
 }
 
 // ── Reconstruction projection ─────────────────────────────────────────────────
@@ -348,6 +384,8 @@ export interface PlaybookRunDetail extends PlaybookRunSummary {
  */
 interface PlaybookStepTypeDescriptorBase {
   stepType: string;
+  /** Version of the input/output contract. Increment only for a breaking contract change. */
+  schemaVersion: number;
   /**
    * Skill paths this step type may run. Empty or absent means the step type runs no Skill.
    *

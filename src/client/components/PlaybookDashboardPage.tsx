@@ -6,16 +6,14 @@ import React, { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, PenLine, Play } from 'lucide-react';
 import type { PlaybookDefinitionDetail } from '../../shared/types/playbook';
+import { playbookAuthorGraphsMatch } from '../../shared/utils/playbookGraph';
 import { useAppShell } from '../hooks/useAppShell';
-import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import { usePlaybookDefinition } from '../hooks/usePlaybookDefinitions';
 import { useProfileCard } from '../hooks/useProfile';
 import { usePlaybookVersionGraph } from '../hooks/usePlaybookCanvas';
 import { usePlaybookRuns, useStartPlaybookRun } from '../hooks/usePlaybookRuns';
-import { PlaybookDraftEditor } from './PlaybookDraftEditor';
 import { PlaybookScheduleCard } from './PlaybookScheduleCard';
 import { PlaybookRunList } from './PlaybookRunList';
-import { PlaybookVersionList } from './PlaybookVersionList';
 import { nodeSubtitle, orderedSteps, stepMeta } from './playbookStepCatalog';
 import {
   computeRunStats,
@@ -162,12 +160,11 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
   const { can } = useAppShell();
   const canAuthor = can('playbooks:author');
   const canRun = can('playbooks:run');
-  const canvasEnabled = useFeatureFlag('playbooks-authoring-canvas', project);
   const detail = usePlaybookDefinition(project, definitionId);
   const runs = usePlaybookRuns(project);
   const start = useStartPlaybookRun(project, definitionId);
   const publishedVersionId = detail.data?.currentPublishedVersionId ?? null;
-  const publishedGraph = usePlaybookVersionGraph(project, definitionId, publishedVersionId, canvasEnabled);
+  const publishedGraph = usePlaybookVersionGraph(project, definitionId, publishedVersionId, true);
   const [runError, setRunError] = useState<string | null>(null);
 
   const definitionRuns = useMemo(
@@ -192,7 +189,8 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
   const data = detail.data;
   const currentVersion = data.versions.find((version) => version.id === publishedVersionId);
   const hasUnpublishedChanges = publishedVersionId
-    ? Boolean(publishedGraph.data) && JSON.stringify(publishedGraph.data!.graph) !== JSON.stringify(data.draft.graph)
+    ? Boolean(publishedGraph.data)
+      && !playbookAuthorGraphsMatch(publishedGraph.data!.graph, data.draft.graph)
     : data.draft.graph.nodes.length > 0;
   const truncated = runs.data ? runs.data.total > runs.data.runs.length : false;
 
@@ -200,7 +198,7 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
     setRunError(null);
     try {
       const result = await start.mutateAsync();
-      if (canvasEnabled) navigate(`/playbooks/runs/${result.runId}`);
+      navigate(`/playbooks/runs/${result.runId}`);
     } catch (error) {
       setRunError(error instanceof Error ? error.message : 'Could not start the run.');
     }
@@ -246,15 +244,22 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
           </p>
         </div>
         <div className={styles.headerActions}>
-          {canvasEnabled ? (
+          {canAuthor ? (
             <Link
-              to={`/playbooks/definitions/${definitionId}`}
+              to={`/playbooks/${definitionId}/edit`}
               className={styles.secondaryButton}
-              {...{ 'data-testid': 'playbook-open-canvas' }}
+              data-testid="playbook-dashboard-edit"
             >
-              <PenLine size={15} aria-hidden /> {canAuthor ? 'Edit in builder' : 'View in builder'}
+              <PenLine size={15} aria-hidden /> Edit
             </Link>
           ) : null}
+          <Link
+            to={`/playbooks/definitions/${definitionId}`}
+            className={styles.secondaryButton}
+            {...{ 'data-testid': 'playbook-open-canvas' }}
+          >
+            <PenLine size={15} aria-hidden /> {canAuthor ? 'Edit in builder' : 'View in builder'}
+          </Link>
           {canRun ? (
             <button
               type="button"
@@ -270,9 +275,6 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
         </div>
       </header>
       {runError ? <p className={styles.errorBanner} role="alert">{runError}</p> : null}
-      {start.isSuccess && !canvasEnabled ? (
-        <p className={styles.successBanner} role="status">Run started.</p>
-      ) : null}
 
       <PlaybookScheduleCard
         project={project}
@@ -350,32 +352,6 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
         </section>
       </div>
 
-      {canAuthor ? (
-        <section className={styles.panel} aria-labelledby="playbook-manage-heading">
-          <header className={styles.panelHeader}>
-            <h2 id="playbook-manage-heading" className={styles.panelTitle}>Manage</h2>
-          </header>
-          <details className={styles.disclosure}>
-            <summary {...{ 'data-testid': 'playbook-dashboard-versions-toggle' }}>Versions and deprecation</summary>
-            <PlaybookVersionList
-              project={project}
-              definitionId={definitionId}
-              versions={data.versions}
-              currentPublishedVersionId={data.currentPublishedVersionId}
-              canAuthor={canAuthor}
-            />
-          </details>
-          <details className={styles.disclosure}>
-            <summary {...{ 'data-testid': 'playbook-dashboard-json-toggle' }}>Edit name, description or graph JSON</summary>
-            <PlaybookDraftEditor
-              project={project}
-              detail={data}
-              canAuthor={canAuthor}
-              reload={detail.refetch}
-            />
-          </details>
-        </section>
-      ) : null}
     </div>
   );
 };

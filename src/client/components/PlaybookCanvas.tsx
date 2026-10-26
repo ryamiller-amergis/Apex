@@ -308,7 +308,7 @@ function PlaybookCanvasInner({
         onDelete={onDelete}
         nodesDraggable={!readOnly}
         nodesConnectable={!readOnly}
-        elementsSelectable={!readOnly}
+        elementsSelectable={!readOnly || Boolean(onSelectNode)}
         deleteKeyCode={readOnly ? null : ['Delete', 'Backspace']}
         fitView
         fitViewOptions={{ padding: 0.35, maxZoom: 1 }}

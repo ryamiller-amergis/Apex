@@ -117,6 +117,7 @@ import type {
   PlaybookGraph,
   PlaybookLayoutPositions,
   PlaybookRunStatus,
+  PlaybookStepBlobRef,
   PlaybookStepRunStatus,
   PlaybookVersionStatus,
 } from '../../shared/types/playbook';
@@ -3450,7 +3451,7 @@ export const playbookStepRuns = pgTable('playbook_step_runs', {
   gatePoolKey: text('gate_pool_key').$type<ReviewerDocumentType>(),
   gateApprovalMode: text('gate_approval_mode').$type<ApprovalMode>(),
   outputInline: jsonb('output_inline').$type<Record<string, unknown>>(),
-  outputBlobRef: jsonb('output_blob_ref').$type<ArtifactRef>(),
+  outputBlobRef: jsonb('output_blob_ref').$type<PlaybookStepBlobRef>(),
   expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }),
   startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
   completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),

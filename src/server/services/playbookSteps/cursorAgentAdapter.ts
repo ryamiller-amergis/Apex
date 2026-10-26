@@ -27,6 +27,11 @@ import {
   PlaybookMcpCapabilityError,
   resolvePlaybookMcpCapability,
 } from '../playbookMcpCapabilityService';
+import {
+  loadPlaybookSkillContent,
+  PlaybookExecutionCapabilityError,
+  resolvePlaybookAgentRunPolicy,
+} from '../playbookExecutionCapabilityService';
 import { parseStepInput } from './descriptorValidation';
 import { assertSkillAllowed, resolveDeadlineMs } from './registry';
 import {
@@ -39,6 +44,7 @@ import {
 } from './stepRuns';
 import type { CursorAgentStepConfig } from '../../../shared/types/playbook';
 import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
+import type { PlaybookAgentRunPolicy } from '../../../shared/types/playbookExecutionCapability';
 
 /**
  * How much longer the step waits than the agent run it is watching.
@@ -67,12 +73,39 @@ async function isV2TransportEnabled(userId: string, project: string): Promise<bo
  * router did not reach a worker. The router's in-process fallback is a no-op here: running the
  * agent on App Service would hide a V2 failure, so the caller fails the step as retryable instead.
  */
+/**
+ * The V2 specification must carry the same Skill bytes the policy was hashed from.
+ * `prepareBackgroundWorkflowTurn` loads a catalog copy, and that copy can differ from the
+ * App Service file the policy already pinned. The worker then refuses the run.
+ */
+function bindPolicySkill<T extends { prompt: string; skillContent?: string }>(
+  prepared: T,
+  skillContent: string,
+  policy: PlaybookAgentRunPolicy,
+): T & { skillPath: string; skillContent: string; skillSha256: string } {
+  const catalogSkill = prepared.skillContent;
+  const prompt = catalogSkill
+    && catalogSkill !== skillContent
+    && prepared.prompt.includes(catalogSkill)
+    ? prepared.prompt.replace(catalogSkill, skillContent)
+    : prepared.prompt;
+  return {
+    ...prepared,
+    prompt,
+    skillPath: policy.skill.path,
+    skillContent,
+    skillSha256: policy.skill.sha256,
+  };
+}
+
 async function routeStepThroughV2(input: {
   userId: string;
   project: string;
   threadId: string;
   prompt: string;
   model: string;
+  skillContent: string;
+  policy: PlaybookAgentRunPolicy;
 }): Promise<string | null> {
   const decision = await routeBackgroundWorkflow({
     userId: input.userId,
@@ -82,10 +115,15 @@ async function routeStepThroughV2(input: {
     // listener correlates on this id, so each step needs its own.
     agentRunId: randomUUID(),
     threadId: input.threadId,
-    prepareWorker: async () => ({
-      ...(await prepareBackgroundWorkflowTurn(input.threadId, input.prompt)),
-      model: input.model,
-    }),
+    playbookAgentPolicy: input.policy,
+    prepareWorker: async () => bindPolicySkill(
+      {
+        ...(await prepareBackgroundWorkflowTurn(input.threadId, input.prompt)),
+        model: input.model,
+      },
+      input.skillContent,
+      input.policy,
+    ),
     runInProcess: () => undefined,
     reportRecoverablePreparationFailure: () => undefined,
   });
@@ -117,6 +155,33 @@ export async function executeCursorAgentStep(
   const stepExpiresAt = deadlineFromNow(deadlineMs);
 
   const skillConfig = await getSkillConfig(context.project);
+  const skillContent = await loadPlaybookSkillContent(config.skillPath);
+  const resolvedPolicy = resolvePlaybookAgentRunPolicy({
+    nodeId: context.stepId,
+    skillPath: config.skillPath,
+    skillContent,
+    mcpProfile: config.mcpProfile,
+    repository: skillConfig?.skillRepo ?? context.project,
+    provider: skillConfig?.skillProvider,
+    enforce: true,
+  });
+  const frozenPolicy = context.graph?.nodes.find(
+    (node) => node.id === context.stepId
+  )?.agentPolicy;
+  if (
+    frozenPolicy
+    && (
+      frozenPolicy.skill.path !== resolvedPolicy.skill.path
+      || frozenPolicy.skill.sha256 !== resolvedPolicy.skill.sha256
+    )
+  ) {
+    throw new PlaybookExecutionCapabilityError(
+      `The published capability policy for step "${context.stepId}" no longer matches its Skill.`
+    );
+  }
+  const policy = frozenPolicy
+    ? { ...frozenPolicy, enforcement: 'enforce' as const }
+    : resolvedPolicy;
 
   // The SDK rejects a blank model id outright, so a step in a project with no configured default
   // cannot fall through to the empty string. This is the resolution the interactive lane already
@@ -153,8 +218,11 @@ export async function executeCursorAgentStep(
     workspaceRef: thread.workspaceDir,
     workflowClass: 'playbook-step',
     skillPath: config.skillPath,
+    skillContent,
+    skillSha256: policy.skill.sha256,
     projectId: context.project,
     threadId: thread.id,
+    playbookAgentPolicy: policy,
   };
 
   if (await isV2TransportEnabled(context.initiatorUserId, context.project)) {
@@ -166,6 +234,8 @@ export async function executeCursorAgentStep(
         threadId: thread.id,
         prompt: config.prompt,
         model,
+        skillContent,
+        policy,
       });
     } catch (error) {
       await failStepRun({

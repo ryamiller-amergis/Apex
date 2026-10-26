@@ -15,6 +15,9 @@ import { db } from '../db/drizzle';
 import { playbookDefinitions, playbookDefinitionVersions } from '../db/schema';
 import { assertGraphWithinGuards } from './playbookGuardService';
 import { assertCursorAgentsUseReadOnlyMcp } from './playbookMcpCapabilityService';
+import { getStepTypeDescriptor } from './playbookSteps/registry';
+import { resolvePlaybookGraphAgentPolicies } from './playbookExecutionCapabilityService';
+import { getSkillConfig } from './projectSettingsService';
 import { copyLayoutToPublishedVersion } from './playbookVersionLayoutService';
 import type {
   PlaybookDefinition,
@@ -28,6 +31,8 @@ import type {
   PlaybookPublishResponse,
   PlaybookVersionStatus,
 } from '../../shared/types/playbook';
+import type { PlaybookAgentRunPolicy } from '../../shared/types/playbookExecutionCapability';
+import type { SkillProvider } from '../../shared/types/projectSettings';
 
 /**
  * Legal lifecycle moves.
@@ -114,6 +119,46 @@ export class PlaybookDraftConflictError extends Error {
   }
 }
 
+/** Adds the shared step-contract version to the immutable graph without changing the draft. */
+export function stampPublishedStepTypeVersions(
+  graph: PlaybookGraph,
+  policies: Array<{ nodeId: string; policy: PlaybookAgentRunPolicy }> = []
+): PlaybookGraph {
+  const policyByNode = new Map(policies.map(({ nodeId, policy }) => [nodeId, policy]));
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node) => ({
+      ...node,
+      stepTypeVersion: getStepTypeDescriptor(node.stepType).schemaVersion,
+      ...(policyByNode.has(node.id) ? { agentPolicy: policyByNode.get(node.id) } : {}),
+    })),
+  };
+}
+
+async function assertPlaybookCapabilitiesForPublish(input: {
+  graph: PlaybookGraph;
+  project?: string;
+  userId?: string;
+}): Promise<Array<{ nodeId: string; policy: PlaybookAgentRunPolicy }>> {
+  let repository = input.project;
+  let provider: SkillProvider | undefined;
+  if (input.project) {
+    try {
+      const settings = await getSkillConfig(input.project);
+      repository = settings?.skillRepo ?? input.project;
+      provider = settings?.skillProvider;
+    } catch {
+      // A policy can still be frozen without optional repository grounding.
+    }
+  }
+  return resolvePlaybookGraphAgentPolicies({
+    graph: input.graph,
+    enforce: true,
+    repository,
+    provider,
+  });
+}
+
 /** Content may only be edited while a version is still a draft. */
 export function assertContentMutable(
   versionId: string,
@@ -174,11 +219,20 @@ export async function publishVersion(
   assertLifecycleTransition(version.status, 'published');
   assertGraphWithinGuards(version.graph as PlaybookGraph);
   assertCursorAgentsUseReadOnlyMcp(version.graph as PlaybookGraph);
+  const policies = await assertPlaybookCapabilitiesForPublish({
+    graph: version.graph as PlaybookGraph,
+    userId: publishedByUserId,
+  });
+  const publishedGraph = stampPublishedStepTypeVersions(
+    version.graph as PlaybookGraph,
+    policies
+  );
 
   await db
     .update(playbookDefinitionVersions)
     .set({
       status: 'published',
+      graph: publishedGraph,
       publishedBy: publishedByUserId,
       publishedAt: new Date().toISOString(),
     })
@@ -503,6 +557,11 @@ export async function publishDraft(
     );
     assertGraphWithinGuards(draft.graph);
     assertCursorAgentsUseReadOnlyMcp(draft.graph);
+    const policies = await assertPlaybookCapabilitiesForPublish({
+      graph: draft.graph,
+      project: input.project,
+      userId: input.publishedByUserId,
+    });
     await assertInterviewProfilesForPublish(
       input.project,
       draft.graph,
@@ -510,6 +569,7 @@ export async function publishDraft(
     );
 
     const publishedAt = new Date().toISOString();
+    const publishedGraph = stampPublishedStepTypeVersions(draft.graph, policies);
     const [advancedDraft] = await tx
       .update(playbookDefinitionVersions)
       .set({
@@ -532,7 +592,7 @@ export async function publishDraft(
       .values({
         definitionId: draft.definitionId,
         versionNumber: draft.versionNumber,
-        graph: draft.graph,
+        graph: publishedGraph,
         status: 'published',
         publishedBy: input.publishedByUserId,
         publishedAt,

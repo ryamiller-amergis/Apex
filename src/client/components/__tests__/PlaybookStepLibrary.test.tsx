@@ -6,6 +6,7 @@ import { PlaybookStepLibrary } from '../PlaybookStepLibrary';
 function item(stepType: string): PlaybookStepTypePaletteItem {
   return {
     stepType,
+    schemaVersion: 1,
     label: stepType,
     sideEffect: 'read',
     requiredPermissions: ['playbooks:view'],
