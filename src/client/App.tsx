@@ -591,6 +591,7 @@ function App() {
   const [firstMessageError, setFirstMessageError] = useState<
     { threadId: string; message: string } | null
   >(null);
+  const [mcpStartChatError, setMcpStartChatError] = useState<string | null>(null);
   const panelRepo = useMemo(
     () =>
       activeSkillConfig
@@ -733,6 +734,7 @@ function App() {
     if (!can('chat:view') || !can('chat:create') || !panelRepo || startChat.isPending) return;
     setChatOpen(true);
     setFirstMessageError(null);
+    setMcpStartChatError(null);
     const startingLocationKey = locationRef.current.key;
     try {
       const result = await startChat.mutateAsync({
@@ -754,9 +756,13 @@ function App() {
       if (locationRef.current.key === startingLocationKey) {
         syncHomeThreadUrl(result.threadId);
       }
-    } catch {
+    } catch (err) {
       if (locationRef.current.key === startingLocationKey) {
         setChatOpen(false);
+        setMcpStartChatError(
+          friendlyChatErrorMessage(err instanceof Error ? err.message : null),
+        );
+        startChat.reset();
       }
     }
   }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig, syncHomeThreadUrl]);
@@ -1592,6 +1598,7 @@ function App() {
                   enabled={mcpServersEnabled}
                   menuEnabled={effectiveEnabledViews.includes('mcp-servers')}
                   canStartChat={Boolean(panelRepo) && can('chat:view') && can('chat:create') && !startChat.isPending}
+                  startChatError={mcpStartChatError}
                   onStartChat={(connection) => { void handleStartMcpChat(connection); }}
                 />
               </Suspense>

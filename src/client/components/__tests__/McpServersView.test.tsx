@@ -204,6 +204,20 @@ describe('McpServersView', () => {
     expect(onStartChat).toHaveBeenCalledWith({ id: 'conn-1', name: 'Docs' });
   });
 
+  it('shows a start-chat error from the parent', () => {
+    render(
+      <McpServersView
+        project="MaxView"
+        enabled
+        menuEnabled
+        canStartChat
+        startChatError="Connection refused"
+        onStartChat={jest.fn()}
+      />,
+    );
+    expect(screen.getByTestId('mcp-servers-chat-error')).toHaveTextContent('Connection refused');
+  });
+
   it('syncs the structured URL input with the JSON config, displays live Usable status in the detail header, and filters discovered tools', () => {
     mockConnections[0].status = 'usable';
     mockConnections[0].operations = [

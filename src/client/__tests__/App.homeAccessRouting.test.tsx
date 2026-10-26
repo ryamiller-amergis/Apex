@@ -78,6 +78,7 @@ jest.mock('../components/AppHeader', () => ({
 jest.mock('../components/McpServersView', () => ({
   McpServersView: (props: {
     onStartChat?: (connection: { id: string; name: string }) => void;
+    startChatError?: string | null;
   }) => (
     <div data-testid="mcp-servers-view">
       <button
@@ -86,6 +87,9 @@ jest.mock('../components/McpServersView', () => ({
       >
         Chat with MCP
       </button>
+      {props.startChatError && (
+        <p data-testid="mcp-servers-chat-error">{props.startChatError}</p>
+      )}
     </div>
   ),
 }));
@@ -117,6 +121,7 @@ jest.mock('../components/ChatAgentPanel', () => ({
     thread?: { id: string; kickoff: { project: string } } | null;
     activeThreadId?: string | null;
     isOpen?: boolean;
+    newChatError?: string;
     onNewChat?: (options?: { initialMessage?: string }) => Promise<void>;
     onSelectThread?: (id: string) => void;
   }) => {
@@ -181,6 +186,7 @@ let mockChatPanelProps: {
   thread?: { id: string; kickoff: { project: string } } | null;
   activeThreadId?: string | null;
   isOpen?: boolean;
+  newChatError?: string;
   onNewChat?: (options?: { initialMessage?: string }) => Promise<void>;
   onSelectThread?: (id: string) => void;
 } = {};
@@ -246,6 +252,7 @@ function setupBase(flagsOverride: Record<string, boolean> = {}) {
   (useStartChat as jest.Mock).mockReturnValue({
     mutateAsync: mockStartChatMutateAsync,
     isPending: false,
+    reset: jest.fn(),
   });
   mockedUseFeatureFlags.mockReturnValue({
     flags: { 'agent-home': true, ...flagsOverride },
@@ -597,7 +604,18 @@ describe('App — Home access with permission + flag both enabled (default)', ()
       },
       isLoading: false,
     } as any);
-    mockStartChatMutateAsync.mockRejectedValue(new Error('Connection refused'));
+    let startChatError: Error | null = null;
+    const resetStartChat = jest.fn(() => { startChatError = null; });
+    (useStartChat as jest.Mock).mockReturnValue({
+      mutateAsync: mockStartChatMutateAsync,
+      isPending: false,
+      get error() { return startChatError; },
+      reset: resetStartChat,
+    });
+    mockStartChatMutateAsync.mockImplementation(async () => {
+      startChatError = new Error('Connection refused');
+      throw startChatError;
+    });
 
     renderApp('/mcp-servers');
     fireEvent.click(await screen.findByRole('button', { name: 'Chat with MCP' }));
@@ -605,6 +623,14 @@ describe('App — Home access with permission + flag both enabled (default)', ()
       expect(mockStartChatMutateAsync).toHaveBeenCalled();
     });
     expect(screen.getByTestId('location').textContent).toBe('/mcp-servers');
+    expect(await screen.findByTestId('mcp-servers-chat-error')).toHaveTextContent('Connection refused');
+    expect(screen.queryByTestId('chat-agent-panel-open')).not.toBeInTheDocument();
+    expect(resetStartChat).toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Home' }));
+    expect(screen.getByTestId('location').textContent).toBe('/home');
+    expect(screen.queryByTestId('mcp-servers-chat-error')).not.toBeInTheDocument();
+    expect(mockChatPanelProps.newChatError).toBeUndefined();
   });
 });
 

@@ -54,6 +54,7 @@ interface McpServersViewProps {
   enabled: boolean;
   menuEnabled: boolean;
   canStartChat?: boolean;
+  startChatError?: string | null;
   onStartChat?: (connection: { id: string; name: string }) => void;
 }
 
@@ -89,6 +90,7 @@ export const McpServersView: React.FC<McpServersViewProps> = ({
   enabled,
   menuEnabled,
   canStartChat = false,
+  startChatError,
   onStartChat,
 }) => {
   const [search, setSearch] = useState('');
@@ -359,6 +361,9 @@ export const McpServersView: React.FC<McpServersViewProps> = ({
           <p>Add a remote MCP server for this project. One sign-in is shared by everyone who can use the project.</p>
         </div>
       </div>
+      {startChatError && (
+        <p className={gridStyles.error} {...{ 'data-testid': 'mcp-servers-chat-error' }}>{startChatError}</p>
+      )}
       <div className={styles.workspace}>
         <aside className={styles.serverPane}>
           <div className={styles.serverPaneHeader}>
