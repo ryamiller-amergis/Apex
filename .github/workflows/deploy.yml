@@ -299,6 +299,8 @@ jobs:
           # sticky so a swap cannot move it onto production.
           # ALLOW_TEST_ACCOUNT_SIGN_IN lets the MFA-exempt test accounts sign in on
           # staging only; production holds a sticky "false".
+          # GROUNDING_MAINTENANCE_MODE: staging shares production's database, so it
+          # only evicts and compacts its own disk; it never clones production's repos.
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
@@ -310,7 +312,8 @@ jobs:
               AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS="${{ vars.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS || '600000' }}" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
               APEX_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
-              ALLOW_TEST_ACCOUNT_SIGN_IN="true"
+              ALLOW_TEST_ACCOUNT_SIGN_IN="true" \
+              GROUNDING_MAINTENANCE_MODE="cleanup-only"
 
           # Production slot sticky callback + shared MI runner auth (not swapped away).
           # Re-mark the *existing* production DATABASE_URL as sticky — do not write
@@ -332,7 +335,8 @@ jobs:
               AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS="${{ vars.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS || '600000' }}" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net" \
               APEX_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net" \
-              ALLOW_TEST_ACCOUNT_SIGN_IN="false"
+              ALLOW_TEST_ACCOUNT_SIGN_IN="false" \
+              GROUNDING_MAINTENANCE_MODE="full"
 
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \

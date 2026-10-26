@@ -226,4 +226,120 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
     expect(evictIdle).not.toHaveBeenCalled();
     expect(sharedEvictIdle).not.toHaveBeenCalled();
   });
+
+  describe('GROUNDING_MAINTENANCE_MODE', () => {
+    function stubs() {
+      return {
+        sweep: jest.fn().mockResolvedValue(undefined),
+        preWarm: jest.fn().mockResolvedValue(undefined),
+        evictIdle: jest.fn().mockResolvedValue(undefined),
+        sharedEvictIdle: jest.fn().mockResolvedValue({ scanned: 0, evicted: 0, protected: 0 }),
+        evictOverBudget: stubRepoCacheEviction(),
+        evaluateActive: jest.fn().mockResolvedValue([]),
+        runIfDue: jest.fn().mockResolvedValue({
+          due: false,
+          etDate: '2026-08-20',
+          considered: 0,
+          reGrounded: 0,
+          skippedRunning: 0,
+          skippedFresh: 0,
+          skippedIneligible: 0,
+          errors: 0,
+        }),
+        runLeaderSweep: jest.fn(
+          async (operation: () => Promise<void>, _leaseWindowMs: number, _claimKey: string) =>
+            operation(),
+        ),
+        subscribe: jest.fn(() => jest.fn()),
+      };
+    }
+
+    function build(s: ReturnType<typeof stubs>, mode?: string) {
+      return createGroundingMaintenanceScheduler({
+        preWarmService: { sweep: s.sweep, preWarm: s.preWarm },
+        evictionService: { evictIdle: s.evictIdle },
+        sharedReadCheckoutService: { evictIdle: s.sharedEvictIdle },
+        repoCacheEvictionService: { evictOverBudget: s.evictOverBudget },
+        stalenessService: { evaluateActive: s.evaluateActive },
+        nightlyIdleReGround: { runIfDue: s.runIfDue },
+        runLeaderSweep: s.runLeaderSweep,
+        subscribe: s.subscribe,
+        startupDelayMs: 100,
+        ...(mode !== undefined ? { mode } : {}),
+      });
+    }
+
+    it('cleanup-only runs only the evictions, under its own claim key, with no pre-warm subscription', async () => {
+      const s = stubs();
+      const log = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+      const scheduler = build(s, 'cleanup-only');
+
+      scheduler.start();
+      await jest.advanceTimersByTimeAsync(100);
+      scheduler.stop();
+
+      expect(scheduler.mode).toBe('cleanup-only');
+      expect(s.subscribe).not.toHaveBeenCalled();
+      expect(s.sweep).not.toHaveBeenCalled();
+      expect(s.evaluateActive).not.toHaveBeenCalled();
+      expect(s.runIfDue).not.toHaveBeenCalled();
+      expect(s.evictIdle).toHaveBeenCalledTimes(1);
+      expect(s.sharedEvictIdle).toHaveBeenCalledTimes(1);
+      expect(s.evictOverBudget).toHaveBeenCalledTimes(1);
+      expect(s.runLeaderSweep).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.any(Number),
+        'grounding-maintenance:sweep:cleanup-only',
+      );
+      log.mockRestore();
+    });
+
+    it('full keeps the existing claim key and every step', async () => {
+      const s = stubs();
+      const scheduler = build(s, 'full');
+
+      await scheduler.runNow();
+
+      expect(s.sweep).toHaveBeenCalledTimes(1);
+      expect(s.evaluateActive).toHaveBeenCalledTimes(1);
+      expect(s.runIfDue).toHaveBeenCalledTimes(1);
+      expect(s.evictOverBudget).toHaveBeenCalledTimes(1);
+      expect(s.runLeaderSweep).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.any(Number),
+        'grounding-maintenance:sweep',
+      );
+    });
+
+    it('reads the mode from the environment by default', () => {
+      const original = process.env.GROUNDING_MAINTENANCE_MODE;
+      process.env.GROUNDING_MAINTENANCE_MODE = 'cleanup-only';
+      try {
+        expect(build(stubs()).mode).toBe('cleanup-only');
+      } finally {
+        if (original === undefined) delete process.env.GROUNDING_MAINTENANCE_MODE;
+        else process.env.GROUNDING_MAINTENANCE_MODE = original;
+      }
+    });
+
+    it('falls back to full with a warning for an unknown value', async () => {
+      const s = stubs();
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const scheduler = build(s, 'staging');
+
+      await scheduler.runNow();
+
+      expect(scheduler.mode).toBe('full');
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('unknown GROUNDING_MAINTENANCE_MODE="staging"'),
+      );
+      expect(s.sweep).toHaveBeenCalledTimes(1);
+      expect(s.runLeaderSweep).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.any(Number),
+        'grounding-maintenance:sweep',
+      );
+      warn.mockRestore();
+    });
+  });
 });
