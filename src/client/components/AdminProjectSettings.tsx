@@ -28,6 +28,9 @@ import {
 } from '../hooks/useProjectRepositoryReadiness';
 import styles from './AdminProjectSettings.module.css';
 import { PlaybookSpendPolicyCard } from './PlaybookSpendPolicyCard';
+import { BuildProfileSection } from './BuildProfileSection';
+import { BUILD_FROM_PROMPT_FLAG } from '../../shared/types/featureFlags';
+import type { UserWithRoles } from '../../shared/types/rbac';
 
 // ── BranchCombobox ─────────────────────────────────────────────────────────────
 
@@ -1634,6 +1637,43 @@ const RepoCheckoutControlsEnabled: React.FC<RepoCheckoutControlsProps> = ({ conf
   );
 };
 
+interface BuildProfileAccordionProps {
+  settingsId: string | null;
+  project: string;
+  expanded: boolean;
+  onToggle: () => void;
+  skillList: { id: string; path: string; name: string }[];
+  availableModels: { id: string; displayName: string }[];
+  users: UserWithRoles[];
+  skillsLoading: boolean;
+  modelsLoading: boolean;
+}
+
+const BuildProfileAccordion: React.FC<BuildProfileAccordionProps> = ({ expanded, onToggle, ...sectionProps }) => {
+  const enabled = useFeatureFlag(BUILD_FROM_PROMPT_FLAG, sectionProps.project);
+
+  // @feature-flag:build-from-prompt start winner=enabled
+  if (!enabled) {
+    // @feature-flag:build-from-prompt disabled-start
+    return null;
+    // @feature-flag:build-from-prompt disabled-end
+  }
+
+  // @feature-flag:build-from-prompt enabled-start
+  return (
+    <AccordionSection
+      title="Build Profile"
+      hint="Skill, model and caps for each build role"
+      expanded={expanded}
+      onToggle={onToggle}
+    >
+      <BuildProfileSection {...sectionProps} />
+    </AccordionSection>
+  );
+  // @feature-flag:build-from-prompt enabled-end
+  // @feature-flag:build-from-prompt end
+};
+
 const RepoCheckoutControls: React.FC<RepoCheckoutControlsProps & { project: string }> = ({
   config,
   project,
@@ -1687,6 +1727,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     approvers: false,
     pills: false,
     mcpPills: false,
+    buildProfile: false,
   });
 
   // Optional pipeline stages start collapsed; core stages start open
@@ -3286,6 +3327,18 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 isPending={upsert.isPending}
                 onAdd={(pill) => setEdit((prev) => prev ? { ...prev, quickMcpPills: [...prev.quickMcpPills, pill] } : prev)} {...{ 'data-testid': 'ps-mcp-pill-add-form' }} />
             </AccordionSection>
+
+            <BuildProfileAccordion
+              settingsId={edit.id}
+              project={edit.project || selectedProject}
+              expanded={expandedSections.buildProfile}
+              onToggle={() => toggleSection('buildProfile')}
+              skillList={skillList}
+              availableModels={availableModels}
+              users={allUsers}
+              skillsLoading={isLoadingSkills || !edit.skillRepo}
+              modelsLoading={isLoadingModels}
+            />
 
             {formError && <p className={styles.formError}>{formError}</p>}
             <div className={styles.formActions} style={{ marginTop: '12px' }}>

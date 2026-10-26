@@ -92,6 +92,7 @@ import type {
   BuildCorrelationKind,
   BuildDeploymentStatus,
   BuildEventSeverity,
+  BuildProfile,
   BuildQualityManifestSnapshot,
   BuildRequirement,
   BuildReuseEntry,
@@ -1180,9 +1181,17 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
     withTimezone: true,
     mode: 'string',
   }),
+  /** Null means no Build profile yet. Saved through its own route, never by upsertSkillConfig. */
+  buildProfile: jsonb('build_profile').$type<BuildProfile>(),
+  buildProfileUpdatedAt: timestamp('build_profile_updated_at', { withTimezone: true, mode: 'string' }),
+  buildProfileUpdatedBy: text('build_profile_updated_by'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => ({
+  buildProfileObjectCheck: check(
+    'project_skill_settings_build_profile_object_check',
+    sql`${t.buildProfile} IS NULL OR jsonb_typeof(${t.buildProfile}) = 'object'`,
+  ),
   // Exactly one default repo config per project.
   oneDefaultPerProject: uniqueIndex('project_skill_settings_one_default_per_project')
     .on(t.project)

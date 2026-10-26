@@ -282,24 +282,26 @@ export interface BuildRiskDecision {
   rationale: string;
 }
 
+/** Null means "not set": the resolver falls back for models; skill paths have no fallback. */
 export interface BuildProfileRoleSetting {
-  skillPath: string;
-  model: string;
+  skillPath: string | null;
+  model: string | null;
 }
 
-/** Shape only. FEAT-003 stores the profile. */
+export interface BuildProfileCaps {
+  costUsd: number | null;
+  elapsedMinutesPerRevision: number | null;
+  /** Change requests, not counting the first build. */
+  maxRevisions: number | null;
+  maxParallelism: number | null;
+}
+
+/** Stored on `project_skill_settings.build_profile`, one per repository configuration. */
 export interface BuildProfile {
-  intake: BuildProfileRoleSetting;
-  planner: BuildProfileRoleSetting;
-  implementer: BuildProfileRoleSetting;
-  qa: BuildProfileRoleSetting;
-  check: BuildProfileRoleSetting;
-  costCapUsd: number;
-  elapsedCapSeconds: number;
-  parallelismCap: number;
-  /** Change requests, not counting the first build. Default 5. */
-  revisionCap: number;
-  qualityManifestRef: string;
+  roles: Record<BuildProfileRole, BuildProfileRoleSetting>;
+  caps: BuildProfileCaps;
+  qualityManifestPath: string | null;
+  deployPipelineId: number | null;
   supportContactUserIds: string[];
 }
 
