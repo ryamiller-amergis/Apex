@@ -44,7 +44,10 @@ resource "azurerm_linux_web_app" "main" {
   resource_group_name = local.app_resource_group_name
   service_plan_id     = azurerm_service_plan.main.id
   https_only          = true
-  tags                = merge(var.tags, { Environment = var.environment })
+  # ARR affinity pins a browser to one instance; when that instance hangs, the
+  # user stays pinned to it. deploy.yml enforces the live value.
+  client_affinity_enabled = false
+  tags                    = merge(var.tags, { Environment = var.environment })
 
   identity {
     type = "SystemAssigned"
@@ -90,12 +93,21 @@ resource "azurerm_linux_web_app" "main" {
     "WEBSITE_RUN_FROM_PACKAGE"            = "1"
     "WEBSITES_ENABLE_APP_SERVICE_STORAGE" = "true"
 
+    # Evict an unresponsive instance after 2 failed health pings instead of the
+    # default 10.
+    "WEBSITE_HEALTHCHECK_MAXPINGFAILURES" = "2"
+
     # Observability
     "APPLICATIONINSIGHTS_CONNECTION_STRING" = azurerm_application_insights.main.connection_string
 
     # Repository grounding bundles (managed identity; no storage keys)
     "GROUNDING_BLOB_ACCOUNT_NAME"   = azurerm_storage_account.shared.name
     "GROUNDING_BLOB_CONTAINER_NAME" = azurerm_storage_container.shared["repo-grounding"].name
+
+    # Playbook step output (managed identity; no storage keys). Existing apps
+    # keep using the shared-account fallback until deploy writes this setting.
+    "PLAYBOOK_STEP_OUTPUT_BLOB_ACCOUNT_NAME" = azurerm_storage_account.shared.name
+    "PLAYBOOK_STEP_OUTPUT_CONTAINER_NAME"    = azurerm_storage_container.shared["playbook-step-outputs"].name
 
     # Repo read service (null/empty while enable_repo_read_service is false)
     "REPO_READ_SERVICE_URL"   = try("https://${azurerm_container_app.repo_read_service[0].ingress[0].fqdn}", "")
@@ -176,6 +188,10 @@ resource "azurerm_linux_web_app" "main" {
       # shortly after the former 90s reaper threshold. Keep this with each slot
       # until V2 confirms worker loss through checkpoints plus platform status.
       "AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS",
+      # Staging shares production's database, so a full grounding sweep there
+      # clones production's repositories onto staging's disk. Staging holds
+      # "cleanup-only" and production "full"; a swap must not trade them.
+      "GROUNDING_MAINTENANCE_MODE",
     ])
   }
 
@@ -219,7 +235,9 @@ resource "azurerm_linux_web_app_slot" "staging" {
   name           = var.staging_slot_name
   app_service_id = azurerm_linux_web_app.main.id
   https_only     = true
-  tags           = merge(var.tags, { Environment = var.environment, Slot = var.staging_slot_name })
+  # Same as production; deploy.yml enforces the live value.
+  client_affinity_enabled = false
+  tags                    = merge(var.tags, { Environment = var.environment, Slot = var.staging_slot_name })
 
   # Slot identities are not swapped with application code. Keep a dedicated
   # system identity on staging so pre-swap checks retain managed-identity

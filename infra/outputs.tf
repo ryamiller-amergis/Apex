@@ -81,6 +81,19 @@ output "grounding_app_setting_names" {
   }
 }
 
+output "playbook_step_output_blob_container_name" {
+  description = "Private Blob container for large Playbook step output"
+  value       = azurerm_storage_container.shared["playbook-step-outputs"].name
+}
+
+output "playbook_step_output_app_setting_names" {
+  description = "Non-secret app setting contract for Playbook step-output storage"
+  value = {
+    blob_account_name   = "PLAYBOOK_STEP_OUTPUT_BLOB_ACCOUNT_NAME"
+    blob_container_name = "PLAYBOOK_STEP_OUTPUT_CONTAINER_NAME"
+  }
+}
+
 # ---------------------------------------------------------------------------
 # Load Test module outputs (FEAT-002)
 # Wire these into Apex app settings and the Container Apps Job environment

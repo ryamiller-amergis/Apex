@@ -23,7 +23,10 @@ import {
   invokeInteractiveToolProxy,
   postLocalMcp,
 } from '../services/interactiveToolProxyService';
-import { isDurableInteractiveTurnSpecification } from '../../shared/types/durableInteractiveTurn';
+import {
+  isDurableInteractiveTurnSpecification,
+  type FrozenInteractiveMcpDescriptor,
+} from '../../shared/types/durableInteractiveTurn';
 
 const router = Router();
 
@@ -51,16 +54,11 @@ function extractBearerToken(header: unknown): string {
 }
 
 function localMcpUrl(
-  serverName: 'ado-skills' | 'calendar-assistant' | 'maxview',
-  descriptor: {
-    profileId?: string;
-    calendarSessionId?: string;
-    enableRepoBrowse: boolean;
-  },
+  descriptor: Extract<FrozenInteractiveMcpDescriptor, { kind: 'internal-proxy' }>,
 ): string {
   const port = process.env.PORT?.trim() || '3001';
   const base = `http://127.0.0.1:${port}`;
-  switch (serverName) {
+  switch (descriptor.serverName) {
     case 'ado-skills': {
       const profilePath = descriptor.profileId
         ? `/grounding/${descriptor.profileId}`
@@ -80,8 +78,10 @@ function localMcpUrl(
     }
     case 'maxview':
       return `${base}/mcp/maxview`;
+    case 'mcp-server':
+      return `${base}/mcp/mcp-servers/${encodeURIComponent(descriptor.connectionId)}?userId=${encodeURIComponent(descriptor.boundUserId)}`;
     default: {
-      const unhandled: never = serverName;
+      const unhandled: never = descriptor;
       throw new InteractiveToolProxyError(
         `Unsupported internal MCP server: ${String(unhandled)}`,
         400,
@@ -231,8 +231,8 @@ router.post(
         claims,
         specification: attempt.specSnapshot,
         body: req.body,
-        invokeInternal: (name, descriptor, body, context) =>
-          postLocalMcp(localMcpUrl(name, descriptor), body, {
+        invokeInternal: (_name, descriptor, body, context) =>
+          postLocalMcp(localMcpUrl(descriptor), body, {
             signal: context.signal,
           }),
       });

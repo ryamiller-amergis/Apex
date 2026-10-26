@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto';
 import { Agent } from '@cursor/sdk';
 import type { LocalAgentOptions } from '@cursor/sdk/dist/cjs/options.js';
 import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
+import { isPlaybookAgentRunPolicy } from '../../../shared/types/playbookExecutionCapability';
 import type { RepoReader } from '../../../shared/types/repoReader';
 import type { CursorExecutionRun } from '../cursorExecutionCore';
 import { createNativeReadTools } from '../nativeReadToolAdapter';
@@ -65,11 +67,45 @@ export async function createLocalCursorExecution(
 ): Promise<WorkerCursorExecution> {
   const apiKey = process.env.CURSOR_API_KEY?.trim();
   if (!apiKey) throw new Error('CURSOR_API_KEY is required');
+  const rawPolicy: unknown = snapshot.playbookAgentPolicy;
+  if (rawPolicy !== undefined && !isPlaybookAgentRunPolicy(rawPolicy)) {
+    throw new Error('Playbook agent run referenced an invalid frozen capability policy');
+  }
+  const policy = rawPolicy;
+  // A recorded policy is audit data until enforcement is on. Observe mode keeps the
+  // worker path that already shipped: project settings, no sandbox, and the prompt as given.
+  const enforcing = policy?.enforcement === 'enforce';
+  if (policy && enforcing) {
+    if (!snapshot.skillContent || !snapshot.skillSha256) {
+      throw new Error('Playbook agent run is missing its frozen Skill content');
+    }
+    const actualSkillSha = createHash('sha256')
+      .update(snapshot.skillContent)
+      .digest('hex');
+    if (
+      actualSkillSha !== snapshot.skillSha256.toLowerCase()
+      || actualSkillSha !== policy.skill.sha256.toLowerCase()
+    ) {
+      throw new Error('Playbook agent run referenced Skill content with a mismatched hash');
+    }
+    if (
+      policy.localAgent.cwdMode !== 'scratch'
+      || policy.localAgent.allowBuiltinWrites
+      || policy.capabilities.includes('repository-write')
+      || policy.mcpServers.length > 0
+    ) {
+      throw new Error('Playbook agent policy is broader than the worker read-only execution lane');
+    }
+  }
+  const nativeReadsAllowed =
+    policy?.enforcement !== 'enforce'
+    || policy.localAgent.customTools === 'native-read-only';
 
   const local = {
     cwd: snapshot.workspaceRef,
-    settingSources: ['project'],
-    ...(checkout ? { customTools: createNativeReadTools(checkout) } : {}),
+    settingSources: enforcing ? [] : ['project'],
+    ...(enforcing ? { sandboxOptions: { enabled: true } } : {}),
+    ...(checkout && nativeReadsAllowed ? { customTools: createNativeReadTools(checkout) } : {}),
   } satisfies LocalAgentOptions;
 
   const createAgent = Agent.create({
@@ -87,8 +123,11 @@ export async function createLocalCursorExecution(
   );
 
   try {
+    const prompt = enforcing && snapshot.skillContent && !snapshot.prompt.includes(snapshot.skillContent)
+      ? `${snapshot.skillContent}\n\n---\n\n${snapshot.prompt}`
+      : snapshot.prompt;
     const run = await raceCursorStartup(
-      agent.send(snapshot.prompt),
+      agent.send(prompt),
       signal,
       () => agent[Symbol.asyncDispose](),
     );

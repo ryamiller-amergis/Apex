@@ -350,6 +350,27 @@ describe('durable interactive turn contracts', () => {
     ).toBe(true);
   });
 
+  it('accepts a project MCP server proxy and rejects one without its connection', () => {
+    expect(isDurableInteractiveTurnSpecification({
+      ...validSpecification,
+      mcpServers: [{
+        kind: 'internal-proxy',
+        serverName: 'mcp-server',
+        connectionId: '20000000-0000-4000-8000-000000000002',
+        boundUserId: '40000000-0000-4000-8000-000000000001',
+        enableRepoBrowse: false,
+      }],
+    })).toBe(true);
+    expect(isDurableInteractiveTurnSpecification({
+      ...validSpecification,
+      mcpServers: [{
+        kind: 'internal-proxy',
+        serverName: 'mcp-server',
+        enableRepoBrowse: false,
+      }],
+    })).toBe(false);
+  });
+
   it.each([
     'runId',
     'attemptId',

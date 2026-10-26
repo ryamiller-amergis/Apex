@@ -104,7 +104,9 @@ const CURSOR_AGENT_INPUT_SCHEMA = z.object({
   prompt: z.string().min(1),
   model: z.string().optional(),
   // Optional for immutable Phase 0 history; every newly published graph is checked separately.
-  mcpProfile: z.string().min(1).optional(),
+  mcpProfile: z.enum(['repository-read-only']).optional().describe(
+    'Read-only repository and network access; no external writes or deployment.'
+  ),
   deadlineMs: z.number().positive().max(CURSOR_AGENT_DEADLINE_MS).optional(),
   threadId: z.string().min(1).optional(),
 });
@@ -211,6 +213,7 @@ const INTERVIEW_OUTPUT_SCHEMA = z.object({
 export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
   {
     stepType: 'cursor-agent',
+    schemaVersion: 1,
     canSuspend: true,
     defaultDeadlineMs: CURSOR_AGENT_DEADLINE_MS,
     // A definition may shorten the observed ceiling, but never extend it.
@@ -226,6 +229,7 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
   },
   {
     stepType: 'ingest-artifact',
+    schemaVersion: 1,
     canSuspend: false,
     isAgentStep: false,
     sideEffect: 'writes-apex',
@@ -235,6 +239,7 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
   },
   {
     stepType: 'branch',
+    schemaVersion: 1,
     canSuspend: false,
     isAgentStep: false,
     sideEffect: 'read',
@@ -244,6 +249,7 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
   },
   {
     stepType: 'approval-gate',
+    schemaVersion: 1,
     canSuspend: true,
     defaultDeadlineMs: APPROVAL_GATE_DEADLINE_MS,
     deadlineOverridable: true,
@@ -258,6 +264,7 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
   },
   {
     stepType: 'notify',
+    schemaVersion: 1,
     // Completes as soon as the notification row is written, so there is nothing to wait for and
     // therefore nothing to expire.
     canSuspend: false,
@@ -269,6 +276,7 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
   },
   {
     stepType: 'interview',
+    schemaVersion: 1,
     canSuspend: true,
     defaultDeadlineMs: INTERVIEW_DEADLINE_MS,
     deadlineOverridable: true,
@@ -328,6 +336,12 @@ export function validateStepTypeDescriptor(descriptor: PlaybookStepTypeDescripto
 
   if (!stepType || !stepType.trim()) {
     throw new PlaybookStepTypeError('A Playbook step type descriptor must declare a stepType.');
+  }
+
+  if (!Number.isInteger(descriptor.schemaVersion) || descriptor.schemaVersion < 1) {
+    throw new PlaybookStepTypeError(
+      `Step type "${stepType}" must declare a positive integer schemaVersion.`
+    );
   }
 
   assertZodSchema(stepType, 'inputSchema', descriptor.inputSchema);

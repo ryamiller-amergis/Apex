@@ -28,6 +28,7 @@ import type {
   ChatThreadKickoff,
   SseEvent,
 } from '../../shared/types/chat';
+import type { McpServerOperation } from '../../shared/types/mcpServers';
 import type {
   AgentRunCancelState,
   AgentRunExecutionSnapshot,
@@ -118,6 +119,7 @@ import type {
   PlaybookGraph,
   PlaybookLayoutPositions,
   PlaybookRunStatus,
+  PlaybookStepBlobRef,
   PlaybookStepRunStatus,
   PlaybookVersionStatus,
 } from '../../shared/types/playbook';
@@ -3442,7 +3444,7 @@ export const playbookStepRuns = pgTable('playbook_step_runs', {
   gatePoolKey: text('gate_pool_key').$type<ReviewerDocumentType>(),
   gateApprovalMode: text('gate_approval_mode').$type<ApprovalMode>(),
   outputInline: jsonb('output_inline').$type<Record<string, unknown>>(),
-  outputBlobRef: jsonb('output_blob_ref').$type<ArtifactRef>(),
+  outputBlobRef: jsonb('output_blob_ref').$type<PlaybookStepBlobRef>(),
   expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }),
   startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
   completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
@@ -3535,6 +3537,27 @@ export const playbookGateApproversRelations = relations(playbookGateApprovers, (
     fields: [playbookGateApprovers.stepRunId],
     references: [playbookStepRuns.id],
   }),
+}));
+
+export const mcpServers = pgTable('mcp_servers', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  name: text('name').notNull(),
+  provider: text('provider').notNull(),
+  status: text('status').notNull().default('untested'),
+  credentialCiphertext: text('credential_ciphertext').notNull(),
+  credentialIv: text('credential_iv').notNull(),
+  credentialAuthTag: text('credential_auth_tag').notNull(),
+  credentialHint: text('credential_hint').notNull(),
+  baseUrl: text('base_url'),
+  operations: jsonb('operations').$type<McpServerOperation[]>().notNull().default([]),
+  allowedUserIds: jsonb('allowed_user_ids').$type<string[]>().notNull().default([]),
+  createdBy: text('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  lastTestedAt: timestamp('last_tested_at', { withTimezone: true, mode: 'string' }),
+}, (t) => ({
+  projectIdx: index('idx_mcp_servers_project').on(t.project),
 }));
 
 export const workflowEvaluationDefinitions = pgTable('workflow_evaluation_definitions', {

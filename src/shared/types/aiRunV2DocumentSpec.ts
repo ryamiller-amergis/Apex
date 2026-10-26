@@ -4,6 +4,10 @@ import {
 } from './effort';
 import type { BackgroundWorkflowClass } from './backgroundWorkflow';
 import type { SkillProvider } from './projectSettings';
+import {
+  isPlaybookAgentRunPolicy,
+  type PlaybookAgentRunPolicy,
+} from './playbookExecutionCapability';
 
 export const AI_RUN_V2_DOCUMENT_WORKFLOW_CLASSES = [
   'prd',
@@ -42,6 +46,8 @@ export type AiRunV2DocumentSpecification = Readonly<{
   groundedSha?: string;
   repository?: string;
   provider?: SkillProvider;
+  /** Required for Playbook steps; resolved on App Service and applied without worker defaults. */
+  playbookAgentPolicy?: PlaybookAgentRunPolicy;
 }>;
 
 function isNonEmptyString(value: unknown): value is string {
@@ -168,6 +174,12 @@ export function isAiRunV2DocumentSpecification(
     return false;
   }
   if (!isDocumentWorkflowClass(candidate.workflowClass)) return false;
+  if (
+    candidate.workflowClass === 'playbook-step'
+    && !isPlaybookAgentRunPolicy(candidate.playbookAgentPolicy)
+  ) {
+    return false;
+  }
   if (!isNonEmptyString(candidate.projectId)) return false;
   if (!isNonEmptyString(candidate.threadId)) return false;
   if (

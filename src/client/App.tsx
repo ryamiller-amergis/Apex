@@ -103,12 +103,16 @@ const PlaybookCanvasPage = lazy(() => import('./components/PlaybookCanvasPage'))
 const PlaybookLiveRunPage = lazy(() => import('./components/PlaybookLiveRunPage'));
 const PlaybooksManagePage = lazy(() => import('./components/PlaybooksManagePage'));
 const PlaybookDashboardPage = lazy(() => import('./components/PlaybookDashboardPage'));
+const PlaybookEditPage = lazy(() => import('./components/PlaybookEditPage'));
 const LoadTestsListPage = lazy(() => import('./components/LoadTestsListPage').then(m => ({ default: m.LoadTestsListPage })));
 const LoadTestDefinitionBuilderView = lazy(() =>
   import('./components/LoadTestDefinitionBuilderView').then((m) => ({ default: m.LoadTestDefinitionBuilderView })),
 );
 const DiagramsView = lazy(() =>
   import('./components/DiagramsView').then((m) => ({ default: m.DiagramsView })),
+);
+const McpServersView = lazy(() =>
+  import('./components/McpServersView').then((m) => ({ default: m.McpServersView })),
 );
 const DiagramEditorView = lazy(() =>
   import('./components/DiagramEditorView').then((m) => ({ default: m.DiagramEditorView })),
@@ -146,7 +150,7 @@ const isPlanningTab = (value: string | undefined): value is PlanningTab => (
 
 function DocumentProjectOpening({ label }: { label: string }) {
   return (
-    <div className="loading-overlay" role="status" aria-live="polite" data-testid="document-project-opening">
+    <div className="loading-overlay" role="status" aria-live="polite" {...{ 'data-testid': 'document-project-opening' }}>
       <div className="loading-spinner-container">
         <ApexLoader size={72} />
         <p>{label}</p>
@@ -158,6 +162,8 @@ function DocumentProjectOpening({ label }: { label: string }) {
 function App() {
   const navigate = useNavigate();
   const location = useLocation();
+  const locationRef = useRef(location);
+  locationRef.current = location;
 
   const [chatOpen, setChatOpen] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -192,7 +198,7 @@ function App() {
   }, []);
   const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -242,6 +248,8 @@ function App() {
                     ? 'diagrams'
                     : location.pathname === '/builds' || location.pathname.startsWith('/builds/')
                     ? 'builds'
+                    : location.pathname === '/mcp-servers' || location.pathname.startsWith('/mcp-servers/')
+                    ? 'mcp-servers'
                     : 'not-found';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
@@ -374,9 +382,9 @@ function App() {
         || streamAlignedProject !== selectedProject
       )
     );
-  const playbooksEnabled =
-    !homeFlagsLoading && homeFlags['playbooks-production-adapters'] === true;
   const buildsEnabled = !homeFlagsLoading && homeFlags[BUILD_FROM_PROMPT_FLAG] === true;
+  const mcpServersEnabled =
+    !homeFlagsLoading && homeFlags['mcp-servers'] === true;
   // Prefer the WebSocket agent gateway when the durable interactive transport
   // flag is enabled; SSE remains the stream-transport fallback only.
   // Wait until flags resolve so we do not open SSE first, then leave it stuck
@@ -403,9 +411,14 @@ function App() {
   const effectiveEnabledViews = isRestricted ? restrictedModules : enabledViews;
   const menuConfigReady = isRestricted || !menuConfigLoading;
   const canAccessPlaybooks =
-    playbooksEnabled &&
     menuConfigReady &&
     (isSuperAdmin || (effectiveEnabledViews.includes('playbooks') && can('playbooks:view')));
+  const canAccessMcpServers =
+    mcpServersEnabled &&
+    menuConfigReady &&
+    permissionsLoaded &&
+    effectiveEnabledViews.includes('mcp-servers') &&
+    (isSuperAdmin || can('mcp-servers:view'));
   const restrictedSkipRef = useRef(false);
 
   // UI Lab members read the whole project list; everyone else only reaches
@@ -615,6 +628,27 @@ function App() {
     );
   }, [location.pathname, location.search, navigate]);
 
+  const navigateAwayFromHome = useCallback((pathname: string) => {
+    setChatOpen(false);
+    navigate(pathname);
+  }, [navigate]);
+
+  const handleNavigateHome = useCallback(() => {
+    setActiveThreadId(null);
+    setActiveThreadProject(null);
+    sessionStorage.removeItem(`agentHomeThreadId:${selectedProject}`);
+    setChatOpen(true);
+    navigate('/home');
+  }, [navigate, selectedProject]);
+
+  const handleRestoreHomeThread = useCallback((id: string) => {
+    setActiveThreadId(id);
+    setActiveThreadProject(selectedProject);
+    if (locationRef.current.pathname === '/home') {
+      syncHomeThreadUrl(id);
+    }
+  }, [selectedProject, syncHomeThreadUrl]);
+
   const previousHomeProjectRef = useRef(selectedProject);
   useEffect(() => {
     const projectChanged = previousHomeProjectRef.current !== selectedProject;
@@ -648,10 +682,12 @@ function App() {
     if (!options) {
       setActiveThreadId(null);
       setActiveThreadProject(null);
+      sessionStorage.removeItem(`agentHomeThreadId:${selectedProject}`);
       syncHomeThreadUrl(null);
       return;
     }
     if (!panelRepo || startChat.isPending) return;
+    const startingLocationKey = locationRef.current.key;
     try {
       const result = await startChat.mutateAsync({
         kickoff: {
@@ -671,7 +707,9 @@ function App() {
       });
       setActiveThreadId(result.threadId);
       setActiveThreadProject(selectedProject);
-      syncHomeThreadUrl(result.threadId);
+      if (locationRef.current.key === startingLocationKey) {
+        syncHomeThreadUrl(result.threadId);
+      }
       if (options?.initialMessage) {
         const res = await fetch(`/api/chat/threads/${result.threadId}/messages`, {
           method: 'POST',
@@ -696,6 +734,38 @@ function App() {
       // Error shown inside the panel
     }
   }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig, syncHomeThreadUrl]);
+
+  const handleStartMcpChat = useCallback(async (connection: { id: string; name: string }) => {
+    if (!can('chat:view') || !can('chat:create') || startChat.isPending) return;
+    setChatOpen(true);
+    setFirstMessageError(null);
+    const startingLocationKey = locationRef.current.key;
+    try {
+      const result = await startChat.mutateAsync({
+        kickoff: {
+          project: selectedProject,
+          repo: selectedProject,
+          branch: 'main',
+          skillProvider: activeSkillConfig?.skillProvider ?? undefined,
+          model: DEFAULT_MODEL_ID,
+          skillSettingsId: activeSkillConfig?.id ?? selectedSkillSettingsId ?? undefined,
+          assistantType: 'mcp-server',
+          mcpServerId: connection.id,
+          pillLabel: connection.name,
+        },
+        skipAutoKickoff: true,
+      });
+      setActiveThreadId(result.threadId);
+      setActiveThreadProject(selectedProject);
+      if (locationRef.current.key === startingLocationKey) {
+        syncHomeThreadUrl(result.threadId);
+      }
+    } catch {
+      if (locationRef.current.key === startingLocationKey) {
+        syncHomeThreadUrl(null);
+      }
+    }
+  }, [selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig, syncHomeThreadUrl]);
 
   useEffect(() => {
     if (
@@ -899,7 +969,11 @@ function App() {
     return <ViewSkeleton />;
   }
 
-  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks)) {
+  if (currentView === 'mcp-servers' && (homeFlagsLoading || !menuConfigReady || !permissionsLoaded)) {
+    return <ViewSkeleton />;
+  }
+
+  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks) || (currentView === 'mcp-servers' && !canAccessMcpServers)) {
     return (
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <div role="status" aria-live="polite" {...{ 'data-testid': 'route-not-found' }}>
@@ -927,27 +1001,28 @@ function App() {
             hasUiLabShares={hasUiLabShares}
             selectedProject={selectedProject}
             canAccessHome={canAccessHome}
-            onNavigateHome={() => navigate('/home')}
-            onNavigateCalendar={() => navigate('/calendar')}
-            onNavigatePlanning={() => navigate(`/planning/${planningTab}`)}
-            onNavigateCloudCost={() => navigate('/cloud-cost')}
-            onNavigateBacklog={() => navigate('/backlog')}
-            onNavigateAdr={() => navigate('/adr')}
-            onNavigateMyWork={() => navigate('/my-work')}
-            onNavigateStandup={() => navigate('/standup')}
-            onNavigateUiLab={() => navigate('/ui-lab')}
-            onNavigateFeatureRequests={() => navigate('/feature-requests')}
-            onNavigateAiCost={() => navigate('/ai-cost')}
-            onNavigateDesignModule={() => navigate('/design-module')}
-            onNavigateWorkBoard={() => navigate('/work-board')}
+            onNavigateHome={handleNavigateHome}
+            onNavigateCalendar={() => navigateAwayFromHome('/calendar')}
+            onNavigatePlanning={() => navigateAwayFromHome(`/planning/${planningTab}`)}
+            onNavigateCloudCost={() => navigateAwayFromHome('/cloud-cost')}
+            onNavigateBacklog={() => navigateAwayFromHome('/backlog')}
+            onNavigateAdr={() => navigateAwayFromHome('/adr')}
+            onNavigateMyWork={() => navigateAwayFromHome('/my-work')}
+            onNavigateStandup={() => navigateAwayFromHome('/standup')}
+            onNavigateUiLab={() => navigateAwayFromHome('/ui-lab')}
+            onNavigateFeatureRequests={() => navigateAwayFromHome('/feature-requests')}
+            onNavigateAiCost={() => navigateAwayFromHome('/ai-cost')}
+            onNavigateDesignModule={() => navigateAwayFromHome('/design-module')}
+            onNavigateWorkBoard={() => navigateAwayFromHome('/work-board')}
             workBoardEnabled={workBoardEnabled}
-            onNavigateLoadTests={() => navigate('/load-tests')}
-            onNavigateDiagrams={() => navigate('/diagrams')}
-            onNavigatePlaybooks={() => navigate('/playbooks')}
-            playbooksEnabled={playbooksEnabled}
-            onNavigateBuilds={() => navigate('/builds')}
+            onNavigateLoadTests={() => navigateAwayFromHome('/load-tests')}
+            onNavigateDiagrams={() => navigateAwayFromHome('/diagrams')}
+            onNavigatePlaybooks={() => navigateAwayFromHome('/playbooks')}
+            onNavigateBuilds={() => navigateAwayFromHome('/builds')}
             buildsEnabled={buildsEnabled}
-            onNavigateAdmin={() => navigate('/admin/roles')}
+            onNavigateMcpServers={() => navigateAwayFromHome('/mcp-servers')}
+            mcpServersEnabled={mcpServersEnabled}
+            onNavigateAdmin={() => navigateAwayFromHome('/admin/roles')}
           />
           <div className={`app-main ${sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}>
           {isLoading && currentView === 'calendar' && (
@@ -983,28 +1058,29 @@ function App() {
             repoConfigs={isRestricted ? [] : repoConfigs}
             selectedSkillSettingsId={selectedSkillSettingsId}
             onChangeSkillSettings={isRestricted ? undefined : changeSkillSettings}
-            onNavigateHome={() => navigate('/home')}
-            onNavigateProjects={isRestricted ? undefined : () => navigate('/')}
-            onNavigateCalendar={() => navigate('/calendar')}
-            onNavigatePlanning={() => navigate(`/planning/${planningTab}`)}
-            onNavigateCloudCost={() => navigate('/cloud-cost')}
-            onNavigateBacklog={() => navigate('/backlog')}
-            onNavigateAdr={() => navigate('/adr')}
-            onNavigateMyWork={() => navigate('/my-work')}
-            onNavigateStandup={() => navigate('/standup')}
-            onNavigateFeatureRequests={() => navigate('/feature-requests')}
-            onNavigateUiLab={() => navigate('/ui-lab')}
-            onNavigateAdmin={() => navigate('/admin/roles')}
-            onNavigateAiCost={() => navigate('/ai-cost')}
-            onNavigateDesignModule={() => navigate('/design-module')}
-            onNavigateLoadTests={() => navigate('/load-tests')}
-            onNavigateDiagrams={() => navigate('/diagrams')}
-            onNavigateWorkBoard={() => navigate('/work-board')}
+            onNavigateHome={handleNavigateHome}
+            onNavigateProjects={isRestricted ? undefined : () => navigateAwayFromHome('/')}
+            onNavigateCalendar={() => navigateAwayFromHome('/calendar')}
+            onNavigatePlanning={() => navigateAwayFromHome(`/planning/${planningTab}`)}
+            onNavigateCloudCost={() => navigateAwayFromHome('/cloud-cost')}
+            onNavigateBacklog={() => navigateAwayFromHome('/backlog')}
+            onNavigateAdr={() => navigateAwayFromHome('/adr')}
+            onNavigateMyWork={() => navigateAwayFromHome('/my-work')}
+            onNavigateStandup={() => navigateAwayFromHome('/standup')}
+            onNavigateFeatureRequests={() => navigateAwayFromHome('/feature-requests')}
+            onNavigateUiLab={() => navigateAwayFromHome('/ui-lab')}
+            onNavigateAdmin={() => navigateAwayFromHome('/admin/roles')}
+            onNavigateAiCost={() => navigateAwayFromHome('/ai-cost')}
+            onNavigateDesignModule={() => navigateAwayFromHome('/design-module')}
+            onNavigateLoadTests={() => navigateAwayFromHome('/load-tests')}
+            onNavigateDiagrams={() => navigateAwayFromHome('/diagrams')}
+            onNavigateWorkBoard={() => navigateAwayFromHome('/work-board')}
             workBoardEnabled={workBoardEnabled}
-            onNavigatePlaybooks={() => navigate('/playbooks')}
-            playbooksEnabled={playbooksEnabled}
-            onNavigateBuilds={() => navigate('/builds')}
+            onNavigatePlaybooks={() => navigateAwayFromHome('/playbooks')}
+            onNavigateBuilds={() => navigateAwayFromHome('/builds')}
             buildsEnabled={buildsEnabled}
+            onNavigateMcpServers={() => navigateAwayFromHome('/mcp-servers')}
+            mcpServersEnabled={mcpServersEnabled}
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
             onLogout={handleLogout}
@@ -1058,11 +1134,7 @@ function App() {
                   selectedProject={selectedProject}
                   isActive={currentView === 'home' && !documentProjectOpening}
                   onHomeViewChange={handleHomeViewChange}
-                  onRestoreThread={(id) => {
-                    setActiveThreadId(id);
-                    setActiveThreadProject(selectedProject);
-                    syncHomeThreadUrl(id);
-                  }}
+                  onRestoreThread={handleRestoreHomeThread}
                 />
                 {/* data-testid-exempt — ChatAgentPanel API has no data-testid prop */}
                 <ChatAgentPanel
@@ -1426,6 +1498,14 @@ function App() {
                       />
                     );
                   }
+                  if (segments[0] === 'playbooks' && segments[1] && segments[2] === 'edit') {
+                    return (
+                      <PlaybookEditPage
+                        project={selectedProject}
+                        definitionId={segments[1]}
+                      />
+                    );
+                  }
                   if (segments[0] === 'playbooks' && segments[1] && !segments[2]) {
                     return (
                       <PlaybookDashboardPage
@@ -1540,6 +1620,18 @@ function App() {
                   }
                   return <DiagramsView projectId={selectedProject} />;
                 })()}
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'mcp-servers' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <McpServersView
+                  project={selectedProject}
+                  enabled={mcpServersEnabled}
+                  menuEnabled={effectiveEnabledViews.includes('mcp-servers')}
+                  canStartChat={can('chat:view') && can('chat:create') && !startChat.isPending}
+                  onStartChat={(connection) => { void handleStartMcpChat(connection); }}
+                />
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'planning' ? (

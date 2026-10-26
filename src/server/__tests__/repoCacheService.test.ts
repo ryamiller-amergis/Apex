@@ -215,6 +215,10 @@ describe('repoCacheService', () => {
     })).resolves.toEqual(expect.objectContaining({ baseSha: 'head123' }));
 
     expect(mockGit).toHaveBeenCalledWith(
+      expect.arrayContaining(['repack', '-a', '-d']),
+      expect.any(Object),
+    );
+    expect(mockGit).toHaveBeenCalledWith(
       expect.arrayContaining([
         'fetch',
         '--refetch',
@@ -375,6 +379,57 @@ describe('repoCacheService', () => {
       expect.any(Object),
     );
     expect(mockFs.rmSync).not.toHaveBeenCalled();
+  });
+
+  it('compacts the mirror after a repair refetch, before verifying it', async () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockGit.mockImplementation(async (args: string[]) => {
+      if (args.includes('rev-parse')) return 'repaired123\n';
+      return '';
+    });
+
+    await repairRepoCache({
+      provider: 'ado',
+      project: 'MatterWorx',
+      repo: 'MatterWorx',
+      branch: 'main',
+    });
+
+    const verbs = mockGit.mock.calls.map(([args]) =>
+      (args as string[]).find((arg) => ['fetch', 'repack', 'fsck'].includes(arg)),
+    ).filter(Boolean);
+    expect(verbs).toEqual(['fetch', 'repack', 'fsck']);
+    const repack = mockGit.mock.calls.find(([args]) => (args as string[]).includes('repack'));
+    expect(repack?.[0]).toEqual(expect.arrayContaining(['repack', '-a', '-d']));
+    expect(repack?.[1]).toEqual(expect.objectContaining({
+      timeout: COLD_CACHE_TIMEOUT_MS,
+      abortSignal: expect.any(AbortSignal),
+    }));
+    expect(repack?.[1]).not.toHaveProperty('idleTimeout');
+  });
+
+  it('keeps a successful repair when compaction fails', async () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockGit.mockImplementation(async (args: string[]) => {
+      if (args.includes('rev-parse')) return 'repaired123\n';
+      if (args.includes('repack')) throw new Error('No space left on device');
+      return '';
+    });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(repairRepoCache({
+      provider: 'ado',
+      project: 'MatterWorx',
+      repo: 'MatterWorx',
+      branch: 'main',
+    })).resolves.toEqual(expect.objectContaining({ baseSha: 'repaired123' }));
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('phase=compact-failed reason=refetch'));
+    expect(mockGit).toHaveBeenCalledWith(
+      expect.arrayContaining(['fsck', '--full', '--no-dangling', '--progress', 'repaired123']),
+      expect.any(Object),
+    );
+    warn.mockRestore();
   });
 
   it('coalesces a queued repair after another instance completed it', async () => {

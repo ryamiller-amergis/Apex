@@ -86,7 +86,9 @@ export interface ChatThreadKickoff {
   /** Server-verified MCP profile applied to a Playbook cursor-agent thread. */
   playbookMcpProfile?: string;
   /** Identifies the type of assistant thread — controls system prompt behavior */
-  assistantType?: 'design-doc' | 'prd' | 'adr' | 'calendar-work-item';
+  assistantType?: 'design-doc' | 'prd' | 'adr' | 'calendar-work-item' | 'mcp-server';
+  /** Integration assistant: the one connection this thread may call */
+  mcpServerId?: string;
   /** Calendar assistant: anchor work item ID */
   calendarAnchorWorkItemId?: number;
   /** Calendar assistant: selected work item IDs (immutable after session start) */

@@ -1,5 +1,6 @@
 import {
   PlaybookBindingError,
+  collectStepBindingReferences,
   configHasBindings,
   resolvePlaybookBindings,
 } from '../services/playbookBindingResolver';
@@ -67,5 +68,23 @@ describe('FEAT-014 Playbook binding resolver', () => {
       input: { documentId: 'WRONG' },
       steps: { score: { reportMd: 'Keep ${input.documentId} from the agent' } },
     })).toEqual({ reportMd: 'Keep WRONG from the agent' });
+  });
+
+  it('collects only explicit cross-step bindings from nested config', () => {
+    expect(collectStepBindingReferences({
+      prompt: 'Use ${steps.draft.reportMd} and ${input.documentId}',
+      nested: [{ score: '${steps.review.scorecard}' }, '${HOME}'],
+    })).toEqual([
+      {
+        placeholder: '${steps.draft.reportMd}',
+        stepId: 'draft',
+        field: 'reportMd',
+      },
+      {
+        placeholder: '${steps.review.scorecard}',
+        stepId: 'review',
+        field: 'scorecard',
+      },
+    ]);
   });
 });

@@ -376,9 +376,10 @@ variable "blob_containers" {
   description = "Private blob containers on the shared storage account. Key = container name. Add one container per workload."
   type        = map(object({}))
   default = {
-    pdf-artifacts  = {}
-    repo-grounding = {}
-    cursor-prompts = {}
+    pdf-artifacts         = {}
+    repo-grounding        = {}
+    cursor-prompts        = {}
+    playbook-step-outputs = {}
   }
 }
 

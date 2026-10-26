@@ -35,8 +35,61 @@ import {
 } from '../utils/singleFlight';
 
 export const GROUNDING_MAINTENANCE_INTERVAL_MS = 5 * 60 * 1000;
-const GROUNDING_MAINTENANCE_CLAIM_KEY = 'grounding-maintenance:sweep';
 const CLAIM_EXPIRY_HEADROOM_MS = 5_000;
+
+/**
+ * `full` grounds repositories and cleans up after them. `cleanup-only` is for
+ * the staging slot: it shares production's database, so a full sweep there
+ * would clone production's active repositories onto staging's disk. A swap
+ * still hands staging production's old disk, so staging keeps evicting and
+ * compacting what it inherits.
+ */
+export type GroundingMaintenanceMode = 'full' | 'cleanup-only';
+
+export function resolveGroundingMaintenanceMode(
+  raw: string | undefined,
+): GroundingMaintenanceMode {
+  const value = raw?.trim().toLowerCase();
+  if (!value) return 'full';
+  if (value === 'full' || value === 'cleanup-only') return value;
+  console.warn(
+    `[grounding-maintenance] unknown GROUNDING_MAINTENANCE_MODE="${raw}"; using full`,
+  );
+  return 'full';
+}
+
+/**
+ * Each mode claims its own key. A cleanup-only instance holding the full key
+ * would make production skip its pre-warm for that interval.
+ */
+export function groundingMaintenanceClaimKey(
+  mode: GroundingMaintenanceMode,
+): string {
+  switch (mode) {
+    case 'full':
+      return 'grounding-maintenance:sweep';
+    case 'cleanup-only':
+      return 'grounding-maintenance:sweep:cleanup-only';
+    default: {
+      const unhandled: never = mode;
+      throw new Error(`Unhandled grounding maintenance mode: ${String(unhandled)}`);
+    }
+  }
+}
+
+/** Whether the mode clones, refreshes, and re-grounds repositories. */
+function groundsRepositories(mode: GroundingMaintenanceMode): boolean {
+  switch (mode) {
+    case 'full':
+      return true;
+    case 'cleanup-only':
+      return false;
+    default: {
+      const unhandled: never = mode;
+      throw new Error(`Unhandled grounding maintenance mode: ${String(unhandled)}`);
+    }
+  }
+}
 
 export interface GroundingMaintenanceSchedulerDependencies {
   preWarmService?: Pick<GroundingPreWarmService, 'preWarm' | 'sweep'>;
@@ -56,9 +109,12 @@ export interface GroundingMaintenanceSchedulerDependencies {
   runLeaderSweep?: (
     operation: () => Promise<void>,
     leaseWindowMs: number,
+    claimKey: string,
   ) => Promise<void>;
   startupDelayMs?: number;
   intervalMs?: number;
+  /** Raw setting value; defaults to `GROUNDING_MAINTENANCE_MODE`. */
+  mode?: string;
 }
 
 export class GroundingMaintenanceScheduler {
@@ -95,13 +151,18 @@ export class GroundingMaintenanceScheduler {
   private readonly runLeaderSweep: (
     operation: () => Promise<void>,
     leaseWindowMs: number,
+    claimKey: string,
   ) => Promise<void>;
   private readonly startupDelayMs: number;
   private readonly intervalMs: number;
+  readonly mode: GroundingMaintenanceMode;
 
   constructor(
     dependencies: GroundingMaintenanceSchedulerDependencies = {},
   ) {
+    this.mode = resolveGroundingMaintenanceMode(
+      dependencies.mode ?? process.env.GROUNDING_MAINTENANCE_MODE,
+    );
     this.preWarmService =
       dependencies.preWarmService ?? groundingPreWarmService;
     this.evictionService =
@@ -118,9 +179,9 @@ export class GroundingMaintenanceScheduler {
       dependencies.subscribe ?? onGroundingActiveSetChanged;
     this.runLeaderSweep =
       dependencies.runLeaderSweep ??
-      ((operation, leaseWindowMs) =>
+      ((operation, leaseWindowMs, claimKey) =>
         withRepoCacheLease(
-          GROUNDING_MAINTENANCE_CLAIM_KEY,
+          claimKey,
           async () => operation(),
           {
             leaseMs: leaseWindowMs,
@@ -151,6 +212,10 @@ export class GroundingMaintenanceScheduler {
     this.startupTimer.unref?.();
     this.intervalTimer = setInterval(runScheduled, this.intervalMs);
     this.intervalTimer.unref?.();
+    if (!groundsRepositories(this.mode)) {
+      console.log(`[grounding-maintenance] mode=${this.mode}; pre-warm, staleness and nightly re-ground are off`);
+      return;
+    }
     this.unsubscribe = this.subscribe((target: PreWarmTarget) => {
       void this.preWarmService
         .preWarm(target)
@@ -197,18 +262,24 @@ export class GroundingMaintenanceScheduler {
               );
             }
           };
-          await runStep('pre-warm', () => this.preWarmService.sweep());
-          await runStep('staleness', () => this.stalenessService.evaluateActive());
+          const grounds = groundsRepositories(this.mode);
+          if (grounds) {
+            await runStep('pre-warm', () => this.preWarmService.sweep());
+            await runStep('staleness', () => this.stalenessService.evaluateActive());
+          }
           await runStep('workspace-eviction', () => this.evictionService.evictIdle());
           await runStep('shared-checkout-eviction', () => this.sharedReadCheckoutService.evictIdle());
           // Runs after the workspace sweeps so freed checkouts count against
-          // the share before mirrors are considered for deletion.
+          // the share before mirrors are considered for deletion. Also
+          // compacts oversized mirrors.
           await runStep('repo-cache-eviction', () => this.repoCacheEvictionService.evictOverBudget());
-          await runStep('nightly-re-ground', () => this.nightlyIdleReGround.runIfDue());
+          if (grounds) {
+            await runStep('nightly-re-ground', () => this.nightlyIdleReGround.runIfDue());
+          }
           if (failedSteps.length > 0) {
             throw new Error(`Grounding maintenance steps failed: ${failedSteps.join(', ')}`);
           }
-        }, leaseWindowMs);
+        }, leaseWindowMs, groundingMaintenanceClaimKey(this.mode));
       } catch (error) {
         if (
           error instanceof Error
