@@ -19,6 +19,7 @@ import type { ProjectSkillConfig } from '../../../shared/types/projectSettings';
 import { normalizeRepoRelativePath } from '../../../shared/skillPaths';
 import { designSystemPathCandidates } from '../prototypeContextService';
 import { sha256Hex } from './hash';
+import { yamlParameterNames } from './repoReader';
 import type { RefusalSpec } from './messages';
 import type { AdoRepoCoords, PreflightPorts } from './ports';
 
@@ -281,6 +282,10 @@ const pipelineUsable: PreflightCheck = {
     const boundId = definition.repositoryId?.toLowerCase() ?? null;
     if (boundName !== repo && boundId !== repo) return [{ code: 'pipeline_unusable', reason: 'other_repository' }];
     const declared = new Set(definition.parameterNames);
+    if (definition.yamlPath) {
+      const yaml = await ctx.ports.readFile(ctx.coords, definition.yamlPath);
+      if (yaml) for (const name of yamlParameterNames(yaml)) declared.add(name);
+    }
     if (!BUILD_PIPELINE_PARAMETER_NAMES.some((name) => declared.has(name))) {
       return [{ code: 'pipeline_unusable', reason: 'no_parameter' }];
     }

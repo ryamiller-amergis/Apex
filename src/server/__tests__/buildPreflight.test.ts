@@ -90,7 +90,7 @@ function fakePorts(setup: FakeSetup = {}) {
     }),
     readPipeline: jest.fn(async () =>
       setup.pipeline === undefined
-        ? { enabled: true, repositoryName: 'apex', repositoryId: 'guid', parameterNames: ['commitSha'] }
+        ? { enabled: true, repositoryName: 'apex', repositoryId: 'guid', parameterNames: ['commitSha'], yamlPath: null }
         : setup.pipeline,
     ),
     redact: (text) => redactText(text, { knownSecrets: () => setup.knownSecrets ?? [] }),
@@ -280,9 +280,9 @@ describe('TBI-006 DoD-0 — each refusal condition has a plain message', () => {
   it('VT-25: pipeline not found, disabled, other repository, no parameter; a valid one passes', async () => {
     const cases: Array<[PipelineDefinitionSummary | null, string]> = [
       [null, 'deploy pipeline'],
-      [{ enabled: false, repositoryName: 'apex', repositoryId: null, parameterNames: ['commitSha'] }, 'deploy pipeline (disabled)'],
-      [{ enabled: true, repositoryName: 'other', repositoryId: 'g', parameterNames: ['branch'] }, 'deploy pipeline (other repository)'],
-      [{ enabled: true, repositoryName: 'apex', repositoryId: 'g', parameterNames: ['env'] }, 'deploy pipeline parameter'],
+      [{ enabled: false, repositoryName: 'apex', repositoryId: null, parameterNames: ['commitSha'], yamlPath: null }, 'deploy pipeline (disabled)'],
+      [{ enabled: true, repositoryName: 'other', repositoryId: 'g', parameterNames: ['branch'], yamlPath: null }, 'deploy pipeline (other repository)'],
+      [{ enabled: true, repositoryName: 'apex', repositoryId: 'g', parameterNames: ['env'], yamlPath: null }, 'deploy pipeline parameter'],
     ];
     for (const [pipeline, item] of cases) {
       const refusals = refused(await runPreflight(INPUT, fakePorts({ pipeline }).ports));
@@ -291,7 +291,7 @@ describe('TBI-006 DoD-0 — each refusal condition has a plain message', () => {
     const unset = fullProfile();
     unset.deployPipelineId = null;
     expect(codes(await runPreflight(INPUT, fakePorts({ row: fullRow({ buildProfile: unset }) }).ports))).toEqual(['pipeline_unusable']);
-    expect((await runPreflight(INPUT, fakePorts({ pipeline: { enabled: true, repositoryName: 'APEX', repositoryId: 'g', parameterNames: ['branch'] } }).ports)).ok).toBe(true);
+    expect((await runPreflight(INPUT, fakePorts({ pipeline: { enabled: true, repositoryName: 'APEX', repositoryId: 'g', parameterNames: ['branch'], yamlPath: null } }).ports)).ok).toBe(true);
   });
 });
 
@@ -357,5 +357,42 @@ describe('pipeline YAML parameter parsing', () => {
   it('reads names under a top-level parameters list', () => {
     const yaml = ['trigger: none', 'parameters:', '  - name: commitSha', '    type: string', "  - name: 'branch'", 'stages: []', '  - name: ignored'].join('\n');
     expect(yamlParameterNames(yaml)).toEqual(['commitSha', 'branch']);
+  });
+
+  it('ignores trailing and full-line comments', () => {
+    const yaml = [
+      'parameters: # runtime inputs',
+      '# deploy target',
+      '  - name: commitSha # pinned commit',
+      '    # the branch fallback',
+      "  - name: 'branch'  # optional",
+      'stages: []',
+    ].join('\n');
+    expect(yamlParameterNames(yaml)).toEqual(['commitSha', 'branch']);
+  });
+});
+
+describe('pipeline check reads the YAML file as its own read', () => {
+  afterEach(() => jest.useRealTimers());
+
+  it('passes on a commented YAML parameter declared only in the pipeline file', async () => {
+    const files = { ...baseFiles(), 'azure-pipelines.yml': 'parameters: # inputs\n  - name: commitSha # pinned\nsteps: []\n' };
+    const pipeline = { enabled: true, repositoryName: 'apex', repositoryId: 'g', parameterNames: [], yamlPath: 'azure-pipelines.yml' };
+    expect((await runPreflight(INPUT, fakePorts({ files, pipeline }).ports)).ok).toBe(true);
+  });
+
+  it('a definition read and a YAML read of 4 s each together pass under the 5 s per-read limit', async () => {
+    jest.useFakeTimers();
+    const files = { ...baseFiles(), 'azure-pipelines.yml': 'parameters:\n  - name: branch\n' };
+    const { ports } = fakePorts({ files });
+    const delayed = <T,>(value: T) => new Promise<T>((resolve) => setTimeout(() => resolve(value), 4_000));
+    ports.readPipeline = jest.fn(() =>
+      delayed({ enabled: true, repositoryName: 'apex', repositoryId: 'g', parameterNames: [], yamlPath: 'azure-pipelines.yml' }),
+    );
+    const readFile = ports.readFile;
+    ports.readFile = jest.fn((c, p: string) => (p === 'azure-pipelines.yml' ? delayed(files[p]) : readFile(c, p)));
+    const pending = runPreflight(INPUT, ports);
+    await jest.advanceTimersByTimeAsync(8_000);
+    expect((await pending).ok).toBe(true);
   });
 });

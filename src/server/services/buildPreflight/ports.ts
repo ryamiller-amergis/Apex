@@ -10,8 +10,10 @@ export interface PipelineDefinitionSummary {
   enabled: boolean;
   repositoryName: string | null;
   repositoryId: string | null;
-  /** Runtime parameters (YAML) and overridable variables (classic). */
+  /** Overridable variables (classic pipelines). */
   parameterNames: string[];
+  /** YAML pipeline file; the check reads it separately so each read has its own timeout. */
+  yamlPath: string | null;
 }
 
 /** A read that failed for a reason other than "not found". */
