@@ -10,6 +10,7 @@
  * project the caller names rather than to the platform.
  */
 import express, { Request, Response } from 'express';
+import { ZodError } from 'zod';
 import { requirePermission, resolveRequestProject } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
 import { isSuperAdminRequest } from '../utils/superAdmin';
@@ -49,6 +50,11 @@ import {
   updateDraft,
 } from '../services/playbookDefinitionService';
 import { dryRunPlaybookDraft } from '../services/playbookDryRunService';
+import {
+  PlaybookScheduleValidationError,
+  updatePlaybookSchedule,
+} from '../services/playbookScheduleService';
+import { playbookScheduleSchema } from '../../shared/utils/playbookSchedule';
 import {
   ensurePlaybookRunNotifyListener,
   subscribePlaybookRunEvents,
@@ -407,6 +413,49 @@ router.post(
       if (!sendDefinitionError(error, res)) throw error;
     }
   }
+);
+
+router.put(
+  '/definitions/:definitionId/schedule',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const { project, scheduleKind, scheduleHour, scheduleMinute } = (req.body ?? {}) as RequestBody;
+    if (!isNonBlankString(project)) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    const actorUserId = getUserId(req);
+    if (!actorUserId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const parsed = playbookScheduleSchema.safeParse({
+      scheduleKind,
+      scheduleHour: scheduleHour ?? null,
+      scheduleMinute,
+    });
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Check the trigger and try again.' });
+      return;
+    }
+    try {
+      res.json(await updatePlaybookSchedule({
+        project,
+        definitionId: req.params.definitionId,
+        actorUserId,
+        schedule: parsed.data,
+      }));
+    } catch (error) {
+      if (error instanceof PlaybookScheduleValidationError || error instanceof ZodError) {
+        const message = error instanceof ZodError
+          ? (error.issues[0]?.message ?? 'Check the trigger and try again.')
+          : error.message;
+        res.status(400).json({ error: message });
+        return;
+      }
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+  },
 );
 
 router.get(

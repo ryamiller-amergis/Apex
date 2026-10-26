@@ -1,8 +1,8 @@
 /**
- * Starts project background jobs whose daily UTC minute has arrived.
- * The sweep is the clock. Starting a job still uses the Cloud Agent launch.
+ * Starts Playbooks whose daily UTC minute has arrived.
+ * Run now is still the button on the Playbook. This clock is the other trigger.
  */
-import { sweepDueCloudBackgroundJobs } from './cloudBackgroundJobService';
+import { sweepDuePlaybookSchedules } from './playbookScheduleService';
 
 const CHECK_MS = 60_000;
 
@@ -13,10 +13,10 @@ async function sweep(): Promise<void> {
   if (running) return;
   running = true;
   try {
-    await sweepDueCloudBackgroundJobs();
+    await sweepDuePlaybookSchedules();
   } catch (err) {
     console.error(
-      '[cloud-background-job] sweep failed',
+      '[playbook-schedule] sweep failed',
       err instanceof Error ? err.message : err,
     );
   } finally {
@@ -24,7 +24,7 @@ async function sweep(): Promise<void> {
   }
 }
 
-export function startCloudBackgroundJobScheduler(): void {
+export function startPlaybookScheduleScheduler(): void {
   if (timer) return;
   timer = setInterval(() => {
     void sweep();
@@ -33,7 +33,7 @@ export function startCloudBackgroundJobScheduler(): void {
   void sweep();
 }
 
-export function stopCloudBackgroundJobScheduler(): void {
+export function stopPlaybookScheduleScheduler(): void {
   if (!timer) return;
   clearInterval(timer);
   timer = null;

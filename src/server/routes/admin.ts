@@ -1,5 +1,4 @@
 import { Router, type Request, type Response } from 'express';
-import { ZodError } from 'zod';
 import { requirePermission } from '../middleware/rbac';
 import * as rbacService from '../services/rbacService';
 import * as projectSettingsService from '../services/projectSettingsService';
@@ -23,15 +22,6 @@ import { isEffortLevel } from '../../shared/types/effort';
 import type { ApprovalMode, ModuleApprovalModes } from '../../shared/types/approvals';
 import type { CreateGroupRequest, UpdateGroupRequest, SetGroupMembersRequest } from '../../shared/types/groups';
 import type { NotificationType } from '../../shared/types/notification';
-import { cloudBackgroundJobSchema } from '../../shared/utils/cloudBackgroundJob';
-import {
-  CloudBackgroundJobError,
-  deleteCloudBackgroundJob,
-  listCloudBackgroundJobs,
-  saveCloudBackgroundJob,
-  startCloudBackgroundJob,
-} from '../services/cloudBackgroundJobService';
-import { getDisplayName, getUserEmail, getUserId } from '../utils/requestUser';
 
 const ALL_NOTIFICATION_TYPES: NotificationType[] = ['system', 'ai', 'user-action', 'background'];
 
@@ -723,114 +713,6 @@ router.put('/app-settings/teamsNotifications', async (req: Request, res: Respons
     res.json({ enabledTypes });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-function projectQuery(req: Request): string {
-  return typeof req.query.project === 'string' ? req.query.project.trim() : '';
-}
-
-function sendBackgroundJobError(res: Response, err: unknown, label: string): void {
-  if (err instanceof CloudBackgroundJobError) {
-    res.status(err.status).json({ error: err.message });
-    return;
-  }
-  if (err instanceof ZodError) {
-    res.status(400).json({ error: err.issues[0]?.message ?? 'Check the job and try again.' });
-    return;
-  }
-  console.error(label, err instanceof Error ? err.message : err);
-  res.status(500).json({ error: 'Internal server error' });
-}
-
-router.get('/cloud-background-jobs', async (req: Request, res: Response): Promise<void> => {
-  const project = projectQuery(req);
-  if (!project) {
-    res.status(400).json({ error: 'project is required' });
-    return;
-  }
-  try {
-    res.json(await listCloudBackgroundJobs(project));
-  } catch (err) {
-    sendBackgroundJobError(res, err, '[admin] GET /cloud-background-jobs');
-  }
-});
-
-router.post('/cloud-background-jobs', async (req: Request, res: Response): Promise<void> => {
-  const project = typeof req.body?.project === 'string' ? req.body.project.trim() : '';
-  if (!project) {
-    res.status(400).json({ error: 'project is required' });
-    return;
-  }
-  try {
-    const draft = cloudBackgroundJobSchema.parse(req.body);
-    const job = await saveCloudBackgroundJob({
-      project,
-      userId: getUserId(req),
-      draft,
-    });
-    res.status(201).json(job);
-  } catch (err) {
-    sendBackgroundJobError(res, err, '[admin] POST /cloud-background-jobs');
-  }
-});
-
-router.put('/cloud-background-jobs/:id', async (req: Request, res: Response): Promise<void> => {
-  const project = typeof req.body?.project === 'string' ? req.body.project.trim() : '';
-  if (!project) {
-    res.status(400).json({ error: 'project is required' });
-    return;
-  }
-  try {
-    const draft = cloudBackgroundJobSchema.parse(req.body);
-    const job = await saveCloudBackgroundJob({
-      project,
-      userId: getUserId(req),
-      jobId: req.params.id,
-      draft,
-    });
-    res.json(job);
-  } catch (err) {
-    sendBackgroundJobError(res, err, '[admin] PUT /cloud-background-jobs/:id');
-  }
-});
-
-router.delete('/cloud-background-jobs/:id', async (req: Request, res: Response): Promise<void> => {
-  const project = projectQuery(req);
-  if (!project) {
-    res.status(400).json({ error: 'project is required' });
-    return;
-  }
-  try {
-    await deleteCloudBackgroundJob(project, req.params.id);
-    res.status(204).send();
-  } catch (err) {
-    sendBackgroundJobError(res, err, '[admin] DELETE /cloud-background-jobs/:id');
-  }
-});
-
-router.post('/cloud-background-jobs/:id/run', async (req: Request, res: Response): Promise<void> => {
-  const project = typeof req.body?.project === 'string' ? req.body.project.trim() : projectQuery(req);
-  if (!project) {
-    res.status(400).json({ error: 'project is required' });
-    return;
-  }
-  try {
-    const started = await startCloudBackgroundJob({
-      project,
-      jobId: req.params.id,
-      trigger: 'manual',
-      userId: getUserId(req),
-      displayName: getDisplayName(req),
-      email: getUserEmail(req),
-    });
-    if (!started) {
-      res.status(409).json({ error: 'This job did not start.' });
-      return;
-    }
-    res.status(201).json(started);
-  } catch (err) {
-    sendBackgroundJobError(res, err, '[admin] POST /cloud-background-jobs/:id/run');
   }
 });
 

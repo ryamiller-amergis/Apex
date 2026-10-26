@@ -13,6 +13,7 @@ import { useProfileCard } from '../hooks/useProfile';
 import { usePlaybookVersionGraph } from '../hooks/usePlaybookCanvas';
 import { usePlaybookRuns, useStartPlaybookRun } from '../hooks/usePlaybookRuns';
 import { PlaybookDraftEditor } from './PlaybookDraftEditor';
+import { PlaybookScheduleCard } from './PlaybookScheduleCard';
 import { PlaybookRunList } from './PlaybookRunList';
 import { PlaybookVersionList } from './PlaybookVersionList';
 import { nodeSubtitle, orderedSteps, stepMeta } from './playbookStepCatalog';
@@ -272,6 +273,15 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
       {start.isSuccess && !canvasEnabled ? (
         <p className={styles.successBanner} role="status">Run started.</p>
       ) : null}
+
+      <PlaybookScheduleCard
+        project={project}
+        definitionId={definitionId}
+        definition={data.definition}
+        canAuthor={canAuthor}
+        published={Boolean(publishedVersionId)}
+        {...{ 'data-testid': 'playbook-schedule' }}
+      />
 
       <dl className={styles.tiles} {...{ 'data-testid': 'playbook-dashboard-stats' }}>
         {tiles.map((tile) => (

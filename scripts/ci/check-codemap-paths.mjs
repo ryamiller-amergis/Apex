@@ -13,6 +13,7 @@ const CHECKED_ROOTS = [
   'tests/',
   'migrations/',
   'scripts/',
+  'evals/',
   'infra/',
   'runners/',
   'foundation-skills/',

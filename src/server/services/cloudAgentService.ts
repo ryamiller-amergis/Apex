@@ -1071,15 +1071,16 @@ async function createSiteIssueBug(input: {
     const created = await create(true);
     return { bugWorkItemId: created.id, bugUrl: created.url };
   } catch (err) {
+    let failure: unknown = err;
     if (systemInfoHtml) {
       try {
         const created = await create(false);
         return { bugWorkItemId: created.id, bugUrl: created.url };
       } catch (retryErr) {
-        err = retryErr;
+        failure = retryErr;
       }
     }
-    const detail = err instanceof Error ? err.message : 'Azure DevOps could not create the Bug';
+    const detail = failure instanceof Error ? failure.message : 'Azure DevOps could not create the Bug';
     throw new CloudAgentLaunchError(`Could not create the Bug work item. ${detail}`);
   }
 }
@@ -1278,19 +1279,6 @@ async function claimCloudAgentRun(runId: string): Promise<boolean> {
   return Array.isArray(updated) && updated.length > 0;
 }
 
-function notifyBackgroundJobTerminal(input: {
-  runId: string;
-  status: 'completed' | 'failed' | 'cancelled';
-  prUrl?: string | null;
-  detail?: string | null;
-}): void {
-  void import('./cloudBackgroundJobService')
-    .then((mod) => mod.notifyCloudBackgroundJobTerminal(input))
-    .catch((err) => {
-      console.error('[cloud-background-job] notification failed', err instanceof Error ? err.message : err);
-    });
-}
-
 /** Claims saved runs that never reached Cursor. There is no launch cap. */
 async function claimCloudAgentRunIds(): Promise<string[]> {
   const instance = cloudAgentInstanceId();
@@ -1340,7 +1328,7 @@ async function launchClaimedCloudAgentRun(
   });
   const snapshot = backgroundSnapshot(run?.executionSnapshot);
   const cloud = snapshot?.cloudAgent;
-  const unattended = cloud?.delivery === 'guided' || cloud?.delivery === 'background-job';
+  const unattended = cloud?.delivery === 'guided';
   const sessionId = run?.devSessionId ?? snapshot?.threadId ?? null;
   if (!run || run.status !== 'queued' || run.cloudAgentIdentity) {
     pendingCloudAgentUserTokens.delete(runId);
@@ -1358,7 +1346,6 @@ async function launchClaimedCloudAgentRun(
     pendingCloudAgentUserTokens.delete(runId);
     const detail = 'Cloud Agent run is missing its saved repository settings.';
     await markTerminal(runId, { status: 'failed', detail });
-    notifyBackgroundJobTerminal({ runId, status: 'failed', detail });
     if (sessionId && snapshot?.projectId) {
       emitTerminal({ sessionId, runId }, snapshot.projectId, 'failed', null);
     }
@@ -1383,7 +1370,7 @@ async function launchClaimedCloudAgentRun(
       skillRepo: snapshot.repository,
       skillBranch: cloud.baseBranch,
       workItemId: cloud.workItemId,
-      workItemTitle: cloud.workItemTitle ?? (cloud.workItemId ? `Work item ${cloud.workItemId}` : (cloud.backgroundJobName ?? 'Guided job')),
+      workItemTitle: cloud.workItemTitle ?? (cloud.workItemId ? `Work item ${cloud.workItemId}` : 'Guided job'),
       initiatorName: cloud.initiatorName,
       initiatorEmail: cloud.initiatorEmail,
       skillName: cloud.skillName,
@@ -1415,8 +1402,6 @@ async function launchClaimedCloudAgentRun(
         reason: terminal.reason,
         status: terminal.run?.status ?? null,
       }));
-    } else {
-      notifyBackgroundJobTerminal({ runId, status: 'failed', detail });
     }
     emitTerminal({ sessionId, runId }, snapshot.projectId, 'failed', null);
     scheduleCloudAgentDispatch();
@@ -1535,8 +1520,6 @@ async function failLaunchAfterCursorCreate(
       reason: terminal.reason,
       status: terminal.run?.status ?? null,
     }));
-  } else {
-    notifyBackgroundJobTerminal({ runId, status: 'failed', detail });
   }
   emitTerminal({ sessionId, runId }, projectId, 'failed', null);
 }
@@ -1894,14 +1877,6 @@ export async function applyCloudAgentCompletion(input: {
     ...(input.checkResults ? { checkResults: input.checkResults } : {}),
   });
   if (!terminal.ok) return;
-  if (input.status === 'completed' || input.status === 'failed' || input.status === 'cancelled') {
-    notifyBackgroundJobTerminal({
-      runId: input.runId,
-      status: input.status,
-      prUrl: input.prUrl,
-      detail: input.detail,
-    });
-  }
   scheduleCloudAgentDispatch();
   await trackCloudAgentSpend({
     runId: input.runId,
@@ -2428,10 +2403,6 @@ export async function cancelCloudAgentRun(
       'cancelled',
       requested.run.terminalReason,
     );
-    notifyBackgroundJobTerminal({
-      runId: run.id,
-      status: 'cancelled',
-    });
     scheduleCloudAgentDispatch();
     await trackLaunchedCloudAgentSpend(requested.run, session.project, 'cancelled', deps);
     return { ok: true, status: 'cancelled' };
@@ -2476,10 +2447,6 @@ export async function cancelCloudAgentRun(
     terminal.run.status,
     terminal.run.terminalReason,
   );
-  notifyBackgroundJobTerminal({
-    runId: run.id,
-    status: 'cancelled',
-  });
   scheduleCloudAgentDispatch();
   await trackLaunchedCloudAgentSpend(terminal.run, session.project, 'cancelled', deps);
   return { ok: true, status: 'cancelled' };

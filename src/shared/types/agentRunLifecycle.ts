@@ -102,15 +102,9 @@ export interface ExecutionSnapshot {
     skillName?: string;
     /**
      * `guided` jobs have no Azure DevOps work item and do not add the ai-code tag.
-     * `background-job` is a project-owned job started from Project Settings or its schedule.
      * Omitted on older runs, which stay implementation runs.
      */
-    delivery?: 'implementation' | 'guided' | 'background-job';
-    /** Project background job that started this run. */
-    backgroundJobId?: string;
-    backgroundJobName?: string;
-    /** User who should hear when this background job finishes. */
-    notifyUserId?: string;
+    delivery?: 'implementation' | 'guided';
     /**
      * Guided site reports set this so Cursor opens a pull request.
      * Older guided runs omit it and stay analysis-only.
