@@ -86,10 +86,10 @@ postgresql_backup_retention_days = 7
 # Null uses the standard stapex<environment>async name (for example,
 # stapexdevasync or stapexprdasync). Override only for a global-name collision.
 shared_storage_account_name = null
-# blob_containers default still includes pdf-artifacts so apply does not
-# destroy existing blobs. PDF assembly moved to DocHub; purge the container
-# in a later change when operators confirm it is unused.
-# shared_storage_account_name = null
+# blob_containers default includes pdf-artifacts, repo-grounding,
+# cursor-prompts, and playbook-step-outputs. pdf-artifacts stays so apply
+# does not destroy existing blobs; PDF assembly moved to DocHub. If you
+# override the map, include every container the environment still uses.
 
 # ---------------------------------------------------------------------------
 # Load Test module — FEAT-002

@@ -32,7 +32,6 @@ import {
 import { getIncompletePipeline } from './pipelineArtifactStatusService';
 import { getUserPermissions } from './rbacService';
 import { trackEvent } from './telemetry';
-import { isFeatureEnabled } from './featureFlagService';
 import { createPendingWorkService } from './pendingWorkService';
 import { PRODUCTION_PENDING_WORK_SOURCES } from './playbookPendingWorkSource';
 
@@ -65,7 +64,6 @@ export interface HomeDashboardDependencies {
   }): Promise<BugToPbiRatio>;
   getDeliveryCycleTime(input: { project: string }): Promise<DeliveryCycleTime>;
   getAssignedToMe?(input: { project: string; userId: string }): Promise<AssignedToMeData>;
-  isProductionAdaptersEnabled?(input: { project: string; userId: string }): Promise<boolean>;
   trackEvent(
     name: string,
     properties?: Record<string, string>,
@@ -161,13 +159,8 @@ export class HomeDashboardService {
     const canViewInterviewTiles = input.isSuperAdmin
       || (permissions.has('interviews:view') && enabledViews.has('backlog'));
     const canViewMyWork = permissions.has('dev-workbench:view') && groups.has('developer');
-    const canViewPlaybooks = permissions.has('playbooks:view');
-    const productionAdaptersEnabled = canViewPlaybooks
-      && Boolean(this.dependencies.getAssignedToMe)
-      && await (this.dependencies.isProductionAdaptersEnabled?.({
-        project: input.project,
-        userId: input.userId,
-      }) ?? Promise.resolve(false));
+    const canViewPlaybooks = permissions.has('playbooks:view')
+      && Boolean(this.dependencies.getAssignedToMe);
 
     const incompletePipeline = canViewInterviewTiles
       ? this.loadTile(
@@ -242,8 +235,7 @@ export class HomeDashboardService {
         `${input.project}:devToProduction`,
       )
       : Promise.resolve(null);
-    // @feature-flag:playbooks-production-adapters start winner=enabled
-    const assignedToMe = productionAdaptersEnabled
+    const assignedToMe = canViewPlaybooks
       ? this.loadTile(
           'assignedToMe',
           input.project,
@@ -255,7 +247,6 @@ export class HomeDashboardService {
           this.localTimeoutMs,
         )
       : Promise.resolve(null);
-    // @feature-flag:playbooks-production-adapters end
 
     const [
       pipelineResult,
@@ -283,7 +274,7 @@ export class HomeDashboardService {
       openBugsOnPbis: defectsResult,
       bugToPbiRatio: bugRatioResult,
       devToProduction: deliveryResult,
-      ...(productionAdaptersEnabled ? { assignedToMe: assignedToMeResult } : {}),
+      ...(canViewPlaybooks ? { assignedToMe: assignedToMeResult } : {}),
     };
   }
 
@@ -403,7 +394,6 @@ const productionService = createHomeDashboardService({
   getBugToPbiRatio: (input) => productionDefects.getBugToPbiRatio(input),
   getDeliveryCycleTime: (input) => productionDelivery.getCycleTime(input),
   getAssignedToMe: (input) => productionPendingWork.listPending(input),
-  isProductionAdaptersEnabled: (input) => isFeatureEnabled('playbooks-production-adapters', input),
   trackEvent,
 });
 

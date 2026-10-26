@@ -51,6 +51,7 @@ const REGISTRY_SOURCE = path.join(REPO_ROOT, 'src/server/services/playbookSteps/
 function descriptor(overrides: Record<string, unknown> = {}): PlaybookStepTypeDescriptor {
   return {
     stepType: 'fake-step',
+    schemaVersion: 1,
     canSuspend: false,
     isAgentStep: false,
     sideEffect: 'read',

@@ -20,13 +20,48 @@ export interface PlaybookBindingContext {
   steps: Record<string, Record<string, unknown>>;
 }
 
+export interface PlaybookStepBindingReference {
+  placeholder: string;
+  stepId: string;
+  field: string;
+}
+
 const DOCUMENTED_PLACEHOLDER = /\$\{(?:input\.[A-Za-z][A-Za-z0-9_]*|steps\.[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_]*)\}/;
 const EMBEDDED_PLACEHOLDER = /\$\{([^}]+)\}/g;
+const STEP_PLACEHOLDER = /\$\{steps\.([A-Za-z][A-Za-z0-9_-]*)\.([A-Za-z][A-Za-z0-9_]*)\}/g;
 const INPUT_PATH = /^[A-Za-z][A-Za-z0-9_]*$/;
 const STEP_PATH = /^[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_]*$/;
 
 export function configHasBindings(config: unknown): boolean {
   return DOCUMENTED_PLACEHOLDER.test(JSON.stringify(config));
+}
+
+/** Returns every explicit cross-step binding in a config without evaluating it. */
+export function collectStepBindingReferences(config: unknown): PlaybookStepBindingReference[] {
+  const references: PlaybookStepBindingReference[] = [];
+
+  function visit(value: unknown): void {
+    if (typeof value === 'string') {
+      for (const match of value.matchAll(STEP_PLACEHOLDER)) {
+        references.push({
+          placeholder: match[0],
+          stepId: match[1],
+          field: match[2],
+        });
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (value && typeof value === 'object') {
+      Object.values(value as Record<string, unknown>).forEach(visit);
+    }
+  }
+
+  visit(config);
+  return references;
 }
 
 export function resolvePlaybookBindings<T>(value: T, context: PlaybookBindingContext): T {

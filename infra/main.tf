@@ -104,6 +104,11 @@ resource "azurerm_linux_web_app" "main" {
     "GROUNDING_BLOB_ACCOUNT_NAME"   = azurerm_storage_account.shared.name
     "GROUNDING_BLOB_CONTAINER_NAME" = azurerm_storage_container.shared["repo-grounding"].name
 
+    # Playbook step output (managed identity; no storage keys). Existing apps
+    # keep using the shared-account fallback until deploy writes this setting.
+    "PLAYBOOK_STEP_OUTPUT_BLOB_ACCOUNT_NAME" = azurerm_storage_account.shared.name
+    "PLAYBOOK_STEP_OUTPUT_CONTAINER_NAME"    = azurerm_storage_container.shared["playbook-step-outputs"].name
+
     # Repo read service (null/empty while enable_repo_read_service is false)
     "REPO_READ_SERVICE_URL"   = try("https://${azurerm_container_app.repo_read_service[0].ingress[0].fqdn}", "")
     "REPO_READ_SERVICE_TOKEN" = var.enable_repo_read_service ? coalesce(var.ai_runs_runner_callback_token, "") : ""

@@ -1,0 +1,51 @@
+.page {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+  color: inherit;
+}
+
+.header {
+  margin-bottom: 1.25rem;
+}
+
+.header h1 {
+  margin: 0;
+}
+
+.header p {
+  color: var(--text-secondary);
+}
+
+.builderLink {
+  display: inline-block;
+  color: var(--accent-color);
+}
+
+.section {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  background: var(--bg-primary);
+}
+
+.section h2 {
+  margin-top: 0;
+}
+
+.loading,
+.error {
+  padding: 2rem;
+}
+
+.error {
+  color: var(--error-color);
+}

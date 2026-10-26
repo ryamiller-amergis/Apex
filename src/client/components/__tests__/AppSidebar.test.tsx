@@ -317,26 +317,12 @@ describe('AppSidebar — Work Board flag', () => {
 });
 
 describe('AppSidebar — Playbooks visibility', () => {
-  it('hides Playbooks for a super admin when the feature flag is off', () => {
+  it('renders Playbooks for a super admin', () => {
     render(
       <AppSidebar
         {...baseProps}
         isSuperAdmin
         selectedProject="Apex"
-        playbooksEnabled={false}
-        onNavigatePlaybooks={jest.fn()}
-      />,
-    );
-    expect(screen.queryByRole('button', { name: 'Playbooks' })).not.toBeInTheDocument();
-  });
-
-  it('renders Playbooks for a super admin when the feature flag is on', () => {
-    render(
-      <AppSidebar
-        {...baseProps}
-        isSuperAdmin
-        selectedProject="Apex"
-        playbooksEnabled
         onNavigatePlaybooks={jest.fn()}
       />,
     );
@@ -350,7 +336,6 @@ describe('AppSidebar — Playbooks visibility', () => {
         {...baseProps}
         can={can}
         menuEnabledViews={[]}
-        playbooksEnabled
         onNavigatePlaybooks={jest.fn()}
       />,
     );
@@ -365,7 +350,6 @@ describe('AppSidebar — Playbooks visibility', () => {
         {...baseProps}
         can={can}
         menuEnabledViews={['playbooks']}
-        playbooksEnabled
         onNavigatePlaybooks={onNavigatePlaybooks}
       />,
     );

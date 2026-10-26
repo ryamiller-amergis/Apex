@@ -46,9 +46,12 @@ jest.mock('../db/drizzle', () => ({
 }));
 
 import {
+  PlaybookGraphBindingError,
   PlaybookGraphNodeConfigError,
+  PlaybookGraphStepVersionError,
   PlaybookGraphStepTypeError,
   PlaybookGuardViolationError,
+  assertBindingsResolvable,
   assertCanvasConnection,
   assertGraphWithinGuards,
   assertStepGateSatisfied,
@@ -256,6 +259,7 @@ function fakeDescriptor(
 ): PlaybookStepTypeDescriptor {
   const base = {
     stepType,
+    schemaVersion: 1,
     isAgentStep: sideEffect === 'leaves-apex',
     sideEffect,
     requiredPermissions: ['playbooks:run'] as [string, ...string[]],
@@ -277,6 +281,64 @@ function fakeDescriptor(
 function node(id: string, stepType: string) {
   return { id, stepType, config: configFor(stepType, id) };
 }
+
+describe('Part 1 node contracts — explicit cross-step bindings', () => {
+  it('accepts a declared output field from an ancestor', () => {
+    const graph: PlaybookGraph = {
+      nodes: [
+        node('gate', 'approval-gate'),
+        node('draft', 'cursor-agent'),
+        {
+          id: 'announce',
+          stepType: 'notify',
+          config: { title: 'Done', body: '${steps.draft.reportMd}' },
+        },
+      ],
+      edges: [
+        { from: 'gate', to: 'draft' },
+        { from: 'draft', to: 'announce' },
+      ],
+    };
+
+    expect(() => assertBindingsResolvable(graph)).not.toThrow();
+  });
+
+  it('refuses a missing source, a later source, and an undeclared field', () => {
+    const base: PlaybookGraph = {
+      nodes: [
+        { id: 'announce', stepType: 'notify', config: { title: 'Done' } },
+        node('draft', 'cursor-agent'),
+      ],
+      edges: [{ from: 'announce', to: 'draft' }],
+    };
+
+    for (const body of [
+      '${steps.missing.reportMd}',
+      '${steps.draft.reportMd}',
+      '${steps.draft.notAField}',
+    ]) {
+      const graph: PlaybookGraph = {
+        ...base,
+        nodes: [{ ...base.nodes[0], config: { title: 'Done', body } }, base.nodes[1]],
+      };
+      expect(() => assertBindingsResolvable(graph)).toThrow(PlaybookGraphBindingError);
+    }
+  });
+
+  it('refuses a published node contract newer than the registered adapter', () => {
+    const graph: PlaybookGraph = {
+      nodes: [{
+        id: 'announce',
+        stepType: 'notify',
+        stepTypeVersion: 2,
+        config: { title: 'Done' },
+      }],
+      edges: [],
+    };
+
+    expect(() => assertGraphWithinGuards(graph)).toThrow(PlaybookGraphStepVersionError);
+  });
+});
 
 describe('FEAT-008 VT-10..VT-14 (TBI-034) — a leaves-apex step needs a gate on every inbound edge', () => {
   it('VT-10 (TBI-034 a / PBI-007 AC-1): permits approval-gate → leaves-apex', () => {
