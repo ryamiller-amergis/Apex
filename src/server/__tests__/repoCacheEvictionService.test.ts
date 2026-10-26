@@ -301,6 +301,31 @@ describe('repoCacheEvictionService', () => {
     expect(fs.existsSync(dir)).toBe(true);
   });
 
+  it('re-checks idle under the lease and keeps a mirror used since the scan', async () => {
+    const dir = makeMirror({
+      identity: ADO_MAXVIEW,
+      branch: 'main',
+      bytes: 4 * MB,
+      idleMs: REPO_CACHE_MIN_IDLE_MS * 10,
+    });
+    const leaseAfterUse = jest.fn(
+      async (_key: string, operation: () => Promise<unknown>) => {
+        const stamp = new Date(NOW - 1_000);
+        fs.utimesSync(path.join(dir, 'apex-last-used'), stamp, stamp);
+        return operation();
+      },
+    );
+
+    const result = await service({
+      maxBytes: MB,
+      withLease: leaseAfterUse as never,
+    }).evictOverBudget();
+
+    expect(leaseAfterUse).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(dir)).toBe(true);
+    expect(result.evicted).toBe(0);
+  });
+
   it('never deletes a mirror without an identity sidecar', async () => {
     const dir = makeMirror({
       identity: null,

@@ -378,7 +378,7 @@ export function createRepoCacheEvictionService(
 
       for (const candidate of candidates) {
         if (result.bytesAfter <= maxBytes) break;
-        const removed = await removeMirror(candidate, withLease);
+        const removed = await removeMirror(candidate, withLease, isIdle);
         if (!removed) {
           result.protected += 1;
           continue;
@@ -400,18 +400,23 @@ export function createRepoCacheEvictionService(
 async function removeMirror(
   candidate: MirrorCandidate,
   withLease: typeof withRepoCacheLease,
+  isIdle: (dir: string) => Promise<boolean>,
 ): Promise<boolean> {
   if (!candidate.identity) return false;
   const leaseKey = getRepoCacheLeaseKey(candidate.identity);
   try {
-    await withLease(
+    // Compaction earlier in the sweep can run for many minutes, so the
+    // scan-time idle reading may be stale. A clone started since then reads
+    // the mirror without the lease and would lose it mid-copy.
+    return await withLease(
       leaseKey,
       async () => {
+        if (!(await isIdle(candidate.dir))) return false;
         await fsp.rm(candidate.dir, { recursive: true, force: true });
+        return true;
       },
       { waitMs: 0 },
     );
-    return true;
   } catch (error) {
     // Someone is fetching into this mirror right now. Leave it for the next
     // sweep rather than deleting objects a running clone depends on.
