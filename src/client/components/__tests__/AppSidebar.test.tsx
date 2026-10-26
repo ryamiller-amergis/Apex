@@ -412,6 +412,60 @@ describe('AppSidebar — grouped sections', () => {
   });
 });
 
+describe('AppSidebar — integrations nav (SC-1)', () => {
+  it('SC-1 hides Integrations when the flag is off', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key) => key === 'mcp-servers:view'}
+        menuEnabledViews={['mcp-servers']}
+        mcpServersEnabled={false}
+        onNavigateMcpServers={jest.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('nav-item-mcp-servers')).not.toBeInTheDocument();
+  });
+
+  it('SC-1 hides Integrations when the project menu omits it', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key) => key === 'mcp-servers:view'}
+        menuEnabledViews={['calendar']}
+        mcpServersEnabled
+        onNavigateMcpServers={jest.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('nav-item-mcp-servers')).not.toBeInTheDocument();
+  });
+
+  it('SC-1 hides Integrations without mcp-servers:view', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={() => false}
+        menuEnabledViews={['mcp-servers']}
+        mcpServersEnabled
+        onNavigateMcpServers={jest.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('nav-item-mcp-servers')).not.toBeInTheDocument();
+  });
+
+  it('SC-1 shows Integrations when the flag, menu, and view permission are on', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key) => key === 'mcp-servers:view'}
+        menuEnabledViews={['mcp-servers']}
+        mcpServersEnabled
+        onNavigateMcpServers={jest.fn()}
+      />,
+    );
+    expect(screen.getByTestId('nav-item-mcp-servers')).toBeInTheDocument();
+  });
+});
+
 describe('AppSidebar — mobile', () => {
   it('renders nothing on mobile', () => {
     mockedUseBreakpoint.mockReturnValue({ isMobile: true, isTablet: false, isDesktop: false });

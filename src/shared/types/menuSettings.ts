@@ -13,7 +13,8 @@ export type MenuItemKey =
   | 'load-tests'
   | 'diagrams'
   | 'work-board'
-  | 'playbooks';
+  | 'playbooks'
+  | 'mcp-servers';
 
 export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'calendar', label: 'Calendar' },
@@ -31,6 +32,7 @@ export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'diagrams', label: 'Diagrams' },
   { key: 'work-board', label: 'Work Board' },
   { key: 'playbooks', label: 'Playbooks' },
+  { key: 'mcp-servers', label: 'MCP Servers' },
 ];
 
 /** All configurable menu keys (includes opt-in-only keys such as Diagrams). */
@@ -38,10 +40,10 @@ export const ALL_MENU_VIEWS: MenuItemKey[] = CONFIGURABLE_MENU_ITEMS.map((item) 
 
 /**
  * Default enabled views when a project has no explicit menu config row.
- * Diagrams is opt-in (BR-011) and must not appear here.
+ * Diagrams and MCP Servers are opt-in and must not appear here.
  */
 export const DEFAULT_ENABLED_MENU_VIEWS: MenuItemKey[] = ALL_MENU_VIEWS.filter(
-  (key) => key !== 'diagrams',
+  (key) => key !== 'diagrams' && key !== 'mcp-servers',
 );
 
 export interface ProjectMenuConfig {

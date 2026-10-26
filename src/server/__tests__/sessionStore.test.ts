@@ -121,7 +121,7 @@ describe('OAuth-critical session options', () => {
       secret: 'test-secret',
       store,
       resave: false,
-      saveUninitialized: true,
+      saveUninitialized: false,
       name: 'connect.sid',
       cookie: {
         secure: true,

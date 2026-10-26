@@ -225,6 +225,10 @@ import type {
   ChatThread,
   ChatThreadKickoff,
 } from '../../shared/types/chat';
+import {
+  mcpServerToolRetryPrompt,
+  mcpServerTurnRequiresToolUse,
+} from '../../shared/types/mcpServers';
 import { getSkillFile } from '../services/skillCatalogFacade';
 import type { CallerGroundingSelection } from '../services/callerGroundingService';
 import type {
@@ -3139,5 +3143,68 @@ describe('buildDocumentAssistantEditGuidance', () => {
     expect(guidance).toContain(
       'Do NOT write proposed design-doc content to `.ai-pilot/output/`'
     );
+  });
+});
+
+describe('integration connector MCP mount (SC-5)', () => {
+  it('SC-5 mounts only the selected connection tool server', () => {
+    const port = process.env.PORT ?? '3001';
+    const servers = buildMcpServers(
+      baseKickoff({
+        assistantType: 'mcp-server',
+        mcpServerId: 'conn-clerk',
+        skillProvider: 'ado',
+      }),
+      'http://localhost:3001/mcp/ado-skills',
+      { maxviewEnabled: true, userId: 'user-1' },
+    );
+
+    expect(servers).toEqual({
+      'mcp-server': {
+        url: `http://localhost:${port}/mcp/mcp-servers/conn-clerk?userId=user-1`,
+      },
+    });
+  });
+
+  it('tells an MCP chat to use only the connected read-only tools', () => {
+    const prompt = buildInitialPrompt(baseKickoff({
+      assistantType: 'mcp-server',
+      mcpServerId: '20000000-0000-4000-8000-000000000002',
+      pillLabel: 'Clerk',
+    }));
+
+    expect(prompt).toContain('Clerk');
+    expect(prompt).toContain('read-only tools');
+    expect(prompt).toContain('Complete the user’s request');
+    expect(prompt).toContain('call the relevant MCP tools before answering');
+    expect(prompt).toContain('If the user explicitly defines an approximation');
+    expect(prompt).toContain('offset probes or binary search');
+    expect(prompt).toContain('at most eight MCP calls');
+    expect(prompt).toContain('Do not return SQL');
+    expect(prompt).not.toContain('ado-skills');
+  });
+
+  it('requires MCP tools for data questions and follow-up calculations', () => {
+    expect(mcpServerTurnRequiresToolUse('How many people logged in today?')).toBe(true);
+    expect(
+      mcpServerTurnRequiresToolUse(
+        "Count users whose last_sign_in_at falls on today's date",
+      ),
+    ).toBe(true);
+    expect(mcpServerTurnRequiresToolUse('Thanks!')).toBe(false);
+    expect(mcpServerTurnRequiresToolUse('What can you do?')).toBe(false);
+  });
+
+  it('builds an outcome-first retry after an MCP turn skips tool use', () => {
+    const retry = mcpServerToolRetryPrompt(
+      'Clerk',
+      'Count users whose last_sign_in_at is today',
+    );
+
+    expect(retry).toContain('Discard that draft');
+    expect(retry).toContain('Call the relevant MCP tools');
+    expect(retry).toContain('Return the result first');
+    expect(retry).toContain('Count users whose last_sign_in_at is today');
+    expect(retry).not.toContain('write SQL');
   });
 });

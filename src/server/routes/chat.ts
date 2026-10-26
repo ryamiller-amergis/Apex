@@ -70,6 +70,12 @@ import {
   DurableInteractiveTurnError,
 } from '../services/durableInteractiveTurnService';
 import { isCanonicalUuid } from '../../shared/types/durableInteractiveTurn';
+import { MCP_SERVERS_FLAG } from '../../shared/types/mcpServers';
+import { DEFAULT_ENABLED_MENU_VIEWS } from '../../shared/types/menuSettings';
+import { McpServerError } from '../services/mcpServerErrors';
+import { assertCallerCanUseMcpServer } from '../services/mcpServerReadService';
+import { getMenuConfig } from '../services/menuSettingsService';
+import { getUserPermissions } from '../services/rbacService';
 
 const router = Router();
 
@@ -412,12 +418,51 @@ router.post('/threads', async (req: Request, res: Response) => {
     });
     const agentModule = deriveAgentModule(clientKickoff, skillConfig);
 
+    if (clientKickoff.assistantType === 'mcp-server') {
+      const connectionId = clientKickoff.mcpServerId;
+      if (!connectionId) {
+        return res.status(400).json({ error: 'mcpServerId is required' });
+      }
+      const enabled = await isFeatureEnabled(MCP_SERVERS_FLAG, {
+        userId,
+        project: clientKickoff.project,
+      });
+      // @feature-flag:mcp-servers start winner=enabled
+      if (!enabled) {
+        // @feature-flag:mcp-servers disabled-start
+        return res.status(404).json({ error: 'Not found' });
+        // @feature-flag:mcp-servers disabled-end
+      }
+      // @feature-flag:mcp-servers enabled-start
+      const menu = await getMenuConfig(clientKickoff.project);
+      const views = menu?.enabledViews ?? DEFAULT_ENABLED_MENU_VIEWS;
+      if (!views.includes('mcp-servers')) {
+        return res.status(404).json({ error: 'Not found' });
+      }
+      if (!isSuperAdminRequest(req)) {
+        const permissions = await getUserPermissions(userId, clientKickoff.project);
+        if (!permissions.has('mcp-servers:view')) {
+          return res.status(403).json({ error: 'Forbidden', missing: ['mcp-servers:view'] });
+        }
+      }
+      await assertCallerCanUseMcpServer({
+        project: clientKickoff.project,
+        connectionId,
+        userId,
+      });
+      // @feature-flag:mcp-servers enabled-end
+      // @feature-flag:mcp-servers end
+    }
+
     // Home pill admission (TBI-005) covers Home starts only: a kickoff that names
     // a configured quick pill, or one the server cannot map to any module (Home
     // free chat, or an unrecognized direct call). Configured Interview/ADR/PRD/
-    // assistant/development/standup workflows keep their own gates (BR-008).
+    // assistant/development/standup/MCP-server workflows keep their own gates (BR-008).
     // Runs before any persistence, so a denied kickoff leaves no thread row.
-    if (namesHomePill(clientKickoff, skillConfig) || agentModule === undefined) {
+    if (
+      clientKickoff.assistantType !== 'mcp-server' &&
+      (namesHomePill(clientKickoff, skillConfig) || agentModule === undefined)
+    ) {
       const isSuperAdmin = isSuperAdminRequest(req);
       const admission = resolveThreadCreationAdmission({
         skillPills: skillConfig?.quickSkillPills,
@@ -451,6 +496,9 @@ router.post('/threads', async (req: Request, res: Response) => {
     });
     res.status(201).json({ threadId: thread.id });
   } catch (err: unknown) {
+    if (err instanceof McpServerError) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
     console.error('[chat] createThread error:', errorMessage(err));
     res.status(500).json({ error: errorMessage(err) || 'Failed to create thread' });
   }

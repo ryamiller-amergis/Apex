@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import type { AgentRunPhase } from '../../shared/types/chat';
-import { friendlyToolActivityLabel } from '../../shared/utils/chatProgressCopy';
+import { friendlyChatProgressLabel, friendlyToolActivityLabel } from '../../shared/utils/chatProgressCopy';
 import type { ToolProgress } from '../hooks/useChatStream';
 
 const SHOW_ELAPSED_AFTER_SECONDS = 3;
@@ -42,7 +42,11 @@ export const ChatRunProgressLabel: React.FC<ChatRunProgressLabelProps> = ({
   }
 
   const running = [...toolProgress].reverse().find((tool) => tool.status === 'running');
-  const parts = [running ? friendlyToolActivityLabel(running.toolName, running.args) : fallbackLabel];
+  const parts = [
+    running
+      ? friendlyToolActivityLabel(running.toolName, running.args)
+      : friendlyChatProgressLabel(fallbackLabel, progressPhase),
+  ];
   const seconds = Math.floor((now - startedAt) / 1_000);
   if (seconds >= SHOW_ELAPSED_AFTER_SECONDS) parts.push(`${seconds}s`);
   if (toolProgress.length > 0) {

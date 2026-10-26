@@ -73,6 +73,41 @@ describe('interactive Cursor execution repository tools', () => {
     }
   });
 
+  it('gives an MCP connection chat only its connected MCP tools', async () => {
+    process.env.CURSOR_API_KEY = 'test-key';
+    mockCreateAgent.mockResolvedValue({
+      id: 'agent-mcp',
+      send: jest.fn(),
+      [Symbol.asyncDispose]: jest.fn().mockResolvedValue(undefined),
+    });
+
+    try {
+      await acquireInteractiveCursorAgent(
+        {
+          model: 'composer-2.5',
+          effort: null,
+          workspaceRef: '/scratch/mcp-chat',
+          interviewPhase: null,
+        },
+        {} as RepoReader,
+        { mcpServers: { 'mcp-server': { url: 'http://localhost/mcp/connection' } } },
+      );
+
+      expect(mockCreateNativeReadTools).not.toHaveBeenCalled();
+      expect(mockCreateAgent).toHaveBeenCalledWith(expect.objectContaining({
+        tools: ['mcp'],
+        disallowedTools: ['task'],
+        local: {
+          cwd: '/scratch/mcp-chat',
+          settingSources: [],
+        },
+      }));
+    } finally {
+      delete process.env.CURSOR_API_KEY;
+      jest.clearAllMocks();
+    }
+  });
+
   it('closes repository tools for a product-phase guided interview', async () => {
     process.env.CURSOR_API_KEY = 'test-key';
     mockCreateAgent.mockResolvedValue({
