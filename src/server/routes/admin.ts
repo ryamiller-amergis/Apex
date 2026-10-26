@@ -7,6 +7,11 @@ import {
   validateConfiguredRepository,
 } from '../services/foundationSkillAuthorizeService';
 import * as groupService from '../services/groupService';
+import * as buildProfileService from '../services/buildProfileService';
+import { isBuildFromPromptEnabled } from '../services/buildAccessService';
+import { isSuperAdminRequest } from '../utils/superAdmin';
+import { parseBuildProfile } from '../../shared/buildProfileSchema';
+import { BUILD_FROM_PROMPT_DISABLED_ERROR } from '../../shared/types/buildPreflight';
 import { getDefaultModel, getAppSetting, setAppSetting } from '../services/appSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
 import { listAvailableBedrockModels } from '../services/bedrockService';
@@ -572,6 +577,87 @@ router.put('/project-settings/:id/approvers', async (req: Request, res: Response
       ...(hasAdrUpdate ? { adr } : {}),
     });
   } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── Build Profile ────────────────────────────────────────────────────────────
+
+/**
+ * The router-level permission check resolves the project from the request, not
+ * from the row named by :id, so re-check admin:roles against the row's project.
+ */
+async function canAdministerRowProject(req: Request, project: string): Promise<boolean> {
+  if (isSuperAdminRequest(req)) return true;
+  const oid = (req.user as { profile?: { oid?: string } } | undefined)?.profile?.oid;
+  if (!oid) return false;
+  const permissions = await rbacService.getUserPermissions(oid, project);
+  return permissions.has('admin:roles');
+}
+
+router.get('/project-settings/:id/build-profile', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const row = await projectSettingsService.getSkillConfigById(req.params.id);
+    if (!row) {
+      res.status(404).json({ error: 'Repository configuration not found' });
+      return;
+    }
+    if (!(await canAdministerRowProject(req, row.project))) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+    const profile = await buildProfileService.getBuildProfile(row.id);
+    res.json(profile);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.put('/project-settings/:id/build-profile', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const row = await projectSettingsService.getSkillConfigById(req.params.id);
+    if (!row) {
+      res.status(404).json({ error: 'Repository configuration not found' });
+      return;
+    }
+    if (!(await canAdministerRowProject(req, row.project))) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+    const oid = (req.user as { profile?: { oid?: string } } | undefined)?.profile?.oid ?? null;
+    // @feature-flag:build-from-prompt start winner=enabled
+    if (!(await isBuildFromPromptEnabled({ userId: oid ?? '', project: row.project }))) {
+      // @feature-flag:build-from-prompt disabled-start
+      res.status(403).json({
+        error: BUILD_FROM_PROMPT_DISABLED_ERROR,
+        message: 'Build from prompt is turned off for this project. A Platform Admin can turn it on.',
+      });
+      return;
+      // @feature-flag:build-from-prompt disabled-end
+    }
+    // @feature-flag:build-from-prompt enabled-start
+    // @feature-flag:build-from-prompt enabled-end
+    // @feature-flag:build-from-prompt end
+    const parsed = parseBuildProfile(req.body);
+    if (!parsed.ok) {
+      res.status(400).json({ error: 'validation_failed', fieldErrors: parsed.fieldErrors });
+      return;
+    }
+    const saved = await buildProfileService.saveBuildProfile({
+      settingsId: row.id,
+      profile: parsed.profile,
+      actorOid: oid,
+    });
+    res.json(saved);
+  } catch (err) {
+    if (err instanceof buildProfileService.BuildProfileError) {
+      if (err.kind === 'not_found') {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      res.status(400).json({ error: 'validation_failed', fieldErrors: err.fieldErrors });
+      return;
+    }
     res.status(500).json({ error: 'Internal server error' });
   }
 });
