@@ -631,6 +631,137 @@ describe('App — Home access with permission + flag both enabled (default)', ()
     expect(screen.getByTestId('location').textContent).toBe('/home');
     expect(screen.queryByTestId('mcp-servers-chat-error')).not.toBeInTheDocument();
     expect(mockChatPanelProps.newChatError).toBeUndefined();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open MCP Servers' }));
+    expect(screen.getByTestId('location').textContent).toBe('/mcp-servers');
+    expect(screen.queryByTestId('mcp-servers-chat-error')).not.toBeInTheDocument();
+  });
+
+  it('does not leak an in-flight MCP chat failure onto Home', async () => {
+    (useAppShell as jest.Mock).mockReturnValue(makeAppShell({
+      isSuperAdmin: true,
+      can: (key: string) => [
+        'home:view',
+        'chat:view',
+        'chat:create',
+        'mcp-servers:view',
+      ].includes(key),
+    }));
+    (useProjectMenuConfig as jest.Mock).mockReturnValue({
+      enabledViews: ['mcp-servers'],
+      isLoading: false,
+    });
+    (useSkillRepos as jest.Mock).mockReturnValue({
+      data: [{ name: 'MaxView', defaultBranch: 'main' }],
+      isLoading: false,
+    });
+    mockedUseFeatureFlags.mockReturnValue({
+      flags: {
+        'agent-home': true,
+        'mcp-servers': true,
+      },
+      isLoading: false,
+    } as any);
+    let startChatError: Error | null = null;
+    const resetStartChat = jest.fn(() => { startChatError = null; });
+    let rejectStartChat = (_error: Error) => {};
+    (useStartChat as jest.Mock).mockReturnValue({
+      mutateAsync: mockStartChatMutateAsync,
+      isPending: false,
+      get error() { return startChatError; },
+      reset: resetStartChat,
+    });
+    mockStartChatMutateAsync.mockImplementation(
+      () => new Promise((_resolve, reject) => {
+        rejectStartChat = (error: Error) => {
+          startChatError = error;
+          reject(error);
+        };
+      }),
+    );
+
+    renderApp('/mcp-servers');
+    fireEvent.click(await screen.findByRole('button', { name: 'Chat with MCP' }));
+    await waitFor(() => {
+      expect(mockStartChatMutateAsync).toHaveBeenCalled();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Open Home' }));
+    expect(screen.getByTestId('location').textContent).toBe('/home');
+
+    await act(async () => {
+      rejectStartChat(new Error('Connection refused'));
+    });
+    expect(resetStartChat).toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Home' }));
+    expect(mockChatPanelProps.newChatError).toBeUndefined();
+    expect(screen.queryByTestId('mcp-servers-chat-error')).not.toBeInTheDocument();
+  });
+
+  it('does not keep an MCP chat failure after switching projects', async () => {
+    const React = jest.requireActual<typeof import('react')>('react');
+    let selectedProject = 'MaxView';
+    (useAppShell as jest.Mock).mockImplementation(() => makeAppShell({
+      isSuperAdmin: true,
+      selectedProject,
+      selectedAreaPath: selectedProject,
+      availableProjects: ['MaxView', 'Apex'],
+      can: (key: string) => [
+        'home:view',
+        'chat:view',
+        'chat:create',
+        'mcp-servers:view',
+      ].includes(key),
+    }));
+    (useProjectMenuConfig as jest.Mock).mockReturnValue({
+      enabledViews: ['mcp-servers'],
+      isLoading: false,
+    });
+    (useSkillRepos as jest.Mock).mockReturnValue({
+      data: [{ name: 'MaxView', defaultBranch: 'main' }],
+      isLoading: false,
+    });
+    mockedUseFeatureFlags.mockReturnValue({
+      flags: {
+        'agent-home': true,
+        'mcp-servers': true,
+      },
+      isLoading: false,
+    } as any);
+    let startChatError: Error | null = null;
+    (useStartChat as jest.Mock).mockReturnValue({
+      mutateAsync: mockStartChatMutateAsync,
+      isPending: false,
+      get error() { return startChatError; },
+      reset: jest.fn(() => { startChatError = null; }),
+    });
+    mockStartChatMutateAsync.mockImplementation(async () => {
+      startChatError = new Error('Connection refused');
+      throw startChatError;
+    });
+
+    function Harness() {
+      const [, setTick] = React.useState(0);
+      return (
+        <>
+          <button type="button" onClick={() => setTick((n) => n + 1)}>Refresh shell</button>
+          <App />
+          <LocationProbe />
+        </>
+      );
+    }
+
+    render(
+      <MemoryRouter initialEntries={['/mcp-servers']}>
+        <Harness />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Chat with MCP' }));
+    expect(await screen.findByTestId('mcp-servers-chat-error')).toHaveTextContent('Connection refused');
+
+    selectedProject = 'Apex';
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh shell' }));
+    expect(screen.queryByTestId('mcp-servers-chat-error')).not.toBeInTheDocument();
   });
 });
 

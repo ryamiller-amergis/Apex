@@ -591,7 +591,9 @@ function App() {
   const [firstMessageError, setFirstMessageError] = useState<
     { threadId: string; message: string } | null
   >(null);
-  const [mcpStartChatError, setMcpStartChatError] = useState<string | null>(null);
+  const [mcpStartChatError, setMcpStartChatError] = useState<
+    { project: string; message: string } | null
+  >(null);
   const panelRepo = useMemo(
     () =>
       activeSkillConfig
@@ -736,6 +738,7 @@ function App() {
     setFirstMessageError(null);
     setMcpStartChatError(null);
     const startingLocationKey = locationRef.current.key;
+    const startingProject = selectedProject;
     try {
       const result = await startChat.mutateAsync({
         kickoff: {
@@ -757,15 +760,20 @@ function App() {
         syncHomeThreadUrl(result.threadId);
       }
     } catch (err) {
+      startChat.reset();
       if (locationRef.current.key === startingLocationKey) {
         setChatOpen(false);
-        setMcpStartChatError(
-          friendlyChatErrorMessage(err instanceof Error ? err.message : null),
-        );
-        startChat.reset();
+        setMcpStartChatError({
+          project: startingProject,
+          message: friendlyChatErrorMessage(err instanceof Error ? err.message : null),
+        });
       }
     }
   }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig, syncHomeThreadUrl]);
+
+  useEffect(() => {
+    setMcpStartChatError(null);
+  }, [selectedProject, currentView]);
 
   useEffect(() => {
     if (
@@ -1598,7 +1606,11 @@ function App() {
                   enabled={mcpServersEnabled}
                   menuEnabled={effectiveEnabledViews.includes('mcp-servers')}
                   canStartChat={Boolean(panelRepo) && can('chat:view') && can('chat:create') && !startChat.isPending}
-                  startChatError={mcpStartChatError}
+                  startChatError={
+                    mcpStartChatError?.project === selectedProject
+                      ? mcpStartChatError.message
+                      : null
+                  }
                   onStartChat={(connection) => { void handleStartMcpChat(connection); }}
                 />
               </Suspense>
