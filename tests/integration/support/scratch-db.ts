@@ -130,12 +130,22 @@ export async function createScratchDatabase(label = 'verify'): Promise<ScratchDa
   };
 }
 
+/** Applies every migration that is not yet recorded. Used to re-apply a migration after a scoped down. */
+export async function migrateUp(connectionString: string): Promise<void> {
+  await execFileAsync(
+    process.execPath,
+    [MIGRATE_CLI, 'up', '--no-check-order', '--migrations-dir', MIGRATIONS_DIR],
+    {
+      cwd: REPO_ROOT,
+      env: { ...process.env, DATABASE_URL: connectionString },
+      maxBuffer: 32 * 1024 * 1024,
+    }
+  );
+}
+
 /**
  * Rolls back the most recent `count` migrations.
- *
- * Reversibility is a stated non-functional requirement on the playbook schema, and the only honest
- * way to check it is to actually run the down path and see what is left behind. Scoped to a scratch
- * database for the obvious reason.
+ * Scoped to a scratch database.
  */
 export async function migrateDown(connectionString: string, count: number): Promise<void> {
   await execFileAsync(
