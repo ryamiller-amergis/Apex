@@ -756,7 +756,7 @@ function App() {
       }
     } catch {
       if (locationRef.current.key === startingLocationKey) {
-        syncHomeThreadUrl(null);
+        setChatOpen(false);
       }
     }
   }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig, syncHomeThreadUrl]);

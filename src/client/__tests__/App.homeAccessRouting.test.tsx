@@ -75,6 +75,21 @@ jest.mock('../components/AppHeader', () => ({
   ),
 }));
 
+jest.mock('../components/McpServersView', () => ({
+  McpServersView: (props: {
+    onStartChat?: (connection: { id: string; name: string }) => void;
+  }) => (
+    <div data-testid="mcp-servers-view">
+      <button
+        type="button"
+        onClick={() => props.onStartChat?.({ id: 'conn-1', name: 'Docs' })}
+      >
+        Chat with MCP
+      </button>
+    </div>
+  ),
+}));
+
 jest.mock('../components/AgentHome', () => ({
   AgentHome: (props: {
     isActive?: boolean;
@@ -555,6 +570,41 @@ describe('App — Home access with permission + flag both enabled (default)', ()
     } finally {
       sessionStorage.removeItem('agentHomeThreadId:MaxView');
     }
+  });
+
+  it('stays on MCP Servers when starting a chat fails', async () => {
+    (useAppShell as jest.Mock).mockReturnValue(makeAppShell({
+      isSuperAdmin: true,
+      can: (key: string) => [
+        'home:view',
+        'chat:view',
+        'chat:create',
+        'mcp-servers:view',
+      ].includes(key),
+    }));
+    (useProjectMenuConfig as jest.Mock).mockReturnValue({
+      enabledViews: ['mcp-servers'],
+      isLoading: false,
+    });
+    (useSkillRepos as jest.Mock).mockReturnValue({
+      data: [{ name: 'MaxView', defaultBranch: 'main' }],
+      isLoading: false,
+    });
+    mockedUseFeatureFlags.mockReturnValue({
+      flags: {
+        'agent-home': true,
+        'mcp-servers': true,
+      },
+      isLoading: false,
+    } as any);
+    mockStartChatMutateAsync.mockRejectedValue(new Error('Connection refused'));
+
+    renderApp('/mcp-servers');
+    fireEvent.click(await screen.findByRole('button', { name: 'Chat with MCP' }));
+    await waitFor(() => {
+      expect(mockStartChatMutateAsync).toHaveBeenCalled();
+    });
+    expect(screen.getByTestId('location').textContent).toBe('/mcp-servers');
   });
 });
 

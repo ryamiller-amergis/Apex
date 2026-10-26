@@ -55,11 +55,11 @@ export function encodeClientCredential(clientId: string, clientSecret: string): 
 function toDiscovered(tool: McpToolListing): DiscoveredMcpTool | null {
   if (!tool.name.trim()) return null;
   if (tool.annotations?.destructiveHint === true) return null;
-  if (tool.annotations?.readOnlyHint === false) return null;
+  if (tool.annotations?.readOnlyHint !== true) return null;
   return {
     name: tool.name,
     description: tool.description?.trim() || tool.name,
-    readOnly: tool.annotations?.readOnlyHint === true,
+    readOnly: true,
     inputSchema: tool.inputSchema,
   };
 }

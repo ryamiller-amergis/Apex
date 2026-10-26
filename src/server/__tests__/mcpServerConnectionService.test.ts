@@ -189,6 +189,7 @@ describe('integration connection service', () => {
         inputSchema: { type: 'object' },
       },
       { name: 'appUsage', description: 'Retrieve app usage', readOnly: true },
+      { name: 'unannotatedWrite', description: 'Update a visitor', readOnly: false },
     ]);
 
     const created = await createMcpServer({
@@ -197,7 +198,7 @@ describe('integration connection service', () => {
       provider: 'pendo',
       credential: 'pendo-client-secret',
       clientId: 'pendo-client',
-      toolNames: ['entityUsage', 'not-on-the-server'],
+      toolNames: ['entityUsage', 'unannotatedWrite', 'not-on-the-server'],
       allowedUserIds: ['user-1'],
       createdBy: 'user-1',
     });
@@ -261,7 +262,7 @@ describe('integration connection service', () => {
   it('stores a remote MCP server without the secret and loads read-only tools on test', async () => {
     (discoverRemoteMcpTools as jest.Mock).mockResolvedValue([
       { name: 'search', description: 'Search docs', readOnly: true },
-      { name: 'writeDoc', description: 'Write a doc', readOnly: true },
+      { name: 'writeDoc', description: 'Write a doc', readOnly: false },
     ]);
     const created = await createMcpServer({
       project: 'MaxView',
@@ -282,13 +283,36 @@ describe('integration connection service', () => {
 
     const tested = await testMcpServer('MaxView', created.id);
     expect(tested.status).toBe('usable');
-    expect(tested.operations.map((operation) => operation.id)).toEqual(['search', 'writeDoc']);
+    expect(tested.operations.map((operation) => operation.id)).toEqual(['search']);
     expect(tested.toolNames).toEqual(['search']);
     expect(selectEnabledMcpOperations(tested.operations, tested.toolNames).map((operation) => operation.id)).toEqual(['search']);
     expect(discoverRemoteMcpTools).toHaveBeenCalledWith({
       url: 'https://example.com/mcp',
       headers: { Authorization: 'Bearer super-secret-value' },
     });
+  });
+
+  it('does not save unannotated tools as read-only on test', async () => {
+    (discoverRemoteMcpTools as jest.Mock).mockResolvedValue([
+      { name: 'search', description: 'Search docs', readOnly: true },
+      { name: 'writeDoc', description: 'Write a doc', readOnly: false },
+    ]);
+    const created = await createMcpServer({
+      project: 'MaxView',
+      name: 'Docs Allow All',
+      provider: 'custom',
+      credential: '',
+      mcpUrl: 'https://example.com/mcp',
+      headers: { Authorization: 'Bearer token' },
+      secrets: [],
+      toolNames: [],
+      allowedUserIds: [],
+      createdBy: 'user-1',
+    });
+
+    const tested = await testMcpServer('MaxView', created.id);
+    expect(tested.operations.map((operation) => operation.id)).toEqual(['search']);
+    expect(selectEnabledMcpOperations(tested.operations, tested.toolNames).map((operation) => operation.id)).toEqual(['search']);
   });
 
   it('refuses a hostname that resolves to a private address', async () => {

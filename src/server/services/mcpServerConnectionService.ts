@@ -6,6 +6,7 @@ import {
   PREBUILT_CONNECTORS,
   PREBUILT_PROVIDER_IDS,
   type CreateMcpServerRequest,
+  type DiscoveredMcpTool,
   type McpServerConnectionPublic,
   type McpServerOperation,
   type McpServerProvider,
@@ -298,6 +299,20 @@ function toPublic(row: ConnectionRow): McpServerConnectionPublic {
   };
 }
 
+function mcpToolsToReadOnlyOperations(tools: DiscoveredMcpTool[]): McpServerOperation[] {
+  return tools
+    .filter((tool) => tool.readOnly)
+    .map((tool) => ({
+      id: tool.name,
+      method: 'GET' as const,
+      path: '/mcp-tool',
+      summary: tool.description,
+      readOnly: true as const,
+      source: 'mcp' as const,
+      inputSchema: tool.inputSchema,
+    }));
+}
+
 function encryptedFromRow(row: ConnectionRow): EncryptedMcpServerCredential {
   return {
     algorithm: 'aes-256-gcm',
@@ -400,23 +415,16 @@ export async function createMcpServer(
         clientSecret: credential,
       });
       const wanted = new Set(input.toolNames);
-      const selected = discovered.filter((tool) => wanted.has(tool.name));
-      if (selected.length === 0) {
+      operations = mcpToolsToReadOnlyOperations(
+        discovered.filter((tool) => wanted.has(tool.name))
+      );
+      if (operations.length === 0) {
         throw new McpServerError(
           400,
           'Choose at least one tool from the MCP server',
           'OPERATIONS_REQUIRED'
         );
       }
-      operations = selected.map((tool) => ({
-        id: tool.name,
-        method: 'GET' as const,
-        path: '/mcp-tool',
-        summary: tool.description,
-        readOnly: true as const,
-        source: 'mcp' as const,
-        inputSchema: tool.inputSchema,
-      }));
     } else {
       baseUrl = connector.baseUrl;
       operations = selectPrebuiltOperations(connector, input.operations);
@@ -695,22 +703,14 @@ export async function testMcpServer(
       url: existing.baseUrl,
       headers: resolveRemoteMcpHeaders(remote),
     });
-    if (discovered.length === 0) {
+    const operations = mcpToolsToReadOnlyOperations(discovered);
+    if (operations.length === 0) {
       throw new McpServerError(
         400,
         'This server did not publish a read-only tool',
         'OPERATIONS_REQUIRED'
       );
     }
-    const operations: McpServerOperation[] = discovered.map((tool) => ({
-      id: tool.name,
-      method: 'GET',
-      path: '/mcp-tool',
-      summary: tool.description,
-      readOnly: true,
-      source: 'mcp',
-      inputSchema: tool.inputSchema,
-    }));
     const testedAt = new Date().toISOString();
     const updated = await db
       .update(mcpServers)
