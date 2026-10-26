@@ -9,7 +9,7 @@ import passport from 'passport';
 // Load environment variables BEFORE importing routes
 dotenv.config();
 
-import apiRoutes, { isPublicHealthPath } from './routes/api';
+import apiRoutes, { isPublicHealthPath, shouldSkipSessionMiddleware } from './routes/api';
 import authRoutes from './routes/auth';
 import azureCostRoutes from './routes/azureCost';
 import skillsRoutes from './routes/skills';
@@ -153,11 +153,15 @@ const { store: sessionStore } = createSessionStore();
 const sessionMiddleware = session(createSessionOptions(sessionStore));
 const passportInitializeMiddleware = passport.initialize();
 const passportSessionMiddleware = passport.session();
-app.use(sessionMiddleware);
+// Session-free routes (health probes, runner callbacks, public API) skip the
+// session store so a slow Postgres or a hung instance cannot fail a health probe.
+const withSession = (handler: express.RequestHandler): express.RequestHandler =>
+  (req, res, next) => (shouldSkipSessionMiddleware(req.path) ? next() : handler(req, res, next));
+app.use(withSession(sessionMiddleware));
 
 // Initialize Passport
-app.use(passportInitializeMiddleware);
-app.use(passportSessionMiddleware);
+app.use(withSession(passportInitializeMiddleware));
+app.use(withSession(passportSessionMiddleware));
 
 // Auth routes (no authentication required)
 app.use('/auth', authRoutes);

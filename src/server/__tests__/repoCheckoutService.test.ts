@@ -72,6 +72,15 @@ function workspacePath(sessionId: string): string {
 describe('repoCheckoutService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // jest.mock('fs') automocking leaves `fs.promises` undefined.
+    Object.defineProperty(mockFs, 'promises', {
+      configurable: true,
+      value: {
+        mkdir: jest.fn().mockResolvedValue(undefined),
+        rename: jest.fn().mockResolvedValue(undefined),
+        rm: jest.fn().mockResolvedValue(undefined),
+      },
+    });
     mockGit.mockResolvedValue('');
     mockEnsureRepoCache.mockResolvedValue({
       cacheDir: '/data/repo-cache/maxview.git',
@@ -216,6 +225,36 @@ describe('repoCheckoutService', () => {
         expect.objectContaining({ cwd: workspacePath('session-abc') }),
       );
       expect(JSON.stringify(mockGit.mock.calls)).not.toContain('secret-pat');
+    });
+
+    it('clears an existing workspace without synchronous fs calls', async () => {
+      process.env.ADO_ORG = 'https://dev.azure.com/amergis';
+      process.env.ADO_PAT = 'secret-pat';
+
+      await checkoutDefaultBranch({
+        project: 'MaxView',
+        repo: 'MaxView',
+        branch: 'main',
+        sessionId: 'session-async',
+      });
+
+      const promises = mockFs.promises as unknown as {
+        mkdir: jest.Mock;
+        rename: jest.Mock;
+        rm: jest.Mock;
+      };
+      expect(promises.mkdir).toHaveBeenCalledWith(path.join('/data', 'dev-workspaces'), {
+        recursive: true,
+      });
+      expect(promises.rename).toHaveBeenCalledWith(
+        workspacePath('session-async'),
+        expect.stringContaining(`${workspacePath('session-async')}.removing-`),
+      );
+      expect(promises.rm).toHaveBeenCalledWith(
+        expect.stringContaining('.removing-'),
+        { recursive: true, force: true },
+      );
+      expect(mockFs.rmSync).not.toHaveBeenCalled();
     });
 
     it('excludes .ai-pilot from git tracking after cloning', async () => {
