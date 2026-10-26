@@ -220,7 +220,6 @@ export async function sweepDuePlaybookSchedules(now = new Date()): Promise<void>
         project: claimed.project,
         definitionId: definition.id,
         initiatorUserId: claimed.initiatorUserId,
-        spendAdmissionEnabled: true,
       });
     } catch (err) {
       console.error('[playbook-schedule] scheduled start failed', JSON.stringify({
