@@ -60,6 +60,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
   const [priorModel, setPriorModel] = useState<string | null>(null);
   const [priorTask, setPriorTask] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
+  const [bugAlreadyOpened, setBugAlreadyOpened] = useState(false);
   const [search, setSearch] = useState('');
   const panelRef = useDialogFocus<HTMLDivElement>(open, () => setOpen(false), job !== null);
   const data = jobsQuery.data;
@@ -91,6 +92,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
     setPriorModel(null);
     setPriorTask('');
     setActionError(null);
+    setBugAlreadyOpened(false);
   };
 
   const openRetry = (report: GuidedCloudAgentSession) => {
@@ -103,10 +105,11 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
     setPriorModel(report.model);
     setPriorTask(report.task);
     setActionError(null);
+    setBugAlreadyOpened(false);
   };
 
   const confirm = async (value: { skillPath: string; model: string; task: string; images?: Array<{ name: string; mimeType: 'image/png' | 'image/jpeg' | 'image/webp'; data: string }> }) => {
-    if (!job) return;
+    if (!job || bugAlreadyOpened) return;
     if (!value.task || value.task.trim() === SITE_ISSUE_REPORT_TEMPLATE.trim()) {
       setActionError('Fill in the page, the problem, and what you expected.');
       return;
@@ -126,7 +129,9 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
       setJob(null);
       void jobsQuery.refetch();
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Unable to send the report.');
+      const message = error instanceof Error ? error.message : 'Unable to send the report.';
+      setActionError(message);
+      if (message.includes('was opened')) setBugAlreadyOpened(true);
     }
   };
 
@@ -286,9 +291,9 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
           taskLabel="What's wrong on the site?"
           emptyTaskMessage="Describe the issue"
           loading={jobsQuery.isLoading}
-          loadError={jobsQuery.error?.message ?? null}
+          loadError={bugAlreadyOpened ? actionError : (jobsQuery.error?.message ?? null)}
           pending={startJob.isPending}
-          error={actionError}
+          error={bugAlreadyOpened ? null : actionError}
           onClose={() => setJob(null)}
           onConfirm={(value) => { void confirm(value); }}
         />

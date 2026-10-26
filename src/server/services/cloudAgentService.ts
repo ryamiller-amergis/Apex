@@ -858,11 +858,11 @@ export async function startGuidedCloudAgentRun(
   // A new site-issue run is owned by this process until the Bug is stored.
   // The queue pump claims queued runs with a null owner, including during the
   // Azure DevOps call, so the run must not be claimable until the prompt,
-  // branch, and Bug id are on the snapshot.
+  // branch, and Bug id are on the snapshot. The short pre-identity deadline
+  // starts only when this process is about to launch; the reaper would
+  // otherwise fail the run while Azure DevOps is still creating the Bug.
   const holdUntilBugIsStored = intent === 'start';
-  const timeoutAt = holdUntilBugIsStored
-    ? cloudAgentPreIdentityTimeoutAt(0)
-    : new Date(Date.now() + CLOUD_AGENT_QUEUE_WAIT_MS).toISOString();
+  const timeoutAt = new Date(Date.now() + CLOUD_AGENT_QUEUE_WAIT_MS).toISOString();
   const lockKey = `cloud-agent-guided:${input.project}:${sessionId}`;
 
   const started = await db.transaction(async (tx) => {
