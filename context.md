@@ -43,7 +43,7 @@ The default landing experience for AI-assisted work within a project.
 - **Skill pills** — project-configured shortcuts that start a chat with a specific skill and model
 - **Thread history** — resume prior agent conversations from a sidebar
 - **Streaming chat** — SSE-powered agent responses with attachment support
-- **MCP integrations** — optional quick-launch pills for configured MCP servers
+- **MCP servers** — optional quick-launch pills for configured MCP servers
 - **Gated by** — `home:view` permission and the `agent-home` feature flag (both granted to all roles by default)
 
 ### 1. AI-Guided Design Interviews

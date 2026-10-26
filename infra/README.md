@@ -221,8 +221,8 @@ The shared Blob account is created in every Terraform workspace. PDF assembly ha
 
 | Terraform variable | Purpose | Default |
 |--------------------|---------|---------|
-| `shared_storage_account_name` | Globally unique shared artifact account; null derives `stapex<environment>async` | derived |
-| `blob_containers` | Map of private containers on the shared account | `{ pdf-artifacts = {}, repo-grounding = {} }` |
+| `shared_storage_account_name` | Globally unique shared artifact account; null derives `stapex<environment>async` (for example, `stapexdevasync`) | derived |
+| `blob_containers` | Map of private containers on the shared account | `{ pdf-artifacts, repo-grounding, cursor-prompts, playbook-step-outputs }` |
 
 App setting contract for the Apex application (wire via deploy pipeline / App Service config — `main.tf` ignores `app_settings` drift):
 
@@ -230,6 +230,10 @@ App setting contract for the Apex application (wire via deploy pipeline / App Se
 |-------------|--------------|----------|
 | `GROUNDING_BLOB_ACCOUNT_NAME` | `grounding_storage_account_name` output | Grounding bundle store |
 | `GROUNDING_BLOB_CONTAINER_NAME` | `grounding_blob_container_name` output | Grounding bundle store |
+| `PLAYBOOK_STEP_OUTPUT_BLOB_ACCOUNT_NAME` | `shared_storage_account_name` output | Playbook step-output store |
+| `PLAYBOOK_STEP_OUTPUT_CONTAINER_NAME` | `playbook_step_output_blob_container_name` output | Playbook step-output store |
+
+`playbook-step-outputs` stores private JSON for Playbook steps whose output exceeds the inline limit. The Apex App Service identity, and a distinct staging-slot identity when enabled, receive `Storage Blob Data Contributor` only on that container. The application falls back to `GROUNDING_BLOB_ACCOUNT_NAME` or `PDF_BLOB_ACCOUNT_NAME` when the explicit account setting has not yet been deployed, because all three name the same shared account. A daily in-process sweep verifies referenced objects and deletes only unreferenced objects older than one hour. Apply this change in each Terraform workspace before Playbook steps spill large output there.
 
 ### Repository grounding bundles
 

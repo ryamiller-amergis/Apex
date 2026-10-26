@@ -1,6 +1,12 @@
 import { AzureDevOpsService } from './azureDevOps';
 import { parseAutoCheckTeams } from './adoTeamConfig';
 import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
+import {
+  NonblockingRepoCacheLeaseUnavailableError,
+  withRepoCacheLease,
+} from './repoCacheLeaseService';
+
+const LEASE_KEY = 'feature-auto-complete:sweep';
 
 /**
  * Background service that automatically updates Feature status to "Done"
@@ -27,12 +33,33 @@ export class FeatureAutoCompleteService {
     console.log('[FeatureAutoComplete] Starting service - checking every 15 minutes');
     
     // Run immediately on start
-    this.checkAndUpdateFeatures();
+    void this.runScheduledCheck();
     
     // Then run every 15 minutes
     this.intervalId = setInterval(() => {
-      this.checkAndUpdateFeatures();
+      void this.runScheduledCheck();
     }, this.CHECK_INTERVAL);
+  }
+
+  /**
+   * Periodic sweep. Every App Service instance runs this timer, so a Postgres
+   * lease lets only one instance poll Azure DevOps per interval. The lease is
+   * not released on completion; it expires just before the next interval.
+   */
+  private async runScheduledCheck(): Promise<void> {
+    try {
+      await withRepoCacheLease(
+        LEASE_KEY,
+        async () => this.checkAndUpdateFeatures(),
+        { leaseMs: this.CHECK_INTERVAL - 5000, waitMs: 0, releaseOnComplete: false },
+      );
+    } catch (error) {
+      if (error instanceof NonblockingRepoCacheLeaseUnavailableError) {
+        console.log('[FeatureAutoComplete] Another instance holds the sweep lease, skipping...');
+        return;
+      }
+      console.error('[FeatureAutoComplete] Could not run the scheduled check:', error);
+    }
   }
 
   /**

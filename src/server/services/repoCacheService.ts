@@ -407,7 +407,9 @@ function pruneAbandonedPackTemps(cacheDir: string): void {
 
   const cutoff = Date.now() - COLD_CACHE_TIMEOUT_MS;
   for (const entry of entries) {
-    if (!entry.startsWith('tmp_pack_')) continue;
+    // `.tmp-<pid>-pack-*` is the name `git repack` gives a finished pack
+    // before renaming it into place; a repack killed in between leaves it.
+    if (!entry.startsWith('tmp_pack_') && !entry.startsWith('.tmp-')) continue;
     const file = path.join(packDir, entry);
     try {
       if (fs.statSync(file).mtimeMs > cutoff) continue;
@@ -444,9 +446,141 @@ async function refetchAndVerifyCache(
     },
   );
   await assertOwned();
+  try {
+    await compactRepoCache(cacheDir, { abortSignal, assertOwned, reason: 'refetch' });
+  } catch (compactionError) {
+    if (abortSignal.aborted) throw compactionError;
+    // The refetch already repaired the mirror; old packs stay until the
+    // maintenance sweep compacts it.
+    console.warn(
+      `[repo-cache] phase=compact-failed reason=refetch dir=${path.basename(cacheDir)}: ` +
+        (compactionError instanceof Error ? compactionError.message : String(compactionError)).slice(0, 300),
+    );
+  }
+  await assertOwned();
   const baseSha = await verifyCacheConnectivity(cacheDir, options.branch, abortSignal);
   writeRepairMarker(cacheDir, baseSha);
   return baseSha;
+}
+
+export interface RepoCachePackStats {
+  packCount: number;
+  packBytes: number;
+  largestPackBytes: number;
+}
+
+export function readRepoCachePackStats(cacheDir: string): RepoCachePackStats {
+  const stats: RepoCachePackStats = { packCount: 0, packBytes: 0, largestPackBytes: 0 };
+  const packDir = path.join(cacheDir, 'objects', 'pack');
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(packDir);
+  } catch {
+    return stats;
+  }
+  for (const entry of entries) {
+    if (!entry.endsWith('.pack') || !entry.startsWith('pack-')) continue;
+    let size: number;
+    try {
+      size = fs.statSync(path.join(packDir, entry)).size;
+    } catch {
+      continue;
+    }
+    stats.packCount += 1;
+    stats.packBytes += size;
+    stats.largestPackBytes = Math.max(stats.largestPackBytes, size);
+  }
+  return stats;
+}
+
+/**
+ * Free space a repack needs, as a multiple of the largest existing pack. The
+ * consolidated pack is about the size of the repository, and the largest pack
+ * is a good proxy for that because every `fetch --refetch` writes a complete
+ * copy. Doubling covers the new .idx/.bitmap and leaves headroom.
+ */
+export const REPO_CACHE_COMPACTION_FREE_SPACE_FACTOR = 2;
+const REPO_CACHE_COMPACTION_TIMEOUT_MS = COLD_CACHE_TIMEOUT_MS;
+
+export interface RepoCacheCompactionResult {
+  compacted: boolean;
+  skippedReason?: 'disk-low';
+  before: RepoCachePackStats;
+  after: RepoCachePackStats;
+  freeBytes: number | null;
+  requiredFreeBytes: number;
+  durationMs: number;
+}
+
+export interface RepoCacheCompactionOptions {
+  abortSignal: AbortSignal;
+  assertOwned: () => Promise<void>;
+  reason: 'refetch' | 'oversized';
+}
+
+/**
+ * Packs every object in the mirror into one pack and deletes the packs that
+ * makes redundant (`-d` also runs `prune-packed`). Mirrors keep `gc.auto 0`,
+ * so this explicit call is the only thing that drops the full duplicate pack
+ * each `fetch --refetch` leaves behind.
+ *
+ * `--keep-unreachable` keeps objects no ref points at, such as a commit fetched
+ * by SHA without a ref that a lease-free reader is about to check out, so this
+ * removes duplicate copies only, never an object. Readers that clone without
+ * the lease can still lose a pack file mid-read; `materializeWorkspaceFromCache`
+ * retries for that. The caller must hold the mirror's lease. A repack killed
+ * part way leaves the old packs in place.
+ */
+export async function compactRepoCache(
+  cacheDir: string,
+  options: RepoCacheCompactionOptions,
+): Promise<RepoCacheCompactionResult> {
+  const { abortSignal, assertOwned, reason } = options;
+  const startedAt = Date.now();
+  const label = path.basename(cacheDir);
+  const before = readRepoCachePackStats(cacheDir);
+  const requiredFreeBytes =
+    before.largestPackBytes * REPO_CACHE_COMPACTION_FREE_SPACE_FACTOR;
+  const freeBytes = await readRepoCacheFreeBytes(cacheDir).catch(() => null);
+  if (freeBytes !== null && freeBytes < requiredFreeBytes) {
+    console.error(
+      `[repo-cache] phase=compact-skipped reason=${reason} dir=${label} disk-low ` +
+        `freeBytes=${freeBytes} requiredBytes=${requiredFreeBytes} ` +
+        `packs=${before.packCount} packBytes=${before.packBytes}`,
+    );
+    return {
+      compacted: false,
+      skippedReason: 'disk-low',
+      before,
+      after: before,
+      freeBytes,
+      requiredFreeBytes,
+      durationMs: Date.now() - startedAt,
+    };
+  }
+
+  console.log(
+    `[repo-cache] phase=compact-start reason=${reason} dir=${label} ` +
+      `packsBefore=${before.packCount} bytesBefore=${before.packBytes}`,
+  );
+  pruneAbandonedPackTemps(cacheDir);
+  await assertOwned();
+  // Repack prints nothing when stderr is not a terminal, so an idle timeout
+  // would kill a healthy run; bound it by total time only.
+  await git(safeArgs(cacheDir, ['repack', '-a', '-d', '--keep-unreachable', '-q']), {
+    cwd: cacheDir,
+    timeout: REPO_CACHE_COMPACTION_TIMEOUT_MS,
+    abortSignal,
+  });
+  await assertOwned();
+  const after = readRepoCachePackStats(cacheDir);
+  const durationMs = Date.now() - startedAt;
+  console.log(
+    `[repo-cache] phase=compact-complete reason=${reason} dir=${label} ` +
+      `packsBefore=${before.packCount} packsAfter=${after.packCount} ` +
+      `bytesBefore=${before.packBytes} bytesAfter=${after.packBytes} durationMs=${durationMs}`,
+  );
+  return { compacted: true, before, after, freeBytes, requiredFreeBytes, durationMs };
 }
 
 function isTransientGitError(error: unknown): boolean {

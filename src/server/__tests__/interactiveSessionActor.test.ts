@@ -719,6 +719,130 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     expect(send.mock.calls[1][1]).toMatchObject({ mcpServers: toolsFor('second') });
   });
 
+  it('retries an MCP follow-up when the first draft does not call a tool', async () => {
+    const first = makeAgentHandle({
+      tokens: ['Here is SQL you can run.'],
+      agentId: 'agent-mcp',
+    });
+    const secondRun: WorkerCursorExecutionRun = {
+      supports: (capability: string) =>
+        capability === 'stream' || capability === 'cancel',
+      async *stream(): AsyncIterable<CursorStreamEvent> {
+        yield {
+          type: 'assistant',
+          message: {
+            content: [{
+              type: 'tool_use',
+              id: 'tool-call-1',
+              name: 'list_users',
+              input: {},
+            }],
+          },
+        };
+        yield {
+          type: 'assistant',
+          message: {
+            content: [{
+              type: 'text',
+              text: '42 users had their latest sign-in today.',
+            }],
+          },
+        };
+        yield { type: 'apex_turn_end' };
+      },
+      wait: async () => ({ status: 'finished' }),
+      cancel: async () => {},
+    };
+    const sentPrompts: string[] = [];
+    let sendCount = 0;
+    const handle: InteractiveCursorAgentHandle = {
+      ...first,
+      send: async (prompt, options) => {
+        sentPrompts.push(prompt);
+        sendCount += 1;
+        if (sendCount === 1) return first.send(prompt, options);
+        return secondRun;
+      },
+    };
+    const posted: AiRunIngestBody[] = [];
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) => {
+        handle.workspaceRef = checkout.workspacePath;
+        return handle;
+      }),
+      materializeWorkspace: jest.fn(async (_bootstrap, destination: string) => ({
+        workspacePath: destination,
+        dispose: async () => {},
+      })),
+      uploadAttemptArtifacts: jest.fn(async () => ({
+        container: 'artifacts',
+        key: 'runs/r/attempts/1/manifest.json',
+      })),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+    });
+    const base = makeDurableBootstrap();
+    const descriptor = {
+      kind: 'internal-proxy' as const,
+      serverName: 'mcp-server' as const,
+      connectionId: '30000000-0000-4000-8000-000000000004',
+      boundUserId: USER_ID,
+      enableRepoBrowse: false as const,
+    };
+
+    await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: {
+        ...base,
+        specification: {
+          ...base.specification,
+          currentMessage: {
+            ...base.specification.currentMessage,
+            text: "Count users whose last_sign_in_at falls on today's date.",
+          },
+          transcript: [
+            {
+              id: '40000000-0000-4000-8000-000000000001',
+              role: 'user',
+              text: 'How many people logged in today?',
+              timestamp: '2026-10-23T21:13:22.371-04:00',
+            },
+            {
+              id: '40000000-0000-4000-8000-000000000002',
+              role: 'agent',
+              text: 'The connected server does not expose a login-events report.',
+              timestamp: '2026-10-23T21:13:46.749-04:00',
+            },
+          ],
+          mcpServers: [descriptor],
+        },
+        mcpServers: {
+          'mcp-server': { url: 'https://apex.example/mcp?token=test' },
+        },
+      },
+    });
+
+    expect(sentPrompts).toHaveLength(2);
+    expect(sentPrompts[1]).toContain('Discard that draft');
+    expect(sentPrompts[1]).toContain(
+      "Count users whose last_sign_in_at falls on today's date.",
+    );
+    const progressTypes = posted.flatMap((body) =>
+      body.kind === 'progress' && body.event ? [body.event.type] : [],
+    );
+    expect(progressTypes).toContain('tool_call');
+    const messages = posted
+      .filter((body) => body.kind === 'progress' && body.event?.type === 'message')
+      .map((body) => body.kind === 'progress' && body.event?.type === 'message'
+        ? body.event.message.text
+        : '');
+    expect(messages).toContain('42 users had their latest sign-in today.');
+    expect(messages).not.toContain('Here is SQL you can run.');
+  });
+
   it('marks guided interview replies and rebuilds the Agent when the phase changes', async () => {
     const posted: AiRunIngestBody[] = [];
     const acquireDurableAgent = jest.fn(async (bootstrap, checkout) => ({

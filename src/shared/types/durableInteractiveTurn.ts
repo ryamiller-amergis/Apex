@@ -51,6 +51,13 @@ export type FrozenInteractiveMcpDescriptor =
       enableRepoBrowse: boolean;
     }>
   | Readonly<{
+      kind: 'internal-proxy';
+      serverName: 'mcp-server';
+      connectionId: string;
+      boundUserId: string;
+      enableRepoBrowse: false;
+    }>
+  | Readonly<{
       kind: 'external-http-proxy';
       serverName: string;
       url: string;
@@ -309,6 +316,13 @@ function isMcpDescriptor(
   if (!isRecord(value)) return false;
 
   if (value.kind === 'internal-proxy') {
+    if (value.serverName === 'mcp-server') {
+      return (
+        isCanonicalUuid(value.connectionId) &&
+        isDurableUserIdentity(value.boundUserId) &&
+        value.enableRepoBrowse === false
+      );
+    }
     return (
       (value.serverName === 'ado-skills' ||
         value.serverName === 'calendar-assistant' ||

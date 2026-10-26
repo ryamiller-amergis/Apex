@@ -48,6 +48,21 @@ jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: () => ({ can: () => false }),
 }));
 
+jest.mock('../../hooks/usePlaybookSpendPolicy', () => ({
+  usePlaybookSpendPolicy: () => ({
+    isLoading: false,
+    isError: false,
+    data: undefined,
+    refetch: jest.fn(),
+  }),
+  useUpdatePlaybookSpendPolicy: () => ({
+    mutateAsync: jest.fn(),
+    isPending: false,
+    isSuccess: false,
+    error: null,
+  }),
+}));
+
 jest.mock('../GroupAwarePeoplePicker', () => ({
   GroupAwarePeoplePicker: ({
     groups,

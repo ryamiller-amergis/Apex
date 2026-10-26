@@ -9,8 +9,8 @@ import {
 } from '../../shared/types/menuSettings';
 
 describe('menuSettings shared types', () => {
-  it('CONFIGURABLE_MENU_ITEMS has exactly 15 entries', () => {
-    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(15);
+  it('CONFIGURABLE_MENU_ITEMS has exactly 16 entries', () => {
+    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(16);
   });
 
   it('contains the expected keys in order', () => {
@@ -31,6 +31,7 @@ describe('menuSettings shared types', () => {
       'diagrams',
       'work-board',
       'playbooks',
+      'mcp-servers',
     ]);
   });
 
@@ -52,6 +53,7 @@ describe('menuSettings shared types', () => {
       'Diagrams',
       'Work Board',
       'Playbooks',
+      'MCP Servers',
     ]);
   });
 
@@ -66,12 +68,14 @@ describe('menuSettings shared types', () => {
     expect(keys).toContain('feature-requests');
     expect(keys).toContain('load-tests');
     expect(keys).toContain('diagrams');
+    expect(keys).toContain('mcp-servers');
   });
 
-  it('VT-04 / BR-011: diagrams is configurable but excluded from DEFAULT_ENABLED_MENU_VIEWS', () => {
-    expect(ALL_MENU_VIEWS).toContain('diagrams');
+  it('SC-1: integrations is configurable but omitted from DEFAULT_ENABLED_MENU_VIEWS', () => {
+    expect(ALL_MENU_VIEWS).toContain('mcp-servers');
+    expect(DEFAULT_ENABLED_MENU_VIEWS).not.toContain('mcp-servers');
     expect(DEFAULT_ENABLED_MENU_VIEWS).not.toContain('diagrams');
-    expect(DEFAULT_ENABLED_MENU_VIEWS).toHaveLength(ALL_MENU_VIEWS.length - 1);
+    expect(DEFAULT_ENABLED_MENU_VIEWS).toHaveLength(ALL_MENU_VIEWS.length - 2);
   });
 
   it('ProjectMenuConfig shape is correctly typed', () => {

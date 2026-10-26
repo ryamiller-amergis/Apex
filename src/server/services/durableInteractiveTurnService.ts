@@ -31,6 +31,7 @@ import type {
   ProjectSkillConfigResponse,
   QuickMcpPill,
 } from '../../shared/types/projectSettings';
+import { mcpServerChatInstructions } from '../../shared/types/mcpServers';
 import type { GroundingProfileId } from '../../shared/types/repoReader';
 import type { RepoReader } from '../../shared/types/repoReader';
 import { callerGroundingService } from './callerGroundingService';
@@ -132,6 +133,12 @@ function sessionInstructions(
   thread: ChatThread,
   workflowClass: InteractiveWorkflowClass,
 ): string[] {
+  if (thread.kickoff.assistantType === 'mcp-server') {
+    return [
+      ...mcpServerChatInstructions(thread.kickoff.pillLabel ?? 'MCP server'),
+      '',
+    ];
+  }
   const documentGuidance = buildDocumentAssistantEditGuidance(thread.kickoff).map(
     (line) =>
       line
@@ -703,6 +710,7 @@ function capabilityMetadata(
     thread.kickoff.mcpPill ||
     thread.kickoff.webResearchEnabled ||
     thread.kickoff.assistantType === 'calendar-work-item' ||
+    thread.kickoff.assistantType === 'mcp-server' ||
     resolveDocumentAssistantType(thread.kickoff)
   ) {
     capabilities.push('mcp');
@@ -982,6 +990,15 @@ function frozenMcpDescriptors(
   maxviewEnabled: boolean,
   grounding: FrozenGrounding,
 ): FrozenInteractiveMcpDescriptor[] {
+  if (thread.kickoff.assistantType === 'mcp-server' && thread.kickoff.mcpServerId) {
+    return [{
+      kind: 'internal-proxy',
+      serverName: 'mcp-server',
+      connectionId: thread.kickoff.mcpServerId,
+      boundUserId: thread.userId,
+      enableRepoBrowse: false,
+    }];
+  }
   const descriptors: FrozenInteractiveMcpDescriptor[] = [];
   const pill = thread.kickoff.mcpPill;
   if (pill?.transport === 'http') {
@@ -1420,6 +1437,8 @@ export function createDurableInteractiveTurnService(
       // workspace, and so its warm agent, the same across the product phase.
       const requiresRepositoryPreparation =
         skillNeedsRepository && !groundInBackground;
+      // An MCP connection chat answers from that server alone.
+      const skipRepositoryGrounding = thread.kickoff.assistantType === 'mcp-server';
 
       const immutableAttachments = [];
       for (
@@ -1440,7 +1459,9 @@ export function createDurableInteractiveTurnService(
 
       const setupDoneAt = deps.now().getTime();
       let grounding: FrozenGrounding = null;
-      if (groundInBackground) {
+      if (skipRepositoryGrounding) {
+        grounding = null;
+      } else if (groundInBackground) {
         if (thread.kickoff.repo) {
           prepareGroundingInBackground({ thread, userId: input.userId });
         }
@@ -1471,7 +1492,7 @@ export function createDurableInteractiveTurnService(
           );
         }
       }
-      if (requiresRepositoryPreparation && grounding === null) {
+      if (!skipRepositoryGrounding && requiresRepositoryPreparation && grounding === null) {
         throw new DurableInteractiveTurnError(
           'INTERACTIVE_V2_GROUNDING_UNAVAILABLE',
           422,
@@ -1482,6 +1503,7 @@ export function createDurableInteractiveTurnService(
       // Preparation keeps running after the wait expires, so a later turn
       // on the same thread finds the repository ready.
       if (
+        !skipRepositoryGrounding &&
         !groundInBackground &&
         !requiresRepositoryPreparation &&
         thread.kickoff.repo
@@ -1587,12 +1609,16 @@ export function createDurableInteractiveTurnService(
       const transcript = visibleTranscript(thread);
       const messageText =
         input.text.trim() || 'Uploaded files for context.';
+      const resolvedSessionInstructions = sessionInstructions(
+        thread,
+        input.workflowClass,
+      );
       const firstTurnPrompt = currentPrompt(
         promptText,
         skill,
         frozenSkill,
         immutableAttachments,
-        sessionInstructions(thread, input.workflowClass),
+        resolvedSessionInstructions,
         input.turnSkill ? 'turn' : 'session',
         input.internalContext,
       );
@@ -1608,7 +1634,14 @@ export function createDurableInteractiveTurnService(
             null,
             null,
             immutableAttachments,
-            guidedInterview ? [] : answersSoFar(transcript, input.workflowClass),
+            [
+              ...(thread.kickoff.assistantType === 'mcp-server'
+                ? resolvedSessionInstructions
+                : []),
+              ...(guidedInterview
+                ? []
+                : answersSoFar(transcript, input.workflowClass)),
+            ],
             'session',
             input.internalContext,
             skill,

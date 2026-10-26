@@ -1,6 +1,6 @@
 import request from 'supertest';
 import express from 'express';
-import apiRouter, { isPublicHealthPath } from '../routes/api';
+import apiRouter, { isPublicHealthPath, shouldSkipSessionMiddleware } from '../routes/api';
 import { AzureDevOpsService } from '../services/azureDevOps';
 import { getDbPoolStats } from '../db';
 import { db } from '../db/drizzle';
@@ -852,6 +852,28 @@ describe('API Routes', () => {
       expect(isPublicHealthPath('/health/dependencies/private')).toBe(false);
       expect(isPublicHealthPath('/health/agent')).toBe(false);
       expect(isPublicHealthPath('/status')).toBe(false);
+    });
+  });
+
+  describe('session-free path predicate', () => {
+    it('skips sessions for health probes and session-free callbacks', () => {
+      expect(shouldSkipSessionMiddleware('/api/health')).toBe(true);
+      expect(shouldSkipSessionMiddleware('/api/health/live')).toBe(true);
+      expect(shouldSkipSessionMiddleware('/api/telemetry-config')).toBe(true);
+      expect(shouldSkipSessionMiddleware('/api/messages')).toBe(true);
+      expect(shouldSkipSessionMiddleware('/api/internal/ai-runs/abc/events')).toBe(true);
+      expect(shouldSkipSessionMiddleware('/api/internal/load-test-runs/1')).toBe(true);
+      expect(shouldSkipSessionMiddleware('/api/internal/foundation-skills/x')).toBe(true);
+      expect(shouldSkipSessionMiddleware('/api/public/anything')).toBe(true);
+    });
+
+    it('keeps sessions for auth and authenticated routes', () => {
+      expect(shouldSkipSessionMiddleware('/auth/login')).toBe(false);
+      expect(shouldSkipSessionMiddleware('/api/auth/me')).toBe(false);
+      expect(shouldSkipSessionMiddleware('/api/projects')).toBe(false);
+      expect(shouldSkipSessionMiddleware('/api/health/live/extra')).toBe(false);
+      expect(shouldSkipSessionMiddleware('/api/backlog/mock-html')).toBe(false);
+      expect(shouldSkipSessionMiddleware('/')).toBe(false);
     });
   });
 

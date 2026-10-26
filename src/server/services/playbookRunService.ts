@@ -182,7 +182,6 @@ export interface StartRunResult {
 
 export interface StartRunInput extends StartRunRequest {
   initiatorUserId: string;
-  spendAdmissionEnabled?: boolean;
 }
 
 export async function startRun(input: StartRunInput): Promise<StartRunResult> {
@@ -203,17 +202,7 @@ export async function startRun(input: StartRunInput): Promise<StartRunResult> {
    * reasoning as the no-published-version case above. The graph guards are not repeated here:
    * publication already ran them, and the version is immutable, so the answer cannot have changed.
    */
-  // @feature-flag:playbooks-production-adapters start winner=enabled
-  if (input.spendAdmissionEnabled) {
-    // @feature-flag:playbooks-production-adapters enabled-start
-    await playbookSpendPolicyService.assertAdmission(input.project);
-    // @feature-flag:playbooks-production-adapters enabled-end
-  } else {
-    // @feature-flag:playbooks-production-adapters disabled-start
-    // Preserve Phase 1 start behavior: no spend-policy read or rejection.
-    // @feature-flag:playbooks-production-adapters disabled-end
-  }
-  // @feature-flag:playbooks-production-adapters end
+  await playbookSpendPolicyService.assertAdmission(input.project);
 
   await assertActiveRunCapacity(input.project);
 

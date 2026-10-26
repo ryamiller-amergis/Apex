@@ -317,26 +317,12 @@ describe('AppSidebar — Work Board flag', () => {
 });
 
 describe('AppSidebar — Playbooks visibility', () => {
-  it('hides Playbooks for a super admin when the feature flag is off', () => {
+  it('renders Playbooks for a super admin', () => {
     render(
       <AppSidebar
         {...baseProps}
         isSuperAdmin
         selectedProject="Apex"
-        playbooksEnabled={false}
-        onNavigatePlaybooks={jest.fn()}
-      />,
-    );
-    expect(screen.queryByRole('button', { name: 'Playbooks' })).not.toBeInTheDocument();
-  });
-
-  it('renders Playbooks for a super admin when the feature flag is on', () => {
-    render(
-      <AppSidebar
-        {...baseProps}
-        isSuperAdmin
-        selectedProject="Apex"
-        playbooksEnabled
         onNavigatePlaybooks={jest.fn()}
       />,
     );
@@ -350,7 +336,6 @@ describe('AppSidebar — Playbooks visibility', () => {
         {...baseProps}
         can={can}
         menuEnabledViews={[]}
-        playbooksEnabled
         onNavigatePlaybooks={jest.fn()}
       />,
     );
@@ -365,7 +350,6 @@ describe('AppSidebar — Playbooks visibility', () => {
         {...baseProps}
         can={can}
         menuEnabledViews={['playbooks']}
-        playbooksEnabled
         onNavigatePlaybooks={onNavigatePlaybooks}
       />,
     );
@@ -425,6 +409,60 @@ describe('AppSidebar — grouped sections', () => {
     expect(screen.queryByText('Build')).not.toBeInTheDocument();
     expect(screen.queryByText('Delivery')).not.toBeInTheDocument();
     expect(screen.queryByText('Tools')).not.toBeInTheDocument();
+  });
+});
+
+describe('AppSidebar — integrations nav (SC-1)', () => {
+  it('SC-1 hides Integrations when the flag is off', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key) => key === 'mcp-servers:view'}
+        menuEnabledViews={['mcp-servers']}
+        mcpServersEnabled={false}
+        onNavigateMcpServers={jest.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('nav-item-mcp-servers')).not.toBeInTheDocument();
+  });
+
+  it('SC-1 hides Integrations when the project menu omits it', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key) => key === 'mcp-servers:view'}
+        menuEnabledViews={['calendar']}
+        mcpServersEnabled
+        onNavigateMcpServers={jest.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('nav-item-mcp-servers')).not.toBeInTheDocument();
+  });
+
+  it('SC-1 hides Integrations without mcp-servers:view', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={() => false}
+        menuEnabledViews={['mcp-servers']}
+        mcpServersEnabled
+        onNavigateMcpServers={jest.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('nav-item-mcp-servers')).not.toBeInTheDocument();
+  });
+
+  it('SC-1 shows Integrations when the flag, menu, and view permission are on', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key) => key === 'mcp-servers:view'}
+        menuEnabledViews={['mcp-servers']}
+        mcpServersEnabled
+        onNavigateMcpServers={jest.fn()}
+      />,
+    );
+    expect(screen.getByTestId('nav-item-mcp-servers')).toBeInTheDocument();
   });
 });
 

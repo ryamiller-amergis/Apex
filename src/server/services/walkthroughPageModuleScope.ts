@@ -247,6 +247,15 @@ const PAGE_MODULE_BY_MENU_KEY: Record<
       },
     ],
   },
+  'mcp-servers': {
+    pageEntries: [
+      {
+        component: 'src/client/components/McpServersView.tsx',
+        routePattern: '/mcp-servers',
+        suggestedRoute: '/mcp-servers',
+      },
+    ],
+  },
 };
 
 const FIXED_PAGE_MODULES: readonly WalkthroughPageModuleContext[] = [

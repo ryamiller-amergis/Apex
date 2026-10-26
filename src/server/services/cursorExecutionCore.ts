@@ -752,6 +752,10 @@ export async function executeCursorExecutionCore(
           toolCallEvent.status === 'completed' || toolCallEvent.status === 'error'
             ? toolCallEvent.status
             : 'running';
+        if (status === 'running' && textBuffer.trim()) {
+          await hooks.onReasoningSegment?.(textBuffer.trim());
+          textBuffer = '';
+        }
         const name = toolCallEvent.name ?? '';
         const key = toolCallEvent.call_id || toolCallEvent.name || 'unknown';
         const phase = inferCursorToolPhase(name, toolCallEvent.args);
