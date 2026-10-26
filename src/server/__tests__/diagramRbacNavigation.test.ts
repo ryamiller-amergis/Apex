@@ -60,7 +60,7 @@ describe('FEAT-002 Diagram RBAC and opt-in navigation', () => {
       expect(ALL_MENU_VIEWS).toContain('diagrams');
       expect(DEFAULT_ENABLED_MENU_VIEWS).not.toContain('diagrams');
       expect(DEFAULT_ENABLED_MENU_VIEWS).toEqual(
-        ALL_MENU_VIEWS.filter((key) => key !== 'diagrams' && key !== 'mcp-servers'),
+        ALL_MENU_VIEWS.filter((key) => key !== 'diagrams' && key !== 'builds' && key !== 'mcp-servers'),
       );
     });
 

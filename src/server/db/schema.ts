@@ -2,6 +2,7 @@ import { bigint, bigserial, boolean, check, date, index, integer, jsonb, numeric
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type { RepoProvider, RepoRole, RunType } from '../../shared/types/runGrounding';
+import type { BuildAllowlistAuditAction } from '../../shared/types/buildAccess';
 import type {
   OverlayTextBox,
   PageManifestEntry,
@@ -503,6 +504,29 @@ export const devEnvAllowlist = pgTable('dev_env_allowlist', {
   createdBy: text('created_by'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
+
+export const buildAllowlist = pgTable('build_allowlist', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  repository: text('repository').notNull(),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectRepositoryKey: unique('build_allowlist_project_repository_key').on(t.project, t.repository),
+}));
+
+export const buildAllowlistAudit = pgTable('build_allowlist_audit', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  action: text('action').$type<BuildAllowlistAuditAction>().notNull(),
+  project: text('project').notNull(),
+  repository: text('repository').notNull(),
+  actorId: text('actor_id').notNull(),
+  actorLabel: text('actor_label'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  actionCheck: check('build_allowlist_audit_action_check', sql`${t.action} IN ('added', 'removed')`),
+  createdAtIdx: index('build_allowlist_audit_created_at_idx').on(t.createdAt),
+}));
 
 export const projectAccessRequests = pgTable('project_access_requests', {
   id: uuid('id').primaryKey().defaultRandom(),
