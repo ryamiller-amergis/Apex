@@ -519,15 +519,17 @@ export interface RepoCacheCompactionOptions {
 }
 
 /**
- * Packs every object reachable from the mirror's refs into one pack and deletes
- * the packs that makes redundant (`-d` also runs `prune-packed`). Mirrors keep
- * `gc.auto 0`, so this explicit call is the only thing that drops the full
- * duplicate pack each `fetch --refetch` leaves behind.
+ * Packs every object in the mirror into one pack and deletes the packs that
+ * makes redundant (`-d` also runs `prune-packed`). Mirrors keep `gc.auto 0`,
+ * so this explicit call is the only thing that drops the full duplicate pack
+ * each `fetch --refetch` leaves behind.
  *
- * The caller must hold the mirror's lease. Refs are unchanged, workspaces clone
- * with `--dissociate`, and pinned SHAs are refs under `refs/apex/pins/`, so
- * nothing outside the mirror depends on the unreachable objects this drops.
- * A repack killed part way leaves the old packs in place.
+ * `--keep-unreachable` keeps objects no ref points at, such as a commit fetched
+ * by SHA without a ref that a lease-free reader is about to check out, so this
+ * removes duplicate copies only, never an object. Readers that clone without
+ * the lease can still lose a pack file mid-read; `materializeWorkspaceFromCache`
+ * retries for that. The caller must hold the mirror's lease. A repack killed
+ * part way leaves the old packs in place.
  */
 export async function compactRepoCache(
   cacheDir: string,
@@ -565,7 +567,7 @@ export async function compactRepoCache(
   await assertOwned();
   // Repack prints nothing when stderr is not a terminal, so an idle timeout
   // would kill a healthy run; bound it by total time only.
-  await git(safeArgs(cacheDir, ['repack', '-a', '-d', '-q']), {
+  await git(safeArgs(cacheDir, ['repack', '-a', '-d', '--keep-unreachable', '-q']), {
     cwd: cacheDir,
     timeout: REPO_CACHE_COMPACTION_TIMEOUT_MS,
     abortSignal,

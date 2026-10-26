@@ -150,6 +150,10 @@ async function directoryBytes(dir: string): Promise<number> {
   return total;
 }
 
+async function mirrorLastUsedMs(dir: string): Promise<number> {
+  return readRepoCacheLastUsed(dir) ?? (await fsp.stat(dir)).mtimeMs;
+}
+
 function groundingCacheOptions(grounding: RunGrounding): RepoCacheOptions {
   return {
     provider: grounding.provider === 'azure_devops' ? 'ado' : 'github',
@@ -181,25 +185,40 @@ export function createRepoCacheEvictionService(
       }));
   const cacheRoot = path.join(dataRoot, 'repo-cache');
 
+  const isIdle = async (dir: string): Promise<boolean> =>
+    now() - (await mirrorLastUsedMs(dir)) > REPO_CACHE_MIN_IDLE_MS;
+
   /**
-   * Repacking keeps every ref and reachable object, so unlike deletion it is
-   * safe for mirrors that were just used or back an active grounding. It still
-   * takes the mirror's lease so it never races a fetch into the same pack dir.
+   * Repacking keeps every object, so an active grounding does not block it:
+   * workspaces are dissociated from the mirror. Recent use does, because
+   * readers clone from the mirror after `ensureRepoCache` releases the lease
+   * and a repack deletes the pack files such a clone may be copying. Idle is
+   * checked again under the lease, right before the repack.
    */
   async function compactOversized(
     mirror: ScannedMirror,
     result: RepoCacheEvictionResult,
   ): Promise<void> {
     if (!mirror.identity) return;
+    if (now() - mirror.lastUsedMs <= REPO_CACHE_MIN_IDLE_MS) return;
     const stats = readPackStats(mirror.dir);
     if (!mirrorNeedsCompaction(stats)) return;
     let outcome: RepoCacheCompactionResult | null = null;
     try {
       outcome = await withLease(
         getRepoCacheLeaseKey(mirror.identity),
-        (lease) => compactMirror(mirror.dir, lease),
+        async (lease) => {
+          if (!(await isIdle(mirror.dir))) return null;
+          return compactMirror(mirror.dir, lease);
+        },
         { waitMs: 0 },
       );
+      if (!outcome) {
+        console.log(
+          `[repo-cache] phase=compact-deferred reason=oversized mirror=${mirror.name} recently-used`,
+        );
+        return;
+      }
     } catch (error) {
       if (isLeaseBusy(error)) {
         console.log(
@@ -325,8 +344,7 @@ export function createRepoCacheEvictionService(
         let lastUsedMs: number;
         try {
           bytes = await directoryBytes(dir);
-          lastUsedMs =
-            readRepoCacheLastUsed(dir) ?? (await fsp.stat(dir)).mtimeMs;
+          lastUsedMs = await mirrorLastUsedMs(dir);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
           throw error;

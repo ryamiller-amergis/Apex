@@ -378,12 +378,12 @@ describe('repoCacheEvictionService', () => {
       })).toBe(false);
     });
 
-    it('compacts a bloated mirror that was just used and backs an active grounding', async () => {
+    it('compacts an idle bloated mirror even when it backs an active grounding', async () => {
       const dir = makeMirror({
         identity: ADO_MATTERWORX,
         branch: 'main',
         bytes: 8 * MB,
-        idleMs: 60_000,
+        idleMs: REPO_CACHE_MIN_IDLE_MS * 10,
       });
       const compactMirror = compactTo(COMPACTED_PACKS);
       const telemetry = jest.fn();
@@ -428,7 +428,7 @@ describe('repoCacheEvictionService', () => {
         identity: ADO_MATTERWORX,
         branch: 'main',
         bytes: 8 * MB,
-        idleMs: 60_000,
+        idleMs: REPO_CACHE_MIN_IDLE_MS * 10,
       });
       const idle = makeMirror({
         identity: ADO_MAXVIEW,
@@ -450,12 +450,72 @@ describe('repoCacheEvictionService', () => {
       expect(fs.existsSync(idle)).toBe(true);
     });
 
+    it('skips a recently used oversized mirror and compacts an idle one', async () => {
+      const recent = makeMirror({
+        identity: ADO_MATTERWORX,
+        branch: 'main',
+        bytes: 8 * MB,
+        idleMs: REPO_CACHE_MIN_IDLE_MS / 2,
+      });
+      const idle = makeMirror({
+        identity: ADO_MAXVIEW,
+        branch: 'main',
+        bytes: 8 * MB,
+        idleMs: REPO_CACHE_MIN_IDLE_MS * 10,
+      });
+      const compactMirror = compactTo(COMPACTED_PACKS);
+
+      const result = await service({
+        maxBytes: 10 * 1024 * MB,
+        readPackStats: () => BLOATED_PACKS,
+        compactMirror,
+      }).evictOverBudget();
+
+      expect(compactMirror).toHaveBeenCalledTimes(1);
+      expect(compactMirror).toHaveBeenCalledWith(idle, undefined);
+      expect(compactMirror).not.toHaveBeenCalledWith(recent, expect.anything());
+      expect(grantLease).toHaveBeenCalledTimes(1);
+      expect(result.compacted).toBe(1);
+    });
+
+    it('re-checks idle under the lease and skips a mirror used while the sweep waited', async () => {
+      const dir = makeMirror({
+        identity: ADO_MATTERWORX,
+        branch: 'main',
+        bytes: 8 * MB,
+        idleMs: REPO_CACHE_MIN_IDLE_MS * 10,
+      });
+      const compactMirror = compactTo(COMPACTED_PACKS);
+      const leaseAfterUse = jest.fn(
+        async (_key: string, operation: () => Promise<unknown>) => {
+          const lastUsed = path.join(dir, 'apex-last-used');
+          const stamp = new Date(NOW - 1_000);
+          fs.utimesSync(lastUsed, stamp, stamp);
+          return operation();
+        },
+      );
+      const log = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+
+      const result = await service({
+        maxBytes: 10 * 1024 * MB,
+        withLease: leaseAfterUse,
+        readPackStats: () => BLOATED_PACKS,
+        compactMirror,
+      }).evictOverBudget();
+
+      expect(leaseAfterUse).toHaveBeenCalledTimes(1);
+      expect(compactMirror).not.toHaveBeenCalled();
+      expect(result.compacted).toBe(0);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('compact-deferred reason=oversized'));
+      log.mockRestore();
+    });
+
     it('skips a mirror whose lease is busy and leaves it for the next sweep', async () => {
       const dir = makeMirror({
         identity: ADO_MATTERWORX,
         branch: 'main',
         bytes: 8 * MB,
-        idleMs: 60_000,
+        idleMs: REPO_CACHE_MIN_IDLE_MS * 10,
       });
       const compactMirror = compactTo(HEALTHY_PACKS);
       const busyLease = jest.fn(async (key: string) => {
@@ -480,7 +540,7 @@ describe('repoCacheEvictionService', () => {
         identity: ADO_MATTERWORX,
         branch: 'main',
         bytes: 8 * MB,
-        idleMs: 60_000,
+        idleMs: REPO_CACHE_MIN_IDLE_MS * 10,
       });
       const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
 
@@ -496,7 +556,7 @@ describe('repoCacheEvictionService', () => {
     });
 
     it('does not touch a mirror without an identity sidecar', async () => {
-      makeMirror({ identity: null, branch: 'main', bytes: 8 * MB, idleMs: 60_000 });
+      makeMirror({ identity: null, branch: 'main', bytes: 8 * MB, idleMs: REPO_CACHE_MIN_IDLE_MS * 10 });
       const compactMirror = compactTo(HEALTHY_PACKS);
 
       const result = await service({

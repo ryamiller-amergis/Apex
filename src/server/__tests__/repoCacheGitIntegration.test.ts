@@ -115,6 +115,14 @@ describe('compactRepoCache', () => {
     }
     fetchAll('--refetch');
     fetchAll('--refetch');
+    // A commit fetched by SHA, as the exact-commit paths do, has no ref.
+    runGit(sourceDir, ['checkout', '-q', '-b', 'side']);
+    fs.writeFileSync(path.join(sourceDir, 'side.txt'), 'side\n');
+    runGit(sourceDir, ['add', 'side.txt']);
+    runGit(sourceDir, ['commit', '-m', 'side']);
+    const unreferenced = runGit(sourceDir, ['rev-parse', 'HEAD']);
+    runGit(sourceDir, ['config', 'uploadpack.allowAnySHA1InWant', 'true']);
+    runGit(cacheDir, ['-c', 'fetch.unpackLimit=1', 'fetch', '--no-tags', sourceDir, unreferenced]);
     const before = readRepoCachePackStats(cacheDir);
     expect(before.packCount).toBeGreaterThan(2);
 
@@ -130,6 +138,7 @@ describe('compactRepoCache', () => {
     expect(result.after.packBytes).toBeLessThan(before.packBytes);
     expect(readRepoCachePackStats(cacheDir).packCount).toBe(1);
     expect(runGit(cacheDir, ['rev-list', '--count', 'refs/heads/main'])).toBe('5');
+    runGit(cacheDir, ['cat-file', '-e', `${unreferenced}^{tree}`]);
     runGit(cacheDir, ['fsck', '--full', '--no-dangling']);
   });
 });
