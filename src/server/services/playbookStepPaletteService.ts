@@ -6,6 +6,7 @@ import { listStepTypeDescriptors } from './playbookSteps/registry';
 export function listPlaybookStepPaletteItems(): PlaybookStepTypePaletteItem[] {
   return listStepTypeDescriptors().map((descriptor) => ({
     stepType: descriptor.stepType,
+    schemaVersion: descriptor.schemaVersion,
     label: descriptor.stepType,
     sideEffect: descriptor.sideEffect,
     requiredPermissions: descriptor.requiredPermissions,

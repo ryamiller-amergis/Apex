@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
+import type { PlaybookAgentRunPolicy } from '../../shared/types/playbookExecutionCapability';
 import type {
   BackgroundWorkflowClass,
   WorkflowRouteDecision,
@@ -109,6 +110,8 @@ export interface BackgroundWorkflowRouteInput {
    */
   agentRunId?: string;
   threadId: string;
+  /** App-Service-resolved policy for a Playbook agent step. */
+  playbookAgentPolicy?: PlaybookAgentRunPolicy;
   /** Worker-only preparation, evaluated lazily after the feature flag enables routing. */
   prepareWorker(): Promise<PreparedBackgroundWorkflowWorker>;
   runInProcess(): Promise<void> | void;
@@ -606,6 +609,9 @@ export function createBackgroundWorkflowRouter(
           threadId: input.threadId,
           deadlineMs,
           scratchInputs: documentScratchInputs,
+          ...(input.playbookAgentPolicy
+            ? { playbookAgentPolicy: input.playbookAgentPolicy }
+            : {}),
           ...(targetGrounding
             ? {
                 groundedSha: targetGrounding.groundedSha,
@@ -696,6 +702,9 @@ export function createBackgroundWorkflowRouter(
         skillPath: prepared.skillPath,
         projectId: prepared.projectId,
         threadId: input.threadId,
+        ...(input.playbookAgentPolicy
+          ? { playbookAgentPolicy: input.playbookAgentPolicy }
+          : {}),
       };
       let dispatchedRunId: string;
       try {
@@ -860,6 +869,9 @@ export function createBackgroundWorkflowRouter(
       skillPath: prepared.skillPath,
       projectId: prepared.projectId,
       threadId: input.threadId,
+      ...(input.playbookAgentPolicy
+        ? { playbookAgentPolicy: input.playbookAgentPolicy }
+        : {}),
     };
     let dispatchedRunId: string;
     try {

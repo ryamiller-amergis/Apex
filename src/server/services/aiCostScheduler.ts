@@ -12,7 +12,6 @@ import { runCursorBillingSync } from './cursorBillingSyncService';
 import { runCostAllocation } from './aiCostAllocationService';
 import { generateBriefForAllProjects } from './aiCostDailyBriefService';
 import { aiCostUndercountReportService } from './aiCostUndercountReportService';
-import { isFeatureOperational } from './featureFlagService';
 import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
 
 export class AiCostSchedulerService {
@@ -66,24 +65,13 @@ export class AiCostSchedulerService {
       const isAfternoon = hour === 14;
 
       // Playbook reporting is isolated from the established billing allocation
-      // and brief schedule: flag/report failures must not skip existing jobs.
+      // and brief schedule: a report failure must not skip existing jobs.
       try {
-        const productionAdaptersEnabled = await isFeatureOperational('playbooks-production-adapters');
-        // @feature-flag:playbooks-production-adapters start winner=enabled
-        if (productionAdaptersEnabled) {
-          // @feature-flag:playbooks-production-adapters enabled-start
-          const utcDate = now.toISOString().slice(0, 10);
-          if (this.lastUndercountReportDate !== utcDate) {
-            await aiCostUndercountReportService.run();
-            this.lastUndercountReportDate = utcDate;
-          }
-          // @feature-flag:playbooks-production-adapters enabled-end
-        } else {
-          // @feature-flag:playbooks-production-adapters disabled-start
-          // Preserve the existing scheduler: no Playbook spend report reads or writes.
-          // @feature-flag:playbooks-production-adapters disabled-end
+        const utcDate = now.toISOString().slice(0, 10);
+        if (this.lastUndercountReportDate !== utcDate) {
+          await aiCostUndercountReportService.run();
+          this.lastUndercountReportDate = utcDate;
         }
-        // @feature-flag:playbooks-production-adapters end
       } catch (err) {
         console.error(
           '[AiCostScheduler] Playbook spend undercount report failed:',

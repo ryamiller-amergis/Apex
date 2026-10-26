@@ -62,7 +62,6 @@ interface AppHeaderProps {
   workBoardEnabled?: boolean;
   onNavigatePlaybooks?: () => void;
   /** Playbooks stays hidden until the production-adapters flag is on for the project. */
-  playbooksEnabled?: boolean;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
   onThemeChange: (theme: ThemeMode) => void;
@@ -104,7 +103,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateWorkBoard,
   workBoardEnabled = true,
   onNavigatePlaybooks,
-  playbooksEnabled = false,
   onNavigateAdmin,
   onOpenChangelog,
   onThemeChange,
@@ -175,7 +173,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       return isSuperAdmin || can('work-board:view');
     }
     if (item.view === 'playbooks') {
-      if (!playbooksEnabled) return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;
       return isSuperAdmin || can('playbooks:view');
     }
